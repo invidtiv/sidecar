@@ -570,6 +570,10 @@ func (p *Plugin) setupTDRoot(worktreePath string) error {
 
 const sidecarTaskFile = "task"
 const sidecarAgentFile = "agent"
+// sidecarAgentStartFile is intentionally a dotfile in the worktree root (not centralized storage)
+// so users can check it in or add it to .gitignore per-repo. It overrides the agent launch command
+// for that specific worktree/branch.
+const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
 const sidecarBaseFile = "base"
 
