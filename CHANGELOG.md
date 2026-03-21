@@ -2,6 +2,11 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.80.0] - 2026-03-21
+
+### Dependencies
+- bump td to v0.42.2 — 14 bug fixes: SSE nil-validator panic, work_session_issues sync, non-atomic undo, rows.Err() propagation, timestamp parse, non-transactional migration, snapshot race, StatusFilter/board editor data races, stale syncState, CLI reject validation, HelpFilter UTF-8, preview count, copyFile durability
+
 ## [v0.79.0] - 2026-03-20
 
 ### Dependencies
