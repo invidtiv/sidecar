@@ -64,6 +64,7 @@ type Adapter struct {
 	id           string
 	name         string
 	icon         string
+	projectDirFn func(sessionsDir, projectRoot string) string // nil → default piagent encoding
 	sessionIndex map[string]string // sessionID -> file path
 	metaCache    map[string]sessionMetaCacheEntry
 	msgCache     *cache.Cache[messageCacheEntry]
@@ -89,6 +90,13 @@ func NewCustom(sessionsDir, id, name, icon string) *Adapter {
 		metaCache:    make(map[string]sessionMetaCacheEntry),
 		msgCache:     cache.New[messageCacheEntry](msgCacheMaxEntries),
 	}
+}
+
+// WithProjectDirFunc overrides the function used to map a project root to its
+// sessions directory. Use this for Pi forks that encode paths differently.
+func (a *Adapter) WithProjectDirFunc(fn func(sessionsDir, projectRoot string) string) *Adapter {
+	a.projectDirFn = fn
+	return a
 }
 
 // ID returns the adapter identifier.
@@ -279,7 +287,11 @@ func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, er
 
 // projectDirPath converts a project root path to the Pi Agent sessions directory path.
 // Pi Agent encodes paths as: /home/user/project → --home-user-project--
+// If a.projectDirFn is set, it is called instead.
 func (a *Adapter) projectDirPath(projectRoot string) string {
+	if a.projectDirFn != nil {
+		return a.projectDirFn(a.sessionsDir, projectRoot)
+	}
 	absPath, err := filepath.Abs(projectRoot)
 	if err != nil {
 		absPath = projectRoot
