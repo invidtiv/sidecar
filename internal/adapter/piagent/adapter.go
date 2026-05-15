@@ -61,6 +61,9 @@ type toolUseRef struct {
 // Adapter implements the adapter.Adapter interface for standalone Pi Agent sessions.
 type Adapter struct {
 	sessionsDir  string
+	id           string
+	name         string
+	icon         string
 	sessionIndex map[string]string // sessionID -> file path
 	metaCache    map[string]sessionMetaCacheEntry
 	msgCache     *cache.Cache[messageCacheEntry]
@@ -71,8 +74,17 @@ type Adapter struct {
 // New creates a new Pi Agent adapter.
 func New() *Adapter {
 	home, _ := os.UserHomeDir()
+	return NewCustom(filepath.Join(home, ".pi", "agent", "sessions"), adapterID, adapterName, adapterIcon)
+}
+
+// NewCustom creates a Pi Agent-compatible adapter with a custom sessions directory and identity.
+// Use this for forks of Pi Agent that share the same JSONL format but store sessions elsewhere.
+func NewCustom(sessionsDir, id, name, icon string) *Adapter {
 	return &Adapter{
-		sessionsDir:  filepath.Join(home, ".pi", "agent", "sessions"),
+		sessionsDir:  sessionsDir,
+		id:           id,
+		name:         name,
+		icon:         icon,
 		sessionIndex: make(map[string]string),
 		metaCache:    make(map[string]sessionMetaCacheEntry),
 		msgCache:     cache.New[messageCacheEntry](msgCacheMaxEntries),
@@ -80,13 +92,13 @@ func New() *Adapter {
 }
 
 // ID returns the adapter identifier.
-func (a *Adapter) ID() string { return adapterID }
+func (a *Adapter) ID() string { return a.id }
 
 // Name returns the human-readable adapter name.
-func (a *Adapter) Name() string { return adapterName }
+func (a *Adapter) Name() string { return a.name }
 
 // Icon returns the adapter icon for badge display.
-func (a *Adapter) Icon() string { return adapterIcon }
+func (a *Adapter) Icon() string { return a.icon }
 
 // Detect checks if Pi Agent sessions exist for the given project.
 func (a *Adapter) Detect(projectRoot string) (bool, error) {
@@ -271,6 +283,11 @@ func (a *Adapter) projectDirPath(projectRoot string) string {
 	absPath, err := filepath.Abs(projectRoot)
 	if err != nil {
 		absPath = projectRoot
+	}
+	// Resolve symlinks so that paths like /tmp (→ /private/tmp on macOS) match
+	// the encoding that Pi Agent uses when it records the session cwd.
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolved
 	}
 	// /home/user/project → --home-user-project--
 	// Strip leading slash, replace remaining slashes with dashes, wrap in --

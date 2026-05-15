@@ -27,12 +27,14 @@ func TestProjectDirPath(t *testing.T) {
 	a := New()
 
 	tests := []struct {
-		input    string
+		input      string
 		wantSuffix string
 	}{
 		{"/home/user/project", "--home-user-project--"},
 		{"/home/user/my-app", "--home-user-my-app--"},
 		{"/", "----"},
+		// /tmp is a symlink to /private/tmp on macOS; must resolve to --private-tmp--
+		{"/tmp", "--private-tmp--"},
 	}
 
 	for _, tt := range tests {
