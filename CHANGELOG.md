@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.85.0] - 2026-06-08
+
+### Dependencies
+- **Charmbracelet v2 migration**: upgraded to the `charm.land` v2 stack — lipgloss v2.0.3, bubbletea v2.0.7, bubbles v2.1.0, glamour v2.0.0 (huh v2.0.3 transitively, via td). Bubble Tea v2 ships a faster renderer and a declarative `tea.View`; lipgloss colors moved to `image/color.Color`; key/mouse handling moved to the v2 message model (`KeyPressMsg`, `MouseClickMsg`/`MouseWheelMsg`). No intended behavior change — a mechanical migration verified against the full test suite.
+- bump td to v0.45.0 — itself rebuilt on the Charmbracelet v2 stack, so sidecar's embedded td monitor sub-model now shares the same v2 `tea.*`/`lipgloss.*` types. The local development `replace` directive was removed.
+
 ## [v0.84.0] - 2026-04-18
 
 ### Dependencies
