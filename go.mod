@@ -14,7 +14,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/td v0.44.0
+	github.com/marcus/td v0.45.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	golang.org/x/term v0.39.0
@@ -69,5 +69,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/marcus/td => /Users/marcus/code/td
