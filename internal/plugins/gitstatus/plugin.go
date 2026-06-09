@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -340,7 +340,7 @@ func (p *Plugin) Stop() {
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if p.inNoRepoMode() {
 			return p.updateNoRepo(msg)
 		}
@@ -1419,8 +1419,11 @@ func (p *Plugin) initCommitTextarea() {
 	p.commitMessage = textarea.New()
 	p.commitMessage.SetValue("") // Ensure empty
 	p.commitMessage.Placeholder = "Type your commit message..."
-	// Make placeholder more visible (default color 240 is too dim)
-	p.commitMessage.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(styles.TextSecondary)
+	// Make placeholder more visible (default color 240 is too dim).
+	// v2: styling moved under .Styles, accessed via Styles()/SetStyles().
+	cmStyles := p.commitMessage.Styles()
+	cmStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(styles.TextSecondary)
+	p.commitMessage.SetStyles(cmStyles)
 	p.commitMessage.Focus()
 	p.commitMessage.CharLimit = 0
 	// Size for modal: modalWidth - 6 (border+padding) - 2 (textarea internal padding)

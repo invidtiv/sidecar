@@ -3,7 +3,7 @@ package filebrowser
 import (
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
@@ -156,11 +156,12 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		}
 
 		// Handle mouse release - end drag
-		if msg.Action == tea.MouseActionRelease {
+		if rel, ok := msg.(tea.MouseReleaseMsg); ok {
 			if p.inlineEditorDragging {
 				p.inlineEditorDragging = false
 				p.lastDragForwardTime = time.Time{}
-				col, row, ok := p.calculateInlineEditorMouseCoords(msg.X, msg.Y)
+				rm := rel.Mouse()
+				col, row, ok := p.calculateInlineEditorMouseCoords(rm.X, rm.Y)
 				if ok {
 					return p, p.forwardMouseReleaseToInlineEditor(col, row)
 				}
@@ -545,7 +546,7 @@ func (p *Plugin) handleProjectSearchMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p, nil
 	}
 
-	if msg.Action == tea.MouseActionMotion {
+	if _, ok := msg.(tea.MouseMotionMsg); ok {
 		p.projectSearchModal.HandleMouse(msg, p.mouseHandler)
 		return p, nil
 	}

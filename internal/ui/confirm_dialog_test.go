@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestNewConfirmDialog(t *testing.T) {
@@ -57,13 +57,13 @@ func TestConfirmDialog_ToModalActions(t *testing.T) {
 	m := d.ToModal()
 	m.Render(80, 24, nil)
 
-	action, _ := m.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	action, _ := m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action != "confirm" {
 		t.Errorf("expected confirm action, got %q", action)
 	}
 
 	m.SetFocus("cancel")
-	action, _ = m.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	action, _ = m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action != "cancel" {
 		t.Errorf("expected cancel action, got %q", action)
 	}

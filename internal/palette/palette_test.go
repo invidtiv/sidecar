@@ -3,7 +3,7 @@ package palette
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestNew(t *testing.T) {
@@ -186,7 +186,7 @@ func TestUpdate_KeyDown(t *testing.T) {
 	m.cursor = 0
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyDown}
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 1 {
@@ -200,7 +200,7 @@ func TestUpdate_KeyUp(t *testing.T) {
 	m.cursor = 2
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyUp}
+	msg := tea.KeyPressMsg{Code: tea.KeyUp}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 1 {
@@ -215,7 +215,7 @@ func TestUpdate_KeyEnter(t *testing.T) {
 	}
 	m.cursor = 0
 
-	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, cmd := m.Update(msg)
 
 	if cmd == nil {
@@ -242,7 +242,7 @@ func TestUpdate_CtrlP(t *testing.T) {
 	m.cursor = 2
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyCtrlP}
+	msg := tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 1 {
@@ -256,7 +256,7 @@ func TestUpdate_CtrlN(t *testing.T) {
 	m.cursor = 0
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyCtrlN}
+	msg := tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 1 {
@@ -270,7 +270,7 @@ func TestUpdate_CtrlD_PageDown(t *testing.T) {
 	m.cursor = 0
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyCtrlD}
+	msg := tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 10 {
@@ -284,7 +284,7 @@ func TestUpdate_CtrlU_PageUp(t *testing.T) {
 	m.cursor = 20
 	m.maxVisible = 10
 
-	msg := tea.KeyMsg{Type: tea.KeyCtrlU}
+	msg := tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	newModel, _ := m.Update(msg)
 
 	if newModel.cursor != 10 {

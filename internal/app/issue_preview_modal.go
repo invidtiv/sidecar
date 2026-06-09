@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -16,8 +18,8 @@ import (
 var issueTypeIcons = map[string]string{
 	"epic": "◆", "feature": "●", "bug": "✗", "task": "■", "chore": "○",
 }
-var issueTypeColors = map[string]lipgloss.Color{
-	"epic": "212", "feature": "42", "bug": "196", "task": "45", "chore": "241",
+var issueTypeColors = map[string]color.Color{
+	"epic": lipgloss.Color("212"), "feature": lipgloss.Color("42"), "bug": lipgloss.Color("196"), "task": lipgloss.Color("45"), "chore": lipgloss.Color("241"),
 }
 
 func formatSearchTypeIcon(t string) string {

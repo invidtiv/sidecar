@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
@@ -152,7 +152,7 @@ func (p *Plugin) shouldShowResumeSkipPerms() bool {
 }
 
 // handleResumeModalKeys handles keyboard input for the resume modal.
-func (p *Plugin) handleResumeModalKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleResumeModalKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureResumeModal()
 	if p.resumeModal == nil {
 		return nil

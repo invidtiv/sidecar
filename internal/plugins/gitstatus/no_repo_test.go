@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -174,7 +174,7 @@ func TestUpdateNoRepo_InitKeyStartsInit(t *testing.T) {
 		t.Fatalf("Init() error = %v", err)
 	}
 
-	updatedPlugin, cmd := p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	updatedPlugin, cmd := p.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	updated, ok := updatedPlugin.(*Plugin)
 	if !ok {
 		t.Fatalf("updated plugin type = %T, want *Plugin", updatedPlugin)

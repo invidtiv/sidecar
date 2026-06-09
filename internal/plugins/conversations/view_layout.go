@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -291,7 +291,7 @@ func (p *Plugin) renderSidebarPane(height int) string {
 		if len(catLabel) > 0 {
 			catLabel = strings.ToUpper(catLabel[:1]) + catLabel[1:]
 		}
-		sb.WriteString(" " + styles.RenderPillWithStyle(catLabel, styles.BarChipActive, ""))
+		sb.WriteString(" " + styles.RenderPillWithStyle(catLabel, styles.BarChipActive, nil))
 	}
 	// Show animated spinner while adapters are still sending batches (td-7198a5)
 	if p.loadingAdapters {

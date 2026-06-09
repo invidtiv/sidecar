@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
@@ -612,7 +612,7 @@ func sendEditorCursorToEnd(target, editor string) {
 }
 
 // handleInlineEditorKey processes keyboard input when inline editor is active.
-func (p *Plugin) handleInlineEditorKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (p *Plugin) handleInlineEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !p.inlineEditMode || p.inlineEditor == nil {
 		return false, nil
 	}

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -38,7 +38,7 @@ func NewPromptPicker(prompts []Prompt, width, height int) *PromptPicker {
 	ti := textinput.New()
 	ti.Placeholder = "Type to filter..."
 	ti.Prompt = ""
-	ti.Width = 30
+	ti.SetWidth(30)
 	ti.Focus() // Focus filter input by default when picker opens
 
 	pp := &PromptPicker{
@@ -57,7 +57,7 @@ func NewPromptPicker(prompts []Prompt, width, height int) *PromptPicker {
 // Update handles input for the prompt picker.
 func (pp *PromptPicker) Update(msg tea.Msg) (*PromptPicker, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		key := msg.String()
 
 		// When no prompts configured, handle 'd' to install defaults

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -14,7 +14,7 @@ import (
 // Update methods for handling key events in various views
 
 // updateSessions handles key events in session list view.
-func (p *Plugin) updateSessions(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateSessions(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Handle search mode input
 	if p.searchMode {
 		return p.updateSearch(msg)
@@ -249,7 +249,7 @@ func (p *Plugin) toggleCategoryFilter() tea.Cmd {
 }
 
 // updateSearch handles key events in search mode.
-func (p *Plugin) updateSearch(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateSearch(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		p.searchMode = false
@@ -388,7 +388,7 @@ func (p *Plugin) updateSearch(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateAnalytics handles key events in analytics view.
-func (p *Plugin) updateAnalytics(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateAnalytics(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Calculate max scroll based on content
 	maxScroll := len(p.analyticsLines) - (p.height - 2)
 	if maxScroll < 0 {
@@ -432,7 +432,7 @@ func (p *Plugin) updateAnalytics(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateMessages handles key events in message view (now uses turns).
-func (p *Plugin) updateMessages(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateMessages(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// In detail mode, handle detail-specific navigation
 	if p.detailMode {
 		return p.updateDetailMode(msg)
@@ -778,7 +778,7 @@ func (p *Plugin) updateMessages(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateDetailMode handles key events when in detail mode (two-pane).
-func (p *Plugin) updateDetailMode(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateDetailMode(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		// Exit detail mode, back to turn list
@@ -829,7 +829,7 @@ func (p *Plugin) updateDetailMode(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateFilter handles key events in filter mode.
-func (p *Plugin) updateFilter(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateFilter(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 	for _, opt := range adapterFilterOptions(p.adapters) {
 		if key == opt.key {

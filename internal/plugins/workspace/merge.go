@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/marcus/sidecar/internal/app"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
@@ -20,15 +20,15 @@ import (
 type MergeWorkflowStep int
 
 const (
-	MergeStepReviewDiff  MergeWorkflowStep = iota
-	MergeStepTargetBranch                  // Choose target branch for merge/PR
-	MergeStepMergeMethod                   // Choose: PR workflow or direct merge
+	MergeStepReviewDiff   MergeWorkflowStep = iota
+	MergeStepTargetBranch                   // Choose target branch for merge/PR
+	MergeStepMergeMethod                    // Choose: PR workflow or direct merge
 	MergeStepPush
-	MergeStepGeneratePR                    // Agent generates PR title/body
+	MergeStepGeneratePR // Agent generates PR title/body
 	MergeStepCreatePR
 	MergeStepWaitingMerge
-	MergeStepDirectMerge                  // Performing direct merge (no PR)
-	MergeStepPostMergeConfirmation        // User confirms cleanup options after PR merge
+	MergeStepDirectMerge           // Performing direct merge (no PR)
+	MergeStepPostMergeConfirmation // User confirms cleanup options after PR merge
 	MergeStepCleanup
 	MergeStepDone
 	MergeStepError // Error display step (strategy-agnostic)
@@ -74,11 +74,11 @@ type MergeWorkflowState struct {
 	PRTitle          string
 	PRBody           string
 	PRURL            string
-	ExistingPR       bool   // True if using an existing PR (vs newly created)
+	ExistingPR       bool // True if using an existing PR (vs newly created)
 	Error            error
-	ErrorTitle       string            // Short title for error display (e.g. "Direct Merge Failed")
-	ErrorDetail      string            // Full error text for display and clipboard copy
-	ErrorFromStep    MergeWorkflowStep // Which step produced the error
+	ErrorTitle       string                       // Short title for error display (e.g. "Direct Merge Failed")
+	ErrorDetail      string                       // Full error text for display and clipboard copy
+	ErrorFromStep    MergeWorkflowStep            // Which step produced the error
 	StepStatus       map[MergeWorkflowStep]string // "pending", "running", "done", "error", "skipped"
 	DeleteAfterMerge bool                         // true = delete worktree after merge (default)
 
@@ -92,21 +92,21 @@ type MergeWorkflowState struct {
 	MergeMethodOption int  // 0 = Create PR (default), 1 = Direct merge
 
 	// Post-merge confirmation options
-	DeleteLocalWorktree bool // Checkbox: delete local worktree (default: true)
-	DeleteLocalBranch   bool // Checkbox: delete local branch (default: true)
-	DeleteRemoteBranch  bool // Checkbox: delete remote branch (default: false)
-	PullAfterMerge      bool // Checkbox: pull changes to current branch after merge
+	DeleteLocalWorktree bool   // Checkbox: delete local worktree (default: true)
+	DeleteLocalBranch   bool   // Checkbox: delete local branch (default: true)
+	DeleteRemoteBranch  bool   // Checkbox: delete remote branch (default: false)
+	PullAfterMerge      bool   // Checkbox: pull changes to current branch after merge
 	CurrentBranch       string // Branch user was on before merge (for pull)
-	ConfirmationFocus   int  // 0-3=checkboxes, 4=confirm btn, 5=skip btn
-	ConfirmationHover   int  // Mouse hover state
+	ConfirmationFocus   int    // 0-3=checkboxes, 4=confirm btn, 5=skip btn
+	ConfirmationHover   int    // Mouse hover state
 
 	// PR generation state
-	PRGenerationDots   int            // Animation counter for progress dots (0-3)
+	PRGenerationDots   int                // Animation counter for progress dots (0-3)
 	PRGenerationCancel context.CancelFunc // Cancel func for in-flight agent process
 
 	// Cleanup results for summary display
-	CleanupResults     *CleanupResults
-	PendingCleanupOps  int // Counter for parallel cleanup operations in flight
+	CleanupResults    *CleanupResults
+	PendingCleanupOps int // Counter for parallel cleanup operations in flight
 }
 
 // CleanupResults holds the results of cleanup operations for display in summary.
@@ -129,7 +129,7 @@ type CleanupResults struct {
 
 // MergeStepCompleteMsg signals a merge workflow step completed.
 type MergeStepCompleteMsg struct {
-	WorkspaceName    string
+	WorkspaceName   string
 	Step            MergeWorkflowStep
 	Data            string // Step-specific data (e.g., PR URL)
 	Err             error
@@ -139,25 +139,25 @@ type MergeStepCompleteMsg struct {
 // CheckPRMergedMsg signals the result of checking if a PR was merged.
 type CheckPRMergedMsg struct {
 	WorkspaceName string
-	Merged       bool
-	Err          error
+	Merged        bool
+	Err           error
 }
 
 // UncommittedChangesCheckMsg signals the result of checking for uncommitted changes.
 type UncommittedChangesCheckMsg struct {
-	WorkspaceName     string
-	HasChanges       bool
-	StagedCount      int
-	ModifiedCount    int
-	UntrackedCount   int
-	Err              error
+	WorkspaceName  string
+	HasChanges     bool
+	StagedCount    int
+	ModifiedCount  int
+	UntrackedCount int
+	Err            error
 }
 
 // MergeCommitDoneMsg signals that the commit before merge completed.
 type MergeCommitDoneMsg struct {
 	WorkspaceName string
-	CommitHash   string
-	Err          error
+	CommitHash    string
+	Err           error
 }
 
 // PRGenerationDoneMsg signals that agent-powered PR description generation completed.
@@ -186,29 +186,29 @@ type MergeCommitState struct {
 // RemoteBranchDeleteMsg signals the result of deleting a remote branch.
 type RemoteBranchDeleteMsg struct {
 	WorkspaceName string
-	BranchName   string
-	Err          error
+	BranchName    string
+	Err           error
 }
 
 // CleanupDoneMsg signals that cleanup operations completed.
 type CleanupDoneMsg struct {
 	WorkspaceName string
-	Results      *CleanupResults
+	Results       *CleanupResults
 }
 
 // DirectMergeDoneMsg signals that direct merge completed.
 type DirectMergeDoneMsg struct {
 	WorkspaceName string
-	BaseBranch   string
-	Err          error
+	BaseBranch    string
+	Err           error
 }
 
 // PullAfterMergeMsg signals that pull after merge completed.
 type PullAfterMergeMsg struct {
 	WorkspaceName string
-	Branch       string
-	Success      bool
-	Err          error
+	Branch        string
+	Success       bool
+	Err           error
 }
 
 // checkUncommittedChanges checks if a worktree has uncommitted changes.
@@ -218,8 +218,8 @@ func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 		if err := tree.Refresh(); err != nil {
 			return UncommittedChangesCheckMsg{
 				WorkspaceName: wt.Name,
-				HasChanges:   false,
-				Err:          err,
+				HasChanges:    false,
+				Err:           err,
 			}
 		}
 
@@ -229,7 +229,7 @@ func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 		hasChanges := stagedCount > 0 || modifiedCount > 0 || untrackedCount > 0
 
 		return UncommittedChangesCheckMsg{
-			WorkspaceName:   wt.Name,
+			WorkspaceName:  wt.Name,
 			HasChanges:     hasChanges,
 			StagedCount:    stagedCount,
 			ModifiedCount:  modifiedCount,
@@ -245,7 +245,7 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 		if tree == nil {
 			return MergeCommitDoneMsg{
 				WorkspaceName: wt.Name,
-				Err:          fmt.Errorf("failed to initialize git tree for %s", wt.Path),
+				Err:           fmt.Errorf("failed to initialize git tree for %s", wt.Path),
 			}
 		}
 
@@ -253,7 +253,7 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 		if err := tree.StageAll(); err != nil {
 			return MergeCommitDoneMsg{
 				WorkspaceName: wt.Name,
-				Err:          fmt.Errorf("failed to stage: %w", err),
+				Err:           fmt.Errorf("failed to stage: %w", err),
 			}
 		}
 
@@ -262,13 +262,13 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 		if err != nil {
 			return MergeCommitDoneMsg{
 				WorkspaceName: wt.Name,
-				Err:          err,
+				Err:           err,
 			}
 		}
 
 		return MergeCommitDoneMsg{
 			WorkspaceName: wt.Name,
-			CommitHash:   hash,
+			CommitHash:    hash,
 		}
 	}
 }
@@ -317,16 +317,16 @@ func (p *Plugin) loadMergeDiff(wt *Worktree) tea.Cmd {
 		if err != nil {
 			return MergeStepCompleteMsg{
 				WorkspaceName: wt.Name,
-				Step:         MergeStepReviewDiff,
-				Data:         "",
-				Err:          err,
+				Step:          MergeStepReviewDiff,
+				Data:          "",
+				Err:           err,
 			}
 		}
 
 		return MergeStepCompleteMsg{
 			WorkspaceName: wt.Name,
-			Step:         MergeStepReviewDiff,
-			Data:         stat,
+			Step:          MergeStepReviewDiff,
+			Data:          stat,
 		}
 	}
 }
@@ -347,8 +347,8 @@ func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
 		err := doPush(wt.Path, wt.Branch, false, true)
 		return MergeStepCompleteMsg{
 			WorkspaceName: wt.Name,
-			Step:         MergeStepPush,
-			Err:          err,
+			Step:          MergeStepPush,
+			Err:           err,
 		}
 	}
 }
@@ -407,7 +407,7 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 			outputStr := string(output)
 			if existingURL, found := parseExistingPRURL(outputStr); found {
 				return MergeStepCompleteMsg{
-					WorkspaceName:    wt.Name,
+					WorkspaceName:   wt.Name,
 					Step:            MergeStepCreatePR,
 					Data:            existingURL,
 					ExistingPRFound: true,
@@ -415,8 +415,8 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 			}
 			return MergeStepCompleteMsg{
 				WorkspaceName: wt.Name,
-				Step:         MergeStepCreatePR,
-				Err:          fmt.Errorf("gh pr create: %s: %w", strings.TrimSpace(outputStr), err),
+				Step:          MergeStepCreatePR,
+				Err:           fmt.Errorf("gh pr create: %s: %w", strings.TrimSpace(outputStr), err),
 			}
 		}
 
@@ -425,8 +425,8 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 
 		return MergeStepCompleteMsg{
 			WorkspaceName: wt.Name,
-			Step:         MergeStepCreatePR,
-			Data:         prURL,
+			Step:          MergeStepCreatePR,
+			Data:          prURL,
 		}
 	}
 }
@@ -738,8 +738,8 @@ func (p *Plugin) checkPRMerged(wt *Worktree) tea.Cmd {
 		if err != nil {
 			return CheckPRMergedMsg{
 				WorkspaceName: wt.Name,
-				Merged:       false,
-				Err:          err,
+				Merged:        false,
+				Err:           err,
 			}
 		}
 
@@ -756,7 +756,7 @@ func (p *Plugin) checkPRMerged(wt *Worktree) tea.Cmd {
 
 		return CheckPRMergedMsg{
 			WorkspaceName: wt.Name,
-			Merged:       merged,
+			Merged:        merged,
 		}
 	}
 }
@@ -774,8 +774,8 @@ func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
 		if output, err := fetchCmd.CombinedOutput(); err != nil {
 			return DirectMergeDoneMsg{
 				WorkspaceName: wt.Name,
-				BaseBranch:   baseBranch,
-				Err:          fmt.Errorf("fetch origin: %s: %w", strings.TrimSpace(string(output)), err),
+				BaseBranch:    baseBranch,
+				Err:           fmt.Errorf("fetch origin: %s: %w", strings.TrimSpace(string(output)), err),
 			}
 		}
 
@@ -785,8 +785,8 @@ func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
 		if output, err := checkoutCmd.CombinedOutput(); err != nil {
 			return DirectMergeDoneMsg{
 				WorkspaceName: wt.Name,
-				BaseBranch:   baseBranch,
-				Err:          fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
+				BaseBranch:    baseBranch,
+				Err:           fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
 			}
 		}
 
@@ -796,8 +796,8 @@ func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
 		if output, err := pullCmd.CombinedOutput(); err != nil {
 			return DirectMergeDoneMsg{
 				WorkspaceName: wt.Name,
-				BaseBranch:   baseBranch,
-				Err:          fmt.Errorf("pull origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
+				BaseBranch:    baseBranch,
+				Err:           fmt.Errorf("pull origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
 			}
 		}
 
@@ -808,8 +808,8 @@ func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
 		if output, err := mergeCmd.CombinedOutput(); err != nil {
 			return DirectMergeDoneMsg{
 				WorkspaceName: wt.Name,
-				BaseBranch:   baseBranch,
-				Err:          fmt.Errorf("merge %s: %s: %w", branch, strings.TrimSpace(string(output)), err),
+				BaseBranch:    baseBranch,
+				Err:           fmt.Errorf("merge %s: %s: %w", branch, strings.TrimSpace(string(output)), err),
 			}
 		}
 
@@ -819,14 +819,14 @@ func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
 		if output, err := pushCmd.CombinedOutput(); err != nil {
 			return DirectMergeDoneMsg{
 				WorkspaceName: wt.Name,
-				BaseBranch:   baseBranch,
-				Err:          fmt.Errorf("push origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
+				BaseBranch:    baseBranch,
+				Err:           fmt.Errorf("push origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
 			}
 		}
 
 		return DirectMergeDoneMsg{
 			WorkspaceName: wt.Name,
-			BaseBranch:   baseBranch,
+			BaseBranch:    baseBranch,
 		}
 	}
 }
@@ -854,9 +854,9 @@ func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch strin
 			if output, err := pullCmd.CombinedOutput(); err != nil {
 				return PullAfterMergeMsg{
 					WorkspaceName: wt.Name,
-					Branch:       branch,
-					Success:      false,
-					Err:          fmt.Errorf("pull: %s: %w", strings.TrimSpace(string(output)), err),
+					Branch:        branch,
+					Success:       false,
+					Err:           fmt.Errorf("pull: %s: %w", strings.TrimSpace(string(output)), err),
 				}
 			}
 		} else {
@@ -866,9 +866,9 @@ func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch strin
 			if output, err := fetchCmd.CombinedOutput(); err != nil {
 				return PullAfterMergeMsg{
 					WorkspaceName: wt.Name,
-					Branch:       branch,
-					Success:      false,
-					Err:          fmt.Errorf("fetch: %s: %w", strings.TrimSpace(string(output)), err),
+					Branch:        branch,
+					Success:       false,
+					Err:           fmt.Errorf("fetch: %s: %w", strings.TrimSpace(string(output)), err),
 				}
 			}
 
@@ -877,17 +877,17 @@ func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch strin
 			if output, err := updateCmd.CombinedOutput(); err != nil {
 				return PullAfterMergeMsg{
 					WorkspaceName: wt.Name,
-					Branch:       branch,
-					Success:      false,
-					Err:          fmt.Errorf("update-ref: %s: %w", strings.TrimSpace(string(output)), err),
+					Branch:        branch,
+					Success:       false,
+					Err:           fmt.Errorf("update-ref: %s: %w", strings.TrimSpace(string(output)), err),
 				}
 			}
 		}
 
 		return PullAfterMergeMsg{
 			WorkspaceName: wt.Name,
-			Branch:       branch,
-			Success:      true,
+			Branch:        branch,
+			Success:       true,
 		}
 	}
 }
@@ -970,17 +970,17 @@ func summarizeGitError(err error) (string, string, bool) {
 // RebaseResolutionMsg signals result of rebase resolution attempt.
 type RebaseResolutionMsg struct {
 	WorkspaceName string
-	Branch       string
-	Success      bool
-	Err          error
+	Branch        string
+	Success       bool
+	Err           error
 }
 
 // MergeResolutionMsg signals result of merge resolution attempt.
 type MergeResolutionMsg struct {
 	WorkspaceName string
-	Branch       string
-	Success      bool
-	Err          error
+	Branch        string
+	Success       bool
+	Err           error
 }
 
 // executeRebaseResolution performs git pull --rebase to resolve diverged branches.
@@ -1001,16 +1001,16 @@ func (p *Plugin) executeRebaseResolution() tea.Cmd {
 		if err != nil {
 			return RebaseResolutionMsg{
 				WorkspaceName: wtName,
-				Branch:       branch,
-				Success:      false,
-				Err:          fmt.Errorf("rebase failed: %s", strings.TrimSpace(string(output))),
+				Branch:        branch,
+				Success:       false,
+				Err:           fmt.Errorf("rebase failed: %s", strings.TrimSpace(string(output))),
 			}
 		}
 
 		return RebaseResolutionMsg{
 			WorkspaceName: wtName,
-			Branch:       branch,
-			Success:      true,
+			Branch:        branch,
+			Success:       true,
 		}
 	}
 }
@@ -1033,16 +1033,16 @@ func (p *Plugin) executeMergeResolution() tea.Cmd {
 		if err != nil {
 			return MergeResolutionMsg{
 				WorkspaceName: wtName,
-				Branch:       branch,
-				Success:      false,
-				Err:          fmt.Errorf("merge failed: %s", strings.TrimSpace(string(output))),
+				Branch:        branch,
+				Success:       false,
+				Err:           fmt.Errorf("merge failed: %s", strings.TrimSpace(string(output))),
 			}
 		}
 
 		return MergeResolutionMsg{
 			WorkspaceName: wtName,
-			Branch:       branch,
-			Success:      true,
+			Branch:        branch,
+			Success:       true,
 		}
 	}
 }
@@ -1067,19 +1067,19 @@ func (p *Plugin) deleteRemoteBranch(wt *Worktree) tea.Cmd {
 				// Not an error - branch already gone
 				return RemoteBranchDeleteMsg{
 					WorkspaceName: name,
-					BranchName:   branch,
+					BranchName:    branch,
 				}
 			}
 			return RemoteBranchDeleteMsg{
 				WorkspaceName: name,
-				BranchName:   branch,
-				Err:          fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr)),
+				BranchName:    branch,
+				Err:           fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr)),
 			}
 		}
 
 		return RemoteBranchDeleteMsg{
 			WorkspaceName: name,
-			BranchName:   branch,
+			BranchName:    branch,
 		}
 	}
 }
@@ -1275,9 +1275,9 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 		p.mergeState.StepStatus[MergeStepPostMergeConfirmation] = "running"
 
 		// Initialize default checkbox values
-		p.mergeState.DeleteLocalWorktree = true  // Default: checked
-		p.mergeState.DeleteLocalBranch = true    // Default: checked
-		p.mergeState.DeleteRemoteBranch = false  // Default: unchecked (safer)
+		p.mergeState.DeleteLocalWorktree = true // Default: checked
+		p.mergeState.DeleteLocalBranch = true   // Default: checked
+		p.mergeState.DeleteRemoteBranch = false // Default: unchecked (safer)
 		// Pull option: default checked if current branch matches base branch
 		p.mergeState.PullAfterMerge = p.mergeState.CurrentBranch == p.mergeState.TargetBranch
 		p.mergeState.ConfirmationFocus = 0

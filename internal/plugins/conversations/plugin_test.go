@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -669,7 +669,7 @@ func TestUpdateSearchModeEnter(t *testing.T) {
 	}
 
 	// Press '/' to enter search mode
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	msg := tea.KeyPressMsg{Code: '/', Text: "/"}
 	_, _ = p.Update(msg)
 
 	if !p.searchMode {
@@ -700,7 +700,7 @@ func TestUpdateSearchModeExit(t *testing.T) {
 	p.cursor = 1
 
 	// Press 'esc' to exit search mode
-	msg := tea.KeyMsg{Type: tea.KeyEsc}
+	msg := tea.KeyPressMsg{Code: tea.KeyEsc}
 	_, _ = p.Update(msg)
 
 	if p.searchMode {
@@ -729,7 +729,7 @@ func TestUpdateSearchTypingCharacters(t *testing.T) {
 	p.searchMode = true
 
 	// Type 'a'
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
 	_, _ = p.Update(msg)
 
 	if p.searchQuery != "a" {
@@ -737,7 +737,7 @@ func TestUpdateSearchTypingCharacters(t *testing.T) {
 	}
 
 	// Type 'l'
-	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}
+	msg = tea.KeyPressMsg{Code: 'l', Text: "l"}
 	_, _ = p.Update(msg)
 
 	if p.searchQuery != "al" {
@@ -745,7 +745,7 @@ func TestUpdateSearchTypingCharacters(t *testing.T) {
 	}
 
 	// Type 'p'
-	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	msg = tea.KeyPressMsg{Code: 'p', Text: "p"}
 	_, _ = p.Update(msg)
 
 	if p.searchQuery != "alp" {
@@ -774,7 +774,7 @@ func TestUpdateSearchBackspace(t *testing.T) {
 	p.filterSessions() // Initialize searchResults
 
 	// Press backspace
-	msg := tea.KeyMsg{Type: tea.KeyBackspace}
+	msg := tea.KeyPressMsg{Code: tea.KeyBackspace}
 	_, _ = p.Update(msg)
 
 	if p.searchQuery != "alp" {
@@ -823,7 +823,7 @@ func TestUpdateSearchNavigationDown(t *testing.T) {
 	}
 
 	// Press down arrow
-	msg := tea.KeyMsg{Type: tea.KeyDown}
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 1 {
@@ -861,7 +861,7 @@ func TestUpdateSearchNavigationUp(t *testing.T) {
 	p.height = 20
 
 	// Press up arrow
-	msg := tea.KeyMsg{Type: tea.KeyUp}
+	msg := tea.KeyPressMsg{Code: tea.KeyUp}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 1 {
@@ -897,7 +897,7 @@ func TestUpdateSearchNavigationCtrlN(t *testing.T) {
 	p.height = 20
 
 	// Press ctrl+n (should move down)
-	msg := tea.KeyMsg{Type: tea.KeyCtrlN}
+	msg := tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 1 {
@@ -920,7 +920,7 @@ func TestUpdateSearchNavigationCtrlP(t *testing.T) {
 	p.height = 20
 
 	// Press ctrl+p (should move up)
-	msg := tea.KeyMsg{Type: tea.KeyCtrlP}
+	msg := tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 0 {
@@ -946,7 +946,7 @@ func TestUpdateSearchEnterSelectsSession(t *testing.T) {
 	}
 
 	// Press enter to select
-	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, cmd := p.Update(msg)
 
 	if p.searchMode {
@@ -979,7 +979,7 @@ func TestUpdateSearchCursorResetOnQuery(t *testing.T) {
 	p.height = 20
 
 	// Type another character - cursor should reset
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}
+	msg := tea.KeyPressMsg{Code: 'l', Text: "l"}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 0 {
@@ -990,7 +990,7 @@ func TestUpdateSearchCursorResetOnQuery(t *testing.T) {
 	p.cursor = 1
 
 	// Backspace should also reset cursor
-	msg = tea.KeyMsg{Type: tea.KeyBackspace}
+	msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
 	_, _ = p.Update(msg)
 
 	if p.cursor != 0 {
@@ -1011,7 +1011,7 @@ func TestUpdateSearchEmptyResults(t *testing.T) {
 
 	// Type query that matches nothing
 	for _, r := range "xyz" {
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		msg := tea.KeyPressMsg{Code: r, Text: string(r)}
 		_, _ = p.Update(msg)
 	}
 
@@ -1023,14 +1023,14 @@ func TestUpdateSearchEmptyResults(t *testing.T) {
 	}
 
 	// Navigation should not panic with empty results
-	msg := tea.KeyMsg{Type: tea.KeyDown}
+	msg := tea.KeyPressMsg{Code: tea.KeyDown}
 	_, _ = p.Update(msg) // Should not panic
 
-	msg = tea.KeyMsg{Type: tea.KeyUp}
+	msg = tea.KeyPressMsg{Code: tea.KeyUp}
 	_, _ = p.Update(msg) // Should not panic
 
 	// Enter should do nothing with empty results
-	msg = tea.KeyMsg{Type: tea.KeyEnter}
+	msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = p.Update(msg)
 
 	if p.view != ViewSessions {
@@ -1082,7 +1082,7 @@ func TestThinkingBlockTogglePersistence(t *testing.T) {
 	}
 
 	// Toggle turn 0 thinking blocks (press 'T')
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}
+	msg := tea.KeyPressMsg{Code: 'e', Text: "e"}
 	_, _ = p.Update(msg)
 
 	if !p.expandedThinking["msg-1"] {
@@ -1142,7 +1142,7 @@ func TestThinkingBlockToggleNoThinkingBlocks(t *testing.T) {
 	p.turnCursor = 0
 
 	// Try to toggle (should do nothing)
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}
+	msg := tea.KeyPressMsg{Code: 'e', Text: "e"}
 	_, _ = p.Update(msg)
 
 	// Map should remain empty
@@ -1174,7 +1174,7 @@ func TestThinkingBlockResetOnSessionChange(t *testing.T) {
 	p.turnCursor = 0
 
 	// Toggle to expand
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}
+	msg := tea.KeyPressMsg{Code: 'e', Text: "e"}
 	_, _ = p.Update(msg)
 
 	if !p.expandedThinking["msg-1"] {
@@ -1208,7 +1208,7 @@ func TestThinkingBlockToggleMultipleIndependent(t *testing.T) {
 	}
 	p.turns = GroupMessagesIntoTurns(p.messages)
 
-	toggleMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}
+	toggleMsg := tea.KeyPressMsg{Code: 'e', Text: "e"}
 
 	// Expand turns 0, 2, 4 (assistant turns with thinking blocks)
 	p.turnCursor = 0
@@ -1268,7 +1268,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'j' to move down
-	keyJ := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}
+	keyJ := tea.KeyPressMsg{Code: 'j', Text: "j"}
 	_, _ = p.Update(keyJ)
 
 	if p.cursor != 1 {
@@ -1276,7 +1276,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'down' to move down again
-	keyDown := tea.KeyMsg{Type: tea.KeyDown}
+	keyDown := tea.KeyPressMsg{Code: tea.KeyDown}
 	_, _ = p.Update(keyDown)
 
 	if p.cursor != 2 {
@@ -1284,7 +1284,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'k' to move up
-	keyK := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}
+	keyK := tea.KeyPressMsg{Code: 'k', Text: "k"}
 	_, _ = p.Update(keyK)
 
 	if p.cursor != 1 {
@@ -1292,7 +1292,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'up' to move up
-	keyUp := tea.KeyMsg{Type: tea.KeyUp}
+	keyUp := tea.KeyPressMsg{Code: tea.KeyUp}
 	_, _ = p.Update(keyUp)
 
 	if p.cursor != 0 {
@@ -1300,7 +1300,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'G' to jump to bottom
-	keyG := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}
+	keyG := tea.KeyPressMsg{Code: 'G', Text: "G"}
 	_, _ = p.Update(keyG)
 
 	if p.cursor != 2 {
@@ -1308,7 +1308,7 @@ func TestSessionListNavigation(t *testing.T) {
 	}
 
 	// Press 'g' to jump to top
-	keyg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}
+	keyg := tea.KeyPressMsg{Code: 'g', Text: "g"}
 	_, _ = p.Update(keyg)
 
 	if p.cursor != 0 {
@@ -1328,7 +1328,7 @@ func TestSessionListNavigationBounds(t *testing.T) {
 	p.width = 100
 
 	// Try to move up when at top - should stay at 0
-	keyK := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}
+	keyK := tea.KeyPressMsg{Code: 'k', Text: "k"}
 	_, _ = p.Update(keyK)
 
 	if p.cursor != 0 {
@@ -1336,11 +1336,11 @@ func TestSessionListNavigationBounds(t *testing.T) {
 	}
 
 	// Move to bottom
-	keyG := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}
+	keyG := tea.KeyPressMsg{Code: 'G', Text: "G"}
 	_, _ = p.Update(keyG)
 
 	// Try to move down when at bottom - should stay at last
-	keyJ := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}
+	keyJ := tea.KeyPressMsg{Code: 'j', Text: "j"}
 	_, _ = p.Update(keyJ)
 
 	if p.cursor != 1 {
@@ -1362,7 +1362,7 @@ func TestTwoPaneNavigationRouting(t *testing.T) {
 	p.activePane = PaneSidebar
 
 	// With sidebar focused, j should move cursor in session list
-	keyJ := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}
+	keyJ := tea.KeyPressMsg{Code: 'j', Text: "j"}
 	_, _ = p.Update(keyJ)
 
 	if p.cursor != 1 {
@@ -1403,7 +1403,7 @@ func TestTwoPaneFocusSwitching(t *testing.T) {
 	p.turns = GroupMessagesIntoTurns(p.messages)
 
 	// Press 'l' to switch to messages pane
-	keyL := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}
+	keyL := tea.KeyPressMsg{Code: 'l', Text: "l"}
 	_, _ = p.Update(keyL)
 
 	if p.activePane != PaneMessages {
@@ -1411,7 +1411,7 @@ func TestTwoPaneFocusSwitching(t *testing.T) {
 	}
 
 	// Press 'h' to switch back to sidebar
-	keyH := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}
+	keyH := tea.KeyPressMsg{Code: 'h', Text: "h"}
 	_, _ = p.Update(keyH)
 
 	if p.activePane != PaneSidebar {
@@ -1420,7 +1420,7 @@ func TestTwoPaneFocusSwitching(t *testing.T) {
 
 	// Switch to messages and test tab to switch back
 	p.activePane = PaneMessages
-	keyTab := tea.KeyMsg{Type: tea.KeyTab}
+	keyTab := tea.KeyPressMsg{Code: tea.KeyTab}
 	_, _ = p.Update(keyTab)
 
 	if p.activePane != PaneSidebar {
@@ -1672,7 +1672,7 @@ func TestHitRegionsDirtyOnModeChange(t *testing.T) {
 	t.Run("turnViewMode toggle sets dirty", func(t *testing.T) {
 		p.hitRegionsDirty = false
 		// Simulate 'v' key press
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}}
+		msg := tea.KeyPressMsg{Code: 'v', Text: "v"}
 		p.Update(msg)
 		if !p.hitRegionsDirty {
 			t.Error("expected hitRegionsDirty=true after turnViewMode toggle")
@@ -1683,7 +1683,7 @@ func TestHitRegionsDirtyOnModeChange(t *testing.T) {
 		p.hitRegionsDirty = false
 		p.activePane = PaneSidebar
 		// Simulate 'f' key press
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}
+		msg := tea.KeyPressMsg{Code: 'f', Text: "f"}
 		p.Update(msg)
 		if !p.hitRegionsDirty {
 			t.Error("expected hitRegionsDirty=true when opening filter menu")
@@ -1694,7 +1694,7 @@ func TestHitRegionsDirtyOnModeChange(t *testing.T) {
 		p.filterMode = true
 		p.hitRegionsDirty = false
 		// Simulate 'esc' key press
-		msg := tea.KeyMsg{Type: tea.KeyEscape}
+		msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 		p.Update(msg)
 		if !p.hitRegionsDirty {
 			t.Error("expected hitRegionsDirty=true when closing filter menu via esc")
@@ -1705,7 +1705,7 @@ func TestHitRegionsDirtyOnModeChange(t *testing.T) {
 		p.filterMode = true
 		p.hitRegionsDirty = false
 		// Simulate 'enter' key press
-		msg := tea.KeyMsg{Type: tea.KeyEnter}
+		msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 		p.Update(msg)
 		if !p.hitRegionsDirty {
 			t.Error("expected hitRegionsDirty=true when closing filter menu via enter")
@@ -1729,7 +1729,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.totalMessages = 100 // Less than maxMessagesInMemory
 		initialOffset := p.messageOffset
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+		msg := tea.KeyPressMsg{Code: 'p', Text: "p"}
 		p.Update(msg)
 
 		if p.messageOffset != initialOffset {
@@ -1742,7 +1742,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.hasOlderMsgs = true
 		p.totalMessages = 1000 // More than maxMessagesInMemory
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+		msg := tea.KeyPressMsg{Code: 'p', Text: "p"}
 		p.Update(msg)
 
 		// Should increase by maxMessagesInMemory / 2 = 250
@@ -1757,7 +1757,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.hasOlderMsgs = true
 		p.totalMessages = 600 // max offset = 600 - 500 = 100
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+		msg := tea.KeyPressMsg{Code: 'p', Text: "p"}
 		p.Update(msg)
 
 		// Should clamp to totalMessages - maxMessagesInMemory = 100
@@ -1771,7 +1771,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.messageOffset = 0
 		p.totalMessages = 1000
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+		msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
 		p.Update(msg)
 
 		if p.messageOffset != 0 {
@@ -1783,7 +1783,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.messageOffset = 300
 		p.totalMessages = 1000
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+		msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
 		p.Update(msg)
 
 		// Should decrease by maxMessagesInMemory / 2 = 250
@@ -1797,7 +1797,7 @@ func TestPaginationKeyHandling(t *testing.T) {
 		p.messageOffset = 100
 		p.totalMessages = 1000
 
-		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+		msg := tea.KeyPressMsg{Code: 'n', Text: "n"}
 		p.Update(msg)
 
 		// Should clamp to 0

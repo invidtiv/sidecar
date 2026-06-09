@@ -3,8 +3,8 @@ package gitstatus
 import (
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -75,7 +75,7 @@ func (p *Plugin) renderErrorModal() string {
 }
 
 // updateErrorModal handles keyboard input for the error modal.
-func (p *Plugin) updateErrorModal(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateErrorModal(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensureErrorModal()
 	if p.errorModal == nil {
 		return p, nil

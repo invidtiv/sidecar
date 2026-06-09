@@ -4,28 +4,28 @@ import (
 	"errors"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // mockPlugin implements Plugin for testing.
 type mockPlugin struct {
-	id          string
-	initErr     error
-	initPanic   bool
-	startPanic  bool
-	stopPanic   bool
-	started     bool
-	stopped     bool
+	id         string
+	initErr    error
+	initPanic  bool
+	startPanic bool
+	stopPanic  bool
+	started    bool
+	stopped    bool
 }
 
-func (m *mockPlugin) ID() string      { return m.id }
-func (m *mockPlugin) Name() string    { return m.id }
-func (m *mockPlugin) Icon() string    { return "📦" }
-func (m *mockPlugin) IsFocused() bool { return false }
-func (m *mockPlugin) SetFocused(bool) {}
-func (m *mockPlugin) Commands() []Command { return nil }
-func (m *mockPlugin) FocusContext() string { return m.id }
-func (m *mockPlugin) View(w, h int) string { return "" }
+func (m *mockPlugin) ID() string                           { return m.id }
+func (m *mockPlugin) Name() string                         { return m.id }
+func (m *mockPlugin) Icon() string                         { return "📦" }
+func (m *mockPlugin) IsFocused() bool                      { return false }
+func (m *mockPlugin) SetFocused(bool)                      {}
+func (m *mockPlugin) Commands() []Command                  { return nil }
+func (m *mockPlugin) FocusContext() string                 { return m.id }
+func (m *mockPlugin) View(w, h int) string                 { return "" }
 func (m *mockPlugin) Update(msg tea.Msg) (Plugin, tea.Cmd) { return m, nil }
 
 func (m *mockPlugin) Init(ctx *Context) error {

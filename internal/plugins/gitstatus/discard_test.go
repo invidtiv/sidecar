@@ -3,7 +3,7 @@ package gitstatus
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -43,7 +43,7 @@ func TestDiscardModalKeyboardFlow(t *testing.T) {
 	}
 
 	// Simulate pressing Enter
-	action, _ := p.discardModal.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	action, _ := p.discardModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	t.Logf("HandleKey returned action: %q", action)
 
@@ -52,12 +52,12 @@ func TestDiscardModalKeyboardFlow(t *testing.T) {
 	}
 
 	// Test Tab to switch to cancel, then Enter
-	p.discardModal.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
+	p.discardModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	if p.discardModal.FocusedID() != "cancel" {
 		t.Errorf("expected focus on 'cancel' after Tab, got %q", p.discardModal.FocusedID())
 	}
 
-	action, _ = p.discardModal.HandleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	action, _ = p.discardModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action != "cancel" {
 		t.Errorf("expected action 'cancel', got %q", action)
 	}
@@ -111,11 +111,10 @@ func TestDiscardModalMouseFlow(t *testing.T) {
 	// Simulate clicking on the discard button
 	clickX := discardRegion.Rect.X + discardRegion.Rect.W/2
 	clickY := discardRegion.Rect.Y
-	action := p.discardModal.HandleMouse(tea.MouseMsg{
+	action := p.discardModal.HandleMouse(tea.MouseClickMsg{
 		X:      clickX,
 		Y:      clickY,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
+		Button: tea.MouseLeft,
 	}, p.mouseHandler)
 
 	if action != "discard" {
@@ -153,7 +152,7 @@ func TestPluginUpdateConfirmDiscard(t *testing.T) {
 		p.viewMode, p.discardFile != nil, p.discardModal.FocusedID())
 
 	// Now call Update with Enter key
-	result, cmd := p.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	result, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	updatedPlugin := result.(*Plugin)
 
 	t.Logf("After Update: viewMode=%d discardFile=%v cmd=%v",
@@ -202,7 +201,7 @@ func TestPluginUpdateConfirmDiscardY(t *testing.T) {
 	p.discardModal.Render(p.width, p.height, p.mouseHandler)
 
 	// Now call Update with Y key
-	result, cmd := p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	result, cmd := p.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	updatedPlugin := result.(*Plugin)
 
 	// The viewMode should have returned to status

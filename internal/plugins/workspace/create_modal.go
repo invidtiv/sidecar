@@ -5,24 +5,24 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
 const (
-	createNameFieldID           = "create-name"
-	createBaseFieldID           = "create-base"
-	createPromptFieldID         = "create-prompt"
-	createTaskFieldID           = "create-task"
-	createAgentListID           = "create-agent-list"
-	createSkipPermissionsID     = "create-skip-permissions"
-	createSubmitID              = "create-submit"
-	createCancelID              = "create-cancel"
-	createBranchItemPrefix      = "create-branch-"
-	createTaskItemPrefix        = "create-task-item-"
-	createAgentItemPrefix       = "create-agent-"
+	createNameFieldID       = "create-name"
+	createBaseFieldID       = "create-base"
+	createPromptFieldID     = "create-prompt"
+	createTaskFieldID       = "create-task"
+	createAgentListID       = "create-agent-list"
+	createSkipPermissionsID = "create-skip-permissions"
+	createSubmitID          = "create-submit"
+	createCancelID          = "create-cancel"
+	createBranchItemPrefix  = "create-branch-"
+	createTaskItemPrefix    = "create-task-item-"
+	createAgentItemPrefix   = "create-agent-"
 )
 
 func createIndexedID(prefix string, idx int) string {
@@ -343,7 +343,7 @@ func (p *Plugin) createTaskSection() modal.Section {
 		if inputInnerWidth < 1 {
 			inputInnerWidth = 1
 		}
-		p.taskSearchInput.Width = inputInnerWidth
+		p.taskSearchInput.SetWidth(inputInnerWidth)
 
 		taskStyle := inputStyle()
 		if isFocused {

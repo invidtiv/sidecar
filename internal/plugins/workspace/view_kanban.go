@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -55,12 +57,12 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 		StatusDone:     "✓ Ready",
 		StatusPaused:   "⏸ Paused",
 	}
-	columnColors := map[WorktreeStatus]lipgloss.Color{
-		StatusActive:   styles.StatusCompleted.GetForeground().(lipgloss.Color), // Green
-		StatusThinking: styles.Primary,                                            // Purple
-		StatusWaiting:  styles.StatusModified.GetForeground().(lipgloss.Color),  // Yellow
-		StatusDone:     styles.Secondary,                                        // Cyan/Blue
-		StatusPaused:   styles.TextMuted,                                        // Gray
+	columnColors := map[WorktreeStatus]color.Color{
+		StatusActive:   styles.StatusCompleted.GetForeground(), // Green
+		StatusThinking: styles.Primary,                         // Purple
+		StatusWaiting:  styles.StatusModified.GetForeground(),  // Yellow
+		StatusDone:     styles.Secondary,                       // Cyan/Blue
+		StatusPaused:   styles.TextMuted,                       // Gray
 	}
 
 	// Calculate column widths (account for panel borders)
@@ -77,7 +79,7 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 		var headerStyle lipgloss.Style
 		if colIdx == kanbanShellColumnIndex {
 			title = fmt.Sprintf("Shells (%d)", shellCount)
-			headerStyle = lipgloss.NewStyle().Bold(true).Foreground(styles.Muted.GetForeground().(lipgloss.Color)).Width(colWidth)
+			headerStyle = lipgloss.NewStyle().Bold(true).Foreground(styles.Muted.GetForeground()).Width(colWidth)
 		} else {
 			status := kanbanColumnOrder[colIdx-1]
 			items := columns[status]

@@ -7,15 +7,15 @@ import (
 	"strconv"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 )
 
-func (p *Plugin) handleKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	// Handle project search mode
@@ -651,7 +651,7 @@ func (p *Plugin) handlePreviewKey(key string) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleFileOpKey handles key input during file operation mode (move/rename/create/delete).
-func (p *Plugin) handleFileOpKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleFileOpKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	// Handle delete confirmation mode
@@ -855,7 +855,7 @@ func (p *Plugin) handleFileOpKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleInfoKey handles key input during info modal mode.
-func (p *Plugin) handleInfoKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleInfoKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensureInfoModal()
 	if p.infoModal == nil {
 		p.infoMode = false
@@ -880,7 +880,7 @@ func (p *Plugin) handleInfoKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 
 // handleContentSearchKey handles key input during content search mode.
 // Implements vim-style two-phase search: type query, Enter to commit, then n/N navigate.
-func (p *Plugin) handleContentSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleContentSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	// Esc always exits search mode completely
@@ -975,7 +975,7 @@ func (p *Plugin) handleContentSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd)
 }
 
 // handleQuickOpenKey handles key input during quick open mode.
-func (p *Plugin) handleQuickOpenKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleQuickOpenKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -1019,7 +1019,7 @@ func (p *Plugin) handleQuickOpenKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleProjectSearchKey handles key input during project search mode.
-func (p *Plugin) handleProjectSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 	state := p.projectSearchState
 
@@ -1268,7 +1268,7 @@ func (p *Plugin) toggleProjectSearchOption(state *ProjectSearchState, option *bo
 }
 
 // handleSearchKey handles key input during search mode.
-func (p *Plugin) handleSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -1370,7 +1370,7 @@ func (p *Plugin) blameVisibleHeight() int {
 }
 
 // handleBlameKey handles key input during blame view mode.
-func (p *Plugin) handleBlameKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleBlameKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensureBlameModal()
 	if p.blameModal == nil || p.blameState == nil {
 		p.blameMode = false
@@ -1470,7 +1470,7 @@ func (p *Plugin) handleBlameKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleLineJumpKey handles key input during line jump mode (vim-style :<number>).
-func (p *Plugin) handleLineJumpKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleLineJumpKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {

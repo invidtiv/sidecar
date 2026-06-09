@@ -3,8 +3,8 @@ package modal
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -200,7 +200,7 @@ func (s *listSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -240,4 +240,3 @@ func (s *listSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 
 	return "", nil
 }
-

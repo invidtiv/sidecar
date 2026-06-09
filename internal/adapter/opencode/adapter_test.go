@@ -378,7 +378,6 @@ func TestFindProjectID_WithSandboxPaths(t *testing.T) {
 	}
 }
 
-
 func TestFindProjectID_SubdirectoryMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")

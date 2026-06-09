@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -439,7 +439,7 @@ func (p *Plugin) refresh() tea.Cmd {
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog first
 	if p.showExitConfirmation {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 			switch keyMsg.String() {
 			case "j", "down":
 				p.exitConfirmSelection = (p.exitConfirmSelection + 1) % 3
@@ -486,7 +486,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Route mouse through handleMouse for click-away detection
 			return p.handleMouse(msg)
 
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			// Intercept copy key before delegating to tty model
 			if msg.String() == p.getInlineEditCopyKey() {
 				return p, p.copyInlineEditorOutputCmd()
@@ -760,7 +760,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, LoadPreview(p.ctx.WorkDir, msg.FilePath, p.ctx.Epoch)
 		}
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return p.handleKey(msg)
 	}
 

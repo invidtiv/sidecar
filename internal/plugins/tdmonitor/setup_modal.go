@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/td/pkg/monitor"
 	"github.com/marcus/td/pkg/monitor/modal"
 	"github.com/marcus/td/pkg/monitor/mouse"
@@ -75,7 +75,7 @@ func (m *SetupModel) Update(msg tea.Msg) tea.Cmd {
 		m.height = msg.Height
 		return nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		action, cmd := m.modal.HandleKey(msg)
 		if action != "" {
 			return m.handleAction(action)

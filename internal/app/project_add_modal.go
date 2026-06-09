@@ -3,8 +3,8 @@ package app
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -111,7 +111,7 @@ func (m *Model) projectAddNameUpdate(msg tea.Msg, focusID string) (string, tea.C
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -182,7 +182,7 @@ func (m *Model) projectAddPathUpdate(msg tea.Msg, focusID string) (string, tea.C
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -244,7 +244,7 @@ func (m *Model) projectAddThemeUpdate(msg tea.Msg, focusID string) (string, tea.
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -303,7 +303,7 @@ func (m *Model) renderProjectAddModal(content string) string {
 }
 
 // handleProjectAddModalKeys handles keyboard input for the project add modal.
-func (m *Model) handleProjectAddModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleProjectAddModalKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// If theme picker is open, handle it separately
 	if m.projectAddThemeMode {
 		return m.handleProjectAddThemePickerKeys(msg)

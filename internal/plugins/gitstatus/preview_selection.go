@@ -1,7 +1,7 @@
 package gitstatus
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // getHighlighter returns a syntax highlighter for the given filename.
@@ -46,7 +46,6 @@ func (p *Plugin) selectedCommitIndex() int {
 	entries := p.tree.AllEntries()
 	return p.cursor - len(entries)
 }
-
 
 // autoLoadDiff triggers loading the diff for the currently selected file or folder.
 func (p *Plugin) autoLoadDiff() tea.Cmd {

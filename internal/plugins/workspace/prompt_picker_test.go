@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 )
@@ -14,7 +14,7 @@ func TestPromptPickerDKeyEmptyPrompts(t *testing.T) {
 	// When no prompts are configured, 'd' should emit PromptInstallDefaultsMsg
 	pp := NewPromptPicker(nil, 80, 24)
 
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	msg := tea.KeyPressMsg{Code: 'd', Text: "d"}
 	_, cmd := pp.Update(msg)
 
 	if cmd == nil {
@@ -32,7 +32,7 @@ func TestPromptPickerDKeyWithPrompts(t *testing.T) {
 	prompts := []Prompt{{Name: "test", Body: "test body", TicketMode: TicketNone}}
 	pp := NewPromptPicker(prompts, 80, 24)
 
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	msg := tea.KeyPressMsg{Code: 'd', Text: "d"}
 	_, cmd := pp.Update(msg)
 
 	// Should not emit PromptInstallDefaultsMsg
@@ -53,7 +53,7 @@ func TestPromptPickerEscEmptyPrompts(t *testing.T) {
 	// Esc should still cancel even with empty prompts
 	pp := NewPromptPicker(nil, 80, 24)
 
-	msg := tea.KeyMsg{Type: tea.KeyEsc}
+	msg := tea.KeyPressMsg{Code: tea.KeyEsc}
 	_, cmd := pp.Update(msg)
 
 	if cmd == nil {
@@ -70,7 +70,7 @@ func TestPromptPickerEnterEmptyPrompts(t *testing.T) {
 	// Enter should select "none" even with empty prompts
 	pp := NewPromptPicker(nil, 80, 24)
 
-	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, cmd := pp.Update(msg)
 
 	if cmd == nil {
@@ -104,7 +104,7 @@ func TestInstallDefaultsRoundTrip(t *testing.T) {
 	pp := NewPromptPicker(prompts, 80, 24)
 
 	// 'd' should now go to filter (prompts exist), not install defaults
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}
+	msg := tea.KeyPressMsg{Code: 'd', Text: "d"}
 	_, cmd := pp.Update(msg)
 	if cmd != nil {
 		result := cmd()

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -106,11 +106,12 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		}
 
 		// Handle mouse release - end drag
-		if msg.Action == tea.MouseActionRelease {
+		if rel, ok := msg.(tea.MouseReleaseMsg); ok {
 			if p.inlineEditorDragging {
 				p.inlineEditorDragging = false
 				p.lastDragForwardTime = time.Time{}
-				col, row, ok := p.calculateInlineEditorMouseCoords(msg.X, msg.Y)
+				rm := rel.Mouse()
+				col, row, ok := p.calculateInlineEditorMouseCoords(rm.X, rm.Y)
 				if ok {
 					return p, p.forwardMouseReleaseToInlineEditor(col, row)
 				}
@@ -324,9 +325,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 		var cmd tea.Cmd
 		for i := 0; i < 3; i++ {
 			if delta > 0 {
-				p.editorTextarea, cmd = p.editorTextarea.Update(tea.KeyMsg{Type: tea.KeyDown})
+				p.editorTextarea, cmd = p.editorTextarea.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 			} else {
-				p.editorTextarea, cmd = p.editorTextarea.Update(tea.KeyMsg{Type: tea.KeyUp})
+				p.editorTextarea, cmd = p.editorTextarea.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 			}
 		}
 		p.trackTextareaScroll()

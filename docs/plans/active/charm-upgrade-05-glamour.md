@@ -1,7 +1,7 @@
 # Glamour v0.10 → v2 Upgrade Plan
 
-> Status: **PLAN / not started** · **Phase 2** — separate follow-up PR, after [lipgloss v2](charm-upgrade-02-lipgloss.md) is merged.
-> Smallest blast radius of all the upgrades: **one file**.
+> Status: **DONE** (implemented on branch `claude/goofy-booth-70c27e`) · **Phase 2**.
+> Smallest blast radius of all the upgrades: **one file** — import path only; all options/signatures unchanged. `"dark"` confirmed a v2 built-in style.
 
 ## Versions
 

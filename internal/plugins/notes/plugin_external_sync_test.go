@@ -3,7 +3,7 @@ package notes
 import (
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
+	"charm.land/bubbles/v2/textarea"
 )
 
 func TestNotesLoadedSyncsEditorAfterOutOfBandSave(t *testing.T) {

@@ -1,7 +1,7 @@
 package gitstatus
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // loadDiff loads the diff for a file.
@@ -80,7 +80,6 @@ func (p *Plugin) loadMoreCommits() tea.Cmd {
 	}
 }
 
-
 // loadFilteredCommits fetches commits with current filter options.
 func (p *Plugin) loadFilteredCommits() tea.Cmd {
 	epoch := p.ctx.Epoch
@@ -144,7 +143,6 @@ func (p *Plugin) loadCommitFileDiff(hash, path, parentHash string) tea.Cmd {
 		return DiffLoadedMsg{Epoch: epoch, Content: rawDiff, Raw: rawDiff}
 	}
 }
-
 
 // loadFullFileDiff loads the full file content (old + new) for full-file diff view.
 // forInline indicates whether this is for the inline diff pane or the full-screen diff view.

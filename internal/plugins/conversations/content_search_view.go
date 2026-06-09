@@ -8,13 +8,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 )
-
 
 // renderContentSearchModal renders the content search modal.
 // This creates a modal with search input, options, results, and stats sections.
@@ -692,4 +691,3 @@ func byteToRuneIndex(s string, byteIdx int) int {
 	}
 	return utf8.RuneCountInString(s[:byteIdx])
 }
-

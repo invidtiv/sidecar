@@ -1,7 +1,7 @@
 package gitstatus
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
 )
@@ -400,11 +400,11 @@ func (p *Plugin) handleBranchPickerMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p, nil
 	}
 
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
 		p.moveBranchCursor(-1)
 		return p, nil
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		p.moveBranchCursor(1)
 		return p, nil
 	}

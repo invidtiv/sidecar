@@ -1,9 +1,10 @@
 package styles
 
 import (
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // FillBackground ensures each line has a uniform background color.
@@ -12,7 +13,7 @@ import (
 // for the remainder of the line. We fix this by re-applying the background
 // ANSI sequence after every reset, then padding short lines with
 // background-colored spaces.
-func FillBackground(content string, width int, bgColor lipgloss.Color) string {
+func FillBackground(content string, width int, bgColor color.Color) string {
 	if width <= 0 {
 		return content
 	}
@@ -44,7 +45,7 @@ func FillBackground(content string, width int, bgColor lipgloss.Color) string {
 
 // BgANSISeqFor extracts the raw ANSI escape sequence for the given background
 // color by rendering a marker character and taking everything before it.
-func BgANSISeqFor(bgColor lipgloss.Color) string {
+func BgANSISeqFor(bgColor color.Color) string {
 	const marker = "\x01"
 	s := lipgloss.NewStyle().Background(bgColor).Render(marker)
 	idx := strings.Index(s, marker)

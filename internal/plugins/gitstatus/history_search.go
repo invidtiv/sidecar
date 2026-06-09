@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -234,7 +234,7 @@ func formatInt(n int) string {
 }
 
 // updateHistorySearch handles key events when in search mode.
-func (p *Plugin) updateHistorySearch(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateHistorySearch(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	state := p.historySearchState
 	if state == nil {
 		state = NewHistorySearchState()
@@ -323,7 +323,7 @@ func (p *Plugin) clearSearchState() {
 }
 
 // updatePathFilter handles key events when in path filter mode.
-func (p *Plugin) updatePathFilter(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updatePathFilter(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {

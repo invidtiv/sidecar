@@ -1,6 +1,7 @@
 # Charmbracelet Library Upgrade — Overview & Coordination
 
-> Status: **PLAN / not started**
+> Status: **DONE — all phases implemented** on branch `claude/goofy-booth-70c27e` (Phase 0 x/ansi; Phase 1 lipgloss+bubbletea+bubbles v2 trio; Phase 2 glamour v2 + x/cellbuf). `go build/vet/test ./...` green; visual-regression proof + independent reviews passed.
+> **Merge blocker:** `go.mod` has a local `replace github.com/marcus/td => /Users/marcus/code/td` (td's monitor was migrated to v2 on a local branch) — swap for a published td version before merge.
 > Tracking task: `td-e17cb9`
 > Author research date: 2026-06-08 (verify versions again at execution time — see "Re-verify before starting")
 

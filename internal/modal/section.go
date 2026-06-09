@@ -3,8 +3,8 @@ package modal
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -249,7 +249,7 @@ func (b *buttonsSection) resolveStyle(btn ButtonDef, focusID, hoverID string) li
 }
 
 func (b *buttonsSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -317,7 +317,7 @@ func (c *checkboxSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) 
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}

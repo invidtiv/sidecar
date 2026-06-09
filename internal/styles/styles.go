@@ -1,6 +1,10 @@
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 // Color palette - default dark theme
 var (
@@ -426,12 +430,12 @@ func RenderGradientTab(label string, tabIndex, totalTabs int, isActive bool) str
 	return renderGradientTab(label, tabIndex, totalTabs, isActive, false, CurrentTabColors)
 }
 
-func tabTextColor(isActive bool, backgrounds []RGB) lipgloss.Color {
+func tabTextColor(isActive bool, backgrounds []RGB) color.Color {
 	minTarget := 3.5
-	candidates := []lipgloss.Color{TextSecondary, TextPrimary, TextMuted}
+	candidates := []color.Color{TextSecondary, TextPrimary, TextMuted}
 	if isActive {
 		minTarget = 4.5
-		candidates = []lipgloss.Color{TextPrimary, TextSecondary, TextMuted}
+		candidates = []color.Color{TextPrimary, TextSecondary, TextMuted}
 	}
 
 	best := candidates[0]
@@ -444,7 +448,7 @@ func tabTextColor(isActive bool, backgrounds []RGB) lipgloss.Color {
 	}
 
 	if bestRatio < minTarget {
-		for _, candidate := range []lipgloss.Color{lipgloss.Color("#000000"), lipgloss.Color("#ffffff")} {
+		for _, candidate := range []color.Color{lipgloss.Color("#000000"), lipgloss.Color("#ffffff")} {
 			if ratio := minContrastRatio(colorToRGB(candidate), backgrounds); ratio > bestRatio {
 				best = candidate
 				bestRatio = ratio
@@ -455,8 +459,24 @@ func tabTextColor(isActive bool, backgrounds []RGB) lipgloss.Color {
 	return best
 }
 
-func colorToRGB(c lipgloss.Color) RGB {
-	return HexToRGB(string(c))
+func colorToRGB(c color.Color) RGB {
+	// An unset color is nil or lipgloss.NoColor{} (whose RGBA() is pure black).
+	// v1 parsed an empty hex string to a mid-gray fallback; preserve that so a
+	// theme that omits a color used in contrast math doesn't collapse to black.
+	if c == nil {
+		return RGB{R: 128, G: 128, B: 128}
+	}
+	if _, isNoColor := c.(lipgloss.NoColor); isNoColor {
+		return RGB{R: 128, G: 128, B: 128}
+	}
+	// color.Color.RGBA() returns 16-bit alpha-premultiplied components (0–65535);
+	// >>8 yields 0–255 to match HexToRGB's range. RGB stores float64.
+	r, g, b, _ := c.RGBA()
+	return RGB{
+		R: float64(r >> 8),
+		G: float64(g >> 8),
+		B: float64(b >> 8),
+	}
 }
 
 // Pill tab cap characters (Powerline/Nerd Font)
@@ -468,8 +488,8 @@ const (
 // RenderPill renders text with pill-shaped caps when NerdFontsEnabled (PillTabsEnabled) is true.
 // fg is the text color, bg is the pill background, outerBg is the surrounding background.
 // If outerBg is empty, defaults to BgSecondary.
-func RenderPill(text string, fg, bg, outerBg lipgloss.Color) string {
-	if outerBg == "" {
+func RenderPill(text string, fg, bg, outerBg color.Color) string {
+	if outerBg == nil {
 		outerBg = BgSecondary
 	}
 
@@ -493,14 +513,15 @@ func RenderPill(text string, fg, bg, outerBg lipgloss.Color) string {
 // RenderPillWithStyle renders text with pill-shaped caps using the provided lipgloss.Style.
 // The style's background color is used for the pill caps.
 // outerBg is the surrounding background; if empty, defaults to BgSecondary.
-func RenderPillWithStyle(text string, style lipgloss.Style, outerBg lipgloss.Color) string {
-	if outerBg == "" {
+func RenderPillWithStyle(text string, style lipgloss.Style, outerBg color.Color) string {
+	if outerBg == nil {
 		outerBg = BgSecondary
 	}
 
-	// Get background from style for pill caps
-	bg, _ := style.GetBackground().(lipgloss.Color)
-	if bg == "" {
+	// Get background from style for pill caps. GetBackground() returns NoColor{}
+	// (not nil) when unset, so detect that and fall back.
+	bg := style.GetBackground()
+	if _, isNoColor := bg.(lipgloss.NoColor); bg == nil || isNoColor {
 		bg = BgTertiary // fallback
 	}
 
@@ -648,7 +669,7 @@ func renderSolidTab(label string, isActive bool, isPreview bool) string {
 		padded = "  " + label + "  "
 	}
 
-	var bg lipgloss.Color
+	var bg color.Color
 	if isActive {
 		bg = Primary
 	} else {

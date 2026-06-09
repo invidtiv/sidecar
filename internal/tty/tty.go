@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Config holds configuration options for a tty Model.
@@ -173,8 +173,13 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.PasteMsg:
+		// v2: bracketed paste arrives as a dedicated message. Forward the
+		// pasted content to tmux as literal paste text.
+		return m.handlePaste(msg.Content)
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
@@ -247,7 +252,7 @@ func (m *Model) GetTarget() string {
 }
 
 // handleKey processes key input in interactive mode.
-func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if !m.IsActive() {
 		return nil
 	}
@@ -271,7 +276,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// Double-escape exit handling
-	if msg.Type == tea.KeyEscape {
+	if msg.Code == tea.KeyEscape {
 		if m.State.EscapePressed {
 			// Second Escape within window: exit
 			m.State.EscapePressed = false
@@ -297,8 +302,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Filter partial SGR mouse sequences (td-e2ce50: use lenient check for truncated sequences)
 	// Catches even very short fragments like "[<" that occur when terminal splits mouse events.
 	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
-		if LooksLikeMouseFragment(string(msg.Runes)) {
+	if len(msg.Text) > 0 {
+		if LooksLikeMouseFragment(msg.Text) {
 			m.State.EscapePressed = false
 			return nil // Drop mouse sequence fragments
 		}
@@ -312,7 +317,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	//   2. Mouse gate: <10ms since last tea.MouseMsg — Bubble Tea consumed the
 	//      ESC internally but "[" leaked as a rune. Successfully-parsed mouse
 	//      events and the leaked "[" come from the same terminal output burst.
-	if msg.Type == tea.KeyRunes && string(msg.Runes) == "[" {
+	if msg.Text == "[" {
 		escGate := m.State.EscapePressed &&
 			time.Since(m.State.EscapeTime) < 5*time.Millisecond
 		mouseGate := time.Since(m.State.LastMouseEventTime) < 10*time.Millisecond
@@ -343,7 +348,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	// Check for paste input
 	if IsPasteInput(msg) {
-		text := string(msg.Runes)
+		text := msg.Text
 		bracketed := m.State.BracketedPasteEnabled
 		if pendingEscape {
 			cmds = append(cmds, func() tea.Msg {
@@ -392,6 +397,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// handlePaste forwards bracketed-paste content (delivered as a tea.PasteMsg in
+// v2) to the tmux session, honoring the target app's bracketed paste mode.
+func (m *Model) handlePaste(content string) tea.Cmd {
+	if !m.IsActive() || content == "" {
+		return nil
+	}
+	m.State.LastKeyTime = time.Now()
+	cmds := []tea.Cmd{
+		SendPasteInputCmd(m.State.TargetSession, content, m.State.BracketedPasteEnabled),
+		m.schedulePoll(KeystrokeDebounce),
+	}
+	return tea.Batch(cmds...)
+}
+
 // handleMouse processes mouse input in interactive mode.
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// Record every mouse event (including motion) for split-CSI suppression.
@@ -402,14 +421,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	// Only handle click events
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+	// Only handle left-button click (press) events. In v2 a press is a
+	// MouseClickMsg; release/wheel/motion are distinct types we ignore here.
+	click, ok := msg.(tea.MouseClickMsg)
+	if !ok {
+		return nil
+	}
+	mouse := click.Mouse()
+	if mouse.Button != tea.MouseLeft {
 		return nil
 	}
 
 	// Convert to pane-relative coordinates
-	col := msg.X + 1
-	row := msg.Y + 1
+	col := mouse.X + 1
+	row := mouse.Y + 1
 
 	sessionName := m.State.TargetSession
 	return func() tea.Msg {

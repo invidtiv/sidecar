@@ -1,7 +1,8 @@
 package ui
 
 import (
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -10,10 +11,10 @@ import (
 type ConfirmDialog struct {
 	Title        string
 	Message      string
-	ConfirmLabel string         // e.g., " Confirm ", " Delete ", " Yes "
-	CancelLabel  string         // e.g., " Cancel ", " No "
-	BorderColor  lipgloss.Color // Modal border color
-	Width        int            // Modal width (default 50)
+	ConfirmLabel string      // e.g., " Confirm ", " Delete ", " Yes "
+	CancelLabel  string      // e.g., " Cancel ", " No "
+	BorderColor  color.Color // Modal border color
+	Width        int         // Modal width (default 50)
 }
 
 // NewConfirmDialog creates a dialog with sensible defaults.

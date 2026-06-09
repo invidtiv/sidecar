@@ -1,8 +1,8 @@
 package palette
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -49,7 +49,7 @@ func New() Model {
 	ti.Placeholder = "Search commands..."
 	ti.Focus()
 	ti.CharLimit = 50
-	ti.Width = 40
+	ti.SetWidth(40)
 
 	return Model{
 		textInput:    ti,
@@ -69,7 +69,7 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 	// Reserve space for input, borders, layer headers
 	m.maxVisible = max(5, (height-10)/2)
-	m.textInput.Width = min(50, width-10)
+	m.textInput.SetWidth(min(50, width-10))
 }
 
 // Open prepares the palette for display.
@@ -157,13 +157,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyEsc:
+	case tea.KeyPressMsg:
+		// Match on String() so ctrl combos (gone as KeyCtrl* constants in v2)
+		// and special keys are handled uniformly.
+		switch msg.String() {
+		case "esc":
 			// Close without selecting - handled by parent
 			return m, nil
 
-		case tea.KeyEnter:
+		case "enter":
 			// Select current entry
 			if entry := m.SelectedEntry(); entry != nil {
 				return m, func() tea.Msg {
@@ -175,25 +177,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyUp, tea.KeyCtrlP:
+		case "up", "ctrl+p":
 			m.moveCursor(-1)
 			return m, nil
 
-		case tea.KeyDown, tea.KeyCtrlN:
+		case "down", "ctrl+n":
 			m.moveCursor(1)
 			return m, nil
 
-		case tea.KeyCtrlU:
+		case "ctrl+u":
 			// Page up
 			m.moveCursor(-m.maxVisible)
 			return m, nil
 
-		case tea.KeyCtrlD:
+		case "ctrl+d":
 			// Page down
 			m.moveCursor(m.maxVisible)
 			return m, nil
 
-		case tea.KeyTab:
+		case "tab":
 			// Toggle between current context and all contexts mode
 			m.showAllContexts = !m.showAllContexts
 			m.refilter()

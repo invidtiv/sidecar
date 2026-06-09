@@ -5,15 +5,15 @@ import (
 	"os/exec"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/marcus/td/pkg/monitor"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tdroot"
+	"github.com/marcus/td/pkg/monitor"
 )
 
 const (
@@ -332,7 +332,10 @@ func (p *Plugin) View(width, height int) string {
 		// Set dimensions on model before rendering
 		p.model.Width = width
 		p.model.Height = height
-		content = p.model.View()
+		// v2: monitor.View() returns tea.View; extract its string content for
+		// composition into sidecar's own view (the app's tea.View owns the
+		// terminal-level features like alt-screen/mouse/cursor).
+		content = p.model.View().Content
 	}
 
 	// Constrain output to allocated height to prevent header scrolling off-screen.

@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
 )
 
 // handleKeyPress processes key input based on current view mode.
-func (p *Plugin) handleKeyPress(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	switch p.viewMode {
 	case ViewModeList, ViewModeKanban:
 		return p.handleListKeys(msg)
@@ -51,7 +51,7 @@ func (p *Plugin) handleKeyPress(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleTypeSelectorKeys handles keys in the type selector modal.
-func (p *Plugin) handleTypeSelectorKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleTypeSelectorKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureTypeSelectorModal()
 	if p.typeSelectorModal == nil {
 		return nil
@@ -101,7 +101,7 @@ func (p *Plugin) executeTypeSelectorConfirm() tea.Cmd {
 }
 
 // handleFetchPRKeys handles keys in the fetch PR modal.
-func (p *Plugin) handleFetchPRKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleFetchPRKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureFetchPRModal()
 	if p.fetchPRModal == nil {
 		return nil
@@ -161,7 +161,7 @@ func (p *Plugin) handleFetchPRKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handlePromptPickerKeys handles keys in the prompt picker modal.
-func (p *Plugin) handlePromptPickerKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handlePromptPickerKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.promptPicker == nil {
 		return nil
 	}
@@ -264,7 +264,7 @@ func (p *Plugin) handlePromptPickerKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleAgentChoiceKeys handles keys in agent choice modal.
-func (p *Plugin) handleAgentChoiceKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleAgentChoiceKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureAgentChoiceModal()
 	if p.agentChoiceModal == nil {
 		return nil
@@ -285,7 +285,7 @@ func (p *Plugin) handleAgentChoiceKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleAgentConfigKeys handles keys in agent config modal.
-func (p *Plugin) handleAgentConfigKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureAgentConfigModal()
 	if p.agentConfigModal == nil {
 		return nil
@@ -391,7 +391,7 @@ func (p *Plugin) executeAgentChoice() tea.Cmd {
 }
 
 // handleConfirmDeleteKeys handles keys in delete confirmation modal.
-func (p *Plugin) handleConfirmDeleteKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleConfirmDeleteKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureConfirmDeleteModal()
 	if p.deleteConfirmModal == nil {
 		return nil
@@ -404,10 +404,10 @@ func (p *Plugin) handleConfirmDeleteKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc", "q":
 		return p.cancelDelete()
 	case "j", "down", "l", "right":
-		p.deleteConfirmModal.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
+		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 		return nil
 	case "k", "up", "h", "left":
-		p.deleteConfirmModal.HandleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		return nil
 	}
 
@@ -500,7 +500,7 @@ func (p *Plugin) clearConfirmDeleteModal() {
 }
 
 // handleConfirmDeleteShellKeys handles keys in the shell delete confirmation modal.
-func (p *Plugin) handleConfirmDeleteShellKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleConfirmDeleteShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureConfirmDeleteShellModal()
 	if p.deleteShellModal == nil {
 		return nil
@@ -512,10 +512,10 @@ func (p *Plugin) handleConfirmDeleteShellKeys(msg tea.KeyMsg) tea.Cmd {
 	case "esc", "q":
 		return p.cancelShellDelete()
 	case "j", "down", "l", "right":
-		p.deleteShellModal.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
+		p.deleteShellModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 		return nil
 	case "k", "up", "h", "left":
-		p.deleteShellModal.HandleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		p.deleteShellModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		return nil
 	}
 
@@ -560,7 +560,7 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 }
 
 // handleListKeys handles keys in list view (and kanban view).
-func (p *Plugin) handleListKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
 
@@ -723,7 +723,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyMsg) tea.Cmd {
 		p.typeSelectorNameInput = textinput.New()
 		p.typeSelectorNameInput.Placeholder = p.nextShellDisplayName()
 		p.typeSelectorNameInput.Prompt = ""
-		p.typeSelectorNameInput.Width = 30
+		p.typeSelectorNameInput.SetWidth(30)
 		p.typeSelectorNameInput.CharLimit = 50
 		p.typeSelectorModal = nil    // Force rebuild
 		p.typeSelectorModalWidth = 0 // Force rebuild
@@ -1083,7 +1083,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyMsg) tea.Cmd {
 			p.renameShellInput = textinput.New()
 			p.renameShellInput.SetValue(shell.Name)
 			p.renameShellInput.CharLimit = 50
-			p.renameShellInput.Width = 30
+			p.renameShellInput.SetWidth(30)
 			p.renameShellInput.Prompt = ""
 			p.renameShellError = ""
 		}
@@ -1177,7 +1177,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyMsg) tea.Cmd {
 
 // handleCreateKeys handles keys in create modal.
 // createFocus: 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create button, 7=cancel button
-func (p *Plugin) handleCreateKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureCreateModal()
 	if p.createModal == nil {
 		return nil
@@ -1409,7 +1409,7 @@ func (p *Plugin) focusCreateInput() {
 }
 
 // handleTaskLinkKeys handles keys in task link modal.
-func (p *Plugin) handleTaskLinkKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		p.viewMode = ViewModeList
@@ -1454,7 +1454,7 @@ func (p *Plugin) handleTaskLinkKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleMergeKeys handles keys in merge workflow modal.
-func (p *Plugin) handleMergeKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.mergeState == nil {
 		p.viewMode = ViewModeList
 		return nil
@@ -1630,7 +1630,7 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleCommitForMergeKeys handles keys in the commit-before-merge modal.
-func (p *Plugin) handleCommitForMergeKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleCommitForMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureCommitForMergeModal()
 	if p.commitForMergeModal == nil {
 		return nil
@@ -1662,7 +1662,7 @@ func (p *Plugin) handleCommitForMergeKeys(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleRenameShellKeys handles keys in the rename shell modal.
-func (p *Plugin) handleRenameShellKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleRenameShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureRenameShellModal()
 	if p.renameShellModal == nil {
 		return nil
@@ -1737,7 +1737,7 @@ func (p *Plugin) clearRenameShellModal() {
 }
 
 // handleFilePickerKeys handles keys in the file picker modal.
-func (p *Plugin) handleFilePickerKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleFilePickerKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.multiFileDiff == nil || len(p.multiFileDiff.Files) == 0 {
 		p.viewMode = ViewModeList
 		return nil
@@ -1802,7 +1802,7 @@ func (p *Plugin) openFilePicker() tea.Cmd {
 
 // handleDiffTabKey handles key events within the diff tab's two-pane layout.
 // Routes to file list navigation or diff pane scrolling based on diffTabFocus.
-func (p *Plugin) handleDiffTabKey(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleDiffTabKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch p.diffTabFocus {
 	case DiffTabFocusDiff:
 		return p.handleDiffTabDiffPaneKey(msg)
@@ -1816,7 +1816,7 @@ func (p *Plugin) handleDiffTabKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleDiffTabFileListKey handles keys when the diff tab file list is focused.
-func (p *Plugin) handleDiffTabFileListKey(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleDiffTabFileListKey(msg tea.KeyPressMsg) tea.Cmd {
 	totalItems := p.diffTabTotalItems()
 
 	switch msg.String() {
@@ -1873,7 +1873,7 @@ func (p *Plugin) handleDiffTabFileListKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleDiffTabDiffPaneKey handles keys when the diff tab diff pane is focused.
-func (p *Plugin) handleDiffTabDiffPaneKey(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleDiffTabDiffPaneKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "j", "down":
 		p.diffTabDiffScroll++
@@ -2022,7 +2022,7 @@ func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 }
 
 // handleCommitFilesKey handles keys when viewing files within a commit.
-func (p *Plugin) handleCommitFilesKey(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleCommitFilesKey(msg tea.KeyPressMsg) tea.Cmd {
 	if p.commitDetail == nil {
 		// Still loading — only allow escape
 		if msg.String() == "esc" || msg.String() == "h" || msg.String() == "left" {
@@ -2086,7 +2086,7 @@ func (p *Plugin) handleCommitFilesKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // handleCommitDiffPaneKey handles keys when viewing a commit file's diff.
-func (p *Plugin) handleCommitDiffPaneKey(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleCommitDiffPaneKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "j", "down":
 		p.diffTabDiffScroll++

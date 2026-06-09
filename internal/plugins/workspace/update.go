@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -763,8 +763,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case ShellDetachedMsg:
-		// User detached from shell session - re-enable mouse and resume polling
-		cmds = append(cmds, func() tea.Msg { return tea.EnableMouseAllMotion() })
+		// User detached from shell session - resume polling. In v2 mouse mode is
+		// declared on tea.View and re-asserted by the renderer on the next frame.
 		// Resize pane back to preview dimensions
 		if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -1111,8 +1111,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Clear attached state
 		p.attachedSession = ""
 
-		// Re-enable mouse after tea.ExecProcess (tmux attach disables it)
-		cmds = append(cmds, func() tea.Msg { return tea.EnableMouseAllMotion() })
+		// In v2 mouse mode is declared on tea.View and re-asserted by the renderer
+		// on the next frame after tea.ExecProcess (tmux attach) returns.
 
 		// Resize pane back to preview dimensions
 		if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
@@ -1569,9 +1569,16 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.handleTermPanelPoll(msg.SessionName)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)
 		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case tea.PasteMsg:
+		// v2: bracketed paste arrives as a dedicated message. Forward to tmux
+		// when in interactive mode.
+		if cmd := p.handleInteractivePaste(msg.Content); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/styles"
@@ -223,7 +223,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	if p.hoverNewButton {
 		buttonStyle = styles.ButtonHover
 	}
-	styledButton := styles.RenderPillWithStyle(buttonText, buttonStyle, "")
+	styledButton := styles.RenderPillWithStyle(buttonText, buttonStyle, nil)
 	buttonWidth := lipgloss.Width(styledButton)
 
 	// Calculate spacing between title and button
@@ -281,7 +281,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		if p.hoverShellsPlusButton {
 			shellsPlusStyle = styles.ButtonHover
 		}
-		shellsPlusBtn := styles.RenderPillWithStyle("+", shellsPlusStyle, "")
+		shellsPlusBtn := styles.RenderPillWithStyle("+", shellsPlusStyle, nil)
 		shellsPlusBtnWidth := lipgloss.Width(shellsPlusBtn)
 		// Right-align button with fill spacing
 		spacing := width - shellsTitleWidth - shellsPlusBtnWidth
@@ -361,7 +361,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 			if p.hoverWorkspacesPlusButton {
 				workspacesPlusStyle = styles.ButtonHover
 			}
-			workspacesPlusBtn := styles.RenderPillWithStyle("+", workspacesPlusStyle, "")
+			workspacesPlusBtn := styles.RenderPillWithStyle("+", workspacesPlusStyle, nil)
 			workspacesPlusBtnWidth := lipgloss.Width(workspacesPlusBtn)
 			// Right-align button with fill spacing
 			spacing := width - workspacesTitleWidth - workspacesPlusBtnWidth

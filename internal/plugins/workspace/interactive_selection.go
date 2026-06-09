@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"

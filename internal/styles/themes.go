@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // themeMu protects access to themeRegistry and currentTheme for thread safety

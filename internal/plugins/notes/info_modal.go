@@ -3,8 +3,8 @@ package notes
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -85,7 +85,7 @@ func (p *Plugin) renderInfoModal() string {
 }
 
 // handleInfoModalKey handles keyboard input for the info modal.
-func (p *Plugin) handleInfoModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (p *Plugin) handleInfoModalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	p.ensureInfoModal()
 	if p.infoModal == nil {
 		return nil, false

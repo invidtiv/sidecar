@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	openInItemPrefix  = "open-in-item-"
-	openInMaxVisible  = 10
+	openInItemPrefix = "open-in-item-"
+	openInMaxVisible = 10
 )
 
 // openInApp represents a known IDE/app that can open the project directory.
@@ -245,7 +245,7 @@ func (m *Model) openInListSection() modal.Section {
 
 // openInListUpdate handles key events for the Open In list.
 func (m *Model) openInListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}

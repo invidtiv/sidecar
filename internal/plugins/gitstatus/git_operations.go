@@ -3,7 +3,7 @@ package gitstatus
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // doCommit executes the git commit asynchronously.

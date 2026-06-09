@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
@@ -570,6 +570,7 @@ func (p *Plugin) setupTDRoot(worktreePath string) error {
 
 const sidecarTaskFile = "task"
 const sidecarAgentFile = "agent"
+
 // sidecarAgentStartFile is intentionally a dotfile in the worktree root (not centralized storage)
 // so users can check it in or add it to .gitignore per-repo. It overrides the agent launch command
 // for that specific worktree/branch.

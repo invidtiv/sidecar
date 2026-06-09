@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -29,8 +29,20 @@ func projectSwitcherItemID(idx int) string {
 	return fmt.Sprintf("%s%d", projectSwitcherItemPrefix, idx)
 }
 
-// View renders the entire application UI.
-func (m Model) View() string {
+// View renders the entire application UI and declares the terminal features
+// (alt-screen, mouse) that were previously NewProgram options in v1.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.viewContent())
+	v.AltScreen = true
+	// MouseModeAllMotion mirrors the v1 tea.WithMouseAllMotion(); the app relies
+	// on drag + hover (see internal/mouse/).
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
+}
+
+// viewContent builds the rendered screen as a string (header, content, footer,
+// and any modal overlays). It is wrapped into a tea.View by View().
+func (m Model) viewContent() string {
 	if !m.ready {
 		return "Loading..."
 	}
@@ -270,7 +282,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 
 // projectSwitcherListUpdate handles key events for the project list.
 func (m *Model) projectSwitcherListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}

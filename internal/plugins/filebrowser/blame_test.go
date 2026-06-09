@@ -115,8 +115,8 @@ func TestGetBlameAgeColor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			commitTime := time.Now().Add(-tt.age)
 			color := getBlameAgeColor(commitTime)
-			if color == "" {
-				t.Errorf("Expected non-empty color for %s", tt.name)
+			if color == nil {
+				t.Errorf("Expected non-nil color for %s", tt.name)
 			}
 		})
 	}
@@ -125,8 +125,8 @@ func TestGetBlameAgeColor(t *testing.T) {
 func TestGetBlameAgeColorZeroTime(t *testing.T) {
 	color := getBlameAgeColor(time.Time{})
 	// Should return muted color for zero time
-	if color == "" {
-		t.Error("Expected non-empty color for zero time")
+	if color == nil {
+		t.Error("Expected non-nil color for zero time")
 	}
 }
 

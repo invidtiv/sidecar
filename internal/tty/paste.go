@@ -4,25 +4,23 @@ import (
 	"os/exec"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
-// IsPasteInput detects if the input is a paste operation.
-// Returns true if the input contains newlines or is longer than a typical typed sequence.
-func IsPasteInput(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes {
+// IsPasteInput detects if a key message is actually a paste operation.
+//
+// In bubbletea v2, true bracketed pastes arrive as a separate tea.PasteMsg
+// (handled in Update), so this heuristic only catches terminals that deliver
+// multi-rune text as a single KeyPressMsg without bracketed paste. It returns
+// true if the typed text contains newlines or is suspiciously long for typing.
+func IsPasteInput(msg tea.KeyPressMsg) bool {
+	runes := []rune(msg.Text)
+	if len(runes) <= 1 {
 		return false
 	}
-	if msg.Paste {
-		return true
-	}
-	if len(msg.Runes) <= 1 {
-		return false
-	}
-	text := string(msg.Runes)
 	// Treat as paste if contains newline or is suspiciously long for typing
-	return strings.Contains(text, "\n") || len(msg.Runes) > 10
+	return strings.Contains(msg.Text, "\n") || len(runes) > 10
 }
 
 // SendPasteToTmux pastes multi-line text via tmux buffer.

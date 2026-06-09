@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -251,7 +251,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	ta.MaxHeight = 0
 	ta.Prompt = ""
 	ta.EndOfBufferCharacter = '~'
-	ta.FocusedStyle = textarea.Style{
+	// v2: styling moved under .Styles (StyleState per focus state), accessed via
+	// Styles()/SetStyles(). Preserve the default Cursor style by getting first.
+	focusedStyle := textarea.StyleState{
 		Base:             lipgloss.NewStyle(),
 		CursorLine:       lipgloss.NewStyle(),
 		CursorLineNumber: styles.Muted,
@@ -261,7 +263,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		Prompt:           lipgloss.NewStyle(),
 		Text:             lipgloss.NewStyle(),
 	}
-	ta.BlurredStyle = ta.FocusedStyle
+	taStyles := ta.Styles()
+	taStyles.Focused = focusedStyle
+	taStyles.Blurred = focusedStyle
+	ta.SetStyles(taStyles)
 	// Unbind alt+c (CapitalizeWordForward) - we use it for clipboard copy
 	ta.KeyMap.CapitalizeWordForward = key.NewBinding(key.WithDisabled())
 	ta.Blur()
@@ -303,7 +308,7 @@ func (p *Plugin) Stop() {
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog first
 	if p.showExitConfirmation {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 			switch keyMsg.String() {
 			case "j", "down":
 				p.exitConfirmSelection = (p.exitConfirmSelection + 1) % 3
@@ -492,7 +497,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Normal refresh: reload notes
 		return p, p.loadNotes()
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Handle inline editor first if in inline edit mode
 		if p.inlineEditMode {
 			handled, cmd := p.handleInlineEditorKey(msg)
@@ -574,7 +579,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleKey processes keyboard input.
-func (p *Plugin) handleKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	// Handle search mode input (only when in list pane)
@@ -780,7 +785,7 @@ func (p *Plugin) handleKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleEditorKey processes keyboard input when editor pane is focused.
-func (p *Plugin) handleEditorKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	// In preview mode, only allow navigation and mode switches
@@ -841,7 +846,7 @@ func (p *Plugin) handleEditorKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // handleEditorPreviewKey handles keys in preview mode (read-only).
-func (p *Plugin) handleEditorPreviewKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -958,7 +963,7 @@ func (p *Plugin) setTextareaCursorPosition(row, col int) {
 	}
 
 	// Set column
-	p.editorTextarea.SetCursor(col)
+	p.editorTextarea.SetCursorColumn(col)
 }
 
 // syncPreviewFromTextarea updates previewLines from the current textarea content.
@@ -1166,7 +1171,7 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 }
 
 // handleSearchKey processes keyboard input in search mode.
-func (p *Plugin) handleSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -1274,8 +1279,8 @@ func (p *Plugin) handleSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 
 	default:
 		// Add character to search query (only printable runes)
-		if len(msg.Runes) > 0 && msg.Runes[0] >= 32 {
-			p.searchQuery += string(msg.Runes)
+		if r := []rune(msg.Text); len(r) > 0 && r[0] >= 32 {
+			p.searchQuery += msg.Text
 			p.updateFilteredNotes()
 		}
 		return p, nil

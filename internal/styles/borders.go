@@ -3,7 +3,7 @@ package styles
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // Border characters for rounded borders (matching lipgloss.RoundedBorder)

@@ -1,6 +1,6 @@
 package plugin
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 // Plugin defines the interface for all sidecar plugins.
 type Plugin interface {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -57,7 +57,7 @@ func TestSearch_EnterSearchMode(t *testing.T) {
 	}
 
 	// Press "/" to enter search mode
-	_, _ = p.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	_, _ = p.handleKey(tea.KeyPressMsg{Code: '/', Text: "/"})
 
 	if !p.searchMode {
 		t.Error("searchMode should be true after '/'")
@@ -76,7 +76,7 @@ func TestSearch_ExitSearchMode(t *testing.T) {
 	p.searchQuery = "test"
 
 	// Press escape to exit
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyEscape})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if p.searchMode {
 		t.Error("searchMode should be false after escape")
@@ -93,10 +93,10 @@ func TestSearch_TypeQuery(t *testing.T) {
 	p.searchMode = true
 
 	// Type "main"
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	if p.searchQuery != "main" {
 		t.Errorf("searchQuery = %q, want main", p.searchQuery)
@@ -127,7 +127,7 @@ func TestSearch_Backspace(t *testing.T) {
 	p.searchQuery = "mail"
 
 	// Press backspace
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
 	if p.searchQuery != "mai" {
 		t.Errorf("searchQuery = %q, want mai", p.searchQuery)
@@ -236,14 +236,14 @@ func TestSearch_NavigateMatches(t *testing.T) {
 	initialCursor := p.searchCursor
 
 	// Press down to move to next match
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	if p.searchCursor == initialCursor {
 		t.Error("search cursor did not move with down arrow")
 	}
 
 	// Press up to move to previous match
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyUp})
 
 	if p.searchCursor != initialCursor {
 		t.Error("search cursor did not move back with up arrow")
@@ -265,7 +265,7 @@ func TestSearch_JumpToMatch(t *testing.T) {
 	initialCursor := p.treeCursor
 
 	// Press enter to jump to first match
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Cursor should have moved or tree cursor updated
 	if !p.searchMode {
@@ -373,19 +373,19 @@ func TestSearch_CursorBounds(t *testing.T) {
 	}
 
 	// Try to move up when at position 0
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	if p.searchCursor < 0 {
 		t.Error("search cursor should not go below 0")
 	}
 
 	// Move to end
 	for i := 0; i < len(p.searchMatches); i++ {
-		_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+		_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 
 	// Try to move down at end
 	cursorBefore := p.searchCursor
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	if p.searchCursor > len(p.searchMatches)-1 {
 		t.Error("search cursor should not exceed matches length")
@@ -402,14 +402,14 @@ func TestSearch_PrintableCharacterFilter(t *testing.T) {
 
 	// Try to input non-printable character (should be ignored)
 	initialQuery := p.searchQuery
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 0})
 
 	if p.searchQuery != initialQuery {
 		t.Error("non-printable character should be ignored")
 	}
 
 	// Printable character should be added
-	_, _ = p.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	_, _ = p.handleSearchKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if p.searchQuery != "a" {
 		t.Error("printable character should be added to query")
 	}
@@ -481,7 +481,7 @@ func TestContentSearch_ExitWithEsc(t *testing.T) {
 	p.contentSearchQuery = "test"
 	p.contentSearchMatches = []ContentMatch{{LineNo: 0, StartCol: 0, EndCol: 4}}
 
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEscape})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if p.contentSearchMode {
 		t.Error("contentSearchMode should be false after escape")
@@ -502,7 +502,7 @@ func TestContentSearch_ExitWithEnter(t *testing.T) {
 	p.contentSearchMatches = []ContentMatch{{LineNo: 0, StartCol: 0, EndCol: 4}}
 
 	// First Enter commits the search (vim-style two-phase)
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !p.contentSearchCommitted {
 		t.Error("contentSearchCommitted should be true after first enter")
 	}
@@ -511,7 +511,7 @@ func TestContentSearch_ExitWithEnter(t *testing.T) {
 	}
 
 	// Second Enter exits search mode
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if p.contentSearchMode {
 		t.Error("contentSearchMode should be false after second enter")
 	}
@@ -570,22 +570,22 @@ func TestContentSearch_NavigateNext(t *testing.T) {
 	}
 
 	// Commit search with Enter first (vim-style two-phase)
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Press n
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if p.contentSearchCursor != 1 {
 		t.Errorf("cursor should be 1 after n, got %d", p.contentSearchCursor)
 	}
 
 	// Press n again
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if p.contentSearchCursor != 2 {
 		t.Errorf("cursor should be 2 after n, got %d", p.contentSearchCursor)
 	}
 
 	// Press n - should wrap to 0
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if p.contentSearchCursor != 0 {
 		t.Errorf("cursor should wrap to 0, got %d", p.contentSearchCursor)
 	}
@@ -599,16 +599,16 @@ func TestContentSearch_NavigatePrev(t *testing.T) {
 	p.updateContentMatches()
 
 	// Commit search with Enter first (vim-style two-phase)
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Press N at position 0 - should wrap to last
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'N', Text: "N"})
 	if p.contentSearchCursor != 2 {
 		t.Errorf("cursor should wrap to 2, got %d", p.contentSearchCursor)
 	}
 
 	// Press N again
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'N', Text: "N"})
 	if p.contentSearchCursor != 1 {
 		t.Errorf("cursor should be 1, got %d", p.contentSearchCursor)
 	}
@@ -620,7 +620,7 @@ func TestContentSearch_Backspace(t *testing.T) {
 	p.contentSearchMode = true
 	p.contentSearchQuery = "tes"
 
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
 	if p.contentSearchQuery != "te" {
 		t.Errorf("query should be 'te', got %q", p.contentSearchQuery)
@@ -632,8 +632,8 @@ func TestContentSearch_TypeCharacters(t *testing.T) {
 	p := createTestPluginWithPreview(t, tmpDir, "hello world")
 	p.contentSearchMode = true
 
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'e', Text: "e"})
 
 	if p.contentSearchQuery != "he" {
 		t.Errorf("query should be 'he', got %q", p.contentSearchQuery)
@@ -697,8 +697,8 @@ func TestContentSearch_ScrollStaysWhenMatchVisible(t *testing.T) {
 	scrollAfterFirst := p.previewScroll
 
 	// Commit and navigate to next match at line 15
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 
 	// Match at line 15 should be visible from the first match's scroll position,
 	// so viewport should NOT jump
@@ -708,7 +708,7 @@ func TestContentSearch_ScrollStaysWhenMatchVisible(t *testing.T) {
 	}
 
 	// Navigate to match at line 80 - should scroll since it's off-screen
-	_, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if p.previewScroll == scrollAfterFirst {
 		t.Error("viewport should scroll to show match at line 80")
 	}
@@ -754,7 +754,7 @@ func TestQuickOpen_OpenMode(t *testing.T) {
 	}
 
 	// Press ctrl+p
-	_, _ = p.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	if !p.quickOpenMode {
 		t.Error("quickOpenMode should be true after ctrl+p")
@@ -777,7 +777,7 @@ func TestQuickOpen_CloseWithEsc(t *testing.T) {
 	p.updateQuickOpenMatches()
 
 	// Press esc
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyEscape})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if p.quickOpenMode {
 		t.Error("quickOpenMode should be false after esc")
@@ -794,8 +794,8 @@ func TestQuickOpen_TypeQuery(t *testing.T) {
 	p.quickOpenFiles = []string{"main.go", "test.go", "app.go"}
 
 	// Type "ma"
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 
 	if p.quickOpenQuery != "ma" {
 		t.Errorf("query should be 'ma', got %q", p.quickOpenQuery)
@@ -831,19 +831,19 @@ func TestQuickOpen_NavigateResults(t *testing.T) {
 	}
 
 	// Move down
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyDown})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if p.quickOpenCursor != 1 {
 		t.Errorf("cursor should be 1, got %d", p.quickOpenCursor)
 	}
 
 	// Move up
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	if p.quickOpenCursor != 0 {
 		t.Errorf("cursor should be 0, got %d", p.quickOpenCursor)
 	}
 
 	// Can't go above 0
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	if p.quickOpenCursor != 0 {
 		t.Error("cursor should not go below 0")
 	}
@@ -911,7 +911,7 @@ func TestQuickOpen_Backspace(t *testing.T) {
 	p.quickOpenQuery = "test"
 	p.quickOpenFiles = []string{"test.go"}
 
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
 	if p.quickOpenQuery != "tes" {
 		t.Errorf("query should be 'tes', got %q", p.quickOpenQuery)
@@ -927,7 +927,7 @@ func TestQuickOpen_CtrlPNavigates(t *testing.T) {
 	p.quickOpenCursor = 1
 
 	// ctrl+p should move cursor up (vim-like)
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	if p.quickOpenCursor != 0 {
 		t.Errorf("cursor should be 0 after ctrl+p, got %d", p.quickOpenCursor)
@@ -942,7 +942,7 @@ func TestQuickOpen_CtrlNNavigates(t *testing.T) {
 	p.updateQuickOpenMatches()
 
 	// ctrl+n should move cursor down
-	_, _ = p.handleQuickOpenKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 
 	if p.quickOpenCursor != 1 {
 		t.Errorf("cursor should be 1 after ctrl+n, got %d", p.quickOpenCursor)

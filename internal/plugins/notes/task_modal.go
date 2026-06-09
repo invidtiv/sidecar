@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -108,7 +108,7 @@ func (p *Plugin) openTaskModal() tea.Cmd {
 	// Initialize title input with note title (or first line of content)
 	p.taskModalTitleInput = textinput.New()
 	p.taskModalTitleInput.Placeholder = "Task title"
-	p.taskModalTitleInput.Width = 40
+	p.taskModalTitleInput.SetWidth(40)
 	title := note.Title
 	if title == "" && note.Content != "" {
 		lines := strings.SplitN(note.Content, "\n", 2)
@@ -159,7 +159,7 @@ func (p *Plugin) renderTaskModal() string {
 }
 
 // handleTaskModalKey handles keyboard input for the task modal.
-func (p *Plugin) handleTaskModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (p *Plugin) handleTaskModalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	p.ensureTaskModal()
 	if p.taskModal == nil {
 		return nil, false

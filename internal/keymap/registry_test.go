@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestRegistry_SingleKey(t *testing.T) {
@@ -21,7 +21,7 @@ func TestRegistry_SingleKey(t *testing.T) {
 	})
 	r.RegisterBinding(Binding{Key: "t", Command: "test-cmd", Context: "global"})
 
-	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}}
+	key := tea.KeyPressMsg{Code: 't', Text: "t"}
 	r.Handle(key, "global")
 
 	if !called {
@@ -44,7 +44,7 @@ func TestRegistry_KeySequence(t *testing.T) {
 	r.RegisterBinding(Binding{Key: "g g", Command: "go-top", Context: "global"})
 
 	// First 'g' should start sequence
-	key1 := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}
+	key1 := tea.KeyPressMsg{Code: 'g', Text: "g"}
 	r.Handle(key1, "global")
 
 	if called {
@@ -55,7 +55,7 @@ func TestRegistry_KeySequence(t *testing.T) {
 	}
 
 	// Second 'g' should complete sequence
-	key2 := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}
+	key2 := tea.KeyPressMsg{Code: 'g', Text: "g"}
 	r.Handle(key2, "global")
 
 	if !called {
@@ -78,14 +78,14 @@ func TestRegistry_KeySequenceTimeout(t *testing.T) {
 	r.RegisterBinding(Binding{Key: "g g", Command: "go-top", Context: "global"})
 
 	// First 'g'
-	key1 := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}
+	key1 := tea.KeyPressMsg{Code: 'g', Text: "g"}
 	r.Handle(key1, "global")
 
 	// Wait for timeout
 	time.Sleep(sequenceTimeout + 10*time.Millisecond)
 
 	// Second 'g' should not complete sequence due to timeout
-	key2 := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}
+	key2 := tea.KeyPressMsg{Code: 'g', Text: "g"}
 	r.Handle(key2, "global")
 
 	if called {
@@ -120,7 +120,7 @@ func TestRegistry_ContextPrecedence(t *testing.T) {
 	r.RegisterBinding(Binding{Key: "s", Command: "context-action", Context: "git-status"})
 
 	// With git-status context, should use context binding
-	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	key := tea.KeyPressMsg{Code: 's', Text: "s"}
 	r.Handle(key, "git-status")
 
 	if globalCalled {
@@ -157,7 +157,7 @@ func TestRegistry_UserOverride(t *testing.T) {
 	r.RegisterBinding(Binding{Key: "x", Command: "default-action", Context: "global"})
 	r.SetUserOverride("x", "override-action")
 
-	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}
+	key := tea.KeyPressMsg{Code: 'x', Text: "x"}
 	r.Handle(key, "global")
 
 	if defaultCalled {
@@ -170,23 +170,22 @@ func TestRegistry_UserOverride(t *testing.T) {
 
 func TestRegistry_SpecialKeys(t *testing.T) {
 	cases := []struct {
-		keyType tea.KeyType
-		expect  string
+		key    tea.KeyPressMsg
+		expect string
 	}{
-		{tea.KeyTab, "tab"},
-		{tea.KeyEnter, "enter"},
-		{tea.KeyEsc, "esc"},
-		{tea.KeyUp, "up"},
-		{tea.KeyDown, "down"},
-		{tea.KeyCtrlC, "ctrl+c"},
-		{tea.KeyShiftTab, "shift+tab"},
+		{tea.KeyPressMsg{Code: tea.KeyTab}, "tab"},
+		{tea.KeyPressMsg{Code: tea.KeyEnter}, "enter"},
+		{tea.KeyPressMsg{Code: tea.KeyEsc}, "esc"},
+		{tea.KeyPressMsg{Code: tea.KeyUp}, "up"},
+		{tea.KeyPressMsg{Code: tea.KeyDown}, "down"},
+		{tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}, "ctrl+c"},
+		{tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}, "shift+tab"},
 	}
 
 	for _, tc := range cases {
-		key := tea.KeyMsg{Type: tc.keyType}
-		got := keyToString(key)
+		got := keyToString(tc.key)
 		if got != tc.expect {
-			t.Errorf("keyToString(%v) = %q, want %q", tc.keyType, got, tc.expect)
+			t.Errorf("keyToString(%v) = %q, want %q", tc.key, got, tc.expect)
 		}
 	}
 }

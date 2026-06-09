@@ -1,7 +1,7 @@
 # Bubbles v1 → v2 Upgrade Plan
 
-> Status: **PLAN / not started** · Part of the Phase 1 atomic trio (see [overview](charm-upgrade-00-overview.md)).
-> Do this **last** within Phase 1, after [lipgloss](charm-upgrade-02-lipgloss.md) and [bubbletea](charm-upgrade-03-bubbletea.md).
+> Status: **DONE** (implemented on branch `claude/goofy-booth-70c27e`) · Part of the Phase 1 atomic trio (see [overview](charm-upgrade-00-overview.md)).
+> Was done **last** within Phase 1, after [lipgloss](charm-upgrade-02-lipgloss.md) and [bubbletea](charm-upgrade-03-bubbletea.md).
 
 ## Versions
 

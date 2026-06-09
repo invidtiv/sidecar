@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Registry manages plugin registration and lifecycle.

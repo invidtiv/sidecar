@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -33,7 +33,7 @@ func parseBranchPickerItem(id string) (int, bool) {
 }
 
 // updateBranchPicker handles key events in the branch picker modal.
-func (p *Plugin) updateBranchPicker(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateBranchPicker(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensureBranchPickerModal()
 	if p.branchPickerModal == nil {
 		return p, nil
@@ -196,7 +196,7 @@ func (p *Plugin) branchPickerListUpdate(msg tea.Msg, focusID string) (string, te
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}

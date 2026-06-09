@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/term"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -25,7 +25,7 @@ import (
 
 // isMouseEscapeSequence returns true if the key message appears to be
 // an unparsed mouse escape sequence (SGR format: [<...M or [<...m)
-func isMouseEscapeSequence(msg tea.KeyMsg) bool {
+func isMouseEscapeSequence(msg tea.KeyPressMsg) bool {
 	s := msg.String()
 	// SGR mouse sequences contain [< and end with M or m
 	if strings.Contains(s, "[<") && (strings.HasSuffix(s, "M") || strings.HasSuffix(s, "m")) {
@@ -40,13 +40,109 @@ func isMouseEscapeSequence(msg tea.KeyMsg) bool {
 	return false
 }
 
+// offsetMouseY returns a copy of the mouse message with its Y coordinate
+// shifted by dy, preserving the concrete message type. In bubbletea v2 mouse
+// messages are interfaces (no struct rebuild), so we reconstruct the matching
+// concrete type from the offset Mouse value.
+func offsetMouseY(msg tea.MouseMsg, dy int) tea.MouseMsg {
+	mm := msg.Mouse()
+	mm.Y += dy
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(mm)
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(mm)
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(mm)
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(mm)
+	}
+	return msg
+}
+
+// handlePaste routes a bracketed-paste message into the active text-input modal
+// (mirroring the per-modal key routing in handleKeyMsg), or forwards it to all
+// plugins when no app-level text-input modal is open. textinput.Update handles
+// tea.PasteMsg natively in v2.
+func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	switch m.activeModal() {
+	case ModalPalette:
+		var cmd tea.Cmd
+		m.palette, cmd = m.palette.Update(msg)
+		return m, cmd
+
+	case ModalWorktreeSwitcher:
+		var cmd tea.Cmd
+		m.worktreeSwitcherInput, cmd = m.worktreeSwitcherInput.Update(msg)
+		m.worktreeSwitcherFiltered = filterWorktrees(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
+		m.clearWorktreeSwitcherModal()
+		return m, cmd
+
+	case ModalProjectSwitcher:
+		// The project-add sub-flow has multiple focus-dependent inputs; leave it
+		// to the plugin-forward fallback rather than guess the focused field.
+		if !m.projectAddMode {
+			var cmd tea.Cmd
+			m.projectSwitcherInput, cmd = m.projectSwitcherInput.Update(msg)
+			m.projectSwitcherFiltered = filterProjects(m.cfg.Projects.List, m.projectSwitcherInput.Value())
+			m.clearProjectSwitcherModal()
+			return m, cmd
+		}
+
+	case ModalThemeSwitcher:
+		var cmd tea.Cmd
+		m.themeSwitcherInput, cmd = m.themeSwitcherInput.Update(msg)
+		m.themeSwitcherFiltered = filterThemeEntries(buildUnifiedThemeList(), m.themeSwitcherInput.Value())
+		m.clearThemeSwitcherModal()
+		return m, cmd
+
+	case ModalIssueInput:
+		var cmd tea.Cmd
+		m.issueInputInput, cmd = m.issueInputInput.Update(msg)
+		m.issueInputModal = nil
+		m.issueInputModalWidth = 0
+		newValue := strings.TrimSpace(m.issueInputInput.Value())
+		if newValue != m.issueSearchQuery && len(newValue) >= 2 {
+			m.issueSearchQuery = newValue
+			m.issueSearchLoading = true
+			m.issueSearchCursor = -1
+			return m, tea.Batch(cmd, issueSearchCmd(m.ui.WorkDir, newValue, m.issueSearchIncludeClosed))
+		}
+		if len(newValue) < 2 {
+			m.issueSearchResults = nil
+			m.issueSearchQuery = ""
+			m.issueSearchCursor = -1
+		}
+		return m, cmd
+	}
+
+	// No app-level text-input modal active: forward to all plugins so the
+	// focused plugin (e.g. the notes editor textarea) receives the paste.
+	var cmds []tea.Cmd
+	plugins := m.registry.Plugins()
+	for i, p := range plugins {
+		newPlugin, cmd := p.Update(msg)
+		plugins[i] = newPlugin
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return m, tea.Batch(cmds...)
+}
+
 // Update handles all messages and returns the updated model and commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return (&m).handleKeyMsg(msg)
+
+	case tea.PasteMsg:
+		// v2: bracketed paste arrives as a dedicated message (not a KeyMsg).
+		// Route it into the active text-input modal so paste-into-filter works
+		// like v1; otherwise forward to plugins (notes editor handles it natively).
+		return (&m).handlePaste(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -112,8 +208,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle header tab clicks (Y < 2 means header area)
-		if msg.Y < headerHeight && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && msg.X >= start && msg.X < end {
+		mi := msg.Mouse()
+		_, isClickPress := msg.(tea.MouseClickMsg)
+		if mi.Y < headerHeight && isClickPress && mi.Button == tea.MouseLeft {
+			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				m.showProjectSwitcher = true
 				m.activeContext = "project-switcher"
 				m.initProjectSwitcher()
@@ -121,7 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Check if click is on worktree indicator
-			if start, end, ok := m.getWorktreeIndicatorBounds(); ok && !m.intro.Active && msg.X >= start && msg.X < end {
+			if start, end, ok := m.getWorktreeIndicatorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				worktrees := GetWorktrees(m.ui.WorkDir)
 				if len(worktrees) > 1 {
 					m.showWorktreeSwitcher = true
@@ -134,7 +232,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Check if click is on a tab
 			tabBounds := m.getTabBounds()
 			for i, bounds := range tabBounds {
-				if msg.X >= bounds.Start && msg.X < bounds.End {
+				if mi.X >= bounds.Start && mi.X < bounds.End {
 					return m, m.SetActivePlugin(i)
 				}
 			}
@@ -143,15 +241,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Forward mouse events to active plugin with Y offset for app header (2 lines)
 		if p := m.ActivePlugin(); p != nil {
-			adjusted := tea.MouseMsg{
-				X:      msg.X,
-				Y:      msg.Y - headerHeight, // Offset for app header
-				Button: msg.Button,
-				Action: msg.Action,
-				Ctrl:   msg.Ctrl,
-				Alt:    msg.Alt,
-				Shift:  msg.Shift,
-			}
+			adjusted := offsetMouseY(msg, -headerHeight) // Offset for app header
 			newPlugin, cmd := p.Update(adjusted)
 			plugins := m.registry.Plugins()
 			if m.activePlugin < len(plugins) {
@@ -343,11 +433,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 
 	case EditorReturnedMsg:
-		// After editor exits, re-enable mouse and trigger refresh
-		// tea.ExecProcess disables mouse, need to restore it
-		cmds := []tea.Cmd{
-			func() tea.Msg { return tea.EnableMouseAllMotion() },
-		}
+		// After editor exits, trigger refresh. In v2 mouse mode is declared on
+		// tea.View and the renderer re-asserts it on the next frame after
+		// tea.ExecProcess returns, so no manual mouse re-enable is needed.
+		var cmds []tea.Cmd
 		if msg.Err != nil {
 			cmds = append(cmds, func() tea.Msg { return ErrorMsg(msg) })
 		} else {
@@ -433,9 +522,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleKeyMsg processes keyboard input.
-func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Close modals with escape (priority order via activeModal)
-	if msg.Type == tea.KeyEsc {
+	if msg.Code == tea.KeyEsc {
 		switch m.activeModal() {
 		case ModalPalette:
 			m.showPalette = false
@@ -643,7 +732,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.showWorktreeSwitcher {
 		worktrees := m.worktreeSwitcherFiltered
 
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			// Select worktree and switch to it
 			if m.worktreeSwitcherCursor >= 0 && m.worktreeSwitcherCursor < len(worktrees) {
@@ -752,7 +841,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		projects := m.projectSwitcherFiltered
 
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			// Select project and switch to it
 			if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(projects) {
@@ -862,7 +951,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		themes := m.themeSwitcherFiltered
 
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			// Confirm selection and close (ignore separators)
 			if m.themeSwitcherSelectedIdx >= 0 && m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
@@ -1012,7 +1101,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			return m.issueInputSubmit()
 		case tea.KeyUp:
@@ -1197,7 +1286,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.consumesTextInput() {
 			break
 		}
-		idx := int(msg.Runes[0] - '1')
+		idx := int([]rune(msg.Text)[0] - '1')
 		return m, m.SetActivePlugin(idx)
 	}
 
@@ -1424,8 +1513,8 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 	}
 
 	// Handle scroll wheel for project list navigation
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
 		m.projectSwitcherCursor--
 		if m.projectSwitcherCursor < 0 {
 			m.projectSwitcherCursor = 0
@@ -1435,7 +1524,7 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		m.clearProjectSwitcherModal()
 		m.previewProjectTheme()
 		return m, nil
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		projects := m.projectSwitcherFiltered
 		m.projectSwitcherCursor++
 		if m.projectSwitcherCursor >= len(projects) {
@@ -1528,7 +1617,7 @@ func (m *Model) handleHelpModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleUpdateModalKey handles keyboard input for the update modal.
-func (m *Model) handleUpdateModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// Handle changelog overlay first if visible
@@ -1706,8 +1795,8 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.changelogMouseHandler = mouse.NewHandler()
 		}
 		// Handle scroll events via shared state pointer (no modal rebuild needed)
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
 			if m.changelogScrollOffset > 0 {
 				m.changelogScrollOffset -= 3
 				if m.changelogScrollOffset < 0 {
@@ -1716,7 +1805,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.syncChangelogScroll()
 			}
 			return m, nil
-		case tea.MouseButtonWheelDown:
+		case tea.MouseWheelDown:
 			m.changelogScrollOffset += 3
 			m.syncChangelogScroll()
 			return m, nil
@@ -1824,7 +1913,7 @@ func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleProjectAddThemePickerKeys handles keys within the theme picker sub-modal.
-func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.projectAddCommunityMode {
 		return m.handleProjectAddCommunityKeys(msg)
 	}
@@ -1909,7 +1998,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyMsg) (tea.Model, tea.
 }
 
 // handleProjectAddCommunityKeys handles keys in the community sub-browser within add-project.
-func (m *Model) handleProjectAddCommunityKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleProjectAddCommunityKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	maxVisible := 6
 	switch msg.String() {
 	case "esc", "tab":

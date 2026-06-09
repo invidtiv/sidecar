@@ -1,7 +1,7 @@
 # x/cellbuf + Transitive Dependency Cleanup
 
-> Status: **PLAN / not started** · **Phase 2** — runs *after* the [v2 trio](charm-upgrade-02-lipgloss.md) lands.
-> Low risk. This is the dependency-graph tidy-up that follows the big change.
+> Status: **DONE** (implemented on branch `claude/goofy-booth-70c27e`) · **Phase 2**.
+> cellbuf bumped to v0.0.15 (kept as direct dep, `Wrap` signature unchanged). `go mod tidy` pruned ALL v1 charm UI libs (glamour v2 was the last v1 holdout); `ultraviolet`+`displaywidth` pulled in by lipgloss v2.
 
 ## x/cellbuf (2 files)
 

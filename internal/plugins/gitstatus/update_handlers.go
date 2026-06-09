@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -31,7 +31,7 @@ func (p *Plugin) toggleSidebar() {
 }
 
 // updateStatus handles key events in the status view.
-func (p *Plugin) updateStatus(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Handle diff pane keys when focused on diff
 	if p.activePane == PaneDiff {
 		return p.updateStatusDiffPane(msg)
@@ -465,7 +465,7 @@ func (p *Plugin) updateStatus(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateStatusDiffPane handles key events when the diff pane is focused.
-func (p *Plugin) updateStatusDiffPane(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// If showing commit preview, handle file list navigation
 	if p.previewCommit != nil && p.cursorOnCommit() {
 		return p.updateCommitPreviewPane(msg)
@@ -643,7 +643,7 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateCommitPreviewPane handles key events when viewing commit preview in the diff pane.
-func (p *Plugin) updateCommitPreviewPane(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateCommitPreviewPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	c := p.previewCommit
 	if c == nil {
 		return p, nil
@@ -764,7 +764,7 @@ func (p *Plugin) updateCommitPreviewPane(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd
 }
 
 // updateCommitBodyExpanded handles keys when the full commit message is expanded.
-func (p *Plugin) updateCommitBodyExpanded(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateCommitBodyExpanded(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	c := p.previewCommit
 	bodyLines := strings.Split(strings.TrimSpace(c.Body), "\n")
 	totalLines := len(bodyLines)
@@ -828,7 +828,7 @@ func (p *Plugin) closeDiffView() {
 }
 
 // updateDiff handles key events in the diff view.
-func (p *Plugin) updateDiff(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateDiff(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		p.closeDiffView()
@@ -965,7 +965,7 @@ func (p *Plugin) updateDiff(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updateCommit handles key events in the commit view.
-func (p *Plugin) updateCommit(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateCommit(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensureCommitModal()
 	if p.commitModal == nil {
 		return p, nil
@@ -1034,7 +1034,7 @@ func (p *Plugin) tryCommit() tea.Cmd {
 }
 
 // updatePushMenu handles key events in the push menu.
-func (p *Plugin) updatePushMenu(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updatePushMenu(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensurePushMenuModal()
 	if p.pushMenuModal == nil {
 		return p, nil
@@ -1079,7 +1079,7 @@ func (p *Plugin) updatePushMenu(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
 }
 
 // updatePullMenu handles key events in the pull menu.
-func (p *Plugin) updatePullMenu(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updatePullMenu(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensurePullModal()
 	if p.pullModal == nil {
 		return p, nil
@@ -1153,7 +1153,7 @@ func (p *Plugin) clearPullModal() {
 }
 
 // updatePullConflict handles key events in the pull conflict modal.
-func (p *Plugin) updatePullConflict(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updatePullConflict(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	p.ensurePullConflictModal()
 	if p.pullConflictModal == nil {
 		return p, nil
@@ -1221,9 +1221,8 @@ func (p *Plugin) executePushMenuAction(idx int) (plugin.Plugin, tea.Cmd) {
 	return p, nil
 }
 
-
 // updateConfirmDiscard handles key events in the confirm discard modal.
-func (p *Plugin) updateConfirmDiscard(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateConfirmDiscard(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if p.discardModal == nil {
 		return p, nil
 	}

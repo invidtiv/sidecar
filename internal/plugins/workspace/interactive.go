@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
@@ -157,7 +157,7 @@ func isSessionDeadError(err error) bool {
 
 // MapKeyToTmux is a wrapper around tty.MapKeyToTmux for backward compatibility.
 // See tty.MapKeyToTmux for documentation.
-func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
+func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
 	return tty.MapKeyToTmux(msg)
 }
 
@@ -372,19 +372,13 @@ func (p *Plugin) updateBracketedPasteMode(output string) {
 
 // isPasteInput detects if the input is a paste operation.
 // Returns true if the input contains newlines or is longer than a typical typed sequence.
-func isPasteInput(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes {
+func isPasteInput(msg tea.KeyPressMsg) bool {
+	runes := []rune(msg.Text)
+	if len(runes) <= 1 {
 		return false
 	}
-	if msg.Paste {
-		return true
-	}
-	if len(msg.Runes) <= 1 {
-		return false
-	}
-	text := string(msg.Runes)
 	// Treat as paste if contains newline or is suspiciously long for typing
-	return strings.Contains(text, "\n") || len(msg.Runes) > 10
+	return strings.Contains(msg.Text, "\n") || len(runes) > 10
 }
 
 // isNormalTyping returns true if the input looks like normal keyboard typing.
@@ -819,9 +813,22 @@ func (p *Plugin) exitInteractiveMode() {
 	p.viewMode = ViewModeList
 }
 
+// handleInteractivePaste forwards bracketed-paste content (delivered as a
+// tea.PasteMsg in v2) to the interactive tmux session.
+func (p *Plugin) handleInteractivePaste(content string) tea.Cmd {
+	if p.interactiveState == nil || !p.interactiveState.Active || content == "" {
+		return nil
+	}
+	sessionName := p.interactiveState.TargetSession
+	return tea.Batch(
+		sendInteractivePasteInputCmd(sessionName, content, p.interactiveState.BracketedPasteEnabled),
+		p.pollInteractivePane(),
+	)
+}
+
 // handleInteractiveKeys processes key input in interactive mode.
 // Returns a tea.Cmd for any async operations needed.
-func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
+func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		p.exitInteractiveMode()
 		p.previewOffset = 0
@@ -888,7 +895,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
 
 	// Secondary exit: Double-Escape with 150ms delay
 	// Per spec: first Escape is delayed to detect double-press
-	if msg.Type == tea.KeyEscape {
+	if msg.Code == tea.KeyEscape {
 		if p.interactiveState.EscapePressed {
 			// Second Escape within window: exit interactive mode
 			p.interactiveState.EscapePressed = false
@@ -916,8 +923,8 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
 	// Mouse event garbage can continue arriving after scroll ends due to
 	// terminal/OS buffering. Use time-based check for wider protection window.
 	timeSinceScroll := time.Since(p.lastScrollTime)
-	if timeSinceScroll < postScrollFilterWindow && msg.Type == tea.KeyRunes {
-		s := string(msg.Runes)
+	if timeSinceScroll < postScrollFilterWindow && len(msg.Text) > 0 {
+		s := msg.Text
 		// Drop anything that looks like mouse sequence garbage:
 		// - Contains <, ;, M, m (mouse sequence chars)
 		// - Is not normal alphanumeric typing
@@ -935,8 +942,8 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
 	// of the mouse sequence, not a real user keypress.
 	// td-e2ce50: Use lenient check to catch truncated/split sequences during fast scrolling.
 	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
-	if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
-		if tty.LooksLikeMouseFragment(string(msg.Runes)) {
+	if len(msg.Text) > 0 {
+		if tty.LooksLikeMouseFragment(msg.Text) {
 			// Cancel the pending escape — it was the leading byte of this mouse event
 			p.interactiveState.EscapePressed = false
 			return nil // Drop mouse sequence fragments
@@ -964,7 +971,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
 	// sub-10ms granularity. This works because successfully-parsed mouse events
 	// (tea.MouseMsg) and the leaked "[" originate from the same burst of terminal
 	// output — they arrive within microseconds of each other.
-	if msg.Type == tea.KeyRunes && string(msg.Runes) == "[" {
+	if msg.Text == "[" {
 		escGate := p.interactiveState.EscapePressed &&
 			time.Since(p.interactiveState.EscapeTime) < 5*time.Millisecond
 		mouseGate := time.Since(p.lastMouseEventTime) < 10*time.Millisecond
@@ -1015,7 +1022,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyMsg) tea.Cmd {
 
 	// Check for paste (multi-character input with newlines or long text)
 	if isPasteInput(msg) {
-		text := string(msg.Runes)
+		text := msg.Text
 		bracketed := p.interactiveState.BracketedPasteEnabled
 		// Send paste async (td-c2961e): escape + paste in order if pending
 		if pendingEscape {
@@ -1530,7 +1537,7 @@ func renderWithCursor(content string, cursorRow, cursorCol int, visible bool) st
 // shouldSnapBack determines if we should snap back to live view for a given key (td-e2ce50).
 // Returns false during active scrolling or for input that looks like mouse sequence fragments.
 // This prevents bounce-scroll caused by split mouse events triggering snap-back.
-func (p *Plugin) shouldSnapBack(msg tea.KeyMsg) bool {
+func (p *Plugin) shouldSnapBack(msg tea.KeyPressMsg) bool {
 	// Guard 1: Don't snap back during active scrolling (time-based protection)
 	// If user scrolled recently, suspicious input is likely mouse garbage
 	if time.Since(p.lastScrollTime) < snapBackCooldown {
@@ -1538,32 +1545,32 @@ func (p *Plugin) shouldSnapBack(msg tea.KeyMsg) bool {
 	}
 
 	// Guard 2: Don't snap back for anything that looks like mouse sequence data
-	if msg.Type == tea.KeyRunes {
-		s := string(msg.Runes)
+	if len(msg.Text) > 0 {
 		// Check for any mouse-like fragments
-		if tty.LooksLikeMouseFragment(s) {
+		if tty.LooksLikeMouseFragment(msg.Text) {
 			return false
 		}
 		// Multi-character input (not single keypress) is suspicious during scrolling
 		// Could be paste (which we handle separately) or split mouse sequence
-		if len(msg.Runes) > 1 {
+		if len([]rune(msg.Text)) > 1 {
 			return false
 		}
 	}
 
 	// Guard 3: Don't snap back for Escape - it might be start of a mouse sequence
 	// Real escape is handled by the double-escape exit logic
-	if msg.Type == tea.KeyEscape {
+	if msg.Code == tea.KeyEscape {
 		return false
 	}
 
 	// Snap back for actual user typing:
 	// - Single printable characters
 	// - Navigation/editing keys
-	switch msg.Type {
-	case tea.KeyRunes:
-		// Single character that's not suspicious
-		return len(msg.Runes) == 1
+	// Single character that's not suspicious
+	if len(msg.Text) > 0 {
+		return len([]rune(msg.Text)) == 1
+	}
+	switch msg.Code {
 	case tea.KeyEnter, tea.KeyTab, tea.KeyBackspace, tea.KeyDelete,
 		tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
 		tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown:

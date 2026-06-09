@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
+	"charm.land/glamour/v2"
 	"github.com/cespare/xxhash/v2"
-	"github.com/charmbracelet/glamour"
 	"github.com/marcus/sidecar/internal/styles"
 )
 

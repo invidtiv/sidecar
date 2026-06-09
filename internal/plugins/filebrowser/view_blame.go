@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -79,10 +81,14 @@ func (p *Plugin) ensureBlameModal() {
 		modal.WithHints(false),
 	).
 		AddSection(p.blameHeaderSection()).
-		AddSection(modal.When(func() bool { return !p.blameState.IsLoading && p.blameState.Error == nil && len(p.blameState.Lines) > 0 }, p.blameContentSection(resultsHeight))).
+		AddSection(modal.When(func() bool {
+			return !p.blameState.IsLoading && p.blameState.Error == nil && len(p.blameState.Lines) > 0
+		}, p.blameContentSection(resultsHeight))).
 		AddSection(modal.When(func() bool { return p.blameState.IsLoading }, p.blameLoadingSection())).
 		AddSection(modal.When(func() bool { return p.blameState.Error != nil }, p.blameErrorSection())).
-		AddSection(modal.When(func() bool { return !p.blameState.IsLoading && p.blameState.Error == nil && len(p.blameState.Lines) == 0 }, p.blameEmptySection()))
+		AddSection(modal.When(func() bool {
+			return !p.blameState.IsLoading && p.blameState.Error == nil && len(p.blameState.Lines) == 0
+		}, p.blameEmptySection()))
 }
 
 // blameHeaderSection is intentionally empty - title is in modal header
@@ -229,7 +235,7 @@ func (p *Plugin) renderBlameLine(line BlameLine, hashW, authorW, dateW, lineNoW,
 
 // getBlameAgeColor returns a color based on commit age.
 // Recent commits are brighter, older commits are more muted.
-func getBlameAgeColor(commitTime time.Time) lipgloss.Color {
+func getBlameAgeColor(commitTime time.Time) color.Color {
 	if commitTime.IsZero() {
 		return styles.TextMuted
 	}

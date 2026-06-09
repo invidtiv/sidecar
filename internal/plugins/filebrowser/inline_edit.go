@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
@@ -740,4 +740,3 @@ func (p *Plugin) enterInlineEditModeAtCurrentLine(path string) tea.Cmd {
 	lineNo := p.getCurrentPreviewLine()
 	return p.enterInlineEditMode(path, lineNo)
 }
-

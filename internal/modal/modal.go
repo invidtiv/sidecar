@@ -1,7 +1,7 @@
 package modal
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 )
 
@@ -64,7 +64,7 @@ func (m *Modal) Render(screenW, screenH int, handler *mouse.Handler) string {
 // Returns:
 //   - action: the action ID if triggered ("cancel" for Esc, button/input ID for Enter, etc.)
 //   - cmd: any tea.Cmd from bubbles models (cursor blink, etc.)
-func (m *Modal) HandleKey(msg tea.KeyMsg) (action string, cmd tea.Cmd) {
+func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 	key := msg.String()
 
 	switch key {
@@ -241,7 +241,7 @@ func (m *Modal) scrollToFocused() {
 }
 
 // routeToFocusedSection routes a key message to the focused section.
-func (m *Modal) routeToFocusedSection(msg tea.KeyMsg) (string, tea.Cmd) {
+func (m *Modal) routeToFocusedSection(msg tea.KeyPressMsg) (string, tea.Cmd) {
 	focusID := m.currentFocusID()
 	if focusID == "" {
 		return "", nil

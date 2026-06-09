@@ -3,7 +3,7 @@ package msg
 import (
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // ToastMsg displays a temporary message.

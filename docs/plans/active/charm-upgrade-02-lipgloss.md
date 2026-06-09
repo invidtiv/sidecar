@@ -1,7 +1,7 @@
 # Lip Gloss v1 → v2 Upgrade Plan
 
-> Status: **PLAN / not started** · Part of the Phase 1 atomic trio (see [overview](charm-upgrade-00-overview.md)).
-> Do this **first** within Phase 1 — it is the foundation bubbletea/bubbles build on.
+> Status: **DONE** (implemented on branch `claude/goofy-booth-70c27e`) · Part of the Phase 1 atomic trio (see [overview](charm-upgrade-00-overview.md)).
+> Was done **first** within Phase 1 — the foundation bubbletea/bubbles build on.
 
 ## Versions
 

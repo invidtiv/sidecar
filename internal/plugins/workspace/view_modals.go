@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
@@ -45,7 +45,7 @@ func (p *Plugin) renderTaskLinkModal(width, height int) string {
 	}
 
 	// Set textinput width and remove default prompt
-	p.taskSearchInput.Width = inputW
+	p.taskSearchInput.SetWidth(inputW)
 	p.taskSearchInput.Prompt = ""
 
 	var sb strings.Builder
@@ -304,10 +304,10 @@ const (
 )
 
 const (
-	commitForMergeInputID   = "commit-for-merge-input"
-	commitForMergeCommitID  = "commit-for-merge-commit"
-	commitForMergeCancelID  = "commit-for-merge-cancel"
-	commitForMergeActionID  = "commit-for-merge-action"
+	commitForMergeInputID  = "commit-for-merge-input"
+	commitForMergeCommitID = "commit-for-merge-commit"
+	commitForMergeCancelID = "commit-for-merge-cancel"
+	commitForMergeActionID = "commit-for-merge-action"
 )
 
 // renderConfirmDeleteShellModal renders the shell delete confirmation modal.
@@ -686,9 +686,9 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text(dimText("Select what to clean up:")))
 		m.AddSection(modal.Spacer())
 		m.AddSection(modal.Checkbox(mergeConfirmWorktreeID, "Delete local worktree", &p.mergeState.DeleteLocalWorktree))
-		m.AddSection(modal.Text(dimText("  Removes "+p.mergeState.Worktree.Path)))
+		m.AddSection(modal.Text(dimText("  Removes " + p.mergeState.Worktree.Path)))
 		m.AddSection(modal.Checkbox(mergeConfirmBranchID, "Delete local branch", &p.mergeState.DeleteLocalBranch))
-		m.AddSection(modal.Text(dimText("  Removes '"+p.mergeState.Worktree.Branch+"' locally")))
+		m.AddSection(modal.Text(dimText("  Removes '" + p.mergeState.Worktree.Branch + "' locally")))
 		m.AddSection(modal.Checkbox(mergeConfirmRemoteID, "Delete remote branch", &p.mergeState.DeleteRemoteBranch))
 		m.AddSection(modal.Text(dimText("  Removes from GitHub (often auto-deleted)")))
 		m.AddSection(modal.Spacer())

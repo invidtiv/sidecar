@@ -12,7 +12,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	_ "github.com/marcus/sidecar/internal/adapter/amp"
 	_ "github.com/marcus/sidecar/internal/adapter/claudecode"
@@ -215,7 +215,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sidecar requires an interactive terminal")
 		os.Exit(1)
 	}
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	// v2: terminal features (alt-screen, mouse) are declared on tea.View in
+	// the app's View() method, not as NewProgram options.
+	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)

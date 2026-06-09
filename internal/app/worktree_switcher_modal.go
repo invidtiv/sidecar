@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -33,7 +33,7 @@ func (m *Model) initWorktreeSwitcher() {
 	ti.Placeholder = "Filter worktrees..."
 	ti.Focus()
 	ti.CharLimit = 50
-	ti.Width = 40
+	ti.SetWidth(40)
 	m.worktreeSwitcherInput = ti
 
 	// Load all worktrees
@@ -265,7 +265,7 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 
 // worktreeSwitcherListUpdate handles key events for the worktree list.
 func (m *Model) worktreeSwitcherListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
@@ -409,7 +409,6 @@ func (m *Model) switchWorktree(worktreePath string) tea.Cmd {
 	// Use the same switchProject mechanism - it handles reinit, state save/restore
 	return m.switchProject(worktreePath)
 }
-
 
 // refreshWorktreeCache calls GetWorktrees and caches the result for the current WorkDir.
 func (m *Model) refreshWorktreeCache() {

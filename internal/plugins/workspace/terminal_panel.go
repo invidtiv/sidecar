@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -107,7 +107,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	p.termPanelVisible = true
 	_ = state.SetTermPanelVisible(true)
 	p.termPanelFocused = true // Focus the terminal sub-pane so the user can Enter to interact
-	p.termPanelScroll = 0    // Reset scroll to show latest output
+	p.termPanelScroll = 0     // Reset scroll to show latest output
 	p.activePane = PanePreview
 	if state.GetTermPanelLayout() == "right" {
 		p.termPanelLayout = TermPanelRight
@@ -168,8 +168,6 @@ func (p *Plugin) switchTermPanelLayout() tea.Cmd {
 	p.ctx.Logger.Debug("termPanel: switched layout", "layout", p.termPanelLayout)
 	return tea.Batch(p.resizeTermPanelPaneCmd(), p.resizeSelectedPaneCmd())
 }
-
-
 
 // createTermPanelSession creates or reuses a tmux session for the terminal panel.
 func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -105,11 +105,10 @@ func TestRepoNameClick_OpensProjectSwitcher(t *testing.T) {
 
 	// Click in the middle of the repo name area
 	clickX := (start + end) / 2
-	msg := tea.MouseMsg{
+	msg := tea.MouseClickMsg{
 		X:      clickX,
 		Y:      0, // Header is at Y=0
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
+		Button: tea.MouseLeft,
 	}
 
 	// Process the mouse message
@@ -150,11 +149,10 @@ func TestRepoNameClick_BlockedDuringIntro(t *testing.T) {
 	}
 
 	clickX := (start + end) / 2
-	msg := tea.MouseMsg{
+	msg := tea.MouseClickMsg{
 		X:      clickX,
 		Y:      0,
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
+		Button: tea.MouseLeft,
 	}
 
 	newModel, _ := m.Update(msg)
@@ -191,11 +189,10 @@ func TestRepoNameClick_OutsideBounds(t *testing.T) {
 	}
 
 	// Click before the repo name area (in the "Sidecar" text)
-	msg := tea.MouseMsg{
+	msg := tea.MouseClickMsg{
 		X:      start - 5,
 		Y:      0,
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
+		Button: tea.MouseLeft,
 	}
 
 	newModel, _ := m.Update(msg)

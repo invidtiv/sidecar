@@ -3,7 +3,7 @@ package notes
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/ui"
@@ -113,7 +113,7 @@ func (p *Plugin) renderDeleteModal() string {
 }
 
 // handleDeleteModalKey handles keyboard input for the delete modal.
-func (p *Plugin) handleDeleteModalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (p *Plugin) handleDeleteModalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	p.ensureDeleteModal()
 	if p.deleteModal == nil {
 		return nil, false

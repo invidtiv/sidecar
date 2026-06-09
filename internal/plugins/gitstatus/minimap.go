@@ -4,7 +4,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -233,7 +235,7 @@ func rangesOverlap(a0, a1, b0, b1 int) bool {
 }
 
 // mmColor returns the minimap color for a line type and viewport membership.
-func mmColor(lt LineType, inViewport bool) lipgloss.Color {
+func mmColor(lt LineType, inViewport bool) color.Color {
 	if inViewport {
 		switch lt {
 		case LineAdd:

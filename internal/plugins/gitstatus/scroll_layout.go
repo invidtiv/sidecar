@@ -3,9 +3,8 @@ package gitstatus
 import (
 	"log/slog"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
-
 
 // commitBodyHeight returns the number of visible lines available for the expanded
 // commit body, matching the calculation in renderCommitPreview.
@@ -87,7 +86,6 @@ func (p *Plugin) clampCommitScroll() {
 		p.commitScrollOff = maxOff
 	}
 }
-
 
 func (p *Plugin) ensureCommitListFilled() tea.Cmd {
 	if p.historyFilterActive || p.loadingMoreCommits || !p.moreCommitsAvailable {

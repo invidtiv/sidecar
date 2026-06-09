@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -91,19 +91,19 @@ const (
 	regionDiffTabDivider = "diff-tab-divider"
 
 	// Diff tab mouse regions
-	regionDiffTabFile        = "diff-tab-file"          // File in left pane file list
-	regionDiffTabCommit      = "diff-tab-commit"        // Commit in left pane
-	regionDiffTabDiffPane    = "diff-tab-diff-pane"     // Right pane diff content area
-	regionDiffTabMinimap     = "diff-tab-minimap"       // Minimap in full-file view
-	regionCommitFileItem     = "commit-file-item"       // File in commit drill-down list
-	regionCommitFileBack     = "commit-file-back"       // Back button in commit drill-down
-	regionCommitFileDiffPane = "commit-file-diff-pane"  // Right pane for commit file diff
+	regionDiffTabFile         = "diff-tab-file"          // File in left pane file list
+	regionDiffTabCommit       = "diff-tab-commit"        // Commit in left pane
+	regionDiffTabDiffPane     = "diff-tab-diff-pane"     // Right pane diff content area
+	regionDiffTabMinimap      = "diff-tab-minimap"       // Minimap in full-file view
+	regionCommitFileItem      = "commit-file-item"       // File in commit drill-down list
+	regionCommitFileBack      = "commit-file-back"       // Back button in commit drill-down
+	regionCommitFileDiffPane  = "commit-file-diff-pane"  // Right pane for commit file diff
 	regionDiffTabPreviewFile  = "diff-tab-preview-file"  // File in commit preview (right pane)
-	regionDiffTabFileListPane = "diff-tab-filelist-pane"  // Left pane catch-all (for click-to-focus)
+	regionDiffTabFileListPane = "diff-tab-filelist-pane" // Left pane catch-all (for click-to-focus)
 
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
-	regionTermPanelDivider  = "term-panel-divider"
-	regionTermPanelContent  = "term-panel-content"
+	regionTermPanelDivider = "term-panel-divider"
+	regionTermPanelContent = "term-panel-content"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -133,19 +133,19 @@ type Plugin struct {
 	managedSessions map[string]bool
 
 	// View state
-	viewMode            ViewMode
-	activePane          FocusPane
-	previewTab          PreviewTab
-	selectedIdx         int
-	scrollOffset        int // Sidebar list scroll offset
-	visibleCount        int // Number of visible list items
-	previewOffset    int  // Scroll offset: absolute line from top (0 = first line) for all tabs
-	autoScrollOutput bool // Auto-scroll output to follow agent (paused when user scrolls up)
-	sidebarWidth        int       // Persisted sidebar width
-	sidebarVisible      bool      // Whether sidebar is visible (toggled with \)
-	flashPreviewTime    time.Time // When preview flash was triggered
-	toastMessage        string    // Temporary toast message to display
-	toastTime           time.Time // When toast was triggered
+	viewMode         ViewMode
+	activePane       FocusPane
+	previewTab       PreviewTab
+	selectedIdx      int
+	scrollOffset     int       // Sidebar list scroll offset
+	visibleCount     int       // Number of visible list items
+	previewOffset    int       // Scroll offset: absolute line from top (0 = first line) for all tabs
+	autoScrollOutput bool      // Auto-scroll output to follow agent (paused when user scrolls up)
+	sidebarWidth     int       // Persisted sidebar width
+	sidebarVisible   bool      // Whether sidebar is visible (toggled with \)
+	flashPreviewTime time.Time // When preview flash was triggered
+	toastMessage     string    // Temporary toast message to display
+	toastTime        time.Time // When toast was triggered
 
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
@@ -193,11 +193,11 @@ type Plugin struct {
 	diffTabParsedDiff  *gitstatus.ParsedDiff // Parsed diff for selected file
 
 	// Commit drill-down state (when viewing files within a commit)
-	commitDetail       *gitstatus.Commit      // Loaded commit detail with file list
-	commitFileCursor   int                     // Cursor in commit file list
-	commitFileScroll   int                     // Scroll offset in commit file list
-	commitFileDiffRaw  string                  // Raw diff for selected commit file
-	commitFileParsed   *gitstatus.ParsedDiff   // Parsed diff for selected commit file
+	commitDetail      *gitstatus.Commit     // Loaded commit detail with file list
+	commitFileCursor  int                   // Cursor in commit file list
+	commitFileScroll  int                   // Scroll offset in commit file list
+	commitFileDiffRaw string                // Raw diff for selected commit file
+	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
 
 	// Terminal panel state (Ctrl+T toggle)
 	termPanelVisible    bool            // Whether the terminal panel is shown
@@ -269,11 +269,11 @@ type Plugin struct {
 	taskLoading       bool // True when task fetch is in progress
 
 	// Markdown rendering for task view
-	markdownRenderer       *markdown.Renderer
-	taskMarkdownMode       bool     // true = rendered, false = raw
-	taskMarkdownRendered   []string // Cached rendered lines
-	taskMarkdownWidth      int      // Width used for cached render
-	taskRenderedLineCount  int      // Total line count of last task render (for scroll clamping)
+	markdownRenderer      *markdown.Renderer
+	taskMarkdownMode      bool     // true = rendered, false = raw
+	taskMarkdownRendered  []string // Cached rendered lines
+	taskMarkdownWidth     int      // Width used for cached render
+	taskRenderedLineCount int      // Total line count of last task render (for scroll clamping)
 
 	// Merge workflow state
 	mergeState      *MergeWorkflowState
@@ -1080,12 +1080,12 @@ func (p *Plugin) moveCursor(delta int) {
 	if selectionChanged {
 		p.previewOffset = 0
 		p.autoScrollOutput = true
-		p.taskLoading = false // Reset task loading state for new selection (td-3668584f)
-		p.multiFileDiff = nil        // Clear stale multi-file diff from previous worktree
-		p.fullFileDiff = nil         // Clear stale full-file diff from previous worktree
-		p.commitStatusList = nil     // Clear stale commit list from previous worktree
+		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
+		p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
+		p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
+		p.commitStatusList = nil // Clear stale commit list from previous worktree
 		p.commitStatusWorktree = ""
-		p.diffTabCursor = 0          // Reset diff tab file selection
+		p.diffTabCursor = 0 // Reset diff tab file selection
 		p.diffTabScroll = 0
 		p.diffTabDiffScroll = 0
 		p.diffTabHorizScroll = 0

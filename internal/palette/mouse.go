@@ -1,7 +1,7 @@
 package palette
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 )
 
@@ -9,6 +9,24 @@ import (
 const (
 	regionPaletteEntry = "palette-entry" // Individual command entry (Data: entry index int)
 )
+
+// rebuildMouseAt returns a copy of the mouse message with X/Y replaced,
+// preserving the concrete message type.
+func rebuildMouseAt(msg tea.MouseMsg, x, y int) tea.MouseMsg {
+	mm := msg.Mouse()
+	mm.X, mm.Y = x, y
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(mm)
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(mm)
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(mm)
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(mm)
+	}
+	return msg
+}
 
 // handleMouse processes mouse events for the command palette.
 func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
@@ -26,23 +44,18 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	modalY := (m.height - modalHeight) / 2
 
 	// Translate to modal-relative coordinates
-	relX := msg.X - modalX
-	relY := msg.Y - modalY
+	mi := msg.Mouse()
+	relX := mi.X - modalX
+	relY := mi.Y - modalY
 
 	// Ignore clicks outside modal bounds
 	if relX < 0 || relY < 0 || relX >= modalWidth || relY >= modalHeight {
 		return *m, nil
 	}
 
-	// Create adjusted message for hit testing
-	adjusted := tea.MouseMsg{
-		X:      relX,
-		Y:      relY,
-		Button: msg.Button,
-		Action: msg.Action,
-	}
-
-	action := m.mouseHandler.HandleMouse(adjusted)
+	// Create adjusted message for hit testing (v2 mouse msgs are interfaces, so
+	// rebuild the matching concrete type with relative coordinates).
+	action := m.mouseHandler.HandleMouse(rebuildMouseAt(msg, relX, relY))
 
 	switch action.Type {
 	case mouse.ActionClick:

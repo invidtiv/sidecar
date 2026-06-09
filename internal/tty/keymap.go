@@ -3,14 +3,16 @@
 package tty
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	"unicode"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // MapKeyToTmux translates a Bubble Tea key message to a tmux send-keys argument.
 // Returns the tmux key name and whether to use literal mode (-l).
 // For modified keys and special keys, returns the tmux key name.
 // For literal characters, returns the character with useLiteral=true.
-func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
+func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
 	switch msg.String() {
 	case "shift+up":
 		return "\x1b[1;2A", true
@@ -42,17 +44,31 @@ func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
 		return "\x1b[13;2u", true // CSI u: shift+return
 	}
 
-	// Handle special keys
-	// Note: KeyCtrlI == KeyTab and KeyCtrlM == KeyEnter in BubbleTea,
-	// so we handle Tab and Enter first, then other Ctrl keys.
-	switch msg.Type {
-	case tea.KeyEnter: // Also KeyCtrlM
+	// Ctrl combinations. In v2 the KeyCtrl* constants are gone; a ctrl combo
+	// arrives as the base rune with ModCtrl set (e.g. ctrl+a -> Code=='a',
+	// ModCtrl; ctrl+space -> Code==KeySpace, ModCtrl). Handle these BEFORE the
+	// special-key switch so ctrl+space isn't swallowed by the KeySpace case.
+	// ctrl+i / ctrl+m arrive as Code==KeyTab/KeyEnter (no ModCtrl) and fall
+	// through to the special switch, preserving the v1 "Tab/Enter win" behavior.
+	if msg.Mod.Contains(tea.ModCtrl) {
+		if msg.Code == tea.KeySpace {
+			return "C-Space", false
+		}
+		if msg.Code >= 'a' && msg.Code <= 'z' {
+			return "C-" + string(msg.Code), false
+		}
+	}
+
+	// Handle special keys. A real Tab/Enter keypress arrives as Code==KeyTab/
+	// KeyEnter.
+	switch msg.Code {
+	case tea.KeyEnter:
 		return "Enter", false
 	case tea.KeyBackspace:
 		return "BSpace", false
 	case tea.KeyDelete:
 		return "DC", false
-	case tea.KeyTab: // Also KeyCtrlI
+	case tea.KeyTab:
 		return "Tab", false
 	case tea.KeySpace:
 		return "Space", false
@@ -76,56 +92,6 @@ func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
 		return "IC", false
 	case tea.KeyEscape:
 		return "Escape", false
-
-	// Ctrl combinations (excluding KeyCtrlI/Tab and KeyCtrlM/Enter handled above)
-	case tea.KeyCtrlA:
-		return "C-a", false
-	case tea.KeyCtrlB:
-		return "C-b", false
-	case tea.KeyCtrlC:
-		return "C-c", false
-	case tea.KeyCtrlD:
-		return "C-d", false
-	case tea.KeyCtrlE:
-		return "C-e", false
-	case tea.KeyCtrlF:
-		return "C-f", false
-	case tea.KeyCtrlG:
-		return "C-g", false
-	case tea.KeyCtrlH:
-		return "C-h", false
-	case tea.KeyCtrlJ:
-		return "C-j", false
-	case tea.KeyCtrlK:
-		return "C-k", false
-	case tea.KeyCtrlL:
-		return "C-l", false
-	case tea.KeyCtrlN:
-		return "C-n", false
-	case tea.KeyCtrlO:
-		return "C-o", false
-	case tea.KeyCtrlP:
-		return "C-p", false
-	case tea.KeyCtrlQ:
-		return "C-q", false
-	case tea.KeyCtrlR:
-		return "C-r", false
-	case tea.KeyCtrlS:
-		return "C-s", false
-	case tea.KeyCtrlT:
-		return "C-t", false
-	case tea.KeyCtrlU:
-		return "C-u", false
-	case tea.KeyCtrlV:
-		return "C-v", false
-	case tea.KeyCtrlW:
-		return "C-w", false
-	case tea.KeyCtrlX:
-		return "C-x", false
-	case tea.KeyCtrlY:
-		return "C-y", false
-	case tea.KeyCtrlZ:
-		return "C-z", false
 
 	// Function keys (F1-F12)
 	case tea.KeyF1:
@@ -152,18 +118,19 @@ func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
 		return "F11", false
 	case tea.KeyF12:
 		return "F12", false
-
-	case tea.KeyRunes:
-		// Regular character input
-		if len(msg.Runes) > 0 {
-			return string(msg.Runes), true
-		}
-		return "", true
 	}
 
-	// Fallback for any unhandled key types
-	if msg.String() != "" {
-		return msg.String(), true
+	// Regular character input: v2 populates Text for printable keypresses.
+	if len(msg.Text) > 0 {
+		return msg.Text, true
+	}
+
+	// Modified printable key that carries no Text (e.g. alt+a arrives as
+	// Code=='a', ModAlt, Text==""). Send the bare base character, matching v1
+	// which returned string(Runes) for alt+rune. This avoids emitting a
+	// modifier-prefixed name like "alt+a" as literal text into the pane.
+	if unicode.IsPrint(msg.Code) {
+		return string(msg.Code), true
 	}
 	return "", true
 }

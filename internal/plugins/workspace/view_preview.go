@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/styles"
@@ -209,9 +209,9 @@ func (p *Plugin) renderTabs(width int) string {
 
 	for i, tab := range tabs {
 		if PreviewTab(i) == p.previewTab {
-			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChipActive, ""))
+			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChipActive, nil))
 		} else {
-			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChip, ""))
+			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChip, nil))
 		}
 	}
 

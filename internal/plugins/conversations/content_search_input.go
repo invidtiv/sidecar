@@ -5,14 +5,14 @@ package conversations
 import (
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
 // handleContentSearchKey handles keyboard input when in content search mode.
-func (p *Plugin) handleContentSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) handleContentSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch {
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		p.contentSearchMode = false
@@ -155,10 +155,10 @@ func (p *Plugin) handleContentSearchKey(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd)
 		}
 		return p, nil
 
-	case msg.Type == tea.KeyRunes:
+	case len(msg.Text) > 0:
 		// Add character to query
 		if p.contentSearchState != nil {
-			p.contentSearchState.Query += string(msg.Runes)
+			p.contentSearchState.Query += msg.Text
 			return p, p.triggerContentSearch()
 		}
 		return p, nil

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -49,7 +49,7 @@ type RepoInitDoneMsg struct {
 func (m RepoInitDoneMsg) GetEpoch() uint64 { return m.Epoch }
 
 // updateNoRepo handles key events when the current project has no git repository.
-func (p *Plugin) updateNoRepo(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateNoRepo(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch msg.String() {
 	case "i", "enter":
 		if p.repoInitInProgress {

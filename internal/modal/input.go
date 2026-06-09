@@ -3,10 +3,10 @@ package modal
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -89,7 +89,7 @@ func (s *inputSection) Render(contentWidth int, focusID, hoverID string) Rendere
 	}
 
 	if s.model != nil {
-		s.model.Width = inputInnerWidth // Account for input padding/border
+		s.model.SetWidth(inputInnerWidth) // Account for input padding/border
 		if isFocused {
 			s.model.Focus()
 		} else {
@@ -144,7 +144,7 @@ func (s *inputSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 		return "", nil
 	}
 
-	keyMsg, ok := msg.(tea.KeyMsg)
+	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		// Forward non-key messages to the model
 		var cmd tea.Cmd

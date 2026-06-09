@@ -3,7 +3,7 @@ package gitstatus
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestSearchCommits(t *testing.T) {
@@ -29,21 +29,21 @@ func TestSearchCommits(t *testing.T) {
 		wantSubject   string // Check first match subject if count > 0
 	}{
 		{
-			name:          "Empty query",
-			query:         "",
-			wantCount:     0,
+			name:      "Empty query",
+			query:     "",
+			wantCount: 0,
 		},
 		{
-			name:          "Simple match subject",
-			query:         "feature",
-			wantCount:     1,
-			wantSubject:   "Add new feature",
+			name:        "Simple match subject",
+			query:       "feature",
+			wantCount:   1,
+			wantSubject: "Add new feature",
 		},
 		{
-			name:          "Simple match author",
-			query:         "Charlie",
-			wantCount:     1,
-			wantSubject:   "Update documentation",
+			name:        "Simple match author",
+			query:       "Charlie",
+			wantCount:   1,
+			wantSubject: "Update documentation",
 		},
 		{
 			name:          "Case insensitive match",
@@ -66,24 +66,24 @@ func TestSearchCommits(t *testing.T) {
 			wantSubject:   "Fix bug in parser",
 		},
 		{
-			name:          "Regex match",
-			query:         "Fix.*",
-			useRegex:      true,
-			wantCount:     2,
-			wantSubject:   "Fix bug in parser",
+			name:        "Regex match",
+			query:       "Fix.*",
+			useRegex:    true,
+			wantCount:   2,
+			wantSubject: "Fix bug in parser",
 		},
 		{
-			name:          "Regex match author",
-			query:         "^Bob$",
-			useRegex:      true,
-			wantCount:     2,
-			wantSubject:   "Add new feature",
+			name:        "Regex match author",
+			query:       "^Bob$",
+			useRegex:    true,
+			wantCount:   2,
+			wantSubject: "Add new feature",
 		},
 		{
-			name:          "Invalid regex",
-			query:         "[",
-			useRegex:      true,
-			wantCount:     0,
+			name:      "Invalid regex",
+			query:     "[",
+			useRegex:  true,
+			wantCount: 0,
 		},
 	}
 
@@ -107,19 +107,19 @@ func TestUpdatePathFilter(t *testing.T) {
 	}
 
 	// Test backspace
-	p.updatePathFilter(tea.KeyMsg{Type: tea.KeyBackspace})
+	p.updatePathFilter(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if p.pathFilterInput != "sr" {
 		t.Errorf("after backspace, input = %q, want %q", p.pathFilterInput, "sr")
 	}
 
 	// Test input
-	p.updatePathFilter(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	p.updatePathFilter(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	if p.pathFilterInput != "src" {
 		t.Errorf("after input 'c', input = %q, want %q", p.pathFilterInput, "src")
 	}
 
 	// Test escape
-	p.updatePathFilter(tea.KeyMsg{Type: tea.KeyEsc})
+	p.updatePathFilter(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if p.pathFilterMode {
 		t.Error("after esc, pathFilterMode should be false")
 	}
@@ -140,13 +140,13 @@ func TestUpdateHistorySearch(t *testing.T) {
 	}
 
 	// Test backspace
-	p.updateHistorySearch(tea.KeyMsg{Type: tea.KeyBackspace})
+	p.updateHistorySearch(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if p.historySearchState.Query != "fo" {
 		t.Errorf("after backspace, query = %q, want %q", p.historySearchState.Query, "fo")
 	}
 
 	// Test input
-	p.updateHistorySearch(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	p.updateHistorySearch(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	if p.historySearchState.Query != "foo" {
 		t.Errorf("after input 'o', query = %q, want %q", p.historySearchState.Query, "foo")
 	}

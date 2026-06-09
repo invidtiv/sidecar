@@ -1,9 +1,9 @@
 package gitstatus
 
 import (
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
@@ -115,7 +115,7 @@ func (p *Plugin) cancelStashPop() (plugin.Plugin, tea.Cmd) {
 }
 
 // updateConfirmStashPop handles key events in the confirm stash pop modal.
-func (p *Plugin) updateConfirmStashPop(msg tea.KeyMsg) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) updateConfirmStashPop(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if p.stashPopModal == nil {
 		p.buildStashPopModal()
 	}

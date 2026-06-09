@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -63,13 +63,13 @@ func TestContentSearchKeyHandling(t *testing.T) {
 	p = result.(*Plugin)
 
 	// Test typing characters
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 't', Text: "t"})
 	p = result.(*Plugin)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	p = result.(*Plugin)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 's', Text: "s"})
 	p = result.(*Plugin)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 't', Text: "t"})
 	p = result.(*Plugin)
 
 	if p.contentSearchState.Query != "test" {
@@ -77,14 +77,14 @@ func TestContentSearchKeyHandling(t *testing.T) {
 	}
 
 	// Test backspace
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	p = result.(*Plugin)
 	if p.contentSearchState.Query != "tes" {
 		t.Errorf("Query after backspace should be 'tes', got %q", p.contentSearchState.Query)
 	}
 
 	// Test escape to close
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEscape})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	p = result.(*Plugin)
 	if p.contentSearchMode {
 		t.Error("Content search mode should be closed after escape")
@@ -125,14 +125,14 @@ func TestContentSearchCursorNavigation(t *testing.T) {
 	}
 
 	// Move down
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	p = result.(*Plugin)
 	if p.contentSearchState.Cursor != 1 {
 		t.Errorf("Cursor after down should be 1, got %d", p.contentSearchState.Cursor)
 	}
 
 	// Move up
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyUp})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	p = result.(*Plugin)
 	if p.contentSearchState.Cursor != 0 {
 		t.Errorf("Cursor after up should be 0, got %d", p.contentSearchState.Cursor)
@@ -157,14 +157,14 @@ func TestContentSearchToggleOptions(t *testing.T) {
 	}
 
 	// Toggle regex with ctrl+r
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	p = result.(*Plugin)
 	if !p.contentSearchState.UseRegex {
 		t.Error("Regex should be on after ctrl+r")
 	}
 
 	// Toggle case sensitivity with alt+c
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}, Alt: true})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
 	p = result.(*Plugin)
 	if !p.contentSearchState.CaseSensitive {
 		t.Error("Case sensitivity should be on after alt+c")
@@ -192,14 +192,14 @@ func TestContentSearchToggleCollapse(t *testing.T) {
 	}
 
 	// Cursor is on session, toggle collapse with tab (td-2467e8: changed from space)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyTab})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	p = result.(*Plugin)
 	if !p.contentSearchState.Results[0].Collapsed {
 		t.Error("Session should be collapsed after tab on session row")
 	}
 
 	// Toggle again to expand
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyTab})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	p = result.(*Plugin)
 	if p.contentSearchState.Results[0].Collapsed {
 		t.Error("Session should be expanded after second tab")
@@ -488,7 +488,7 @@ func TestContentSearchNextPrevMatch(t *testing.T) {
 	p.contentSearchState.Cursor = 0
 
 	// Jump to next match (ctrl+n - td-2467e8)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	p = result.(*Plugin)
 
 	// Should be at first match (index 2)
@@ -497,7 +497,7 @@ func TestContentSearchNextPrevMatch(t *testing.T) {
 	}
 
 	// Jump to next match again
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	p = result.(*Plugin)
 
 	// Should be at second match (index 3)
@@ -506,7 +506,7 @@ func TestContentSearchNextPrevMatch(t *testing.T) {
 	}
 
 	// Jump to previous match (ctrl+p - td-2467e8)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	p = result.(*Plugin)
 
 	// Should be back at first match
@@ -527,7 +527,7 @@ func TestFKeyOpensContentSearch(t *testing.T) {
 	p.activePane = PaneSidebar
 
 	// Test from sidebar
-	result, _ := p.updateSessions(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	result, _ := p.updateSessions(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	p = result.(*Plugin)
 
 	if !p.contentSearchMode {
@@ -540,7 +540,7 @@ func TestFKeyOpensContentSearch(t *testing.T) {
 	p.activePane = PaneMessages
 	p.selectedSession = "session1"
 
-	result, _ = p.updateMessages(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	result, _ = p.updateMessages(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	p = result.(*Plugin)
 
 	if !p.contentSearchMode {
@@ -564,7 +564,7 @@ func TestContentSearchExpandCollapseAll(t *testing.T) {
 	}
 
 	// Collapse all (C key)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'C', Text: "C"})
 	p = result.(*Plugin)
 
 	for i, sr := range p.contentSearchState.Results {
@@ -574,7 +574,7 @@ func TestContentSearchExpandCollapseAll(t *testing.T) {
 	}
 
 	// Expand all (E key)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'E'}})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	p = result.(*Plugin)
 
 	for i, sr := range p.contentSearchState.Results {
@@ -608,7 +608,7 @@ func TestContentSearchGotoTopBottom(t *testing.T) {
 	p.contentSearchState.Cursor = 2
 
 	// Go to top (home key - td-2467e8)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyHome})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyHome})
 	p = result.(*Plugin)
 
 	if p.contentSearchState.Cursor != 0 {
@@ -616,7 +616,7 @@ func TestContentSearchGotoTopBottom(t *testing.T) {
 	}
 
 	// Go to bottom (end key - td-2467e8)
-	result, _ = p.handleContentSearchKey(tea.KeyMsg{Type: tea.KeyEnd})
+	result, _ = p.handleContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnd})
 	p = result.(*Plugin)
 
 	flatLen := p.contentSearchState.FlatLen()
