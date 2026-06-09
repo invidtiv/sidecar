@@ -4,6 +4,8 @@
 > Tracking task: `td-e17cb9`
 > Author research date: 2026-06-08 (verify versions again at execution time — see "Re-verify before starting")
 
+> ⚠️ **Prerequisite: td must upgrade to the charm.land v2 stack and cut a release FIRST.** sidecar embeds `github.com/marcus/td/pkg/monitor` as a *live Bubble Tea sub-model* inside its single `tea.Program` (the `tdmonitor` plugin forwards `tea.Msg`/`KeyMsg`/`MouseMsg` into `monitor.Update` and renders `monitor.View()`). A `tea.Cmd`/`tea.Msg`/`lipgloss.Style` from v1 td will not unify with sidecar's v2 types. So **Phase 1 step 0 is "bump `github.com/marcus/td` to its new v2-based release."** See td's plan set at `~/code/td/docs/plans/active/charm-upgrade-*.md` (overview explains the cross-repo handoff).
+
 This is the master document for upgrading sidecar's Charmbracelet dependencies. **The per-library files are numbered in execution order** — read this first, then work through them in sequence:
 
 | # | Library | File | Current | Target | Phase | Risk |
@@ -51,6 +53,7 @@ Bump `x/ansi` → `v0.11.7` (width-calc fixes only; signatures unchanged) while 
 
 ### Phase 1 — the v2 trio (files 02→03→04, ONE atomic PR)
 Do the code migration in dependency order inside the single change:
+0. **Bump `github.com/marcus/td`** to its new charm.land-v2 release (the prerequisite above). Until td is on v2, the embedded `monitor` sub-model's `tea.*`/`lipgloss.*` types won't unify with sidecar's. Validate locally first with `replace github.com/marcus/td => ../td` before the real td tag exists. Also update the one embedding call site (sidecar reads `monitor.View()` — under td v2 this becomes `monitor.ViewString()` or `monitor.View().Content`; see td's bubbletea plan, "The monitor.View() decision").
 1. **Lip Gloss v2** ([02](charm-upgrade-02-lipgloss.md)) — the foundation. Fix `lipgloss.Color`-as-type → `color.Color`, drop `.(lipgloss.Color)` assertions, rewrite import paths.
 2. **Bubble Tea v2** ([03](charm-upgrade-03-bubbletea.md)) — `View() string` → `View() tea.View` on the root model only, move `NewProgram` options to View fields, `tea.KeyMsg` → `tea.KeyPressMsg`, rework mouse + paste.
 3. **Bubbles v2** ([04](charm-upgrade-04-bubbles.md)) — `textinput.Width` field → `SetWidth()`, `textarea.Style` → `StyleState` / `Styles.Focused`, `SetCursor` → `SetCursorColumn`, path-only change for `key`.
