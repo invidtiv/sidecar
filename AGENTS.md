@@ -17,7 +17,7 @@ go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar
 # Tag a release
 ```
 
-See .claude/skills/release/SKILL.md
+See .claude/skills/release-sidecar/SKILL.md
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
 
 ## Keyboard Shortcut Parity
