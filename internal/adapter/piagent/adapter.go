@@ -65,7 +65,7 @@ type Adapter struct {
 	name         string
 	icon         string
 	projectDirFn func(sessionsDir, projectRoot string) string // nil → default piagent encoding
-	sessionIndex map[string]string // sessionID -> file path
+	sessionIndex map[string]string                            // sessionID -> file path
 	metaCache    map[string]sessionMetaCacheEntry
 	msgCache     *cache.Cache[messageCacheEntry]
 	mu           sync.RWMutex
@@ -188,9 +188,9 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		sessions = append(sessions, adapter.Session{
 			ID:              meta.SessionID,
 			Name:            name,
-			AdapterID:       adapterID,
-			AdapterName:     adapterName,
-			AdapterIcon:     adapterIcon,
+			AdapterID:       a.ID(),
+			AdapterName:     a.Name(),
+			AdapterIcon:     a.Icon(),
 			CreatedAt:       meta.FirstMsg,
 			UpdatedAt:       meta.LastMsg,
 			Duration:        meta.LastMsg.Sub(meta.FirstMsg),
@@ -1095,9 +1095,9 @@ func (a *Adapter) SessionByID(sessionID string) (*adapter.Session, error) {
 	return &adapter.Session{
 		ID:              meta.SessionID,
 		Name:            name,
-		AdapterID:       adapterID,
-		AdapterName:     adapterName,
-		AdapterIcon:     adapterIcon,
+		AdapterID:       a.ID(),
+		AdapterName:     a.Name(),
+		AdapterIcon:     a.Icon(),
 		CreatedAt:       meta.FirstMsg,
 		UpdatedAt:       meta.LastMsg,
 		Duration:        meta.LastMsg.Sub(meta.FirstMsg),

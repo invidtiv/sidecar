@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/adapter"
 )
 
 func TestNew(t *testing.T) {
@@ -124,6 +126,40 @@ func TestSessions_WithTestData(t *testing.T) {
 	if s.EstCost == 0 {
 		t.Error("session EstCost = 0, want > 0")
 	}
+}
+
+func TestCustomAdapterSessionIdentity(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "--test-project--")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile("testdata/session1.jsonl")
+	if err != nil {
+		t.Skipf("test data not available: %v", err)
+	}
+	destPath := filepath.Join(projectDir, "2026-02-01T00-00-00Z_test-session-1.jsonl")
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewCustom(tmpDir, "custom-agent", "Custom Agent", "C")
+
+	sessions, err := a.Sessions("/test/project")
+	if err != nil {
+		t.Fatalf("Sessions() error = %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("Sessions() returned %d sessions, want 1", len(sessions))
+	}
+	assertSessionIdentity(t, sessions[0], "custom-agent", "Custom Agent", "C")
+
+	session, err := a.SessionByID("test-session-1")
+	if err != nil {
+		t.Fatalf("SessionByID() error = %v", err)
+	}
+	assertSessionIdentity(t, *session, "custom-agent", "Custom Agent", "C")
 }
 
 func TestMessages_WithTestData(t *testing.T) {
@@ -319,4 +355,17 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func assertSessionIdentity(t *testing.T, s adapter.Session, wantID, wantName, wantIcon string) {
+	t.Helper()
+	if s.AdapterID != wantID {
+		t.Errorf("session AdapterID = %q, want %q", s.AdapterID, wantID)
+	}
+	if s.AdapterName != wantName {
+		t.Errorf("session AdapterName = %q, want %q", s.AdapterName, wantName)
+	}
+	if s.AdapterIcon != wantIcon {
+		t.Errorf("session AdapterIcon = %q, want %q", s.AdapterIcon, wantIcon)
+	}
 }
