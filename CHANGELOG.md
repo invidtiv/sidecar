@@ -2,6 +2,14 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.85.1] - 2026-06-17
+
+### Bug Fixes
+- **td monitor: capital-letter keyboard shortcuts now work again.** After the v0.85.0 Charmbracelet v2 upgrade, `Y` (copy task ID) and every other shift-bound shortcut in the embedded td monitor silently did nothing. In Bubble Tea v2 a shifted printable key arrives as the unshifted code plus a shift modifier, so td's keymap matched against `"shift+y"` instead of `"Y"`. Fixed upstream in td and pulled in via the dependency bump below.
+
+### Dependencies
+- bump td to v0.47.1 — fixes the capital-letter shortcut regression in the monitor keymap (`KeyToString` now uses `Key.String()`, mirroring sidecar's own keymap fix).
+
 ## [v0.85.0] - 2026-06-08
 
 ### Dependencies
