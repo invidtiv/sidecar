@@ -61,7 +61,11 @@ type toolUseRef struct {
 // Adapter implements the adapter.Adapter interface for standalone Pi Agent sessions.
 type Adapter struct {
 	sessionsDir  string
-	sessionIndex map[string]string // sessionID -> file path
+	id           string
+	name         string
+	icon         string
+	projectDirFn func(sessionsDir, projectRoot string) string // nil → default piagent encoding
+	sessionIndex map[string]string                            // sessionID -> file path
 	metaCache    map[string]sessionMetaCacheEntry
 	msgCache     *cache.Cache[messageCacheEntry]
 	mu           sync.RWMutex
@@ -71,22 +75,38 @@ type Adapter struct {
 // New creates a new Pi Agent adapter.
 func New() *Adapter {
 	home, _ := os.UserHomeDir()
+	return NewCustom(filepath.Join(home, ".pi", "agent", "sessions"), adapterID, adapterName, adapterIcon)
+}
+
+// NewCustom creates a Pi Agent-compatible adapter with a custom sessions directory and identity.
+// Use this for forks of Pi Agent that share the same JSONL format but store sessions elsewhere.
+func NewCustom(sessionsDir, id, name, icon string) *Adapter {
 	return &Adapter{
-		sessionsDir:  filepath.Join(home, ".pi", "agent", "sessions"),
+		sessionsDir:  sessionsDir,
+		id:           id,
+		name:         name,
+		icon:         icon,
 		sessionIndex: make(map[string]string),
 		metaCache:    make(map[string]sessionMetaCacheEntry),
 		msgCache:     cache.New[messageCacheEntry](msgCacheMaxEntries),
 	}
 }
 
+// WithProjectDirFunc overrides the function used to map a project root to its
+// sessions directory. Use this for Pi forks that encode paths differently.
+func (a *Adapter) WithProjectDirFunc(fn func(sessionsDir, projectRoot string) string) *Adapter {
+	a.projectDirFn = fn
+	return a
+}
+
 // ID returns the adapter identifier.
-func (a *Adapter) ID() string { return adapterID }
+func (a *Adapter) ID() string { return a.id }
 
 // Name returns the human-readable adapter name.
-func (a *Adapter) Name() string { return adapterName }
+func (a *Adapter) Name() string { return a.name }
 
 // Icon returns the adapter icon for badge display.
-func (a *Adapter) Icon() string { return adapterIcon }
+func (a *Adapter) Icon() string { return a.icon }
 
 // Detect checks if Pi Agent sessions exist for the given project.
 func (a *Adapter) Detect(projectRoot string) (bool, error) {
@@ -168,9 +188,9 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		sessions = append(sessions, adapter.Session{
 			ID:              meta.SessionID,
 			Name:            name,
-			AdapterID:       adapterID,
-			AdapterName:     adapterName,
-			AdapterIcon:     adapterIcon,
+			AdapterID:       a.ID(),
+			AdapterName:     a.Name(),
+			AdapterIcon:     a.Icon(),
 			CreatedAt:       meta.FirstMsg,
 			UpdatedAt:       meta.LastMsg,
 			Duration:        meta.LastMsg.Sub(meta.FirstMsg),
@@ -267,10 +287,19 @@ func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, er
 
 // projectDirPath converts a project root path to the Pi Agent sessions directory path.
 // Pi Agent encodes paths as: /home/user/project → --home-user-project--
+// If a.projectDirFn is set, it is called instead.
 func (a *Adapter) projectDirPath(projectRoot string) string {
+	if a.projectDirFn != nil {
+		return a.projectDirFn(a.sessionsDir, projectRoot)
+	}
 	absPath, err := filepath.Abs(projectRoot)
 	if err != nil {
 		absPath = projectRoot
+	}
+	// Resolve symlinks so that paths like /tmp (→ /private/tmp on macOS) match
+	// the encoding that Pi Agent uses when it records the session cwd.
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolved
 	}
 	// /home/user/project → --home-user-project--
 	// Strip leading slash, replace remaining slashes with dashes, wrap in --
@@ -1066,9 +1095,9 @@ func (a *Adapter) SessionByID(sessionID string) (*adapter.Session, error) {
 	return &adapter.Session{
 		ID:              meta.SessionID,
 		Name:            name,
-		AdapterID:       adapterID,
-		AdapterName:     adapterName,
-		AdapterIcon:     adapterIcon,
+		AdapterID:       a.ID(),
+		AdapterName:     a.Name(),
+		AdapterIcon:     a.Icon(),
 		CreatedAt:       meta.FirstMsg,
 		UpdatedAt:       meta.LastMsg,
 		Duration:        meta.LastMsg.Sub(meta.FirstMsg),
