@@ -35,8 +35,10 @@ func TestProjectDirPath(t *testing.T) {
 		{"/home/user/project", "--home-user-project--"},
 		{"/home/user/my-app", "--home-user-my-app--"},
 		{"/", "----"},
-		// /tmp is a symlink to /private/tmp on macOS; must resolve to --private-tmp--
-		{"/tmp", "--private-tmp--"},
+		// /tmp is a symlink to /private/tmp on macOS but a real dir on Linux;
+		// projectDirPath resolves symlinks, so derive the expected suffix from the
+		// platform's actual resolution rather than hardcoding it.
+		{"/tmp", tmpDirSuffix(t)},
 	}
 
 	for _, tt := range tests {
@@ -47,6 +49,18 @@ func TestProjectDirPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// tmpDirSuffix returns the expected encoded suffix for "/tmp" on the current
+// platform, accounting for symlink resolution (e.g. /tmp → /private/tmp on macOS).
+func tmpDirSuffix(t *testing.T) string {
+	t.Helper()
+	resolved := "/tmp"
+	if r, err := filepath.EvalSymlinks("/tmp"); err == nil {
+		resolved = r
+	}
+	encoded := strings.ReplaceAll(strings.TrimPrefix(resolved, "/"), "/", "-")
+	return "--" + encoded + "--"
 }
 
 func TestCapabilities(t *testing.T) {
