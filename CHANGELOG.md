@@ -2,6 +2,18 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.86.0] - 2026-06-17
+
+### Features
+- Add an Oh My Pi (OMP) conversation adapter for sessions stored under `~/.omp/agent/sessions`, reusing the Pi Agent JSONL parser with OMP's current project-path encoding.
+
+### Bug Fixes
+- Preserve custom Pi Agent-compatible adapter identity on returned sessions, so OMP sessions are labeled as OMP instead of Pi Agent in conversation lists and targeted refreshes.
+- Resolve symlinks when matching Pi Agent project session directories, fixing macOS paths such as `/tmp` resolving to `/private/tmp`.
+
+### Dependencies
+- bump td to v0.47.2 — normalizes issue IDs before FK-constrained writes.
+
 ## [v0.85.1] - 2026-06-17
 
 ### Bug Fixes
