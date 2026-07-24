@@ -149,7 +149,15 @@ func (p *Plugin) buildMonitor() tea.Cmd {
 		epoch = p.ctx.Epoch
 	}
 
-	return func() tea.Msg {
+	return func() (msg tea.Msg) {
+		// Building the monitor used to run inside registry.safeInit, which
+		// recovers panics and degrades to "plugin unavailable". Preserve that:
+		// a panic here would otherwise tear the whole program down (td-9c7bf2).
+		defer func() {
+			if rec := recover(); rec != nil {
+				msg = MonitorReadyMsg{Epoch: epoch, Err: fmt.Errorf("panic building td monitor: %v", rec)}
+			}
+		}()
 		model, err := monitor.NewEmbeddedWithOptions(opts)
 		return MonitorReadyMsg{Epoch: epoch, Model: model, Err: err}
 	}

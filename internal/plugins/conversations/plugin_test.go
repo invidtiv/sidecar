@@ -3805,3 +3805,70 @@ func TestViewShowsSkeletonWhileDetecting(t *testing.T) {
 		t.Error("view should show the empty state once detection found nothing")
 	}
 }
+
+// panicAdapter panics from Detect, simulating a malformed session store.
+type panicAdapter struct {
+	mockAdapter
+	id string
+}
+
+func (d *panicAdapter) ID() string { return d.id }
+func (d *panicAdapter) Detect(projectRoot string) (bool, error) {
+	panic("boom")
+}
+
+// TestDetectAdaptersSurvivesPanickingAdapter pins that a panicking Detect can't
+// kill the process. Detection used to run inside registry.safeInit, which
+// recovers panics; it now runs in bare goroutines spawned by a tea.Cmd, and
+// Bubble Tea's command panic handler does not cover nested goroutines — an
+// unrecovered panic there is fatal and leaves the terminal in raw mode.
+func TestDetectAdaptersSurvivesPanickingAdapter(t *testing.T) {
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir:     t.TempDir(),
+		ProjectRoot: t.TempDir(),
+		Adapters: map[string]adapter.Adapter{
+			"boom": &panicAdapter{id: "boom"},
+			"ok":   &detectAdapter{id: "ok", found: true},
+		},
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	msg, ok := p.detectAdapters()().(AdaptersDetectedMsg)
+	if !ok {
+		t.Fatal("detectAdapters did not produce an AdaptersDetectedMsg")
+	}
+	if _, found := msg.Adapters["boom"]; found {
+		t.Error("a panicking adapter must not be reported as detected")
+	}
+	if _, found := msg.Adapters["ok"]; !found {
+		t.Error("a healthy adapter must still be detected alongside a panicking one")
+	}
+}
+
+// TestDiagnosticsWhileDetecting pins that the diagnostics panel doesn't claim
+// the tab is disabled during the window where detection hasn't answered yet.
+func TestDiagnosticsWhileDetecting(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	p.detectingAdapters = true
+
+	diags := p.Diagnostics()
+	if len(diags) == 0 {
+		t.Fatal("expected at least one diagnostic")
+	}
+	if diags[0].Status == "disabled" {
+		t.Errorf("diagnostics reported %q/%q while detection was still running",
+			diags[0].Status, diags[0].Detail)
+	}
+
+	p.detectingAdapters = false
+	diags = p.Diagnostics()
+	if diags[0].Status != "disabled" {
+		t.Errorf("expected disabled once detection found nothing, got %q", diags[0].Status)
+	}
+}

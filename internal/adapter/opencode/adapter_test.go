@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -1056,5 +1057,39 @@ func TestMalformedMessageJSON(t *testing.T) {
 
 	if msg.Role != "user" {
 		t.Errorf("expected role %q, got %q", "user", msg.Role)
+	}
+}
+
+// TestConcurrentProjectIndexAccess pins that the lazily-built project index is
+// safe for concurrent use. Detect(), Sessions() and DiscoverRelatedProjectDirs()
+// all run from separate tea.Cmd goroutines against the same shared adapter
+// instance (adapter instances are created once in main and reused across
+// project switches), and each of them lazily populates projectIndex. Without a
+// lock this is a concurrent map write, which is a fatal runtime error, not a
+// recoverable one. Run under -race to catch regressions.
+func TestConcurrentProjectIndexAccess(t *testing.T) {
+	a := newTestAdapter(t)
+	roots := []string{
+		"/Users/test/projects/myapp",
+		"/Users/test/projects/other",
+		t.TempDir(),
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		for _, root := range roots {
+			wg.Add(3)
+			go func(root string) { defer wg.Done(); _, _ = a.Detect(root) }(root)
+			go func(root string) { defer wg.Done(); _, _ = a.Sessions(root) }(root)
+			go func(root string) {
+				defer wg.Done()
+				_, _ = a.DiscoverRelatedProjectDirs(root)
+			}(root)
+		}
+	}
+	wg.Wait()
+
+	if !a.projectsLoaded {
+		t.Error("projectsLoaded should be set after concurrent access")
 	}
 }

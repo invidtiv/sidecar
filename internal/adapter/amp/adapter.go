@@ -125,37 +125,39 @@ func (a *Adapter) Detect(projectRoot string) (bool, error) {
 	}
 	absRoot = filepath.Clean(absRoot)
 
-	// Each candidate thread is fully read to check its project, so probe
-	// newest-first and stop at the first match (td-9c7bf2).
-	infos := make(map[string]time.Time, len(entries))
-	for _, e := range entries {
-		if info, err := e.Info(); err == nil {
-			infos[e.Name()] = info.ModTime()
-		}
+	// Each candidate thread is read in full to check its project, so probe
+	// newest-first and stop at the first match (td-9c7bf2). Filter to thread
+	// files before stat-ing: DirEntry.Info() is an lstat per call on Unix, and
+	// the whole point of this path is to touch as few files as possible.
+	type candidate struct {
+		path string
+		info os.FileInfo
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return infos[entries[i].Name()].After(infos[entries[j].Name()])
-	})
-
+	candidates := make([]candidate, 0, len(entries))
 	for _, e := range entries {
 		if !isThreadFile(e.Name()) {
 			continue
 		}
-
-		path := filepath.Join(a.threadsDir, e.Name())
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
+		candidates = append(candidates, candidate{
+			path: filepath.Join(a.threadsDir, e.Name()),
+			info: info,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].info.ModTime().After(candidates[j].info.ModTime())
+	})
 
-		meta, err := a.threadMetadata(path, info)
-		if err != nil {
+	for _, c := range candidates {
+		if _, err := a.threadMetadata(c.path, c.info); err != nil {
 			continue
 		}
 
 		// Check project match by reading the full thread
-		if a.threadMatchesProject(path, absRoot) {
-			_ = meta // valid thread for this project
+		if a.threadMatchesProject(c.path, absRoot) {
 			return true, nil
 		}
 	}

@@ -31,6 +31,7 @@ type Adapter struct {
 	dbPath         string
 	projectIndex   map[string]*Project // worktree path -> Project
 	projectsLoaded bool                // true after loadProjects populates projectIndex
+	projectMu      sync.RWMutex        // guards projectIndex and projectsLoaded
 	metaCache      map[string]sessionMetaCacheEntry
 	metaMu         sync.RWMutex // guards metaCache
 	db             *sql.DB
@@ -889,11 +890,12 @@ func (a *Adapter) findProjectID(projectRoot string) (string, error) {
 		absRoot = resolved
 	}
 	absRoot = filepath.Clean(absRoot)
-	if !a.projectsLoaded {
-		if err := a.loadProjects(); err != nil {
-			return "", err
-		}
+	if err := a.ensureProjectsLoaded(); err != nil {
+		return "", err
 	}
+
+	a.projectMu.RLock()
+	defer a.projectMu.RUnlock()
 
 	// Exact match (covers worktree path and sandbox paths)
 	if proj, ok := a.projectIndex[absRoot]; ok {
@@ -911,7 +913,29 @@ func (a *Adapter) findProjectID(projectRoot string) (string, error) {
 	return "", nil
 }
 
+// ensureProjectsLoaded populates projectIndex once, safely under concurrent
+// callers. Detect(), Sessions() and DiscoverRelatedProjectDirs() all run from
+// separate tea.Cmd goroutines against the same shared adapter instance, so the
+// lazy load has to be serialized or it corrupts projectIndex (fatal
+// "concurrent map writes").
+func (a *Adapter) ensureProjectsLoaded() error {
+	a.projectMu.RLock()
+	loaded := a.projectsLoaded
+	a.projectMu.RUnlock()
+	if loaded {
+		return nil
+	}
+
+	a.projectMu.Lock()
+	defer a.projectMu.Unlock()
+	if a.projectsLoaded {
+		return nil
+	}
+	return a.loadProjects()
+}
+
 // loadProjects loads all projects from storage/project/*.json and populates projectIndex.
+// Callers must hold a.projectMu for writing (see ensureProjectsLoaded).
 func (a *Adapter) loadProjects() error {
 	projectDir := filepath.Join(a.storageDir, "project")
 	entries, err := os.ReadDir(projectDir)
@@ -993,11 +1017,12 @@ func (a *Adapter) DiscoverRelatedProjectDirs(mainWorktreePath string) ([]string,
 	}
 
 	// Load projects if not already loaded
-	if !a.projectsLoaded {
-		if err := a.loadProjects(); err != nil {
-			return nil, nil
-		}
+	if err := a.ensureProjectsLoaded(); err != nil {
+		return nil, nil
 	}
+
+	a.projectMu.RLock()
+	defer a.projectMu.RUnlock()
 
 	var related []string
 	for worktreePath := range a.projectIndex {

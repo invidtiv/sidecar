@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -491,10 +492,12 @@ func (p *Plugin) Start() tea.Cmd {
 func (p *Plugin) detectAdapters() tea.Cmd {
 	var epoch uint64
 	var projectRoot string
+	var logger *slog.Logger
 	all := map[string]adapter.Adapter{}
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
 		projectRoot = p.ctx.ProjectRoot
+		logger = p.ctx.Logger
 		all = p.ctx.Adapters
 	}
 
@@ -507,6 +510,17 @@ func (p *Plugin) detectAdapters() tea.Cmd {
 			wg.Add(1)
 			go func(id string, a adapter.Adapter) {
 				defer wg.Done()
+				// Detect used to run inside registry.safeInit, which recovers
+				// panics and degrades the plugin to "unavailable". Here it runs
+				// in a bare goroutine, which Bubble Tea's command panic handler
+				// does NOT cover, so a panicking adapter would take the whole
+				// process down with the terminal still in raw mode. Treat a
+				// panic as "not detected" instead (td-9c7bf2).
+				defer func() {
+					if rec := recover(); rec != nil && logger != nil {
+						logger.Error("adapter detect panicked", "adapter", id, "panic", rec)
+					}
+				}()
 				var ok bool
 				var err error
 				startuptrace.Track("adapter.Detect:"+id, func() {
@@ -1271,8 +1285,15 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	status := "ok"
 	detail := ""
 	if len(p.adapters) == 0 {
-		status = "disabled"
-		detail = "no adapters"
+		if p.detectingAdapters {
+			// Detection runs off the startup path, so "no adapters" is not yet
+			// a real answer during this window (td-9c7bf2).
+			status = "loading"
+			detail = "detecting adapters"
+		} else {
+			status = "disabled"
+			detail = "no adapters"
+		}
 	} else if len(p.sessions) == 0 {
 		status = "empty"
 		detail = "no sessions"

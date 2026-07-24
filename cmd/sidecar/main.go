@@ -243,6 +243,9 @@ func main() {
 		time.AfterFunc(startuptrace.ReportDelay(), func() { startuptrace.Report(logger) })
 	}
 	if _, err := p.Run(); err != nil {
+		// Report before exiting: os.Exit skips deferred calls, and a trace of a
+		// run that died is exactly the one worth having.
+		startuptrace.Report(logger)
 		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
 		os.Exit(1)
 	}
