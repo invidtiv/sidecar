@@ -11,12 +11,31 @@ disable-model-invocation: true
 - Go installed matching go.mod version
 - Clean working tree (`git status` shows no changes)
 - All tests passing (`go test ./...`)
+- **Go CI green on `main`** — see "Lint" below; `go test` alone is not the gate
 - GitHub CLI authenticated (`gh auth status`)
 - No `replace` directives in go.mod
 - GoReleaser configured (`.goreleaser.yml` in repo root)
 - `HOMEBREW_TAP_TOKEN` secret exists in GitHub repo settings
 
 **Beware of go.work**: A parent `go.work` file can silently use local dependencies instead of published versions. Always use `GOWORK=off` when updating dependencies and testing builds.
+
+### Lint
+
+`.github/workflows/go-ci.yml` runs **two** jobs on every push to `main`: `go test ./...` *and* `golangci-lint` over the whole codebase. Passing tests locally does not mean the release is clean.
+
+Local linting is a trap worth knowing about: `.golangci.yml` is a **v2** config, and a v1 `golangci-lint` refuses to read it —
+
+```
+Error: you are using a configuration file for golangci-lint v2 with golangci-lint v1
+```
+
+CI pins **v2.8.0**. If your local binary is v1.x, `make lint` fails on the config before linting anything. Either install v2.8.0 to match, or just let CI be the gate:
+
+```bash
+gh run list --workflow=go-ci.yml --limit=1   # must be "completed  success" for the commit you're tagging
+```
+
+`make lint` only lints changes since `main`; `make lint-all` covers the full codebase (which is what CI does).
 
 ## Release Process
 
@@ -33,12 +52,19 @@ git tag -l | sort -V | tail -1
 
 ### 2. Update td Dependency
 
-Sidecar embeds td as a Go module. Always update to latest before releasing:
+Sidecar embeds td as a Go module. Update to latest before releasing:
 
 ```bash
 GOWORK=off go get github.com/marcus/td@latest
 GOWORK=off go mod tidy
 ```
+
+Check how far it moved (`git diff go.mod`). If td jumped several minor versions, decide deliberately rather than by reflex:
+
+- **Normal release** — take latest, note the highlights in the CHANGELOG's Dependencies section.
+- **Release meant to validate one specific change** (a perf fix you want someone to test on another machine, a bug fix you need confirmed in the field) — consider pinning td where it is and bumping it in the *next* release. A large dependency jump bundled with the change under test means a regression report can't distinguish the two.
+
+Either way, launch the app and open the td tab before tagging — the embedded monitor is the part that breaks when td's storage layer moves.
 
 ### 3. Verify go.mod
 
@@ -124,19 +150,20 @@ You only touch the tap by hand in two cases:
 ### 8. Verify
 
 ```bash
-# Check workflow succeeded
+# Check both jobs succeeded (goreleaser + update-homebrew-tap)
 gh run list --workflow=release.yml --limit=1
+gh run view <run-id>
 
 # Check release exists with binaries
-gh release view vX.Y.Z
+gh release view vX.Y.Z --json assets -q '.assets[].name'
+# Expect: checksums.txt + 4 tarballs (darwin/linux x amd64/arm64)
 
-# Test Homebrew install
-brew install marcus/tap/sidecar
-sidecar --version
+# Confirm the tap formula points at the new tag with a matching sha256
+curl -s https://raw.githubusercontent.com/marcus/homebrew-tap/main/Formula/sidecar.rb | grep -E 'url|sha256'
+curl -sL "https://github.com/marcus/sidecar/archive/refs/tags/vX.Y.Z.tar.gz" | shasum -a 256
 
-# Test go install (critical!)
-GOWORK=off go install github.com/marcus/sidecar/cmd/sidecar@vX.Y.Z
-sidecar --version
+# Test go install (critical!) — into a throwaway GOBIN, see the warning below
+GOBIN=$(mktemp -d) GOWORK=off go install github.com/marcus/sidecar/cmd/sidecar@vX.Y.Z
 # Should output: sidecar version vX.Y.Z
 
 # Test update notification
@@ -144,6 +171,45 @@ go build -ldflags "-X main.Version=v0.0.1" -o /tmp/sidecar-test ./cmd/sidecar
 /tmp/sidecar-test
 # Should show toast: "Update vX.Y.Z available!"
 ```
+
+**`go install @vX.Y.Z` fails for the first minute or two.** The checksum database
+hasn't seen the tag yet and returns a 500:
+
+```
+verifying module: ... reading https://sum.golang.org/lookup/...: 500 Internal Server Error
+```
+
+That is propagation, not a broken release. Wait a minute and retry before
+investigating.
+
+**Verification can clobber your working binary.** Both `go install ...@vX.Y.Z`
+(without a `GOBIN` override) and `brew install marcus/tap/sidecar` overwrite or
+re-link whatever `sidecar` your shell resolves. On a dev machine that is running
+a locally built binary, use a throwaway `GOBIN` as shown above, and skip the
+`brew install` check — a fresh machine or CI is a better place to test the
+Homebrew path than the one box where you need the dev build intact.
+
+### Running a dev build on your own machine
+
+On a machine that develops sidecar, you generally want the working tree's build,
+not the released one:
+
+```bash
+make install-dev     # go install with Version from `git describe`
+```
+
+Homebrew's copy lands in `/opt/homebrew/bin`, which comes **after** `~/go/bin` in
+an interactive shell but **before** it in non-interactive ones (`sh -c`, scripts,
+some tmux invocations) — so a dev build can appear to work while scripts silently
+run the Homebrew binary. To take Homebrew out of the picture without uninstalling
+it:
+
+```bash
+brew unlink sidecar     # removes the symlink, keeps the keg
+brew link sidecar       # undo when you want the released build back
+```
+
+Note that `brew upgrade` re-links, so re-run `brew unlink` after upgrades.
 
 ## Version in Binaries
 
@@ -179,17 +245,20 @@ On startup, sidecar checks `https://api.github.com/repos/marcus/sidecar/releases
 
 ## Checklist
 
-- [ ] Tests pass
+- [ ] Tests pass (`GOWORK=off go test ./...`)
+- [ ] Go CI green on the commit being tagged — tests **and** lint (`gh run list --workflow=go-ci.yml --limit=1`)
 - [ ] Working tree clean
-- [ ] td dependency updated (`GOWORK=off go get github.com/marcus/td@latest`)
+- [ ] td dependency updated, and the size of the jump considered (step 2)
+- [ ] td tab opens in a real launch after the td bump
 - [ ] No `replace` directives in go.mod
 - [ ] Build works without go.work (`GOWORK=off go build ./...`)
 - [ ] CHANGELOG.md updated
 - [ ] Version follows semver
 - [ ] Tag created and pushed
-- [ ] GitHub Actions workflow completed
-- [ ] Binaries attached to release
-- [ ] `update-homebrew-tap` job green and `Formula/sidecar.rb` bumped (automatic; manual only if it failed — see step 7b)
+- [ ] Both release jobs completed (`goreleaser` + `update-homebrew-tap`)
+- [ ] Binaries attached to release (checksums.txt + 4 tarballs)
+- [ ] `Formula/sidecar.rb` bumped and its sha256 matches the tag tarball (automatic; manual only if the job failed — see step 7b)
 - [ ] td/nightshift formulas bumped by hand IF co-releasing them (step 7b)
-- [ ] Installation verified (`GOWORK=off go install ...@vX.Y.Z`)
+- [ ] Installation verified (`GOBIN=$(mktemp -d) GOWORK=off go install ...@vX.Y.Z`) — retry if the checksum DB 500s
 - [ ] Update notification verified
+- [ ] Dev machine still on the build you want (`sidecar --version`) — verification steps can overwrite it
