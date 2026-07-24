@@ -2,6 +2,26 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.87.0] - 2026-07-24
+
+### Performance
+- **Startup is roughly 30x faster.** Time to a usable first frame went from ~4.3s to ~0.1s on the machine this was profiled on. The gain is larger on machines running an endpoint security agent (CrowdStrike and similar), where every file open and process spawn carries a fixed tax and the old startup path did a great many of both.
+  - Conversation adapter detection no longer runs before the first frame. It used to probe all twelve adapters serially inside plugin init, and probing Codex alone walks every rollout file in `~/.codex/sessions` — 3.5s against a few thousand sessions. Detection now runs asynchronously and probes adapters concurrently, so it costs the slowest adapter rather than the sum, and the tab shows its loading skeleton until results arrive.
+  - The Codex, Pi, and Amp adapters probe session files newest-first and stop at the first match, so opening a recently used project reads a handful of files instead of the whole history.
+  - The td tab builds its embedded monitor (which opens the task database) asynchronously instead of during init.
+  - Terminal graphics-protocol detection no longer queries the terminal at startup. The queries cost ~0.5s in escape-sequence round-trips and two tmux subprocess spawns, and nothing consumed the result — image previews always render with Halfblocks. The protocol is now read from environment variables.
+  - Dropped redundant `git rev-parse --git-dir` prechecks before `git worktree list` and `git remote get-url`, halving the subprocess spawns on those paths.
+
+### Features
+- Added `SIDECAR_STARTUP_TRACE` for diagnosing slow launches. Set it to `stderr` to print a phase-by-phase startup timeline (or `1` to write it to the debug log), and `SIDECAR_STARTUP_TRACE_DELAY` to dump the trace later so asynchronous startup work is included.
+
+### Bug Fixes
+- Fixed a potential crash from concurrent access to the OpenCode adapter's project index, which was reachable whenever session loading and file watching ran at the same time.
+- A panicking conversation adapter now disables just that adapter instead of taking down the application.
+
+### Dependencies
+- bump td to v0.51.2 — local session state store, worktree identity on sessions, session keying by context ID for sub-agent independence, `--json` output across the CLI mutation commands, project slugs and invitations, plus fixes for sync conflict false-positives, handoff autosync stalls, and SQLite timestamp serialization.
+
 ## [v0.86.0] - 2026-06-17
 
 ### Features
