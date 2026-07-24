@@ -19,6 +19,26 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// startAndSettle runs the plugin's async monitor build to completion, the way
+// the Bubble Tea loop would: Start() returns a command, and the resulting
+// MonitorReadyMsg is fed back through Update(). Building the monitor is
+// deliberately not done in Init() (td-9c7bf2), so tests that need a live model
+// must go through this.
+func startAndSettle(t *testing.T, p *Plugin) {
+	t.Helper()
+
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned no command; expected the monitor build")
+	}
+	msg := cmd()
+	ready, ok := msg.(MonitorReadyMsg)
+	if !ok {
+		t.Fatalf("Start() command produced %T, want MonitorReadyMsg", msg)
+	}
+	p.Update(ready)
+}
+
 func TestPluginID(t *testing.T) {
 	p := New()
 	if id := p.ID(); id != "td-monitor" {
@@ -150,7 +170,13 @@ func TestInitWithValidDatabase(t *testing.T) {
 		t.Errorf("Init failed: %v", err)
 	}
 
-	// Check if model was created
+	// The model is built asynchronously, so it must not exist yet.
+	if p.model != nil {
+		t.Error("model should not be built during Init")
+	}
+
+	startAndSettle(t, p)
+
 	if p.model == nil {
 		t.Error("model should be created when database exists")
 	}
@@ -159,21 +185,22 @@ func TestInitWithValidDatabase(t *testing.T) {
 	p.Stop()
 }
 
-func TestInitSetsClipboardFn(t *testing.T) {
-	// Create a temp directory with a td database so we don't depend on
-	// the repo having one.
-	tmpDir, err := os.MkdirTemp("", "tdmonitor-clipboard-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+// tempTdProject returns a fresh directory with an initialized td database, so
+// tests don't depend on the checkout having a usable one.
+func tempTdProject(t *testing.T) string {
+	t.Helper()
 
-	// Initialize td in the temp directory
+	dir := t.TempDir()
 	cmd := exec.Command("td", "init")
-	cmd.Dir = tmpDir
+	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("td init failed (td not installed?): %s: %v", out, err)
 	}
+	return dir
+}
+
+func TestInitSetsClipboardFn(t *testing.T) {
+	tmpDir := tempTdProject(t)
 
 	p := New()
 	ctx := &plugin.Context{
@@ -185,6 +212,8 @@ func TestInitSetsClipboardFn(t *testing.T) {
 		t.Fatalf("Init failed: %v", err)
 	}
 	defer p.Stop()
+
+	startAndSettle(t, p)
 
 	if p.model == nil {
 		t.Fatal("model should be created when database exists")
@@ -207,6 +236,7 @@ func TestDiagnosticsWithDatabase(t *testing.T) {
 	}
 	_ = p.Init(ctx)
 	defer p.Stop()
+	startAndSettle(t, p)
 
 	diags := p.Diagnostics()
 	if len(diags) != 1 {
@@ -322,5 +352,62 @@ func TestInitWithTodosFileConflict(t *testing.T) {
 	}
 	if !strings.Contains(diags[0].Detail, "file, not a directory") {
 		t.Errorf("expected diagnostic detail about file conflict, got %q", diags[0].Detail)
+	}
+}
+
+// TestMonitorReadyAfterStopIsDropped covers the async build racing a project
+// switch: Stop() clears loadingModel, so a MonitorReadyMsg that lands
+// afterwards must be discarded rather than installed for the wrong project.
+func TestMonitorReadyAfterStopIsDropped(t *testing.T) {
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir: tempTdProject(t),
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned no command; expected the monitor build")
+	}
+	msg := cmd()
+
+	p.Stop() // project switch lands before the build finishes
+	p.Update(msg)
+
+	if p.model != nil {
+		t.Error("monitor built for a stopped plugin should be dropped, not adopted")
+	}
+}
+
+// TestMonitorReadyWithStaleEpochIsDropped covers the same race across a
+// project switch, where the plugin has been reinitialized under a new epoch.
+func TestMonitorReadyWithStaleEpochIsDropped(t *testing.T) {
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir: tempTdProject(t),
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer p.Stop()
+
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned no command; expected the monitor build")
+	}
+	msg := cmd()
+
+	ctx.Epoch++ // a project switch happened while the build was in flight
+	p.Update(msg)
+
+	if p.model != nil {
+		t.Error("monitor from a stale epoch should be dropped, not adopted")
+	}
+	if !p.loadingModel {
+		t.Error("a stale message should not clear the loading state")
 	}
 }

@@ -3678,3 +3678,130 @@ func TestSessionsRefreshedMsgAddsNewSession(t *testing.T) {
 		t.Errorf("expected new session at top, got %s", p.sessions[0].ID)
 	}
 }
+
+// =============================================================================
+// Async adapter detection (td-9c7bf2)
+// =============================================================================
+
+// detectAdapter records whether Detect ran and how it answered.
+type detectAdapter struct {
+	mockAdapter
+	id     string
+	found  bool
+	detect func()
+}
+
+func (d *detectAdapter) ID() string { return d.id }
+func (d *detectAdapter) Detect(projectRoot string) (bool, error) {
+	if d.detect != nil {
+		d.detect()
+	}
+	return d.found, nil
+}
+
+// TestInitDoesNotDetectAdapters pins the startup contract: Init must not probe
+// adapters, because probing walks each tool's whole session store and used to
+// add seconds before the first frame.
+func TestInitDoesNotDetectAdapters(t *testing.T) {
+	detected := false
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir:     t.TempDir(),
+		ProjectRoot: t.TempDir(),
+		Adapters: map[string]adapter.Adapter{
+			"probe": &detectAdapter{id: "probe", found: true, detect: func() { detected = true }},
+		},
+	}
+
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if detected {
+		t.Error("Init probed an adapter; detection must be deferred to Start()")
+	}
+	if len(p.adapters) != 0 {
+		t.Errorf("expected no adapters after Init, got %d", len(p.adapters))
+	}
+}
+
+// TestStartDetectsAdaptersAsynchronously walks the deferred detection the way
+// the Bubble Tea loop would and checks that only matching adapters are kept.
+func TestStartDetectsAdaptersAsynchronously(t *testing.T) {
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir:     t.TempDir(),
+		ProjectRoot: t.TempDir(),
+		Adapters: map[string]adapter.Adapter{
+			"yes": &detectAdapter{id: "yes", found: true},
+			"no":  &detectAdapter{id: "no", found: false},
+		},
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	cmd := p.detectAdapters()
+	msg, ok := cmd().(AdaptersDetectedMsg)
+	if !ok {
+		t.Fatal("detectAdapters did not produce an AdaptersDetectedMsg")
+	}
+	if len(msg.Adapters) != 1 {
+		t.Fatalf("expected 1 detected adapter, got %d", len(msg.Adapters))
+	}
+	if _, ok := msg.Adapters["yes"]; !ok {
+		t.Error("expected the matching adapter to be detected")
+	}
+
+	p.detectingAdapters = true
+	p.Update(msg)
+
+	if p.detectingAdapters {
+		t.Error("detectingAdapters should be cleared once results arrive")
+	}
+	if len(p.adapters) != 1 {
+		t.Errorf("expected 1 adapter installed, got %d", len(p.adapters))
+	}
+}
+
+// TestAdaptersDetectedStaleEpochIgnored covers a project switch landing while
+// detection is in flight: results for the old project must not be installed.
+func TestAdaptersDetectedStaleEpochIgnored(t *testing.T) {
+	p := New()
+	ctx := &plugin.Context{WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	p.detectingAdapters = true
+
+	ctx.Epoch = 7
+	p.Update(AdaptersDetectedMsg{
+		Epoch:    3,
+		Adapters: map[string]adapter.Adapter{"stale": &mockAdapter{}},
+	})
+
+	if len(p.adapters) != 0 {
+		t.Error("stale detection results should be ignored")
+	}
+	if !p.detectingAdapters {
+		t.Error("a stale message should not clear the detecting state")
+	}
+}
+
+// TestViewShowsSkeletonWhileDetecting checks the tab doesn't flash "no
+// sessions available" during the window where detection hasn't answered yet.
+func TestViewShowsSkeletonWhileDetecting(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	p.detectingAdapters = true
+
+	if got := p.View(100, 30); strings.Contains(got, "No AI sessions available") {
+		t.Error("view showed the empty state while detection was still running")
+	}
+
+	p.detectingAdapters = false
+	if got := p.View(100, 30); !strings.Contains(got, "No AI sessions available") {
+		t.Error("view should show the empty state once detection found nothing")
+	}
+}

@@ -26,6 +26,28 @@ See .claude/skills/ui-features/SKILL.md
 
 See td-331dbf19 for diff paging implementation.
 
+## Startup Latency
+
+Everything a plugin does in `Init()` — and everything `Start()` does before
+returning its `tea.Cmd` — runs before the first frame is painted. Keep that path
+free of filesystem walks, database opens, and subprocess spawns; do that work in
+a `tea.Cmd` and render a loading state until the result message arrives. This
+matters most on machines running an endpoint security agent (e.g. CrowdStrike),
+where every file open and process spawn carries a large fixed tax.
+
+To measure:
+
+```bash
+SIDECAR_STARTUP_TRACE=stderr sidecar 2> trace.out   # or =1 to log instead
+SIDECAR_STARTUP_TRACE_DELAY=10s                     # dump later to catch async work
+```
+
+The trace lists each phase with its offset from process start and its duration,
+ending with the `first ready frame` marker. See `internal/startuptrace`.
+
+To count subprocess spawns, put logging shims for `git`/`tmux`/`td` ahead of the
+real binaries on `PATH` — duplicated git invocations are the usual finding.
+
 ## Plugin View Rendering
 
 **Critical: Always constrain plugin output height.** The app's header/footer are always visible - plugins must not exceed their allocated height or the header will scroll off-screen.

@@ -125,6 +125,18 @@ func (a *Adapter) Detect(projectRoot string) (bool, error) {
 	}
 	absRoot = filepath.Clean(absRoot)
 
+	// Each candidate thread is fully read to check its project, so probe
+	// newest-first and stop at the first match (td-9c7bf2).
+	infos := make(map[string]time.Time, len(entries))
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			infos[e.Name()] = info.ModTime()
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return infos[entries[i].Name()].After(infos[entries[j].Name()])
+	})
+
 	for _, e := range entries {
 		if !isThreadFile(e.Name()) {
 			continue

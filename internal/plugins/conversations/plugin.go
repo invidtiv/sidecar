@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -104,6 +105,10 @@ type Plugin struct {
 	displayedCount  int  // sessions currently surfaced to UI (td-7198a5)
 	hasMoreSessions bool // displayedCount < len(sessions) (td-7198a5)
 	loadingAdapters bool // true while adapter batches are still arriving (td-7198a5)
+	// detectingAdapters is true between Start() and AdaptersDetectedMsg. Adapter
+	// detection walks each tool's session store, which is slow enough to block
+	// the first frame, so it runs off the startup path (td-9c7bf2).
+	detectingAdapters bool
 
 	// Message view state
 	selectedSession string
@@ -458,17 +463,12 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.defaultCategoryFilter = []string{adapter.SessionCategoryInteractive}
 	}
 
+	// Adapter detection is deliberately NOT done here. Detect() walks each
+	// tool's session store (Codex alone can be thousands of files), which used
+	// to add seconds to the pre-first-frame path — much worse on machines where
+	// an endpoint security agent intercepts every file open. Start() kicks it
+	// off asynchronously instead (td-9c7bf2).
 	p.adapters = make(map[string]adapter.Adapter)
-	for id, a := range ctx.Adapters {
-		found, err := a.Detect(ctx.ProjectRoot)
-		if err != nil || !found {
-			continue
-		}
-		p.adapters[id] = a
-	}
-	if len(p.adapters) == 0 {
-		return nil
-	}
 
 	return nil
 }
@@ -476,16 +476,54 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
 	p.stopped = false
-	if len(p.adapters) == 0 {
-		return nil
-	}
+	p.detectingAdapters = true
 
 	return tea.Batch(
-		p.loadSessions(),
-		p.startWatcher(),
+		p.detectAdapters(),
 		p.listenForCoalescedRefresh(),
 		p.skeleton.Start(), // Start skeleton animation (td-6cc19f)
 	)
+}
+
+// detectAdapters probes every registered adapter for this project concurrently
+// and reports the ones that matched. Probes are independent, so the command
+// costs roughly the slowest adapter rather than the sum of all of them.
+func (p *Plugin) detectAdapters() tea.Cmd {
+	var epoch uint64
+	var projectRoot string
+	all := map[string]adapter.Adapter{}
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+		projectRoot = p.ctx.ProjectRoot
+		all = p.ctx.Adapters
+	}
+
+	return func() tea.Msg {
+		var mu sync.Mutex
+		found := make(map[string]adapter.Adapter, len(all))
+
+		var wg sync.WaitGroup
+		for id, a := range all {
+			wg.Add(1)
+			go func(id string, a adapter.Adapter) {
+				defer wg.Done()
+				var ok bool
+				var err error
+				startuptrace.Track("adapter.Detect:"+id, func() {
+					ok, err = a.Detect(projectRoot)
+				})
+				if err != nil || !ok {
+					return
+				}
+				mu.Lock()
+				found[id] = a
+				mu.Unlock()
+			}(id, a)
+		}
+		wg.Wait()
+
+		return AdaptersDetectedMsg{Epoch: epoch, Adapters: found}
+	}
 }
 
 // Stop cleans up plugin resources.
@@ -576,6 +614,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			return p.updateSessions(msg)
 		}
+
+	case AdaptersDetectedMsg:
+		if plugin.IsStale(p.ctx, msg) || p.stopped {
+			return p, nil
+		}
+		p.detectingAdapters = false
+		p.adapters = msg.Adapters
+		if len(p.adapters) == 0 {
+			p.skeleton.Stop()
+			p.initialLoadDone = true
+			return p, nil
+		}
+		return p, tea.Batch(p.loadSessions(), p.startWatcher())
 
 	case LoadingStartedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1092,7 +1143,7 @@ func (p *Plugin) View(width, height int) string {
 	}
 
 	var content string
-	if len(p.adapters) == 0 {
+	if len(p.adapters) == 0 && !p.detectingAdapters {
 		content = renderNoAdapter()
 	} else {
 		switch p.view {
@@ -1281,6 +1332,17 @@ func (p *Plugin) exportSessionToFile() tea.Cmd {
 }
 
 // Message types
+
+// AdaptersDetectedMsg reports the adapters that have sessions for this project.
+// Detection runs off the startup path, so this arrives after the first frame.
+type AdaptersDetectedMsg struct {
+	Epoch    uint64
+	Adapters map[string]adapter.Adapter
+}
+
+// GetEpoch implements plugin.EpochMessage.
+func (m AdaptersDetectedMsg) GetEpoch() uint64 { return m.Epoch }
+
 type SessionsLoadedMsg struct {
 	Epoch    uint64 // Epoch when request was issued (for stale detection)
 	Sessions []adapter.Session

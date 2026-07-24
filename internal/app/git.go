@@ -22,6 +22,10 @@ func normalizePath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
+// notAGitRepoExitCode is git's exit status for "fatal: not a git repository".
+// Ordinary command-level failures (missing remote, missing ref) exit 2.
+const notAGitRepoExitCode = 128
+
 // WorktreeInfo contains information about a git worktree.
 type WorktreeInfo struct {
 	Path   string // Absolute path to the worktree
@@ -32,15 +36,10 @@ type WorktreeInfo struct {
 // GetWorktrees returns all worktrees for the repository containing workDir.
 // Returns nil if workDir is not in a git repository.
 func GetWorktrees(workDir string) []WorktreeInfo {
-	// First, verify this is a git repo
-	cmd := exec.Command("git", "--no-optional-locks", "rev-parse", "--git-dir")
-	cmd.Dir = workDir
-	if err := cmd.Run(); err != nil {
-		return nil
-	}
-
-	// Get list of worktrees
-	cmd = exec.Command("git", "--no-optional-locks", "worktree", "list", "--porcelain")
+	// No `rev-parse --git-dir` precheck: `worktree list` already exits non-zero
+	// outside a repository, and this runs on the pre-first-frame path where
+	// every subprocess spawn is expensive (td-9c7bf2).
+	cmd := exec.Command("git", "--no-optional-locks", "worktree", "list", "--porcelain")
 	cmd.Dir = workDir
 	output, err := cmd.Output()
 	if err != nil {
@@ -149,15 +148,13 @@ func WorktreeNameForPath(workDir, targetPath string) string {
 // to the directory name if no remote is configured.
 // Returns empty string if the directory is not a git repository.
 func GetRepoName(workDir string) string {
-	// Check if this is a git repo
-	cmd := exec.Command("git", "--no-optional-locks", "rev-parse", "--git-dir")
-	cmd.Dir = workDir
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-
-	// Try to get remote URL
-	cmd = exec.Command("git", "--no-optional-locks", "remote", "get-url", "origin")
+	// A single `remote get-url` answers both questions this function used to
+	// spawn two processes for. git exits 128 outside a repository and 2 when
+	// the repository simply has no such remote, so the exit code alone
+	// distinguishes "not a repo" (return "") from "repo without an origin"
+	// (fall back to the directory name). Halving the spawns matters here
+	// because this runs before the first frame (td-9c7bf2).
+	cmd := exec.Command("git", "--no-optional-locks", "remote", "get-url", "origin")
 	cmd.Dir = workDir
 	output, err := cmd.Output()
 	if err == nil {
@@ -165,6 +162,8 @@ func GetRepoName(workDir string) string {
 		if name := parseRepoNameFromURL(url); name != "" {
 			return name
 		}
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() == notAGitRepoExitCode {
+		return ""
 	}
 
 	// Fallback to directory name

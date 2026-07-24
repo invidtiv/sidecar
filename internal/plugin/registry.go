@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/startuptrace"
 )
 
 // Registry manages plugin registration and lifecycle.
@@ -49,6 +50,7 @@ func (r *Registry) safeInit(p Plugin) (err error) {
 			err = fmt.Errorf("panic: %v", rec)
 		}
 	}()
+	defer startuptrace.Begin("plugin.Init:" + p.ID())()
 	return p.Init(r.ctx)
 }
 
@@ -76,6 +78,7 @@ func (r *Registry) safeStart(p Plugin) (cmd tea.Cmd) {
 			cmd = nil
 		}
 	}()
+	defer startuptrace.Begin("plugin.Start:" + p.ID())()
 	return p.Start()
 }
 

@@ -82,12 +82,26 @@ func (a *Adapter) Name() string { return adapterName }
 func (a *Adapter) Icon() string { return "▶" }
 
 // Detect checks if Codex sessions exist for the given project.
+//
+// Files are probed newest-first and the scan stops at the first match. Detect
+// runs on every launch with a cold metadata cache, and reading every rollout
+// file in ~/.codex/sessions can take seconds once the history is a few
+// thousand sessions deep — much worse where an endpoint security agent
+// intercepts each open. Newest-first turns the common case (a project worked
+// on recently) into a handful of reads (td-9c7bf2).
 func (a *Adapter) Detect(projectRoot string) (bool, error) {
 	files, err := a.sessionFiles()
 	if err != nil {
 		return false, err
 	}
-	for _, f := range files {
+
+	ordered := make([]sessionFileEntry, len(files))
+	copy(ordered, files)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].info.ModTime().After(ordered[j].info.ModTime())
+	})
+
+	for _, f := range ordered {
 		meta, err := a.sessionMetadata(f.path, f.info)
 		if err != nil {
 			continue

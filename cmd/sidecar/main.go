@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
@@ -38,6 +39,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/notes"
 	"github.com/marcus/sidecar/internal/plugins/tdmonitor"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
@@ -110,7 +112,10 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Load configuration
-	cfg, err := loadConfig(*configPath)
+	var cfg *config.Config
+	startuptrace.Track("config.Load", func() {
+		cfg, err = loadConfig(*configPath)
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
@@ -121,7 +126,7 @@ func main() {
 	applyFeatureOverrides()
 
 	// Load persistent state (ignore errors - state is optional)
-	_ = state.Init()
+	startuptrace.Track("state.Init", func() { _ = state.Init() })
 
 	// Create event dispatcher
 	dispatcher := event.NewWithLogger(logger)
@@ -135,14 +140,19 @@ func main() {
 	}
 
 	// Resolve project root (main worktree for linked worktrees, same as workDir otherwise)
-	projectRootPath := app.GetMainWorktreePath(workDir)
+	var projectRootPath string
+	startuptrace.Track("app.GetMainWorktreePath", func() {
+		projectRootPath = app.GetMainWorktreePath(workDir)
+	})
 	if projectRootPath == "" {
 		projectRootPath = workDir
 	}
 
 	// Apply theme from config (after workDir is known for per-project themes)
-	resolved := theme.ResolveTheme(cfg, workDir)
-	theme.ApplyResolved(resolved)
+	startuptrace.Track("theme.Resolve+Apply", func() {
+		resolved := theme.ResolveTheme(cfg, workDir)
+		theme.ApplyResolved(resolved)
+	})
 
 	// Apply UI settings (Nerd Font features)
 	styles.PillTabsEnabled = cfg.UI.NerdFontsEnabled
@@ -165,7 +175,9 @@ func main() {
 
 	// Create all adapter instances upfront so they survive project switches.
 	// Per-project filtering happens in each plugin's Init() via Detect().
-	pluginCtx.Adapters = adapter.AllAdapters()
+	startuptrace.Track("adapter.AllAdapters", func() {
+		pluginCtx.Adapters = adapter.AllAdapters()
+	})
 
 	// Create plugin registry
 	registry := plugin.NewRegistry(pluginCtx)
@@ -209,7 +221,10 @@ func main() {
 	// Create and run application
 	currentVersion := effectiveVersion(Version)
 	initialPluginID := state.GetActivePlugin(projectRootPath)
-	model := app.New(registry, km, cfg, currentVersion, workDir, projectRootPath, initialPluginID)
+	var model app.Model
+	startuptrace.Track("app.New", func() {
+		model = app.New(registry, km, cfg, currentVersion, workDir, projectRootPath, initialPluginID)
+	})
 
 	// Guard against non-interactive terminal (e.g. piped stdout)
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -220,6 +235,13 @@ func main() {
 	// the app's View() method, not as NewProgram options.
 	p := tea.NewProgram(model)
 
+	startuptrace.Mark("tea.Program.Run")
+	if startuptrace.Enabled() {
+		// Report on exit, and again a few seconds in so the trace is usable
+		// without having to quit the app cleanly.
+		defer startuptrace.Report(logger)
+		time.AfterFunc(startuptrace.ReportDelay(), func() { startuptrace.Report(logger) })
+	}
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
 		os.Exit(1)

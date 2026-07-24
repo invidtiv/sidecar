@@ -122,7 +122,17 @@ func (a *Adapter) Detect(projectRoot string) (bool, error) {
 	if resolvedProject == nil {
 		return false, nil
 	}
-	for _, f := range files {
+
+	// Probe newest-first and stop at the first match: with a cold cache this is
+	// a read per session file, and recent sessions are the ones likely to match
+	// the project being opened (td-9c7bf2).
+	ordered := make([]sessionFileEntry, len(files))
+	copy(ordered, files)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].info.ModTime().After(ordered[j].info.ModTime())
+	})
+
+	for _, f := range ordered {
 		cwd, err := a.sessionCWD(f.path, f.info)
 		if err != nil {
 			continue

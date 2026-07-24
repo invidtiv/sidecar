@@ -54,6 +54,11 @@ type Plugin struct {
 
 	// started tracks whether Init() has been called to prevent duplicate poll chains (td-023577)
 	started bool
+
+	// loadingModel is true between Start() and MonitorReadyMsg. Building the
+	// embedded monitor opens td's SQLite database, which is slow enough to be
+	// worth keeping off the pre-first-frame path (td-9c7bf2).
+	loadingModel bool
 }
 
 // New creates a new TD Monitor plugin.
@@ -94,49 +99,17 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	_, err := exec.LookPath("td")
 	p.tdOnPath = err == nil
 
-	// Try to create embedded monitor with custom renderers for gradient borders.
-	// Version is empty for embedded use (not displayed in this context).
-	opts := monitor.EmbeddedOptions{
-		BaseDir:       ctx.WorkDir,
-		Interval:      pollInterval,
-		Version:       "",
-		PanelRenderer: styles.CreateTDPanelRenderer(),
-		ModalRenderer: styles.CreateTDModalRenderer(),
-		MarkdownTheme: buildMarkdownTheme(),
-	}
-	model, err := monitor.NewEmbeddedWithOptions(opts)
-	if err != nil {
-		// Database not initialized - decide which view to show
-		p.ctx.Logger.Debug("td monitor: database not found", "error", err)
-		if p.tdOnPath {
-			// td is installed but project not initialized - show setup modal
-			p.setupModal = NewSetupModel(ctx.WorkDir)
-		} else {
-			// td is not installed on system - show not-installed view
-			p.notInstalled = NewNotInstalledModel()
-		}
-		return nil
-	}
-
-	p.model = model
-
-	// Use sidecar's clipboard (atotto/clipboard) instead of td's built-in one.
-	// td's copyToClipboard doesn't handle WSL (tries xclip/xsel only);
-	// atotto/clipboard falls through to clip.exe on WSL.
-	model.ClipboardFn = clipboard.WriteAll
-
-	// Register TD bindings with sidecar's keymap (single source of truth)
-	if ctx.Keymap != nil && model.Keymap != nil {
-		for _, b := range model.Keymap.ExportBindings() {
-			ctx.Keymap.RegisterPluginBinding(b.Key, b.Command, b.Context)
-		}
-	}
+	// The embedded monitor itself is built in Start(), off the startup path.
+	p.loadingModel = true
 
 	return nil
 }
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.loadingModel {
+		return p.buildMonitor()
+	}
 	if p.model == nil {
 		// Start animation for not-installed view
 		if p.notInstalled != nil {
@@ -154,6 +127,82 @@ func (p *Plugin) Start() tea.Cmd {
 	return p.model.Init()
 }
 
+// buildMonitor constructs td's embedded monitor asynchronously. Opening the
+// task database costs ~100ms here and considerably more on machines where an
+// endpoint security agent intercepts file access, so it must not run before
+// the first frame (td-9c7bf2).
+//
+// The renderer closures are built on this goroutine but only invoked later
+// during View(), so no TUI state is touched off the main loop.
+func (p *Plugin) buildMonitor() tea.Cmd {
+	opts := monitor.EmbeddedOptions{
+		BaseDir:       p.ctx.WorkDir,
+		Interval:      pollInterval,
+		Version:       "", // empty for embedded use (not displayed in this context)
+		PanelRenderer: styles.CreateTDPanelRenderer(),
+		ModalRenderer: styles.CreateTDModalRenderer(),
+		MarkdownTheme: buildMarkdownTheme(),
+	}
+
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
+
+	return func() tea.Msg {
+		model, err := monitor.NewEmbeddedWithOptions(opts)
+		return MonitorReadyMsg{Epoch: epoch, Model: model, Err: err}
+	}
+}
+
+// MonitorReadyMsg carries the embedded td monitor once it has been built.
+type MonitorReadyMsg struct {
+	Epoch uint64
+	Model *monitor.Model
+	Err   error
+}
+
+// GetEpoch implements plugin.EpochMessage.
+func (m MonitorReadyMsg) GetEpoch() uint64 { return m.Epoch }
+
+// adoptMonitor installs a freshly built monitor (or the appropriate fallback
+// view) and returns the command that starts its polling.
+func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
+	p.loadingModel = false
+
+	if msg.Err != nil || msg.Model == nil {
+		// Database not initialized - decide which view to show
+		p.ctx.Logger.Debug("td monitor: database not found", "error", msg.Err)
+		if p.tdOnPath {
+			// td is installed but project not initialized - show setup modal
+			p.setupModal = NewSetupModel(p.ctx.WorkDir)
+			return p.setupModal.Init()
+		}
+		// td is not installed on system - show not-installed view
+		p.notInstalled = NewNotInstalledModel()
+		return p.notInstalled.Init()
+	}
+
+	p.model = msg.Model
+
+	// Use sidecar's clipboard (atotto/clipboard) instead of td's built-in one.
+	// td's copyToClipboard doesn't handle WSL (tries xclip/xsel only);
+	// atotto/clipboard falls through to clip.exe on WSL.
+	p.model.ClipboardFn = clipboard.WriteAll
+
+	// Register TD bindings with sidecar's keymap (single source of truth)
+	if p.ctx.Keymap != nil && p.model.Keymap != nil {
+		for _, b := range p.model.Keymap.ExportBindings() {
+			p.ctx.Keymap.RegisterPluginBinding(b.Key, b.Command, b.Context)
+		}
+	}
+
+	// Delegate to monitor's Init which starts data fetch and tick.
+	// Mark as started to prevent duplicate poll chains on focus (td-023577)
+	p.started = true
+	return p.model.Init()
+}
+
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
 	if p.model != nil {
@@ -163,10 +212,26 @@ func (p *Plugin) Stop() {
 	p.notInstalled = nil
 	p.setupModal = nil
 	p.started = false
+	// Any monitor still being built belongs to the project we just left; the
+	// MonitorReadyMsg handler closes it rather than adopting it.
+	p.loadingModel = false
 }
 
 // Update handles messages by delegating to the embedded monitor.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// Handle the async monitor build kicked off by Start()
+	if ready, ok := msg.(MonitorReadyMsg); ok {
+		if plugin.IsStale(p.ctx, ready) || !p.loadingModel {
+			// Stale project switch, or Stop() already tore this plugin down;
+			// drop the monitor rather than adopting one for the old project.
+			if ready.Model != nil {
+				_ = ready.Model.Close()
+			}
+			return p, nil
+		}
+		return p, p.adoptMonitor(ready)
+	}
+
 	// Handle setup completion - reinitialize to load the monitor
 	if _, ok := msg.(SetupCompleteMsg); ok {
 		if err := p.Init(p.ctx); err == nil {
@@ -325,6 +390,8 @@ func (p *Plugin) View(width, height int) string {
 			content = p.setupModal.View(width, height)
 		} else if p.notInstalled != nil {
 			content = p.notInstalled.View(width, height)
+		} else if p.loadingModel {
+			content = styles.Muted.Render("Loading tasks…")
 		} else {
 			content = "No td database found.\nRun 'td init' to initialize."
 		}
@@ -428,8 +495,13 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 		status = "error"
 		detail = ".todos is a file, not a directory"
 	} else if p.model == nil {
-		status = "disabled"
-		detail = "no database"
+		if p.loadingModel {
+			status = "loading"
+			detail = "opening database"
+		} else {
+			status = "disabled"
+			detail = "no database"
+		}
 	} else {
 		// Count issues across categories
 		total := len(p.model.InProgress) +

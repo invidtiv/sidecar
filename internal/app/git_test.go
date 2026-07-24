@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseWorktreeList(t *testing.T) {
 	tests := []struct {
@@ -167,5 +171,35 @@ func TestParseRepoNameFromURL(t *testing.T) {
 				t.Errorf("parseRepoNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestGetRepoNameOutsideRepo pins the contract that GetRepoName distinguishes
+// "not a git repository" (empty string) from "repository without an origin
+// remote" (directory name), which it does from git's exit code alone rather
+// than by spawning a separate `rev-parse --git-dir` precheck.
+func TestGetRepoNameOutsideRepo(t *testing.T) {
+	if got := GetRepoName(t.TempDir()); got != "" {
+		t.Errorf("GetRepoName(non-repo) = %q, want \"\"", got)
+	}
+}
+
+func TestGetRepoNameRepoWithoutOrigin(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Skipf("git init unavailable: %v: %s", err, out)
+	}
+
+	// t.TempDir() on macOS lives under /var, a symlink to /private/var, so
+	// compare against the base name rather than the full path.
+	want := filepath.Base(dir)
+	if got := GetRepoName(dir); got != want {
+		t.Errorf("GetRepoName(repo without origin) = %q, want %q", got, want)
+	}
+}
+
+func TestGetWorktreesOutsideRepo(t *testing.T) {
+	if got := GetWorktrees(t.TempDir()); got != nil {
+		t.Errorf("GetWorktrees(non-repo) = %v, want nil", got)
 	}
 }

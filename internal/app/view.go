@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -24,6 +26,10 @@ const (
 	projectSwitcherItemPrefix = "project-switcher-item-"
 )
 
+// Startup-trace markers: fired once each on the first rendered frame and the
+// first frame after the app has real dimensions (i.e. actual usable UI).
+var firstFrame, firstReadyFrame sync.Once
+
 // projectSwitcherItemID returns the ID for a project item at the given index.
 func projectSwitcherItemID(idx int) string {
 	return fmt.Sprintf("%s%d", projectSwitcherItemPrefix, idx)
@@ -32,6 +38,11 @@ func projectSwitcherItemID(idx int) string {
 // View renders the entire application UI and declares the terminal features
 // (alt-screen, mouse) that were previously NewProgram options in v1.
 func (m Model) View() tea.View {
+	if m.ready {
+		firstReadyFrame.Do(func() { startuptrace.Mark("first ready frame") })
+	} else {
+		firstFrame.Do(func() { startuptrace.Mark("first frame (loading)") })
+	}
 	v := tea.NewView(m.viewContent())
 	v.AltScreen = true
 	// MouseModeAllMotion mirrors the v1 tea.WithMouseAllMotion(); the app relies

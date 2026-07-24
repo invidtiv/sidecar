@@ -80,7 +80,7 @@ type Renderer struct {
 	mu       sync.RWMutex
 }
 
-// New creates a renderer and detects protocol
+// New creates a renderer.
 func New() *Renderer {
 	return &Renderer{
 		protocol: detectProtocol(),
@@ -88,20 +88,32 @@ func New() *Renderer {
 	}
 }
 
-// Protocol returns detected protocol
+// Protocol returns the terminal's native graphics protocol, if any.
+// Render() does not use it — see the note on detectProtocol.
 func (r *Renderer) Protocol() Protocol {
 	return r.protocol
 }
 
-// detectProtocol queries terminal for graphics support
+// detectProtocol reports the terminal's native graphics protocol from
+// environment variables alone.
+//
+// It deliberately does not use termimg.DetectProtocol(), which writes query
+// escape sequences to the terminal and waits for replies. Those round-trips
+// cost ~0.5s of startup (several 100ms timeouts, plus two tmux subprocess
+// spawns for passthrough setup) and they must happen before Bubble Tea takes
+// over stdin, so they land squarely on the pre-first-frame path (td-9c7bf2).
+//
+// Nothing in sidecar renders with a native protocol: Render() always uses
+// Halfblocks, because Kitty/iTerm2/Sixel write straight to the terminal and
+// bypass TUI compositing. So the precise answer buys nothing and the cheap
+// environment-based answer is enough.
 func detectProtocol() Protocol {
-	proto := termimg.DetectProtocol()
-	switch proto {
-	case termimg.Kitty:
+	switch {
+	case termimg.DetectKittyFromEnvironment():
 		return ProtocolKitty
-	case termimg.ITerm2:
+	case termimg.DetectITerm2FromEnvironment():
 		return ProtocolITerm2
-	case termimg.Sixel:
+	case termimg.DetectSixelFromEnvironment():
 		return ProtocolSixel
 	default:
 		return ProtocolNone
