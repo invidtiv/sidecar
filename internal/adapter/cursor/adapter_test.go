@@ -2,6 +2,7 @@ package cursor
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -468,5 +469,53 @@ func TestParseContentBlocks_ToolResultError(t *testing.T) {
 	}
 	if !contentBlocks[0].IsError {
 		t.Error("expected IsError=true, got false")
+	}
+}
+
+// TestDetectThroughSymlinkedProjectPath covers the case where sidecar passes a
+// project path differing from the one Cursor recorded only by a symlink. The
+// workspace directory is an MD5 of the path string, so one differing character
+// yields an unrelated hash and the adapter silently reports no sessions
+// (td-97e132).
+func TestDetectThroughSymlinkedProjectPath(t *testing.T) {
+	root := t.TempDir()
+
+	realProject := filepath.Join(root, "real", "myproject")
+	if err := os.MkdirAll(realProject, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	a := &Adapter{
+		chatsDir:     filepath.Join(root, "chats"),
+		sessionCache: map[string]sessionCacheEntry{},
+	}
+
+	// Cursor stored the workspace under the resolved path.
+	resolved, err := filepath.EvalSymlinks(realProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(a.workspacePath(resolved), "agent-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "store.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	askPath := filepath.Join(root, "linked", "myproject")
+	if a.workspacePath(askPath) == a.workspacePath(resolved) {
+		t.Skip("symlinked and resolved paths hash identically; nothing to test")
+	}
+
+	found, err := a.Detect(askPath)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !found {
+		t.Error("Detect missed the workspace stored under the symlink-resolved project path")
 	}
 }

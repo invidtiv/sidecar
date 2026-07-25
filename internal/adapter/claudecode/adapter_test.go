@@ -2,6 +2,8 @@ package claudecode
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/adapter"
@@ -1158,5 +1160,72 @@ func TestSessionMetadataCacheInvalidation(t *testing.T) {
 	}
 	if meta2.MsgCount != 3 {
 		t.Errorf("expected 3 msgs after invalidation, got %d", meta2.MsgCount)
+	}
+}
+
+// TestDetectThroughSymlinkedProjectPath covers the case where sidecar passes a
+// project path that differs from the one Claude Code recorded only by a
+// symlink. The directory name is derived by literal substitution, so without
+// resolving symlinks the lookup lands on a name that does not exist and the
+// adapter silently reports no sessions (td-97e132).
+func TestDetectThroughSymlinkedProjectPath(t *testing.T) {
+	root := t.TempDir()
+
+	// The "real" project, and a symlink pointing at it. Claude Code recorded
+	// sessions under the real path; sidecar will ask about the symlinked one.
+	realProject := filepath.Join(root, "real", "myproject")
+	if err := os.MkdirAll(realProject, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedProject := filepath.Join(root, "linked")
+	if err := os.Symlink(filepath.Join(root, "real"), linkedProject); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	projectsDir := filepath.Join(root, "projects")
+	a := &Adapter{projectsDir: projectsDir, sessionIndex: map[string]string{}}
+
+	// Session directory keyed by the resolved path.
+	resolved, err := filepath.EvalSymlinks(realProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := a.projectDirPath(resolved)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "s.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ask using the symlinked path, which encodes to a different directory.
+	askPath := filepath.Join(linkedProject, "myproject")
+	if a.projectDirPath(askPath) == sessionDir {
+		t.Skip("symlinked and resolved paths encode identically; nothing to test")
+	}
+
+	found, err := a.Detect(askPath)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !found {
+		t.Error("Detect missed sessions stored under the symlink-resolved project path")
+	}
+}
+
+func TestProjectsCandidatesHonorsClaudeConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/custom/claude")
+
+	got := claudeCodeProjectsCandidates("/home/user")
+	if len(got) == 0 || got[0] != filepath.Join("/custom/claude", "projects") {
+		t.Errorf("CLAUDE_CONFIG_DIR should be the first candidate, got %v", got)
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	got = claudeCodeProjectsCandidates("/home/user")
+	for _, c := range got {
+		if strings.Contains(c, "custom") {
+			t.Errorf("unset CLAUDE_CONFIG_DIR should not contribute a candidate, got %v", got)
+		}
 	}
 }

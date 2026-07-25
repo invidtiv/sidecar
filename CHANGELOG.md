@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.87.1] - 2026-07-24
+
+### Bug Fixes
+- **Claude Code and Cursor sessions no longer go missing when the project sits under a symlinked path.** Both adapters locate sessions by deriving a directory name from the project path — Claude Code by substituting characters, Cursor by hashing the string — and neither resolved symlinks first. Sidecar passes the main worktree path reported by `git worktree list`, which *is* resolved, while both tools record the working directory as the shell saw it. Where those disagree the lookup landed on a name that does not exist and the conversations tab reported no sessions at all. Both adapters now try the path as given and its resolved form, matching what the Warp, Kiro, Pi, and Pi Agent adapters already did.
+- The Claude Code adapter now honors `CLAUDE_CONFIG_DIR`. Claude Code uses it to relocate its config directory; sidecar only looked in `~/.config/claude/projects` and `~/.claude/projects`, so a relocated install appeared to have no sessions.
+
 ## [v0.87.0] - 2026-07-24
 
 ### Performance

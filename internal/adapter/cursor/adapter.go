@@ -90,7 +90,7 @@ func (a *Adapter) Detect(projectRoot string) (bool, error) {
 		return false, err
 	}
 
-	workspaceDir := a.workspacePath(absPath)
+	workspaceDir := a.resolveWorkspaceDir(absPath)
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -119,7 +119,7 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		return nil, err
 	}
 
-	workspaceDir := a.workspacePath(absPath)
+	workspaceDir := a.resolveWorkspaceDir(absPath)
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -273,7 +273,7 @@ func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, er
 	if err != nil {
 		return nil, nil, err
 	}
-	return NewWatcher(a.workspacePath(absPath))
+	return NewWatcher(a.resolveWorkspaceDir(absPath))
 }
 
 // workspacePath returns the path to the workspace directory in ~/.cursor/chats.
@@ -281,6 +281,37 @@ func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, er
 func (a *Adapter) workspacePath(projectRoot string) string {
 	hash := md5.Sum([]byte(projectRoot))
 	return filepath.Join(a.chatsDir, hex.EncodeToString(hash[:]))
+}
+
+// resolveWorkspaceDir returns the workspace directory to read for projectRoot,
+// trying the path as given and then its symlink-resolved form.
+//
+// The directory name is an MD5 of the path string, so a single differing
+// character — including one introduced by a symlink — produces an unrelated
+// hash and silently finds nothing. Sidecar passes the main worktree path
+// reported by `git worktree list`, which is resolved, while Cursor records the
+// working directory as the shell saw it; those disagree whenever the repo sits
+// under a symlinked home or mount. Other adapters (warp, kiro, pi, pi-agent)
+// already resolve symlinks before matching (td-97e132).
+//
+// When neither candidate exists the primary hash is returned, so callers that
+// need a stable path (Watch) still get one.
+func (a *Adapter) resolveWorkspaceDir(absPath string) string {
+	primary := a.workspacePath(absPath)
+
+	candidates := []string{primary}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		if alt := a.workspacePath(resolved); alt != primary {
+			candidates = append(candidates, alt)
+		}
+	}
+
+	for _, dir := range candidates {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return primary
 }
 
 // readSessionMeta reads the session metadata from store.db.

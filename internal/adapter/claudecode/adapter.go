@@ -79,6 +79,14 @@ func findClaudeCodeProjectsDir(home string) string {
 func claudeCodeProjectsCandidates(home string) []string {
 	var candidates []string
 
+	// CLAUDE_CONFIG_DIR relocates Claude Code's whole config directory, so it
+	// wins over both defaults when set. Managed and multi-account setups use
+	// it, and without this sidecar looks in a directory that does not exist and
+	// silently reports no sessions (td-97e132).
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, "projects"))
+	}
+
 	// v1.0.30+ XDG path (preferred)
 	candidates = append(candidates, filepath.Join(home, ".config", "claude", "projects"))
 
@@ -99,7 +107,7 @@ func (a *Adapter) Icon() string { return "◆" }
 
 // Detect checks if Claude Code sessions exist for the given project.
 func (a *Adapter) Detect(projectRoot string) (bool, error) {
-	dir := a.projectDirPath(projectRoot)
+	dir := a.resolveProjectDir(projectRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -128,7 +136,7 @@ func (a *Adapter) Capabilities() adapter.CapabilitySet {
 
 // Sessions returns all sessions for the given project, sorted by update time.
 func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
-	dir := a.projectDirPath(projectRoot)
+	dir := a.resolveProjectDir(projectRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -625,7 +633,7 @@ func (a *Adapter) Usage(sessionID string) (*adapter.UsageStats, error) {
 
 // Watch returns a channel that emits events when session data changes.
 func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, error) {
-	return NewWatcher(a.projectDirPath(projectRoot))
+	return NewWatcher(a.resolveProjectDir(projectRoot))
 }
 
 // projectDirPath converts a project root path to the Claude Code projects directory path.
@@ -643,6 +651,39 @@ func (a *Adapter) projectDirPath(projectRoot string) string {
 	hash = strings.ReplaceAll(hash, ".", "-")
 	hash = strings.ReplaceAll(hash, "_", "-")
 	return filepath.Join(a.projectsDir, hash)
+}
+
+// resolveProjectDir returns the projects directory to read for projectRoot,
+// trying the path as given and then its symlink-resolved form.
+//
+// The directory name is derived from the project path by literal substitution,
+// so a path that differs only by a symlink produces a completely different name
+// and silently finds nothing. Sidecar passes the main worktree path reported by
+// `git worktree list`, which is resolved, while Claude Code records the working
+// directory as the shell saw it — those disagree whenever the repo sits under a
+// symlinked home or mount. Other adapters (warp, kiro, pi, pi-agent) already
+// resolve symlinks before matching; this brings Claude Code in line (td-97e132).
+//
+// When neither candidate exists the primary encoding is returned, so callers
+// that need a stable path (Watch) still get one.
+func (a *Adapter) resolveProjectDir(projectRoot string) string {
+	primary := a.projectDirPath(projectRoot)
+
+	candidates := []string{primary}
+	if abs, err := filepath.Abs(projectRoot); err == nil {
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			if alt := a.projectDirPath(resolved); alt != primary {
+				candidates = append(candidates, alt)
+			}
+		}
+	}
+
+	for _, dir := range candidates {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return primary
 }
 
 // DiscoverRelatedProjectDirs scans ~/.claude/projects/ for directories that appear
