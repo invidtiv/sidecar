@@ -692,36 +692,13 @@ func (p *Plugin) renderShellPrimer(width, height int) string {
 func (p *Plugin) renderMainWorktreeView(width, height int) string {
 	var lines []string
 
-	// ASCII art tree - thematic for "worktrees"
-	tree := []string{
-		"",
-		"              *",
-		"             /|\\",
-		"            / | \\",
-		"           /  |  \\",
-		"          /   |   \\",
-		"         /___ | ___\\",
-		"             |||",
-		"             |||",
-		"            /|||\\ ",
-		"",
-	}
-
-	// Styles
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(styles.Primary)
-	treeStyle := lipgloss.NewStyle().Foreground(styles.TextMuted)
 	hintStyle := lipgloss.NewStyle().Foreground(styles.Success)
-
-	// Center the tree
-	for _, line := range tree {
-		centered := treeStyle.Render(line)
-		lines = append(lines, centered)
-	}
 
 	lines = append(lines, "")
 	lines = append(lines, titleStyle.Render("Main Worktree"))
 	lines = append(lines, "")
-	lines = append(lines, dimText("This is your primary working directory—the trunk of the tree."))
+	lines = append(lines, dimText("This is your primary working directory."))
 	lines = append(lines, dimText("Workspaces branch off from here as isolated environments."))
 	lines = append(lines, "")
 	lines = append(lines, strings.Repeat("─", min(width-4, 50)))
@@ -731,6 +708,11 @@ func (p *Plugin) renderMainWorktreeView(width, height int) string {
 	lines = append(lines, dimText("Each workspace gets its own directory, branch, and"))
 	lines = append(lines, dimText("optional AI agent. Work on multiple features in"))
 	lines = append(lines, dimText("parallel without switching branches."))
+	lines = append(lines, "")
+	lines = append(lines, hintStyle.Render("Press 'ctrl+n' for a new shell"))
+	lines = append(lines, "")
+	lines = append(lines, dimText("Shells are plain terminals in this directory, for"))
+	lines = append(lines, dimText("quick tasks that don't need their own workspace."))
 
 	return strings.Join(lines, "\n")
 }

@@ -207,6 +207,7 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | Key | Command | Description |
 |-----|---------|-------------|
 | `n` | new-workspace | Create new workspace |
+| `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
 | `v` | toggle-view | Toggle list/kanban |
 | `D` | delete-workspace | Delete workspace |
 | `p` | push | Push branch |

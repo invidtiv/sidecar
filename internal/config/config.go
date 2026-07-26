@@ -84,6 +84,10 @@ type WorkspacePluginConfig struct {
 	AgentStart map[string]string `json:"agentStart,omitempty"`
 	// TmuxCaptureMaxBytes caps tmux pane capture size for the preview pane. Default: 2MB.
 	TmuxCaptureMaxBytes int `json:"tmuxCaptureMaxBytes"`
+	// AutoCreateShell creates a shell session the first time the workspaces tab is
+	// focused in a session, when no shell sessions exist yet. The shell honors
+	// DefaultAgentType; with none set it is a plain shell. Default: false.
+	AutoCreateShell bool `json:"autoCreateShell"`
 	// InteractiveExitKey is the keybinding to exit interactive mode. Default: "ctrl+\".
 	// Examples: "ctrl+]", "ctrl+\\", "ctrl+x"
 	InteractiveExitKey string `json:"interactiveExitKey,omitempty"`

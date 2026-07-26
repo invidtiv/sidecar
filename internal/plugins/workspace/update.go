@@ -45,11 +45,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case app.PluginFocusedMsg:
 		if p.focused {
+			focusCmds := []tea.Cmd{p.maybeAutoCreateShell()}
 			// Poll shell or selected agent when plugin gains focus
 			if shell := p.getSelectedShell(); shell != nil {
-				return p, p.pollShellSessionByName(shell.TmuxName)
+				focusCmds = append(focusCmds, p.pollShellSessionByName(shell.TmuxName))
+			} else {
+				focusCmds = append(focusCmds, p.pollSelectedAgentNowIfVisible())
 			}
-			return p, p.pollSelectedAgentNowIfVisible()
+			return p, tea.Batch(focusCmds...)
 		}
 
 	case RefreshMsg:
@@ -124,6 +127,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					}
 				}
 				go func() { _ = migration.MigrateProject(p.ctx.ProjectRoot, wtPaths) }()
+
+				// Covers the case where workspaces is the startup tab: it is
+				// focused without ever receiving a PluginFocusedMsg.
+				if cmd := p.maybeAutoCreateShell(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 
 			// Bounds check in case the selected worktree was deleted
@@ -707,9 +716,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				_ = p.shellManifest.UpdateShell(shellToDefinition(existingShell))
 			}
 
-			p.shellSelected = true
-			p.selectedShellIdx = existingIdx
-			p.saveSelectionState()
+			if !msg.KeepSelection {
+				p.shellSelected = true
+				p.selectedShellIdx = existingIdx
+				p.saveSelectionState()
+			}
 		} else {
 			// Create new shell session entry
 			shell := &ShellSession{
@@ -735,13 +746,18 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				_ = p.shellManifest.AddShell(shellToDefinition(shell))
 			}
 
-			// Auto-select and focus the new shell
-			p.shellSelected = true
-			p.selectedShellIdx = len(p.shells) - 1
-			p.saveSelectionState()
+			// Auto-select and focus the new shell, unless it was created on the
+			// user's behalf rather than at their request.
+			if !msg.KeepSelection {
+				p.shellSelected = true
+				p.selectedShellIdx = len(p.shells) - 1
+				p.saveSelectionState()
+			}
 		}
-		p.activePane = PaneSidebar
-		p.autoScrollOutput = true
+		if !msg.KeepSelection {
+			p.activePane = PaneSidebar
+			p.autoScrollOutput = true
+		}
 
 		// Resize pane to match preview width immediately
 		if cmd := p.resizeSelectedPaneCmd(); cmd != nil {

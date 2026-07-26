@@ -408,3 +408,46 @@ func TestLoadFrom_FileBrowserDisabled(t *testing.T) {
 		t.Error("git-status should still be enabled (default)")
 	}
 }
+
+func TestLoadFrom_WorkspaceAutoCreateShell(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	content := []byte(`{
+		"plugins": {
+			"workspace": {
+				"autoCreateShell": true
+			}
+		}
+	}`)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if !cfg.Plugins.Workspace.AutoCreateShell {
+		t.Error("AutoCreateShell = false, want true")
+	}
+}
+
+func TestLoadFrom_WorkspaceAutoCreateShellDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	if err := os.WriteFile(path, []byte(`{"plugins":{"workspace":{}}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+
+	if cfg.Plugins.Workspace.AutoCreateShell {
+		t.Error("AutoCreateShell = true, want false when unset")
+	}
+}

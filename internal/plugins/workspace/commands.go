@@ -192,10 +192,11 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Priority 10-14: Agent commands (highest visibility when applicable)
 		cmds := []plugin.Command{
 			{ID: "new-workspace", Name: "New", Description: "Create new workspace", Context: "workspace-list", Priority: 1},
-			{ID: "fetch-pr", Name: "Fetch", Description: "Fetch remote PR as workspace", Context: "workspace-list", Priority: 2},
-			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 3},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 4},
-			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 5},
+			{ID: "new-shell", Name: "Shell", Description: "Create new shell session", Context: "workspace-list", Priority: 2},
+			{ID: "fetch-pr", Name: "Fetch", Description: "Fetch remote PR as workspace", Context: "workspace-list", Priority: 3},
+			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 4},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
+			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
 		}
 
 		// Shell-specific commands when shell is selected
@@ -204,13 +205,13 @@ func (p *Plugin) Commands() []plugin.Command {
 			if shell == nil || shell.Agent == nil {
 				cmds = append(cmds,
 					plugin.Command{ID: "attach-shell", Name: "Attach", Description: "Create and attach to shell", Context: "workspace-list", Priority: 10},
-				plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 11},
+					plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 11},
 				)
 			} else {
 				cmds = append(cmds,
 					plugin.Command{ID: "attach-shell", Name: "Attach", Description: "Attach to shell", Context: "workspace-list", Priority: 10},
 					plugin.Command{ID: "kill-shell", Name: "Kill", Description: "Kill shell session", Context: "workspace-list", Priority: 11},
-				plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 12},
+					plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 12},
 				)
 			}
 			return cmds

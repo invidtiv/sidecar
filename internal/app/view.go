@@ -785,8 +785,9 @@ func (m Model) pluginFooterHints(p plugin.Plugin, context string) []footerHint {
 		cmds = append(cmds, cmdWithPriority{cmd, keys, priority})
 	}
 
-	// Sort by priority (lower = more important, shown first)
-	sort.Slice(cmds, func(i, j int) bool {
+	// Sort by priority (lower = more important, shown first). Stable so commands
+	// sharing a priority keep their Commands() declaration order.
+	sort.SliceStable(cmds, func(i, j int) bool {
 		return cmds[i].priority < cmds[j].priority
 	})
 

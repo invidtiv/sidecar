@@ -238,3 +238,26 @@ func TestSave_WritesWorkspaceAgentSettings(t *testing.T) {
 		t.Errorf("agentStart.codex = %v, want %q", got, "codex --dangerously-bypass-approvals-and-sandbox")
 	}
 }
+
+func TestSave_WorkspaceAutoCreateShellRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	SetTestConfigPath(path)
+	defer ResetTestConfigPath()
+
+	cfg := Default()
+	cfg.Plugins.Workspace.AutoCreateShell = true
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	if !loaded.Plugins.Workspace.AutoCreateShell {
+		t.Error("AutoCreateShell did not survive a save/load round trip")
+	}
+}

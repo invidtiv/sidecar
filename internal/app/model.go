@@ -309,6 +309,16 @@ func (m Model) Init() tea.Cmd {
 		version.CheckTdAsync(),
 	}
 
+	// Mark the startup plugin focused. SetActivePlugin only runs when the user
+	// switches tabs, so without this the initial tab reports itself unfocused —
+	// which, among other things, makes it poll at the slower unfocused interval.
+	// Deliberately no PluginFocused() broadcast: several plugins refresh on that
+	// message without checking their own focus flag, which would duplicate their
+	// Start() work on the startup path.
+	if p := m.ActivePlugin(); p != nil {
+		p.SetFocused(true)
+	}
+
 	// Start all registered plugins
 	for _, cmd := range m.registry.Start() {
 		if cmd != nil {

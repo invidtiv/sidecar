@@ -335,6 +335,9 @@ type Plugin struct {
 	// State restoration tracking (only restore once on startup)
 	stateRestored bool
 
+	// Auto-create default shell tracking (evaluated once per project load)
+	autoShellChecked bool
+
 	// Interactive mode state (feature-gated behind tmux_interactive_input)
 	interactiveState   *InteractiveState
 	lastScrollTime     time.Time // For scroll debouncing (td-e2ce50)
@@ -463,6 +466,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
+
+	// Re-arm default-shell auto-creation for the newly loaded project
+	p.autoShellChecked = false
 
 	// Load shell manifest for persistence (td-f88fdd)
 	projDir, err := projectdir.Resolve(ctx.ProjectRoot)

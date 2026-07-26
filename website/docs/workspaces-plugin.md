@@ -110,6 +110,7 @@ Workspace behavior is configured via:
 | Option | Type | Description |
 |--------|------|-------------|
 | `dirPrefix` | bool | Prefix workspace dir with repo name (e.g., `myrepo-feature-auth`) |
+| `autoCreateShell` | bool | Create a shell session the first time the workspaces tab is focused in a session, if no shells exist yet. Default `false` |
 | `defaultAgentType` | string | Default agent family selected in create-workspace modal for new worktrees (AgentType value, e.g. `claude`, `codex`, `opencode`) |
 | `agentStart` | object | Default startup command map keyed by AgentType (plus optional `*`/`default` fallback) |
 | `setupScript` | string | Path to script run after workspace creation (for env setup, symlinks, etc.) |
@@ -365,7 +366,25 @@ Shells are standalone tmux sessions created for direct terminal access without a
 
 ### Creating Shells
 
-Press `n` and select "Shell" from the type selector modal, or press `A` in the sidebar to quickly create a new shell. Each shell is created with an auto-numbered display name (e.g., "Shell 1", "Shell 2") and a stable tmux session name for state persistence.
+Press `ctrl+n` to create a shell immediately, or press `n` and select "Shell" from the type selector modal when you want to name it or attach an agent. Each shell is created with an auto-numbered display name (e.g., "Shell 1", "Shell 2") and a stable tmux session name for state persistence.
+
+`ctrl+n` uses `plugins.workspace.defaultAgentType` when one is configured; with no default set it creates a plain shell. It never passes an agent's skip-permissions flag — use the `n` modal for that.
+
+### Automatic Shells
+
+Set `plugins.workspace.autoCreateShell` to `true` to have a shell waiting the first time you open the workspaces tab in a session:
+
+```json
+{
+  "plugins": {
+    "workspace": {
+      "autoCreateShell": true
+    }
+  }
+}
+```
+
+The shell is created only when no shell sessions already exist — shells whose tmux sessions survived a sidecar restart are reattached instead. It does not move the sidebar selection, so your restored workspace stays selected. Nothing is created until the tab is actually focused, so the setting costs nothing at startup if you open elsewhere.
 
 ### Renaming Shells
 
@@ -392,7 +411,8 @@ Press `D` to delete a shell session. This terminates the underlying tmux session
 
 | Operation | Key | Description |
 |-----------|-----|-------------|
-| Create shell | `n` + select Shell | Create new terminal session |
+| Create shell | `ctrl+n` | Create new terminal session immediately |
+| Create shell (options) | `n` + select Shell | Create with a custom name or agent |
 | Rename shell | `R` | Change display name (50 char limit) |
 | Delete shell | `D` | Terminate tmux session |
 | Interactive mode | `enter` | Enter interactive mode for typing |

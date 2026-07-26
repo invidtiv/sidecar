@@ -142,6 +142,10 @@ type (
 		Err         error     // Non-nil if creation failed
 		AgentType   AgentType // td-16b2b5: Agent to start (AgentNone if plain shell)
 		SkipPerms   bool      // td-16b2b5: Whether to skip permissions for agent
+		// KeepSelection leaves the sidebar selection where it is instead of
+		// selecting the new shell. Set for shells created without the user
+		// explicitly asking for one (auto-create on first focus).
+		KeepSelection bool
 	}
 
 	// ShellDetachedMsg signals user detached from shell session
@@ -512,9 +516,18 @@ func (p *Plugin) generateShellSessionName() string {
 	return fmt.Sprintf("%s-%d", basePrefix, p.nextShellIndex())
 }
 
-// createNewShell creates a new shell session. If customName is non-empty, it is
-// used as the display name instead of the auto-generated "Shell N".
-func (p *Plugin) createNewShell(customName string) tea.Cmd {
+// shellCreateOpts describes a shell session to create.
+type shellCreateOpts struct {
+	CustomName    string    // Display name; empty means auto-generated "Shell N"
+	AgentType     AgentType // Agent to start after creation (AgentNone for a plain shell)
+	SkipPerms     bool      // Whether to pass the agent's skip-permissions flag
+	KeepSelection bool      // Leave the sidebar selection alone (see ShellCreatedMsg)
+}
+
+// createShell creates a new detached tmux session for a shell. The returned
+// command reports the outcome as a ShellCreatedMsg; the update handler owns all
+// state bookkeeping (manifest, selection, polling).
+func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	if !isTmuxInstalled() {
 		return func() tea.Msg {
 			return ShellCreatedMsg{Err: fmt.Errorf("tmux not installed: %s", getTmuxInstallInstructions())}
@@ -522,17 +535,25 @@ func (p *Plugin) createNewShell(customName string) tea.Cmd {
 	}
 
 	sessionName := p.generateShellSessionName()
-	displayName := strings.TrimSpace(customName)
+	displayName := strings.TrimSpace(opts.CustomName)
 	if displayName == "" {
 		displayName = p.nextShellDisplayName()
 	}
 	workDir := p.ctx.WorkDir
 
+	created := ShellCreatedMsg{
+		SessionName:   sessionName,
+		DisplayName:   displayName,
+		AgentType:     opts.AgentType,
+		SkipPerms:     opts.SkipPerms,
+		KeepSelection: opts.KeepSelection,
+	}
+
 	return func() tea.Msg {
 		// Check if session already exists (shouldn't happen with unique names)
 		if sessionExists(sessionName) {
-			paneID := getPaneID(sessionName)
-			return ShellCreatedMsg{SessionName: sessionName, DisplayName: displayName, PaneID: paneID}
+			created.PaneID = getPaneID(sessionName)
+			return created
 		}
 
 		// Create new detached session in project directory
@@ -544,88 +565,82 @@ func (p *Plugin) createNewShell(customName string) tea.Cmd {
 		}
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
-			return ShellCreatedMsg{
-				SessionName: sessionName,
-				DisplayName: displayName,
-				Err:         fmt.Errorf("create shell session: %w", err),
-			}
+			created.Err = fmt.Errorf("create shell session: %w", err)
+			return created
 		}
 
 		// Ensure server persists when all sessions are killed
 		ensureTmuxServerConfig()
 
 		// Capture pane ID for interactive mode support
-		paneID := getPaneID(sessionName)
-
-		return ShellCreatedMsg{SessionName: sessionName, DisplayName: displayName, PaneID: paneID}
+		created.PaneID = getPaneID(sessionName)
+		return created
 	}
+}
+
+// createNewShell creates a plain shell session. If customName is non-empty, it is
+// used as the display name instead of the auto-generated "Shell N".
+func (p *Plugin) createNewShell(customName string) tea.Cmd {
+	return p.createShell(shellCreateOpts{CustomName: customName})
 }
 
 // createShellWithAgent creates a new shell session with optional agent startup.
 // td-16b2b5: Captures agent info from type selector state, creates shell, and includes
 // agent info in the message so the handler can start the agent after shell creation.
 func (p *Plugin) createShellWithAgent() tea.Cmd {
-	// Capture state before clearing modal
-	customName := p.typeSelectorNameInput.Value()
-	agentType := p.typeSelectorAgentType
-	skipPerms := p.typeSelectorSkipPerms
+	return p.createShell(shellCreateOpts{
+		CustomName: p.typeSelectorNameInput.Value(),
+		AgentType:  p.typeSelectorAgentType,
+		SkipPerms:  p.typeSelectorSkipPerms,
+	})
+}
 
-	if !isTmuxInstalled() {
-		return func() tea.Msg {
-			return ShellCreatedMsg{Err: fmt.Errorf("tmux not installed: %s", getTmuxInstallInstructions())}
-		}
+// resolveShellAgentType returns the agent to launch in a shell created outside
+// the type-selector modal. Unlike worktrees, a shell with no configured default
+// stays a plain shell rather than falling back to Claude.
+func (p *Plugin) resolveShellAgentType() AgentType {
+	if p == nil || p.ctx == nil || p.ctx.Config == nil {
+		return AgentNone
 	}
-
-	sessionName := p.generateShellSessionName()
-	displayName := strings.TrimSpace(customName)
-	if displayName == "" {
-		displayName = p.nextShellDisplayName()
+	agentType := AgentType(strings.TrimSpace(p.ctx.Config.Plugins.Workspace.DefaultAgentType))
+	if isKnownAgentType(agentType) {
+		return agentType
 	}
-	workDir := p.ctx.WorkDir
+	return AgentNone
+}
 
-	return func() tea.Msg {
-		// Check if session already exists (shouldn't happen with unique names)
-		if sessionExists(sessionName) {
-			paneID := getPaneID(sessionName)
-			return ShellCreatedMsg{
-				SessionName: sessionName,
-				DisplayName: displayName,
-				PaneID:      paneID,
-				AgentType:   agentType,
-				SkipPerms:   skipPerms,
-			}
-		}
-
-		// Create new detached session in project directory
-		args := []string{
-			"new-session",
-			"-d",              // Detached
-			"-s", sessionName, // Session name
-			"-c", workDir, // Working directory
-		}
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
-			return ShellCreatedMsg{
-				SessionName: sessionName,
-				DisplayName: displayName,
-				Err:         fmt.Errorf("create shell session: %w", err),
-			}
-		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
-
-		// Capture pane ID for interactive mode support
-		paneID := getPaneID(sessionName)
-
-		return ShellCreatedMsg{
-			SessionName: sessionName,
-			DisplayName: displayName,
-			PaneID:      paneID,
-			AgentType:   agentType,
-			SkipPerms:   skipPerms,
-		}
+// maybeAutoCreateShell creates a default shell the first time the workspaces tab
+// is focused with no shell sessions, when plugins.workspace.autoCreateShell is
+// set. Returns nil in every other case.
+//
+// Called from both the plugin-focused path (tab switched to) and the first
+// worktree refresh (workspaces was the startup tab, which emits no focus
+// message). The check is only consumed once it actually runs while focused, so a
+// background workspaces tab never spawns a session.
+func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
+	if p.autoShellChecked || !p.focused {
+		return nil
 	}
+	if p.ctx == nil || p.ctx.Config == nil || !p.ctx.Config.Plugins.Workspace.AutoCreateShell {
+		return nil
+	}
+	p.autoShellChecked = true
+	if len(p.shells) > 0 || !isTmuxInstalled() {
+		return nil
+	}
+	return p.createDefaultShell(true)
+}
+
+// createDefaultShell creates a shell using the configured default agent. Used by
+// the ctrl+n binding and by auto-create on first focus.
+func (p *Plugin) createDefaultShell(keepSelection bool) tea.Cmd {
+	// SkipPerms stays false: the type-selector modal defaults it off, and a shell
+	// the user did not explicitly configure should not launch an agent with
+	// permission prompts disabled.
+	return p.createShell(shellCreateOpts{
+		AgentType:     p.resolveShellAgentType(),
+		KeepSelection: keepSelection,
+	})
 }
 
 // recreateOrphanedShell recreates a tmux session for an orphaned shell.

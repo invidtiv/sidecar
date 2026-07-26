@@ -365,6 +365,7 @@ func DefaultBindings() []Binding {
 
 		// Worktree context
 		{Key: "n", Command: "new-workspace", Context: "workspace-list"},
+		{Key: "ctrl+n", Command: "new-shell", Context: "workspace-list"},
 		{Key: "v", Command: "toggle-view", Context: "workspace-list"},
 		{Key: "r", Command: "refresh", Context: "workspace-list"},
 		{Key: "D", Command: "delete-workspace", Context: "workspace-list"},

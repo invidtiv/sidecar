@@ -728,6 +728,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.typeSelectorModal = nil    // Force rebuild
 		p.typeSelectorModalWidth = 0 // Force rebuild
 		return nil
+	case "ctrl+n":
+		// Create a shell directly, skipping the type selector modal
+		return p.createDefaultShell(false)
 	case "D":
 		// Check if deleting a shell session
 		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {

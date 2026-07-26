@@ -83,8 +83,9 @@ type rawWorkspaceConfig struct {
 	DirPrefix            *bool                    `json:"dirPrefix"`
 	DefaultAgentType     string                   `json:"defaultAgentType"`
 	LegacyDefaultAgent   string                   `json:"defaultAgent"` // Backward compatibility
-	AgentStart           json.RawMessage           `json:"agentStart"`
+	AgentStart           json.RawMessage          `json:"agentStart"`
 	TmuxCaptureMaxBytes  *int                     `json:"tmuxCaptureMaxBytes"`
+	AutoCreateShell      *bool                    `json:"autoCreateShell"`
 	InteractiveExitKey   string                   `json:"interactiveExitKey"`
 	InteractiveAttachKey string                   `json:"interactiveAttachKey"`
 	InteractiveCopyKey   string                   `json:"interactiveCopyKey"`
@@ -241,6 +242,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Plugins.Workspace.TmuxCaptureMaxBytes != nil {
 		cfg.Plugins.Workspace.TmuxCaptureMaxBytes = *raw.Plugins.Workspace.TmuxCaptureMaxBytes
+	}
+	if raw.Plugins.Workspace.AutoCreateShell != nil {
+		cfg.Plugins.Workspace.AutoCreateShell = *raw.Plugins.Workspace.AutoCreateShell
 	}
 	if raw.Plugins.Workspace.DefaultAgentType != "" {
 		cfg.Plugins.Workspace.DefaultAgentType = raw.Plugins.Workspace.DefaultAgentType

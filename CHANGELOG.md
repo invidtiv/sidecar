@@ -2,6 +2,19 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+- **`ctrl+n` creates a shell session directly from the workspaces tab**, skipping the type-selector modal. It uses `plugins.workspace.defaultAgentType` when one is configured and creates a plain shell otherwise; it never passes an agent's skip-permissions flag, so use `n` → Shell when you want that. The hint appears in the workspaces footer next to **New**.
+- **New `plugins.workspace.autoCreateShell` setting (default off).** With it enabled, the first time you focus the workspaces tab in a session sidecar creates a shell for you, so a terminal is ready for quick tasks without going through the create modal. It only fires when no shell sessions exist — shells whose tmux sessions survived a restart are reattached as before — and it leaves the sidebar selection where it was rather than jumping to the new shell. Nothing is created until the tab is focused, so startup is unaffected when you open on another tab.
+
+### Bug Fixes
+- The plugin active at startup is now marked focused. `SetFocused` only ran when switching tabs, so whichever tab sidecar opened on reported itself unfocused — which, among other things, made it poll its tmux sessions at the slower background interval until you navigated away and back.
+- Footer hints with equal priority no longer sort nondeterministically; they now follow the order the plugin declares them in.
+
+### Interface
+- Removed the ASCII tree from the main worktree preview. The pane now leads with the text and carries hints for both `n` (new workspace) and `ctrl+n` (new shell).
+
 ## [v0.87.1] - 2026-07-24
 
 ### Bug Fixes
