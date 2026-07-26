@@ -71,3 +71,5 @@ screenshots/
 # Benchmarks
 .benchmarks/
 .codex
+# Nightshift plan artifacts (keep out of version control)
+.nightshift-plan
