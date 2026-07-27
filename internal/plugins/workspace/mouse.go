@@ -1049,6 +1049,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
 		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
+		}
 		return nil
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
 		// Scroll file/commit list in diff tab
@@ -1236,6 +1239,9 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 		}
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			p.autoScrollOutput = false
+			if p.previewOffset == 0 {
+				return p.loadOlderTerminalHistory(false, -delta)
+			}
 		}
 	} else {
 		// Scroll DOWN: move toward bottom of content

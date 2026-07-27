@@ -181,6 +181,9 @@ type (
 		HasCursor     bool // True if cursor position was captured
 		PaneHeight    int  // Tmux pane height for cursor offset calculation
 		PaneWidth     int  // Tmux pane width for display alignment
+		HistorySize   int
+		CaptureBase   int
+		HasHistory    bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -901,11 +904,13 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		joinWrapped := !interactiveCapture && !directCapture
 		var output string
 		var cursor capturedCursor
+		var capture capturedPaneMetadata
 		var err error
 		if interactiveCapture && cursorTarget != "" {
 			output, cursor, err = capturePaneDirectWithJoinAndCursor(tmuxName, cursorTarget, joinWrapped)
+			capture = cursor.capturedPaneMetadata
 		} else {
-			output, err = capturePaneDirectWithJoin(tmuxName, joinWrapped)
+			output, capture, err = capturePaneDirectWithJoinMetadata(tmuxName, joinWrapped)
 		}
 		if err != nil {
 			// Capture error - check error message to determine if session is dead
@@ -934,6 +939,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			HasCursor:     cursor.Valid,
 			PaneHeight:    cursor.PaneHeight,
 			PaneWidth:     cursor.PaneWidth,
+			HistorySize:   capture.HistorySize,
+			CaptureBase:   capture.CaptureBase,
+			HasHistory:    capture.Valid,
 		}
 	}
 }

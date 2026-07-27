@@ -53,6 +53,9 @@ type TermPanelCaptureMsg struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 }
 
 // termPanelPollMsg triggers the next poll cycle for the terminal panel.
@@ -236,20 +239,26 @@ func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd
 	return func() tea.Msg {
 		var output string
 		var cursor capturedCursor
+		var capture capturedPaneMetadata
 		var err error
 		if captureCursor {
 			// Interactive mode: bypass cache for fresh capture, same as agent pane.
 			// The global cache has 300ms TTL which causes stale reads during typing.
 			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, target, false)
+			capture = cursor.capturedPaneMetadata
 		} else {
-			// Non-interactive: use global cache + singleflight coordinator.
-			output, err = capturePane(sessionName)
+			// The visible panel uses a direct metadata capture so deep history
+			// can be addressed without loading it on the polling hot path.
+			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, false)
 		}
 		msg := TermPanelCaptureMsg{
 			SessionName: sessionName,
 			Generation:  generation,
 			Output:      output,
 			Err:         err,
+			HistorySize: capture.HistorySize,
+			CaptureBase: capture.CaptureBase,
+			HasHistory:  capture.Valid,
 		}
 		if cursor.Valid {
 			msg.HasCursor = true

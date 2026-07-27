@@ -40,6 +40,9 @@ type AgentOutputMsg struct {
 	HasCursor     bool // True if cursor position was captured
 	PaneHeight    int  // Tmux pane height for cursor offset calculation
 	PaneWidth     int  // Tmux pane width for display alignment
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 }
 
 // AgentStoppedMsg signals an agent has stopped.

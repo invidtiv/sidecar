@@ -25,8 +25,10 @@ const (
 	pluginName = "workspaces"
 	pluginIcon = "W"
 
-	// Output buffer capacity (lines)
-	outputBufferCap = 500
+	// Output buffer capacity (lines). The live capture remains small; older
+	// ranges are fetched lazily as the user reaches the loaded boundary.
+	outputBufferCap  = tty.HistoryLimit + 512
+	historyLoadChunk = 600
 
 	// Pane layout constants
 	dividerWidth    = 1 // Visual divider width
@@ -151,6 +153,7 @@ type Plugin struct {
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	interactiveCopyPasteHintShown bool
+	terminalHistory               map[string]terminalHistoryState
 
 	// Kanban view state
 	kanbanCol int // Current column index (0=Shells, 1=Active, 2=Thinking, 3=Waiting, 4=Done, 5=Paused)
@@ -408,6 +411,7 @@ func New() *Plugin {
 		autoScrollOutput:    true, // Auto-scroll to follow agent output
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
+		terminalHistory:     make(map[string]terminalHistoryState),
 		markdownRenderer:    mdRenderer,
 		taskMarkdownMode:    true,  // Default to rendered mode
 		shellSelected:       false, // Start with first worktree selected, not shell
@@ -458,6 +462,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
 	p.pollScheduler.Reset()
+	p.terminalHistory = make(map[string]terminalHistoryState)
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)

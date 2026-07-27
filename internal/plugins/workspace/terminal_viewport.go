@@ -3,6 +3,7 @@ package workspace
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -28,6 +29,9 @@ type terminalViewportInput struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+	AbsoluteBase  int
+	TotalItems    int
+	LoadingOlder  bool
 }
 
 type terminalViewportLayout struct {
@@ -37,6 +41,8 @@ type terminalViewportLayout struct {
 	DisplayWidth   int
 	DisplayHeight  int
 	MaxOffset      int
+	AbsoluteStart  int
+	ShowScrollbar  bool
 }
 
 type terminalViewportResult struct {
@@ -61,6 +67,10 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 			layout.DisplayHeight = in.PaneHeight
 		}
 	}
+	if in.TotalItems > layout.DisplayHeight && layout.DisplayWidth > 1 {
+		layout.DisplayWidth--
+		layout.ShowScrollbar = true
+	}
 
 	layout.EffectiveCount = in.Buffer.LineCount()
 	if in.TrimTrailing {
@@ -77,6 +87,7 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 		layout.Start = min(max(in.Offset, 0), layout.MaxOffset)
 	}
 	layout.End = min(layout.Start+layout.DisplayHeight, layout.EffectiveCount)
+	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
 	return layout
 }
 
@@ -91,7 +102,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	for i, line := range lines {
 		line = ui.ExpandTabs(line, tabStopWidth)
 		if in.Interactive && in.Selection != nil && in.Selection.HasSelection() {
-			startCol, endCol := in.Selection.GetLineSelectionCols(layout.Start + i)
+			startCol, endCol := in.Selection.GetLineSelectionCols(in.AbsoluteBase + layout.Start + i)
 			if startCol >= 0 {
 				line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
 			}
@@ -115,8 +126,21 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		displayLines[relativeRow] = tty.RenderCursorLine(displayLines[relativeRow], relativeCol, true)
 	}
 
+	content := strings.Join(displayLines, "\n")
+	if layout.ShowScrollbar {
+		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
+		content = lipgloss.JoinHorizontal(lipgloss.Top,
+			strings.Join(displayLines, "\n"),
+			ui.RenderScrollbar(ui.ScrollbarParams{
+				TotalItems:   max(in.TotalItems, layout.EffectiveCount),
+				ScrollOffset: layout.AbsoluteStart,
+				VisibleItems: layout.DisplayHeight,
+				TrackHeight:  layout.DisplayHeight,
+			}),
+		)
+	}
 	return terminalViewportResult{
-		Content: strings.Join(displayLines, "\n"),
+		Content: content,
 		Layout:  layout,
 	}
 }

@@ -244,6 +244,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		}
 		trimTrailing = !interactive
 	}
+	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer:           buffer,
@@ -260,12 +261,20 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		CursorVisible:    cursorVisible,
 		PaneHeight:       paneHeight,
 		PaneWidth:        paneWidth,
+		AbsoluteBase:     absoluteBase,
+		TotalItems:       totalItems,
+		LoadingOlder:     loadingOlder,
 	}, p.truncateCache)
 	if result.Content == "" {
 		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
 	}
 	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))
+	}
+	if loadingOlder {
+		hint += " " + dimText("loading older history…")
+	} else if result.Layout.Start == 0 && absoluteBase > 0 {
+		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", absoluteBase))
 	}
 	return truncateHint(hint) + "\n" + result.Content
 }

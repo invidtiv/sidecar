@@ -56,6 +56,13 @@ type capturedCursor struct {
 	PaneWidth  int
 	Visible    bool
 	Valid      bool
+	capturedPaneMetadata
+}
+
+type capturedPaneMetadata struct {
+	HistorySize int
+	CaptureBase int
+	Valid       bool
 }
 
 func newCaptureCoordinator() *captureCoordinator {
@@ -872,6 +879,9 @@ type AgentPollUnchangedMsg struct {
 	HasCursor     bool
 	PaneHeight    int // Tmux pane height for cursor offset calculation
 	PaneWidth     int // Tmux pane width for display alignment
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 }
 
 // handlePollAgent captures output from a tmux session asynchronously.
@@ -910,21 +920,24 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		}
 	}
 
-	// When feature is enabled, use direct capture without -J for the selected worktree.
-	// This ensures the preview shows content wrapped at the pane width (which is resized
-	// to match the preview). We also resize inline to avoid races with async resize cmds.
+	// The selected worktree gets a direct metadata capture so its history can
+	// be addressed lazily. Interactive input additionally preserves native
+	// wrapping and resizes the pane to the preview dimensions.
 	directCapture := false
+	joinWrapped := !features.IsEnabled(features.TmuxInteractiveInput.Name)
 	var resizeTarget string
 	var previewWidth, previewHeight int
-	if !interactiveCapture && features.IsEnabled(features.TmuxInteractiveInput.Name) {
+	if !interactiveCapture {
 		if selected := p.selectedWorktree(); selected != nil && selected.Name == worktreeName {
 			directCapture = true
-			if p.termPanelVisible {
-				previewWidth, previewHeight = p.calculateAgentPaneDimensions()
-			} else {
-				previewWidth, previewHeight = p.calculatePreviewDimensions()
+			if features.IsEnabled(features.TmuxInteractiveInput.Name) {
+				if p.termPanelVisible {
+					previewWidth, previewHeight = p.calculateAgentPaneDimensions()
+				} else {
+					previewWidth, previewHeight = p.calculatePreviewDimensions()
+				}
+				resizeTarget = p.previewResizeTarget()
 			}
-			resizeTarget = p.previewResizeTarget()
 		}
 	}
 
@@ -949,10 +962,12 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		var output string
 		var err error
 		var cursor capturedCursor
+		var capture capturedPaneMetadata
 		if interactiveCapture && cursorTarget != "" {
 			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget, false)
+			capture = cursor.capturedPaneMetadata
 		} else if interactiveCapture || directCapture {
-			output, err = capturePaneDirectWithJoin(sessionName, false)
+			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, joinWrapped)
 		} else {
 			output, err = capturePane(sessionName)
 		}
@@ -970,7 +985,9 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		output = trimCapturedOutput(output, maxBytes)
 
 		// Use hash-based change detection to skip processing if content unchanged
-		outputChanged := outputBuf == nil || outputBuf.WouldChange(output)
+		outputChanged := outputBuf == nil || (capture.Valid &&
+			outputBuf.WouldChangeSnapshot(output, capture.CaptureBase)) ||
+			(!capture.Valid && outputBuf.WouldChange(output))
 
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):
 		//   - tmux patterns: thinking, done, error (high-signal, session files can't detect these)
@@ -1019,6 +1036,9 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				HasCursor:     cursor.Valid,
 				PaneHeight:    cursor.PaneHeight,
 				PaneWidth:     cursor.PaneWidth,
+				HistorySize:   capture.HistorySize,
+				CaptureBase:   capture.CaptureBase,
+				HasHistory:    capture.Valid,
 			}
 		}
 
@@ -1034,6 +1054,9 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			HasCursor:     cursor.Valid,
 			PaneHeight:    cursor.PaneHeight,
 			PaneWidth:     cursor.PaneWidth,
+			HistorySize:   capture.HistorySize,
+			CaptureBase:   capture.CaptureBase,
+			HasHistory:    capture.Valid,
 		}
 	}
 }
@@ -1105,6 +1128,35 @@ func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, er
 	return string(output), nil
 }
 
+// capturePaneDirectWithJoinMetadata captures the live tail and the tmux
+// history size in one argv-only command chain.
+func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (string, capturedPaneMetadata, error) {
+	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size}", ";"}
+	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "tmux", args...).Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: timeout after %s", tmuxCaptureTimeout)
+	}
+	if err != nil {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: %w", err)
+	}
+	header, paneOutput, found := strings.Cut(string(output), "\n")
+	if !found {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: missing history metadata")
+	}
+	historySize, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || historySize < 0 {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: invalid history size %q", header)
+	}
+	return paneOutput, capturedPaneMetadata{
+		HistorySize: historySize,
+		CaptureBase: max(historySize-captureLineCount, 0),
+		Valid:       true,
+	}, nil
+}
+
 func capturePaneArgs(sessionName string, joinWrapped bool) []string {
 	args := []string{"capture-pane", "-p", "-e"}
 	if joinWrapped {
@@ -1142,7 +1194,7 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
 	args := []string{
 		"display-message", "-t", cursorTarget, "-p",
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size}",
 		";",
 	}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
@@ -1161,7 +1213,7 @@ func parseCapturedCursor(header string) capturedCursor {
 	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil {
 		return capturedCursor{}
 	}
-	return capturedCursor{
+	cursor := capturedCursor{
 		Row:        row,
 		Col:        col,
 		Visible:    parts[2] != "0",
@@ -1169,6 +1221,16 @@ func parseCapturedCursor(header string) capturedCursor {
 		PaneWidth:  paneWidth,
 		Valid:      true,
 	}
+	if len(parts) >= 6 {
+		if historySize, err := strconv.Atoi(parts[5]); err == nil && historySize >= 0 {
+			cursor.capturedPaneMetadata = capturedPaneMetadata{
+				HistorySize: historySize,
+				CaptureBase: max(historySize-captureLineCount, 0),
+				Valid:       true,
+			}
+		}
+	}
+	return cursor
 }
 
 // batchCaptureActiveSessions captures only recently-polled sidecar sessions (td-018f25).

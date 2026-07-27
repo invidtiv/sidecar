@@ -21,6 +21,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case terminalHistoryLoadedMsg:
+		p.applyTerminalHistory(msg)
+		return p, nil
+
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
 		p.height = msg.Height
@@ -554,7 +558,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if wt.Agent.OutputBuf != nil {
-				wt.Agent.OutputBuf.Update(msg.Output)
+				if msg.HasHistory {
+					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
+				} else {
+					wt.Agent.OutputBuf.Update(msg.Output)
+				}
 			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
@@ -629,7 +638,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if wt.Agent.OutputBuf != nil {
-				wt.Agent.OutputBuf.Update(msg.Output)
+				if msg.HasHistory {
+					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
+				} else {
+					wt.Agent.OutputBuf.Update(msg.Output)
+				}
 			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
@@ -1027,7 +1041,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
 		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
-			changed = shell.Agent.OutputBuf.Update(msg.Output)
+			if msg.HasHistory {
+				changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+				p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
+			} else {
+				changed = shell.Agent.OutputBuf.Update(msg.Output)
+			}
 			if changed {
 				shell.Agent.LastOutput = time.Now()
 			}
@@ -1601,7 +1620,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		contentChanged := false
 		if msg.Err == nil && p.termPanelOutput != nil {
-			contentChanged = p.termPanelOutput.Update(msg.Output)
+			if msg.HasHistory {
+				contentChanged = p.termPanelOutput.UpdateSnapshot(msg.Output, msg.CaptureBase)
+				p.recordTerminalHistory("panel", msg.SessionName, msg.HistorySize)
+			} else {
+				contentChanged = p.termPanelOutput.Update(msg.Output)
+			}
 			p.ctx.Logger.Debug("termPanel: CaptureMsg OK", "session", msg.SessionName, "outputLen", len(msg.Output), "lines", p.termPanelOutput.LineCount(), "changed", contentChanged)
 		} else if msg.Err != nil {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg ERROR", "err", msg.Err)

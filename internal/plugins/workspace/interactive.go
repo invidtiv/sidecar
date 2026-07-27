@@ -1031,6 +1031,9 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		if maxScroll := p.termPanelMaxScroll(); p.termPanelScroll > maxScroll {
 			p.termPanelScroll = maxScroll
 		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
+		}
 		return nil
 	}
 
@@ -1045,6 +1048,9 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 			p.previewOffset = 0
 		}
 		p.autoScrollOutput = false
+		if p.previewOffset == 0 {
+			return p.loadOlderTerminalHistory(false, -delta)
+		}
 	} else {
 		// Scroll down: move toward bottom of content
 		p.previewOffset += delta
@@ -1071,20 +1077,22 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 
 	switch msg.Code {
 	case tea.KeyUp:
-		p.scrollInteractiveViewport(-1)
+		return true, p.scrollInteractiveViewport(-1)
 	case tea.KeyDown:
-		p.scrollInteractiveViewport(1)
+		return true, p.scrollInteractiveViewport(1)
 	case tea.KeyPgUp:
-		p.scrollInteractiveViewport(-pageSize)
+		return true, p.scrollInteractiveViewport(-pageSize)
 	case tea.KeyPgDown:
-		p.scrollInteractiveViewport(pageSize)
+		return true, p.scrollInteractiveViewport(pageSize)
 	case tea.KeyHome:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
 			p.selection.Clear()
 			p.termPanelScroll = p.termPanelMaxScroll()
+			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
 		} else {
 			p.previewOffset = 0
 			p.autoScrollOutput = false
+			return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
 		}
 	case tea.KeyEnd:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
@@ -1100,12 +1108,15 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 	return true, nil
 }
 
-func (p *Plugin) scrollInteractiveViewport(delta int) {
+func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.selection.Clear()
 		p.termPanelScroll -= delta
 		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
-		return
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
+		}
+		return nil
 	}
 
 	maxOffset := p.getMaxScrollOffset()
@@ -1114,6 +1125,10 @@ func (p *Plugin) scrollInteractiveViewport(delta int) {
 	}
 	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
 	p.autoScrollOutput = p.previewOffset >= maxOffset
+	if delta < 0 && p.previewOffset == 0 {
+		return p.loadOlderTerminalHistory(false, -delta)
+	}
+	return nil
 }
 
 // forwardClickToTmux sends a mouse click to the tmux pane.
