@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-07-26  
 **Tracking:** `td-bcd2d4`  
-**Source:** `docs/plans/active/embedded-terminal-audit.md`
+**Source:** `docs/implemented/embedded-terminal-audit.md`
 
 ## Decision
 
@@ -74,4 +74,3 @@ keyboard negotiation already provides key disambiguation where supported.
 Requesting all keys or release events would expand the event stream and require
 new release/repeat semantics throughout existing key handling without improving
 the terminal forwarding path.
-

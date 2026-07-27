@@ -2,8 +2,8 @@
 name: shell-integration
 description: >
   Interactive shell/TTY integration with tmux session management, shell command
-  execution, and output capture in sidecar. Covers the tty package, key mapping,
-  adaptive polling, cursor rendering, scrolling, paste handling, and inline editing.
+  execution, control-mode output capture with polling fallback, native cursor
+  rendering, lazy scrollback, selection, paste handling, and inline editing.
   Use when working on shell integration, tmux features, command execution, or
   interactive mode.
 user-invocable: false
@@ -19,18 +19,27 @@ Sidecar's interactive shell allows users to type directly into tmux sessions fro
 internal/tty/                    # Shared tmux terminal abstraction
   tty.go                         # Core Model and State types
   keymap.go                      # Bubble Tea -> tmux key translation
-  messages.go                    # Message types (CaptureResultMsg, PollTickMsg, etc.)
+  messages.go                    # Owner/target/generation-scoped messages
   session.go                     # tmux operations (send-keys, capture-pane, resize)
-  polling.go                     # Polling interval constants and calculation
-  cursor.go                      # Cursor rendering and position query
+  scheduler.go                   # Keyed fallback-poll generation ownership
+  control_*.go                   # Session-keyed tmux -C transport and manager
+  capture_range.go               # Atomic bounded history capture
+  cursor.go                      # Cursor positioning helpers
   paste.go                       # Paste handling (clipboard, bracketed paste)
   terminal_mode.go               # Terminal mode detection (mouse, bracketed paste)
-  output_buffer.go               # Thread-safe buffer with hash-based change detection
+  output_buffer.go               # Absolute, bounded live/history buffer
+  editor_session.go              # Shared inline-editor tmux lifecycle
 
 internal/plugins/workspace/
   interactive.go                 # Workspace-specific interactive mode logic
   interactive_selection.go       # Text selection in interactive mode
-  view_preview.go                # Rendering with cursor overlay and scroll offset
+  terminal_viewport.go           # Pure shared terminal viewport renderer
+  terminal_control.go            # Control-mode subscription/fallback bridge
+  terminal_history.go            # Lazy absolute scrollback loading
+  terminal_search.go             # Loaded-history search
+  terminal_links.go              # Safe URL/path detection and activation
+  native_terminal.go             # Native cursor and contextual mouse mode
+  view_preview.go                # Agent/shell preview composition
   mouse.go                       # Scroll handling
   types.go                       # InteractiveState type
 
@@ -42,15 +51,16 @@ internal/plugins/filebrowser/
 ## Data Flow
 
 ```
-User Keypress -> handleInteractiveKeys()
-              -> tty.MapKeyToTmux()
-              -> tmux send-keys
-              -> schedulePoll(20ms debounce)
-              -> capture-pane + cursor query
-              -> CaptureResultMsg
-              -> OutputBuffer.Update()
-              -> pollInteractivePane() (adaptive 50-250ms)
-              -> renderWithCursor()
+User Keypress -> handleInteractiveKeys() -> tty.MapKeyToTmux() -> tmux send-keys
+
+Pane output -> tmux -C %output notification
+            -> per-session coalescer
+            -> in-band cursor/history query + capture-pane
+            -> owner/role/generation-scoped Tea message
+            -> OutputBuffer.UpdateSnapshot()
+            -> pure terminal viewport + native Bubble Tea cursor
+
+Control unavailable/dead -> keyed adaptive polling fallback
 ```
 
 ## Core Abstractions
@@ -135,7 +145,7 @@ case "shift+tab":  return "\x1b[Z", true
 
 For printable characters, `tmux send-keys -l` prevents interpretation.
 
-## Adaptive Polling (`polling.go`)
+## Polling fallback
 
 ```go
 const (
@@ -146,37 +156,33 @@ const (
 )
 ```
 
-### Three-State Visibility Polling (Workspace)
+Control mode is preferred for the visible terminal panel and selected agent or
+shell. Adaptive polling remains the fallback for old/unavailable/dead control
+clients and for background status work.
+
+### Visibility and focus
 
 | State | Active | Idle |
 |-------|--------|------|
 | Visible + focused | 200ms | 2s |
-| Visible + unfocused | 500ms | 500ms |
+| Visible + app unfocused | clamped to unfocused cadence | clamped |
 | Not visible | 10-20s | 10-20s |
 
-### Poll Generation
+### Keyed generation ownership
 
-Stale polls invalidated using generation counter:
+`tty.KeyedScheduler` owns a generation per logical source
+(`agent:<name>`, `shell:<tmuxName>`, `terminal-panel`). Every schedule allocates
+a fresh token, and the token travels through capture, result, retry, and
+continuation messages. Reset invalidates pending timers and in-flight results.
 
 ```go
-func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
-    m.State.PollGeneration++
-    gen := m.State.PollGeneration
-    return tea.Tick(delay, func(t time.Time) tea.Msg {
-        return PollTickMsg{Generation: gen}
-    })
-}
+token, cmd := scheduler.Schedule(key, delay, makeMessage)
+if scheduler.IsCurrent(key, token) { /* apply result */ }
 ```
 
-### Performance Per Keystroke
-
-1. `tmux send-keys` (~10ms)
-2. 20ms debounce
-3. `capture-pane` (~5ms) + cursor query (~5ms)
-4. Hash check (~1ms), regex if changed (~5ms), buffer split (~1ms)
-5. Cursor overlay (<1ms)
-
-Total: ~42ms worst case, ~36ms typical.
+Control subscriptions are pooled by tmux session because a control client cannot
+observe panes in another session. Subscription close and manager stop invalidate
+and drain queued callbacks before returning.
 
 ## Cursor Positioning (`cursor.go`)
 
@@ -191,7 +197,11 @@ func QueryCursorPositionSync(target string) (row, col, paneHeight, paneWidth int
 
 ### Rendering
 
-Cursor is rendered as a block character overlaid on captured output. Handles cursor past end of line (pad with spaces) and cursor within line (ANSI-aware slicing with `ansi.Cut`).
+Focused live terminal surfaces expose a `tea.Cursor` through the plugin
+`CursorProvider` capability. Workspace, filebrowser, and notes compute exact
+application coordinates and suppress the cursor under modals, while scrolled
+back, outside the visible slice, or when another surface owns focus. A painted
+cursor is not added to native-cursor content.
 
 ### Height Mismatch Adjustment
 
@@ -217,7 +227,9 @@ type Plugin struct {
 
 - Scroll UP: pause auto-scroll, increment `previewOffset`
 - Scroll DOWN: decrement `previewOffset`, re-enable auto-scroll at 0
-- Bounded by capture window (default 600 lines)
+- Live capture stays bounded at 600 lines; older 600-line ranges load lazily
+- Absolute buffer coordinates keep selections and search matches stable
+- Scrollback is bounded by the shared 10,000-line tmux history policy
 - Instant response (pure state manipulation, no subprocess calls)
 
 ## Copy/Paste
@@ -245,14 +257,15 @@ Resize triggers: window resize, sidebar toggle/drag, selection change, agent/she
 
 ## Inline Edit Mode (Filebrowser)
 
-Uses `tty.Model` for vim/nano/emacs editing in the file preview pane:
+Uses `tty.Model` plus `tty.EditorSession` for vim/nano/emacs editing in the file
+preview pane. Session creation is history-safe and asynchronous:
 
 ```go
 func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
-    editor := os.Getenv("EDITOR")
-    sessionName := fmt.Sprintf("sidecar-edit-%d", time.Now().UnixNano())
-    exec.Command("tmux", "new-session", "-d", "-s", sessionName, editor, path).Run()
-    return InlineEditStartedMsg{SessionName: sessionName}
+    return func() tea.Msg {
+        session, err := tty.StartEditorSession(tty.EditorSessionOptions{Path: path})
+        return InlineEditStartedMsg{Session: session, Err: err}
+    }
 }
 ```
 
@@ -289,7 +302,8 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
       "interactiveAttachKey": "ctrl+]",
       "interactiveCopyKey": "alt+c",
       "interactivePasteKey": "alt+v",
-      "tmuxCaptureMaxBytes": 600
+      "tmuxCaptureMaxBytes": 2097152,
+      "copyOnSelect": false
     }
   }
 }
@@ -297,14 +311,17 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 
 ## Critical Rules
 
-1. **Never clear OutputBuffer** -- breaks hash-based change detection and rendering
-2. **Always increment poll generation** on entering interactive mode to avoid duplicate poll chains (causes 200% CPU)
-3. **Never call subprocesses from View()** -- cursor queries and tmux ops must run in poll handlers
-4. **Don't mix shell/workspace polling** -- shells use `scheduleShellPollByName()` + `shellPollGeneration`, workspaces use `scheduleAgentPoll()` + `pollGeneration`
-5. **Hash before regex** -- massive CPU savings when content unchanged
-6. **Debouncing works** -- 20ms delay reduces subprocess spam ~60%
-7. **Atomic cursor capture** -- query cursor with output to avoid race conditions
-8. **Width sync matters** -- resize panes in background at all times
+1. **Scope every async result** by owner, target/role, activation, and keyed generation.
+2. **Carry the generation end to end** through capture, result, retry, and continuation.
+3. **Never call subprocesses from `Init()` or `View()`**; use `Start()`/`tea.Cmd`.
+4. **Do not mutate model state in `tea.Cmd` callbacks**; return a scoped message.
+5. **Hash raw capture before cleaning/splitting**, but mode changes must still clear coordinate state.
+6. **Preserve newer live overlap** when delayed history ranges prepend.
+7. **Control clients are per tmux session** and close/stop must invalidate and drain deliveries.
+8. **Keep keyed polling fallback working** until the first accepted control snapshot and after control failure.
+9. **Use native cursor only for the focused live viewport**; hide it offscreen, under modals, and in scrollback.
+10. **Treat source OSC as untrusted**; the sanitizer and independent fuzz oracle must cover nested 7-bit/C1 forms and removal-boundary synthesis.
+11. **Width sync matters**; resize panes/control clients when terminal geometry changes.
 
 ## References
 

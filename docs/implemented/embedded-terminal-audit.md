@@ -5,7 +5,31 @@ panel, output preview), `internal/plugins/filebrowser/inline_edit.go`,
 `internal/plugins/notes/inline_edit.go`, `internal/ui/selection*.go`,
 `internal/mouse/`.
 
-**Date:** 2026-07-26 · **Tracking:** td-acaed2 · **Baseline:** `c097a33`
+**Date:** 2026-07-26 · **Status:** Implemented · **Epic:** td-2d2d1e ·
+**Original audit:** td-acaed2 · **Baseline:** `c097a33`
+
+## Implementation outcome
+
+Implemented end to end through independently reviewed phases:
+
+- correctness, input fidelity, scroll behavior, process safety, and command
+  injection fixes;
+- shared `internal/tty` primitives, pure viewport rendering, keyed polling
+  ownership, uniform history policy, and shared editor sessions;
+- lazy 10,000-line scrollback, absolute selection and gestures, Unicode-aware
+  search, and safe URL/`path:line` activation;
+- session-keyed tmux control-mode capture with polling fallback, application
+  focus awareness, contextual mouse reporting, and native Bubble Tea cursors.
+
+Deliberate non-regressing adaptations are recorded in
+`docs/implemented/embedded-terminal-transport-decisions.md`: control clients are
+pooled per tmux session, cell-motion is contextual rather than global, Bubble
+Tea v2 keyboard enhancements remain at their safe defaults, source OSC metadata
+is sanitized and visible links are detected, and an in-process VT parser is
+deferred until terminal state can be seeded correctly.
+
+Final proof included `go test ./...`, `go test -race ./...`, `go build ./...`,
+real isolated tmux control-mode tests, and independent sanitizer fuzz campaigns.
 
 ---
 
