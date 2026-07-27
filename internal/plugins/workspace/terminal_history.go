@@ -46,6 +46,9 @@ func (p *Plugin) recordTerminalHistory(kind, target string, historySize int) {
 	state.HistorySize = historySize
 	state.Exhausted = historySize == 0
 	p.terminalHistory[key] = state
+	if p.terminalSearch.SourceKey == key && p.terminalSearch.Query != "" {
+		p.recomputeTerminalSearch()
+	}
 }
 
 func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool) {
@@ -173,6 +176,9 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	state.HistorySize = msg.Capture.HistorySize
 	state.Exhausted = newBase == 0
 	p.terminalHistory[msg.Source.Key] = state
+	if p.terminalSearch.SourceKey == msg.Source.Key && p.terminalSearch.Query != "" {
+		p.recomputeTerminalSearch()
+	}
 
 	if msg.Source.TermPanel {
 		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())

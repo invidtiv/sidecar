@@ -155,6 +155,7 @@ type Plugin struct {
 	selectionTermPanel            bool
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
+	terminalSearch                terminalSearchState
 
 	// Kanban view state
 	kanbanCol int // Current column index (0=Shells, 1=Active, 2=Thinking, 3=Waiting, 4=Done, 5=Paused)

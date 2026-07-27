@@ -268,6 +268,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		AbsoluteBase:     absoluteBase,
 		TotalItems:       totalItems,
 		LoadingOlder:     loadingOlder,
+		SearchMatches:    p.terminalSearchMatches(termPanel),
 	}, p.truncateCache)
 	if result.Content == "" {
 		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
@@ -279,6 +280,17 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		hint += " " + dimText("loading older history…")
 	} else if result.Layout.Start == 0 && absoluteBase > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", absoluteBase))
+	}
+	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
+		if p.terminalSearch.InputActive {
+			hint += " " + dimText("/"+p.terminalSearch.Query+"▌")
+		} else if p.terminalSearch.Query != "" {
+			if len(p.terminalSearch.Matches) == 0 {
+				hint += " " + dimText("no matches")
+			} else {
+				hint += " " + dimText(fmt.Sprintf("%d/%d matches • n/N", p.terminalSearch.Current+1, len(p.terminalSearch.Matches)))
+			}
+		}
 	}
 	return truncateHint(hint) + "\n" + result.Content
 }

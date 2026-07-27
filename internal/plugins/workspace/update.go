@@ -23,6 +23,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	switch msg := msg.(type) {
 	case terminalHistoryLoadedMsg:
 		return p, p.applyTerminalHistory(msg)
+	case terminalSearchHistoryLoadedMsg:
+		p.applyTerminalSearchHistory(msg)
+		return p, nil
 
 	case tea.WindowSizeMsg:
 		p.width = msg.Width

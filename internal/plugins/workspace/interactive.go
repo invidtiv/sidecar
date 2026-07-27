@@ -710,6 +710,9 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.autoScrollOutput = true
 		return p.pollSelectedAgentNowIfVisible()
 	}
+	if handled, cmd := p.handleTerminalSearchKey(msg, true); handled {
+		return cmd
+	}
 	// Check for exit keys
 
 	// Primary exit: Configurable key (default: Ctrl+\)

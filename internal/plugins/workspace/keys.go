@@ -564,6 +564,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
+			return cmd
+		}
 		switch msg.String() {
 		case "ctrl+a":
 			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)

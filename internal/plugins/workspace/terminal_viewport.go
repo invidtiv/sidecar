@@ -32,6 +32,7 @@ type terminalViewportInput struct {
 	AbsoluteBase  int
 	TotalItems    int
 	LoadingOlder  bool
+	SearchMatches *terminalSearchMatches
 }
 
 type terminalViewportLayout struct {
@@ -101,8 +102,16 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
 		line = ui.ExpandTabs(line, tabStopWidth)
+		absoluteLine := in.AbsoluteBase + layout.Start + i
+		if in.SearchMatches != nil {
+			for _, match := range in.SearchMatches.Items {
+				if match.Line == absoluteLine {
+					line = ui.InjectCharacterRangeBackground(line, match.StartCol, match.EndCol)
+				}
+			}
+		}
 		if in.Selection != nil && in.Selection.HasSelection() {
-			startCol, endCol := in.Selection.GetLineSelectionCols(in.AbsoluteBase + layout.Start + i)
+			startCol, endCol := in.Selection.GetLineSelectionCols(absoluteLine)
 			if startCol >= 0 {
 				line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
 			}
