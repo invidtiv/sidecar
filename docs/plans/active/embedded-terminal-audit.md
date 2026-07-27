@@ -17,7 +17,7 @@ poll-based input/output relay:
 ```
 keypress ──► MapKeyToTmux ──► `tmux send-keys` (subprocess)
                                      │
-              tea.Tick(20ms debounce) ▼
+            keystroke debounce (20 ms) ▼
              `tmux capture-pane -p -e -S -600` (subprocess)
              `tmux display-message #{cursor_x},…` (subprocess)
                                      │
@@ -60,18 +60,21 @@ if time.Since(p.lastScrollTime) < scrollBurstTimeout && p.scrollBurstCount > 0 {
 }
 ```
 
-These two functions are also the **only thing that schedules the next poll** in
-interactive mode (`update.go:609`, `update.go:654`, `update.go:1569`). Returning
-`nil` doesn't skip one tick — it terminates the poll chain. Nothing restarts it:
-there is no periodic heartbeat anywhere in the plugin (only `tea.Tick`-chained
-polls; verified across `agent.go`, `shell.go`, `terminal_panel.go`,
-`internal/app/`).
+These two functions are the sole continuation of the poll chain in interactive
+mode (`update.go:609`, `:654`, `:1053`, `:1569` — all four `return` immediately
+after the call). Returning `nil` doesn't skip one tick — it terminates the
+chain. There is no periodic heartbeat anywhere in the plugin that would restart
+it (verified across `agent.go`, `shell.go`, `terminal_panel.go`,
+`internal/app/`); the only restart paths are a keystroke
+(`scheduleDebouncedPoll`, `interactive.go:1375`, which has no burst gate), a
+resize, or a click.
 
 **Effect:** scroll up to read, scroll back down — the pane is now a frozen
 screenshot. It stays frozen until you press a key, resize, or leave interactive
-mode. Since `scrollBurstCount` is only ever reset to `1` (`interactive.go:1141`),
-never `0`, the `> 0` half of the guard is permanently true after the first scroll
-of the session.
+mode. Since `scrollBurstCount` is only ever reset to `1` (`interactive.go:1141`
+and its copy-pasted twin `mouse.go:1205`), never `0` — not even on
+interactive-mode exit — the `> 0` half of the guard is permanently true after
+the first scroll of the session and the gate is purely time-based.
 
 **Fix:** the guard should skip the *capture*, not the *chain*. Always schedule
 the next tick; make the poll body a no-op when the user is mid-flick.
@@ -100,9 +103,16 @@ correctly conservative — it never matches a 1-rune string. This ad-hoc
 of the two gates.
 
 **Fix:** delete the `ContainsAny` branch and rely on `LooksLikeMouseFragment` +
-the existing `[`-proximity gates. Better: see §6.1 — with a persistent control-mode
-connection and `MouseModeCellMotion`, the split-CSI class of bug largely stops
-existing.
+the existing `[`-proximity gates — `LooksLikeMouseFragment` structurally cannot
+match a 1-rune string, so plain typing survives while multi-character fragments
+are still caught. Guard the change with leak-regression tests: feed the split
+SGR sequences that motivated the filter (`[<65;33;12M` with and without the
+leading ESC, split at each byte boundary) through the input path and assert
+none reach `send-keys` as literal text. **The leak-regression tests are a
+blocker: they land in the same change that removes the filter, not as a
+follow-up.** Longer term, `MouseModeCellMotion` (§3.3) cuts the volume of mouse
+reports crossing sidecar's stdin by an order of magnitude, which is what makes
+split fragments likely in the first place.
 
 ### 2.3 Scrolling is ~12× slower than intended 🔴
 
@@ -118,12 +128,17 @@ Three multiplicative losses:
 3. `forwardScrollToTmux` (`interactive.go:1168-1183`) and `scrollPreview`
    (`mouse.go:1223-1239`) then move **one line per event** regardless of `delta`
    — they branch on the *sign* only.
-4. On top of that, burst debouncing (`interactive.go:1151`) *drops* events
-   entirely rather than accumulating them: at 12 ms burst debounce, a trackpad
-   emitting events every ~4 ms loses two of every three.
+4. On top of that, burst debouncing (`interactive.go:1151-1153`, twin at
+   `mouse.go:1215-1217`) *drops* events entirely rather than accumulating them:
+   at 12 ms burst debounce (`scrollBurstDebounce`, `interactive.go:72` — the
+   comment above it still says 32 ms), a trackpad emitting events every ~4 ms
+   loses two of every three.
 
 Net: a flick that should travel ~100 lines travels ~8. This is the "scrollback
-isn't natural" complaint, precisely.
+isn't natural" complaint, precisely. The ±1 flattening is specific to workspace
+vertical scroll: `conversations/mouse.go:177-193` and `gitstatus/mouse.go:233-243`
+pass `action.Delta` through, and workspace itself honors it for horizontal
+scroll (`mouse.go:1124`).
 
 **Fix:** honor `action.Delta`; accumulate dropped deltas into a pending counter
 that is applied on the next accepted frame instead of discarding them.
@@ -134,12 +149,15 @@ that is applied on the next accepted frame instead of discarding them.
 reflecting for a `[]byte`-kinded value — matching bubbletea **v1**'s unexported
 `unknownCSISequenceMsg []byte`.
 
-In v2, unparsed input arrives as `ultraviolet.UnknownEvent` /
-`UnknownCsiEvent`, both of which are **`string`** types
-(`ultraviolet/event.go:27,35`), passed through untouched by
+In the pinned v2 (`charm.land/bubbletea/v2 v2.0.7`), unparsed input arrives as
+`ultraviolet.UnknownEvent` / `UnknownCsiEvent`, both of which are **`string`**
+types (`ultraviolet/event.go:27,35`), passed through untouched by
 `bubbletea/v2/input.go:translateInputEvent`. `reflect.Kind()` is `String`, not
-`Slice`, so `ExtractUnknownCSIBytes` always returns `nil` and
-`handleUnknownSequence` (`interactive.go:1081`) never forwards anything.
+`Slice` — and no `[]byte`-kinded event type exists anywhere in bubbletea v2 or
+ultraviolet — so `ExtractUnknownCSIBytes` always returns `nil` and
+`handleUnknownSequence` (`interactive.go:1081`, reached from the `default:`
+branch at `update.go:1610`; its doc comment still cites the v1 premise) never
+forwards anything.
 
 The unit tests pass because `csiu_test.go:7` defines its own local
 `type csiBytes []byte` rather than exercising the real message type — a green
@@ -171,10 +189,13 @@ return func() tea.Msg {
 }
 ```
 
-Every other write to `p.interactiveState` happens on the Update goroutine. If the
-user exits interactive mode (or the session dies) between the click and the
-command running, `p.interactiveState` is `nil` and the last line panics. The race
-detector doesn't catch it because no test forwards a click.
+Every other write to `p.interactiveState` happens on the event-loop goroutine
+(in `Update` or — see §3.6 — in `View`); this closure is the only write from a
+`tea.Cmd` goroutine. `exitInteractiveMode` (`interactive.go:805-814`) sets
+`p.interactiveState = nil`, and the nil check at `:1191` runs before the closure
+does — so if the user exits interactive mode (or the session dies) between the
+click and the command running, the last line panics. The race detector doesn't
+catch it because no test forwards a click.
 
 **Fix:** return a message (`interactiveClickSentMsg{Err}`) and mutate state in
 `Update`, as every other path already does.
@@ -188,11 +209,18 @@ agent/shell buffer:
 - `interactiveOutputBuffer()` (`interactive_selection.go:117`) returns the
   worktree's or shell's `OutputBuf` — never `p.termPanelOutput`.
 - `interactiveLineIndexAtY` (`interactive_selection.go:58`) bails when
-  `VisibleEnd <= VisibleStart`, and `renderTermPanelOutput`
-  (`terminal_panel.go:375`) never sets `VisibleStart`/`VisibleEnd`.
+  `VisibleEnd <= VisibleStart`; `renderTermPanelOutput` (`terminal_panel.go:375`)
+  never sets them, and the two renderers that do skip that bookkeeping in panel
+  mode (`!p.interactiveState.TermPanel`, `view_preview.go:275`, `:483`), so both
+  stay `0` for the entire panel session.
 
-So dragging in the terminal panel does nothing, and `alt+c` there copies from the
-**agent** pane instead. The panel also has no paste target of its own.
+So a click in the panel is swallowed outright — `prepareInteractiveDrag` gets
+`!ok`, clears the selection, and returns `nil`
+(`interactive_selection.go:89-93`), never falling through to click-forwarding —
+dragging selects nothing, and `alt+c` hits the empty-range fallback and toasts
+"No output to copy" (`interactive_selection.go:169-192`). (`alt+v` works: paste
+targets `interactiveState.TargetSession`, which panel entry sets to the panel
+session, `interactive.go:511,530`.)
 
 **Fix:** make the selection source a function of `interactiveState.TermPanel`;
 have `renderTermPanelOutput` publish `VisibleStart`/`VisibleEnd`/`ContentRowOffset`
@@ -265,20 +293,28 @@ trims from the front (`filebrowser/inline_edit.go:362-364`):
 if len(lines) > contentHeight { lines = lines[:contentHeight] }
 ```
 
-For a fresh editor session tmux history is empty, so this happens to work. The
-moment the editor session accumulates scrollback (`:!`, `:term`, a shell escape),
-the inline editor shows the oldest 40 lines with the cursor overlaid at a
-meaningless offset.
+(`notes/inline_edit.go:374` has the identical trim.) For a fresh editor session
+tmux history is empty, so this happens to work. The moment the editor session
+accumulates scrollback (`:!`, `:term`, a shell escape), the inline editor shows
+the oldest 40 lines with the cursor overlaid at a meaningless offset.
 
 **Fix:** `View()` should slice the last `m.Height` lines and compute the cursor
 row against that slice.
 
 ### 2.12 `history-limit` is set inconsistently 🟡
 
-Set: `agent.go:380`, `agent.go:696`, `shell.go:1108`.
-Not set: `terminal_panel.go:190-204`, `shell.go:664`, `shell.go:783`,
-`agent.go:751`. Those sessions get the tmux default (2000, often less) — so the
-terminal panel and some shells have shallower history than the rest.
+Set: `agent.go:380`, `agent.go:696`, `shell.go:1108` — in all three cases via
+`set-option` *after* `new-session` has already created the pane. Not set:
+`terminal_panel.go:190-204`, `shell.go:560-566` (the main `createShell` path),
+`shell.go:664`, `shell.go:783`, `agent.go:751`, `notes/inline_edit.go:89`,
+`filebrowser/inline_edit.go:98`. Those sessions get the tmux default (2000) — so
+the terminal panel and most shells have shallower history than the agent panes.
+
+Modern tmux (verified on 3.7b) applies a raised `history-limit` to existing
+panes, so set-after-create works there; older releases applied it only to panes
+created after the option was set, and sidecar never checks the tmux version.
+Setting it once, globally, before any session exists (or chaining
+`new-session \; set-option` in one invocation) is correct on both.
 
 ### 2.13 Batch capture shells out to `bash -c` with Go-quoted names 🟡
 
@@ -289,21 +325,26 @@ quotedSessions = append(quotedSessions, fmt.Sprintf("%q", s))
 ```
 
 `%q` is *Go* quoting, not shell quoting. Inside bash double quotes, `$(…)`,
-backticks and `${…}` still expand. `sanitizeName` (`agent.go:807`) only strips
-`.`, `:`, `/` — a project directory or worktree name containing `$(` reaches the
-script intact. Low likelihood, but it's arbitrary command execution driven by a
-filename.
+backticks and `${…}` still expand, and git ref names and directory names may
+legally contain `$`, `(`, `)`. `sanitizeName` (`agent.go:807`) only strips `.`,
+`:`, `/` — so a hostile branch or checkout-directory name reaches the script
+intact. Only reachable with 2+ active sessions (the 0/1-session path at
+`agent.go:1132` captures directly via argv), but it's arbitrary command
+execution driven by a filename.
 
 It's also the slowest possible way to do this: `bash` + N × `tmux` processes.
 tmux accepts multiple commands in one invocation:
 
 ```
-tmux capture-pane -p -e -t s1 \; capture-pane -p -e -t s2 \; …
+tmux display-message -p -t s1 'SIDECAR<nonce>:s1' \; capture-pane -p -e -S -600 -t s1 \; \
+     display-message -p -t s2 'SIDECAR<nonce>:s2' \; capture-pane -p -e -S -600 -t s2 \; …
 ```
 
-One process, no shell, no quoting problem. The `===SIDECAR_SESSION:` delimiter is
-also collidable with pane content; `tmux display-message -p` markers or
-per-session `-b` buffers avoid that.
+One process, no shell, argv-only quoting. Note the chained captures concatenate
+on stdout with no separator of their own — the interleaved `display-message -p`
+markers are what delimit them, and a per-invocation random nonce makes the
+marker collision-proof against pane content (the current `===SIDECAR_SESSION:`
+literal is guessable and collidable).
 
 ### 2.14 Dead code: interactive branches inside `handleListKeys` 🟢
 
@@ -315,27 +356,44 @@ Consequence worth noting: `+`, `-`, and `\` (sidebar resize / toggle) are *not*
 available in interactive mode at all — they go straight to tmux. That's arguably
 correct, but the dead code implies otherwise.
 
+### 2.15 Selection anchors drift while output arrives 🟠
+
+`SelectionPoint.Line` is a buffer line index (`ui/selection.go:8-14`), but
+`OutputBuffer.Update` (`types.go:427-467`) replaces `b.lines` wholesale from
+each capture and trims to capacity from the front (`:459-464`). Line indices are
+not stable across polls: hold a selection while the pane is producing output and
+the highlight — and what `alt+c` copies — silently slides onto different text.
+
+**Fix:** anchor selections in absolute pane coordinates. tmux exposes
+`#{history_size}`; the absolute index of the first captured line is
+`history_size − min(captureDepth, history_size)`, so storing
+`absoluteOffset + bufferIndex` at selection time and re-deriving the buffer
+index each frame keeps the anchor pinned to content. (Freezing capture updates
+while a selection is held was considered and rejected — the pane would visibly
+stall.)
+
 ---
 
 ## 3. Performance
 
 ### 3.1 Subprocess volume is the dominant cost
 
-Per poll cycle in interactive mode, on the hot path:
+Per poll cycle on the hot path:
 
 | Call | Subprocesses |
 |---|---|
-| `tmux send-keys` per keystroke | 1 |
+| `tmux send-keys` per keystroke | 1 (2 when flushing a pending escape; 2–3 per paste) |
 | `capture-pane` | 1 |
-| `display-message` (cursor) | 1 |
-| `queryPaneSize` when `directCapture` (`agent.go:948`) | 1 |
-| `maybeResizeInteractivePane` → `queryPaneSize` + `resize-window` | 0–2 |
+| `display-message` (cursor + pane size; interactive only) | 1 |
+| `queryPaneSize` when `directCapture` (`agent.go:949`; non-interactive selected pane — mutually exclusive with the cursor query) | 1 |
+| `maybeResizeInteractivePane` on size change (500 ms throttle) | up to 6 |
 
-At `pollingDecayFast = 50 ms` that is **≈40 process spawns/second sustained
-while typing**, dropping to ~10/s after 2 s idle and ~4/s after 10 s. `CLAUDE.md`
-already flags that every spawn carries a large fixed tax on machines running an
-endpoint security agent. This is the "sluggish" feeling, and no amount of
-interval tuning fixes it — the architecture is wrong for the cadence.
+At `pollingDecayFast = 50 ms` that is 20 polls/s × 2 spawns — **≈40 process
+spawns/second sustained while typing** — dropping to ~10 spawns/s after 2 s idle
+and ~4/s after 10 s. `CLAUDE.md` already flags that every spawn carries a large
+fixed tax on machines running an endpoint security agent. This is the "sluggish"
+feeling, and no amount of interval tuning fixes it — the architecture is wrong
+for the cadence.
 
 Two immediate reductions before the architectural fix in §6.1:
 
@@ -346,9 +404,13 @@ Two immediate reductions before the architectural fix in §6.1:
   tmux display-message -t T -p '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}' \; \
        capture-pane -p -e -S -600 -t T
   ```
-- **Drop `queryPaneSize` from the poll body.** The pane size already comes back
-  in the cursor query (`PaneHeight`/`PaneWidth`); `agent.go:948-952` queries it a
-  second time and conditionally resizes on every single poll.
+- **Drop the re-query inside the resize path.** `maybeResizeInteractivePane`
+  already receives `PaneWidth`/`PaneHeight` from the cursor query and compares
+  them (`interactive.go:670`) — then `resizeTmuxTargetCmd` immediately
+  re-queries the same values (`interactive.go:638`) and can run query → resize →
+  re-query → conditional second resize, where each resize is itself 1–2 spawns
+  via the `resize-window` → `resize-pane` fallback (`interactive.go:695-708`).
+  Trust the values already in hand.
 
 ### 3.2 No focus/blur awareness
 
@@ -363,9 +425,10 @@ app, or on another desktop. Setting `ReportFocus` and clamping to
 `internal/app/view.go:50` sets `MouseModeAllMotion` unconditionally. Every pixel
 of mouse movement produces an SGR sequence → a `MouseMotionMsg` → a full
 hit-test + re-render, and is the origin of every split-CSI heuristic in §2.2.
-All-motion is only needed for hover feedback and drag; `MouseModeCellMotion`
-reports drags but not idle motion. Consider switching to cell-motion by default
-and promoting to all-motion only while a hover-sensitive surface is on screen.
+All-motion is only needed for idle hover feedback — which sidecar does not rely
+on — while `MouseModeCellMotion` still reports clicks and drags. **Decision:
+switch to cell-motion.** No dynamic promotion to all-motion is needed; the lost
+idle-motion events are an accepted tradeoff.
 
 ### 3.4 Render path does the same work two to three times
 
@@ -387,17 +450,22 @@ apply the cursor to `displayLines[row]` before the join.
 
 `view_preview.go:297`, `view_preview.go:505` and `terminal_panel.go:402` call
 `OutputBuf.Lines()` — which allocates and copies **all 500 lines** — solely to
-find `lastNonEmptyLine`. Every frame, per pane. Add
+find `lastNonEmptyLine`. Every frame, per pane. (`terminal_panel.go:402` copies
+unconditionally but consumes the result only when `!interactive`, so every
+interactive frame copies the whole panel buffer and throws it away.) Add
 `OutputBuffer.LastNonEmptyLine()` that scans under the existing mutex without
 copying, or cache the index at `Update()` time (it can only change when content
 changes).
 
 ### 3.6 Rendering mutates model state
 
-`renderOutputContent` writes `p.previewOffset` (`view_preview.go:321`),
-`p.interactiveState.VisibleStart/VisibleEnd/ContentRowOffset`
-(`:281,547-549`), and `renderTermPanelOutput` writes `p.termPanelScroll`
-(`terminal_panel.go:428`). Mouse-to-buffer mapping therefore depends on the last
+`renderOutputContent`/`renderShellOutput` write `p.previewOffset`
+(`view_preview.go:322`, `:529`) and
+`p.interactiveState.VisibleStart/VisibleEnd/ContentRowOffset` (`:279-281`,
+`:341-342`, `:487-489`, `:547-549`); `renderPreviewContent` writes
+`ContentRowOffset` again (`:20`, `:39`, `:63-75`); `renderTermPanelOutput`
+clamps `p.termPanelScroll` (`terminal_panel.go:427-429`). Mouse-to-buffer
+mapping therefore depends on the last
 painted frame. It works because `View()` runs on the Update goroutine, but it
 makes selection coordinates unreproducible in tests and couples hit-testing to
 render order. Compute a `previewLayout` struct in `Update` and let `View` read it.
@@ -407,7 +475,9 @@ render order. Compute a `previewLayout` struct in `Update` and let `View` read i
 `captureLineCount = 600`, `outputBufferCap = 500`, `tmuxHistoryLimit = 10000`.
 tmux retains 10 000 lines; sidecar throws away 95% of them on every capture and
 keeps 500. Scrollback in the preview is therefore capped at 500 lines, with no
-indication when you hit the ceiling (§5.2).
+indication when you hit the ceiling (§5.2). (`internal/tty` sizes differently
+again: `Config.ScrollbackLines = 600` is both its capture depth and its buffer
+cap, `tty.go:35`.)
 
 The `shell-integration` skill also documents `tmuxCaptureMaxBytes` as
 `600` "scrollback lines"; it is actually a **byte** cap defaulting to 2 MB
@@ -432,7 +502,7 @@ copies have since drifted.
 | `QueryPaneSize` | `session.go:106-125` | `interactive.go:711-730` |
 | `SendSGRMouse` | `session.go:131-141` | `interactive.go:1223-1233` |
 | `QueryCursorPositionSync` | `cursor.go:70-97` | `interactive.go:1464-1491` |
-| `RenderWithCursor` / `CursorStyle` | `cursor.go:17-64` | `interactive.go:1439-1535` |
+| `RenderWithCursor` / `CursorStyle` | `cursor.go:17-64` | `interactive.go:1439-1445`, `:1497-1535` |
 | bracketed-paste + mouse-mode constants & detectors | `terminal_mode.go` | `interactive.go:246-355` |
 | `IsPasteInput`, paste senders | `paste.go:17-99` | `interactive.go:216-289` |
 | polling constants | `polling.go:8-33` | `interactive.go:23-58` |
@@ -440,7 +510,10 @@ copies have since drifted.
 
 That's roughly **500 lines of exact-duplicate logic**, plus divergences already
 noted (`Clear()` §2.10, the `ContainsAny` filter §2.2, `pollingDecaySlow` is
-500 ms in workspace vs 250 ms in tty).
+500 ms in workspace vs 250 ms in tty). The workspace plugin already imports
+`internal/tty` (`interactive.go:18`) — but only for the keymap, the
+mouse-fragment regexes, and the CSI-u helpers; the send/resize/cursor/paste
+surface is all local copies.
 
 Additional duplication:
 
@@ -450,15 +523,21 @@ Additional duplication:
   (`terminal_panel.go:375-492`) is a third, slightly-diverged copy of the same
   viewport/cursor logic. All three should collapse into one
   `renderTerminalViewport(src, opts)`.
-- **`notes/inline_edit.go` vs `filebrowser/inline_edit.go`** — ~500 lines with
-  roughly half in common (`normalizeEditorName`, `sendEditorSaveAndQuit`,
-  `isSessionAlive`, `killSession`, exit-confirmation flow, mouse forwarding).
-  Those belong in `internal/tty` as an `EditorSession` helper.
-- **Four poll schedulers with four generation counters.** `scheduleAgentPoll`,
-  `scheduleInteractivePoll`, `scheduleShellPollByName`, `scheduleTermPanelPoll`
-  plus `pollGeneration` / `shellPollGeneration` / `termPanelGeneration`, with a
-  documented "don't mix them" rule that has already caused a 200% CPU bug
-  (`td-97327e`, `interactive.go:479-486`). One `paneSource` interface with one
+- **`notes/inline_edit.go` vs `filebrowser/inline_edit.go`** — 773 and 742
+  lines; ~170 effectively identical (`normalizeEditorName`, the three
+  mouse-forwarding functions, exit-confirmation flow, `exitInlineEditMode`,
+  height calculation) and another ~300 structurally parallel but diverged
+  (`enterInlineEditMode`, `sendEditorSaveAndQuit`, mouse-coordinate mapping,
+  render). filebrowser has `isSessionAlive`/`killSession` helpers; notes inlines
+  the same tmux calls. All of it belongs in `internal/tty` as an
+  `EditorSession` helper.
+- **Four poll schedulers over three generation counters.** `scheduleAgentPoll`
+  and `scheduleInteractivePoll` (sharing `pollGeneration`),
+  `scheduleShellPollByName` (`shellPollGeneration`), `scheduleTermPanelPoll`
+  (`termPanelGeneration`), with a documented "don't mix them" rule that has
+  already caused a 200% CPU bug (`td-97327e`, `interactive.go:477-486`,
+  `:1389-1391`). `tty.CalculatePollingInterval` is additionally re-implemented
+  inline at `interactive.go:1348-1355`. One `paneSource` interface with one
   scheduler removes the whole class.
 - **Scroll-burst detection is copy-pasted** in `forwardScrollToTmux`
   (`interactive.go:1136-1154`) and `scrollPreview` (`mouse.go:1197-1219`).
@@ -488,9 +567,12 @@ in, plus a `▲ 143 lines back · end to jump to live` marker on the hint line.
 
 ### 5.3 Scrollback is 500 lines when tmux holds 10 000
 
-See §3.7. Deepening this is mostly a matter of raising `outputBufferCap` and
-capturing lazily: keep the live screen on the fast path, and fetch older ranges
-with `capture-pane -S -N -E -M` only when the user scrolls past what's buffered.
+See §3.7. tmux is already holding the history (10 000 lines for agent panes) —
+sidecar just never reads past 600. Deepening is mostly a matter of raising
+`outputBufferCap` and capturing lazily: keep the live screen on the fast path,
+and fetch older ranges with explicit bounds
+(`capture-pane -p -e -S -1200 -E -601`) only when the user scrolls past what's
+buffered. §2.12 has to land first or most panes have no history to fetch.
 
 ### 5.4 No search in scrollback
 
@@ -500,18 +582,22 @@ search primitives (`fuzzy.go`, `project_search.go`) to borrow from.
 
 ### 5.5 Selection only exists inside interactive mode
 
-`p.selection` is cleared on entry (`interactive.go:473`) and the highlight is
-only rendered `if interactive && p.selection.HasSelection()`
-(`view_preview.go:351`). Outside interactive mode a click on the preview *enters*
-interactive mode (`mouse.go:571-583`) rather than starting a selection. Read-only
+`p.selection` is cleared on entry (`interactive.go:473`, `:535`) and the
+highlight is only rendered `if interactive && p.selection.HasSelection()`
+(`view_preview.go:351`, `:557`). Outside interactive mode a click on the preview
+*enters* interactive mode (`mouse.go:570-583`; with the terminal panel visible
+it merely moves focus, `:566-569`) rather than starting a selection. Read-only
 selection in the normal preview is a reasonable expectation.
 
 ### 5.6 Missing standard selection gestures
 
 `SelectionState` supports only character-range drag. Missing:
-double-click-selects-word, triple-click-selects-line, shift+click-extends,
+double-click-selects-word (double-click currently *enters interactive mode*,
+`mouse.go:876-897`), triple-click-selects-line, shift+click-extends,
 `ctrl+a`-style select-all, and copy-on-select. All are cheap on top of the
-existing `SelectionPoint` model.
+existing `SelectionPoint` model. Copy-on-select ships behind a config flag,
+default off — expectations differ by platform and it must never surprise a
+macOS-convention user.
 
 ### 5.7 No block/rectangular selection
 
@@ -529,10 +615,10 @@ would be a genuinely differentiating feature and reuses existing plumbing.
 
 ### 5.9 Terminal panel is a second-class citizen
 
-No selection (§2.6), no copy, no paste key, no scrollback indicator, no
-`history-limit` (§2.12), single instance only, and its poll loop double-queries
-the cursor alongside the agent poll (§2.9). Unifying it onto the shared viewport
-(§4) fixes most of this for free.
+No selection and no working copy (§2.6 — paste does work), no scrollback
+indicator, no `history-limit` (§2.12), single instance only, and its poll loop
+runs a second cursor query alongside the agent poll (§2.9). Unifying it onto the
+shared viewport (§4) fixes most of this for free.
 
 ### 5.10 No visible indication of who owns the mouse
 
@@ -546,37 +632,55 @@ the behavior legible.
 
 ### 6.1 Replace polling with a persistent tmux control-mode connection ⭐
 
-The single biggest win available. `tmux -C` (control mode) keeps **one**
-long-lived process; commands go in over stdin, and tmux pushes `%output`,
-`%layout-change`, `%window-pane-changed`, `%exit` notifications out over stdout as
-they happen.
+The single biggest win available. `tmux -C` (control mode, tmux ≥ 1.8) keeps
+**one** long-lived process; commands go in over stdin (replies framed by
+`%begin`/`%end`/`%error`), and tmux pushes `%output`, `%layout-change`,
+`%window-pane-changed`, `%exit` notifications out over stdout as they happen.
 
 | | Today | Control mode |
 |---|---|---|
 | Processes while typing | ~40/s | 1, for the app's lifetime |
-| Output latency | 20 ms debounce + 0–50 ms poll + spawn | push, sub-frame |
+| Output latency | 20 ms debounce + 0–50 ms poll + spawn | push notification + in-band capture, no spawn |
 | Idle CPU | continuous `capture-pane` | zero |
 | Change detection | hash the whole screen every poll | tmux tells you |
 | Cursor position | separate `display-message` | in-band |
 
-Sidecar becomes event-driven: keystrokes go out on the control channel, output
-arrives as it's produced. The entire adaptive-decay/stagger/generation/throttle
-machinery (`polling.go`, `staggerOffset`, three generation maps, runaway
-detection) collapses, and with it the freeze in §2.1.
+One thing to be precise about: `%output` carries the pane's **raw byte stream**
+— escape sequences and all, non-printables octal-escaped — not rendered lines.
+Until sidecar has a VT parser (§6.5) it cannot render from `%output` directly,
+so the design is *notification-driven capture*: treat `%output` as the change
+signal, coalesce per frame, and issue `capture-pane` **over the control
+channel** to fetch the rendered screen. Same rendering pipeline as today, but
+push-driven, in-band, and spawn-free. The entire
+adaptive-decay/stagger/generation/throttle machinery (`polling.go`,
+`staggerOffset`, three generation maps, runaway detection) collapses, and with
+it the freeze in §2.1. This shape also makes §6.5 a drop-in later: the parser
+replaces the capture step and nothing else moves.
+
+Design notes:
+
+- A control-mode client is a real attached client; size it explicitly
+  (`refresh-client -C WxH`) so it can never clamp the window.
+- Enable flow control where available (tmux ≥ 3.2: `refresh-client -f
+  pause-after=N`, `%pause`/`%continue`) so a stalled reader degrades gracefully
+  instead of ballooning tmux's buffers.
+- Keep the existing `capture-pane` polling path as the fallback when the control
+  process dies, and as the degraded mode on old tmux — feature-detect rather
+  than version-sniff (the codebase currently checks no tmux version at all).
 
 Practical shape: `internal/tty/control.go` owns the `tmux -C` process and a
-`map[paneID]*paneSubscriber`; keep the existing `capture-pane` path as a fallback
-for tmux < 2.4 or if the control process dies. Migrate one consumer (terminal
-panel — smallest blast radius) first.
+`map[paneID]*paneSubscriber`. Migrate one consumer (terminal panel — smallest
+blast radius) first.
 
-If control mode proves awkward, the intermediate step is still worth it: a single
-persistent `tmux -C` *or* batching every per-poll query into one `tmux` invocation
-with `\;` separators (§3.1), which alone halves spawn count.
+If control mode proves awkward, the intermediate step is still worth it:
+batching every per-poll query into one `tmux` invocation with `\;` separators
+(§3.1; delimiting caveat in §2.13), which alone halves spawn count.
 
 ### 6.2 Use bubbletea v2's real cursor instead of a painted ▉ ⭐
 
-`tea.View.Cursor` (`bubbletea/v2/tea.go:361`) accepts a position, a
-`CursorShape` (`Block`/`Underline`/`Bar`), a color, and `Blink`. Setting it
+`tea.View.Cursor` (`bubbletea/v2/tea.go:131`; the `Cursor` struct at
+`tea.go:357`) accepts a position, a shape
+(`CursorBlock`/`CursorUnderline`/`CursorBar`), a color, and `Blink`. Setting it
 places the **actual terminal cursor** in the pane.
 
 That directly addresses "text selection cursors don't show up naturally":
@@ -590,8 +694,9 @@ That directly addresses "text selection cursors don't show up naturally":
 - screen readers and terminal cursor-tracking features work.
 
 Path: plumb a `*tea.Cursor` up from the plugin's `View()` to `app.Model.View()`
-alongside the string. Fall back to the painted block only when the pane isn't the
-focused surface.
+alongside the string. There is exactly one real cursor per application, so
+ownership follows focus: fall back to the painted block when the pane isn't the
+focused surface, and yield the cursor entirely under modals.
 
 ### 6.3 Opt into keyboard enhancements
 
@@ -617,6 +722,12 @@ exact cursor state, per-cell attributes, correct wide-char and grapheme handling
 alternate-screen awareness, real scrollback, and unambiguous selection
 coordinates — deleting essentially all of the escape-sequence guessing.
 
+One seam to plan for: `%output` streams only from subscription time, so each
+pane's emulator must be seeded from a `capture-pane -e` snapshot plus queried
+state (`#{alternate_on}`, cursor position, pane modes). A capture cannot fully
+reconstruct emulator internals (scroll regions, saved cursors), so expect minor
+drift until the next full-screen redraw.
+
 That's a large change and shouldn't be attempted before §6.1. But §6.1 is the
 prerequisite for it, so it's worth choosing the control-mode design with this
 endpoint in mind.
@@ -632,16 +743,18 @@ endpoint in mind.
 3. §2.3 honor wheel delta + accumulate dropped scroll events
 4. §2.5 race/panic in `forwardClickToTmux`
 5. §2.8 don't paint a cursor while scrolled back
-6. §3.1 merge cursor query into the capture invocation; drop the redundant
-   `queryPaneSize`
+6. §3.1 merge cursor query into the capture invocation; drop the resize path's
+   re-query
 7. §6.4 focus reporting
+8. §2.13 batch-capture command injection — argv-only, nonce-delimited markers
+   (small, isolated, and it's command execution from a filename)
 
 **Phase 2 — consolidate**
 
 8. §4 migrate workspace onto `internal/tty`; delete the fork
 9. §4 collapse the three viewport renderers into one
 10. §4 one poll scheduler / one generation counter
-11. §2.6, §2.7, §2.9, §2.10, §2.11, §2.12, §2.13, §2.14 — most become trivial or
+11. §2.6, §2.7, §2.9, §2.10, §2.11, §2.12, §2.14 — most become trivial or
     disappear once there's one implementation
 12. §3.4, §3.5, §3.6 render-path cleanups
 13. Fix `csiu` detection (§2.4) and its test
@@ -649,7 +762,8 @@ endpoint in mind.
 **Phase 3 — make it feel like a terminal**
 
 14. §5.1 keyboard scrolling · §5.2 scroll indicator · §5.3 deeper scrollback
-15. §5.5–5.7 selection gestures, selection outside interactive mode, block select
+15. §5.5–5.7 selection gestures, selection outside interactive mode, block
+    select; fix selection anchor drift (§2.15)
 16. §5.4 scrollback search
 17. §5.8 clickable `path:line` and URLs
 18. §6.2 real cursor via `tea.View.Cursor`
@@ -680,5 +794,11 @@ Gaps that let the bugs above through:
   actual one (§2.4) — the test passes while production is dead.
 - **Terminal panel selection.** No coverage at all (§2.6).
 - **Cursor suppression while scrolled back** (§2.8).
+- **Mouse-leak regressions.** No test feeds split SGR mouse sequences (with and
+  without the leading ESC, split at each byte boundary) through the interactive
+  input path and asserts nothing reaches `send-keys` as literal text — the
+  filters in §2.2 exist precisely for this and have no safety net.
+- **Selection stability across captures.** Nothing pins a selection to content
+  while the buffer updates underneath it (§2.15).
 - **Commands that mutate plugin state** — a lint or review rule that `tea.Cmd`
   closures may only read captured values would have caught §2.5.
