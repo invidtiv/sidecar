@@ -355,6 +355,118 @@ func TestControlManagerDropsStaleGenerationAndStopsIdempotently(t *testing.T) {
 	manager.Stop()
 }
 
+func TestControlManagerRevalidatesQueuedDeliveriesAfterClose(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	var callbackMu sync.Mutex
+	callbacks := 0
+	firstStarted := make(chan string, 1)
+	releaseFirst := make(chan struct{})
+	var firstOnce sync.Once
+	onSnapshot := func(id string) func(ControlSnapshot) {
+		return func(ControlSnapshot) {
+			callbackMu.Lock()
+			callbacks++
+			callbackMu.Unlock()
+			firstOnce.Do(func() {
+				firstStarted <- id
+				<-releaseFirst
+			})
+		}
+	}
+	first, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: true, OnSnapshot: onSnapshot("first"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: true, OnSnapshot: onSnapshot("second"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.commandCountContaining("capture-pane") == 1
+	})
+
+	responseDone := make(chan struct{})
+	go func() {
+		channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80", "screen"}})
+		close(responseDone)
+	}()
+	var active, queued *ControlSubscription
+	select {
+	case id := <-firstStarted:
+		if id == "first" {
+			active, queued = first, second
+		} else {
+			active, queued = second, first
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first queued callback did not start")
+	}
+	// Closing the subscriber whose callback has not begun must invalidate its
+	// queued delivery immediately. Closing the active subscriber is a barrier
+	// and returns after that callback is released.
+	queued.Close()
+	activeClosed := make(chan struct{})
+	go func() {
+		active.Close()
+		close(activeClosed)
+	}()
+	close(releaseFirst)
+	select {
+	case <-activeClosed:
+	case <-time.After(time.Second):
+		t.Fatal("active subscriber close did not drain callback")
+	}
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("capture callback did not finish")
+	}
+
+	callbackMu.Lock()
+	defer callbackMu.Unlock()
+	if callbacks != 1 {
+		t.Fatalf("callbacks after closing queued subscribers = %d, want 1", callbacks)
+	}
+}
+
+func TestControlManagerStopInvalidatesInFlightCapture(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	var callbackMu sync.Mutex
+	callbacks := 0
+	_, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: true,
+		OnSnapshot: func(ControlSnapshot) {
+			callbackMu.Lock()
+			callbacks++
+			callbackMu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.commandCountContaining("capture-pane") == 1
+	})
+
+	manager.Stop()
+	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80", "late"}})
+	callbackMu.Lock()
+	defer callbackMu.Unlock()
+	if callbacks != 0 {
+		t.Fatalf("callbacks after manager stop = %d, want 0", callbacks)
+	}
+}
+
 func TestControlClientContinuesPausedPaneAndCapturesLayoutChange(t *testing.T) {
 	factory := newFakeControlFactory()
 	manager := newControlManager(factory.create, 0)

@@ -378,6 +378,67 @@ type sessionSubscriber struct {
 	id         uint64
 	generation uint64
 	request    ControlRequest
+	delivery   *subscriberDeliveryGate
+}
+
+// subscriberDeliveryGate makes subscription invalidation a callback barrier.
+// Deactivation prevents new callbacks; waiting then drains any callback that
+// already began. The client mutex still protects membership and generation
+// checks; this gate closes the small race between that check and external code.
+type subscriberDeliveryGate struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	active  bool
+	running int
+}
+
+func newSubscriberDeliveryGate() *subscriberDeliveryGate {
+	gate := &subscriberDeliveryGate{active: true}
+	gate.cond = sync.NewCond(&gate.mu)
+	return gate
+}
+
+func (g *subscriberDeliveryGate) invoke(callback func()) bool {
+	if g == nil || callback == nil {
+		return false
+	}
+	g.mu.Lock()
+	if !g.active {
+		g.mu.Unlock()
+		return false
+	}
+	g.running++
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.running--
+		if g.running == 0 {
+			g.cond.Broadcast()
+		}
+		g.mu.Unlock()
+	}()
+	callback()
+	return true
+}
+
+func (g *subscriberDeliveryGate) deactivate() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.active = false
+	g.mu.Unlock()
+}
+
+func (g *subscriberDeliveryGate) wait() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	for g.running != 0 {
+		g.cond.Wait()
+	}
+	g.mu.Unlock()
 }
 
 type paneCaptureState struct {
@@ -394,6 +455,7 @@ type sessionControlClient struct {
 
 	mu         sync.Mutex
 	subs       map[uint64]sessionSubscriber
+	deliveries map[uint64]*subscriberDeliveryGate
 	panes      map[string]*paneCaptureState
 	appFocused bool
 	closed     bool
@@ -407,6 +469,7 @@ func newSessionControlClient(manager *ControlManager, session string, channel co
 		channel:    channel,
 		coalesce:   coalesce,
 		subs:       make(map[uint64]sessionSubscriber),
+		deliveries: make(map[uint64]*subscriberDeliveryGate),
 		panes:      make(map[string]*paneCaptureState),
 		appFocused: appFocused,
 	}
@@ -458,7 +521,12 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 		callFallback(sub.request.OnFallback, fmt.Errorf("tmux control client closed"))
 		return
 	}
-	c.subs[sub.id] = sessionSubscriber{id: sub.id, generation: sub.generation, request: sub.request}
+	delivery := newSubscriberDeliveryGate()
+	c.subs[sub.id] = sessionSubscriber{
+		id: sub.id, generation: sub.generation, request: sub.request,
+		delivery: delivery,
+	}
+	c.deliveries[sub.id] = delivery
 	c.ensurePaneLocked(sub.request.Pane).dirty = true
 	c.mu.Unlock()
 	c.configureSize(sub.request.Width, sub.request.Height)
@@ -467,7 +535,15 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 
 func (c *sessionControlClient) remove(id uint64) {
 	c.mu.Lock()
+	sub := c.subs[id]
+	sub.delivery.deactivate()
 	delete(c.subs, id)
+	c.mu.Unlock()
+	sub.delivery.wait()
+	c.mu.Lock()
+	if c.deliveries[id] == sub.delivery {
+		delete(c.deliveries, id)
+	}
 	c.mu.Unlock()
 }
 
@@ -658,11 +734,22 @@ func (c *sessionControlClient) captureFinished(pane string, response controlResp
 	c.mu.Unlock()
 
 	for _, sub := range deliveries {
-		if sub.request.OnSnapshot != nil {
-			copy := snapshot
-			copy.Generation = sub.generation
-			sub.request.OnSnapshot(copy)
+		// A prior callback may synchronously unsubscribe another consumer, and
+		// Stop/Close may invalidate the whole client while a response is queued.
+		// Revalidate immediately before each external callback rather than
+		// trusting the delivery snapshot assembled above.
+		c.mu.Lock()
+		current, ok := c.subs[sub.id]
+		valid := !c.closed && ok && current.generation == sub.generation
+		callback := current.request.OnSnapshot
+		gate := current.delivery
+		c.mu.Unlock()
+		if !valid || callback == nil {
+			continue
 		}
+		copy := snapshot
+		copy.Generation = current.generation
+		gate.invoke(func() { callback(copy) })
 	}
 	if again {
 		c.scheduleIfEligible(pane)
@@ -694,13 +781,32 @@ func (c *sessionControlClient) close() {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		// Invalidate queued delivery snapshots before releasing the close
+		// barrier. A late control response can still run its FIFO callback, but
+		// it can no longer reach a consumer after Close/Stop.
+		gates := make([]*subscriberDeliveryGate, 0, len(c.deliveries))
+		for _, gate := range c.deliveries {
+			gates = append(gates, gate)
+		}
+		c.subs = make(map[uint64]sessionSubscriber)
+		c.deliveries = make(map[uint64]*subscriberDeliveryGate)
 		for _, pane := range c.panes {
 			if pane.timer != nil {
 				pane.timer.Stop()
 				pane.timer = nil
 			}
+			pane.dirty = false
 		}
 		c.mu.Unlock()
+		// Deactivate every subscriber before waiting for any running callback;
+		// otherwise a callback queued behind the first one could start while
+		// Close is waiting on that first callback.
+		for _, gate := range gates {
+			gate.deactivate()
+		}
+		for _, gate := range gates {
+			gate.wait()
+		}
 		_ = c.channel.Close()
 	})
 }
