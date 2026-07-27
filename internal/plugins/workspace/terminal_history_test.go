@@ -96,6 +96,57 @@ func TestTerminalViewportScrollbarUsesAbsolutePosition(t *testing.T) {
 	}
 }
 
+func TestTerminalHistorySummaryReportsBufferBaseWithoutTrackedHistory(t *testing.T) {
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
+	// No shells, no worktrees: terminalHistoryFor finds no source for this
+	// buffer. The buffer's own absolute range is still the coordinate space
+	// selection and search matches were recorded in.
+	p := New()
+
+	base, total, loading := p.terminalHistorySummary(false, buffer)
+	if base != 600 {
+		t.Fatalf("absolute base = %d, want 600 (buffer's own base, not 0)", base)
+	}
+	if total != 1220 {
+		t.Fatalf("total items = %d, want 1220 (absolute end, not loaded line count)", total)
+	}
+	if loading {
+		t.Fatal("loading = true without tracked history state")
+	}
+}
+
+func TestTerminalHistorySummaryMatchesSearchAndCursorCoordinates(t *testing.T) {
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
+	p := New()
+	p.interactiveState = &InteractiveState{HasCursorHistory: true}
+
+	// recomputeTerminalSearch and revealTerminalSearchMatch derive match lines
+	// straight from the buffer, and cursorBufferBase does the same. The render
+	// path maps them back through terminalHistorySummary, so the two must agree
+	// whether or not the buffer has tracked history state.
+	wantBase, _, _ := buffer.AbsoluteRange()
+	for _, tracked := range []bool{false, true} {
+		if tracked {
+			p.shellSelected = true
+			p.shells = []*ShellSession{{
+				TmuxName: "shell-1",
+				Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buffer},
+			}}
+			p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = terminalHistoryState{HistorySize: 1200}
+		}
+		base, _, _ := p.terminalHistorySummary(false, buffer)
+		if base != wantBase {
+			t.Fatalf("tracked=%v: summary base = %d, want %d", tracked, base, wantBase)
+		}
+		cursorBase, ok := cursorBufferBase(buffer, p.interactiveState)
+		if !ok || cursorBase != base {
+			t.Fatalf("tracked=%v: cursor base = %d (ok=%v), want %d", tracked, cursorBase, ok, base)
+		}
+	}
+}
+
 func TestTerminalHistoryAccumulatesScrollIntentWhileLoading(t *testing.T) {
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)

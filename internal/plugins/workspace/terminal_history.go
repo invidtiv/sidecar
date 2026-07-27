@@ -216,14 +216,29 @@ func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
 	p.terminalHistory[key] = state
 }
 
+// terminalHistorySummary reports the buffer's absolute base, the total number
+// of lines the scrollbar should represent, and whether an older-history load is
+// in flight.
+//
+// The base always comes from the buffer itself. Selection anchors and search
+// matches are recorded in the buffer's absolute coordinates, and rendering maps
+// them back with this base, so reporting 0 for a buffer that actually starts at
+// a nonzero absolute line would offset every highlight by the amount of loaded
+// scrollback. Only the total and loading flag depend on finding matching
+// history state for this buffer.
 func (p *Plugin) terminalHistorySummary(termPanel bool, buffer *tty.OutputBuffer) (base, total int, loading bool) {
-	source, ok := p.terminalHistoryFor(termPanel)
-	if !ok || source.Buffer != buffer {
-		return 0, buffer.LineCount(), false
+	if buffer == nil {
+		return 0, 0, false
 	}
 	base, end, absolute := buffer.AbsoluteRange()
 	if !absolute {
+		// Relative buffer: local indices already are the coordinate space.
 		return 0, buffer.LineCount(), false
+	}
+	source, ok := p.terminalHistoryFor(termPanel)
+	if !ok || source.Buffer != buffer {
+		// No tracked history for this buffer — its own range is still the truth.
+		return base, end, false
 	}
 	state := p.terminalHistory[source.Key]
 	total = max(end, state.HistorySize)
