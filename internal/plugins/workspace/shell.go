@@ -873,6 +873,11 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 		p.shellSelected &&
 		selectedShell != nil &&
 		selectedShell.TmuxName == tmuxName
+	if interactiveCapture {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleShellPollByName(tmuxName, remaining)
+		}
+	}
 
 	// When feature is enabled, skip -J for the selected shell so content wraps
 	// at the pane width (matching interactive mode). Resize inline to avoid races.
@@ -911,7 +916,14 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 		// Use direct capture for shells (no batch), preserving wraps in interactive mode.
 		// Shell sessions have prefix "sidecar-sh-" not "sidecar-ws-" so batch capture skips them.
 		joinWrapped := !interactiveCapture && !directCapture
-		output, err := capturePaneDirectWithJoin(tmuxName, joinWrapped)
+		var output string
+		var cursor capturedCursor
+		var err error
+		if interactiveCapture && cursorTarget != "" {
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(tmuxName, cursorTarget, joinWrapped)
+		} else {
+			output, err = capturePaneDirectWithJoin(tmuxName, joinWrapped)
+		}
 		if err != nil {
 			// Capture error - check error message to determine if session is dead
 			// Avoid synchronous sessionExists() call which would block (td-c2961e)
@@ -926,13 +938,6 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 			return ShellOutputMsg{TmuxName: tmuxName, Output: "", Changed: false}
 		}
 
-		// Capture cursor position atomically with output when in interactive mode.
-		var cursorRow, cursorCol, paneHeight, paneWidth int
-		var cursorVisible, hasCursor bool
-		if interactiveCapture && cursorTarget != "" {
-			cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, hasCursor = queryCursorPositionSync(cursorTarget)
-		}
-
 		// Trim to max bytes
 		output = trimCapturedOutput(output, maxBytes)
 
@@ -943,12 +948,12 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 			TmuxName:      tmuxName,
 			Output:        output,
 			Changed:       changed,
-			CursorRow:     cursorRow,
-			CursorCol:     cursorCol,
-			CursorVisible: cursorVisible,
-			HasCursor:     hasCursor,
-			PaneHeight:    paneHeight,
-			PaneWidth:     paneWidth,
+			CursorRow:     cursor.Row,
+			CursorCol:     cursor.Col,
+			CursorVisible: cursor.Visible,
+			HasCursor:     cursor.Valid,
+			PaneHeight:    cursor.PaneHeight,
+			PaneWidth:     cursor.PaneWidth,
 		}
 	}
 }

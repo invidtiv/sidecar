@@ -1506,6 +1506,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case interactiveClickSentMsg:
+		if p.interactiveState == nil || !p.interactiveState.Active ||
+			p.interactiveState.TargetSession != msg.SessionName {
+			break
+		}
+		if msg.Err != nil {
+			p.exitInteractiveMode()
+			if isSessionDeadError(msg.Err) {
+				p.toastMessage = "Session ended"
+				p.toastTime = time.Now()
+			}
+			break
+		}
+		p.interactiveState.LastKeyTime = time.Now()
+
 	case InteractivePasteResultMsg:
 		if msg.SessionDead {
 			p.exitInteractiveMode()

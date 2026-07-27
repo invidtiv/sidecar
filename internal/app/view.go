@@ -45,9 +45,9 @@ func (m Model) View() tea.View {
 	}
 	v := tea.NewView(m.viewContent())
 	v.AltScreen = true
-	// MouseModeAllMotion mirrors the v1 tea.WithMouseAllMotion(); the app relies
-	// on drag + hover (see internal/mouse/).
-	v.MouseMode = tea.MouseModeAllMotion
+	// Cell motion preserves clicks, releases, wheels, and drag reporting without
+	// flooding the input parser with an event for every idle pointer movement.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 

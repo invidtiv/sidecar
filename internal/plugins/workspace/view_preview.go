@@ -372,7 +372,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	content := strings.Join(displayLines, "\n")
 
 	// Apply cursor overlay in interactive mode
-	if interactive && cursorVisible {
+	if shouldOverlayCursor(interactive, cursorVisible, p.autoScrollOutput) {
 		// cursor_y is relative to tmux pane (0 to paneHeight-1).
 		// Our display shows len(displayLines) lines.
 		displayHeight := len(displayLines)
@@ -577,7 +577,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	content := strings.Join(displayLines, "\n")
 
 	// Apply cursor overlay in interactive mode
-	if interactive && cursorVisible {
+	if shouldOverlayCursor(interactive, cursorVisible, p.autoScrollOutput) {
 		// cursor_y is relative to tmux pane (0 to paneHeight-1).
 		// Our display shows len(displayLines) lines.
 		displayHeight := len(displayLines)

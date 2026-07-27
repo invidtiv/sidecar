@@ -1017,11 +1017,13 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
-	var delta int
-	if action.Type == mouse.ActionScrollUp {
-		delta = -1
-	} else {
-		delta = 1
+	delta := action.Delta
+	if delta == 0 {
+		if action.Type == mouse.ActionScrollUp {
+			delta = -1
+		} else {
+			delta = 1
+		}
 	}
 
 	// In interactive mode, always forward scroll to tmux copy-mode.
@@ -1212,26 +1214,31 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 			debounceInterval = scrollBurstDebounce
 		}
 
+		p.pendingScrollDelta += delta
 		if timeSinceLastScroll < debounceInterval {
 			return nil
 		}
 		p.lastScrollTime = now
+		delta = p.pendingScrollDelta
+		p.pendingScrollDelta = 0
 	}
 
 	// Unified offset: 0 = top of content, higher = further down
 	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll UP: move toward top of content
-		if p.previewOffset > 0 {
-			p.previewOffset--
+		p.previewOffset += delta
+		if p.previewOffset < 0 {
+			p.previewOffset = 0
 		}
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			p.autoScrollOutput = false
 		}
 	} else {
 		// Scroll DOWN: move toward bottom of content
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		p.previewOffset += delta
+		if p.previewOffset > maxOffset {
+			p.previewOffset = maxOffset
 		}
 		if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true

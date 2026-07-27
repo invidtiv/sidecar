@@ -3,6 +3,8 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +46,15 @@ type captureCoordinator struct {
 	mu       sync.Mutex
 	inFlight bool
 	cond     *sync.Cond
+}
+
+type capturedCursor struct {
+	Row        int
+	Col        int
+	PaneHeight int
+	PaneWidth  int
+	Visible    bool
+	Valid      bool
 }
 
 func newCaptureCoordinator() *captureCoordinator {
@@ -914,6 +926,11 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 			interactiveCapture = false
 		}
 	}
+	if interactiveCapture {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleInteractivePoll(worktreeName, remaining)
+		}
+	}
 
 	// When feature is enabled, use direct capture without -J for the selected worktree.
 	// This ensures the preview shows content wrapped at the pane width (which is resized
@@ -953,7 +970,10 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 
 		var output string
 		var err error
-		if interactiveCapture || directCapture {
+		var cursor capturedCursor
+		if interactiveCapture && cursorTarget != "" {
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget, false)
+		} else if interactiveCapture || directCapture {
 			output, err = capturePaneDirectWithJoin(sessionName, false)
 		} else {
 			output, err = capturePane(sessionName)
@@ -967,15 +987,6 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 			// Schedule retry on other errors (with delay to prevent busy-loop)
 			time.Sleep(pollIntervalActive)
 			return pollAgentMsg{WorkspaceName: worktreeName}
-		}
-
-		// Capture cursor position atomically with output when in interactive mode.
-		// This prevents race conditions where cursor position changes between
-		// output capture and cursor query.
-		var cursorRow, cursorCol, paneHeight, paneWidth int
-		var cursorVisible, hasCursor bool
-		if interactiveCapture && cursorTarget != "" {
-			cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, hasCursor = queryCursorPositionSync(cursorTarget)
 		}
 
 		output = trimCapturedOutput(output, maxBytes)
@@ -1024,12 +1035,12 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 				WorkspaceName: worktreeName,
 				CurrentStatus: status,
 				WaitingFor:    waitingFor,
-				CursorRow:     cursorRow,
-				CursorCol:     cursorCol,
-				CursorVisible: cursorVisible,
-				HasCursor:     hasCursor,
-				PaneHeight:    paneHeight,
-				PaneWidth:     paneWidth,
+				CursorRow:     cursor.Row,
+				CursorCol:     cursor.Col,
+				CursorVisible: cursor.Visible,
+				HasCursor:     cursor.Valid,
+				PaneHeight:    cursor.PaneHeight,
+				PaneWidth:     cursor.PaneWidth,
 			}
 		}
 
@@ -1038,12 +1049,12 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 			Output:        output,
 			Status:        status,
 			WaitingFor:    waitingFor,
-			CursorRow:     cursorRow,
-			CursorCol:     cursorCol,
-			CursorVisible: cursorVisible,
-			HasCursor:     hasCursor,
-			PaneHeight:    paneHeight,
-			PaneWidth:     paneWidth,
+			CursorRow:     cursor.Row,
+			CursorCol:     cursor.Col,
+			CursorVisible: cursor.Visible,
+			HasCursor:     cursor.Valid,
+			PaneHeight:    cursor.PaneHeight,
+			PaneWidth:     cursor.PaneWidth,
 		}
 	}
 }
@@ -1098,14 +1109,9 @@ func capturePaneDirect(sessionName string) (string, error) {
 // capturePaneDirectWithJoin captures a single pane without caching.
 // When joinWrapped is false, tmux preserves wrapped lines for correct cursor alignment.
 func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, error) {
-	startLine := fmt.Sprintf("-%d", captureLineCount)
+	args := capturePaneArgs(sessionName, joinWrapped)
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
-	args := []string{"capture-pane", "-p", "-e"}
-	if joinWrapped {
-		args = append(args, "-J")
-	}
-	args = append(args, "-S", startLine, "-t", sessionName)
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -1118,6 +1124,72 @@ func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, er
 		return "", fmt.Errorf("capture-pane: %w", err)
 	}
 	return string(output), nil
+}
+
+func capturePaneArgs(sessionName string, joinWrapped bool) []string {
+	args := []string{"capture-pane", "-p", "-e"}
+	if joinWrapped {
+		args = append(args, "-J")
+	}
+	return append(args, "-S", fmt.Sprintf("-%d", captureLineCount), "-t", sessionName)
+}
+
+// capturePaneDirectWithJoinAndCursor captures cursor metadata and pane output
+// in one tmux process. The command separator is an argv element, not shell
+// syntax, so target names are never interpreted by a shell.
+func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWrapped bool) (string, capturedCursor, error) {
+	args := capturePaneWithCursorArgs(sessionName, cursorTarget, joinWrapped)
+
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	output, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: timeout after %s", tmuxCaptureTimeout)
+	}
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return "", capturedCursor{}, fmt.Errorf("capture-pane: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: %w", err)
+	}
+	header, paneOutput, found := strings.Cut(string(output), "\n")
+	if !found {
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: missing cursor metadata")
+	}
+	return paneOutput, parseCapturedCursor(header), nil
+}
+
+func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
+	args := []string{
+		"display-message", "-t", cursorTarget, "-p",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}",
+		";",
+	}
+	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
+	return args
+}
+
+func parseCapturedCursor(header string) capturedCursor {
+	parts := strings.Split(strings.TrimSpace(header), ",")
+	if len(parts) < 5 {
+		return capturedCursor{}
+	}
+	col, errCol := strconv.Atoi(parts[0])
+	row, errRow := strconv.Atoi(parts[1])
+	paneHeight, errHeight := strconv.Atoi(parts[3])
+	paneWidth, errWidth := strconv.Atoi(parts[4])
+	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil {
+		return capturedCursor{}
+	}
+	return capturedCursor{
+		Row:        row,
+		Col:        col,
+		Visible:    parts[2] != "0",
+		PaneHeight: paneHeight,
+		PaneWidth:  paneWidth,
+		Valid:      true,
+	}
 }
 
 // batchCaptureActiveSessions captures only recently-polled sidecar sessions (td-018f25).
@@ -1133,30 +1205,19 @@ func batchCaptureActiveSessions() (map[string]string, error) {
 		return nil, nil
 	}
 
-	// Build bash script that only captures active sessions
-	// Quote session names to handle special characters safely
-	var quotedSessions []string
-	for _, s := range activeSessions {
-		quotedSessions = append(quotedSessions, fmt.Sprintf("%q", s))
-	}
-
 	// When tmux_interactive_input is enabled, panes are resized to match preview width,
 	// so skip -J to preserve tmux's native wrapping (matches interactive mode rendering).
-	captureArgs := "-p -e -J"
-	if features.IsEnabled(features.TmuxInteractiveInput.Name) {
-		captureArgs = "-p -e"
+	joinWrapped := !features.IsEnabled(features.TmuxInteractiveInput.Name)
+	sort.Strings(activeSessions)
+	nonce, err := newCaptureNonce()
+	if err != nil {
+		return nil, fmt.Errorf("batch capture nonce: %w", err)
 	}
-
-	script := fmt.Sprintf(`
-for session in %s; do
-    echo "===SIDECAR_SESSION:$session==="
-    tmux capture-pane %s -S -%d -t "$session" 2>/dev/null
-done
-`, strings.Join(quotedSessions, " "), captureArgs, captureLineCount)
+	args := buildBatchCaptureArgs(activeSessions, nonce, joinWrapped)
 
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxBatchCaptureTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("batch capture: timeout after %s", tmuxBatchCaptureTimeout)
@@ -1165,30 +1226,57 @@ done
 		return nil, fmt.Errorf("batch capture: %w", err)
 	}
 
-	// Parse output by splitting on delimiter
-	results := make(map[string]string)
-	parts := strings.Split(string(output), "===SIDECAR_SESSION:")
+	return parseBatchCaptureOutput(string(output), activeSessions, nonce), nil
+}
 
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		// Find session name (ends with ===)
-		idx := strings.Index(part, "===")
-		if idx == -1 {
-			continue
-		}
-		sessionName := strings.Clone(part[:idx])
-		content := ""
-		if idx+3 < len(part) {
-			content = part[idx+3:]
-			// Trim leading newline from content
-			content = strings.TrimPrefix(content, "\n")
-		}
-		results[sessionName] = strings.Clone(content)
+func newCaptureNonce() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
 	}
+	return hex.EncodeToString(raw[:]), nil
+}
 
-	return results, nil
+func batchCaptureMarker(nonce string, index int) string {
+	return fmt.Sprintf("===SIDECAR_CAPTURE:%s:%d===", nonce, index)
+}
+
+func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []string {
+	var args []string
+	for i, session := range sessions {
+		if i > 0 {
+			args = append(args, ";")
+		}
+		args = append(args,
+			"display-message", "-p", "-t", session, batchCaptureMarker(nonce, i),
+			";",
+		)
+		args = append(args, capturePaneArgs(session, joinWrapped)...)
+	}
+	return args
+}
+
+func parseBatchCaptureOutput(output string, sessions []string, nonce string) map[string]string {
+	results := make(map[string]string, len(sessions))
+	for i, session := range sessions {
+		marker := batchCaptureMarker(nonce, i)
+		start := strings.Index(output, marker)
+		if start < 0 {
+			continue
+		}
+		start += len(marker)
+		if start < len(output) && output[start] == '\n' {
+			start++
+		}
+		end := len(output)
+		if i+1 < len(sessions) {
+			if next := strings.Index(output[start:], batchCaptureMarker(nonce, i+1)); next >= 0 {
+				end = start + next
+			}
+		}
+		results[session] = strings.Clone(output[start:end])
+	}
+	return results
 }
 
 func trimCapturedOutput(output string, maxBytes int) string {

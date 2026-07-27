@@ -83,10 +83,9 @@ const (
 	// If user scrolled within this window, suspicious input won't trigger snap-back.
 	snapBackCooldown = 100 * time.Millisecond
 
-	// postScrollFilterWindow is how long after scrolling to keep filtering garbage input.
-	// Mouse event garbage can arrive after scroll ends due to terminal/OS buffering.
-	// Longer = better filtering but may eat legitimate keystrokes. Shorter = risk of leakage.
-	postScrollFilterWindow = 500 * time.Millisecond
+	// mouseFragmentTimeout bounds state kept while reassembling an SGR mouse
+	// report split across terminal input reads.
+	mouseFragmentTimeout = 50 * time.Millisecond
 )
 
 // partialMouseSeqRegex is now provided by the tty package as tty.PartialMouseSeqRegex
@@ -370,6 +369,111 @@ func (p *Plugin) updateBracketedPasteMode(output string) {
 	p.interactiveState.BracketedPasteEnabled = detectBracketedPasteMode(output)
 }
 
+// consumeSplitMouseFragment reassembles SGR mouse reports split across input
+// reads. It only retains a fragment after seeing a structurally valid SGR
+// prefix, so literal m, M, ;, and < remain ordinary typing.
+func (p *Plugin) consumeSplitMouseFragment(text string) bool {
+	now := time.Now()
+	if p.mouseFragment != "" && now.Sub(p.mouseFragmentTime) >= mouseFragmentTimeout {
+		p.mouseFragment = ""
+	}
+
+	if p.mouseFragment != "" {
+		combined := p.mouseFragment + text
+		if possible, complete := sgrMouseFragmentState(combined); possible {
+			if complete {
+				p.mouseFragment = ""
+			} else {
+				p.rememberMouseFragment(combined)
+			}
+			return true
+		}
+		p.mouseFragment = ""
+	}
+
+	// A separately delivered Escape is held by the double-Escape logic. Check
+	// whether this text completes its role as the start of an SGR report before
+	// treating it as a real keyboard Escape.
+	if p.interactiveState != nil && p.interactiveState.EscapePressed &&
+		time.Since(p.interactiveState.EscapeTime) < mouseFragmentTimeout {
+		combined := "\x1b" + text
+		if possible, complete := sgrMouseFragmentState(combined); possible {
+			if !complete {
+				p.rememberMouseFragment(combined)
+			}
+			return true
+		}
+	}
+
+	if possible, complete := sgrMouseFragmentState(text); possible {
+		// A lone "[" is valid user input and is handled only by the existing
+		// Escape/mouse-proximity gates below.
+		if text == "[" {
+			return false
+		}
+		if !complete {
+			p.rememberMouseFragment(text)
+		}
+		return true
+	}
+	return false
+}
+
+func (p *Plugin) rememberMouseFragment(fragment string) {
+	p.mouseFragment = fragment
+	p.mouseFragmentTime = time.Now()
+}
+
+// sgrMouseFragmentState recognizes a complete SGR mouse report or any prefix
+// that can become one. The grammar is ESC? "[" "<" digits ";" digits ";"
+// digits ("M"|"m").
+func sgrMouseFragmentState(s string) (possible, complete bool) {
+	if s == "" {
+		return false, false
+	}
+	i := 0
+	if s[i] == '\x1b' {
+		i++
+		if i == len(s) {
+			return true, false
+		}
+	}
+	for _, want := range []byte{'[', '<'} {
+		if i == len(s) {
+			return true, false
+		}
+		if s[i] != want {
+			return false, false
+		}
+		i++
+	}
+	for field := 0; field < 3; field++ {
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return i == len(s), false
+		}
+		if field < 2 {
+			if i == len(s) {
+				return true, false
+			}
+			if s[i] != ';' {
+				return false, false
+			}
+			i++
+		}
+	}
+	if i == len(s) {
+		return true, false
+	}
+	if (s[i] == 'M' || s[i] == 'm') && i+1 == len(s) {
+		return true, true
+	}
+	return false, false
+}
+
 // isPasteInput detects if the input is a paste operation.
 // Returns true if the input contains newlines or is longer than a typical typed sequence.
 func isPasteInput(msg tea.KeyPressMsg) bool {
@@ -379,27 +483,6 @@ func isPasteInput(msg tea.KeyPressMsg) bool {
 	}
 	// Treat as paste if contains newline or is suspiciously long for typing
 	return strings.Contains(msg.Text, "\n") || len(runes) > 10
-}
-
-// isNormalTyping returns true if the input looks like normal keyboard typing.
-// Used during scroll bursts to distinguish real typing from garbage input.
-func isNormalTyping(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	// Single printable character is normal typing
-	if len(s) == 1 {
-		r := rune(s[0])
-		return r >= 32 && r < 127 // Printable ASCII
-	}
-	// Multi-char: only allow if all are printable alphanumeric or common punctuation
-	// Reject anything that looks like control sequences
-	for _, r := range s {
-		if r < 32 || r > 126 {
-			return false
-		}
-	}
-	return true
 }
 
 // enterInteractiveMode enters interactive mode for the current selection.
@@ -675,7 +758,20 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		return nil
 	}
 	p.interactiveState.LastResizeAt = time.Now()
-	return p.resizeInteractivePaneCmd()
+	target := p.interactiveState.TargetPane
+	if target == "" {
+		target = p.interactiveState.TargetSession
+	}
+	if target == "" {
+		return nil
+	}
+	// The capture already returned the actual pane size. Trust that atomic
+	// observation instead of spawning two more display-message queries around
+	// the resize.
+	return func() tea.Msg {
+		p.resizeTmuxPane(target, previewWidth, previewHeight)
+		return paneResizedMsg{}
+	}
 }
 
 // resizeTmuxPane resizes a tmux window/pane to the specified dimensions.
@@ -809,6 +905,9 @@ func (p *Plugin) exitInteractiveMode() {
 		p.interactiveState.Active = false
 	}
 	p.interactiveState = nil
+	p.mouseFragment = ""
+	p.pendingScrollDelta = 0
+	p.scrollBurstCount = 0
 	p.selection.Clear()
 	p.viewMode = ViewModeList
 }
@@ -919,23 +1018,6 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Fast-path rejection during and after scroll bursts.
-	// Mouse event garbage can continue arriving after scroll ends due to
-	// terminal/OS buffering. Use time-based check for wider protection window.
-	timeSinceScroll := time.Since(p.lastScrollTime)
-	if timeSinceScroll < postScrollFilterWindow && len(msg.Text) > 0 {
-		s := msg.Text
-		// Drop anything that looks like mouse sequence garbage:
-		// - Contains <, ;, M, m (mouse sequence chars)
-		// - Is not normal alphanumeric typing
-		// Note: bare "[" is NOT filtered here — it's a normal typeable character.
-		// It's only suspicious after ESC (handled below).
-		if strings.ContainsAny(s, "<;Mm") || !isNormalTyping(s) {
-			p.interactiveState.EscapePressed = false
-			return nil
-		}
-	}
-
 	// Filter partial SGR mouse sequences that leaked through Bubble Tea's
 	// input parser due to split-read timing (ESC arrived separately) (td-791865).
 	// Must be checked BEFORE forwarding pending escape, since the ESC was part
@@ -943,6 +1025,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// td-e2ce50: Use lenient check to catch truncated/split sequences during fast scrolling.
 	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
 	if len(msg.Text) > 0 {
+		if p.consumeSplitMouseFragment(msg.Text) {
+			p.interactiveState.EscapePressed = false
+			return nil
+		}
 		if tty.LooksLikeMouseFragment(msg.Text) {
 			// Cancel the pending escape — it was the leading byte of this mouse event
 			p.interactiveState.EscapePressed = false
@@ -976,6 +1062,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 			time.Since(p.interactiveState.EscapeTime) < 5*time.Millisecond
 		mouseGate := time.Since(p.lastMouseEventTime) < 10*time.Millisecond
 		if escGate || mouseGate {
+			p.rememberMouseFragment("[")
 			p.interactiveState.EscapePressed = false
 			return nil
 		}
@@ -1148,34 +1235,36 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		debounceInterval = scrollBurstDebounce
 	}
 
+	p.pendingScrollDelta += delta
 	if timeSinceLastScroll < debounceInterval {
 		return nil
 	}
 	p.lastScrollTime = now
+	delta = p.pendingScrollDelta
+	p.pendingScrollDelta = 0
 
 	// When interactive mode targets the terminal panel, scroll terminal panel output
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		if delta < 0 {
-			p.termPanelScroll++
-		} else {
-			if p.termPanelScroll > 0 {
-				p.termPanelScroll--
-			}
+		p.termPanelScroll -= delta
+		if p.termPanelScroll < 0 {
+			p.termPanelScroll = 0
 		}
 		return nil
 	}
 
 	if delta < 0 {
 		// Scroll up: move toward top of content
-		if p.previewOffset > 0 {
-			p.previewOffset--
+		p.previewOffset += delta
+		if p.previewOffset < 0 {
+			p.previewOffset = 0
 		}
 		p.autoScrollOutput = false
 	} else {
 		// Scroll down: move toward bottom of content
 		maxOffset := p.getMaxScrollOffset()
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		p.previewOffset += delta
+		if p.previewOffset > maxOffset {
+			p.previewOffset = maxOffset
 		}
 		if p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true
@@ -1202,21 +1291,12 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 
 	return func() tea.Msg {
 		if err := sendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			p.exitInteractiveMode()
-			if isSessionDeadError(err) {
-				return InteractiveSessionDeadMsg{}
-			}
-			return nil
+			return interactiveClickSentMsg{SessionName: sessionName, Err: err}
 		}
 		if err := sendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			p.exitInteractiveMode()
-			if isSessionDeadError(err) {
-				return InteractiveSessionDeadMsg{}
-			}
-			return nil
+			return interactiveClickSentMsg{SessionName: sessionName, Err: err}
 		}
-		p.interactiveState.LastKeyTime = time.Now()
-		return nil
+		return interactiveClickSentMsg{SessionName: sessionName}
 	}
 }
 
@@ -1337,13 +1417,6 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Skip polling during active scroll bursts.
-	// User is scrolling through already-captured content; no need for new captures.
-	// This reduces CPU load and prevents capturing garbage during fast scrolling.
-	if time.Since(p.lastScrollTime) < scrollBurstTimeout && p.scrollBurstCount > 0 {
-		return nil
-	}
-
 	// Determine polling interval based on activity
 	interval := pollingDecayFast
 	inactivity := time.Since(p.interactiveState.LastKeyTime)
@@ -1352,6 +1425,9 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		interval = pollingDecaySlow
 	} else if inactivity > inactivityMediumThreshold {
 		interval = pollingDecayMedium
+	}
+	if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+		interval = remaining
 	}
 
 	// When interactive mode targets the terminal panel, use terminal panel polling
@@ -1411,24 +1487,38 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Skip polling during active scroll bursts.
-	if time.Since(p.lastScrollTime) < scrollBurstTimeout && p.scrollBurstCount > 0 {
-		return nil
+	delay := time.Duration(0)
+	if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+		delay = remaining
 	}
 
 	// When interactive mode targets the terminal panel, use terminal panel polling
 	if p.interactiveState.TermPanel {
-		return p.scheduleTermPanelPoll(0)
+		return p.scheduleTermPanelPoll(delay)
 	}
 
 	// Schedule with 0ms delay for immediate capture (td-8856c9: no stagger for worktrees)
 	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, 0)
+		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, delay)
 	}
 	if wt := p.selectedWorktree(); wt != nil {
-		return p.scheduleInteractivePoll(wt.Name, 0)
+		return p.scheduleInteractivePoll(wt.Name, delay)
 	}
 	return nil
+}
+
+// interactiveScrollDelay reports how long a poll should be deferred while the
+// user is mid-flick. Callers reschedule instead of returning nil so the poll
+// chain always has a continuation.
+func (p *Plugin) interactiveScrollDelay() (time.Duration, bool) {
+	if p.scrollBurstCount <= 0 {
+		return 0, false
+	}
+	elapsed := time.Since(p.lastScrollTime)
+	if elapsed >= scrollBurstTimeout {
+		return 0, false
+	}
+	return scrollBurstTimeout - elapsed, true
 }
 
 // cursorStyle defines the appearance of the cursor overlay.
@@ -1532,6 +1622,10 @@ func renderWithCursor(content string, cursorRow, cursorCol int, visible bool) st
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func shouldOverlayCursor(interactive, cursorVisible, atLiveEdge bool) bool {
+	return interactive && cursorVisible && atLiveEdge
 }
 
 // shouldSnapBack determines if we should snap back to live view for a given key (td-e2ce50).

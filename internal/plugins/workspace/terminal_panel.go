@@ -225,17 +225,23 @@ func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
 // When interactive mode targets the terminal panel, also captures cursor position.
 func (p *Plugin) handleTermPanelPoll(sessionName string) tea.Cmd {
 	captureCursor := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
+	if captureCursor {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleTermPanelPoll(remaining)
+		}
+	}
 	target := p.termPanelPaneID
 	if target == "" {
 		target = sessionName
 	}
 	return func() tea.Msg {
 		var output string
+		var cursor capturedCursor
 		var err error
 		if captureCursor {
 			// Interactive mode: bypass cache for fresh capture, same as agent pane.
 			// The global cache has 300ms TTL which causes stale reads during typing.
-			output, err = capturePaneDirect(sessionName)
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, target, false)
 		} else {
 			// Non-interactive: use global cache + singleflight coordinator.
 			output, err = capturePane(sessionName)
@@ -245,16 +251,13 @@ func (p *Plugin) handleTermPanelPoll(sessionName string) tea.Cmd {
 			Output:      output,
 			Err:         err,
 		}
-		if captureCursor {
-			row, col, ph, pw, vis, ok := queryCursorPositionSync(target)
-			if ok {
-				msg.HasCursor = true
-				msg.CursorRow = row
-				msg.CursorCol = col
-				msg.CursorVisible = vis
-				msg.PaneHeight = ph
-				msg.PaneWidth = pw
-			}
+		if cursor.Valid {
+			msg.HasCursor = true
+			msg.CursorRow = cursor.Row
+			msg.CursorCol = cursor.Col
+			msg.CursorVisible = cursor.Visible
+			msg.PaneHeight = cursor.PaneHeight
+			msg.PaneWidth = cursor.PaneWidth
 		}
 		return msg
 	}
@@ -462,7 +465,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	content := strings.Join(displayLines, "\n")
 
 	// Apply cursor overlay when interactive mode targets the terminal panel
-	if interactive && cursorVisible {
+	if shouldOverlayCursor(interactive, cursorVisible, p.termPanelScroll == 0) {
 		displayHeight := len(displayLines)
 		relativeRow := cursorRow
 		if paneHeight > displayHeight {

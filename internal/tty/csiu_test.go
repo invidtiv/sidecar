@@ -1,6 +1,10 @@
 package tty
 
-import "testing"
+import (
+	"testing"
+
+	uv "github.com/charmbracelet/ultraviolet"
+)
 
 // csiBytes is a local []byte-based type that mimics BubbleTea's
 // unexported unknownCSISequenceMsg.
@@ -19,6 +23,20 @@ func TestExtractUnknownCSIBytes_ModifyOtherKeys(t *testing.T) {
 	got := ExtractUnknownCSIBytes(msg)
 	if got == nil {
 		t.Fatal("expected non-nil")
+	}
+}
+
+func TestExtractUnknownCSIBytes_UltravioletUnknownCsiEvent(t *testing.T) {
+	msg := uv.UnknownCsiEvent("\x1b[13;2u")
+	if got := string(ExtractUnknownCSIBytes(msg)); got != string(msg) {
+		t.Fatalf("got %q, want real ultraviolet event %q", got, msg)
+	}
+}
+
+func TestExtractUnknownCSIBytes_UltravioletUnknownEvent(t *testing.T) {
+	msg := uv.UnknownEvent("\x1b[27;2;13~")
+	if got := string(ExtractUnknownCSIBytes(msg)); got != string(msg) {
+		t.Fatalf("got %q, want real ultraviolet event %q", got, msg)
 	}
 }
 

@@ -344,6 +344,9 @@ type Plugin struct {
 	lastMouseEventTime time.Time // For suppressing split-CSI "[" near mouse activity
 	scrollBurstCount   int       // Consecutive scroll events for burst detection
 	scrollBurstStarted time.Time // When current burst started
+	pendingScrollDelta int       // Wheel delta accumulated while burst debounce is active
+	mouseFragment      string    // Incomplete split SGR mouse input awaiting its next chunk
+	mouseFragmentTime  time.Time // Last update to mouseFragment
 
 	// Sidebar header hover state
 	hoverNewButton            bool
