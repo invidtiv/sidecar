@@ -6,9 +6,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestViewUsesCellMotionMouseMode(t *testing.T) {
+func TestViewDefaultsToAllMotionMouseMode(t *testing.T) {
 	view := (Model{}).View()
-	if view.MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("MouseMode = %v, want cell motion", view.MouseMode)
+	if view.MouseMode != tea.MouseModeAllMotion {
+		t.Fatalf("MouseMode = %v, want all motion", view.MouseMode)
 	}
 }
