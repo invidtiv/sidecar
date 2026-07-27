@@ -1019,6 +1019,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil
 		}
+		if msg.Err != nil {
+			// Preserve the last good screen and retry under a fresh owner.
+			return p, p.scheduleShellPollByName(msg.TmuxName, pollIntervalActive)
+		}
 		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)

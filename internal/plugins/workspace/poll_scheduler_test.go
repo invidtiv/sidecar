@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/tty"
@@ -79,5 +80,32 @@ func TestStaleShellCaptureCannotMutateOrContinue(t *testing.T) {
 	}
 	if got := buffer.String(); got != "current shell" {
 		t.Fatalf("stale shell capture mutated buffer: %q", got)
+	}
+}
+
+func TestTransientShellCaptureErrorPreservesLastGoodOutput(t *testing.T) {
+	buffer := tty.NewOutputBuffer(10)
+	buffer.Update("last good screen")
+	shell := &ShellSession{
+		TmuxName: "shell",
+		Agent:    &Agent{OutputBuf: buffer},
+	}
+	p := &Plugin{shells: []*ShellSession{shell}}
+	generation := p.pollScheduler.Invalidate(shellPollKey("shell"))
+
+	_, cmd := p.Update(ShellOutputMsg{
+		TmuxName:   "shell",
+		Generation: generation,
+		Err:        errors.New("capture timed out"),
+	})
+
+	if got := buffer.String(); got != "last good screen" {
+		t.Fatalf("transient capture error cleared buffer: %q", got)
+	}
+	if cmd == nil {
+		t.Fatal("transient capture error did not schedule retry")
+	}
+	if p.pollScheduler.IsCurrent(shellPollKey("shell"), generation) {
+		t.Fatal("retry did not receive a fresh generation")
 	}
 }

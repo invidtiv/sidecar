@@ -173,6 +173,7 @@ type (
 		TmuxName   string // Session name (stable identifier)
 		Generation int
 		Output     string
+		Err        error
 		// Cursor position captured atomically with output (only set in interactive mode)
 		CursorRow     int
 		CursorCol     int
@@ -917,7 +918,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 				return ShellSessionDeadMsg{TmuxName: tmuxName, Generation: generation}
 			}
 			// Other errors (timeout, etc.) - return empty output and schedule retry
-			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation}
+			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
 		}
 
 		// Trim to max bytes
