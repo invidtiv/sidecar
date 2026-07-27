@@ -528,6 +528,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			// Already targeting terminal panel — forward click
 			if p.interactiveState != nil && p.interactiveState.Active &&
 				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
+				if !action.Shift && !action.Alt {
+					if cmd, ok := p.activateTerminalLink(action); ok {
+						return cmd
+					}
+				}
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -541,6 +546,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			// Already targeting agent pane — forward click
 			if p.interactiveState != nil && p.interactiveState.Active &&
 				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
+				if !action.Shift && !action.Alt {
+					if cmd, ok := p.activateTerminalLink(action); ok {
+						return cmd
+					}
+				}
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -571,6 +581,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Normal clicks focus and prepare read-mode selection. Enter is the
 		// explicit transition into interactive input.
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
+			if !action.Shift && !action.Alt {
+				if cmd, ok := p.activateTerminalLink(action); ok {
+					return cmd
+				}
+			}
 			return p.prepareInteractiveDrag(action)
 		}
 	case regionPaneDivider:
@@ -587,6 +602,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
 		p.termPanelFocused = true
+		if !action.Shift && !action.Alt {
+			if cmd, ok := p.activateTerminalLink(action); ok {
+				return cmd
+			}
+		}
 		return p.prepareInteractiveDrag(action)
 	case regionTermPanelDivider:
 		// Start drag for terminal panel resizing (percentage-based).

@@ -102,6 +102,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
 		line = ui.ExpandTabs(line, tabStopWidth)
+		line = decorateTerminalLinks(line)
 		absoluteLine := in.AbsoluteBase + layout.Start + i
 		if in.SearchMatches != nil {
 			for _, match := range in.SearchMatches.Items {
