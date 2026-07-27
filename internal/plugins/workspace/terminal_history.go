@@ -202,11 +202,18 @@ func (p *Plugin) cancelTerminalHistoryIntent(termPanel bool) {
 	if !ok {
 		return
 	}
-	state := p.terminalHistory[source.Key]
+	p.cancelTerminalHistoryIntentByKey(source.Key)
+}
+
+func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
+	if key == "" {
+		return
+	}
+	state := p.terminalHistory[key]
 	state.PendingScroll = 0
 	state.Loading = false
 	state.RequestGen++
-	p.terminalHistory[source.Key] = state
+	p.terminalHistory[key] = state
 }
 
 func (p *Plugin) terminalHistorySummary(termPanel bool, buffer *tty.OutputBuffer) (base, total int, loading bool) {

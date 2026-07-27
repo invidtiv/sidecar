@@ -177,14 +177,14 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 }
 
 func (p *Plugin) clearTerminalSearch() {
-	termPanel := p.terminalSearch.TermPanel
+	sourceKey := p.terminalSearch.SourceKey
 	p.terminalSearch.Generation++
 	p.terminalSearch.InputActive = false
 	p.terminalSearch.SourceKey = ""
 	p.terminalSearch.Query = ""
 	p.terminalSearch.Matches = nil
 	p.terminalSearch.Current = 0
-	p.cancelTerminalHistoryIntent(termPanel)
+	p.cancelTerminalHistoryIntentByKey(sourceKey)
 }
 
 func (p *Plugin) recomputeTerminalSearch() {
@@ -196,8 +196,8 @@ func (p *Plugin) recomputeTerminalSearch() {
 	}
 	search.Matches = search.Matches[:0]
 	search.Current = 0
-	query := strings.ToLower(search.Query)
-	if query == "" {
+	queryTokens := terminalSearchGraphemes(search.Query)
+	if len(queryTokens) == 0 {
 		return
 	}
 	source, ok := p.terminalHistoryFor(search.TermPanel)
@@ -210,25 +210,26 @@ func (p *Plugin) recomputeTerminalSearch() {
 	}
 	for i, raw := range source.Buffer.Lines() {
 		plain := ansi.Strip(ui.ExpandTabs(raw, tabStopWidth))
-		lower := strings.ToLower(plain)
-		for from := 0; from <= len(lower); {
-			idx := strings.Index(lower[from:], query)
-			if idx < 0 {
-				break
+		lineTokens := terminalSearchGraphemes(plain)
+		for from := 0; from+len(queryTokens) <= len(lineTokens); {
+			matched := true
+			for j := range queryTokens {
+				if !strings.EqualFold(lineTokens[from+j].Text, queryTokens[j].Text) {
+					matched = false
+					break
+				}
 			}
-			idx += from
-			endByte := idx + len(query)
-			if endByte > len(plain) {
-				break
+			if !matched {
+				from++
+				continue
 			}
-			startCol := ansi.StringWidth(plain[:idx])
-			endCol := startCol + ansi.StringWidth(plain[idx:endByte]) - 1
+			last := from + len(queryTokens) - 1
 			search.Matches = append(search.Matches, terminalSearchMatch{
 				Line:     base + i,
-				StartCol: startCol,
-				EndCol:   max(endCol, startCol),
+				StartCol: lineTokens[from].StartCol,
+				EndCol:   max(lineTokens[last].EndCol-1, lineTokens[from].StartCol),
 			})
-			from = idx + max(len(query), 1)
+			from += len(queryTokens)
 		}
 	}
 	if hadPrevious {
@@ -239,6 +240,34 @@ func (p *Plugin) recomputeTerminalSearch() {
 			}
 		}
 	}
+}
+
+type terminalSearchGrapheme struct {
+	Text             string
+	StartCol, EndCol int
+}
+
+func terminalSearchGraphemes(value string) []terminalSearchGrapheme {
+	var result []terminalSearchGrapheme
+	state := ansi.NormalState
+	col := 0
+	for len(value) > 0 {
+		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(value, state, nil)
+		if n <= 0 {
+			break
+		}
+		if width > 0 {
+			result = append(result, terminalSearchGrapheme{
+				Text:     seq,
+				StartCol: col,
+				EndCol:   col + width,
+			})
+			col += width
+		}
+		state = newState
+		value = value[n:]
+	}
+	return result
 }
 
 func (p *Plugin) revealTerminalSearchMatch() {

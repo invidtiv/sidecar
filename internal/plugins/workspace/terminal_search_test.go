@@ -168,3 +168,41 @@ func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing
 			start, p.autoScrollOutput, p.terminalSearch)
 	}
 }
+
+func TestClearTerminalSearchCancelsStoredSourceAfterSelectionSwitch(t *testing.T) {
+	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
+	keyA := terminalHistoryKey("shell", "search-shell")
+	p.terminalHistory[keyA] = terminalHistoryState{HistorySize: 1200}
+	if p.beginTerminalSearch() == nil {
+		t.Fatal("search on shell A did not start history load")
+	}
+	genA := p.terminalHistory[keyA].RequestGen
+
+	bufferB := tty.NewOutputBuffer(20)
+	bufferB.UpdateSnapshot("shell b", 0)
+	p.shells = append(p.shells, &ShellSession{
+		TmuxName: "shell-b",
+		Agent:    &Agent{TmuxSession: "shell-b", OutputBuf: bufferB},
+	})
+	p.selectedShellIdx = 1
+	p.clearTerminalSearch()
+
+	stateA := p.terminalHistory[keyA]
+	if stateA.Loading || stateA.RequestGen <= genA {
+		t.Fatalf("stored source A was not cancelled after switch: %#v", stateA)
+	}
+}
+
+func TestTerminalSearchUnicodeCaseFoldMapsVisualColumns(t *testing.T) {
+	p := terminalSearchPlugin("x Kelvin", 0)
+	p.beginTerminalSearch()
+	p.terminalSearch.Query = "kelvin"
+	p.recomputeTerminalSearch()
+	if len(p.terminalSearch.Matches) != 1 {
+		t.Fatalf("Unicode fold matches = %#v, want one", p.terminalSearch.Matches)
+	}
+	match := p.terminalSearch.Matches[0]
+	if match.StartCol != 2 || match.EndCol != 7 {
+		t.Fatalf("Unicode fold columns = %d..%d, want 2..7", match.StartCol, match.EndCol)
+	}
+}
