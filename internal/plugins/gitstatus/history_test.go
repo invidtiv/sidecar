@@ -279,15 +279,48 @@ func TestGetCommitDiff_NonExistentPath(t *testing.T) {
 		t.Fatalf("GetCommitDiff with non-existent path returned error: %v", err)
 	}
 
-	// "git show <hash> -- <path>" always emits the commit header, for matching
-	// and non-matching paths alike, so the result is not empty. What marks "no
-	// changes here" is the absence of hunks, which is what ParseUnifiedDiff
-	// keys on -- it ignores every line before the first @@.
+	// "git show <hash> -- <path>" emits the commit header for matching and
+	// non-matching paths alike. GetCommitDiff drops a header-only result so the
+	// diff pane can treat empty as "No changes".
 	parsed, err := ParseUnifiedDiff(diff)
 	if err != nil {
 		t.Fatalf("ParseUnifiedDiff: %v", err)
 	}
 	if len(parsed.Hunks) != 0 {
 		t.Errorf("expected no hunks for non-existent path, got %d", len(parsed.Hunks))
+	}
+	if diff != "" {
+		t.Errorf("expected empty diff for non-existent path, got: %q", diff)
+	}
+}
+
+func TestHasFileSection(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"empty", "", false},
+		{"header only", "commit abc\nAuthor: A\n\n    subject\n", false},
+		{
+			// A commit message quoting a diff must not read as a file section;
+			// git indents message bodies by four spaces.
+			name: "header quoting a diff in the message",
+			out:  "commit abc\nAuthor: A\n\n    subject\n\n    diff --git a/x b/x\n",
+			want: false,
+		},
+		{"regular diff", "commit abc\n\n    subject\n\ndiff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n", true},
+		{"binary file", "commit abc\n\ndiff --git a/x.png b/x.png\nBinary files a/x.png and b/x.png differ\n", true},
+		{"pure rename, no hunks", "commit abc\n\ndiff --git a/x b/y\nsimilarity index 100%\nrename from x\nrename to y\n", true},
+		{"merge combined diff", "commit abc\n\ndiff --combined main.go\n@@@ -1,1 -1,1 +1,1 @@@\n", true},
+		{"merge cc diff", "commit abc\n\ndiff --cc main.go\n", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasFileSection(tc.out); got != tc.want {
+				t.Errorf("hasFileSection() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
