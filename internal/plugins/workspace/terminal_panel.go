@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 const (
@@ -142,7 +143,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	}
 	p.termPanelSession = sessionName
 	if p.termPanelOutput == nil {
-		p.termPanelOutput = NewOutputBuffer(outputBufferCap)
+		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
 		p.termPanelOutput.Clear()
 	}
@@ -194,6 +195,7 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 			"-s", sessionName,
 			"-c", workDir,
 		}
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return TermPanelSessionCreatedMsg{
@@ -202,7 +204,6 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 			}
 		}
 
-		ensureTmuxServerConfig()
 		paneID := getPaneID(sessionName)
 		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
 	}
@@ -352,7 +353,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 	}
 	w, h := p.calculateTermPanelDimensions()
 	return func() tea.Msg {
-		p.resizeTmuxPane(target, w, h)
+		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}
 }
@@ -488,7 +489,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 			relativeCol = displayWidth - 1
 		}
 
-		content = renderWithCursor(content, relativeRow, relativeCol, cursorVisible)
+		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
 	}
 
 	return hint + "\n" + content
@@ -712,7 +713,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
 	if p.termPanelOutput == nil {
-		p.termPanelOutput = NewOutputBuffer(outputBufferCap)
+		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
 		p.termPanelOutput.Clear()
 	}

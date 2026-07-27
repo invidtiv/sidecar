@@ -126,16 +126,42 @@ func TestOutputBuffer_Clear(t *testing.T) {
 	}
 }
 
+func TestOutputBuffer_ClearAllowsSameContentAgain(t *testing.T) {
+	buf := NewOutputBuffer(10)
+	if !buf.Update("same") {
+		t.Fatal("initial update should change the buffer")
+	}
+	buf.Clear()
+	if !buf.Update("same") {
+		t.Fatal("same raw content after Clear should update the buffer")
+	}
+	if got := buf.String(); got != "same" {
+		t.Fatalf("buffer after Clear and update = %q, want same", got)
+	}
+}
+
+func TestOutputBuffer_LastNonEmptyLine(t *testing.T) {
+	buf := NewOutputBuffer(10)
+	buf.Write("first\nsecond\n \n\x1b[31m\x1b[0m")
+	if got := buf.LastNonEmptyLine(); got != 1 {
+		t.Fatalf("LastNonEmptyLine() = %d, want 1", got)
+	}
+	buf.Clear()
+	if got := buf.LastNonEmptyLine(); got != -1 {
+		t.Fatalf("LastNonEmptyLine() after Clear = %d, want -1", got)
+	}
+}
+
 func TestPartialMouseSeqRegex(t *testing.T) {
 	tests := []struct {
 		input string
 		match bool
 	}{
-		{"[<65;83;33M", true},   // scroll down
-		{"[<64;10;5M", true},    // scroll up
-		{"[<0;50;20m", true},    // release
-		{"hello", false},        // normal text
-		{"[notmouse]", false},   // not a mouse sequence
+		{"[<65;83;33M", true},     // scroll down
+		{"[<64;10;5M", true},      // scroll up
+		{"[<0;50;20m", true},      // release
+		{"hello", false},          // normal text
+		{"[notmouse]", false},     // not a mouse sequence
 		{"[<abc;def;ghiM", false}, // invalid format
 	}
 

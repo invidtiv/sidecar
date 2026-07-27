@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -400,7 +401,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 			relativeCol = displayWidth - 1
 		}
 
-		content = renderWithCursor(content, relativeRow, relativeCol, cursorVisible)
+		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
 	}
 
 	return hint + "\n" + content
@@ -605,7 +606,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 			relativeCol = displayWidth - 1
 		}
 
-		content = renderWithCursor(content, relativeRow, relativeCol, cursorVisible)
+		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
 	}
 
 	return hint + "\n" + content

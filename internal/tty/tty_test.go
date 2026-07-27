@@ -113,3 +113,60 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("unexpected default ScrollbackLines: %d", cfg.ScrollbackLines)
 	}
 }
+
+func TestModelIgnoresMessagesFromAnotherOwner(t *testing.T) {
+	first := New(nil)
+	second := New(nil)
+	first.Enter("first", "")
+	second.Enter("second", "")
+
+	second.State.OutputBuf.Write("second output")
+	first.Update(CaptureResultMsg{
+		Scope:  second.Scope(),
+		Target: "second",
+		Output: "foreign output",
+	})
+	if got := first.State.OutputBuf.String(); got != "" {
+		t.Fatalf("foreign capture changed first model: %q", got)
+	}
+
+	first.Update(SessionDeadMsg{Scope: second.Scope()})
+	if !first.IsActive() {
+		t.Fatal("foreign session-dead message exited first model")
+	}
+}
+
+func TestModelIgnoresMessagesFromPreviousActivation(t *testing.T) {
+	model := New(nil)
+	model.Enter("same-target", "")
+	stale := model.Scope()
+	model.Exit()
+	model.Enter("same-target", "")
+
+	model.Update(CaptureResultMsg{
+		Scope:  stale,
+		Target: "same-target",
+		Output: "stale output",
+	})
+	if got := model.State.OutputBuf.String(); got != "" {
+		t.Fatalf("stale capture changed re-entered model: %q", got)
+	}
+
+	model.Update(SessionDeadMsg{Scope: stale})
+	if !model.IsActive() {
+		t.Fatal("stale session-dead message exited re-entered model")
+	}
+}
+
+func TestModelAcceptsCurrentScopedCapture(t *testing.T) {
+	model := New(nil)
+	model.Enter("current", "")
+	model.Update(CaptureResultMsg{
+		Scope:  model.Scope(),
+		Target: "current",
+		Output: "current output",
+	})
+	if got := model.State.OutputBuf.String(); got != "current output" {
+		t.Fatalf("current capture = %q, want current output", got)
+	}
+}

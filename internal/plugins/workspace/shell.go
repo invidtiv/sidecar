@@ -36,19 +36,7 @@ var (
 
 	tmuxPrefixOnce   sync.Once
 	tmuxPrefixCached string
-
-	tmuxServerConfigOnce sync.Once
 )
-
-// ensureTmuxServerConfig sets server-level options on the tmux server.
-// Called once per process before the first session is created.
-// Sets exit-empty off so the server persists even when all sessions are killed,
-// preventing the server from dying between sidecar operations.
-func ensureTmuxServerConfig() {
-	tmuxServerConfigOnce.Do(func() {
-		_ = exec.Command("tmux", "set-option", "-s", "exit-empty", "off").Run()
-	})
-}
 
 // isTmuxInstalled returns true if tmux is available in PATH.
 // Result is cached after first check.
@@ -281,7 +269,7 @@ func (p *Plugin) shellFromDefinition(def ShellDefinition, isRunning bool) *Shell
 			Type:        displayType,
 			TmuxSession: def.TmuxName,
 			TmuxPane:    paneID,
-			OutputBuf:   NewOutputBuffer(outputBufferCap),
+			OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			StartedAt:   def.CreatedAt,
 			Status:      AgentStatusRunning,
 		}
@@ -302,7 +290,7 @@ func (p *Plugin) shellFromTmux(tmuxName string) *ShellSession {
 			Type:        AgentShell,
 			TmuxSession: tmuxName,
 			TmuxPane:    paneID,
-			OutputBuf:   NewOutputBuffer(outputBufferCap),
+			OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			StartedAt:   time.Now(),
 			Status:      AgentStatusRunning,
 		},
@@ -563,14 +551,12 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", workDir, // Working directory
 		}
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			created.Err = fmt.Errorf("create shell session: %w", err)
 			return created
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		// Capture pane ID for interactive mode support
 		created.PaneID = getPaneID(sessionName)
@@ -665,6 +651,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 		if previewWidth > 0 && previewHeight > 0 {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return ShellCreatedMsg{
@@ -673,9 +660,6 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 				Err:         fmt.Errorf("recreate shell session: %w", err),
 			}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		tty.SetWindowSizeManual(sessionName)
 
@@ -784,6 +768,7 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 			if previewWidth > 0 && previewHeight > 0 {
 				args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 			}
+			tty.PrepareServer()
 			cmd := exec.Command("tmux", args...)
 			if err := cmd.Run(); err != nil {
 				return ShellCreatedMsg{
@@ -792,7 +777,6 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 					Err:         fmt.Errorf("recreate shell session: %w", err),
 				}
 			}
-			ensureTmuxServerConfig()
 			tty.SetWindowSizeManual(sessionName)
 			// Capture pane ID for interactive mode support
 			paneID := getPaneID(sessionName)
@@ -908,8 +892,8 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 	return func() tea.Msg {
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := queryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				p.resizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			}
 		}
 
@@ -1104,14 +1088,11 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			"-c", wt.Path, // Working directory
 		}
 
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))

@@ -2,6 +2,7 @@ package tty
 
 import (
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -91,6 +92,9 @@ type Model struct {
 	Config Config
 	State  *State
 
+	ownerID       uint64
+	runGeneration uint64
+
 	// Width and Height are set by the containing plugin
 	Width  int
 	Height int
@@ -122,9 +126,12 @@ func New(config *Config) *Model {
 		}
 	}
 	return &Model{
-		Config: cfg,
+		Config:  cfg,
+		ownerID: nextModelID.Add(1),
 	}
 }
+
+var nextModelID atomic.Uint64
 
 // IsActive returns whether interactive mode is currently active.
 func (m *Model) IsActive() bool {
@@ -134,6 +141,7 @@ func (m *Model) IsActive() bool {
 // Enter enters interactive mode for the specified tmux session/pane.
 // Returns a tea.Cmd to start polling for output.
 func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
+	m.runGeneration++
 	m.State = &State{
 		Active:        true,
 		TargetPane:    paneID,
@@ -154,6 +162,24 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 
 	// Return command to trigger initial poll
 	return m.schedulePoll(0)
+}
+
+// Scope returns the identity of the current Model activation. Commands created
+// for this model should include this scope in their result messages.
+func (m *Model) Scope() MessageScope {
+	return MessageScope{
+		Owner:      m.ownerID,
+		Target:     m.GetTarget(),
+		Generation: m.runGeneration,
+	}
+}
+
+func (m *Model) owns(scope MessageScope) bool {
+	current := m.Scope()
+	return m.IsActive() &&
+		scope.Owner == current.Owner &&
+		scope.Target == current.Target &&
+		scope.Generation == current.Generation
 }
 
 // Exit exits interactive mode.
@@ -185,18 +211,33 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.handleMouse(msg)
 
 	case EscapeTimerMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		return m.handleEscapeTimer()
 
 	case CaptureResultMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		return m.handleCaptureResult(msg)
 
 	case PollTickMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		return m.handlePollTick(msg)
 
 	case PaneResizedMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		return m.schedulePoll(0)
 
 	case SessionDeadMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		m.Exit()
 		if m.OnExit != nil {
 			return m.OnExit()
@@ -204,6 +245,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case PasteResultMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
 		if msg.SessionDead {
 			m.Exit()
 			if m.OnExit != nil {
@@ -292,8 +336,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.State.EscapeTime = time.Now()
 		if !m.State.EscapeTimerPending {
 			m.State.EscapeTimerPending = true
+			scope := m.Scope()
 			return tea.Tick(DoubleEscapeDelay, func(t time.Time) tea.Msg {
-				return EscapeTimerMsg{}
+				return EscapeTimerMsg{Scope: scope}
 			})
 		}
 		return nil
@@ -338,7 +383,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Paste key
 	if msg.String() == m.Config.PasteKey {
 		m.State.LastKeyTime = time.Now()
-		return PasteClipboardToTmuxCmd(m.State.TargetSession, m.State.BracketedPasteEnabled)
+		return PasteClipboardToTmuxCmd(m.Scope(), m.State.TargetSession, m.State.BracketedPasteEnabled)
 	}
 
 	// Update last key time
@@ -350,10 +395,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if IsPasteInput(msg) {
 		text := msg.Text
 		bracketed := m.State.BracketedPasteEnabled
+		scope := m.Scope()
 		if pendingEscape {
 			cmds = append(cmds, func() tea.Msg {
 				if err := SendKeyToTmux(sessionName, "Escape"); err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{}
+					return SessionDeadMsg{Scope: scope}
 				}
 				var err error
 				if bracketed {
@@ -362,12 +408,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 					err = SendPasteToTmux(sessionName, text)
 				}
 				if err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{}
+					return SessionDeadMsg{Scope: scope}
 				}
 				return nil
 			})
 		} else {
-			cmds = append(cmds, SendPasteInputCmd(sessionName, text, bracketed))
+			cmds = append(cmds, SendPasteInputCmd(scope, sessionName, text, bracketed))
 		}
 		cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		return tea.Batch(cmds...)
@@ -377,7 +423,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	key, useLiteral := MapKeyToTmux(msg)
 	if key == "" {
 		if pendingEscape {
-			cmds = append(cmds, SendKeysCmd(sessionName, KeySpec{"Escape", false}))
+			cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{"Escape", false}))
 			cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		}
 		return tea.Batch(cmds...)
@@ -385,12 +431,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Send keys
 	if pendingEscape {
-		cmds = append(cmds, SendKeysCmd(sessionName,
+		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName,
 			KeySpec{"Escape", false},
 			KeySpec{key, useLiteral},
 		))
 	} else {
-		cmds = append(cmds, SendKeysCmd(sessionName, KeySpec{key, useLiteral}))
+		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{key, useLiteral}))
 	}
 
 	cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
@@ -405,7 +451,7 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 	}
 	m.State.LastKeyTime = time.Now()
 	cmds := []tea.Cmd{
-		SendPasteInputCmd(m.State.TargetSession, content, m.State.BracketedPasteEnabled),
+		SendPasteInputCmd(m.Scope(), m.State.TargetSession, content, m.State.BracketedPasteEnabled),
 		m.schedulePoll(KeystrokeDebounce),
 	}
 	return tea.Batch(cmds...)
@@ -437,16 +483,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	row := mouse.Y + 1
 
 	sessionName := m.State.TargetSession
+	scope := m.Scope()
 	return func() tea.Msg {
 		if err := SendSGRMouse(sessionName, 0, col, row, false); err != nil {
 			if IsSessionDeadError(err) {
-				return SessionDeadMsg{}
+				return SessionDeadMsg{Scope: scope}
 			}
 			return nil
 		}
 		if err := SendSGRMouse(sessionName, 0, col, row, true); err != nil {
 			if IsSessionDeadError(err) {
-				return SessionDeadMsg{}
+				return SessionDeadMsg{Scope: scope}
 			}
 		}
 		return nil
@@ -470,7 +517,7 @@ func (m *Model) handleEscapeTimer() tea.Cmd {
 	m.State.LastKeyTime = time.Now()
 
 	return tea.Batch(
-		SendKeysCmd(m.State.TargetSession, KeySpec{"Escape", false}),
+		SendKeysCmd(m.Scope(), m.State.TargetSession, KeySpec{"Escape", false}),
 		m.schedulePoll(0),
 	)
 }
@@ -528,15 +575,17 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	}
 
 	// Capture output and cursor position atomically
+	scope := msg.Scope
 	return func() tea.Msg {
 		output, err := CapturePaneOutput(target, m.Config.ScrollbackLines)
 		if err != nil {
-			return CaptureResultMsg{Target: target, Err: err}
+			return CaptureResultMsg{Scope: scope, Target: target, Err: err}
 		}
 
 		row, col, paneHeight, paneWidth, visible, _ := QueryCursorPositionSync(target)
 
 		return CaptureResultMsg{
+			Scope:         scope,
 			Target:        target,
 			Output:        output,
 			CursorRow:     row,
@@ -557,15 +606,16 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 	m.State.PollGeneration++
 	gen := m.State.PollGeneration
 	target := m.GetTarget()
+	scope := m.Scope()
 
 	if delay <= 0 {
 		return func() tea.Msg {
-			return PollTickMsg{Target: target, Generation: gen}
+			return PollTickMsg{Scope: scope, Target: target, Generation: gen}
 		}
 	}
 
 	return tea.Tick(delay, func(t time.Time) tea.Msg {
-		return PollTickMsg{Target: target, Generation: gen}
+		return PollTickMsg{Scope: scope, Target: target, Generation: gen}
 	})
 }
 
@@ -589,6 +639,7 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	m.State.LastResizeAt = time.Now()
 
 	target := m.GetTarget()
+	scope := m.Scope()
 	if target == "" {
 		return nil
 	}
@@ -600,7 +651,7 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 			return nil
 		}
 		ResizeTmuxPane(target, width, height)
-		return PaneResizedMsg{}
+		return PaneResizedMsg{Scope: scope}
 	}
 }
 
@@ -620,6 +671,7 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	}
 
 	target := m.GetTarget()
+	scope := m.Scope()
 	if target == "" {
 		return nil
 	}
@@ -631,14 +683,14 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 			return nil
 		}
 		ResizeTmuxPane(target, width, height)
-		return PaneResizedMsg{}
+		return PaneResizedMsg{Scope: scope}
 	}
 
 	// Immediate poll command
 	m.State.PollGeneration++
 	gen := m.State.PollGeneration
 	pollCmd := func() tea.Msg {
-		return PollTickMsg{Target: target, Generation: gen}
+		return PollTickMsg{Scope: scope, Target: target, Generation: gen}
 	}
 
 	return tea.Batch(resizeCmd, pollCmd)

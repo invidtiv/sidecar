@@ -58,14 +58,14 @@ func SendBracketedPasteToTmux(sessionName, text string) error {
 // PasteClipboardToTmuxCmd returns a tea.Cmd that pastes clipboard content to a tmux session.
 // The bracketed parameter determines whether to use bracketed paste mode.
 // Returns a PasteResultMsg with the result.
-func PasteClipboardToTmuxCmd(sessionName string, bracketed bool) tea.Cmd {
+func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string, bracketed bool) tea.Cmd {
 	return func() tea.Msg {
 		text, err := clipboard.ReadAll()
 		if err != nil {
-			return PasteResultMsg{Err: err}
+			return PasteResultMsg{Scope: scope, Err: err}
 		}
 		if text == "" {
-			return PasteResultMsg{Empty: true}
+			return PasteResultMsg{Scope: scope, Empty: true}
 		}
 
 		if bracketed {
@@ -74,26 +74,30 @@ func PasteClipboardToTmuxCmd(sessionName string, bracketed bool) tea.Cmd {
 			err = SendPasteToTmux(sessionName, text)
 		}
 		if err != nil {
-			return PasteResultMsg{Err: err, SessionDead: IsSessionDeadError(err)}
+			return PasteResultMsg{Scope: scope, Err: err, SessionDead: IsSessionDeadError(err)}
 		}
 
-		return PasteResultMsg{}
+		return PasteResultMsg{Scope: scope}
 	}
 }
 
 // SendPasteInputCmd sends paste text to tmux asynchronously.
 // Used for multi-character terminal input (not clipboard paste which is already async).
-func SendPasteInputCmd(sessionName, text string, bracketed bool) tea.Cmd {
+func SendPasteInputCmd(scope MessageScope, sessionName, text string, bracketed bool) tea.Cmd {
 	return func() tea.Msg {
-		var err error
-		if bracketed {
-			err = SendBracketedPasteToTmux(sessionName, text)
-		} else {
-			err = SendPasteToTmux(sessionName, text)
-		}
+		err := SendPasteInput(sessionName, text, bracketed)
 		if err != nil && IsSessionDeadError(err) {
-			return SessionDeadMsg{}
+			return SessionDeadMsg{Scope: scope}
 		}
 		return nil
 	}
+}
+
+// SendPasteInput forwards paste text using the target applications current
+// bracketed-paste mode.
+func SendPasteInput(sessionName, text string, bracketed bool) error {
+	if bracketed {
+		return SendBracketedPasteToTmux(sessionName, text)
+	}
+	return SendPasteToTmux(sessionName, text)
 }

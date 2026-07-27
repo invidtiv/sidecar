@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -219,7 +220,7 @@ func TestClearInteractiveSelection_ResetsSentinels(t *testing.T) {
 
 func TestDragToSameLine_SelectsSingleLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("line0\nline1\nline2\nline three has enough text to test\nline4")
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
@@ -349,11 +350,11 @@ func TestGetLineSelectionCols(t *testing.T) {
 	p := newSelectionTestPlugin()
 
 	tests := []struct {
-		name             string
-		start, end       ui.SelectionPoint
-		lineIdx          int
-		expectStart      int
-		expectEnd        int
+		name        string
+		start, end  ui.SelectionPoint
+		lineIdx     int
+		expectStart int
+		expectEnd   int
 	}{
 		{
 			"line before selection",
@@ -402,7 +403,7 @@ func TestGetLineSelectionCols(t *testing.T) {
 
 func TestInteractiveColAtX_PlainText(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	// Set up a shell with the buffer
@@ -424,7 +425,7 @@ func TestInteractiveColAtX_PlainText(t *testing.T) {
 
 func TestInteractiveColAtX_BeyondLineEnd(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello")
 
 	p.shellSelected = true
@@ -446,7 +447,7 @@ func TestInteractiveColAtX_BeyondLineEnd(t *testing.T) {
 
 func TestInteractiveColAtX_WithHorizOffset(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world test")
 
 	p.shellSelected = true
@@ -468,7 +469,7 @@ func TestInteractiveColAtX_WithHorizOffset(t *testing.T) {
 
 func TestInteractiveColAtX_EmptyLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("")
 
 	p.shellSelected = true
@@ -491,7 +492,7 @@ func TestInteractiveColAtX_EmptyLine(t *testing.T) {
 
 func TestCharacterLevelDrag_SameLineRightward(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	p.shellSelected = true
@@ -526,7 +527,7 @@ func TestCharacterLevelDrag_SameLineRightward(t *testing.T) {
 
 func TestCharacterLevelDrag_SameLineBackward(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	p.shellSelected = true
@@ -562,7 +563,7 @@ func TestCharacterLevelDrag_SameLineBackward(t *testing.T) {
 
 func TestCharacterLevelDrag_MultiLineDown(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("line zero\nline one\nline two\nline three")
 
 	p.shellSelected = true
@@ -597,7 +598,7 @@ func TestCharacterLevelDrag_MultiLineDown(t *testing.T) {
 
 func TestCharacterLevelDrag_DirectionReversal(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("abcdefghijklmnop")
 
 	p.shellSelected = true
@@ -641,7 +642,7 @@ func TestCharacterLevelDrag_DirectionReversal(t *testing.T) {
 
 func TestInteractiveSelectionLines_SingleLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world foo bar")
 	p.shellSelected = true
 	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}

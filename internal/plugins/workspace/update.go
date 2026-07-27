@@ -13,6 +13,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // Update handles messages.
@@ -112,7 +113,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					sessionName := p.termPanelSessionName()
 					if sessionName != "" {
 						p.termPanelSession = sessionName
-						p.termPanelOutput = NewOutputBuffer(outputBufferCap)
+						p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 						cmds = append(cmds, p.createTermPanelSession(sessionName))
 					}
 				}
@@ -506,7 +507,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				TmuxSession: msg.SessionName,
 				TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
 				StartedAt:   time.Now(),
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
 			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
@@ -705,7 +706,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				Type:        displayAgentType,
 				TmuxSession: msg.SessionName,
 				TmuxPane:    msg.PaneID,
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 				StartedAt:   time.Now(),
 				Status:      AgentStatusRunning,
 			}
@@ -730,7 +731,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					Type:        displayAgentType, // td-2ba8a3: Show chosen agent type
 					TmuxSession: msg.SessionName,
 					TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
-					OutputBuf:   NewOutputBuffer(outputBufferCap),
+					OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 					StartedAt:   time.Now(),
 					Status:      AgentStatusRunning,
 				},
@@ -1514,7 +1515,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			p.exitInteractiveMode()
-			if isSessionDeadError(msg.Err) {
+			if tty.IsSessionDeadError(msg.Err) {
 				p.toastMessage = "Session ended"
 				p.toastTime = time.Now()
 			}

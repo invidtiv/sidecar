@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -200,15 +201,15 @@ type Plugin struct {
 	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
 
 	// Terminal panel state (Ctrl+T toggle)
-	termPanelVisible    bool            // Whether the terminal panel is shown
-	termPanelLayout     TermPanelLayout // Bottom or right split
-	termPanelSize       int             // Split size in percentage (0 = use default 50%)
-	termPanelSession    string          // Tmux session name for the terminal panel
-	termPanelPaneID     string          // Tmux pane ID for resize operations
-	termPanelOutput     *OutputBuffer   // Captured output from the terminal session
-	termPanelScroll     int             // Scroll offset in terminal panel output
-	termPanelGeneration int             // Incremented on toggle to invalidate stale poll timers
-	termPanelFocused    bool            // Whether the terminal panel sub-pane is focused (vs agent output)
+	termPanelVisible    bool              // Whether the terminal panel is shown
+	termPanelLayout     TermPanelLayout   // Bottom or right split
+	termPanelSize       int               // Split size in percentage (0 = use default 50%)
+	termPanelSession    string            // Tmux session name for the terminal panel
+	termPanelPaneID     string            // Tmux pane ID for resize operations
+	termPanelOutput     *tty.OutputBuffer // Captured output from the terminal session
+	termPanelScroll     int               // Scroll offset in terminal panel output
+	termPanelGeneration int               // Incremented on toggle to invalidate stale poll timers
+	termPanelFocused    bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker

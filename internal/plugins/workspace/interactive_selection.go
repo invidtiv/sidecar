@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -114,7 +115,7 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) interactiveOutputBuffer() *OutputBuffer {
+func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
 	if p.shellSelected {
 		shell := p.getSelectedShell()
 		if shell != nil && shell.Agent != nil {

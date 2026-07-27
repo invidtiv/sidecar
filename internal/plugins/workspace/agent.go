@@ -23,6 +23,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 var openCodeRunPrefixRe = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
@@ -212,9 +213,6 @@ const (
 	// Tmux session prefix for sidecar-managed worktree sessions
 	tmuxSessionPrefix = "sidecar-ws-"
 
-	// Default history limit for tmux scrollback capture
-	tmuxHistoryLimit = 10000
-
 	// Lines to capture from tmux (slightly > outputBufferCap for margin)
 	// We only need recent output for status detection and display
 	captureLineCount = 600
@@ -380,17 +378,11 @@ func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 			"-c", wt.Path, // Working directory
 		}
 
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		envCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
@@ -696,17 +688,11 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 			"-c", wt.Path, // Working directory
 		}
 
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
@@ -765,15 +751,13 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", wt.Path, // Working directory
 		}
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", args...)
 		if err := cmd.Run(); err != nil {
 			return func() tea.Msg {
 				return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("create session: %w", err)}
 			}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		// Track as managed session
 		p.managedSessions[sessionName] = true
@@ -963,8 +947,8 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 	return func() tea.Msg {
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := queryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				p.resizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			}
 		}
 
@@ -1657,7 +1641,7 @@ func (p *Plugin) reconnectAgents() tea.Cmd {
 				TmuxSession: session,
 				TmuxPane:    paneID,     // Capture pane ID for interactive mode
 				StartedAt:   time.Now(), // Unknown actual start
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
 			wt.Agent = agent

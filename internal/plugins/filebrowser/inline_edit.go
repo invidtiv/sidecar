@@ -99,6 +99,7 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 			"-x", strconv.Itoa(editorW), "-y", strconv.Itoa(editorH), "-e", "TERM=" + term}
 		tmuxArgs = append(tmuxArgs, editorArgs...)
 
+		tty.PrepareServer()
 		cmd := exec.Command("tmux", tmuxArgs...)
 		if err := cmd.Run(); err != nil {
 			return msg.ToastMsg{
@@ -645,11 +646,12 @@ func (p *Plugin) forwardMousePressToInlineEditor(col, row int) tea.Cmd {
 	}
 
 	sessionName := p.inlineEditSession
+	scope := p.inlineEditor.Scope()
 	return func() tea.Msg {
 		// Send SGR mouse press (button 0 = left button)
 		if err := tty.SendSGRMouse(sessionName, 0, col, row, false); err != nil {
 			if tty.IsSessionDeadError(err) {
-				return tty.SessionDeadMsg{}
+				return tty.SessionDeadMsg{Scope: scope}
 			}
 		}
 		return nil
@@ -667,11 +669,12 @@ func (p *Plugin) forwardMouseDragToInlineEditor(col, row int) tea.Cmd {
 	}
 
 	sessionName := p.inlineEditSession
+	scope := p.inlineEditor.Scope()
 	return func() tea.Msg {
 		// Send SGR mouse motion with button held (button 32 = motion + left button)
 		if err := tty.SendSGRMouse(sessionName, 32, col, row, false); err != nil {
 			if tty.IsSessionDeadError(err) {
-				return tty.SessionDeadMsg{}
+				return tty.SessionDeadMsg{Scope: scope}
 			}
 		}
 		return nil
@@ -689,11 +692,12 @@ func (p *Plugin) forwardMouseReleaseToInlineEditor(col, row int) tea.Cmd {
 	}
 
 	sessionName := p.inlineEditSession
+	scope := p.inlineEditor.Scope()
 	return func() tea.Msg {
 		// Send SGR mouse release (button 0 = left button, release=true)
 		if err := tty.SendSGRMouse(sessionName, 0, col, row, true); err != nil {
 			if tty.IsSessionDeadError(err) {
-				return tty.SessionDeadMsg{}
+				return tty.SessionDeadMsg{Scope: scope}
 			}
 		}
 		return nil

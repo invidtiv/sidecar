@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Regexes for cleaning terminal output
@@ -159,6 +161,20 @@ func (b *OutputBuffer) LineCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.lines)
+}
+
+// LastNonEmptyLine returns the index of the last line containing printable
+// content, or -1 when every line is empty. It scans under the buffer lock and
+// avoids copying the full scrollback into the render path.
+func (b *OutputBuffer) LastNonEmptyLine() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(ansi.Strip(b.lines[i])) != "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // String returns the buffer contents as a single string.

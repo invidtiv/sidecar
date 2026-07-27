@@ -5,9 +5,39 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+// HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
+const HistoryLimit = 10000
+
+var prepareServerOnce sync.Once
+
+// PrepareServer configures tmux before any sidecar session is created. Raising
+// the global default before new-session is the only behavior that works on
+// older tmux releases where history-limit changes do not affect existing panes.
+// Existing user settings above the sidecar minimum are preserved.
+func PrepareServer() {
+	prepareServerOnce.Do(func() {
+		// Keep the server alive between session creations and configure both
+		// options in the same invocation so an empty new server cannot exit in
+		// the gap between commands.
+		_ = exec.Command("tmux",
+			"start-server", ";",
+			"set-option", "-s", "exit-empty", "off",
+		).Run()
+
+		current := 0
+		if output, err := exec.Command("tmux", "show-options", "-gv", "history-limit").Output(); err == nil {
+			current, _ = strconv.Atoi(strings.TrimSpace(string(output)))
+		}
+		if current < HistoryLimit {
+			_ = exec.Command("tmux", "set-option", "-g", "history-limit", strconv.Itoa(HistoryLimit)).Run()
+		}
+	})
+}
 
 // IsSessionDeadError checks if an error indicates the tmux session/pane is gone.
 func IsSessionDeadError(err error) bool {
@@ -48,21 +78,29 @@ func SendLiteralToTmux(sessionName, text string) error {
 // SendKeysCmd sends keys to tmux asynchronously.
 // Keys are sent in order within a single goroutine to prevent reordering.
 // Returns SessionDeadMsg if the session has ended.
-func SendKeysCmd(sessionName string, keys ...KeySpec) tea.Cmd {
+func SendKeysCmd(scope MessageScope, sessionName string, keys ...KeySpec) tea.Cmd {
 	return func() tea.Msg {
-		for _, k := range keys {
-			var err error
-			if k.Literal {
-				err = SendLiteralToTmux(sessionName, k.Value)
-			} else {
-				err = SendKeyToTmux(sessionName, k.Value)
-			}
-			if err != nil && IsSessionDeadError(err) {
-				return SessionDeadMsg{}
-			}
+		if err := SendKeys(sessionName, keys...); err != nil && IsSessionDeadError(err) {
+			return SessionDeadMsg{Scope: scope}
 		}
 		return nil
 	}
+}
+
+// SendKeys sends keys to tmux synchronously and preserves their order.
+func SendKeys(sessionName string, keys ...KeySpec) error {
+	for _, k := range keys {
+		var err error
+		if k.Literal {
+			err = SendLiteralToTmux(sessionName, k.Value)
+		} else {
+			err = SendKeyToTmux(sessionName, k.Value)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ResizeTmuxPane resizes a tmux window/pane to the specified dimensions.
