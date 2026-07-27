@@ -123,15 +123,20 @@ func (b *OutputBuffer) LinesRange(start, end int) []string
 ## Key Mapping (`keymap.go`)
 
 ```go
-func MapKeyToTmux(msg tea.KeyMsg) (key string, useLiteral bool) {
-    switch msg.Type {
+func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
+    if msg.Mod.Contains(tea.ModCtrl) && msg.Code >= 'a' && msg.Code <= 'z' {
+        return "C-" + string(msg.Code), false
+    }
+    switch msg.Code {
     case tea.KeyEnter:     return "Enter", false
     case tea.KeyBackspace: return "BSpace", false
     case tea.KeyTab:       return "Tab", false
     case tea.KeyUp:        return "Up", false
-    case tea.KeyCtrlC:     return "C-c", false
-    case tea.KeyRunes:     return string(msg.Runes), true  // Literal mode
     }
+    if msg.Text != "" {
+        return msg.Text, true // Literal mode
+    }
+    return "", true
 }
 ```
 

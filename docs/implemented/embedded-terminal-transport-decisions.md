@@ -1,8 +1,8 @@
 # Embedded terminal transport decisions
 
-**Status:** Accepted  
-**Date:** 2026-07-26  
-**Tracking:** `td-bcd2d4`  
+**Status:** Accepted
+**Date:** 2026-07-26
+**Tracking:** `td-bcd2d4`
 **Source:** `docs/implemented/embedded-terminal-audit.md`
 
 ## Decision
