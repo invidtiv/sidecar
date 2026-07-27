@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
@@ -16,10 +15,6 @@ import (
 // renderPreviewContent renders the preview pane content (no borders).
 func (p *Plugin) renderPreviewContent(width, height int) string {
 	var lines []string
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active
-	if interactive {
-		p.interactiveState.ContentRowOffset = 0
-	}
 
 	// Show welcome guide only when no worktree AND no shell is selected
 	wt := p.selectedWorktree()
@@ -36,11 +31,8 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 		} else {
 			content = p.renderShellOutput(width, height)
 		}
-		if interactive && !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-			p.interactiveState.ContentRowOffset++
-		}
-		content = p.prependFlashHint(content)
-		return p.truncateAllLines(content, width)
+		content = p.prependFlashHint(content, width)
+		return content
 	}
 
 	// Main worktree: show informational view instead of normal tabs
@@ -61,20 +53,8 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 	case PreviewTabOutput:
 		if p.termPanelVisible {
 			content = p.renderOutputWithTermPanel(width, contentHeight)
-			if interactive {
-				p.interactiveState.ContentRowOffset += 2
-				if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-					p.interactiveState.ContentRowOffset++
-				}
-			}
 		} else {
 			content = p.renderOutputContent(width, contentHeight)
-			if interactive {
-				p.interactiveState.ContentRowOffset += 2
-				if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-					p.interactiveState.ContentRowOffset++
-				}
-			}
 		}
 	case PreviewTabDiff:
 		content = p.renderDiffContent(width, contentHeight)
@@ -84,20 +64,22 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 
 	lines = append(lines, content)
 
-	// Final safety: ensure ALL lines are truncated to width
-	// This catches any content that wasn't properly truncated
 	result := strings.Join(lines, "\n")
-	result = p.prependFlashHint(result)
+	result = p.prependFlashHint(result, width)
+	if p.previewTab == PreviewTabOutput {
+		// Terminal viewport renderers already expand tabs and truncate once.
+		return result
+	}
 	return p.truncateAllLines(result, width)
 }
 
 // prependFlashHint adds an attach hint at the top of content when flash is active.
-func (p *Plugin) prependFlashHint(content string) string {
+func (p *Plugin) prependFlashHint(content string, width int) string {
 	if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
 		hintStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
 			Bold(true)
-		hint := hintStyle.Render("Enter or double-click to attach")
+		hint := p.truncateCache.Truncate(hintStyle.Render("Enter or double-click to attach"), width, "")
 		return hint + "\n" + content
 	}
 	return content
@@ -216,7 +198,68 @@ func (p *Plugin) renderTabs(width int) string {
 		}
 	}
 
-	return strings.Join(rendered, " ")
+	return p.truncateCache.Truncate(strings.Join(rendered, " "), width, "")
+}
+
+func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+	truncateHint := func(value string) string {
+		return p.truncateCache.Truncate(ui.ExpandTabs(value, tabStopWidth), width, "")
+	}
+	height-- // Reserve one line for the hint.
+	if height < 1 {
+		return truncateHint(hint)
+	}
+	if buffer == nil || buffer.LineCount() == 0 {
+		return truncateHint(hint) + "\n" + dimText(emptyText)
+	}
+
+	interactive := p.viewMode == ViewModeInteractive &&
+		p.interactiveState != nil &&
+		p.interactiveState.Active &&
+		p.interactiveState.TermPanel == termPanel
+	var cursorRow, cursorCol, paneHeight, paneWidth int
+	var cursorVisible bool
+	if interactive {
+		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
+		if p.interactiveState.MouseReportingEnabled {
+			hint += " " + dimText("app mouse • ⇧drag select")
+		}
+	}
+
+	follow := p.autoScrollOutput
+	offset := p.previewOffset
+	offsetFromBottom := false
+	trimTrailing := p.autoScrollOutput && !interactive
+	if termPanel {
+		follow = p.termPanelScroll == 0
+		offset = p.termPanelScroll
+		offsetFromBottom = true
+		trimTrailing = !interactive
+	}
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:           buffer,
+		Width:            width,
+		Height:           height,
+		Offset:           offset,
+		OffsetFromBottom: offsetFromBottom,
+		Follow:           follow,
+		TrimTrailing:     trimTrailing,
+		Interactive:      interactive,
+		Selection:        &p.selection,
+		CursorRow:        cursorRow,
+		CursorCol:        cursorCol,
+		CursorVisible:    cursorVisible,
+		PaneHeight:       paneHeight,
+		PaneWidth:        paneWidth,
+	}, p.truncateCache)
+	if result.Content == "" {
+		return truncateHint(hint) + "\n" + dimText(emptyText)
+	}
+	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
+		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))
+	}
+	return truncateHint(hint) + "\n" + result.Content
 }
 
 // renderOutputContent renders agent output.
@@ -261,150 +304,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
 		}
 	}
-	height-- // Reserve line for hint
-
-	if wt.Agent.OutputBuf == nil {
-		return hint + "\n" + dimText("No output yet")
-	}
-
-	lineCount := wt.Agent.OutputBuf.LineCount()
-	if lineCount == 0 {
-		return hint + "\n" + dimText("No output yet")
-	}
-
-	// Only treat as interactive for this (agent) pane if interactive mode is NOT targeting the terminal panel.
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel
-	var cursorRow, cursorCol, paneHeight, paneWidth int
-	var cursorVisible bool
-	if interactive {
-		p.interactiveState.VisibleStart = 0
-		p.interactiveState.VisibleEnd = 0
-		p.interactiveState.ContentRowOffset = 1
-		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
-	}
-
-	visibleHeight := height
-	if interactive && paneHeight > 0 && paneHeight < visibleHeight {
-		visibleHeight = paneHeight
-	}
-
-	displayWidth := width
-	if interactive && paneWidth > 0 && paneWidth < displayWidth {
-		displayWidth = paneWidth
-	}
-
-	effectiveLineCount := lineCount
-	if p.autoScrollOutput && !interactive {
-		lines := wt.Agent.OutputBuf.Lines()
-		if idx := lastNonEmptyLine(lines); idx >= 0 {
-			nonEmptyCount := idx + 1
-			if nonEmptyCount < visibleHeight {
-				effectiveLineCount = nonEmptyCount
-			}
-		} else {
-			effectiveLineCount = 0
-		}
-		if effectiveLineCount == 0 {
-			return hint + "\n" + dimText("No output yet")
-		}
-	}
-
-	// Unified scroll: previewOffset is absolute line from top (0 = first line).
-	// Auto-scroll keeps offset pinned to the bottom so newest content is visible.
-	var start, end int
-	if p.autoScrollOutput {
-		// Auto-scroll: show newest content (last visibleHeight lines)
-		start = effectiveLineCount - visibleHeight
-		if start < 0 {
-			start = 0
-		}
-		end = effectiveLineCount
-		// Keep previewOffset in sync so switching to manual scroll is seamless
-		p.previewOffset = start
-	} else {
-		// Manual scroll: offset is line number from top
-		start = p.previewOffset
-		if start < 0 {
-			start = 0
-		}
-		end = start + visibleHeight
-		if end > effectiveLineCount {
-			end = effectiveLineCount
-		}
-	}
-
-	// Get only the lines we need (avoids copying entire 500-line buffer)
-	lines := wt.Agent.OutputBuf.LinesRange(start, end)
-	if len(lines) == 0 {
-		return hint + "\n" + dimText("No output yet")
-	}
-	if interactive {
-		p.interactiveState.VisibleStart = start
-		p.interactiveState.VisibleEnd = end
-	}
-
-	// Truncate each line to display width
-	// and avoid cellbuf allocation churn from varying offsets.
-	displayLines := make([]string, 0, len(lines))
-	for i, line := range lines {
-		displayLine := ui.ExpandTabs(line, tabStopWidth)
-		// Apply character-level selection background BEFORE truncation
-		if interactive && p.selection.HasSelection() {
-			startCol, endCol := p.selection.GetLineSelectionCols(start + i)
-			if startCol >= 0 {
-				displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
-			}
-		}
-		// Truncate to width
-		displayLine = p.truncateCache.Truncate(displayLine, displayWidth, "")
-		displayLines = append(displayLines, displayLine)
-	}
-
-	if interactive && paneHeight > 0 {
-		targetHeight := visibleHeight
-		if targetHeight > height {
-			targetHeight = height
-		}
-		if targetHeight > 0 && len(displayLines) < targetHeight {
-			displayLines = padLinesToHeight(displayLines, targetHeight)
-		}
-	}
-
-	content := strings.Join(displayLines, "\n")
-
-	// Apply cursor overlay in interactive mode
-	if shouldOverlayCursor(interactive, cursorVisible, p.autoScrollOutput) {
-		// cursor_y is relative to tmux pane (0 to paneHeight-1).
-		// Our display shows len(displayLines) lines.
-		displayHeight := len(displayLines)
-		relativeRow := cursorRow
-		if paneHeight > displayHeight {
-			relativeRow = cursorRow - (paneHeight - displayHeight)
-		} else if paneHeight > 0 && paneHeight < displayHeight {
-			relativeRow = cursorRow + (displayHeight - paneHeight)
-		}
-		relativeCol := cursorCol
-
-		// Clamp cursor position to visible area instead of hiding it (td-16bfa6).
-		// This ensures cursor remains visible even during pane size mismatches,
-		// which can occur with lots of scrollback or during resize transitions.
-		if relativeRow < 0 {
-			relativeRow = 0
-		}
-		if relativeRow >= displayHeight {
-			relativeRow = displayHeight - 1
-		}
-		if relativeCol < 0 {
-			relativeCol = 0
-		}
-		if relativeCol >= displayWidth {
-			relativeCol = displayWidth - 1
-		}
-
-		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
-	}
-
-	return hint + "\n" + content
+	return p.renderCapturedTerminal(hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 // renderOrphanedMessage renders the recovery prompt for orphaned worktrees.
@@ -469,147 +369,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
 		}
 	}
-	height-- // Reserve line for hint
-
-	if shell.Agent.OutputBuf == nil {
-		return hint + "\n" + dimText("No output yet")
-	}
-
-	lineCount := shell.Agent.OutputBuf.LineCount()
-	if lineCount == 0 {
-		return hint + "\n" + dimText("No output yet")
-	}
-
-	// Only treat as interactive for this (shell/agent) pane if interactive mode is NOT targeting the terminal panel.
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel
-	var cursorRow, cursorCol, paneHeight, paneWidth int
-	var cursorVisible bool
-	if interactive {
-		p.interactiveState.VisibleStart = 0
-		p.interactiveState.VisibleEnd = 0
-		p.interactiveState.ContentRowOffset = 1
-		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
-	}
-
-	visibleHeight := height
-	if interactive && paneHeight > 0 && paneHeight < visibleHeight {
-		visibleHeight = paneHeight
-	}
-
-	displayWidth := width
-	if interactive && paneWidth > 0 && paneWidth < displayWidth {
-		displayWidth = paneWidth
-	}
-
-	effectiveLineCount := lineCount
-	if p.autoScrollOutput && !interactive {
-		lines := shell.Agent.OutputBuf.Lines()
-		if idx := lastNonEmptyLine(lines); idx >= 0 {
-			nonEmptyCount := idx + 1
-			if nonEmptyCount < visibleHeight {
-				effectiveLineCount = nonEmptyCount
-			}
-		} else {
-			effectiveLineCount = 0
-		}
-		if effectiveLineCount == 0 {
-			return hint + "\n" + dimText("No output yet")
-		}
-	}
-
-	// Unified scroll: previewOffset is absolute line from top (0 = first line).
-	var start, end int
-	if p.autoScrollOutput {
-		// Auto-scroll: show newest content (last visibleHeight lines)
-		start = effectiveLineCount - visibleHeight
-		if start < 0 {
-			start = 0
-		}
-		end = effectiveLineCount
-		// Keep previewOffset in sync so switching to manual scroll is seamless
-		p.previewOffset = start
-	} else {
-		// Manual scroll: offset is line number from top
-		start = p.previewOffset
-		if start < 0 {
-			start = 0
-		}
-		end = start + visibleHeight
-		if end > effectiveLineCount {
-			end = effectiveLineCount
-		}
-	}
-
-	// Get only the lines we need
-	lines := shell.Agent.OutputBuf.LinesRange(start, end)
-	if len(lines) == 0 {
-		return hint + "\n" + dimText("No output yet")
-	}
-	if interactive {
-		p.interactiveState.VisibleStart = start
-		p.interactiveState.VisibleEnd = end
-	}
-
-	// Apply horizontal offset and truncate each line
-	displayLines := make([]string, 0, len(lines))
-	for i, line := range lines {
-		displayLine := ui.ExpandTabs(line, tabStopWidth)
-		// Apply character-level selection background BEFORE truncation
-		if interactive && p.selection.HasSelection() {
-			startCol, endCol := p.selection.GetLineSelectionCols(start + i)
-			if startCol >= 0 {
-				displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
-			}
-		}
-		displayLine = p.truncateCache.Truncate(displayLine, displayWidth, "")
-		displayLines = append(displayLines, displayLine)
-	}
-
-	if interactive && paneHeight > 0 {
-		targetHeight := visibleHeight
-		if targetHeight > height {
-			targetHeight = height
-		}
-		if targetHeight > 0 && len(displayLines) < targetHeight {
-			displayLines = padLinesToHeight(displayLines, targetHeight)
-		}
-	}
-
-	content := strings.Join(displayLines, "\n")
-
-	// Apply cursor overlay in interactive mode
-	if shouldOverlayCursor(interactive, cursorVisible, p.autoScrollOutput) {
-		// cursor_y is relative to tmux pane (0 to paneHeight-1).
-		// Our display shows len(displayLines) lines.
-		displayHeight := len(displayLines)
-		relativeRow := cursorRow
-		if paneHeight > displayHeight {
-			relativeRow = cursorRow - (paneHeight - displayHeight)
-		} else if paneHeight > 0 && paneHeight < displayHeight {
-			relativeRow = cursorRow + (displayHeight - paneHeight)
-		}
-		relativeCol := cursorCol
-
-		// Clamp cursor position to visible area instead of hiding it (td-16bfa6).
-		// This ensures cursor remains visible even during pane size mismatches,
-		// which can occur with lots of scrollback or during resize transitions.
-		if relativeRow < 0 {
-			relativeRow = 0
-		}
-		if relativeRow >= displayHeight {
-			relativeRow = displayHeight - 1
-		}
-		if relativeCol < 0 {
-			relativeCol = 0
-		}
-		if relativeCol >= displayWidth {
-			relativeCol = displayWidth - 1
-		}
-
-		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
-	}
-
-	return hint + "\n" + content
+	return p.renderCapturedTerminal(hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 func padLinesToHeight(lines []string, target int) []string {
@@ -620,15 +380,6 @@ func padLinesToHeight(lines []string, target int) []string {
 		lines = append(lines, "")
 	}
 	return lines
-}
-
-func lastNonEmptyLine(lines []string) int {
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(ansi.Strip(lines[i])) != "" {
-			return i
-		}
-	}
-	return -1
 }
 
 // renderShellPrimer renders a helpful guide when no shell session exists.

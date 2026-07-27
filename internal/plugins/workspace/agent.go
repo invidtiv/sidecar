@@ -898,6 +898,7 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
+		!p.interactiveState.TermPanel &&
 		!p.shellSelected
 	if interactiveCapture {
 		if selected := p.selectedWorktree(); selected == nil || selected.Name != worktreeName {
@@ -979,32 +980,30 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 		// may finish while tmux output stays the same (td-2fca7d v8).
 		status := currentStatus
 		waitingFor := ""
-		if !interactiveCapture {
-			if outputChanged {
-				// Tmux pattern detection only when output changes (same output = same patterns).
-				status = detectStatus(output)
+		if outputChanged {
+			// Tmux pattern detection only when output changes (same output = same patterns).
+			status = detectStatus(output)
+			if status == StatusWaiting {
+				waitingFor = extractPrompt(output)
+			}
+		}
+		// Session file check runs every poll — mtime changes independently of tmux output.
+		// Only override active/waiting; preserve tmux-detected thinking/done/error.
+		if status == StatusActive || status == StatusWaiting {
+			if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
+				prevStatus := status
+				status = sessionStatus
 				if status == StatusWaiting {
 					waitingFor = extractPrompt(output)
-				}
-			}
-			// Session file check runs every poll — mtime changes independently of tmux output.
-			// Only override active/waiting; preserve tmux-detected thinking/done/error.
-			if status == StatusActive || status == StatusWaiting {
-				if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
-					prevStatus := status
-					status = sessionStatus
-					if status == StatusWaiting {
-						waitingFor = extractPrompt(output)
-						if waitingFor == "" {
-							waitingFor = "Waiting for input"
-						}
-					} else {
-						waitingFor = ""
+					if waitingFor == "" {
+						waitingFor = "Waiting for input"
 					}
-					slog.Debug("status: session file override", "worktree", worktreeName, "prev", prevStatus, "session", sessionStatus)
 				} else {
-					slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", agentType)
+					waitingFor = ""
 				}
+				slog.Debug("status: session file override", "worktree", worktreeName, "prev", prevStatus, "session", sessionStatus)
+			} else {
+				slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", agentType)
 			}
 		}
 

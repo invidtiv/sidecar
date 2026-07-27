@@ -766,6 +766,17 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
+	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		var h int
+		if p.termPanelVisible {
+			_, h = p.calculateAgentPaneDimensions()
+		} else {
+			_, h = p.calculatePreviewDimensions()
+		}
+		if h > 0 {
+			return h
+		}
+	}
 	h := p.height - 4 // tabs header + empty line + hint line + margin
 	if h < 1 {
 		h = 1

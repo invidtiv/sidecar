@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -338,6 +339,18 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 	return previewWidth, outputHeight
 }
 
+func (p *Plugin) termPanelMaxScroll() int {
+	if p.termPanelOutput == nil {
+		return 0
+	}
+	_, height := p.calculateTermPanelDimensions()
+	lineCount := p.termPanelOutput.LineCount()
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
+		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
+	}
+	return max(lineCount-height, 0)
+}
+
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
 // tmux pane to match the current split dimensions.
 func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
@@ -374,122 +387,15 @@ func (p *Plugin) termPanelHintLine() string {
 
 // renderTermPanelOutput renders the terminal panel's captured output.
 func (p *Plugin) renderTermPanelOutput(width, height int) string {
-	// Render label line and reserve 1 line of height for it
 	hint := p.termPanelHintLine()
-	height-- // Reserve for label
-	if height < 1 {
-		return hint
-	}
-
 	if p.termPanelOutput == nil {
+		hint = p.truncateCache.Truncate(ui.ExpandTabs(hint, tabStopWidth), width, "")
+		if height <= 1 {
+			return hint
+		}
 		return hint + "\n" + dimText("Starting terminal...")
 	}
-
-	lineCount := p.termPanelOutput.LineCount()
-	if lineCount == 0 {
-		return hint + "\n" + dimText("Terminal ready")
-	}
-
-	// Check if interactive mode is targeting this terminal panel
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-	var cursorRow, cursorCol, paneHeight, paneWidth int
-	var cursorVisible bool
-	if interactive {
-		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
-	}
-
-	// Trim trailing empty lines so the shell prompt appears near the top
-	// instead of being buried at the bottom of empty capture output.
-	allLines := p.termPanelOutput.Lines()
-	effectiveCount := lineCount
-	if !interactive {
-		if idx := lastNonEmptyLine(allLines); idx >= 0 {
-			effectiveCount = idx + 1
-		}
-	}
-	if effectiveCount == 0 {
-		return hint + "\n" + dimText("Terminal ready")
-	}
-	visibleHeight := height
-	if interactive && paneHeight > 0 && paneHeight < visibleHeight {
-		visibleHeight = paneHeight
-	}
-
-	displayWidth := width
-	if interactive && paneWidth > 0 && paneWidth < displayWidth {
-		displayWidth = paneWidth
-	}
-
-	// Clamp scroll to prevent scrolling past all content
-	maxScroll := effectiveCount - visibleHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if p.termPanelScroll > maxScroll {
-		p.termPanelScroll = maxScroll
-	}
-
-	// Calculate visible range (always show most recent lines)
-	start := effectiveCount - visibleHeight - p.termPanelScroll
-	if start < 0 {
-		start = 0
-	}
-	end := start + visibleHeight
-	if end > effectiveCount {
-		end = effectiveCount
-	}
-
-	lines := p.termPanelOutput.LinesRange(start, end)
-
-	displayLines := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if lipgloss.Width(line) > displayWidth {
-			line = p.truncateCache.Truncate(line, displayWidth, "")
-		}
-		displayLines = append(displayLines, line)
-	}
-
-	// Pad to pane height in interactive mode so cursor positioning works
-	if interactive && paneHeight > 0 {
-		targetHeight := visibleHeight
-		if targetHeight > height {
-			targetHeight = height
-		}
-		if targetHeight > 0 && len(displayLines) < targetHeight {
-			displayLines = padLinesToHeight(displayLines, targetHeight)
-		}
-	}
-
-	content := strings.Join(displayLines, "\n")
-
-	// Apply cursor overlay when interactive mode targets the terminal panel
-	if shouldOverlayCursor(interactive, cursorVisible, p.termPanelScroll == 0) {
-		displayHeight := len(displayLines)
-		relativeRow := cursorRow
-		if paneHeight > displayHeight {
-			relativeRow = cursorRow - (paneHeight - displayHeight)
-		} else if paneHeight > 0 && paneHeight < displayHeight {
-			relativeRow = cursorRow + (displayHeight - paneHeight)
-		}
-		relativeCol := cursorCol
-
-		if relativeRow < 0 {
-			relativeRow = 0
-		}
-		if relativeRow >= displayHeight {
-			relativeRow = displayHeight - 1
-		}
-		if relativeCol < 0 {
-			relativeCol = 0
-		}
-		if relativeCol >= displayWidth {
-			relativeCol = displayWidth - 1
-		}
-
-		content = tty.RenderWithCursor(content, relativeRow, relativeCol, cursorVisible)
-	}
-
-	return hint + "\n" + content
+	return p.renderCapturedTerminal(hint, p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
 // renderTermPanelDividerH renders a horizontal divider (for bottom layout).
@@ -536,9 +442,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 		previewContentY = 3
 	}
 
-	// Check if interactive mode targets the terminal panel — set ContentRowOffset accordingly.
-	termPanelInteractive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-
 	if p.termPanelLayout == TermPanelRight {
 		// Right layout: output | divider | terminal
 		termWidth := width * size / 100
@@ -558,12 +461,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 		absX := previewContentX + outputWidth
 		p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, absX, previewContentY, dividerHitWidth, height, nil)
 		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, absX+1, previewContentY, termWidth, height, nil)
-
-		// Set ContentRowOffset for terminal panel cursor positioning (right layout).
-		// Use 1 (for the hint/label line) — renderPreviewContent adds tab overhead (+2) afterwards.
-		if termPanelInteractive {
-			p.interactiveState.ContentRowOffset = 1
-		}
 
 		outputPane := p.renderOutputContent(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
@@ -598,12 +495,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, previewContentX, absY, width, dividerHitWidth, nil)
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
 
-	// Set ContentRowOffset for terminal panel cursor positioning (bottom layout).
-	// outputHeight + 1 (divider) + 1 (hint line) — renderPreviewContent adds tab overhead (+2) afterwards.
-	if termPanelInteractive {
-		p.interactiveState.ContentRowOffset = outputHeight + 1 + 1
-	}
-
 	outputPane := padToHeight(p.renderOutputContent(width, outputHeight), outputHeight, width)
 	divider := p.renderTermPanelDividerH(width)
 	termPane := p.renderTermPanelOutput(width, termHeight)
@@ -629,8 +520,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	}
 	previewContentY := 1 // Shell has no tabs, only panel border
 
-	termPanelInteractive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-
 	if p.termPanelLayout == TermPanelRight {
 		termWidth := width * size / 100
 		if termWidth < 10 {
@@ -648,10 +537,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 		absX := previewContentX + outputWidth
 		p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, absX, previewContentY, dividerHitWidth, height, nil)
 		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, absX+1, previewContentY, termWidth, height, nil)
-
-		if termPanelInteractive {
-			p.interactiveState.ContentRowOffset = previewContentY + 1
-		}
 
 		shellPane := p.renderShellOutput(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
@@ -682,10 +567,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	absY := previewContentY + outputHeight
 	p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, previewContentX, absY, width, dividerHitWidth, nil)
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
-
-	if termPanelInteractive {
-		p.interactiveState.ContentRowOffset = previewContentY + outputHeight + 1 + 1
-	}
 
 	shellPane := padToHeight(p.renderShellOutput(width, outputHeight), outputHeight, width)
 	divider := p.renderTermPanelDividerH(width)

@@ -175,6 +175,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 	case tea.MouseClickMsg:
 		m := msg.Mouse()
 		if m.Button == tea.MouseLeft {
+			shift := m.Mod.Contains(tea.ModShift)
 			result := h.HandleClick(m.X, m.Y)
 			if result.Region == nil {
 				return MouseAction{Type: ActionNone}
@@ -185,6 +186,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 					Region: result.Region,
 					X:      m.X,
 					Y:      m.Y,
+					Shift:  shift,
 				}
 			}
 			return MouseAction{
@@ -192,6 +194,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 				Region: result.Region,
 				X:      m.X,
 				Y:      m.Y,
+				Shift:  shift,
 			}
 		}
 
@@ -236,6 +239,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 				Y:      m.Y,
 				DragDX: dx,
 				DragDY: dy,
+				Shift:  m.Mod.Contains(tea.ModShift),
 			}
 		}
 		// Track hover for visual feedback
@@ -275,4 +279,5 @@ type MouseAction struct {
 	Delta  int // Scroll delta
 	DragDX int // Drag delta X
 	DragDY int // Drag delta Y
+	Shift  bool
 }

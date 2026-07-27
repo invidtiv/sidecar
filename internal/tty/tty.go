@@ -267,7 +267,12 @@ func (m *Model) View() string {
 		return ""
 	}
 
-	lines := m.State.OutputBuf.Lines()
+	lineCount := m.State.OutputBuf.LineCount()
+	start := lineCount - m.Height
+	if start < 0 || m.Height <= 0 {
+		start = 0
+	}
+	lines := m.State.OutputBuf.LinesRange(start, lineCount)
 	content := strings.Join(lines, "\n")
 
 	// Overlay cursor if visible

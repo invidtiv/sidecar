@@ -741,6 +741,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 
+	if handled, cmd := p.handleInteractiveScrollbackKey(msg); handled {
+		return cmd
+	}
+
 	// Attach shortcut: exit interactive and attach to full session (td-fd68d1)
 	if msg.String() == p.getInteractiveAttachKey() {
 		isTermPanel := p.interactiveState != nil && p.interactiveState.TermPanel
@@ -1023,11 +1027,18 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
 		}
+		if maxScroll := p.termPanelMaxScroll(); p.termPanelScroll > maxScroll {
+			p.termPanelScroll = maxScroll
+		}
 		return nil
 	}
 
+	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll up: move toward top of content
+		if p.autoScrollOutput && maxOffset >= p.previewOffset {
+			p.previewOffset = maxOffset
+		}
 		p.previewOffset += delta
 		if p.previewOffset < 0 {
 			p.previewOffset = 0
@@ -1035,7 +1046,6 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		p.autoScrollOutput = false
 	} else {
 		// Scroll down: move toward bottom of content
-		maxOffset := p.getMaxScrollOffset()
 		p.previewOffset += delta
 		if p.previewOffset > maxOffset {
 			p.previewOffset = maxOffset
@@ -1045,6 +1055,61 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !msg.Mod.Contains(tea.ModShift) {
+		return false, nil
+	}
+
+	pageSize := p.getPreviewVisibleHeight()
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		_, pageSize = p.calculateTermPanelDimensions()
+	}
+	pageSize = max(pageSize-1, 1)
+
+	switch msg.Code {
+	case tea.KeyUp:
+		p.scrollInteractiveViewport(-1)
+	case tea.KeyDown:
+		p.scrollInteractiveViewport(1)
+	case tea.KeyPgUp:
+		p.scrollInteractiveViewport(-pageSize)
+	case tea.KeyPgDown:
+		p.scrollInteractiveViewport(pageSize)
+	case tea.KeyHome:
+		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.termPanelScroll = p.termPanelMaxScroll()
+		} else {
+			p.previewOffset = 0
+			p.autoScrollOutput = false
+		}
+	case tea.KeyEnd:
+		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.termPanelScroll = 0
+		} else {
+			p.previewOffset = p.getMaxScrollOffset()
+			p.autoScrollOutput = true
+		}
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+func (p *Plugin) scrollInteractiveViewport(delta int) {
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.termPanelScroll -= delta
+		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
+		return
+	}
+
+	maxOffset := p.getMaxScrollOffset()
+	if delta < 0 && p.autoScrollOutput && maxOffset >= p.previewOffset {
+		p.previewOffset = maxOffset
+	}
+	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
+	p.autoScrollOutput = p.previewOffset >= maxOffset
 }
 
 // forwardClickToTmux sends a mouse click to the tmux pane.

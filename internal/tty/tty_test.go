@@ -206,3 +206,15 @@ func TestModelRejectsOutOfOrderCaptureResult(t *testing.T) {
 		t.Fatalf("out-of-order capture replaced cursor row: %d", got)
 	}
 }
+
+func TestModelViewShowsBottomOfScrollback(t *testing.T) {
+	model := New(nil)
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.CursorVisible = false
+	model.State.OutputBuf.Write("oldest\nmiddle\nnewest")
+
+	if got := model.View(); got != "middle\nnewest" {
+		t.Fatalf("View() = %q, want bottom two lines", got)
+	}
+}

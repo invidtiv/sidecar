@@ -36,31 +36,37 @@ func RenderWithCursor(content string, cursorRow, cursorCol int, visible bool) st
 		return content
 	}
 
-	line := lines[cursorRow]
+	lines[cursorRow] = RenderCursorLine(lines[cursorRow], cursorCol, true)
+	return strings.Join(lines, "\n")
+}
 
+// RenderCursorLine overlays the cursor on one terminal line. Keeping the
+// line-level primitive separate lets viewport renderers avoid splitting and
+// joining the complete rendered buffer a second time.
+func RenderCursorLine(line string, cursorCol int, visible bool) string {
+	if !visible || cursorCol < 0 {
+		return line
+	}
 	// Use ANSI-aware width calculation for visual position
 	lineWidth := ansi.StringWidth(line)
 
 	if cursorCol >= lineWidth {
 		// Cursor past end of line: append visible cursor block
 		padding := max(cursorCol-lineWidth, 0)
-		lines[cursorRow] = line + strings.Repeat(" ", padding) + CursorStyle().Render("\u2588")
-	} else {
-		// Use ANSI-aware slicing to preserve escape codes in before/after
-		before := ansi.Cut(line, 0, cursorCol)
-		char := ansi.Cut(line, cursorCol, cursorCol+1)
-		after := ansi.Cut(line, cursorCol+1, lineWidth)
-
-		// Strip the cursor char to get clean styling
-		charStripped := ansi.Strip(char)
-		// Use a block character for empty/whitespace to make cursor more visible
-		if charStripped == "" || charStripped == " " {
-			charStripped = "\u2588"
-		}
-		lines[cursorRow] = before + CursorStyle().Render(charStripped) + after
+		return line + strings.Repeat(" ", padding) + CursorStyle().Render("\u2588")
 	}
 
-	return strings.Join(lines, "\n")
+	// Use ANSI-aware slicing to preserve escape codes in before/after.
+	before := ansi.Cut(line, 0, cursorCol)
+	char := ansi.Cut(line, cursorCol, cursorCol+1)
+	after := ansi.Cut(line, cursorCol+1, lineWidth)
+
+	// Strip the cursor char to get clean styling.
+	charStripped := ansi.Strip(char)
+	if charStripped == "" || charStripped == " " {
+		charStripped = "\u2588"
+	}
+	return before + CursorStyle().Render(charStripped) + after
 }
 
 // QueryCursorPositionSync synchronously queries cursor position for the given target.

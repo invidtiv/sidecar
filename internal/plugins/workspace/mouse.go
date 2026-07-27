@@ -524,7 +524,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.enterTermPanelInteractiveMode()
 			}
 			// Already targeting terminal panel — forward click
-			if p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.MouseReportingEnabled {
+			if p.interactiveState != nil && p.interactiveState.Active &&
+				(!p.interactiveState.MouseReportingEnabled || action.Shift) {
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -536,7 +537,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.enterInteractiveMode()
 			}
 			// Already targeting agent pane — forward click
-			if p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.MouseReportingEnabled {
+			if p.interactiveState != nil && p.interactiveState.Active &&
+				(!p.interactiveState.MouseReportingEnabled || action.Shift) {
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -1224,6 +1226,10 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll UP: move toward top of content
+		if (p.previewTab == PreviewTabOutput || p.shellSelected) &&
+			p.autoScrollOutput && maxOffset >= p.previewOffset {
+			p.previewOffset = maxOffset
+		}
 		p.previewOffset += delta
 		if p.previewOffset < 0 {
 			p.previewOffset = 0
@@ -1344,7 +1350,7 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionPreviewPane:
 		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active &&
-			!p.interactiveState.MouseReportingEnabled {
+			(!p.interactiveState.MouseReportingEnabled || p.selection.Anchor.Valid()) {
 			return p.handleInteractiveSelectionDrag(action)
 		}
 	}
