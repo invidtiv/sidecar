@@ -335,7 +335,7 @@ func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 		sb.WriteString(strings.Join(lines, "\n"))
 	}
 
-	// Enforce total height constraint per CLAUDE.md
+	// Enforce total height constraint per AGENTS.md
 	return lipgloss.NewStyle().Height(visibleHeight).Render(sb.String())
 }
 

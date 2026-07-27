@@ -48,7 +48,7 @@ snap() {
 # Inner panes: the sessions sidecar itself created, on the default tmux server.
 panes() {
     tmux list-panes -a -F \
-        '#{session_name}\t#{pane_id}\t#{pane_width}x#{pane_height}\twin=#{window_width}x#{window_height}\t#{pane_current_command}' \
+        '#{session_name}  #{pane_id}  #{pane_width}x#{pane_height}  win=#{window_width}x#{window_height}  #{pane_current_command}  alt=#{alternate_on}  cur=#{cursor_x},#{cursor_y}  hist=#{history_size}' \
         2>/dev/null | grep -E 'sidecar|shell|agent|term' || echo "(no sidecar-created panes)"
 }
 

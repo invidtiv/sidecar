@@ -329,7 +329,7 @@ func (m *Model) renderUpdateProgressModal() string {
 	cancelHint := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Esc: cancel")
 	sb.WriteString(centerText(cancelHint, contentW))
 
-	// Constrain modal height to available space per CLAUDE.md
+	// Constrain modal height to available space per AGENTS.md
 	maxHeight := m.height - 4
 	if maxHeight < 10 {
 		maxHeight = 10

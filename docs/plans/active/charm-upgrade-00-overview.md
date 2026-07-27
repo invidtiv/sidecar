@@ -131,7 +131,7 @@ github.com/charmbracelet/x/cellbuf      v0.0.15   // direct import in 2 files
 - `go build ./...` clean
 - `go vet ./...` clean
 - `go test ./...` green (after updating test constructors)
-- Manual smoke test: launch sidecar, switch every plugin tab, exercise mouse click/scroll/drag, attach to a tmux workspace + paste, open a file in editor (`tea.ExecProcess`) and return, switch theme, resize the terminal. Verify the header never scrolls off (see CLAUDE.md plugin-height rule).
+- Manual smoke test: launch sidecar, switch every plugin tab, exercise mouse click/scroll/drag, attach to a tmux workspace + paste, open a file in editor (`tea.ExecProcess`) and return, switch theme, resize the terminal. Verify the header never scrolls off (see AGENTS.md plugin-height rule).
 - Run under both a dark and a light terminal profile to confirm colors.
 - Automated visual regression check (see below) — for any phase that can shift layout or color (all of them). Phase 0 = width/alignment; Phase 1 = **both** width and color (color is the #1 risk).
 
