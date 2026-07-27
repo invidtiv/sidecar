@@ -83,6 +83,59 @@ func TestStripSourceOSC8HandlesC1AndMixedForms(t *testing.T) {
 	}
 }
 
+func TestStripSourceOSC8DropsNestedControlsAndPreservesVisibleLabel(t *testing.T) {
+	introducers := map[string]string{
+		"esc":     "\x1b]",
+		"raw-c1":  "\x9d",
+		"utf8-c1": "\u009d",
+	}
+	terminators := map[string]string{
+		"bel":     "\x07",
+		"esc-st":  "\x1b\\",
+		"raw-st":  "\x9c",
+		"utf8-st": "\u009c",
+	}
+	for outerName, outer := range introducers {
+		for nestedName, nested := range introducers {
+			for termName, terminator := range terminators {
+				name := outerName + "-" + nestedName + "-" + termName
+				t.Run(name, func(t *testing.T) {
+					source := "safe" + outer + "0;title" +
+						nested + "8;;https://evil.example" + terminator +
+						"LABEL" + nested + "8;;" + terminator
+					cleaned := stripSourceOSC8(source)
+					if cleaned != "safeLABEL" {
+						t.Fatalf("nested OSC sanitization = %q, want safeLABEL", cleaned)
+					}
+					if containsOSCIntroducerAtRuneBoundary(cleaned) {
+						t.Fatalf("OSC introducer survived nested sanitization: %q", cleaned)
+					}
+				})
+			}
+		}
+	}
+	for introName, intro := range introducers {
+		for termName, terminator := range terminators {
+			name := introName + "-" + termName
+			t.Run("adjacent-"+name, func(t *testing.T) {
+				source := "safe" + intro + "0;title" + terminator +
+					intro + "8;;https://evil.example" + terminator +
+					"LABEL" + intro + "8;;" + terminator
+				if cleaned := stripSourceOSC8(source); cleaned != "safeLABEL" {
+					t.Fatalf("adjacent OSC sanitization = %q, want safeLABEL", cleaned)
+				}
+			})
+		}
+	}
+}
+
+func TestStripSourceOSC8PreservesCSIAndOrdinaryEscape(t *testing.T) {
+	source := "plain \x1b[31mred\x1b[0m and escape \x1bx"
+	if cleaned := stripSourceOSC8(source); cleaned != source {
+		t.Fatalf("non-OSC escape changed: got %q, want %q", cleaned, source)
+	}
+}
+
 func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T) {
 	const ordinary = "plain Ý, Ü, ʝ, and ݝ text"
 	if cleaned := stripSourceOSC8(ordinary); cleaned != ordinary {
@@ -135,33 +188,32 @@ func FuzzStripSourceOSC8(f *testing.F) {
 		"\x9d8",
 		"ݝ8;",
 		"\x9d\x9d8;\x9c",
+		"\x1b\x1b]\x07]",
+		"\x1b\x1b\x1b]\x07]",
+		string([]byte{0xc2, 0x1b, ']', '8', ';', ';', 0x07, 0x9d, '8', ';'}),
+		"\x1b]\x9d8;;https://evil.example\u009cLABEL\x1b]8;;\x07",
+		"safe\x1b]0;title\x1b]8;;https://evil.example\x07LABEL\x1b]8;;\x07",
 		string([]byte{0x9d, '8', ';', ';', 0, 0x9c}),
 	} {
 		f.Add(source)
 	}
 	f.Fuzz(func(t *testing.T, source string) {
 		cleaned := stripSourceOSC8(source)
-		if containsOSC8AtRuneBoundary(cleaned) {
-			t.Fatalf("OSC-8 control survived sanitization: input=%q output=%q", source, cleaned)
+		if containsOSCIntroducerAtRuneBoundary(cleaned) {
+			t.Fatalf("OSC control survived sanitization: input=%q output=%q", source, cleaned)
 		}
 	})
 }
 
-func containsOSC8AtRuneBoundary(value string) bool {
+func containsOSCIntroducerAtRuneBoundary(value string) bool {
 	for pos := 0; pos < len(value); {
-		if introLen := oscIntroducerLen(value, pos); introLen > 0 {
-			payload := pos + introLen
-			end, terminated := oscTerminatorEnd(value, payload)
-			isHyperlink := payload < len(value) && value[payload] == '8' &&
-				(payload+1 == len(value) || value[payload+1] == ';')
-			if isHyperlink {
-				return true
-			}
-			if !terminated {
-				return false
-			}
-			pos = end
-			continue
+		switch {
+		case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == ']':
+			return true
+		case value[pos] == '\x9d':
+			return true
+		case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9d':
+			return true
 		}
 		_, size := utf8.DecodeRuneInString(value[pos:])
 		pos += size

@@ -105,7 +105,7 @@ func terminalLinkOverlapsBytes(plain string, links []terminalLink, start, end in
 }
 
 func decorateTerminalLinks(line string) string {
-	// tmux output is untrusted. Remove source-supplied hyperlink controls and
+	// tmux output is untrusted. Remove source-supplied OSC controls and
 	// synthesize OSC-8 only for URLs that pass safeHTTPURL.
 	line = stripSourceOSC8(line)
 	links := detectTerminalLinks(line)
@@ -123,34 +123,51 @@ func decorateTerminalLinks(line string) string {
 }
 
 func stripSourceOSC8(line string) string {
-	var out strings.Builder
+	out := make([]byte, 0, len(line))
+	inOSC := false
 	for pos := 0; pos < len(line); {
-		introLen := oscIntroducerLen(line, pos)
-		if introLen == 0 {
+		if inOSC {
+			if terminatorLen := oscTerminatorLen(line, pos); terminatorLen > 0 {
+				pos += terminatorLen
+				inOSC = false
+				continue
+			}
+			if introLen := oscIntroducerLen(line, pos); introLen > 0 {
+				// Real terminal parsers restart OSC parsing on a nested
+				// introducer. Remain in the discard state so the nested
+				// payload cannot become an active hyperlink.
+				pos += introLen
+				continue
+			}
 			_, size := utf8.DecodeRuneInString(line[pos:])
-			out.WriteString(line[pos : pos+size])
 			pos += size
 			continue
 		}
-		payload := pos + introLen
-		end, ok := oscTerminatorEnd(line, payload)
-		if !ok {
-			// An unterminated OSC control can consume all following terminal
-			// text. Drop the remainder rather than turning a malformed nested
-			// sequence into a new control during sanitization.
-			break
+
+		if introLen := oscIntroducerLen(line, pos); introLen > 0 {
+			pos += introLen
+			inOSC = true
+			continue
 		}
-		isHyperlink := payload+1 < len(line) &&
-			line[payload] == '8' && line[payload+1] == ';'
-		if !isHyperlink {
-			// Preserve unrelated, well-formed OSC controls atomically. Advancing
-			// over the complete sequence prevents C1 bytes in its payload from
-			// being reinterpreted at the outer scan level.
-			out.WriteString(line[pos:end])
+		_, size := utf8.DecodeRuneInString(line[pos:])
+		segment := line[pos : pos+size]
+		if segment[0] == ']' {
+			// Removing an intervening OSC must not concatenate an ordinary
+			// trailing ESC with a later ']' into a fresh OSC introducer.
+			for len(out) > 0 && out[len(out)-1] == '\x1b' {
+				out = out[:len(out)-1]
+			}
 		}
-		pos = end
+		out = append(out, segment...)
+		pos += size
 	}
-	return out.String()
+	cleaned := string(out)
+	if containsSourceOSCIntroducer(cleaned) {
+		// The scan removes variable-length controls. Fail closed if bytes on
+		// either side of a removal ever concatenate into a new OSC introducer.
+		return ""
+	}
+	return cleaned
 }
 
 func oscIntroducerLen(value string, pos int) int {
@@ -166,21 +183,28 @@ func oscIntroducerLen(value string, pos int) int {
 	}
 }
 
-func oscTerminatorEnd(value string, pos int) (int, bool) {
-	for pos < len(value) {
-		switch {
-		case value[pos] == '\x07' || value[pos] == '\x9c':
-			return pos + 1, true
-		case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == '\\':
-			return pos + 2, true
-		case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9c':
-			return pos + 2, true
-		default:
-			_, size := utf8.DecodeRuneInString(value[pos:])
-			pos += size
-		}
+func oscTerminatorLen(value string, pos int) int {
+	switch {
+	case value[pos] == '\x07' || value[pos] == '\x9c':
+		return 1
+	case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == '\\':
+		return 2
+	case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9c':
+		return 2
+	default:
+		return 0
 	}
-	return 0, false
+}
+
+func containsSourceOSCIntroducer(value string) bool {
+	for pos := 0; pos < len(value); {
+		if oscIntroducerLen(value, pos) > 0 {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(value[pos:])
+		pos += size
+	}
+	return false
 }
 
 func wrapTerminalVisualRange(line string, startCol, endCol int, open, close string) string {
