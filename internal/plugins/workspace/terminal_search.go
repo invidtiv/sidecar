@@ -102,6 +102,7 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 		return nil
 	}
 	if p.terminalSearch.SourceKey != source.Key {
+		p.cancelTerminalHistoryIntentByKey(p.terminalSearch.SourceKey)
 		p.terminalSearch.Query = ""
 		p.terminalSearch.Matches = nil
 		p.terminalSearch.Current = 0

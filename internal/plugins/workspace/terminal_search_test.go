@@ -193,6 +193,56 @@ func TestClearTerminalSearchCancelsStoredSourceAfterSelectionSwitch(t *testing.T
 	}
 }
 
+func TestBeginTerminalSearchCancelsPreviousSourceLoad(t *testing.T) {
+	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
+	keyA := terminalHistoryKey("shell", "search-shell")
+	p.terminalHistory[keyA] = terminalHistoryState{HistorySize: 1200}
+	if p.beginTerminalSearch() == nil {
+		t.Fatal("search on shell A did not start history load")
+	}
+	stateA := p.terminalHistory[keyA]
+	searchGenA := p.terminalSearch.Generation
+
+	bufferB := tty.NewOutputBuffer(outputBufferCap)
+	bufferB.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
+	p.shells = append(p.shells, &ShellSession{
+		TmuxName: "shell-b",
+		Agent:    &Agent{TmuxSession: "shell-b", OutputBuf: bufferB},
+	})
+	keyB := terminalHistoryKey("shell", "shell-b")
+	p.terminalHistory[keyB] = terminalHistoryState{HistorySize: 1200}
+	p.selectedShellIdx = 1
+	if p.beginTerminalSearch() == nil {
+		t.Fatal("search on shell B did not start history load")
+	}
+
+	cancelledA := p.terminalHistory[keyA]
+	if cancelledA.Loading || cancelledA.RequestGen <= stateA.RequestGen {
+		t.Fatalf("source A load was not cancelled on begin switch: %#v", cancelledA)
+	}
+	p.applyTerminalSearchHistory(terminalSearchHistoryLoadedMsg{
+		Source: terminalHistorySource{
+			Key:    keyA,
+			Target: "search-shell",
+			Buffer: p.shells[0].Agent.OutputBuf,
+		},
+		Capture: tty.CaptureRange{
+			Output:      numberedTerminalLines(0, 600),
+			HistorySize: 1200,
+			StartLine:   0,
+			EndLine:     600,
+		},
+		RequestGen: stateA.RequestGen,
+		SearchGen:  searchGenA,
+	})
+	if got := p.terminalHistory[keyA]; got.Loading || got.RequestGen != cancelledA.RequestGen {
+		t.Fatalf("late source A result changed cancelled state: %#v", got)
+	}
+	if p.terminalSearch.SourceKey != keyB {
+		t.Fatalf("search source = %q, want %q", p.terminalSearch.SourceKey, keyB)
+	}
+}
+
 func TestTerminalSearchUnicodeCaseFoldMapsVisualColumns(t *testing.T) {
 	p := terminalSearchPlugin("x Kelvin", 0)
 	p.beginTerminalSearch()
