@@ -82,6 +82,22 @@ func TestStripSourceOSC8HandlesC1AndMixedForms(t *testing.T) {
 	}
 }
 
+func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T) {
+	const ordinary = "plain Ý and Ü text"
+	if cleaned := stripSourceOSC8(ordinary); cleaned != ordinary {
+		t.Fatalf("ordinary UTF-8 text changed: got %q, want %q", cleaned, ordinary)
+	}
+
+	source := "\x1b]8;;https://hidden.example/\u00dc/https://evil.example\x07label\x1b]8;;\x07"
+	cleaned := decorateTerminalLinks(source)
+	if ansi.Strip(cleaned) != "label" {
+		t.Fatalf("UTF-8 URI payload leaked into label: %q", cleaned)
+	}
+	if strings.Contains(cleaned, "evil.example") || strings.Contains(cleaned, "\x1b]8;;") {
+		t.Fatalf("hidden UTF-8 URI payload survived or was linkified: %q", cleaned)
+	}
+}
+
 func TestStripSourceOSC8DropsMalformedHyperlinkRemainders(t *testing.T) {
 	for name, source := range map[string]string{
 		"esc-unclosed":  "safe\x1b]8;;javascript:alert(1)",
@@ -97,6 +113,14 @@ func TestStripSourceOSC8DropsMalformedHyperlinkRemainders(t *testing.T) {
 				t.Fatalf("stripSourceOSC8(%q) = %q, want safe prefix", source, cleaned)
 			}
 		})
+	}
+}
+
+func TestStripSourceOSC8RecognizesRawC1BesideInvalidUTF8(t *testing.T) {
+	source := string([]byte{'a', 0xff, 0x9d, '8', ';', ';', 0xfe, 0x9c, 'b'})
+	want := string([]byte{'a', 0xff, 'b'})
+	if cleaned := stripSourceOSC8(source); cleaned != want {
+		t.Fatalf("raw C1 beside malformed UTF-8 = %q, want %q", cleaned, want)
 	}
 }
 

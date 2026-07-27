@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -126,8 +127,9 @@ func stripSourceOSC8(line string) string {
 	for pos := 0; pos < len(line); {
 		introLen := oscIntroducerLen(line, pos)
 		if introLen == 0 {
-			out.WriteByte(line[pos])
-			pos++
+			_, size := utf8.DecodeRuneInString(line[pos:])
+			out.WriteString(line[pos : pos+size])
+			pos += size
 			continue
 		}
 		payload := pos + introLen
@@ -182,7 +184,8 @@ func oscTerminatorEnd(value string, pos int) (int, bool) {
 		case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9c':
 			return pos + 2, true
 		default:
-			pos++
+			_, size := utf8.DecodeRuneInString(value[pos:])
+			pos += size
 		}
 	}
 	return 0, false
