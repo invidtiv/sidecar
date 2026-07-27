@@ -44,6 +44,13 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 
 	editor := tty.ResolveEditor()
 
+	// Size the session to the viewport it will be rendered into, not to the whole
+	// plugin rect. Passing p.width/p.height created the pane several rows taller
+	// than the visible area, so the editor laid out its status and command lines
+	// off the bottom of the pane (td-a87445).
+	editorWidth := p.calculateInlineEditorWidth()
+	editorHeight := p.calculateInlineEditorHeight()
+
 	return func() tea.Msg {
 		if !tty.EditorAvailable() {
 			// Fall back to external editor
@@ -61,8 +68,8 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 			Editor:     editor,
 			Path:       fullPath,
 			Line:       lineNo,
-			Width:      p.width,
-			Height:     p.height,
+			Width:      editorWidth,
+			Height:     editorHeight,
 		})
 		if err != nil {
 			return msg.ToastMsg{

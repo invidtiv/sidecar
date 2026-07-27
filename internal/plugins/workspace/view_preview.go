@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
@@ -412,6 +413,20 @@ func padLinesToHeight(lines []string, target int) []string {
 	}
 	for len(lines) < target {
 		lines = append(lines, "")
+	}
+	return lines
+}
+
+// padLinesToWidth right-pads each line to target display columns, ignoring ANSI
+// sequences. Lines already at or beyond the target are left alone.
+func padLinesToWidth(lines []string, target int) []string {
+	if target <= 0 {
+		return lines
+	}
+	for i, line := range lines {
+		if gap := target - ansi.StringWidth(line); gap > 0 {
+			lines[i] = line + strings.Repeat(" ", gap)
+		}
 	}
 	return lines
 }

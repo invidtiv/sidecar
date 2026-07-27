@@ -406,3 +406,55 @@ func TestTerminalEmptyStatesRespectNarrowWidth(t *testing.T) {
 		}
 	}
 }
+
+// td-26bdb2: the scrollbar used to be joined to an unpadded block, so
+// lipgloss.JoinHorizontal aligned it to the widest line — landing it right after
+// the shell prompt and sliding rightwards as the user typed.
+func TestRenderTerminalViewportPinsScrollbarToRightEdge(t *testing.T) {
+	// Short lines, more of them than fit, so a scrollbar is shown.
+	buffer := testTerminalBuffer("prompt>\na\nb\nc\nd\ne\nf\ng")
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:     buffer,
+		Width:      40,
+		Height:     4,
+		Follow:     true,
+		TotalItems: 8,
+	}, ui.NewTruncateCache(32))
+
+	if !result.Layout.ShowScrollbar {
+		t.Fatalf("expected a scrollbar for %d lines in %d rows", buffer.LineCount(), 4)
+	}
+
+	for i, line := range strings.Split(result.Content, "\n") {
+		if got := ansi.StringWidth(line); got != 40 {
+			t.Errorf("line %d: width = %d, want 40 (scrollbar not at the right edge): %q",
+				i, got, ansi.Strip(line))
+		}
+	}
+}
+
+func TestPadLinesToWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		width int
+		want  []int
+	}{
+		{name: "pads short lines", lines: []string{"ab", "abcd"}, width: 6, want: []int{6, 6}},
+		{name: "leaves long lines alone", lines: []string{"abcdefgh"}, width: 4, want: []int{8}},
+		{name: "ignores ansi when measuring", lines: []string{"\x1b[31mab\x1b[0m"}, width: 5, want: []int{5}},
+		{name: "non-positive width is a no-op", lines: []string{"ab"}, width: 0, want: []int{2}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := padLinesToWidth(append([]string(nil), tt.lines...), tt.width)
+			for i, want := range tt.want {
+				if w := ansi.StringWidth(got[i]); w != want {
+					t.Errorf("line %d width = %d, want %d", i, w, want)
+				}
+			}
+		})
+	}
+}

@@ -1219,3 +1219,46 @@ func TestCalculatePreviewDimensions_WidthConsistency(t *testing.T) {
 		})
 	}
 }
+
+// td-9b181e: a shell's tmux session is created before the shell is selected, so
+// its size has to be computed for a shell rather than for whatever the sidebar
+// currently points at. Otherwise the pane is created two rows short and anything
+// started in it before the follow-up resize lays out for the wrong height.
+func TestPreviewDimensionsForIgnoresCurrentSelection(t *testing.T) {
+	p := &Plugin{width: 200, height: 50, sidebarVisible: true, sidebarWidth: 25}
+
+	for _, selected := range []bool{true, false} {
+		p.shellSelected = selected
+
+		shellW, shellH := p.previewDimensionsFor(true)
+		worktreeW, worktreeH := p.previewDimensionsFor(false)
+
+		if shellW != worktreeW {
+			t.Errorf("shellSelected=%v: widths differ (%d vs %d); only height depends on the tab row",
+				selected, shellW, worktreeW)
+		}
+		// Worktrees render a tab header and spacer that shells do not.
+		if shellH != worktreeH+2 {
+			t.Errorf("shellSelected=%v: shell height %d, worktree height %d; want shell to be 2 taller",
+				selected, shellH, worktreeH)
+		}
+	}
+}
+
+func TestCalculatePreviewDimensionsMatchesSelectionKind(t *testing.T) {
+	p := &Plugin{width: 200, height: 50, sidebarVisible: true, sidebarWidth: 25}
+
+	p.shellSelected = true
+	gotW, gotH := p.calculatePreviewDimensions()
+	wantW, wantH := p.previewDimensionsFor(true)
+	if gotW != wantW || gotH != wantH {
+		t.Errorf("shell selected: got %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
+	}
+
+	p.shellSelected = false
+	gotW, gotH = p.calculatePreviewDimensions()
+	wantW, wantH = p.previewDimensionsFor(false)
+	if gotW != wantW || gotH != wantH {
+		t.Errorf("worktree selected: got %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
+	}
+}

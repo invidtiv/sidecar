@@ -48,6 +48,11 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 
 	editor := tty.ResolveEditor()
 
+	// Size the session to the viewport it will be rendered into rather than the
+	// whole plugin rect, so the editor's bottom rows stay visible (td-a87445).
+	editorWidth := p.calculateInlineEditorWidth()
+	editorHeight := p.calculateInlineEditorHeight()
+
 	return func() tea.Msg {
 		if !tty.EditorAvailable() {
 			// Fall back to external editor
@@ -58,8 +63,8 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 			NamePrefix:  "sidecar-note-edit-",
 			Editor:      editor,
 			Path:        notePath,
-			Width:       p.width,
-			Height:      p.height,
+			Width:       editorWidth,
+			Height:      editorHeight,
 			CursorAtEnd: true,
 		})
 		if err != nil {

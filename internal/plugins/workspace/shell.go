@@ -400,6 +400,11 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		displayName = p.nextShellDisplayName()
 	}
 	workDir := p.ctx.WorkDir
+	// Size the pane at creation. Without -x/-y tmux uses default-size (80x24),
+	// and anything the user starts before the follow-up resize lands — an editor
+	// especially — lays itself out for 24 rows (td-9b181e). The shell is not
+	// selected yet, so ask for shell dimensions explicitly.
+	previewWidth, previewHeight := p.previewDimensionsFor(true)
 
 	created := ShellCreatedMsg{
 		SessionName:   sessionName,
@@ -422,6 +427,9 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 			"-d",              // Detached
 			"-s", sessionName, // Session name
 			"-c", workDir, // Working directory
+		}
+		if previewWidth > 0 && previewHeight > 0 {
+			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
 		if err := tty.NewSession(args...); err != nil {
 			created.Err = fmt.Errorf("create shell session: %w", err)
@@ -513,7 +521,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 
 	sessionName := shell.TmuxName
 	workDir := p.ctx.WorkDir
-	previewWidth, previewHeight := p.calculatePreviewDimensions()
+	previewWidth, previewHeight := p.previewDimensionsFor(true)
 
 	return func() tea.Msg {
 		// Create new detached session

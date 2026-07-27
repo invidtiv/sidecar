@@ -107,11 +107,15 @@ func runTmuxWithError(args ...string) error {
 }
 
 // SendKeysCmd sends keys to tmux asynchronously.
-// Keys are sent in order within a single goroutine to prevent reordering.
+//
+// The batch is queued at call time (see send_queue.go) so keystrokes reach tmux
+// in the order Update handled them, not the order Bubble Tea happens to schedule
+// their goroutines in. Call this from Update, not from inside another tea.Cmd.
 // Returns SessionDeadMsg if the session has ended.
 func SendKeysCmd(scope MessageScope, sessionName string, keys ...KeySpec) tea.Cmd {
+	done := SendKeysOrdered(sessionName, keys...)
 	return func() tea.Msg {
-		if err := SendKeys(sessionName, keys...); err != nil && IsSessionDeadError(err) {
+		if err := <-done; err != nil && IsSessionDeadError(err) {
 			return SessionDeadMsg{Scope: scope}
 		}
 		return nil

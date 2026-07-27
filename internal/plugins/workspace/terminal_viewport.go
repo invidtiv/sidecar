@@ -134,6 +134,13 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	content := strings.Join(displayLines, "\n")
 	if layout.ShowScrollbar {
 		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
+		// JoinHorizontal aligns the scrollbar to the widest line of the block it
+		// is joined to. Terminal lines are truncated but never padded, so without
+		// this the scrollbar renders immediately after the longest line — right
+		// after the prompt on a fresh shell — and creeps right as the user types
+		// (td-26bdb2). Padding to the exact content width pins it to the edge and
+		// keeps the joined block from exceeding the pane and wrapping.
+		displayLines = padLinesToWidth(displayLines, layout.DisplayWidth)
 		content = lipgloss.JoinHorizontal(lipgloss.Top,
 			strings.Join(displayLines, "\n"),
 			ui.RenderScrollbar(ui.ScrollbarParams{

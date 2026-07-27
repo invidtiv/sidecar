@@ -138,22 +138,29 @@ func (p *Plugin) getInteractivePasteKey() string {
 }
 
 // sendInteractiveKeysCmd sends keys to tmux asynchronously (td-c2961e).
-// Keys are sent in order within a single goroutine to prevent reordering.
+//
+// The batch is queued at call time so it keeps its place relative to the
+// keystrokes around it; only the wait happens in the returned Cmd's goroutine.
+// Bubble Tea runs each Cmd concurrently, so ordering established inside the Cmd
+// would be no ordering at all (td-8fcd2e). Call from Update.
 // Returns InteractiveSessionDeadMsg if the session has ended.
 func sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
-	return func() tea.Msg {
-		if err := tty.SendKeys(sessionName, keys...); err != nil && tty.IsSessionDeadError(err) {
-			return InteractiveSessionDeadMsg{}
-		}
-		return nil
-	}
+	return awaitInteractiveSend(tty.SendKeysOrdered(sessionName, keys...))
 }
 
 // sendInteractivePasteInputCmd sends paste text to tmux asynchronously (td-c2961e).
 // Used for multi-character terminal input (not clipboard paste which is already async).
+// Shares the keystroke queue so pasted text cannot overtake surrounding keys.
 func sendInteractivePasteInputCmd(sessionName, text string, bracketed bool) tea.Cmd {
+	return awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
+		return tty.SendPasteInput(sessionName, text, bracketed)
+	}))
+}
+
+// awaitInteractiveSend turns a queued send's result channel into a tea.Cmd.
+func awaitInteractiveSend(done <-chan error) tea.Cmd {
 	return func() tea.Msg {
-		if err := tty.SendPasteInput(sessionName, text, bracketed); err != nil && tty.IsSessionDeadError(err) {
+		if err := <-done; err != nil && tty.IsSessionDeadError(err) {
 			return InteractiveSessionDeadMsg{}
 		}
 		return nil
@@ -180,7 +187,12 @@ func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
 			return InteractivePasteResultMsg{Empty: true}
 		}
 
-		err = tty.SendPasteInput(sessionName, text, bracketed)
+		// The clipboard read has to happen off the Update loop, so this enqueues
+		// later than a keystroke Cmd would. Going through the queue anyway keeps
+		// the paste from interleaving mid-write with concurrent keystrokes.
+		err = <-tty.SendOrdered(sessionName, func() error {
+			return tty.SendPasteInput(sessionName, text, bracketed)
+		})
 		if err != nil {
 			return InteractivePasteResultMsg{Err: err, SessionDead: tty.IsSessionDeadError(err)}
 		}
@@ -377,7 +389,13 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		TargetSession: sessionName,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true, // Assume visible until we get first cursor query result
+		PaneOnEntry:   p.activePane,
 	}
+	// The embedded terminal owns input now, so make the preview the active pane.
+	// nativeTerminalActive() gates both the native cursor and cell-motion mouse
+	// reporting on it, and entering from the sidebar used to leave it behind —
+	// interactive mode with no visible cursor at all (td-62b8ab).
+	p.activePane = PanePreview
 	p.selectionTermPanel = false
 	p.selection.Clear()
 
@@ -440,7 +458,9 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		TermPanel:     true,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true,
+		PaneOnEntry:   p.activePane,
 	}
+	p.activePane = PanePreview
 	p.selectionTermPanel = true
 	p.selection.Clear()
 	p.viewMode = ViewModeInteractive
@@ -456,6 +476,14 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 // Used to resize tmux panes to match the visible area.
 // IMPORTANT: This must stay in sync with renderListView() width calculations.
 func (p *Plugin) calculatePreviewDimensions() (width, height int) {
+	return p.previewDimensionsFor(p.shellSelected)
+}
+
+// previewDimensionsFor computes preview dimensions for a given selection kind
+// rather than the current one. Sizing a tmux session at creation time needs the
+// dimensions the pane will be rendered into once it is selected, which is not
+// necessarily what is selected right now.
+func (p *Plugin) previewDimensionsFor(shellSelected bool) (width, height int) {
 	if p.width <= 0 || p.height <= 0 {
 		if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && h > 0 {
 			return w - panelOverhead, h - panelBorderWidth - 1
@@ -491,7 +519,7 @@ func (p *Plugin) calculatePreviewDimensions() (width, height int) {
 	// - 1 for hint line
 	// - 2 for tabs header (worktrees only)
 	paneHeight := p.height - panelBorderWidth
-	if p.shellSelected {
+	if shellSelected {
 		// Shell: no tabs, just hint
 		height = paneHeight - 1
 	} else {
@@ -678,6 +706,8 @@ func (p *Plugin) exitInteractiveMode() {
 	if p.interactiveState != nil {
 		// Preserve focus on whichever sub-pane was interactive
 		p.termPanelFocused = p.interactiveState.TermPanel
+		// Hand the pane back to whoever had it before interactive mode claimed it.
+		p.activePane = p.interactiveState.PaneOnEntry
 		p.interactiveState.Active = false
 	}
 	p.interactiveState = nil
@@ -899,21 +929,15 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		bracketed := p.interactiveState.BracketedPasteEnabled
 		// Send paste async (td-c2961e): escape + paste in order if pending
 		if pendingEscape {
-			cmds = append(cmds, func() tea.Msg {
-				if err := tty.SendKeyToTmux(sessionName, "Escape"); err != nil && tty.IsSessionDeadError(err) {
-					return InteractiveSessionDeadMsg{}
+			cmds = append(cmds, awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
+				if err := tty.SendKeyToTmux(sessionName, "Escape"); err != nil {
+					return err
 				}
-				var err error
 				if bracketed {
-					err = tty.SendBracketedPasteToTmux(sessionName, text)
-				} else {
-					err = tty.SendPasteToTmux(sessionName, text)
+					return tty.SendBracketedPasteToTmux(sessionName, text)
 				}
-				if err != nil && tty.IsSessionDeadError(err) {
-					return InteractiveSessionDeadMsg{}
-				}
-				return nil
-			})
+				return tty.SendPasteToTmux(sessionName, text)
+			})))
 		} else {
 			cmds = append(cmds, sendInteractivePasteInputCmd(sessionName, text, bracketed))
 		}
