@@ -4,6 +4,14 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v0.88.1] - 2026-07-27
+
+### Bug Fixes
+- **`E` enters interactive mode again.** The key was listed in the keymap and advertised by both the preview hint line and the command palette, but nothing handled it — so it did nothing, and because the workspaces tab kept interpreting keys, whatever you typed next was read as workspace shortcuts (typing `whoami` after it opened the issue picker). `enter` was and remains the primary binding.
+
+### Dependencies
+- Updated td to v0.53.0, which fixes several issue-query bugs.
+
 ## [v0.88.0] - 2026-07-27
 
 ### Features

@@ -964,8 +964,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "r":
 		return func() tea.Msg { return RefreshMsg{} }
-	case "i":
-		// Legacy shortcut for interactive mode (enter is now primary)
+	case "i", "E":
+		// Alternate shortcuts for interactive mode (enter is primary). "E" is
+		// what the preview hint and the command palette advertise; it was listed
+		// in the keymap but never handled here, so it did nothing and the keys
+		// typed after it were read as workspace bindings (td-10c761).
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal.
 		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
 			return p.enterInteractiveMode()

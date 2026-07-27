@@ -296,3 +296,46 @@ func installSuccessfulFakeTmux(t *testing.T) string {
 	t.Setenv("TMUX_TEST_LOG", logPath)
 	return logPath
 }
+
+// Interactive mode is advertised under three keys — enter (primary), and the
+// "E"/"i" alternates named by the preview hint and the command palette. "E" was
+// listed in the keymap but never handled, so it silently did nothing and the
+// keys typed after it were read as workspace bindings (td-10c761).
+func TestInteractiveModeEntryKeys(t *testing.T) {
+	for _, key := range []string{"enter", "E", "i"} {
+		t.Run(key, func(t *testing.T) {
+			installSuccessfulFakeTmux(t)
+			p := New()
+			p.width, p.height = 100, 30
+			p.shellSelected = true
+			p.selectedShellIdx = 0
+			p.shells = []*ShellSession{{
+				TmuxName: "sidecar-test",
+				Agent:    &Agent{TmuxSession: "sidecar-test", TmuxPane: "%1"},
+			}}
+
+			p.handleListKeys(keyPressFor(key))
+
+			if p.viewMode != ViewModeInteractive {
+				t.Fatalf("%q did not enter interactive mode: viewMode = %v", key, p.viewMode)
+			}
+			if p.interactiveState == nil || !p.interactiveState.Active {
+				t.Fatalf("%q left interactive state inactive: %#v", key, p.interactiveState)
+			}
+		})
+	}
+}
+
+func keyPressFor(key string) tea.KeyPressMsg {
+	if key == "enter" {
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	runes := []rune(key)
+	msg := tea.KeyPressMsg{Code: runes[0], Text: key}
+	if len(runes) == 1 && runes[0] >= 'A' && runes[0] <= 'Z' {
+		msg.Code = runes[0] + ('a' - 'A')
+		msg.ShiftedCode = runes[0]
+		msg.Mod = tea.ModShift
+	}
+	return msg
+}

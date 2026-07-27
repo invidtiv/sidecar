@@ -405,6 +405,7 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "focus-left", Context: "workspace-preview"},
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
+		{Key: "E", Command: "interactive", Context: "workspace-preview"},
 		{Key: "y", Command: "approve", Context: "workspace-preview"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},
 		{Key: "N", Command: "reject", Context: "workspace-preview"},
