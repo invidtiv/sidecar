@@ -48,7 +48,7 @@ func TestNormalizeEditorName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := normalizeEditorName(tt.input)
+			got := tty.NormalizeEditorName(tt.input)
 			if got != tt.expected {
 				t.Errorf("normalizeEditorName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
@@ -193,8 +193,8 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 			treeVisible: false,
 			treeWidth:   0,
 			tabCount:    0,
-			clickX:      2,  // border(1) + padding(1) = content start
-			clickY:      2,  // border(1) + header(1) = content start
+			clickX:      2, // border(1) + padding(1) = content start
+			clickY:      2, // border(1) + header(1) = content start
 			wantCol:     1,
 			wantRow:     1,
 			wantOK:      true,
@@ -279,7 +279,7 @@ func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 		t.Run(editor, func(t *testing.T) {
 			// sendEditorSaveAndQuit will fail (no tmux session) but should still
 			// return true for recognized editors
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if !got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = false, want true (known editor)", editor)
 			}
@@ -292,7 +292,7 @@ func TestSendEditorSaveAndQuit_UnknownEditors(t *testing.T) {
 
 	for _, editor := range unknown {
 		t.Run(editor, func(t *testing.T) {
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = true, want false (unknown editor)", editor)
 			}
