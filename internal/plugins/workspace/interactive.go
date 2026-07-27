@@ -1023,6 +1023,7 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 
 	// When interactive mode targets the terminal panel, scroll terminal panel output
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.selection.Clear()
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
@@ -1079,6 +1080,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		p.scrollInteractiveViewport(pageSize)
 	case tea.KeyHome:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.selection.Clear()
 			p.termPanelScroll = p.termPanelMaxScroll()
 		} else {
 			p.previewOffset = 0
@@ -1086,6 +1088,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		}
 	case tea.KeyEnd:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.selection.Clear()
 			p.termPanelScroll = 0
 		} else {
 			p.previewOffset = p.getMaxScrollOffset()
@@ -1099,6 +1102,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 
 func (p *Plugin) scrollInteractiveViewport(delta int) {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.selection.Clear()
 		p.termPanelScroll -= delta
 		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
 		return

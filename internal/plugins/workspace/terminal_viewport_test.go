@@ -359,24 +359,46 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 	if !p.autoScrollOutput {
 		t.Fatal("panel selection disabled independent agent auto-follow")
 	}
-	if p.termPanelScroll == 0 {
-		t.Fatal("panel selection left panel in live-follow mode")
+	frozen := p.interactiveViewportLayout()
+	panel.Write("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11")
+	afterAppend := p.interactiveViewportLayout()
+	if afterAppend.Start != frozen.Start {
+		t.Fatalf("panel selection viewport moved on append: start %d -> %d", frozen.Start, afterAppend.Start)
 	}
 }
 
 func TestTerminalEmptyStatesRespectNarrowWidth(t *testing.T) {
 	cache := ui.NewTruncateCache(32)
-	p := &Plugin{
+	emptyBuffer := &Plugin{
 		selectedIdx:   0,
 		truncateCache: cache,
 		worktrees: []*Worktree{{
 			Agent: &Agent{},
 		}},
 	}
+	noAgent := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees:     []*Worktree{{}},
+	}
+	orphan := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees: []*Worktree{{
+			IsOrphaned: true,
+		}},
+	}
+	noShell := &Plugin{
+		shellSelected: true,
+		truncateCache: cache,
+	}
 
 	for name, content := range map[string]string{
-		"agent": p.renderOutputContent(5, 3),
-		"panel": p.renderTermPanelOutput(5, 3),
+		"empty-buffer": emptyBuffer.renderOutputContent(5, 3),
+		"no-agent":     noAgent.renderOutputContent(5, 3),
+		"orphan":       orphan.renderOutputContent(5, 8),
+		"no-shell":     noShell.renderShellOutput(5, 8),
+		"panel":        emptyBuffer.renderTermPanelOutput(5, 3),
 	} {
 		for _, line := range strings.Split(content, "\n") {
 			if width := ansi.StringWidth(line); width > 5 {

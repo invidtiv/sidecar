@@ -113,11 +113,13 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.termPanelSelectionOffset = p.interactiveViewportLayout().Start
+	}
 	p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		// Stop following the live panel while the user establishes a local
-		// selection. Do not disturb the independent agent/shell follow state.
-		p.termPanelScroll = max(p.termPanelScroll, 1)
+		// The absolute viewport start above freezes the panel while selecting.
+		// Do not disturb the independent agent/shell follow state.
 	} else {
 		p.autoScrollOutput = false
 	}
@@ -245,9 +247,14 @@ func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
 		PaneWidth:   p.interactiveState.PaneWidth,
 	}
 	if termPanel {
-		input.Follow = p.termPanelScroll == 0
-		input.Offset = p.termPanelScroll
-		input.OffsetFromBottom = true
+		if p.selection.Anchor.Valid() {
+			input.Follow = false
+			input.Offset = p.termPanelSelectionOffset
+		} else {
+			input.Follow = p.termPanelScroll == 0
+			input.Offset = p.termPanelScroll
+			input.OffsetFromBottom = true
+		}
 	}
 	return calculateTerminalViewportLayout(input)
 }

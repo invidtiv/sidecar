@@ -234,9 +234,14 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	offsetFromBottom := false
 	trimTrailing := p.autoScrollOutput && !interactive
 	if termPanel {
-		follow = p.termPanelScroll == 0
-		offset = p.termPanelScroll
-		offsetFromBottom = true
+		if p.selection.Anchor.Valid() {
+			follow = false
+			offset = p.termPanelSelectionOffset
+		} else {
+			follow = p.termPanelScroll == 0
+			offset = p.termPanelScroll
+			offsetFromBottom = true
+		}
 		trimTrailing = !interactive
 	}
 
@@ -269,16 +274,16 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 func (p *Plugin) renderOutputContent(width, height int) string {
 	wt := p.selectedWorktree()
 	if wt == nil {
-		return dimText("No worktree selected")
+		return p.truncateAllLines(dimText("No worktree selected"), width)
 	}
 
 	// Check for orphaned worktree (agent file exists but tmux session gone)
 	if wt.IsOrphaned && wt.Agent == nil {
-		return p.renderOrphanedMessage(wt.ChosenAgentType)
+		return p.truncateAllLines(p.renderOrphanedMessage(wt.ChosenAgentType), width)
 	}
 
 	if wt.Agent == nil {
-		return dimText("No agent running\nPress 's' to start an agent")
+		return p.truncateAllLines(dimText("No agent running\nPress 's' to start an agent"), width)
 	}
 
 	// Hint depends on mode - interactive mode shows exit hints
@@ -345,7 +350,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	// Get the selected shell
 	shell := p.getSelectedShell()
 	if shell == nil || shell.Agent == nil {
-		return p.renderShellPrimer(width, height)
+		return p.truncateAllLines(p.renderShellPrimer(width, height), width)
 	}
 
 	// Hint depends on mode - interactive mode shows exit hints
