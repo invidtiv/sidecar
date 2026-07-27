@@ -850,6 +850,9 @@ func staggerOffset(name string) time.Duration {
 // Adds stagger offset based on worktree name to prevent simultaneous polls.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when worktrees are removed.
 func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea.Cmd {
+	if p.primaryControlUsing("agent", worktreeName) {
+		return nil
+	}
 	stagger := staggerOffset(worktreeName)
 	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay+stagger, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
@@ -860,6 +863,9 @@ func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea
 // Stagger exists to spread polls across multiple worktrees, but the selected interactive worktree
 // needs minimal latency. Uses the same generation tracking as scheduleAgentPoll.
 func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duration) tea.Cmd {
+	if p.primaryControlUsing("agent", worktreeName) {
+		return nil
+	}
 	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
 	})

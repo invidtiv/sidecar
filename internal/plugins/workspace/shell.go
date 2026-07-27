@@ -953,6 +953,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 // scheduleShellPollByName schedules a poll for a specific shell's output by name.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when shells are removed.
 func (p *Plugin) scheduleShellPollByName(tmuxName string, delay time.Duration) tea.Cmd {
+	if p.primaryControlUsing("shell", tmuxName) {
+		return nil
+	}
 	return p.pollScheduler.Schedule(shellPollKey(tmuxName), delay, func(gen int) tea.Msg {
 		return pollShellByNameMsg{TmuxName: tmuxName, Generation: gen}
 	})
