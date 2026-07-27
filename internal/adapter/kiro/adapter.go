@@ -368,8 +368,7 @@ func (a *Adapter) getDB() (*sql.DB, error) {
 		a.db = nil
 	}
 
-	connStr := a.dbPath + "?mode=ro&_journal_mode=WAL"
-	db, err := sql.Open("sqlite3", connStr)
+	db, err := sql.Open("sqlite3", adapter.ReadOnlyDSN(a.dbPath))
 	if err != nil {
 		return nil, err
 	}
