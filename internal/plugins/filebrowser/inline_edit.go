@@ -84,6 +84,7 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 // handleInlineEditStarted processes the InlineEditStartedMsg and activates the tty model.
 func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	p.inlineEditMode = true
+	p.activePane = PanePreview
 	p.inlineEditSession = msg.SessionName
 	p.inlineEditFile = msg.FilePath
 	p.inlineEditOrigMtime = msg.OriginalMtime
@@ -169,6 +170,7 @@ func (p *Plugin) reattachInlineEditSession() tea.Cmd {
 	if p.inlineEditSession == "" {
 		return nil
 	}
+	p.activePane = PanePreview
 
 	// Configure the tty model callbacks (same as handleInlineEditStarted)
 	p.inlineEditor.OnExit = func() tea.Cmd {
@@ -449,6 +451,30 @@ func (p *Plugin) loadCurrentTreeItemPreview() tea.Cmd {
 // Returns (col, row, ok) where col and row are 1-indexed for SGR mouse protocol.
 // Returns ok=false if the coordinates are outside the editor content area.
 func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bool) {
+	contentX, contentY, ok := p.inlineEditorOrigin()
+	if !ok {
+		return 0, 0, false
+	}
+	relX := x - contentX
+	relY := y - contentY
+
+	if relX < 0 || relY < 0 {
+		return 0, 0, false
+	}
+
+	// Validate bounds against editor dimensions
+	editorWidth := p.calculateInlineEditorWidth()
+	editorHeight := p.calculateInlineEditorHeight()
+
+	if relX >= editorWidth || relY >= editorHeight {
+		return 0, 0, false
+	}
+
+	// SGR mouse protocol uses 1-indexed coordinates
+	return relX + 1, relY + 1, true
+}
+
+func (p *Plugin) inlineEditorOrigin() (x, y int, ok bool) {
 	if p.width <= 0 || p.height <= 0 {
 		return 0, 0, false
 	}
@@ -484,25 +510,44 @@ func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bo
 
 	// Add header line ("Editing: filename...")
 	contentY++
+	return contentX, contentY, true
+}
 
-	// Calculate relative coordinates
-	relX := x - contentX
-	relY := y - contentY
-
-	if relX < 0 || relY < 0 {
-		return 0, 0, false
+// Cursor exposes the inline editor's native cursor in plugin-local coordinates.
+func (p *Plugin) Cursor() *tea.Cursor {
+	if !p.inlineEditorNativeActive() {
+		return nil
 	}
-
-	// Validate bounds against editor dimensions
-	editorWidth := p.calculateInlineEditorWidth()
-	editorHeight := p.calculateInlineEditorHeight()
-
-	if relX >= editorWidth || relY >= editorHeight {
-		return 0, 0, false
+	cursor := p.inlineEditor.Cursor()
+	if cursor == nil {
+		return nil
 	}
+	x, y, ok := p.inlineEditorOrigin()
+	if !ok {
+		return nil
+	}
+	copy := *cursor
+	copy.X += x
+	copy.Y += y
+	if copy.X < 0 || copy.X >= p.width || copy.Y < 0 || copy.Y >= p.height {
+		return nil
+	}
+	return &copy
+}
 
-	// SGR mouse protocol uses 1-indexed coordinates
-	return relX + 1, relY + 1, true
+func (p *Plugin) inlineEditorNativeActive() bool {
+	return p.focused && p.activePane == PanePreview && p.inlineEditMode &&
+		p.inlineEditor != nil && p.inlineEditor.IsActive() && !p.showExitConfirmation &&
+		!p.projectSearchMode && !p.quickOpenMode && !p.infoMode && !p.blameMode
+}
+
+// PreferredMouseMode reduces idle hover traffic only while the inline terminal
+// owns input. Modal and ordinary file-browser views retain all-motion hover.
+func (p *Plugin) PreferredMouseMode() tea.MouseMode {
+	if p.inlineEditorNativeActive() {
+		return p.inlineEditor.PreferredMouseMode()
+	}
+	return tea.MouseModeAllMotion
 }
 
 // forwardMousePressToInlineEditor sends a mouse press event to the inline editor.

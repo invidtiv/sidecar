@@ -265,6 +265,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		CursorVisible:    cursorVisible,
 		PaneHeight:       paneHeight,
 		PaneWidth:        paneWidth,
+		NativeCursor:     interactive,
 		AbsoluteBase:     absoluteBase,
 		TotalItems:       totalItems,
 		LoadingOlder:     loadingOlder,

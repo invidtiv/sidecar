@@ -29,6 +29,7 @@ type terminalViewportInput struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+	NativeCursor  bool
 	AbsoluteBase  int
 	TotalItems    int
 	LoadingOlder  bool
@@ -124,16 +125,10 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
 	}
 
-	if shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) && len(displayLines) > 0 {
-		relativeRow := in.CursorRow
-		if in.PaneHeight > len(displayLines) {
-			relativeRow -= in.PaneHeight - len(displayLines)
-		} else if in.PaneHeight > 0 && in.PaneHeight < len(displayLines) {
-			relativeRow += len(displayLines) - in.PaneHeight
+	if !in.NativeCursor {
+		if x, y, ok := terminalViewportCursorPosition(in); ok && y < len(displayLines) {
+			displayLines[y] = tty.RenderCursorLine(displayLines[y], x, true)
 		}
-		relativeRow = min(max(relativeRow, 0), len(displayLines)-1)
-		relativeCol := min(max(in.CursorCol, 0), max(layout.DisplayWidth-1, 0))
-		displayLines[relativeRow] = tty.RenderCursorLine(displayLines[relativeRow], relativeCol, true)
 	}
 
 	content := strings.Join(displayLines, "\n")
@@ -153,4 +148,29 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		Content: content,
 		Layout:  layout,
 	}
+}
+
+func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
+	layout := calculateTerminalViewportLayout(in)
+	if in.Buffer == nil || layout.EffectiveCount == 0 ||
+		!shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) ||
+		layout.DisplayWidth <= 0 || layout.DisplayHeight <= 0 {
+		return 0, 0, false
+	}
+	visibleRows := layout.End - layout.Start
+	if in.Interactive && in.PaneHeight > 0 {
+		visibleRows = layout.DisplayHeight
+	}
+	if visibleRows <= 0 {
+		return 0, 0, false
+	}
+	y = in.CursorRow
+	if in.PaneHeight > visibleRows {
+		y -= in.PaneHeight - visibleRows
+	} else if in.PaneHeight > 0 && in.PaneHeight < visibleRows {
+		y += visibleRows - in.PaneHeight
+	}
+	y = min(max(y, 0), visibleRows-1)
+	x = min(max(in.CursorCol, 0), layout.DisplayWidth-1)
+	return x, y, true
 }

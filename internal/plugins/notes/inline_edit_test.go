@@ -245,6 +245,40 @@ func TestInlineEditorTtyConfig(t *testing.T) {
 	}
 }
 
+func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
+	p := New()
+	p.width = 100
+	p.height = 24
+	p.focused = true
+	p.activePane = PaneEditor
+	p.listWidth = 30
+	p.inlineEditMode = true
+	p.inlineEditor.Enter("editor", "")
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.State.OutputBuf.Write("one\ntwo")
+	p.inlineEditor.State.CursorVisible = true
+	p.inlineEditor.State.CursorRow = 1
+	p.inlineEditor.State.CursorCol = 3
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height
+
+	cursor := p.Cursor()
+	if cursor == nil || cursor.X != 36 || cursor.Y != 3 {
+		t.Fatalf("Cursor() = %#v, want plugin-local (36,3)", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
+		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
+	}
+
+	p.showExitConfirmation = true
+	if cursor := p.Cursor(); cursor != nil {
+		t.Fatalf("confirmation-covered Cursor() = %#v, want nil", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeAllMotion {
+		t.Fatalf("confirmation mouse mode = %v, want all motion", mode)
+	}
+}
+
 func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
 	logPath := installNotesFakeTmux(t)
 

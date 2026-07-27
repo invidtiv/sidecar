@@ -260,7 +260,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// View renders the interactive terminal content with cursor overlay.
+// View renders the interactive terminal content. Cursor ownership is exposed
+// separately through Cursor so the containing plugin can place Bubble Tea's
+// native cursor after applying its pane offset.
 // Plugins should call this to render the terminal when interactive mode is active.
 func (m *Model) View() string {
 	if !m.IsActive() || m.State.OutputBuf == nil {
@@ -273,20 +275,36 @@ func (m *Model) View() string {
 		start = 0
 	}
 	lines := m.State.OutputBuf.LinesRange(start, lineCount)
-	content := strings.Join(lines, "\n")
+	return strings.Join(lines, "\n")
+}
 
-	// Overlay cursor if visible
-	if m.State.CursorVisible && m.State.CursorRow >= 0 && m.State.CursorCol >= 0 {
-		// Adjust cursor row to visible content
-		cursorRow := m.State.CursorRow
-		if m.State.PaneHeight > 0 && m.Height > 0 && m.State.PaneHeight != m.Height {
-			// Adjust for pane height difference
-			cursorRow = m.State.CursorRow - (m.State.PaneHeight - m.Height)
-		}
-		content = RenderWithCursor(content, cursorRow, m.State.CursorCol, true)
+// Cursor returns the native cursor position relative to View().
+func (m *Model) Cursor() *tea.Cursor {
+	if !m.IsActive() || m.State.OutputBuf == nil || !m.State.CursorVisible ||
+		m.Width <= 0 || m.Height <= 0 || m.State.CursorRow < 0 || m.State.CursorCol < 0 {
+		return nil
 	}
+	row := m.State.CursorRow
+	if m.State.PaneHeight > 0 && m.State.PaneHeight != m.Height {
+		row -= m.State.PaneHeight - m.Height
+	}
+	if row < 0 || row >= m.Height {
+		return nil
+	}
+	col := min(m.State.CursorCol, m.Width-1)
+	cursor := tea.NewCursor(col, row)
+	cursor.Shape = tea.CursorBlock
+	cursor.Blink = true
+	return cursor
+}
 
-	return content
+// PreferredMouseMode reports the mode suitable for an active embedded
+// terminal. Containers still own coordinate translation and mouse forwarding.
+func (m *Model) PreferredMouseMode() tea.MouseMode {
+	if m.IsActive() {
+		return tea.MouseModeCellMotion
+	}
+	return tea.MouseModeNone
 }
 
 // GetTarget returns the current tmux target (pane ID or session name).

@@ -1,6 +1,10 @@
 package tty
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 func TestNew(t *testing.T) {
 	// Test with nil config (uses defaults)
@@ -216,5 +220,56 @@ func TestModelViewShowsBottomOfScrollback(t *testing.T) {
 
 	if got := model.View(); got != "middle\nnewest" {
 		t.Fatalf("View() = %q, want bottom two lines", got)
+	}
+}
+
+func TestModelExposesNativeCursorWithoutPaintingContent(t *testing.T) {
+	model := New(nil)
+	model.Width = 8
+	model.Height = 3
+	model.Enter("current", "")
+	model.State.OutputBuf.Write("one\ntwo\nthree")
+	model.State.CursorRow = 1
+	model.State.CursorCol = 3
+	model.State.CursorVisible = true
+	model.State.PaneHeight = 3
+
+	if got := model.View(); got != "one\ntwo\nthree" {
+		t.Fatalf("View() painted cursor into content: %q", got)
+	}
+	cursor := model.Cursor()
+	if cursor == nil || cursor.X != 3 || cursor.Y != 1 ||
+		cursor.Shape != tea.CursorBlock || !cursor.Blink {
+		t.Fatalf("Cursor() = %#v", cursor)
+	}
+	if mode := model.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
+		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
+	}
+}
+
+func TestModelNativeCursorAdjustsPaneHeightAndBounds(t *testing.T) {
+	model := New(nil)
+	model.Width = 5
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.CursorVisible = true
+	model.State.CursorRow = 4
+	model.State.CursorCol = 9
+	model.State.PaneHeight = 5
+
+	cursor := model.Cursor()
+	if cursor == nil || cursor.X != 4 || cursor.Y != 1 {
+		t.Fatalf("adjusted Cursor() = %#v, want (4,1)", cursor)
+	}
+	model.State.CursorRow = 1
+	if cursor := model.Cursor(); cursor != nil {
+		t.Fatalf("off-viewport Cursor() = %#v, want nil", cursor)
+	}
+	model.Exit()
+	if cursor := model.Cursor(); cursor != nil {
+		t.Fatalf("inactive Cursor() = %#v, want nil", cursor)
+	}
+	if mode := model.PreferredMouseMode(); mode != tea.MouseModeNone {
+		t.Fatalf("inactive PreferredMouseMode() = %v, want none", mode)
 	}
 }
