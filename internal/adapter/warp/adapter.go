@@ -494,9 +494,7 @@ func (a *Adapter) getDB() (*sql.DB, error) {
 		a.db = nil
 	}
 
-	// Open new connection with read-only mode and WAL mode
-	connStr := a.dbPath + "?mode=ro&_journal_mode=WAL"
-	db, err := sql.Open("sqlite3", connStr)
+	db, err := sql.Open("sqlite3", adapter.ReadOnlyDSN(a.dbPath))
 	if err != nil {
 		return nil, err
 	}
