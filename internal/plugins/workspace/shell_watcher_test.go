@@ -208,3 +208,27 @@ func TestShellWatcher_IgnoresOtherFiles(t *testing.T) {
 		// Expected - no message for other files
 	}
 }
+
+func TestShellWatcher_StopBeforeStartDoesNotBlock(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), ".sidecar", "shells.json")
+	watcher, err := NewShellWatcher(manifestPath)
+	if err != nil {
+		t.Fatalf("NewShellWatcher() error = %v", err)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		watcher.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop() blocked for a watcher that had not started")
+	}
+
+	if _, ok := <-watcher.Start(); ok {
+		t.Fatal("Start() after Stop() returned an open message channel")
+	}
+}

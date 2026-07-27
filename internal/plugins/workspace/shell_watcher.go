@@ -24,6 +24,7 @@ type ShellWatcher struct {
 	stopChan  chan struct{}
 	doneChan  chan struct{} // closed when run() exits (td-cb47a2)
 	mu        sync.Mutex
+	started   bool
 	stopped   bool
 }
 
@@ -69,6 +70,13 @@ func NewShellWatcher(manifestPath string) (*ShellWatcher, error) {
 // Start begins watching and returns a channel for receiving messages.
 // The channel emits ShellManifestChangedMsg when the manifest changes.
 func (w *ShellWatcher) Start() <-chan tea.Msg {
+	w.mu.Lock()
+	if w.started || w.stopped {
+		w.mu.Unlock()
+		return w.msgChan
+	}
+	w.started = true
+	w.mu.Unlock()
 	go w.run()
 	return w.msgChan
 }
@@ -83,7 +91,16 @@ func (w *ShellWatcher) Stop() {
 	w.stopped = true
 	close(w.stopChan)
 	_ = w.fsWatcher.Close()
+	started := w.started
+	if !started {
+		close(w.doneChan)
+		close(w.msgChan)
+	}
 	w.mu.Unlock()
+
+	if !started {
+		return
+	}
 
 	// Wait for run() to finish before returning (td-cb47a2)
 	// This ensures timer callbacks complete and msgChan is closed safely

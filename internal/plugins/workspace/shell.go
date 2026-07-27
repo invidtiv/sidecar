@@ -14,7 +14,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
-	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -209,118 +208,8 @@ type (
 // pollShellMsg triggers a shell output poll (legacy, polls selected shell).
 type pollShellMsg struct{}
 
-// initShellSessions discovers existing shell sessions for the current project.
-// Called from Init() to reconnect to sessions from previous runs.
-// td-f88fdd: Uses manifest as source of truth, merged with tmux discovery.
-func (p *Plugin) initShellSessions() {
-	// Discover running tmux sessions
-	tmuxSessions := p.discoverTmuxSessionNames()
-	tmuxMap := make(map[string]bool)
-	for _, name := range tmuxSessions {
-		tmuxMap[name] = true
-	}
-
-	p.shells = nil
-
-	// Process manifest entries (if manifest exists)
-	if p.shellManifest != nil {
-		for _, def := range p.shellManifest.Shells {
-			isRunning := tmuxMap[def.TmuxName]
-			if !isRunning {
-				// Tmux session is dead - remove stale entry from manifest
-				_ = p.shellManifest.RemoveShell(def.TmuxName)
-				continue
-			}
-			shell := p.shellFromDefinition(def, isRunning)
-			p.shells = append(p.shells, shell)
-			p.managedSessions[def.TmuxName] = true
-			delete(tmuxMap, def.TmuxName)
-		}
-	}
-
-	// Add tmux sessions not in manifest (upgrade path / external creation)
-	for tmuxName := range tmuxMap {
-		shell := p.shellFromTmux(tmuxName)
-		p.shells = append(p.shells, shell)
-		p.managedSessions[tmuxName] = true
-		// Save to manifest for future sessions
-		if p.shellManifest != nil {
-			_ = p.shellManifest.AddShell(shellToDefinition(shell))
-		}
-	}
-
-	// Also restore display names from legacy state.json (migration path)
-	p.restoreShellDisplayNames()
-}
-
-// shellFromDefinition creates a ShellSession from a manifest definition.
-func (p *Plugin) shellFromDefinition(def ShellDefinition, isRunning bool) *ShellSession {
-	shell := &ShellSession{
-		Name:        def.DisplayName,
-		TmuxName:    def.TmuxName,
-		CreatedAt:   def.CreatedAt,
-		ChosenAgent: definitionToAgentType(def.AgentType),
-		SkipPerms:   def.SkipPerms,
-		IsOrphaned:  !isRunning,
-	}
-
-	if isRunning {
-		paneID := getPaneID(def.TmuxName)
-		displayType := AgentShell
-		if shell.ChosenAgent != AgentNone {
-			displayType = shell.ChosenAgent
-		}
-		shell.Agent = &Agent{
-			Type:        displayType,
-			TmuxSession: def.TmuxName,
-			TmuxPane:    paneID,
-			OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
-			StartedAt:   def.CreatedAt,
-			Status:      AgentStatusRunning,
-		}
-	}
-
-	return shell
-}
-
-// shellFromTmux creates a ShellSession from a discovered tmux session.
-func (p *Plugin) shellFromTmux(tmuxName string) *ShellSession {
-	paneID := getPaneID(tmuxName)
-	displayName := p.deriveDisplayName(tmuxName)
-
-	return &ShellSession{
-		Name:     displayName,
-		TmuxName: tmuxName,
-		Agent: &Agent{
-			Type:        AgentShell,
-			TmuxSession: tmuxName,
-			TmuxPane:    paneID,
-			OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
-			StartedAt:   time.Now(),
-			Status:      AgentStatusRunning,
-		},
-		CreatedAt: time.Now(),
-	}
-}
-
-// deriveDisplayName extracts a display name from a tmux session name.
-func (p *Plugin) deriveDisplayName(tmuxName string) string {
-	projectName := filepath.Base(p.ctx.WorkDir)
-	basePrefix := shellSessionPrefix + sanitizeName(projectName)
-	indexPattern := regexp.MustCompile(`-(\d+)$`)
-
-	if matches := indexPattern.FindStringSubmatch(tmuxName); matches != nil {
-		idx, _ := strconv.Atoi(matches[1])
-		return fmt.Sprintf("Shell %d", idx)
-	} else if tmuxName == basePrefix {
-		return "Shell 1"
-	}
-	return "Shell"
-}
-
-// discoverTmuxSessionNames returns names of all sidecar shell sessions for this project.
-func (p *Plugin) discoverTmuxSessionNames() []string {
-	projectName := filepath.Base(p.ctx.WorkDir)
+func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
+	projectName := filepath.Base(workDir)
 	basePrefix := shellSessionPrefix + sanitizeName(projectName)
 
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
@@ -347,39 +236,48 @@ func (p *Plugin) discoverTmuxSessionNames() []string {
 
 // syncShellsFromManifest reloads the manifest and syncs the shell list.
 // Called when the manifest file changes (from another sidecar instance).
-func (p *Plugin) syncShellsFromManifest() tea.Cmd {
+func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
+	if p.shellManifest == nil || !p.shellScopeCurrent(scope) {
+		return nil
+	}
+	manifestPath := p.shellManifest.Path()
+	workDir := p.ctx.WorkDir
+	hooks := p.shellStartupHooks.withDefaults()
 	return func() tea.Msg {
-		if p.shellManifest == nil {
-			return nil
-		}
-
 		// Reload manifest from disk
-		newManifest, err := LoadShellManifest(p.shellManifest.Path())
+		newManifest, err := hooks.loadManifest(manifestPath)
 		if err != nil {
 			return nil
 		}
 
-		return shellManifestSyncMsg{Manifest: newManifest}
+		running := make(map[string]bool)
+		paneIDs := make(map[string]string)
+		for _, name := range hooks.discoverSessions(workDir) {
+			running[name] = true
+			paneIDs[name] = hooks.getPaneID(name)
+		}
+		return shellManifestSyncMsg{
+			Scope:    scope,
+			Manifest: newManifest,
+			Running:  running,
+			PaneIDs:  paneIDs,
+		}
 	}
 }
 
 // shellManifestSyncMsg carries the reloaded manifest for syncing.
 type shellManifestSyncMsg struct {
+	Scope    shellStartupScope
 	Manifest *ShellManifest
+	Running  map[string]bool
+	PaneIDs  map[string]string
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
 // Called after receiving shellManifestSyncMsg.
-func (p *Plugin) applyManifestSync() {
+func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
 	if p.shellManifest == nil {
 		return
-	}
-
-	// Get current tmux sessions
-	tmuxSessions := p.discoverTmuxSessionNames()
-	tmuxMap := make(map[string]bool)
-	for _, name := range tmuxSessions {
-		tmuxMap[name] = true
 	}
 
 	// Build map of current shells by TmuxName
@@ -397,7 +295,7 @@ func (p *Plugin) applyManifestSync() {
 	// Process manifest entries - add new or update existing
 	var newShells []*ShellSession
 	for _, def := range p.shellManifest.Shells {
-		isRunning := tmuxMap[def.TmuxName]
+		isRunning := sync.Running[def.TmuxName]
 
 		if existing, ok := currentShells[def.TmuxName]; ok {
 			// Update existing shell
@@ -408,7 +306,9 @@ func (p *Plugin) applyManifestSync() {
 			newShells = append(newShells, existing)
 		} else {
 			// New shell from manifest
-			shell := p.shellFromDefinition(def, isRunning)
+			shell := shellSessionFromDefinition(def, isRunning, func(name string) string {
+				return sync.PaneIDs[name]
+			})
 			newShells = append(newShells, shell)
 			if isRunning {
 				p.managedSessions[def.TmuxName] = true
@@ -436,39 +336,6 @@ func (p *Plugin) applyManifestSync() {
 			p.shellSelected = false
 			p.selectedIdx = 0
 		}
-	}
-}
-
-func (p *Plugin) restoreShellDisplayNames() {
-	if p.ctx == nil || len(p.shells) == 0 {
-		return
-	}
-
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
-	if len(wtState.ShellDisplayNames) == 0 {
-		return
-	}
-
-	// td-f88fdd: Migrate display names from state.json to manifest
-	migrated := false
-	for _, shell := range p.shells {
-		if shell == nil {
-			continue
-		}
-		if name, ok := wtState.ShellDisplayNames[shell.TmuxName]; ok && name != "" {
-			shell.Name = name
-			// If we have a manifest, update it with the migrated name
-			if p.shellManifest != nil && p.shellManifest.FindShell(shell.TmuxName) != nil {
-				_ = p.shellManifest.UpdateShell(shellToDefinition(shell))
-				migrated = true
-			}
-		}
-	}
-
-	// Clear from state.json after migration to avoid re-migration
-	if migrated {
-		wtState.ShellDisplayNames = nil
-		_ = state.SetWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
 
@@ -607,7 +474,7 @@ func (p *Plugin) resolveShellAgentType() AgentType {
 // message). The check is only consumed once it actually runs while focused, so a
 // background workspaces tab never spawns a session.
 func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
-	if p.autoShellChecked || !p.focused {
+	if p.shellStartupLoading || p.autoShellChecked || !p.focused {
 		return nil
 	}
 	if p.ctx == nil || p.ctx.Config == nil || !p.ctx.Config.Plugins.Workspace.AutoCreateShell {

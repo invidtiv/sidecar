@@ -22,6 +22,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case shellStartupResultMsg:
+		return p, p.applyShellStartup(msg)
+
 	case terminalHistoryLoadedMsg:
 		return p, p.applyTerminalHistory(msg)
 	case terminalSearchHistoryLoadedMsg:
@@ -92,6 +95,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 
 			p.worktrees = msg.Worktrees
+			p.worktreesLoaded = true
 
 			// Restore selection by finding the worktree with the same name
 			if selectedName != "" {
@@ -103,45 +107,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 
-			// On first refresh after startup/project-switch, restore saved selection
-			// and run one-time legacy migration.
-			if !p.stateRestored {
-				p.stateRestored = true
-				// Only restore if we don't already have a valid selection from above
-				// and if there are items to select
-				if selectedName == "" && (len(p.worktrees) > 0 || len(p.shells) > 0) {
-					p.restoreSelectionState()
-				}
-
-				// Restore terminal panel: if it was visible last session, create the
-				// tmux session now that worktrees/shells are loaded and selection is
-				// restored (so termPanelSessionName() can resolve).
-				if p.termPanelVisible && p.termPanelSession == "" {
-					sessionName := p.termPanelSessionName()
-					if sessionName != "" {
-						p.termPanelSession = sessionName
-						p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
-						cmds = append(cmds, p.createTermPanelSession(sessionName))
-					}
-				}
-
-				// Migrate legacy per-project and per-worktree files to the
-				// centralized XDG state directory. This is idempotent and
-				// non-destructive — originals are never deleted.
-				wtPaths := make([]string, 0, len(p.worktrees))
-				for _, wt := range p.worktrees {
-					if !wt.IsMissing {
-						wtPaths = append(wtPaths, wt.Path)
-					}
-				}
-				go func() { _ = migration.MigrateProject(p.ctx.ProjectRoot, wtPaths) }()
-
-				// Covers the case where workspaces is the startup tab: it is
-				// focused without ever receiving a PluginFocusedMsg.
-				if cmd := p.maybeAutoCreateShell(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
+			// Shell discovery and worktree refresh race at startup. Restore state
+			// only after both have applied so a saved shell cannot be mistaken for
+			// a missing item and auto-created over.
+			cmds = append(cmds, p.completeInitialWorkspaceLoad()...)
 
 			// Bounds check in case the selected worktree was deleted
 			if p.selectedIdx >= len(p.worktrees) && len(p.worktrees) > 0 {
@@ -1012,21 +981,29 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, nil
 
-	case ShellManifestChangedMsg:
+	case shellManifestChangedMsg:
+		if !p.shellScopeCurrent(msg.scope) {
+			return p, nil
+		}
 		// Manifest changed by another sidecar instance (td-f88fdd)
 		// Reload manifest and sync shells
-		cmds = append(cmds, p.syncShellsFromManifest())
+		cmds = append(cmds, p.syncShellsFromManifest(msg.scope))
 		// Continue listening for more changes
-		cmds = append(cmds, p.listenForShellManifestChanges())
+		if p.shellWatcherMessages != nil {
+			cmds = append(cmds, listenForShellManifestChanges(msg.scope, p.shellWatcherMessages))
+		}
 		return p, tea.Batch(cmds...)
 
 	case shellManifestSyncMsg:
+		if !p.shellScopeCurrent(msg.Scope) {
+			return p, nil
+		}
 		// Apply the reloaded manifest (td-f88fdd)
 		if msg.Manifest == nil {
 			return p, nil
 		}
 		p.shellManifest = msg.Manifest
-		p.applyManifestSync()
+		p.applyManifestSync(msg)
 		// Reload content if a shell is selected
 		if p.shellSelected {
 			return p, p.loadSelectedContent()
@@ -1695,4 +1672,45 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, tea.Batch(cmds...)
+}
+
+// completeInitialWorkspaceLoad performs the one-time state restoration that
+// needs both independently loaded shell and worktree collections.
+func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
+	if p.stateRestored || p.shellStartupLoading || !p.worktreesLoaded {
+		return nil
+	}
+	p.stateRestored = true
+
+	var commands []tea.Cmd
+	if len(p.worktrees) > 0 || len(p.shells) > 0 {
+		p.restoreSelectionState()
+	}
+
+	// Restore terminal panel only after selection is final, since its session
+	// identity depends on the selected shell/worktree.
+	if p.termPanelVisible && p.termPanelSession == "" {
+		sessionName := p.termPanelSessionName()
+		if sessionName != "" {
+			p.termPanelSession = sessionName
+			p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
+			commands = append(commands, p.createTermPanelSession(sessionName))
+		}
+	}
+
+	// Migration is idempotent and non-destructive. Capture immutable inputs so
+	// a project switch cannot redirect this goroutine to the new context.
+	projectRoot := p.ctx.ProjectRoot
+	worktreePaths := make([]string, 0, len(p.worktrees))
+	for _, worktree := range p.worktrees {
+		if !worktree.IsMissing {
+			worktreePaths = append(worktreePaths, worktree.Path)
+		}
+	}
+	go func() { _ = migration.MigrateProject(projectRoot, worktreePaths) }()
+
+	if command := p.maybeAutoCreateShell(); command != nil {
+		commands = append(commands, command)
+	}
+	return commands
 }

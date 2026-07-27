@@ -14,7 +14,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -345,7 +344,8 @@ type Plugin struct {
 	initialReconnectDone bool
 
 	// State restoration tracking (only restore once on startup)
-	stateRestored bool
+	stateRestored   bool
+	worktreesLoaded bool
 
 	// Auto-create default shell tracking (evaluated once per project load)
 	autoShellChecked bool
@@ -397,8 +397,13 @@ type Plugin struct {
 	fetchPRModalWidth   int          // Cached width for rebuild detection
 
 	// Shell manifest for persistence and cross-instance sync (td-f88fdd)
-	shellManifest *ShellManifest
-	shellWatcher  *ShellWatcher
+	shellManifest        *ShellManifest
+	shellWatcher         shellManifestWatcher
+	shellWatcherMessages <-chan tea.Msg
+	shellStartupHooks    shellStartupHooks
+	shellStartupEpoch    uint64
+	shellStartupVersion  uint64
+	shellStartupLoading  bool
 }
 
 // New creates a new worktree manager plugin.
@@ -427,6 +432,7 @@ func New() *Plugin {
 		typeSelectorIdx:     1,     // Default to Worktree option
 		taskLoading:         false, // Explicitly initialized (td-3668584f)
 		applicationFocused:  true,
+		shellStartupHooks:   defaultShellStartupHooks(),
 	}
 }
 
@@ -453,6 +459,7 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	p.ctx = ctx
 	p.controlManager = tty.NewControlManager()
@@ -486,27 +493,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
+	p.worktreesLoaded = false
 
 	// Re-arm default-shell auto-creation for the newly loaded project
 	p.autoShellChecked = false
 
-	// Load shell manifest for persistence (td-f88fdd)
-	projDir, err := projectdir.Resolve(ctx.ProjectRoot)
-	if err != nil {
-		p.ctx.Logger.Warn("failed to resolve project dir for manifest", "error", err)
-	} else {
-		manifestPath := filepath.Join(projDir, "shells.json")
-		p.shellManifest, _ = LoadShellManifest(manifestPath)
-	}
-
-	// Stop any previous watcher (important for project switching)
-	if p.shellWatcher != nil {
-		p.shellWatcher.Stop()
-		p.shellWatcher = nil
-	}
-
-	// Discover existing shell sessions for this project
-	p.initShellSessions()
+	// Shell manifest I/O, tmux discovery, pane lookup, and watcher construction
+	// are deferred to Start's command so Init remains on the first-frame path.
+	p.shellManifest = nil
+	p.shellStartupEpoch = ctx.Epoch
+	p.shellStartupLoading = true
 
 	// Register dynamic keybindings for modal contexts only.
 	// Main worktree-list and worktree-preview bindings are in bindings.go.
@@ -582,67 +578,20 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins async operations.
 func (p *Plugin) Start() tea.Cmd {
-	var cmds []tea.Cmd
-
 	// Refresh worktrees - reconnectAgents will be called after worktrees are loaded
-	cmds = append(cmds, p.refreshWorktrees())
-
-	// Start shell polling for all existing shells (so preview shows content right away)
-	for _, shell := range p.shells {
-		if shell.Agent != nil {
-			cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
-		}
-	}
-
-	// Start shell manifest watcher for cross-instance sync (td-f88fdd)
-	cmds = append(cmds, p.startShellWatcher())
-	cmds = append(cmds, p.listenForTerminalControl())
-
-	return tea.Batch(cmds...)
-}
-
-// startShellWatcher creates and starts the shell manifest file watcher.
-func (p *Plugin) startShellWatcher() tea.Cmd {
-	if p.shellManifest == nil {
-		return nil
-	}
-
-	var err error
-	p.shellWatcher, err = NewShellWatcher(p.shellManifest.Path())
-	if err != nil {
-		return nil // Watcher failed, continue without cross-instance sync
-	}
-
-	p.shellWatcher.Start()
-	return p.listenForShellManifestChanges()
-}
-
-// listenForShellManifestChanges waits for manifest file changes.
-func (p *Plugin) listenForShellManifestChanges() tea.Cmd {
-	if p.shellWatcher == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		// Block until watcher signals a change
-		// Channel is closed when watcher stops
-		if _, ok := <-p.shellWatcher.msgChan; !ok {
-			return nil // Watcher stopped
-		}
-		return ShellManifestChangedMsg{}
-	}
+	return tea.Batch(
+		p.refreshWorktrees(),
+		p.loadShellStartup(),
+		p.listenForTerminalControl(),
+	)
 }
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
-
-	// Stop shell watcher (td-f88fdd)
-	if p.shellWatcher != nil {
-		p.shellWatcher.Stop()
-		p.shellWatcher = nil
-	}
 }
 
 // saveSelectionState persists the current selection to disk.
