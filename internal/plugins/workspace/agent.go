@@ -1330,11 +1330,6 @@ func parseBatchCaptureOutput(output string, sessions []string, nonce string) map
 	return results
 }
 
-func trimCapturedOutput(output string, maxBytes int) string {
-	trimmed, _ := trimCapturedOutputRows(output, maxBytes)
-	return trimmed
-}
-
 // trimCapturedOutputRows applies the byte cap only at a complete line
 // boundary and reports how many absolute rows were removed from the front.
 // A single oversized row is preserved intact rather than returning a partial

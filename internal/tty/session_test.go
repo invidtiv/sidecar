@@ -10,6 +10,11 @@ import (
 
 func installFakeTmux(t *testing.T) string {
 	t.Helper()
+	// Sends are enqueued at call time and run on a background queue, so an
+	// earlier test's send can still be in flight. Bracket this test so its log
+	// holds only its own commands.
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls.log")
 	script := `#!/bin/sh

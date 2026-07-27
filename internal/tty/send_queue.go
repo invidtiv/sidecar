@@ -34,6 +34,10 @@ type sendQueue struct {
 var (
 	sendQueuesMu sync.Mutex
 	sendQueues   = make(map[string]*sendQueue)
+
+	pendingMu   sync.Mutex
+	pendingIdle = sync.NewCond(&pendingMu)
+	pendingJobs int
 )
 
 // SendOrdered queues work for a tmux target and returns a channel that receives
@@ -59,6 +63,9 @@ func SendOrdered(target string, run func() error) <-chan error {
 		}
 		select {
 		case q.jobs <- job:
+			pendingMu.Lock()
+			pendingJobs++
+			pendingMu.Unlock()
 			sendQueuesMu.Unlock()
 			return done
 		default:
@@ -79,6 +86,20 @@ func SendKeysOrdered(target string, keys ...KeySpec) <-chan error {
 	})
 }
 
+// WaitForPendingSends blocks until every queued send has run.
+//
+// Enqueueing happens where the key is handled, so the tmux call escapes the
+// caller's goroutine and can land arbitrarily later — after a test has restored
+// PATH, for instance, or while a different test owns the fake tmux. Tests that
+// assert on what was spawned use this to draw a hard line around themselves.
+func WaitForPendingSends() {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	for pendingJobs > 0 {
+		pendingIdle.Wait()
+	}
+}
+
 func (q *sendQueue) run(target string) {
 	idle := time.NewTimer(sendQueueIdleTimeout)
 	defer idle.Stop()
@@ -87,6 +108,12 @@ func (q *sendQueue) run(target string) {
 		select {
 		case job := <-q.jobs:
 			job.done <- job.run()
+			pendingMu.Lock()
+			pendingJobs--
+			if pendingJobs == 0 {
+				pendingIdle.Broadcast()
+			}
+			pendingMu.Unlock()
 			if !idle.Stop() {
 				select {
 				case <-idle.C:

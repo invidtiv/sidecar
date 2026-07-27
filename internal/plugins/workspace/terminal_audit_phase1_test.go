@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 func TestInteractivePollContinuesDuringScrollBurst(t *testing.T) {
@@ -277,6 +278,13 @@ func countStrings(values []string, want string) int {
 
 func installSuccessfulFakeTmux(t *testing.T) string {
 	t.Helper()
+	// Keystroke sends are enqueued where the key is handled and run on a
+	// background queue, so an earlier test's send can still be in flight. Flush
+	// before claiming the fake tmux so its log holds only this test's commands,
+	// and again on the way out so this test's sends cannot leak into the next
+	// one's log while PATH still points here.
+	tty.WaitForPendingSends()
+	t.Cleanup(tty.WaitForPendingSends)
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "tmux.log")
 	script := filepath.Join(dir, "tmux")

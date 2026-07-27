@@ -132,11 +132,10 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 		p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
 		return nil
 	}
+	// The term panel needs nothing further here: freezing termPanelSelectionOffset
+	// above holds it still while selecting, and the agent/shell follow state is
+	// independent and must not be disturbed.
 	p.selection.PrepareDragMode(lineIdx, col, action.Region.Rect, action.Alt)
-	if p.selectionTermPanel {
-		// The absolute viewport start above freezes the panel while selecting.
-		// Do not disturb the independent agent/shell follow state.
-	}
 
 	p.mouseHandler.StartDrag(action.X, action.Y, regionPreviewPane, lineIdx)
 	return nil

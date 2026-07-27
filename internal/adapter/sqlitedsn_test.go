@@ -30,7 +30,7 @@ func TestReadOnlyDSN_DoesNotCreateMissingDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.Ping(); err == nil {
 		t.Error("Ping on a nonexistent read-only database should fail")
@@ -50,13 +50,13 @@ func TestReadOnlyDSN_ReadsExistingDBAndRejectsWrites(t *testing.T) {
 	if _, err := w.Exec("CREATE TABLE t(x); INSERT INTO t VALUES (42)"); err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	_ = w.Close()
 
 	db, err := sql.Open("sqlite3", ReadOnlyDSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var x int
 	if err := db.QueryRow("SELECT x FROM t").Scan(&x); err != nil {

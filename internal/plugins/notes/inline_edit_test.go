@@ -377,6 +377,11 @@ func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
 
 func installNotesFakeTmux(t *testing.T) string {
 	t.Helper()
+	// Editor keystrokes go through tty's ordered send queue, which runs them on
+	// a background goroutine. Bracket this test so its log holds only its own
+	// commands.
+	tty.WaitForPendingSends()
+	t.Cleanup(tty.WaitForPendingSends)
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "tmux.log")
 	script := `#!/bin/sh
