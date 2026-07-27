@@ -1044,6 +1044,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
 		}
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
 		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
 			return p.loadOlderTerminalHistory(true, -delta)
 		}
@@ -1246,6 +1249,7 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 		}
 		if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
 		}
 	}
 	return nil

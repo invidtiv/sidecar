@@ -982,7 +982,11 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			return pollAgentMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 
-		output = trimCapturedOutput(output, maxBytes)
+		var removedRows int
+		output, removedRows = trimCapturedOutputRows(output, maxBytes)
+		if capture.Valid {
+			capture.CaptureBase += removedRows
+		}
 
 		// Use hash-based change detection to skip processing if content unchanged
 		outputChanged := outputBuf == nil || (capture.Valid &&
@@ -1321,14 +1325,27 @@ func parseBatchCaptureOutput(output string, sessions []string, nonce string) map
 }
 
 func trimCapturedOutput(output string, maxBytes int) string {
-	if maxBytes <= 0 || len(output) <= maxBytes {
-		return output
-	}
-	trimmed := tailUTF8Safe(output, maxBytes)
-	if nl := strings.Index(trimmed, "\n"); nl >= 0 && nl+1 < len(trimmed) {
-		return trimmed[nl+1:]
-	}
+	trimmed, _ := trimCapturedOutputRows(output, maxBytes)
 	return trimmed
+}
+
+// trimCapturedOutputRows applies the byte cap only at a complete line
+// boundary and reports how many absolute rows were removed from the front.
+// A single oversized row is preserved intact rather than returning a partial
+// row whose pane coordinate cannot be represented.
+func trimCapturedOutputRows(output string, maxBytes int) (string, int) {
+	if maxBytes <= 0 || len(output) <= maxBytes {
+		return output, 0
+	}
+	start := len(output) - maxBytes
+	for start < len(output) && !utf8.RuneStart(output[start]) {
+		start++
+	}
+	if nl := strings.IndexByte(output[start:], '\n'); nl >= 0 && start+nl+1 < len(output) {
+		cut := start + nl + 1
+		return output[cut:], strings.Count(output[:cut], "\n")
+	}
+	return output, 0
 }
 
 // tailUTF8Safe returns the last n bytes of s, adjusted to not split UTF-8 chars.

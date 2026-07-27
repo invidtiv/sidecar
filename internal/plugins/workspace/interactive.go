@@ -710,7 +710,6 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.autoScrollOutput = true
 		return p.pollSelectedAgentNowIfVisible()
 	}
-
 	// Check for exit keys
 
 	// Primary exit: Configurable key (default: Ctrl+\)
@@ -1037,6 +1036,9 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		if maxScroll := p.termPanelMaxScroll(); p.termPanelScroll > maxScroll {
 			p.termPanelScroll = maxScroll
 		}
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
 		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
 			return p.loadOlderTerminalHistory(true, -delta)
 		}
@@ -1065,6 +1067,7 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		}
 		if p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
 		}
 	}
 	return nil
@@ -1104,9 +1107,11 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
 			p.selection.Clear()
 			p.termPanelScroll = 0
+			p.cancelTerminalHistoryIntent(true)
 		} else {
 			p.previewOffset = p.getMaxScrollOffset()
 			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
 		}
 	default:
 		return false, nil
@@ -1119,6 +1124,9 @@ func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 		p.selection.Clear()
 		p.termPanelScroll -= delta
 		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
 		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
 			return p.loadOlderTerminalHistory(true, -delta)
 		}
@@ -1131,6 +1139,9 @@ func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	}
 	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
 	p.autoScrollOutput = p.previewOffset >= maxOffset
+	if delta > 0 && p.autoScrollOutput {
+		p.cancelTerminalHistoryIntent(false)
+	}
 	if delta < 0 && p.previewOffset == 0 {
 		return p.loadOlderTerminalHistory(false, -delta)
 	}

@@ -927,7 +927,11 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		}
 
 		// Trim to max bytes
-		output = trimCapturedOutput(output, maxBytes)
+		var removedRows int
+		output, removedRows = trimCapturedOutputRows(output, maxBytes)
+		if capture.Valid {
+			capture.CaptureBase += removedRows
+		}
 
 		return ShellOutputMsg{
 			TmuxName:      tmuxName,

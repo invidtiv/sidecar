@@ -8,9 +8,11 @@ import (
 )
 
 type terminalHistoryState struct {
-	HistorySize int
-	Loading     bool
-	Exhausted   bool
+	HistorySize   int
+	Loading       bool
+	Exhausted     bool
+	PendingScroll int
+	RequestGen    uint64
 }
 
 type terminalHistorySource struct {
@@ -24,6 +26,7 @@ type terminalHistoryLoadedMsg struct {
 	Source      terminalHistorySource
 	Capture     tty.CaptureRange
 	ScrollLines int
+	RequestGen  uint64
 	Err         error
 }
 
@@ -99,8 +102,15 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 		return nil
 	}
 	state := p.terminalHistory[source.Key]
+	state.PendingScroll += scrollLines
+	if state.Loading {
+		p.terminalHistory[source.Key] = state
+		return nil
+	}
 	base, _, absolute := source.Buffer.AbsoluteRange()
-	if !absolute || base <= 0 || state.Loading || state.Exhausted {
+	if !absolute || base <= 0 || state.Exhausted {
+		state.PendingScroll = 0
+		p.terminalHistory[source.Key] = state
 		return nil
 	}
 	start := max(base-historyLoadChunk, 0)
@@ -110,43 +120,53 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 		return nil
 	}
 	state.Loading = true
+	state.RequestGen++
+	requestGen := state.RequestGen
 	p.terminalHistory[source.Key] = state
 	relativeStart := start - historySize
 	relativeEnd := end - historySize
 	return func() tea.Msg {
 		capture, err := tty.CapturePaneRange(source.Target, relativeStart, relativeEnd)
 		return terminalHistoryLoadedMsg{
-			Source:      source,
-			Capture:     capture,
-			ScrollLines: scrollLines,
-			Err:         err,
+			Source:     source,
+			Capture:    capture,
+			RequestGen: requestGen,
+			Err:        err,
 		}
 	}
 }
 
-func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) {
+func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	state := p.terminalHistory[msg.Source.Key]
+	if msg.RequestGen != 0 && msg.RequestGen != state.RequestGen {
+		return nil
+	}
 	state.Loading = false
+	scrollLines := state.PendingScroll
+	if scrollLines == 0 {
+		scrollLines = msg.ScrollLines
+	}
+	state.PendingScroll = 0
 	if msg.Err != nil {
 		p.terminalHistory[msg.Source.Key] = state
 		if p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Debug("terminal history capture failed", "source", msg.Source.Key, "err", msg.Err)
 		}
-		return
+		return nil
 	}
 	current, ok := p.terminalHistoryFor(msg.Source.TermPanel)
 	if !ok || current.Key != msg.Source.Key || current.Buffer != msg.Source.Buffer {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	oldBase, _, ok := current.Buffer.AbsoluteRange()
 	if !ok {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	if !current.Buffer.PrependSnapshot(msg.Capture.Output, msg.Capture.StartLine) {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	newBase, _, _ := current.Buffer.AbsoluteRange()
 	added := oldBase - newBase
@@ -155,13 +175,32 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) {
 	p.terminalHistory[msg.Source.Key] = state
 
 	if msg.Source.TermPanel {
-		p.termPanelScroll = min(p.termPanelScroll+msg.ScrollLines, p.termPanelMaxScroll())
-		return
+		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
+		if scrollLines > added && !state.Exhausted {
+			return p.loadOlderTerminalHistory(true, scrollLines-added)
+		}
+		return nil
 	}
 	// Prepending shifts the old local coordinates down by added lines. Replay
 	// the user's pending upward movement in that shifted coordinate space.
-	p.previewOffset = max(p.previewOffset+added-msg.ScrollLines, 0)
+	p.previewOffset = max(p.previewOffset+added-scrollLines, 0)
 	p.autoScrollOutput = false
+	if scrollLines > added && !state.Exhausted {
+		return p.loadOlderTerminalHistory(false, scrollLines-added)
+	}
+	return nil
+}
+
+func (p *Plugin) cancelTerminalHistoryIntent(termPanel bool) {
+	source, ok := p.terminalHistoryFor(termPanel)
+	if !ok {
+		return
+	}
+	state := p.terminalHistory[source.Key]
+	state.PendingScroll = 0
+	state.Loading = false
+	state.RequestGen++
+	p.terminalHistory[source.Key] = state
 }
 
 func (p *Plugin) terminalHistorySummary(termPanel bool, buffer *tty.OutputBuffer) (base, total int, loading bool) {
