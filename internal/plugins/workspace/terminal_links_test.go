@@ -65,6 +65,62 @@ func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
 	}
 }
 
+func TestStripSourceOSC8HandlesC1AndMixedForms(t *testing.T) {
+	for name, source := range map[string]string{
+		"c1":              "\x9d8;;javascript:alert(1)\x9clabel\x9d8;;\x9c",
+		"utf8-c1":         "\u009d8;;javascript:alert(1)\u009clabel\u009d8;;\u009c",
+		"esc-intro-c1-st": "\x1b]8;;javascript:alert(1)\x9clabel\x1b]8;;\x9c",
+		"c1-intro-esc-st": "\x9d8;;javascript:alert(1)\x1b\\label\x9d8;;\x1b\\",
+		"c1-intro-bel":    "\x9d8;;javascript:alert(1)\x07label\x9d8;;\x07",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleaned := stripSourceOSC8(source)
+			if cleaned != "label" {
+				t.Fatalf("stripSourceOSC8(%q) = %q, want label", source, cleaned)
+			}
+		})
+	}
+}
+
+func TestStripSourceOSC8DropsMalformedHyperlinkRemainders(t *testing.T) {
+	for name, source := range map[string]string{
+		"esc-unclosed":  "safe\x1b]8;;javascript:alert(1)",
+		"c1-unclosed":   "safe\x9d8;;javascript:alert(1)\x1b[31m",
+		"utf8-unclosed": "safe\u009d8;;javascript:alert(1)",
+		"short":         "safe\x9d8;",
+		"short-command": "safe\x1b]8",
+		"bare-intro":    "safe\x9d",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleaned := stripSourceOSC8(source)
+			if cleaned != "safe" {
+				t.Fatalf("stripSourceOSC8(%q) = %q, want safe prefix", source, cleaned)
+			}
+		})
+	}
+}
+
+func FuzzStripSourceOSC8(f *testing.F) {
+	for _, source := range []string{
+		"\x1b]8;;https://example.com\x07label\x1b]8;;\x07",
+		"\x9d8;;javascript:alert(1)\x9clabel\x9d8;;\x9c",
+		"\u009d8;;javascript:alert(1)\x1b\\label\u009d8;;\x9c",
+		"\x1b]8;",
+		"\x9d8",
+		string([]byte{0x9d, '8', ';', ';', 0, 0x9c}),
+	} {
+		f.Add(source)
+	}
+	f.Fuzz(func(t *testing.T, source string) {
+		cleaned := stripSourceOSC8(source)
+		for _, prefix := range []string{"\x1b]8;", "\x9d8;", "\u009d8;"} {
+			if strings.Contains(cleaned, prefix) {
+				t.Fatalf("OSC-8 introducer survived sanitization: input=%q output=%q", source, cleaned)
+			}
+		}
+	})
+}
+
 func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testing.T) {
 	base := t.TempDir()
 	inside := filepath.Join(base, "internal", "foo.go")

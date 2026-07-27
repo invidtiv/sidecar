@@ -37,7 +37,6 @@ var (
 	terminalPathPattern = regexp.MustCompile(
 		`(?:^|[\s(\[])((?:\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
 	)
-	sourceOSC8Pattern = regexp.MustCompile(`\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)`)
 )
 
 func safeHTTPURL(raw string) (string, bool) {
@@ -107,7 +106,7 @@ func terminalLinkOverlapsBytes(plain string, links []terminalLink, start, end in
 func decorateTerminalLinks(line string) string {
 	// tmux output is untrusted. Remove source-supplied hyperlink controls and
 	// synthesize OSC-8 only for URLs that pass safeHTTPURL.
-	line = sourceOSC8Pattern.ReplaceAllString(line, "")
+	line = stripSourceOSC8(line)
 	links := detectTerminalLinks(line)
 	// Apply from right to left so wrappers do not disturb later visual ranges.
 	for i := len(links) - 1; i >= 0; i-- {
@@ -120,6 +119,73 @@ func decorateTerminalLinks(line string) string {
 		line = wrapTerminalVisualRange(line, link.StartCol, link.EndCol, open, close)
 	}
 	return line
+}
+
+func stripSourceOSC8(line string) string {
+	var out strings.Builder
+	for pos := 0; pos < len(line); {
+		introLen := oscIntroducerLen(line, pos)
+		if introLen == 0 {
+			out.WriteByte(line[pos])
+			pos++
+			continue
+		}
+		payload := pos + introLen
+		if payload >= len(line) {
+			break
+		}
+		if line[payload] != '8' {
+			out.WriteString(line[pos : pos+introLen])
+			pos += introLen
+			continue
+		}
+		if payload+1 >= len(line) {
+			break
+		}
+		if line[payload+1] != ';' {
+			out.WriteString(line[pos : pos+introLen])
+			pos += introLen
+			continue
+		}
+		end, ok := oscTerminatorEnd(line, pos+introLen+2)
+		if !ok {
+			// An unterminated hyperlink control can consume all following
+			// terminal text. Drop the remainder rather than forwarding an
+			// attacker-controlled URI or control payload.
+			break
+		}
+		pos = end
+	}
+	return out.String()
+}
+
+func oscIntroducerLen(value string, pos int) int {
+	switch {
+	case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == ']':
+		return 2
+	case value[pos] == '\x9d':
+		return 1
+	case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9d':
+		return 2
+	default:
+		return 0
+	}
+}
+
+func oscTerminatorEnd(value string, pos int) (int, bool) {
+	for pos < len(value) {
+		switch {
+		case value[pos] == '\x07' || value[pos] == '\x9c':
+			return pos + 1, true
+		case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == '\\':
+			return pos + 2, true
+		case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9c':
+			return pos + 2, true
+		default:
+			pos++
+		}
+	}
+	return 0, false
 }
 
 func wrapTerminalVisualRange(line string, startCol, endCol int, open, close string) string {
