@@ -79,6 +79,7 @@ type Handler struct {
 	lastClickY      int
 	lastClickTime   time.Time
 	lastClickRegion string
+	lastClickCount  int
 
 	// Drag tracking
 	dragging       bool
@@ -99,6 +100,8 @@ func NewHandler() *Handler {
 type ClickResult struct {
 	Region        *Region
 	IsDoubleClick bool
+	IsTripleClick bool
+	ClickCount    int
 }
 
 // HandleClick processes a mouse click and returns the hit region.
@@ -109,14 +112,23 @@ func (h *Handler) HandleClick(x, y int) ClickResult {
 	result := ClickResult{Region: region}
 
 	if region != nil {
-		// Check for double-click (same region within 400ms)
+		// Count successive clicks at the same cell. Reset after triple-click so
+		// a fourth click starts a new gesture.
 		now := time.Now()
 		if region.ID == h.lastClickRegion &&
+			x == h.lastClickX && y == h.lastClickY &&
 			now.Sub(h.lastClickTime) < 400*time.Millisecond {
-			result.IsDoubleClick = true
-			// Reset to prevent triple-click counting as double
+			h.lastClickCount++
+		} else {
+			h.lastClickCount = 1
+		}
+		result.ClickCount = h.lastClickCount
+		result.IsDoubleClick = h.lastClickCount == 2
+		result.IsTripleClick = h.lastClickCount == 3
+		if result.IsTripleClick {
 			h.lastClickRegion = ""
 			h.lastClickTime = time.Time{}
+			h.lastClickCount = 0
 		} else {
 			h.lastClickRegion = region.ID
 			h.lastClickTime = now
@@ -176,6 +188,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 		m := msg.Mouse()
 		if m.Button == tea.MouseLeft {
 			shift := m.Mod.Contains(tea.ModShift)
+			alt := m.Mod.Contains(tea.ModAlt)
 			result := h.HandleClick(m.X, m.Y)
 			if result.Region == nil {
 				return MouseAction{Type: ActionNone}
@@ -187,6 +200,17 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 					X:      m.X,
 					Y:      m.Y,
 					Shift:  shift,
+					Alt:    alt,
+				}
+			}
+			if result.IsTripleClick {
+				return MouseAction{
+					Type:   ActionTripleClick,
+					Region: result.Region,
+					X:      m.X,
+					Y:      m.Y,
+					Shift:  shift,
+					Alt:    alt,
 				}
 			}
 			return MouseAction{
@@ -195,6 +219,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 				X:      m.X,
 				Y:      m.Y,
 				Shift:  shift,
+				Alt:    alt,
 			}
 		}
 
@@ -240,6 +265,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 				DragDX: dx,
 				DragDY: dy,
 				Shift:  m.Mod.Contains(tea.ModShift),
+				Alt:    m.Mod.Contains(tea.ModAlt),
 			}
 		}
 		// Track hover for visual feedback
@@ -262,6 +288,7 @@ const (
 	ActionNone ActionType = iota
 	ActionClick
 	ActionDoubleClick
+	ActionTripleClick
 	ActionScrollUp
 	ActionScrollDown
 	ActionScrollLeft  // Shift+scroll up = scroll left
@@ -280,4 +307,5 @@ type MouseAction struct {
 	DragDX int // Drag delta X
 	DragDY int // Drag delta Y
 	Shift  bool
+	Alt    bool
 }

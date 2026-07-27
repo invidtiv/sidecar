@@ -18,7 +18,7 @@ import (
 // The returned column is in visual space (post-tab-expansion, accounting for multi-width chars).
 func (p *Plugin) interactiveColAtX(x, lineIdx int) (int, bool) {
 	contentInset := panelOverhead / 2
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+	if p.effectiveSelectionTermPanel() {
 		contentInset = 0
 	}
 	relX := x - p.selection.ViewRect.X - contentInset
@@ -30,11 +30,17 @@ func (p *Plugin) interactiveColAtX(x, lineIdx int) (int, bool) {
 	if buf == nil {
 		return 0, true
 	}
-	if lineIdx < 0 || lineIdx >= buf.LineCount() {
+	localLine := lineIdx
+	if base, end, absolute := buf.AbsoluteRange(); absolute {
+		if lineIdx < base || lineIdx >= end {
+			return 0, true
+		}
+		localLine = lineIdx - base
+	} else if lineIdx < 0 || lineIdx >= buf.LineCount() {
 		return 0, true
 	}
 
-	lines := buf.LinesRange(lineIdx, lineIdx+1)
+	lines := buf.LinesRange(localLine, localLine+1)
 	if len(lines) == 0 {
 		return 0, true
 	}
@@ -54,14 +60,11 @@ func (p *Plugin) interactiveCharAtXY(x, y int) (int, int, bool) {
 }
 
 func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return 0, false
-	}
 	if p.selection.ViewRect.W == 0 || p.selection.ViewRect.H == 0 {
 		return 0, false
 	}
-	layout := p.interactiveViewportLayout()
-	if layout.End <= layout.Start {
+	layout := p.terminalSelectionViewportLayout()
+	if layout.End <= layout.Start && p.interactiveState != nil {
 		// Compatibility for callers that construct only the old cached state.
 		layout.Start = p.interactiveState.VisibleStart
 		layout.End = p.interactiveState.VisibleEnd
@@ -72,7 +75,7 @@ func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
 
 	contentRow := y - p.selection.ViewRect.Y
 	contentRowOffset := 1 // terminal hint line
-	if !p.interactiveState.TermPanel {
+	if !p.effectiveSelectionTermPanel() {
 		contentRow-- // preview panel top border
 		if !p.shellSelected {
 			contentRowOffset += 2 // worktree tabs and spacer
@@ -84,7 +87,7 @@ func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
 	if contentRow < 0 {
 		return 0, false
 	}
-	if layout.EffectiveCount == 0 && p.interactiveState.ContentRowOffset > 0 {
+	if layout.EffectiveCount == 0 && p.interactiveState != nil && p.interactiveState.ContentRowOffset > 0 {
 		contentRowOffset = p.interactiveState.ContentRowOffset
 	}
 	outputRow := contentRow - contentRowOffset
@@ -95,6 +98,12 @@ func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
 	if lineIdx < layout.Start || lineIdx >= layout.End {
 		return 0, false
 	}
+	buf := p.interactiveOutputBuffer()
+	if buf != nil {
+		if base, _, absolute := buf.AbsoluteRange(); absolute {
+			lineIdx += base
+		}
+	}
 	return lineIdx, true
 }
 
@@ -104,7 +113,8 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	if action.Region == nil {
 		return nil
 	}
-	// Set ViewRect before charAtXY so interactiveLineIndexAtY can use it
+	p.selectionTermPanel = action.Region.ID == regionTermPanelContent
+	// Set ViewRect before charAtXY so interactiveLineIndexAtY can use it.
 	p.selection.ViewRect = action.Region.Rect
 
 	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
@@ -113,11 +123,15 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		p.termPanelSelectionOffset = p.interactiveViewportLayout().Start
+	if p.selectionTermPanel {
+		p.termPanelSelectionOffset = p.terminalSelectionViewportLayout().Start
 	}
-	p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+	if action.Shift && p.selection.HasSelection() {
+		p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
+		return nil
+	}
+	p.selection.PrepareDragMode(lineIdx, col, action.Region.Rect, action.Alt)
+	if p.selectionTermPanel {
 		// The absolute viewport start above freezes the panel while selecting.
 		// Do not disturb the independent agent/shell follow state.
 	} else {
@@ -140,11 +154,14 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 
 func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	p.selection.FinishDrag()
+	if p.selection.HasSelection() && p.copyOnSelectEnabled() {
+		return p.copyInteractiveSelectionCmd()
+	}
 	return nil
 }
 
 func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+	if p.effectiveSelectionTermPanel() {
 		return p.termPanelOutput
 	}
 	if p.shellSelected {
@@ -161,6 +178,13 @@ func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
 	return wt.Agent.OutputBuf
 }
 
+func (p *Plugin) effectiveSelectionTermPanel() bool {
+	if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
+		return p.interactiveState.TermPanel
+	}
+	return p.selectionTermPanel
+}
+
 func (p *Plugin) interactiveSelectionLines() []string {
 	if !p.selection.HasSelection() {
 		return nil
@@ -170,8 +194,7 @@ func (p *Plugin) interactiveSelectionLines() []string {
 		return nil
 	}
 
-	lineCount := buf.LineCount()
-	if lineCount == 0 {
+	if buf.LineCount() == 0 {
 		return nil
 	}
 
@@ -180,17 +203,16 @@ func (p *Plugin) interactiveSelectionLines() []string {
 	if startLine > endLine {
 		startLine, endLine = endLine, startLine
 	}
-	if startLine < 0 {
-		startLine = 0
+	var lines []string
+	if base, end, absolute := buf.AbsoluteRange(); absolute {
+		startLine = max(startLine, base)
+		endLine = min(endLine, end-1)
+		lines = buf.LinesAbsoluteRange(startLine, endLine+1)
+	} else {
+		startLine = max(startLine, 0)
+		endLine = min(endLine, buf.LineCount()-1)
+		lines = buf.LinesRange(startLine, endLine+1)
 	}
-	if endLine >= lineCount {
-		endLine = lineCount - 1
-	}
-	if endLine < startLine {
-		return nil
-	}
-
-	lines := buf.LinesRange(startLine, endLine+1)
 	if len(lines) == 0 {
 		return nil
 	}
@@ -199,14 +221,11 @@ func (p *Plugin) interactiveSelectionLines() []string {
 }
 
 func (p *Plugin) interactiveVisibleLines() []string {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return nil
-	}
 	buf := p.interactiveOutputBuffer()
 	if buf == nil {
 		return nil
 	}
-	layout := p.interactiveViewportLayout()
+	layout := p.terminalSelectionViewportLayout()
 	start := layout.Start
 	end := layout.End
 	if end <= start {
@@ -220,31 +239,38 @@ func (p *Plugin) interactiveVisibleLines() []string {
 }
 
 func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return terminalViewportLayout{}
-	}
+	return p.terminalSelectionViewportLayout()
+}
+
+func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	buffer := p.interactiveOutputBuffer()
 	if buffer == nil {
 		return terminalViewportLayout{}
 	}
 
 	width, height := p.calculatePreviewDimensions()
-	termPanel := p.interactiveState.TermPanel
+	termPanel := p.selectionTermPanel
+	if p.interactiveState != nil && p.interactiveState.Active {
+		termPanel = p.interactiveState.TermPanel
+	}
 	if termPanel && p.termPanelVisible {
 		width, height = p.calculateTermPanelDimensions()
 	} else if p.termPanelVisible {
 		width, height = p.calculateAgentPaneDimensions()
 	}
 
+	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active
 	input := terminalViewportInput{
 		Buffer:      buffer,
 		Width:       width,
 		Height:      height,
 		Follow:      p.autoScrollOutput,
 		Offset:      p.previewOffset,
-		Interactive: true,
-		PaneHeight:  p.interactiveState.PaneHeight,
-		PaneWidth:   p.interactiveState.PaneWidth,
+		Interactive: interactive,
+	}
+	if p.interactiveState != nil {
+		input.PaneHeight = p.interactiveState.PaneHeight
+		input.PaneWidth = p.interactiveState.PaneWidth
 	}
 	if termPanel {
 		if p.selection.Anchor.Valid() {
@@ -259,12 +285,117 @@ func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
 	return calculateTerminalViewportLayout(input)
 }
 
-func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
-	return func() tea.Msg {
-		lines := p.interactiveSelectionLines()
-		if len(lines) == 0 {
-			lines = p.interactiveVisibleLines()
+func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
+	point, line, ok := p.terminalPointAndLine(action)
+	if !ok {
+		return nil
+	}
+	plain := ansi.Strip(ui.ExpandTabs(line, tabStopWidth))
+	left, right := point.Col, point.Col
+	isWord := func(r rune) bool {
+		return r == '_' || r == '-' || r == '.' || r == '/' || r == ':' ||
+			r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+	}
+	runes := []rune(plain)
+	if len(runes) == 0 {
+		return nil
+	}
+	left = min(left, len(runes)-1)
+	right = left
+	if isWord(runes[left]) {
+		for left > 0 && isWord(runes[left-1]) {
+			left--
 		}
+		for right+1 < len(runes) && isWord(runes[right+1]) {
+			right++
+		}
+	}
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: point.Line, Col: left},
+		ui.SelectionPoint{Line: point.Line, Col: right},
+		false,
+	)
+	if p.copyOnSelectEnabled() {
+		return p.copyInteractiveSelectionCmd()
+	}
+	return nil
+}
+
+func (p *Plugin) selectTerminalLine(action mouse.MouseAction) tea.Cmd {
+	point, line, ok := p.terminalPointAndLine(action)
+	if !ok {
+		return nil
+	}
+	width := ansi.StringWidth(ui.ExpandTabs(line, tabStopWidth))
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: point.Line, Col: 0},
+		ui.SelectionPoint{Line: point.Line, Col: max(width-1, 0)},
+		false,
+	)
+	if p.copyOnSelectEnabled() {
+		return p.copyInteractiveSelectionCmd()
+	}
+	return nil
+}
+
+func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoint, string, bool) {
+	if action.Region == nil {
+		return ui.SelectionPoint{}, "", false
+	}
+	p.selectionTermPanel = action.Region.ID == regionTermPanelContent
+	p.selection.ViewRect = action.Region.Rect
+	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
+	if !ok {
+		return ui.SelectionPoint{}, "", false
+	}
+	buf := p.interactiveOutputBuffer()
+	if buf == nil {
+		return ui.SelectionPoint{}, "", false
+	}
+	var lines []string
+	if _, _, absolute := buf.AbsoluteRange(); absolute {
+		lines = buf.LinesAbsoluteRange(lineIdx, lineIdx+1)
+	} else {
+		lines = buf.LinesRange(lineIdx, lineIdx+1)
+	}
+	if len(lines) == 0 {
+		return ui.SelectionPoint{}, "", false
+	}
+	return ui.SelectionPoint{Line: lineIdx, Col: col}, lines[0], true
+}
+
+func (p *Plugin) selectAllTerminalOutput(termPanel bool) {
+	p.selectionTermPanel = termPanel
+	buf := p.interactiveOutputBuffer()
+	if buf == nil || buf.LineCount() == 0 {
+		return
+	}
+	start, end := 0, buf.LineCount()
+	if absoluteStart, absoluteEnd, absolute := buf.AbsoluteRange(); absolute {
+		start, end = absoluteStart, absoluteEnd
+	}
+	last := buf.LinesRange(buf.LineCount()-1, buf.LineCount())
+	lastWidth := 0
+	if len(last) > 0 {
+		lastWidth = ansi.StringWidth(ui.ExpandTabs(last[0], tabStopWidth))
+	}
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: start, Col: 0},
+		ui.SelectionPoint{Line: end - 1, Col: max(lastWidth-1, 0)},
+		false,
+	)
+}
+
+func (p *Plugin) copyOnSelectEnabled() bool {
+	return p.ctx != nil && p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.CopyOnSelect
+}
+
+func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
+	lines := p.interactiveSelectionLines()
+	if len(lines) == 0 {
+		lines = p.interactiveVisibleLines()
+	}
+	return func() tea.Msg {
 		if len(lines) == 0 {
 			return app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
 		}

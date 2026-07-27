@@ -163,10 +163,19 @@ func TestHandler_DoubleClick(t *testing.T) {
 		t.Error("second immediate click should be double click")
 	}
 
-	// Third click — should NOT be double click (reset after double)
+	// Third click completes a triple-click gesture, but is not another double.
 	r3 := h.HandleClick(5, 5)
 	if r3.IsDoubleClick {
-		t.Error("third click should not be double click (reset after double)")
+		t.Error("third click should not be double click")
+	}
+	if !r3.IsTripleClick || r3.ClickCount != 3 {
+		t.Fatalf("third click = %#v, want triple click", r3)
+	}
+
+	// Fourth click starts a fresh gesture.
+	r4 := h.HandleClick(5, 5)
+	if r4.IsDoubleClick || r4.IsTripleClick || r4.ClickCount != 1 {
+		t.Fatalf("fourth click = %#v, want fresh single click", r4)
 	}
 }
 

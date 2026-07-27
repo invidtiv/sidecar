@@ -378,6 +378,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		LastKeyTime:   time.Now(),
 		CursorVisible: true, // Assume visible until we get first cursor query result
 	}
+	p.selectionTermPanel = false
 	p.selection.Clear()
 
 	p.viewMode = ViewModeInteractive
@@ -440,6 +441,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		LastKeyTime:   time.Now(),
 		CursorVisible: true,
 	}
+	p.selectionTermPanel = true
 	p.selection.Clear()
 	p.viewMode = ViewModeInteractive
 
@@ -858,6 +860,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	if msg.String() == p.getInteractiveCopyKey() {
 		return p.copyInteractiveSelectionCmd()
+	}
+	if msg.String() == "ctrl+a" && p.interactiveState != nil {
+		p.selectAllTerminalOutput(p.interactiveState.TermPanel)
+		return nil
 	}
 
 	if msg.String() == p.getInteractivePasteKey() {

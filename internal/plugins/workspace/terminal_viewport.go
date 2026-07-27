@@ -101,7 +101,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
 		line = ui.ExpandTabs(line, tabStopWidth)
-		if in.Interactive && in.Selection != nil && in.Selection.HasSelection() {
+		if in.Selection != nil && in.Selection.HasSelection() {
 			startCol, endCol := in.Selection.GetLineSelectionCols(in.AbsoluteBase + layout.Start + i)
 			if startCol >= 0 {
 				line = ui.InjectCharacterRangeBackground(line, startCol, endCol)

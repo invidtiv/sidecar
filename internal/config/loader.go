@@ -90,6 +90,7 @@ type rawWorkspaceConfig struct {
 	InteractiveAttachKey string                   `json:"interactiveAttachKey"`
 	InteractiveCopyKey   string                   `json:"interactiveCopyKey"`
 	InteractivePasteKey  string                   `json:"interactivePasteKey"`
+	CopyOnSelect         *bool                    `json:"copyOnSelect"`
 	SidebarDisplay       *rawSidebarDisplayConfig `json:"sidebarDisplay"`
 }
 
@@ -266,6 +267,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Plugins.Workspace.InteractivePasteKey != "" {
 		cfg.Plugins.Workspace.InteractivePasteKey = raw.Plugins.Workspace.InteractivePasteKey
+	}
+	if raw.Plugins.Workspace.CopyOnSelect != nil {
+		cfg.Plugins.Workspace.CopyOnSelect = *raw.Plugins.Workspace.CopyOnSelect
 	}
 	if sd := raw.Plugins.Workspace.SidebarDisplay; sd != nil {
 		if sd.HideRepoPrefix != nil {

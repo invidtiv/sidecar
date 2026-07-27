@@ -25,16 +25,18 @@ func (p SelectionPoint) Valid() bool {
 
 // SelectionState holds all selection state for a single selectable region.
 type SelectionState struct {
-	Active   bool
-	Start    SelectionPoint
-	End      SelectionPoint
-	Anchor   SelectionPoint
-	ViewRect mouse.Rect
+	Active      bool
+	Rectangular bool
+	Start       SelectionPoint
+	End         SelectionPoint
+	Anchor      SelectionPoint
+	ViewRect    mouse.Rect
 }
 
 // Clear resets all fields, Start/End/Anchor to {-1,-1}.
 func (s *SelectionState) Clear() {
 	s.Active = false
+	s.Rectangular = false
 	s.Start = SelectionPoint{-1, -1}
 	s.End = SelectionPoint{-1, -1}
 	s.Anchor = SelectionPoint{-1, -1}
@@ -71,9 +73,15 @@ func (s *SelectionState) GetLineSelectionCols(lineIdx int) (startCol, endCol int
 
 	selStart := s.Start
 	selEnd := s.End
+	if selStart.Line > selEnd.Line {
+		selStart, selEnd = selEnd, selStart
+	}
 
 	if lineIdx < selStart.Line || lineIdx > selEnd.Line {
 		return -1, -1
+	}
+	if s.Rectangular {
+		return min(s.Start.Col, s.End.Col), max(s.Start.Col, s.End.Col)
 	}
 
 	if selStart.Line == selEnd.Line {
@@ -93,11 +101,42 @@ func (s *SelectionState) GetLineSelectionCols(lineIdx int) (startCol, endCol int
 // PrepareDrag stores the click position and starts drag tracking without
 // initializing selection. Selection only activates on actual drag motion.
 func (s *SelectionState) PrepareDrag(lineIdx, col int, viewRect mouse.Rect) {
+	s.PrepareDragMode(lineIdx, col, viewRect, false)
+}
+
+// PrepareDragMode starts a character or rectangular drag.
+func (s *SelectionState) PrepareDragMode(lineIdx, col int, viewRect mouse.Rect, rectangular bool) {
 	s.Active = false
+	s.Rectangular = rectangular
 	s.Start = SelectionPoint{-1, -1}
 	s.End = SelectionPoint{-1, -1}
 	s.Anchor = SelectionPoint{lineIdx, col}
 	s.ViewRect = viewRect
+}
+
+// SelectRange installs a complete selection and preserves anchor for future
+// shift-extension gestures.
+func (s *SelectionState) SelectRange(anchor, current SelectionPoint, rectangular bool) {
+	s.Anchor = anchor
+	s.Rectangular = rectangular
+	s.Active = false
+	if current.Before(anchor) {
+		s.Start, s.End = current, anchor
+	} else {
+		s.Start, s.End = anchor, current
+	}
+}
+
+// ExtendTo extends the existing anchor to current.
+func (s *SelectionState) ExtendTo(current SelectionPoint) {
+	anchor := s.Anchor
+	if !anchor.Valid() {
+		anchor = s.Start
+	}
+	if !anchor.Valid() {
+		anchor = current
+	}
+	s.SelectRange(anchor, current, s.Rectangular)
 }
 
 // HandleDrag updates selection state during a drag operation.
@@ -158,6 +197,11 @@ func (s *SelectionState) SelectedText(lines []string, startLine int, tabWidth in
 	if len(expanded) == 1 {
 		// Single line: extract [startCol, endCol] inclusive
 		expanded[0] = VisualSubstring(expanded[0], startCol, endCol+1)
+	} else if s.Rectangular {
+		left, right := min(s.Start.Col, s.End.Col), max(s.Start.Col, s.End.Col)
+		for i := range expanded {
+			expanded[i] = VisualSubstring(expanded[i], left, right+1)
+		}
 	} else {
 		// First line: from startCol to end
 		expanded[0] = VisualSubstring(expanded[0], startCol, -1)

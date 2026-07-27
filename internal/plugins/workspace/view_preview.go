@@ -234,7 +234,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	offsetFromBottom := false
 	trimTrailing := p.autoScrollOutput && !interactive
 	if termPanel {
-		if p.selection.Anchor.Valid() {
+		if p.selectionTermPanel && p.selection.Anchor.Valid() {
 			follow = false
 			offset = p.termPanelSelectionOffset
 		} else {
@@ -245,6 +245,10 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		trimTrailing = !interactive
 	}
 	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
+	var selection *ui.SelectionState
+	if p.selectionTermPanel == termPanel {
+		selection = &p.selection
+	}
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer:           buffer,
@@ -255,7 +259,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		Follow:           follow,
 		TrimTrailing:     trimTrailing,
 		Interactive:      interactive,
-		Selection:        &p.selection,
+		Selection:        selection,
 		CursorRow:        cursorRow,
 		CursorCol:        cursorCol,
 		CursorVisible:    cursorVisible,

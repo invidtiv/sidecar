@@ -563,6 +563,17 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
+	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		switch msg.String() {
+		case "ctrl+a":
+			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
+			return nil
+		default:
+			if msg.String() == p.getInteractiveCopyKey() {
+				return p.copyInteractiveSelectionCmd()
+			}
+		}
+	}
 
 	switch msg.String() {
 	case "j", "down":

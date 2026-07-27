@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -657,5 +658,98 @@ func TestInteractiveSelectionLines_SingleLine(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "world") {
 		t.Errorf("expected 'world' in selection, got %q", lines[0])
+	}
+}
+
+func TestInteractiveSelectionUsesAbsoluteCoordinatesAcrossPrepend(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.UpdateSnapshot("one\nstable target\nthree", 100)
+	p.shellSelected = true
+	p.shells = []*ShellSession{{
+		TmuxName: "shell-1",
+		Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buf},
+	}}
+	p.selectedShellIdx = 0
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 101, Col: 0},
+		ui.SelectionPoint{Line: 101, Col: 5},
+		false,
+	)
+
+	before := p.interactiveSelectionLines()
+	if !slices.Equal(before, []string{"stable"}) {
+		t.Fatalf("selection before prepend = %#v, want stable", before)
+	}
+	buf.PrependSnapshot("older-a\nolder-b", 98)
+	after := p.interactiveSelectionLines()
+	if !slices.Equal(after, before) {
+		t.Fatalf("selection drifted after prepend: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestTerminalWordAndLineGestures(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("open internal/foo.go:123 now")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	wordAction := actionAt(10, 4)
+	p.selectTerminalWord(wordAction)
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"internal/foo.go:123"}) {
+		t.Fatalf("double-click word selection = %#v", got)
+	}
+
+	p.selectTerminalLine(wordAction)
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"open internal/foo.go:123 now"}) {
+		t.Fatalf("triple-click line selection = %#v", got)
+	}
+}
+
+func TestAltDragCreatesRectangularSelection(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("abcdef\nghijkl")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	start := actionAt(1, 4)
+	start.Alt = true
+	p.prepareInteractiveDrag(start)
+	p.handleInteractiveSelectionDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag,
+		X:    3 + panelOverhead/2,
+		Y:    5,
+	})
+	if !p.selection.Rectangular {
+		t.Fatal("Alt+drag did not set rectangular selection mode")
+	}
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"bcd", "hij"}) {
+		t.Fatalf("rectangular selection = %#v, want bcd/hij", got)
+	}
+}
+
+func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("abcdef\nghijkl")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 0, Col: 2},
+		ui.SelectionPoint{Line: 0, Col: 3},
+		false,
+	)
+
+	extend := actionAt(4, 5)
+	extend.Shift = true
+	p.prepareInteractiveDrag(extend)
+	if p.selection.Start != (ui.SelectionPoint{Line: 0, Col: 2}) ||
+		p.selection.End != (ui.SelectionPoint{Line: 1, Col: 4}) {
+		t.Fatalf("extended selection = %+v..%+v", p.selection.Start, p.selection.End)
 	}
 }

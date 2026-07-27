@@ -61,6 +61,7 @@ type saveWorkspaceConfig struct {
 	InteractiveAttachKey string                `json:"interactiveAttachKey,omitempty"`
 	InteractiveCopyKey   string                `json:"interactiveCopyKey,omitempty"`
 	InteractivePasteKey  string                `json:"interactivePasteKey,omitempty"`
+	CopyOnSelect         *bool                 `json:"copyOnSelect,omitempty"`
 	SidebarDisplay       *SidebarDisplayConfig `json:"sidebarDisplay,omitempty"`
 }
 
@@ -99,6 +100,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 				InteractiveAttachKey: cfg.Plugins.Workspace.InteractiveAttachKey,
 				InteractiveCopyKey:   cfg.Plugins.Workspace.InteractiveCopyKey,
 				InteractivePasteKey:  cfg.Plugins.Workspace.InteractivePasteKey,
+				CopyOnSelect:         &cfg.Plugins.Workspace.CopyOnSelect,
 				SidebarDisplay:       &cfg.Plugins.Workspace.SidebarDisplay,
 			},
 		},
