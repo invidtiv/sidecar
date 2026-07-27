@@ -378,9 +378,7 @@ func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 			"-c", wt.Path, // Working directory
 		}
 
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
 
@@ -688,9 +686,7 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 			"-c", wt.Path, // Working directory
 		}
 
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
 
@@ -751,9 +747,7 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", wt.Path, // Working directory
 		}
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return func() tea.Msg {
 				return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("create session: %w", err)}
 			}

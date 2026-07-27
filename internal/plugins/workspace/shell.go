@@ -551,9 +551,7 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", workDir, // Working directory
 		}
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			created.Err = fmt.Errorf("create shell session: %w", err)
 			return created
 		}
@@ -651,9 +649,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 		if previewWidth > 0 && previewHeight > 0 {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return ShellCreatedMsg{
 				SessionName: sessionName,
 				DisplayName: shell.Name,
@@ -768,9 +764,7 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 			if previewWidth > 0 && previewHeight > 0 {
 				args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 			}
-			tty.PrepareServer()
-			cmd := exec.Command("tmux", args...)
-			if err := cmd.Run(); err != nil {
+			if err := tty.NewSession(args...); err != nil {
 				return ShellCreatedMsg{
 					SessionName: sessionName,
 					DisplayName: shell.Name,
@@ -1088,9 +1082,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			"-c", wt.Path, // Working directory
 		}
 
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
 

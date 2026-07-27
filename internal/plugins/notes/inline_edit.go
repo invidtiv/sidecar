@@ -90,9 +90,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 			"-x", strconv.Itoa(editorW), "-y", strconv.Itoa(editorH), "-e", "TERM=" + term,
 			editor, notePath}
 
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", tmuxArgs...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(tmuxArgs...); err != nil {
 			return msg.ToastMsg{
 				Message:  fmt.Sprintf("Failed to start editor: %v", err),
 				Duration: 3 * time.Second,

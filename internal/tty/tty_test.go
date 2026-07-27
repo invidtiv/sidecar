@@ -117,14 +117,15 @@ func TestDefaultConfig(t *testing.T) {
 func TestModelIgnoresMessagesFromAnotherOwner(t *testing.T) {
 	first := New(nil)
 	second := New(nil)
-	first.Enter("first", "")
-	second.Enter("second", "")
+	first.Enter("shared-target", "")
+	second.Enter("shared-target", "")
 
 	second.State.OutputBuf.Write("second output")
 	first.Update(CaptureResultMsg{
-		Scope:  second.Scope(),
-		Target: "second",
-		Output: "foreign output",
+		Scope:          second.Scope(),
+		PollGeneration: first.State.PollGeneration,
+		Target:         "shared-target",
+		Output:         "foreign output",
 	})
 	if got := first.State.OutputBuf.String(); got != "" {
 		t.Fatalf("foreign capture changed first model: %q", got)
@@ -144,9 +145,10 @@ func TestModelIgnoresMessagesFromPreviousActivation(t *testing.T) {
 	model.Enter("same-target", "")
 
 	model.Update(CaptureResultMsg{
-		Scope:  stale,
-		Target: "same-target",
-		Output: "stale output",
+		Scope:          stale,
+		PollGeneration: model.State.PollGeneration,
+		Target:         "same-target",
+		Output:         "stale output",
 	})
 	if got := model.State.OutputBuf.String(); got != "" {
 		t.Fatalf("stale capture changed re-entered model: %q", got)
@@ -162,11 +164,45 @@ func TestModelAcceptsCurrentScopedCapture(t *testing.T) {
 	model := New(nil)
 	model.Enter("current", "")
 	model.Update(CaptureResultMsg{
-		Scope:  model.Scope(),
-		Target: "current",
-		Output: "current output",
+		Scope:          model.Scope(),
+		PollGeneration: model.State.PollGeneration,
+		Target:         "current",
+		Output:         "current output",
 	})
 	if got := model.State.OutputBuf.String(); got != "current output" {
 		t.Fatalf("current capture = %q, want current output", got)
+	}
+}
+
+func TestModelRejectsOutOfOrderCaptureResult(t *testing.T) {
+	model := New(nil)
+	model.Enter("current", "")
+	scope := model.Scope()
+
+	// Model a newer poll superseding an older capture that is still in flight.
+	model.State.PollGeneration = 2
+	model.Update(CaptureResultMsg{
+		Scope:          scope,
+		PollGeneration: 2,
+		Target:         "current",
+		Output:         "newer output",
+		CursorRow:      7,
+	})
+	if got := model.State.OutputBuf.String(); got != "newer output" {
+		t.Fatalf("newer capture = %q, want newer output", got)
+	}
+
+	model.Update(CaptureResultMsg{
+		Scope:          scope,
+		PollGeneration: 1,
+		Target:         "current",
+		Output:         "older output",
+		CursorRow:      1,
+	})
+	if got := model.State.OutputBuf.String(); got != "newer output" {
+		t.Fatalf("out-of-order capture replaced newer output: %q", got)
+	}
+	if got := model.State.CursorRow; got != 7 {
+		t.Fatalf("out-of-order capture replaced cursor row: %d", got)
 	}
 }

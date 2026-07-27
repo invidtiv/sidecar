@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -195,9 +194,7 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 			"-s", sessionName,
 			"-c", workDir,
 		}
-		tty.PrepareServer()
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return TermPanelSessionCreatedMsg{
 				SessionName: sessionName,
 				Err:         fmt.Errorf("create terminal panel session: %w", err),

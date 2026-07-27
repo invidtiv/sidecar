@@ -13,30 +13,55 @@ import (
 // HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
 const HistoryLimit = 10000
 
-var prepareServerOnce sync.Once
+var tmuxSessionMu sync.Mutex
 
 // PrepareServer configures tmux before any sidecar session is created. Raising
 // the global default before new-session is the only behavior that works on
 // older tmux releases where history-limit changes do not affect existing panes.
 // Existing user settings above the sidecar minimum are preserved.
-func PrepareServer() {
-	prepareServerOnce.Do(func() {
-		// Keep the server alive between session creations and configure both
-		// options in the same invocation so an empty new server cannot exit in
-		// the gap between commands.
-		_ = exec.Command("tmux",
-			"start-server", ";",
-			"set-option", "-s", "exit-empty", "off",
-		).Run()
+func PrepareServer() error {
+	tmuxSessionMu.Lock()
+	defer tmuxSessionMu.Unlock()
+	return prepareServer()
+}
 
-		current := 0
-		if output, err := exec.Command("tmux", "show-options", "-gv", "history-limit").Output(); err == nil {
-			current, _ = strconv.Atoi(strings.TrimSpace(string(output)))
+func prepareServer() error {
+	// Keep the server alive between session creations and configure both
+	// options in the same invocation so an empty new server cannot exit in
+	// the gap between commands.
+	if err := exec.Command("tmux",
+		"start-server", ";",
+		"set-option", "-s", "exit-empty", "off",
+	).Run(); err != nil {
+		return fmt.Errorf("prepare tmux server: %w", err)
+	}
+
+	output, err := exec.Command("tmux", "show-options", "-gv", "history-limit").Output()
+	if err != nil {
+		return fmt.Errorf("read tmux history-limit: %w", err)
+	}
+	current, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return fmt.Errorf("parse tmux history-limit: %w", err)
+	}
+	if current < HistoryLimit {
+		if err := exec.Command("tmux", "set-option", "-g", "history-limit", strconv.Itoa(HistoryLimit)).Run(); err != nil {
+			return fmt.Errorf("set tmux history-limit: %w", err)
 		}
-		if current < HistoryLimit {
-			_ = exec.Command("tmux", "set-option", "-g", "history-limit", strconv.Itoa(HistoryLimit)).Run()
-		}
-	})
+	}
+	return nil
+}
+
+// NewSession creates a tmux session only after the server-wide history default
+// is known to be configured. The mutex keeps every sidecar new-session path
+// ordered behind preparation and makes a failed preparation retryable.
+func NewSession(args ...string) error {
+	tmuxSessionMu.Lock()
+	defer tmuxSessionMu.Unlock()
+	if err := prepareServer(); err != nil {
+		return err
+	}
+	return exec.Command("tmux", args...).Run()
 }
 
 // IsSessionDeadError checks if an error indicates the tmux session/pane is gone.

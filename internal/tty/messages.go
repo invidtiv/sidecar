@@ -29,13 +29,6 @@ type EscapeTimerMsg struct {
 	Scope MessageScope
 }
 
-// CursorPositionMsg delivers cursor position from async query.
-type CursorPositionMsg struct {
-	Row     int
-	Col     int
-	Visible bool
-}
-
 // PaneResizedMsg is sent when a pane resize operation completes.
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
 type PaneResizedMsg struct {
@@ -45,10 +38,11 @@ type PaneResizedMsg struct {
 // CaptureResultMsg delivers async tmux capture results.
 // Used to avoid blocking the UI thread on tmux subprocess calls.
 type CaptureResultMsg struct {
-	Scope  MessageScope
-	Target string // Pane or session this capture is for
-	Output string // Captured output (empty on error)
-	Err    error  // Non-nil if capture failed
+	Scope          MessageScope
+	PollGeneration int
+	Target         string // Pane or session this capture is for
+	Output         string // Captured output (empty on error)
+	Err            error  // Non-nil if capture failed
 
 	// Cursor state captured atomically with output
 	CursorRow     int

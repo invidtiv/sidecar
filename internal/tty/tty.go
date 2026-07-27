@@ -527,6 +527,9 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 	if !m.IsActive() || m.State.OutputBuf == nil {
 		return nil
 	}
+	if msg.PollGeneration != m.State.PollGeneration {
+		return nil
+	}
 
 	if msg.Err != nil {
 		if IsSessionDeadError(msg.Err) {
@@ -576,23 +579,30 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 
 	// Capture output and cursor position atomically
 	scope := msg.Scope
+	pollGeneration := msg.Generation
 	return func() tea.Msg {
 		output, err := CapturePaneOutput(target, m.Config.ScrollbackLines)
 		if err != nil {
-			return CaptureResultMsg{Scope: scope, Target: target, Err: err}
+			return CaptureResultMsg{
+				Scope:          scope,
+				PollGeneration: pollGeneration,
+				Target:         target,
+				Err:            err,
+			}
 		}
 
 		row, col, paneHeight, paneWidth, visible, _ := QueryCursorPositionSync(target)
 
 		return CaptureResultMsg{
-			Scope:         scope,
-			Target:        target,
-			Output:        output,
-			CursorRow:     row,
-			CursorCol:     col,
-			CursorVisible: visible,
-			PaneHeight:    paneHeight,
-			PaneWidth:     paneWidth,
+			Scope:          scope,
+			PollGeneration: pollGeneration,
+			Target:         target,
+			Output:         output,
+			CursorRow:      row,
+			CursorCol:      col,
+			CursorVisible:  visible,
+			PaneHeight:     paneHeight,
+			PaneWidth:      paneWidth,
 		}
 	}
 }
