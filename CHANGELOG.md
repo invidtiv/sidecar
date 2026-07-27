@@ -7,6 +7,12 @@ All notable changes to sidecar are documented here.
 ## [v0.88.0] - 2026-07-27
 
 ### Features
+- **Embedded terminals are driven by tmux control mode.** Sidecar keeps a control connection to the visible terminal and re-renders when tmux says the screen changed, instead of capturing it on a timer. The polling path is retained and resumes automatically whenever control mode cannot start or its client dies.
+- **Embedded terminals use the host terminal's own cursor** rather than a drawn block, so shape, blink, and hidden-cursor states match what the program running inside actually asked for.
+- **Scroll back through the full tmux scrollback.** Older ranges are fetched on demand as you scroll past what is loaded; the hint line reports how many older lines remain and how far back you are from the live edge.
+- **Search terminal scrollback.** Press `/` (or `ctrl+shift+f` while interactive) to search, `n`/`N` to step through matches, `esc` to clear. Search covers the complete tmux history, not only the ranges you happen to have scrolled through.
+- **Select terminal output with the mouse.** Drag to select, hold alt for a rectangular selection, double-click for a word, triple-click for a line, `ctrl+a` for everything. Set `plugins.workspace.copyOnSelect` to copy as soon as a drag ends.
+- **URLs in terminal output are underlined and clickable.** Hyperlink escape sequences present in the output itself are stripped and re-synthesized only for URLs that pass a safety check, so untrusted output cannot make a link point somewhere other than the text it displays.
 - **`ctrl+n` creates a shell session directly from the workspaces tab**, skipping the type-selector modal. It uses `plugins.workspace.defaultAgentType` when one is configured and creates a plain shell otherwise; it never passes an agent's skip-permissions flag, so use `n` → Shell when you want that. The hint appears in the workspaces footer next to **New**.
 - **New `plugins.workspace.autoCreateShell` setting (default off).** With it enabled, the first time you focus the workspaces tab in a session sidecar creates a shell for you, so a terminal is ready for quick tasks without going through the create modal. It only fires when no shell sessions exist — shells whose tmux sessions survived a restart are reattached as before — and it leaves the sidebar selection where it was rather than jumping to the new shell. Nothing is created until the tab is focused, so startup is unaffected when you open on another tab.
 
