@@ -186,6 +186,35 @@ func TestOutputBufferPrependRejectsGap(t *testing.T) {
 	}
 }
 
+func TestOutputBufferLegacyUpdateClearsAbsoluteModeForIdenticalContent(t *testing.T) {
+	b := NewOutputBuffer(20)
+	if !b.UpdateSnapshot("same\ncontent", 42) {
+		t.Fatal("absolute snapshot was not applied")
+	}
+	if !b.Update("same\ncontent") {
+		t.Fatal("legacy update must apply when changing coordinate modes")
+	}
+	if start, end, ok := b.AbsoluteRange(); ok {
+		t.Fatalf("legacy update left absolute range [%d,%d) active", start, end)
+	}
+}
+
+func TestOutputBufferDelayedPrependCannotOverwriteNewerOverlap(t *testing.T) {
+	b := NewOutputBuffer(20)
+	b.UpdateSnapshot("live-2\nlive-3\nlive-4", 2)
+
+	// Simulate an older capture requested before the live rows changed. Its
+	// overlap at absolute lines 2-3 must not replace the current live tail.
+	if !b.PrependSnapshot("old-0\nold-1\nstale-2\nstale-3", 0) {
+		t.Fatal("older capture was not prepended")
+	}
+	got := b.Lines()
+	want := []string{"old-0", "old-1", "live-2", "live-3", "live-4"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("merged lines = %#v, want %#v", got, want)
+	}
+}
+
 func TestOutputBufferUpdateUsesRawLengthHashGuard(t *testing.T) {
 	b := NewOutputBuffer(10)
 	content := "hello\x1b[?2004h"

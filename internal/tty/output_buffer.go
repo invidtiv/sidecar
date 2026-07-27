@@ -68,7 +68,7 @@ func (b *OutputBuffer) Update(content string) bool {
 	// Compute hash of raw content first
 	rawHash := maphash.String(b.hashSeed, content)
 	rawLen := len(content)
-	if rawHash == b.lastRawHash && rawLen == b.lastLen {
+	if !b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen {
 		return false // Content unchanged - skip ALL processing
 	}
 
@@ -165,8 +165,11 @@ func (b *OutputBuffer) PrependSnapshot(content string, baseLine int) bool {
 	combinedBase := min(baseLine, b.baseLine)
 	combinedEnd := max(incomingEnd, currentEnd)
 	combined := make([]string, combinedEnd-combinedBase)
-	copy(combined[b.baseLine-combinedBase:], b.lines)
 	copy(combined[baseLine-combinedBase:], incoming)
+	// A range capture may finish after a newer live snapshot has arrived.
+	// Preserve the current buffer on overlap so delayed history can only add
+	// older rows, never roll the live tail backward.
+	copy(combined[b.baseLine-combinedBase:], b.lines)
 
 	changed := combinedBase != b.baseLine || len(combined) != len(b.lines)
 	if !changed {
