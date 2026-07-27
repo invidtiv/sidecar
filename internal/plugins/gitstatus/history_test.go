@@ -278,7 +278,16 @@ func TestGetCommitDiff_NonExistentPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCommitDiff with non-existent path returned error: %v", err)
 	}
-	if diff != "" {
-		t.Errorf("expected empty diff for non-existent path, got: %q", diff)
+
+	// "git show <hash> -- <path>" always emits the commit header, for matching
+	// and non-matching paths alike, so the result is not empty. What marks "no
+	// changes here" is the absence of hunks, which is what ParseUnifiedDiff
+	// keys on -- it ignores every line before the first @@.
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff: %v", err)
+	}
+	if len(parsed.Hunks) != 0 {
+		t.Errorf("expected no hunks for non-existent path, got %d", len(parsed.Hunks))
 	}
 }
