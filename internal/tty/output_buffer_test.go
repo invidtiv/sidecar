@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -137,6 +138,62 @@ func TestOutputBuffer_ClearAllowsSameContentAgain(t *testing.T) {
 	}
 	if got := buf.String(); got != "same" {
 		t.Fatalf("buffer after Clear and update = %q, want same", got)
+	}
+}
+
+func TestOutputBufferAbsoluteSnapshotPreservesPrependedHistory(t *testing.T) {
+	b := NewOutputBuffer(20)
+	if !b.UpdateSnapshot("live-8\nlive-9\n", 8) {
+		t.Fatal("initial absolute snapshot was not applied")
+	}
+	if !b.PrependSnapshot("old-5\nold-6\nold-7\n", 5) {
+		t.Fatal("older snapshot was not prepended")
+	}
+	if !b.UpdateSnapshot("live-8\nlive-9 changed\nlive-10\n", 8) {
+		t.Fatal("changed live snapshot was not applied")
+	}
+
+	start, end, ok := b.AbsoluteRange()
+	if !ok || start != 5 || end != 11 {
+		t.Fatalf("absolute range = (%d,%d,%v), want (5,11,true)", start, end, ok)
+	}
+	got := b.LinesAbsoluteRange(5, 11)
+	want := []string{"old-5", "old-6", "old-7", "live-8", "live-9 changed", "live-10"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestOutputBufferAbsoluteTrimAdvancesBase(t *testing.T) {
+	b := NewOutputBuffer(4)
+	b.UpdateSnapshot("six\nseven\neight\nnine\n", 6)
+	b.PrependSnapshot("three\nfour\nfive\n", 3)
+
+	start, end, ok := b.AbsoluteRange()
+	if !ok || start != 6 || end != 10 {
+		t.Fatalf("trimmed range = (%d,%d,%v), want (6,10,true)", start, end, ok)
+	}
+	if got := b.Lines(); !slices.Equal(got, []string{"six", "seven", "eight", "nine"}) {
+		t.Fatalf("trimmed lines = %#v", got)
+	}
+}
+
+func TestOutputBufferPrependRejectsGap(t *testing.T) {
+	b := NewOutputBuffer(20)
+	b.UpdateSnapshot("ten\neleven\n", 10)
+	if b.PrependSnapshot("five\n", 5) {
+		t.Fatal("gapped prepend unexpectedly succeeded")
+	}
+}
+
+func TestOutputBufferUpdateUsesRawLengthHashGuard(t *testing.T) {
+	b := NewOutputBuffer(10)
+	content := "hello\x1b[?2004h"
+	if !b.Update(content) {
+		t.Fatal("initial update did not change")
+	}
+	if b.Update(content) {
+		t.Fatal("identical raw content reprocessed after escape stripping")
 	}
 }
 
