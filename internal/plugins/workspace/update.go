@@ -556,6 +556,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -661,6 +663,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1044,6 +1048,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1617,6 +1623,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState.CursorVisible = msg.CursorVisible
 			p.interactiveState.PaneHeight = msg.PaneHeight
 			p.interactiveState.PaneWidth = msg.PaneWidth
+			p.interactiveState.CursorHistorySize = msg.HistorySize
+			p.interactiveState.HasCursorHistory = msg.HasHistory
 		}
 		// In interactive mode targeting terminal panel, use the same adaptive
 		// decay polling as agent/shell panes (pollingDecayFast=50ms) for

@@ -34,6 +34,20 @@ type terminalViewportInput struct {
 	TotalItems    int
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
+
+	// CursorHistorySize and BufferBase place the cursor in buffer coordinates.
+	//
+	// A capture is `capture-pane -S -N`, i.e. scrollback lines followed by the
+	// pane's rows with trailing blanks stripped — so the buffer's tail is not
+	// the pane. In tmux's absolute line space pane row j is history_size+j, and
+	// BufferBase is the absolute index of the buffer's first line, so the
+	// cursor's buffer index is CursorHistorySize + CursorRow - BufferBase.
+	// HasCursorHistory is false when the capture carried no history metadata,
+	// in which case placement falls back to treating the buffer tail as the
+	// pane (td-d29821).
+	CursorHistorySize int
+	BufferBase        int
+	HasCursorHistory  bool
 }
 
 type terminalViewportLayout struct {
@@ -157,6 +171,22 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 }
 
+// cursorBufferBase reports the absolute index of the buffer's first line and
+// whether the cursor can be placed in absolute coordinates. Both the capture
+// having supplied history metadata and the buffer having been fed an absolute
+// snapshot are required; a buffer still on the relative Update path has no
+// absolute base to subtract.
+func cursorBufferBase(buffer *tty.OutputBuffer, state *InteractiveState) (base int, ok bool) {
+	if buffer == nil || state == nil || !state.HasCursorHistory {
+		return 0, false
+	}
+	base, _, absolute := buffer.AbsoluteRange()
+	if !absolute {
+		return 0, false
+	}
+	return base, true
+}
+
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
 	layout := calculateTerminalViewportLayout(in)
 	if in.Buffer == nil || layout.EffectiveCount == 0 ||
@@ -171,11 +201,19 @@ func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool
 	if visibleRows <= 0 {
 		return 0, 0, false
 	}
-	y = in.CursorRow
-	if in.PaneHeight > visibleRows {
-		y -= in.PaneHeight - visibleRows
-	} else if in.PaneHeight > 0 && in.PaneHeight < visibleRows {
-		y += visibleRows - in.PaneHeight
+	if in.HasCursorHistory {
+		// Buffer coordinates: absolute cursor row, minus the buffer's absolute
+		// base, minus the scroll offset.
+		y = in.CursorHistorySize + in.CursorRow - in.BufferBase - layout.Start
+	} else {
+		// No history metadata — assume the buffer's last DisplayHeight lines are
+		// the pane and place the cursor relative to that.
+		y = in.CursorRow
+		if in.PaneHeight > visibleRows {
+			y -= in.PaneHeight - visibleRows
+		} else if in.PaneHeight > 0 && in.PaneHeight < visibleRows {
+			y += visibleRows - in.PaneHeight
+		}
 	}
 	if y < 0 || y >= visibleRows {
 		return 0, 0, false

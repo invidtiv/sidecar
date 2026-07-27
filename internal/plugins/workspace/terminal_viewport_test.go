@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -456,5 +457,114 @@ func TestPadLinesToWidth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// td-d29821: a capture is scrollback + pane rows, so the pane's cursor row is
+// not a display row. Placing it as if it were floats the cursor above the live
+// line by however much scrollback the capture carried.
+func TestTerminalViewportCursorAccountsForScrollback(t *testing.T) {
+	// One scrollback line, then three pane rows. The cursor sits on pane row 2
+	// (the live prompt), which is display row 3.
+	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+
+	in := terminalViewportInput{
+		Buffer:            buffer,
+		Width:             80,
+		Height:            44,
+		Follow:            true,
+		Interactive:       true,
+		CursorRow:         2,
+		CursorCol:         8,
+		CursorVisible:     true,
+		PaneHeight:        44,
+		PaneWidth:         80,
+		CursorHistorySize: 1,
+		BufferBase:        0,
+		HasCursorHistory:  true,
+	}
+
+	_, y, ok := terminalViewportCursorPosition(in)
+	if !ok {
+		t.Fatal("expected the cursor to be visible")
+	}
+	if y != 3 {
+		t.Errorf("cursor row = %d, want 3 (pane row 2 + 1 scrollback line)", y)
+	}
+
+	// Without history metadata the old pane-relative placement still applies.
+	in.HasCursorHistory = false
+	if _, y, ok = terminalViewportCursorPosition(in); !ok || y != 2 {
+		t.Errorf("fallback cursor row = %d (ok=%v), want 2", y, ok)
+	}
+}
+
+// A full-screen program fills the pane, so the buffer's tail *is* the pane and
+// the absolute mapping has to agree with the pane-relative one. This is the
+// case that already worked and must not regress.
+func TestTerminalViewportCursorFullScreenPaneUnchanged(t *testing.T) {
+	const paneHeight = 10
+	const historySize = 25
+
+	lines := make([]string, 0, historySize+paneHeight)
+	for i := range historySize + paneHeight {
+		lines = append(lines, fmt.Sprintf("line-%02d", i))
+	}
+	buffer := testTerminalBuffer(strings.Join(lines, "\n"))
+
+	for _, cursorRow := range []int{0, 4, paneHeight - 1} {
+		in := terminalViewportInput{
+			Buffer:            buffer,
+			Width:             80,
+			Height:            paneHeight,
+			Follow:            true,
+			Interactive:       true,
+			CursorRow:         cursorRow,
+			CursorVisible:     true,
+			PaneHeight:        paneHeight,
+			PaneWidth:         80,
+			CursorHistorySize: historySize,
+			BufferBase:        0,
+			HasCursorHistory:  true,
+		}
+
+		_, withHistory, ok := terminalViewportCursorPosition(in)
+		if !ok {
+			t.Fatalf("cursorRow %d: expected the cursor to be visible", cursorRow)
+		}
+		in.HasCursorHistory = false
+		_, paneRelative, _ := terminalViewportCursorPosition(in)
+
+		if withHistory != cursorRow || paneRelative != cursorRow {
+			t.Errorf("cursorRow %d: absolute mapping gave %d, pane-relative gave %d; want %d for both",
+				cursorRow, withHistory, paneRelative, cursorRow)
+		}
+	}
+}
+
+// The buffer's absolute base has to be subtracted: once tmux history exceeds
+// the capture window, the buffer no longer starts at absolute line 0.
+func TestTerminalViewportCursorHonoursBufferBase(t *testing.T) {
+	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+
+	_, y, ok := terminalViewportCursorPosition(terminalViewportInput{
+		Buffer:            buffer,
+		Width:             80,
+		Height:            44,
+		Follow:            true,
+		Interactive:       true,
+		CursorRow:         2,
+		CursorVisible:     true,
+		PaneHeight:        44,
+		PaneWidth:         80,
+		CursorHistorySize: 601, // 600 lines scrolled out of the capture window
+		BufferBase:        600,
+		HasCursorHistory:  true,
+	})
+	if !ok {
+		t.Fatal("expected the cursor to be visible")
+	}
+	if y != 3 {
+		t.Errorf("cursor row = %d, want 3; buffer base was not subtracted", y)
 	}
 }

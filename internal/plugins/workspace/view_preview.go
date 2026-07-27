@@ -250,27 +250,36 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	if p.selectionTermPanel == termPanel {
 		selection = &p.selection
 	}
+	var cursorHistorySize, bufferBase int
+	var hasCursorHistory bool
+	if interactive {
+		cursorHistorySize = p.interactiveState.CursorHistorySize
+		bufferBase, hasCursorHistory = cursorBufferBase(buffer, p.interactiveState)
+	}
 
 	result := renderTerminalViewport(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		TrimTrailing:     trimTrailing,
-		Interactive:      interactive,
-		Selection:        selection,
-		CursorRow:        cursorRow,
-		CursorCol:        cursorCol,
-		CursorVisible:    cursorVisible,
-		PaneHeight:       paneHeight,
-		PaneWidth:        paneWidth,
-		NativeCursor:     interactive,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
-		SearchMatches:    p.terminalSearchMatches(termPanel),
+		Buffer:            buffer,
+		Width:             width,
+		Height:            height,
+		Offset:            offset,
+		OffsetFromBottom:  offsetFromBottom,
+		Follow:            follow,
+		TrimTrailing:      trimTrailing,
+		Interactive:       interactive,
+		Selection:         selection,
+		CursorRow:         cursorRow,
+		CursorCol:         cursorCol,
+		CursorVisible:     cursorVisible,
+		PaneHeight:        paneHeight,
+		PaneWidth:         paneWidth,
+		NativeCursor:      interactive,
+		AbsoluteBase:      absoluteBase,
+		TotalItems:        totalItems,
+		LoadingOlder:      loadingOlder,
+		SearchMatches:     p.terminalSearchMatches(termPanel),
+		CursorHistorySize: cursorHistorySize,
+		BufferBase:        bufferBase,
+		HasCursorHistory:  hasCursorHistory,
 	}, p.truncateCache)
 	if result.Content == "" {
 		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)

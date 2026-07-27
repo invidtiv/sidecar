@@ -33,23 +33,27 @@ func (p *Plugin) Cursor() *tea.Cursor {
 		}
 	}
 	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
+	bufferBase, hasCursorHistory := cursorBufferBase(buffer, p.interactiveState)
 	cursorX, cursorY, visible := terminalViewportCursorPosition(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		Interactive:      true,
-		CursorRow:        p.interactiveState.CursorRow,
-		CursorCol:        p.interactiveState.CursorCol,
-		CursorVisible:    p.interactiveState.CursorVisible,
-		PaneHeight:       p.interactiveState.PaneHeight,
-		PaneWidth:        p.interactiveState.PaneWidth,
-		NativeCursor:     true,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
+		Buffer:            buffer,
+		Width:             width,
+		Height:            height,
+		Offset:            offset,
+		OffsetFromBottom:  offsetFromBottom,
+		Follow:            follow,
+		Interactive:       true,
+		CursorRow:         p.interactiveState.CursorRow,
+		CursorCol:         p.interactiveState.CursorCol,
+		CursorVisible:     p.interactiveState.CursorVisible,
+		PaneHeight:        p.interactiveState.PaneHeight,
+		PaneWidth:         p.interactiveState.PaneWidth,
+		NativeCursor:      true,
+		AbsoluteBase:      absoluteBase,
+		TotalItems:        totalItems,
+		LoadingOlder:      loadingOlder,
+		CursorHistorySize: p.interactiveState.CursorHistorySize,
+		BufferBase:        bufferBase,
+		HasCursorHistory:  hasCursorHistory,
 	})
 	if !visible {
 		return nil

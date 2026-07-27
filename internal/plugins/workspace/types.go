@@ -341,6 +341,19 @@ type InteractiveState struct {
 	// PaneWidth tracks the tmux pane width for display width alignment.
 	PaneWidth int
 
+	// CursorHistorySize is the tmux history_size captured atomically with the
+	// cursor. In tmux's absolute line space the scrollback occupies
+	// [0, history_size) and pane row j is history_size+j, so this converts the
+	// pane-relative CursorRow into a buffer coordinate. Without it the rendered
+	// cursor floats above the live row by however much scrollback the capture
+	// included (td-d29821).
+	CursorHistorySize int
+
+	// HasCursorHistory reports whether CursorHistorySize is meaningful. Captures
+	// that predate the metadata, or that failed to parse it, fall back to the
+	// pane-relative placement.
+	HasCursorHistory bool
+
 	// VisibleStart and VisibleEnd track the buffer line range currently visible.
 	// Used for interactive selection mapping.
 	VisibleStart int

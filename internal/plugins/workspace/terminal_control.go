@@ -483,6 +483,8 @@ func (p *Plugin) applyPanelControlSnapshot(snapshot tty.ControlSnapshot) {
 		p.interactiveState.CursorVisible = snapshot.CursorVisible
 		p.interactiveState.PaneHeight = snapshot.PaneHeight
 		p.interactiveState.PaneWidth = snapshot.PaneWidth
+		p.interactiveState.CursorHistorySize = snapshot.HistorySize
+		p.interactiveState.HasCursorHistory = snapshot.HasHistory
 		p.updateBracketedPasteMode(output)
 		p.updateMouseReportingMode(output)
 	}
@@ -541,6 +543,8 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 		p.interactiveState.CursorVisible = snapshot.CursorVisible
 		p.interactiveState.PaneHeight = snapshot.PaneHeight
 		p.interactiveState.PaneWidth = snapshot.PaneWidth
+		p.interactiveState.CursorHistorySize = snapshot.HistorySize
+		p.interactiveState.HasCursorHistory = snapshot.HasHistory
 		p.updateBracketedPasteMode(output)
 		p.updateMouseReportingMode(output)
 	}
