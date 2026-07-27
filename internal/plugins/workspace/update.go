@@ -545,11 +545,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Always poll for status updates (needed for sidebar indicators),
 		// but use longer intervals when output isn't visible
-		return p, p.handlePollAgent(msg.WorkspaceName)
+		return p, p.handlePollAgent(msg.WorkspaceName, msg.Generation)
 
 	case AgentOutputMsg:
-		// Update state (content already stored by Update() in handlePollAgent)
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
+		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.OutputBuf != nil {
+				wt.Agent.OutputBuf.Update(msg.Output)
+			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
 			wt.Status = msg.Status
@@ -617,8 +623,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case AgentPollUnchangedMsg:
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.OutputBuf != nil {
+				wt.Agent.OutputBuf.Update(msg.Output)
+			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
@@ -928,6 +940,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case ShellSessionDeadMsg:
+		if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+			return p, nil
+		}
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(shellPollKey(msg.TmuxName))
 		// Shell session externally terminated (user typed 'exit' in shell)
@@ -1001,10 +1016,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case ShellOutputMsg:
+		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+			return p, nil
+		}
+		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
-		if shell != nil && msg.Changed && shell.Agent != nil {
-			shell.Agent.LastOutput = time.Now()
+		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
+			changed = shell.Agent.OutputBuf.Update(msg.Output)
+			if changed {
+				shell.Agent.LastOutput = time.Now()
+			}
 		}
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if p.viewMode == ViewModeInteractive && p.shellSelected &&
@@ -1031,7 +1053,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// 2. Visible + unfocused → medium polling (2s) - user can see output but clicked elsewhere
 		// 3. Not visible → slow polling (10-20s)
 		interval := pollIntervalActive
-		if !msg.Changed {
+		if !changed {
 			interval = pollIntervalIdle
 		}
 		selectedShell := p.getSelectedShell()
@@ -1087,7 +1109,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Poll specific shell session for output by name
 		if p.findShellByName(msg.TmuxName) != nil {
-			return p, p.pollShellSessionByName(msg.TmuxName)
+			return p, p.captureShellSessionByName(msg.TmuxName, msg.Generation)
 		}
 		return p, nil
 
@@ -1099,6 +1121,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case AgentStoppedMsg:
+		if msg.Generation != 0 && !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
@@ -1565,7 +1590,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case TermPanelCaptureMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible {
+		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
+			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg DROPPED", "session", msg.SessionName, "current", p.termPanelSession, "visible", p.termPanelVisible)
 			return p, nil
 		}
@@ -1606,7 +1632,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
 			return p, nil // Stale timer or panel hidden
 		}
-		return p, p.handleTermPanelPoll(msg.SessionName)
+		return p, p.handleTermPanelPoll(msg.SessionName, msg.Generation)
 
 	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)

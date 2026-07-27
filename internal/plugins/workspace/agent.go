@@ -861,6 +861,8 @@ func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duratio
 // AgentPollUnchangedMsg signals content unchanged, schedule next poll.
 type AgentPollUnchangedMsg struct {
 	WorkspaceName string
+	Generation    int
+	Output        string
 	CurrentStatus WorktreeStatus // Status including session file re-check
 	WaitingFor    string         // Prompt text if waiting
 	// Cursor position captured atomically (even when content unchanged)
@@ -874,11 +876,11 @@ type AgentPollUnchangedMsg struct {
 
 // handlePollAgent captures output from a tmux session asynchronously.
 // Uses a goroutine to avoid blocking the UI thread on tmux subprocess calls (td-c2961e).
-func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
+func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	wt := p.findWorktree(worktreeName)
 	if wt == nil || wt.Agent == nil {
 		return func() tea.Msg {
-			return AgentStoppedMsg{WorkspaceName: worktreeName}
+			return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 	}
 
@@ -958,17 +960,17 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 			// Session may have been killed
 			if strings.Contains(err.Error(), "can't find") ||
 				strings.Contains(err.Error(), "no server") {
-				return AgentStoppedMsg{WorkspaceName: worktreeName}
+				return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
 			}
 			// Schedule retry on other errors (with delay to prevent busy-loop)
 			time.Sleep(pollIntervalActive)
-			return pollAgentMsg{WorkspaceName: worktreeName}
+			return pollAgentMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 
 		output = trimCapturedOutput(output, maxBytes)
 
 		// Use hash-based change detection to skip processing if content unchanged
-		outputChanged := outputBuf == nil || outputBuf.Update(output)
+		outputChanged := outputBuf == nil || outputBuf.WouldChange(output)
 
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):
 		//   - tmux patterns: thinking, done, error (high-signal, session files can't detect these)
@@ -1007,6 +1009,8 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 		if !outputChanged {
 			return AgentPollUnchangedMsg{
 				WorkspaceName: worktreeName,
+				Generation:    generation,
+				Output:        output,
 				CurrentStatus: status,
 				WaitingFor:    waitingFor,
 				CursorRow:     cursor.Row,
@@ -1020,6 +1024,7 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 
 		return AgentOutputMsg{
 			WorkspaceName: worktreeName,
+			Generation:    generation,
 			Output:        output,
 			Status:        status,
 			WaitingFor:    waitingFor,

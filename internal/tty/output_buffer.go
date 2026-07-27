@@ -99,6 +99,16 @@ func (b *OutputBuffer) Update(content string) bool {
 	return true
 }
 
+// WouldChange reports whether content differs from the last raw update without
+// mutating the buffer. Async capture commands use this to do status work off
+// the UI goroutine while deferring the actual update until ownership is checked.
+func (b *OutputBuffer) WouldChange(content string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	rawHash := maphash.String(b.hashSeed, content)
+	return rawHash != b.lastRawHash || len(content) != b.lastLen
+}
+
 // Write replaces content in the buffer (for backward compatibility).
 // Prefer Update() for change detection.
 func (b *OutputBuffer) Write(content string) {

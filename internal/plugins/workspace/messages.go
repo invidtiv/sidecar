@@ -29,6 +29,7 @@ type WatcherErrorMsg struct {
 // AgentOutputMsg delivers new agent output.
 type AgentOutputMsg struct {
 	WorkspaceName string
+	Generation    int
 	Output        string
 	Status        WorktreeStatus
 	WaitingFor    string
@@ -44,6 +45,7 @@ type AgentOutputMsg struct {
 // AgentStoppedMsg signals an agent has stopped.
 type AgentStoppedMsg struct {
 	WorkspaceName string
+	Generation    int
 	Err           error
 }
 

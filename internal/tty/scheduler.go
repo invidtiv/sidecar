@@ -54,9 +54,10 @@ func (s *KeyedScheduler) Reset() {
 	s.generations = nil
 }
 
-// Schedule returns a delayed command stamped with key's current generation.
+// Schedule supersedes any outstanding work for key and returns a delayed
+// command stamped with the new generation.
 func (s *KeyedScheduler) Schedule(key string, delay time.Duration, message func(generation int) tea.Msg) tea.Cmd {
-	generation := s.Current(key)
+	generation := s.Invalidate(key)
 	if delay <= 0 {
 		return func() tea.Msg { return message(generation) }
 	}

@@ -44,6 +44,7 @@ type TermPanelSessionCreatedMsg struct {
 // TermPanelCaptureMsg delivers captured output from the terminal panel's tmux session.
 type TermPanelCaptureMsg struct {
 	SessionName   string
+	Generation    int
 	Output        string
 	Err           error
 	HasCursor     bool
@@ -221,7 +222,7 @@ func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
 // handleTermPanelPoll captures output from the terminal panel's tmux session.
 // Uses the global capture cache/coordinator to avoid redundant subprocess calls.
 // When interactive mode targets the terminal panel, also captures cursor position.
-func (p *Plugin) handleTermPanelPoll(sessionName string) tea.Cmd {
+func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd {
 	captureCursor := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
 	if captureCursor {
 		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
@@ -246,6 +247,7 @@ func (p *Plugin) handleTermPanelPoll(sessionName string) tea.Cmd {
 		}
 		msg := TermPanelCaptureMsg{
 			SessionName: sessionName,
+			Generation:  generation,
 			Output:      output,
 			Err:         err,
 		}

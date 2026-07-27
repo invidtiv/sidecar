@@ -19,16 +19,36 @@ func TestKeyedSchedulerScopesAndInvalidatesIndependently(t *testing.T) {
 	agentCmd := scheduler.Schedule(agent, 0, func(generation int) tea.Msg {
 		return schedulerTestMsg{Generation: generation}
 	})
+	agentGeneration := scheduler.Current(agent)
 	scheduler.Invalidate(shell)
-	if !scheduler.IsCurrent(agent, 0) {
+	if !scheduler.IsCurrent(agent, agentGeneration) {
 		t.Fatal("invalidating shell changed agent generation")
 	}
 	scheduler.Invalidate(agent)
-	if scheduler.IsCurrent(agent, 0) {
+	if scheduler.IsCurrent(agent, agentGeneration) {
 		t.Fatal("stale agent generation remained current")
 	}
-	if got := agentCmd().(schedulerTestMsg).Generation; got != 0 {
-		t.Fatalf("scheduled command token = %d, want captured generation 0", got)
+	if got := agentCmd().(schedulerTestMsg).Generation; got != agentGeneration {
+		t.Fatalf("scheduled command token = %d, want captured generation %d", got, agentGeneration)
+	}
+}
+
+func TestKeyedSchedulerNewScheduleSupersedesSameKey(t *testing.T) {
+	var scheduler KeyedScheduler
+	first := scheduler.Schedule("agent:one", 0, func(generation int) tea.Msg {
+		return schedulerTestMsg{Generation: generation}
+	})
+	second := scheduler.Schedule("agent:one", 0, func(generation int) tea.Msg {
+		return schedulerTestMsg{Generation: generation}
+	})
+
+	firstGeneration := first().(schedulerTestMsg).Generation
+	secondGeneration := second().(schedulerTestMsg).Generation
+	if scheduler.IsCurrent("agent:one", firstGeneration) {
+		t.Fatal("first duplicate schedule remained current")
+	}
+	if !scheduler.IsCurrent("agent:one", secondGeneration) {
+		t.Fatal("newest duplicate schedule is not current")
 	}
 }
 

@@ -149,7 +149,8 @@ type (
 	// ShellSessionDeadMsg signals shell session was externally terminated
 	// (e.g., user typed 'exit' in the shell)
 	ShellSessionDeadMsg struct {
-		TmuxName string // Session name for cleanup (stable identifier)
+		TmuxName   string // Session name for cleanup (stable identifier)
+		Generation int    // Poll owner; zero for non-poll lifecycle checks
 	}
 
 	// ShellAgentStartedMsg signals agent was started in a shell session.
@@ -169,9 +170,9 @@ type (
 
 	// ShellOutputMsg signals shell output was captured (for polling)
 	ShellOutputMsg struct {
-		TmuxName string // Session name (stable identifier)
-		Output   string
-		Changed  bool
+		TmuxName   string // Session name (stable identifier)
+		Generation int
+		Output     string
 		// Cursor position captured atomically with output (only set in interactive mode)
 		CursorRow     int
 		CursorCol     int
@@ -829,6 +830,10 @@ func (p *Plugin) killShellSessionByName(sessionName string) tea.Cmd {
 // pollShellSessionByName captures output from a specific shell session by name.
 // Uses cached capture to avoid blocking subprocess calls (td-c2961e).
 func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
+	return p.scheduleShellPollByName(tmuxName, 0)
+}
+
+func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
 	// Find the shell by TmuxName
 	var shell *ShellSession
 	for _, s := range p.shells {
@@ -842,7 +847,6 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 	}
 
 	// Capture references before spawning closure to avoid data races
-	outputBuf := shell.Agent.OutputBuf
 	maxBytes := p.tmuxCaptureMaxBytes
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
@@ -910,22 +914,19 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 				strings.Contains(errStr, "no server") ||
 				strings.Contains(errStr, "no such session") ||
 				strings.Contains(errStr, "session not found") {
-				return ShellSessionDeadMsg{TmuxName: tmuxName}
+				return ShellSessionDeadMsg{TmuxName: tmuxName, Generation: generation}
 			}
 			// Other errors (timeout, etc.) - return empty output and schedule retry
-			return ShellOutputMsg{TmuxName: tmuxName, Output: "", Changed: false}
+			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation}
 		}
 
 		// Trim to max bytes
 		output = trimCapturedOutput(output, maxBytes)
 
-		// Update buffer and check if content changed
-		changed := outputBuf.Update(output)
-
 		return ShellOutputMsg{
 			TmuxName:      tmuxName,
+			Generation:    generation,
 			Output:        output,
-			Changed:       changed,
 			CursorRow:     cursor.Row,
 			CursorCol:     cursor.Col,
 			CursorVisible: cursor.Visible,

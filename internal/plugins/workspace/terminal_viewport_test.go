@@ -281,9 +281,6 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 					Agent: &Agent{OutputBuf: tty.NewOutputBuffer(10)},
 				}},
 			}
-			for range 4 {
-				p.pollScheduler.Invalidate(agentPollKey("work"))
-			}
 			before := *state
 
 			_, cmd := p.Update(tt.msg)
@@ -298,7 +295,7 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 			if !ok {
 				t.Fatalf("continuation = %T, want pollAgentMsg (terminal panel poll hijacked agent chain)", result)
 			}
-			if poll.WorkspaceName != "work" || poll.Generation != 4 {
+			if poll.WorkspaceName != "work" || poll.Generation != 1 {
 				t.Fatalf("agent continuation = %+v", poll)
 			}
 		})
