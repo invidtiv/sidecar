@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -83,7 +84,7 @@ func TestStripSourceOSC8HandlesC1AndMixedForms(t *testing.T) {
 }
 
 func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T) {
-	const ordinary = "plain Ý and Ü text"
+	const ordinary = "plain Ý, Ü, ʝ, and ݝ text"
 	if cleaned := stripSourceOSC8(ordinary); cleaned != ordinary {
 		t.Fatalf("ordinary UTF-8 text changed: got %q, want %q", cleaned, ordinary)
 	}
@@ -106,6 +107,7 @@ func TestStripSourceOSC8DropsMalformedHyperlinkRemainders(t *testing.T) {
 		"short":         "safe\x9d8;",
 		"short-command": "safe\x1b]8",
 		"bare-intro":    "safe\x9d",
+		"nested-intro":  "safe\x9d8\x9d",
 	} {
 		t.Run(name, func(t *testing.T) {
 			cleaned := stripSourceOSC8(source)
@@ -131,18 +133,40 @@ func FuzzStripSourceOSC8(f *testing.F) {
 		"\u009d8;;javascript:alert(1)\x1b\\label\u009d8;;\x9c",
 		"\x1b]8;",
 		"\x9d8",
+		"ݝ8;",
+		"\x9d\x9d8;\x9c",
 		string([]byte{0x9d, '8', ';', ';', 0, 0x9c}),
 	} {
 		f.Add(source)
 	}
 	f.Fuzz(func(t *testing.T, source string) {
 		cleaned := stripSourceOSC8(source)
-		for _, prefix := range []string{"\x1b]8;", "\x9d8;", "\u009d8;"} {
-			if strings.Contains(cleaned, prefix) {
-				t.Fatalf("OSC-8 introducer survived sanitization: input=%q output=%q", source, cleaned)
-			}
+		if containsOSC8AtRuneBoundary(cleaned) {
+			t.Fatalf("OSC-8 control survived sanitization: input=%q output=%q", source, cleaned)
 		}
 	})
+}
+
+func containsOSC8AtRuneBoundary(value string) bool {
+	for pos := 0; pos < len(value); {
+		if introLen := oscIntroducerLen(value, pos); introLen > 0 {
+			payload := pos + introLen
+			end, terminated := oscTerminatorEnd(value, payload)
+			isHyperlink := payload < len(value) && value[payload] == '8' &&
+				(payload+1 == len(value) || value[payload+1] == ';')
+			if isHyperlink {
+				return true
+			}
+			if !terminated {
+				return false
+			}
+			pos = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(value[pos:])
+		pos += size
+	}
+	return false
 }
 
 func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testing.T) {

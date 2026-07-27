@@ -133,28 +133,20 @@ func stripSourceOSC8(line string) string {
 			continue
 		}
 		payload := pos + introLen
-		if payload >= len(line) {
-			break
-		}
-		if line[payload] != '8' {
-			out.WriteString(line[pos : pos+introLen])
-			pos += introLen
-			continue
-		}
-		if payload+1 >= len(line) {
-			break
-		}
-		if line[payload+1] != ';' {
-			out.WriteString(line[pos : pos+introLen])
-			pos += introLen
-			continue
-		}
-		end, ok := oscTerminatorEnd(line, pos+introLen+2)
+		end, ok := oscTerminatorEnd(line, payload)
 		if !ok {
-			// An unterminated hyperlink control can consume all following
-			// terminal text. Drop the remainder rather than forwarding an
-			// attacker-controlled URI or control payload.
+			// An unterminated OSC control can consume all following terminal
+			// text. Drop the remainder rather than turning a malformed nested
+			// sequence into a new control during sanitization.
 			break
+		}
+		isHyperlink := payload+1 < len(line) &&
+			line[payload] == '8' && line[payload+1] == ';'
+		if !isHyperlink {
+			// Preserve unrelated, well-formed OSC controls atomically. Advancing
+			// over the complete sequence prevents C1 bytes in its payload from
+			// being reinterpreted at the outer scan level.
+			out.WriteString(line[pos:end])
 		}
 		pos = end
 	}
