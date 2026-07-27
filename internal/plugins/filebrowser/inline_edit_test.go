@@ -3,6 +3,7 @@ package filebrowser
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -48,7 +49,7 @@ func TestNormalizeEditorName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := normalizeEditorName(tt.input)
+			got := tty.NormalizeEditorName(tt.input)
 			if got != tt.expected {
 				t.Errorf("normalizeEditorName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
@@ -193,8 +194,8 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 			treeVisible: false,
 			treeWidth:   0,
 			tabCount:    0,
-			clickX:      2,  // border(1) + padding(1) = content start
-			clickY:      2,  // border(1) + header(1) = content start
+			clickX:      2, // border(1) + padding(1) = content start
+			clickY:      2, // border(1) + header(1) = content start
 			wantCol:     1,
 			wantRow:     1,
 			wantOK:      true,
@@ -279,7 +280,7 @@ func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 		t.Run(editor, func(t *testing.T) {
 			// sendEditorSaveAndQuit will fail (no tmux session) but should still
 			// return true for recognized editors
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if !got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = false, want true (known editor)", editor)
 			}
@@ -292,7 +293,7 @@ func TestSendEditorSaveAndQuit_UnknownEditors(t *testing.T) {
 
 	for _, editor := range unknown {
 		t.Run(editor, func(t *testing.T) {
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = true, want false (unknown editor)", editor)
 			}
@@ -306,5 +307,40 @@ func TestInlineEditorUsesAnsiPreservation(t *testing.T) {
 	m := tty.New(nil)
 	if m.Config.ScrollbackLines <= 0 {
 		t.Errorf("default ScrollbackLines = %d, want > 0 for capture-pane history", m.Config.ScrollbackLines)
+	}
+}
+
+func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
+	p := New()
+	p.width = 100
+	p.height = 24
+	p.focused = true
+	p.activePane = PanePreview
+	p.treeVisible = true
+	p.treeWidth = 30
+	p.inlineEditMode = true
+	p.inlineEditor.Enter("editor", "")
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.State.OutputBuf.Write("one\ntwo")
+	p.inlineEditor.State.CursorVisible = true
+	p.inlineEditor.State.CursorRow = 1
+	p.inlineEditor.State.CursorCol = 3
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height
+
+	cursor := p.Cursor()
+	if cursor == nil || cursor.X != 36 || cursor.Y != 3 {
+		t.Fatalf("Cursor() = %#v, want plugin-local (36,3)", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
+		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
+	}
+
+	p.showExitConfirmation = true
+	if cursor := p.Cursor(); cursor != nil {
+		t.Fatalf("confirmation-covered Cursor() = %#v, want nil", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeAllMotion {
+		t.Fatalf("confirmation mouse mode = %v, want all motion", mode)
 	}
 }

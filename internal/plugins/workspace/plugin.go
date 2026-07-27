@@ -14,8 +14,8 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -24,8 +24,10 @@ const (
 	pluginName = "workspaces"
 	pluginIcon = "W"
 
-	// Output buffer capacity (lines)
-	outputBufferCap = 500
+	// Output buffer capacity (lines). The live capture remains small; older
+	// ranges are fetched lazily as the user reaches the loaded boundary.
+	outputBufferCap  = tty.HistoryLimit + 512
+	historyLoadChunk = 600
 
 	// Pane layout constants
 	dividerWidth    = 1 // Visual divider width
@@ -125,6 +127,13 @@ type Plugin struct {
 	width   int
 	height  int
 
+	// Persistent tmux control-mode transport for visible terminal surfaces.
+	controlManager     workspaceControlManager
+	controlMailbox     *workspaceControlMailbox
+	controlConsumers   map[workspaceControlRole]*workspaceControlConsumer
+	controlNextToken   uint64
+	applicationFocused bool
+
 	// Worktree state
 	worktrees []*Worktree
 	agents    map[string]*Agent
@@ -149,7 +158,10 @@ type Plugin struct {
 
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
+	selectionTermPanel            bool
 	interactiveCopyPasteHintShown bool
+	terminalHistory               map[string]terminalHistoryState
+	terminalSearch                terminalSearchState
 
 	// Kanban view state
 	kanbanCol int // Current column index (0=Shells, 1=Active, 2=Thinking, 3=Waiting, 4=Done, 5=Paused)
@@ -162,8 +174,7 @@ type Plugin struct {
 	// Timer leak prevention (td-83dc22): generation counters to invalidate stale timers.
 	// When a timer fires, it checks if its captured generation matches the current one.
 	// If not, the timer is stale (worktree/shell was removed) and the msg is ignored.
-	pollGeneration      map[string]int // Per-worktree/shell poll generation counter
-	shellPollGeneration map[string]int // Per-shell poll generation counter
+	pollScheduler tty.KeyedScheduler // Namespaced agent/shell/panel poll generations
 
 	// Truncation cache to eliminate ANSI parser allocation churn
 	truncateCache *ui.TruncateCache
@@ -200,15 +211,15 @@ type Plugin struct {
 	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
 
 	// Terminal panel state (Ctrl+T toggle)
-	termPanelVisible    bool            // Whether the terminal panel is shown
-	termPanelLayout     TermPanelLayout // Bottom or right split
-	termPanelSize       int             // Split size in percentage (0 = use default 50%)
-	termPanelSession    string          // Tmux session name for the terminal panel
-	termPanelPaneID     string          // Tmux pane ID for resize operations
-	termPanelOutput     *OutputBuffer   // Captured output from the terminal session
-	termPanelScroll     int             // Scroll offset in terminal panel output
-	termPanelGeneration int             // Incremented on toggle to invalidate stale poll timers
-	termPanelFocused    bool            // Whether the terminal panel sub-pane is focused (vs agent output)
+	termPanelVisible         bool              // Whether the terminal panel is shown
+	termPanelLayout          TermPanelLayout   // Bottom or right split
+	termPanelSize            int               // Split size in percentage (0 = use default 50%)
+	termPanelSession         string            // Tmux session name for the terminal panel
+	termPanelPaneID          string            // Tmux pane ID for resize operations
+	termPanelOutput          *tty.OutputBuffer // Captured output from the terminal session
+	termPanelScroll          int               // Scroll offset in terminal panel output
+	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
+	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
@@ -333,7 +344,8 @@ type Plugin struct {
 	initialReconnectDone bool
 
 	// State restoration tracking (only restore once on startup)
-	stateRestored bool
+	stateRestored   bool
+	worktreesLoaded bool
 
 	// Auto-create default shell tracking (evaluated once per project load)
 	autoShellChecked bool
@@ -344,6 +356,9 @@ type Plugin struct {
 	lastMouseEventTime time.Time // For suppressing split-CSI "[" near mouse activity
 	scrollBurstCount   int       // Consecutive scroll events for burst detection
 	scrollBurstStarted time.Time // When current burst started
+	pendingScrollDelta int       // Wheel delta accumulated while burst debounce is active
+	mouseFragment      string    // Incomplete split SGR mouse input awaiting its next chunk
+	mouseFragmentTime  time.Time // Last update to mouseFragment
 
 	// Sidebar header hover state
 	hoverNewButton            bool
@@ -382,8 +397,13 @@ type Plugin struct {
 	fetchPRModalWidth   int          // Cached width for rebuild detection
 
 	// Shell manifest for persistence and cross-instance sync (td-f88fdd)
-	shellManifest *ShellManifest
-	shellWatcher  *ShellWatcher
+	shellManifest        *ShellManifest
+	shellWatcher         shellManifestWatcher
+	shellWatcherMessages <-chan tea.Msg
+	shellStartupHooks    shellStartupHooks
+	shellStartupEpoch    uint64
+	shellStartupVersion  uint64
+	shellStartupLoading  bool
 }
 
 // New creates a new worktree manager plugin.
@@ -396,8 +416,6 @@ func New() *Plugin {
 		agents:              make(map[string]*Agent),
 		managedSessions:     make(map[string]bool),
 		shells:              make([]*ShellSession, 0),
-		pollGeneration:      make(map[string]int),
-		shellPollGeneration: make(map[string]int),
 		viewMode:            ViewModeList,
 		activePane:          PaneSidebar,
 		previewTab:          PreviewTabOutput,
@@ -407,11 +425,14 @@ func New() *Plugin {
 		autoScrollOutput:    true, // Auto-scroll to follow agent output
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
+		terminalHistory:     make(map[string]terminalHistoryState),
 		markdownRenderer:    mdRenderer,
 		taskMarkdownMode:    true,  // Default to rendered mode
 		shellSelected:       false, // Start with first worktree selected, not shell
 		typeSelectorIdx:     1,     // Default to Worktree option
 		taskLoading:         false, // Explicitly initialized (td-3668584f)
+		applicationFocused:  true,
+		shellStartupHooks:   defaultShellStartupHooks(),
 	}
 }
 
@@ -438,14 +459,20 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	p.invalidateShellStartup()
+	p.stopTerminalControls()
 	p.ctx = ctx
+	p.controlManager = tty.NewControlManager()
+	p.controlMailbox = newWorkspaceControlMailbox()
+	p.controlConsumers = make(map[workspaceControlRole]*workspaceControlConsumer)
+	p.applicationFocused = true
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	// Reset agent-related state for clean reinit (important for project switching)
 	// Without this, reconnectAgents() won't run again after switching projects
@@ -456,8 +483,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.attachedSession = ""
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
-	p.pollGeneration = make(map[string]int)
-	p.shellPollGeneration = make(map[string]int)
+	p.pollScheduler.Reset()
+	p.terminalHistory = make(map[string]terminalHistoryState)
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)
@@ -466,27 +493,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
+	p.worktreesLoaded = false
 
 	// Re-arm default-shell auto-creation for the newly loaded project
 	p.autoShellChecked = false
 
-	// Load shell manifest for persistence (td-f88fdd)
-	projDir, err := projectdir.Resolve(ctx.ProjectRoot)
-	if err != nil {
-		p.ctx.Logger.Warn("failed to resolve project dir for manifest", "error", err)
-	} else {
-		manifestPath := filepath.Join(projDir, "shells.json")
-		p.shellManifest, _ = LoadShellManifest(manifestPath)
-	}
-
-	// Stop any previous watcher (important for project switching)
-	if p.shellWatcher != nil {
-		p.shellWatcher.Stop()
-		p.shellWatcher = nil
-	}
-
-	// Discover existing shell sessions for this project
-	p.initShellSessions()
+	// Shell manifest I/O, tmux discovery, pane lookup, and watcher construction
+	// are deferred to Start's command so Init remains on the first-frame path.
+	p.shellManifest = nil
+	p.shellStartupEpoch = ctx.Epoch
+	p.shellStartupLoading = true
 
 	// Register dynamic keybindings for modal contexts only.
 	// Main worktree-list and worktree-preview bindings are in bindings.go.
@@ -562,65 +578,20 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins async operations.
 func (p *Plugin) Start() tea.Cmd {
-	var cmds []tea.Cmd
-
 	// Refresh worktrees - reconnectAgents will be called after worktrees are loaded
-	cmds = append(cmds, p.refreshWorktrees())
-
-	// Start shell polling for all existing shells (so preview shows content right away)
-	for _, shell := range p.shells {
-		if shell.Agent != nil {
-			cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
-		}
-	}
-
-	// Start shell manifest watcher for cross-instance sync (td-f88fdd)
-	cmds = append(cmds, p.startShellWatcher())
-
-	return tea.Batch(cmds...)
-}
-
-// startShellWatcher creates and starts the shell manifest file watcher.
-func (p *Plugin) startShellWatcher() tea.Cmd {
-	if p.shellManifest == nil {
-		return nil
-	}
-
-	var err error
-	p.shellWatcher, err = NewShellWatcher(p.shellManifest.Path())
-	if err != nil {
-		return nil // Watcher failed, continue without cross-instance sync
-	}
-
-	p.shellWatcher.Start()
-	return p.listenForShellManifestChanges()
-}
-
-// listenForShellManifestChanges waits for manifest file changes.
-func (p *Plugin) listenForShellManifestChanges() tea.Cmd {
-	if p.shellWatcher == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		// Block until watcher signals a change
-		// Channel is closed when watcher stops
-		if _, ok := <-p.shellWatcher.msgChan; !ok {
-			return nil // Watcher stopped
-		}
-		return ShellManifestChangedMsg{}
-	}
+	return tea.Batch(
+		p.refreshWorktrees(),
+		p.loadShellStartup(),
+		p.listenForTerminalControl(),
+	)
 }
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	p.invalidateShellStartup()
+	p.stopTerminalControls()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
-
-	// Stop shell watcher (td-f88fdd)
-	if p.shellWatcher != nil {
-		p.shellWatcher.Stop()
-		p.shellWatcher = nil
-	}
 }
 
 // saveSelectionState persists the current selection to disk.
@@ -762,6 +733,17 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
+	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		var h int
+		if p.termPanelVisible {
+			_, h = p.calculateAgentPaneDimensions()
+		} else {
+			_, h = p.calculatePreviewDimensions()
+		}
+		if h > 0 {
+			return h
+		}
+	}
 	h := p.height - 4 // tabs header + empty line + hint line + margin
 	if h < 1 {
 		h = 1

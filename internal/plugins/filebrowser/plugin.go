@@ -60,6 +60,7 @@ type (
 	// NavigateToFileMsg requests navigation to a specific file (from other plugins).
 	NavigateToFileMsg struct {
 		Path string // Relative path from workdir
+		Line int    // Optional 1-based line to reveal after loading
 	}
 	// RevealErrorMsg is sent when reveal in file manager fails.
 	RevealErrorMsg struct {
@@ -159,7 +160,11 @@ type Plugin struct {
 	searchCursor  int
 
 	// Auto-open state
-	pendingOpenFile string // Relative path to open after next tree rebuild
+	pendingOpenFile     string // Relative path to open after next tree rebuild
+	pendingNavigatePath string
+	pendingNavigateLine int
+	pendingNavigateGen  uint64
+	navigateGen         uint64
 
 	// Content search state (preview pane)
 	contentSearchMode      bool
@@ -631,6 +636,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.applyPreviewResult(msg.Result)
 			p.updateActiveTabResult(msg.Result)
 			p.clampPreviewScroll()
+			if p.pendingNavigateLine > 0 && p.pendingNavigatePath == msg.Path &&
+				p.pendingNavigateGen == msg.NavigateGeneration {
+				p.previewScroll = p.pendingNavigateLine - 1
+				p.clampPreviewScroll()
+				if p.activeTab >= 0 && p.activeTab < len(p.tabs) {
+					p.tabs[p.activeTab].Scroll = p.previewScroll
+				}
+				p.pendingNavigateLine = 0
+				p.pendingNavigatePath = ""
+				p.pendingNavigateGen = 0
+			}
 
 			// Re-run search if still in search mode (e.g., navigating files with j/k)
 			if p.contentSearchMode && p.contentSearchQuery != "" {
@@ -659,7 +675,32 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case NavigateToFileMsg:
-		return p.navigateToFile(msg.Path)
+		p.navigateGen++
+		if msg.Line > 0 {
+			p.pendingNavigatePath = msg.Path
+			p.pendingNavigateLine = msg.Line
+			p.pendingNavigateGen = p.navigateGen
+		} else {
+			p.pendingNavigatePath = ""
+			p.pendingNavigateLine = 0
+			p.pendingNavigateGen = 0
+		}
+		updated, cmd := p.navigateToFile(msg.Path)
+		if cmd == nil {
+			p.pendingNavigatePath = ""
+			p.pendingNavigateLine = 0
+			p.pendingNavigateGen = 0
+			return updated, nil
+		}
+		generation := p.navigateGen
+		return updated, func() tea.Msg {
+			result := cmd()
+			if loaded, ok := result.(PreviewLoadedMsg); ok {
+				loaded.NavigateGeneration = generation
+				return loaded
+			}
+			return result
+		}
 
 	case RevealErrorMsg:
 		p.ctx.Logger.Error("file browser: reveal failed", "error", msg.Err)

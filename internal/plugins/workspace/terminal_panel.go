@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -12,6 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -43,6 +44,7 @@ type TermPanelSessionCreatedMsg struct {
 // TermPanelCaptureMsg delivers captured output from the terminal panel's tmux session.
 type TermPanelCaptureMsg struct {
 	SessionName   string
+	Generation    int
 	Output        string
 	Err           error
 	HasCursor     bool
@@ -51,6 +53,9 @@ type TermPanelCaptureMsg struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 }
 
 // termPanelPollMsg triggers the next poll cycle for the terminal panel.
@@ -114,7 +119,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	} else {
 		p.termPanelLayout = TermPanelBottom
 	}
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	sessionName := p.termPanelSessionName()
 	if sessionName == "" {
@@ -124,7 +129,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return nil
 	}
 
-	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout, "gen", p.termPanelGeneration)
+	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout, "gen", p.pollScheduler.Current(termPanelPollKey()))
 
 	// If we already have an active session for this, just show it
 	if p.termPanelSession == sessionName && p.termPanelOutput != nil {
@@ -142,7 +147,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	}
 	p.termPanelSession = sessionName
 	if p.termPanelOutput == nil {
-		p.termPanelOutput = NewOutputBuffer(outputBufferCap)
+		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
 		p.termPanelOutput.Clear()
 	}
@@ -194,15 +199,13 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 			"-s", sessionName,
 			"-c", workDir,
 		}
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return TermPanelSessionCreatedMsg{
 				SessionName: sessionName,
 				Err:         fmt.Errorf("create terminal panel session: %w", err),
 			}
 		}
 
-		ensureTmuxServerConfig()
 		paneID := getPaneID(sessionName)
 		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
 	}
@@ -210,12 +213,14 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 
 // scheduleTermPanelPoll schedules the next poll for the terminal panel output.
 func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
+	if p.terminalControlUsing(workspaceControlPanel) {
+		return nil
+	}
 	sessionName := p.termPanelSession
-	gen := p.termPanelGeneration
 	if sessionName == "" {
 		return nil
 	}
-	return tea.Tick(delay, func(t time.Time) tea.Msg {
+	return p.pollScheduler.Schedule(termPanelPollKey(), delay, func(gen int) tea.Msg {
 		return termPanelPollMsg{SessionName: sessionName, Generation: gen}
 	})
 }
@@ -223,38 +228,51 @@ func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
 // handleTermPanelPoll captures output from the terminal panel's tmux session.
 // Uses the global capture cache/coordinator to avoid redundant subprocess calls.
 // When interactive mode targets the terminal panel, also captures cursor position.
-func (p *Plugin) handleTermPanelPoll(sessionName string) tea.Cmd {
+func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd {
+	if p.terminalControlUsing(workspaceControlPanel) {
+		return nil
+	}
 	captureCursor := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
+	if captureCursor {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleTermPanelPoll(remaining)
+		}
+	}
 	target := p.termPanelPaneID
 	if target == "" {
 		target = sessionName
 	}
 	return func() tea.Msg {
 		var output string
+		var cursor capturedCursor
+		var capture capturedPaneMetadata
 		var err error
 		if captureCursor {
 			// Interactive mode: bypass cache for fresh capture, same as agent pane.
 			// The global cache has 300ms TTL which causes stale reads during typing.
-			output, err = capturePaneDirect(sessionName)
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, target, false)
+			capture = cursor.capturedPaneMetadata
 		} else {
-			// Non-interactive: use global cache + singleflight coordinator.
-			output, err = capturePane(sessionName)
+			// The visible panel uses a direct metadata capture so deep history
+			// can be addressed without loading it on the polling hot path.
+			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, false)
 		}
 		msg := TermPanelCaptureMsg{
 			SessionName: sessionName,
+			Generation:  generation,
 			Output:      output,
 			Err:         err,
+			HistorySize: capture.HistorySize,
+			CaptureBase: capture.CaptureBase,
+			HasHistory:  capture.Valid,
 		}
-		if captureCursor {
-			row, col, ph, pw, vis, ok := queryCursorPositionSync(target)
-			if ok {
-				msg.HasCursor = true
-				msg.CursorRow = row
-				msg.CursorCol = col
-				msg.CursorVisible = vis
-				msg.PaneHeight = ph
-				msg.PaneWidth = pw
-			}
+		if cursor.Valid {
+			msg.HasCursor = true
+			msg.CursorRow = cursor.Row
+			msg.CursorCol = cursor.Col
+			msg.CursorVisible = cursor.Visible
+			msg.PaneHeight = cursor.PaneHeight
+			msg.PaneWidth = cursor.PaneWidth
 		}
 		return msg
 	}
@@ -289,11 +307,15 @@ func (p *Plugin) calculateTermPanelDimensions() (width, height int) {
 		return termWidth, previewHeight
 	}
 	// Bottom layout
-	termHeight := previewHeight * size / 100
-	if termHeight < 3 {
-		termHeight = 3
+	// previewHeight excludes the main pane's hint. The split renderer divides
+	// the container that includes both child hints, then each child renderer
+	// reserves its own hint row before terminal content is drawn.
+	containerHeight := previewHeight + 1
+	termBoxHeight := containerHeight * size / 100
+	if termBoxHeight < 3 {
+		termBoxHeight = 3
 	}
-	return previewWidth, termHeight
+	return previewWidth, max(termBoxHeight-1, 1)
 }
 
 // calculateAgentPaneDimensions returns the width and height for the agent
@@ -322,19 +344,32 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 		return outputWidth, previewHeight
 	}
 	// Bottom layout
-	termHeight := previewHeight * size / 100
-	if termHeight < 3 {
-		termHeight = 3
+	containerHeight := previewHeight + 1
+	termBoxHeight := containerHeight * size / 100
+	if termBoxHeight < 3 {
+		termBoxHeight = 3
 	}
-	outputHeight := previewHeight - termHeight - 1 // -1 for divider
-	if outputHeight < 3 {
-		outputHeight = 3
+	outputBoxHeight := containerHeight - termBoxHeight - 1 // -1 for divider
+	if outputBoxHeight < 3 {
+		outputBoxHeight = 3
 	}
 	// If both minimums exceed available height, fall back to full preview
-	if outputHeight+termHeight+1 > previewHeight {
+	if outputBoxHeight+termBoxHeight+1 > containerHeight {
 		return previewWidth, previewHeight
 	}
-	return previewWidth, outputHeight
+	return previewWidth, max(outputBoxHeight-1, 1)
+}
+
+func (p *Plugin) termPanelMaxScroll() int {
+	if p.termPanelOutput == nil {
+		return 0
+	}
+	_, height := p.calculateTermPanelDimensions()
+	lineCount := p.termPanelOutput.LineCount()
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
+		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
+	}
+	return max(lineCount-height, 0)
 }
 
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
@@ -349,7 +384,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 	}
 	w, h := p.calculateTermPanelDimensions()
 	return func() tea.Msg {
-		p.resizeTmuxPane(target, w, h)
+		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}
 }
@@ -373,122 +408,16 @@ func (p *Plugin) termPanelHintLine() string {
 
 // renderTermPanelOutput renders the terminal panel's captured output.
 func (p *Plugin) renderTermPanelOutput(width, height int) string {
-	// Render label line and reserve 1 line of height for it
 	hint := p.termPanelHintLine()
-	height-- // Reserve for label
-	if height < 1 {
-		return hint
-	}
-
 	if p.termPanelOutput == nil {
-		return hint + "\n" + dimText("Starting terminal...")
-	}
-
-	lineCount := p.termPanelOutput.LineCount()
-	if lineCount == 0 {
-		return hint + "\n" + dimText("Terminal ready")
-	}
-
-	// Check if interactive mode is targeting this terminal panel
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-	var cursorRow, cursorCol, paneHeight, paneWidth int
-	var cursorVisible bool
-	if interactive {
-		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
-	}
-
-	// Trim trailing empty lines so the shell prompt appears near the top
-	// instead of being buried at the bottom of empty capture output.
-	allLines := p.termPanelOutput.Lines()
-	effectiveCount := lineCount
-	if !interactive {
-		if idx := lastNonEmptyLine(allLines); idx >= 0 {
-			effectiveCount = idx + 1
+		hint = p.truncateCache.Truncate(ui.ExpandTabs(hint, tabStopWidth), width, "")
+		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
+		if height <= 1 {
+			return hint
 		}
+		return hint + "\n" + empty
 	}
-	if effectiveCount == 0 {
-		return hint + "\n" + dimText("Terminal ready")
-	}
-	visibleHeight := height
-	if interactive && paneHeight > 0 && paneHeight < visibleHeight {
-		visibleHeight = paneHeight
-	}
-
-	displayWidth := width
-	if interactive && paneWidth > 0 && paneWidth < displayWidth {
-		displayWidth = paneWidth
-	}
-
-	// Clamp scroll to prevent scrolling past all content
-	maxScroll := effectiveCount - visibleHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if p.termPanelScroll > maxScroll {
-		p.termPanelScroll = maxScroll
-	}
-
-	// Calculate visible range (always show most recent lines)
-	start := effectiveCount - visibleHeight - p.termPanelScroll
-	if start < 0 {
-		start = 0
-	}
-	end := start + visibleHeight
-	if end > effectiveCount {
-		end = effectiveCount
-	}
-
-	lines := p.termPanelOutput.LinesRange(start, end)
-
-	displayLines := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if lipgloss.Width(line) > displayWidth {
-			line = p.truncateCache.Truncate(line, displayWidth, "")
-		}
-		displayLines = append(displayLines, line)
-	}
-
-	// Pad to pane height in interactive mode so cursor positioning works
-	if interactive && paneHeight > 0 {
-		targetHeight := visibleHeight
-		if targetHeight > height {
-			targetHeight = height
-		}
-		if targetHeight > 0 && len(displayLines) < targetHeight {
-			displayLines = padLinesToHeight(displayLines, targetHeight)
-		}
-	}
-
-	content := strings.Join(displayLines, "\n")
-
-	// Apply cursor overlay when interactive mode targets the terminal panel
-	if interactive && cursorVisible {
-		displayHeight := len(displayLines)
-		relativeRow := cursorRow
-		if paneHeight > displayHeight {
-			relativeRow = cursorRow - (paneHeight - displayHeight)
-		} else if paneHeight > 0 && paneHeight < displayHeight {
-			relativeRow = cursorRow + (displayHeight - paneHeight)
-		}
-		relativeCol := cursorCol
-
-		if relativeRow < 0 {
-			relativeRow = 0
-		}
-		if relativeRow >= displayHeight {
-			relativeRow = displayHeight - 1
-		}
-		if relativeCol < 0 {
-			relativeCol = 0
-		}
-		if relativeCol >= displayWidth {
-			relativeCol = displayWidth - 1
-		}
-
-		content = renderWithCursor(content, relativeRow, relativeCol, cursorVisible)
-	}
-
-	return hint + "\n" + content
+	return p.renderCapturedTerminal(hint, p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
 // renderTermPanelDividerH renders a horizontal divider (for bottom layout).
@@ -535,9 +464,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 		previewContentY = 3
 	}
 
-	// Check if interactive mode targets the terminal panel — set ContentRowOffset accordingly.
-	termPanelInteractive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-
 	if p.termPanelLayout == TermPanelRight {
 		// Right layout: output | divider | terminal
 		termWidth := width * size / 100
@@ -557,12 +483,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 		absX := previewContentX + outputWidth
 		p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, absX, previewContentY, dividerHitWidth, height, nil)
 		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, absX+1, previewContentY, termWidth, height, nil)
-
-		// Set ContentRowOffset for terminal panel cursor positioning (right layout).
-		// Use 1 (for the hint/label line) — renderPreviewContent adds tab overhead (+2) afterwards.
-		if termPanelInteractive {
-			p.interactiveState.ContentRowOffset = 1
-		}
 
 		outputPane := p.renderOutputContent(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
@@ -597,12 +517,6 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, previewContentX, absY, width, dividerHitWidth, nil)
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
 
-	// Set ContentRowOffset for terminal panel cursor positioning (bottom layout).
-	// outputHeight + 1 (divider) + 1 (hint line) — renderPreviewContent adds tab overhead (+2) afterwards.
-	if termPanelInteractive {
-		p.interactiveState.ContentRowOffset = outputHeight + 1 + 1
-	}
-
 	outputPane := padToHeight(p.renderOutputContent(width, outputHeight), outputHeight, width)
 	divider := p.renderTermPanelDividerH(width)
 	termPane := p.renderTermPanelOutput(width, termHeight)
@@ -628,8 +542,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	}
 	previewContentY := 1 // Shell has no tabs, only panel border
 
-	termPanelInteractive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-
 	if p.termPanelLayout == TermPanelRight {
 		termWidth := width * size / 100
 		if termWidth < 10 {
@@ -647,10 +559,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 		absX := previewContentX + outputWidth
 		p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, absX, previewContentY, dividerHitWidth, height, nil)
 		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, absX+1, previewContentY, termWidth, height, nil)
-
-		if termPanelInteractive {
-			p.interactiveState.ContentRowOffset = previewContentY + 1
-		}
 
 		shellPane := p.renderShellOutput(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
@@ -682,10 +590,6 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, previewContentX, absY, width, dividerHitWidth, nil)
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
 
-	if termPanelInteractive {
-		p.interactiveState.ContentRowOffset = previewContentY + outputHeight + 1 + 1
-	}
-
 	shellPane := padToHeight(p.renderShellOutput(width, outputHeight), outputHeight, width)
 	divider := p.renderTermPanelDividerH(width)
 	termPane := p.renderTermPanelOutput(width, termHeight)
@@ -704,12 +608,12 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		return nil
 	}
 	// Switch to new session (old session preserved for later reuse)
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 	p.termPanelSession = newSession
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
 	if p.termPanelOutput == nil {
-		p.termPanelOutput = NewOutputBuffer(outputBufferCap)
+		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
 		p.termPanelOutput.Clear()
 	}

@@ -220,7 +220,8 @@ type Model struct {
 	lastError error
 
 	// Ready state
-	ready bool
+	ready              bool
+	applicationFocused bool
 
 	// Version info
 	currentVersion  string
@@ -285,18 +286,19 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 
 	return Model{
-		cfg:               cfg,
-		registry:          reg,
-		keymap:            km,
-		activePlugin:      activeIdx,
-		activeContext:     "global",
-		showClock:         cfg.UI.ShowClock,
-		palette:           palette.New(),
-		ui:                ui,
-		ready:             false,
-		intro:             NewIntroModel(repoName),
-		currentVersion:    currentVersion,
-		updatePhaseStatus: make(map[UpdatePhase]string),
+		cfg:                cfg,
+		registry:           reg,
+		keymap:             km,
+		activePlugin:       activeIdx,
+		activeContext:      "global",
+		showClock:          cfg.UI.ShowClock,
+		palette:            palette.New(),
+		ui:                 ui,
+		ready:              false,
+		applicationFocused: true,
+		intro:              NewIntroModel(repoName),
+		currentVersion:     currentVersion,
+		updatePhaseStatus:  make(map[UpdatePhase]string),
 	}
 }
 

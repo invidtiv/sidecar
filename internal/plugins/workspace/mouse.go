@@ -96,6 +96,8 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleMouseClick(action)
 	case mouse.ActionDoubleClick:
 		return p.handleMouseDoubleClick(action)
+	case mouse.ActionTripleClick:
+		return p.handleMouseTripleClick(action)
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		return p.handleMouseScroll(action)
 	case mouse.ActionScrollLeft, mouse.ActionScrollRight:
@@ -524,7 +526,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.enterTermPanelInteractiveMode()
 			}
 			// Already targeting terminal panel — forward click
-			if p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.MouseReportingEnabled {
+			if p.interactiveState != nil && p.interactiveState.Active &&
+				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
+				if !action.Shift && !action.Alt {
+					if cmd, ok := p.activateTerminalLink(action); ok {
+						return cmd
+					}
+				}
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -536,7 +544,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.enterInteractiveMode()
 			}
 			// Already targeting agent pane — forward click
-			if p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.MouseReportingEnabled {
+			if p.interactiveState != nil && p.interactiveState.Active &&
+				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
+				if !action.Shift && !action.Alt {
+					if cmd, ok := p.activateTerminalLink(action); ok {
+						return cmd
+					}
+				}
 				return p.prepareInteractiveDrag(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
@@ -561,25 +575,18 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.activePane = PaneSidebar
 	case regionPreviewPane:
 		p.activePane = PanePreview
-		// When terminal panel is visible, single click focuses the agent sub-pane
-		// (double-click enters interactive mode instead)
 		if p.termPanelVisible {
 			p.termPanelFocused = false
-			return nil
 		}
-		// No terminal panel: single click enters interactive mode if Output tab active (td-7c2016)
-		if p.previewTab == PreviewTabOutput {
-			if p.shellSelected {
-				shell := p.getSelectedShell()
-				if shell != nil && shell.Agent != nil {
-					return p.enterInteractiveMode()
-				}
-			} else {
-				wt := p.selectedWorktree()
-				if wt != nil && wt.Agent != nil && wt.Agent.TmuxSession != "" {
-					return p.enterInteractiveMode()
+		// Normal clicks focus and prepare read-mode selection. Enter is the
+		// explicit transition into interactive input.
+		if p.previewTab == PreviewTabOutput || p.shellSelected {
+			if !action.Shift && !action.Alt {
+				if cmd, ok := p.activateTerminalLink(action); ok {
+					return cmd
 				}
 			}
+			return p.prepareInteractiveDrag(action)
 		}
 	case regionPaneDivider:
 		// Start drag for pane resizing
@@ -593,9 +600,14 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
-		// Click in terminal panel area - focus the terminal sub-pane (double-click enters interactive)
 		p.activePane = PanePreview
 		p.termPanelFocused = true
+		if !action.Shift && !action.Alt {
+			if cmd, ok := p.activateTerminalLink(action); ok {
+				return cmd
+			}
+		}
+		return p.prepareInteractiveDrag(action)
 	case regionTermPanelDivider:
 		// Start drag for terminal panel resizing (percentage-based).
 		startSize := p.termPanelEffectiveSize()
@@ -875,27 +887,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 
 	switch action.Region.ID {
 	case regionTermPanelContent:
-		// Double-click in terminal panel: enter terminal panel interactive mode
 		p.activePane = PanePreview
 		p.termPanelFocused = true
-		return p.enterTermPanelInteractiveMode()
+		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		// Double-click in preview pane: enter interactive mode if Output tab active (td-80d96956)
-		// This provides seamless terminal integration without detaching from sidecar
-		if p.previewTab == PreviewTabOutput {
+		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			p.termPanelFocused = false
-			// Check for active session (worktree or shell)
-			if p.shellSelected {
-				shell := p.getSelectedShell()
-				if shell != nil && shell.Agent != nil {
-					return p.enterInteractiveMode()
-				}
-			} else {
-				wt := p.selectedWorktree()
-				if wt != nil && wt.Agent != nil && wt.Agent.TmuxSession != "" {
-					return p.enterInteractiveMode()
-				}
-			}
+			return p.selectTerminalWord(action)
 		}
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
@@ -1010,6 +1008,25 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	return nil
 }
 
+func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
+	if p.isModalViewMode() || action.Region == nil {
+		return nil
+	}
+	switch action.Region.ID {
+	case regionTermPanelContent:
+		p.activePane = PanePreview
+		p.termPanelFocused = true
+		return p.selectTerminalLine(action)
+	case regionPreviewPane:
+		if p.previewTab == PreviewTabOutput || p.shellSelected {
+			p.activePane = PanePreview
+			p.termPanelFocused = false
+			return p.selectTerminalLine(action)
+		}
+	}
+	return p.handleMouseDoubleClick(action)
+}
+
 // handleMouseScroll handles scroll wheel events.
 func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	// Guard: absorb background region scrolls when a modal is open (td-f63097).
@@ -1017,11 +1034,13 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
-	var delta int
-	if action.Type == mouse.ActionScrollUp {
-		delta = -1
-	} else {
-		delta = 1
+	delta := action.Delta
+	if delta == 0 {
+		if action.Type == mouse.ActionScrollUp {
+			delta = -1
+		} else {
+			delta = 1
+		}
 	}
 
 	// In interactive mode, always forward scroll to tmux copy-mode.
@@ -1041,12 +1060,15 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollSidebar(delta)
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
-		if delta < 0 {
-			p.termPanelScroll++
-		} else {
-			if p.termPanelScroll > 0 {
-				p.termPanelScroll--
-			}
+		p.termPanelScroll -= delta
+		if p.termPanelScroll < 0 {
+			p.termPanelScroll = 0
+		}
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
 		}
 		return nil
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
@@ -1212,29 +1234,42 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 			debounceInterval = scrollBurstDebounce
 		}
 
+		p.pendingScrollDelta += delta
 		if timeSinceLastScroll < debounceInterval {
 			return nil
 		}
 		p.lastScrollTime = now
+		delta = p.pendingScrollDelta
+		p.pendingScrollDelta = 0
 	}
 
 	// Unified offset: 0 = top of content, higher = further down
 	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll UP: move toward top of content
-		if p.previewOffset > 0 {
-			p.previewOffset--
+		if (p.previewTab == PreviewTabOutput || p.shellSelected) &&
+			p.autoScrollOutput && maxOffset >= p.previewOffset {
+			p.previewOffset = maxOffset
+		}
+		p.previewOffset += delta
+		if p.previewOffset < 0 {
+			p.previewOffset = 0
 		}
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			p.autoScrollOutput = false
+			if p.previewOffset == 0 {
+				return p.loadOlderTerminalHistory(false, -delta)
+			}
 		}
 	} else {
 		// Scroll DOWN: move toward bottom of content
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		p.previewOffset += delta
+		if p.previewOffset > maxOffset {
+			p.previewOffset = maxOffset
 		}
 		if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
 		}
 	}
 	return nil
@@ -1339,8 +1374,7 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			p.termPanelSize = newSize
 		}
 	case regionPreviewPane:
-		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active &&
-			!p.interactiveState.MouseReportingEnabled {
+		if p.selection.Anchor.Valid() {
 			return p.handleInteractiveSelectionDrag(action)
 		}
 	}
@@ -1354,7 +1388,7 @@ func (p *Plugin) handleMouseDragEnd() tea.Cmd {
 		return nil
 	}
 
-	if p.selection.Active {
+	if p.selection.Anchor.Valid() {
 		return p.finishInteractiveSelection()
 	}
 

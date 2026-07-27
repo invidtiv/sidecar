@@ -98,6 +98,8 @@ type WorkspacePluginConfig struct {
 	InteractiveCopyKey string `json:"interactiveCopyKey,omitempty"`
 	// InteractivePasteKey is the keybinding to paste clipboard in interactive mode. Default: "alt+v".
 	InteractivePasteKey string `json:"interactivePasteKey,omitempty"`
+	// CopyOnSelect copies terminal selections when a drag completes. Default: false.
+	CopyOnSelect bool `json:"copyOnSelect,omitempty"`
 	// SidebarDisplay controls what information is shown in the workspace sidebar entries.
 	SidebarDisplay SidebarDisplayConfig `json:"sidebarDisplay"`
 }

@@ -36,9 +36,10 @@ type PreviewResult struct {
 
 // PreviewLoadedMsg signals that file preview content is ready.
 type PreviewLoadedMsg struct {
-	Epoch  uint64 // Epoch when request was issued (for stale detection)
-	Result PreviewResult
-	Path   string
+	Epoch              uint64 // Epoch when request was issued (for stale detection)
+	NavigateGeneration uint64 // Non-zero only for NavigateToFileMsg-owned loads
+	Result             PreviewResult
+	Path               string
 }
 
 // GetEpoch implements plugin.EpochMessage.

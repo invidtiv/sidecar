@@ -3,6 +3,8 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +23,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 var openCodeRunPrefixRe = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
@@ -43,6 +47,22 @@ type captureCoordinator struct {
 	mu       sync.Mutex
 	inFlight bool
 	cond     *sync.Cond
+}
+
+type capturedCursor struct {
+	Row        int
+	Col        int
+	PaneHeight int
+	PaneWidth  int
+	Visible    bool
+	Valid      bool
+	capturedPaneMetadata
+}
+
+type capturedPaneMetadata struct {
+	HistorySize int
+	CaptureBase int
+	Valid       bool
 }
 
 func newCaptureCoordinator() *captureCoordinator {
@@ -199,9 +219,6 @@ func init() {
 const (
 	// Tmux session prefix for sidecar-managed worktree sessions
 	tmuxSessionPrefix = "sidecar-ws-"
-
-	// Default history limit for tmux scrollback capture
-	tmuxHistoryLimit = 10000
 
 	// Lines to capture from tmux (slightly > outputBufferCap for margin)
 	// We only need recent output for status detection and display
@@ -368,17 +385,9 @@ func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 			"-c", wt.Path, // Working directory
 		}
 
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		envCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
@@ -684,17 +693,9 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 			"-c", wt.Path, // Working directory
 		}
 
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
@@ -753,15 +754,11 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", wt.Path, // Working directory
 		}
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return func() tea.Msg {
 				return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("create session: %w", err)}
 			}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		// Track as managed session
 		p.managedSessions[sessionName] = true
@@ -853,10 +850,11 @@ func staggerOffset(name string) time.Duration {
 // Adds stagger offset based on worktree name to prevent simultaneous polls.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when worktrees are removed.
 func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea.Cmd {
-	// Capture current generation for this worktree
-	gen := p.pollGeneration[worktreeName]
+	if p.primaryControlUsing("agent", worktreeName) {
+		return nil
+	}
 	stagger := staggerOffset(worktreeName)
-	return tea.Tick(delay+stagger, func(t time.Time) tea.Msg {
+	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay+stagger, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
 	})
 }
@@ -865,8 +863,10 @@ func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea
 // Stagger exists to spread polls across multiple worktrees, but the selected interactive worktree
 // needs minimal latency. Uses the same generation tracking as scheduleAgentPoll.
 func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duration) tea.Cmd {
-	gen := p.pollGeneration[worktreeName]
-	return tea.Tick(delay, func(t time.Time) tea.Msg {
+	if p.primaryControlUsing("agent", worktreeName) {
+		return nil
+	}
+	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
 	})
 }
@@ -874,6 +874,8 @@ func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duratio
 // AgentPollUnchangedMsg signals content unchanged, schedule next poll.
 type AgentPollUnchangedMsg struct {
 	WorkspaceName string
+	Generation    int
+	Output        string
 	CurrentStatus WorktreeStatus // Status including session file re-check
 	WaitingFor    string         // Prompt text if waiting
 	// Cursor position captured atomically (even when content unchanged)
@@ -883,15 +885,18 @@ type AgentPollUnchangedMsg struct {
 	HasCursor     bool
 	PaneHeight    int // Tmux pane height for cursor offset calculation
 	PaneWidth     int // Tmux pane width for display alignment
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 }
 
 // handlePollAgent captures output from a tmux session asynchronously.
 // Uses a goroutine to avoid blocking the UI thread on tmux subprocess calls (td-c2961e).
-func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
+func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	wt := p.findWorktree(worktreeName)
 	if wt == nil || wt.Agent == nil {
 		return func() tea.Msg {
-			return AgentStoppedMsg{WorkspaceName: worktreeName}
+			return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 	}
 
@@ -908,28 +913,37 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
+		!p.interactiveState.TermPanel &&
 		!p.shellSelected
 	if interactiveCapture {
 		if selected := p.selectedWorktree(); selected == nil || selected.Name != worktreeName {
 			interactiveCapture = false
 		}
 	}
+	if interactiveCapture {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleInteractivePoll(worktreeName, remaining)
+		}
+	}
 
-	// When feature is enabled, use direct capture without -J for the selected worktree.
-	// This ensures the preview shows content wrapped at the pane width (which is resized
-	// to match the preview). We also resize inline to avoid races with async resize cmds.
+	// The selected worktree gets a direct metadata capture so its history can
+	// be addressed lazily. Interactive input additionally preserves native
+	// wrapping and resizes the pane to the preview dimensions.
 	directCapture := false
+	joinWrapped := !features.IsEnabled(features.TmuxInteractiveInput.Name)
 	var resizeTarget string
 	var previewWidth, previewHeight int
-	if !interactiveCapture && features.IsEnabled(features.TmuxInteractiveInput.Name) {
+	if !interactiveCapture {
 		if selected := p.selectedWorktree(); selected != nil && selected.Name == worktreeName {
 			directCapture = true
-			if p.termPanelVisible {
-				previewWidth, previewHeight = p.calculateAgentPaneDimensions()
-			} else {
-				previewWidth, previewHeight = p.calculatePreviewDimensions()
+			if features.IsEnabled(features.TmuxInteractiveInput.Name) {
+				if p.termPanelVisible {
+					previewWidth, previewHeight = p.calculateAgentPaneDimensions()
+				} else {
+					previewWidth, previewHeight = p.calculatePreviewDimensions()
+				}
+				resizeTarget = p.previewResizeTarget()
 			}
-			resizeTarget = p.previewResizeTarget()
 		}
 	}
 
@@ -946,15 +960,20 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 	return func() tea.Msg {
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := queryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				p.resizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			}
 		}
 
 		var output string
 		var err error
-		if interactiveCapture || directCapture {
-			output, err = capturePaneDirectWithJoin(sessionName, false)
+		var cursor capturedCursor
+		var capture capturedPaneMetadata
+		if interactiveCapture && cursorTarget != "" {
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget, false)
+			capture = cursor.capturedPaneMetadata
+		} else if interactiveCapture || directCapture {
+			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, joinWrapped)
 		} else {
 			output, err = capturePane(sessionName)
 		}
@@ -962,26 +981,23 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 			// Session may have been killed
 			if strings.Contains(err.Error(), "can't find") ||
 				strings.Contains(err.Error(), "no server") {
-				return AgentStoppedMsg{WorkspaceName: worktreeName}
+				return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
 			}
 			// Schedule retry on other errors (with delay to prevent busy-loop)
 			time.Sleep(pollIntervalActive)
-			return pollAgentMsg{WorkspaceName: worktreeName}
+			return pollAgentMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 
-		// Capture cursor position atomically with output when in interactive mode.
-		// This prevents race conditions where cursor position changes between
-		// output capture and cursor query.
-		var cursorRow, cursorCol, paneHeight, paneWidth int
-		var cursorVisible, hasCursor bool
-		if interactiveCapture && cursorTarget != "" {
-			cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, hasCursor = queryCursorPositionSync(cursorTarget)
+		var removedRows int
+		output, removedRows = trimCapturedOutputRows(output, maxBytes)
+		if capture.Valid {
+			capture.CaptureBase += removedRows
 		}
-
-		output = trimCapturedOutput(output, maxBytes)
 
 		// Use hash-based change detection to skip processing if content unchanged
-		outputChanged := outputBuf == nil || outputBuf.Update(output)
+		outputChanged := outputBuf == nil || (capture.Valid &&
+			outputBuf.WouldChangeSnapshot(output, capture.CaptureBase)) ||
+			(!capture.Valid && outputBuf.WouldChange(output))
 
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):
 		//   - tmux patterns: thinking, done, error (high-signal, session files can't detect these)
@@ -990,60 +1006,67 @@ func (p *Plugin) handlePollAgent(worktreeName string) tea.Cmd {
 		// may finish while tmux output stays the same (td-2fca7d v8).
 		status := currentStatus
 		waitingFor := ""
-		if !interactiveCapture {
-			if outputChanged {
-				// Tmux pattern detection only when output changes (same output = same patterns).
-				status = detectStatus(output)
+		if outputChanged {
+			// Tmux pattern detection only when output changes (same output = same patterns).
+			status = detectStatus(output)
+			if status == StatusWaiting {
+				waitingFor = extractPrompt(output)
+			}
+		}
+		// Session file check runs every poll — mtime changes independently of tmux output.
+		// Only override active/waiting; preserve tmux-detected thinking/done/error.
+		if status == StatusActive || status == StatusWaiting {
+			if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
+				prevStatus := status
+				status = sessionStatus
 				if status == StatusWaiting {
 					waitingFor = extractPrompt(output)
-				}
-			}
-			// Session file check runs every poll — mtime changes independently of tmux output.
-			// Only override active/waiting; preserve tmux-detected thinking/done/error.
-			if status == StatusActive || status == StatusWaiting {
-				if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
-					prevStatus := status
-					status = sessionStatus
-					if status == StatusWaiting {
-						waitingFor = extractPrompt(output)
-						if waitingFor == "" {
-							waitingFor = "Waiting for input"
-						}
-					} else {
-						waitingFor = ""
+					if waitingFor == "" {
+						waitingFor = "Waiting for input"
 					}
-					slog.Debug("status: session file override", "worktree", worktreeName, "prev", prevStatus, "session", sessionStatus)
 				} else {
-					slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", agentType)
+					waitingFor = ""
 				}
+				slog.Debug("status: session file override", "worktree", worktreeName, "prev", prevStatus, "session", sessionStatus)
+			} else {
+				slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", agentType)
 			}
 		}
 
 		if !outputChanged {
 			return AgentPollUnchangedMsg{
 				WorkspaceName: worktreeName,
+				Generation:    generation,
+				Output:        output,
 				CurrentStatus: status,
 				WaitingFor:    waitingFor,
-				CursorRow:     cursorRow,
-				CursorCol:     cursorCol,
-				CursorVisible: cursorVisible,
-				HasCursor:     hasCursor,
-				PaneHeight:    paneHeight,
-				PaneWidth:     paneWidth,
+				CursorRow:     cursor.Row,
+				CursorCol:     cursor.Col,
+				CursorVisible: cursor.Visible,
+				HasCursor:     cursor.Valid,
+				PaneHeight:    cursor.PaneHeight,
+				PaneWidth:     cursor.PaneWidth,
+				HistorySize:   capture.HistorySize,
+				CaptureBase:   capture.CaptureBase,
+				HasHistory:    capture.Valid,
 			}
 		}
 
 		return AgentOutputMsg{
 			WorkspaceName: worktreeName,
+			Generation:    generation,
 			Output:        output,
 			Status:        status,
 			WaitingFor:    waitingFor,
-			CursorRow:     cursorRow,
-			CursorCol:     cursorCol,
-			CursorVisible: cursorVisible,
-			HasCursor:     hasCursor,
-			PaneHeight:    paneHeight,
-			PaneWidth:     paneWidth,
+			CursorRow:     cursor.Row,
+			CursorCol:     cursor.Col,
+			CursorVisible: cursor.Visible,
+			HasCursor:     cursor.Valid,
+			PaneHeight:    cursor.PaneHeight,
+			PaneWidth:     cursor.PaneWidth,
+			HistorySize:   capture.HistorySize,
+			CaptureBase:   capture.CaptureBase,
+			HasHistory:    capture.Valid,
 		}
 	}
 }
@@ -1098,14 +1121,9 @@ func capturePaneDirect(sessionName string) (string, error) {
 // capturePaneDirectWithJoin captures a single pane without caching.
 // When joinWrapped is false, tmux preserves wrapped lines for correct cursor alignment.
 func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, error) {
-	startLine := fmt.Sprintf("-%d", captureLineCount)
+	args := capturePaneArgs(sessionName, joinWrapped)
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
-	args := []string{"capture-pane", "-p", "-e"}
-	if joinWrapped {
-		args = append(args, "-J")
-	}
-	args = append(args, "-S", startLine, "-t", sessionName)
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -1118,6 +1136,111 @@ func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, er
 		return "", fmt.Errorf("capture-pane: %w", err)
 	}
 	return string(output), nil
+}
+
+// capturePaneDirectWithJoinMetadata captures the live tail and the tmux
+// history size in one argv-only command chain.
+func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (string, capturedPaneMetadata, error) {
+	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size}", ";"}
+	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "tmux", args...).Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: timeout after %s", tmuxCaptureTimeout)
+	}
+	if err != nil {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: %w", err)
+	}
+	header, paneOutput, found := strings.Cut(string(output), "\n")
+	if !found {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: missing history metadata")
+	}
+	historySize, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || historySize < 0 {
+		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: invalid history size %q", header)
+	}
+	return paneOutput, capturedPaneMetadata{
+		HistorySize: historySize,
+		CaptureBase: max(historySize-captureLineCount, 0),
+		Valid:       true,
+	}, nil
+}
+
+func capturePaneArgs(sessionName string, joinWrapped bool) []string {
+	args := []string{"capture-pane", "-p", "-e"}
+	if joinWrapped {
+		args = append(args, "-J")
+	}
+	return append(args, "-S", fmt.Sprintf("-%d", captureLineCount), "-t", sessionName)
+}
+
+// capturePaneDirectWithJoinAndCursor captures cursor metadata and pane output
+// in one tmux process. The command separator is an argv element, not shell
+// syntax, so target names are never interpreted by a shell.
+func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWrapped bool) (string, capturedCursor, error) {
+	args := capturePaneWithCursorArgs(sessionName, cursorTarget, joinWrapped)
+
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	output, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: timeout after %s", tmuxCaptureTimeout)
+	}
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return "", capturedCursor{}, fmt.Errorf("capture-pane: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: %w", err)
+	}
+	header, paneOutput, found := strings.Cut(string(output), "\n")
+	if !found {
+		return "", capturedCursor{}, fmt.Errorf("capture-pane: missing cursor metadata")
+	}
+	return paneOutput, parseCapturedCursor(header), nil
+}
+
+func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
+	args := []string{
+		"display-message", "-t", cursorTarget, "-p",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size}",
+		";",
+	}
+	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
+	return args
+}
+
+func parseCapturedCursor(header string) capturedCursor {
+	parts := strings.Split(strings.TrimSpace(header), ",")
+	if len(parts) < 5 {
+		return capturedCursor{}
+	}
+	col, errCol := strconv.Atoi(parts[0])
+	row, errRow := strconv.Atoi(parts[1])
+	paneHeight, errHeight := strconv.Atoi(parts[3])
+	paneWidth, errWidth := strconv.Atoi(parts[4])
+	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil {
+		return capturedCursor{}
+	}
+	cursor := capturedCursor{
+		Row:        row,
+		Col:        col,
+		Visible:    parts[2] != "0",
+		PaneHeight: paneHeight,
+		PaneWidth:  paneWidth,
+		Valid:      true,
+	}
+	if len(parts) >= 6 {
+		if historySize, err := strconv.Atoi(parts[5]); err == nil && historySize >= 0 {
+			cursor.capturedPaneMetadata = capturedPaneMetadata{
+				HistorySize: historySize,
+				CaptureBase: max(historySize-captureLineCount, 0),
+				Valid:       true,
+			}
+		}
+	}
+	return cursor
 }
 
 // batchCaptureActiveSessions captures only recently-polled sidecar sessions (td-018f25).
@@ -1133,30 +1256,19 @@ func batchCaptureActiveSessions() (map[string]string, error) {
 		return nil, nil
 	}
 
-	// Build bash script that only captures active sessions
-	// Quote session names to handle special characters safely
-	var quotedSessions []string
-	for _, s := range activeSessions {
-		quotedSessions = append(quotedSessions, fmt.Sprintf("%q", s))
-	}
-
 	// When tmux_interactive_input is enabled, panes are resized to match preview width,
 	// so skip -J to preserve tmux's native wrapping (matches interactive mode rendering).
-	captureArgs := "-p -e -J"
-	if features.IsEnabled(features.TmuxInteractiveInput.Name) {
-		captureArgs = "-p -e"
+	joinWrapped := !features.IsEnabled(features.TmuxInteractiveInput.Name)
+	sort.Strings(activeSessions)
+	nonce, err := newCaptureNonce()
+	if err != nil {
+		return nil, fmt.Errorf("batch capture nonce: %w", err)
 	}
-
-	script := fmt.Sprintf(`
-for session in %s; do
-    echo "===SIDECAR_SESSION:$session==="
-    tmux capture-pane %s -S -%d -t "$session" 2>/dev/null
-done
-`, strings.Join(quotedSessions, " "), captureArgs, captureLineCount)
+	args := buildBatchCaptureArgs(activeSessions, nonce, joinWrapped)
 
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxBatchCaptureTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("batch capture: timeout after %s", tmuxBatchCaptureTimeout)
@@ -1165,41 +1277,96 @@ done
 		return nil, fmt.Errorf("batch capture: %w", err)
 	}
 
-	// Parse output by splitting on delimiter
-	results := make(map[string]string)
-	parts := strings.Split(string(output), "===SIDECAR_SESSION:")
+	return parseBatchCaptureOutput(string(output), activeSessions, nonce), nil
+}
 
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		// Find session name (ends with ===)
-		idx := strings.Index(part, "===")
-		if idx == -1 {
-			continue
-		}
-		sessionName := strings.Clone(part[:idx])
-		content := ""
-		if idx+3 < len(part) {
-			content = part[idx+3:]
-			// Trim leading newline from content
-			content = strings.TrimPrefix(content, "\n")
-		}
-		results[sessionName] = strings.Clone(content)
+func newCaptureNonce() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
 	}
+	return hex.EncodeToString(raw[:]), nil
+}
 
-	return results, nil
+func batchCaptureMarker(nonce string, index int) string {
+	return fmt.Sprintf("===SIDECAR_CAPTURE:%s:%d===", nonce, index)
+}
+
+func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []string {
+	var args []string
+	for i, session := range sessions {
+		if i > 0 {
+			args = append(args, ";")
+		}
+		args = append(args,
+			"display-message", "-p", "-t", session, batchCaptureMarker(nonce, i),
+			";",
+		)
+		args = append(args, capturePaneArgs(session, joinWrapped)...)
+	}
+	return args
+}
+
+func parseBatchCaptureOutput(output string, sessions []string, nonce string) map[string]string {
+	results := make(map[string]string, len(sessions))
+	for i, session := range sessions {
+		marker := batchCaptureMarker(nonce, i)
+		start := strings.Index(output, marker)
+		if start < 0 {
+			continue
+		}
+		start += len(marker)
+		if start < len(output) && output[start] == '\n' {
+			start++
+		}
+		end := len(output)
+		if i+1 < len(sessions) {
+			if next := strings.Index(output[start:], batchCaptureMarker(nonce, i+1)); next >= 0 {
+				end = start + next
+			}
+		}
+		results[session] = strings.Clone(output[start:end])
+	}
+	return results
 }
 
 func trimCapturedOutput(output string, maxBytes int) string {
-	if maxBytes <= 0 || len(output) <= maxBytes {
-		return output
-	}
-	trimmed := tailUTF8Safe(output, maxBytes)
-	if nl := strings.Index(trimmed, "\n"); nl >= 0 && nl+1 < len(trimmed) {
-		return trimmed[nl+1:]
-	}
+	trimmed, _ := trimCapturedOutputRows(output, maxBytes)
 	return trimmed
+}
+
+// trimCapturedOutputRows applies the byte cap only at a complete line
+// boundary and reports how many absolute rows were removed from the front.
+// A single oversized row is preserved intact rather than returning a partial
+// row whose pane coordinate cannot be represented.
+func trimCapturedOutputRows(output string, maxBytes int) (string, int) {
+	if maxBytes <= 0 || len(output) <= maxBytes {
+		return output, 0
+	}
+	start := len(output) - maxBytes
+	for start < len(output) && !utf8.RuneStart(output[start]) {
+		start++
+	}
+	// The cap can land exactly after a newline. In that case the suffix already
+	// starts at a valid row and must not lose one more line.
+	if start > 0 && output[start-1] == '\n' {
+		return output[start:], strings.Count(output[:start], "\n")
+	}
+
+	rowStart := strings.LastIndexByte(output[:start], '\n') + 1
+	rowEnd := len(output)
+	if nl := strings.IndexByte(output[start:], '\n'); nl >= 0 {
+		rowEnd = start + nl + 1
+	}
+	rowBytes := rowEnd - rowStart
+	if rowBytes > maxBytes || rowEnd == len(output) {
+		// The containing row itself exceeds the cap (or is the only remaining
+		// final row). Preserve it intact, but discard complete prefix rows.
+		return output[rowStart:], strings.Count(output[:rowStart], "\n")
+	}
+	// The cutoff is inside an ordinary row; drop that partial row and retain
+	// the newest complete rows after it.
+	return output[rowEnd:], strings.Count(output[:rowEnd], "\n")
 }
 
 // tailUTF8Safe returns the last n bytes of s, adjusted to not split UTF-8 chars.
@@ -1569,7 +1736,7 @@ func (p *Plugin) reconnectAgents() tea.Cmd {
 				TmuxSession: session,
 				TmuxPane:    paneID,     // Capture pane ID for interactive mode
 				StartedAt:   time.Now(), // Unknown actual start
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
 			wt.Agent = agent

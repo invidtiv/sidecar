@@ -206,7 +206,7 @@ func TestShellCreatedMsg_KeepSelectionLeavesSelectionAlone(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newAutoShellPlugin(t, true, "")
 			p.managedSessions = make(map[string]bool)
-			p.shellPollGeneration = make(map[string]int)
+			p.pollScheduler.Reset()
 			p.activePane = PanePreview
 			p.shellSelected = false
 			p.selectedIdx = 0

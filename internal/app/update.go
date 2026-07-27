@@ -135,6 +135,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.applicationFocused = true
+		return m, m.forwardApplicationFocus(msg)
+
+	case tea.BlurMsg:
+		m.applicationFocused = false
+		return m, m.forwardApplicationFocus(msg)
+
 	case tea.KeyPressMsg:
 		return (&m).handleKeyMsg(msg)
 
@@ -519,6 +527,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, p := range m.registry.Plugins() {
+		_, cmd := p.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleKeyMsg processes keyboard input.

@@ -67,4 +67,4 @@ The rendered markdown string is composed into the TUI (cached in the `Renderer` 
 
 - Wrong path (`github.com/charmbracelet/glamour/v2`) → resolves to a stale beta. Use `charm.land/glamour/v2`.
 - If a custom JSON style theme is in the repo and sets `overlined`, v2 will ignore/reject it — strip that key.
-- Word-wrap behavior was rewritten on `lipgloss.Wrap` in v2 (better CJK/emoji handling). Long lines may wrap slightly differently — verify the preview panes still fit their allocated width (CLAUDE.md height/width rule).
+- Word-wrap behavior was rewritten on `lipgloss.Wrap` in v2 (better CJK/emoji handling). Long lines may wrap slightly differently — verify the preview panes still fit their allocated width (AGENTS.md height/width rule).

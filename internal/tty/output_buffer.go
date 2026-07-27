@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Regexes for cleaning terminal output
@@ -38,9 +40,12 @@ type OutputBuffer struct {
 	mu          sync.Mutex
 	lines       []string
 	cap         int
+	baseLine    int
+	absolute    bool
 	lastHash    uint64       // Hash of cleaned content (after mouse sequence stripping)
 	lastRawHash uint64       // Hash of raw content before processing
 	lastLen     int          // Length of last content (collision guard)
+	lastBase    int          // Absolute base of the last live snapshot
 	hashSeed    maphash.Seed // Seed for stable hashing
 }
 
@@ -62,28 +67,21 @@ func (b *OutputBuffer) Update(content string) bool {
 	// Check hash BEFORE expensive regex processing
 	// Compute hash of raw content first
 	rawHash := maphash.String(b.hashSeed, content)
-	if rawHash == b.lastRawHash && len(content) == b.lastLen {
+	rawLen := len(content)
+	if !b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen {
 		return false // Content unchanged - skip ALL processing
 	}
 
-	// Content changed - now strip mouse escape sequences
-	// Fast path: only run regex if mouse sequences are likely present
-	if strings.Contains(content, "\x1b[<") {
-		content = mouseEscapeRegex.ReplaceAllString(content, "")
-	}
-	if strings.Contains(content, "\x1b[?") {
-		content = terminalModeRegex.ReplaceAllString(content, "")
-	}
-	// Strip partial mouse sequences (ESC consumed by shell, rest printed as text)
-	if strings.Contains(content, "[<") {
-		content = partialMouseEscapeRegex.ReplaceAllString(content, "")
-	}
+	content = cleanOutput(content)
 
 	// Store cleaned content hash for future comparisons
 	cleanHash := maphash.String(b.hashSeed, content)
 	b.lastHash = cleanHash
 	b.lastRawHash = rawHash
-	b.lastLen = len(content)
+	b.lastLen = rawLen
+	b.baseLine = 0
+	b.absolute = false
+	b.lastBase = 0
 	// Trim trailing newline before split to avoid spurious empty element.
 	// tmux capture-pane output ends with \n, which would create an extra empty
 	// element after split, causing cursor alignment to be off by one line.
@@ -97,33 +95,137 @@ func (b *OutputBuffer) Update(content string) bool {
 	return true
 }
 
+// UpdateSnapshot merges a live capture whose first line has the supplied
+// absolute pane coordinate. Older lines loaded with PrependSnapshot are
+// retained while the overlapping live tail is replaced.
+func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	rawHash := maphash.String(b.hashSeed, content)
+	rawLen := len(content)
+	if b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen && baseLine == b.lastBase {
+		return false
+	}
+
+	cleaned := cleanOutput(content)
+	incoming := splitOutputLines(cleaned)
+	if baseLine < 0 {
+		baseLine = 0
+	}
+
+	if b.absolute && baseLine >= b.baseLine && baseLine <= b.baseLine+len(b.lines) {
+		prefixLen := baseLine - b.baseLine
+		merged := make([]string, 0, prefixLen+len(incoming))
+		merged = append(merged, b.lines[:prefixLen]...)
+		merged = append(merged, incoming...)
+		b.lines = merged
+	} else {
+		b.lines = incoming
+		b.baseLine = baseLine
+	}
+	b.absolute = true
+	b.trimLocked()
+
+	b.lastHash = maphash.String(b.hashSeed, cleaned)
+	b.lastRawHash = rawHash
+	b.lastLen = rawLen
+	b.lastBase = baseLine
+	return true
+}
+
+// PrependSnapshot merges an older bounded capture into an absolute buffer.
+// The ranges must overlap or touch; a gap is rejected because inventing blank
+// terminal rows would make selection and search coordinates incorrect.
+func (b *OutputBuffer) PrependSnapshot(content string, baseLine int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if baseLine < 0 {
+		baseLine = 0
+	}
+	incoming := splitOutputLines(cleanOutput(content))
+	if len(incoming) == 0 {
+		return false
+	}
+	if !b.absolute {
+		b.lines = incoming
+		b.baseLine = baseLine
+		b.absolute = true
+		b.trimLocked()
+		return true
+	}
+
+	currentEnd := b.baseLine + len(b.lines)
+	incomingEnd := baseLine + len(incoming)
+	if incomingEnd < b.baseLine || baseLine > currentEnd {
+		return false
+	}
+
+	combinedBase := min(baseLine, b.baseLine)
+	combinedEnd := max(incomingEnd, currentEnd)
+	combined := make([]string, combinedEnd-combinedBase)
+	copy(combined[baseLine-combinedBase:], incoming)
+	// A range capture may finish after a newer live snapshot has arrived.
+	// Preserve the current buffer on overlap so delayed history can only add
+	// older rows, never roll the live tail backward.
+	copy(combined[b.baseLine-combinedBase:], b.lines)
+
+	changed := combinedBase != b.baseLine || len(combined) != len(b.lines)
+	if !changed {
+		for i := range combined {
+			if combined[i] != b.lines[i] {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return false
+	}
+
+	b.lines = combined
+	b.baseLine = combinedBase
+	b.trimLocked()
+	return true
+}
+
+// WouldChange reports whether content differs from the last raw update without
+// mutating the buffer. Async capture commands use this to do status work off
+// the UI goroutine while deferring the actual update until ownership is checked.
+func (b *OutputBuffer) WouldChange(content string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	rawHash := maphash.String(b.hashSeed, content)
+	return rawHash != b.lastRawHash || len(content) != b.lastLen
+}
+
+// WouldChangeSnapshot reports whether an absolute live capture differs from
+// the last one without mutating the buffer.
+func (b *OutputBuffer) WouldChangeSnapshot(content string, baseLine int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	rawHash := maphash.String(b.hashSeed, content)
+	return !b.absolute || rawHash != b.lastRawHash || len(content) != b.lastLen || baseLine != b.lastBase
+}
+
 // Write replaces content in the buffer (for backward compatibility).
 // Prefer Update() for change detection.
 func (b *OutputBuffer) Write(content string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Strip mouse escape sequences.
-	// Fast path: only run regex if mouse sequences are likely present
-	if strings.Contains(content, "\x1b[<") {
-		content = mouseEscapeRegex.ReplaceAllString(content, "")
-	}
-	if strings.Contains(content, "\x1b[?") {
-		content = terminalModeRegex.ReplaceAllString(content, "")
-	}
-	// Strip partial mouse sequences (ESC consumed by shell, rest printed as text)
-	if strings.Contains(content, "[<") {
-		content = partialMouseEscapeRegex.ReplaceAllString(content, "")
-	}
+	content = cleanOutput(content)
 
 	// Replace instead of append to avoid duplication
 	// Trim trailing newline before split (same as Update method)
-	b.lines = strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	b.lines = splitOutputLines(content)
+	b.baseLine = 0
+	b.absolute = false
+	b.lastBase = 0
 
 	// Trim to capacity (keep most recent lines)
-	if len(b.lines) > b.cap {
-		b.lines = b.lines[len(b.lines)-b.cap:]
-	}
+	b.trimLocked()
 }
 
 // Lines returns a copy of all lines in the buffer.
@@ -154,11 +256,59 @@ func (b *OutputBuffer) LinesRange(start, end int) []string {
 	return result
 }
 
+// LinesAbsoluteRange returns a copy of absolute lines in [start, end).
+func (b *OutputBuffer) LinesAbsoluteRange(start, end int) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.absolute {
+		return nil
+	}
+	start -= b.baseLine
+	end -= b.baseLine
+	if start < 0 {
+		start = 0
+	}
+	if end > len(b.lines) {
+		end = len(b.lines)
+	}
+	if start >= end {
+		return nil
+	}
+	result := make([]string, end-start)
+	copy(result, b.lines[start:end])
+	return result
+}
+
+// AbsoluteRange reports the half-open absolute line range represented by the
+// buffer. ok is false until the buffer has received an absolute snapshot.
+func (b *OutputBuffer) AbsoluteRange() (start, end int, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.absolute {
+		return 0, 0, false
+	}
+	return b.baseLine, b.baseLine + len(b.lines), true
+}
+
 // LineCount returns the number of lines without copying.
 func (b *OutputBuffer) LineCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.lines)
+}
+
+// LastNonEmptyLine returns the index of the last line containing printable
+// content, or -1 when every line is empty. It scans under the buffer lock and
+// avoids copying the full scrollback into the render path.
+func (b *OutputBuffer) LastNonEmptyLine() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(ansi.Strip(b.lines[i])) != "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // String returns the buffer contents as a single string.
@@ -171,9 +321,12 @@ func (b *OutputBuffer) Clear() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.lines = b.lines[:0]
+	b.baseLine = 0
+	b.absolute = false
 	b.lastHash = 0
 	b.lastRawHash = 0
 	b.lastLen = 0
+	b.lastBase = 0
 }
 
 // Len returns the number of lines in the buffer.
@@ -181,6 +334,34 @@ func (b *OutputBuffer) Len() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.lines)
+}
+
+func (b *OutputBuffer) trimLocked() {
+	if len(b.lines) <= b.cap {
+		return
+	}
+	drop := len(b.lines) - b.cap
+	b.lines = b.lines[drop:]
+	if b.absolute {
+		b.baseLine += drop
+	}
+}
+
+func cleanOutput(content string) string {
+	if strings.Contains(content, "\x1b[<") {
+		content = mouseEscapeRegex.ReplaceAllString(content, "")
+	}
+	if strings.Contains(content, "\x1b[?") {
+		content = terminalModeRegex.ReplaceAllString(content, "")
+	}
+	if strings.Contains(content, "[<") {
+		content = partialMouseEscapeRegex.ReplaceAllString(content, "")
+	}
+	return content
+}
+
+func splitOutputLines(content string) []string {
+	return strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 }
 
 // ContainsMouseSequence checks if input looks like it contains SGR mouse data (td-e2ce50).

@@ -1,8 +1,15 @@
 package notes
 
 import (
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -42,7 +49,7 @@ func TestNormalizeEditorName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := normalizeEditorName(tt.input)
+			got := tty.NormalizeEditorName(tt.input)
 			if got != tt.expected {
 				t.Errorf("normalizeEditorName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
@@ -208,7 +215,7 @@ func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 
 	for _, editor := range known {
 		t.Run(editor, func(t *testing.T) {
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if !got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = false, want true", editor)
 			}
@@ -221,7 +228,7 @@ func TestSendEditorSaveAndQuit_UnknownEditors(t *testing.T) {
 
 	for _, editor := range unknown {
 		t.Run(editor, func(t *testing.T) {
-			got := sendEditorSaveAndQuit("nonexistent-session", editor)
+			got := (tty.EditorSession{Name: "nonexistent-session", Editor: editor}).SaveAndQuit()
 			if got {
 				t.Errorf("sendEditorSaveAndQuit(_, %q) = true, want false", editor)
 			}
@@ -236,4 +243,150 @@ func TestInlineEditorTtyConfig(t *testing.T) {
 	if m.Config.ScrollbackLines <= 0 {
 		t.Errorf("default ScrollbackLines = %d, want > 0", m.Config.ScrollbackLines)
 	}
+}
+
+func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
+	p := New()
+	p.width = 100
+	p.height = 24
+	p.focused = true
+	p.activePane = PaneEditor
+	p.listWidth = 30
+	p.inlineEditMode = true
+	p.inlineEditor.Enter("editor", "")
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.State.OutputBuf.Write("one\ntwo")
+	p.inlineEditor.State.CursorVisible = true
+	p.inlineEditor.State.CursorRow = 1
+	p.inlineEditor.State.CursorCol = 3
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height
+
+	cursor := p.Cursor()
+	if cursor == nil || cursor.X != 36 || cursor.Y != 3 {
+		t.Fatalf("Cursor() = %#v, want plugin-local (36,3)", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
+		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
+	}
+
+	p.showExitConfirmation = true
+	if cursor := p.Cursor(); cursor != nil {
+		t.Fatalf("confirmation-covered Cursor() = %#v, want nil", cursor)
+	}
+	if mode := p.PreferredMouseMode(); mode != tea.MouseModeAllMotion {
+		t.Fatalf("confirmation mouse mode = %v, want all motion", mode)
+	}
+}
+
+func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
+	logPath := installNotesFakeTmux(t)
+
+	p := New()
+	p.inlineEditMode = true
+	p.inlineEditSession = "old-project-editor"
+	p.inlineEditNoteID = "old-note"
+	p.inlineEditPath = "/tmp/old-note"
+	p.inlineEditEditor = "nvim"
+	p.inlineLastSavedContent = "old"
+	p.inlineAutoSaveGen = 7
+	oldGeneration := p.inlineAutoSaveGen
+
+	p.Stop()
+
+	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" ||
+		p.inlineEditPath != "" || p.inlineEditEditor != "" || p.inlineLastSavedContent != "" {
+		t.Fatalf("Stop retained old-project inline state: %+v", p)
+	}
+	if p.inlineAutoSaveGen <= oldGeneration {
+		t.Fatalf("autosave generation = %d, want > %d", p.inlineAutoSaveGen, oldGeneration)
+	}
+	if _, cmd := p.Update(InlineAutoSaveTickMsg{Generation: oldGeneration}); cmd != nil {
+		t.Fatal("old-project autosave tick produced a command after Stop")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t old-project-editor") {
+		t.Fatalf("Stop did not kill editor session; log:\n%s", data)
+	}
+}
+
+func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
+	logPath := installNotesFakeTmux(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".todos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.inlineEditMode = true
+	p.inlineEditSession = "old-project-editor"
+	p.inlineEditNoteID = "old-note"
+	p.inlineEditPath = "/tmp/old-note"
+	p.inlineEditEditor = "vim"
+	p.inlineAutoSaveGen = 11
+	oldGeneration := p.inlineAutoSaveGen
+	ctx := &plugin.Context{
+		WorkDir:     root,
+		ProjectRoot: root,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Epoch:       2,
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if p.store == nil {
+		t.Fatal("new project store was not initialized")
+	}
+	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" || p.inlineEditPath != "" {
+		t.Fatal("Init retained old-project inline editor state")
+	}
+	if p.inlineAutoSaveGen <= oldGeneration {
+		t.Fatalf("Init autosave generation = %d, want > %d", p.inlineAutoSaveGen, oldGeneration)
+	}
+	if _, cmd := p.Update(InlineAutoSaveTickMsg{Generation: oldGeneration}); cmd != nil {
+		t.Fatal("old-project autosave tick reached new project store")
+	}
+	if data, err := os.ReadFile(logPath); err == nil && strings.Contains(string(data), "kill-session") {
+		t.Fatalf("Init synchronously spawned tmux cleanup:\n%s", data)
+	}
+	startCmd := p.Start()
+	if startCmd == nil {
+		t.Fatal("Start did not return orphan cleanup command")
+	}
+	startResult := startCmd()
+	batch, ok := startResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Start returned %T, want tea.BatchMsg", startResult)
+	}
+	for _, cmd := range batch {
+		if cmd != nil {
+			_ = cmd()
+		}
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t old-project-editor") {
+		t.Fatalf("Start did not asynchronously clean orphan editor:\n%s", data)
+	}
+}
+
+func installNotesFakeTmux(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TEST_LOG", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }

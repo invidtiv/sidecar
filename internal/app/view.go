@@ -45,10 +45,55 @@ func (m Model) View() tea.View {
 	}
 	v := tea.NewView(m.viewContent())
 	v.AltScreen = true
-	// MouseModeAllMotion mirrors the v1 tea.WithMouseAllMotion(); the app relies
-	// on drag + hover (see internal/mouse/).
-	v.MouseMode = tea.MouseModeAllMotion
+	v.ReportFocus = true
+	v.MouseMode = m.preferredMouseMode()
+	v.Cursor = m.pluginCursor()
+	// Keep KeyboardEnhancements at its zero value. Bubble Tea v2 already
+	// requests basic key disambiguation; release events and all-keys escape
+	// encoding would alter ordinary text delivery and are intentionally opt-in.
 	return v
+}
+
+func (m Model) preferredMouseMode() tea.MouseMode {
+	// App-level overlays rely on hover motion, regardless of what the covered
+	// plugin prefers.
+	if !m.ready || m.hasModal() {
+		return tea.MouseModeAllMotion
+	}
+	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {
+		switch mode := provider.PreferredMouseMode(); mode {
+		case tea.MouseModeCellMotion, tea.MouseModeAllMotion:
+			return mode
+		}
+	}
+	return tea.MouseModeAllMotion
+}
+
+func (m Model) pluginCursor() *tea.Cursor {
+	if !m.ready || !m.applicationFocused || m.hasModal() ||
+		m.width < minWidth || m.height < minHeight {
+		return nil
+	}
+	active := m.ActivePlugin()
+	if active == nil || !active.IsFocused() {
+		return nil
+	}
+	provider, ok := active.(plugin.CursorProvider)
+	if !ok {
+		return nil
+	}
+	local := provider.Cursor()
+	if local == nil {
+		return nil
+	}
+	cursor := *local
+	cursor.Y += headerHeight
+	contentHeight := m.height - headerHeight - footerHeight
+	if cursor.X < 0 || cursor.X >= m.width || cursor.Y < headerHeight ||
+		cursor.Y >= headerHeight+contentHeight {
+		return nil
+	}
+	return &cursor
 }
 
 // viewContent builds the rendered screen as a string (header, content, footer,

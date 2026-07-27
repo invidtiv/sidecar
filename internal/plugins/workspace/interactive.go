@@ -4,17 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/x/ansi"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
@@ -83,10 +78,9 @@ const (
 	// If user scrolled within this window, suspicious input won't trigger snap-back.
 	snapBackCooldown = 100 * time.Millisecond
 
-	// postScrollFilterWindow is how long after scrolling to keep filtering garbage input.
-	// Mouse event garbage can arrive after scroll ends due to terminal/OS buffering.
-	// Longer = better filtering but may eat legitimate keystrokes. Shorter = risk of leakage.
-	postScrollFilterWindow = 500 * time.Millisecond
+	// mouseFragmentTimeout bounds state kept while reassembling an SGR mouse
+	// report split across terminal input reads.
+	mouseFragmentTimeout = 50 * time.Millisecond
 )
 
 // partialMouseSeqRegex is now provided by the tty package as tty.PartialMouseSeqRegex
@@ -143,149 +137,34 @@ func (p *Plugin) getInteractivePasteKey() string {
 	return defaultPasteKey
 }
 
-// isSessionDeadError checks if an error indicates the tmux session/pane is gone.
-func isSessionDeadError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "can't find pane") ||
-		strings.Contains(errStr, "no such session") ||
-		strings.Contains(errStr, "session not found") ||
-		strings.Contains(errStr, "pane not found")
-}
-
-// MapKeyToTmux is a wrapper around tty.MapKeyToTmux for backward compatibility.
-// See tty.MapKeyToTmux for documentation.
-func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
-	return tty.MapKeyToTmux(msg)
-}
-
-// sendKeyToTmux sends a key to a tmux pane using send-keys.
-// Uses the tmux key name syntax (e.g., "Enter", "C-c", "Up").
-func sendKeyToTmux(sessionName, key string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", sessionName, key)
-	return cmd.Run()
-}
-
-// sendLiteralToTmux sends literal text to a tmux pane using send-keys -l.
-// This prevents tmux from interpreting special key names.
-func sendLiteralToTmux(sessionName, text string) error {
-	// tmux treats bare ; in argv as a command separator, so a literal
-	// semicolon never reaches send-keys. Fall back to hex encoding (-H)
-	// which bypasses tmux's command parser entirely.
-	if strings.Contains(text, ";") {
-		args := []string{"send-keys", "-t", sessionName, "-H"}
-		for _, b := range []byte(text) {
-			args = append(args, fmt.Sprintf("%02x", b))
-		}
-		return exec.Command("tmux", args...).Run()
-	}
-	cmd := exec.Command("tmux", "send-keys", "-l", "-t", sessionName, text)
-	return cmd.Run()
-}
-
-// keySpec describes a key to send to tmux with ordering preserved.
-type keySpec struct {
-	value   string
-	literal bool
-}
-
 // sendInteractiveKeysCmd sends keys to tmux asynchronously (td-c2961e).
-// Keys are sent in order within a single goroutine to prevent reordering.
+//
+// The batch is queued at call time so it keeps its place relative to the
+// keystrokes around it; only the wait happens in the returned Cmd's goroutine.
+// Bubble Tea runs each Cmd concurrently, so ordering established inside the Cmd
+// would be no ordering at all (td-8fcd2e). Call from Update.
 // Returns InteractiveSessionDeadMsg if the session has ended.
-func sendInteractiveKeysCmd(sessionName string, keys ...keySpec) tea.Cmd {
-	return func() tea.Msg {
-		for _, k := range keys {
-			var err error
-			if k.literal {
-				err = sendLiteralToTmux(sessionName, k.value)
-			} else {
-				err = sendKeyToTmux(sessionName, k.value)
-			}
-			if err != nil && isSessionDeadError(err) {
-				return InteractiveSessionDeadMsg{}
-			}
-		}
-		return nil
-	}
+func sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
+	return awaitInteractiveSend(tty.SendKeysOrdered(sessionName, keys...))
 }
 
 // sendInteractivePasteInputCmd sends paste text to tmux asynchronously (td-c2961e).
 // Used for multi-character terminal input (not clipboard paste which is already async).
+// Shares the keystroke queue so pasted text cannot overtake surrounding keys.
 func sendInteractivePasteInputCmd(sessionName, text string, bracketed bool) tea.Cmd {
+	return awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
+		return tty.SendPasteInput(sessionName, text, bracketed)
+	}))
+}
+
+// awaitInteractiveSend turns a queued send's result channel into a tea.Cmd.
+func awaitInteractiveSend(done <-chan error) tea.Cmd {
 	return func() tea.Msg {
-		var err error
-		if bracketed {
-			err = sendBracketedPasteToTmux(sessionName, text)
-		} else {
-			err = sendPasteToTmux(sessionName, text)
-		}
-		if err != nil && isSessionDeadError(err) {
+		if err := <-done; err != nil && tty.IsSessionDeadError(err) {
 			return InteractiveSessionDeadMsg{}
 		}
 		return nil
 	}
-}
-
-// sendPasteToTmux pastes multi-line text via tmux buffer.
-// Uses load-buffer + paste-buffer which works regardless of app paste mode state.
-func sendPasteToTmux(sessionName, text string) error {
-	// Load text into tmux default buffer via stdin
-	loadCmd := exec.Command("tmux", "load-buffer", "-")
-	loadCmd.Stdin = strings.NewReader(text)
-	if err := loadCmd.Run(); err != nil {
-		return err
-	}
-
-	// Paste buffer into target pane
-	pasteCmd := exec.Command("tmux", "paste-buffer", "-t", sessionName)
-	return pasteCmd.Run()
-}
-
-// Bracketed paste escape sequences
-const (
-	bracketedPasteEnable  = "\x1b[?2004h" // ESC[?2004h - app enables bracketed paste
-	bracketedPasteDisable = "\x1b[?2004l" // ESC[?2004l - app disables bracketed paste
-	bracketedPasteStart   = "\x1b[200~"   // ESC[200~ - start of pasted content
-	bracketedPasteEnd     = "\x1b[201~"   // ESC[201~ - end of pasted content
-	mouseModeEnable1000   = "\x1b[?1000h"
-	mouseModeEnable1002   = "\x1b[?1002h"
-	mouseModeEnable1003   = "\x1b[?1003h"
-	mouseModeEnable1006   = "\x1b[?1006h"
-	mouseModeEnable1015   = "\x1b[?1015h"
-	mouseModeDisable1000  = "\x1b[?1000l"
-	mouseModeDisable1002  = "\x1b[?1002l"
-	mouseModeDisable1003  = "\x1b[?1003l"
-	mouseModeDisable1006  = "\x1b[?1006l"
-	mouseModeDisable1015  = "\x1b[?1015l"
-)
-
-// detectBracketedPasteMode checks captured output to determine if the app has
-// enabled bracketed paste mode. Looks for the most recent occurrence of either
-// the enable (ESC[?2004h) or disable (ESC[?2004l) sequence.
-func detectBracketedPasteMode(output string) bool {
-	enableIdx := strings.LastIndex(output, bracketedPasteEnable)
-	disableIdx := strings.LastIndex(output, bracketedPasteDisable)
-	// If enable was found more recently than disable, bracketed paste is enabled
-	return enableIdx > disableIdx
-}
-
-// sendBracketedPasteToTmux sends text wrapped in bracketed paste sequences.
-// Used when the target app has enabled bracketed paste mode.
-func sendBracketedPasteToTmux(sessionName, text string) error {
-	// Send bracketed paste start sequence
-	if err := sendLiteralToTmux(sessionName, bracketedPasteStart); err != nil {
-		return err
-	}
-
-	// Send the actual text
-	if err := sendLiteralToTmux(sessionName, text); err != nil {
-		return err
-	}
-
-	// Send bracketed paste end sequence
-	return sendLiteralToTmux(sessionName, bracketedPasteEnd)
 }
 
 func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
@@ -308,57 +187,25 @@ func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
 			return InteractivePasteResultMsg{Empty: true}
 		}
 
-		if bracketed {
-			err = sendBracketedPasteToTmux(sessionName, text)
-		} else {
-			err = sendPasteToTmux(sessionName, text)
-		}
+		// The clipboard read has to happen off the Update loop, so this enqueues
+		// later than a keystroke Cmd would. Going through the queue anyway keeps
+		// the paste from interleaving mid-write with concurrent keystrokes.
+		err = <-tty.SendOrdered(sessionName, func() error {
+			return tty.SendPasteInput(sessionName, text, bracketed)
+		})
 		if err != nil {
-			return InteractivePasteResultMsg{Err: err, SessionDead: isSessionDeadError(err)}
+			return InteractivePasteResultMsg{Err: err, SessionDead: tty.IsSessionDeadError(err)}
 		}
 
 		return InteractivePasteResultMsg{}
 	}
 }
 
-func detectMouseReportingMode(output string) bool {
-	enableSeqs := []string{
-		mouseModeEnable1000,
-		mouseModeEnable1002,
-		mouseModeEnable1003,
-		mouseModeEnable1006,
-		mouseModeEnable1015,
-	}
-	disableSeqs := []string{
-		mouseModeDisable1000,
-		mouseModeDisable1002,
-		mouseModeDisable1003,
-		mouseModeDisable1006,
-		mouseModeDisable1015,
-	}
-
-	latestEnable := -1
-	for _, seq := range enableSeqs {
-		if idx := strings.LastIndex(output, seq); idx > latestEnable {
-			latestEnable = idx
-		}
-	}
-
-	latestDisable := -1
-	for _, seq := range disableSeqs {
-		if idx := strings.LastIndex(output, seq); idx > latestDisable {
-			latestDisable = idx
-		}
-	}
-
-	return latestEnable > latestDisable
-}
-
 func (p *Plugin) updateMouseReportingMode(output string) {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return
 	}
-	p.interactiveState.MouseReportingEnabled = detectMouseReportingMode(output)
+	p.interactiveState.MouseReportingEnabled = tty.DetectMouseReportingMode(output)
 }
 
 // updateBracketedPasteMode updates the BracketedPasteEnabled state from captured output.
@@ -367,39 +214,112 @@ func (p *Plugin) updateBracketedPasteMode(output string) {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return
 	}
-	p.interactiveState.BracketedPasteEnabled = detectBracketedPasteMode(output)
+	p.interactiveState.BracketedPasteEnabled = tty.DetectBracketedPasteMode(output)
 }
 
-// isPasteInput detects if the input is a paste operation.
-// Returns true if the input contains newlines or is longer than a typical typed sequence.
-func isPasteInput(msg tea.KeyPressMsg) bool {
-	runes := []rune(msg.Text)
-	if len(runes) <= 1 {
-		return false
+// consumeSplitMouseFragment reassembles SGR mouse reports split across input
+// reads. It only retains a fragment after seeing a structurally valid SGR
+// prefix, so literal m, M, ;, and < remain ordinary typing.
+func (p *Plugin) consumeSplitMouseFragment(text string) bool {
+	now := time.Now()
+	if p.mouseFragment != "" && now.Sub(p.mouseFragmentTime) >= mouseFragmentTimeout {
+		p.mouseFragment = ""
 	}
-	// Treat as paste if contains newline or is suspiciously long for typing
-	return strings.Contains(msg.Text, "\n") || len(runes) > 10
-}
 
-// isNormalTyping returns true if the input looks like normal keyboard typing.
-// Used during scroll bursts to distinguish real typing from garbage input.
-func isNormalTyping(s string) bool {
-	if len(s) == 0 {
-		return false
+	if p.mouseFragment != "" {
+		combined := p.mouseFragment + text
+		if possible, complete := sgrMouseFragmentState(combined); possible {
+			if complete {
+				p.mouseFragment = ""
+			} else {
+				p.rememberMouseFragment(combined)
+			}
+			return true
+		}
+		p.mouseFragment = ""
 	}
-	// Single printable character is normal typing
-	if len(s) == 1 {
-		r := rune(s[0])
-		return r >= 32 && r < 127 // Printable ASCII
-	}
-	// Multi-char: only allow if all are printable alphanumeric or common punctuation
-	// Reject anything that looks like control sequences
-	for _, r := range s {
-		if r < 32 || r > 126 {
-			return false
+
+	// A separately delivered Escape is held by the double-Escape logic. Check
+	// whether this text completes its role as the start of an SGR report before
+	// treating it as a real keyboard Escape.
+	if p.interactiveState != nil && p.interactiveState.EscapePressed &&
+		time.Since(p.interactiveState.EscapeTime) < mouseFragmentTimeout {
+		combined := "\x1b" + text
+		if possible, complete := sgrMouseFragmentState(combined); possible {
+			if !complete {
+				p.rememberMouseFragment(combined)
+			}
+			return true
 		}
 	}
-	return true
+
+	if possible, complete := sgrMouseFragmentState(text); possible {
+		// A lone "[" is valid user input and is handled only by the existing
+		// Escape/mouse-proximity gates below.
+		if text == "[" {
+			return false
+		}
+		if !complete {
+			p.rememberMouseFragment(text)
+		}
+		return true
+	}
+	return false
+}
+
+func (p *Plugin) rememberMouseFragment(fragment string) {
+	p.mouseFragment = fragment
+	p.mouseFragmentTime = time.Now()
+}
+
+// sgrMouseFragmentState recognizes a complete SGR mouse report or any prefix
+// that can become one. The grammar is ESC? "[" "<" digits ";" digits ";"
+// digits ("M"|"m").
+func sgrMouseFragmentState(s string) (possible, complete bool) {
+	if s == "" {
+		return false, false
+	}
+	i := 0
+	if s[i] == '\x1b' {
+		i++
+		if i == len(s) {
+			return true, false
+		}
+	}
+	for _, want := range []byte{'[', '<'} {
+		if i == len(s) {
+			return true, false
+		}
+		if s[i] != want {
+			return false, false
+		}
+		i++
+	}
+	for field := 0; field < 3; field++ {
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return i == len(s), false
+		}
+		if field < 2 {
+			if i == len(s) {
+				return true, false
+			}
+			if s[i] != ';' {
+				return false, false
+			}
+			i++
+		}
+	}
+	if i == len(s) {
+		return true, false
+	}
+	if (s[i] == 'M' || s[i] == 'm') && i+1 == len(s) {
+		return true, true
+	}
+	return false, false
 }
 
 // enterInteractiveMode enters interactive mode for the current selection.
@@ -456,10 +376,10 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
 		}
 		tty.SetWindowSizeManual(sessionName)
-		p.resizeTmuxPane(target, previewWidth, previewHeight)
+		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		// Verify and retry once if resize didn't take effect
-		if w, h, ok := queryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
-			p.resizeTmuxPane(target, previewWidth, previewHeight)
+		if w, h, ok := tty.QueryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
+			tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		}
 	}
 	// Initialize interactive state
@@ -469,7 +389,14 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		TargetSession: sessionName,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true, // Assume visible until we get first cursor query result
+		PaneOnEntry:   p.activePane,
 	}
+	// The embedded terminal owns input now, so make the preview the active pane.
+	// nativeTerminalActive() gates both the native cursor and cell-motion mouse
+	// reporting on it, and entering from the sidebar used to leave it behind —
+	// interactive mode with no visible cursor at all (td-62b8ab).
+	p.activePane = PanePreview
+	p.selectionTermPanel = false
 	p.selection.Clear()
 
 	p.viewMode = ViewModeInteractive
@@ -478,10 +405,10 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// Without this, entering interactive mode creates a second poll chain that runs
 	// in parallel with the existing one, causing 200% CPU usage.
 	if p.shellSelected {
-		p.shellPollGeneration[sessionName]++
+		p.pollScheduler.Invalidate(shellPollKey(sessionName))
 	} else {
 		if wt := p.selectedWorktree(); wt != nil {
-			p.pollGeneration[wt.Name]++
+			p.pollScheduler.Invalidate(agentPollKey(wt.Name))
 		}
 	}
 
@@ -518,9 +445,9 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	// Resize terminal panel pane to match its split dimensions
 	w, h := p.calculateTermPanelDimensions()
 	tty.SetWindowSizeManual(sessionName)
-	p.resizeTmuxPane(target, w, h)
-	if aw, ah, ok := queryPaneSize(target); ok && (aw != w || ah != h) {
-		p.resizeTmuxPane(target, w, h)
+	tty.ResizeTmuxPane(target, w, h)
+	if aw, ah, ok := tty.QueryPaneSize(target); ok && (aw != w || ah != h) {
+		tty.ResizeTmuxPane(target, w, h)
 	}
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
@@ -531,14 +458,17 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		TermPanel:     true,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true,
+		PaneOnEntry:   p.activePane,
 	}
+	p.activePane = PanePreview
+	p.selectionTermPanel = true
 	p.selection.Clear()
 	p.viewMode = ViewModeInteractive
 
 	// Invalidate the background poll chain so only the interactive poll loop runs.
 	// The interactive chain captures the same pane and updates termPanelOutput,
 	// so background polling is redundant during interactive mode.
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 	return p.pollInteractivePane()
 }
 
@@ -546,6 +476,14 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 // Used to resize tmux panes to match the visible area.
 // IMPORTANT: This must stay in sync with renderListView() width calculations.
 func (p *Plugin) calculatePreviewDimensions() (width, height int) {
+	return p.previewDimensionsFor(p.shellSelected)
+}
+
+// previewDimensionsFor computes preview dimensions for a given selection kind
+// rather than the current one. Sizing a tmux session at creation time needs the
+// dimensions the pane will be rendered into once it is selected, which is not
+// necessarily what is selected right now.
+func (p *Plugin) previewDimensionsFor(shellSelected bool) (width, height int) {
 	if p.width <= 0 || p.height <= 0 {
 		if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && h > 0 {
 			return w - panelOverhead, h - panelBorderWidth - 1
@@ -581,7 +519,7 @@ func (p *Plugin) calculatePreviewDimensions() (width, height int) {
 	// - 1 for hint line
 	// - 2 for tabs header (worktrees only)
 	paneHeight := p.height - panelBorderWidth
-	if p.shellSelected {
+	if shellSelected {
 		// Shell: no tabs, just hint
 		height = paneHeight - 1
 	} else {
@@ -635,15 +573,15 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
 	}
 	return func() tea.Msg {
-		if actualWidth, actualHeight, ok := queryPaneSize(target); ok {
+		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
 			if actualWidth == previewWidth && actualHeight == previewHeight {
 				return nil
 			}
 		}
-		p.resizeTmuxPane(target, previewWidth, previewHeight)
-		if actualWidth, actualHeight, ok := queryPaneSize(target); ok {
+		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
+		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
 			if actualWidth != previewWidth || actualHeight != previewHeight {
-				p.resizeTmuxPane(target, previewWidth, previewHeight)
+				tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 			}
 		}
 		return paneResizedMsg{}
@@ -675,58 +613,20 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		return nil
 	}
 	p.interactiveState.LastResizeAt = time.Now()
-	return p.resizeInteractivePaneCmd()
-}
-
-// resizeTmuxPane resizes a tmux window/pane to the specified dimensions.
-// resize-window works for detached sessions; resize-pane is a fallback.
-func (p *Plugin) resizeTmuxPane(paneID string, width, height int) {
-	if width <= 0 && height <= 0 {
-		return
-	}
-
-	args := []string{"resize-window", "-t", paneID}
-	if width > 0 {
-		args = append(args, "-x", strconv.Itoa(width))
-	}
-	if height > 0 {
-		args = append(args, "-y", strconv.Itoa(height))
-	}
-	cmd := exec.Command("tmux", args...)
-	if err := cmd.Run(); err == nil {
-		return
-	}
-
-	// Fallback for older tmux or attached clients that reject resize-window.
-	args = []string{"resize-pane", "-t", paneID}
-	if width > 0 {
-		args = append(args, "-x", strconv.Itoa(width))
-	}
-	if height > 0 {
-		args = append(args, "-y", strconv.Itoa(height))
-	}
-	_ = exec.Command("tmux", args...).Run()
-}
-
-func queryPaneSize(target string) (width, height int, ok bool) {
+	target := p.interactiveState.TargetPane
 	if target == "" {
-		return 0, 0, false
+		target = p.interactiveState.TargetSession
 	}
-
-	cmd := exec.Command("tmux", "display-message", "-t", target, "-p", "#{pane_width},#{pane_height}")
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, 0, false
+	if target == "" {
+		return nil
 	}
-
-	parts := strings.Split(strings.TrimSpace(string(output)), ",")
-	if len(parts) < 2 {
-		return 0, 0, false
+	// The capture already returned the actual pane size. Trust that atomic
+	// observation instead of spawning two more display-message queries around
+	// the resize.
+	return func() tea.Msg {
+		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
+		return paneResizedMsg{}
 	}
-
-	width, _ = strconv.Atoi(parts[0])
-	height, _ = strconv.Atoi(parts[1])
-	return width, height, true
 }
 
 // resizeSelectedPaneCmd resizes the currently selected tmux pane to match the
@@ -754,7 +654,7 @@ func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
 		if w <= 0 || h <= 0 {
 			return nil
 		}
-		p.resizeTmuxPane(target, w, h)
+		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}
 }
@@ -806,9 +706,14 @@ func (p *Plugin) exitInteractiveMode() {
 	if p.interactiveState != nil {
 		// Preserve focus on whichever sub-pane was interactive
 		p.termPanelFocused = p.interactiveState.TermPanel
+		// Hand the pane back to whoever had it before interactive mode claimed it.
+		p.activePane = p.interactiveState.PaneOnEntry
 		p.interactiveState.Active = false
 	}
 	p.interactiveState = nil
+	p.mouseFragment = ""
+	p.pendingScrollDelta = 0
+	p.scrollBurstCount = 0
 	p.selection.Clear()
 	p.viewMode = ViewModeList
 }
@@ -835,7 +740,9 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.autoScrollOutput = true
 		return p.pollSelectedAgentNowIfVisible()
 	}
-
+	if handled, cmd := p.handleTerminalSearchKey(msg, true); handled {
+		return cmd
+	}
 	// Check for exit keys
 
 	// Primary exit: Configurable key (default: Ctrl+\)
@@ -865,6 +772,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.interactiveState != nil && p.interactiveState.Active {
 			return tea.Batch(cmd, p.resizeInteractivePaneCmd())
 		}
+		return cmd
+	}
+
+	if handled, cmd := p.handleInteractiveScrollbackKey(msg); handled {
 		return cmd
 	}
 
@@ -919,23 +830,6 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Fast-path rejection during and after scroll bursts.
-	// Mouse event garbage can continue arriving after scroll ends due to
-	// terminal/OS buffering. Use time-based check for wider protection window.
-	timeSinceScroll := time.Since(p.lastScrollTime)
-	if timeSinceScroll < postScrollFilterWindow && len(msg.Text) > 0 {
-		s := msg.Text
-		// Drop anything that looks like mouse sequence garbage:
-		// - Contains <, ;, M, m (mouse sequence chars)
-		// - Is not normal alphanumeric typing
-		// Note: bare "[" is NOT filtered here — it's a normal typeable character.
-		// It's only suspicious after ESC (handled below).
-		if strings.ContainsAny(s, "<;Mm") || !isNormalTyping(s) {
-			p.interactiveState.EscapePressed = false
-			return nil
-		}
-	}
-
 	// Filter partial SGR mouse sequences that leaked through Bubble Tea's
 	// input parser due to split-read timing (ESC arrived separately) (td-791865).
 	// Must be checked BEFORE forwarding pending escape, since the ESC was part
@@ -943,6 +837,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// td-e2ce50: Use lenient check to catch truncated/split sequences during fast scrolling.
 	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
 	if len(msg.Text) > 0 {
+		if p.consumeSplitMouseFragment(msg.Text) {
+			p.interactiveState.EscapePressed = false
+			return nil
+		}
 		if tty.LooksLikeMouseFragment(msg.Text) {
 			// Cancel the pending escape — it was the leading byte of this mouse event
 			p.interactiveState.EscapePressed = false
@@ -976,6 +874,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 			time.Since(p.interactiveState.EscapeTime) < 5*time.Millisecond
 		mouseGate := time.Since(p.lastMouseEventTime) < 10*time.Millisecond
 		if escGate || mouseGate {
+			p.rememberMouseFragment("[")
 			p.interactiveState.EscapePressed = false
 			return nil
 		}
@@ -993,6 +892,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	if msg.String() == p.getInteractiveCopyKey() {
 		return p.copyInteractiveSelectionCmd()
+	}
+	if msg.String() == "ctrl+a" && p.interactiveState != nil {
+		p.selectAllTerminalOutput(p.interactiveState.TermPanel)
+		return nil
 	}
 
 	if msg.String() == p.getInteractivePasteKey() {
@@ -1021,26 +924,20 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	sessionName := p.interactiveState.TargetSession
 
 	// Check for paste (multi-character input with newlines or long text)
-	if isPasteInput(msg) {
+	if tty.IsPasteInput(msg) {
 		text := msg.Text
 		bracketed := p.interactiveState.BracketedPasteEnabled
 		// Send paste async (td-c2961e): escape + paste in order if pending
 		if pendingEscape {
-			cmds = append(cmds, func() tea.Msg {
-				if err := sendKeyToTmux(sessionName, "Escape"); err != nil && isSessionDeadError(err) {
-					return InteractiveSessionDeadMsg{}
+			cmds = append(cmds, awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
+				if err := tty.SendKeyToTmux(sessionName, "Escape"); err != nil {
+					return err
 				}
-				var err error
 				if bracketed {
-					err = sendBracketedPasteToTmux(sessionName, text)
-				} else {
-					err = sendPasteToTmux(sessionName, text)
+					return tty.SendBracketedPasteToTmux(sessionName, text)
 				}
-				if err != nil && isSessionDeadError(err) {
-					return InteractiveSessionDeadMsg{}
-				}
-				return nil
-			})
+				return tty.SendPasteToTmux(sessionName, text)
+			})))
 		} else {
 			cmds = append(cmds, sendInteractivePasteInputCmd(sessionName, text, bracketed))
 		}
@@ -1049,11 +946,11 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	// Map key to tmux format and send
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key == "" {
 		// Still send pending escape if nothing else to send
 		if pendingEscape {
-			cmds = append(cmds, sendInteractiveKeysCmd(sessionName, keySpec{"Escape", false}))
+			cmds = append(cmds, sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: "Escape"}))
 			cmds = append(cmds, p.scheduleDebouncedPoll(keystrokeDebounce))
 		}
 		return tea.Batch(cmds...)
@@ -1062,11 +959,11 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Send keys async (td-c2961e): pending escape + key in order within single goroutine
 	if pendingEscape {
 		cmds = append(cmds, sendInteractiveKeysCmd(sessionName,
-			keySpec{"Escape", false},
-			keySpec{key, useLiteral},
+			tty.KeySpec{Value: "Escape"},
+			tty.KeySpec{Value: key, Literal: useLiteral},
 		))
 	} else {
-		cmds = append(cmds, sendInteractiveKeysCmd(sessionName, keySpec{key, useLiteral}))
+		cmds = append(cmds, sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: key, Literal: useLiteral}))
 	}
 
 	// Schedule debounced poll to batch rapid keystrokes (td-8a0978)
@@ -1097,7 +994,7 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	}
 
 	sessionName := p.interactiveState.TargetSession
-	return sendInteractiveKeysCmd(sessionName, keySpec{csiu, true})
+	return sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: csiu, Literal: true})
 }
 
 // handleEscapeTimer processes the escape delay timer firing.
@@ -1121,7 +1018,7 @@ func (p *Plugin) handleEscapeTimer() tea.Cmd {
 	// Update last key time and poll immediately for better responsiveness (td-babfd9)
 	p.interactiveState.LastKeyTime = time.Now()
 	return tea.Batch(
-		sendInteractiveKeysCmd(p.interactiveState.TargetSession, keySpec{"Escape", false}),
+		sendInteractiveKeysCmd(p.interactiveState.TargetSession, tty.KeySpec{Value: "Escape"}),
 		p.pollInteractivePaneImmediate(),
 	)
 }
@@ -1148,38 +1045,132 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		debounceInterval = scrollBurstDebounce
 	}
 
+	p.pendingScrollDelta += delta
 	if timeSinceLastScroll < debounceInterval {
 		return nil
 	}
 	p.lastScrollTime = now
+	delta = p.pendingScrollDelta
+	p.pendingScrollDelta = 0
 
 	// When interactive mode targets the terminal panel, scroll terminal panel output
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		if delta < 0 {
-			p.termPanelScroll++
-		} else {
-			if p.termPanelScroll > 0 {
-				p.termPanelScroll--
-			}
+		p.selection.Clear()
+		p.termPanelScroll -= delta
+		if p.termPanelScroll < 0 {
+			p.termPanelScroll = 0
+		}
+		if maxScroll := p.termPanelMaxScroll(); p.termPanelScroll > maxScroll {
+			p.termPanelScroll = maxScroll
+		}
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
 		}
 		return nil
 	}
 
+	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll up: move toward top of content
-		if p.previewOffset > 0 {
-			p.previewOffset--
+		if p.autoScrollOutput && maxOffset >= p.previewOffset {
+			p.previewOffset = maxOffset
+		}
+		p.previewOffset += delta
+		if p.previewOffset < 0 {
+			p.previewOffset = 0
 		}
 		p.autoScrollOutput = false
+		if p.previewOffset == 0 {
+			return p.loadOlderTerminalHistory(false, -delta)
+		}
 	} else {
 		// Scroll down: move toward bottom of content
-		maxOffset := p.getMaxScrollOffset()
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		p.previewOffset += delta
+		if p.previewOffset > maxOffset {
+			p.previewOffset = maxOffset
 		}
 		if p.previewOffset >= maxOffset {
 			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
 		}
+	}
+	return nil
+}
+
+func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !msg.Mod.Contains(tea.ModShift) {
+		return false, nil
+	}
+
+	pageSize := p.getPreviewVisibleHeight()
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		_, pageSize = p.calculateTermPanelDimensions()
+	}
+	pageSize = max(pageSize-1, 1)
+
+	switch msg.Code {
+	case tea.KeyUp:
+		return true, p.scrollInteractiveViewport(-1)
+	case tea.KeyDown:
+		return true, p.scrollInteractiveViewport(1)
+	case tea.KeyPgUp:
+		return true, p.scrollInteractiveViewport(-pageSize)
+	case tea.KeyPgDown:
+		return true, p.scrollInteractiveViewport(pageSize)
+	case tea.KeyHome:
+		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.selection.Clear()
+			p.termPanelScroll = p.termPanelMaxScroll()
+			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
+		} else {
+			p.previewOffset = 0
+			p.autoScrollOutput = false
+			return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
+		}
+	case tea.KeyEnd:
+		if p.interactiveState != nil && p.interactiveState.TermPanel {
+			p.selection.Clear()
+			p.termPanelScroll = 0
+			p.cancelTerminalHistoryIntent(true)
+		} else {
+			p.previewOffset = p.getMaxScrollOffset()
+			p.autoScrollOutput = true
+			p.cancelTerminalHistoryIntent(false)
+		}
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.selection.Clear()
+		p.termPanelScroll -= delta
+		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
+		}
+		return nil
+	}
+
+	maxOffset := p.getMaxScrollOffset()
+	if delta < 0 && p.autoScrollOutput && maxOffset >= p.previewOffset {
+		p.previewOffset = maxOffset
+	}
+	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
+	p.autoScrollOutput = p.previewOffset >= maxOffset
+	if delta > 0 && p.autoScrollOutput {
+		p.cancelTerminalHistoryIntent(false)
+	}
+	if delta < 0 && p.previewOffset == 0 {
+		return p.loadOlderTerminalHistory(false, -delta)
 	}
 	return nil
 }
@@ -1194,42 +1185,22 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 	if !p.interactiveState.MouseReportingEnabled {
 		return nil
 	}
-	sessionName := p.interactiveState.TargetSession
+	interaction := p.interactiveState
+	sessionName := interaction.TargetSession
 	col, row, ok := p.interactiveMouseCoords(x, y)
 	if !ok {
 		return nil
 	}
 
 	return func() tea.Msg {
-		if err := sendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			p.exitInteractiveMode()
-			if isSessionDeadError(err) {
-				return InteractiveSessionDeadMsg{}
-			}
-			return nil
+		if err := tty.SendSGRMouse(sessionName, 0, col, row, false); err != nil {
+			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
 		}
-		if err := sendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			p.exitInteractiveMode()
-			if isSessionDeadError(err) {
-				return InteractiveSessionDeadMsg{}
-			}
-			return nil
+		if err := tty.SendSGRMouse(sessionName, 0, col, row, true); err != nil {
+			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
 		}
-		p.interactiveState.LastKeyTime = time.Now()
-		return nil
+		return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction}
 	}
-}
-
-func sendSGRMouse(sessionName string, button, col, row int, release bool) error {
-	if col <= 0 || row <= 0 {
-		return nil
-	}
-	suffix := "M"
-	if release {
-		suffix = "m"
-	}
-	seq := fmt.Sprintf("\x1b[<%d;%d;%d%s", button, col, row, suffix)
-	return sendLiteralToTmux(sessionName, seq)
 }
 
 func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
@@ -1337,13 +1308,6 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Skip polling during active scroll bursts.
-	// User is scrolling through already-captured content; no need for new captures.
-	// This reduces CPU load and prevents capturing garbage during fast scrolling.
-	if time.Since(p.lastScrollTime) < scrollBurstTimeout && p.scrollBurstCount > 0 {
-		return nil
-	}
-
 	// Determine polling interval based on activity
 	interval := pollingDecayFast
 	inactivity := time.Since(p.interactiveState.LastKeyTime)
@@ -1352,6 +1316,9 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		interval = pollingDecaySlow
 	} else if inactivity > inactivityMediumThreshold {
 		interval = pollingDecayMedium
+	}
+	if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+		interval = remaining
 	}
 
 	// When interactive mode targets the terminal panel, use terminal panel polling
@@ -1381,22 +1348,21 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 	// Increment generation to invalidate stale timers from previous keystrokes,
 	// preventing poll chain accumulation during rapid typing.
 	if p.interactiveState.TermPanel {
-		p.termPanelGeneration++
+		p.pollScheduler.Invalidate(termPanelPollKey())
 		return p.scheduleTermPanelPoll(delay)
 	}
 
 	// Use shell or worktree polling mechanism based on current selection.
-	// IMPORTANT: Use the correct generation map for each type (td-97327e):
-	// - Shells use shellPollGeneration (checked by scheduleShellPollByName)
-	// - Worktrees use pollGeneration (checked by scheduleInteractivePoll)
+	// Shells and agents use separate scheduler keys, so restarting one poll
+	// chain cannot invalidate another pane with the same display name.
 	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
 		shellName := p.shells[p.selectedShellIdx].TmuxName
 		if shellName != "" {
-			p.shellPollGeneration[shellName]++
+			p.pollScheduler.Invalidate(shellPollKey(shellName))
 			return p.scheduleShellPollByName(shellName, delay)
 		}
 	} else if wt := p.selectedWorktree(); wt != nil {
-		p.pollGeneration[wt.Name]++
+		p.pollScheduler.Invalidate(agentPollKey(wt.Name))
 		return p.scheduleInteractivePoll(wt.Name, delay)
 	}
 
@@ -1411,37 +1377,38 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 		return nil
 	}
 
-	// td-3b15ee: Skip polling during active scroll bursts.
-	if time.Since(p.lastScrollTime) < scrollBurstTimeout && p.scrollBurstCount > 0 {
-		return nil
+	delay := time.Duration(0)
+	if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+		delay = remaining
 	}
 
 	// When interactive mode targets the terminal panel, use terminal panel polling
 	if p.interactiveState.TermPanel {
-		return p.scheduleTermPanelPoll(0)
+		return p.scheduleTermPanelPoll(delay)
 	}
 
 	// Schedule with 0ms delay for immediate capture (td-8856c9: no stagger for worktrees)
 	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, 0)
+		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, delay)
 	}
 	if wt := p.selectedWorktree(); wt != nil {
-		return p.scheduleInteractivePoll(wt.Name, 0)
+		return p.scheduleInteractivePoll(wt.Name, delay)
 	}
 	return nil
 }
 
-// cursorStyle defines the appearance of the cursor overlay.
-// Uses bold reverse video with a bright background for maximum visibility (td-43d37b).
-// The bright cyan/white combination stands out against most terminal backgrounds
-// including Claude Code's diff highlighting and colored output.
-// cursorStyle returns the cursor style using current theme colors.
-func cursorStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Reverse(true).
-		Bold(true).
-		Background(styles.Primary).
-		Foreground(styles.BgPrimary)
+// interactiveScrollDelay reports how long a poll should be deferred while the
+// user is mid-flick. Callers reschedule instead of returning nil so the poll
+// chain always has a continuation.
+func (p *Plugin) interactiveScrollDelay() (time.Duration, bool) {
+	if p.scrollBurstCount <= 0 {
+		return 0, false
+	}
+	elapsed := time.Since(p.lastScrollTime)
+	if elapsed >= scrollBurstTimeout {
+		return 0, false
+	}
+	return scrollBurstTimeout - elapsed, true
 }
 
 // getCursorPosition returns the cached cursor position for rendering (td-648af4).
@@ -1457,81 +1424,8 @@ func (p *Plugin) getCursorPosition() (row, col, paneHeight, paneWidth int, visib
 	return p.interactiveState.CursorRow, p.interactiveState.CursorCol, p.interactiveState.PaneHeight, p.interactiveState.PaneWidth, p.interactiveState.CursorVisible, nil
 }
 
-// queryCursorPositionSync synchronously queries cursor position for the given target.
-// Used to capture cursor position atomically with output in poll goroutines.
-// Returns row, col (0-indexed), paneHeight, visible, and ok (false if query failed).
-// paneHeight is needed to calculate cursor offset when display height differs from pane height.
-func queryCursorPositionSync(target string) (row, col, paneHeight, paneWidth int, visible, ok bool) {
-	if target == "" {
-		return 0, 0, 0, 0, false, false
-	}
-
-	cmd := exec.Command("tmux", "display-message", "-t", target,
-		"-p", "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}")
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, 0, 0, 0, false, false
-	}
-
-	parts := strings.Split(strings.TrimSpace(string(output)), ",")
-	if len(parts) < 2 {
-		return 0, 0, 0, 0, false, false
-	}
-
-	col, _ = strconv.Atoi(parts[0])
-	row, _ = strconv.Atoi(parts[1])
-	visible = len(parts) < 3 || parts[2] != "0"
-	if len(parts) >= 4 {
-		paneHeight, _ = strconv.Atoi(parts[3])
-	}
-	if len(parts) >= 5 {
-		paneWidth, _ = strconv.Atoi(parts[4])
-	}
-	return row, col, paneHeight, paneWidth, visible, true
-}
-
-// renderWithCursor overlays the cursor on content at the specified position.
-// cursorRow is relative to the visible content (0 = first visible line).
-// cursorCol is the column within the line (0-indexed).
-// Preserves ANSI escape codes in surrounding content while rendering cursor.
-func renderWithCursor(content string, cursorRow, cursorCol int, visible bool) string {
-	if !visible || cursorRow < 0 || cursorCol < 0 {
-		return content
-	}
-
-	lines := strings.Split(content, "\n")
-	if cursorRow >= len(lines) {
-		return content
-	}
-
-	line := lines[cursorRow]
-
-	// Use ANSI-aware width calculation for visual position
-	lineWidth := ansi.StringWidth(line)
-
-	if cursorCol >= lineWidth {
-		// Cursor past end of line: append visible cursor block (td-43d37b)
-		padding := cursorCol - lineWidth
-		if padding < 0 {
-			padding = 0
-		}
-		lines[cursorRow] = line + strings.Repeat(" ", padding) + cursorStyle().Render("█")
-	} else {
-		// Use ANSI-aware slicing to preserve escape codes in before/after
-		before := ansi.Cut(line, 0, cursorCol)
-		char := ansi.Cut(line, cursorCol, cursorCol+1)
-		after := ansi.Cut(line, cursorCol+1, lineWidth)
-
-		// Strip the cursor char to get clean styling
-		charStripped := ansi.Strip(char)
-		// Use a block character for empty/whitespace to make cursor more visible (td-43d37b)
-		if charStripped == "" || charStripped == " " {
-			charStripped = "█"
-		}
-		lines[cursorRow] = before + cursorStyle().Render(charStripped) + after
-	}
-
-	return strings.Join(lines, "\n")
+func shouldOverlayCursor(interactive, cursorVisible, atLiveEdge bool) bool {
+	return interactive && cursorVisible && atLiveEdge
 }
 
 // shouldSnapBack determines if we should snap back to live view for a given key (td-e2ce50).

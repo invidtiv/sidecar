@@ -5,18 +5,33 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	uv "github.com/charmbracelet/ultraviolet"
 )
 
-// ExtractUnknownCSIBytes checks whether msg is a BubbleTea
-// unknownCSISequenceMsg (an unexported []byte type) containing a CSI
-// sequence, and returns the raw bytes if so. Returns nil for any other
-// message type.
+// ExtractUnknownCSIBytes extracts an unparsed CSI sequence from Bubble Tea's
+// current ultraviolet event types. The reflection fallback preserves
+// compatibility with Bubble Tea v1's unexported []byte message.
 func ExtractUnknownCSIBytes(msg interface{}) []byte {
+	var raw []byte
+	switch msg := msg.(type) {
+	case uv.UnknownEvent:
+		raw = []byte(msg)
+	case uv.UnknownCsiEvent:
+		raw = []byte(msg)
+	}
+	if raw != nil {
+		if len(raw) < 4 || raw[0] != '\x1b' || raw[1] != '[' {
+			return nil
+		}
+		return raw
+	}
+
 	rv := reflect.ValueOf(msg)
 	if rv.Kind() != reflect.Slice || rv.Type().Elem().Kind() != reflect.Uint8 {
 		return nil
 	}
-	raw := rv.Bytes()
+	raw = rv.Bytes()
 	if len(raw) < 4 || raw[0] != '\x1b' || raw[1] != '[' {
 		return nil
 	}

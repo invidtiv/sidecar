@@ -148,6 +148,7 @@ type Plugin struct {
 	inlineEditNoteID  string
 	inlineEditPath    string
 	inlineEditEditor  string
+	orphanEditSession string // Defensive re-init cleanup, executed asynchronously in Start
 
 	// Inline editor mouse drag state (for text selection forwarding)
 	inlineEditorDragging bool      // True when mouse is being dragged in editor (for text selection)
@@ -204,6 +205,13 @@ func (p *Plugin) Icon() string { return pluginIcon }
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	// Project switches normally call Stop first, but Init is defensive: kill
+	// any surviving editor asynchronously from Start and invalidate its autosave
+	// chain before replacing the store/context.
+	if p.inlineEditSession != "" {
+		p.orphanEditSession = p.inlineEditSession
+	}
+	p.resetInlineEditState()
 	p.ctx = ctx
 	p.notes = nil
 	p.cursor = 0
@@ -290,14 +298,27 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
-	if p.store == nil {
-		return nil
+	var cmds []tea.Cmd
+	if p.orphanEditSession != "" {
+		session := tty.EditorSession{Name: p.orphanEditSession}
+		p.orphanEditSession = ""
+		cmds = append(cmds, session.KillCmd())
 	}
-	return p.loadNotes()
+	if p.store != nil {
+		cmds = append(cmds, p.loadNotes())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	// Invalidate and clear editor/autosave state before closing the store. A
+	// queued tick from this project must not observe a later project's store.
+	if p.orphanEditSession != "" {
+		tty.EditorSession{Name: p.orphanEditSession}.Kill()
+		p.orphanEditSession = ""
+	}
+	p.exitInlineEditMode()
 	if p.store != nil {
 		_ = p.store.Close()
 		p.store = nil

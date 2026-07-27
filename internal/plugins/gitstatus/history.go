@@ -266,13 +266,40 @@ func GetCommitDiff(workDir, hash, path string, parentHash string) (string, error
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if exitErr.ExitCode() == 1 {
-				return string(output), nil
+				return normalizeCommitDiff(string(output)), nil
 			}
 		}
 		return "", err
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	return normalizeCommitDiff(string(output)), nil
+}
+
+// normalizeCommitDiff collapses a header-only "git show" result to the empty
+// string. "git show <hash> -- <path>" prints the commit header whether or not
+// the path matched anything, so callers that test the result for emptiness to
+// mean "nothing changed here" would otherwise never see it. Diffs that do carry
+// a file section keep their header untouched: ParseUnifiedDiff skips it, and
+// the external-pager path renders it as git wrote it.
+func normalizeCommitDiff(out string) string {
+	if !hasFileSection(out) {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// hasFileSection reports whether a diff contains at least one file section.
+// The prefix covers every form git emits: "diff --git", plus "diff --cc" and
+// "diff --combined" for merge commits. Only a match at the start of a line
+// counts, which is what keeps a commit message that quotes a diff from
+// registering: git indents message bodies by four spaces.
+func hasFileSection(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "diff --") {
+			return true
+		}
+	}
+	return false
 }
 
 // GetCommitFullDiff returns the full diff for a commit.

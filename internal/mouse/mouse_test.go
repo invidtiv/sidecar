@@ -163,10 +163,34 @@ func TestHandler_DoubleClick(t *testing.T) {
 		t.Error("second immediate click should be double click")
 	}
 
-	// Third click — should NOT be double click (reset after double)
+	// Third click completes a triple-click gesture, but is not another double.
 	r3 := h.HandleClick(5, 5)
 	if r3.IsDoubleClick {
-		t.Error("third click should not be double click (reset after double)")
+		t.Error("third click should not be double click")
+	}
+	if !r3.IsTripleClick || r3.ClickCount != 3 {
+		t.Fatalf("third click = %#v, want triple click", r3)
+	}
+
+	// Fourth click starts a fresh gesture.
+	r4 := h.HandleClick(5, 5)
+	if r4.IsDoubleClick || r4.IsTripleClick || r4.ClickCount != 1 {
+		t.Fatalf("fourth click = %#v, want fresh single click", r4)
+	}
+}
+
+func TestHandler_ClickCountIncludesModifiers(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("btn", Rect{X: 0, Y: 0, W: 10, H: 10}, nil)
+
+	if got := h.handleClickWithModifiers(5, 5, false, false); got.ClickCount != 1 {
+		t.Fatalf("plain click count = %d, want 1", got.ClickCount)
+	}
+	if got := h.handleClickWithModifiers(5, 5, true, false); got.ClickCount != 1 || got.IsDoubleClick {
+		t.Fatalf("plain→Shift click was combined: %#v", got)
+	}
+	if got := h.handleClickWithModifiers(5, 5, false, true); got.ClickCount != 1 || got.IsDoubleClick {
+		t.Fatalf("Shift→Alt click was combined: %#v", got)
 	}
 }
 

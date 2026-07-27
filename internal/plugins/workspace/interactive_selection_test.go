@@ -1,10 +1,12 @@
 package workspace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -219,7 +221,7 @@ func TestClearInteractiveSelection_ResetsSentinels(t *testing.T) {
 
 func TestDragToSameLine_SelectsSingleLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("line0\nline1\nline2\nline three has enough text to test\nline4")
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
@@ -349,11 +351,11 @@ func TestGetLineSelectionCols(t *testing.T) {
 	p := newSelectionTestPlugin()
 
 	tests := []struct {
-		name             string
-		start, end       ui.SelectionPoint
-		lineIdx          int
-		expectStart      int
-		expectEnd        int
+		name        string
+		start, end  ui.SelectionPoint
+		lineIdx     int
+		expectStart int
+		expectEnd   int
 	}{
 		{
 			"line before selection",
@@ -402,7 +404,7 @@ func TestGetLineSelectionCols(t *testing.T) {
 
 func TestInteractiveColAtX_PlainText(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	// Set up a shell with the buffer
@@ -424,7 +426,7 @@ func TestInteractiveColAtX_PlainText(t *testing.T) {
 
 func TestInteractiveColAtX_BeyondLineEnd(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello")
 
 	p.shellSelected = true
@@ -446,7 +448,7 @@ func TestInteractiveColAtX_BeyondLineEnd(t *testing.T) {
 
 func TestInteractiveColAtX_WithHorizOffset(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world test")
 
 	p.shellSelected = true
@@ -468,7 +470,7 @@ func TestInteractiveColAtX_WithHorizOffset(t *testing.T) {
 
 func TestInteractiveColAtX_EmptyLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("")
 
 	p.shellSelected = true
@@ -491,7 +493,7 @@ func TestInteractiveColAtX_EmptyLine(t *testing.T) {
 
 func TestCharacterLevelDrag_SameLineRightward(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	p.shellSelected = true
@@ -526,7 +528,7 @@ func TestCharacterLevelDrag_SameLineRightward(t *testing.T) {
 
 func TestCharacterLevelDrag_SameLineBackward(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world")
 
 	p.shellSelected = true
@@ -562,7 +564,7 @@ func TestCharacterLevelDrag_SameLineBackward(t *testing.T) {
 
 func TestCharacterLevelDrag_MultiLineDown(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("line zero\nline one\nline two\nline three")
 
 	p.shellSelected = true
@@ -597,7 +599,7 @@ func TestCharacterLevelDrag_MultiLineDown(t *testing.T) {
 
 func TestCharacterLevelDrag_DirectionReversal(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("abcdefghijklmnop")
 
 	p.shellSelected = true
@@ -641,7 +643,7 @@ func TestCharacterLevelDrag_DirectionReversal(t *testing.T) {
 
 func TestInteractiveSelectionLines_SingleLine(t *testing.T) {
 	p := newSelectionTestPlugin()
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 	buf.Write("hello world foo bar")
 	p.shellSelected = true
 	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
@@ -656,5 +658,162 @@ func TestInteractiveSelectionLines_SingleLine(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "world") {
 		t.Errorf("expected 'world' in selection, got %q", lines[0])
+	}
+}
+
+func TestInteractiveSelectionUsesAbsoluteCoordinatesAcrossPrepend(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.UpdateSnapshot("one\nstable target\nthree", 100)
+	p.shellSelected = true
+	p.shells = []*ShellSession{{
+		TmuxName: "shell-1",
+		Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buf},
+	}}
+	p.selectedShellIdx = 0
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 101, Col: 0},
+		ui.SelectionPoint{Line: 101, Col: 5},
+		false,
+	)
+
+	before := p.interactiveSelectionLines()
+	if !slices.Equal(before, []string{"stable"}) {
+		t.Fatalf("selection before prepend = %#v, want stable", before)
+	}
+	buf.PrependSnapshot("older-a\nolder-b", 98)
+	after := p.interactiveSelectionLines()
+	if !slices.Equal(after, before) {
+		t.Fatalf("selection drifted after prepend: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestTerminalWordAndLineGestures(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("open internal/foo.go:123 now")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	wordAction := actionAt(10, 4)
+	p.selectTerminalWord(wordAction)
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"internal/foo.go:123"}) {
+		t.Fatalf("double-click word selection = %#v", got)
+	}
+
+	p.selectTerminalLine(wordAction)
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"open internal/foo.go:123 now"}) {
+		t.Fatalf("triple-click line selection = %#v", got)
+	}
+}
+
+func TestAltDragCreatesRectangularSelection(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("abcdef\nghijkl")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	start := actionAt(1, 4)
+	start.Alt = true
+	p.prepareInteractiveDrag(start)
+	p.handleInteractiveSelectionDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag,
+		X:    3 + panelOverhead/2,
+		Y:    5,
+	})
+	if !p.selection.Rectangular {
+		t.Fatal("Alt+drag did not set rectangular selection mode")
+	}
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"bcd", "hij"}) {
+		t.Fatalf("rectangular selection = %#v, want bcd/hij", got)
+	}
+}
+
+func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("abcdef\nghijkl")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 0, Col: 2},
+		ui.SelectionPoint{Line: 0, Col: 3},
+		false,
+	)
+
+	extend := actionAt(4, 5)
+	extend.Shift = true
+	p.prepareInteractiveDrag(extend)
+	if p.selection.Start != (ui.SelectionPoint{Line: 0, Col: 2}) ||
+		p.selection.End != (ui.SelectionPoint{Line: 1, Col: 4}) {
+		t.Fatalf("extended selection = %+v..%+v", p.selection.Start, p.selection.End)
+	}
+}
+
+func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
+	p := newSelectionTestPlugin()
+	p.autoScrollOutput = true
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("follow me")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	p.prepareInteractiveDrag(actionAt(2, 4))
+	p.finishInteractiveSelection()
+	if !p.autoScrollOutput {
+		t.Fatal("click without drag disabled follow mode")
+	}
+}
+
+func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
+	p := New()
+	p.width = 80
+	p.height = 20
+	p.viewMode = ViewModeList
+	p.termPanelVisible = true
+	p.termPanelOutput = testTerminalBuffer("panel zero\npanel one")
+	p.selectionTermPanel = false
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 10, Col: 1},
+		ui.SelectionPoint{Line: 10, Col: 3},
+		false,
+	)
+	action := mouse.MouseAction{
+		Type:  mouse.ActionClick,
+		X:     12,
+		Y:     6,
+		Shift: true,
+		Region: &mouse.Region{
+			ID:   regionTermPanelContent,
+			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
+		},
+	}
+	p.prepareInteractiveDrag(action)
+	if p.selection.HasSelection() {
+		t.Fatalf("agent selection was extended into panel coordinates: %+v..%+v",
+			p.selection.Start, p.selection.End)
+	}
+	if !p.selectionTermPanel || !p.selection.Anchor.Valid() {
+		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
+			p.selectionTermPanel, p.selection.Anchor)
+	}
+}
+
+func TestWordSelectionMapsVisualColumnAfterWideGlyph(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("界 foo bar")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	p.selectTerminalWord(actionAt(3, 4))
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"foo"}) {
+		t.Fatalf("wide-glyph word selection = %#v, want foo", got)
 	}
 }

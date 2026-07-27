@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -126,16 +127,127 @@ func TestOutputBuffer_Clear(t *testing.T) {
 	}
 }
 
+func TestOutputBuffer_ClearAllowsSameContentAgain(t *testing.T) {
+	buf := NewOutputBuffer(10)
+	if !buf.Update("same") {
+		t.Fatal("initial update should change the buffer")
+	}
+	buf.Clear()
+	if !buf.Update("same") {
+		t.Fatal("same raw content after Clear should update the buffer")
+	}
+	if got := buf.String(); got != "same" {
+		t.Fatalf("buffer after Clear and update = %q, want same", got)
+	}
+}
+
+func TestOutputBufferAbsoluteSnapshotPreservesPrependedHistory(t *testing.T) {
+	b := NewOutputBuffer(20)
+	if !b.UpdateSnapshot("live-8\nlive-9\n", 8) {
+		t.Fatal("initial absolute snapshot was not applied")
+	}
+	if !b.PrependSnapshot("old-5\nold-6\nold-7\n", 5) {
+		t.Fatal("older snapshot was not prepended")
+	}
+	if !b.UpdateSnapshot("live-8\nlive-9 changed\nlive-10\n", 8) {
+		t.Fatal("changed live snapshot was not applied")
+	}
+
+	start, end, ok := b.AbsoluteRange()
+	if !ok || start != 5 || end != 11 {
+		t.Fatalf("absolute range = (%d,%d,%v), want (5,11,true)", start, end, ok)
+	}
+	got := b.LinesAbsoluteRange(5, 11)
+	want := []string{"old-5", "old-6", "old-7", "live-8", "live-9 changed", "live-10"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestOutputBufferAbsoluteTrimAdvancesBase(t *testing.T) {
+	b := NewOutputBuffer(4)
+	b.UpdateSnapshot("six\nseven\neight\nnine\n", 6)
+	b.PrependSnapshot("three\nfour\nfive\n", 3)
+
+	start, end, ok := b.AbsoluteRange()
+	if !ok || start != 6 || end != 10 {
+		t.Fatalf("trimmed range = (%d,%d,%v), want (6,10,true)", start, end, ok)
+	}
+	if got := b.Lines(); !slices.Equal(got, []string{"six", "seven", "eight", "nine"}) {
+		t.Fatalf("trimmed lines = %#v", got)
+	}
+}
+
+func TestOutputBufferPrependRejectsGap(t *testing.T) {
+	b := NewOutputBuffer(20)
+	b.UpdateSnapshot("ten\neleven\n", 10)
+	if b.PrependSnapshot("five\n", 5) {
+		t.Fatal("gapped prepend unexpectedly succeeded")
+	}
+}
+
+func TestOutputBufferLegacyUpdateClearsAbsoluteModeForIdenticalContent(t *testing.T) {
+	b := NewOutputBuffer(20)
+	if !b.UpdateSnapshot("same\ncontent", 42) {
+		t.Fatal("absolute snapshot was not applied")
+	}
+	if !b.Update("same\ncontent") {
+		t.Fatal("legacy update must apply when changing coordinate modes")
+	}
+	if start, end, ok := b.AbsoluteRange(); ok {
+		t.Fatalf("legacy update left absolute range [%d,%d) active", start, end)
+	}
+}
+
+func TestOutputBufferDelayedPrependCannotOverwriteNewerOverlap(t *testing.T) {
+	b := NewOutputBuffer(20)
+	b.UpdateSnapshot("live-2\nlive-3\nlive-4", 2)
+
+	// Simulate an older capture requested before the live rows changed. Its
+	// overlap at absolute lines 2-3 must not replace the current live tail.
+	if !b.PrependSnapshot("old-0\nold-1\nstale-2\nstale-3", 0) {
+		t.Fatal("older capture was not prepended")
+	}
+	got := b.Lines()
+	want := []string{"old-0", "old-1", "live-2", "live-3", "live-4"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("merged lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestOutputBufferUpdateUsesRawLengthHashGuard(t *testing.T) {
+	b := NewOutputBuffer(10)
+	content := "hello\x1b[?2004h"
+	if !b.Update(content) {
+		t.Fatal("initial update did not change")
+	}
+	if b.Update(content) {
+		t.Fatal("identical raw content reprocessed after escape stripping")
+	}
+}
+
+func TestOutputBuffer_LastNonEmptyLine(t *testing.T) {
+	buf := NewOutputBuffer(10)
+	buf.Write("first\nsecond\n \n\x1b[31m\x1b[0m")
+	if got := buf.LastNonEmptyLine(); got != 1 {
+		t.Fatalf("LastNonEmptyLine() = %d, want 1", got)
+	}
+	buf.Clear()
+	if got := buf.LastNonEmptyLine(); got != -1 {
+		t.Fatalf("LastNonEmptyLine() after Clear = %d, want -1", got)
+	}
+}
+
 func TestPartialMouseSeqRegex(t *testing.T) {
 	tests := []struct {
 		input string
 		match bool
 	}{
-		{"[<65;83;33M", true},   // scroll down
-		{"[<64;10;5M", true},    // scroll up
-		{"[<0;50;20m", true},    // release
-		{"hello", false},        // normal text
-		{"[notmouse]", false},   // not a mouse sequence
+		{"[<65;83;33M", true},     // scroll down
+		{"[<64;10;5M", true},      // scroll up
+		{"[<0;50;20m", true},      // release
+		{"hello", false},          // normal text
+		{"[notmouse]", false},     // not a mouse sequence
 		{"[<abc;def;ghiM", false}, // invalid format
 	}
 

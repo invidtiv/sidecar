@@ -1,6 +1,10 @@
 package tty
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 func TestNew(t *testing.T) {
 	// Test with nil config (uses defaults)
@@ -111,5 +115,161 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.ScrollbackLines != 600 {
 		t.Errorf("unexpected default ScrollbackLines: %d", cfg.ScrollbackLines)
+	}
+}
+
+func TestModelIgnoresMessagesFromAnotherOwner(t *testing.T) {
+	first := New(nil)
+	second := New(nil)
+	first.Enter("shared-target", "")
+	second.Enter("shared-target", "")
+
+	second.State.OutputBuf.Write("second output")
+	first.Update(CaptureResultMsg{
+		Scope:          second.Scope(),
+		PollGeneration: first.State.PollGeneration,
+		Target:         "shared-target",
+		Output:         "foreign output",
+	})
+	if got := first.State.OutputBuf.String(); got != "" {
+		t.Fatalf("foreign capture changed first model: %q", got)
+	}
+
+	first.Update(SessionDeadMsg{Scope: second.Scope()})
+	if !first.IsActive() {
+		t.Fatal("foreign session-dead message exited first model")
+	}
+}
+
+func TestModelIgnoresMessagesFromPreviousActivation(t *testing.T) {
+	model := New(nil)
+	model.Enter("same-target", "")
+	stale := model.Scope()
+	model.Exit()
+	model.Enter("same-target", "")
+
+	model.Update(CaptureResultMsg{
+		Scope:          stale,
+		PollGeneration: model.State.PollGeneration,
+		Target:         "same-target",
+		Output:         "stale output",
+	})
+	if got := model.State.OutputBuf.String(); got != "" {
+		t.Fatalf("stale capture changed re-entered model: %q", got)
+	}
+
+	model.Update(SessionDeadMsg{Scope: stale})
+	if !model.IsActive() {
+		t.Fatal("stale session-dead message exited re-entered model")
+	}
+}
+
+func TestModelAcceptsCurrentScopedCapture(t *testing.T) {
+	model := New(nil)
+	model.Enter("current", "")
+	model.Update(CaptureResultMsg{
+		Scope:          model.Scope(),
+		PollGeneration: model.State.PollGeneration,
+		Target:         "current",
+		Output:         "current output",
+	})
+	if got := model.State.OutputBuf.String(); got != "current output" {
+		t.Fatalf("current capture = %q, want current output", got)
+	}
+}
+
+func TestModelRejectsOutOfOrderCaptureResult(t *testing.T) {
+	model := New(nil)
+	model.Enter("current", "")
+	scope := model.Scope()
+
+	// Model a newer poll superseding an older capture that is still in flight.
+	model.State.PollGeneration = 2
+	model.Update(CaptureResultMsg{
+		Scope:          scope,
+		PollGeneration: 2,
+		Target:         "current",
+		Output:         "newer output",
+		CursorRow:      7,
+	})
+	if got := model.State.OutputBuf.String(); got != "newer output" {
+		t.Fatalf("newer capture = %q, want newer output", got)
+	}
+
+	model.Update(CaptureResultMsg{
+		Scope:          scope,
+		PollGeneration: 1,
+		Target:         "current",
+		Output:         "older output",
+		CursorRow:      1,
+	})
+	if got := model.State.OutputBuf.String(); got != "newer output" {
+		t.Fatalf("out-of-order capture replaced newer output: %q", got)
+	}
+	if got := model.State.CursorRow; got != 7 {
+		t.Fatalf("out-of-order capture replaced cursor row: %d", got)
+	}
+}
+
+func TestModelViewShowsBottomOfScrollback(t *testing.T) {
+	model := New(nil)
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.CursorVisible = false
+	model.State.OutputBuf.Write("oldest\nmiddle\nnewest")
+
+	if got := model.View(); got != "middle\nnewest" {
+		t.Fatalf("View() = %q, want bottom two lines", got)
+	}
+}
+
+func TestModelExposesNativeCursorWithoutPaintingContent(t *testing.T) {
+	model := New(nil)
+	model.Width = 8
+	model.Height = 3
+	model.Enter("current", "")
+	model.State.OutputBuf.Write("one\ntwo\nthree")
+	model.State.CursorRow = 1
+	model.State.CursorCol = 3
+	model.State.CursorVisible = true
+	model.State.PaneHeight = 3
+
+	if got := model.View(); got != "one\ntwo\nthree" {
+		t.Fatalf("View() painted cursor into content: %q", got)
+	}
+	cursor := model.Cursor()
+	if cursor == nil || cursor.X != 3 || cursor.Y != 1 ||
+		cursor.Shape != tea.CursorBlock || !cursor.Blink {
+		t.Fatalf("Cursor() = %#v", cursor)
+	}
+	if mode := model.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
+		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
+	}
+}
+
+func TestModelNativeCursorAdjustsPaneHeightAndBounds(t *testing.T) {
+	model := New(nil)
+	model.Width = 5
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.CursorVisible = true
+	model.State.CursorRow = 4
+	model.State.CursorCol = 9
+	model.State.PaneHeight = 5
+
+	cursor := model.Cursor()
+	if cursor == nil || cursor.X != 4 || cursor.Y != 1 {
+		t.Fatalf("adjusted Cursor() = %#v, want (4,1)", cursor)
+	}
+	model.State.CursorRow = 1
+	if cursor := model.Cursor(); cursor != nil {
+		t.Fatalf("off-viewport Cursor() = %#v, want nil", cursor)
+	}
+	model.Exit()
+	if cursor := model.Cursor(); cursor != nil {
+		t.Fatalf("inactive Cursor() = %#v, want nil", cursor)
+	}
+	if mode := model.PreferredMouseMode(); mode != tea.MouseModeNone {
+		t.Fatalf("inactive PreferredMouseMode() = %v, want none", mode)
 	}
 }

@@ -10,15 +10,19 @@ import (
 
 // openInBrowser opens the URL in the default browser.
 func openInBrowser(url string) tea.Cmd {
+	safeURL, ok := safeHTTPURL(url)
+	if !ok {
+		return nil
+	}
 	return func() tea.Msg {
 		var cmd *exec.Cmd
 		switch runtime.GOOS {
 		case "darwin":
-			cmd = exec.Command("open", url)
+			cmd = exec.Command("open", safeURL)
 		case "windows":
-			cmd = exec.Command("cmd", "/c", "start", url)
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", safeURL)
 		case "linux":
-			cmd = exec.Command("xdg-open", url)
+			cmd = exec.Command("xdg-open", safeURL)
 		default:
 			return nil
 		}

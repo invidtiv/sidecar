@@ -14,7 +14,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
-	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -36,19 +35,7 @@ var (
 
 	tmuxPrefixOnce   sync.Once
 	tmuxPrefixCached string
-
-	tmuxServerConfigOnce sync.Once
 )
-
-// ensureTmuxServerConfig sets server-level options on the tmux server.
-// Called once per process before the first session is created.
-// Sets exit-empty off so the server persists even when all sessions are killed,
-// preventing the server from dying between sidecar operations.
-func ensureTmuxServerConfig() {
-	tmuxServerConfigOnce.Do(func() {
-		_ = exec.Command("tmux", "set-option", "-s", "exit-empty", "off").Run()
-	})
-}
 
 // isTmuxInstalled returns true if tmux is available in PATH.
 // Result is cached after first check.
@@ -161,7 +148,8 @@ type (
 	// ShellSessionDeadMsg signals shell session was externally terminated
 	// (e.g., user typed 'exit' in the shell)
 	ShellSessionDeadMsg struct {
-		TmuxName string // Session name for cleanup (stable identifier)
+		TmuxName   string // Session name for cleanup (stable identifier)
+		Generation int    // Poll owner; zero for non-poll lifecycle checks
 	}
 
 	// ShellAgentStartedMsg signals agent was started in a shell session.
@@ -181,9 +169,10 @@ type (
 
 	// ShellOutputMsg signals shell output was captured (for polling)
 	ShellOutputMsg struct {
-		TmuxName string // Session name (stable identifier)
-		Output   string
-		Changed  bool
+		TmuxName   string // Session name (stable identifier)
+		Generation int
+		Output     string
+		Err        error
 		// Cursor position captured atomically with output (only set in interactive mode)
 		CursorRow     int
 		CursorCol     int
@@ -191,6 +180,9 @@ type (
 		HasCursor     bool // True if cursor position was captured
 		PaneHeight    int  // Tmux pane height for cursor offset calculation
 		PaneWidth     int  // Tmux pane width for display alignment
+		HistorySize   int
+		CaptureBase   int
+		HasHistory    bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -216,118 +208,8 @@ type (
 // pollShellMsg triggers a shell output poll (legacy, polls selected shell).
 type pollShellMsg struct{}
 
-// initShellSessions discovers existing shell sessions for the current project.
-// Called from Init() to reconnect to sessions from previous runs.
-// td-f88fdd: Uses manifest as source of truth, merged with tmux discovery.
-func (p *Plugin) initShellSessions() {
-	// Discover running tmux sessions
-	tmuxSessions := p.discoverTmuxSessionNames()
-	tmuxMap := make(map[string]bool)
-	for _, name := range tmuxSessions {
-		tmuxMap[name] = true
-	}
-
-	p.shells = nil
-
-	// Process manifest entries (if manifest exists)
-	if p.shellManifest != nil {
-		for _, def := range p.shellManifest.Shells {
-			isRunning := tmuxMap[def.TmuxName]
-			if !isRunning {
-				// Tmux session is dead - remove stale entry from manifest
-				_ = p.shellManifest.RemoveShell(def.TmuxName)
-				continue
-			}
-			shell := p.shellFromDefinition(def, isRunning)
-			p.shells = append(p.shells, shell)
-			p.managedSessions[def.TmuxName] = true
-			delete(tmuxMap, def.TmuxName)
-		}
-	}
-
-	// Add tmux sessions not in manifest (upgrade path / external creation)
-	for tmuxName := range tmuxMap {
-		shell := p.shellFromTmux(tmuxName)
-		p.shells = append(p.shells, shell)
-		p.managedSessions[tmuxName] = true
-		// Save to manifest for future sessions
-		if p.shellManifest != nil {
-			_ = p.shellManifest.AddShell(shellToDefinition(shell))
-		}
-	}
-
-	// Also restore display names from legacy state.json (migration path)
-	p.restoreShellDisplayNames()
-}
-
-// shellFromDefinition creates a ShellSession from a manifest definition.
-func (p *Plugin) shellFromDefinition(def ShellDefinition, isRunning bool) *ShellSession {
-	shell := &ShellSession{
-		Name:        def.DisplayName,
-		TmuxName:    def.TmuxName,
-		CreatedAt:   def.CreatedAt,
-		ChosenAgent: definitionToAgentType(def.AgentType),
-		SkipPerms:   def.SkipPerms,
-		IsOrphaned:  !isRunning,
-	}
-
-	if isRunning {
-		paneID := getPaneID(def.TmuxName)
-		displayType := AgentShell
-		if shell.ChosenAgent != AgentNone {
-			displayType = shell.ChosenAgent
-		}
-		shell.Agent = &Agent{
-			Type:        displayType,
-			TmuxSession: def.TmuxName,
-			TmuxPane:    paneID,
-			OutputBuf:   NewOutputBuffer(outputBufferCap),
-			StartedAt:   def.CreatedAt,
-			Status:      AgentStatusRunning,
-		}
-	}
-
-	return shell
-}
-
-// shellFromTmux creates a ShellSession from a discovered tmux session.
-func (p *Plugin) shellFromTmux(tmuxName string) *ShellSession {
-	paneID := getPaneID(tmuxName)
-	displayName := p.deriveDisplayName(tmuxName)
-
-	return &ShellSession{
-		Name:     displayName,
-		TmuxName: tmuxName,
-		Agent: &Agent{
-			Type:        AgentShell,
-			TmuxSession: tmuxName,
-			TmuxPane:    paneID,
-			OutputBuf:   NewOutputBuffer(outputBufferCap),
-			StartedAt:   time.Now(),
-			Status:      AgentStatusRunning,
-		},
-		CreatedAt: time.Now(),
-	}
-}
-
-// deriveDisplayName extracts a display name from a tmux session name.
-func (p *Plugin) deriveDisplayName(tmuxName string) string {
-	projectName := filepath.Base(p.ctx.WorkDir)
-	basePrefix := shellSessionPrefix + sanitizeName(projectName)
-	indexPattern := regexp.MustCompile(`-(\d+)$`)
-
-	if matches := indexPattern.FindStringSubmatch(tmuxName); matches != nil {
-		idx, _ := strconv.Atoi(matches[1])
-		return fmt.Sprintf("Shell %d", idx)
-	} else if tmuxName == basePrefix {
-		return "Shell 1"
-	}
-	return "Shell"
-}
-
-// discoverTmuxSessionNames returns names of all sidecar shell sessions for this project.
-func (p *Plugin) discoverTmuxSessionNames() []string {
-	projectName := filepath.Base(p.ctx.WorkDir)
+func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
+	projectName := filepath.Base(workDir)
 	basePrefix := shellSessionPrefix + sanitizeName(projectName)
 
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
@@ -354,39 +236,48 @@ func (p *Plugin) discoverTmuxSessionNames() []string {
 
 // syncShellsFromManifest reloads the manifest and syncs the shell list.
 // Called when the manifest file changes (from another sidecar instance).
-func (p *Plugin) syncShellsFromManifest() tea.Cmd {
+func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
+	if p.shellManifest == nil || !p.shellScopeCurrent(scope) {
+		return nil
+	}
+	manifestPath := p.shellManifest.Path()
+	workDir := p.ctx.WorkDir
+	hooks := p.shellStartupHooks.withDefaults()
 	return func() tea.Msg {
-		if p.shellManifest == nil {
-			return nil
-		}
-
 		// Reload manifest from disk
-		newManifest, err := LoadShellManifest(p.shellManifest.Path())
+		newManifest, err := hooks.loadManifest(manifestPath)
 		if err != nil {
 			return nil
 		}
 
-		return shellManifestSyncMsg{Manifest: newManifest}
+		running := make(map[string]bool)
+		paneIDs := make(map[string]string)
+		for _, name := range hooks.discoverSessions(workDir) {
+			running[name] = true
+			paneIDs[name] = hooks.getPaneID(name)
+		}
+		return shellManifestSyncMsg{
+			Scope:    scope,
+			Manifest: newManifest,
+			Running:  running,
+			PaneIDs:  paneIDs,
+		}
 	}
 }
 
 // shellManifestSyncMsg carries the reloaded manifest for syncing.
 type shellManifestSyncMsg struct {
+	Scope    shellStartupScope
 	Manifest *ShellManifest
+	Running  map[string]bool
+	PaneIDs  map[string]string
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
 // Called after receiving shellManifestSyncMsg.
-func (p *Plugin) applyManifestSync() {
+func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
 	if p.shellManifest == nil {
 		return
-	}
-
-	// Get current tmux sessions
-	tmuxSessions := p.discoverTmuxSessionNames()
-	tmuxMap := make(map[string]bool)
-	for _, name := range tmuxSessions {
-		tmuxMap[name] = true
 	}
 
 	// Build map of current shells by TmuxName
@@ -404,7 +295,7 @@ func (p *Plugin) applyManifestSync() {
 	// Process manifest entries - add new or update existing
 	var newShells []*ShellSession
 	for _, def := range p.shellManifest.Shells {
-		isRunning := tmuxMap[def.TmuxName]
+		isRunning := sync.Running[def.TmuxName]
 
 		if existing, ok := currentShells[def.TmuxName]; ok {
 			// Update existing shell
@@ -415,7 +306,9 @@ func (p *Plugin) applyManifestSync() {
 			newShells = append(newShells, existing)
 		} else {
 			// New shell from manifest
-			shell := p.shellFromDefinition(def, isRunning)
+			shell := shellSessionFromDefinition(def, isRunning, func(name string) string {
+				return sync.PaneIDs[name]
+			})
 			newShells = append(newShells, shell)
 			if isRunning {
 				p.managedSessions[def.TmuxName] = true
@@ -443,39 +336,6 @@ func (p *Plugin) applyManifestSync() {
 			p.shellSelected = false
 			p.selectedIdx = 0
 		}
-	}
-}
-
-func (p *Plugin) restoreShellDisplayNames() {
-	if p.ctx == nil || len(p.shells) == 0 {
-		return
-	}
-
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
-	if len(wtState.ShellDisplayNames) == 0 {
-		return
-	}
-
-	// td-f88fdd: Migrate display names from state.json to manifest
-	migrated := false
-	for _, shell := range p.shells {
-		if shell == nil {
-			continue
-		}
-		if name, ok := wtState.ShellDisplayNames[shell.TmuxName]; ok && name != "" {
-			shell.Name = name
-			// If we have a manifest, update it with the migrated name
-			if p.shellManifest != nil && p.shellManifest.FindShell(shell.TmuxName) != nil {
-				_ = p.shellManifest.UpdateShell(shellToDefinition(shell))
-				migrated = true
-			}
-		}
-	}
-
-	// Clear from state.json after migration to avoid re-migration
-	if migrated {
-		wtState.ShellDisplayNames = nil
-		_ = state.SetWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
 
@@ -540,6 +400,11 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		displayName = p.nextShellDisplayName()
 	}
 	workDir := p.ctx.WorkDir
+	// Size the pane at creation. Without -x/-y tmux uses default-size (80x24),
+	// and anything the user starts before the follow-up resize lands — an editor
+	// especially — lays itself out for 24 rows (td-9b181e). The shell is not
+	// selected yet, so ask for shell dimensions explicitly.
+	previewWidth, previewHeight := p.previewDimensionsFor(true)
 
 	created := ShellCreatedMsg{
 		SessionName:   sessionName,
@@ -563,14 +428,13 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 			"-s", sessionName, // Session name
 			"-c", workDir, // Working directory
 		}
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if previewWidth > 0 && previewHeight > 0 {
+			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
+		}
+		if err := tty.NewSession(args...); err != nil {
 			created.Err = fmt.Errorf("create shell session: %w", err)
 			return created
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		// Capture pane ID for interactive mode support
 		created.PaneID = getPaneID(sessionName)
@@ -618,7 +482,7 @@ func (p *Plugin) resolveShellAgentType() AgentType {
 // message). The check is only consumed once it actually runs while focused, so a
 // background workspaces tab never spawns a session.
 func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
-	if p.autoShellChecked || !p.focused {
+	if p.shellStartupLoading || p.autoShellChecked || !p.focused {
 		return nil
 	}
 	if p.ctx == nil || p.ctx.Config == nil || !p.ctx.Config.Plugins.Workspace.AutoCreateShell {
@@ -657,7 +521,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 
 	sessionName := shell.TmuxName
 	workDir := p.ctx.WorkDir
-	previewWidth, previewHeight := p.calculatePreviewDimensions()
+	previewWidth, previewHeight := p.previewDimensionsFor(true)
 
 	return func() tea.Msg {
 		// Create new detached session
@@ -665,17 +529,13 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 		if previewWidth > 0 && previewHeight > 0 {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return ShellCreatedMsg{
 				SessionName: sessionName,
 				DisplayName: shell.Name,
 				Err:         fmt.Errorf("recreate shell session: %w", err),
 			}
 		}
-
-		// Ensure server persists when all sessions are killed
-		ensureTmuxServerConfig()
 
 		tty.SetWindowSizeManual(sessionName)
 
@@ -784,15 +644,13 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 			if previewWidth > 0 && previewHeight > 0 {
 				args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 			}
-			cmd := exec.Command("tmux", args...)
-			if err := cmd.Run(); err != nil {
+			if err := tty.NewSession(args...); err != nil {
 				return ShellCreatedMsg{
 					SessionName: sessionName,
 					DisplayName: shell.Name,
 					Err:         fmt.Errorf("recreate shell session: %w", err),
 				}
 			}
-			ensureTmuxServerConfig()
 			tty.SetWindowSizeManual(sessionName)
 			// Capture pane ID for interactive mode support
 			paneID := getPaneID(sessionName)
@@ -851,6 +709,10 @@ func (p *Plugin) killShellSessionByName(sessionName string) tea.Cmd {
 // pollShellSessionByName captures output from a specific shell session by name.
 // Uses cached capture to avoid blocking subprocess calls (td-c2961e).
 func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
+	return p.scheduleShellPollByName(tmuxName, 0)
+}
+
+func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
 	// Find the shell by TmuxName
 	var shell *ShellSession
 	for _, s := range p.shells {
@@ -864,7 +726,6 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 	}
 
 	// Capture references before spawning closure to avoid data races
-	outputBuf := shell.Agent.OutputBuf
 	maxBytes := p.tmuxCaptureMaxBytes
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
@@ -873,6 +734,11 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 		p.shellSelected &&
 		selectedShell != nil &&
 		selectedShell.TmuxName == tmuxName
+	if interactiveCapture {
+		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
+			return p.scheduleShellPollByName(tmuxName, remaining)
+		}
+	}
 
 	// When feature is enabled, skip -J for the selected shell so content wraps
 	// at the pane width (matching interactive mode). Resize inline to avoid races.
@@ -903,15 +769,24 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 	return func() tea.Msg {
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := queryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				p.resizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			}
 		}
 
 		// Use direct capture for shells (no batch), preserving wraps in interactive mode.
 		// Shell sessions have prefix "sidecar-sh-" not "sidecar-ws-" so batch capture skips them.
 		joinWrapped := !interactiveCapture && !directCapture
-		output, err := capturePaneDirectWithJoin(tmuxName, joinWrapped)
+		var output string
+		var cursor capturedCursor
+		var capture capturedPaneMetadata
+		var err error
+		if interactiveCapture && cursorTarget != "" {
+			output, cursor, err = capturePaneDirectWithJoinAndCursor(tmuxName, cursorTarget, joinWrapped)
+			capture = cursor.capturedPaneMetadata
+		} else {
+			output, capture, err = capturePaneDirectWithJoinMetadata(tmuxName, joinWrapped)
+		}
 		if err != nil {
 			// Capture error - check error message to determine if session is dead
 			// Avoid synchronous sessionExists() call which would block (td-c2961e)
@@ -920,35 +795,32 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 				strings.Contains(errStr, "no server") ||
 				strings.Contains(errStr, "no such session") ||
 				strings.Contains(errStr, "session not found") {
-				return ShellSessionDeadMsg{TmuxName: tmuxName}
+				return ShellSessionDeadMsg{TmuxName: tmuxName, Generation: generation}
 			}
 			// Other errors (timeout, etc.) - return empty output and schedule retry
-			return ShellOutputMsg{TmuxName: tmuxName, Output: "", Changed: false}
-		}
-
-		// Capture cursor position atomically with output when in interactive mode.
-		var cursorRow, cursorCol, paneHeight, paneWidth int
-		var cursorVisible, hasCursor bool
-		if interactiveCapture && cursorTarget != "" {
-			cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, hasCursor = queryCursorPositionSync(cursorTarget)
+			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
 		}
 
 		// Trim to max bytes
-		output = trimCapturedOutput(output, maxBytes)
-
-		// Update buffer and check if content changed
-		changed := outputBuf.Update(output)
+		var removedRows int
+		output, removedRows = trimCapturedOutputRows(output, maxBytes)
+		if capture.Valid {
+			capture.CaptureBase += removedRows
+		}
 
 		return ShellOutputMsg{
 			TmuxName:      tmuxName,
+			Generation:    generation,
 			Output:        output,
-			Changed:       changed,
-			CursorRow:     cursorRow,
-			CursorCol:     cursorCol,
-			CursorVisible: cursorVisible,
-			HasCursor:     hasCursor,
-			PaneHeight:    paneHeight,
-			PaneWidth:     paneWidth,
+			CursorRow:     cursor.Row,
+			CursorCol:     cursor.Col,
+			CursorVisible: cursor.Visible,
+			HasCursor:     cursor.Valid,
+			PaneHeight:    cursor.PaneHeight,
+			PaneWidth:     cursor.PaneWidth,
+			HistorySize:   capture.HistorySize,
+			CaptureBase:   capture.CaptureBase,
+			HasHistory:    capture.Valid,
 		}
 	}
 }
@@ -956,9 +828,10 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 // scheduleShellPollByName schedules a poll for a specific shell's output by name.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when shells are removed.
 func (p *Plugin) scheduleShellPollByName(tmuxName string, delay time.Duration) tea.Cmd {
-	// Capture current generation for this shell
-	gen := p.shellPollGeneration[tmuxName]
-	return tea.Tick(delay, func(t time.Time) tea.Msg {
+	if p.primaryControlUsing("shell", tmuxName) {
+		return nil
+	}
+	return p.pollScheduler.Schedule(shellPollKey(tmuxName), delay, func(gen int) tea.Msg {
 		return pollShellByNameMsg{TmuxName: tmuxName, Generation: gen}
 	})
 }
@@ -1099,14 +972,9 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			"-c", wt.Path, // Working directory
 		}
 
-		cmd := exec.Command("tmux", args...)
-		if err := cmd.Run(); err != nil {
+		if err := tty.NewSession(args...); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
-
-		// Set history limit for scrollback capture
-		_ = exec.Command("tmux", "set-option", "-t", sessionName, "history-limit",
-			strconv.Itoa(tmuxHistoryLimit)).Run()
 
 		// Set TD_SESSION_ID environment variable for td session tracking
 		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))

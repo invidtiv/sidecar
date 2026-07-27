@@ -13,13 +13,24 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
-// Update handles messages.
-func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+// update handles messages. The public Update wrapper in terminal_control.go
+// reconciles persistent terminal subscriptions after every state transition.
+func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case shellStartupResultMsg:
+		return p, p.applyShellStartup(msg)
+
+	case terminalHistoryLoadedMsg:
+		return p, p.applyTerminalHistory(msg)
+	case terminalSearchHistoryLoadedMsg:
+		p.applyTerminalSearchHistory(msg)
+		return p, nil
+
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
 		p.height = msg.Height
@@ -84,6 +95,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 
 			p.worktrees = msg.Worktrees
+			p.worktreesLoaded = true
 
 			// Restore selection by finding the worktree with the same name
 			if selectedName != "" {
@@ -95,45 +107,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 
-			// On first refresh after startup/project-switch, restore saved selection
-			// and run one-time legacy migration.
-			if !p.stateRestored {
-				p.stateRestored = true
-				// Only restore if we don't already have a valid selection from above
-				// and if there are items to select
-				if selectedName == "" && (len(p.worktrees) > 0 || len(p.shells) > 0) {
-					p.restoreSelectionState()
-				}
-
-				// Restore terminal panel: if it was visible last session, create the
-				// tmux session now that worktrees/shells are loaded and selection is
-				// restored (so termPanelSessionName() can resolve).
-				if p.termPanelVisible && p.termPanelSession == "" {
-					sessionName := p.termPanelSessionName()
-					if sessionName != "" {
-						p.termPanelSession = sessionName
-						p.termPanelOutput = NewOutputBuffer(outputBufferCap)
-						cmds = append(cmds, p.createTermPanelSession(sessionName))
-					}
-				}
-
-				// Migrate legacy per-project and per-worktree files to the
-				// centralized XDG state directory. This is idempotent and
-				// non-destructive — originals are never deleted.
-				wtPaths := make([]string, 0, len(p.worktrees))
-				for _, wt := range p.worktrees {
-					if !wt.IsMissing {
-						wtPaths = append(wtPaths, wt.Path)
-					}
-				}
-				go func() { _ = migration.MigrateProject(p.ctx.ProjectRoot, wtPaths) }()
-
-				// Covers the case where workspaces is the startup tab: it is
-				// focused without ever receiving a PluginFocusedMsg.
-				if cmd := p.maybeAutoCreateShell(); cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			}
+			// Shell discovery and worktree refresh race at startup. Restore state
+			// only after both have applied so a saved shell cannot be mistaken for
+			// a missing item and auto-created over.
+			cmds = append(cmds, p.completeInitialWorkspaceLoad()...)
 
 			// Bounds check in case the selected worktree was deleted
 			if p.selectedIdx >= len(p.worktrees) && len(p.worktrees) > 0 {
@@ -506,7 +483,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				TmuxSession: msg.SessionName,
 				TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
 				StartedAt:   time.Now(),
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
 			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
@@ -535,7 +512,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the worktree was removed or reset since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if currentGen := p.pollGeneration[msg.WorkspaceName]; msg.Generation != currentGen {
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Skip polling while user is attached to session
@@ -544,11 +521,22 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Always poll for status updates (needed for sidebar indicators),
 		// but use longer intervals when output isn't visible
-		return p, p.handlePollAgent(msg.WorkspaceName)
+		return p, p.handlePollAgent(msg.WorkspaceName, msg.Generation)
 
 	case AgentOutputMsg:
-		// Update state (content already stored by Update() in handlePollAgent)
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
+		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.OutputBuf != nil {
+				if msg.HasHistory {
+					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
+				} else {
+					wt.Agent.OutputBuf.Update(msg.Output)
+				}
+			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
 			wt.Status = msg.Status
@@ -556,7 +544,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			wt.Agent.RecordPollTime()
 		}
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
@@ -567,6 +556,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -604,7 +595,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
@@ -614,8 +606,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case AgentPollUnchangedMsg:
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.OutputBuf != nil {
+				if msg.HasHistory {
+					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
+				} else {
+					wt.Agent.OutputBuf.Update(msg.Output)
+				}
+			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
@@ -649,7 +652,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				// Use cursor position captured atomically with output
@@ -659,6 +663,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -705,7 +711,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				Type:        displayAgentType,
 				TmuxSession: msg.SessionName,
 				TmuxPane:    msg.PaneID,
-				OutputBuf:   NewOutputBuffer(outputBufferCap),
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 				StartedAt:   time.Now(),
 				Status:      AgentStatusRunning,
 			}
@@ -730,7 +736,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					Type:        displayAgentType, // td-2ba8a3: Show chosen agent type
 					TmuxSession: msg.SessionName,
 					TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
-					OutputBuf:   NewOutputBuffer(outputBufferCap),
+					OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 					StartedAt:   time.Now(),
 					Status:      AgentStatusRunning,
 				},
@@ -874,7 +880,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case ShellKilledMsg:
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.shellPollGeneration[msg.SessionName]++
+		p.pollScheduler.Invalidate(shellPollKey(msg.SessionName))
 		// Shell session killed, remove from list
 		removedIdx := -1
 		for i, shell := range p.shells {
@@ -924,8 +930,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case ShellSessionDeadMsg:
+		if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+			return p, nil
+		}
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.shellPollGeneration[msg.TmuxName]++
+		p.pollScheduler.Invalidate(shellPollKey(msg.TmuxName))
 		// Shell session externally terminated (user typed 'exit' in shell)
 		// Remove the dead shell from the list
 		removedIdx := -1
@@ -976,34 +985,59 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, nil
 
-	case ShellManifestChangedMsg:
+	case shellManifestChangedMsg:
+		if !p.shellScopeCurrent(msg.scope) {
+			return p, nil
+		}
 		// Manifest changed by another sidecar instance (td-f88fdd)
 		// Reload manifest and sync shells
-		cmds = append(cmds, p.syncShellsFromManifest())
+		cmds = append(cmds, p.syncShellsFromManifest(msg.scope))
 		// Continue listening for more changes
-		cmds = append(cmds, p.listenForShellManifestChanges())
+		if p.shellWatcherMessages != nil {
+			cmds = append(cmds, listenForShellManifestChanges(msg.scope, p.shellWatcherMessages))
+		}
 		return p, tea.Batch(cmds...)
 
 	case shellManifestSyncMsg:
+		if !p.shellScopeCurrent(msg.Scope) {
+			return p, nil
+		}
 		// Apply the reloaded manifest (td-f88fdd)
 		if msg.Manifest == nil {
 			return p, nil
 		}
 		p.shellManifest = msg.Manifest
-		p.applyManifestSync()
+		p.applyManifestSync(msg)
 		// Reload content if a shell is selected
 		if p.shellSelected {
 			return p, p.loadSelectedContent()
 		}
 
 	case ShellOutputMsg:
+		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+			return p, nil
+		}
+		if msg.Err != nil {
+			// Preserve the last good screen and retry under a fresh owner.
+			return p, p.scheduleShellPollByName(msg.TmuxName, pollIntervalActive)
+		}
+		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
-		if shell != nil && msg.Changed && shell.Agent != nil {
-			shell.Agent.LastOutput = time.Now()
+		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
+			if msg.HasHistory {
+				changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+				p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
+			} else {
+				changed = shell.Agent.OutputBuf.Update(msg.Output)
+			}
+			if changed {
+				shell.Agent.LastOutput = time.Now()
+			}
 		}
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && p.shellSelected {
+		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
@@ -1014,6 +1048,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
+					p.interactiveState.CursorHistorySize = msg.HistorySize
+					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1026,7 +1062,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// 2. Visible + unfocused → medium polling (2s) - user can see output but clicked elsewhere
 		// 3. Not visible → slow polling (10-20s)
 		interval := pollIntervalActive
-		if !msg.Changed {
+		if !changed {
 			interval = pollIntervalIdle
 		}
 		selectedShell := p.getSelectedShell()
@@ -1048,7 +1084,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && p.shellSelected {
+		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
@@ -1076,12 +1113,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the shell was removed since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if currentGen := p.shellPollGeneration[msg.TmuxName]; msg.Generation != currentGen {
+		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Poll specific shell session for output by name
 		if p.findShellByName(msg.TmuxName) != nil {
-			return p, p.pollShellSessionByName(msg.TmuxName)
+			return p, p.captureShellSessionByName(msg.TmuxName, msg.Generation)
 		}
 		return p, nil
 
@@ -1093,8 +1130,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case AgentStoppedMsg:
+		if msg.Generation != 0 && !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+			return p, nil
+		}
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.pollGeneration[msg.WorkspaceName]++
+		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
 			// Capture session name before clearing Agent (uses sanitized name like StartAgent)
 			sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
@@ -1506,6 +1546,22 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case interactiveClickSentMsg:
+		if p.interactiveState == nil || !p.interactiveState.Active ||
+			p.interactiveState != msg.Interaction ||
+			p.interactiveState.TargetSession != msg.SessionName {
+			break
+		}
+		if msg.Err != nil {
+			p.exitInteractiveMode()
+			if tty.IsSessionDeadError(msg.Err) {
+				p.toastMessage = "Session ended"
+				p.toastTime = time.Now()
+			}
+			break
+		}
+		p.interactiveState.LastKeyTime = time.Now()
+
 	case InteractivePasteResultMsg:
 		if msg.SessionDead {
 			p.exitInteractiveMode()
@@ -1543,13 +1599,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case TermPanelCaptureMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible {
+		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
+			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg DROPPED", "session", msg.SessionName, "current", p.termPanelSession, "visible", p.termPanelVisible)
 			return p, nil
 		}
 		contentChanged := false
 		if msg.Err == nil && p.termPanelOutput != nil {
-			contentChanged = p.termPanelOutput.Update(msg.Output)
+			if msg.HasHistory {
+				contentChanged = p.termPanelOutput.UpdateSnapshot(msg.Output, msg.CaptureBase)
+				p.recordTerminalHistory("panel", msg.SessionName, msg.HistorySize)
+			} else {
+				contentChanged = p.termPanelOutput.Update(msg.Output)
+			}
 			p.ctx.Logger.Debug("termPanel: CaptureMsg OK", "session", msg.SessionName, "outputLen", len(msg.Output), "lines", p.termPanelOutput.LineCount(), "changed", contentChanged)
 		} else if msg.Err != nil {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg ERROR", "err", msg.Err)
@@ -1561,6 +1623,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState.CursorVisible = msg.CursorVisible
 			p.interactiveState.PaneHeight = msg.PaneHeight
 			p.interactiveState.PaneWidth = msg.PaneWidth
+			p.interactiveState.CursorHistorySize = msg.HistorySize
+			p.interactiveState.HasCursorHistory = msg.HasHistory
 		}
 		// In interactive mode targeting terminal panel, use the same adaptive
 		// decay polling as agent/shell panes (pollingDecayFast=50ms) for
@@ -1574,16 +1638,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			interval = termPanelPollActive
 		}
 		// Slow down when plugin is not focused
-		if !p.focused && interval < termPanelPollUnfocus {
+		if !p.applicationFocused {
+			interval = pollIntervalUnfocused
+		} else if !p.focused && interval < termPanelPollUnfocus {
 			interval = termPanelPollUnfocus
 		}
 		return p, p.scheduleTermPanelPoll(interval)
 
 	case termPanelPollMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible || msg.Generation != p.termPanelGeneration {
+		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
+			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
 			return p, nil // Stale timer or panel hidden
 		}
-		return p, p.handleTermPanelPoll(msg.SessionName)
+		return p, p.handleTermPanelPoll(msg.SessionName, msg.Generation)
 
 	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)
@@ -1613,4 +1680,45 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, tea.Batch(cmds...)
+}
+
+// completeInitialWorkspaceLoad performs the one-time state restoration that
+// needs both independently loaded shell and worktree collections.
+func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
+	if p.stateRestored || p.shellStartupLoading || !p.worktreesLoaded {
+		return nil
+	}
+	p.stateRestored = true
+
+	var commands []tea.Cmd
+	if len(p.worktrees) > 0 || len(p.shells) > 0 {
+		p.restoreSelectionState()
+	}
+
+	// Restore terminal panel only after selection is final, since its session
+	// identity depends on the selected shell/worktree.
+	if p.termPanelVisible && p.termPanelSession == "" {
+		sessionName := p.termPanelSessionName()
+		if sessionName != "" {
+			p.termPanelSession = sessionName
+			p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
+			commands = append(commands, p.createTermPanelSession(sessionName))
+		}
+	}
+
+	// Migration is idempotent and non-destructive. Capture immutable inputs so
+	// a project switch cannot redirect this goroutine to the new context.
+	projectRoot := p.ctx.ProjectRoot
+	worktreePaths := make([]string, 0, len(p.worktrees))
+	for _, worktree := range p.worktrees {
+		if !worktree.IsMissing {
+			worktreePaths = append(worktreePaths, worktree.Path)
+		}
+	}
+	go func() { _ = migration.MigrateProject(projectRoot, worktreePaths) }()
+
+	if command := p.maybeAutoCreateShell(); command != nil {
+		commands = append(commands, command)
+	}
+	return commands
 }

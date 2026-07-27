@@ -563,6 +563,20 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
+	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
+			return cmd
+		}
+		switch msg.String() {
+		case "ctrl+a":
+			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
+			return nil
+		default:
+			if msg.String() == p.getInteractiveCopyKey() {
+				return p.copyInteractiveSelectionCmd()
+			}
+		}
+	}
 
 	switch msg.String() {
 	case "j", "down":
@@ -898,9 +912,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				p.sidebarWidth = 60
 			}
 			_ = state.SetWorkspaceSidebarWidth(p.sidebarWidth)
-			if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
-				return tea.Batch(p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate())
-			}
 			return p.resizeSelectedPaneCmd()
 		}
 
@@ -912,27 +923,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				p.sidebarWidth = 20
 			}
 			_ = state.SetWorkspaceSidebarWidth(p.sidebarWidth)
-			if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
-				return tea.Batch(p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate())
-			}
 			return p.resizeSelectedPaneCmd()
 		}
 
 	case "\\":
 		p.toggleSidebar()
-		if p.viewMode == ViewModeInteractive {
-			// Poll captures cursor atomically - no separate query needed
-			resizeCmds := []tea.Cmd{p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate()}
-			// Also resize the non-interactive pane so both sides match
-			if p.termPanelVisible && p.interactiveState != nil {
-				if p.interactiveState.TermPanel {
-					resizeCmds = append(resizeCmds, p.resizeSelectedPaneCmd())
-				} else {
-					resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
-				}
-			}
-			return tea.Batch(resizeCmds...)
-		}
 		resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
 		if p.termPanelVisible {
 			resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())

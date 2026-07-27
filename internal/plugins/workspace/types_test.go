@@ -4,11 +4,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 func TestOutputBuffer(t *testing.T) {
 	t.Run("basic write and read", func(t *testing.T) {
-		buf := NewOutputBuffer(10)
+		buf := tty.NewOutputBuffer(10)
 		buf.Write("line 1\nline 2\nline 3")
 
 		lines := buf.Lines()
@@ -21,7 +23,7 @@ func TestOutputBuffer(t *testing.T) {
 	})
 
 	t.Run("capacity limit", func(t *testing.T) {
-		buf := NewOutputBuffer(5)
+		buf := tty.NewOutputBuffer(5)
 		// Write 10 lines - should be trimmed to last 5
 		buf.Write("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10")
 
@@ -36,7 +38,7 @@ func TestOutputBuffer(t *testing.T) {
 	})
 
 	t.Run("string output", func(t *testing.T) {
-		buf := NewOutputBuffer(10)
+		buf := tty.NewOutputBuffer(10)
 		buf.Write("a\nb\nc")
 
 		s := buf.String()
@@ -46,7 +48,7 @@ func TestOutputBuffer(t *testing.T) {
 	})
 
 	t.Run("clear", func(t *testing.T) {
-		buf := NewOutputBuffer(10)
+		buf := tty.NewOutputBuffer(10)
 		buf.Write("a\nb\nc")
 		buf.Clear()
 
@@ -56,7 +58,7 @@ func TestOutputBuffer(t *testing.T) {
 	})
 
 	t.Run("concurrent access", func(t *testing.T) {
-		buf := NewOutputBuffer(100)
+		buf := tty.NewOutputBuffer(100)
 		var wg sync.WaitGroup
 
 		// Concurrent writes (using replace semantics)
@@ -90,7 +92,7 @@ func TestOutputBuffer(t *testing.T) {
 	})
 
 	t.Run("Update change detection", func(t *testing.T) {
-		buf := NewOutputBuffer(100)
+		buf := tty.NewOutputBuffer(100)
 
 		// First update should return true (content changed)
 		if !buf.Update("content 1") {
@@ -204,10 +206,10 @@ func TestIsDefaultShellName(t *testing.T) {
 		{"Shell 123", true},
 		{"Backend", false},
 		{"Frontend", false},
-		{"shell 1", false},  // case sensitive
-		{"Shell1", false},   // no space
-		{"Shell", false},    // no number
-		{"Shell X", false},  // not a digit
+		{"shell 1", false}, // case sensitive
+		{"Shell1", false},  // no space
+		{"Shell", false},   // no number
+		{"Shell X", false}, // not a digit
 		{"My Shell 1", false},
 		{"", false},
 	}

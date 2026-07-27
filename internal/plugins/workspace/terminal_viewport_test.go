@@ -1,0 +1,570 @@
+package workspace
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
+)
+
+func testTerminalBuffer(content string) *tty.OutputBuffer {
+	buffer := tty.NewOutputBuffer(100)
+	buffer.Write(content)
+	return buffer
+}
+
+func TestCalculateTerminalViewportLayout(t *testing.T) {
+	buffer := testTerminalBuffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9")
+
+	tests := []struct {
+		name  string
+		input terminalViewportInput
+		start int
+		end   int
+	}{
+		{
+			name:  "follow live edge",
+			input: terminalViewportInput{Buffer: buffer, Width: 80, Height: 3, Follow: true},
+			start: 7,
+			end:   10,
+		},
+		{
+			name:  "absolute offset",
+			input: terminalViewportInput{Buffer: buffer, Width: 80, Height: 3, Offset: 2},
+			start: 2,
+			end:   5,
+		},
+		{
+			name:  "offset from bottom",
+			input: terminalViewportInput{Buffer: buffer, Width: 80, Height: 3, Offset: 2, OffsetFromBottom: true},
+			start: 5,
+			end:   8,
+		},
+		{
+			name: "interactive pane bounds",
+			input: terminalViewportInput{
+				Buffer: buffer, Width: 80, Height: 8, Follow: true,
+				Interactive: true, PaneWidth: 20, PaneHeight: 4,
+			},
+			start: 6,
+			end:   10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateTerminalViewportLayout(tt.input)
+			if got.Start != tt.start || got.End != tt.end {
+				t.Fatalf("range = [%d,%d), want [%d,%d)", got.Start, got.End, tt.start, tt.end)
+			}
+		})
+	}
+}
+
+func TestTerminalViewportTrimsTrailingEmptyWithoutCopyingState(t *testing.T) {
+	buffer := testTerminalBuffer("prompt\n\n\n")
+	input := terminalViewportInput{
+		Buffer:       buffer,
+		Width:        80,
+		Height:       4,
+		Follow:       true,
+		TrimTrailing: true,
+	}
+	before := input
+	result := renderTerminalViewport(input, ui.NewTruncateCache(32))
+
+	if result.Content != "prompt" {
+		t.Fatalf("content = %q, want prompt", result.Content)
+	}
+	if input != before {
+		t.Fatal("renderTerminalViewport mutated its input")
+	}
+	if result.Layout.EffectiveCount != 1 {
+		t.Fatalf("effective count = %d, want 1", result.Layout.EffectiveCount)
+	}
+}
+
+func TestTerminalViewportExpandsAndTruncatesOnce(t *testing.T) {
+	buffer := testTerminalBuffer("a\t0123456789")
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer,
+		Width:  6,
+		Height: 1,
+		Follow: true,
+	}, ui.NewTruncateCache(32))
+
+	if strings.Contains(result.Content, "\t") {
+		t.Fatalf("tab was not expanded: %q", result.Content)
+	}
+	if got := ansi.StringWidth(result.Content); got > 6 {
+		t.Fatalf("visible width = %d, want <= 6", got)
+	}
+}
+
+func TestTerminalPanelUsesPanelBufferForSelection(t *testing.T) {
+	panel := testTerminalBuffer("panel-0\npanel-1\npanel-2")
+	agent := testTerminalBuffer("agent-0")
+	p := &Plugin{
+		viewMode:        ViewModeInteractive,
+		termPanelOutput: panel,
+		interactiveState: &InteractiveState{
+			Active:    true,
+			TermPanel: true,
+		},
+		worktrees: []*Worktree{{Agent: &Agent{OutputBuf: agent}}},
+	}
+
+	if got := p.interactiveOutputBuffer(); got != panel {
+		t.Fatal("terminal-panel selection did not use terminal-panel output")
+	}
+}
+
+func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
+	agentBuffer := testTerminalBuffer("0\n1\n2\n3\n4\n5")
+	panelBuffer := testTerminalBuffer("a\nb\nc\nd\ne")
+	state := &InteractiveState{
+		Active:           true,
+		VisibleStart:     91,
+		VisibleEnd:       99,
+		ContentRowOffset: 7,
+		PaneHeight:       3,
+		PaneWidth:        20,
+	}
+	p := &Plugin{
+		viewMode:         ViewModeInteractive,
+		previewTab:       PreviewTabOutput,
+		selectedIdx:      0,
+		previewOffset:    2,
+		autoScrollOutput: true,
+		termPanelOutput:  panelBuffer,
+		termPanelScroll:  99,
+		interactiveState: state,
+		worktrees: []*Worktree{{
+			Agent: &Agent{OutputBuf: agentBuffer},
+		}},
+		truncateCache: ui.NewTruncateCache(32),
+	}
+	p.selection.Clear()
+	beforeState := *state
+	beforePreviewOffset := p.previewOffset
+	beforePanelScroll := p.termPanelScroll
+
+	_ = p.renderOutputContent(20, 4)
+	if *state != beforeState {
+		t.Fatalf("agent render mutated interactive state: got %+v want %+v", *state, beforeState)
+	}
+	state.TermPanel = true
+	beforeState = *state
+	_ = p.renderTermPanelOutput(20, 4)
+
+	if *state != beforeState {
+		t.Fatalf("panel render mutated interactive state: got %+v want %+v", *state, beforeState)
+	}
+	if p.previewOffset != beforePreviewOffset {
+		t.Fatalf("render mutated previewOffset: got %d want %d", p.previewOffset, beforePreviewOffset)
+	}
+	if p.termPanelScroll != beforePanelScroll {
+		t.Fatalf("render mutated termPanelScroll: got %d want %d", p.termPanelScroll, beforePanelScroll)
+	}
+}
+
+func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
+	buffer := tty.NewOutputBuffer(200)
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, "line")
+	}
+	buffer.Write(strings.Join(lines, "\n"))
+	p := &Plugin{
+		width:            80,
+		height:           20,
+		viewMode:         ViewModeInteractive,
+		previewTab:       PreviewTabOutput,
+		selectedIdx:      0,
+		autoScrollOutput: true,
+		interactiveState: &InteractiveState{Active: true},
+		worktrees: []*Worktree{{
+			Agent: &Agent{OutputBuf: buffer},
+		}},
+	}
+
+	handled, _ := p.handleInteractiveScrollbackKey(tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
+	if !handled {
+		t.Fatal("shift+PageUp was forwarded instead of scrolling sidecar")
+	}
+	if p.autoScrollOutput {
+		t.Fatal("shift+PageUp did not leave live-follow mode")
+	}
+	if p.previewOffset >= p.getMaxScrollOffset() {
+		t.Fatalf("shift+PageUp did not move back: offset=%d max=%d", p.previewOffset, p.getMaxScrollOffset())
+	}
+}
+
+func TestTerminalPanelSelectionMapsFromPanelViewport(t *testing.T) {
+	panel := testTerminalBuffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9")
+	p := &Plugin{
+		width:            80,
+		height:           20,
+		viewMode:         ViewModeInteractive,
+		termPanelVisible: true,
+		termPanelOutput:  panel,
+		interactiveState: &InteractiveState{Active: true, TermPanel: true},
+	}
+	p.selection.ViewRect = mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
+
+	layout := p.interactiveViewportLayout()
+	line, ok := p.interactiveLineIndexAtY(6) // first row after the panel hint
+	if !ok {
+		t.Fatal("terminal-panel output row did not map to its buffer")
+	}
+	if line != layout.Start {
+		t.Fatalf("mapped line = %d, want viewport start %d", line, layout.Start)
+	}
+}
+
+func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{
+			name: "changed output",
+			msg: AgentOutputMsg{
+				WorkspaceName: "work",
+				Output:        "\x1b[?2004l\x1b[?1000l",
+				Status:        StatusActive,
+				HasCursor:     true,
+				CursorRow:     1,
+				CursorCol:     2,
+				PaneHeight:    10,
+				PaneWidth:     20,
+			},
+		},
+		{
+			name: "unchanged output",
+			msg: AgentPollUnchangedMsg{
+				WorkspaceName: "work",
+				CurrentStatus: StatusActive,
+				HasCursor:     true,
+				CursorRow:     1,
+				CursorCol:     2,
+				PaneHeight:    10,
+				PaneWidth:     20,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &InteractiveState{
+				Active:                true,
+				TermPanel:             true,
+				BracketedPasteEnabled: true,
+				MouseReportingEnabled: true,
+				CursorRow:             8,
+				CursorCol:             9,
+				PaneHeight:            30,
+				PaneWidth:             90,
+			}
+			p := &Plugin{
+				focused:          true,
+				viewMode:         ViewModeInteractive,
+				previewTab:       PreviewTabOutput,
+				selectedIdx:      0,
+				interactiveState: state,
+				worktrees: []*Worktree{{
+					Name:  "work",
+					Agent: &Agent{OutputBuf: tty.NewOutputBuffer(10)},
+				}},
+			}
+			before := *state
+
+			_, cmd := p.Update(tt.msg)
+			if *state != before {
+				t.Fatalf("agent update overwrote terminal-panel modes: got %+v want %+v", *state, before)
+			}
+			if cmd == nil {
+				t.Fatal("agent update did not schedule a continuation")
+			}
+			result := cmd()
+			poll, ok := result.(pollAgentMsg)
+			if !ok {
+				t.Fatalf("continuation = %T, want pollAgentMsg (terminal panel poll hijacked agent chain)", result)
+			}
+			if poll.WorkspaceName != "work" || poll.Generation != 1 {
+				t.Fatalf("agent continuation = %+v", poll)
+			}
+		})
+	}
+}
+
+func TestBottomSplitDimensionsMatchRenderedTerminalContent(t *testing.T) {
+	for _, shellSelected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "worktree", true: "shell"}[shellSelected], func(t *testing.T) {
+			p := &Plugin{
+				width:            100,
+				height:           30,
+				shellSelected:    shellSelected,
+				termPanelVisible: true,
+				termPanelLayout:  TermPanelBottom,
+				termPanelSize:    50,
+			}
+			_, previewContentHeight := p.calculatePreviewDimensions()
+			containerHeight := previewContentHeight + 1
+			termBoxHeight := containerHeight * p.termPanelEffectiveSize() / 100
+			outputBoxHeight := containerHeight - termBoxHeight - 1
+
+			_, gotTermHeight := p.calculateTermPanelDimensions()
+			_, gotOutputHeight := p.calculateAgentPaneDimensions()
+			if gotTermHeight != termBoxHeight-1 {
+				t.Fatalf("terminal content height = %d, rendered child content = %d", gotTermHeight, termBoxHeight-1)
+			}
+			if gotOutputHeight != outputBoxHeight-1 {
+				t.Fatalf("output content height = %d, rendered child content = %d", gotOutputHeight, outputBoxHeight-1)
+			}
+		})
+	}
+}
+
+func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
+	panel := testTerminalBuffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9")
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		width:            80,
+		height:           20,
+		viewMode:         ViewModeInteractive,
+		autoScrollOutput: true,
+		termPanelVisible: true,
+		termPanelOutput:  panel,
+		mouseHandler:     handler,
+		interactiveState: &InteractiveState{Active: true, TermPanel: true},
+	}
+	rect := mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
+	action := mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		X:      rect.X,
+		Y:      rect.Y + 1,
+		Region: &mouse.Region{ID: regionTermPanelContent, Rect: rect},
+	}
+
+	p.prepareInteractiveDrag(action)
+	if !p.selection.Anchor.Valid() {
+		t.Fatal("panel selection did not establish an anchor")
+	}
+	if !p.autoScrollOutput {
+		t.Fatal("panel selection disabled independent agent auto-follow")
+	}
+	frozen := p.interactiveViewportLayout()
+	panel.Write("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11")
+	afterAppend := p.interactiveViewportLayout()
+	if afterAppend.Start != frozen.Start {
+		t.Fatalf("panel selection viewport moved on append: start %d -> %d", frozen.Start, afterAppend.Start)
+	}
+}
+
+func TestTerminalEmptyStatesRespectNarrowWidth(t *testing.T) {
+	cache := ui.NewTruncateCache(32)
+	emptyBuffer := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees: []*Worktree{{
+			Agent: &Agent{},
+		}},
+	}
+	noAgent := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees:     []*Worktree{{}},
+	}
+	orphan := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees: []*Worktree{{
+			IsOrphaned: true,
+		}},
+	}
+	noShell := &Plugin{
+		shellSelected: true,
+		truncateCache: cache,
+	}
+
+	for name, content := range map[string]string{
+		"empty-buffer": emptyBuffer.renderOutputContent(5, 3),
+		"no-agent":     noAgent.renderOutputContent(5, 3),
+		"orphan":       orphan.renderOutputContent(5, 8),
+		"no-shell":     noShell.renderShellOutput(5, 8),
+		"panel":        emptyBuffer.renderTermPanelOutput(5, 3),
+	} {
+		for _, line := range strings.Split(content, "\n") {
+			if width := ansi.StringWidth(line); width > 5 {
+				t.Fatalf("%s empty-state width = %d, want <= 5: %q", name, width, line)
+			}
+		}
+	}
+}
+
+// td-26bdb2: the scrollbar used to be joined to an unpadded block, so
+// lipgloss.JoinHorizontal aligned it to the widest line — landing it right after
+// the shell prompt and sliding rightwards as the user typed.
+func TestRenderTerminalViewportPinsScrollbarToRightEdge(t *testing.T) {
+	// Short lines, more of them than fit, so a scrollbar is shown.
+	buffer := testTerminalBuffer("prompt>\na\nb\nc\nd\ne\nf\ng")
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:     buffer,
+		Width:      40,
+		Height:     4,
+		Follow:     true,
+		TotalItems: 8,
+	}, ui.NewTruncateCache(32))
+
+	if !result.Layout.ShowScrollbar {
+		t.Fatalf("expected a scrollbar for %d lines in %d rows", buffer.LineCount(), 4)
+	}
+
+	for i, line := range strings.Split(result.Content, "\n") {
+		if got := ansi.StringWidth(line); got != 40 {
+			t.Errorf("line %d: width = %d, want 40 (scrollbar not at the right edge): %q",
+				i, got, ansi.Strip(line))
+		}
+	}
+}
+
+func TestPadLinesToWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		width int
+		want  []int
+	}{
+		{name: "pads short lines", lines: []string{"ab", "abcd"}, width: 6, want: []int{6, 6}},
+		{name: "leaves long lines alone", lines: []string{"abcdefgh"}, width: 4, want: []int{8}},
+		{name: "ignores ansi when measuring", lines: []string{"\x1b[31mab\x1b[0m"}, width: 5, want: []int{5}},
+		{name: "non-positive width is a no-op", lines: []string{"ab"}, width: 0, want: []int{2}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := padLinesToWidth(append([]string(nil), tt.lines...), tt.width)
+			for i, want := range tt.want {
+				if w := ansi.StringWidth(got[i]); w != want {
+					t.Errorf("line %d width = %d, want %d", i, w, want)
+				}
+			}
+		})
+	}
+}
+
+// td-d29821: a capture is scrollback + pane rows, so the pane's cursor row is
+// not a display row. Placing it as if it were floats the cursor above the live
+// line by however much scrollback the capture carried.
+func TestTerminalViewportCursorAccountsForScrollback(t *testing.T) {
+	// One scrollback line, then three pane rows. The cursor sits on pane row 2
+	// (the live prompt), which is display row 3.
+	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+
+	in := terminalViewportInput{
+		Buffer:            buffer,
+		Width:             80,
+		Height:            44,
+		Follow:            true,
+		Interactive:       true,
+		CursorRow:         2,
+		CursorCol:         8,
+		CursorVisible:     true,
+		PaneHeight:        44,
+		PaneWidth:         80,
+		CursorHistorySize: 1,
+		BufferBase:        0,
+		HasCursorHistory:  true,
+	}
+
+	_, y, ok := terminalViewportCursorPosition(in)
+	if !ok {
+		t.Fatal("expected the cursor to be visible")
+	}
+	if y != 3 {
+		t.Errorf("cursor row = %d, want 3 (pane row 2 + 1 scrollback line)", y)
+	}
+
+	// Without history metadata the old pane-relative placement still applies.
+	in.HasCursorHistory = false
+	if _, y, ok = terminalViewportCursorPosition(in); !ok || y != 2 {
+		t.Errorf("fallback cursor row = %d (ok=%v), want 2", y, ok)
+	}
+}
+
+// A full-screen program fills the pane, so the buffer's tail *is* the pane and
+// the absolute mapping has to agree with the pane-relative one. This is the
+// case that already worked and must not regress.
+func TestTerminalViewportCursorFullScreenPaneUnchanged(t *testing.T) {
+	const paneHeight = 10
+	const historySize = 25
+
+	lines := make([]string, 0, historySize+paneHeight)
+	for i := range historySize + paneHeight {
+		lines = append(lines, fmt.Sprintf("line-%02d", i))
+	}
+	buffer := testTerminalBuffer(strings.Join(lines, "\n"))
+
+	for _, cursorRow := range []int{0, 4, paneHeight - 1} {
+		in := terminalViewportInput{
+			Buffer:            buffer,
+			Width:             80,
+			Height:            paneHeight,
+			Follow:            true,
+			Interactive:       true,
+			CursorRow:         cursorRow,
+			CursorVisible:     true,
+			PaneHeight:        paneHeight,
+			PaneWidth:         80,
+			CursorHistorySize: historySize,
+			BufferBase:        0,
+			HasCursorHistory:  true,
+		}
+
+		_, withHistory, ok := terminalViewportCursorPosition(in)
+		if !ok {
+			t.Fatalf("cursorRow %d: expected the cursor to be visible", cursorRow)
+		}
+		in.HasCursorHistory = false
+		_, paneRelative, _ := terminalViewportCursorPosition(in)
+
+		if withHistory != cursorRow || paneRelative != cursorRow {
+			t.Errorf("cursorRow %d: absolute mapping gave %d, pane-relative gave %d; want %d for both",
+				cursorRow, withHistory, paneRelative, cursorRow)
+		}
+	}
+}
+
+// The buffer's absolute base has to be subtracted: once tmux history exceeds
+// the capture window, the buffer no longer starts at absolute line 0.
+func TestTerminalViewportCursorHonoursBufferBase(t *testing.T) {
+	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+
+	_, y, ok := terminalViewportCursorPosition(terminalViewportInput{
+		Buffer:            buffer,
+		Width:             80,
+		Height:            44,
+		Follow:            true,
+		Interactive:       true,
+		CursorRow:         2,
+		CursorVisible:     true,
+		PaneHeight:        44,
+		PaneWidth:         80,
+		CursorHistorySize: 601, // 600 lines scrolled out of the capture window
+		BufferBase:        600,
+		HasCursorHistory:  true,
+	})
+	if !ok {
+		t.Fatal("expected the cursor to be visible")
+	}
+	if y != 3 {
+		t.Errorf("cursor row = %d, want 3; buffer base was not subtracted", y)
+	}
+}

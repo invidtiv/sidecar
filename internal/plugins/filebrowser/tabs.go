@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 type TabOpenMode int
@@ -572,7 +573,7 @@ func (p *Plugin) restoreEditStateFromTab() bool {
 		return false
 	}
 	// Check if session is still alive
-	if !isSessionAlive(tab.EditSession) {
+	if !(tty.EditorSession{Name: tab.EditSession}).IsAlive() {
 		// Session died while away - clear tab edit state
 		tab.EditSession = ""
 		tab.EditOrigMtime = time.Time{}
@@ -595,7 +596,7 @@ func (p *Plugin) killTabEditSession(index int) {
 	}
 	tab := &p.tabs[index]
 	if tab.EditSession != "" {
-		killSession(tab.EditSession)
+		tty.EditorSession{Name: tab.EditSession}.Kill()
 		tab.EditSession = ""
 		tab.EditOrigMtime = time.Time{}
 		tab.EditEditor = ""
@@ -628,15 +629,19 @@ func (p *Plugin) closeTabsForPath(deletedPath string) {
 // cleanupAllEditSessions kills all tmux edit sessions for all tabs.
 // Called on plugin exit to ensure no orphan tmux sessions remain.
 func (p *Plugin) cleanupAllEditSessions() {
+	killed := make(map[string]struct{})
 	// Clean up current plugin-level edit state
 	if p.inlineEditMode && p.inlineEditSession != "" {
-		killSession(p.inlineEditSession)
+		killed[p.inlineEditSession] = struct{}{}
+		tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}.Kill()
 		p.clearPluginEditState()
 	}
 	// Clean up any backgrounded sessions in tabs
 	for i := range p.tabs {
 		if p.tabs[i].EditSession != "" {
-			killSession(p.tabs[i].EditSession)
+			if _, alreadyKilled := killed[p.tabs[i].EditSession]; !alreadyKilled {
+				tty.EditorSession{Name: p.tabs[i].EditSession}.Kill()
+			}
 			p.tabs[i].EditSession = ""
 			p.tabs[i].EditOrigMtime = time.Time{}
 			p.tabs[i].EditEditor = ""

@@ -15,7 +15,7 @@ import (
 // TestMapKeyToTmux_Printable tests regular character input
 func TestMapKeyToTmux_Printable(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "a" {
 		t.Errorf("expected key='a', got '%s'", key)
 	}
@@ -27,7 +27,7 @@ func TestMapKeyToTmux_Printable(t *testing.T) {
 // TestMapKeyToTmux_MultiRune tests multi-character input
 func TestMapKeyToTmux_MultiRune(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'h', Text: "hello"}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "hello" {
 		t.Errorf("expected key='hello', got '%s'", key)
 	}
@@ -39,7 +39,7 @@ func TestMapKeyToTmux_MultiRune(t *testing.T) {
 // TestMapKeyToTmux_Enter tests Enter key mapping
 func TestMapKeyToTmux_Enter(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "Enter" {
 		t.Errorf("expected key='Enter', got '%s'", key)
 	}
@@ -51,7 +51,7 @@ func TestMapKeyToTmux_Enter(t *testing.T) {
 // TestMapKeyToTmux_Backspace tests Backspace key mapping
 func TestMapKeyToTmux_Backspace(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyBackspace}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "BSpace" {
 		t.Errorf("expected key='BSpace', got '%s'", key)
 	}
@@ -63,7 +63,7 @@ func TestMapKeyToTmux_Backspace(t *testing.T) {
 // TestMapKeyToTmux_Tab tests Tab key mapping
 func TestMapKeyToTmux_Tab(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyTab}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "Tab" {
 		t.Errorf("expected key='Tab', got '%s'", key)
 	}
@@ -75,7 +75,7 @@ func TestMapKeyToTmux_Tab(t *testing.T) {
 // TestMapKeyToTmux_Escape tests Escape key mapping
 func TestMapKeyToTmux_Escape(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "Escape" {
 		t.Errorf("expected key='Escape', got '%s'", key)
 	}
@@ -100,7 +100,7 @@ func TestMapKeyToTmux_ArrowKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := tea.KeyPressMsg{Code: tt.code}
-			key, useLiteral := MapKeyToTmux(msg)
+			key, useLiteral := tty.MapKeyToTmux(msg)
 			if key != tt.expected {
 				t.Errorf("expected key='%s', got '%s'", tt.expected, key)
 			}
@@ -127,7 +127,7 @@ func TestMapKeyToTmux_CtrlKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := tt.msg
-			key, useLiteral := MapKeyToTmux(msg)
+			key, useLiteral := tty.MapKeyToTmux(msg)
 			if key != tt.expected {
 				t.Errorf("expected key='%s', got '%s'", tt.expected, key)
 			}
@@ -154,7 +154,7 @@ func TestMapKeyToTmux_FunctionKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
 			msg := tea.KeyPressMsg{Code: tt.code}
-			key, useLiteral := MapKeyToTmux(msg)
+			key, useLiteral := tty.MapKeyToTmux(msg)
 			if key != tt.expected {
 				t.Errorf("expected key='%s', got '%s'", tt.expected, key)
 			}
@@ -183,7 +183,7 @@ func TestMapKeyToTmux_NavigationKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := tea.KeyPressMsg{Code: tt.code}
-			key, useLiteral := MapKeyToTmux(msg)
+			key, useLiteral := tty.MapKeyToTmux(msg)
 			if key != tt.expected {
 				t.Errorf("expected key='%s', got '%s'", tt.expected, key)
 			}
@@ -197,7 +197,7 @@ func TestMapKeyToTmux_NavigationKeys(t *testing.T) {
 // TestMapKeyToTmux_Space tests Space key mapping
 func TestMapKeyToTmux_Space(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeySpace}
-	key, useLiteral := MapKeyToTmux(msg)
+	key, useLiteral := tty.MapKeyToTmux(msg)
 	if key != "Space" {
 		t.Errorf("expected key='Space', got '%s'", key)
 	}
@@ -215,7 +215,7 @@ func TestMapKeyToTmux_Space(t *testing.T) {
 // through to the generic fallback, which still reports useLiteral=true.
 func TestMapKeyToTmux_EmptyRunes(t *testing.T) {
 	msg := tea.KeyPressMsg{Text: ""}
-	_, useLiteral := MapKeyToTmux(msg)
+	_, useLiteral := tty.MapKeyToTmux(msg)
 	if !useLiteral {
 		t.Error("expected useLiteral=true for empty-text key")
 	}
@@ -224,7 +224,7 @@ func TestMapKeyToTmux_EmptyRunes(t *testing.T) {
 // TestIsPasteInput_SingleChar tests single character is not paste
 func TestIsPasteInput_SingleChar(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
-	if isPasteInput(msg) {
+	if tty.IsPasteInput(msg) {
 		t.Error("single character should not be detected as paste")
 	}
 }
@@ -238,7 +238,7 @@ func TestIsPasteInput_SingleChar(t *testing.T) {
 // multi-rune paste Text, which is how a real paste arrives in v2.
 func TestIsPasteInput_PasteFlag(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'p', Text: "pasted content"}
-	if !isPasteInput(msg) {
+	if !tty.IsPasteInput(msg) {
 		t.Error("pasted multi-rune input should be detected as paste")
 	}
 }
@@ -246,7 +246,7 @@ func TestIsPasteInput_PasteFlag(t *testing.T) {
 // TestIsPasteInput_ShortString tests short string without newlines
 func TestIsPasteInput_ShortString(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'h', Text: "hello"}
-	if isPasteInput(msg) {
+	if tty.IsPasteInput(msg) {
 		t.Error("short string without newlines should not be paste")
 	}
 }
@@ -254,7 +254,7 @@ func TestIsPasteInput_ShortString(t *testing.T) {
 // TestIsPasteInput_WithNewline tests string with newline is paste
 func TestIsPasteInput_WithNewline(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'h', Text: "hello\nworld"}
-	if !isPasteInput(msg) {
+	if !tty.IsPasteInput(msg) {
 		t.Error("string with newline should be detected as paste")
 	}
 }
@@ -262,7 +262,7 @@ func TestIsPasteInput_WithNewline(t *testing.T) {
 // TestIsPasteInput_LongString tests long string is paste
 func TestIsPasteInput_LongString(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 't', Text: "this is a longer string that should be paste"}
-	if !isPasteInput(msg) {
+	if !tty.IsPasteInput(msg) {
 		t.Error("long string (>10 chars) should be detected as paste")
 	}
 }
@@ -270,7 +270,7 @@ func TestIsPasteInput_LongString(t *testing.T) {
 // TestIsPasteInput_NonRunes tests non-rune key types
 func TestIsPasteInput_NonRunes(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
-	if isPasteInput(msg) {
+	if tty.IsPasteInput(msg) {
 		t.Error("non-rune key types should not be detected as paste")
 	}
 }
@@ -278,7 +278,7 @@ func TestIsPasteInput_NonRunes(t *testing.T) {
 // TestRenderWithCursor_MiddleOfLine tests cursor in middle of text
 func TestRenderWithCursor_MiddleOfLine(t *testing.T) {
 	content := "hello\nworld"
-	result := renderWithCursor(content, 0, 2, true)
+	result := tty.RenderWithCursor(content, 0, 2, true)
 
 	// Should contain the original text (possibly with ANSI codes)
 	// In test environment (no TTY), lipgloss may not add ANSI codes
@@ -299,7 +299,7 @@ func TestRenderWithCursor_MiddleOfLine(t *testing.T) {
 // TestRenderWithCursor_EndOfLine tests cursor past end of line
 func TestRenderWithCursor_EndOfLine(t *testing.T) {
 	content := "hi"
-	result := renderWithCursor(content, 0, 10, true)
+	result := tty.RenderWithCursor(content, 0, 10, true)
 
 	// Should append cursor block since cursor is past end
 	if len(result) <= len(content) {
@@ -309,7 +309,7 @@ func TestRenderWithCursor_EndOfLine(t *testing.T) {
 
 func TestRenderWithCursor_EndOfLineWithSpace(t *testing.T) {
 	content := "word"
-	result := renderWithCursor(content, 0, 5, true)
+	result := tty.RenderWithCursor(content, 0, 5, true)
 
 	if !strings.Contains(result, "word ") {
 		t.Error("expected padded space before cursor when cursor past end")
@@ -319,7 +319,7 @@ func TestRenderWithCursor_EndOfLineWithSpace(t *testing.T) {
 // TestRenderWithCursor_NotVisible tests invisible cursor
 func TestRenderWithCursor_NotVisible(t *testing.T) {
 	content := "hello"
-	result := renderWithCursor(content, 0, 2, false)
+	result := tty.RenderWithCursor(content, 0, 2, false)
 
 	// Should return content unchanged when cursor not visible
 	if result != content {
@@ -332,13 +332,13 @@ func TestRenderWithCursor_NegativePosition(t *testing.T) {
 	content := "hello"
 
 	// Negative row
-	result := renderWithCursor(content, -1, 2, true)
+	result := tty.RenderWithCursor(content, -1, 2, true)
 	if result != content {
 		t.Error("expected unchanged content for negative row")
 	}
 
 	// Negative column
-	result = renderWithCursor(content, 0, -1, true)
+	result = tty.RenderWithCursor(content, 0, -1, true)
 	if result != content {
 		t.Error("expected unchanged content for negative column")
 	}
@@ -347,7 +347,7 @@ func TestRenderWithCursor_NegativePosition(t *testing.T) {
 // TestRenderWithCursor_RowOutOfBounds tests cursor row beyond content
 func TestRenderWithCursor_RowOutOfBounds(t *testing.T) {
 	content := "hello\nworld"
-	result := renderWithCursor(content, 5, 2, true)
+	result := tty.RenderWithCursor(content, 5, 2, true)
 
 	// Should return content unchanged when row is out of bounds
 	if result != content {
@@ -358,7 +358,7 @@ func TestRenderWithCursor_RowOutOfBounds(t *testing.T) {
 // TestRenderWithCursor_MultiLine tests cursor on second line
 func TestRenderWithCursor_MultiLine(t *testing.T) {
 	content := "hello\nworld"
-	result := renderWithCursor(content, 1, 0, true)
+	result := tty.RenderWithCursor(content, 1, 0, true)
 
 	lines := strings.Split(result, "\n")
 	if len(lines) != 2 {
@@ -380,7 +380,7 @@ func TestRenderWithCursor_PreservesANSI(t *testing.T) {
 	// Red "hello" = \x1b[31mhello\x1b[0m
 	// Cursor at position 2 (on 'l')
 	content := "\x1b[31mhello\x1b[0m"
-	result := renderWithCursor(content, 0, 2, true)
+	result := tty.RenderWithCursor(content, 0, 2, true)
 
 	// The result should preserve ANSI codes in before/after parts
 	// Before part "he" should retain \x1b[31m prefix
@@ -400,7 +400,7 @@ func TestRenderWithCursor_ANSIWidthCalc(t *testing.T) {
 	// Line with ANSI codes: visual width is 5 ("hello")
 	// Cursor at position 10 (past end) should append cursor block
 	content := "\x1b[31mhello\x1b[0m"
-	result := renderWithCursor(content, 0, 10, true)
+	result := tty.RenderWithCursor(content, 0, 10, true)
 
 	// Should have cursor block appended (length increase)
 	if len(result) <= len(content) {
@@ -718,7 +718,7 @@ func TestClickOutsidePreviewExitsInteractiveMode(t *testing.T) {
 // TestIsSessionDeadError_TrueForPaneNotFound tests detection of "can't find pane" error
 func TestIsSessionDeadError_TrueForPaneNotFound(t *testing.T) {
 	err := fmt.Errorf("can't find pane: %%5")
-	if !isSessionDeadError(err) {
+	if !tty.IsSessionDeadError(err) {
 		t.Error("expected true for 'can't find pane' error")
 	}
 }
@@ -726,7 +726,7 @@ func TestIsSessionDeadError_TrueForPaneNotFound(t *testing.T) {
 // TestIsSessionDeadError_TrueForNoSuchSession tests detection of "no such session" error
 func TestIsSessionDeadError_TrueForNoSuchSession(t *testing.T) {
 	err := fmt.Errorf("no such session: test-session")
-	if !isSessionDeadError(err) {
+	if !tty.IsSessionDeadError(err) {
 		t.Error("expected true for 'no such session' error")
 	}
 }
@@ -734,14 +734,14 @@ func TestIsSessionDeadError_TrueForNoSuchSession(t *testing.T) {
 // TestIsSessionDeadError_FalseForOtherErrors tests that other errors return false
 func TestIsSessionDeadError_FalseForOtherErrors(t *testing.T) {
 	err := fmt.Errorf("some random error")
-	if isSessionDeadError(err) {
+	if tty.IsSessionDeadError(err) {
 		t.Error("expected false for unrelated error")
 	}
 }
 
 // TestIsSessionDeadError_FalseForNil tests nil error handling
 func TestIsSessionDeadError_FalseForNil(t *testing.T) {
-	if isSessionDeadError(nil) {
+	if tty.IsSessionDeadError(nil) {
 		t.Error("expected false for nil error")
 	}
 }
@@ -886,7 +886,7 @@ func TestForwardClickToTmux_ReturnsNil(t *testing.T) {
 // TestDetectBracketedPasteMode_EnabledOnly tests detection when only enable sequence is present
 func TestDetectBracketedPasteMode_EnabledOnly(t *testing.T) {
 	output := "some output\x1b[?2004hmore output"
-	if !detectBracketedPasteMode(output) {
+	if !tty.DetectBracketedPasteMode(output) {
 		t.Error("expected bracketed paste to be detected as enabled")
 	}
 }
@@ -894,21 +894,21 @@ func TestDetectBracketedPasteMode_EnabledOnly(t *testing.T) {
 // TestDetectBracketedPasteMode_DisabledOnly tests detection when only disable sequence is present
 func TestDetectBracketedPasteMode_DisabledOnly(t *testing.T) {
 	output := "some output\x1b[?2004lmore output"
-	if detectBracketedPasteMode(output) {
+	if tty.DetectBracketedPasteMode(output) {
 		t.Error("expected bracketed paste to be detected as disabled")
 	}
 }
 
 func TestDetectMouseReportingMode_EnabledOnly(t *testing.T) {
-	output := "some output" + mouseModeEnable1006 + "more output"
-	if !detectMouseReportingMode(output) {
+	output := "some output" + tty.MouseModeEnable1006 + "more output"
+	if !tty.DetectMouseReportingMode(output) {
 		t.Error("expected mouse reporting to be detected as enabled")
 	}
 }
 
 func TestDetectMouseReportingMode_DisabledOnly(t *testing.T) {
-	output := "some output" + mouseModeEnable1006 + mouseModeDisable1006
-	if detectMouseReportingMode(output) {
+	output := "some output" + tty.MouseModeEnable1006 + tty.MouseModeDisable1006
+	if tty.DetectMouseReportingMode(output) {
 		t.Error("expected mouse reporting to be detected as disabled")
 	}
 }
@@ -916,7 +916,7 @@ func TestDetectMouseReportingMode_DisabledOnly(t *testing.T) {
 // TestDetectBracketedPasteMode_EnabledThenDisabled tests detection when enable followed by disable
 func TestDetectBracketedPasteMode_EnabledThenDisabled(t *testing.T) {
 	output := "some output\x1b[?2004henabled\x1b[?2004ldisabled"
-	if detectBracketedPasteMode(output) {
+	if tty.DetectBracketedPasteMode(output) {
 		t.Error("expected bracketed paste to be disabled when disable comes after enable")
 	}
 }
@@ -924,7 +924,7 @@ func TestDetectBracketedPasteMode_EnabledThenDisabled(t *testing.T) {
 // TestDetectBracketedPasteMode_DisabledThenEnabled tests detection when disable followed by enable
 func TestDetectBracketedPasteMode_DisabledThenEnabled(t *testing.T) {
 	output := "some output\x1b[?2004ldisabled\x1b[?2004henabled"
-	if !detectBracketedPasteMode(output) {
+	if !tty.DetectBracketedPasteMode(output) {
 		t.Error("expected bracketed paste to be enabled when enable comes after disable")
 	}
 }
@@ -932,14 +932,14 @@ func TestDetectBracketedPasteMode_DisabledThenEnabled(t *testing.T) {
 // TestDetectBracketedPasteMode_NoSequences tests detection with no sequences
 func TestDetectBracketedPasteMode_NoSequences(t *testing.T) {
 	output := "some normal output without any sequences"
-	if detectBracketedPasteMode(output) {
+	if tty.DetectBracketedPasteMode(output) {
 		t.Error("expected bracketed paste to be disabled when no sequences present")
 	}
 }
 
 // TestDetectBracketedPasteMode_EmptyOutput tests detection with empty output
 func TestDetectBracketedPasteMode_EmptyOutput(t *testing.T) {
-	if detectBracketedPasteMode("") {
+	if tty.DetectBracketedPasteMode("") {
 		t.Error("expected bracketed paste to be disabled for empty output")
 	}
 }
@@ -1105,7 +1105,7 @@ func TestHandleInteractiveKeys_ForwardsNormalRunes(t *testing.T) {
 // TestOutputBuffer_StripsPartialMouseSequences tests that OutputBuffer.Update
 // strips partial mouse sequences without ESC prefix (td-791865)
 func TestOutputBuffer_StripsPartialMouseSequences(t *testing.T) {
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 
 	// Content with partial mouse sequences (no ESC prefix)
 	content := "prompt$ [<65;83;33M[<65;83;33Mls\nfile1.txt\n"
@@ -1123,7 +1123,7 @@ func TestOutputBuffer_StripsPartialMouseSequences(t *testing.T) {
 
 // TestOutputBuffer_StripsFullAndPartialMouseSequences tests both forms are stripped
 func TestOutputBuffer_StripsFullAndPartialMouseSequences(t *testing.T) {
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 
 	// Mix of full (with ESC) and partial (without ESC) sequences
 	content := "output\x1b[<64;10;5M[<65;83;33Mmore output\n"
@@ -1144,7 +1144,7 @@ func TestOutputBuffer_StripsFullAndPartialMouseSequences(t *testing.T) {
 
 // TestOutputBuffer_PreservesNormalBrackets tests that normal bracket usage is not stripped
 func TestOutputBuffer_PreservesNormalBrackets(t *testing.T) {
-	buf := NewOutputBuffer(100)
+	buf := tty.NewOutputBuffer(100)
 
 	// Content with brackets that should NOT be stripped
 	content := "array[0] = value\nif [[ -f file ]]; then\n"
@@ -1217,5 +1217,48 @@ func TestCalculatePreviewDimensions_WidthConsistency(t *testing.T) {
 					calcWidth, renderWidth)
 			}
 		})
+	}
+}
+
+// td-9b181e: a shell's tmux session is created before the shell is selected, so
+// its size has to be computed for a shell rather than for whatever the sidebar
+// currently points at. Otherwise the pane is created two rows short and anything
+// started in it before the follow-up resize lays out for the wrong height.
+func TestPreviewDimensionsForIgnoresCurrentSelection(t *testing.T) {
+	p := &Plugin{width: 200, height: 50, sidebarVisible: true, sidebarWidth: 25}
+
+	for _, selected := range []bool{true, false} {
+		p.shellSelected = selected
+
+		shellW, shellH := p.previewDimensionsFor(true)
+		worktreeW, worktreeH := p.previewDimensionsFor(false)
+
+		if shellW != worktreeW {
+			t.Errorf("shellSelected=%v: widths differ (%d vs %d); only height depends on the tab row",
+				selected, shellW, worktreeW)
+		}
+		// Worktrees render a tab header and spacer that shells do not.
+		if shellH != worktreeH+2 {
+			t.Errorf("shellSelected=%v: shell height %d, worktree height %d; want shell to be 2 taller",
+				selected, shellH, worktreeH)
+		}
+	}
+}
+
+func TestCalculatePreviewDimensionsMatchesSelectionKind(t *testing.T) {
+	p := &Plugin{width: 200, height: 50, sidebarVisible: true, sidebarWidth: 25}
+
+	p.shellSelected = true
+	gotW, gotH := p.calculatePreviewDimensions()
+	wantW, wantH := p.previewDimensionsFor(true)
+	if gotW != wantW || gotH != wantH {
+		t.Errorf("shell selected: got %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
+	}
+
+	p.shellSelected = false
+	gotW, gotH = p.calculatePreviewDimensions()
+	wantW, wantH = p.previewDimensionsFor(false)
+	if gotW != wantW || gotH != wantH {
+		t.Errorf("worktree selected: got %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
 	}
 }

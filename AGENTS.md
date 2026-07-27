@@ -1,6 +1,9 @@
-# Agents: Mandatory: use td usage --new-session to see open work and view tasks / epics.
+# Agents: use td usage --new-session to see open work and view tasks / epics.
 
-# Agents: Mandatory if the human does not provide an existing task for the work you've been asked to start, create a task or tasks with td first and use td to track progress.
+# Agents: If the human does not provide an existing task for the work you've been asked to start, create a task or tasks with td first and use td to track progress.
+
+This file is the single entry point for agent instructions. `GEMINI.md` is a
+symlink to it; there is no separate `CLAUDE.md`.
 
 ## Build & Versioning
 
@@ -47,6 +50,23 @@ ending with the `first ready frame` marker. See `internal/startuptrace`.
 
 To count subprocess spawns, put logging shims for `git`/`tmux`/`td` ahead of the
 real binaries on `PATH` — duplicated git invocations are the usual finding.
+
+## Verifying Changes in the Real App
+
+`scripts/tmux-drive.sh` runs sidecar in a headless tmux session, sends it
+keystrokes, and captures the screen as text and PNG, so a UI change can be
+verified without a human at the keyboard:
+
+```bash
+SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
+./scripts/tmux-drive.sh keys 5 && ./scripts/tmux-drive.sh snap workspaces
+./scripts/tmux-drive.sh stop
+```
+
+Note that the embedded terminal's cursor is a **native** cursor drawn by the host
+terminal, so `capture-pane` cannot see it; checking cursor placement needs an
+attached viewer client. See `docs/guides/headless-testing.md` for that, for the
+key-pacing rules, and for the tmux coordinate spaces the terminal code works in.
 
 ## Plugin View Rendering
 

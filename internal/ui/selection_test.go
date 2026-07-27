@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,10 +62,10 @@ func newTestState() *SelectionState {
 
 func TestSelectionState_Clear(t *testing.T) {
 	s := &SelectionState{
-		Active: true,
-		Start:  SelectionPoint{3, 5},
-		End:    SelectionPoint{6, 10},
-		Anchor: SelectionPoint{3, 5},
+		Active:   true,
+		Start:    SelectionPoint{3, 5},
+		End:      SelectionPoint{6, 10},
+		Anchor:   SelectionPoint{3, 5},
 		ViewRect: mouse.Rect{X: 1, Y: 2, W: 80, H: 24},
 	}
 	s.Clear()
@@ -193,6 +194,32 @@ func TestGetLineSelectionCols_NoSelection(t *testing.T) {
 	sc, ec := s.GetLineSelectionCols(0)
 	if sc != -1 || ec != -1 {
 		t.Errorf("no selection: got (%d, %d), want (-1, -1)", sc, ec)
+	}
+}
+
+func TestRectangularSelectionColumnsAndText(t *testing.T) {
+	s := newTestState()
+	s.SelectRange(SelectionPoint{Line: 2, Col: 2}, SelectionPoint{Line: 4, Col: 4}, true)
+	for line := 2; line <= 4; line++ {
+		start, end := s.GetLineSelectionCols(line)
+		if start != 2 || end != 4 {
+			t.Fatalf("line %d columns = (%d,%d), want (2,4)", line, start, end)
+		}
+	}
+	got := s.SelectedText([]string{"abcdef", "ghijkl", "mnopqr"}, 2, 4)
+	want := []string{"cde", "ijk", "opq"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rectangular text = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectionExtendUsesStableAnchor(t *testing.T) {
+	s := newTestState()
+	s.SelectRange(SelectionPoint{Line: 10, Col: 5}, SelectionPoint{Line: 10, Col: 8}, false)
+	s.ExtendTo(SelectionPoint{Line: 8, Col: 2})
+	if s.Start != (SelectionPoint{Line: 8, Col: 2}) ||
+		s.End != (SelectionPoint{Line: 10, Col: 5}) {
+		t.Fatalf("extended range = %+v..%+v, want {8,2}..{10,5}", s.Start, s.End)
 	}
 }
 

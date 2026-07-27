@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"testing"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // TestGetMaxScrollOffset tests the unified max scroll offset calculation.
@@ -63,7 +65,7 @@ func TestGetMaxScrollOffset(t *testing.T) {
 				wt := &Worktree{
 					Name: "test",
 					Agent: &Agent{
-						OutputBuf: NewOutputBuffer(500),
+						OutputBuf: tty.NewOutputBuffer(500),
 					},
 				}
 				// Fill buffer with lines
@@ -100,7 +102,7 @@ func TestScrollToBottom(t *testing.T) {
 	wt := &Worktree{
 		Name: "test",
 		Agent: &Agent{
-			OutputBuf: NewOutputBuffer(500),
+			OutputBuf: tty.NewOutputBuffer(500),
 		},
 	}
 	// 100 lines of content
@@ -150,7 +152,7 @@ func TestScrollDirectionConsistency(t *testing.T) {
 				wt := &Worktree{
 					Name: "test",
 					Agent: &Agent{
-						OutputBuf: NewOutputBuffer(500),
+						OutputBuf: tty.NewOutputBuffer(500),
 					},
 				}
 				content := ""
@@ -247,7 +249,7 @@ func TestAutoScrollOutputDisabledOnManualScroll(t *testing.T) {
 	wt := &Worktree{
 		Name: "test",
 		Agent: &Agent{
-			OutputBuf: NewOutputBuffer(500),
+			OutputBuf: tty.NewOutputBuffer(500),
 		},
 	}
 	content := ""
@@ -282,7 +284,7 @@ func TestAutoScrollReenabledAtBottom(t *testing.T) {
 	wt := &Worktree{
 		Name: "test",
 		Agent: &Agent{
-			OutputBuf: NewOutputBuffer(500),
+			OutputBuf: tty.NewOutputBuffer(500),
 		},
 	}
 	content := ""
