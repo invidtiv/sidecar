@@ -386,10 +386,10 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// Without this, entering interactive mode creates a second poll chain that runs
 	// in parallel with the existing one, causing 200% CPU usage.
 	if p.shellSelected {
-		p.shellPollGeneration[sessionName]++
+		p.pollScheduler.Invalidate(shellPollKey(sessionName))
 	} else {
 		if wt := p.selectedWorktree(); wt != nil {
-			p.pollGeneration[wt.Name]++
+			p.pollScheduler.Invalidate(agentPollKey(wt.Name))
 		}
 	}
 
@@ -446,7 +446,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	// Invalidate the background poll chain so only the interactive poll loop runs.
 	// The interactive chain captures the same pane and updates termPanelOutput,
 	// so background polling is redundant during interactive mode.
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 	return p.pollInteractivePane()
 }
 
@@ -1289,22 +1289,21 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 	// Increment generation to invalidate stale timers from previous keystrokes,
 	// preventing poll chain accumulation during rapid typing.
 	if p.interactiveState.TermPanel {
-		p.termPanelGeneration++
+		p.pollScheduler.Invalidate(termPanelPollKey())
 		return p.scheduleTermPanelPoll(delay)
 	}
 
 	// Use shell or worktree polling mechanism based on current selection.
-	// IMPORTANT: Use the correct generation map for each type (td-97327e):
-	// - Shells use shellPollGeneration (checked by scheduleShellPollByName)
-	// - Worktrees use pollGeneration (checked by scheduleInteractivePoll)
+	// Shells and agents use separate scheduler keys, so restarting one poll
+	// chain cannot invalidate another pane with the same display name.
 	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
 		shellName := p.shells[p.selectedShellIdx].TmuxName
 		if shellName != "" {
-			p.shellPollGeneration[shellName]++
+			p.pollScheduler.Invalidate(shellPollKey(shellName))
 			return p.scheduleShellPollByName(shellName, delay)
 		}
 	} else if wt := p.selectedWorktree(); wt != nil {
-		p.pollGeneration[wt.Name]++
+		p.pollScheduler.Invalidate(agentPollKey(wt.Name))
 		return p.scheduleInteractivePoll(wt.Name, delay)
 	}
 

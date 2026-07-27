@@ -276,11 +276,13 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 				previewTab:       PreviewTabOutput,
 				selectedIdx:      0,
 				interactiveState: state,
-				pollGeneration:   map[string]int{"work": 4},
 				worktrees: []*Worktree{{
 					Name:  "work",
 					Agent: &Agent{OutputBuf: tty.NewOutputBuffer(10)},
 				}},
+			}
+			for range 4 {
+				p.pollScheduler.Invalidate(agentPollKey("work"))
 			}
 			before := *state
 

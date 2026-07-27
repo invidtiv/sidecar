@@ -536,7 +536,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the worktree was removed or reset since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if currentGen := p.pollGeneration[msg.WorkspaceName]; msg.Generation != currentGen {
+		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Skip polling while user is attached to session
@@ -878,7 +878,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case ShellKilledMsg:
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.shellPollGeneration[msg.SessionName]++
+		p.pollScheduler.Invalidate(shellPollKey(msg.SessionName))
 		// Shell session killed, remove from list
 		removedIdx := -1
 		for i, shell := range p.shells {
@@ -929,7 +929,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case ShellSessionDeadMsg:
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.shellPollGeneration[msg.TmuxName]++
+		p.pollScheduler.Invalidate(shellPollKey(msg.TmuxName))
 		// Shell session externally terminated (user typed 'exit' in shell)
 		// Remove the dead shell from the list
 		removedIdx := -1
@@ -1082,7 +1082,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the shell was removed since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if currentGen := p.shellPollGeneration[msg.TmuxName]; msg.Generation != currentGen {
+		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Poll specific shell session for output by name
@@ -1100,7 +1100,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case AgentStoppedMsg:
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
-		p.pollGeneration[msg.WorkspaceName]++
+		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
 			// Capture session name before clearing Agent (uses sanitized name like StartAgent)
 			sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
@@ -1602,7 +1602,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.scheduleTermPanelPoll(interval)
 
 	case termPanelPollMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible || msg.Generation != p.termPanelGeneration {
+		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
+			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
 			return p, nil // Stale timer or panel hidden
 		}
 		return p, p.handleTermPanelPoll(msg.SessionName)

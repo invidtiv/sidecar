@@ -163,8 +163,7 @@ type Plugin struct {
 	// Timer leak prevention (td-83dc22): generation counters to invalidate stale timers.
 	// When a timer fires, it checks if its captured generation matches the current one.
 	// If not, the timer is stale (worktree/shell was removed) and the msg is ignored.
-	pollGeneration      map[string]int // Per-worktree/shell poll generation counter
-	shellPollGeneration map[string]int // Per-shell poll generation counter
+	pollScheduler tty.KeyedScheduler // Namespaced agent/shell/panel poll generations
 
 	// Truncation cache to eliminate ANSI parser allocation churn
 	truncateCache *ui.TruncateCache
@@ -209,7 +208,6 @@ type Plugin struct {
 	termPanelOutput          *tty.OutputBuffer // Captured output from the terminal session
 	termPanelScroll          int               // Scroll offset in terminal panel output
 	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
-	termPanelGeneration      int               // Incremented on toggle to invalidate stale poll timers
 	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 
 	// File picker modal state (gf command)
@@ -401,8 +399,6 @@ func New() *Plugin {
 		agents:              make(map[string]*Agent),
 		managedSessions:     make(map[string]bool),
 		shells:              make([]*ShellSession, 0),
-		pollGeneration:      make(map[string]int),
-		shellPollGeneration: make(map[string]int),
 		viewMode:            ViewModeList,
 		activePane:          PaneSidebar,
 		previewTab:          PreviewTabOutput,
@@ -450,7 +446,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	// Reset agent-related state for clean reinit (important for project switching)
 	// Without this, reconnectAgents() won't run again after switching projects
@@ -461,8 +457,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.attachedSession = ""
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
-	p.pollGeneration = make(map[string]int)
-	p.shellPollGeneration = make(map[string]int)
+	p.pollScheduler.Reset()
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)

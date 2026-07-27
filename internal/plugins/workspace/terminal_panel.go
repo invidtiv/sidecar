@@ -115,7 +115,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	} else {
 		p.termPanelLayout = TermPanelBottom
 	}
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	sessionName := p.termPanelSessionName()
 	if sessionName == "" {
@@ -125,7 +125,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return nil
 	}
 
-	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout, "gen", p.termPanelGeneration)
+	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout, "gen", p.pollScheduler.Current(termPanelPollKey()))
 
 	// If we already have an active session for this, just show it
 	if p.termPanelSession == sessionName && p.termPanelOutput != nil {
@@ -210,11 +210,10 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 // scheduleTermPanelPoll schedules the next poll for the terminal panel output.
 func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
 	sessionName := p.termPanelSession
-	gen := p.termPanelGeneration
 	if sessionName == "" {
 		return nil
 	}
-	return tea.Tick(delay, func(t time.Time) tea.Msg {
+	return p.pollScheduler.Schedule(termPanelPollKey(), delay, func(gen int) tea.Msg {
 		return termPanelPollMsg{SessionName: sessionName, Generation: gen}
 	})
 }
@@ -592,7 +591,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		return nil
 	}
 	// Switch to new session (old session preserved for later reuse)
-	p.termPanelGeneration++
+	p.pollScheduler.Invalidate(termPanelPollKey())
 	p.termPanelSession = newSession
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
