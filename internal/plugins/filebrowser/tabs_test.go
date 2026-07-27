@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // createTabTestPlugin creates a test plugin with files for tab testing.
@@ -25,9 +26,9 @@ func createTabTestPlugin(t *testing.T, tmpDir string) *Plugin {
 	files := map[string]string{
 		"main.go":          "package main",
 		"README.md":        "# Test",
-		"src/main.go":      "package src",    // duplicate filename
+		"src/main.go":      "package src", // duplicate filename
 		"src/helper.go":    "package src",
-		"lib/helper.go":    "package lib",    // duplicate filename
+		"lib/helper.go":    "package lib", // duplicate filename
 		"pkg/util/util.go": "package util",
 	}
 	for path, content := range files {
@@ -589,5 +590,49 @@ func TestTabs_SyncTreeSelection(t *testing.T) {
 	// Tree should have cursor pointing to main.go
 	if node := p.tree.GetNode(p.treeCursor); node == nil || node.Path != "main.go" {
 		t.Errorf("expected tree cursor at main.go, got %v", node)
+	}
+}
+
+func TestEditorTabRestoreAndCleanupLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TEST_LOG", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := &Plugin{
+		inlineEditor: tty.New(nil),
+		tabs: []FileTab{{
+			Path:        "note.md",
+			EditSession: "editor-session",
+			EditEditor:  "nvim",
+		}},
+		activeTab: 0,
+	}
+	if !p.restoreEditStateFromTab() {
+		t.Fatal("live tab editor was not restored")
+	}
+	if !p.inlineEditMode || p.inlineEditSession != "editor-session" || p.inlineEditEditor != "nvim" {
+		t.Fatalf("restored editor state = mode:%v session:%q editor:%q",
+			p.inlineEditMode, p.inlineEditSession, p.inlineEditEditor)
+	}
+
+	p.cleanupAllEditSessions()
+	if p.inlineEditMode || p.inlineEditSession != "" || p.tabs[0].EditSession != "" {
+		t.Fatalf("cleanup retained editor state: mode:%v session:%q tab:%q",
+			p.inlineEditMode, p.inlineEditSession, p.tabs[0].EditSession)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(data), "kill-session -t editor-session"); count != 1 {
+		t.Fatalf("kill-session count = %d, want 1; log:\n%s", count, data)
 	}
 }

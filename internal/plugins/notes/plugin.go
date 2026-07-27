@@ -204,6 +204,11 @@ func (p *Plugin) Icon() string { return pluginIcon }
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	// Project switches normally call Stop first, but Init is defensive: kill
+	// any surviving editor and invalidate its autosave chain before replacing
+	// the store/context.
+	tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}.Kill()
+	p.resetInlineEditState()
 	p.ctx = ctx
 	p.notes = nil
 	p.cursor = 0
@@ -298,6 +303,9 @@ func (p *Plugin) Start() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	// Invalidate and clear editor/autosave state before closing the store. A
+	// queued tick from this project must not observe a later project's store.
+	p.exitInlineEditMode()
 	if p.store != nil {
 		_ = p.store.Close()
 		p.store = nil

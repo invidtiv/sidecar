@@ -119,12 +119,25 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 // exitInlineEditMode cleans up inline edit state and kills the tmux session.
 func (p *Plugin) exitInlineEditMode() {
 	tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}.Kill()
+	p.resetInlineEditState()
+}
+
+// resetInlineEditState invalidates all session-scoped state without touching
+// the note store. Stop uses it before closing a project store so an old timer
+// can never operate on the next project's store.
+func (p *Plugin) resetInlineEditState() {
 	p.inlineEditMode = false
 	p.inlineEditSession = ""
 	p.inlineEditNoteID = ""
 	p.inlineEditPath = ""
 	p.inlineEditEditor = ""
-	p.inlineEditor.Exit()
+	p.inlineEditorDragging = false
+	p.showExitConfirmation = false
+	p.pendingClickRegion = ""
+	p.pendingClickData = nil
+	if p.inlineEditor != nil {
+		p.inlineEditor.Exit()
+	}
 
 	// Reset auto-save state
 	p.inlineAutoSaveGen++

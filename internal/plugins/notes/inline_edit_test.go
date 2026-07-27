@@ -1,8 +1,14 @@
 package notes
 
 import (
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -236,4 +242,92 @@ func TestInlineEditorTtyConfig(t *testing.T) {
 	if m.Config.ScrollbackLines <= 0 {
 		t.Errorf("default ScrollbackLines = %d, want > 0", m.Config.ScrollbackLines)
 	}
+}
+
+func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
+	logPath := installNotesFakeTmux(t)
+
+	p := New()
+	p.inlineEditMode = true
+	p.inlineEditSession = "old-project-editor"
+	p.inlineEditNoteID = "old-note"
+	p.inlineEditPath = "/tmp/old-note"
+	p.inlineEditEditor = "nvim"
+	p.inlineLastSavedContent = "old"
+	p.inlineAutoSaveGen = 7
+	oldGeneration := p.inlineAutoSaveGen
+
+	p.Stop()
+
+	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" ||
+		p.inlineEditPath != "" || p.inlineEditEditor != "" || p.inlineLastSavedContent != "" {
+		t.Fatalf("Stop retained old-project inline state: %+v", p)
+	}
+	if p.inlineAutoSaveGen <= oldGeneration {
+		t.Fatalf("autosave generation = %d, want > %d", p.inlineAutoSaveGen, oldGeneration)
+	}
+	if _, cmd := p.Update(InlineAutoSaveTickMsg{Generation: oldGeneration}); cmd != nil {
+		t.Fatal("old-project autosave tick produced a command after Stop")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t old-project-editor") {
+		t.Fatalf("Stop did not kill editor session; log:\n%s", data)
+	}
+}
+
+func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
+	installNotesFakeTmux(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".todos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.inlineEditMode = true
+	p.inlineEditSession = "old-project-editor"
+	p.inlineEditNoteID = "old-note"
+	p.inlineEditPath = "/tmp/old-note"
+	p.inlineEditEditor = "vim"
+	p.inlineAutoSaveGen = 11
+	oldGeneration := p.inlineAutoSaveGen
+	ctx := &plugin.Context{
+		WorkDir:     root,
+		ProjectRoot: root,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Epoch:       2,
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if p.store == nil {
+		t.Fatal("new project store was not initialized")
+	}
+	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" || p.inlineEditPath != "" {
+		t.Fatal("Init retained old-project inline editor state")
+	}
+	if p.inlineAutoSaveGen <= oldGeneration {
+		t.Fatalf("Init autosave generation = %d, want > %d", p.inlineAutoSaveGen, oldGeneration)
+	}
+	if _, cmd := p.Update(InlineAutoSaveTickMsg{Generation: oldGeneration}); cmd != nil {
+		t.Fatal("old-project autosave tick reached new project store")
+	}
+}
+
+func installNotesFakeTmux(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TEST_LOG", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }
