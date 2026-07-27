@@ -128,6 +128,13 @@ type Plugin struct {
 	width   int
 	height  int
 
+	// Persistent tmux control-mode transport for visible terminal surfaces.
+	controlManager     workspaceControlManager
+	controlMailbox     *workspaceControlMailbox
+	controlConsumers   map[workspaceControlRole]*workspaceControlConsumer
+	controlNextToken   uint64
+	applicationFocused bool
+
 	// Worktree state
 	worktrees []*Worktree
 	agents    map[string]*Agent
@@ -419,6 +426,7 @@ func New() *Plugin {
 		shellSelected:       false, // Start with first worktree selected, not shell
 		typeSelectorIdx:     1,     // Default to Worktree option
 		taskLoading:         false, // Explicitly initialized (td-3668584f)
+		applicationFocused:  true,
 	}
 }
 
@@ -445,7 +453,12 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	p.stopTerminalControls()
 	p.ctx = ctx
+	p.controlManager = tty.NewControlManager()
+	p.controlMailbox = newWorkspaceControlMailbox()
+	p.controlConsumers = make(map[workspaceControlRole]*workspaceControlConsumer)
+	p.applicationFocused = true
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
@@ -583,6 +596,7 @@ func (p *Plugin) Start() tea.Cmd {
 
 	// Start shell manifest watcher for cross-instance sync (td-f88fdd)
 	cmds = append(cmds, p.startShellWatcher())
+	cmds = append(cmds, p.listenForTerminalControl())
 
 	return tea.Batch(cmds...)
 }
@@ -620,6 +634,7 @@ func (p *Plugin) listenForShellManifestChanges() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	p.stopTerminalControls()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
 

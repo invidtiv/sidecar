@@ -213,6 +213,9 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 
 // scheduleTermPanelPoll schedules the next poll for the terminal panel output.
 func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
+	if p.terminalControlUsing(workspaceControlPanel) {
+		return nil
+	}
 	sessionName := p.termPanelSession
 	if sessionName == "" {
 		return nil
@@ -226,6 +229,9 @@ func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
 // Uses the global capture cache/coordinator to avoid redundant subprocess calls.
 // When interactive mode targets the terminal panel, also captures cursor position.
 func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd {
+	if p.terminalControlUsing(workspaceControlPanel) {
+		return nil
+	}
 	captureCursor := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
 	if captureCursor {
 		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {

@@ -19,6 +19,9 @@ type ControlSnapshot struct {
 	Session       string
 	Pane          string
 	Output        string
+	HistorySize   int
+	CaptureBase   int
+	HasHistory    bool
 	CursorRow     int
 	CursorCol     int
 	CursorVisible bool
@@ -671,14 +674,14 @@ func (c *sessionControlClient) startCapture(pane string) {
 
 	metadataCommand, captureCommand, err := buildControlCaptureCommands(pane, scrollback)
 	if err != nil {
-		c.captureFinished(pane, controlResponse{Err: err})
+		c.captureFinished(pane, scrollback, controlResponse{Err: err})
 		return
 	}
 	var responseMu sync.Mutex
 	var metadata controlResponse
 	var finished sync.Once
 	finish := func(response controlResponse) {
-		finished.Do(func() { c.captureFinished(pane, response) })
+		finished.Do(func() { c.captureFinished(pane, scrollback, response) })
 	}
 	if err := c.channel.Send(metadataCommand, func(response controlResponse) {
 		responseMu.Lock()
@@ -710,12 +713,12 @@ func (c *sessionControlClient) startCapture(pane string) {
 	}
 }
 
-func (c *sessionControlClient) captureFinished(pane string, response controlResponse) {
+func (c *sessionControlClient) captureFinished(pane string, scrollback int, response controlResponse) {
 	if response.Err != nil {
 		c.manager.clientFailed(c, response.Err)
 		return
 	}
-	snapshot, err := parseControlSnapshot(c.session, pane, response.Lines)
+	snapshot, err := parseControlSnapshot(c.session, pane, scrollback, response.Lines)
 	if err != nil {
 		c.manager.clientFailed(c, err)
 		return
@@ -819,30 +822,38 @@ func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture
 		scrollback = 600
 	}
 	metadata = "display-message -p -t " + pane +
-		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}'"
+		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size}'"
 	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, capture, nil
 }
 
-func parseControlSnapshot(session, pane string, lines []string) (ControlSnapshot, error) {
+func parseControlSnapshot(session, pane string, scrollback int, lines []string) (ControlSnapshot, error) {
 	if len(lines) == 0 {
 		return ControlSnapshot{}, errors.New("tmux control capture: missing cursor metadata")
 	}
 	parts := strings.Split(strings.TrimSpace(lines[0]), ",")
-	if len(parts) != 5 {
+	if len(parts) != 6 {
 		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
 	}
 	col, errCol := strconv.Atoi(parts[0])
 	row, errRow := strconv.Atoi(parts[1])
 	height, errHeight := strconv.Atoi(parts[3])
 	width, errWidth := strconv.Atoi(parts[4])
-	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil {
+	historySize, errHistory := strconv.Atoi(parts[5])
+	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil ||
+		errHistory != nil || historySize < 0 {
 		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
+	}
+	if scrollback <= 0 {
+		scrollback = 600
 	}
 	return ControlSnapshot{
 		Session:       session,
 		Pane:          pane,
 		Output:        strings.Join(lines[1:], "\n"),
+		HistorySize:   historySize,
+		CaptureBase:   max(historySize-scrollback, 0),
+		HasHistory:    true,
 		CursorRow:     row,
 		CursorCol:     col,
 		CursorVisible: parts[2] != "0",

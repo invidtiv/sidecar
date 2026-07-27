@@ -78,7 +78,7 @@ func (f *fakeControlChannel) respondCapture(index int, response controlResponse)
 	if index >= len(metadata) || index >= len(captures) {
 		return false
 	}
-	metaLines := []string{"0,0,1,24,80"}
+	metaLines := []string{"0,0,1,24,80,0"}
 	captureResponse := response
 	if len(response.Lines) > 0 {
 		metaLines = response.Lines[:1]
@@ -221,7 +221,7 @@ func TestControlManagerNotificationCaptureCoalescingAndFocusGate(t *testing.T) {
 	})
 
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 1 })
-	channel.respondCapture(0, controlResponse{Lines: []string{"4,2,1,24,80", "initial"}})
+	channel.respondCapture(0, controlResponse{Lines: []string{"4,2,1,24,80,700", "initial"}})
 	waitFor(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -240,9 +240,9 @@ func TestControlManagerNotificationCaptureCoalescingAndFocusGate(t *testing.T) {
 	if got := channel.commandCountContaining("capture-pane"); got != 2 {
 		t.Fatalf("in-flight burst spawned %d captures, want 2", got)
 	}
-	channel.respondCapture(1, controlResponse{Lines: []string{"5,3,1,24,80", "burst"}})
+	channel.respondCapture(1, controlResponse{Lines: []string{"5,3,1,24,80,700", "burst"}})
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 3 })
-	channel.respondCapture(2, controlResponse{Lines: []string{"6,4,1,24,80", "follow-up"}})
+	channel.respondCapture(2, controlResponse{Lines: []string{"6,4,1,24,80,700", "follow-up"}})
 
 	manager.SetAppFocused(false)
 	channel.events <- controlEvent{Kind: controlEventOutput, Pane: "%1"}
@@ -257,7 +257,8 @@ func TestControlManagerNotificationCaptureCoalescingAndFocusGate(t *testing.T) {
 	first := snapshots[0]
 	mu.Unlock()
 	if first.Output != "initial" || first.CursorRow != 2 || first.CursorCol != 4 ||
-		first.PaneHeight != 24 || first.PaneWidth != 80 || first.Generation != 1 {
+		first.PaneHeight != 24 || first.PaneWidth != 80 || first.Generation != 1 ||
+		!first.HasHistory || first.HistorySize != 700 || first.CaptureBase != 100 {
 		t.Fatalf("snapshot = %#v", first)
 	}
 }
@@ -343,7 +344,7 @@ func TestControlManagerDropsStaleGenerationAndStopsIdempotently(t *testing.T) {
 	if newChannel == oldChannel {
 		t.Fatal("visibility teardown did not replace unused session client")
 	}
-	oldChannel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80", "stale"}})
+	oldChannel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0", "stale"}})
 	time.Sleep(5 * time.Millisecond)
 	if delivered != 0 {
 		t.Fatal("stale generation delivered a snapshot")
@@ -394,7 +395,7 @@ func TestControlManagerRevalidatesQueuedDeliveriesAfterClose(t *testing.T) {
 
 	responseDone := make(chan struct{})
 	go func() {
-		channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80", "screen"}})
+		channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0", "screen"}})
 		close(responseDone)
 	}()
 	var active, queued *ControlSubscription
@@ -459,7 +460,7 @@ func TestControlManagerStopInvalidatesInFlightCapture(t *testing.T) {
 	})
 
 	manager.Stop()
-	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80", "late"}})
+	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0", "late"}})
 	callbackMu.Lock()
 	defer callbackMu.Unlock()
 	if callbacks != 0 {
@@ -482,7 +483,7 @@ func TestControlClientContinuesPausedPaneAndCapturesLayoutChange(t *testing.T) {
 		return channel != nil
 	})
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 1 })
-	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80"}})
+	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0"}})
 
 	channel.events <- controlEvent{Kind: controlEventPause, Pane: "%7"}
 	waitFor(t, func() bool { return channel.commandCountContaining("refresh-client -A %7:continue") == 1 })
@@ -501,14 +502,15 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 	if _, _, err := buildControlCaptureCommands("name; kill-server", 10); err == nil {
 		t.Fatal("unsafe pane target accepted")
 	}
-	snapshot, err := parseControlSnapshot("session", "%12", []string{
-		"9,4,0,30,100", "line one", "%output %12 pane content",
+	snapshot, err := parseControlSnapshot("session", "%12", 900, []string{
+		"9,4,0,30,100,1250", "line one", "%output %12 pane content",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.Output != "line one\n%output %12 pane content" ||
-		snapshot.CursorVisible || snapshot.CursorCol != 9 || snapshot.CursorRow != 4 {
+		snapshot.CursorVisible || snapshot.CursorCol != 9 || snapshot.CursorRow != 4 ||
+		!snapshot.HasHistory || snapshot.HistorySize != 1250 || snapshot.CaptureBase != 350 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

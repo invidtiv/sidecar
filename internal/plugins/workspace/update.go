@@ -16,8 +16,9 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 )
 
-// Update handles messages.
-func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+// update handles messages. The public Update wrapper in terminal_control.go
+// reconciles persistent terminal subscriptions after every state transition.
+func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -1652,7 +1653,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			interval = termPanelPollActive
 		}
 		// Slow down when plugin is not focused
-		if !p.focused && interval < termPanelPollUnfocus {
+		if !p.applicationFocused {
+			interval = pollIntervalUnfocused
+		} else if !p.focused && interval < termPanelPollUnfocus {
 			interval = termPanelPollUnfocus
 		}
 		return p, p.scheduleTermPanelPoll(interval)
