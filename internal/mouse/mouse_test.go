@@ -179,6 +179,21 @@ func TestHandler_DoubleClick(t *testing.T) {
 	}
 }
 
+func TestHandler_ClickCountIncludesModifiers(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("btn", Rect{X: 0, Y: 0, W: 10, H: 10}, nil)
+
+	if got := h.handleClickWithModifiers(5, 5, false, false); got.ClickCount != 1 {
+		t.Fatalf("plain click count = %d, want 1", got.ClickCount)
+	}
+	if got := h.handleClickWithModifiers(5, 5, true, false); got.ClickCount != 1 || got.IsDoubleClick {
+		t.Fatalf("plain→Shift click was combined: %#v", got)
+	}
+	if got := h.handleClickWithModifiers(5, 5, false, true); got.ClickCount != 1 || got.IsDoubleClick {
+		t.Fatalf("Shift→Alt click was combined: %#v", got)
+	}
+}
+
 func TestHandler_DragLifecycle(t *testing.T) {
 	h := NewHandler()
 

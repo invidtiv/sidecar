@@ -113,7 +113,9 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	if action.Region == nil {
 		return nil
 	}
-	p.selectionTermPanel = action.Region.ID == regionTermPanelContent
+	targetTermPanel := action.Region.ID == regionTermPanelContent
+	canExtend := action.Shift && p.selection.HasSelection() && p.selectionTermPanel == targetTermPanel
+	p.selectionTermPanel = targetTermPanel
 	// Set ViewRect before charAtXY so interactiveLineIndexAtY can use it.
 	p.selection.ViewRect = action.Region.Rect
 
@@ -126,7 +128,7 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	if p.selectionTermPanel {
 		p.termPanelSelectionOffset = p.terminalSelectionViewportLayout().Start
 	}
-	if action.Shift && p.selection.HasSelection() {
+	if canExtend {
 		p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
 		return nil
 	}
@@ -134,8 +136,6 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	if p.selectionTermPanel {
 		// The absolute viewport start above freezes the panel while selecting.
 		// Do not disturb the independent agent/shell follow state.
-	} else {
-		p.autoScrollOutput = false
 	}
 
 	p.mouseHandler.StartDrag(action.X, action.Y, regionPreviewPane, lineIdx)
@@ -149,6 +149,9 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 	}
 
 	p.selection.HandleDrag(lineIdx, col)
+	if !p.selectionTermPanel {
+		p.autoScrollOutput = false
+	}
 	return nil
 }
 
@@ -291,28 +294,56 @@ func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	plain := ansi.Strip(ui.ExpandTabs(line, tabStopWidth))
-	left, right := point.Col, point.Col
 	isWord := func(r rune) bool {
 		return r == '_' || r == '-' || r == '.' || r == '/' || r == ':' ||
 			r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 	}
-	runes := []rune(plain)
-	if len(runes) == 0 {
+	type visualToken struct {
+		text       string
+		start, end int
+	}
+	var tokens []visualToken
+	state := ansi.NormalState
+	col := 0
+	remaining := plain
+	for len(remaining) > 0 {
+		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
+		if n <= 0 {
+			break
+		}
+		if width > 0 {
+			tokens = append(tokens, visualToken{text: seq, start: col, end: col + width})
+			col += width
+		}
+		state = newState
+		remaining = remaining[n:]
+	}
+	if len(tokens) == 0 {
 		return nil
 	}
-	left = min(left, len(runes)-1)
-	right = left
-	if isWord(runes[left]) {
-		for left > 0 && isWord(runes[left-1]) {
+	index := len(tokens) - 1
+	for i, token := range tokens {
+		if point.Col < token.end {
+			index = i
+			break
+		}
+	}
+	left, right := index, index
+	tokenWord := func(token visualToken) bool {
+		runes := []rune(token.text)
+		return len(runes) > 0 && isWord(runes[0])
+	}
+	if tokenWord(tokens[index]) {
+		for left > 0 && tokenWord(tokens[left-1]) {
 			left--
 		}
-		for right+1 < len(runes) && isWord(runes[right+1]) {
+		for right+1 < len(tokens) && tokenWord(tokens[right+1]) {
 			right++
 		}
 	}
 	p.selection.SelectRange(
-		ui.SelectionPoint{Line: point.Line, Col: left},
-		ui.SelectionPoint{Line: point.Line, Col: right},
+		ui.SelectionPoint{Line: point.Line, Col: tokens[left].start},
+		ui.SelectionPoint{Line: point.Line, Col: tokens[right].end - 1},
 		false,
 	)
 	if p.copyOnSelectEnabled() {

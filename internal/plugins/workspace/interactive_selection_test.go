@@ -753,3 +753,67 @@ func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
 		t.Fatalf("extended selection = %+v..%+v", p.selection.Start, p.selection.End)
 	}
 }
+
+func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
+	p := newSelectionTestPlugin()
+	p.autoScrollOutput = true
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("follow me")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	p.prepareInteractiveDrag(actionAt(2, 4))
+	p.finishInteractiveSelection()
+	if !p.autoScrollOutput {
+		t.Fatal("click without drag disabled follow mode")
+	}
+}
+
+func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
+	p := New()
+	p.width = 80
+	p.height = 20
+	p.viewMode = ViewModeList
+	p.termPanelVisible = true
+	p.termPanelOutput = testTerminalBuffer("panel zero\npanel one")
+	p.selectionTermPanel = false
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 10, Col: 1},
+		ui.SelectionPoint{Line: 10, Col: 3},
+		false,
+	)
+	action := mouse.MouseAction{
+		Type:  mouse.ActionClick,
+		X:     12,
+		Y:     6,
+		Shift: true,
+		Region: &mouse.Region{
+			ID:   regionTermPanelContent,
+			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
+		},
+	}
+	p.prepareInteractiveDrag(action)
+	if p.selection.HasSelection() {
+		t.Fatalf("agent selection was extended into panel coordinates: %+v..%+v",
+			p.selection.Start, p.selection.End)
+	}
+	if !p.selectionTermPanel || !p.selection.Anchor.Valid() {
+		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
+			p.selectionTermPanel, p.selection.Anchor)
+	}
+}
+
+func TestWordSelectionMapsVisualColumnAfterWideGlyph(t *testing.T) {
+	p := newSelectionTestPlugin()
+	buf := tty.NewOutputBuffer(100)
+	buf.Write("界 foo bar")
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
+	p.selectedShellIdx = 0
+
+	p.selectTerminalWord(actionAt(3, 4))
+	if got := p.interactiveSelectionLines(); !slices.Equal(got, []string{"foo"}) {
+		t.Fatalf("wide-glyph word selection = %#v, want foo", got)
+	}
+}

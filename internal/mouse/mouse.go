@@ -80,6 +80,8 @@ type Handler struct {
 	lastClickTime   time.Time
 	lastClickRegion string
 	lastClickCount  int
+	lastClickShift  bool
+	lastClickAlt    bool
 
 	// Drag tracking
 	dragging       bool
@@ -107,6 +109,10 @@ type ClickResult struct {
 // HandleClick processes a mouse click and returns the hit region.
 // Tracks click timing for double-click detection.
 func (h *Handler) HandleClick(x, y int) ClickResult {
+	return h.handleClickWithModifiers(x, y, false, false)
+}
+
+func (h *Handler) handleClickWithModifiers(x, y int, shift, alt bool) ClickResult {
 	region := h.HitMap.Test(x, y)
 
 	result := ClickResult{Region: region}
@@ -117,6 +123,7 @@ func (h *Handler) HandleClick(x, y int) ClickResult {
 		now := time.Now()
 		if region.ID == h.lastClickRegion &&
 			x == h.lastClickX && y == h.lastClickY &&
+			shift == h.lastClickShift && alt == h.lastClickAlt &&
 			now.Sub(h.lastClickTime) < 400*time.Millisecond {
 			h.lastClickCount++
 		} else {
@@ -134,6 +141,8 @@ func (h *Handler) HandleClick(x, y int) ClickResult {
 			h.lastClickTime = now
 			h.lastClickX = x
 			h.lastClickY = y
+			h.lastClickShift = shift
+			h.lastClickAlt = alt
 		}
 	}
 
@@ -189,7 +198,7 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 		if m.Button == tea.MouseLeft {
 			shift := m.Mod.Contains(tea.ModShift)
 			alt := m.Mod.Contains(tea.ModAlt)
-			result := h.HandleClick(m.X, m.Y)
+			result := h.handleClickWithModifiers(m.X, m.Y, shift, alt)
 			if result.Region == nil {
 				return MouseAction{Type: ActionNone}
 			}
