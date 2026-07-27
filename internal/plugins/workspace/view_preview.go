@@ -205,12 +205,15 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	truncateHint := func(value string) string {
 		return p.truncateCache.Truncate(ui.ExpandTabs(value, tabStopWidth), width, "")
 	}
+	truncateEmpty := func(value string) string {
+		return p.truncateCache.Truncate(ui.ExpandTabs(dimText(value), tabStopWidth), width, "")
+	}
 	height-- // Reserve one line for the hint.
 	if height < 1 {
 		return truncateHint(hint)
 	}
 	if buffer == nil || buffer.LineCount() == 0 {
-		return truncateHint(hint) + "\n" + dimText(emptyText)
+		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
 	}
 
 	interactive := p.viewMode == ViewModeInteractive &&
@@ -254,7 +257,7 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		PaneWidth:        paneWidth,
 	}, p.truncateCache)
 	if result.Content == "" {
-		return truncateHint(hint) + "\n" + dimText(emptyText)
+		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
 	}
 	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))

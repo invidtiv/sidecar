@@ -557,7 +557,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			wt.Agent.RecordPollTime()
 		}
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
@@ -605,7 +606,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
@@ -650,7 +652,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected {
+		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				// Use cursor position captured atomically with output
@@ -1004,7 +1007,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			shell.Agent.LastOutput = time.Now()
 		}
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && p.shellSelected {
+		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
@@ -1049,7 +1053,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && p.shellSelected {
+		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)

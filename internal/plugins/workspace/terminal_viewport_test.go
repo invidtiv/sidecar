@@ -225,3 +225,163 @@ func TestTerminalPanelSelectionMapsFromPanelViewport(t *testing.T) {
 		t.Fatalf("mapped line = %d, want viewport start %d", line, layout.Start)
 	}
 }
+
+func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{
+			name: "changed output",
+			msg: AgentOutputMsg{
+				WorkspaceName: "work",
+				Output:        "\x1b[?2004l\x1b[?1000l",
+				Status:        StatusActive,
+				HasCursor:     true,
+				CursorRow:     1,
+				CursorCol:     2,
+				PaneHeight:    10,
+				PaneWidth:     20,
+			},
+		},
+		{
+			name: "unchanged output",
+			msg: AgentPollUnchangedMsg{
+				WorkspaceName: "work",
+				CurrentStatus: StatusActive,
+				HasCursor:     true,
+				CursorRow:     1,
+				CursorCol:     2,
+				PaneHeight:    10,
+				PaneWidth:     20,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &InteractiveState{
+				Active:                true,
+				TermPanel:             true,
+				BracketedPasteEnabled: true,
+				MouseReportingEnabled: true,
+				CursorRow:             8,
+				CursorCol:             9,
+				PaneHeight:            30,
+				PaneWidth:             90,
+			}
+			p := &Plugin{
+				focused:          true,
+				viewMode:         ViewModeInteractive,
+				previewTab:       PreviewTabOutput,
+				selectedIdx:      0,
+				interactiveState: state,
+				pollGeneration:   map[string]int{"work": 4},
+				worktrees: []*Worktree{{
+					Name:  "work",
+					Agent: &Agent{OutputBuf: tty.NewOutputBuffer(10)},
+				}},
+			}
+			before := *state
+
+			_, cmd := p.Update(tt.msg)
+			if *state != before {
+				t.Fatalf("agent update overwrote terminal-panel modes: got %+v want %+v", *state, before)
+			}
+			if cmd == nil {
+				t.Fatal("agent update did not schedule a continuation")
+			}
+			result := cmd()
+			poll, ok := result.(pollAgentMsg)
+			if !ok {
+				t.Fatalf("continuation = %T, want pollAgentMsg (terminal panel poll hijacked agent chain)", result)
+			}
+			if poll.WorkspaceName != "work" || poll.Generation != 4 {
+				t.Fatalf("agent continuation = %+v", poll)
+			}
+		})
+	}
+}
+
+func TestBottomSplitDimensionsMatchRenderedTerminalContent(t *testing.T) {
+	for _, shellSelected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "worktree", true: "shell"}[shellSelected], func(t *testing.T) {
+			p := &Plugin{
+				width:            100,
+				height:           30,
+				shellSelected:    shellSelected,
+				termPanelVisible: true,
+				termPanelLayout:  TermPanelBottom,
+				termPanelSize:    50,
+			}
+			_, previewContentHeight := p.calculatePreviewDimensions()
+			containerHeight := previewContentHeight + 1
+			termBoxHeight := containerHeight * p.termPanelEffectiveSize() / 100
+			outputBoxHeight := containerHeight - termBoxHeight - 1
+
+			_, gotTermHeight := p.calculateTermPanelDimensions()
+			_, gotOutputHeight := p.calculateAgentPaneDimensions()
+			if gotTermHeight != termBoxHeight-1 {
+				t.Fatalf("terminal content height = %d, rendered child content = %d", gotTermHeight, termBoxHeight-1)
+			}
+			if gotOutputHeight != outputBoxHeight-1 {
+				t.Fatalf("output content height = %d, rendered child content = %d", gotOutputHeight, outputBoxHeight-1)
+			}
+		})
+	}
+}
+
+func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
+	panel := testTerminalBuffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9")
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		width:            80,
+		height:           20,
+		viewMode:         ViewModeInteractive,
+		autoScrollOutput: true,
+		termPanelVisible: true,
+		termPanelOutput:  panel,
+		mouseHandler:     handler,
+		interactiveState: &InteractiveState{Active: true, TermPanel: true},
+	}
+	rect := mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
+	action := mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		X:      rect.X,
+		Y:      rect.Y + 1,
+		Region: &mouse.Region{ID: regionTermPanelContent, Rect: rect},
+	}
+
+	p.prepareInteractiveDrag(action)
+	if !p.selection.Anchor.Valid() {
+		t.Fatal("panel selection did not establish an anchor")
+	}
+	if !p.autoScrollOutput {
+		t.Fatal("panel selection disabled independent agent auto-follow")
+	}
+	if p.termPanelScroll == 0 {
+		t.Fatal("panel selection left panel in live-follow mode")
+	}
+}
+
+func TestTerminalEmptyStatesRespectNarrowWidth(t *testing.T) {
+	cache := ui.NewTruncateCache(32)
+	p := &Plugin{
+		selectedIdx:   0,
+		truncateCache: cache,
+		worktrees: []*Worktree{{
+			Agent: &Agent{},
+		}},
+	}
+
+	for name, content := range map[string]string{
+		"agent": p.renderOutputContent(5, 3),
+		"panel": p.renderTermPanelOutput(5, 3),
+	} {
+		for _, line := range strings.Split(content, "\n") {
+			if width := ansi.StringWidth(line); width > 5 {
+				t.Fatalf("%s empty-state width = %d, want <= 5: %q", name, width, line)
+			}
+		}
+	}
+}

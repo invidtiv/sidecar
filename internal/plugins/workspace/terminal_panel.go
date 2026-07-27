@@ -291,11 +291,15 @@ func (p *Plugin) calculateTermPanelDimensions() (width, height int) {
 		return termWidth, previewHeight
 	}
 	// Bottom layout
-	termHeight := previewHeight * size / 100
-	if termHeight < 3 {
-		termHeight = 3
+	// previewHeight excludes the main pane's hint. The split renderer divides
+	// the container that includes both child hints, then each child renderer
+	// reserves its own hint row before terminal content is drawn.
+	containerHeight := previewHeight + 1
+	termBoxHeight := containerHeight * size / 100
+	if termBoxHeight < 3 {
+		termBoxHeight = 3
 	}
-	return previewWidth, termHeight
+	return previewWidth, max(termBoxHeight-1, 1)
 }
 
 // calculateAgentPaneDimensions returns the width and height for the agent
@@ -324,19 +328,20 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 		return outputWidth, previewHeight
 	}
 	// Bottom layout
-	termHeight := previewHeight * size / 100
-	if termHeight < 3 {
-		termHeight = 3
+	containerHeight := previewHeight + 1
+	termBoxHeight := containerHeight * size / 100
+	if termBoxHeight < 3 {
+		termBoxHeight = 3
 	}
-	outputHeight := previewHeight - termHeight - 1 // -1 for divider
-	if outputHeight < 3 {
-		outputHeight = 3
+	outputBoxHeight := containerHeight - termBoxHeight - 1 // -1 for divider
+	if outputBoxHeight < 3 {
+		outputBoxHeight = 3
 	}
 	// If both minimums exceed available height, fall back to full preview
-	if outputHeight+termHeight+1 > previewHeight {
+	if outputBoxHeight+termBoxHeight+1 > containerHeight {
 		return previewWidth, previewHeight
 	}
-	return previewWidth, outputHeight
+	return previewWidth, max(outputBoxHeight-1, 1)
 }
 
 func (p *Plugin) termPanelMaxScroll() int {
@@ -390,10 +395,11 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	hint := p.termPanelHintLine()
 	if p.termPanelOutput == nil {
 		hint = p.truncateCache.Truncate(ui.ExpandTabs(hint, tabStopWidth), width, "")
+		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
 		if height <= 1 {
 			return hint
 		}
-		return hint + "\n" + dimText("Starting terminal...")
+		return hint + "\n" + empty
 	}
 	return p.renderCapturedTerminal(hint, p.termPanelOutput, width, height, true, "Terminal ready")
 }

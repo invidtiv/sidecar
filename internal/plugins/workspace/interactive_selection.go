@@ -114,7 +114,13 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	}
 
 	p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
-	p.autoScrollOutput = false
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		// Stop following the live panel while the user establishes a local
+		// selection. Do not disturb the independent agent/shell follow state.
+		p.termPanelScroll = max(p.termPanelScroll, 1)
+	} else {
+		p.autoScrollOutput = false
+	}
 
 	p.mouseHandler.StartDrag(action.X, action.Y, regionPreviewPane, lineIdx)
 	return nil
