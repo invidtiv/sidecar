@@ -1043,12 +1043,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollSidebar(delta)
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
-		if delta < 0 {
-			p.termPanelScroll++
-		} else {
-			if p.termPanelScroll > 0 {
-				p.termPanelScroll--
-			}
+		p.termPanelScroll -= delta
+		if p.termPanelScroll < 0 {
+			p.termPanelScroll = 0
 		}
 		return nil
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:

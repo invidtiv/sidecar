@@ -1508,6 +1508,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case interactiveClickSentMsg:
 		if p.interactiveState == nil || !p.interactiveState.Active ||
+			p.interactiveState != msg.Interaction ||
 			p.interactiveState.TargetSession != msg.SessionName {
 			break
 		}

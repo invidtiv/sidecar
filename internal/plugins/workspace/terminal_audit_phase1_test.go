@@ -88,6 +88,20 @@ func TestHandleMouseScrollHonorsFullWheelDelta(t *testing.T) {
 	}
 }
 
+func TestHandleMouseScrollHonorsFullWheelDeltaInTerminalPanel(t *testing.T) {
+	p := &Plugin{viewMode: ViewModeList, termPanelScroll: 10}
+	region := &mouse.Region{ID: regionTermPanelContent}
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -3, Region: region})
+	if p.termPanelScroll != 13 {
+		t.Fatalf("termPanelScroll = %d, want 13 after Delta -3", p.termPanelScroll)
+	}
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 3, Region: region})
+	if p.termPanelScroll != 10 {
+		t.Fatalf("termPanelScroll = %d, want 10 after Delta +3", p.termPanelScroll)
+	}
+}
+
 func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.previewOffset = 20
@@ -120,12 +134,33 @@ func TestForwardClickCommandDoesNotMutateExitedInteractiveState(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected click forwarding command")
 	}
+	oldInteraction := p.interactiveState
 	p.exitInteractiveMode()
 
 	msg := cmd() // Regression: this used to dereference p.interactiveState here.
 	result, ok := msg.(interactiveClickSentMsg)
-	if !ok || result.Err != nil {
+	if !ok || result.Err != nil || result.Interaction != oldInteraction {
 		t.Fatalf("click command result = %#v, want successful interactiveClickSentMsg", msg)
+	}
+
+	// Re-entering the same session must not let the old result mutate the new
+	// interaction merely because the tmux target name matches.
+	newKeyTime := time.Unix(123, 0)
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{
+		Active:        true,
+		TargetSession: oldInteraction.TargetSession,
+		LastKeyTime:   newKeyTime,
+	}
+	_, _ = p.Update(result)
+	if !p.interactiveState.LastKeyTime.Equal(newKeyTime) {
+		t.Fatal("stale click success updated a newly entered interaction")
+	}
+	staleErr := result
+	staleErr.Err = os.ErrClosed
+	_, _ = p.Update(staleErr)
+	if p.interactiveState == nil || !p.interactiveState.Active {
+		t.Fatal("stale click error exited a newly entered interaction")
 	}
 }
 

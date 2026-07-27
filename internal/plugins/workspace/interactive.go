@@ -1283,7 +1283,8 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 	if !p.interactiveState.MouseReportingEnabled {
 		return nil
 	}
-	sessionName := p.interactiveState.TargetSession
+	interaction := p.interactiveState
+	sessionName := interaction.TargetSession
 	col, row, ok := p.interactiveMouseCoords(x, y)
 	if !ok {
 		return nil
@@ -1291,12 +1292,12 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 
 	return func() tea.Msg {
 		if err := sendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			return interactiveClickSentMsg{SessionName: sessionName, Err: err}
+			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
 		}
 		if err := sendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			return interactiveClickSentMsg{SessionName: sessionName, Err: err}
+			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
 		}
-		return interactiveClickSentMsg{SessionName: sessionName}
+		return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction}
 	}
 }
 

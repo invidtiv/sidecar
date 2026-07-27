@@ -244,6 +244,7 @@ type paneResizedMsg struct{}
 // event loop, where interactive state may be mutated safely.
 type interactiveClickSentMsg struct {
 	SessionName string
+	Interaction *InteractiveState
 	Err         error
 }
 
