@@ -101,6 +101,19 @@ func TestViewRejectsOutOfBoundsPluginCursor(t *testing.T) {
 	}
 }
 
+func TestViewSuppressesPluginCursorForTooSmallWarning(t *testing.T) {
+	p := &nativeTestPlugin{
+		focused: true,
+		cursor:  tea.NewCursor(2, 3),
+		mouse:   tea.MouseModeCellMotion,
+	}
+	m := nativeTestModel(t, p)
+	m.width = minWidth - 1
+	if got := m.View().Cursor; got != nil {
+		t.Fatalf("too-small warning cursor = %#v, want nil", got)
+	}
+}
+
 func TestFocusAndBlurUpdateStateAndReachAllPlugins(t *testing.T) {
 	first := &nativeTestPlugin{focused: true}
 	second := &nativeTestPlugin{}

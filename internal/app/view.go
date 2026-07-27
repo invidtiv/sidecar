@@ -70,7 +70,8 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 }
 
 func (m Model) pluginCursor() *tea.Cursor {
-	if !m.ready || !m.applicationFocused || m.hasModal() {
+	if !m.ready || !m.applicationFocused || m.hasModal() ||
+		m.width < minWidth || m.height < minHeight {
 		return nil
 	}
 	active := m.ActivePlugin()
