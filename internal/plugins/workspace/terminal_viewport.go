@@ -170,7 +170,9 @@ func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool
 	} else if in.PaneHeight > 0 && in.PaneHeight < visibleRows {
 		y += visibleRows - in.PaneHeight
 	}
-	y = min(max(y, 0), visibleRows-1)
+	if y < 0 || y >= visibleRows {
+		return 0, 0, false
+	}
 	x = min(max(in.CursorCol, 0), layout.DisplayWidth-1)
 	return x, y, true
 }

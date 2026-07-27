@@ -132,4 +132,10 @@ func TestTerminalViewportNativeCursorDoesNotMutateContent(t *testing.T) {
 	if x, y, ok := terminalViewportCursorPosition(in); !ok || x != 2 || y != 1 {
 		t.Fatalf("terminalViewportCursorPosition() = (%d,%d,%v)", x, y, ok)
 	}
+
+	in.CursorRow = 0
+	in.PaneHeight = 5
+	if x, y, ok := terminalViewportCursorPosition(in); ok {
+		t.Fatalf("offscreen terminalViewportCursorPosition() = (%d,%d,true), want hidden", x, y)
+	}
 }
