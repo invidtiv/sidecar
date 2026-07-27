@@ -4,13 +4,25 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v0.88.0] - 2026-07-27
+
 ### Features
 - **`ctrl+n` creates a shell session directly from the workspaces tab**, skipping the type-selector modal. It uses `plugins.workspace.defaultAgentType` when one is configured and creates a plain shell otherwise; it never passes an agent's skip-permissions flag, so use `n` → Shell when you want that. The hint appears in the workspaces footer next to **New**.
 - **New `plugins.workspace.autoCreateShell` setting (default off).** With it enabled, the first time you focus the workspaces tab in a session sidecar creates a shell for you, so a terminal is ready for quick tasks without going through the create modal. It only fires when no shell sessions exist — shells whose tmux sessions survived a restart are reattached as before — and it leaves the sidebar selection where it was rather than jumping to the new shell. Nothing is created until the tab is focused, so startup is unaffected when you open on another tab.
 
 ### Bug Fixes
+- **Typing fast in an embedded terminal no longer transposes characters.** Every keypress returned its own command, and those run concurrently — so two keys typed in quick succession raced into tmux and could arrive out of order (`whoami` landing as `whoaim`). Keystrokes now go through a per-session queue that fixes their order where the key is handled, not where its command happens to be scheduled. Pastes share the queue, so pasted text can no longer interleave with surrounding keys.
+- **The terminal cursor is drawn on the line you are typing on.** The rendered buffer is scrollback followed by the pane's rows, but the cursor's row was mapped straight onto a display row as if the buffer's tail were the pane — so the cursor floated above the live line by however much scrollback the capture carried. On a fresh shell that was one row; after quitting a full-screen program like vim it was many, which is the "cursor stays at the top of the terminal while I type further down" report.
+- **The terminal scrollbar sits at the right edge of the pane.** It was aligned to the longest rendered line instead, so on a mostly-empty terminal it appeared right after the shell prompt and crept rightwards as you typed. Full-width lines could also push the joined block past the pane and wrap it, shifting every row down by one.
+- **Interactive mode shows a cursor when entered from the sidebar.** The native cursor and cell-motion mouse reporting were gated on the preview pane being active, and entering interactive mode left the sidebar active — so the session ran with no visible cursor at all. The previous pane is restored on exit.
+- **Editors opened in a workspace shell get the full pane.** Shell sessions were created without a size, so tmux used its 80x24 default and anything started before the follow-up resize laid itself out for 24 rows.
+- **The inline file editor gets the height it is displayed in.** Both the file browser's and the notes' inline editors created their tmux session at the whole plugin rect while rendering into a viewport four to five rows shorter, pushing vim's status and command lines out of view.
+- Terminal selection highlights and search matches stay on their lines once older scrollback has been loaded. The renderer could be handed a base of 0 for a buffer that actually started further down tmux's history, offsetting every highlight by the amount of loaded scrollback.
 - The plugin active at startup is now marked focused. `SetFocused` only ran when switching tabs, so whichever tab sidecar opened on reported itself unfocused — which, among other things, made it poll its tmux sessions at the slower background interval until you navigated away and back.
 - Footer hints with equal priority no longer sort nondeterministically; they now follow the order the plugin declares them in.
+
+### Developer
+- Added `scripts/tmux-drive.sh`, which runs sidecar on its own tmux socket, sends it keystrokes, and captures the screen as text and PNG — the terminal fixes above were all reproduced and verified this way, without a human at the keyboard. `docs/guides/headless-testing.md` covers it, including how to see the native cursor (which `capture-pane` cannot) and the tmux coordinate spaces the terminal code works in. `AGENTS.md` is now the single entry point for agent instructions.
 
 ### Interface
 - Removed the ASCII tree from the main worktree preview. The pane now leads with the text and carries hints for both `n` (new workspace) and `ctrl+n` (new shell).
