@@ -192,3 +192,20 @@ func TestTrimCapturedOutputPreservesSingleOversizedRow(t *testing.T) {
 		t.Fatalf("oversized row became partial: len=%d removed=%d", len(trimmed), removed)
 	}
 }
+
+func TestTrimCapturedOutputHonorsExactLineBoundary(t *testing.T) {
+	output := "row1\nrow2\n"
+	trimmed, removed := trimCapturedOutputRows(output, len("row2\n"))
+	if trimmed != "row2\n" || removed != 1 {
+		t.Fatalf("exact-boundary trim = %q removed=%d, want row2 and 1", trimmed, removed)
+	}
+}
+
+func TestTrimCapturedOutputDropsPrefixesBeforeOversizedFinalRow(t *testing.T) {
+	tail := strings.Repeat("x", 100)
+	output := "prefix1\nprefix2\n" + tail
+	trimmed, removed := trimCapturedOutputRows(output, 10)
+	if trimmed != tail || removed != 2 {
+		t.Fatalf("oversized-tail trim len=%d removed=%d, want tail-only and 2", len(trimmed), removed)
+	}
+}

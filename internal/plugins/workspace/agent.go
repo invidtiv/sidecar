@@ -1341,11 +1341,26 @@ func trimCapturedOutputRows(output string, maxBytes int) (string, int) {
 	for start < len(output) && !utf8.RuneStart(output[start]) {
 		start++
 	}
-	if nl := strings.IndexByte(output[start:], '\n'); nl >= 0 && start+nl+1 < len(output) {
-		cut := start + nl + 1
-		return output[cut:], strings.Count(output[:cut], "\n")
+	// The cap can land exactly after a newline. In that case the suffix already
+	// starts at a valid row and must not lose one more line.
+	if start > 0 && output[start-1] == '\n' {
+		return output[start:], strings.Count(output[:start], "\n")
 	}
-	return output, 0
+
+	rowStart := strings.LastIndexByte(output[:start], '\n') + 1
+	rowEnd := len(output)
+	if nl := strings.IndexByte(output[start:], '\n'); nl >= 0 {
+		rowEnd = start + nl + 1
+	}
+	rowBytes := rowEnd - rowStart
+	if rowBytes > maxBytes || rowEnd == len(output) {
+		// The containing row itself exceeds the cap (or is the only remaining
+		// final row). Preserve it intact, but discard complete prefix rows.
+		return output[rowStart:], strings.Count(output[:rowStart], "\n")
+	}
+	// The cutoff is inside an ordinary row; drop that partial row and retain
+	// the newest complete rows after it.
+	return output[rowEnd:], strings.Count(output[:rowEnd], "\n")
 }
 
 // tailUTF8Safe returns the last n bytes of s, adjusted to not split UTF-8 chars.
