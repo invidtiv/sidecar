@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -279,7 +280,7 @@ func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
 }
 
 func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
-	installNotesFakeTmux(t)
+	logPath := installNotesFakeTmux(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".todos"), 0o755); err != nil {
 		t.Fatal(err)
@@ -313,6 +314,30 @@ func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
 	}
 	if _, cmd := p.Update(InlineAutoSaveTickMsg{Generation: oldGeneration}); cmd != nil {
 		t.Fatal("old-project autosave tick reached new project store")
+	}
+	if data, err := os.ReadFile(logPath); err == nil && strings.Contains(string(data), "kill-session") {
+		t.Fatalf("Init synchronously spawned tmux cleanup:\n%s", data)
+	}
+	startCmd := p.Start()
+	if startCmd == nil {
+		t.Fatal("Start did not return orphan cleanup command")
+	}
+	startResult := startCmd()
+	batch, ok := startResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Start returned %T, want tea.BatchMsg", startResult)
+	}
+	for _, cmd := range batch {
+		if cmd != nil {
+			_ = cmd()
+		}
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t old-project-editor") {
+		t.Fatalf("Start did not asynchronously clean orphan editor:\n%s", data)
 	}
 }
 

@@ -79,8 +79,7 @@ func IsSessionDeadError(err error) bool {
 // SendKeyToTmux sends a key to a tmux pane using send-keys.
 // Uses the tmux key name syntax (e.g., "Enter", "C-c", "Up").
 func SendKeyToTmux(sessionName, key string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", sessionName, key)
-	return cmd.Run()
+	return runTmuxWithError("send-keys", "-t", sessionName, key)
 }
 
 // SendLiteralToTmux sends literal text to a tmux pane using send-keys -l.
@@ -94,10 +93,17 @@ func SendLiteralToTmux(sessionName, text string) error {
 		for _, b := range []byte(text) {
 			args = append(args, fmt.Sprintf("%02x", b))
 		}
-		return exec.Command("tmux", args...).Run()
+		return runTmuxWithError(args...)
 	}
-	cmd := exec.Command("tmux", "send-keys", "-l", "-t", sessionName, text)
-	return cmd.Run()
+	return runTmuxWithError("send-keys", "-l", "-t", sessionName, text)
+}
+
+func runTmuxWithError(args ...string) error {
+	output, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil && len(output) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return err
 }
 
 // SendKeysCmd sends keys to tmux asynchronously.

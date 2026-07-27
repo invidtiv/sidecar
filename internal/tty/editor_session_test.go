@@ -120,3 +120,18 @@ func TestEditorSessionMouseCmdUsesScopedForwarding(t *testing.T) {
 		t.Fatalf("SGR mouse command missing from fake tmux log:\n%s", log)
 	}
 }
+
+func TestEditorSessionMouseCmdReportsScopedDeadSession(t *testing.T) {
+	installFakeTmux(t)
+	t.Setenv("TMUX_FAKE_SEND_ERROR", "can't find pane: editor")
+	scope := MessageScope{Owner: 9, Target: "notes", Generation: 4}
+	cmd := (EditorSession{Name: "editor"}).MouseCmd(scope, 0, 2, 3, false)
+	result := cmd()
+	msg, ok := result.(SessionDeadMsg)
+	if !ok {
+		t.Fatalf("mouse failure returned %T, want SessionDeadMsg", result)
+	}
+	if msg.Scope != scope {
+		t.Fatalf("dead-session scope = %+v, want %+v", msg.Scope, scope)
+	}
+}

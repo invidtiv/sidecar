@@ -120,6 +120,17 @@ func (s EditorSession) Kill() {
 	}
 }
 
+// KillCmd defers session cleanup to Bubble Tea's command runner.
+func (s EditorSession) KillCmd() tea.Cmd {
+	if s.Name == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		s.Kill()
+		return nil
+	}
+}
+
 // NormalizeEditorName maps common aliases to their editor family.
 func NormalizeEditorName(editor string) string {
 	base := strings.TrimSuffix(filepath.Base(editor), ".exe")

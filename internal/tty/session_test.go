@@ -21,6 +21,10 @@ fi
 if [ "$1" = "show-options" ]; then
 	printf '%s\n' "${TMUX_FAKE_HISTORY:-2000}"
 fi
+if [ "$1" = "send-keys" ] && [ -n "$TMUX_FAKE_SEND_ERROR" ]; then
+	printf '%s\n' "$TMUX_FAKE_SEND_ERROR" >&2
+	exit 1
+fi
 `
 	path := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
