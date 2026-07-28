@@ -549,6 +549,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
+				if msg.HasCursor {
+					p.setPaneMouseReporting(msg.MouseReporting)
+				}
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -625,6 +628,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// (e.g., agent finishes but terminal output stays the same).
 			wt.Status = msg.CurrentStatus
 			wt.Agent.WaitingFor = msg.WaitingFor
+		}
+		// An app can toggle mouse tracking without changing a single rendered
+		// cell — Claude Code sitting idle at its prompt is the common case — so
+		// the flag has to be refreshed on unchanged polls too, or wheel notches
+		// would keep scrolling local scrollback until the app next redraws.
+		if msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+				p.setPaneMouseReporting(msg.MouseReporting)
+			}
 		}
 		// Content unchanged - use longer interval based on current status
 		interval := pollIntervalIdle
@@ -1041,6 +1054,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
+				if msg.HasCursor {
+					p.setPaneMouseReporting(msg.MouseReporting)
+				}
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -1618,6 +1634,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Update cursor position when interactive mode targets the terminal panel
 		if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
+			p.setPaneMouseReporting(msg.MouseReporting)
 			p.interactiveState.CursorRow = msg.CursorRow
 			p.interactiveState.CursorCol = msg.CursorCol
 			p.interactiveState.CursorVisible = msg.CursorVisible

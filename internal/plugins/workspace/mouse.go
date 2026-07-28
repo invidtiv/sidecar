@@ -1043,10 +1043,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 	}
 
-	// In interactive mode, always forward scroll to tmux copy-mode.
-	// The user is interacting with the pane; exit interactive mode first to scroll sidebar.
+	// In interactive mode the wheel belongs to the pane: either the app running
+	// there gets it as a mouse report, or it scrolls the captured output. Exit
+	// interactive mode first to scroll the sidebar.
 	if p.viewMode == ViewModeInteractive {
-		return p.forwardScrollToTmux(delta)
+		return p.forwardScrollToTmux(action, delta)
 	}
 
 	// Determine which pane based on region or position

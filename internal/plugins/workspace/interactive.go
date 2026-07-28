@@ -10,6 +10,7 @@ import (
 	"github.com/atotto/clipboard"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
@@ -206,6 +207,17 @@ func (p *Plugin) updateMouseReportingMode(output string) {
 		return
 	}
 	p.interactiveState.MouseReportingEnabled = tty.DetectMouseReportingMode(output)
+}
+
+// setPaneMouseReporting records tmux's #{mouse_any_flag} for the interactive
+// pane. It is only called with metadata captured alongside the pane, so a
+// capture that carried no cursor metadata leaves the last known value alone
+// rather than falsely reporting the app released the mouse.
+func (p *Plugin) setPaneMouseReporting(enabled bool) {
+	if p.interactiveState == nil || !p.interactiveState.Active {
+		return
+	}
+	p.interactiveState.PaneMouseReporting = enabled
 }
 
 // updateBracketedPasteMode updates the BracketedPasteEnabled state from captured output.
@@ -1023,10 +1035,26 @@ func (p *Plugin) handleEscapeTimer() tea.Cmd {
 	)
 }
 
-// forwardScrollToTmux scrolls through the captured pane output using previewOffset.
-// No tmux subprocesses needed — we scroll through the already-captured 600 lines of scrollback.
-// Scroll up (delta < 0) pauses auto-scroll, scroll down (delta > 0) moves toward live output.
-func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
+// maxWheelNotchesPerFlush caps how many wheel reports one debounced burst can
+// send. A fast trackpad flick can coalesce a large delta, and every notch is a
+// separate `tmux send-keys`; past a point the app has scrolled as far as the
+// gesture meant anyway.
+const maxWheelNotchesPerFlush = 10
+
+// forwardScrollToTmux routes a wheel notch for the interactive pane.
+//
+// When the app running in the pane has enabled mouse tracking, the notch is its
+// event: it is encoded as an SGR wheel report and sent to the pane, exactly as a
+// real terminal emulator would. Full-screen apps like Claude Code draw their own
+// scrollback inside the pane and keep tmux's history empty, so consuming the
+// notch locally would slide the viewport across the app's live frame and leave
+// the layout looking torn (the reported symptom).
+//
+// Otherwise the notch scrolls the captured pane output using previewOffset. No
+// tmux subprocesses needed — we scroll through the already-captured 600 lines of
+// scrollback. Scroll up (delta < 0) pauses auto-scroll, scroll down (delta > 0)
+// moves toward live output.
+func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
 	now := time.Now()
 
 	// Detect and handle scroll bursts (fast trackpad scrolling)
@@ -1052,6 +1080,10 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 	p.lastScrollTime = now
 	delta = p.pendingScrollDelta
 	p.pendingScrollDelta = 0
+
+	if cmd, forwarded := p.forwardWheelToPane(action, delta); forwarded {
+		return cmd
+	}
 
 	// When interactive mode targets the terminal panel, scroll terminal panel output
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
@@ -1098,6 +1130,90 @@ func (p *Plugin) forwardScrollToTmux(delta int) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// forwardWheelToPane sends delta as SGR wheel reports when the app running in
+// the interactive pane has asked for mouse events. It reports forwarded=false
+// whenever the notch belongs to the local viewport instead — no mouse tracking,
+// no interactive pane, or a pointer position that does not map into the pane —
+// so the caller falls through to its scrollback handling unchanged.
+func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cmd, bool) {
+	state := p.interactiveState
+	if delta == 0 || state == nil || !state.Active || !state.PaneMouseReporting {
+		return nil, false
+	}
+	// Alt is the "give me the terminal, not the app" modifier for the wheel.
+	// Shift is checked too for symmetry with click handling, but shift+wheel
+	// never reaches here — mouse.HandleMouse maps it to horizontal scroll.
+	if action.Shift || action.Alt {
+		return nil, false
+	}
+	sessionName := state.TargetSession
+	if sessionName == "" {
+		return nil, false
+	}
+	col, row, ok := p.interactiveMouseCoords(action.X, action.Y)
+	if !ok {
+		return nil, false
+	}
+
+	// While the app owns the wheel it also owns what the pane shows, so the
+	// viewport is pinned to the live frame. Without this a viewport left
+	// scrolled back — by alt+wheel, or by plain wheel from before the app
+	// enabled tracking — would sit frozen over stale rows while the app
+	// repainted below it.
+	p.pinInteractiveViewportToLive()
+
+	// The wheel is the user's most recent input, so it counts as activity: the
+	// poll cadence decays to its slow tier on idle time, and a scroll that did
+	// not reset it would be repainted at that tier.
+	state.LastKeyTime = time.Now()
+
+	// Delta is a line count — mouse.HandleMouse expands one notch into
+	// WheelScrollLines — but the pane wants notches, and the app applies its own
+	// lines-per-notch on top. Forwarding the line count made every notch scroll
+	// roughly WheelScrollLines times too far.
+	up := delta < 0
+	notches := min(wheelNotchesForDelta(delta), maxWheelNotchesPerFlush)
+
+	// Queued from the Update loop so wheel reports keep their order relative to
+	// keystrokes for the same pane rather than racing them.
+	cmd := awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
+		return tty.SendSGRWheel(sessionName, up, col, row, notches)
+	}))
+	return tea.Batch(cmd, p.pollInteractivePaneImmediate()), true
+}
+
+// wheelNotchesForDelta converts a scroll delta in lines back into whole wheel
+// notches, never rounding a real scroll down to nothing.
+func wheelNotchesForDelta(delta int) int {
+	lines := max(delta, -delta)
+	return max(lines/mouse.WheelScrollLines, 1)
+}
+
+// pinInteractiveViewportToLive returns the interactive viewport to the live edge
+// of the captured output, dropping any pending request for older history.
+//
+// A selection is anchored to buffer lines, so a jump this large leaves it
+// highlighting rows the user never picked — the local scroll paths clear it for
+// the same reason. Nothing is touched when the viewport is already live.
+func (p *Plugin) pinInteractiveViewportToLive() {
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		if p.termPanelScroll != 0 {
+			p.selection.Clear()
+			p.termPanelScroll = 0
+			p.cancelTerminalHistoryIntent(true)
+		}
+		return
+	}
+	maxOffset := p.getMaxScrollOffset()
+	if p.autoScrollOutput && p.previewOffset >= maxOffset {
+		return
+	}
+	p.selection.Clear()
+	p.previewOffset = maxOffset
+	p.autoScrollOutput = true
+	p.cancelTerminalHistoryIntent(false)
 }
 
 func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -1400,7 +1516,16 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 // interactiveScrollDelay reports how long a poll should be deferred while the
 // user is mid-flick. Callers reschedule instead of returning nil so the poll
 // chain always has a continuation.
+//
+// The deferral only makes sense when the flick moves sidecar's own viewport,
+// which needs no capture to repaint. When the app running in the pane owns the
+// wheel, the flick changed the pane itself, and holding the capture back for the
+// rest of the burst window is exactly the wrong thing — it is the difference
+// between scrolling that tracks the wheel and scrolling that lurches.
 func (p *Plugin) interactiveScrollDelay() (time.Duration, bool) {
+	if p.interactiveState != nil && p.interactiveState.PaneMouseReporting {
+		return 0, false
+	}
 	if p.scrollBurstCount <= 0 {
 		return 0, false
 	}

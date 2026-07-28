@@ -487,6 +487,7 @@ func (p *Plugin) applyPanelControlSnapshot(snapshot tty.ControlSnapshot) {
 		p.interactiveState.HasCursorHistory = snapshot.HasHistory
 		p.updateBracketedPasteMode(output)
 		p.updateMouseReportingMode(output)
+		p.setPaneMouseReporting(snapshot.MouseReporting)
 	}
 }
 
@@ -547,5 +548,6 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 		p.interactiveState.HasCursorHistory = snapshot.HasHistory
 		p.updateBracketedPasteMode(output)
 		p.updateMouseReportingMode(output)
+		p.setPaneMouseReporting(snapshot.MouseReporting)
 	}
 }

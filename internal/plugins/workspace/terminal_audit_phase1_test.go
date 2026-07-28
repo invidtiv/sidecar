@@ -109,12 +109,12 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p.autoScrollOutput = true
 	p.lastScrollTime = time.Now()
 
-	p.forwardScrollToTmux(-3)
+	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
 	if p.previewOffset != 20 || p.pendingScrollDelta != -3 {
 		t.Fatalf("debounced delta not retained: offset=%d pending=%d", p.previewOffset, p.pendingScrollDelta)
 	}
 	p.lastScrollTime = time.Now().Add(-2 * scrollDebounceInterval)
-	p.forwardScrollToTmux(-3)
+	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
 	if p.previewOffset != 14 {
 		t.Fatalf("previewOffset = %d, want accumulated movement to 14", p.previewOffset)
 	}

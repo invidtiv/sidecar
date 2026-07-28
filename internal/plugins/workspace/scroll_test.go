@@ -1,9 +1,14 @@
 package workspace
 
 import (
+	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // TestGetMaxScrollOffset tests the unified max scroll offset calculation.
@@ -439,4 +444,273 @@ func TestScrollPreviewUnified(t *testing.T) {
 			t.Errorf("after scroll up at top: previewOffset = %d, want 0", p.previewOffset)
 		}
 	})
+}
+
+// Wheel notches over an interactive pane belong to the app running there as
+// soon as it has enabled mouse tracking. Claude Code turns on 1003+1006 and
+// keeps tmux's history empty, so consuming the notch as local scrollback slid
+// the viewport across its live frame and tore the layout.
+func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 0
+	p.autoScrollOutput = true
+	p.interactiveState.PaneMouseReporting = true
+
+	cmd := p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	if cmd == nil {
+		t.Fatal("expected a command forwarding the wheel notch to the pane")
+	}
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SGR wheel-up press: ESC [ < 6 4 ; ... M, hex-encoded because the report
+	// contains semicolons.
+	if !strings.Contains(string(logged), "3c 36 34 3b") {
+		t.Fatalf("no SGR wheel-up report reached tmux: %s", logged)
+	}
+
+	if p.previewOffset != 0 || !p.autoScrollOutput {
+		t.Fatalf("local scrollback moved: previewOffset=%d autoScroll=%v", p.previewOffset, p.autoScrollOutput)
+	}
+}
+
+// A viewport left scrolled back must snap to the live edge once the app owns the
+// wheel, or it would sit frozen over stale rows while the app repaints below.
+func TestForwardedWheelPinsViewportToLiveOutput(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 12
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	if !p.autoScrollOutput || p.previewOffset != p.getMaxScrollOffset() {
+		t.Fatalf("viewport not pinned to live: previewOffset=%d max=%d autoScroll=%v",
+			p.previewOffset, p.getMaxScrollOffset(), p.autoScrollOutput)
+	}
+}
+
+func TestWheelDownForwardsWheelDownButton(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "3c 36 35 3b") {
+		t.Fatalf("no SGR wheel-down report reached tmux: %s", logged)
+	}
+}
+
+// A plain shell tracks no mouse, so the wheel keeps scrolling the captured
+// scrollback exactly as before.
+func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = false
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 after scrolling local scrollback", p.previewOffset)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "send-keys") {
+		t.Fatalf("wheel was forwarded to a pane that tracks no mouse: %s", logged)
+	}
+}
+
+// Alt is the "give me the terminal, not the app" modifier for the wheel. The
+// event is built the way mouse.HandleMouse builds it for alt+wheel — plain
+// ActionScrollUp carrying Alt — so the escape hatch is exercised as it is
+// actually reachable. (Shift+wheel never gets here; HandleMouse maps it to
+// horizontal scroll.)
+func TestWheelWithAltScrollsScrollbackDespiteMouseTracking(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Alt: true})
+	tty.WaitForPendingSends()
+
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 — alt+wheel must stay local", p.previewOffset)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "send-keys") {
+		t.Fatalf("alt+wheel was forwarded to the pane: %s", logged)
+	}
+}
+
+// A pointer that does not land inside the pane has no coordinates to report, so
+// the notch falls back to the viewport rather than being dropped.
+func TestWheelOutsidePaneFallsBackToScrollback(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 0, Y: 0})
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 when the pointer maps outside the pane", p.previewOffset)
+	}
+}
+
+// The mouse flag has to come from tmux: `capture-pane -e` emits rendering
+// escapes only, so DECSET mode sequences never appear in captured output.
+func TestPaneMetadataCarriesMouseFlag(t *testing.T) {
+	args := capturePaneWithCursorArgs("sidecar-test", "%1", false)
+	found := false
+	for _, arg := range args {
+		if strings.Contains(arg, "#{mouse_any_flag}") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("cursor metadata does not ask tmux for the mouse flag: %#v", args)
+	}
+
+	if cursor := parseCapturedCursor("12,4,1,30,100,7,1"); !cursor.Valid || !cursor.MouseReporting {
+		t.Fatalf("parsed cursor = %#v, want MouseReporting", cursor)
+	}
+	if cursor := parseCapturedCursor("12,4,1,30,100,7,0"); !cursor.Valid || cursor.MouseReporting {
+		t.Fatalf("parsed cursor = %#v, want MouseReporting false", cursor)
+	}
+	// Metadata predating the field still parses.
+	if cursor := parseCapturedCursor("12,4,1,30,100,7"); !cursor.Valid || cursor.MouseReporting {
+		t.Fatalf("parsed legacy cursor = %#v", cursor)
+	}
+}
+
+// One physical wheel notch must reach the pane as one wheel report. Vertical
+// wheel actions carry Delta in lines (mouse.WheelScrollLines per notch), and
+// forwarding that line count made every notch scroll roughly three times as far
+// as it does in a real terminal.
+func TestForwardedWheelSendsOneReportPerNotch(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+
+	// Exactly what mouse.HandleMouse produces for a single wheel-up notch.
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -mouse.WheelScrollLines, X: 10, Y: 5,
+	})
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hex-encoded "ESC [ < 6 4 ;" — the start of an SGR wheel-up report.
+	if got := strings.Count(string(logged), "1b 5b 3c 36 34 3b"); got != 1 {
+		t.Fatalf("one notch produced %d wheel reports, want 1: %s", got, logged)
+	}
+}
+
+func TestWheelNotchesForDelta(t *testing.T) {
+	for _, tc := range []struct {
+		delta, want int
+	}{
+		{-mouse.WheelScrollLines, 1},
+		{mouse.WheelScrollLines, 1},
+		{-3 * mouse.WheelScrollLines, 3},
+		{-1, 1}, // sub-notch deltas still scroll rather than being dropped
+		{1, 1},
+	} {
+		if got := wheelNotchesForDelta(tc.delta); got != tc.want {
+			t.Fatalf("wheelNotchesForDelta(%d) = %d, want %d", tc.delta, got, tc.want)
+		}
+	}
+}
+
+// A forwarded wheel changed the pane, so the capture that repaints it must not
+// be deferred behind the scroll-burst window the local viewport uses, and the
+// notch has to count as activity or polling decays to its slow tier.
+func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+	p.interactiveState.LastKeyTime = time.Now().Add(-time.Hour)
+
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -mouse.WheelScrollLines, X: 10, Y: 5,
+	})
+	tty.WaitForPendingSends()
+
+	if time.Since(p.interactiveState.LastKeyTime) > time.Minute {
+		t.Fatal("forwarded wheel did not count as activity; polling would decay to its slow tier")
+	}
+	if delay, deferred := p.interactiveScrollDelay(); deferred {
+		t.Fatalf("capture deferred by %s after a wheel the app consumed", delay)
+	}
+
+	// The deferral still applies when the wheel moves sidecar's own viewport,
+	// which repaints without a capture.
+	p.interactiveState.PaneMouseReporting = false
+	if _, deferred := p.interactiveScrollDelay(); !deferred {
+		t.Fatal("scroll-burst deferral lost for locally handled scrolling")
+	}
+}
+
+// Pinning the viewport is a jump, so a selection anchored to buffer lines would
+// be left highlighting rows the user never picked.
+func TestPinningViewportClearsSelection(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.previewOffset = 12
+	p.autoScrollOutput = false
+	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
+	if !p.selection.HasSelection() {
+		t.Fatal("test setup did not produce a selection")
+	}
+
+	p.pinInteractiveViewportToLive()
+	if p.selection.HasSelection() {
+		t.Fatal("selection survived the jump to the live edge")
+	}
+
+	// An already-live viewport is left alone, selection included.
+	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
+	p.pinInteractiveViewportToLive()
+	if !p.selection.HasSelection() {
+		t.Fatal("selection cleared even though the viewport was already live")
+	}
 }

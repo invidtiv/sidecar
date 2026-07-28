@@ -183,6 +183,9 @@ type (
 		HistorySize   int
 		CaptureBase   int
 		HasHistory    bool
+		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
+		// meaningful when HasCursor is set.
+		MouseReporting bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -809,18 +812,19 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		}
 
 		return ShellOutputMsg{
-			TmuxName:      tmuxName,
-			Generation:    generation,
-			Output:        output,
-			CursorRow:     cursor.Row,
-			CursorCol:     cursor.Col,
-			CursorVisible: cursor.Visible,
-			HasCursor:     cursor.Valid,
-			PaneHeight:    cursor.PaneHeight,
-			PaneWidth:     cursor.PaneWidth,
-			HistorySize:   capture.HistorySize,
-			CaptureBase:   capture.CaptureBase,
-			HasHistory:    capture.Valid,
+			TmuxName:       tmuxName,
+			Generation:     generation,
+			Output:         output,
+			CursorRow:      cursor.Row,
+			CursorCol:      cursor.Col,
+			CursorVisible:  cursor.Visible,
+			HasCursor:      cursor.Valid,
+			PaneHeight:     cursor.PaneHeight,
+			PaneWidth:      cursor.PaneWidth,
+			HistorySize:    capture.HistorySize,
+			CaptureBase:    capture.CaptureBase,
+			HasHistory:     capture.Valid,
+			MouseReporting: cursor.MouseReporting,
 		}
 	}
 }

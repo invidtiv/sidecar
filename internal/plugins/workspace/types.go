@@ -369,7 +369,18 @@ type InteractiveState struct {
 
 	// MouseReportingEnabled tracks whether the target app has enabled
 	// mouse reporting (1000/1002/1003/1006/1015). Updated from captured output.
+	//
+	// Note: captures come from `capture-pane -e`, which emits rendering escapes
+	// only, so DECSET mode sequences never appear in them and this stays false in
+	// practice. Click handling still reads it, deliberately: flipping clicks from
+	// local selection to app forwarding is a separate behaviour change. Wheel
+	// routing uses PaneMouseReporting instead.
 	MouseReportingEnabled bool
+
+	// PaneMouseReporting is tmux's #{mouse_any_flag} for the target pane: the
+	// app has enabled at least one mouse tracking mode and expects wheel notches
+	// as mouse reports rather than having the viewer scroll its own scrollback.
+	PaneMouseReporting bool
 
 	// EscapeTimerPending tracks if an escape timer is already in flight.
 	// Prevents duplicate timers from accumulating (td-83dc22).

@@ -43,6 +43,9 @@ type AgentOutputMsg struct {
 	HistorySize   int
 	CaptureBase   int
 	HasHistory    bool
+	// MouseReporting is tmux's #{mouse_any_flag} for the pane, captured with the
+	// cursor metadata. Only meaningful when HasCursor is set.
+	MouseReporting bool
 }
 
 // AgentStoppedMsg signals an agent has stopped.

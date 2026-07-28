@@ -28,6 +28,12 @@ type ControlSnapshot struct {
 	PaneHeight    int
 	PaneWidth     int
 	Generation    uint64
+
+	// MouseReporting mirrors tmux's #{mouse_any_flag}: the app running in the
+	// pane has enabled at least one mouse tracking mode. It is asked of tmux
+	// rather than scanned out of the capture because `capture-pane -e` emits
+	// rendering escapes only — DECSET mode sequences never survive it.
+	MouseReporting bool
 }
 
 // ControlRequest describes one active/visible terminal consumer. Consumers
@@ -822,7 +828,7 @@ func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture
 		scrollback = 600
 	}
 	metadata = "display-message -p -t " + pane +
-		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size}'"
+		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag}'"
 	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, capture, nil
 }
@@ -832,7 +838,9 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 		return ControlSnapshot{}, errors.New("tmux control capture: missing cursor metadata")
 	}
 	parts := strings.Split(strings.TrimSpace(lines[0]), ",")
-	if len(parts) != 6 {
+	// Fields past the sixth are optional so a metadata line produced before they
+	// were added still parses.
+	if len(parts) < 6 {
 		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
 	}
 	col, errCol := strconv.Atoi(parts[0])
@@ -847,17 +855,19 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 	if scrollback <= 0 {
 		scrollback = 600
 	}
+	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
 	return ControlSnapshot{
-		Session:       session,
-		Pane:          pane,
-		Output:        strings.Join(lines[1:], "\n"),
-		HistorySize:   historySize,
-		CaptureBase:   max(historySize-scrollback, 0),
-		HasHistory:    true,
-		CursorRow:     row,
-		CursorCol:     col,
-		CursorVisible: parts[2] != "0",
-		PaneHeight:    height,
-		PaneWidth:     width,
+		Session:        session,
+		Pane:           pane,
+		Output:         strings.Join(lines[1:], "\n"),
+		HistorySize:    historySize,
+		CaptureBase:    max(historySize-scrollback, 0),
+		HasHistory:     true,
+		CursorRow:      row,
+		CursorCol:      col,
+		CursorVisible:  parts[2] != "0",
+		PaneHeight:     height,
+		PaneWidth:      width,
+		MouseReporting: mouseReporting,
 	}, nil
 }

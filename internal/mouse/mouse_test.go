@@ -2,6 +2,8 @@ package mouse
 
 import (
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestRect_Contains(t *testing.T) {
@@ -235,5 +237,35 @@ func TestHandler_Clear(t *testing.T) {
 
 	if region := h.HitMap.Test(5, 5); region != nil {
 		t.Error("expected nil after Clear()")
+	}
+}
+
+// Wheel actions carry their modifiers. Consumers that forward notches to a
+// terminal application need them to tell "the app's wheel event" from "scroll
+// the viewer's own scrollback" — with the fields always false the escape hatch
+// was unreachable.
+func TestHandleMouse_WheelCarriesModifiers(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("preview", Rect{X: 0, Y: 0, W: 100, H: 40}, nil)
+
+	plain := h.HandleMouse(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 5, Button: tea.MouseWheelUp}))
+	if plain.Type != ActionScrollUp || plain.Alt || plain.Shift {
+		t.Fatalf("plain wheel-up = %#v", plain)
+	}
+
+	alt := h.HandleMouse(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 5, Button: tea.MouseWheelUp, Mod: tea.ModAlt}))
+	if alt.Type != ActionScrollUp || !alt.Alt {
+		t.Fatalf("alt+wheel-up = %#v, want ActionScrollUp with Alt set", alt)
+	}
+	altDown := h.HandleMouse(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 5, Button: tea.MouseWheelDown, Mod: tea.ModAlt}))
+	if altDown.Type != ActionScrollDown || !altDown.Alt {
+		t.Fatalf("alt+wheel-down = %#v, want ActionScrollDown with Alt set", altDown)
+	}
+
+	// Shift+wheel stays a horizontal scroll — it is not a vertical-scroll
+	// modifier, so nothing downstream should expect ActionScrollUp with Shift.
+	shift := h.HandleMouse(tea.MouseWheelMsg(tea.Mouse{X: 10, Y: 5, Button: tea.MouseWheelUp, Mod: tea.ModShift}))
+	if shift.Type != ActionScrollLeft || !shift.Shift {
+		t.Fatalf("shift+wheel-up = %#v, want ActionScrollLeft with Shift set", shift)
 	}
 }

@@ -197,6 +197,32 @@ func QueryPaneSize(target string) (width, height int, ok bool) {
 	return width, height, true
 }
 
+// SGR wheel button codes. Wheel notches are reported as button presses in the
+// 64+ range and have no matching release event.
+const (
+	SGRWheelUp   = 64
+	SGRWheelDown = 65
+)
+
+// SendSGRWheel sends `notches` wheel reports to a tmux pane. col and row are
+// 1-indexed. A wheel notch has no release event, so only the press form is
+// emitted — sending a release would look like a stray button-4/5 release to the
+// application.
+//
+// The reports go out as one send-keys: the pane sees the same byte stream
+// either way, and a flick would otherwise spawn one tmux process per notch.
+func SendSGRWheel(sessionName string, up bool, col, row, notches int) error {
+	if col <= 0 || row <= 0 || notches <= 0 {
+		return nil
+	}
+	button := SGRWheelDown
+	if up {
+		button = SGRWheelUp
+	}
+	report := fmt.Sprintf("\x1b[<%d;%d;%dM", button, col, row)
+	return SendLiteralToTmux(sessionName, strings.Repeat(report, notches))
+}
+
 // SendSGRMouse sends an SGR mouse event to a tmux pane.
 // button is the mouse button (0=left, 1=middle, 2=right).
 // col and row are 1-indexed coordinates.
