@@ -56,6 +56,10 @@ type capturedCursor struct {
 	PaneWidth  int
 	Visible    bool
 	Valid      bool
+	// MouseReporting mirrors tmux's #{mouse_any_flag} for the captured pane.
+	// See tty.ControlSnapshot.MouseReporting for why it comes from tmux instead
+	// of the capture text.
+	MouseReporting bool
 	capturedPaneMetadata
 }
 
@@ -888,6 +892,9 @@ type AgentPollUnchangedMsg struct {
 	HistorySize   int
 	CaptureBase   int
 	HasHistory    bool
+	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
+	// when HasCursor is set.
+	MouseReporting bool
 }
 
 // handlePollAgent captures output from a tmux session asynchronously.
@@ -1035,38 +1042,40 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 
 		if !outputChanged {
 			return AgentPollUnchangedMsg{
-				WorkspaceName: worktreeName,
-				Generation:    generation,
-				Output:        output,
-				CurrentStatus: status,
-				WaitingFor:    waitingFor,
-				CursorRow:     cursor.Row,
-				CursorCol:     cursor.Col,
-				CursorVisible: cursor.Visible,
-				HasCursor:     cursor.Valid,
-				PaneHeight:    cursor.PaneHeight,
-				PaneWidth:     cursor.PaneWidth,
-				HistorySize:   capture.HistorySize,
-				CaptureBase:   capture.CaptureBase,
-				HasHistory:    capture.Valid,
+				WorkspaceName:  worktreeName,
+				Generation:     generation,
+				Output:         output,
+				CurrentStatus:  status,
+				WaitingFor:     waitingFor,
+				CursorRow:      cursor.Row,
+				CursorCol:      cursor.Col,
+				CursorVisible:  cursor.Visible,
+				HasCursor:      cursor.Valid,
+				PaneHeight:     cursor.PaneHeight,
+				PaneWidth:      cursor.PaneWidth,
+				HistorySize:    capture.HistorySize,
+				CaptureBase:    capture.CaptureBase,
+				HasHistory:     capture.Valid,
+				MouseReporting: cursor.MouseReporting,
 			}
 		}
 
 		return AgentOutputMsg{
-			WorkspaceName: worktreeName,
-			Generation:    generation,
-			Output:        output,
-			Status:        status,
-			WaitingFor:    waitingFor,
-			CursorRow:     cursor.Row,
-			CursorCol:     cursor.Col,
-			CursorVisible: cursor.Visible,
-			HasCursor:     cursor.Valid,
-			PaneHeight:    cursor.PaneHeight,
-			PaneWidth:     cursor.PaneWidth,
-			HistorySize:   capture.HistorySize,
-			CaptureBase:   capture.CaptureBase,
-			HasHistory:    capture.Valid,
+			WorkspaceName:  worktreeName,
+			Generation:     generation,
+			Output:         output,
+			Status:         status,
+			WaitingFor:     waitingFor,
+			CursorRow:      cursor.Row,
+			CursorCol:      cursor.Col,
+			CursorVisible:  cursor.Visible,
+			HasCursor:      cursor.Valid,
+			PaneHeight:     cursor.PaneHeight,
+			PaneWidth:      cursor.PaneWidth,
+			HistorySize:    capture.HistorySize,
+			CaptureBase:    capture.CaptureBase,
+			HasHistory:     capture.Valid,
+			MouseReporting: cursor.MouseReporting,
 		}
 	}
 }
@@ -1204,7 +1213,7 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
 	args := []string{
 		"display-message", "-t", cursorTarget, "-p",
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size}",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag}",
 		";",
 	}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
@@ -1239,6 +1248,9 @@ func parseCapturedCursor(header string) capturedCursor {
 				Valid:       true,
 			}
 		}
+	}
+	if len(parts) >= 7 {
+		cursor.MouseReporting = parts[6] != "0" && parts[6] != ""
 	}
 	return cursor
 }

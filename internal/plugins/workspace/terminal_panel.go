@@ -56,6 +56,9 @@ type TermPanelCaptureMsg struct {
 	HistorySize   int
 	CaptureBase   int
 	HasHistory    bool
+	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
+	// when HasCursor is set.
+	MouseReporting bool
 }
 
 // termPanelPollMsg triggers the next poll cycle for the terminal panel.
@@ -273,6 +276,7 @@ func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd
 			msg.CursorVisible = cursor.Visible
 			msg.PaneHeight = cursor.PaneHeight
 			msg.PaneWidth = cursor.PaneWidth
+			msg.MouseReporting = cursor.MouseReporting
 		}
 		return msg
 	}

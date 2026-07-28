@@ -1,8 +1,11 @@
 package workspace
 
 import (
+	"os"
+	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -439,4 +442,165 @@ func TestScrollPreviewUnified(t *testing.T) {
 			t.Errorf("after scroll up at top: previewOffset = %d, want 0", p.previewOffset)
 		}
 	})
+}
+
+// Wheel notches over an interactive pane belong to the app running there as
+// soon as it has enabled mouse tracking. Claude Code turns on 1003+1006 and
+// keeps tmux's history empty, so consuming the notch as local scrollback slid
+// the viewport across its live frame and tore the layout.
+func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 0
+	p.autoScrollOutput = true
+	p.interactiveState.PaneMouseReporting = true
+
+	cmd := p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	if cmd == nil {
+		t.Fatal("expected a command forwarding the wheel notch to the pane")
+	}
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SGR wheel-up press: ESC [ < 6 4 ; ... M, hex-encoded because the report
+	// contains semicolons.
+	if !strings.Contains(string(logged), "3c 36 34 3b") {
+		t.Fatalf("no SGR wheel-up report reached tmux: %s", logged)
+	}
+
+	if p.previewOffset != 0 || !p.autoScrollOutput {
+		t.Fatalf("local scrollback moved: previewOffset=%d autoScroll=%v", p.previewOffset, p.autoScrollOutput)
+	}
+}
+
+// A viewport left scrolled back must snap to the live edge once the app owns the
+// wheel, or it would sit frozen over stale rows while the app repaints below.
+func TestForwardedWheelPinsViewportToLiveOutput(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 12
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	if !p.autoScrollOutput || p.previewOffset != p.getMaxScrollOffset() {
+		t.Fatalf("viewport not pinned to live: previewOffset=%d max=%d autoScroll=%v",
+			p.previewOffset, p.getMaxScrollOffset(), p.autoScrollOutput)
+	}
+}
+
+func TestWheelDownForwardsWheelDownButton(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "3c 36 35 3b") {
+		t.Fatalf("no SGR wheel-down report reached tmux: %s", logged)
+	}
+}
+
+// A plain shell tracks no mouse, so the wheel keeps scrolling the captured
+// scrollback exactly as before.
+func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = false
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
+	tty.WaitForPendingSends()
+
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 after scrolling local scrollback", p.previewOffset)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "send-keys") {
+		t.Fatalf("wheel was forwarded to a pane that tracks no mouse: %s", logged)
+	}
+}
+
+// Shift and Alt are the conventional "give me the terminal, not the app"
+// modifiers, matching how click handling already treats them.
+func TestWheelWithShiftScrollsScrollbackDespiteMouseTracking(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Shift: true})
+	tty.WaitForPendingSends()
+
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 — shift+wheel must stay local", p.previewOffset)
+	}
+}
+
+// A pointer that does not land inside the pane has no coordinates to report, so
+// the notch falls back to the viewport rather than being dropped.
+func TestWheelOutsidePaneFallsBackToScrollback(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 5
+	p.autoScrollOutput = false
+	p.interactiveState.PaneMouseReporting = true
+
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 0, Y: 0})
+	if p.previewOffset != 4 {
+		t.Fatalf("previewOffset = %d, want 4 when the pointer maps outside the pane", p.previewOffset)
+	}
+}
+
+// The mouse flag has to come from tmux: `capture-pane -e` emits rendering
+// escapes only, so DECSET mode sequences never appear in captured output.
+func TestPaneMetadataCarriesMouseFlag(t *testing.T) {
+	args := capturePaneWithCursorArgs("sidecar-test", "%1", false)
+	found := false
+	for _, arg := range args {
+		if strings.Contains(arg, "#{mouse_any_flag}") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("cursor metadata does not ask tmux for the mouse flag: %#v", args)
+	}
+
+	if cursor := parseCapturedCursor("12,4,1,30,100,7,1"); !cursor.Valid || !cursor.MouseReporting {
+		t.Fatalf("parsed cursor = %#v, want MouseReporting", cursor)
+	}
+	if cursor := parseCapturedCursor("12,4,1,30,100,7,0"); !cursor.Valid || cursor.MouseReporting {
+		t.Fatalf("parsed cursor = %#v, want MouseReporting false", cursor)
+	}
+	// Metadata predating the field still parses.
+	if cursor := parseCapturedCursor("12,4,1,30,100,7"); !cursor.Valid || cursor.MouseReporting {
+		t.Fatalf("parsed legacy cursor = %#v", cursor)
+	}
 }

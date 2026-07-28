@@ -513,6 +513,38 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 		!snapshot.HasHistory || snapshot.HistorySize != 1250 || snapshot.CaptureBase != 350 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
+	// A metadata line predating the mouse flag still parses, and reports no
+	// mouse tracking rather than failing the whole snapshot.
+	if snapshot.MouseReporting {
+		t.Fatalf("legacy metadata reported mouse tracking: %#v", snapshot)
+	}
+}
+
+// Mouse tracking is asked of tmux because `capture-pane -e` emits rendering
+// escapes only — an app's DECSET 1000/1002/1003/1006 never survives the capture.
+func TestControlCaptureReportsPaneMouseTracking(t *testing.T) {
+	metadata, _, err := buildControlCaptureCommands("%12", 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metadata, "#{mouse_any_flag}") {
+		t.Fatalf("metadata command does not ask for the mouse flag: %q", metadata)
+	}
+
+	for _, tc := range []struct {
+		flag string
+		want bool
+	}{{"1", true}, {"0", false}} {
+		snapshot, err := parseControlSnapshot("session", "%12", 900, []string{
+			"9,4,0,30,100,1250," + tc.flag, "line one",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.MouseReporting != tc.want {
+			t.Fatalf("mouse_any_flag %q parsed as %v", tc.flag, snapshot.MouseReporting)
+		}
+	}
 }
 
 func waitFor(t *testing.T, condition func() bool) {

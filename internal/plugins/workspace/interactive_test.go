@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -851,7 +852,7 @@ func TestGetInteractiveExitKey_VariousKeys(t *testing.T) {
 func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 	// previewOffset=5 means we're 5 lines from top; scroll up decreases it
 	p := &Plugin{autoScrollOutput: true, previewOffset: 5}
-	p.forwardScrollToTmux(-1)
+	p.forwardScrollToTmux(mouse.MouseAction{}, -1)
 	if p.autoScrollOutput {
 		t.Error("expected autoScrollOutput=false after scroll up")
 	}
@@ -865,7 +866,7 @@ func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
 	// With no content loaded, maxOffset=0. previewOffset=0 is already at bottom.
 	// Scroll down should enable auto-scroll when at max offset.
 	p := &Plugin{autoScrollOutput: false, previewOffset: 0, height: 10}
-	p.forwardScrollToTmux(1)
+	p.forwardScrollToTmux(mouse.MouseAction{}, 1)
 	if !p.autoScrollOutput {
 		t.Error("expected autoScrollOutput=true after scrolling to bottom (maxOffset=0)")
 	}
