@@ -543,10 +543,13 @@ func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
 	}
 }
 
-// Shift and Alt are the conventional "give me the terminal, not the app"
-// modifiers, matching how click handling already treats them.
-func TestWheelWithShiftScrollsScrollbackDespiteMouseTracking(t *testing.T) {
-	installSuccessfulFakeTmux(t)
+// Alt is the "give me the terminal, not the app" modifier for the wheel. The
+// event is built the way mouse.HandleMouse builds it for alt+wheel — plain
+// ActionScrollUp carrying Alt — so the escape hatch is exercised as it is
+// actually reachable. (Shift+wheel never gets here; HandleMouse maps it to
+// horizontal scroll.)
+func TestWheelWithAltScrollsScrollbackDespiteMouseTracking(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
@@ -554,11 +557,18 @@ func TestWheelWithShiftScrollsScrollbackDespiteMouseTracking(t *testing.T) {
 	p.autoScrollOutput = false
 	p.interactiveState.PaneMouseReporting = true
 
-	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Shift: true})
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Alt: true})
 	tty.WaitForPendingSends()
 
 	if p.previewOffset != 4 {
-		t.Fatalf("previewOffset = %d, want 4 — shift+wheel must stay local", p.previewOffset)
+		t.Fatalf("previewOffset = %d, want 4 — alt+wheel must stay local", p.previewOffset)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "send-keys") {
+		t.Fatalf("alt+wheel was forwarded to the pane: %s", logged)
 	}
 }
 

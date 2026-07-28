@@ -237,24 +237,28 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 		// MouseActionPress with wheel buttons).
 		m := msg.Mouse()
 		shift := m.Mod.Contains(tea.ModShift)
+		alt := m.Mod.Contains(tea.ModAlt)
 		region := h.HitMap.Test(m.X, m.Y)
+		// Modifiers are carried on the action, not just consumed here: consumers
+		// use them to decide whether a notch is theirs or the terminal
+		// application's (see workspace.forwardWheelToPane).
 		switch m.Button {
 		case tea.MouseWheelUp:
 			// Shift+scroll = horizontal scroll
 			if shift {
-				return MouseAction{Type: ActionScrollLeft, Region: region, X: m.X, Y: m.Y, Delta: -10}
+				return MouseAction{Type: ActionScrollLeft, Region: region, X: m.X, Y: m.Y, Delta: -10, Shift: shift, Alt: alt}
 			}
-			return MouseAction{Type: ActionScrollUp, Region: region, X: m.X, Y: m.Y, Delta: -3}
+			return MouseAction{Type: ActionScrollUp, Region: region, X: m.X, Y: m.Y, Delta: -3, Alt: alt}
 		case tea.MouseWheelDown:
 			if shift {
-				return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10}
+				return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10, Shift: shift, Alt: alt}
 			}
-			return MouseAction{Type: ActionScrollDown, Region: region, X: m.X, Y: m.Y, Delta: 3}
+			return MouseAction{Type: ActionScrollDown, Region: region, X: m.X, Y: m.Y, Delta: 3, Alt: alt}
 		case tea.MouseWheelLeft:
 			// Native horizontal scroll (trackpad) - reversed for Mac natural scrolling
-			return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10}
+			return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10, Shift: shift, Alt: alt}
 		case tea.MouseWheelRight:
-			return MouseAction{Type: ActionScrollLeft, Region: region, X: m.X, Y: m.Y, Delta: -10}
+			return MouseAction{Type: ActionScrollLeft, Region: region, X: m.X, Y: m.Y, Delta: -10, Shift: shift, Alt: alt}
 		}
 
 	case tea.MouseReleaseMsg:

@@ -1142,8 +1142,9 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 	if delta == 0 || state == nil || !state.Active || !state.PaneMouseReporting {
 		return nil, false
 	}
-	// Shift and Alt are the conventional "give me the terminal, not the app"
-	// modifiers, and click handling already treats them that way.
+	// Alt is the "give me the terminal, not the app" modifier for the wheel.
+	// Shift is checked too for symmetry with click handling, but shift+wheel
+	// never reaches here — mouse.HandleMouse maps it to horizontal scroll.
 	if action.Shift || action.Alt {
 		return nil, false
 	}
