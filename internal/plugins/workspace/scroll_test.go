@@ -4,9 +4,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // TestGetMaxScrollOffset tests the unified max scroll offset calculation.
@@ -612,5 +614,103 @@ func TestPaneMetadataCarriesMouseFlag(t *testing.T) {
 	// Metadata predating the field still parses.
 	if cursor := parseCapturedCursor("12,4,1,30,100,7"); !cursor.Valid || cursor.MouseReporting {
 		t.Fatalf("parsed legacy cursor = %#v", cursor)
+	}
+}
+
+// One physical wheel notch must reach the pane as one wheel report. Vertical
+// wheel actions carry Delta in lines (mouse.WheelScrollLines per notch), and
+// forwarding that line count made every notch scroll roughly three times as far
+// as it does in a real terminal.
+func TestForwardedWheelSendsOneReportPerNotch(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+
+	// Exactly what mouse.HandleMouse produces for a single wheel-up notch.
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -mouse.WheelScrollLines, X: 10, Y: 5,
+	})
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hex-encoded "ESC [ < 6 4 ;" — the start of an SGR wheel-up report.
+	if got := strings.Count(string(logged), "1b 5b 3c 36 34 3b"); got != 1 {
+		t.Fatalf("one notch produced %d wheel reports, want 1: %s", got, logged)
+	}
+}
+
+func TestWheelNotchesForDelta(t *testing.T) {
+	for _, tc := range []struct {
+		delta, want int
+	}{
+		{-mouse.WheelScrollLines, 1},
+		{mouse.WheelScrollLines, 1},
+		{-3 * mouse.WheelScrollLines, 3},
+		{-1, 1}, // sub-notch deltas still scroll rather than being dropped
+		{1, 1},
+	} {
+		if got := wheelNotchesForDelta(tc.delta); got != tc.want {
+			t.Fatalf("wheelNotchesForDelta(%d) = %d, want %d", tc.delta, got, tc.want)
+		}
+	}
+}
+
+// A forwarded wheel changed the pane, so the capture that repaints it must not
+// be deferred behind the scroll-burst window the local viewport uses, and the
+// notch has to count as activity or polling decays to its slow tier.
+func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.interactiveState.PaneMouseReporting = true
+	p.interactiveState.LastKeyTime = time.Now().Add(-time.Hour)
+
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -mouse.WheelScrollLines, X: 10, Y: 5,
+	})
+	tty.WaitForPendingSends()
+
+	if time.Since(p.interactiveState.LastKeyTime) > time.Minute {
+		t.Fatal("forwarded wheel did not count as activity; polling would decay to its slow tier")
+	}
+	if delay, deferred := p.interactiveScrollDelay(); deferred {
+		t.Fatalf("capture deferred by %s after a wheel the app consumed", delay)
+	}
+
+	// The deferral still applies when the wheel moves sidecar's own viewport,
+	// which repaints without a capture.
+	p.interactiveState.PaneMouseReporting = false
+	if _, deferred := p.interactiveScrollDelay(); !deferred {
+		t.Fatal("scroll-burst deferral lost for locally handled scrolling")
+	}
+}
+
+// Pinning the viewport is a jump, so a selection anchored to buffer lines would
+// be left highlighting rows the user never picked.
+func TestPinningViewportClearsSelection(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.previewOffset = 12
+	p.autoScrollOutput = false
+	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
+	if !p.selection.HasSelection() {
+		t.Fatal("test setup did not produce a selection")
+	}
+
+	p.pinInteractiveViewportToLive()
+	if p.selection.HasSelection() {
+		t.Fatal("selection survived the jump to the live edge")
+	}
+
+	// An already-live viewport is left alone, selection included.
+	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
+	p.pinInteractiveViewportToLive()
+	if !p.selection.HasSelection() {
+		t.Fatal("selection cleared even though the viewport was already live")
 	}
 }

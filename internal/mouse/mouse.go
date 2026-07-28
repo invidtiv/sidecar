@@ -248,12 +248,12 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 			if shift {
 				return MouseAction{Type: ActionScrollLeft, Region: region, X: m.X, Y: m.Y, Delta: -10, Shift: shift, Alt: alt}
 			}
-			return MouseAction{Type: ActionScrollUp, Region: region, X: m.X, Y: m.Y, Delta: -3, Alt: alt}
+			return MouseAction{Type: ActionScrollUp, Region: region, X: m.X, Y: m.Y, Delta: -WheelScrollLines, Alt: alt}
 		case tea.MouseWheelDown:
 			if shift {
 				return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10, Shift: shift, Alt: alt}
 			}
-			return MouseAction{Type: ActionScrollDown, Region: region, X: m.X, Y: m.Y, Delta: 3, Alt: alt}
+			return MouseAction{Type: ActionScrollDown, Region: region, X: m.X, Y: m.Y, Delta: WheelScrollLines, Alt: alt}
 		case tea.MouseWheelLeft:
 			// Native horizontal scroll (trackpad) - reversed for Mac natural scrolling
 			return MouseAction{Type: ActionScrollRight, Region: region, X: m.X, Y: m.Y, Delta: 10, Shift: shift, Alt: alt}
@@ -311,12 +311,20 @@ const (
 	ActionHover
 )
 
+// WheelScrollLines is how many lines one physical wheel notch scrolls. Vertical
+// wheel actions report Delta in lines, not notches, so a consumer that needs the
+// notch count — anything translating back into wheel events, such as forwarding
+// to a terminal application — has to divide by this.
+const WheelScrollLines = 3
+
 // MouseAction represents a processed mouse event.
 type MouseAction struct {
 	Type   ActionType
 	Region *Region
 	X, Y   int
-	Delta  int // Scroll delta
+	// Delta is the scroll amount in lines for vertical wheel actions and in
+	// columns for horizontal ones. See WheelScrollLines to recover notches.
+	Delta  int
 	DragDX int // Drag delta X
 	DragDY int // Drag delta Y
 	Shift  bool

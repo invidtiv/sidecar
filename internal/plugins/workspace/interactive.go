@@ -1159,13 +1159,22 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 
 	// While the app owns the wheel it also owns what the pane shows, so the
 	// viewport is pinned to the live frame. Without this a viewport left
-	// scrolled back — by Shift+wheel, or by plain wheel from before the app
+	// scrolled back — by alt+wheel, or by plain wheel from before the app
 	// enabled tracking — would sit frozen over stale rows while the app
 	// repainted below it.
 	p.pinInteractiveViewportToLive()
 
+	// The wheel is the user's most recent input, so it counts as activity: the
+	// poll cadence decays to its slow tier on idle time, and a scroll that did
+	// not reset it would be repainted at that tier.
+	state.LastKeyTime = time.Now()
+
+	// Delta is a line count — mouse.HandleMouse expands one notch into
+	// WheelScrollLines — but the pane wants notches, and the app applies its own
+	// lines-per-notch on top. Forwarding the line count made every notch scroll
+	// roughly WheelScrollLines times too far.
 	up := delta < 0
-	notches := min(max(delta, -delta), maxWheelNotchesPerFlush)
+	notches := min(wheelNotchesForDelta(delta), maxWheelNotchesPerFlush)
 
 	// Queued from the Update loop so wheel reports keep their order relative to
 	// keystrokes for the same pane rather than racing them.
@@ -1175,11 +1184,23 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 	return tea.Batch(cmd, p.pollInteractivePaneImmediate()), true
 }
 
+// wheelNotchesForDelta converts a scroll delta in lines back into whole wheel
+// notches, never rounding a real scroll down to nothing.
+func wheelNotchesForDelta(delta int) int {
+	lines := max(delta, -delta)
+	return max(lines/mouse.WheelScrollLines, 1)
+}
+
 // pinInteractiveViewportToLive returns the interactive viewport to the live edge
 // of the captured output, dropping any pending request for older history.
+//
+// A selection is anchored to buffer lines, so a jump this large leaves it
+// highlighting rows the user never picked — the local scroll paths clear it for
+// the same reason. Nothing is touched when the viewport is already live.
 func (p *Plugin) pinInteractiveViewportToLive() {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		if p.termPanelScroll != 0 {
+			p.selection.Clear()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		}
@@ -1189,6 +1210,7 @@ func (p *Plugin) pinInteractiveViewportToLive() {
 	if p.autoScrollOutput && p.previewOffset >= maxOffset {
 		return
 	}
+	p.selection.Clear()
 	p.previewOffset = maxOffset
 	p.autoScrollOutput = true
 	p.cancelTerminalHistoryIntent(false)
@@ -1494,7 +1516,16 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 // interactiveScrollDelay reports how long a poll should be deferred while the
 // user is mid-flick. Callers reschedule instead of returning nil so the poll
 // chain always has a continuation.
+//
+// The deferral only makes sense when the flick moves sidecar's own viewport,
+// which needs no capture to repaint. When the app running in the pane owns the
+// wheel, the flick changed the pane itself, and holding the capture back for the
+// rest of the burst window is exactly the wrong thing — it is the difference
+// between scrolling that tracks the wheel and scrolling that lurches.
 func (p *Plugin) interactiveScrollDelay() (time.Duration, bool) {
+	if p.interactiveState != nil && p.interactiveState.PaneMouseReporting {
+		return 0, false
+	}
 	if p.scrollBurstCount <= 0 {
 		return 0, false
 	}
