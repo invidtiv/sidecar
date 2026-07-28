@@ -4,6 +4,8 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v0.88.2] - 2026-07-28
+
 ### Bug Fixes
 - **Scrolling an embedded terminal scrolls the program running in it.** When the program has enabled mouse tracking — Claude Code, vim with `mouse=a`, htop — wheel notches now reach it as SGR mouse reports, the way any other terminal emulator delivers them. Previously every notch scrolled sidecar's own view of the captured pane instead, which was worst for full-screen programs: they draw their own scrollback inside the pane and leave tmux's history empty, so scrolling slid the viewport across the live frame and left the layout looking torn. Programs that track no mouse are unaffected and keep scrolling the captured scrollback, and `alt`+wheel still scrolls it for programs that do.
 
