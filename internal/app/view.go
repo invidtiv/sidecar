@@ -48,6 +48,10 @@ func (m Model) View() tea.View {
 	v.ReportFocus = true
 	v.MouseMode = m.preferredMouseMode()
 	v.Cursor = m.pluginCursor()
+	// Deliberately no v.WindowTitle: sidecar emits the terminal title itself
+	// (internal/app/title.go). Bubble Tea clears a title it owns every time the
+	// renderer stops, which would blank the terminal for the whole duration of
+	// an editor or an attached session.
 	// Keep KeyboardEnhancements at its zero value. Bubble Tea v2 already
 	// requests basic key disambiguation; release events and all-keys escape
 	// encoding would alter ordinary text delivery and are intentionally opt-in.

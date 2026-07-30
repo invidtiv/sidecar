@@ -451,3 +451,46 @@ func TestLoadFrom_WorkspaceAutoCreateShellDefaultsOff(t *testing.T) {
 		t.Error("AutoCreateShell = true, want false when unset")
 	}
 }
+
+func TestLoadFrom_TerminalTitle(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "unset keeps the default template",
+			content: `{"ui":{"showClock":false}}`,
+			want:    "{project}{worktree}",
+		},
+		{
+			name:    "custom template",
+			content: `{"ui":{"terminalTitle":"{project} · {plugin}"}}`,
+			want:    "{project} · {plugin}",
+		},
+		{
+			// The pointer in rawUIConfig exists for exactly this case: an
+			// explicit "" means "leave my terminal title alone".
+			name:    "empty string disables retitling",
+			content: `{"ui":{"terminalTitle":""}}`,
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+			if cfg.UI.TerminalTitle != tt.want {
+				t.Errorf("TerminalTitle = %q, want %q", cfg.UI.TerminalTitle, tt.want)
+			}
+		})
+	}
+}

@@ -114,6 +114,9 @@ type Model struct {
 	diagnosticsModalWidth   int
 	diagnosticsMouseHandler *mouse.Handler
 	showClock               bool
+	titleTemplate           string // ui.terminalTitle; empty leaves the terminal title alone
+	lastTitle               string // last title emitted, so OSC 1 only goes out on change
+	titleResyncCounter      int    // ticks since the icon name was last re-asserted
 	showPalette             bool
 	showQuitConfirm         bool
 	quitModal               *modal.Modal
@@ -292,6 +295,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		activePlugin:       activeIdx,
 		activeContext:      "global",
 		showClock:          cfg.UI.ShowClock,
+		titleTemplate:      cfg.UI.TerminalTitle,
 		palette:            palette.New(),
 		ui:                 ui,
 		ready:              false,
@@ -784,9 +788,14 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 		m.FocusPluginByID(newActivePluginID)
 	}
 
+	// Retitle the terminal now rather than waiting for the next tick, so the
+	// tab label changes at the same moment the UI does.
+	titleCmd := m.syncTerminalTitle(false)
+
 	// Return batch of start commands plus a toast notification
 	return tea.Batch(
 		tea.Batch(startCmds...),
+		titleCmd,
 		func() tea.Msg {
 			return ToastMsg{
 				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),

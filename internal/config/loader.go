@@ -56,6 +56,8 @@ type rawUIConfig struct {
 	Theme            ThemeConfig `json:"theme"`
 	NerdFontsEnabled *bool       `json:"nerdFontsEnabled"`
 	LastOpenInApp    string      `json:"lastOpenInApp,omitempty"`
+	// Pointer so that an explicit "" reads as "disabled" rather than "unset".
+	TerminalTitle *string `json:"terminalTitle"`
 }
 
 type rawProjectsConfig struct {
@@ -302,6 +304,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.UI.LastOpenInApp != "" {
 		cfg.UI.LastOpenInApp = raw.UI.LastOpenInApp
+	}
+	if raw.UI.TerminalTitle != nil {
+		cfg.UI.TerminalTitle = *raw.UI.TerminalTitle
 	}
 	if raw.UI.Theme.Name != "" {
 		cfg.UI.Theme.Name = raw.UI.Theme.Name
