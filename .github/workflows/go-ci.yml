@@ -56,5 +56,5 @@ jobs:
       - name: golangci-lint (full codebase)
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.8.0
+          version: v2.12.2
           args: ./...

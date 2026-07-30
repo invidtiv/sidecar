@@ -134,9 +134,9 @@ func GetNewFileDiff(workDir, path string) (string, error) {
 	// Detect binary files (contains null bytes or non-printable chars)
 	if isBinaryContent(content) {
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
+		fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", path, path)
 		sb.WriteString("new file mode 100644\n")
-		sb.WriteString(fmt.Sprintf("Binary files /dev/null and b/%s differ\n", path))
+		fmt.Fprintf(&sb, "Binary files /dev/null and b/%s differ\n", path)
 		return sb.String(), nil
 	}
 
@@ -144,11 +144,11 @@ func GetNewFileDiff(workDir, path string) (string, error) {
 	lineCount := len(lines)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
+	fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", path, path)
 	sb.WriteString("new file mode 100644\n")
 	sb.WriteString("--- /dev/null\n")
-	sb.WriteString(fmt.Sprintf("+++ b/%s\n", path))
-	sb.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))
+	fmt.Fprintf(&sb, "+++ b/%s\n", path)
+	fmt.Fprintf(&sb, "@@ -0,0 +1,%d @@\n", lineCount)
 
 	for _, line := range lines {
 		sb.WriteString("+" + line + "\n")
@@ -223,8 +223,8 @@ func GetFolderDiff(workDir string, files []*FileEntry) (string, error) {
 		fileDiff, err := GetNewFileDiff(workDir, file.Path)
 		if err != nil {
 			// Write error placeholder for this file
-			sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", file.Path, file.Path))
-			sb.WriteString(fmt.Sprintf("Error reading file: %s\n", err))
+			fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", file.Path, file.Path)
+			fmt.Fprintf(&sb, "Error reading file: %s\n", err)
 			continue
 		}
 

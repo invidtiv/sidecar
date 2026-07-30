@@ -97,7 +97,7 @@ func (m Model) View() string {
 		modeText = styles.BarChip.Render(m.activeContext)
 	}
 	toggleHint := styles.Muted.Render("tab to toggle")
-	b.WriteString(fmt.Sprintf("%s  %s", modeText, toggleHint))
+	fmt.Fprintf(&b, "%s  %s", modeText, toggleHint)
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", contentWidth))
 	b.WriteString("\n")

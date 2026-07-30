@@ -1217,9 +1217,9 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 
 	// Footer with match count
 	if len(p.quickOpenMatches) > 0 {
-		sb.WriteString(fmt.Sprintf("\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", p.quickOpenCursor+1, len(p.quickOpenMatches)))))
+		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", p.quickOpenCursor+1, len(p.quickOpenMatches))))
 	} else if len(p.quickOpenFiles) > 0 {
-		sb.WriteString(fmt.Sprintf("\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpenFiles)))))
+		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpenFiles))))
 	}
 
 	// Wrap in modal box (centering handled by overlayModal)

@@ -143,7 +143,7 @@ func (p *Plugin) commitStagedSection() modal.Section {
 				stats = fmt.Sprintf(" %s %s", addStr, delStr)
 			}
 
-			sb.WriteString(fmt.Sprintf("  %s %s%s", status, path, stats))
+			fmt.Fprintf(&sb, "  %s %s%s", status, path, stats)
 			if i < maxFiles-1 && i < len(p.tree.Staged)-1 {
 				sb.WriteString("\n")
 			}

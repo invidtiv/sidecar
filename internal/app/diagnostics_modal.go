@@ -72,7 +72,7 @@ func (m *Model) diagnosticsPluginsSection() modal.Section {
 		plugins := m.registry.Plugins()
 		for _, p := range plugins {
 			status := styles.StatusCompleted.Render("✓")
-			b.WriteString(fmt.Sprintf("  %s %s: active\n", status, p.Name()))
+			fmt.Fprintf(&b, "  %s %s: active\n", status, p.Name())
 
 			// Check for plugin-specific diagnostics
 			if dp, ok := p.(plugin.DiagnosticProvider); ok {
@@ -88,7 +88,7 @@ func (m *Model) diagnosticsPluginsSection() modal.Section {
 					default:
 						statusIcon = styles.Muted.Render("•")
 					}
-					b.WriteString(fmt.Sprintf("    %s %s\n", statusIcon, d.Detail))
+					fmt.Fprintf(&b, "    %s %s\n", statusIcon, d.Detail)
 				}
 			}
 		}
@@ -96,7 +96,7 @@ func (m *Model) diagnosticsPluginsSection() modal.Section {
 		unavail := m.registry.Unavailable()
 		for id, reason := range unavail {
 			status := styles.StatusBlocked.Render("✗")
-			b.WriteString(fmt.Sprintf("  %s %s: %s\n", status, id, reason))
+			fmt.Fprintf(&b, "  %s %s: %s\n", status, id, reason)
 		}
 
 		if len(plugins) == 0 && len(unavail) == 0 {
@@ -113,8 +113,8 @@ func (m *Model) diagnosticsSystemSection() modal.Section {
 		var b strings.Builder
 		b.WriteString(styles.Title.Render("System"))
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  WorkDir: %s\n", styles.Muted.Render(m.ui.WorkDir)))
-		b.WriteString(fmt.Sprintf("  Refresh: %s", styles.Muted.Render(m.ui.LastRefresh.Format("15:04:05"))))
+		fmt.Fprintf(&b, "  WorkDir: %s\n", styles.Muted.Render(m.ui.WorkDir))
+		fmt.Fprintf(&b, "  Refresh: %s", styles.Muted.Render(m.ui.LastRefresh.Format("15:04:05")))
 		return modal.RenderedSection{Content: b.String()}
 	}, nil)
 }
@@ -128,12 +128,12 @@ func (m *Model) diagnosticsVersionSection() modal.Section {
 
 		// Sidecar version
 		if m.updateAvailable != nil {
-			b.WriteString(fmt.Sprintf("  sidecar: %s → %s ",
+			fmt.Fprintf(&b, "  sidecar: %s → %s ",
 				styles.Muted.Render(m.currentVersion),
-				m.updateAvailable.LatestVersion))
+				m.updateAvailable.LatestVersion)
 			b.WriteString(styles.StatusModified.Render("available"))
 		} else {
-			b.WriteString(fmt.Sprintf("  sidecar: %s ", styles.Muted.Render(m.currentVersion)))
+			fmt.Fprintf(&b, "  sidecar: %s ", styles.Muted.Render(m.currentVersion))
 			b.WriteString(styles.StatusCompleted.Render("✓"))
 		}
 
@@ -141,14 +141,14 @@ func (m *Model) diagnosticsVersionSection() modal.Section {
 		if m.tdVersionInfo != nil {
 			b.WriteString("\n")
 			if !m.tdVersionInfo.Installed {
-				b.WriteString(fmt.Sprintf("  td:      %s", styles.Muted.Render("not installed")))
+				fmt.Fprintf(&b, "  td:      %s", styles.Muted.Render("not installed"))
 			} else if m.tdVersionInfo.HasUpdate {
-				b.WriteString(fmt.Sprintf("  td:      %s → %s ",
+				fmt.Fprintf(&b, "  td:      %s → %s ",
 					styles.Muted.Render(m.tdVersionInfo.CurrentVersion),
-					m.tdVersionInfo.LatestVersion))
+					m.tdVersionInfo.LatestVersion)
 				b.WriteString(styles.StatusModified.Render("available"))
 			} else {
-				b.WriteString(fmt.Sprintf("  td:      %s ", styles.Muted.Render(m.tdVersionInfo.CurrentVersion)))
+				fmt.Fprintf(&b, "  td:      %s ", styles.Muted.Render(m.tdVersionInfo.CurrentVersion))
 				b.WriteString(styles.StatusCompleted.Render("✓"))
 			}
 		}
@@ -181,13 +181,13 @@ func (m *Model) diagnosticsUpdateSection() modal.Section {
 
 		// Version comparison
 		if m.updateAvailable != nil {
-			b.WriteString(fmt.Sprintf("Update available: %s → %s",
+			fmt.Fprintf(&b, "Update available: %s → %s",
 				m.updateAvailable.CurrentVersion,
-				m.updateAvailable.LatestVersion))
+				m.updateAvailable.LatestVersion)
 		} else if m.tdVersionInfo != nil && m.tdVersionInfo.HasUpdate {
-			b.WriteString(fmt.Sprintf("td update available: %s → %s",
+			fmt.Fprintf(&b, "td update available: %s → %s",
 				m.tdVersionInfo.CurrentVersion,
-				m.tdVersionInfo.LatestVersion))
+				m.tdVersionInfo.LatestVersion)
 		}
 
 		b.WriteString("\n  ")

@@ -1004,7 +1004,7 @@ func (p *Plugin) renderFilterMenu(height int) string {
 			if p.filters.HasAdapter(opt.id) {
 				checkbox = "[✓]"
 			}
-			sb.WriteString(fmt.Sprintf("  %s %s %s\n", styles.Code.Render(opt.key), checkbox, opt.name))
+			fmt.Fprintf(&sb, "  %s %s %s\n", styles.Code.Render(opt.key), checkbox, opt.name)
 		}
 		sb.WriteString("\n")
 	}
@@ -1026,7 +1026,7 @@ func (p *Plugin) renderFilterMenu(height int) string {
 		if p.filters.HasCategory(c.cat) {
 			checkbox = "[✓]"
 		}
-		sb.WriteString(fmt.Sprintf("  %s %s %s\n", styles.Code.Render(c.key), checkbox, c.name))
+		fmt.Fprintf(&sb, "  %s %s %s\n", styles.Code.Render(c.key), checkbox, c.name)
 	}
 	sb.WriteString("\n")
 
@@ -1047,7 +1047,7 @@ func (p *Plugin) renderFilterMenu(height int) string {
 		if p.filters.HasModel(m.model) {
 			checkbox = "[✓]"
 		}
-		sb.WriteString(fmt.Sprintf("  %s %s %s\n", styles.Code.Render(m.key), checkbox, m.name))
+		fmt.Fprintf(&sb, "  %s %s %s\n", styles.Code.Render(m.key), checkbox, m.name)
 	}
 	sb.WriteString("\n")
 
@@ -1068,7 +1068,7 @@ func (p *Plugin) renderFilterMenu(height int) string {
 		if p.filters.DateRange.Preset == d.preset {
 			checkbox = "[✓]"
 		}
-		sb.WriteString(fmt.Sprintf("  %s %s %s\n", styles.Code.Render(d.key), checkbox, d.name))
+		fmt.Fprintf(&sb, "  %s %s %s\n", styles.Code.Render(d.key), checkbox, d.name)
 	}
 	sb.WriteString("\n")
 
@@ -1077,11 +1077,11 @@ func (p *Plugin) renderFilterMenu(height int) string {
 	if p.filters.ActiveOnly {
 		activeCheck = "[✓]"
 	}
-	sb.WriteString(fmt.Sprintf("  %s %s Active only\n", styles.Code.Render("a"), activeCheck))
+	fmt.Fprintf(&sb, "  %s %s Active only\n", styles.Code.Render("a"), activeCheck)
 	sb.WriteString("\n")
 
 	// Clear filters
-	sb.WriteString(fmt.Sprintf("  %s Clear all filters\n", styles.Code.Render("x")))
+	fmt.Fprintf(&sb, "  %s Clear all filters\n", styles.Code.Render("x"))
 
 	return sb.String()
 }

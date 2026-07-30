@@ -133,12 +133,12 @@ func getUntrackedFileDiff(workdir, file string) (string, error) {
 	if info.Size() > maxUntrackedFileSize {
 		// Generate a truncated diff with size warning
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", file, file))
+		fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", file, file)
 		sb.WriteString("new file mode 100644\n")
 		sb.WriteString("--- /dev/null\n")
-		sb.WriteString(fmt.Sprintf("+++ b/%s\n", file))
+		fmt.Fprintf(&sb, "+++ b/%s\n", file)
 		sb.WriteString("@@ -0,0 +1,1 @@\n")
-		sb.WriteString(fmt.Sprintf("+[File too large to display: %s (%d bytes)]\n", file, info.Size()))
+		fmt.Fprintf(&sb, "+[File too large to display: %s (%d bytes)]\n", file, info.Size())
 		return sb.String(), nil
 	}
 

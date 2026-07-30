@@ -2518,7 +2518,7 @@ func TestRenderToolUseBlockLongOutput(t *testing.T) {
 	// Generate long output
 	var sb strings.Builder
 	for i := 0; i < 50; i++ {
-		sb.WriteString(fmt.Sprintf("Line %d of output\n", i))
+		fmt.Fprintf(&sb, "Line %d of output\n", i)
 	}
 
 	block := adapter.ContentBlock{

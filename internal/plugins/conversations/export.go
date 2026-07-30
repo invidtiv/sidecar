@@ -23,18 +23,18 @@ func ExportSessionAsMarkdown(session *adapter.Session, messages []adapter.Messag
 		sessionName = session.ID
 	}
 
-	sb.WriteString(fmt.Sprintf("# Session: %s\n\n", sessionName))
+	fmt.Fprintf(&sb, "# Session: %s\n\n", sessionName)
 
 	if session != nil {
-		sb.WriteString(fmt.Sprintf("**Date**: %s\n", session.CreatedAt.Format("2006-01-02 15:04")))
+		fmt.Fprintf(&sb, "**Date**: %s\n", session.CreatedAt.Format("2006-01-02 15:04"))
 		if session.Duration > 0 {
-			sb.WriteString(fmt.Sprintf("**Duration**: %s\n", formatExportDuration(session.Duration)))
+			fmt.Fprintf(&sb, "**Duration**: %s\n", formatExportDuration(session.Duration))
 		}
 		if session.TotalTokens > 0 {
-			sb.WriteString(fmt.Sprintf("**Tokens**: %d\n", session.TotalTokens))
+			fmt.Fprintf(&sb, "**Tokens**: %d\n", session.TotalTokens)
 		}
 		if session.EstCost > 0 {
-			sb.WriteString(fmt.Sprintf("**Estimated Cost**: $%.2f\n", session.EstCost))
+			fmt.Fprintf(&sb, "**Estimated Cost**: $%.2f\n", session.EstCost)
 		}
 		sb.WriteString("\n---\n\n")
 	}
@@ -47,23 +47,23 @@ func ExportSessionAsMarkdown(session *adapter.Session, messages []adapter.Messag
 			role = strings.ToUpper(string(runes[:1])) + string(runes[1:])
 		}
 		ts := msg.Timestamp.Format("15:04:05")
-		sb.WriteString(fmt.Sprintf("## %s (%s)\n\n", role, ts))
+		fmt.Fprintf(&sb, "## %s (%s)\n\n", role, ts)
 
 		// Model info for assistant messages
 		if msg.Role == "assistant" && msg.Model != "" {
-			sb.WriteString(fmt.Sprintf("*Model: %s*\n\n", modelShortName(msg.Model)))
+			fmt.Fprintf(&sb, "*Model: %s*\n\n", modelShortName(msg.Model))
 		}
 
 		// Token info
 		if msg.InputTokens > 0 || msg.OutputTokens > 0 {
-			sb.WriteString(fmt.Sprintf("*Tokens: in=%d, out=%d*\n\n", msg.InputTokens, msg.OutputTokens))
+			fmt.Fprintf(&sb, "*Tokens: in=%d, out=%d*\n\n", msg.InputTokens, msg.OutputTokens)
 		}
 
 		// Thinking blocks (if any)
 		if len(msg.ThinkingBlocks) > 0 {
 			for _, tb := range msg.ThinkingBlocks {
 				sb.WriteString("<details>\n")
-				sb.WriteString(fmt.Sprintf("<summary>Thinking (%d tokens)</summary>\n\n", tb.TokenCount))
+				fmt.Fprintf(&sb, "<summary>Thinking (%d tokens)</summary>\n\n", tb.TokenCount)
 				sb.WriteString(tb.Content)
 				sb.WriteString("\n\n</details>\n\n")
 			}
@@ -79,9 +79,9 @@ func ExportSessionAsMarkdown(session *adapter.Session, messages []adapter.Messag
 			for _, tool := range msg.ToolUses {
 				filePath := extractFilePath(tool.Input)
 				if filePath != "" {
-					sb.WriteString(fmt.Sprintf("- %s: `%s`\n", tool.Name, filePath))
+					fmt.Fprintf(&sb, "- %s: `%s`\n", tool.Name, filePath)
 				} else {
-					sb.WriteString(fmt.Sprintf("- %s\n", tool.Name))
+					fmt.Fprintf(&sb, "- %s\n", tool.Name)
 				}
 			}
 			sb.WriteString("\n")

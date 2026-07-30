@@ -160,29 +160,29 @@ func formatSessionSummary(s *sessionRef) string {
 	if name == "" {
 		name = s.ID
 	}
-	sb.WriteString(fmt.Sprintf("# %s\n\n", name))
+	fmt.Fprintf(&sb, "# %s\n\n", name)
 
 	// Metadata
-	sb.WriteString(fmt.Sprintf("**Session ID:** `%s`\n", s.ID))
+	fmt.Fprintf(&sb, "**Session ID:** `%s`\n", s.ID)
 	if s.Adapter != "" {
-		sb.WriteString(fmt.Sprintf("**Adapter:** %s\n", s.Adapter))
+		fmt.Fprintf(&sb, "**Adapter:** %s\n", s.Adapter)
 	}
-	sb.WriteString(fmt.Sprintf("**Created:** %s\n", s.CreatedAt.Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&sb, "**Created:** %s\n", s.CreatedAt.Format("2006-01-02 15:04:05"))
 	if !s.UpdatedAt.IsZero() && s.UpdatedAt.After(s.CreatedAt) {
-		sb.WriteString(fmt.Sprintf("**Updated:** %s\n", s.UpdatedAt.Format("2006-01-02 15:04:05")))
+		fmt.Fprintf(&sb, "**Updated:** %s\n", s.UpdatedAt.Format("2006-01-02 15:04:05"))
 	}
 	if s.Duration > 0 {
-		sb.WriteString(fmt.Sprintf("**Duration:** %s\n", formatExportDuration(s.Duration)))
+		fmt.Fprintf(&sb, "**Duration:** %s\n", formatExportDuration(s.Duration))
 	}
 
 	// Stats
 	if s.Tokens > 0 || s.EstCost > 0 {
 		sb.WriteString("\n## Stats\n\n")
 		if s.Tokens > 0 {
-			sb.WriteString(fmt.Sprintf("- **Tokens:** %d\n", s.Tokens))
+			fmt.Fprintf(&sb, "- **Tokens:** %d\n", s.Tokens)
 		}
 		if s.EstCost > 0 {
-			sb.WriteString(fmt.Sprintf("- **Est. Cost:** $%.4f\n", s.EstCost))
+			fmt.Fprintf(&sb, "- **Est. Cost:** $%.4f\n", s.EstCost)
 		}
 	}
 
@@ -198,11 +198,11 @@ func formatTurnAsMarkdown(turn *Turn) string {
 	if runes := []rune(role); len(runes) > 0 {
 		role = strings.ToUpper(string(runes[:1])) + string(runes[1:])
 	}
-	sb.WriteString(fmt.Sprintf("## %s (%s)\n\n", role, turn.FirstTimestamp()))
+	fmt.Fprintf(&sb, "## %s (%s)\n\n", role, turn.FirstTimestamp())
 
 	// Token info
 	if turn.TotalTokensIn > 0 || turn.TotalTokensOut > 0 {
-		sb.WriteString(fmt.Sprintf("*Tokens: in=%d, out=%d*\n\n", turn.TotalTokensIn, turn.TotalTokensOut))
+		fmt.Fprintf(&sb, "*Tokens: in=%d, out=%d*\n\n", turn.TotalTokensIn, turn.TotalTokensOut)
 	}
 
 	// Content from all messages in turn
@@ -211,7 +211,7 @@ func formatTurnAsMarkdown(turn *Turn) string {
 		if len(msg.ThinkingBlocks) > 0 {
 			for _, tb := range msg.ThinkingBlocks {
 				sb.WriteString("<details>\n")
-				sb.WriteString(fmt.Sprintf("<summary>Thinking (%d tokens)</summary>\n\n", tb.TokenCount))
+				fmt.Fprintf(&sb, "<summary>Thinking (%d tokens)</summary>\n\n", tb.TokenCount)
 				sb.WriteString(tb.Content)
 				sb.WriteString("\n\n</details>\n\n")
 			}
@@ -229,9 +229,9 @@ func formatTurnAsMarkdown(turn *Turn) string {
 			for _, tool := range msg.ToolUses {
 				filePath := extractFilePath(tool.Input)
 				if filePath != "" {
-					sb.WriteString(fmt.Sprintf("- %s: `%s`\n", tool.Name, filePath))
+					fmt.Fprintf(&sb, "- %s: `%s`\n", tool.Name, filePath)
 				} else {
-					sb.WriteString(fmt.Sprintf("- %s\n", tool.Name))
+					fmt.Fprintf(&sb, "- %s\n", tool.Name)
 				}
 			}
 			sb.WriteString("\n")

@@ -29,7 +29,7 @@ Local linting is a trap worth knowing about: `.golangci.yml` is a **v2** config,
 Error: you are using a configuration file for golangci-lint v2 with golangci-lint v1
 ```
 
-CI pins **v2.8.0**. If your local binary is v1.x, `make lint` fails on the config before linting anything. Either install v2.8.0 to match, or just let CI be the gate:
+CI pins **v2.12.2**. If your local binary is v1.x, `make lint` fails on the config before linting anything. A local **v2** that is merely a *different* v2 is the subtler trap: staticcheck gains checks between releases, so an older local binary passes code CI rejects, and a newer one flags code CI accepts. Match the pinned version, or let CI be the gate:
 
 ```bash
 gh run list --workflow=go-ci.yml --limit=1   # must be "completed  success" for the commit you're tagging

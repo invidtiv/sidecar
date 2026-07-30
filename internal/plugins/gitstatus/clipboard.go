@@ -60,17 +60,17 @@ func formatCommitAsMarkdown(commit *Commit) string {
 	var sb strings.Builder
 
 	// Subject as heading
-	sb.WriteString(fmt.Sprintf("# %s\n\n", commit.Subject))
+	fmt.Fprintf(&sb, "# %s\n\n", commit.Subject)
 
 	// Metadata
-	sb.WriteString(fmt.Sprintf("**Commit:** `%s`\n", commit.ShortHash))
-	sb.WriteString(fmt.Sprintf("**Author:** %s <%s>\n", commit.Author, commit.AuthorEmail))
-	sb.WriteString(fmt.Sprintf("**Date:** %s\n", commit.Date.Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&sb, "**Commit:** `%s`\n", commit.ShortHash)
+	fmt.Fprintf(&sb, "**Author:** %s <%s>\n", commit.Author, commit.AuthorEmail)
+	fmt.Fprintf(&sb, "**Date:** %s\n", commit.Date.Format("2006-01-02 15:04:05"))
 
 	// Stats if available
 	if commit.Stats.FilesChanged > 0 {
-		sb.WriteString(fmt.Sprintf("**Stats:** %d file(s), +%d/-%d\n",
-			commit.Stats.FilesChanged, commit.Stats.Additions, commit.Stats.Deletions))
+		fmt.Fprintf(&sb, "**Stats:** %d file(s), +%d/-%d\n",
+			commit.Stats.FilesChanged, commit.Stats.Additions, commit.Stats.Deletions)
 	}
 
 	// Body if present
@@ -85,9 +85,9 @@ func formatCommitAsMarkdown(commit *Commit) string {
 		sb.WriteString("\n## Files Changed\n\n")
 		for _, f := range commit.Files {
 			status := fileStatusIcon(f.Status)
-			sb.WriteString(fmt.Sprintf("- %s `%s`", status, f.Path))
+			fmt.Fprintf(&sb, "- %s `%s`", status, f.Path)
 			if f.Additions > 0 || f.Deletions > 0 {
-				sb.WriteString(fmt.Sprintf(" (+%d/-%d)", f.Additions, f.Deletions))
+				fmt.Fprintf(&sb, " (+%d/-%d)", f.Additions, f.Deletions)
 			}
 			sb.WriteString("\n")
 		}
