@@ -260,7 +260,8 @@ Sidecar runs with sensible defaults. Create `~/.config/sidecar/config.json` only
   },
   "ui": {
     "showClock": true,
-    "nerdFontsEnabled": false
+    "nerdFontsEnabled": false,
+    "terminalTitle": "{project}{worktree}"
   }
 }
 ```
@@ -271,6 +272,39 @@ Sidecar runs with sensible defaults. Create `~/.config/sidecar/config.json` only
 |--------|---------|-------------|
 | `showClock` | `true` | Show clock in header bar |
 | `nerdFontsEnabled` | `false` | Enable Nerd Font glyphs for enhanced visuals |
+| `terminalTitle` | `"{project}{worktree}"` | Template for the terminal window/tab title. Set to `""` to leave the title alone |
+
+### Terminal Title
+
+Sidecar names your terminal window and tab after the project it is showing, so several
+sidecars in several tabs are tellable apart at a glance — and the label follows along when
+you switch projects or worktrees from inside sidecar.
+
+Template variables:
+
+| Variable | Expands to |
+|----------|------------|
+| `{project}` | Project name (`sidecar`) |
+| `{worktree}` | ` [branch]` when you're in a linked worktree, empty otherwise |
+| `{plugin}` | Active tab (`workspaces`, `git`, `files`, …) |
+| `{dir}` | Base name of the working directory |
+
+```json
+{ "ui": { "terminalTitle": "{project}{worktree} · {plugin}" } }
+```
+
+If a template renders to nothing — `{project}` outside a git repository, say — sidecar falls
+back to the directory name rather than clearing the title your shell set.
+
+Sidecar sets the icon name and window title together (OSC 0), which covers tab labels in
+Ghostty, WezTerm, kitty, Alacritty, Terminal.app and iTerm2. The previous title is restored on
+exit in terminals that implement the title stack. Programs that take over the terminal — an
+editor, an attached session — set titles of their own; sidecar takes the title back when they
+finish, within ten seconds at worst.
+
+**Under tmux**, those sequences set the *pane* title, not the window name. To surface it in
+the status line, put `#{pane_title}` in your `window-status-format`, or set
+`set -g allow-rename on` and let tmux follow the pane.
 
 ### Nerd Fonts
 

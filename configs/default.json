@@ -23,6 +23,7 @@
   },
   "ui": {
     "showClock": true,
+    "terminalTitle": "{project}{worktree}",
     "theme": {
       "name": "default",
       "overrides": {}

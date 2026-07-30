@@ -253,6 +253,7 @@ Config file: `~/.config/sidecar/config.json`
   },
   "ui": {
     "showClock": true,
+    "terminalTitle": "{project}{worktree}",
     "theme": {
       "name": "default",
       "overrides": {}
@@ -260,6 +261,10 @@ Config file: `~/.config/sidecar/config.json`
   }
 }
 ```
+
+`terminalTitle` names the terminal window/tab after the active project — handy when several
+sidecars are open at once. Variables: `{project}`, `{worktree}`, `{plugin}`, `{dir}`; set it
+to `""` to leave the title alone.
 
 ## Contributing
 

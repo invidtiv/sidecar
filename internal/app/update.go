@@ -181,6 +181,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		// First real frame: name the terminal after the project.
+		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return m, tea.Batch(cmds...)
 
 	case tea.MouseMsg:
@@ -279,13 +283,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ClearToast()
 		// Eagerly refresh worktree cache (must happen in Update, not View, due to value receiver)
 		m.refreshWorktreeCache()
+		// Resync the tab title against the freshly refreshed worktree cache, so
+		// a branch switched outside sidecar shows up within a second. Every
+		// titleResyncTicks the title is re-asserted even when unchanged, to take
+		// the tab label back from anything run through tea.ExecProcess.
+		m.titleResyncCounter++
+		forceTitle := m.titleResyncCounter >= titleResyncTicks
+		if forceTitle {
+			m.titleResyncCounter = 0
+		}
+		titleCmd := (&m).syncTerminalTitle(forceTitle)
 		// Periodically check if current worktree still exists (every 10 seconds)
 		m.worktreeCheckCounter++
 		if m.worktreeCheckCounter >= 10 {
 			m.worktreeCheckCounter = 0
-			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir))
+			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd)
 		}
-		return m, tickCmd()
+		return m, tea.Batch(tickCmd(), titleCmd)
 
 	case UpdateSpinnerTickMsg:
 		if m.updateInProgress {
@@ -450,6 +464,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, func() tea.Msg { return RefreshMsg{} })
 		}
+		// The editor set its own terminal title; take it back now rather than
+		// leaving the tab mislabelled until the next forced resync.
+		cmds = append(cmds, (&m).syncTerminalTitle(true))
 		return m, tea.Batch(cmds...)
 
 	case palette.CommandSelectedMsg:

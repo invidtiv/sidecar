@@ -4,6 +4,9 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Features
+- **The terminal window and tab are named after the active project.** With several sidecars open at once, the tab bar now says which is which — `sidecar`, `td [charm]` — instead of leaving every tab labelled by the shell, and the name follows along when you switch projects or worktrees from inside sidecar. The format is configurable through the new `ui.terminalTitle` template (`{project}`, `{worktree}`, `{plugin}`, `{dir}`); set it to `""` to leave the title untouched, and outside a git repository it falls back to the directory name rather than clearing what your shell set. The previous title is restored on exit in terminals that support the title stack, and a title set by an editor or an attached session is taken back when you return. Under tmux this sets the pane title — see the docs for surfacing it in the status line.
+
 ## [v0.88.2] - 2026-07-28
 
 ### Bug Fixes

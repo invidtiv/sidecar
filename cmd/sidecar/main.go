@@ -42,6 +42,7 @@ import (
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termtitle"
 	"github.com/marcus/sidecar/internal/theme"
 	"golang.org/x/term"
 )
@@ -231,6 +232,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sidecar requires an interactive terminal")
 		os.Exit(1)
 	}
+	// Bubble Tea clears the window title on exit rather than restoring it, so
+	// bracket the run with the terminal's title stack. Terminals that don't
+	// implement the stack ignore both sequences and are left where they would
+	// have been anyway: window title blank, icon name at sidecar's last value.
+	restoreTitle := func() {}
+	if cfg.UI.TerminalTitle != "" {
+		fmt.Print(termtitle.Save())
+		restoreTitle = func() { fmt.Print(termtitle.Restore()) }
+	}
+
 	// v2: terminal features (alt-screen, mouse) are declared on tea.View in
 	// the app's View() method, not as NewProgram options.
 	p := tea.NewProgram(model)
@@ -246,9 +257,11 @@ func main() {
 		// Report before exiting: os.Exit skips deferred calls, and a trace of a
 		// run that died is exactly the one worth having.
 		startuptrace.Report(logger)
+		restoreTitle()
 		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
 		os.Exit(1)
 	}
+	restoreTitle()
 }
 
 func loadConfig(path string) (*config.Config, error) {

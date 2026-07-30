@@ -136,6 +136,9 @@ type UIConfig struct {
 	Theme            ThemeConfig `json:"theme"`
 	NerdFontsEnabled bool        `json:"nerdFontsEnabled"`        // enables Nerd Font glyphs (pill tabs, icons, etc.)
 	LastOpenInApp    string      `json:"lastOpenInApp,omitempty"` // global fallback for last app used to open projects
+	// TerminalTitle templates the terminal window/tab title. Supported
+	// variables: {project} {worktree} {plugin} {dir}. Empty disables retitling.
+	TerminalTitle string `json:"terminalTitle"`
 }
 
 // ThemeConfig configures the color theme.
@@ -178,7 +181,8 @@ func Default() *Config {
 			Overrides: make(map[string]string),
 		},
 		UI: UIConfig{
-			ShowClock: true,
+			ShowClock:     true,
+			TerminalTitle: "{project}{worktree}",
 			Theme: ThemeConfig{
 				Name:      "default",
 				Overrides: make(map[string]interface{}),
