@@ -65,7 +65,7 @@ func TestRender(t *testing.T) {
 			// backwards is worse than one missing a character.
 			name: "bidi overrides are stripped",
 			tmpl: "{project}",
-			vars: Vars{Project: "main‮gnp.exe"},
+			vars: Vars{Project: "main\u202egnp.exe"}, // U+202E RIGHT-TO-LEFT OVERRIDE
 			want: "maingnp.exe",
 		},
 		{
@@ -79,7 +79,7 @@ func TestRender(t *testing.T) {
 			// title, and not covered by stripping ESC alone.
 			name: "C1 control characters are stripped",
 			tmpl: "{project}",
-			vars: Vars{Project: "sidecar"},
+			vars: Vars{Project: "side\u009bcar"},
 			want: "sidecar",
 		},
 	}
