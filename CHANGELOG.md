@@ -4,6 +4,20 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v0.90.0] - 2026-07-31
+
+### Features
+- **The file browser now tracks filesystem changes as they happen.** Sidecar watches the project root and expanded directories, coalesces bursts of creates, deletes, renames, and writes, and refreshes the tree without waiting for the tab to lose and regain focus. Changes also invalidate background file previews, quick-open results, and path-completion data so every file-browser surface stays aligned with the disk. The watcher is bounded to avoid excessive file descriptors on macOS and is enabled by default behind the `files_auto_refresh` feature flag.
+
+### Performance
+- Tree rebuilds, quick-open scans, and path-completion scans now run outside the UI update path while the previous results remain visible. Navigating to a known file descends only through the directories in that path instead of loading the entire project tree.
+
+### Bug Fixes
+- Async tree refreshes preserve directories expanded and files selected while a scan is running, reject stale results, and continue listening while the inline editor, search, or a modal is open. Recreated directories are re-watched, project switches stop the old watcher, and cache scans can no longer clear one another's dirty state.
+
+### Dependencies
+- Updated td to v0.54.0, adding review attribution and sync support along with monitor input, CLI error reporting, and terminal-output sanitization fixes.
+
 ## [v0.89.0] - 2026-07-30
 
 ### Features

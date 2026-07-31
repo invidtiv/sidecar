@@ -15,7 +15,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/td v0.53.0
+	github.com/marcus/td v0.54.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	golang.org/x/term v0.39.0
