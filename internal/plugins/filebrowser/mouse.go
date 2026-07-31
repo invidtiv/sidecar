@@ -348,6 +348,7 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 	if node.IsDir {
 		// Toggle folder expand/collapse
 		_ = p.tree.Toggle(node)
+		p.syncWatcherDirs()
 		p.treeCursor = idx
 		p.ensureTreeCursorVisible()
 		return p, nil

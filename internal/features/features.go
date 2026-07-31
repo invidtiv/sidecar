@@ -33,6 +33,14 @@ var (
 		Description: "Enable inline file editing via tmux in the files plugin",
 	}
 
+	// FilesAutoRefresh enables watching expanded directories in the files
+	// plugin and refreshing the tree when they change on disk.
+	FilesAutoRefresh = Feature{
+		Name:        "files_auto_refresh",
+		Default:     true,
+		Description: "Auto-refresh the files tree when watched directories change on disk",
+	}
+
 	// NotesPlugin enables the notes plugin for capturing quick notes.
 	NotesPlugin = Feature{
 		Name:        "notes_plugin",
@@ -45,6 +53,7 @@ var (
 var allFeatures = []Feature{
 	TmuxInteractiveInput,
 	TmuxInlineEdit,
+	FilesAutoRefresh,
 	NotesPlugin,
 }
 

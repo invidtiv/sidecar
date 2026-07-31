@@ -2,44 +2,108 @@ package filebrowser
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
-// Watcher monitors a single file for changes.
-// Only watches the currently previewed file, not the entire directory tree.
-type Watcher struct {
-	fsWatcher    *fsnotify.Watcher
-	watchedFile  string // Currently watched file (absolute path)
-	events       chan struct{}
-	stop         chan struct{}
-	debounce     *time.Timer
-	mu           sync.Mutex
-	closed       bool
+const (
+	// watchQuietPeriod is how long the filesystem has to go quiet before a
+	// batch of changes is reported. Editors and build tools write in bursts.
+	watchQuietPeriod = 150 * time.Millisecond
+
+	// watchMaxLatency caps how long a change can sit unreported while writes
+	// keep arriving, so a continuously busy directory still refreshes.
+	watchMaxLatency = 1 * time.Second
+
+	// maxWatchedDirs caps how many directories are watched at once.
+	//
+	// On macOS fsnotify uses kqueue, which needs one file descriptor per file
+	// inside every watched directory (measured: one 500-file directory costs
+	// 501 descriptors). The cap is therefore deliberately small.
+	maxWatchedDirs = 32
+)
+
+// FSEvent is a coalesced batch of filesystem changes.
+type FSEvent struct {
+	// TreeChanged is set when entries appeared, disappeared, or were renamed
+	// inside a watched directory - i.e. when the tree needs rebuilding.
+	TreeChanged bool
+	// PreviewChanged is set when the currently previewed file was touched.
+	PreviewChanged bool
 }
 
-// NewWatcher creates a file watcher. Does not start watching anything until WatchFile is called.
-func NewWatcher() (*Watcher, error) {
+// TreeWatcher watches the expanded directories of the file tree plus the
+// directory holding the previewed file, coalescing bursts of filesystem
+// activity into at most one pending event.
+type TreeWatcher struct {
+	fsWatcher *fsnotify.Watcher
+	events    chan FSEvent
+	stop      chan struct{}
+	done      chan struct{}
+	stopOnce  sync.Once
+
+	mu          sync.Mutex
+	closed      bool
+	watched     map[string]bool // Directories currently registered with fsnotify
+	treeDirs    map[string]bool // Directories requested by SyncDirs
+	previewFile string          // Absolute path of the previewed file ("" = none)
+	previewDir  string          // Directory holding previewFile
+}
+
+// NewTreeWatcher creates a watcher. Nothing is watched until SyncDirs or
+// SetPreviewFile is called.
+func NewTreeWatcher() (*TreeWatcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 
-	w := &Watcher{
+	w := &TreeWatcher{
 		fsWatcher: fsw,
-		events:    make(chan struct{}, 1),
+		events:    make(chan FSEvent, 1),
 		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
+		watched:   make(map[string]bool),
+		treeDirs:  make(map[string]bool),
 	}
 
 	go w.run()
 	return w, nil
 }
 
-// WatchFile starts watching the specified file. Stops watching any previously watched file.
-// Pass empty string to stop watching without watching a new file.
-func (w *Watcher) WatchFile(path string) error {
+// SyncDirs makes the watched directory set match dirs, adding and removing only
+// what actually changed. Order matters: dirs beyond maxWatchedDirs are dropped,
+// so callers should pass the most interesting directories first.
+func (w *TreeWatcher) SyncDirs(dirs []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		return
+	}
+
+	next := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		if len(next) >= maxWatchedDirs {
+			break
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		next[abs] = true
+	}
+
+	w.treeDirs = next
+	w.reconcileLocked()
+}
+
+// SetPreviewFile points the preview watch at path (absolute or relative to the
+// working directory). Pass "" to stop watching a preview file.
+func (w *TreeWatcher) SetPreviewFile(path string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -47,104 +111,224 @@ func (w *Watcher) WatchFile(path string) error {
 		return nil
 	}
 
-	// Remove old watch if any
-	if w.watchedFile != "" {
-		// Watch the directory containing the file (fsnotify works better with directories)
-		oldDir := filepath.Dir(w.watchedFile)
-		_ = w.fsWatcher.Remove(oldDir)
-		w.watchedFile = ""
+	if path == "" {
+		w.previewFile = ""
+		w.previewDir = ""
+		w.reconcileLocked()
+		return nil
 	}
 
-	// Add new watch if path provided
-	if path != "" {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-
-		// Watch the directory containing the file (fsnotify is more reliable with directories)
-		dir := filepath.Dir(absPath)
-		if err := w.fsWatcher.Add(dir); err != nil {
-			return err
-		}
-		w.watchedFile = absPath
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
 	}
-
+	w.previewFile = abs
+	w.previewDir = filepath.Dir(abs)
+	w.reconcileLocked()
 	return nil
 }
 
-// run processes file system events.
-func (w *Watcher) run() {
-	defer func() {
-		w.mu.Lock()
-		w.closed = true
-		if w.debounce != nil {
-			w.debounce.Stop()
+// reconcileLocked brings the fsnotify registrations in line with the desired
+// set (tree directories plus the preview file's directory).
+func (w *TreeWatcher) reconcileLocked() {
+	desired := make(map[string]bool, len(w.treeDirs)+1)
+	for dir := range w.treeDirs {
+		desired[dir] = true
+	}
+	if w.previewDir != "" {
+		desired[w.previewDir] = true
+	}
+
+	for dir := range w.watched {
+		if !desired[dir] {
+			_ = w.fsWatcher.Remove(dir)
+			delete(w.watched, dir)
 		}
-		w.mu.Unlock()
+	}
+	for dir := range desired {
+		if w.watched[dir] {
+			continue
+		}
+		if err := w.fsWatcher.Add(dir); err != nil {
+			continue // Directory vanished or is unreadable; nothing to watch
+		}
+		w.watched[dir] = true
+	}
+}
+
+// classify decides what a raw filesystem event means for the UI.
+func (w *TreeWatcher) classify(event fsnotify.Event) FSEvent {
+	if event.Op == fsnotify.Chmod {
+		return FSEvent{} // Permission/timestamp churn only
+	}
+	if isIgnoredWatchPath(event.Name) {
+		return FSEvent{}
+	}
+
+	abs, err := filepath.Abs(event.Name)
+	if err != nil {
+		return FSEvent{}
+	}
+
+	var out FSEvent
+
+	w.mu.Lock()
+	previewFile := w.previewFile
+	watched := w.watched[filepath.Dir(abs)]
+	w.mu.Unlock()
+
+	if previewFile != "" && abs == previewFile {
+		out.PreviewChanged = true
+	}
+	// Only structural changes need a tree rebuild; writes to an existing file
+	// do not change what the tree displays.
+	if watched && event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
+		out.TreeChanged = true
+	}
+	return out
+}
+
+// isIgnoredWatchPath reports whether a path is noise the file browser never shows.
+func isIgnoredWatchPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	base := filepath.Base(path)
+	if isSystemFile(base) {
+		return true
+	}
+	// Editor scratch files: vim swap/backup, emacs lock files, vim's probe file.
+	if strings.HasPrefix(base, ".#") || strings.HasSuffix(base, "~") || base == "4913" {
+		return true
+	}
+	switch filepath.Ext(base) {
+	case ".swp", ".swx", ".swo", ".tmp":
+		return true
+	}
+	return false
+}
+
+// run processes filesystem events, coalescing bursts into a single pending event.
+func (w *TreeWatcher) run() {
+	defer func() {
 		close(w.events)
+		close(w.done)
 	}()
+
+	quiet := time.NewTimer(time.Hour)
+	stopTimer(quiet)
+	maxLatency := time.NewTimer(time.Hour)
+	stopTimer(maxLatency)
+
+	var (
+		pending  FSEvent
+		quietC   <-chan time.Time
+		maxLatC  <-chan time.Time
+		hasEvent bool
+	)
+
+	flush := func() {
+		stopTimer(quiet)
+		stopTimer(maxLatency)
+		quietC, maxLatC = nil, nil
+		if !hasEvent {
+			return
+		}
+		w.emit(pending)
+		pending = FSEvent{}
+		hasEvent = false
+	}
 
 	for {
 		select {
 		case <-w.stop:
 			return
+
 		case event, ok := <-w.fsWatcher.Events:
 			if !ok {
 				return
 			}
-
-			w.mu.Lock()
-			// Only process events for the watched file
-			watchedFile := w.watchedFile
-			w.mu.Unlock()
-
-			if watchedFile == "" {
+			change := w.classify(event)
+			if !change.TreeChanged && !change.PreviewChanged {
 				continue
 			}
+			pending.TreeChanged = pending.TreeChanged || change.TreeChanged
+			pending.PreviewChanged = pending.PreviewChanged || change.PreviewChanged
 
-			// Check if event is for our watched file
-			eventPath, _ := filepath.Abs(event.Name)
-			if eventPath != watchedFile {
-				continue
+			// Restart the quiet period on every change; start the max-latency
+			// timer only once per batch so a busy directory still reports.
+			stopTimer(quiet)
+			quiet.Reset(watchQuietPeriod)
+			quietC = quiet.C
+			if !hasEvent {
+				maxLatency.Reset(watchMaxLatency)
+				maxLatC = maxLatency.C
 			}
+			hasEvent = true
 
-			// Debounce: wait 100ms for more events before signaling
-			w.mu.Lock()
-			if w.debounce != nil {
-				w.debounce.Stop()
-			}
-			w.debounce = time.AfterFunc(100*time.Millisecond, func() {
-				w.mu.Lock()
-				defer w.mu.Unlock()
+		case <-quietC:
+			flush()
 
-				if w.closed {
-					return
-				}
-
-				select {
-				case w.events <- struct{}{}:
-				default: // Channel full, skip
-				}
-			})
-			w.mu.Unlock()
+		case <-maxLatC:
+			flush()
 
 		case _, ok := <-w.fsWatcher.Errors:
 			if !ok {
 				return
 			}
-			// Ignore errors, continue watching
+			// Ignore errors and keep watching.
 		}
 	}
 }
 
-// Events returns a channel that signals when the watched file changes.
-func (w *Watcher) Events() <-chan struct{} {
+// emit delivers ev on the cap-1 events channel, merging with an event the
+// consumer has not picked up yet. Only run() sends, so the drain-then-send is
+// guaranteed to have room.
+func (w *TreeWatcher) emit(ev FSEvent) {
+	select {
+	case old := <-w.events:
+		ev.TreeChanged = ev.TreeChanged || old.TreeChanged
+		ev.PreviewChanged = ev.PreviewChanged || old.PreviewChanged
+	default:
+	}
+	w.events <- ev
+}
+
+func stopTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+}
+
+// Events returns the channel of coalesced filesystem events. It is closed once
+// the watcher stops.
+func (w *TreeWatcher) Events() <-chan FSEvent {
 	return w.events
 }
 
-// Stop shuts down the watcher.
-func (w *Watcher) Stop() {
-	close(w.stop)
-	_ = w.fsWatcher.Close()
+// Stop shuts the watcher down and blocks until the event channel is closed, so
+// a caller that has stopped a watcher can never see another event from it.
+func (w *TreeWatcher) Stop() {
+	w.stopOnce.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		// fsnotify's kqueue backend marks itself closed before unregistering,
+		// so Close() alone leaks one descriptor per watched file on macOS.
+		// Remove the directories first.
+		for dir := range w.watched {
+			_ = w.fsWatcher.Remove(dir)
+		}
+		w.watched = make(map[string]bool)
+		w.treeDirs = make(map[string]bool)
+		w.mu.Unlock()
+
+		close(w.stop)
+		_ = w.fsWatcher.Close()
+	})
+	<-w.done
 }

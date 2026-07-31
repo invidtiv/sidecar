@@ -94,6 +94,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		if node != nil {
 			if node.IsDir {
 				_ = p.tree.Expand(node)
+				p.syncWatcherDirs()
 			} else {
 				// Load file preview, switch to preview pane, and pin the tab
 				p.activePane = PanePreview
@@ -109,6 +110,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 			if node.IsDir {
 				// Toggle expand/collapse
 				_ = p.tree.Toggle(node)
+				p.syncWatcherDirs()
 			} else {
 				// Load file preview, switch to preview pane, and pin the tab
 				p.activePane = PanePreview
@@ -123,6 +125,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		if node != nil {
 			if node.IsDir && node.IsExpanded {
 				p.tree.Collapse(node)
+				p.syncWatcherDirs()
 			} else if node.Parent != nil && node.Parent != p.tree.Root {
 				if idx := p.tree.IndexOf(node.Parent); idx >= 0 {
 					p.treeCursor = idx

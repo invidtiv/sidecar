@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -59,8 +60,12 @@ type (
 	StateRestoredMsg struct {
 		State state.FileBrowserState
 	}
-	WatchStartedMsg struct{ Watcher *Watcher }
-	WatchEventMsg   struct{}
+	WatchStartedMsg struct{ Watcher *TreeWatcher }
+	// WatchEventMsg carries a coalesced batch of filesystem changes.
+	WatchEventMsg struct {
+		TreeChanged    bool
+		PreviewChanged bool
+	}
 	// NavigateToFileMsg requests navigation to a specific file (from other plugins).
 	NavigateToFileMsg struct {
 		Path string // Relative path from workdir
@@ -236,8 +241,10 @@ type Plugin struct {
 	clipboardIsDir bool   // Whether yanked item is a directory
 
 	// File watcher
-	watcher     *Watcher
-	lastRefresh time.Time // Debounce rapid refreshes on focus
+	watcher            *TreeWatcher
+	lastRefresh        time.Time // Debounce rapid refreshes on focus
+	pendingAutoRefresh bool      // A watched change arrived while a modal/search/editor was open
+	stopped            bool      // Set by Stop(); guards late WatchStartedMsg delivery
 
 	// Mouse support
 	mouseHandler *mouse.Handler
@@ -295,6 +302,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset state flags for reinit support (project switching)
 	p.stateRestored = false
+	p.stopped = false
+	p.pendingAutoRefresh = false
 
 	// Initialize markdown renderer
 	renderer, err := markdown.NewRenderer()
@@ -321,8 +330,10 @@ func (p *Plugin) Start() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	p.stopped = true
 	if p.watcher != nil {
 		p.watcher.Stop()
+		p.watcher = nil
 	}
 	// Kill any active inline edit sessions
 	p.cleanupAllEditSessions()
@@ -404,24 +415,30 @@ func (p *Plugin) restoreState() tea.Cmd {
 
 // startWatcher initializes the file system watcher.
 func (p *Plugin) startWatcher() tea.Cmd {
+	logger := p.ctx.Logger
 	return func() tea.Msg {
-		watcher, err := NewWatcher()
+		watcher, err := NewTreeWatcher()
 		if err != nil {
-			p.ctx.Logger.Error("file browser: watcher failed", "error", err)
+			logger.Error("file browser: watcher failed", "error", err)
 			return nil
 		}
 		return WatchStartedMsg{Watcher: watcher}
 	}
 }
 
-// listenForWatchEvents waits for the next file system event.
+// listenForWatchEvents waits for the next file system event. The watcher is
+// captured here so the command never reads plugin state off the update goroutine.
 func (p *Plugin) listenForWatchEvents() tea.Cmd {
-	if p.watcher == nil {
+	watcher := p.watcher
+	if watcher == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		<-p.watcher.Events()
-		return WatchEventMsg{}
+		ev, ok := <-watcher.Events()
+		if !ok {
+			return nil // Watcher stopped
+		}
+		return WatchEventMsg(ev)
 	}
 }
 
@@ -431,10 +448,57 @@ func (p *Plugin) updateWatchedFile() {
 		return
 	}
 	if p.previewFile != "" {
-		_ = p.watcher.WatchFile(filepath.Join(p.ctx.WorkDir, p.previewFile))
+		_ = p.watcher.SetPreviewFile(filepath.Join(p.ctx.WorkDir, p.previewFile))
 	} else {
-		_ = p.watcher.WatchFile("")
+		_ = p.watcher.SetPreviewFile("")
 	}
+}
+
+// autoRefreshEnabled reports whether watched directories should drive tree refreshes.
+func autoRefreshEnabled() bool {
+	return features.IsEnabled(features.FilesAutoRefresh.Name)
+}
+
+// syncWatcherDirs points the watcher at the root plus every expanded directory,
+// in visible order so the watcher's cap keeps the directories nearest the top.
+func (p *Plugin) syncWatcherDirs() {
+	if p.watcher == nil {
+		return
+	}
+	if p.tree == nil || !autoRefreshEnabled() {
+		p.watcher.SyncDirs(nil)
+		return
+	}
+
+	dirs := make([]string, 0, len(p.tree.FlatList)+1)
+	dirs = append(dirs, p.tree.RootDir)
+	for _, node := range p.tree.FlatList {
+		if node.IsDir && node.IsExpanded {
+			dirs = append(dirs, filepath.Join(p.tree.RootDir, node.Path))
+		}
+	}
+	p.watcher.SyncDirs(dirs)
+}
+
+// autoRefreshBlocked reports whether a tree rebuild would disrupt what the user
+// is doing: rebuilding under a modal, a search, or the inline editor would move
+// the ground out from under it.
+func (p *Plugin) autoRefreshBlocked() bool {
+	return p.ConsumesTextInput() ||
+		p.infoMode ||
+		p.blameMode ||
+		p.showExitConfirmation
+}
+
+// requestAutoRefresh refreshes the tree, or defers it until the user is done.
+func (p *Plugin) requestAutoRefresh() tea.Cmd {
+	if p.autoRefreshBlocked() {
+		p.pendingAutoRefresh = true
+		return nil
+	}
+	p.pendingAutoRefresh = false
+	p.lastRefresh = time.Now()
+	return p.refresh()
 }
 
 // refresh rebuilds the file tree, preserving expanded state.
@@ -517,8 +581,20 @@ func (p *Plugin) reresolveFileOpTarget() {
 	}
 }
 
-// Update handles messages.
+// Update handles messages. A tree refresh deferred while a modal, search, or the
+// inline editor was open is flushed here, once the message that closed it has
+// been handled.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	updated, cmd := p.update(msg)
+	if p.pendingAutoRefresh && !p.autoRefreshBlocked() {
+		if refreshCmd := p.requestAutoRefresh(); refreshCmd != nil {
+			return updated, tea.Batch(cmd, refreshCmd)
+		}
+	}
+	return updated, cmd
+}
+
+func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog first
 	if p.showExitConfirmation {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
@@ -628,6 +704,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.ctx.Logger.Error("tree build failed", "error", msg.Err)
 		} else if msg.Tree != nil {
 			p.applyBuiltTree(msg.Tree, msg.CursorPath)
+			p.syncWatcherDirs()
 		}
 		// Handle pending auto-open from file creation
 		if p.pendingOpenFile != "" {
@@ -658,6 +735,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				expandedPaths[path] = true
 			}
 			p.tree.RestoreExpandedPaths(expandedPaths)
+			p.syncWatcherDirs()
 		}
 
 		// Restore ignored file visibility (nil = default true)
@@ -747,14 +825,25 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.refresh()
 
 	case WatchStartedMsg:
+		// The plugin may have been stopped while the watcher was starting.
+		if p.stopped {
+			msg.Watcher.Stop()
+			return p, nil
+		}
 		p.watcher = msg.Watcher
+		p.updateWatchedFile()
+		p.syncWatcherDirs()
 		return p, p.listenForWatchEvents()
 
 	case WatchEventMsg:
-		// Watched file changed - reload preview (watcher only watches the previewed file)
 		cmds := []tea.Cmd{p.listenForWatchEvents()}
-		if p.previewFile != "" {
+		if msg.PreviewChanged && p.previewFile != "" {
 			cmds = append(cmds, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch))
+		}
+		if msg.TreeChanged && autoRefreshEnabled() {
+			if cmd := p.requestAutoRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		return p, tea.Batch(cmds...)
 

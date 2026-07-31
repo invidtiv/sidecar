@@ -5,394 +5,656 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
-func TestNewWatcher(t *testing.T) {
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-
-	if w != nil {
-		if w.fsWatcher == nil {
-			t.Error("fsWatcher not initialized")
+// waitForEvent waits for the next coalesced event, failing if none arrives.
+func waitForEvent(t *testing.T, w *TreeWatcher) FSEvent {
+	t.Helper()
+	select {
+	case ev, ok := <-w.Events():
+		if !ok {
+			t.Fatal("events channel closed while waiting for an event")
 		}
-		if w.events == nil {
-			t.Error("events channel not initialized")
+		return ev
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for filesystem event")
+		return FSEvent{}
+	}
+}
+
+// expectNoEvent asserts nothing is reported within the quiet period plus slack.
+func expectNoEvent(t *testing.T, w *TreeWatcher) {
+	t.Helper()
+	select {
+	case ev, ok := <-w.Events():
+		if ok {
+			t.Fatalf("unexpected event: %+v", ev)
 		}
-		w.Stop()
-	} else {
-		t.Error("NewWatcher() returned nil")
+	case <-time.After(watchQuietPeriod + 400*time.Millisecond):
 	}
 }
 
-func TestWatcher_WatchFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	// Create a test file
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	w, err := NewWatcher()
+func newTestWatcher(t *testing.T) *TreeWatcher {
+	t.Helper()
+	w, err := NewTreeWatcher()
 	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
 	}
-	defer w.Stop()
+	t.Cleanup(w.Stop)
+	return w
+}
 
-	// Watch the file
-	if err := w.WatchFile(testFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	// Modify the file
-	time.Sleep(50 * time.Millisecond)
-	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
-		t.Fatalf("failed to modify test file: %v", err)
-	}
-
-	// Wait for event with timeout
-	select {
-	case <-w.Events():
-		// Event received as expected
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for file change event")
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write %s: %v", path, err)
 	}
 }
 
-func TestWatcher_WatchFile_IgnoresOtherFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	watchedFile := filepath.Join(tmpDir, "watched.txt")
-	otherFile := filepath.Join(tmpDir, "other.txt")
-
-	// Create both files
-	if err := os.WriteFile(watchedFile, []byte("watched"), 0644); err != nil {
-		t.Fatalf("failed to create watched file: %v", err)
+func TestNewTreeWatcher(t *testing.T) {
+	w := newTestWatcher(t)
+	if w.fsWatcher == nil {
+		t.Error("fsWatcher not initialized")
 	}
-	if err := os.WriteFile(otherFile, []byte("other"), 0644); err != nil {
-		t.Fatalf("failed to create other file: %v", err)
+	if w.events == nil {
+		t.Error("events channel not initialized")
 	}
-
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
-
-	// Watch only one file
-	if err := w.WatchFile(watchedFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	// Modify the OTHER file (should NOT trigger event)
-	time.Sleep(50 * time.Millisecond)
-	if err := os.WriteFile(otherFile, []byte("modified other"), 0644); err != nil {
-		t.Fatalf("failed to modify other file: %v", err)
-	}
-
-	// Should NOT receive event for other file
-	select {
-	case <-w.Events():
-		t.Error("received event for unwatched file")
-	case <-time.After(300 * time.Millisecond):
-		// Expected - no event for unwatched file
-	}
-
-	// Now modify the watched file (SHOULD trigger event)
-	if err := os.WriteFile(watchedFile, []byte("modified watched"), 0644); err != nil {
-		t.Fatalf("failed to modify watched file: %v", err)
-	}
-
-	// Should receive event for watched file
-	select {
-	case <-w.Events():
-		// Expected
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for event on watched file")
+	if cap(w.events) != 1 {
+		t.Errorf("events channel cap = %d, want 1", cap(w.events))
 	}
 }
 
-func TestWatcher_SwitchWatchedFile(t *testing.T) {
+func TestTreeWatcher_SyncDirs_ReportsCreate(t *testing.T) {
 	tmpDir := t.TempDir()
-	file1 := filepath.Join(tmpDir, "file1.txt")
-	file2 := filepath.Join(tmpDir, "file2.txt")
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
 
-	// Create both files
-	if err := os.WriteFile(file1, []byte("file1"), 0644); err != nil {
-		t.Fatalf("failed to create file1: %v", err)
-	}
-	if err := os.WriteFile(file2, []byte("file2"), 0644); err != nil {
-		t.Fatalf("failed to create file2: %v", err)
-	}
+	writeFile(t, filepath.Join(tmpDir, "new.txt"), "hi")
 
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
-
-	// Watch file1
-	if err := w.WatchFile(file1); err != nil {
-		t.Fatalf("WatchFile(file1) failed: %v", err)
-	}
-
-	// Switch to watching file2
-	if err := w.WatchFile(file2); err != nil {
-		t.Fatalf("WatchFile(file2) failed: %v", err)
-	}
-
-	// Modify file1 (should NOT trigger event since we switched)
-	time.Sleep(50 * time.Millisecond)
-	if err := os.WriteFile(file1, []byte("modified file1"), 0644); err != nil {
-		t.Fatalf("failed to modify file1: %v", err)
-	}
-
-	select {
-	case <-w.Events():
-		t.Error("received event for previously watched file after switch")
-	case <-time.After(300 * time.Millisecond):
-		// Expected - no event for unwatched file
-	}
-
-	// Modify file2 (SHOULD trigger event)
-	if err := os.WriteFile(file2, []byte("modified file2"), 0644); err != nil {
-		t.Fatalf("failed to modify file2: %v", err)
-	}
-
-	select {
-	case <-w.Events():
-		// Expected
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for event on currently watched file")
+	ev := waitForEvent(t, w)
+	if !ev.TreeChanged {
+		t.Errorf("expected TreeChanged for a new file, got %+v", ev)
 	}
 }
 
-func TestWatcher_WatchEmptyStopsWatching(t *testing.T) {
+func TestTreeWatcher_SyncDirs_ReportsRemove(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
+	target := filepath.Join(tmpDir, "gone.txt")
+	writeFile(t, target, "x")
 
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
 	}
 
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
-
-	// Watch the file
-	if err := w.WatchFile(testFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	// Stop watching by passing empty string
-	if err := w.WatchFile(""); err != nil {
-		t.Fatalf("WatchFile('') failed: %v", err)
-	}
-
-	// Modify the file (should NOT trigger event since we stopped watching)
-	time.Sleep(50 * time.Millisecond)
-	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
-		t.Fatalf("failed to modify test file: %v", err)
-	}
-
-	select {
-	case <-w.Events():
-		t.Error("received event after stopping watch")
-	case <-time.After(300 * time.Millisecond):
-		// Expected - no event
+	ev := waitForEvent(t, w)
+	if !ev.TreeChanged {
+		t.Errorf("expected TreeChanged for a deleted file, got %+v", ev)
 	}
 }
 
-func TestWatcher_Debounce(t *testing.T) {
+func TestTreeWatcher_SyncDirs_DiffsInsteadOfRewatching(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+	sub := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
 	}
 
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir, sub})
 
-	if err := w.WatchFile(testFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
+	w.mu.Lock()
+	first := len(w.watched)
+	w.mu.Unlock()
+	if first != 2 {
+		t.Fatalf("watched %d dirs, want 2", first)
 	}
 
-	// Rapidly modify the file multiple times
-	for i := 0; i < 5; i++ {
-		if err := os.WriteFile(testFile, []byte("test"+string(rune('0'+i))), 0644); err != nil {
-			t.Fatalf("failed to modify test file: %v", err)
+	// Same set again: nothing should change.
+	w.SyncDirs([]string{tmpDir, sub})
+	w.mu.Lock()
+	second := len(w.watched)
+	w.mu.Unlock()
+	if second != 2 {
+		t.Fatalf("watched %d dirs after re-sync, want 2", second)
+	}
+
+	// Collapse the subdirectory: it should be dropped.
+	w.SyncDirs([]string{tmpDir})
+	w.mu.Lock()
+	_, stillWatched := w.watched[sub]
+	w.mu.Unlock()
+	if stillWatched {
+		t.Error("collapsed directory is still watched")
+	}
+}
+
+func TestTreeWatcher_SyncDirs_StopsReportingRemovedDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	sub := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{sub})
+	w.SyncDirs(nil)
+
+	writeFile(t, filepath.Join(sub, "new.txt"), "hi")
+	expectNoEvent(t, w)
+}
+
+func TestTreeWatcher_SyncDirs_CapsWatchedDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	dirs := make([]string, 0, maxWatchedDirs+10)
+	for i := 0; i < maxWatchedDirs+10; i++ {
+		d := filepath.Join(tmpDir, string(rune('a'+i%26))+string(rune('a'+i/26)))
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		dirs = append(dirs, d)
 	}
 
-	// Should receive event(s) but debouncing prevents too many
-	eventCount := 0
-	done := make(chan bool)
+	w := newTestWatcher(t)
+	w.SyncDirs(dirs)
 
+	w.mu.Lock()
+	got := len(w.watched)
+	w.mu.Unlock()
+	if got != maxWatchedDirs {
+		t.Errorf("watched %d dirs, want the cap of %d", got, maxWatchedDirs)
+	}
+}
+
+func TestTreeWatcher_WriteDoesNotRebuildTree(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "existing.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+
+	// Overwriting an existing file changes no tree entry.
+	writeFile(t, target, "changed")
+
+	select {
+	case ev := <-w.Events():
+		if ev.TreeChanged {
+			t.Errorf("write to an existing file reported TreeChanged: %+v", ev)
+		}
+	case <-time.After(watchQuietPeriod + 400*time.Millisecond):
+	}
+}
+
+func TestTreeWatcher_SetPreviewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "preview.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	if err := w.SetPreviewFile(target); err != nil {
+		t.Fatalf("SetPreviewFile() failed: %v", err)
+	}
+
+	writeFile(t, target, "changed")
+
+	ev := waitForEvent(t, w)
+	if !ev.PreviewChanged {
+		t.Errorf("expected PreviewChanged, got %+v", ev)
+	}
+}
+
+func TestTreeWatcher_SetPreviewFile_IgnoresOtherFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	watched := filepath.Join(tmpDir, "watched.txt")
+	other := filepath.Join(tmpDir, "other.txt")
+	writeFile(t, watched, "x")
+	writeFile(t, other, "x")
+
+	w := newTestWatcher(t)
+	if err := w.SetPreviewFile(watched); err != nil {
+		t.Fatalf("SetPreviewFile() failed: %v", err)
+	}
+
+	// Writing another existing file is neither a preview nor a tree change.
+	writeFile(t, other, "changed")
+	expectNoEvent(t, w)
+
+	writeFile(t, watched, "changed")
+	if ev := waitForEvent(t, w); !ev.PreviewChanged {
+		t.Errorf("expected PreviewChanged, got %+v", ev)
+	}
+}
+
+func TestTreeWatcher_SwitchPreviewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	first := filepath.Join(tmpDir, "first.txt")
+	second := filepath.Join(tmpDir, "second.txt")
+	writeFile(t, first, "x")
+	writeFile(t, second, "x")
+
+	w := newTestWatcher(t)
+	if err := w.SetPreviewFile(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetPreviewFile(second); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, first, "changed")
+	expectNoEvent(t, w)
+
+	writeFile(t, second, "changed")
+	if ev := waitForEvent(t, w); !ev.PreviewChanged {
+		t.Errorf("expected PreviewChanged for the new preview file, got %+v", ev)
+	}
+}
+
+func TestTreeWatcher_SetPreviewFile_EmptyStopsWatching(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "preview.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	if err := w.SetPreviewFile(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetPreviewFile(""); err != nil {
+		t.Fatal(err)
+	}
+
+	w.mu.Lock()
+	watched := len(w.watched)
+	w.mu.Unlock()
+	if watched != 0 {
+		t.Errorf("watched %d dirs after clearing the preview file, want 0", watched)
+	}
+
+	writeFile(t, target, "changed")
+	expectNoEvent(t, w)
+}
+
+func TestTreeWatcher_PreviewFileSurvivesSyncDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	sub := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "preview.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	if err := w.SetPreviewFile(target); err != nil {
+		t.Fatal(err)
+	}
+	// Collapsing every directory must not drop the preview watch.
+	w.SyncDirs([]string{tmpDir})
+
+	writeFile(t, target, "changed")
+	if ev := waitForEvent(t, w); !ev.PreviewChanged {
+		t.Errorf("expected PreviewChanged after SyncDirs, got %+v", ev)
+	}
+}
+
+func TestTreeWatcher_DeletePreviewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "preview.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+	if err := w.SetPreviewFile(target); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+
+	ev := waitForEvent(t, w)
+	if !ev.PreviewChanged || !ev.TreeChanged {
+		t.Errorf("deleting the preview file should report both flags, got %+v", ev)
+	}
+}
+
+func TestTreeWatcher_IgnoresGitDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.Mkdir(gitDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir, gitDir})
+
+	writeFile(t, filepath.Join(gitDir, "index.lock"), "x")
+	expectNoEvent(t, w)
+}
+
+func TestTreeWatcher_IgnoresSystemAndEditorFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+
+	for _, name := range []string{".DS_Store", "._resource", "notes.txt.swp", "notes.txt~", ".#lock", "4913"} {
+		writeFile(t, filepath.Join(tmpDir, name), "x")
+	}
+	expectNoEvent(t, w)
+
+	// A real file still gets through afterwards.
+	writeFile(t, filepath.Join(tmpDir, "real.txt"), "x")
+	if ev := waitForEvent(t, w); !ev.TreeChanged {
+		t.Errorf("expected TreeChanged for a real file, got %+v", ev)
+	}
+}
+
+func TestIsIgnoredWatchPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/repo/.git/index", true},
+		{"/repo/.git", true},
+		{"/repo/src/.git/HEAD", true},
+		{"/repo/.DS_Store", true},
+		{"/repo/._file", true},
+		{"/repo/file.swp", true},
+		{"/repo/file.txt~", true},
+		{"/repo/.#file.txt", true},
+		{"/repo/4913", true},
+		{"/repo/main.go", false},
+		{"/repo/gitignore/main.go", false},
+		{"/repo/.github/workflows/ci.yml", false},
+	}
+	for _, tc := range tests {
+		if got := isIgnoredWatchPath(tc.path); got != tc.want {
+			t.Errorf("isIgnoredWatchPath(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestTreeWatcher_CoalescesBurst(t *testing.T) {
+	tmpDir := t.TempDir()
+	preview := filepath.Join(tmpDir, "preview.txt")
+	writeFile(t, preview, "x")
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+	if err := w.SetPreviewFile(preview); err != nil {
+		t.Fatal(err)
+	}
+
+	// A burst of creates plus preview writes, all inside one quiet period.
+	for i := 0; i < 10; i++ {
+		writeFile(t, filepath.Join(tmpDir, "burst"+string(rune('0'+i))+".txt"), "x")
+		writeFile(t, preview, "change")
+	}
+
+	ev := waitForEvent(t, w)
+	if !ev.TreeChanged || !ev.PreviewChanged {
+		t.Errorf("coalesced event lost a flag: %+v", ev)
+	}
+
+	// The burst must not queue up one event per write.
+	select {
+	case extra := <-w.Events():
+		t.Errorf("burst produced more than one event: %+v", extra)
+	case <-time.After(watchQuietPeriod + 400*time.Millisecond):
+	}
+}
+
+func TestTreeWatcher_MaxLatencyFlush(t *testing.T) {
+	tmpDir := t.TempDir()
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+
+	// Keep writing faster than the quiet period so only the max-latency timer
+	// can flush.
+	stop := make(chan struct{})
+	defer close(stop)
 	go func() {
-		for {
+		for i := 0; ; i++ {
 			select {
-			case <-w.Events():
-				eventCount++
-			case <-time.After(300 * time.Millisecond):
-				done <- true
+			case <-stop:
 				return
+			default:
 			}
+			_ = os.WriteFile(filepath.Join(tmpDir, "busy"+string(rune('a'+i%20))+".txt"), []byte("x"), 0644)
+			_ = os.Remove(filepath.Join(tmpDir, "busy"+string(rune('a'+i%20))+".txt"))
+			time.Sleep(watchQuietPeriod / 4)
 		}
 	}()
 
-	<-done
-
-	if eventCount == 0 {
-		t.Error("no events detected")
+	start := time.Now()
+	ev := waitForEvent(t, w)
+	if !ev.TreeChanged {
+		t.Errorf("expected TreeChanged, got %+v", ev)
 	}
-	// Due to debouncing, we should have fewer events than modifications
+	if elapsed := time.Since(start); elapsed > watchMaxLatency+time.Second {
+		t.Errorf("max-latency flush took %v, want <= %v", elapsed, watchMaxLatency+time.Second)
+	}
 }
 
-func TestWatcher_Stop(t *testing.T) {
-	w, err := NewWatcher()
+func TestTreeWatcher_EmitMergesUndrainedEvent(t *testing.T) {
+	// emit is only ever called from run(); drive it directly on a watcher with
+	// no run goroutine so the test is the sole sender.
+	w := &TreeWatcher{events: make(chan FSEvent, 1)}
+
+	w.emit(FSEvent{TreeChanged: true})
+	w.emit(FSEvent{PreviewChanged: true})
+
+	ev := <-w.Events()
+	if !ev.TreeChanged || !ev.PreviewChanged {
+		t.Errorf("emit dropped a flag when the consumer was behind: %+v", ev)
+	}
+	select {
+	case extra := <-w.Events():
+		t.Errorf("expected a single merged event, got another: %+v", extra)
+	default:
+	}
+}
+
+func TestTreeWatcher_StopClosesEvents(t *testing.T) {
+	w, err := NewTreeWatcher()
 	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
 	}
 
-	// Stop should not panic
 	w.Stop()
 
-	// Wait for run() goroutine to exit and close the channel
-	time.Sleep(50 * time.Millisecond)
-
-	// Channel should be closed after stop
+	// Stop blocks until run() closed the channel, so this must not block.
 	select {
 	case _, ok := <-w.Events():
 		if ok {
-			t.Error("received event after watcher stopped")
+			t.Error("received an event after Stop()")
 		}
-		// !ok means channel closed - this is expected and correct
-	case <-time.After(200 * time.Millisecond):
-		// Also acceptable - no event after stop
+	default:
+		t.Error("events channel is still open after Stop() returned")
 	}
 }
 
-func TestWatcher_EventsChannel(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	w, err := NewWatcher()
+func TestTreeWatcher_StopIsIdempotent(t *testing.T) {
+	w, err := NewTreeWatcher()
 	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
 	}
-	defer w.Stop()
-
-	if err := w.WatchFile(testFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	eventsChan := w.Events()
-	if eventsChan == nil {
-		t.Error("Events() returned nil channel")
-	}
-
-	// Modify the file
-	time.Sleep(50 * time.Millisecond)
-	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
-		t.Fatalf("failed to modify test file: %v", err)
-	}
-
-	select {
-	case <-eventsChan:
-		// Success
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout reading from events channel")
-	}
-}
-
-func TestWatcher_DeleteWatchedFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "test.txt")
-
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
-
-	if err := w.WatchFile(testFile); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	// Delete the file
-	time.Sleep(50 * time.Millisecond)
-	if err := os.Remove(testFile); err != nil {
-		t.Fatalf("failed to delete test file: %v", err)
-	}
-
-	// Should detect the deletion
-	select {
-	case <-w.Events():
-		// Success
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for deletion event")
-	}
-}
-
-func TestWatcher_RenameWatchedFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldPath := filepath.Join(tmpDir, "old.txt")
-	newPath := filepath.Join(tmpDir, "new.txt")
-
-	if err := os.WriteFile(oldPath, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-	defer w.Stop()
-
-	if err := w.WatchFile(oldPath); err != nil {
-		t.Fatalf("WatchFile() failed: %v", err)
-	}
-
-	// Rename the file
-	time.Sleep(50 * time.Millisecond)
-	if err := os.Rename(oldPath, newPath); err != nil {
-		t.Fatalf("failed to rename file: %v", err)
-	}
-
-	// Should detect the rename (shows up as modification/deletion of watched file)
-	select {
-	case <-w.Events():
-		// Success
-	case <-time.After(500 * time.Millisecond):
-		t.Error("timeout waiting for rename event")
-	}
-}
-
-func TestWatcher_WatchClosedWatcher(t *testing.T) {
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatalf("NewWatcher() failed: %v", err)
-	}
-
 	w.Stop()
-	time.Sleep(50 * time.Millisecond)
+	w.Stop() // must not panic or block
+}
 
-	// WatchFile on closed watcher should not panic (some error is acceptable)
-	_ = w.WatchFile("/some/path")
+func TestTreeWatcher_StopReleasesWatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "a.txt"), "x")
+
+	w, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	w.SyncDirs([]string{tmpDir})
+	w.Stop()
+
+	w.mu.Lock()
+	watched := len(w.watched)
+	w.mu.Unlock()
+	if watched != 0 {
+		t.Errorf("%d watches left registered after Stop(), want 0", watched)
+	}
+}
+
+func TestTreeWatcher_CallsAfterStopAreNoops(t *testing.T) {
+	tmpDir := t.TempDir()
+	w, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	w.Stop()
+
+	w.SyncDirs([]string{tmpDir})
+	if err := w.SetPreviewFile(filepath.Join(tmpDir, "a.txt")); err != nil {
+		t.Errorf("SetPreviewFile() after Stop() returned %v, want nil", err)
+	}
+
+	w.mu.Lock()
+	watched := len(w.watched)
+	w.mu.Unlock()
+	if watched != 0 {
+		t.Errorf("watcher registered %d dirs after Stop(), want 0", watched)
+	}
+}
+
+// --- plugin wiring ---
+
+func TestPlugin_WatchStartedAfterStopStopsWatcher(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.stopped = true
+
+	w, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+
+	_, cmd := p.Update(WatchStartedMsg{Watcher: w})
+	if cmd != nil {
+		t.Error("expected no command for a watcher that arrived after Stop()")
+	}
+	if p.watcher != nil {
+		t.Error("plugin adopted a watcher after Stop()")
+	}
+	select {
+	case _, ok := <-w.Events():
+		if ok {
+			t.Error("late watcher was not stopped")
+		}
+	default:
+		t.Error("late watcher was not stopped")
+	}
+}
+
+func TestPlugin_WatchStartedSyncsDirsAndPreview(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "sub/a.txt")
+	p.previewFile = filepath.Join("sub", "a.txt")
+
+	// Expand the subdirectory so it should be watched too.
+	if node := p.tree.FindByPath("sub"); node != nil {
+		if err := p.tree.Expand(node); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	defer w.Stop()
+
+	p.Update(WatchStartedMsg{Watcher: w})
+	if p.watcher != w {
+		t.Fatal("plugin did not adopt the watcher")
+	}
+
+	w.mu.Lock()
+	watched := len(w.watched)
+	preview := w.previewFile
+	w.mu.Unlock()
+
+	if watched != 2 {
+		t.Errorf("watched %d dirs, want 2 (root + expanded sub)", watched)
+	}
+	if want, _ := filepath.Abs(filepath.Join(tmpDir, "sub", "a.txt")); preview != want {
+		t.Errorf("preview file = %q, want %q", preview, want)
+	}
+}
+
+func TestPlugin_SyncWatcherDirsNilWatcherIsSafe(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.syncWatcherDirs() // must not panic
+}
+
+func TestPlugin_WatchEventTreeChangedRefreshes(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+
+	_, cmd := p.Update(WatchEventMsg{TreeChanged: true})
+	if cmd == nil {
+		t.Fatal("expected a refresh command for a tree change")
+	}
+	if p.pendingAutoRefresh {
+		t.Error("refresh should have run immediately, not been deferred")
+	}
+	if p.lastRefresh.IsZero() {
+		t.Error("lastRefresh not updated")
+	}
+}
+
+func TestPlugin_WatchEventDeferredWhileSearching(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.searchMode = true
+
+	p.Update(WatchEventMsg{TreeChanged: true})
+	if !p.pendingAutoRefresh {
+		t.Fatal("tree change during search should have been deferred")
+	}
+
+	// Leaving search mode flushes the deferred refresh on the next message.
+	p.searchMode = false
+	_, cmd := p.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if cmd == nil {
+		t.Fatal("expected the deferred refresh to be flushed")
+	}
+	if p.pendingAutoRefresh {
+		t.Error("pendingAutoRefresh not cleared after flushing")
+	}
+}
+
+func TestPlugin_WatchEventDeferredWhileInlineEditing(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.blameMode = true
+
+	p.Update(WatchEventMsg{TreeChanged: true})
+	if !p.pendingAutoRefresh {
+		t.Error("tree change during a modal should have been deferred")
+	}
+}
+
+func TestPlugin_WatchEventPreviewChangedReloadsPreview(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.previewFile = "a.txt"
+
+	_, cmd := p.Update(WatchEventMsg{PreviewChanged: true})
+	if cmd == nil {
+		t.Fatal("expected a preview reload command")
+	}
+	if p.pendingAutoRefresh {
+		t.Error("a preview-only change should not schedule a tree refresh")
+	}
 }
