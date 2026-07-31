@@ -840,19 +840,8 @@ func (p *Plugin) handleFileOpKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.fileOpError = "" // Clear error on input change
 
 			// Update suggestions for move modal on text change
-			if p.fileOpMode == FileOpMove {
-				query := p.fileOpTextInput.Value()
-				if len(query) > 0 {
-					suggestions, scanCmd := p.getPathSuggestions(query)
-					p.fileOpSuggestions = suggestions
-					p.fileOpSuggestionIdx = -1
-					p.fileOpShowSuggestions = len(p.fileOpSuggestions) > 0
-					if scanCmd != nil {
-						cmd = tea.Batch(cmd, scanCmd)
-					}
-				} else {
-					p.fileOpShowSuggestions = false
-				}
+			if scanCmd := p.updateFileOpSuggestions(); scanCmd != nil {
+				cmd = tea.Batch(cmd, scanCmd)
 			}
 
 			return p, cmd

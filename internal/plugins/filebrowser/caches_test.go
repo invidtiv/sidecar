@@ -116,8 +116,8 @@ func TestWatchEvent_TreeChangedMarksCachesDirtyAndInvalidatesTabs(t *testing.T) 
 
 	p.Update(WatchEventMsg{TreeChanged: true, Dirs: []string{filepath.Join(tmpDir, "src")}})
 
-	if !p.cachesDirty {
-		t.Error("a tree change should mark the quick-open caches dirty")
+	if !p.quickOpenDirty || !p.dirCacheDirty {
+		t.Error("a tree change should mark both quick-open caches dirty")
 	}
 	if p.tabs[1].Loaded {
 		t.Error("a tree change should invalidate background tabs in the changed directory")
@@ -134,7 +134,7 @@ func TestWatchEvent_PreviewOnlyLeavesCachesClean(t *testing.T) {
 
 	p.Update(WatchEventMsg{PreviewChanged: true})
 
-	if p.cachesDirty {
+	if p.quickOpenDirty || p.dirCacheDirty {
 		t.Error("a preview-only change does not change the directory listing")
 	}
 }
@@ -164,13 +164,13 @@ func TestEnsureFileCache_RescansWhenCachesDirty(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	primeFileCache(t, p)
 
-	p.cachesDirty = true
+	p.quickOpenDirty = true
 
 	if p.ensureFileCache() == nil {
 		t.Fatal("a dirty cache should be rescanned")
 	}
-	if p.cachesDirty {
-		t.Error("cachesDirty should be consumed once a scan starts")
+	if p.quickOpenDirty {
+		t.Error("the dirty flag should be consumed once a scan starts")
 	}
 }
 
@@ -192,7 +192,7 @@ func TestEnsureFileCache_KeepsStaleFilesUntilScanLands(t *testing.T) {
 	primeFileCache(t, p)
 
 	before := append([]string(nil), p.quickOpenFiles...)
-	p.cachesDirty = true
+	p.quickOpenDirty = true
 	cmd := p.ensureFileCache()
 	if cmd == nil {
 		t.Fatal("expected a rescan")
@@ -203,7 +203,7 @@ func TestEnsureFileCache_KeepsStaleFilesUntilScanLands(t *testing.T) {
 	}
 }
 
-func TestConsumeCachesDirty_InvalidatesTheCacheThatDidNotRescan(t *testing.T) {
+func TestCacheDirtyFlags_AreTrackedPerCache(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	primeFileCache(t, p)
@@ -214,14 +214,32 @@ func TestConsumeCachesDirty_InvalidatesTheCacheThatDidNotRescan(t *testing.T) {
 		t.Fatal("expected a directory scan")
 	}
 	p.Update(dirCmd())
-	p.cachesDirty = true
+	p.quickOpenDirty = true
+	p.dirCacheDirty = true
 
-	// The file scan takes the dirty flag; the directory cache must still rebuild.
+	// One cache rescanning must not clear the other's flag.
 	if p.ensureFileCache() == nil {
 		t.Fatal("expected a file rescan")
 	}
 	if p.ensureDirCache() == nil {
-		t.Error("the directory cache should rebuild after a disk change it did not consume")
+		t.Error("the directory cache should rebuild after a disk change of its own")
+	}
+}
+
+func TestEnsureDirCache_RescansWhenDirtiedMidScan(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTestPlugin(t, tmpDir)
+
+	cmd := p.ensureDirCache()
+	if cmd == nil {
+		t.Fatal("expected a directory scan")
+	}
+	// The disk moves while the scan is walking it.
+	p.dirCacheDirty = true
+	p.Update(cmd())
+
+	if p.ensureDirCache() == nil {
+		t.Error("a scan that started before the change must not be treated as fresh")
 	}
 }
 
@@ -393,6 +411,62 @@ func TestQuickOpenModal_ShowsScanningState(t *testing.T) {
 	out = p.renderQuickOpenModalContent()
 	if strings.Contains(out, "Scanning files") {
 		t.Error("scanning state should disappear once the scan lands")
+	}
+}
+
+func TestFileCacheBuiltMsg_DirScanFillsMoveSuggestions(t *testing.T) {
+	tmpDir := t.TempDir()
+	mkdirAll(t, filepath.Join(tmpDir, "alpha"))
+	p := createTestPlugin(t, tmpDir)
+
+	// First keystroke in the move modal: the cache is empty and its scan has
+	// only just started, so nothing can match yet.
+	p.fileOpMode = FileOpMove
+	p.fileOpTextInput.SetValue("al")
+	cmd := p.updateFileOpSuggestions()
+	if cmd == nil {
+		t.Fatal("expected a directory scan to be started")
+	}
+	if p.fileOpShowSuggestions {
+		t.Fatal("suggestions cannot exist before the scan lands")
+	}
+
+	p.Update(cmd())
+
+	if !p.fileOpShowSuggestions || len(p.fileOpSuggestions) == 0 {
+		t.Errorf("the landed scan should fill the dropdown, got %v", p.fileOpSuggestions)
+	}
+}
+
+func TestFileCacheBuiltMsg_SearchKeepsTheSelectedMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTestPlugin(t, tmpDir)
+
+	p.searchMode = true
+	p.searchQuery = "go"
+	cmd := p.updateSearchMatches()
+	if cmd == nil {
+		t.Fatal("expected a file scan to be started")
+	}
+	p.Update(cmd())
+	if len(p.searchMatches) < 2 {
+		t.Fatalf("need at least two matches to test selection, got %v", p.searchMatches)
+	}
+
+	// The user moves down, then a later scan lands: the query did not change,
+	// so the selection must not jump back to the first match.
+	p.searchCursor = 1
+	selected := p.searchMatches[1].Path
+	p.quickOpenDirty = true
+	rescan := p.ensureFileCache()
+	if rescan == nil {
+		t.Fatal("expected a rescan")
+	}
+	p.Update(rescan())
+
+	if p.searchCursor >= len(p.searchMatches) || p.searchMatches[p.searchCursor].Path != selected {
+		t.Errorf("selection moved off %q when the scan landed (cursor %d of %v)",
+			selected, p.searchCursor, p.searchMatches)
 	}
 }
 

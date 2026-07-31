@@ -656,6 +656,7 @@ func (p *Plugin) selectQuickOpenMatch() (plugin.Plugin, tea.Cmd) {
 
 	if targetNode != nil {
 		p.tree.Flatten()
+		p.syncWatcherDirs()
 
 		// Move tree cursor to file
 		if idx := p.tree.IndexOf(targetNode); idx >= 0 {
@@ -704,6 +705,7 @@ func (p *Plugin) openProjectSearchResult() (plugin.Plugin, tea.Cmd) {
 
 	if targetNode != nil {
 		p.tree.Flatten()
+		p.syncWatcherDirs()
 
 		// Move tree cursor to file
 		if idx := p.tree.IndexOf(targetNode); idx >= 0 {
@@ -757,6 +759,7 @@ func (p *Plugin) openProjectSearchResultInNewTab() (plugin.Plugin, tea.Cmd) {
 
 	if targetNode != nil {
 		p.tree.Flatten()
+		p.syncWatcherDirs()
 
 		// Move tree cursor to file
 		if idx := p.tree.IndexOf(targetNode); idx >= 0 {
@@ -779,10 +782,12 @@ func (p *Plugin) ensureFileCache() tea.Cmd {
 	if p.ctx == nil || p.quickOpenScanning {
 		return nil
 	}
-	if p.quickOpenCacheOK && !p.cachesDirty {
+	if p.quickOpenCacheOK && !p.quickOpenDirty {
 		return nil
 	}
-	p.consumeCachesDirty()
+	// Cleared at the start of the scan: a change arriving while it runs re-sets
+	// the flag, so the result it is about to deliver is not mistaken for fresh.
+	p.quickOpenDirty = false
 	p.quickOpenScanning = true
 	return scanFileCache(p.ctx.WorkDir, p.ctx.Epoch)
 }
@@ -792,24 +797,12 @@ func (p *Plugin) ensureDirCache() tea.Cmd {
 	if p.ctx == nil || p.dirCacheScanning {
 		return nil
 	}
-	if p.dirCacheOK && !p.cachesDirty {
+	if p.dirCacheOK && !p.dirCacheDirty {
 		return nil
 	}
-	p.consumeCachesDirty()
+	p.dirCacheDirty = false
 	p.dirCacheScanning = true
 	return scanDirCache(p.ctx.WorkDir, p.ctx.Epoch)
-}
-
-// consumeCachesDirty clears the dirty flag once some cache has taken it. The
-// cache that did not get rescanned is invalidated instead, so it rebuilds the
-// next time it is needed rather than serving pre-change contents forever.
-func (p *Plugin) consumeCachesDirty() {
-	if !p.cachesDirty {
-		return
-	}
-	p.cachesDirty = false
-	p.quickOpenCacheOK = false
-	p.dirCacheOK = false
 }
 
 // scanFileCache walks workDir on a background goroutine to build the quick open
@@ -947,6 +940,28 @@ func (p *Plugin) getPathSuggestions(query string) ([]string, tea.Cmd) {
 	return paths, cmd
 }
 
+// updateFileOpSuggestions recomputes the move modal's path auto-complete from
+// the current directory cache, returning any scan command the filter needs.
+func (p *Plugin) updateFileOpSuggestions() tea.Cmd {
+	if p.fileOpMode != FileOpMove {
+		return nil
+	}
+
+	query := p.fileOpTextInput.Value()
+	if query == "" {
+		p.fileOpSuggestions = nil
+		p.fileOpSuggestionIdx = -1
+		p.fileOpShowSuggestions = false
+		return nil
+	}
+
+	suggestions, cmd := p.getPathSuggestions(query)
+	p.fileOpSuggestions = suggestions
+	p.fileOpSuggestionIdx = -1
+	p.fileOpShowSuggestions = len(suggestions) > 0
+	return cmd
+}
+
 // updateSearchMatches finds all files matching the search query using the quick
 // open cache, returning a command that rebuilds the cache when it is missing or
 // stale. Matches come from whatever the cache holds now; the scan result
@@ -966,6 +981,31 @@ func (p *Plugin) updateSearchMatches() tea.Cmd {
 	return cmd
 }
 
+// refilterSearchMatches re-runs the search filter against a cache that just
+// landed, keeping the user on the match they had selected. The query did not
+// change, so resetting the selection would move the ground under them.
+func (p *Plugin) refilterSearchMatches() {
+	var selected string
+	if p.searchCursor >= 0 && p.searchCursor < len(p.searchMatches) {
+		selected = p.searchMatches[p.searchCursor].Path
+	}
+
+	p.searchMatches = nil
+	if p.searchQuery == "" {
+		p.searchCursor = 0
+		return
+	}
+	p.searchMatches = FuzzyFilter(p.quickOpenFiles, p.searchQuery, 20)
+
+	p.searchCursor = 0
+	for i, match := range p.searchMatches {
+		if match.Path == selected {
+			p.searchCursor = i
+			break
+		}
+	}
+}
+
 // findAndExpandPath finds a file by path, expanding only the directories along the way.
 // Only the directories named by the path are read from disk; siblings stay unloaded.
 func (p *Plugin) findAndExpandPath(path string) *FileNode {
@@ -981,6 +1021,7 @@ func (p *Plugin) findAndExpandPath(path string) *FileNode {
 
 	// Walk down the tree following the path
 	current := p.tree.Root
+	var descended []*FileNode
 	for i, part := range parts {
 		// Load children if not already loaded
 		if len(current.Children) == 0 && current.IsDir {
@@ -1000,14 +1041,18 @@ func (p *Plugin) findAndExpandPath(path string) *FileNode {
 			return nil // Path not found in tree
 		}
 
-		// Expand directory if it's not the final component
+		// Directories along the way are expanded only once the whole path
+		// resolves; a miss must leave the tree exactly as it was.
 		if found.IsDir && i < len(parts)-1 {
-			found.IsExpanded = true
+			descended = append(descended, found)
 		}
 
 		current = found
 	}
 
+	for _, dir := range descended {
+		dir.IsExpanded = true
+	}
 	return current
 }
 
@@ -1026,6 +1071,7 @@ func (p *Plugin) jumpToSearchMatch() {
 	}
 
 	p.tree.Flatten()
+	p.syncWatcherDirs()
 
 	if idx := p.tree.IndexOf(targetNode); idx >= 0 {
 		p.treeCursor = idx
@@ -1070,6 +1116,7 @@ func (p *Plugin) navigateToFile(path string) (plugin.Plugin, tea.Cmd) {
 	// Expand parents to make the file visible
 	p.expandParents(targetNode)
 	p.tree.Flatten()
+	p.syncWatcherDirs()
 
 	// Move tree cursor to file
 	if idx := p.tree.IndexOf(targetNode); idx >= 0 {

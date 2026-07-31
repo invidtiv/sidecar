@@ -55,6 +55,7 @@ type (
 		Tree       *FileTree
 		Err        error
 		Epoch      uint64
+		Gen        uint64 // Build generation; only the newest build is applied
 		CursorPath string // Path the cursor sat on when the build was requested
 	}
 	StateRestoredMsg struct {
@@ -211,10 +212,13 @@ type Plugin struct {
 	quickOpenScanning bool     // A background file scan is in flight
 	quickOpenCacheOK  bool     // A file scan has completed at least once
 
-	// cachesDirty is set when watched directories changed on disk, so the
-	// quick-open and path auto-complete caches no longer match what is there.
-	// The stale cache keeps rendering until the next scan lands.
-	cachesDirty bool
+	// quickOpenDirty and dirCacheDirty are set when watched directories changed
+	// on disk, so the cache no longer matches what is there. Each cache owns its
+	// own flag: a scan clears only its own, and a change arriving while that
+	// scan is in flight re-sets it, so the landing result cannot pass itself off
+	// as current. The stale cache keeps rendering until the next scan lands.
+	quickOpenDirty bool
+	dirCacheDirty  bool
 
 	// Project-wide search state (ctrl+s)
 	projectSearchMode       bool
@@ -267,6 +271,7 @@ type Plugin struct {
 	lastRefresh        time.Time // Debounce rapid refreshes on focus
 	pendingAutoRefresh bool      // A watched change arrived while a modal/search/editor was open
 	stopped            bool      // Set by Stop(); guards late WatchStartedMsg delivery
+	treeBuildGen       uint64    // Newest requested tree build; older results are dropped
 
 	// Mouse support
 	mouseHandler *mouse.Handler
@@ -335,7 +340,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.dirCache = nil
 	p.dirCacheScanning = false
 	p.dirCacheOK = false
-	p.cachesDirty = false
+	p.quickOpenDirty = false
+	p.dirCacheDirty = false
 
 	// Initialize markdown renderer
 	renderer, err := markdown.NewRenderer()
@@ -474,6 +480,48 @@ func (p *Plugin) listenForWatchEvents() tea.Cmd {
 	}
 }
 
+// handleWatchStarted adopts a watcher created off the update goroutine.
+func (p *Plugin) handleWatchStarted(msg WatchStartedMsg) (plugin.Plugin, tea.Cmd) {
+	// The plugin may have been stopped while the watcher was starting.
+	if p.stopped {
+		msg.Watcher.Stop()
+		return p, nil
+	}
+	// A project switch runs Stop -> Init -> Start, so a watcher from the
+	// previous Start can still land after Init cleared p.stopped. Whichever one
+	// is not adopted has to be stopped, or its goroutine and its descriptors
+	// live for the rest of the process.
+	if p.watcher != nil && p.watcher != msg.Watcher {
+		p.watcher.Stop()
+	}
+	p.watcher = msg.Watcher
+	p.updateWatchedFile()
+	p.syncWatcherDirs()
+	return p, p.listenForWatchEvents()
+}
+
+// handleWatchEvent applies a coalesced batch of filesystem changes and re-arms
+// the listener.
+func (p *Plugin) handleWatchEvent(msg WatchEventMsg) (plugin.Plugin, tea.Cmd) {
+	cmds := []tea.Cmd{p.listenForWatchEvents()}
+	if msg.PreviewChanged && p.previewFile != "" && p.ctx != nil {
+		cmds = append(cmds, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch))
+	}
+	// A background tab's file may have been rewritten in place, which is not a
+	// tree change but does make the tab's cached content wrong.
+	p.invalidateTabsInDirs(msg.Dirs)
+	if msg.TreeChanged && autoRefreshEnabled() {
+		// Caches that describe the disk are now behind it, whether or not the
+		// rebuild itself can run right now.
+		p.quickOpenDirty = true
+		p.dirCacheDirty = true
+		if cmd := p.requestAutoRefresh(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return p, tea.Batch(cmds...)
+}
+
 // updateWatchedFile updates the file watcher to watch the current preview file.
 func (p *Plugin) updateWatchedFile() {
 	if p.watcher == nil {
@@ -561,15 +609,31 @@ func (p *Plugin) refresh() tea.Cmd {
 		epoch = p.ctx.Epoch
 	}
 
+	// Builds of the same project share an epoch, so they need their own
+	// ordering: a slow earlier build must not land on top of a faster later one.
+	p.treeBuildGen++
+	gen := p.treeBuildGen
+
 	return func() tea.Msg {
 		tree, err := BuildTree(spec)
-		return TreeBuiltMsg{Tree: tree, Err: err, Epoch: epoch, CursorPath: cursorPath}
+		return TreeBuiltMsg{Tree: tree, Err: err, Epoch: epoch, Gen: gen, CursorPath: cursorPath}
 	}
 }
 
 // applyBuiltTree swaps in a freshly built tree, re-anchoring anything that held
 // a pointer into the tree that just got replaced.
+//
+// The build ran off the update goroutine, so the user may have expanded,
+// collapsed, or moved the cursor while it was in flight. Live state wins over
+// the snapshot the build started from; otherwise a directory the user just
+// opened snaps shut when the rebuild lands.
 func (p *Plugin) applyBuiltTree(tree *FileTree, cursorPath string) {
+	if p.tree != nil {
+		tree.SetExpandedPaths(p.tree.GetExpandedPaths())
+		if node := p.tree.GetNode(p.treeCursor); node != nil {
+			cursorPath = node.Path
+		}
+	}
 	p.tree = tree
 	p.reanchorTreeCursor(cursorPath)
 	p.reresolveFileOpTarget()
@@ -627,6 +691,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// The watcher's listen loop is one-shot: whoever handles an event has to
+	// re-arm it. Both are handled before the early returns below, because a
+	// single event swallowed by a modal or the inline editor would kill
+	// auto-refresh for the rest of the session.
+	switch msg := msg.(type) {
+	case WatchStartedMsg:
+		return p.handleWatchStarted(msg)
+	case WatchEventMsg:
+		return p.handleWatchEvent(msg)
+	}
+
 	// Handle exit confirmation dialog first
 	if p.showExitConfirmation {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
@@ -730,6 +805,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case TreeBuiltMsg:
 		// Drop trees built for a project we've since switched away from.
 		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		// Two rebuilds can be in flight at once (the watcher fires while an
+		// earlier build is still walking); only the newest result is current.
+		if msg.Gen != 0 && msg.Gen != p.treeBuildGen {
 			return p, nil
 		}
 		if msg.Err != nil {
@@ -856,33 +936,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.lastRefresh = time.Now()
 		return p, p.refresh()
 
-	case WatchStartedMsg:
-		// The plugin may have been stopped while the watcher was starting.
-		if p.stopped {
-			msg.Watcher.Stop()
-			return p, nil
-		}
-		p.watcher = msg.Watcher
-		p.updateWatchedFile()
-		p.syncWatcherDirs()
-		return p, p.listenForWatchEvents()
-
-	case WatchEventMsg:
-		cmds := []tea.Cmd{p.listenForWatchEvents()}
-		if msg.PreviewChanged && p.previewFile != "" {
-			cmds = append(cmds, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch))
-		}
-		if msg.TreeChanged && autoRefreshEnabled() {
-			// Caches that describe the disk are now behind it, whether or not
-			// the rebuild itself can run right now.
-			p.cachesDirty = true
-			p.invalidateTabsInDirs(msg.Dirs)
-			if cmd := p.requestAutoRefresh(); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return p, tea.Batch(cmds...)
-
 	case FileCacheBuiltMsg:
 		// Drop scans of a project we've since switched away from.
 		if plugin.IsStale(p.ctx, msg) {
@@ -892,6 +945,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.dirCacheScanning = false
 			p.dirCacheOK = true
 			p.dirCache = msg.Files
+			// The move modal filtered an empty cache on the keystroke that
+			// started this scan; recompute so the dropdown appears without
+			// needing another one. A dropdown the user already dismissed by
+			// accepting a suggestion stays dismissed.
+			if p.fileOpShowSuggestions || len(p.fileOpSuggestions) == 0 {
+				return p, p.updateFileOpSuggestions()
+			}
 			return p, nil
 		}
 		p.quickOpenScanning = false
@@ -902,8 +962,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.updateQuickOpenMatches()
 		}
 		if p.searchMode {
-			// The cache is fresh, so this only re-filters.
-			return p, p.updateSearchMatches()
+			// The cache is fresh, so this only re-filters, and it keeps the
+			// user's selection: the scan landing is not a new query.
+			p.refilterSearchMatches()
 		}
 		return p, nil
 

@@ -140,7 +140,53 @@ func TestNavigateToFile_MissingPathLeavesTreeAlone(t *testing.T) {
 	if cmd != nil {
 		t.Error("navigating to a missing path returned a command")
 	}
-	if got := len(updated.(*Plugin).tree.FlatList); got != before {
-		t.Errorf("flat list changed for a missing path: %d -> %d", before, got)
+	got := updated.(*Plugin)
+	if n := len(got.tree.FlatList); n != before {
+		t.Errorf("flat list changed for a missing path: %d -> %d", before, n)
+	}
+
+	// The miss path returns before flattening, so the flat list alone proves
+	// nothing: check the ancestors were not left marked expanded, which the next
+	// Flatten() (any j/k/l keypress) would make visible.
+	for _, rel := range []string{"a", filepath.Join("a", "b"), filepath.Join("a", "b", "c")} {
+		if node := got.tree.FindByPath(rel); node != nil && node.IsExpanded {
+			t.Errorf("failed navigation expanded %s", rel)
+		}
+	}
+	got.tree.Flatten()
+	if n := len(got.tree.FlatList); n != before {
+		t.Errorf("failed navigation opened the tree on the next flatten: %d -> %d", before, n)
+	}
+}
+
+func TestNavigateToFile_SyncsWatcherDirs(t *testing.T) {
+	p, tmpDir := newDeepTreePlugin(t)
+
+	w, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	defer w.Stop()
+	p.watcher = w
+
+	p.navigateToFile(filepath.Join("a", "b", "c", "target.go"))
+
+	w.mu.Lock()
+	watched := make(map[string]bool, len(w.watched))
+	for dir := range w.watched {
+		watched[dir] = true
+	}
+	w.mu.Unlock()
+
+	// Every directory the navigation opened has to be watched, or files an agent
+	// creates in them never show up.
+	for _, rel := range []string{".", "a", filepath.Join("a", "b"), filepath.Join("a", "b", "c")} {
+		abs, err := filepath.Abs(filepath.Join(tmpDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !watched[abs] {
+			t.Errorf("expanded directory %s is not watched (watched: %v)", rel, watched)
+		}
 	}
 }

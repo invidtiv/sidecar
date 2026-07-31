@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // waitForEvent waits for the next coalesced event, failing if none arrives.
@@ -33,6 +35,27 @@ func expectNoEvent(t *testing.T, w *TreeWatcher) {
 			t.Fatalf("unexpected event: %+v", ev)
 		}
 	case <-time.After(watchQuietPeriod + 400*time.Millisecond):
+	}
+}
+
+// expectNoFlaggedEvent asserts nothing within the window reports a tree or
+// preview change. A write to any file in a watched directory still names that
+// directory, so consumers can drop cached file contents; those events are fine.
+func expectNoFlaggedEvent(t *testing.T, w *TreeWatcher) {
+	t.Helper()
+	deadline := time.After(watchQuietPeriod + 400*time.Millisecond)
+	for {
+		select {
+		case ev, ok := <-w.Events():
+			if !ok {
+				return
+			}
+			if ev.TreeChanged || ev.PreviewChanged {
+				t.Fatalf("unexpected change event: %+v", ev)
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
 
@@ -190,6 +213,59 @@ func TestTreeWatcher_WriteDoesNotRebuildTree(t *testing.T) {
 	}
 }
 
+func TestTreeWatcher_WriteReportsChangedDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "existing.txt")
+	writeFile(t, target, "x")
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir})
+
+	// An in-place rewrite (gofmt -w, sed -i, an agent edit) changes no tree
+	// entry, but a tab holding that file is now showing stale content.
+	writeFile(t, target, "changed")
+
+	ev := waitForEvent(t, w)
+	if ev.TreeChanged {
+		t.Errorf("write to an existing file reported TreeChanged: %+v", ev)
+	}
+	if len(ev.Dirs) != 1 || !sameDir(t, ev.Dirs[0], tmpDir) {
+		t.Errorf("Dirs = %v, want [%s]", ev.Dirs, tmpDir)
+	}
+}
+
+func TestTreeWatcher_RewatchesRecreatedDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	sub := filepath.Join(tmpDir, "sub")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir, sub})
+
+	writeFile(t, filepath.Join(sub, "a.txt"), "x")
+	waitForEvent(t, w)
+
+	// A delete and recreate inside one debounce window: git checkout, a build
+	// tool, or `rm -rf sub && mkdir sub`. fsnotify drops its own watch on the
+	// delete, so the watcher has to notice and re-add it.
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, w) // The removal (and recreation) of sub itself
+
+	w.SyncDirs([]string{tmpDir, sub})
+
+	writeFile(t, filepath.Join(sub, "b.txt"), "x")
+	if ev := waitForEvent(t, w); !ev.TreeChanged {
+		t.Errorf("expected TreeChanged inside the recreated directory, got %+v", ev)
+	}
+}
+
 func TestTreeWatcher_SetPreviewFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "preview.txt")
@@ -222,7 +298,7 @@ func TestTreeWatcher_SetPreviewFile_IgnoresOtherFiles(t *testing.T) {
 
 	// Writing another existing file is neither a preview nor a tree change.
 	writeFile(t, other, "changed")
-	expectNoEvent(t, w)
+	expectNoFlaggedEvent(t, w)
 
 	writeFile(t, watched, "changed")
 	if ev := waitForEvent(t, w); !ev.PreviewChanged {
@@ -246,7 +322,7 @@ func TestTreeWatcher_SwitchPreviewFile(t *testing.T) {
 	}
 
 	writeFile(t, first, "changed")
-	expectNoEvent(t, w)
+	expectNoFlaggedEvent(t, w)
 
 	writeFile(t, second, "changed")
 	if ev := waitForEvent(t, w); !ev.PreviewChanged {
@@ -469,8 +545,15 @@ func TestTreeWatcher_MaxLatencyFlush(t *testing.T) {
 	// Keep writing faster than the quiet period so only the max-latency timer
 	// can flush.
 	stop := make(chan struct{})
-	defer close(stop)
+	done := make(chan struct{})
+	// Wait for the writer to leave the loop: t.TempDir's cleanup would otherwise
+	// race a trailing write and fail with ENOTEMPTY.
+	defer func() {
+		close(stop)
+		<-done
+	}()
 	go func() {
+		defer close(done)
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
@@ -691,11 +774,151 @@ func TestPlugin_WatchEventDeferredWhileSearching(t *testing.T) {
 func TestPlugin_WatchEventDeferredWhileInlineEditing(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+	p.inlineEditMode = true // No inlineEditor: only the deferral is under test
+
+	p.Update(WatchEventMsg{TreeChanged: true})
+	if !p.pendingAutoRefresh {
+		t.Error("tree change during inline editing should have been deferred")
+	}
+}
+
+func TestPlugin_WatchEventDeferredWhileBlaming(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
 	p.blameMode = true
 
 	p.Update(WatchEventMsg{TreeChanged: true})
 	if !p.pendingAutoRefresh {
 		t.Error("tree change during a modal should have been deferred")
+	}
+}
+
+// expectWatchListenerArmed runs cmd, flattening batches, and asserts that one of
+// the commands is waiting on the watcher: a real filesystem change has to come
+// back as another WatchEventMsg. The listener is one-shot, so re-arming it is
+// the only thing that keeps auto-refresh alive.
+func expectWatchListenerArmed(t *testing.T, dir string, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("update returned no command, so the watch listener was not re-armed")
+	}
+
+	msgs := make(chan tea.Msg, 16)
+	var run func(tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		go func() {
+			msg := c()
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, sub := range batch {
+					run(sub)
+				}
+				return
+			}
+			msgs <- msg
+		}()
+	}
+	run(cmd)
+
+	writeFile(t, filepath.Join(dir, "armed.txt"), "x")
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case msg := <-msgs:
+			if _, ok := msg.(WatchEventMsg); ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no WatchEventMsg arrived; the watch listener was not re-armed")
+		}
+	}
+}
+
+// The listen loop is one-shot, so an event consumed by an early return in
+// update() would kill auto-refresh for the rest of the session.
+func TestPlugin_WatchEventAlwaysRearmsListener(t *testing.T) {
+	states := map[string]func(*Plugin){
+		"exit confirmation": func(p *Plugin) { p.showExitConfirmation = true },
+		"inline editing": func(p *Plugin) {
+			// An inactive editor makes update() take its "vim exited" branch,
+			// which returns before reaching any message handling.
+			p.inlineEditMode = true
+			p.inlineEditor = tty.New(nil)
+		},
+		"blame modal": func(p *Plugin) { p.blameMode = true },
+	}
+
+	for name, setup := range states {
+		t.Run(name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+
+			w, err := NewTreeWatcher()
+			if err != nil {
+				t.Fatalf("NewTreeWatcher() failed: %v", err)
+			}
+			defer w.Stop()
+			p.watcher = w
+			p.syncWatcherDirs()
+			setup(p)
+
+			_, cmd := p.Update(WatchEventMsg{TreeChanged: true})
+			expectWatchListenerArmed(t, tmpDir, cmd)
+		})
+	}
+}
+
+func TestPlugin_WatchStartedStopsTheWatcherItReplaces(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+
+	first, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	second, err := NewTreeWatcher()
+	if err != nil {
+		t.Fatalf("NewTreeWatcher() failed: %v", err)
+	}
+	defer second.Stop()
+
+	// Two Start() calls straddling a project switch: the first watcher must not
+	// be dropped on the floor with its goroutine and descriptors still live.
+	p.Update(WatchStartedMsg{Watcher: first})
+	p.Update(WatchStartedMsg{Watcher: second})
+
+	if p.watcher != second {
+		t.Fatal("plugin did not adopt the newer watcher")
+	}
+	select {
+	case _, ok := <-first.Events():
+		if ok {
+			t.Error("the replaced watcher was not stopped")
+		}
+	default:
+		t.Error("the replaced watcher was not stopped")
+	}
+}
+
+func TestPlugin_WatchEventInvalidatesTabsWithoutTreeChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt", "sub/b.txt")
+
+	p.tabs = []FileTab{
+		{Path: "a.txt", Loaded: true},
+		{Path: filepath.Join("sub", "b.txt"), Loaded: true},
+	}
+	p.activeTab = 0
+
+	// An in-place rewrite of the background tab's file: no tree change, but the
+	// tab is now holding pre-edit content.
+	p.Update(WatchEventMsg{Dirs: []string{filepath.Join(tmpDir, "sub")}})
+
+	if p.tabs[1].Loaded {
+		t.Error("a background tab whose file was rewritten should be invalidated")
 	}
 }
 

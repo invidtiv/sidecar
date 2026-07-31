@@ -363,6 +363,37 @@ func (t *FileTree) RestoreExpandedPaths(paths map[string]bool) {
 	t.Flatten()
 }
 
+// SetExpandedPaths makes the tree's expansion match paths exactly: directories
+// named in the set are expanded (loading their children if needed) and every
+// other visible directory is collapsed. Unlike RestoreExpandedPaths it can undo
+// an expansion, which is what a rebuilt tree needs to pick up a collapse the
+// user made while the build was running.
+func (t *FileTree) SetExpandedPaths(paths map[string]bool) {
+	if t.Root == nil {
+		return
+	}
+	t.setExpanded(t.Root, paths)
+	t.Flatten()
+}
+
+func (t *FileTree) setExpanded(node *FileNode, paths map[string]bool) {
+	for _, child := range node.Children {
+		if !child.IsDir {
+			continue
+		}
+		if !paths[child.Path] {
+			// Nested state is left alone, exactly as Collapse leaves it.
+			child.IsExpanded = false
+			continue
+		}
+		if len(child.Children) == 0 {
+			_ = t.loadChildren(child)
+		}
+		child.IsExpanded = true
+		t.setExpanded(child, paths)
+	}
+}
+
 func (t *FileTree) restoreExpanded(node *FileNode, paths map[string]bool) {
 	for _, child := range node.Children {
 		if child.IsDir && paths[child.Path] {

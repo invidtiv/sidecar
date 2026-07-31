@@ -309,6 +309,70 @@ func TestTreeBuiltMsg_KeepsFileOpTargetWhenPathNotVisible(t *testing.T) {
 	}
 }
 
+func TestTreeBuiltMsg_KeepsExpansionChangedDuringTheBuild(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "dir/inner.txt", "open/inner.txt")
+
+	// One directory starts open, one closed; the build snapshots that.
+	open := p.tree.FindByPath("open")
+	if open == nil {
+		t.Fatal("expected open in tree")
+	}
+	if err := p.tree.Expand(open); err != nil {
+		t.Fatal(err)
+	}
+	cmd := p.refresh()
+	if cmd == nil {
+		t.Fatal("refresh() returned nil command")
+	}
+
+	// While the build runs the user expands the other one and collapses this one.
+	dir := p.tree.FindByPath("dir")
+	if dir == nil {
+		t.Fatal("expected dir in tree")
+	}
+	if err := p.tree.Expand(dir); err != nil {
+		t.Fatal(err)
+	}
+	p.tree.Collapse(open)
+	p.treeCursor = p.tree.IndexOfPath(filepath.Join("dir", "inner.txt"))
+	if p.treeCursor < 0 {
+		t.Fatal("expected dir/inner.txt to be visible")
+	}
+
+	p.Update(cmd())
+
+	if node := p.tree.FindByPath("dir"); node == nil || !node.IsExpanded {
+		t.Error("a directory expanded while the build ran was closed again")
+	}
+	if node := p.tree.FindByPath("open"); node == nil || node.IsExpanded {
+		t.Error("a directory collapsed while the build ran was re-opened")
+	}
+	if node := p.tree.GetNode(p.treeCursor); node == nil || node.Path != filepath.Join("dir", "inner.txt") {
+		t.Errorf("cursor moved during the build was reset, got %v", node)
+	}
+}
+
+func TestTreeBuiltMsg_StaleGenerationIgnored(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
+
+	// Two overlapping rebuilds; the slower first one must not land on top of
+	// the newer result.
+	first := runRefresh(t, p)
+	if err := os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second := runRefresh(t, p)
+
+	p.Update(second)
+	p.Update(first)
+
+	if p.tree.IndexOfPath("b.txt") < 0 {
+		t.Error("the older build overwrote the newer tree")
+	}
+}
+
 func TestAppRefreshMsg_TriggersRebuild(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createRefreshTestPlugin(t, tmpDir, "a.txt")

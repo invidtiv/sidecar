@@ -294,6 +294,7 @@ func (p *Plugin) syncTreeSelection(path string) {
 
 	p.expandParents(targetNode)
 	p.tree.Flatten()
+	p.syncWatcherDirs()
 
 	if idx := p.tree.IndexOf(targetNode); idx >= 0 {
 		p.treeCursor = idx

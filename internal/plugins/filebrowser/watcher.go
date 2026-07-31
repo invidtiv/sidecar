@@ -39,8 +39,9 @@ type FSEvent struct {
 	TreeChanged bool
 	// PreviewChanged is set when the currently previewed file was touched.
 	PreviewChanged bool
-	// Dirs holds the absolute directories whose contents changed, deduplicated
-	// and capped at maxEventDirs.
+	// Dirs holds the absolute directories something changed in, deduplicated
+	// and capped at maxEventDirs. In-place writes count: consumers cache file
+	// contents, not just directory listings.
 	Dirs []string
 }
 
@@ -184,15 +185,25 @@ func (w *TreeWatcher) classify(event fsnotify.Event) FSEvent {
 	w.mu.Lock()
 	previewFile := w.previewFile
 	watched := w.watched[filepath.Dir(abs)]
+	// fsnotify unregisters a watched directory itself once it is removed or
+	// renamed, so forget it here too. Otherwise reconcileLocked keeps believing
+	// it is registered and never re-adds it when the directory comes back
+	// (git checkout, `rm -rf dir && mkdir dir`).
+	if w.watched[abs] && event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+		delete(w.watched, abs)
+	}
 	w.mu.Unlock()
 
 	if previewFile != "" && abs == previewFile {
 		out.PreviewChanged = true
 	}
-	// Only structural changes need a tree rebuild; writes to an existing file
-	// do not change what the tree displays.
-	if watched && event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
-		out.TreeChanged = true
+	if watched {
+		// Only structural changes need a tree rebuild; writes to an existing
+		// file do not change what the tree displays. Both still name the
+		// directory, because consumers also cache file contents.
+		if event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
+			out.TreeChanged = true
+		}
 		out.Dirs = []string{filepath.Dir(abs)}
 	}
 	return out
@@ -276,7 +287,7 @@ func (w *TreeWatcher) run() {
 				return
 			}
 			change := w.classify(event)
-			if !change.TreeChanged && !change.PreviewChanged {
+			if !change.TreeChanged && !change.PreviewChanged && len(change.Dirs) == 0 {
 				continue
 			}
 			pending.TreeChanged = pending.TreeChanged || change.TreeChanged
