@@ -117,6 +117,10 @@ func TestUpdatePathFilter(t *testing.T) {
 	if p.pathFilterInput != "src" {
 		t.Errorf("after input 'c', input = %q, want %q", p.pathFilterInput, "src")
 	}
+	p.updatePathFilter(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if p.pathFilterInput != "src " {
+		t.Errorf("after space, input = %q, want %q", p.pathFilterInput, "src ")
+	}
 
 	// Test escape
 	p.updatePathFilter(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -149,6 +153,10 @@ func TestUpdateHistorySearch(t *testing.T) {
 	p.updateHistorySearch(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	if p.historySearchState.Query != "foo" {
 		t.Errorf("after input 'o', query = %q, want %q", p.historySearchState.Query, "foo")
+	}
+	p.updateHistorySearch(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if p.historySearchState.Query != "foo " {
+		t.Errorf("after space, query = %q, want %q", p.historySearchState.Query, "foo ")
 	}
 
 	// Test matches update (searchCommits called internally)

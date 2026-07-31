@@ -751,13 +751,21 @@ func TestUpdateSearchTypingCharacters(t *testing.T) {
 	if p.searchQuery != "alp" {
 		t.Errorf("expected searchQuery 'alp', got %q", p.searchQuery)
 	}
-
-	// Verify filtering occurred (should match "alpha")
-	if len(p.searchResults) != 1 {
-		t.Errorf("expected 1 search result, got %d", len(p.searchResults))
+	if len(p.searchResults) != 1 || p.searchResults[0].Name != "alpha" {
+		t.Errorf("expected alpha search result, got %+v", p.searchResults)
 	}
-	if len(p.searchResults) > 0 && p.searchResults[0].Name != "alpha" {
-		t.Errorf("expected result 'alpha', got %q", p.searchResults[0].Name)
+
+	// Space is printable input even though Bubble Tea's String method names it
+	// "space" for shortcut matching.
+	msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	_, _ = p.Update(msg)
+	if p.searchQuery != "alp " {
+		t.Errorf("expected searchQuery 'alp ', got %q", p.searchQuery)
+	}
+
+	// Verify filtering occurred for the multi-word query.
+	if len(p.searchResults) != 0 {
+		t.Errorf("expected no search results, got %d", len(p.searchResults))
 	}
 }
 

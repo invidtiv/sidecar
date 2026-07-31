@@ -120,6 +120,51 @@ func TestSearch_TypeQuery(t *testing.T) {
 	}
 }
 
+func TestSearchInputsAcceptSpaces(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTestPlugin(t, tmpDir)
+	space := tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+
+	p.searchMode = true
+	p.searchQuery = "main"
+	_, _ = p.handleSearchKey(space)
+	if got := p.searchQuery; got != "main " {
+		t.Fatalf("tree search query = %q, want %q", got, "main ")
+	}
+
+	p.quickOpenMode = true
+	p.quickOpenQuery = "main"
+	_, _ = p.handleQuickOpenKey(space)
+	if got := p.quickOpenQuery; got != "main " {
+		t.Fatalf("quick-open query = %q, want %q", got, "main ")
+	}
+
+	p.contentSearchMode = true
+	p.contentSearchQuery = "package"
+	_, _ = p.handleContentSearchKey(space)
+	if got := p.contentSearchQuery; got != "package " {
+		t.Fatalf("content-search query = %q, want %q", got, "package ")
+	}
+}
+
+func TestProjectSearchOpenedWithFAcceptsMultiWordQuery(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTestPlugin(t, tmpDir)
+
+	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if !p.projectSearchMode || p.projectSearchState == nil {
+		t.Fatal("f did not open project search")
+	}
+
+	for _, r := range "first second" {
+		_, _ = p.handleProjectSearchKey(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+
+	if got := p.projectSearchState.Query; got != "first second" {
+		t.Fatalf("project search query = %q, want %q", got, "first second")
+	}
+}
+
 func TestSearch_Backspace(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)

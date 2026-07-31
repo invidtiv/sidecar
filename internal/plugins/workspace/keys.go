@@ -11,6 +11,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // handleKeyPress processes key input based on current view mode.
@@ -150,8 +151,8 @@ func (p *Plugin) handleFetchPRKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	default:
 		// Treat printable characters as filter input
-		if len(msg.String()) == 1 && msg.String()[0] >= 32 && msg.String()[0] < 127 {
-			p.fetchPRFilter += msg.String()
+		if text := ui.PrintableKeyText(msg); text != "" {
+			p.fetchPRFilter += text
 			p.fetchPRCursor = 0
 			p.fetchPRScrollOffset = 0
 			p.clearFetchPRModal() // Rebuild to reflect filter change

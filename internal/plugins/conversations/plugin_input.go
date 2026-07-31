@@ -9,6 +9,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // Update methods for handling key events in various views
@@ -371,8 +372,8 @@ func (p *Plugin) updateSearch(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	default:
 		// Add character to search query
-		if len(msg.String()) == 1 {
-			p.searchQuery += msg.String()
+		if text := ui.PrintableKeyText(msg); text != "" {
+			p.searchQuery += text
 			p.filterSessions()
 			p.cursor = 0
 			p.scrollOff = 0

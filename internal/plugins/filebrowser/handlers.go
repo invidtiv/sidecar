@@ -13,6 +13,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
@@ -878,6 +879,7 @@ func (p *Plugin) handleInfoKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 // Implements vim-style two-phase search: type query, Enter to commit, then n/N navigate.
 func (p *Plugin) handleContentSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 
 	// Esc always exits search mode completely
 	if key == "esc" {
@@ -905,8 +907,8 @@ func (p *Plugin) handleContentSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 			}
 		default:
 			// All printable characters go to query (including n, N, etc.)
-			if len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
-				p.contentSearchQuery += key
+			if text != "" {
+				p.contentSearchQuery += text
 				p.updateContentMatches()
 			}
 		}
@@ -973,6 +975,7 @@ func (p *Plugin) handleContentSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 // handleQuickOpenKey handles key input during quick open mode.
 func (p *Plugin) handleQuickOpenKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 
 	switch key {
 	case "esc":
@@ -1005,8 +1008,8 @@ func (p *Plugin) handleQuickOpenKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd
 
 	default:
 		// Append printable characters
-		if len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
-			p.quickOpenQuery += key
+		if text != "" {
+			p.quickOpenQuery += text
 			p.updateQuickOpenMatches()
 		}
 	}
@@ -1017,6 +1020,7 @@ func (p *Plugin) handleQuickOpenKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd
 // handleProjectSearchKey handles key input during project search mode.
 func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 	state := p.projectSearchState
 
 	p.ensureProjectSearchModal()
@@ -1105,7 +1109,7 @@ func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 		// Any other printable character switches back to input mode
 		// and falls through to the default handler below.
-		if len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
+		if text != "" {
 			state.ResultsFocused = false
 			p.clearProjectSearchModal()
 		}
@@ -1238,8 +1242,8 @@ func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 	default:
 		// Append printable characters
-		if state != nil && len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
-			state.Query += key
+		if state != nil && text != "" {
+			state.Query += text
 			state.IsSearching = true
 			state.DebounceVersion++
 			return p, scheduleProjectSearch(state.DebounceVersion, state.Query)
@@ -1266,6 +1270,7 @@ func (p *Plugin) toggleProjectSearchOption(state *ProjectSearchState, option *bo
 // handleSearchKey handles key input during search mode.
 func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 	var scanCmd tea.Cmd
 
 	switch key {
@@ -1303,8 +1308,8 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	default:
 		// Append printable characters to query
-		if len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
-			p.searchQuery += key
+		if text != "" {
+			p.searchQuery += text
 			scanCmd = p.updateSearchMatches()
 		}
 	}

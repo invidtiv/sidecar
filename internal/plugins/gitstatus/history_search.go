@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // HistorySearchState holds state for commit history search.
@@ -242,6 +243,7 @@ func (p *Plugin) updateHistorySearch(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cm
 	}
 
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 
 	switch key {
 	case "esc":
@@ -306,8 +308,8 @@ func (p *Plugin) updateHistorySearch(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cm
 
 	default:
 		// Append printable characters to query
-		if len(key) == 1 && key[0] >= 32 && key[0] < 127 {
-			state.Query += key
+		if text != "" {
+			state.Query += text
 			state.Matches = p.searchCommits(state.Query, state.UseRegex, state.CaseSensitive)
 			state.Cursor = 0 // Reset cursor when query changes
 		}
@@ -325,6 +327,7 @@ func (p *Plugin) clearSearchState() {
 // updatePathFilter handles key events when in path filter mode.
 func (p *Plugin) updatePathFilter(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	text := ui.PrintableKeyText(msg)
 
 	switch key {
 	case "esc":
@@ -353,8 +356,8 @@ func (p *Plugin) updatePathFilter(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 
 	default:
 		// Append printable characters to path
-		if len(key) == 1 && key[0] >= 32 && key[0] < 127 {
-			p.pathFilterInput += key
+		if text != "" {
+			p.pathFilterInput += text
 		}
 		return p, nil
 	}
