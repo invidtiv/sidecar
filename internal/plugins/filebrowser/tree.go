@@ -95,6 +95,32 @@ func (t *FileTree) Build() error {
 	return nil
 }
 
+// BuildSpec fully describes a tree build. Every field is a value the caller owns
+// outright, so a build can run on a background goroutine without touching the
+// tree the UI is currently rendering.
+type BuildSpec struct {
+	RootDir       string
+	SortMode      SortMode
+	ShowIgnored   bool
+	ExpandedPaths map[string]bool // Directories to re-expand after loading
+}
+
+// BuildTree constructs a brand-new tree from spec. It shares no state with any
+// existing FileTree, which is what makes it safe to call off the UI goroutine:
+// the caller swaps the result in when the resulting message is handled.
+func BuildTree(spec BuildSpec) (*FileTree, error) {
+	t := NewFileTree(spec.RootDir)
+	t.SortMode = spec.SortMode
+	t.ShowIgnored = spec.ShowIgnored
+
+	if err := t.Build(); err != nil {
+		return nil, err
+	}
+
+	t.RestoreExpandedPaths(spec.ExpandedPaths)
+	return t, nil
+}
+
 // isSystemFile returns true for OS-generated files that clutter file browsers.
 func isSystemFile(name string) bool {
 	// Exact matches
@@ -282,12 +308,22 @@ func (t *FileTree) IndexOf(node *FileNode) int {
 
 // FindByPath returns the node with the given relative path, or nil if not found.
 func (t *FileTree) FindByPath(path string) *FileNode {
-	for _, n := range t.FlatList {
+	idx := t.IndexOfPath(path)
+	if idx < 0 {
+		return nil
+	}
+	return t.FlatList[idx]
+}
+
+// IndexOfPath returns the flat-list index of the node with the given relative
+// path, or -1 if no visible node has that path.
+func (t *FileTree) IndexOfPath(path string) int {
+	for i, n := range t.FlatList {
 		if n.Path == path {
-			return n
+			return i
 		}
 	}
-	return nil
+	return -1
 }
 
 // GetExpandedPaths returns the paths of all expanded directories.
@@ -328,21 +364,6 @@ func (t *FileTree) restoreExpanded(node *FileNode, paths map[string]bool) {
 			t.restoreExpanded(child, paths)
 		}
 	}
-}
-
-// Refresh reloads the tree from disk, preserving expanded state.
-func (t *FileTree) Refresh() error {
-	// Save expanded state before rebuild
-	expandedPaths := t.GetExpandedPaths()
-
-	// Rebuild tree
-	if err := t.Build(); err != nil {
-		return err
-	}
-
-	// Restore expanded state
-	t.RestoreExpandedPaths(expandedPaths)
-	return nil
 }
 
 // SetSortMode changes the sort mode and re-sorts the tree.

@@ -188,7 +188,7 @@ func TestSortChildren(t *testing.T) {
 	}
 }
 
-func TestFileTree_RefreshPreservesExpandedState(t *testing.T) {
+func TestBuildTree_PreservesExpandedState(t *testing.T) {
 	// Create temp directory structure
 	tmpDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(tmpDir, "dir1", "nested"), 0755)
@@ -249,9 +249,27 @@ func TestFileTree_RefreshPreservesExpandedState(t *testing.T) {
 	// Add a new file (simulating external change)
 	_ = os.WriteFile(filepath.Join(tmpDir, "newfile.txt"), []byte("new"), 0644)
 
-	// Refresh the tree
-	if err := tree.Refresh(); err != nil {
+	// Rebuild into a fresh tree, carrying the expanded paths across
+	oldTree := tree
+	rebuilt, err := BuildTree(BuildSpec{
+		RootDir:       tree.RootDir,
+		SortMode:      tree.SortMode,
+		ShowIgnored:   tree.ShowIgnored,
+		ExpandedPaths: expandedPaths,
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if rebuilt == oldTree {
+		t.Fatal("BuildTree must return a new tree, not the one it was seeded from")
+	}
+	tree = rebuilt
+
+	// The old tree must be untouched: that's what makes background builds safe
+	for _, node := range oldTree.FlatList {
+		if node.Name == "newfile.txt" {
+			t.Error("BuildTree mutated the tree it was seeded from")
+		}
 	}
 
 	// Verify expanded state is preserved
@@ -343,18 +361,96 @@ func TestFileTree_RestoreExpandedPaths_DeletedDir(t *testing.T) {
 	}
 	_ = tree.Expand(dirNode)
 
+	expandedPaths := tree.GetExpandedPaths()
+
 	// Delete the directory
 	_ = os.RemoveAll(filepath.Join(tmpDir, "willdelete"))
 
-	// Refresh should not error even though expanded dir is gone
-	if err := tree.Refresh(); err != nil {
-		t.Fatalf("Refresh failed after deleting expanded dir: %v", err)
+	// Rebuilding should not error even though the expanded dir is gone
+	rebuilt, err := BuildTree(BuildSpec{RootDir: tmpDir, ExpandedPaths: expandedPaths})
+	if err != nil {
+		t.Fatalf("BuildTree failed after deleting expanded dir: %v", err)
 	}
 
 	// Tree should not contain the deleted directory
-	for _, node := range tree.FlatList {
+	for _, node := range rebuilt.FlatList {
 		if node.Name == "willdelete" {
 			t.Error("Deleted directory should not be in tree")
 		}
+	}
+}
+
+func TestBuildTree_MissingDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+
+	tree, err := BuildTree(BuildSpec{RootDir: missing})
+	if err == nil {
+		t.Fatal("Expected an error building a tree for a missing directory")
+	}
+	if tree != nil {
+		t.Error("Expected nil tree when the build fails, so callers keep the old one")
+	}
+}
+
+func TestBuildTree_HonorsSpecOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("ignored.txt\n"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "ignored.txt"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "small.txt"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "large.txt"), []byte("xxxxxxxxxx"), 0644)
+
+	tree, err := BuildTree(BuildSpec{RootDir: tmpDir, SortMode: SortBySize, ShowIgnored: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if tree.SortMode != SortBySize {
+		t.Errorf("SortMode = %v, want %v", tree.SortMode, SortBySize)
+	}
+	if tree.ShowIgnored {
+		t.Error("ShowIgnored should carry over from the spec")
+	}
+	for _, node := range tree.FlatList {
+		if node.Name == "ignored.txt" {
+			t.Error("ignored.txt should be hidden when ShowIgnored is false")
+		}
+	}
+
+	// Size sort puts the larger file first
+	largeIdx := tree.IndexOfPath("large.txt")
+	smallIdx := tree.IndexOfPath("small.txt")
+	if largeIdx < 0 || smallIdx < 0 {
+		t.Fatalf("Expected both files in tree, got large=%d small=%d", largeIdx, smallIdx)
+	}
+	if largeIdx > smallIdx {
+		t.Errorf("Expected large.txt before small.txt with SortBySize, got %d > %d", largeIdx, smallIdx)
+	}
+}
+
+func TestFileTree_IndexOfPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmpDir, "dir"), 0755)
+	_ = os.WriteFile(filepath.Join(tmpDir, "dir", "inner.txt"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "top.txt"), []byte("x"), 0644)
+
+	tree, err := BuildTree(BuildSpec{RootDir: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := tree.IndexOfPath("top.txt")
+	if idx < 0 {
+		t.Fatal("Expected to find top.txt")
+	}
+	if tree.FlatList[idx].Path != "top.txt" {
+		t.Errorf("IndexOfPath returned index of %q, want top.txt", tree.FlatList[idx].Path)
+	}
+
+	if got := tree.IndexOfPath("nope.txt"); got != -1 {
+		t.Errorf("IndexOfPath(missing) = %d, want -1", got)
+	}
+	// Collapsed directories hide their children from the flat list
+	if got := tree.IndexOfPath(filepath.Join("dir", "inner.txt")); got != -1 {
+		t.Errorf("IndexOfPath(collapsed child) = %d, want -1", got)
 	}
 }

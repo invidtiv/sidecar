@@ -48,9 +48,13 @@ const (
 
 // Message types
 type (
-	RefreshMsg   struct{}
+	// TreeBuiltMsg carries a tree built on a background goroutine. The plugin
+	// swaps Tree in wholesale rather than mutating the live tree in place.
 	TreeBuiltMsg struct {
-		Err error
+		Tree       *FileTree
+		Err        error
+		Epoch      uint64
+		CursorPath string // Path the cursor sat on when the build was requested
 	}
 	StateRestoredMsg struct {
 		State state.FileBrowserState
@@ -95,6 +99,9 @@ type (
 		LastCommit string
 	}
 )
+
+// GetEpoch implements plugin.EpochMessage for staleness detection.
+func (m TreeBuiltMsg) GetEpoch() uint64 { return m.Epoch }
 
 // ContentMatch represents a match position within file content.
 type ContentMatch struct {
@@ -431,12 +438,82 @@ func (p *Plugin) updateWatchedFile() {
 }
 
 // refresh rebuilds the file tree, preserving expanded state.
+//
+// Everything the build needs is snapshotted here, on the update goroutine, so
+// the returned command only ever touches its own copies. The rebuilt tree is
+// swapped in when TreeBuiltMsg is handled; p.tree is never mutated in the
+// background.
 func (p *Plugin) refresh() tea.Cmd {
+	if p.tree == nil {
+		return nil
+	}
+
+	spec := BuildSpec{
+		RootDir:       p.tree.RootDir,
+		SortMode:      p.tree.SortMode,
+		ShowIgnored:   p.tree.ShowIgnored,
+		ExpandedPaths: p.tree.GetExpandedPaths(),
+	}
+
+	var cursorPath string
+	if node := p.tree.GetNode(p.treeCursor); node != nil {
+		cursorPath = node.Path
+	}
+
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
+
 	return func() tea.Msg {
-		expandedPaths := p.tree.GetExpandedPaths()
-		err := p.tree.Build()
-		p.tree.RestoreExpandedPaths(expandedPaths)
-		return TreeBuiltMsg{Err: err}
+		tree, err := BuildTree(spec)
+		return TreeBuiltMsg{Tree: tree, Err: err, Epoch: epoch, CursorPath: cursorPath}
+	}
+}
+
+// applyBuiltTree swaps in a freshly built tree, re-anchoring anything that held
+// a pointer into the tree that just got replaced.
+func (p *Plugin) applyBuiltTree(tree *FileTree, cursorPath string) {
+	p.tree = tree
+	p.reanchorTreeCursor(cursorPath)
+	p.reresolveFileOpTarget()
+}
+
+// reanchorTreeCursor puts the cursor back on the node it was on before the
+// rebuild. If that path is gone (deleted, or hidden by a collapsed parent) the
+// old index is kept and clamped to the new tree.
+func (p *Plugin) reanchorTreeCursor(cursorPath string) {
+	if cursorPath != "" {
+		if idx := p.tree.IndexOfPath(cursorPath); idx >= 0 {
+			p.treeCursor = idx
+			p.ensureTreeCursorVisible()
+			return
+		}
+	}
+	p.clampTreeCursor()
+}
+
+// clampTreeCursor keeps the cursor inside the current flat list.
+func (p *Plugin) clampTreeCursor() {
+	if p.treeCursor >= p.tree.Len() {
+		p.treeCursor = p.tree.Len() - 1
+	}
+	if p.treeCursor < 0 {
+		p.treeCursor = 0
+	}
+	p.ensureTreeCursorVisible()
+}
+
+// reresolveFileOpTarget re-points an in-flight file operation at the equivalent
+// node in the new tree. If the path is not visible in the new tree the old node
+// is kept: it may simply live under a collapsed directory, and operations only
+// read its Path/Name/IsDir.
+func (p *Plugin) reresolveFileOpTarget() {
+	if p.fileOpTarget == nil {
+		return
+	}
+	if node := p.tree.FindByPath(p.fileOpTarget.Path); node != nil {
+		p.fileOpTarget = node
 	}
 }
 
@@ -543,8 +620,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.imageResult = nil
 
 	case TreeBuiltMsg:
+		// Drop trees built for a project we've since switched away from.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("tree build failed", "error", msg.Err)
+		} else if msg.Tree != nil {
+			p.applyBuiltTree(msg.Tree, msg.CursorPath)
 		}
 		// Handle pending auto-open from file creation
 		if p.pendingOpenFile != "" {
@@ -659,7 +742,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
-	case RefreshMsg:
+	case app.RefreshMsg:
+		p.lastRefresh = time.Now()
 		return p, p.refresh()
 
 	case WatchStartedMsg:
