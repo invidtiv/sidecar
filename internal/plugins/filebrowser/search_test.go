@@ -287,13 +287,7 @@ func TestSearch_ExpandParents(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 
 	// Find a nested file
-	var nestedFile *FileNode
-	p.walkTree(p.tree.Root, func(node *FileNode) {
-		if node.Name == "app.go" {
-			nestedFile = node
-		}
-	})
-
+	nestedFile := p.findAndExpandPath(filepath.Join("src", "app.go"))
 	if nestedFile == nil {
 		t.Skip("nested file not found")
 	}
@@ -320,22 +314,23 @@ func TestSearch_ExpandParents(t *testing.T) {
 	}
 }
 
-func TestSearch_WalkTree(t *testing.T) {
+func TestSearch_FindAndExpandPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 
-	visitedFiles := make(map[string]bool)
-
-	p.walkTree(p.tree.Root, func(node *FileNode) {
-		visitedFiles[node.Name] = true
-	})
-
-	// Should have visited test files
-	expectedFiles := []string{"main.go", "src", "app.go", "config.json", "README.md"}
-	for _, expected := range expectedFiles {
-		if !visitedFiles[expected] {
-			t.Errorf("walkTree did not visit %s", expected)
+	for _, rel := range []string{"main.go", "README.md", "src", filepath.Join("src", "app.go"), filepath.Join("src", "config.json")} {
+		node := p.findAndExpandPath(rel)
+		if node == nil {
+			t.Errorf("findAndExpandPath did not find %s", rel)
+			continue
 		}
+		if node.Path != rel {
+			t.Errorf("findAndExpandPath(%s) returned node with path %s", rel, node.Path)
+		}
+	}
+
+	if p.findAndExpandPath(filepath.Join("src", "missing.go")) != nil {
+		t.Error("findAndExpandPath found a nonexistent file")
 	}
 }
 

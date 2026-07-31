@@ -967,7 +967,7 @@ func (p *Plugin) updateSearchMatches() tea.Cmd {
 }
 
 // findAndExpandPath finds a file by path, expanding only the directories along the way.
-// This is much faster than walkTree for deep paths since it only loads needed directories.
+// Only the directories named by the path are read from disk; siblings stay unloaded.
 func (p *Plugin) findAndExpandPath(path string) *FileNode {
 	if p.tree == nil || p.tree.Root == nil || path == "" {
 		return nil
@@ -1009,23 +1009,6 @@ func (p *Plugin) findAndExpandPath(path string) *FileNode {
 	}
 
 	return current
-}
-
-// walkTree recursively visits all nodes in the tree.
-func (p *Plugin) walkTree(node *FileNode, fn func(*FileNode)) {
-	if node == nil {
-		return
-	}
-	for _, child := range node.Children {
-		fn(child)
-		if child.IsDir {
-			// Load children if not already loaded
-			if len(child.Children) == 0 {
-				_ = p.tree.loadChildren(child)
-			}
-			p.walkTree(child, fn)
-		}
-	}
 }
 
 // jumpToSearchMatch navigates to the currently selected search match.
@@ -1077,14 +1060,8 @@ func (p *Plugin) expandParents(node *FileNode) {
 // navigateToFile navigates the file browser to a specific file path.
 // Used when other plugins request navigation (e.g., git plugin opening file in browser).
 func (p *Plugin) navigateToFile(path string) (plugin.Plugin, tea.Cmd) {
-	// Find the file node in tree
-	var targetNode *FileNode
-	p.walkTree(p.tree.Root, func(node *FileNode) {
-		if node.Path == path {
-			targetNode = node
-		}
-	})
-
+	// Targeted descent: only the directories named by the path are read.
+	targetNode := p.findAndExpandPath(path)
 	if targetNode == nil {
 		// File not found in tree, maybe it's new or ignored
 		return p, nil

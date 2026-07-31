@@ -285,14 +285,9 @@ func (p *Plugin) syncTreeSelection(path string) {
 		}
 	}
 
-	// Fallback: walk full tree to find node in unexpanded directories
-	var targetNode *FileNode
-	p.walkTree(p.tree.Root, func(node *FileNode) {
-		if node.Path == path {
-			targetNode = node
-		}
-	})
-
+	// Fallback: descend the path itself to reach a node in unexpanded
+	// directories, reading only the directories along the way.
+	targetNode := p.findAndExpandPath(path)
 	if targetNode == nil {
 		return
 	}
