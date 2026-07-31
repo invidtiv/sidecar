@@ -217,19 +217,29 @@ func sortChildren(children []*FileNode, mode SortMode) {
 	})
 }
 
-// Expand opens a directory node, loading children if needed.
+// Expand opens a directory node, reloading its children from disk. Children
+// loaded by an earlier expand are re-read rather than reused, so a directory
+// that changed while it was collapsed opens with what is actually there. The
+// expanded directories inside the subtree stay expanded.
+//
+// On a read error the previously loaded children are kept, so a directory that
+// briefly becomes unreadable does not blank out.
 func (t *FileTree) Expand(node *FileNode) error {
 	if !node.IsDir {
 		return nil
 	}
 
-	if len(node.Children) == 0 {
-		if err := t.loadChildren(node); err != nil {
-			return err
-		}
+	expanded := make(map[string]bool)
+	t.collectExpanded(node, expanded)
+
+	if err := t.loadChildren(node); err != nil {
+		return err
 	}
 
 	node.IsExpanded = true
+	if len(expanded) > 0 {
+		t.restoreExpanded(node, expanded)
+	}
 	t.Flatten()
 	return nil
 }

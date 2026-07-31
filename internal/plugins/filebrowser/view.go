@@ -1171,9 +1171,12 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	}
 
 	if len(p.quickOpenMatches) == 0 {
-		if p.quickOpenQuery != "" {
+		switch {
+		case p.quickOpenScanning:
+			sb.WriteString(styles.Muted.Render("Scanning files..."))
+		case p.quickOpenQuery != "":
 			sb.WriteString(styles.Muted.Render("No matches"))
-		} else {
+		default:
 			sb.WriteString(styles.Muted.Render("Type to search files..."))
 		}
 	} else {
@@ -1216,7 +1219,9 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	}
 
 	// Footer with match count
-	if len(p.quickOpenMatches) > 0 {
+	if p.quickOpenScanning {
+		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render("(scanning...)"))
+	} else if len(p.quickOpenMatches) > 0 {
 		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", p.quickOpenCursor+1, len(p.quickOpenMatches))))
 	} else if len(p.quickOpenFiles) > 0 {
 		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpenFiles))))

@@ -2,6 +2,7 @@ package filebrowser
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,11 @@ const (
 	// inside every watched directory (measured: one 500-file directory costs
 	// 501 descriptors). The cap is therefore deliberately small.
 	maxWatchedDirs = 32
+
+	// maxEventDirs caps how many distinct directories a single coalesced event
+	// reports. Consumers use the list to invalidate caches; past this many the
+	// batch is broad enough that the exact set stops being interesting.
+	maxEventDirs = 64
 )
 
 // FSEvent is a coalesced batch of filesystem changes.
@@ -33,6 +39,9 @@ type FSEvent struct {
 	TreeChanged bool
 	// PreviewChanged is set when the currently previewed file was touched.
 	PreviewChanged bool
+	// Dirs holds the absolute directories whose contents changed, deduplicated
+	// and capped at maxEventDirs.
+	Dirs []string
 }
 
 // TreeWatcher watches the expanded directories of the file tree plus the
@@ -184,8 +193,24 @@ func (w *TreeWatcher) classify(event fsnotify.Event) FSEvent {
 	// do not change what the tree displays.
 	if watched && event.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 {
 		out.TreeChanged = true
+		out.Dirs = []string{filepath.Dir(abs)}
 	}
 	return out
+}
+
+// mergeDirs appends the entries of src that dst does not already have, up to
+// maxEventDirs.
+func mergeDirs(dst, src []string) []string {
+	for _, dir := range src {
+		if len(dst) >= maxEventDirs {
+			return dst
+		}
+		if slices.Contains(dst, dir) {
+			continue
+		}
+		dst = append(dst, dir)
+	}
+	return dst
 }
 
 // isIgnoredWatchPath reports whether a path is noise the file browser never shows.
@@ -256,6 +281,7 @@ func (w *TreeWatcher) run() {
 			}
 			pending.TreeChanged = pending.TreeChanged || change.TreeChanged
 			pending.PreviewChanged = pending.PreviewChanged || change.PreviewChanged
+			pending.Dirs = mergeDirs(pending.Dirs, change.Dirs)
 
 			// Restart the quiet period on every change; start the max-latency
 			// timer only once per batch so a busy directory still reports.
@@ -291,6 +317,7 @@ func (w *TreeWatcher) emit(ev FSEvent) {
 	case old := <-w.events:
 		ev.TreeChanged = ev.TreeChanged || old.TreeChanged
 		ev.PreviewChanged = ev.PreviewChanged || old.PreviewChanged
+		ev.Dirs = mergeDirs(ev.Dirs, old.Dirs)
 	default:
 	}
 	w.events <- ev

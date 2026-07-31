@@ -407,6 +407,60 @@ func TestTreeWatcher_CoalescesBurst(t *testing.T) {
 	}
 }
 
+func TestTreeWatcher_ReportsChangedDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	sub := filepath.Join(tmpDir, "sub")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := newTestWatcher(t)
+	w.SyncDirs([]string{tmpDir, sub})
+
+	// Two writes in the same directory plus one in the other; the coalesced
+	// event should name each directory once.
+	writeFile(t, filepath.Join(sub, "a.txt"), "x")
+	writeFile(t, filepath.Join(sub, "b.txt"), "x")
+
+	ev := waitForEvent(t, w)
+	if !ev.TreeChanged {
+		t.Fatalf("expected TreeChanged, got %+v", ev)
+	}
+	if len(ev.Dirs) != 1 {
+		t.Fatalf("Dirs = %v, want one entry", ev.Dirs)
+	}
+	if !sameDir(t, ev.Dirs[0], sub) {
+		t.Errorf("Dirs[0] = %q, want %q", ev.Dirs[0], sub)
+	}
+}
+
+func TestMergeDirs(t *testing.T) {
+	if got := mergeDirs([]string{"/a"}, []string{"/a", "/b"}); len(got) != 2 || got[1] != "/b" {
+		t.Errorf("mergeDirs deduplicated wrong: %v", got)
+	}
+
+	full := make([]string, maxEventDirs)
+	for i := range full {
+		full[i] = filepath.Join("/dir", string(rune('a'+i%26)), string(rune('0'+i/26)))
+	}
+	if got := mergeDirs(full, []string{"/overflow"}); len(got) != maxEventDirs {
+		t.Errorf("mergeDirs exceeded the cap: %d entries", len(got))
+	}
+}
+
+// sameDir compares two directory paths, tolerating the symlinked temp dirs
+// macOS hands out.
+func sameDir(t *testing.T, a, b string) bool {
+	t.Helper()
+	resolve := func(path string) string {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return resolved
+		}
+		return filepath.Clean(path)
+	}
+	return resolve(a) == resolve(b)
+}
+
 func TestTreeWatcher_MaxLatencyFlush(t *testing.T) {
 	tmpDir := t.TempDir()
 	w := newTestWatcher(t)

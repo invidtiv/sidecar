@@ -89,6 +89,7 @@ func TestSearch_ExitSearchMode(t *testing.T) {
 func TestSearch_TypeQuery(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchMode = true
 
@@ -137,6 +138,7 @@ func TestSearch_Backspace(t *testing.T) {
 func TestSearch_CaseInsensitive(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchMode = true
 
@@ -159,6 +161,7 @@ func TestSearch_CaseInsensitive(t *testing.T) {
 func TestSearch_PartialMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchQuery = "app"
 	p.updateSearchMatches()
@@ -178,6 +181,7 @@ func TestSearch_PartialMatch(t *testing.T) {
 func TestSearch_MultipleMatches(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchQuery = "a" // Matches: app.go, main.go, README.md, config (in path)
 	p.updateSearchMatches()
@@ -209,6 +213,7 @@ func TestSearch_MatchLimit(t *testing.T) {
 	if err := p.tree.Build(); err != nil {
 		t.Fatalf("failed to rebuild tree: %v", err)
 	}
+	primeFileCache(t, p)
 
 	p.searchQuery = "file"
 	p.updateSearchMatches()
@@ -222,6 +227,7 @@ func TestSearch_MatchLimit(t *testing.T) {
 func TestSearch_NavigateMatches(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchMode = true
 	p.searchQuery = "a" // Multiple matches
@@ -253,6 +259,7 @@ func TestSearch_NavigateMatches(t *testing.T) {
 func TestSearch_JumpToMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchMode = true
 	p.searchQuery = "app"
@@ -363,6 +370,7 @@ func TestSearch_NoMatches(t *testing.T) {
 func TestSearch_CursorBounds(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
+	primeFileCache(t, p)
 
 	p.searchMode = true
 	p.searchQuery = "a"
@@ -754,15 +762,26 @@ func TestQuickOpen_OpenMode(t *testing.T) {
 	}
 
 	// Press ctrl+p
-	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	_, cmd := p.handleKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	if !p.quickOpenMode {
 		t.Error("quickOpenMode should be true after ctrl+p")
 	}
+	if !p.quickOpenScanning {
+		t.Error("ctrl+p should start a background file scan")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+p should return a scan command")
+	}
 
-	// Should have built file cache
+	// The scan populates the cache when its message is handled
+	p.Update(cmd())
+
 	if len(p.quickOpenFiles) == 0 {
 		t.Error("file cache should be populated")
+	}
+	if p.quickOpenScanning {
+		t.Error("quickOpenScanning should be cleared once the scan lands")
 	}
 }
 

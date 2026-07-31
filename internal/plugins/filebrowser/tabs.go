@@ -626,6 +626,41 @@ func (p *Plugin) closeTabsForPath(deletedPath string) {
 	}
 }
 
+// invalidateTabsInDirs drops the cached content of background tabs whose file
+// lives directly in one of dirs (absolute paths), so switching back to such a
+// tab re-reads it from disk instead of showing what was there before.
+//
+// The active tab is left alone: its content is what the user is looking at, and
+// the watcher reloads it through the preview path.
+func (p *Plugin) invalidateTabsInDirs(dirs []string) {
+	if len(dirs) == 0 || len(p.tabs) == 0 || p.ctx == nil {
+		return
+	}
+
+	changed := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		changed[filepath.Clean(abs)] = true
+	}
+
+	for i := range p.tabs {
+		if i == p.activeTab || !p.tabs[i].Loaded {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Join(p.ctx.WorkDir, p.tabs[i].Path))
+		if err != nil {
+			continue
+		}
+		if changed[filepath.Dir(abs)] {
+			p.tabs[i].Loaded = false
+			p.tabs[i].Result = PreviewResult{}
+		}
+	}
+}
+
 // cleanupAllEditSessions kills all tmux edit sessions for all tabs.
 // Called on plugin exit to ensure no orphan tmux sessions remain.
 func (p *Plugin) cleanupAllEditSessions() {

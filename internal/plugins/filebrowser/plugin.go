@@ -61,10 +61,20 @@ type (
 		State state.FileBrowserState
 	}
 	WatchStartedMsg struct{ Watcher *TreeWatcher }
-	// WatchEventMsg carries a coalesced batch of filesystem changes.
+	// WatchEventMsg carries a coalesced batch of filesystem changes. Its fields
+	// mirror FSEvent exactly so the watcher event converts directly.
 	WatchEventMsg struct {
 		TreeChanged    bool
 		PreviewChanged bool
+		Dirs           []string
+	}
+	// FileCacheBuiltMsg carries the result of a background quick-open cache
+	// scan. Dirs distinguishes the path auto-complete scan from the file scan.
+	FileCacheBuiltMsg struct {
+		Dirs    bool
+		Files   []string // Paths relative to the working directory, sorted
+		ErrText string   // Non-empty when the scan failed or hit a limit
+		Epoch   uint64
 	}
 	// NavigateToFileMsg requests navigation to a specific file (from other plugins).
 	NavigateToFileMsg struct {
@@ -107,6 +117,9 @@ type (
 
 // GetEpoch implements plugin.EpochMessage for staleness detection.
 func (m TreeBuiltMsg) GetEpoch() uint64 { return m.Epoch }
+
+// GetEpoch implements plugin.EpochMessage for staleness detection.
+func (m FileCacheBuiltMsg) GetEpoch() uint64 { return m.Epoch }
 
 // ContentMatch represents a match position within file content.
 type ContentMatch struct {
@@ -189,12 +202,19 @@ type Plugin struct {
 	selection ui.SelectionState
 
 	// Quick open state
-	quickOpenMode    bool
-	quickOpenQuery   string
-	quickOpenMatches []QuickOpenMatch
-	quickOpenCursor  int
-	quickOpenFiles   []string // Cached file paths (relative)
-	quickOpenError   string   // Error message if scan failed/limited
+	quickOpenMode     bool
+	quickOpenQuery    string
+	quickOpenMatches  []QuickOpenMatch
+	quickOpenCursor   int
+	quickOpenFiles    []string // Cached file paths (relative)
+	quickOpenError    string   // Error message if scan failed/limited
+	quickOpenScanning bool     // A background file scan is in flight
+	quickOpenCacheOK  bool     // A file scan has completed at least once
+
+	// cachesDirty is set when watched directories changed on disk, so the
+	// quick-open and path auto-complete caches no longer match what is there.
+	// The stale cache keeps rendering until the next scan lands.
+	cachesDirty bool
 
 	// Project-wide search state (ctrl+s)
 	projectSearchMode       bool
@@ -232,6 +252,8 @@ type Plugin struct {
 
 	// Path auto-complete state (for move modal)
 	dirCache              []string // Cached directory paths
+	dirCacheScanning      bool     // A background directory scan is in flight
+	dirCacheOK            bool     // A directory scan has completed at least once
 	fileOpSuggestions     []string // Current filtered suggestions
 	fileOpSuggestionIdx   int      // Selected suggestion (-1 = none)
 	fileOpShowSuggestions bool     // Show suggestions dropdown
@@ -304,6 +326,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.stateRestored = false
 	p.stopped = false
 	p.pendingAutoRefresh = false
+
+	// The quick-open caches describe the old project's disk; drop them.
+	p.quickOpenFiles = nil
+	p.quickOpenError = ""
+	p.quickOpenScanning = false
+	p.quickOpenCacheOK = false
+	p.dirCache = nil
+	p.dirCacheScanning = false
+	p.dirCacheOK = false
+	p.cachesDirty = false
 
 	// Initialize markdown renderer
 	renderer, err := markdown.NewRenderer()
@@ -841,11 +873,39 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			cmds = append(cmds, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch))
 		}
 		if msg.TreeChanged && autoRefreshEnabled() {
+			// Caches that describe the disk are now behind it, whether or not
+			// the rebuild itself can run right now.
+			p.cachesDirty = true
+			p.invalidateTabsInDirs(msg.Dirs)
 			if cmd := p.requestAutoRefresh(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
 		return p, tea.Batch(cmds...)
+
+	case FileCacheBuiltMsg:
+		// Drop scans of a project we've since switched away from.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.Dirs {
+			p.dirCacheScanning = false
+			p.dirCacheOK = true
+			p.dirCache = msg.Files
+			return p, nil
+		}
+		p.quickOpenScanning = false
+		p.quickOpenCacheOK = true
+		p.quickOpenFiles = msg.Files
+		p.quickOpenError = msg.ErrText
+		if p.quickOpenMode {
+			p.updateQuickOpenMatches()
+		}
+		if p.searchMode {
+			// The cache is fresh, so this only re-filters.
+			return p, p.updateSearchMatches()
+		}
+		return p, nil
 
 	case NavigateToFileMsg:
 		p.navigateGen++

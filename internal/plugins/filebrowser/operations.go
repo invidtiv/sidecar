@@ -613,17 +613,14 @@ func intAbs(x int) int {
 
 // openQuickOpen enters quick open mode.
 func (p *Plugin) openQuickOpen() (plugin.Plugin, tea.Cmd) {
-	// Build file cache if empty
-	if len(p.quickOpenFiles) == 0 {
-		p.buildFileCache()
-	}
+	cmd := p.ensureFileCache()
 
 	p.quickOpenMode = true
 	p.quickOpenQuery = ""
 	p.quickOpenCursor = 0
 	p.updateQuickOpenMatches()
 
-	return p, nil
+	return p, cmd
 }
 
 // updateQuickOpenMatches filters files using fuzzy matching.
@@ -775,19 +772,85 @@ func (p *Plugin) openProjectSearchResultInNewTab() (plugin.Plugin, tea.Cmd) {
 	return p, cmd
 }
 
-// buildFileCache walks the filesystem to build the quick open file list.
-// Respects gitignore and has limits to prevent issues on huge repos.
-func (p *Plugin) buildFileCache() {
-	p.quickOpenFiles = nil
-	p.quickOpenError = ""
+// ensureFileCache starts a background scan when the quick-open file cache is
+// missing or the disk has moved under it. The existing cache is left in place
+// until the scan lands, so the modal keeps showing something usable.
+func (p *Plugin) ensureFileCache() tea.Cmd {
+	if p.ctx == nil || p.quickOpenScanning {
+		return nil
+	}
+	if p.quickOpenCacheOK && !p.cachesDirty {
+		return nil
+	}
+	p.consumeCachesDirty()
+	p.quickOpenScanning = true
+	return scanFileCache(p.ctx.WorkDir, p.ctx.Epoch)
+}
 
+// ensureDirCache is ensureFileCache for the path auto-complete directory list.
+func (p *Plugin) ensureDirCache() tea.Cmd {
+	if p.ctx == nil || p.dirCacheScanning {
+		return nil
+	}
+	if p.dirCacheOK && !p.cachesDirty {
+		return nil
+	}
+	p.consumeCachesDirty()
+	p.dirCacheScanning = true
+	return scanDirCache(p.ctx.WorkDir, p.ctx.Epoch)
+}
+
+// consumeCachesDirty clears the dirty flag once some cache has taken it. The
+// cache that did not get rescanned is invalidated instead, so it rebuilds the
+// next time it is needed rather than serving pre-change contents forever.
+func (p *Plugin) consumeCachesDirty() {
+	if !p.cachesDirty {
+		return
+	}
+	p.cachesDirty = false
+	p.quickOpenCacheOK = false
+	p.dirCacheOK = false
+}
+
+// scanFileCache walks workDir on a background goroutine to build the quick open
+// file list. Everything it touches is passed by value: the walk loads its own
+// gitignore rather than sharing the live tree's, whose match cache is not safe
+// for concurrent use.
+func scanFileCache(workDir string, epoch uint64) tea.Cmd {
+	return func() tea.Msg {
+		paths, errText := scanPaths(workDir, false)
+		return FileCacheBuiltMsg{Files: paths, ErrText: errText, Epoch: epoch}
+	}
+}
+
+// scanDirCache is scanFileCache for directories (path auto-complete).
+func scanDirCache(workDir string, epoch uint64) tea.Cmd {
+	return func() tea.Msg {
+		paths, errText := scanPaths(workDir, true)
+		return FileCacheBuiltMsg{Dirs: true, Files: paths, ErrText: errText, Epoch: epoch}
+	}
+}
+
+// scanPaths walks workDir collecting relative paths of either files or
+// directories, respecting gitignore and bounded by a time and count limit.
+// It returns the sorted paths plus a message describing why the scan stopped
+// early, if it did.
+func scanPaths(workDir string, wantDirs bool) ([]string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), quickOpenTimeout)
 	defer cancel()
 
-	count := 0
+	gitIgnore := NewGitIgnore()
+	_ = gitIgnore.LoadFile(filepath.Join(workDir, ".gitignore"))
+
+	limit := quickOpenMaxFiles
+	if wantDirs {
+		limit = dirCacheMaxDirs
+	}
+
+	var paths []string
 	limited := false
 
-	err := filepath.WalkDir(p.ctx.WorkDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(workDir, func(path string, d fs.DirEntry, err error) error {
 		// Check timeout
 		select {
 		case <-ctx.Done():
@@ -801,7 +864,7 @@ func (p *Plugin) buildFileCache() {
 		}
 
 		// Get relative path
-		rel, err := filepath.Rel(p.ctx.WorkDir, path)
+		rel, err := filepath.Rel(workDir, path)
 		if err != nil {
 			return nil
 		}
@@ -811,149 +874,68 @@ func (p *Plugin) buildFileCache() {
 			return nil
 		}
 
-		// Skip common large/irrelevant directories
 		name := d.Name()
+
 		if d.IsDir() {
+			// Skip common large/irrelevant directories
 			if name == ".git" || name == "node_modules" || name == "vendor" ||
 				name == ".next" || name == "dist" || name == "build" ||
 				name == "__pycache__" || name == ".venv" || name == "venv" ||
 				name == ".idea" || name == ".vscode" {
 				return filepath.SkipDir
 			}
-			// Check gitignore for directories
-			if p.tree != nil && p.tree.gitIgnore != nil {
-				if p.tree.gitIgnore.IsIgnored(rel, true) {
-					return filepath.SkipDir
-				}
+			if gitIgnore.IsIgnored(rel, true) {
+				return filepath.SkipDir
 			}
-			return nil // Don't add directories to file list
-		}
-
-		// Skip hidden files (starting with .)
-		if strings.HasPrefix(name, ".") {
-			return nil
-		}
-
-		// Check gitignore for files
-		if p.tree != nil && p.tree.gitIgnore != nil {
-			if p.tree.gitIgnore.IsIgnored(rel, false) {
+			if !wantDirs {
+				return nil // Directories are not part of the file list
+			}
+		} else {
+			if wantDirs {
+				return nil
+			}
+			// Skip hidden files (starting with .)
+			if strings.HasPrefix(name, ".") {
+				return nil
+			}
+			if gitIgnore.IsIgnored(rel, false) {
 				return nil
 			}
 		}
 
-		// Check file limit
-		if count >= quickOpenMaxFiles {
+		if len(paths) >= limit {
 			limited = true
 			return filepath.SkipAll
 		}
 
-		p.quickOpenFiles = append(p.quickOpenFiles, rel)
-		count++
+		paths = append(paths, rel)
 		return nil
 	})
 
-	if err != nil && err != filepath.SkipAll {
-		p.quickOpenError = "scan error: " + err.Error()
-	} else if limited {
-		if ctx.Err() != nil {
-			p.quickOpenError = "scan timed out"
-		} else {
-			p.quickOpenError = "limited to 50000 files"
-		}
-	}
+	// Sort paths for consistent ordering
+	sort.Strings(paths)
 
-	// Sort files by path for consistent ordering
-	sort.Strings(p.quickOpenFiles)
+	switch {
+	case err != nil && err != filepath.SkipAll:
+		return paths, "scan error: " + err.Error()
+	case limited && ctx.Err() != nil:
+		return paths, "scan timed out"
+	case limited && !wantDirs:
+		return paths, fmt.Sprintf("limited to %d files", quickOpenMaxFiles)
+	case limited:
+		return paths, fmt.Sprintf("limited to %d directories", dirCacheMaxDirs)
+	}
+	return paths, ""
 }
 
-// buildDirCache walks the filesystem to build directory list for path auto-complete.
-// Similar to buildFileCache but collects directories instead of files.
-func (p *Plugin) buildDirCache() {
-	p.dirCache = nil
-
-	ctx, cancel := context.WithTimeout(context.Background(), quickOpenTimeout)
-	defer cancel()
-
-	count := 0
-	limited := false
-
-	err := filepath.WalkDir(p.ctx.WorkDir, func(path string, d fs.DirEntry, err error) error {
-		// Check timeout
-		select {
-		case <-ctx.Done():
-			limited = true
-			return filepath.SkipAll
-		default:
-		}
-
-		if err != nil {
-			return nil // Skip unreadable entries
-		}
-
-		// Get relative path
-		rel, err := filepath.Rel(p.ctx.WorkDir, path)
-		if err != nil {
-			return nil
-		}
-
-		// Skip root
-		if rel == "." {
-			return nil
-		}
-
-		// Only process directories
-		if !d.IsDir() {
-			return nil
-		}
-
-		name := d.Name()
-
-		// Skip common large/irrelevant directories
-		if name == ".git" || name == "node_modules" || name == "vendor" ||
-			name == ".next" || name == "dist" || name == "build" ||
-			name == "__pycache__" || name == ".venv" || name == "venv" ||
-			name == ".idea" || name == ".vscode" {
-			return filepath.SkipDir
-		}
-
-		// Check gitignore for directories
-		if p.tree != nil && p.tree.gitIgnore != nil {
-			if p.tree.gitIgnore.IsIgnored(rel, true) {
-				return filepath.SkipDir
-			}
-		}
-
-		// Check dir limit
-		if count >= dirCacheMaxDirs {
-			limited = true
-			return filepath.SkipAll
-		}
-
-		p.dirCache = append(p.dirCache, rel)
-		count++
-		return nil
-	})
-
-	if err != nil && err != filepath.SkipAll {
-		// Silently ignore scan errors for directory cache
-		_ = err
-	}
-	_ = limited // Ignore limited status for now
-
-	// Sort directories for consistent ordering
-	sort.Strings(p.dirCache)
-}
-
-// getPathSuggestions returns fuzzy-matched directory suggestions for the query.
-func (p *Plugin) getPathSuggestions(query string) []string {
+// getPathSuggestions returns fuzzy-matched directory suggestions for the query,
+// plus a command to (re)build the directory cache when it is missing or stale.
+func (p *Plugin) getPathSuggestions(query string) ([]string, tea.Cmd) {
 	if query == "" {
-		return nil
+		return nil, nil
 	}
 
-	// Build cache if needed
-	if len(p.dirCache) == 0 {
-		p.buildDirCache()
-	}
+	cmd := p.ensureDirCache()
 
 	// Use FuzzyFilter for matching
 	matches := FuzzyFilter(p.dirCache, query, dirCacheMaxResults)
@@ -962,24 +944,26 @@ func (p *Plugin) getPathSuggestions(query string) []string {
 	for _, m := range matches {
 		paths = append(paths, m.Path)
 	}
-	return paths
+	return paths, cmd
 }
 
-// updateSearchMatches finds all files matching the search query using the quick open cache.
-func (p *Plugin) updateSearchMatches() {
+// updateSearchMatches finds all files matching the search query using the quick
+// open cache, returning a command that rebuilds the cache when it is missing or
+// stale. Matches come from whatever the cache holds now; the scan result
+// refreshes them when it lands.
+func (p *Plugin) updateSearchMatches() tea.Cmd {
 	p.searchMatches = nil
 	if p.searchQuery == "" {
-		return
+		return nil
 	}
 
-	// Build file cache if not yet built (same cache as Ctrl+P)
-	if len(p.quickOpenFiles) == 0 {
-		p.buildFileCache()
-	}
+	// Same cache as Ctrl+P
+	cmd := p.ensureFileCache()
 
 	// Use fuzzy filter on cached files (same as Ctrl+P)
 	p.searchMatches = FuzzyFilter(p.quickOpenFiles, p.searchQuery, 20)
 	p.searchCursor = 0
+	return cmd
 }
 
 // findAndExpandPath finds a file by path, expanding only the directories along the way.

@@ -843,9 +843,13 @@ func (p *Plugin) handleFileOpKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			if p.fileOpMode == FileOpMove {
 				query := p.fileOpTextInput.Value()
 				if len(query) > 0 {
-					p.fileOpSuggestions = p.getPathSuggestions(query)
+					suggestions, scanCmd := p.getPathSuggestions(query)
+					p.fileOpSuggestions = suggestions
 					p.fileOpSuggestionIdx = -1
 					p.fileOpShowSuggestions = len(p.fileOpSuggestions) > 0
+					if scanCmd != nil {
+						cmd = tea.Batch(cmd, scanCmd)
+					}
 				} else {
 					p.fileOpShowSuggestions = false
 				}
@@ -1273,6 +1277,7 @@ func (p *Plugin) toggleProjectSearchOption(state *ProjectSearchState, option *bo
 // handleSearchKey handles key input during search mode.
 func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	var scanCmd tea.Cmd
 
 	switch key {
 	case "esc":
@@ -1294,7 +1299,7 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if len(p.searchQuery) > 0 {
 			runes := []rune(p.searchQuery)
 			p.searchQuery = string(runes[:len(runes)-1])
-			p.updateSearchMatches()
+			scanCmd = p.updateSearchMatches()
 		}
 
 	case "up", "ctrl+p":
@@ -1311,11 +1316,11 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Append printable characters to query
 		if len(key) == 1 && key[0] >= 32 && key[0] <= 126 {
 			p.searchQuery += key
-			p.updateSearchMatches()
+			scanCmd = p.updateSearchMatches()
 		}
 	}
 
-	return p, nil
+	return p, scanCmd
 }
 
 // visibleContentHeight returns the number of lines available for content.
