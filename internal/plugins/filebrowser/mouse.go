@@ -1,11 +1,14 @@
 package filebrowser
 
 import (
+	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -36,11 +39,13 @@ const (
 func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog if active
 	if p.showExitConfirmation {
+		p.clearDragState()
 		return p.handleExitConfirmationMouse(msg)
 	}
 
 	// Handle inline edit mode - mouse events for editor and click-away detection
 	if p.inlineEditMode && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		p.clearDragState()
 		action := p.mouseHandler.HandleMouse(msg)
 
 		// Helper to handle click-away: save edit state to tab and detach
@@ -72,14 +77,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 			// Check for tab row clicks FIRST (before forwarding to vim)
 			// This is needed because regionPreviewPane encompasses tabs
 			if len(p.tabs) > 1 {
-				inputBarHeight := 0
-				if p.contentSearchMode || p.fileOpMode != FileOpNone || p.lineJumpMode {
-					inputBarHeight = 1
-					if p.fileOpMode != FileOpNone && p.fileOpError != "" {
-						inputBarHeight = 2
-					}
-				}
-				tabY := inputBarHeight + 1 // pane border + first content row
+				tabY := p.inputBarHeight() + 1 // pane border + first content row
 				previewX := 0
 				if p.treeVisible {
 					p.calculatePaneWidths()
@@ -174,6 +172,14 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p, cmd
 	}
 
+	// The modal branches below consume the event without ever reaching the
+	// drag dispatch, so a gesture in flight must not survive them: a release
+	// swallowed by a modal would otherwise leave the drag armed with a stale
+	// row index.
+	if p.projectSearchMode || p.quickOpenMode || p.infoMode || p.blameMode {
+		p.clearDragState()
+	}
+
 	// Handle project search modal first if active
 	if p.projectSearchMode {
 		return p.handleProjectSearchMouse(msg)
@@ -194,6 +200,13 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p.handleBlameModalMouse(msg)
 	}
 
+	// A fresh press always supersedes the previous gesture, even one that lands
+	// on empty space (which produces no action at all, so handleMouseClick
+	// would never run to clear it).
+	if _, ok := msg.(tea.MouseClickMsg); ok {
+		p.clearDragState()
+	}
+
 	action := p.mouseHandler.HandleMouse(msg)
 
 	switch action.Type {
@@ -206,7 +219,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 	case mouse.ActionDrag:
 		return p.handleMouseDrag(action)
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd()
+		return p.handleMouseDragEnd(action)
 	case mouse.ActionHover:
 		return p.handleMouseHover(action)
 	}
@@ -215,6 +228,13 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 // handleMouseHover handles mouse hover for visual feedback.
 func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	// A hover event means no button is held, so any gesture we still think is
+	// in flight lost its release (released outside the window, focus stolen).
+	// Drop it rather than leaving a drag armed against a stale row.
+	if p.dragArmed || p.dragActive {
+		p.clearDragState()
+	}
+
 	// Only track hover for file operation modal buttons
 	if p.fileOpMode == FileOpNone {
 		p.fileOpButtonHover = 0
@@ -245,6 +265,10 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 
 // handleMouseClick handles single click actions.
 func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	// A fresh press always supersedes any previous gesture, including a press
+	// on empty space.
+	p.clearDragState()
+
 	if action.Region == nil {
 		return p, nil
 	}
@@ -258,6 +282,16 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		p.treeCursor = idx
 		p.activePane = PaneTree
 		p.ensureTreeCursorVisible()
+		// Arm (but do not start) a drag. Until the movement threshold is
+		// crossed in handleTreeItemDrag this stays a plain click, so click
+		// behavior above is unchanged. Search mode is excluded: the pane then
+		// renders the flat match list while these regions still carry tree
+		// indices, so a drag there would target a row the user is not looking at.
+		if node := p.draggableNode(idx); node != nil && !p.searchMode {
+			p.dragArmed = true
+			p.dragSourcePath = node.Path
+			p.mouseHandler.StartDrag(action.X, action.Y, regionTreeItem, idx)
+		}
 		return p, p.loadPreviewForCursor()
 
 	case regionTreePane:
@@ -409,14 +443,301 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 }
 
 // handleMouseDrag handles drag actions (pane resizing and text selection).
+// The drag source region comes from action.DragStartID, the same field
+// handleMouseDragEnd reads, so both halves of the gesture agree on one source.
 func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
-	switch p.mouseHandler.DragRegion() {
+	dragRegion := action.DragStartID
+	if dragRegion == "" {
+		dragRegion = p.mouseHandler.DragRegion()
+	}
+
+	switch dragRegion {
 	case regionPaneDivider:
 		return p.handlePaneDividerDrag(action)
 	case regionPreviewLine:
 		return p.handlePreviewSelectionDrag(action)
+	case regionTreeItem:
+		return p.handleTreeItemDrag(action)
 	}
 	return p, nil
+}
+
+// dragThresholdDX/DY are the movement required to promote a press on a tree row
+// from "click" to "drag". Drag-to-move ships without a feature flag, so this
+// threshold is the only thing protecting ordinary clicks: a single cell of
+// drift between press and release is common on a trackpad, and promoting that
+// to a drag would move a file on what the user meant as a click. Two cells in
+// either axis is deliberate motion.
+const (
+	dragThresholdDX = 2
+	dragThresholdDY = 2
+)
+
+// draggableNode returns the node at flat tree row idx if it may be dragged, or
+// nil. The root is never draggable (it is not in the flat list, but guard
+// anyway).
+func (p *Plugin) draggableNode(idx int) *FileNode {
+	if p.tree == nil {
+		return nil
+	}
+	node := p.tree.GetNode(idx)
+	if node == nil || node == p.tree.Root || node.Path == "" {
+		return nil
+	}
+	return node
+}
+
+// clearDragState resets the drag-to-move state machine, including the mouse
+// handler's own gesture when the handler is the one this plugin armed. The two
+// halves have to move together: if the plugin flags reset while the handler
+// keeps thinking it is dragging, every motion is reported as ActionDrag instead
+// of ActionHover and hover-driven UI (file-op modal buttons) goes dead until
+// the next press.
+func (p *Plugin) clearDragState() {
+	p.dragArmed = false
+	p.dragActive = false
+	p.dragSourcePath = ""
+	p.dragDropIdx = -1
+	p.dragDropDir = ""
+	p.dragHoverIdx = -1
+	p.dragHoverSince = time.Time{}
+	p.dragHoverGen++ // Any spring-load tick already in flight is now stale.
+	p.dragLastScroll = time.Time{}
+	if p.mouseHandler != nil && p.mouseHandler.DragRegion() == regionTreeItem {
+		p.mouseHandler.EndDrag()
+	}
+}
+
+// handleTreeItemDrag maintains the drag-to-move gesture for tree rows: it
+// promotes armed -> active once the threshold is crossed, then on every motion
+// auto-scrolls at the pane edges, tracks the hovered row for spring-loading,
+// and re-resolves the drop target.
+func (p *Plugin) handleTreeItemDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	if !p.dragArmed && !p.dragActive {
+		return p, nil
+	}
+	if !p.dragActive {
+		if abs(action.DragDY) < dragThresholdDY && abs(action.DragDX) < dragThresholdDX {
+			// Still within the click tolerance - remain a click.
+			return p, nil
+		}
+		p.dragArmed = false
+		p.dragActive = true
+		p.dragHoverIdx = -1
+		p.dragHoverSince = time.Now()
+	}
+
+	// Auto-scroll first: the hit regions were registered against the previous
+	// scroll offset, so a row index read from them has to be shifted by however
+	// far the pane just scrolled to still name the row under the cursor.
+	scrolled := p.autoScrollForDrag(action.X, action.Y)
+	hoverIdx := treeRowIndexOf(action)
+	if hoverIdx >= 0 && scrolled != 0 {
+		hoverIdx += scrolled
+	}
+
+	cmd := p.trackDragHover(hoverIdx)
+	p.dragDropDir, p.dragDropIdx = p.resolveDropTarget(hoverIdx)
+	return p, cmd
+}
+
+// treeRowIndexOf returns the flat tree row under the cursor for a mouse action,
+// or -1 when the cursor is not over a tree row at all.
+func treeRowIndexOf(action mouse.MouseAction) int {
+	if action.Region == nil || action.Region.ID != regionTreeItem {
+		return -1
+	}
+	idx, ok := action.Region.Data.(int)
+	if !ok {
+		return -1
+	}
+	return idx
+}
+
+// dragSpringLoadDelay is how long the cursor must rest over a collapsed
+// directory mid-drag before it auto-expands, letting one gesture reach a nested
+// destination.
+const dragSpringLoadDelay = 600 * time.Millisecond
+
+// dragAutoScrollInterval throttles edge auto-scroll. Motion events arrive at
+// well over 100/s in all-motion mode; one row per event would fly past the
+// destination before the user could stop.
+const dragAutoScrollInterval = 60 * time.Millisecond
+
+// trackDragHover records how long the cursor has rested on one row and drives
+// spring-loading. Two paths expand the directory, because neither alone is
+// enough: the scheduled tick covers a cursor held perfectly still (no further
+// motion events would ever arrive), and the elapsed-time check on motion covers
+// a tick that was dropped or arrived while the pointer was elsewhere.
+func (p *Plugin) trackDragHover(hoverIdx int) tea.Cmd {
+	if hoverIdx != p.dragHoverIdx {
+		p.dragHoverIdx = hoverIdx
+		p.dragHoverSince = time.Now()
+		p.dragHoverGen++ // Invalidate the tick scheduled for the row we left.
+		if p.springLoadable(hoverIdx) {
+			gen := p.dragHoverGen
+			return tea.Tick(dragSpringLoadDelay, func(time.Time) tea.Msg {
+				return DragSpringLoadMsg{Gen: gen}
+			})
+		}
+		return nil
+	}
+	if p.springLoadable(hoverIdx) && time.Since(p.dragHoverSince) >= dragSpringLoadDelay {
+		p.springLoadDir(hoverIdx)
+	}
+	return nil
+}
+
+// springLoadable reports whether the row at idx is a collapsed directory that
+// spring-loading could open.
+func (p *Plugin) springLoadable(idx int) bool {
+	if !p.dragActive || p.tree == nil {
+		return false
+	}
+	node := p.tree.GetNode(idx)
+	return node != nil && node.IsDir && !node.IsExpanded
+}
+
+// springLoadDir expands the hovered directory mid-drag, then re-resolves the
+// drop target against the row the cursor is on. Expanding renumbers every row
+// below, but not the expanded directory's own row, so the hovered index is
+// still valid - and a user holding perfectly still sends no further motion
+// events, so without this the affordance would read "can't drop here" while a
+// release would happily perform the move.
+func (p *Plugin) springLoadDir(idx int) {
+	node := p.tree.GetNode(idx)
+	if node == nil || !node.IsDir || node.IsExpanded {
+		return
+	}
+	if err := p.tree.Expand(node); err != nil {
+		return
+	}
+	p.syncWatcherDirs()
+	p.clampTreeScroll()
+	p.dragDropDir, p.dragDropIdx = p.resolveDropTarget(idx)
+	p.dragHoverSince = time.Now()
+}
+
+// handleDragSpringLoad expands a directory the cursor has rested on. A tick
+// whose generation no longer matches was scheduled for a row the cursor has
+// since left, and must do nothing.
+func (p *Plugin) handleDragSpringLoad(msg DragSpringLoadMsg) (plugin.Plugin, tea.Cmd) {
+	if !p.dragActive || msg.Gen != p.dragHoverGen {
+		return p, nil
+	}
+	if !p.springLoadable(p.dragHoverIdx) {
+		return p, nil
+	}
+	p.springLoadDir(p.dragHoverIdx)
+	return p, nil
+}
+
+// autoScrollForDrag scrolls the tree when the cursor reaches the top or bottom
+// row of the pane during a drag, so a destination that is off-screen when the
+// gesture starts is still reachable. It returns the number of rows scrolled
+// (negative for up), which is 0 for the common case.
+func (p *Plugin) autoScrollForDrag(x, y int) int {
+	if !p.dragActive || p.tree == nil {
+		return 0
+	}
+	if x >= p.treeWidth {
+		return 0 // Dragging over the preview pane must not scroll the tree.
+	}
+	topY, height := p.treeRowsViewport()
+	if height <= 1 {
+		// A one-row viewport has no distinct top and bottom edge, so there is no
+		// way to tell which direction the user is reaching for.
+		return 0
+	}
+	bottomY := topY + height - 1
+	if y < topY || y > bottomY {
+		return 0 // Not over the tree rows at all.
+	}
+
+	delta := 0
+	switch {
+	case y <= topY:
+		delta = -1
+	case y >= bottomY:
+		delta = 1
+	default:
+		return 0
+	}
+
+	now := time.Now()
+	if !p.dragLastScroll.IsZero() && now.Sub(p.dragLastScroll) < dragAutoScrollInterval {
+		return 0
+	}
+
+	before := p.treeScrollOff
+	p.treeScrollOff += delta
+	p.clampTreeScroll()
+	applied := p.treeScrollOff - before
+	if applied != 0 {
+		p.dragLastScroll = now
+	}
+	return applied
+}
+
+// resolveDropTarget turns the row under the cursor into a destination
+// directory. It returns the destination path (relative to the project root, ""
+// meaning the root itself) and the row to highlight, or -1 when the drop is not
+// allowed. Every rejection here is a move that would be a no-op or would
+// corrupt the tree, so this is the last line of defence before os.Rename.
+func (p *Plugin) resolveDropTarget(hoverIdx int) (string, int) {
+	dir, idx, _ := p.resolveDropTargetReason(hoverIdx)
+	return dir, idx
+}
+
+// resolveDropTargetReason is resolveDropTarget plus a human-readable reason for
+// a rejection, so a released drag can say why nothing happened instead of
+// vanishing silently. The reason is empty when the cursor is simply not over a
+// droppable row (there is nothing to explain) and when the drop is valid.
+func (p *Plugin) resolveDropTargetReason(hoverIdx int) (string, int, string) {
+	if !p.dragActive || p.tree == nil || hoverIdx < 0 {
+		return "", -1, ""
+	}
+	source := p.tree.FindByPath(p.dragSourcePath)
+	if source == nil || source.Path == "" {
+		return "", -1, "" // The root is never draggable.
+	}
+	hovered := p.tree.GetNode(hoverIdx)
+	if hovered == nil {
+		return "", -1, ""
+	}
+
+	// Dropping on a file targets its parent directory, the way Finder and
+	// VS Code behave.
+	targetDir := hovered.Path
+	highlightIdx := hoverIdx
+	if !hovered.IsDir {
+		targetDir = parentDirPath(hovered.Path)
+		// Highlight the directory row itself when it is on screen, so the
+		// feedback names the real destination rather than the file the cursor
+		// happens to be over. Top-level files resolve to the root, which has no
+		// row, so the hovered row stays the highlight.
+		if targetDir != "" {
+			if idx := p.tree.IndexOfPath(targetDir); idx >= 0 {
+				highlightIdx = idx
+			}
+		}
+	}
+
+	// The move rules themselves live in validateMove, shared with the keyboard
+	// 'm' dialog: this function only decides which row the gesture is pointing
+	// at and which row to highlight.
+	if reason := validateMove(source.Path, source.IsDir, filepath.Join(targetDir, source.Name)); reason != "" {
+		return "", -1, reason
+	}
+
+	return targetDir, highlightIdx, ""
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // handlePaneDividerDrag handles dragging the pane divider to resize.
@@ -481,8 +802,19 @@ func (p *Plugin) previewColAtScreenX(x, lineIdx int) int {
 }
 
 // handleMouseDragEnd handles the end of a drag operation.
-func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
-	switch p.mouseHandler.DragRegion() {
+// The action carries the release point and the region under it; the drag source
+// region has to come from action.DragStartID because EndDrag has already run by
+// the time this is called.
+func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	dragRegion := action.DragStartID
+	if dragRegion == "" {
+		dragRegion = p.mouseHandler.DragRegion()
+	}
+
+	// Whether or not the gesture was a real drag, it is over now.
+	defer p.clearDragState()
+
+	switch dragRegion {
 	case regionPaneDivider:
 		// Save the current tree width to state
 		_ = state.SetFileBrowserTreeWidth(p.treeWidth)
@@ -494,8 +826,73 @@ func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
 			p.selectionCopyHintShown = true
 			return p, msg.ShowToast("Press alt+c or y to copy selection", 3*time.Second)
 		}
+	case regionTreeItem:
+		return p.commitTreeItemDrop(action)
 	}
 	return p, nil
+}
+
+// commitTreeItemDrop performs the move a released drag asked for. The drop
+// target is resolved from scratch here rather than trusting dragDropIdx: the
+// watcher can rebuild the tree between the last motion event and the release,
+// and a stale row index would move the wrong file into the wrong place.
+func (p *Plugin) commitTreeItemDrop(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	if !p.dragActive || p.ctx == nil {
+		return p, nil // Never promoted past a click: nothing to do.
+	}
+	hoverIdx := treeRowIndexOf(action)
+	// Defence in depth against a hit region that outlives the row it names: a
+	// row the user cannot see is a row they cannot have aimed at, and there is
+	// no undo for a move.
+	if hoverIdx >= 0 && !p.treeRowVisible(hoverIdx) {
+		return p, nil
+	}
+	targetDir, idx, reason := p.resolveDropTargetReason(hoverIdx)
+	if idx < 0 {
+		// A deliberate multi-second gesture that ends in nothing at all is
+		// indistinguishable from a dropped event, so say why when there is
+		// something to say.
+		if reason != "" {
+			return p, msg.ShowToast(reason, 3*time.Second)
+		}
+		return p, nil
+	}
+	source := p.tree.FindByPath(p.dragSourcePath)
+	if source == nil {
+		return p, nil
+	}
+
+	src := filepath.Join(p.ctx.WorkDir, source.Path)
+	dstDir := filepath.Join(p.ctx.WorkDir, targetDir)
+	dst := filepath.Join(dstDir, source.Name)
+	if err := p.validateDestPath(dst); err != nil {
+		return p, msg.ShowToast("Move failed: "+err.Error(), 3*time.Second)
+	}
+	// The row may be stale: the directory can have been removed on disk since
+	// the last tree build. doFileOp would MkdirAll it back into existence, so a
+	// directory the user deliberately deleted would return holding one file.
+	// The explicit move dialog still prompts before creating parents; a drop
+	// has nowhere to prompt.
+	if info, err := os.Stat(dstDir); err != nil || !info.IsDir() {
+		return p, msg.ShowToast("Move failed: destination no longer exists", 3*time.Second)
+	}
+
+	// doFileOp owns the same-path check, the destination-exists check and the
+	// rename itself. Its result is rewritten into a DragMoveResultMsg so this
+	// move's outcome is reported as a drag move and no other file operation's
+	// result can be mistaken for it.
+	name := source.Name
+	op := p.doFileOp(src, dst)
+	return p, func() tea.Msg {
+		switch res := op().(type) {
+		case FileOpSuccessMsg:
+			return DragMoveResultMsg{Name: name, Dir: targetDir}
+		case FileOpErrorMsg:
+			return DragMoveResultMsg{Name: name, Dir: targetDir, Err: res.Err}
+		default:
+			return res
+		}
+	}
 }
 
 // handleQuickOpenMouse handles mouse events in quick open modal.

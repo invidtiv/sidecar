@@ -230,6 +230,117 @@ func TestHandler_DragLifecycle(t *testing.T) {
 	}
 }
 
+// Drop targeting needs to know where the pointer is and what is underneath it,
+// on every drag motion and at the release point. ActionDrag used to carry no
+// region and ActionDragEnd carried neither region nor coordinates.
+func TestHandleMouse_DragCarriesRegionAndCoords(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("source-row", Rect{X: 0, Y: 0, W: 20, H: 1}, 3)
+	h.HitMap.Add("target-row", Rect{X: 0, Y: 5, W: 20, H: 1}, 8)
+
+	h.StartDrag(2, 0, "source-row", 3)
+
+	drag := h.HandleMouse(tea.MouseMotionMsg(tea.Mouse{X: 4, Y: 5, Button: tea.MouseLeft}))
+	if drag.Type != ActionDrag {
+		t.Fatalf("motion while dragging = %v, want ActionDrag", drag.Type)
+	}
+	if drag.Region == nil || drag.Region.ID != "target-row" {
+		t.Fatalf("ActionDrag.Region = %#v, want the region under the cursor", drag.Region)
+	}
+	if drag.Region.Data != 8 {
+		t.Errorf("ActionDrag.Region.Data = %v, want 8", drag.Region.Data)
+	}
+	if drag.DragStartID != "source-row" {
+		t.Errorf("ActionDrag.DragStartID = %q, want %q", drag.DragStartID, "source-row")
+	}
+	if drag.X != 4 || drag.Y != 5 {
+		t.Errorf("ActionDrag coords = (%d, %d), want (4, 5)", drag.X, drag.Y)
+	}
+	if drag.DragDX != 2 || drag.DragDY != 5 {
+		t.Errorf("ActionDrag delta = (%d, %d), want (2, 5)", drag.DragDX, drag.DragDY)
+	}
+
+	end := h.HandleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 4, Y: 5}))
+	if end.Type != ActionDragEnd {
+		t.Fatalf("release while dragging = %v, want ActionDragEnd", end.Type)
+	}
+	if end.X != 4 || end.Y != 5 {
+		t.Errorf("ActionDragEnd coords = (%d, %d), want (4, 5)", end.X, end.Y)
+	}
+	if end.Region == nil || end.Region.ID != "target-row" {
+		t.Fatalf("ActionDragEnd.Region = %#v, want the region under the release point", end.Region)
+	}
+	// The source region has to survive EndDrag, which clears handler state.
+	if end.DragStartID != "source-row" {
+		t.Errorf("ActionDragEnd.DragStartID = %q, want %q", end.DragStartID, "source-row")
+	}
+	if end.DragDX != 2 || end.DragDY != 5 {
+		t.Errorf("ActionDragEnd delta = (%d, %d), want (2, 5)", end.DragDX, end.DragDY)
+	}
+	if h.IsDragging() {
+		t.Error("should not be dragging after release")
+	}
+}
+
+// Releasing over empty space is a legitimate (invalid) drop: the action still
+// reports where it happened, with a nil region.
+func TestHandleMouse_DragEndOverNoRegion(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("source-row", Rect{X: 0, Y: 0, W: 20, H: 1}, 3)
+	h.StartDrag(2, 0, "source-row", 3)
+
+	end := h.HandleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 50, Y: 40}))
+	if end.Type != ActionDragEnd {
+		t.Fatalf("release = %v, want ActionDragEnd", end.Type)
+	}
+	if end.Region != nil {
+		t.Errorf("Region = %#v, want nil over empty space", end.Region)
+	}
+	if end.X != 50 || end.Y != 40 {
+		t.Errorf("coords = (%d, %d), want (50, 40)", end.X, end.Y)
+	}
+	if end.DragStartID != "source-row" {
+		t.Errorf("DragStartID = %q, want %q", end.DragStartID, "source-row")
+	}
+}
+
+// If a release is lost (released outside the terminal, focus stolen), the
+// handler is left dragging. All-motion mode then delivers button-less motion,
+// which must cancel the stale gesture instead of being reported as a drag.
+func TestHandleMouse_ButtonlessMotionCancelsStaleDrag(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("row", Rect{X: 0, Y: 0, W: 20, H: 10}, 1)
+	h.StartDrag(2, 0, "row", 1)
+
+	got := h.HandleMouse(tea.MouseMotionMsg(tea.Mouse{X: 4, Y: 5})) // no button held
+	if got.Type != ActionHover {
+		t.Errorf("button-less motion = %v, want ActionHover", got.Type)
+	}
+	if h.IsDragging() {
+		t.Error("handler still dragging after button-less motion")
+	}
+	if h.DragRegion() != "" {
+		t.Errorf("DragRegion = %q, want empty", h.DragRegion())
+	}
+
+	// And a later release must not be reported as a drag end.
+	end := h.HandleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 4, Y: 5}))
+	if end.Type != ActionNone {
+		t.Errorf("release after cancelled drag = %v, want ActionNone", end.Type)
+	}
+}
+
+// A release with no drag in progress must stay a no-op.
+func TestHandleMouse_ReleaseWithoutDragIsNoAction(t *testing.T) {
+	h := NewHandler()
+	h.HitMap.Add("row", Rect{X: 0, Y: 0, W: 20, H: 1}, 1)
+
+	got := h.HandleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 2, Y: 0}))
+	if got.Type != ActionNone {
+		t.Errorf("release without drag = %v, want ActionNone", got.Type)
+	}
+}
+
 func TestHandler_Clear(t *testing.T) {
 	h := NewHandler()
 	h.HitMap.Add("a", Rect{X: 0, Y: 0, W: 10, H: 10}, nil)

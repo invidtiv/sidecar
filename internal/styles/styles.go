@@ -290,6 +290,21 @@ var (
 	FileBrowserIcon = lipgloss.NewStyle().
 			Foreground(TextMuted)
 
+	// Drop target row while dragging a file onto a directory. Deliberately
+	// uses Primary rather than the BgTertiary of ListItemSelected: during a
+	// drag both are on screen at once and must not look alike. The foreground
+	// is the dark background colour, not TextPrimary, which is near-illegible
+	// on Primary in most themes.
+	FileBrowserDropTarget = lipgloss.NewStyle().
+				Foreground(BgPrimary).
+				Background(Primary).
+				Bold(true)
+
+	// The row being dragged, dimmed so it reads as "in flight".
+	FileBrowserDragSource = lipgloss.NewStyle().
+				Foreground(TextSubtle).
+				Italic(true)
+
 	// Content search match highlighting
 	SearchMatch = lipgloss.NewStyle().
 			Background(Warning) // Yellow background for all matches
