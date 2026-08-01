@@ -205,6 +205,19 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 		}
 	}
 
+	// Seed the monitor with the size the plugin already knows about. The monitor
+	// only computes its panel bounds on WindowSizeMsg, and since the model is now
+	// built asynchronously (td-9c7bf2) the app's window size arrived before this
+	// model existed. Without replaying it, PanelBounds stays empty and every
+	// mouse hit test misses, so wheel scrolling and clicks do nothing until the
+	// terminal is resized.
+	if p.width > 0 && p.height > 0 {
+		newModel, _ := p.model.Update(tea.WindowSizeMsg{Width: p.width, Height: p.height})
+		if m, ok := newModel.(monitor.Model); ok {
+			p.model = &m
+		}
+	}
+
 	// Delegate to monitor's Init which starts data fetch and tick.
 	// Mark as started to prevent duplicate poll chains on focus (td-023577)
 	p.started = true
@@ -404,9 +417,17 @@ func (p *Plugin) View(width, height int) string {
 			content = "No td database found.\nRun 'td init' to initialize."
 		}
 	} else {
-		// Set dimensions on model before rendering
-		p.model.Width = width
-		p.model.Height = height
+		// Set dimensions on model before rendering. Route a size change through
+		// Update rather than assigning the fields, so the monitor recomputes the
+		// panel bounds its mouse hit tests depend on; assigning Width/Height
+		// alone leaves the bounds stale (or empty, for a model built after the
+		// app's last WindowSizeMsg) and silently kills scrolling and clicks.
+		if p.model.Width != width || p.model.Height != height {
+			newModel, _ := p.model.Update(tea.WindowSizeMsg{Width: width, Height: height})
+			if m, ok := newModel.(monitor.Model); ok {
+				p.model = &m
+			}
+		}
 		// v2: monitor.View() returns tea.View; extract its string content for
 		// composition into sidecar's own view (the app's tea.View owns the
 		// terminal-level features like alt-screen/mouse/cursor).
