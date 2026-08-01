@@ -578,11 +578,16 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if p.termPanelVisible {
 			p.termPanelFocused = false
 		}
-		// Normal clicks focus and prepare read-mode selection. Enter is the
-		// explicit transition into interactive input.
+		// A plain click on the terminal makes it live, the same as pressing
+		// enter: typing and wheel events reach the app instead of scrolling
+		// sidecar's own capture buffer. Shift/alt clicks stay in read mode so
+		// drag-selection still works over mouse-reporting apps.
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			if !action.Shift && !action.Alt {
 				if cmd, ok := p.activateTerminalLink(action); ok {
+					return cmd
+				}
+				if cmd := p.enterInteractiveMode(); cmd != nil {
 					return cmd
 				}
 			}
@@ -604,6 +609,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		if !action.Shift && !action.Alt {
 			if cmd, ok := p.activateTerminalLink(action); ok {
+				return cmd
+			}
+			if cmd := p.enterTermPanelInteractiveMode(); cmd != nil {
 				return cmd
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 func TestIsModalViewMode(t *testing.T) {
@@ -192,6 +193,95 @@ func TestModalHoverGuard(t *testing.T) {
 	}
 	if p.hoverNewButton {
 		t.Error("hoverNewButton should not be set when modal is open")
+	}
+}
+
+// newPreviewClickTestPlugin builds a plugin with a selected shell whose agent is
+// live enough for enterInteractiveMode to accept it.
+func newPreviewClickTestPlugin() *Plugin {
+	p := &Plugin{
+		viewMode:      ViewModeList,
+		mouseHandler:  mouse.NewHandler(),
+		width:         100,
+		height:        30,
+		sidebarWidth:  40,
+		previewTab:    PreviewTabOutput,
+		shellSelected: true,
+		shells: []*ShellSession{{
+			TmuxName: "shell-1",
+			Agent:    &Agent{OutputBuf: tty.NewOutputBuffer(100)},
+		}},
+	}
+	p.selection.Clear()
+	return p
+}
+
+func previewClickAction(shift, alt bool) mouse.MouseAction {
+	return mouse.MouseAction{
+		Type:  mouse.ActionClick,
+		X:     60,
+		Y:     6,
+		Shift: shift,
+		Alt:   alt,
+		Region: &mouse.Region{
+			ID:   regionPreviewPane,
+			Rect: mouse.Rect{X: 40, Y: 2, W: 60, H: 20},
+		},
+	}
+}
+
+// A plain click on the terminal should make it live, so typing and wheel events
+// reach the running app instead of scrolling sidecar's own capture buffer.
+func TestPreviewPaneClickEntersInteractiveMode(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+
+	if cmd := p.handleMouseClick(previewClickAction(false, false)); cmd == nil {
+		t.Fatal("preview pane click should return a cmd from entering interactive mode")
+	}
+	if p.viewMode != ViewModeInteractive {
+		t.Errorf("viewMode = %v, want ViewModeInteractive", p.viewMode)
+	}
+	if p.interactiveState == nil || !p.interactiveState.Active {
+		t.Error("interactiveState should be active after clicking the preview pane")
+	}
+	if p.activePane != PanePreview {
+		t.Errorf("activePane = %v, want PanePreview", p.activePane)
+	}
+}
+
+// Shift/alt clicks stay in read mode so drag-selection still works over apps
+// that have mouse reporting enabled.
+func TestPreviewPaneModifierClickStaysInReadMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		shift, alt bool
+	}{
+		{"shift", true, false},
+		{"alt", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPreviewClickTestPlugin()
+			p.handleMouseClick(previewClickAction(tc.shift, tc.alt))
+			if p.viewMode == ViewModeInteractive {
+				t.Error("modifier click should not enter interactive mode")
+			}
+			if p.interactiveState != nil {
+				t.Error("modifier click should not create interactive state")
+			}
+		})
+	}
+}
+
+// Diff/Task tabs have no terminal behind them, so a click there must not attach.
+func TestPreviewPaneClickOnNonTerminalTabDoesNotAttach(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shellSelected = false
+	p.previewTab = PreviewTabDiff
+	p.worktrees = []*Worktree{{Name: "wt"}}
+
+	p.handleMouseClick(previewClickAction(false, false))
+	if p.viewMode == ViewModeInteractive {
+		t.Error("clicking the diff tab should not enter interactive mode")
 	}
 }
 
