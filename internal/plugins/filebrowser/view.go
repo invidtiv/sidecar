@@ -93,31 +93,140 @@ func (p *Plugin) renderView() string {
 	return p.renderNormalPanes()
 }
 
+// inputBarHeight returns the number of rows the input bars above the panes
+// occupy (content search, file op, line jump). Mouse code needs the same number
+// to know where the panes start, so both read it from here.
+// Note: the tree search bar is rendered inside the tree pane, not here.
+func (p *Plugin) inputBarHeight() int {
+	h := 0
+	if p.contentSearchMode {
+		h += inputBarRows
+	}
+	if p.fileOpMode != FileOpNone {
+		h += inputBarRows
+		// One extra line for the file-op error message when present.
+		if p.fileOpError != "" {
+			h++
+		}
+		// The move dialog's suggestion dropdown renders below the bar and pushes
+		// the panes down with it. Leaving it out shifted every tree hit region
+		// up by one row per suggestion, so a drop released on the row the user
+		// was looking at moved the file into a different directory entirely.
+		h += p.fileOpSuggestionRows()
+	}
+	if p.lineJumpMode {
+		h += inputBarRows
+	}
+	return h
+}
+
+// fileOpSuggestionRows is the number of screen rows the move dialog's path
+// suggestion dropdown occupies (0 when it is not showing).
+func (p *Plugin) fileOpSuggestionRows() int {
+	if p.fileOpMode != FileOpMove || !p.fileOpShowSuggestions {
+		return 0
+	}
+	return len(p.fileOpSuggestions)
+}
+
+// fileOpSuggestionsTopY is the screen row the first suggestion is drawn on.
+// The dropdown sits underneath everything the bars above it draw, including the
+// file-op bar's own input line, its margin row and its optional error line.
+func (p *Plugin) fileOpSuggestionsTopY() int {
+	y := 0
+	if p.contentSearchMode {
+		y += inputBarRows
+	}
+	y += inputBarRows
+	if p.fileOpError != "" {
+		y++
+	}
+	return y
+}
+
+// inputBarRows is the height of one input bar on screen. The bars render with
+// styles.ModalTitle, which carries MarginBottom(1), so each one occupies its
+// text line plus a blank line. Counting it as a single row put every tree hit
+// region one row above the row it names whenever a bar was open - a click
+// selected the wrong file, and a drop moved one into the wrong directory.
+const inputBarRows = 2
+
+// paneHeight returns the outer height of the tree/preview panels, borders
+// included. renderNormalPanes and the geometry helpers below must agree on it,
+// so it lives in one place.
+func (p *Plugin) paneHeight() int {
+	h := p.height - p.inputBarHeight()
+	if h < 4 {
+		h = 4
+	}
+	return h
+}
+
+// treeItemRows returns how many tree rows the pane actually draws: the panel
+// height minus its two borders and the two header lines renderTreePane emits
+// before the first item.
+//
+// Everything that maps rows to screen coordinates reads this: the render loop,
+// the hit-region loop, the scroll clamp and the drag auto-scroll edges. When
+// they disagree the tree registers rows it never draws, and a drop released on
+// the pane border commits a move into a directory the user never saw.
+func (p *Plugin) treeItemRows() int {
+	rows := p.paneHeight() - 4
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// treeRowVisible reports whether a flat tree index is currently drawn on screen.
+func (p *Plugin) treeRowVisible(idx int) bool {
+	return idx >= p.treeScrollOff && idx < p.treeScrollOff+p.treeItemRows()
+}
+
+// treeRowsViewport returns the screen row of the first tree item and how many
+// item rows are visible.
+func (p *Plugin) treeRowsViewport() (topY, height int) {
+	// Pane border (1) + header (2) sit above the first item, matching the hit
+	// regions registered in renderNormalPanes.
+	return p.inputBarHeight() + 3, p.treeItemRows()
+}
+
+// clampTreeScroll keeps the tree scroll offset inside the scrollable range.
+func (p *Plugin) clampTreeScroll() {
+	maxOff := 0
+	if p.tree != nil {
+		maxOff = p.tree.Len() - p.treeItemRows()
+	}
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if p.treeScrollOff > maxOff {
+		p.treeScrollOff = maxOff
+	}
+	if p.treeScrollOff < 0 {
+		p.treeScrollOff = 0
+	}
+}
+
 // renderNormalPanes renders the standard 2-pane layout without modals.
 func (p *Plugin) renderNormalPanes() string {
-	// Account for input bar if active (content search or file op or line jump)
-	// Note: tree search bar is rendered inside the tree pane, not here
-	inputBarHeight := 0
-	if p.contentSearchMode || p.fileOpMode != FileOpNone || p.lineJumpMode {
-		inputBarHeight = 1
-		// Add extra line for error message if present
-		if p.fileOpMode != FileOpNone && p.fileOpError != "" {
-			inputBarHeight = 2
-		}
-	}
+	inputBarHeight := p.inputBarHeight()
 
 	// Pane height for panels (outer dimensions including borders)
 	// Note: footer is rendered by the app, not by the plugin
-	paneHeight := p.height - inputBarHeight
-	if paneHeight < 4 {
-		paneHeight = 4
-	}
+	paneHeight := p.paneHeight()
 
 	// Inner content height (excluding borders and header lines)
 	innerHeight := paneHeight - 2
 	if innerHeight < 1 {
 		innerHeight = 1
 	}
+
+	// Tree rows the pane can actually draw. The tree pane spends two of its
+	// inner lines on the header, so it shows fewer rows than the preview pane
+	// has lines - and the hit regions below must match what is drawn, not the
+	// pane's inner height.
+	treeRows := p.treeItemRows()
 
 	// Handle collapsed tree - render full-width preview pane
 	if !p.treeVisible {
@@ -170,7 +279,7 @@ func (p *Plugin) renderNormalPanes() string {
 	treeActive := p.activePane == PaneTree && !p.searchMode && !p.contentSearchMode
 	previewActive := p.activePane == PanePreview && !p.searchMode || p.contentSearchMode
 
-	treeContent := p.renderTreePane(innerHeight)
+	treeContent := p.renderTreePane(treeRows)
 	previewContent := p.renderPreviewPane(innerHeight)
 
 	// Apply gradient border styles
@@ -236,7 +345,7 @@ func (p *Plugin) renderNormalPanes() string {
 	// Register individual tree items LAST (tested first = higher priority)
 	// Note: regions are tested in reverse order, so items added last take precedence
 	if p.tree != nil && p.tree.Len() > 0 {
-		end := p.treeScrollOff + innerHeight
+		end := p.treeScrollOff + treeRows
 		if end > p.tree.Len() {
 			end = p.tree.Len()
 		}
@@ -406,6 +515,7 @@ func (p *Plugin) renderFileOpConfirmation(message string) string {
 func (p *Plugin) renderFileOpSuggestions() string {
 	var lines []string
 
+	topY := p.fileOpSuggestionsTopY()
 	for i, suggestion := range p.fileOpSuggestions {
 		line := " " + suggestion
 		if i == p.fileOpSuggestionIdx {
@@ -415,8 +525,10 @@ func (p *Plugin) renderFileOpSuggestions() string {
 		}
 		lines = append(lines, line)
 
-		// Register hit region for this suggestion (Y offset = line index + 1 for input bar)
-		p.mouseHandler.HitMap.AddRect(regionFileOpSuggestion, 0, i+1, p.treeWidth, 1, i)
+		// Register the hit region on the row this suggestion is actually drawn
+		// on, which is below the whole input bar - not one row below its first
+		// line.
+		p.mouseHandler.HitMap.AddRect(regionFileOpSuggestion, 0, topY+i, p.treeWidth, 1, i)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -443,6 +555,13 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 	if p.searchMode {
 		searchLine := p.renderTreeSearchBar()
 		sb.WriteString(searchLine)
+		sb.WriteString("\n")
+	} else if dragLine := p.renderDragStatusLine(); dragLine != "" {
+		// The row the search bar would use is otherwise blank, so live drag
+		// status goes there: it needs no new bar and, crucially, no change in
+		// height - a layout shift mid-gesture would move every row out from
+		// under the cursor.
+		sb.WriteString(dragLine)
 		sb.WriteString("\n")
 	} else {
 		sb.WriteString("\n") // Empty line when not searching
@@ -472,6 +591,8 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		end = p.tree.Len()
 	}
 
+	maxWidth := treeNodeWidth(p.treeWidth)
+
 	var treeSB strings.Builder
 	for i := p.treeScrollOff; i < end; i++ {
 		node := p.tree.GetNode(i)
@@ -480,7 +601,6 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		}
 
 		selected := i == p.treeCursor
-		maxWidth := p.treeWidth - 4 - 1 // Account for border padding and scrollbar column
 		line := p.renderTreeNode(node, selected, maxWidth)
 
 		treeSB.WriteString(line)
@@ -497,13 +617,13 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		TrackHeight:  visibleHeight,
 	})
 
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeSB.String(), scrollbar))
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(treeSB.String(), maxWidth), scrollbar))
 	return sb.String()
 }
 
 // renderSearchResults renders the filtered search results list.
 func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) string {
-	maxWidth := p.treeWidth - 4 - 1 // Reserve 1 col for scrollbar
+	maxWidth := treeNodeWidth(p.treeWidth)
 
 	// Calculate scroll offset for search results
 	searchScrollOff := 0
@@ -554,8 +674,84 @@ func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) str
 		TrackHeight:  visibleHeight,
 	})
 
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, resultSB.String(), scrollbar))
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(resultSB.String(), maxWidth), scrollbar))
 	return sb.String()
+}
+
+// renderDragStatusLine describes an in-flight drag: what is moving and where it
+// would land. A TUI has no drag cursor and the row highlight is subtle in some
+// themes, so this text is the primary signal that a drop will (or will not)
+// work.
+func (p *Plugin) renderDragStatusLine() string {
+	if !p.dragActive || p.dragSourcePath == "" {
+		return ""
+	}
+
+	name := filepath.Base(p.dragSourcePath)
+	maxWidth := p.treeWidth - 4
+	if maxWidth < 8 {
+		maxWidth = 8
+	}
+
+	// The pane is narrow, so drop the decoration before the information: the
+	// destination (or the refusal) is what the user needs to read.
+	var candidates []string
+	style := styles.Muted
+	if p.dragDropIdx >= 0 {
+		dst := displayDropDir(p.dragDropDir)
+		candidates = []string{
+			"moving " + name + " → " + dst,
+			name + " → " + dst,
+			"→ " + dst,
+		}
+	} else {
+		style = styles.StatusDeleted
+		candidates = []string{
+			"moving " + name + " · can't drop here",
+			"can't drop here",
+		}
+	}
+
+	text := candidates[len(candidates)-1]
+	for _, c := range candidates {
+		if ansi.StringWidth(c) <= maxWidth {
+			text = c
+			break
+		}
+	}
+	return style.Render(ansi.Truncate(text, maxWidth, "…"))
+}
+
+// treeNodeWidth is the cell width a tree row is rendered into, given the pane
+// width: the border padding and the scrollbar column come off the top.
+func treeNodeWidth(treeWidth int) int {
+	w := treeWidth - 4 - 1
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// treeColumn pads every line of the rendered tree to a fixed width so the
+// scrollbar sits in the same column no matter how the rows are styled.
+//
+// JoinHorizontal sizes a block to its widest line, so without this the
+// scrollbar's position depends on which rows happen to be padded. Only rows
+// drawn with a full-width highlight are, which meant the scrollbar slid left to
+// hug the longest filename whenever none was on screen: while dragging (the
+// dragged row returns early, before the cursor highlight) and, before drag
+// existed at all, whenever the cursor was scrolled out of view.
+//
+// Padding is measured in display cells and the rows are already truncated to
+// width, so a CJK or emoji filename cannot push the column out.
+func treeColumn(rendered string, width int) string {
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		if pad := width - ansi.StringWidth(line); pad > 0 {
+			lines[i] = line + strings.Repeat(" ", pad)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderTreeNode renders a single tree node.
@@ -573,8 +769,11 @@ func (p *Plugin) renderTreeNode(node *FileNode, selected bool, maxWidth int) str
 		}
 	}
 
-	// Calculate available width for name (after indent and icon)
-	prefixLen := len(indent) + len(icon)
+	// Calculate available width for name (after indent and icon).
+	// Widths are measured in display cells, not bytes: a CJK or emoji filename
+	// is wider than its byte length suggests, and slicing it by bytes cuts
+	// mid-rune.
+	prefixLen := ansi.StringWidth(indent) + ansi.StringWidth(icon)
 	availableWidth := maxWidth - prefixLen
 	if availableWidth < 3 {
 		availableWidth = 3
@@ -582,8 +781,8 @@ func (p *Plugin) renderTreeNode(node *FileNode, selected bool, maxWidth int) str
 
 	// Truncate name before styling to avoid cutting ANSI escape codes
 	displayName := node.Name
-	if len(displayName) > availableWidth {
-		displayName = displayName[:availableWidth-1] + "…"
+	if ansi.StringWidth(displayName) > availableWidth {
+		displayName = ansi.Truncate(displayName, availableWidth, "…")
 	}
 
 	// Name styling
@@ -598,14 +797,39 @@ func (p *Plugin) renderTreeNode(node *FileNode, selected bool, maxWidth int) str
 
 	line := fmt.Sprintf("%s%s%s", indent, styles.FileBrowserIcon.Render(icon), name)
 
-	if selected {
-		// Build plain text version for full-width highlight
+	// Plain text version, padded, for any full-width highlight.
+	fullWidth := func() string {
 		plainLine := indent + icon + displayName
-		// Pad to full width
-		if len(plainLine) < maxWidth {
-			plainLine += strings.Repeat(" ", maxWidth-len(plainLine))
+		if w := ansi.StringWidth(plainLine); w < maxWidth {
+			plainLine += strings.Repeat(" ", maxWidth-w)
 		}
-		return styles.ListItemSelected.Render(plainLine)
+		return plainLine
+	}
+
+	if p.dragActive {
+		// The drop target gets its own full-width highlight, distinct from the
+		// cursor highlight, because during a drag both are on screen at once
+		// and they mean different things.
+		//
+		// The highlight is only drawn on the destination directory's own row.
+		// Dropping on a top-level file resolves to the project root, which has
+		// no row: highlighting the hovered file there would claim the file is
+		// the destination. The status line carries that case instead.
+		if p.dragDropIdx >= 0 && node.IsDir && node.Path == p.dragDropDir &&
+			p.tree != nil && p.tree.GetNode(p.dragDropIdx) == node {
+			return styles.FileBrowserDropTarget.Render(fullWidth())
+		}
+		// The row being dragged is dimmed. This check comes before the cursor
+		// highlight on purpose: the source row is almost always the cursor row,
+		// so the normal highlight would otherwise hide the fact that it is the
+		// thing in flight.
+		if p.dragSourcePath != "" && node.Path == p.dragSourcePath {
+			return styles.FileBrowserDragSource.Render(indent + icon + displayName)
+		}
+	}
+
+	if selected {
+		return styles.ListItemSelected.Render(fullWidth())
 	}
 	return line
 }
@@ -911,26 +1135,17 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 		return 0, 0, false
 	}
 
-	// Must match renderNormalPanes() inputBarHeight calculation exactly
-	inputBarHeight := 0
-	if p.contentSearchMode || p.fileOpMode != FileOpNone || p.lineJumpMode {
-		inputBarHeight = 1
-		if p.fileOpMode != FileOpNone && p.fileOpError != "" {
-			inputBarHeight = 2
-		}
-	}
-	previewContentStartY := inputBarHeight + 3 // border + header
+	// Geometry comes from the shared helpers, never a second copy of the
+	// formula: the duplicate here went stale when the bars grew to two rows and
+	// silently anchored preview clicks and drag-selections one line off.
+	previewContentStartY := p.inputBarHeight() + 3 // border + header
 	row := y - previewContentStartY
 	if row < 0 {
 		return 0, 0, false
 	}
 
 	// Inner content height (excluding borders)
-	paneHeight := p.height - inputBarHeight
-	if paneHeight < 4 {
-		paneHeight = 4
-	}
-	innerHeight := paneHeight - 2
+	innerHeight := p.paneHeight() - 2
 	if innerHeight < 1 {
 		innerHeight = 1
 	}

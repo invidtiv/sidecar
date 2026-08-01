@@ -180,9 +180,39 @@ Press `I` for detailed file info modal:
 Full mouse integration for faster workflows:
 
 - **Click files/folders**: Select and preview or expand/collapse
+- **Double-click**: Expand/collapse a folder, or open a file for editing
+- **Drag a tree row**: Move the file or folder — see below
 - **Drag divider**: Resize panes to your preference
 - **Scroll wheel**: Navigate tree or preview content
 - **Click and drag in preview**: Multi-line text selection for copying
+
+### Drag to Move
+
+Press on a row in the tree and move two cells in any direction to pick it up. A
+press that moves less than that is still an ordinary click, so selecting a file
+never moves it.
+
+- **Drop on a folder** moves the item into that folder.
+- **Drop on a file** moves the item alongside it, into that file's parent
+  directory — the same rule Finder and VS Code use.
+- **Rest over a collapsed folder** for about half a second and it springs open,
+  so a single gesture can reach a nested destination.
+- **Drag to the top or bottom edge** of the tree pane and it scrolls, making
+  off-screen destinations reachable.
+- **Press `esc`** (or any other key) to cancel a gesture in flight.
+
+The status line at the top of the tree names what is being dragged and where it
+will land. Moves that would corrupt the tree — a folder into itself or into its
+own subtree — and moves that would change nothing are refused with a message
+explaining why. There is no undo, so a drop is ignored unless the destination
+row was on screen when you released.
+
+:::note Agent parity
+Moving a file is currently reachable only through the TUI — the drag gesture and
+the `m` dialog. There is no CLI, API, or MCP surface for it yet. Both TUI paths
+share one state-free validator (`validateMove` in the files plugin), so a
+headless surface can be added without restating the rules.
+:::
 
 ### Live File Watching
 

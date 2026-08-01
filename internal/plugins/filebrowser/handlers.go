@@ -19,6 +19,19 @@ import (
 func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
+	// Any keystroke ends whatever drag gesture was in flight: keys are what
+	// switch panes and modes, and a half-finished drag must not survive that.
+	wasDragging := p.dragActive
+	p.clearDragState()
+
+	// Esc is the escape hatch out of a drag. It only cancels the drag - a
+	// gesture with no keyboard way out is a trap, and letting Esc also do its
+	// usual job here would make cancelling a drag close a pane or a mode as a
+	// side effect. A press that never became a drag is unaffected.
+	if wasDragging && key == "esc" {
+		return p, nil
+	}
+
 	// Handle project search mode
 	if p.projectSearchMode {
 		return p.handleProjectSearchKey(msg)
@@ -146,7 +159,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case "ctrl+d":
-		visibleHeight := p.visibleContentHeight()
+		visibleHeight := p.treeItemRows()
 		p.treeCursor += visibleHeight / 2
 		if p.treeCursor >= p.tree.Len() {
 			p.treeCursor = p.tree.Len() - 1
@@ -154,7 +167,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		p.ensureTreeCursorVisible()
 
 	case "ctrl+u":
-		visibleHeight := p.visibleContentHeight()
+		visibleHeight := p.treeItemRows()
 		p.treeCursor -= visibleHeight / 2
 		if p.treeCursor < 0 {
 			p.treeCursor = 0
@@ -162,7 +175,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		p.ensureTreeCursorVisible()
 
 	case "ctrl+f", "pgdown":
-		visibleHeight := p.visibleContentHeight()
+		visibleHeight := p.treeItemRows()
 		p.treeCursor += visibleHeight
 		if p.treeCursor >= p.tree.Len() {
 			p.treeCursor = p.tree.Len() - 1
@@ -170,7 +183,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		p.ensureTreeCursorVisible()
 
 	case "ctrl+b", "pgup":
-		visibleHeight := p.visibleContentHeight()
+		visibleHeight := p.treeItemRows()
 		p.treeCursor -= visibleHeight
 		if p.treeCursor < 0 {
 			p.treeCursor = 0
@@ -1317,7 +1330,11 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	return p, scanCmd
 }
 
-// visibleContentHeight returns the number of lines available for content.
+// visibleContentHeight returns the number of lines available for *preview*
+// content. The tree pane does not use it: its viewport is treeItemRows(), which
+// the renderer, the hit map, the scroll clamp and the drag auto-scroll all read.
+// Two numbers for one pane is exactly how a click and the row under the cursor
+// drift apart.
 func (p *Plugin) visibleContentHeight() int {
 	// height - footer (1) - content search bar (0 or 1) - pane border (2) - header (2)
 	// Note: tree search bar is inside the pane header, not counted separately
@@ -1334,7 +1351,7 @@ func (p *Plugin) visibleContentHeight() int {
 
 // ensureTreeCursorVisible adjusts scroll offset to keep cursor visible.
 func (p *Plugin) ensureTreeCursorVisible() {
-	visibleHeight := p.visibleContentHeight()
+	visibleHeight := p.treeItemRows()
 
 	if p.treeCursor < p.treeScrollOff {
 		p.treeScrollOff = p.treeCursor

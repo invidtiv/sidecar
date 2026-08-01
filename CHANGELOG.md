@@ -4,6 +4,12 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Features
+- **Drag a row in the files tree to move the file or folder.** Press on a row and move two cells in any direction to pick it up; drop it on a directory row to move it there, or on a file row to move it alongside that file, the way Finder and VS Code behave. Resting over a collapsed folder for a moment springs it open so one gesture can reach a nested destination, dragging to the top or bottom of the pane scrolls the tree, and `esc` cancels a gesture in flight. Moves that would corrupt the tree — a folder into itself or into its own subtree — and moves that would do nothing are refused with a toast saying why, and the same rules now back the keyboard `m` dialog, which previously reached `os.Rename` and reported a raw `invalid argument`. Drag-to-move is enabled for everyone: a press that moves less than two cells is still an ordinary click. There is no undo, so nothing moves unless the row was on screen when the button was released.
+
+### Bug Fixes
+- **Clicks in the files plugin land on the row you are looking at while an input bar is open.** The tree's clickable rows were registered one row too high per open bar, and the move dialog's path-suggestion dropdown was not counted at all — so with three suggestions showing, every row was off by five. The same stale measurement shifted click and drag-selection in the preview pane by a line, and put the suggestion list's own click targets a row above the suggestions they named. Keyboard tree scrolling used a third, different measurement, which could leave the cursor on a row that was never drawn.
+
 ## [v0.90.0] - 2026-07-31
 
 ### Features

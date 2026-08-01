@@ -163,7 +163,10 @@ func (h *Handler) IsDragging() bool {
 	return h.dragging
 }
 
-// DragRegion returns the region ID being dragged.
+// DragRegion returns the ID of the region the in-progress drag STARTED in (the
+// drag source), not the region currently under the cursor. It is empty once
+// EndDrag has run; consumers that need the source at drag-end time should read
+// MouseAction.DragStartID, which survives the reset.
 func (h *Handler) DragRegion() string {
 	return h.dragRegion
 }
@@ -263,22 +266,50 @@ func (h *Handler) HandleMouse(msg tea.MouseMsg) MouseAction {
 
 	case tea.MouseReleaseMsg:
 		if h.dragging {
+			m := msg.Mouse()
+			// Capture everything the consumer needs *before* EndDrag clears the
+			// drag state: the release point, the region under it, and the
+			// region the drag started in.
+			dx, dy := h.DragDelta(m.X, m.Y)
+			region := h.HitMap.Test(m.X, m.Y)
+			startRegion := h.dragRegion
 			h.EndDrag()
-			return MouseAction{Type: ActionDragEnd}
+			return MouseAction{
+				Type:        ActionDragEnd,
+				Region:      region,
+				DragStartID: startRegion,
+				X:           m.X,
+				Y:           m.Y,
+				DragDX:      dx,
+				DragDY:      dy,
+				Shift:       m.Mod.Contains(tea.ModShift),
+				Alt:         m.Mod.Contains(tea.ModAlt),
+			}
 		}
 
 	case tea.MouseMotionMsg:
 		m := msg.Mouse()
+		// A drag requires a held button. The app runs in all-motion mode, so
+		// button-less motion arrives constantly; if a release was ever lost
+		// (released outside the window, focus stolen mid-gesture) the handler
+		// would otherwise stay "dragging" forever and turn plain mouse movement
+		// into a drag. Treat the first button-less motion as the end of the
+		// gesture and fall through to hover.
+		if h.dragging && m.Button == tea.MouseNone {
+			h.EndDrag()
+		}
 		if h.dragging {
 			dx, dy := h.DragDelta(m.X, m.Y)
 			return MouseAction{
-				Type:   ActionDrag,
-				X:      m.X,
-				Y:      m.Y,
-				DragDX: dx,
-				DragDY: dy,
-				Shift:  m.Mod.Contains(tea.ModShift),
-				Alt:    m.Mod.Contains(tea.ModAlt),
+				Type:        ActionDrag,
+				Region:      h.HitMap.Test(m.X, m.Y),
+				DragStartID: h.dragRegion,
+				X:           m.X,
+				Y:           m.Y,
+				DragDX:      dx,
+				DragDY:      dy,
+				Shift:       m.Mod.Contains(tea.ModShift),
+				Alt:         m.Mod.Contains(tea.ModAlt),
 			}
 		}
 		// Track hover for visual feedback
@@ -327,6 +358,11 @@ type MouseAction struct {
 	Delta  int
 	DragDX int // Drag delta X
 	DragDY int // Drag delta Y
-	Shift  bool
-	Alt    bool
+	// DragStartID is the ID of the region the drag started in, for
+	// ActionDrag/ActionDragEnd. Region, for those two actions, is the region
+	// currently under the cursor (the drop target), which is usually a
+	// different region entirely.
+	DragStartID string
+	Shift       bool
+	Alt         bool
 }

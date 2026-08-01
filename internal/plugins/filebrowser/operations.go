@@ -153,6 +153,80 @@ func validateFilename(name string) error {
 	return nil
 }
 
+// parentDirPath returns the parent directory of a root-relative path, with ""
+// meaning the project root itself.
+func parentDirPath(rel string) string {
+	if rel == "" {
+		return ""
+	}
+	dir := filepath.Dir(rel)
+	if dir == "." || dir == string(filepath.Separator) {
+		return ""
+	}
+	return dir
+}
+
+// pathWithin reports whether child is parent or lives underneath it. Both paths
+// are root-relative, and "" means the project root, which contains everything.
+// The trailing separator is essential: a bare prefix test would report "foobar"
+// as living inside "foo".
+func pathWithin(child, parent string) bool {
+	if parent == "" {
+		return true
+	}
+	if child == "" {
+		return false
+	}
+	c := filepath.Clean(child)
+	pa := filepath.Clean(parent)
+	if c == pa {
+		return true
+	}
+	return strings.HasPrefix(c, pa+string(filepath.Separator))
+}
+
+// displayDropDir renders a destination directory for humans: the project root
+// has no name of its own.
+func displayDropDir(dir string) string {
+	if dir == "" {
+		return "./"
+	}
+	return dir + "/"
+}
+
+// validateMove reports why moving srcRel to dstRel is not allowed, returning ""
+// when the move is fine. Both paths are root-relative and dstRel is the *full*
+// destination path, including the name the node will carry when it lands.
+//
+// This is deliberately free of plugin state so every move surface can share it:
+// the drag-drop gesture and the keyboard 'm' dialog both call it, and they used
+// to disagree - a drag into a folder's own subtree said "Can't move a folder
+// into itself" while the same move typed into the dialog reached os.Rename and
+// surfaced a raw "invalid argument".
+//
+// Agent-parity gap (deliberate, and the reason this is state-free): there is no
+// CLI/API/MCP surface for moving a file in the files plugin yet, so the move
+// capability is TUI-only today. A future headless surface must call this rather
+// than restating the rules a third time.
+func validateMove(srcRel string, srcIsDir bool, dstRel string) string {
+	if srcRel == "" {
+		return "Can't move the project root"
+	}
+	dstDir := parentDirPath(dstRel)
+	// Into itself: a directory cannot contain itself. Into its own subtree is
+	// the dangerous one - os.Rename of a directory into its own descendant
+	// either fails or, on some systems, detaches the subtree. pathWithin's
+	// separator guard is what keeps "foo" from matching "foobar".
+	if dstDir == srcRel || (srcIsDir && pathWithin(dstDir, srcRel)) {
+		return "Can't move a folder into itself"
+	}
+	// Where it already is: a no-op move.
+	if filepath.Clean(dstRel) == filepath.Clean(srcRel) {
+		return filepath.Base(srcRel) + " is already in " + displayDropDir(dstDir)
+	}
+	return ""
+}
+
 // executeFileOp performs the pending file operation.
 func (p *Plugin) executeFileOp() (plugin.Plugin, tea.Cmd) {
 	input := p.fileOpTextInput.Value()
@@ -201,6 +275,12 @@ func (p *Plugin) executeFileOp() (plugin.Plugin, tea.Cmd) {
 			p.fileOpError = "absolute paths not allowed"
 			return p, nil
 		}
+		// Same rules the drag gesture enforces, from the same helper, so the two
+		// move surfaces cannot drift apart.
+		if reason := validateMove(p.fileOpTarget.Path, p.fileOpTarget.IsDir, input); reason != "" {
+			p.fileOpError = reason
+			return p, nil
+		}
 		dstPath = filepath.Join(p.ctx.WorkDir, input)
 	}
 
@@ -224,6 +304,24 @@ func (p *Plugin) executeFileOp() (plugin.Plugin, tea.Cmd) {
 	return p, p.doFileOp(srcPath, dstPath)
 }
 
+// isCaseOnlyRename reports whether src -> dst is a rename that changes nothing
+// but the letter case of the name, within one directory (e.g. "File.txt" ->
+// "file.txt"). On a case-insensitive filesystem that needs a two-step rename via
+// a temp file, which skips doFileOp's destination-exists check - so the test has
+// to be as narrow as possible.
+//
+// Comparing whole paths with EqualFold would also match foo/x.txt -> Foo/x.txt,
+// a real move between two directories that coexist on a case-sensitive
+// filesystem, and would then clobber an existing Foo/x.txt with no warning.
+// That distinction cannot be exercised on a case-insensitive filesystem (macOS
+// APFS by default), which is why this predicate is unit-tested directly rather
+// than only through the filesystem.
+func isCaseOnlyRename(src, dst string) bool {
+	return filepath.Dir(src) == filepath.Dir(dst) &&
+		strings.EqualFold(filepath.Base(src), filepath.Base(dst)) &&
+		src != dst
+}
+
 // doFileOp performs the actual file move/rename operation.
 func (p *Plugin) doFileOp(src, dst string) tea.Cmd {
 	return func() tea.Msg {
@@ -238,11 +336,7 @@ func (p *Plugin) doFileOp(src, dst string) tea.Cmd {
 			return FileOpErrorMsg{Err: fmt.Errorf("source and destination are the same")}
 		}
 
-		// Check for case-only rename (e.g., "File.txt" -> "file.txt")
-		// On case-insensitive filesystems, we need a two-step rename via temp file
-		isCaseOnlyRename := strings.EqualFold(src, dst) && src != dst
-
-		if isCaseOnlyRename {
+		if isCaseOnlyRename(src, dst) {
 			// Two-step rename: src -> temp -> dst
 			tempPath := src + ".sidecar-rename-tmp"
 			if err := os.Rename(src, tempPath); err != nil {

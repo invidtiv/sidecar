@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
@@ -108,6 +109,24 @@ type (
 	PasteSuccessMsg struct {
 		Src string
 		Dst string
+	}
+	// DragMoveResultMsg reports the outcome of a move started by a drag-drop.
+	// It is deliberately a distinct type from FileOpSuccessMsg/FileOpErrorMsg:
+	// a drag move has no file-op bar to render an error into, and a bare
+	// "pending" flag on the plugin would let a concurrent rename's result be
+	// reported as the drag's (and vice versa).
+	DragMoveResultMsg struct {
+		Name string // Basename that was moved, for the toast
+		Dir  string // Destination directory, relative to the project root
+		Err  error
+	}
+	// DragSpringLoadMsg fires once the cursor has rested long enough over a
+	// collapsed directory during a drag, asking for it to auto-expand. Gen
+	// identifies the hover it was scheduled for: the cursor has usually moved
+	// on by the time it lands, and a stale tick must not expand a directory
+	// the user is no longer pointing at.
+	DragSpringLoadMsg struct {
+		Gen uint64
 	}
 	// GitInfoMsg contains git status for a file.
 	GitInfoMsg struct {
@@ -300,6 +319,40 @@ type Plugin struct {
 
 	// Selection copy hint state
 	selectionCopyHintShown bool // True after showing selection copy hint toast
+
+	// Drag-to-move state (tree rows). dragArmed means the button went down on a
+	// tree row but the click-vs-drag threshold has not been crossed yet, so the
+	// gesture is still a plain click. dragActive means it has been crossed and
+	// the gesture is a real drag.
+	//
+	// dragSourcePath is the source of truth for *what* is being dragged, and
+	// deliberately the only record of it: the watcher can rebuild the tree
+	// mid-gesture and renumber every flat index, so a stored index would name a
+	// different file. Everything that needs the source row looks it up by path
+	// (tree.FindByPath / tree.IndexOfPath) at the moment it needs it.
+	//
+	// The -1 sentinels below are only established by New() and Init(); a Plugin
+	// built as a bare literal (tests do this) has them at 0. Never treat an
+	// index as "armed" on its own — always guard on dragArmed/dragActive first.
+	dragSourcePath string // Path of the dragged node, "" when idle
+	dragArmed      bool   // Pressed on a tree row, threshold not yet crossed
+	dragActive     bool   // Threshold crossed, really dragging
+	// dragDropIdx is the row to highlight as the drop target, and doubles as
+	// the validity flag: -1 means "no valid drop here". dragDropDir (the
+	// destination directory, relative to the project root, "" = the root
+	// itself) is only meaningful while dragDropIdx >= 0 — "" is a legitimate
+	// destination, so it can never signal invalidity on its own.
+	dragDropIdx int
+	dragDropDir string
+	// dragHoverIdx / dragHoverSince drive spring-loaded folders: how long the
+	// cursor has rested on one row. dragHoverGen invalidates the tick
+	// scheduled for a row the cursor has since left.
+	dragHoverIdx   int
+	dragHoverSince time.Time
+	dragHoverGen   uint64
+	// dragLastScroll throttles edge auto-scroll: motion events arrive far
+	// faster than a readable scroll rate.
+	dragLastScroll time.Time
 }
 
 // New creates a new File Browser plugin.
@@ -310,6 +363,8 @@ func New() *Plugin {
 		treeVisible:   true,         // Tree pane visible by default
 		showIgnored:   true,         // Show git-ignored files by default
 		inlineEditor:  tty.New(nil), // Initialize inline editor with default config
+		dragDropIdx:   -1,
+		dragHoverIdx:  -1,
 	}
 }
 
@@ -331,6 +386,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.stateRestored = false
 	p.stopped = false
 	p.pendingAutoRefresh = false
+	p.clearDragState()
 
 	// The quick-open caches describe the old project's disk; drop them.
 	p.quickOpenFiles = nil
@@ -637,6 +693,34 @@ func (p *Plugin) applyBuiltTree(tree *FileTree, cursorPath string) {
 	p.tree = tree
 	p.reanchorTreeCursor(cursorPath)
 	p.reresolveFileOpTarget()
+	p.reanchorDragSource()
+}
+
+// reanchorDragSource re-checks an in-flight drag against the tree that just
+// replaced the one it was armed against. The dragged node is tracked by path,
+// so it survives the renumbering a rebuild causes (a build dropping a file, a
+// branch switch, `go mod tidy`); if the dragged path is gone from the tree
+// entirely, the gesture is cancelled.
+func (p *Plugin) reanchorDragSource() {
+	if !p.dragArmed && !p.dragActive {
+		return
+	}
+	if p.dragSourcePath == "" {
+		p.clearDragState()
+		return
+	}
+	if p.tree.IndexOfPath(p.dragSourcePath) < 0 {
+		p.clearDragState()
+		return
+	}
+	// The drop target is recomputed from the pointer on the next motion event;
+	// its old index means nothing in the new tree. The same goes for the
+	// spring-load hover, whose row may now be a different directory entirely.
+	p.dragDropIdx = -1
+	p.dragDropDir = ""
+	p.dragHoverIdx = -1
+	p.dragHoverGen++
+	p.dragHoverSince = time.Now()
 }
 
 // reanchorTreeCursor puts the cursor back on the node it was on before the
@@ -999,6 +1083,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case RevealErrorMsg:
 		p.ctx.Logger.Error("file browser: reveal failed", "error", msg.Err)
 
+	case DragSpringLoadMsg:
+		return p.handleDragSpringLoad(msg)
+
 	case FileOpErrorMsg:
 		p.fileOpError = msg.Err.Error()
 
@@ -1008,6 +1095,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.fileOpTarget = nil
 		p.fileOpError = ""
 		return p, p.refresh()
+
+	case DragMoveResultMsg:
+		// A drag-drop move has no file-op bar to render an error into, so both
+		// outcomes are surfaced as a toast.
+		if msg.Err != nil {
+			return p, appmsg.ShowToast("Move failed: "+msg.Err.Error(), 3*time.Second)
+		}
+		return p, tea.Batch(
+			p.refresh(),
+			appmsg.ShowToast("Moved "+msg.Name+" → "+displayDropDir(msg.Dir), 2*time.Second),
+		)
 
 	case CreateSuccessMsg:
 		// Clear file operation state and refresh
@@ -1117,6 +1215,12 @@ func (p *Plugin) IsFocused() bool { return p.focused }
 
 // SetFocused sets the focus state.
 func (p *Plugin) SetFocused(f bool) {
+	// Losing focus (a plugin switch, which can happen on a key the plugin never
+	// sees) ends any drag gesture: the release will be delivered somewhere else,
+	// if at all.
+	if !f {
+		p.clearDragState()
+	}
 	p.focused = f
 }
 

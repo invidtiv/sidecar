@@ -1084,6 +1084,22 @@ func rebuildStyles() {
 	FileBrowserIcon = lipgloss.NewStyle().
 		Foreground(TextMuted)
 
+	// Drop target while dragging a file onto a directory. Built from the
+	// theme's Primary, so every theme gets a highlight that is distinct from
+	// ListItemSelected's BgTertiary - both are visible at once during a drag.
+	// The foreground is the theme's dark background, not TextPrimary: TextPrimary
+	// on Primary is under 2:1 contrast in most built-in themes, which erased the
+	// filename on the one row the gesture depends on being readable.
+	FileBrowserDropTarget = lipgloss.NewStyle().
+		Foreground(BgPrimary).
+		Background(Primary).
+		Bold(true)
+
+	// The row being dragged, dimmed so it reads as "in flight".
+	FileBrowserDragSource = lipgloss.NewStyle().
+		Foreground(TextSubtle).
+		Italic(true)
+
 	SearchMatch = lipgloss.NewStyle().
 		Background(Warning)
 
