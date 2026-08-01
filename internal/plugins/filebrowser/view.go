@@ -591,6 +591,8 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		end = p.tree.Len()
 	}
 
+	maxWidth := treeNodeWidth(p.treeWidth)
+
 	var treeSB strings.Builder
 	for i := p.treeScrollOff; i < end; i++ {
 		node := p.tree.GetNode(i)
@@ -599,7 +601,6 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		}
 
 		selected := i == p.treeCursor
-		maxWidth := p.treeWidth - 4 - 1 // Account for border padding and scrollbar column
 		line := p.renderTreeNode(node, selected, maxWidth)
 
 		treeSB.WriteString(line)
@@ -616,13 +617,13 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		TrackHeight:  visibleHeight,
 	})
 
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeSB.String(), scrollbar))
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(treeSB.String(), maxWidth), scrollbar))
 	return sb.String()
 }
 
 // renderSearchResults renders the filtered search results list.
 func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) string {
-	maxWidth := p.treeWidth - 4 - 1 // Reserve 1 col for scrollbar
+	maxWidth := treeNodeWidth(p.treeWidth)
 
 	// Calculate scroll offset for search results
 	searchScrollOff := 0
@@ -673,7 +674,7 @@ func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) str
 		TrackHeight:  visibleHeight,
 	})
 
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, resultSB.String(), scrollbar))
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(resultSB.String(), maxWidth), scrollbar))
 	return sb.String()
 }
 
@@ -719,6 +720,38 @@ func (p *Plugin) renderDragStatusLine() string {
 		}
 	}
 	return style.Render(ansi.Truncate(text, maxWidth, "…"))
+}
+
+// treeNodeWidth is the cell width a tree row is rendered into, given the pane
+// width: the border padding and the scrollbar column come off the top.
+func treeNodeWidth(treeWidth int) int {
+	w := treeWidth - 4 - 1
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// treeColumn pads every line of the rendered tree to a fixed width so the
+// scrollbar sits in the same column no matter how the rows are styled.
+//
+// JoinHorizontal sizes a block to its widest line, so without this the
+// scrollbar's position depends on which rows happen to be padded. Only rows
+// drawn with a full-width highlight are, which meant the scrollbar slid left to
+// hug the longest filename whenever none was on screen: while dragging (the
+// dragged row returns early, before the cursor highlight) and, before drag
+// existed at all, whenever the cursor was scrolled out of view.
+//
+// Padding is measured in display cells and the rows are already truncated to
+// width, so a CJK or emoji filename cannot push the column out.
+func treeColumn(rendered string, width int) string {
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		if pad := width - ansi.StringWidth(line); pad > 0 {
+			lines[i] = line + strings.Repeat(" ", pad)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderTreeNode renders a single tree node.
