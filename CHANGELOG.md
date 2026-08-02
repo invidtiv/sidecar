@@ -2,13 +2,20 @@
 
 All notable changes to sidecar are documented here.
 
-## [Unreleased]
+## [v0.91.0] - 2026-08-01
 
 ### Features
+- **Clicking the shell or agent output makes the terminal live.** A click focused the pane but left it inert — entering interactive mode needed a separate `enter`/`i`/`E` press, so the pane looked active while typing went nowhere, and the wheel paged sidecar's own capture buffer instead of reaching the running app, which meant scrollback in TUIs like the Claude Code harness ignored it entirely. A plain click now enters interactive mode, matching `enter`; shift and alt clicks still fall through to read-mode drag selection, and the click is a no-op when there is no live session.
 - **Drag a row in the files tree to move the file or folder.** Press on a row and move two cells in any direction to pick it up; drop it on a directory row to move it there, or on a file row to move it alongside that file, the way Finder and VS Code behave. Resting over a collapsed folder for a moment springs it open so one gesture can reach a nested destination, dragging to the top or bottom of the pane scrolls the tree, and `esc` cancels a gesture in flight. Moves that would corrupt the tree — a folder into itself or into its own subtree — and moves that would do nothing are refused with a toast saying why, and the same rules now back the keyboard `m` dialog, which previously reached `os.Rename` and reported a raw `invalid argument`. Drag-to-move is enabled for everyone: a press that moves less than two cells is still an ordinary click. There is no undo, so nothing moves unless the row was on screen when the button was released.
 
 ### Bug Fixes
 - **Clicks in the files plugin land on the row you are looking at while an input bar is open.** The tree's clickable rows were registered one row too high per open bar, and the move dialog's path-suggestion dropdown was not counted at all — so with three suggestions showing, every row was off by five. The same stale measurement shifted click and drag-selection in the preview pane by a line, and put the suggestion list's own click targets a row above the suggestions they named. Keyboard tree scrolling used a third, different measurement, which could leave the cursor on a row that was never drawn.
+- **Mouse scrolling and clicks work in the td plugin again.** td's monitor computes its panel bounds only when it receives a window-size message, and since the monitor model is now built asynchronously it is adopted after the app has already broadcast that size — so the new model never saw one. Panel bounds stayed empty, every hit test missed, and the wheel and clicks silently did nothing until the terminal was resized.
+- **The files tree scrollbar stays in its own column.** It jumped left to hug the longest filename whenever no full-width highlighted row was on screen — during a drag, and any time the cursor was scrolled out of view.
+- **Manual search inputs accept spaces.**
+
+### Dependencies
+- Updated td to v0.55.0. Log rows written as side effects — the progress note `td unstart` records when releasing a claim, and the auto-cascade and auto-unblock notes — now sync between machines instead of being stranded forever on the machine that created them. A transition to `open` releases the implementer claim on every surface, including the API, which had never received the earlier reopen and unblock fixes. `ERROR:` and `Warning:` diagnostics moved from stdout to stderr so `--json` output is parseable. Sidecar needed no change for this and quietly benefits: the issue preview and search commands unmarshal td's stdout directly, which an error line used to corrupt, and their error extraction already fell back to stderr.
 
 ## [v0.90.0] - 2026-07-31
 
