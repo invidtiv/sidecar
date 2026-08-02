@@ -539,9 +539,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if !m.showHelp && !m.showDiagnostics {
-		m.updateContext()
-	}
+	m.updateContext()
 
 	return m, tea.Batch(cmds...)
 }
@@ -667,7 +665,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// This ensures characters like `, ~, ?, !, @, q, 1-5 reach tmux instead of triggering app shortcuts
 	// Ctrl+C is forwarded to tmux (to interrupt running processes) instead of showing quit dialog
 	// User can exit interactive mode with Ctrl+\ first, then quit normally
-	if m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit" {
+	// An open modal takes keyboard focus away from the pane; the plugin keeps its
+	// mode, so focus returns to it when the modal closes.
+	if !m.hasModal() && (m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
 		// Forward ALL keys to plugin (exit keys and ctrl+c handled by plugin)
 		if p := m.ActivePlugin(); p != nil {
 			newPlugin, cmd := p.Update(msg)
@@ -683,7 +683,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Text input contexts: forward all keys to plugin except ctrl+c.
 	// Uses plugin runtime capability first, then app-level fallback contexts.
-	if m.consumesTextInput() {
+	// Skipped while a modal is open so the modal's own input gets the keys.
+	if !m.hasModal() && m.consumesTextInput() {
 		// ctrl+c shows quit confirmation
 		if msg.String() == "ctrl+c" {
 			if !m.hasModal() {
@@ -1443,7 +1444,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateContext sets activeContext based on current state.
+// An open modal owns the context; only when none is open does the active
+// plugin decide it. Closing a modal therefore restores the plugin's context
+// (including "workspace-interactive") on the next call, with no per-modal
+// bookkeeping.
 func (m *Model) updateContext() {
+	if ctx, ok := modalFocusContext(m.activeModal()); ok {
+		m.activeContext = ctx
+		return
+	}
 	if p := m.ActivePlugin(); p != nil {
 		m.activeContext = p.FocusContext()
 	} else {

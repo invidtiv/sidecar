@@ -78,6 +78,37 @@ func (m *Model) hasModal() bool {
 	return m.activeModal() != ModalNone
 }
 
+// modalFocusContext returns the keymap context a modal owns while it is open.
+// An open modal holds keyboard focus, so its context must survive plugin
+// activity underneath it (an interactive tmux pane, for example, keeps emitting
+// messages that would otherwise recompute the context back to the plugin's).
+// Modals that intercept keys before context-based routing (quit confirm, the
+// update modal) have no context of their own and report false, leaving the
+// underlying plugin context in place.
+func modalFocusContext(kind ModalKind) (string, bool) {
+	switch kind {
+	case ModalPalette:
+		return "palette", true
+	case ModalHelp:
+		return "help", true
+	case ModalDiagnostics:
+		return "diagnostics", true
+	case ModalProjectSwitcher:
+		return "project-switcher", true
+	case ModalWorktreeSwitcher:
+		return "worktree-switcher", true
+	case ModalThemeSwitcher:
+		return "theme-switcher", true
+	case ModalOpenIn:
+		return "open-in", true
+	case ModalIssueInput:
+		return "issue-input", true
+	case ModalIssuePreview:
+		return "issue-preview", true
+	}
+	return "", false
+}
+
 // TabBounds represents the X position range of a tab for mouse hit testing.
 type TabBounds struct {
 	Start, End int
@@ -376,7 +407,7 @@ func (m *Model) SetActivePlugin(idx int) tea.Cmd {
 		// Focus new
 		if next := m.ActivePlugin(); next != nil {
 			next.SetFocused(true)
-			m.activeContext = next.FocusContext()
+			m.updateContext()
 			return PluginFocused()
 		}
 	}
