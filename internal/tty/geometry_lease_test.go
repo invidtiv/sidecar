@@ -21,6 +21,24 @@ type fakeLeaseStore struct {
 	// but neither's write is visible to the other yet.
 	frozen   bool
 	snapshot string
+
+	// mark stands in for tmux's activity marker for the client on this machine's
+	// terminal. Tests advance it to model the user typing inside an attach.
+	mark string
+}
+
+func (s *fakeLeaseStore) inputMark(string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mark
+}
+
+// typeInTmux models a keystroke the user gives tmux rather than sidecar, which
+// is all an attached instance ever sees of the user.
+func (s *fakeLeaseStore) typeInTmux() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mark += "."
 }
 
 func (s *fakeLeaseStore) freeze() {
@@ -825,6 +843,95 @@ func TestLeaseKeeperHeldLeaseYieldsToTheMachineTheUserIsTypingOn(t *testing.T) {
 	}
 	t.Fatalf("the machine being typed on never took geometry from an attached machine the user had left (lease %q)",
 		store.current())
+}
+
+// A hold yields to a peer the user is typing on, and must be able to take
+// geometry back when the user returns. It could not: during an attach the
+// keystrokes go to tmux, so the attached instance's own idle time only ever
+// grows and it can never preempt, while a peer that keeps polling refreshes its
+// token forever and so never goes stale either. Whoever preempted an attach once
+// — a stray mouse move, a regained focus, a sidecar restart over there — owned
+// its geometry for the rest of the attach, however long the user sat typing
+// here. The hold now reads the user's tmux input back out of tmux.
+func TestLeaseKeeperAttachedMachineReclaimsWhenTheUserComesBack(t *testing.T) {
+	store := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	attached := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	attached.selfID = "attached"
+	attached.now = readNow
+	attached.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(attached)
+
+	peer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	peer.selfID = "peer"
+	peer.now = readNow
+	peer.lastInput = readNow()
+
+	attached.hold("%1")
+	// One refresher tick, waited out so the test stays ordered against it.
+	tick := func() {
+		t.Helper()
+		before := store.activity()
+		ticker.c <- readNow()
+		waitForActivity(t, store, before)
+	}
+
+	// Nobody touches either machine for a minute; the attach just sits there.
+	for range 60 {
+		advance(time.Second)
+		tick()
+		peer.allow("%1")
+	}
+	// Something registers as input on the peer — a mouse crossing its window, a
+	// regained focus — and it preempts an attach that now looks a minute idle.
+	peer.noteInput()
+	advance(time.Second)
+	tick()
+	if !peer.allow("%1") || leaseOwner(store.current()) != "peer" {
+		t.Fatalf("peer did not preempt an idle attach (lease %q)", store.current())
+	}
+
+	// The user comes back to the attached machine and works in tmux. None of that
+	// reaches sidecar here; the peer is left alone but keeps polling.
+	reclaimed := 0
+	for i := 1; i <= 60; i++ {
+		advance(time.Second)
+		store.typeInTmux()
+		tick()
+		peer.allow("%1")
+		if leaseOwner(store.current()) == "attached" {
+			reclaimed = i
+			break
+		}
+	}
+	if reclaimed == 0 {
+		t.Fatalf("an attached machine the user was typing on never took geometry back (lease %q)",
+			store.current())
+	}
+
+	// And it keeps it: the peer nobody is using must not take it straight back.
+	for range 30 {
+		advance(time.Second)
+		store.typeInTmux()
+		tick()
+		peer.allow("%1")
+		if leaseOwner(store.current()) != "attached" {
+			t.Fatalf("geometry flapped back to an unattended peer (lease %q)", store.current())
+		}
+	}
 }
 
 // A hold dies with the process that started it, so a crash mid-attach must not

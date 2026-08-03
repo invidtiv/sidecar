@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,14 @@ import (
 // (attaching) also hold the lease from a goroutine, since no tick accrues while
 // the event loop is blocked; that goroutine supplies the missing ticks and
 // nothing more, so an attach nobody is sitting at can still be preempted.
+//
+// While an attach is up, the user's keystrokes go to tmux rather than to
+// sidecar, so this instance's own idle time is blind and only ever grows. The
+// hold therefore reads back tmux's activity marker for the client on this
+// machine's own terminal and counts a change in it as input here. That marker is
+// opaque and only ever compared against the previous one this instance read — it
+// is never measured against a local clock — so the no-cross-machine-timestamps
+// rule stands.
 
 const leaseOptionName = "@sidecar-owner"
 
@@ -291,6 +300,11 @@ type leaseStore interface {
 	read(target string) (session, token string, ok bool)
 	set(session, token string)
 	clear(session string)
+	// inputMark returns an opaque marker of user input into session from this
+	// machine's own terminal. It carries no meaning beyond changing when that
+	// input happens; callers compare it only against the previous marker they
+	// read themselves.
+	inputMark(session string) string
 }
 
 type tmuxLeaseStore struct{}
@@ -323,6 +337,80 @@ func (tmuxLeaseStore) clear(session string) {
 	_ = exec.Command("tmux", "set-option", "-u", "-t", session, leaseOptionName).Run()
 }
 
+// inputMark reports the activity marker of the tmux clients attached to session
+// from this machine's own terminal. tmux advances a client's activity on key
+// input, so a change in the marker means the user typed into tmux here — the one
+// thing an attached sidecar cannot see for itself, since its own event loop is
+// suspended and the keystrokes never reach it.
+//
+// Clients are matched on tty because that is what makes the answer local: an
+// attach inherits this process's terminal, while the other machine's clients —
+// and every control client on either — sit on some other tty. Without a tty we
+// simply have no evidence, which leaves arbitration exactly where it was.
+//
+// The marker itself is a tmux clock reading, and it is deliberately treated as
+// opaque: it is only ever compared with the previous marker this instance read,
+// never against local time.
+func (tmuxLeaseStore) inputMark(session string) string {
+	tty := ownTTY()
+	if session == "" || tty == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "list-clients", "-t", session, "-F",
+		"#{client_tty}\t#{client_activity}").Output()
+	if err != nil {
+		return ""
+	}
+	var marks []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
+		if path, activity, found := strings.Cut(line, "\t"); found && path == tty {
+			marks = append(marks, activity)
+		}
+	}
+	return strings.Join(marks, ",")
+}
+
+// ownTTY names the terminal this process was started on, resolved once. An
+// attach runs as a child sharing this terminal, so this is the name tmux reports
+// back for the client the user is typing into.
+var ownTTY = sync.OnceValue(func() string { return ttyPathOf(os.Stdin) })
+
+// ttyPathOf walks /dev for the device file behind an open terminal, since the
+// standard library exposes no ttyname. Empty when the file is not a terminal or
+// no device matches — both of which simply mean no input evidence is available.
+func ttyPathOf(f *os.File) string {
+	info, err := f.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return ""
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return ""
+	}
+	// /dev/pts first for Linux; on macOS the ttys live directly in /dev. "tty"
+	// itself is the controlling-terminal alias, never a name tmux reports.
+	for _, dir := range []string{"/dev/pts", "/dev"} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if dir == "/dev" && (entry.Name() == "tty" || !strings.HasPrefix(entry.Name(), "tty")) {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			cand, err := os.Stat(path)
+			if err != nil || cand.Mode()&os.ModeCharDevice == 0 {
+				continue
+			}
+			if cst, ok := cand.Sys().(*syscall.Stat_t); ok && cst.Rdev == st.Rdev {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
 // leaseState is one session's tick history as this instance has observed it.
 type leaseState struct {
 	token           string
@@ -335,10 +423,12 @@ type leaseState struct {
 	owned           bool
 }
 
-// leaseHold is one target's background refresher, reduced to the func that stops
-// it.
+// leaseHold is one target's background refresher: the func that stops it, plus
+// the last tmux input marker the refresher saw, which is what tells a suspended
+// instance that the user is still typing into the session it is attached to.
 type leaseHold struct {
 	stop func()
+	mark string
 }
 
 // leaseKeeper holds the per-session tick counters that DecideGeometryLease is
@@ -431,7 +521,9 @@ func (k *leaseKeeper) idleLocked(now time.Time) time.Duration {
 // machine left attached and walked away from would defend geometry against the
 // machine the user moved to for as long as the attach lasted. A hold keeps the
 // token changing instead, which is enough to hold off any peer nobody is using,
-// since only recent input on the peer's own side can preempt.
+// since only recent input on the peer's own side can preempt — and it harvests
+// the input the user gives tmux (refreshHold), so the number stays honest in
+// both directions rather than only ever climbing.
 func (k *leaseKeeper) tokenLocked(now time.Time) string {
 	k.counter++
 	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(k.idleLocked(now).Seconds()))
@@ -645,6 +737,9 @@ func (k *leaseKeeper) hold(target string) {
 			stopTicker()
 			close(done)
 		},
+		// Primed so the refresher measures input from the attach onwards. The
+		// claim above has already stamped this moment as input.
+		mark: k.store.inputMark(k.targets[target]),
 	}
 	k.mu.Unlock()
 
@@ -661,22 +756,39 @@ func (k *leaseKeeper) hold(target string) {
 }
 
 // refreshHold takes one arbitration tick on a held target's behalf, standing in
-// for the geometry loop poll the suspended event loop cannot make.
+// for the geometry loop poll the suspended event loop cannot make, and first
+// harvests whatever input the user has given tmux since the last tick.
 //
 // It is a tick source, not an override. Refreshing unconditionally would defend
 // the lease against every peer, including the one the user actually walked over
 // to; going through the ordinary verdict keeps the attach safe from peers nobody
 // is using — they have no recent input to preempt with, and the token they read
-// keeps changing — while still yielding to a machine that is being typed on, and
-// reclaiming later if that machine in turn goes quiet.
+// keeps changing — while still yielding to a machine that is being typed on.
+//
+// The harvested input is what makes that yielding survivable. Once a peer takes
+// the lease, an attached instance can only get it back by preempting, and
+// preemption demands recent input here; its own idle clock only grows during an
+// attach, because the keystrokes go to tmux. Without this the peer would keep
+// geometry for the rest of the attach however long the user sat typing at this
+// machine — staleness cannot save it either, since a polling peer refreshes its
+// own token forever. Reading the tty's client activity back out of tmux turns
+// those keystrokes into the evidence arbitration already knows how to use.
 func (k *leaseKeeper) refreshHold(target string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	if k.holds[target] == nil {
+	hold := k.holds[target]
+	if hold == nil {
 		return
 	}
-	k.tickLocked(target, k.now(), false)
+	now := k.now()
+	if session, known := k.targets[target]; known {
+		if mark := k.store.inputMark(session); mark != hold.mark {
+			hold.mark = mark
+			k.lastInput = now
+		}
+	}
+	k.tickLocked(target, now, false)
 }
 
 // releaseHold ends the background refresh for target. The lease itself stays put
