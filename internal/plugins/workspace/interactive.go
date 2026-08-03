@@ -1386,42 +1386,35 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
+	// The pane's real geometry decides what is on screen where, so hit testing
+	// reads the layout the render path produced rather than re-deriving one: a
+	// wider pane is drawn horizontally scrolled, a taller one starts partway
+	// down, and the scrollbar takes a column off both (td-73fa86).
 	viewWidth, viewHeight := p.calculatePreviewDimensions()
 	if targetingTermPanel {
 		viewWidth, viewHeight = p.calculateTermPanelDimensions()
 	}
-	// The pane's real geometry decides what is on screen where; a wider pane is
-	// drawn horizontally scrolled, so a click lands ColOffset columns in
-	// (td-73fa86).
 	paneWidth, paneHeight := viewWidth, viewHeight
 	if geometry := p.paneGeometryFor(targetingTermPanel); geometry.known() {
 		paneWidth, paneHeight = geometry.Width, geometry.Height
 	}
-	cursorCol, cursorVisible := 0, false
-	if p.interactiveState != nil {
-		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
-			paneWidth, paneHeight = p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
-		}
-		cursorCol, cursorVisible = p.interactiveState.CursorCol, p.interactiveState.CursorVisible
+	if p.interactiveState != nil &&
+		p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
+		paneWidth, paneHeight = p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
 	}
-	fit := tty.FitPane(tty.PaneFitInput{
-		ViewWidth:  viewWidth,
-		ViewHeight: viewHeight,
-		PaneWidth:  paneWidth,
-		PaneHeight: paneHeight,
-		CursorCol:  cursorCol,
-		HasCursor:  cursorVisible,
-	})
 
-	if fit.Width <= 0 || fit.Height <= 0 {
+	layout := p.terminalSelectionViewportLayout()
+	if layout.DisplayWidth <= 0 || layout.DisplayHeight <= 0 {
 		return 0, 0, false
 	}
-	if relX >= fit.Width || relY >= fit.Height {
+	if relX >= layout.DisplayWidth || relY >= layout.DisplayHeight {
 		return 0, 0, false
 	}
 
-	col = min(relX+fit.ColOffset+1, paneWidth)
-	row = min(relY+1, paneHeight)
+	col = min(relX+layout.Fit.ColOffset+1, paneWidth)
+	// Vertical placement comes from the buffer window, not the fit: the
+	// workspace viewport scrolls history as well as the live pane.
+	row = min(max(layout.paneRowAt(relY)+1, 1), paneHeight)
 
 	return col, row, true
 }

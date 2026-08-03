@@ -261,10 +261,18 @@ func TestModelNativeCursorAdjustsPaneHeightAndBounds(t *testing.T) {
 	if cursor == nil || cursor.X != 4 || cursor.Y != 1 {
 		t.Fatalf("adjusted Cursor() = %#v, want (4,1)", cursor)
 	}
+	// A cursor above the pane's tail pulls the window up rather than falling off
+	// the top: the row being typed into has to stay visible (td-73fa86).
 	model.State.CursorRow = 1
+	if cursor := model.Cursor(); cursor == nil || cursor.Y != 1 {
+		t.Fatalf("anchored Cursor() = %#v, want Y=1", cursor)
+	}
+	// A cursor row past the pane itself is out of bounds and owns no cell.
+	model.State.CursorRow = 9
 	if cursor := model.Cursor(); cursor != nil {
 		t.Fatalf("off-viewport Cursor() = %#v, want nil", cursor)
 	}
+	model.State.CursorRow = 4
 	model.Exit()
 	if cursor := model.Cursor(); cursor != nil {
 		t.Fatalf("inactive Cursor() = %#v, want nil", cursor)

@@ -272,11 +272,21 @@ func (m *Model) View() string {
 
 	fit := m.paneFit()
 	lineCount := m.State.OutputBuf.LineCount()
+	// The buffer's tail is the pane, so pane row 0 is lineCount-PaneHeight and
+	// the visible window starts RowOffset rows into it — which is the pane's
+	// tail unless the cursor pulls the window up (td-73fa86).
 	start := lineCount - fit.Height
+	if m.State.PaneHeight > 0 {
+		start = lineCount - m.State.PaneHeight + fit.RowOffset
+	}
 	if start < 0 || fit.Height <= 0 {
 		start = 0
 	}
-	lines := m.State.OutputBuf.LinesRange(start, lineCount)
+	end := lineCount
+	if fit.Height > 0 && start+fit.Height < end {
+		end = start + fit.Height
+	}
+	lines := m.State.OutputBuf.LinesRange(start, end)
 	if fit.Width <= 0 {
 		return strings.Join(lines, "\n")
 	}
@@ -303,8 +313,20 @@ func (m *Model) paneFit() PaneFit {
 		PaneWidth:  m.State.PaneWidth,
 		PaneHeight: m.State.PaneHeight,
 		CursorCol:  m.State.CursorCol,
-		HasCursor:  m.State.CursorVisible && m.State.CursorCol >= 0,
+		CursorRow:  m.State.CursorRow,
+		HasCursor:  m.State.CursorVisible && m.State.CursorCol >= 0 && m.State.CursorRow >= 0,
 	})
+}
+
+// PaneCoords maps 1-indexed coordinates within the rendered content area to the
+// 1-indexed pane coordinates tmux's mouse protocol expects. A clipped pane is
+// drawn scrolled, so a click lands ColOffset columns and RowOffset rows in
+// (td-73fa86).
+func (m *Model) PaneCoords(col, row int) (int, int, bool) {
+	if !m.IsActive() {
+		return 0, 0, false
+	}
+	return m.paneFit().PaneCoords(col-1, row-1, m.State.PaneWidth, m.State.PaneHeight)
 }
 
 // SizeIndicator describes a pane that is larger than the viewport it is drawn
@@ -328,12 +350,9 @@ func (m *Model) Cursor() *tea.Cursor {
 	if fit.Width <= 0 || fit.Height <= 0 {
 		return nil
 	}
-	// View renders the buffer's last fit.Height lines, and the buffer's tail is
-	// the pane, so a pane row lands fit.Height-PaneHeight rows further down.
-	row := m.State.CursorRow
-	if m.State.PaneHeight > 0 {
-		row -= m.State.PaneHeight - fit.Height
-	}
+	// View renders pane rows fit.RowOffset..+fit.Height, so a pane row lands
+	// RowOffset rows higher on screen.
+	row := m.State.CursorRow - fit.RowOffset
 	if row < 0 || row >= fit.Height {
 		return nil
 	}

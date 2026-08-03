@@ -70,6 +70,20 @@ type terminalViewportLayout struct {
 	// viewport: letterboxed when the pane is smaller, clipped (with ColOffset
 	// as the first visible column) when it is larger.
 	Fit tty.PaneFit
+
+	// PaneClipped reports that the pane itself does not fit the viewport, as
+	// opposed to Fit.ClippedWidth, which also trips when the scrollbar takes a
+	// column off an otherwise perfectly sized pane.
+	PaneClipped bool
+
+	// PaneTop is the buffer index of pane row 0, so a rendered row maps back to
+	// the pane row tmux would report for it.
+	PaneTop int
+}
+
+// paneRowAt maps a 0-indexed rendered row to a 0-indexed pane row.
+func (l terminalViewportLayout) paneRowAt(relY int) int {
+	return l.Start + relY - l.PaneTop
 }
 
 type terminalViewportResult struct {
@@ -82,7 +96,7 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 		DisplayWidth:  max(in.Width, 0),
 		DisplayHeight: max(in.Height, 0),
 	}
-	if in.Buffer == nil || layout.DisplayWidth == 0 || layout.DisplayHeight == 0 {
+	if layout.DisplayWidth == 0 || layout.DisplayHeight == 0 {
 		return layout
 	}
 
@@ -107,6 +121,10 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	}
 	layout.DisplayHeight = fit.Height
 	layout.PadWidth = layout.DisplayWidth
+	// Record the pane-vs-viewport verdict before the scrollbar steals a column:
+	// losing a column to chrome is not a geometry mismatch and must not read as
+	// one (td-73fa86).
+	layout.PaneClipped = fit.Clipped()
 	if in.TotalItems > layout.DisplayHeight && layout.DisplayWidth > 1 {
 		layout.DisplayWidth--
 		fit = fit.WithWidth(layout.DisplayWidth, in.PaneWidth, in.CursorCol, in.Interactive && in.CursorVisible)
@@ -116,6 +134,11 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 		layout.ShowScrollbar = true
 	}
 	layout.Fit = fit
+	// Geometry is settled above so hit testing can ask for it without a buffer;
+	// only the scroll window needs one.
+	if in.Buffer == nil {
+		return layout
+	}
 
 	layout.EffectiveCount = in.Buffer.LineCount()
 	if in.TrimTrailing {
@@ -142,6 +165,13 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	}
 	layout.End = min(layout.Start+layout.DisplayHeight, layout.EffectiveCount)
 	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
+	// Pane row 0 in buffer coordinates: from the capture's history metadata when
+	// it carried any, otherwise assuming the buffer's tail is the pane.
+	if in.HasCursorHistory {
+		layout.PaneTop = in.CursorHistorySize - in.BufferBase
+	} else if in.PaneHeight > 0 {
+		layout.PaneTop = layout.EffectiveCount - in.PaneHeight
+	}
 	return layout
 }
 

@@ -485,7 +485,15 @@ func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bo
 		return 0, 0, false
 	}
 
-	// SGR mouse protocol uses 1-indexed coordinates
+	// SGR mouse protocol uses 1-indexed coordinates, and the editor renders the
+	// pane at its observed size — clipped and scrolled when it is larger than
+	// this viewport — so map through the fit rather than assuming they line up
+	// (td-73fa86).
+	if p.inlineEditor != nil {
+		if col, row, ok := p.inlineEditor.PaneCoords(relX+1, relY+1); ok {
+			return col, row, true
+		}
+	}
 	return relX + 1, relY + 1, true
 }
 

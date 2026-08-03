@@ -18,9 +18,10 @@ type PaneFitInput struct {
 	PaneWidth  int
 	PaneHeight int
 
-	// CursorCol is the pane-relative cursor column used to anchor horizontal
-	// clipping. Ignored unless HasCursor is set.
+	// CursorCol and CursorRow are the pane-relative cursor coordinates used to
+	// anchor clipping. Ignored unless HasCursor is set.
 	CursorCol int
+	CursorRow int
 	HasCursor bool
 }
 
@@ -35,6 +36,12 @@ type PaneFit struct {
 	// ColOffset is the first pane column rendered. Non-zero only when the pane
 	// is wider than the viewport and the cursor sits past the right edge.
 	ColOffset int
+
+	// RowOffset is the first pane row rendered. Non-zero only when the pane is
+	// taller than the viewport; it anchors the window on the cursor so the row
+	// being typed into stays on screen, and falls back to the pane's tail when
+	// there is no cursor to anchor to.
+	RowOffset int
 
 	// ClippedWidth/ClippedHeight report that the pane is larger than the
 	// viewport on that axis, so part of it is not shown.
@@ -80,6 +87,7 @@ func FitPane(in PaneFitInput) PaneFit {
 		}
 	}
 	fit.ColOffset = paneColOffset(fit.ClippedWidth, fit.Width, in.PaneWidth, in.CursorCol, in.HasCursor)
+	fit.RowOffset = paneRowOffset(fit.ClippedHeight, fit.Height, in.PaneHeight, in.CursorRow, in.HasCursor)
 	return fit
 }
 
@@ -113,6 +121,47 @@ func paneColOffset(clipped bool, width, paneWidth, cursorCol int, hasCursor bool
 		return 0
 	}
 	return offset
+}
+
+// paneRowOffset anchors a clipped pane vertically. With a cursor the window
+// only slides down once the cursor would fall past its bottom edge, so a user
+// editing near the top of a taller pane still sees the line they are on
+// (td-73fa86). Without a cursor the pane's tail — the latest output — wins.
+func paneRowOffset(clipped bool, height, paneHeight, cursorRow int, hasCursor bool) int {
+	if !clipped || height <= 0 {
+		return 0
+	}
+	maxOffset := paneHeight - height
+	if maxOffset <= 0 {
+		return 0
+	}
+	if !hasCursor {
+		return maxOffset
+	}
+	offset := cursorRow - height + 1
+	if offset <= 0 {
+		return 0
+	}
+	return min(offset, maxOffset)
+}
+
+// PaneCoords maps a 0-indexed cell of the rendered region to 1-indexed pane
+// coordinates, which is what tmux's mouse protocol speaks. It reports false for
+// a cell outside the rendered region, so hit testing moves with the pixels
+// instead of assuming the viewport and the pane are aligned (td-73fa86).
+func (f PaneFit) PaneCoords(relX, relY, paneWidth, paneHeight int) (col, row int, ok bool) {
+	if relX < 0 || relY < 0 || relX >= f.Width || relY >= f.Height {
+		return 0, 0, false
+	}
+	col = relX + f.ColOffset + 1
+	row = relY + f.RowOffset + 1
+	if paneWidth > 0 {
+		col = min(col, paneWidth)
+	}
+	if paneHeight > 0 {
+		row = min(row, paneHeight)
+	}
+	return col, row, true
 }
 
 // PaneSizeIndicator describes a clipped pane as "200x50, showing 120x40". It

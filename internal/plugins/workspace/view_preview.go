@@ -295,10 +295,14 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
 	}
 	// A pane larger than this viewport is clipped, so say so rather than let the
-	// missing columns/rows look like corruption (td-73fa86).
-	if indicator := tty.PaneSizeIndicator(paneWidth, paneHeight,
-		result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
-		hint += " " + dimText(indicator)
+	// missing columns/rows look like corruption (td-73fa86). Gated on the pane's
+	// own fit: the scrollbar column is chrome, not a mismatch, and would
+	// otherwise make the banner permanent.
+	if result.Layout.PaneClipped {
+		if indicator := tty.PaneSizeIndicator(paneWidth, paneHeight,
+			result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
+			hint += " " + dimText(indicator)
+		}
 	}
 	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))

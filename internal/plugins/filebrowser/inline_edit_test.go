@@ -267,6 +267,32 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 	}
 }
 
+// The editor draws a pane larger than this viewport clipped and scrolled, so a
+// forwarded click has to be mapped through the same fit or it lands on the
+// wrong character (td-73fa86).
+func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
+	p := &Plugin{width: 80, height: 24}
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-edit", "")
+	// Another instance resized the shared session: the pane is wider and taller
+	// than this viewport, with the cursor near its bottom-right.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width + 40
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height + 10
+	p.inlineEditor.State.CursorCol = p.inlineEditor.State.PaneWidth - 1
+	p.inlineEditor.State.CursorRow = p.inlineEditor.State.PaneHeight - 1
+	p.inlineEditor.State.CursorVisible = true
+
+	col, row, ok := p.calculateInlineEditorMouseCoords(2, 2)
+	if !ok {
+		t.Fatal("top-left content cell reported no hit")
+	}
+	if col != 41 || row != 11 {
+		t.Fatalf("coords = (%d,%d), want (41,11) — the pane cell actually drawn there", col, row)
+	}
+}
+
 func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 	// Test that known editors return true (sequence is sent)
 	// We can't test the actual tmux commands without a session,

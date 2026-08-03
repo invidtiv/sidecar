@@ -248,10 +248,10 @@ func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
 }
 
 func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
+	// A nil buffer is fine: the layout's geometry (the fit, the display size)
+	// comes from the viewport and the pane, and hit testing needs it whether or
+	// not any output has been captured yet.
 	buffer := p.interactiveOutputBuffer()
-	if buffer == nil {
-		return terminalViewportLayout{}
-	}
 
 	width, height := p.calculatePreviewDimensions()
 	termPanel := p.selectionTermPanel
@@ -284,8 +284,17 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 			input.PaneWidth = p.interactiveState.PaneWidth
 		}
 		input.CursorCol = p.interactiveState.CursorCol
+		input.CursorRow = p.interactiveState.CursorRow
 		input.CursorVisible = p.interactiveState.CursorVisible
+		if interactive {
+			input.CursorHistorySize = p.interactiveState.CursorHistorySize
+			input.BufferBase, input.HasCursorHistory = cursorBufferBase(buffer, p.interactiveState)
+		}
 	}
+	// The scrollbar takes a column from the content, which moves every column
+	// the user can click on; hit testing has to see the same viewport the render
+	// does (td-73fa86).
+	_, input.TotalItems, _ = p.terminalHistorySummary(termPanel, buffer)
 	if termPanel {
 		if p.selection.Anchor.Valid() {
 			input.Follow = false

@@ -163,6 +163,94 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 	}
 }
 
+// The scrollbar takes a column from the content, which is chrome rather than a
+// geometry mismatch. Reporting it as one made the "NxM, showing AxB" banner
+// permanent for every single-machine user with scrollback (td-73fa86).
+func TestRenderCapturedTerminalScrollbarIsNotAMismatch(t *testing.T) {
+	p := &Plugin{truncateCache: ui.NewTruncateCache(64)}
+	p.shellSelected = true
+	lines := make([]string, 12)
+	for i := range lines {
+		lines[i] = strings.Repeat("x", 10)
+	}
+	buffer := testTerminalBuffer(strings.Join(lines, "\n"))
+	p.shells = []*ShellSession{{
+		TmuxName: "sidecar-shell",
+		Agent:    &Agent{OutputBuf: buffer, TmuxSession: "sidecar-shell"},
+	}}
+	p.selectedShellIdx = 0
+	p.autoScrollOutput = true
+
+	// Viewport 30x3 renders 30x2 after the hint line, and the pane is exactly
+	// that — but 12 lines of scrollback put a scrollbar on screen.
+	p.recordPaneGeometry("shell", "sidecar-shell", 30, 2)
+	plain := ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	if strings.Contains(plain, "showing") {
+		t.Fatalf("scrollbar column reported as a pane mismatch: %q", plain)
+	}
+
+	// A pane that genuinely overflows still says so.
+	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
+	plain = ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	if !strings.Contains(plain, "showing") {
+		t.Fatalf("clipped pane did not surface its true size: %q", plain)
+	}
+}
+
+// Forwarded tmux mouse coordinates have to move with the pixels on both axes:
+// a taller pane starts partway down and a wider one starts partway across, and
+// the scrollbar shifts the horizontal window by one more column (td-73fa86).
+func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
+	p := &Plugin{truncateCache: ui.NewTruncateCache(64)}
+	p.width, p.height = 100, 30
+	p.viewMode = ViewModeInteractive
+	p.previewTab = PreviewTabOutput
+	p.shellSelected = true
+	p.autoScrollOutput = true
+
+	// 4 lines of scrollback followed by the pane's 35 rows.
+	buffer := tty.NewOutputBuffer(200)
+	lines := make([]string, 39)
+	for i := range lines {
+		lines[i] = strings.Repeat("x", 200)
+	}
+	buffer.UpdateSnapshot(strings.Join(lines, "\n"), 0)
+	p.shells = []*ShellSession{{
+		TmuxName: "sidecar-shell",
+		Agent:    &Agent{OutputBuf: buffer, TmuxSession: "sidecar-shell"},
+	}}
+	p.selectedShellIdx = 0
+	p.interactiveState = &InteractiveState{
+		Active:            true,
+		TargetSession:     "sidecar-shell",
+		PaneWidth:         200,
+		PaneHeight:        35,
+		CursorRow:         34,
+		CursorCol:         190,
+		CursorVisible:     true,
+		CursorHistorySize: 4,
+		HasCursorHistory:  true,
+	}
+
+	// Content origin: border+padding across, border+hint down.
+	col, row, ok := p.interactiveMouseCoords(panelOverhead/2, 2)
+	if !ok {
+		t.Fatal("top-left content cell reported no hit")
+	}
+	if layout := p.terminalSelectionViewportLayout(); !layout.ShowScrollbar {
+		t.Fatalf("expected a scrollbar for %d lines in %d rows", layout.EffectiveCount, layout.DisplayHeight)
+	}
+	// 96 content columns lose one to the scrollbar, so the window is anchored at
+	// pane column 96 (190-95+1) and the first visible cell is column 97. The
+	// window starts on buffer line 12, which is pane row 8 — not row 1.
+	if col != 97 {
+		t.Fatalf("col = %d, want 97 (ColOffset with the scrollbar's column accounted for)", col)
+	}
+	if row != 9 {
+		t.Fatalf("row = %d, want 9 (the pane row actually drawn on the top line)", row)
+	}
+}
+
 func TestPaneGeometryCache(t *testing.T) {
 	p := &Plugin{}
 	p.recordPaneGeometry("agent", "sidecar-main", 200, 50)

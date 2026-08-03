@@ -81,6 +81,63 @@ func TestModelViewRendersActualPaneGeometry(t *testing.T) {
 	}
 }
 
+// A pane taller than the viewport anchors on the cursor rather than always
+// showing the pane's tail: editing near the top of a taller pane must not type
+// into a region the viewport never draws (td-73fa86).
+func TestModelViewAnchorsTallPaneOnCursor(t *testing.T) {
+	model := New(nil)
+	model.Width = 10
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.OutputBuf.Write("0000000000\n1111111111\n2222222222\n3333333333")
+	model.State.PaneWidth = 10
+	model.State.PaneHeight = 4
+	model.State.CursorRow = 1
+	model.State.CursorCol = 0
+	model.State.CursorVisible = true
+
+	if got, want := model.View(), "0000000000\n1111111111"; got != want {
+		t.Fatalf("View() = %q, want %q", got, want)
+	}
+	cursor := model.Cursor()
+	if cursor == nil || cursor.X != 0 || cursor.Y != 1 {
+		t.Fatalf("Cursor() = %#v, want (0,1)", cursor)
+	}
+
+	// With no cursor to anchor to, the pane's tail — the latest output — wins.
+	model.State.CursorVisible = false
+	if got, want := model.View(), "2222222222\n3333333333"; got != want {
+		t.Fatalf("unanchored View() = %q, want %q", got, want)
+	}
+}
+
+// Mouse coordinates forwarded to tmux have to move with the pixels: a clipped
+// pane is drawn scrolled on both axes.
+func TestModelPaneCoordsAccountForClipping(t *testing.T) {
+	model := New(nil)
+	model.Width = 10
+	model.Height = 2
+	model.Enter("current", "")
+	model.State.PaneWidth = 20
+	model.State.PaneHeight = 4
+	model.State.CursorRow = 3
+	model.State.CursorCol = 15
+	model.State.CursorVisible = true
+
+	// ColOffset 6 (15-10+1), RowOffset 2 (3-2+1): the top-left visible cell is
+	// pane column 7, row 3 in tmux's 1-indexed space.
+	col, row, ok := model.PaneCoords(1, 1)
+	if !ok || col != 7 || row != 3 {
+		t.Fatalf("PaneCoords(1,1) = (%d,%d,%v), want (7,3,true)", col, row, ok)
+	}
+	if _, _, ok := model.PaneCoords(11, 1); ok {
+		t.Fatal("PaneCoords past the rendered width reported a hit")
+	}
+	if _, _, ok := model.PaneCoords(1, 3); ok {
+		t.Fatal("PaneCoords past the rendered height reported a hit")
+	}
+}
+
 // A pane wider than the viewport scrolls horizontally rather than emitting
 // over-long lines that would wrap over the surrounding layout.
 func TestModelViewClipsWideLinesWithCursorOffset(t *testing.T) {
