@@ -27,33 +27,61 @@ import (
 // The lease is a tmux user option on the session — the tmux server is the only
 // thing both machines already share, so no new file, lock, or socket is needed:
 //
-//	tmux set-option -t <session> @sidecar-owner "<instance-id>:<counter>"
+//	tmux set-option -t <session> @sidecar-owner "<instance-id>:<counter>:<idle-seconds>"
 //
 // The focused instance claims the lease and refreshes it; an unfocused instance
 // never asserts geometry and releases what it holds. A non-owner facing a fresh
 // lease declines to resize and renders the owner's geometry through the pane-fit
 // path (td-73fa86).
 //
+// Focus alone cannot decide it. tea.FocusMsg/BlurMsg report focus in *that*
+// machine's own window server, so walking from one Mac to another — or letting
+// the first one's display sleep — produces no blur on the machine left behind:
+// both instances sit at focused, and the abandoned one keeps refreshing forever.
+// The tie-break is therefore how long each side has gone without user input,
+// which the token carries as a duration the writer measured on its own clock.
+// Durations survive clock skew where timestamps do not.
+//
 // Staleness is counted in the reader's *own* local ticks with the token treated
-// as opaque. Wall-clock timestamps are never compared between machines: their
-// clocks skew, and an opaque changing token sidesteps that entirely.
+// as opaque, plus a wall-clock floor: a session nobody polls (the terminal
+// panel, whose only ticks are resize events) would otherwise need one toggle per
+// tick of the budget before it could reclaim a dead machine's lease.
+//
+// An unambiguous local action — attaching, entering interactive mode — claims
+// outright. Pressing a key on this machine is better evidence of where the user
+// is than any lease.
 
 const leaseOptionName = "@sidecar-owner"
 
-// LeasePolicy is the tick budget arbitration runs on. Ticks are the reader's own
-// local ticks; they carry no cross-machine meaning.
+// LeasePolicy is the budget arbitration runs on. Ticks are the reader's own
+// local ticks; they carry no cross-machine meaning. Durations are elapsed
+// measurements, never timestamps, so they do carry across machines.
 type LeasePolicy struct {
 	// StaleTicks is how many consecutive ticks a foreign token may stay
 	// unchanged before the lease is considered abandoned and claimable.
 	StaleTicks int
+	// StaleAfter is the wall-clock floor on the same judgement, for sessions
+	// whose ticks are sporadic. Zero disables it.
+	StaleAfter time.Duration
 	// RefreshTicks is how many ticks the owner lets pass before writing a new
 	// token, so readers elsewhere keep seeing it change.
 	RefreshTicks int
+	// PreemptIdle is how much longer than us the current owner must have gone
+	// without user input before we take the lease off it. It doubles as the
+	// window in which our own last input counts as "the user is here". Zero
+	// disables idle preemption.
+	PreemptIdle time.Duration
 }
 
 // DefaultLeasePolicy leaves an owner roughly two refreshes of slack before
-// anyone else treats its lease as abandoned.
-var DefaultLeasePolicy = LeasePolicy{StaleTicks: 5, RefreshTicks: 2}
+// anyone else treats its lease as abandoned, and hands geometry to whichever
+// machine the user is actually typing on within a few seconds.
+var DefaultLeasePolicy = LeasePolicy{
+	StaleTicks:   5,
+	StaleAfter:   10 * time.Second,
+	RefreshTicks: 2,
+	PreemptIdle:  5 * time.Second,
+}
 
 // LeaseObservation is everything arbitration needs: what this instance is, what
 // the shared option currently says, and how long the reader has watched it.
@@ -68,8 +96,17 @@ type LeaseObservation struct {
 	// UnchangedTicks is how many of the reader's ticks Token has been identical
 	// for. Zero on the tick it changed.
 	UnchangedTicks int
+	// UnchangedFor is how long Token has been identical in the reader's own
+	// elapsed time.
+	UnchangedFor time.Duration
 	// TicksSinceWrite is how many ticks since this instance last wrote a token.
 	TicksSinceWrite int
+	// SelfIdle is how long since the user last gave this instance input.
+	SelfIdle time.Duration
+	// OwnerIdle is what the current token says its writer's idle time was when
+	// it was written, valid only when OwnerIdleKnown.
+	OwnerIdle      time.Duration
+	OwnerIdleKnown bool
 	// OwnerDefunct reports that Token was written by an instance the reader can
 	// prove is gone — in practice a previous sidecar on this same machine whose
 	// PID no longer exists. Only ever provable locally; a token from another
@@ -107,7 +144,12 @@ func DecideGeometryLease(obs LeaseObservation, policy LeasePolicy) LeaseDecision
 		// waiting the staleness budget out would deny the very first resize after
 		// every restart — including the one-shot resize before an attach.
 		return LeaseDecision{Resize: true, Write: true, Reason: "defunct"}
-	case policy.StaleTicks > 0 && obs.UnchangedTicks >= policy.StaleTicks:
+	case idlePreempts(obs, policy):
+		// The user is typing here and has not touched the owner for a while: the
+		// machine they walked away from never blurs, so this is the only signal
+		// that separates two instances that both believe they are focused.
+		return LeaseDecision{Resize: true, Write: true, Reason: "preempt"}
+	case leaseStale(obs, policy):
 		// Two instances can claim at once; the loser simply sees a foreign fresh
 		// token on its next tick and backs off, costing one extra resize.
 		return LeaseDecision{Resize: true, Write: true, Reason: "stale"}
@@ -116,12 +158,61 @@ func DecideGeometryLease(obs LeaseObservation, policy LeasePolicy) LeaseDecision
 	}
 }
 
-// leaseOwner extracts the instance ID from a "<instance-id>:<counter>" token.
-func leaseOwner(token string) string {
-	if i := strings.LastIndex(token, ":"); i >= 0 {
-		return token[:i]
+// idlePreempts reports whether recent input here outranks the current owner's.
+// Both halves matter: an instance nobody is using must never take a lease off
+// anybody, however idle that owner looks.
+func idlePreempts(obs LeaseObservation, policy LeasePolicy) bool {
+	if policy.PreemptIdle <= 0 || !obs.OwnerIdleKnown {
+		return false
 	}
-	return token
+	return obs.SelfIdle <= policy.PreemptIdle && obs.OwnerIdle-obs.SelfIdle >= policy.PreemptIdle
+}
+
+// leaseStale reports whether a foreign token has sat still long enough to count
+// as abandoned. The wall-clock arm still needs one prior observation: a token
+// first seen this tick may have been written a millisecond ago.
+func leaseStale(obs LeaseObservation, policy LeasePolicy) bool {
+	if policy.StaleTicks > 0 && obs.UnchangedTicks >= policy.StaleTicks {
+		return true
+	}
+	return policy.StaleAfter > 0 && obs.UnchangedTicks >= 1 && obs.UnchangedFor >= policy.StaleAfter
+}
+
+// leaseToken is the parsed form of an @sidecar-owner value:
+//
+//	<instance-id>:<counter>:<idle-seconds>
+//
+// The idle field is a duration its writer measured against its own clock, so it
+// is comparable on any machine; a wall-clock timestamp would not be. Tokens
+// without it (an older sidecar) simply carry no idle evidence.
+type leaseToken struct {
+	owner     string
+	idle      time.Duration
+	idleKnown bool
+}
+
+func parseLeaseToken(token string) leaseToken {
+	fields := strings.Split(token, ":")
+	if len(fields) >= 3 {
+		if _, err := strconv.Atoi(fields[len(fields)-2]); err == nil {
+			if secs, err := strconv.Atoi(fields[len(fields)-1]); err == nil && secs >= 0 {
+				return leaseToken{
+					owner:     strings.Join(fields[:len(fields)-2], ":"),
+					idle:      time.Duration(secs) * time.Second,
+					idleKnown: true,
+				}
+			}
+		}
+	}
+	if i := strings.LastIndex(token, ":"); i >= 0 {
+		return leaseToken{owner: token[:i]}
+	}
+	return leaseToken{owner: token}
+}
+
+// leaseOwner extracts the instance ID from a token.
+func leaseOwner(token string) string {
+	return parseLeaseToken(token).owner
 }
 
 // splitInstanceID takes an instance ID back apart into the host and PID
@@ -196,6 +287,7 @@ func (tmuxLeaseStore) clear(session string) {
 type leaseState struct {
 	token           string
 	unchangedTicks  int
+	unchangedSince  time.Time
 	ticksSinceWrite int
 	lastTick        time.Time
 	lastResize      bool
@@ -215,14 +307,16 @@ type leaseKeeper struct {
 	selfHost string
 	alive    func(pid int) bool
 
-	focused bool
-	counter uint64
-	states  map[string]*leaseState
-	targets map[string]string
+	focused   bool
+	lastInput time.Time
+	counter   uint64
+	states    map[string]*leaseState
+	targets   map[string]string
 }
 
 func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration) *leaseKeeper {
 	host, pid := hostAndPID()
+	now := time.Now()
 	return &leaseKeeper{
 		store:    store,
 		policy:   policy,
@@ -234,9 +328,40 @@ func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration
 		// Focused by default so a single instance behaves exactly as it did
 		// before the lease existed, including before any focus event arrives.
 		focused: true,
-		states:  make(map[string]*leaseState),
-		targets: make(map[string]string),
+		// Launching sidecar is itself a user action: a fresh instance counts as
+		// active so it can take geometry from a machine left behind, without
+		// waiting for the first keystroke.
+		lastInput: now,
+		states:    make(map[string]*leaseState),
+		targets:   make(map[string]string),
 	}
+}
+
+// noteInput records that the user just gave this instance keyboard or mouse
+// input. It is the evidence idle preemption runs on, and it is deliberately
+// cheap: input events arrive at typing and mouse-motion rates.
+func (k *leaseKeeper) noteInput() {
+	k.mu.Lock()
+	k.lastInput = k.now()
+	k.mu.Unlock()
+}
+
+// idleLocked is how long since the user last touched this instance.
+func (k *leaseKeeper) idleLocked(now time.Time) time.Duration {
+	if k.lastInput.IsZero() {
+		return 0
+	}
+	if d := now.Sub(k.lastInput); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// tokenLocked mints this instance's next token, stamping the idle time readers
+// on other machines arbitrate against.
+func (k *leaseKeeper) tokenLocked(now time.Time) string {
+	k.counter++
+	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(k.idleLocked(now).Seconds()))
 }
 
 // hostAndPID names this instance. The PID is part of the identity so two
@@ -309,31 +434,72 @@ func (k *leaseKeeper) allow(target string) bool {
 		state.unchangedTicks++
 	} else {
 		state.unchangedTicks = 0
+		state.unchangedSince = now
 	}
 	state.token = token
 	state.ticksSinceWrite++
 
+	parsed := parseLeaseToken(token)
+	foreign := token != "" && parsed.owner != k.selfID
 	decision := DecideGeometryLease(LeaseObservation{
 		SelfID:          k.selfID,
 		Token:           token,
 		Focused:         k.focused,
 		UnchangedTicks:  state.unchangedTicks,
+		UnchangedFor:    now.Sub(state.unchangedSince),
 		TicksSinceWrite: state.ticksSinceWrite,
+		SelfIdle:        k.idleLocked(now),
+		OwnerIdle:       parsed.idle,
+		OwnerIdleKnown:  foreign && parsed.idleKnown,
 		// Only worth the liveness check when it could change the verdict.
-		OwnerDefunct: k.focused && token != "" && leaseOwner(token) != k.selfID && k.defunct(token),
+		OwnerDefunct: k.focused && foreign && k.defunct(token),
 	}, k.policy)
 
 	if decision.Write {
-		k.counter++
-		fresh := fmt.Sprintf("%s:%d", k.selfID, k.counter)
-		k.store.set(session, fresh)
-		state.token = fresh
-		state.unchangedTicks = 0
-		state.ticksSinceWrite = 0
+		k.writeLocked(session, state, now)
 	}
 	state.owned = decision.Resize
 	state.lastResize = decision.Resize
 	return decision.Resize
+}
+
+// writeLocked stamps a fresh token and resets the history it invalidates.
+func (k *leaseKeeper) writeLocked(session string, state *leaseState, now time.Time) {
+	fresh := k.tokenLocked(now)
+	k.store.set(session, fresh)
+	state.token = fresh
+	state.unchangedTicks = 0
+	state.unchangedSince = now
+	state.ticksSinceWrite = 0
+}
+
+// claim takes the lease for target outright, whatever anyone else holds.
+//
+// Arbitration is evidence about where the user is, and an explicit local action
+// — attaching, entering interactive mode — is the strongest evidence there is.
+// Without this, a machine facing a fresh foreign lease would attach at the other
+// machine's preview geometry and stay letterboxed for the whole session: while
+// attached, sidecar's TUI is suspended, so no tick accrues and nothing retries.
+func (k *leaseKeeper) claim(target string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	now := k.now()
+	k.lastInput = now
+	session, _, ok := k.store.read(target)
+	if !ok {
+		return
+	}
+	k.targets[target] = session
+	state := k.states[session]
+	if state == nil {
+		state = &leaseState{}
+		k.states[session] = state
+	}
+	k.writeLocked(session, state, now)
+	state.lastTick = now
+	state.owned = true
+	state.lastResize = true
 }
 
 // setFocused records application focus. Losing focus releases every lease this
@@ -346,6 +512,12 @@ func (k *leaseKeeper) setFocused(focused bool) {
 		return
 	}
 	k.focused = focused
+	if focused {
+		// Focus is only ever gained by a deliberate act — clicking or tabbing
+		// into this terminal — so it counts as the user being here, even though
+		// its absence proves nothing on the machine they walked away from.
+		k.lastInput = k.now()
+	}
 	// Tick history is meaningless across a focus change: it was accumulated
 	// while this instance was not a candidate.
 	release := k.dropStatesLocked(!focused)
@@ -396,6 +568,25 @@ var defaultLeaseKeeper = newLeaseKeeper(tmuxLeaseStore{}, DefaultLeasePolicy, ti
 // plumbing of their own — observes the same bit.
 func SetAppFocused(focused bool) {
 	defaultLeaseKeeper.setFocused(focused)
+}
+
+// NoteUserInput records keyboard or mouse input on this instance. Focus reports
+// only what one machine's window server believes, and the machine the user
+// walked away from never hears about it — so recent input, compared as a
+// duration between machines, is what actually decides who owns geometry.
+func NoteUserInput() {
+	defaultLeaseKeeper.noteInput()
+}
+
+// ClaimGeometryLease takes ownership of target's session for this instance,
+// overriding whatever lease it finds. Reserved for unambiguous local actions —
+// attaching to a session, entering interactive mode — where the user has just
+// proved which machine they are sitting at.
+func ClaimGeometryLease(target string) {
+	if target == "" {
+		return
+	}
+	defaultLeaseKeeper.claim(target)
 }
 
 // TouchGeometryLease advances the lease for target without asserting geometry.

@@ -145,6 +145,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.forwardApplicationFocus(msg)
 
 	case tea.KeyPressMsg:
+		// Input is what geometry arbitration uses to tell two focused instances
+		// apart: the machine the user walked away from never blurs (td-ee222a).
+		tty.NoteUserInput()
 		return (&m).handleKeyMsg(msg)
 
 	case tea.PasteMsg:
@@ -189,6 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.MouseMsg:
+		tty.NoteUserInput()
 		// Route mouse events to active modal (priority order)
 		switch m.activeModal() {
 		case ModalPalette:

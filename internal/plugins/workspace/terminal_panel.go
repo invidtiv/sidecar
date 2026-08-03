@@ -246,6 +246,12 @@ func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd
 		target = sessionName
 	}
 	return func() tea.Msg {
+		// Polling this pane is what makes this instance the one driving its
+		// geometry. Without a tick here the panel's only lease events are resize
+		// commands, so a peer's abandoned lease would take one panel toggle per
+		// tick of the staleness budget to reclaim (td-ee222a).
+		tty.TouchGeometryLease(target)
+
 		var output string
 		var cursor capturedCursor
 		var capture capturedPaneMetadata

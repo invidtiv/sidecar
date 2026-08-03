@@ -388,6 +388,9 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
 		}
 		tty.SetWindowSizeManual(sessionName)
+		// Entering interactive mode is an explicit local action; the user is
+		// here, so this instance's geometry wins (td-ee222a).
+		tty.ClaimGeometryLease(target)
 		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		// Verify and retry once if resize didn't take effect
 		if w, h, ok := tty.QueryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
@@ -457,6 +460,9 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	// Resize terminal panel pane to match its split dimensions
 	w, h := p.calculateTermPanelDimensions()
 	tty.SetWindowSizeManual(sessionName)
+	// Explicit local action: claim the terminal panel session outright rather
+	// than render it at another machine's geometry (td-ee222a).
+	tty.ClaimGeometryLease(target)
 	tty.ResizeTmuxPane(target, w, h)
 	if aw, ah, ok := tty.QueryPaneSize(target); ok && (aw != w || ah != h) {
 		tty.ResizeTmuxPane(target, w, h)
@@ -678,6 +684,11 @@ func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
 		if w <= 0 || h <= 0 {
 			return nil
 		}
+		// Attaching is proof the user is at this machine, so it outranks another
+		// instance's geometry lease. Nothing retries this resize: the TUI is
+		// suspended for the whole attach, so a declined one would leave the
+		// session drawn at the other machine's preview size (td-ee222a).
+		tty.ClaimGeometryLease(target)
 		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}

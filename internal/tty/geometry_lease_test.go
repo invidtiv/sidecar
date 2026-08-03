@@ -78,7 +78,7 @@ func newTestKeeper(store leaseStore, id string, policy LeasePolicy) *leaseKeeper
 }
 
 func TestDecideGeometryLease(t *testing.T) {
-	policy := LeasePolicy{StaleTicks: 3, RefreshTicks: 2}
+	policy := LeasePolicy{StaleTicks: 3, StaleAfter: 10 * time.Second, RefreshTicks: 2, PreemptIdle: 5 * time.Second}
 	tests := []struct {
 		name       string
 		obs        LeaseObservation
@@ -126,6 +126,42 @@ func TestDecideGeometryLease(t *testing.T) {
 			obs:        LeaseObservation{SelfID: "a", Token: "b:4", Focused: true, UnchangedTicks: 3},
 			wantResize: true, wantWrite: true, wantReason: "stale",
 		},
+		{
+			name: "an owner the user left behind is preempted by recent input here",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4:60", Focused: true, UnchangedTicks: 1,
+				SelfIdle: 0, OwnerIdle: 60 * time.Second, OwnerIdleKnown: true},
+			wantResize: true, wantWrite: true, wantReason: "preempt",
+		},
+		{
+			name: "an instance nobody is using never preempts",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4:60", Focused: true, UnchangedTicks: 1,
+				SelfIdle: 45 * time.Second, OwnerIdle: 60 * time.Second, OwnerIdleKnown: true},
+			wantReason: "held",
+		},
+		{
+			name: "an owner still in use keeps the lease",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4:1", Focused: true, UnchangedTicks: 1,
+				SelfIdle: 0, OwnerIdle: time.Second, OwnerIdleKnown: true},
+			wantReason: "held",
+		},
+		{
+			name: "a token with no idle evidence is never preempted",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4", Focused: true, UnchangedTicks: 1,
+				SelfIdle: 0, OwnerIdle: time.Hour},
+			wantReason: "held",
+		},
+		{
+			name: "a token unchanged for long enough is stale on few ticks",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4", Focused: true,
+				UnchangedTicks: 1, UnchangedFor: 30 * time.Second},
+			wantResize: true, wantWrite: true, wantReason: "stale",
+		},
+		{
+			name: "a token first seen this tick is never stale on elapsed time alone",
+			obs: LeaseObservation{SelfID: "a", Token: "b:4", Focused: true,
+				UnchangedTicks: 0, UnchangedFor: time.Hour},
+			wantReason: "held",
+		},
 	}
 
 	for _, tt := range tests {
@@ -160,8 +196,8 @@ func TestLeaseKeeperOwnerResizes(t *testing.T) {
 	if !k.allow("%1") {
 		t.Fatal("first resize on an unowned session was declined")
 	}
-	if got := store.current(); got != "owner:1" {
-		t.Fatalf("lease = %q, want owner:1", got)
+	if got := store.current(); got != "owner:1:0" {
+		t.Fatalf("lease = %q, want owner:1:0", got)
 	}
 	for i := range 10 {
 		if !k.allow("%1") {
@@ -439,6 +475,163 @@ func TestLeaseKeeperSettledOwnerKeepsLeaseByTicking(t *testing.T) {
 	}
 	if leaseOwner(store.current()) != "owner" {
 		t.Fatalf("lease = %q, want it still held by the settled owner", store.current())
+	}
+}
+
+// newClockedKeeper builds a keeper on a fake clock so tests can drive elapsed
+// time — ticks, staleness, and idleness — without sleeping.
+func newClockedKeeper(store leaseStore, id string, policy LeasePolicy, now *time.Time) *leaseKeeper {
+	k := newLeaseKeeper(store, policy, time.Second)
+	k.selfID = id
+	k.now = func() time.Time { return *now }
+	k.lastInput = *now
+	return k
+}
+
+// Focus is reported by each machine's own window server, so walking away from
+// one Mac never blurs it: both instances stay focused, the abandoned one keeps
+// refreshing, and the machine the user is actually at could never take over.
+// Recent input, compared as a duration, is what breaks the tie.
+func TestLeaseKeeperPreemptsAnOwnerTheUserWalkedAwayFrom(t *testing.T) {
+	store := &fakeLeaseStore{}
+	now := time.Now()
+	left := newClockedKeeper(store, "left", DefaultLeasePolicy, &now)
+	here := newClockedKeeper(store, "here", DefaultLeasePolicy, &now)
+
+	// The machine the user started on owns the lease and keeps polling the pane.
+	if !left.allow("%1") {
+		t.Fatal("first instance failed to take an unowned lease")
+	}
+	tick := func() {
+		now = now.Add(time.Second)
+		left.allow("%1")
+	}
+	for range 3 {
+		tick()
+	}
+
+	// The user walks to the other machine and types. Neither instance ever loses
+	// focus, and the one left behind never stops refreshing.
+	claimed := false
+	for range 10 {
+		now = now.Add(time.Second)
+		here.noteInput()
+		left.allow("%1")
+		if here.allow("%1") {
+			claimed = true
+			break
+		}
+	}
+	if !claimed {
+		t.Fatal("the machine the user is typing on never took geometry from the one they left")
+	}
+	if leaseOwner(store.current()) != "here" {
+		t.Fatalf("lease = %q, want it held by the machine with recent input", store.current())
+	}
+
+	// And it stays put: the abandoned machine must not take it back.
+	for i := range 10 {
+		now = now.Add(time.Second)
+		here.noteInput()
+		if left.allow("%1") {
+			t.Fatalf("the abandoned machine reclaimed geometry on tick %d", i)
+		}
+		if !here.allow("%1") {
+			t.Fatalf("the active machine lost its own lease on tick %d", i)
+		}
+	}
+}
+
+// An idle instance must never take geometry off anybody: with no user at either
+// machine, whoever holds the lease keeps it.
+func TestLeaseKeeperIdleInstanceNeverPreempts(t *testing.T) {
+	store := &fakeLeaseStore{}
+	now := time.Now()
+	owner := newClockedKeeper(store, "owner", DefaultLeasePolicy, &now)
+	peer := newClockedKeeper(store, "peer", DefaultLeasePolicy, &now)
+
+	if !owner.allow("%1") {
+		t.Fatal("failed to take an unowned lease")
+	}
+	// Nobody touches either machine for minutes; both keep polling.
+	for i := range 60 {
+		now = now.Add(time.Second)
+		owner.allow("%1")
+		if peer.allow("%1") {
+			t.Fatalf("an unused instance preempted a live owner on tick %d", i)
+		}
+	}
+}
+
+// The terminal panel session's only lease events used to be resize commands, so
+// reclaiming a dead machine's lease cost one panel toggle per tick of the
+// staleness budget — unbounded wall-clock time. Elapsed time settles it instead.
+func TestLeaseKeeperClaimsALeaseNobodyRefreshesOnElapsedTime(t *testing.T) {
+	store := &fakeLeaseStore{}
+	store.set("sess", "dead-mac-4821:9:0")
+	now := time.Now()
+	k := newClockedKeeper(store, "here", DefaultLeasePolicy, &now)
+
+	// First sight of the token proves nothing: it could have been written a
+	// moment ago, so this instance defers.
+	if k.allow("%1") {
+		t.Fatal("claimed a foreign lease on first sight")
+	}
+	// One later event — a second panel toggle, minutes on — is enough, because a
+	// live owner would have refreshed within a couple of seconds.
+	now = now.Add(2 * time.Minute)
+	if !k.allow("%1") {
+		t.Fatal("a lease nobody has refreshed for two minutes was still declined")
+	}
+	if leaseOwner(store.current()) != "here" {
+		t.Fatalf("lease = %q, want it claimed here", store.current())
+	}
+}
+
+// Attaching (and entering interactive mode) is unambiguous proof of which
+// machine the user is at. Nothing retries the one-shot resize that precedes an
+// attach — the TUI is suspended for its whole duration — so a fresh foreign
+// lease must not be able to block it.
+func TestLeaseKeeperExplicitClaimBeatsAFreshForeignLease(t *testing.T) {
+	store := &fakeLeaseStore{}
+	other := newTestKeeper(store, "other", DefaultLeasePolicy)
+	k := newTestKeeper(store, "self", DefaultLeasePolicy)
+
+	other.allow("%1")
+	if k.allow("%1") {
+		t.Fatal("non-owner asserted geometry against a fresh lease")
+	}
+
+	k.claim("%1")
+	if leaseOwner(store.current()) != "self" {
+		t.Fatalf("lease = %q, want it claimed by the attaching instance", store.current())
+	}
+	if !k.allow("%1") {
+		t.Fatal("resize was declined immediately after an explicit claim")
+	}
+}
+
+func TestParseLeaseToken(t *testing.T) {
+	tests := []struct {
+		token     string
+		owner     string
+		idle      time.Duration
+		idleKnown bool
+	}{
+		{token: "mac-mini-4821:17:42", owner: "mac-mini-4821", idle: 42 * time.Second, idleKnown: true},
+		{token: "mac-mini-4821:17:0", owner: "mac-mini-4821", idleKnown: true},
+		// A token from an older sidecar carries no idle evidence.
+		{token: "mac-mini-4821:17", owner: "mac-mini-4821"},
+		{token: "host:with:colons:3", owner: "host:with:colons"},
+		{token: "bare", owner: "bare"},
+		{token: "", owner: ""},
+	}
+	for _, tt := range tests {
+		got := parseLeaseToken(tt.token)
+		if got.owner != tt.owner || got.idle != tt.idle || got.idleKnown != tt.idleKnown {
+			t.Errorf("parseLeaseToken(%q) = %+v, want owner=%q idle=%v known=%v",
+				tt.token, got, tt.owner, tt.idle, tt.idleKnown)
+		}
 	}
 }
 
