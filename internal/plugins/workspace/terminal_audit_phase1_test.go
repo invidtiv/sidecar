@@ -207,6 +207,42 @@ func TestMaybeResizeInteractivePaneUsesCapturedSizeWithoutQuery(t *testing.T) {
 	}
 }
 
+// The option the geometry lease lives under, spelled out here so the test fails
+// loudly if internal/tty renames it.
+const leaseOptionForTest = "@sidecar-owner"
+
+// A pane that already matches needs no resize, but the geometry lease still has
+// to be ticked: it is kept alive by the poll, not by the resize. An owner that
+// stopped ticking once it settled looked abandoned to the other machine, which
+// claimed and resized, which un-settled this one — ownership ping-ponging on the
+// staleness period (td-ee222a).
+func TestMaybeResizeInteractivePaneTicksLeaseWhenSizeAlreadyMatches(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width = 100
+	p.height = 30
+	p.interactiveState.TargetPane = "%42"
+	w, h := p.calculatePreviewDimensions()
+
+	cmd := p.maybeResizeInteractivePane(w, h)
+	if cmd == nil {
+		t.Fatal("matched pane produced no command, so the lease is never refreshed")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("lease touch reported a resize: %#v", msg)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), leaseOptionForTest) {
+		t.Fatalf("matched pane did not tick the ownership lease: %q", logged)
+	}
+	if strings.Contains(string(logged), "resize-") {
+		t.Fatalf("matched pane resized anyway: %q", logged)
+	}
+}
+
 func TestCaptureWithCursorUsesSingleTmuxCommandChain(t *testing.T) {
 	args := capturePaneWithCursorArgs("session name;$()", "%7", false)
 	if countStrings(args, ";") != 1 {

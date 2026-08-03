@@ -44,6 +44,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termtitle"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
 
@@ -257,10 +258,14 @@ func main() {
 		// Report before exiting: os.Exit skips deferred calls, and a trace of a
 		// run that died is exactly the one worth having.
 		startuptrace.Report(logger)
+		tty.ReleaseGeometryLeases()
 		restoreTitle()
 		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
 		os.Exit(1)
 	}
+	// Hand the shared tmux geometry lease back so the next sidecar — here or on
+	// another machine — is not waiting out a lease nobody holds (td-ee222a).
+	tty.ReleaseGeometryLeases()
 	restoreTitle()
 }
 

@@ -974,6 +974,10 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		if directCapture && resizeTarget != "" {
 			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
 				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			} else {
+				// Already the right size; still tick the geometry lease so a
+				// settled owner does not go stale (td-ee222a).
+				tty.TouchGeometryLease(resizeTarget)
 			}
 		}
 

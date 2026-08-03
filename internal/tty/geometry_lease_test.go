@@ -117,6 +117,11 @@ func TestDecideGeometryLease(t *testing.T) {
 			wantReason: "held",
 		},
 		{
+			name:       "a lease from a dead local instance is claimed at once",
+			obs:        LeaseObservation{SelfID: "a", Token: "b:4", Focused: true, OwnerDefunct: true},
+			wantResize: true, wantWrite: true, wantReason: "defunct",
+		},
+		{
 			name:       "stale foreign lease is claimable",
 			obs:        LeaseObservation{SelfID: "a", Token: "b:4", Focused: true, UnchangedTicks: 3},
 			wantResize: true, wantWrite: true, wantReason: "stale",
@@ -309,6 +314,131 @@ func TestLeaseKeeperTicksAreRateLimited(t *testing.T) {
 	}
 	if store.sets <= writes {
 		t.Fatal("owner never refreshed its lease across ticks")
+	}
+}
+
+func TestSplitInstanceID(t *testing.T) {
+	tests := []struct {
+		id     string
+		host   string
+		pid    int
+		wantOK bool
+	}{
+		{"mac-mini-4821", "mac-mini", 4821, true},
+		{"sidecar-1", "sidecar", 1, true},
+		{"nopid", "", 0, false},
+		{"-4821", "", 0, false},
+		{"host-notanumber", "", 0, false},
+		{"", "", 0, false},
+	}
+	for _, tt := range tests {
+		host, pid, ok := splitInstanceID(tt.id)
+		if ok != tt.wantOK || host != tt.host || pid != tt.pid {
+			t.Errorf("splitInstanceID(%q) = (%q, %d, %v), want (%q, %d, %v)",
+				tt.id, host, pid, ok, tt.host, tt.pid, tt.wantOK)
+		}
+	}
+}
+
+// Nothing clears @sidecar-owner when sidecar quits or crashes, and a restart
+// draws a new PID — so the very next run used to meet its own leftover lease,
+// read it as foreign, and decline every resize until the staleness budget
+// elapsed. The one-shot resize before an attach never gets that many ticks.
+func TestLeaseKeeperReclaimsLeaseFromItsOwnDeadPredecessor(t *testing.T) {
+	store := &fakeLeaseStore{}
+	store.set("sess", "mac-9012:37")
+	k := newTestKeeper(store, "mac-9977", DefaultLeasePolicy)
+	k.selfHost = "mac"
+	k.alive = func(int) bool { return false }
+
+	if !k.allow("%1") {
+		t.Fatal("a restarted instance declined to resize against its own leftover lease")
+	}
+	if leaseOwner(store.current()) != "mac-9977" {
+		t.Fatalf("lease = %q, want it reclaimed by the new instance", store.current())
+	}
+}
+
+func TestLeaseKeeperRespectsLiveInstances(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		host  string
+		alive bool
+	}{
+		// A second sidecar on this machine is a real peer, not a corpse.
+		{name: "live local pid", token: "mac-9012:37", host: "mac", alive: true},
+		// Another machine's PID means nothing here; it must never be probed.
+		{name: "remote host", token: "laptop-9012:37", host: "mac", alive: false},
+		// A token we cannot take apart tells us nothing either.
+		{name: "opaque owner", token: "someone:37", host: "mac", alive: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeLeaseStore{}
+			store.set("sess", tt.token)
+			k := newTestKeeper(store, "mac-9977", DefaultLeasePolicy)
+			k.selfHost = tt.host
+			probed := false
+			k.alive = func(int) bool {
+				probed = true
+				return tt.alive
+			}
+
+			for i := range DefaultLeasePolicy.StaleTicks {
+				if k.allow("%1") {
+					t.Fatalf("stole a live instance's lease on tick %d", i)
+				}
+			}
+			if tt.name == "remote host" && probed {
+				t.Fatal("probed a PID on another machine")
+			}
+			if store.current() != tt.token {
+				t.Fatalf("lease = %q, want it untouched at %q", store.current(), tt.token)
+			}
+		})
+	}
+}
+
+func TestLeaseKeeperReleaseHandsBackOwnership(t *testing.T) {
+	store := &fakeLeaseStore{}
+	k := newTestKeeper(store, "self", DefaultLeasePolicy)
+	other := newTestKeeper(store, "other", DefaultLeasePolicy)
+
+	if !k.allow("%1") {
+		t.Fatal("failed to take an unowned lease")
+	}
+	k.release()
+	if store.current() != "" {
+		t.Fatalf("lease = %q, want it released on exit", store.current())
+	}
+	// A successor finds the option unset instead of pointing at a dead process.
+	if !other.allow("%1") {
+		t.Fatal("released lease was not immediately claimable")
+	}
+}
+
+// A settled owner stops calling ResizeTmuxPane, so its lease is only kept alive
+// by the geometry loop ticking it anyway. Without that tick the owner goes
+// stale, the peer claims, and ownership ping-pongs on the staleness period.
+func TestLeaseKeeperSettledOwnerKeepsLeaseByTicking(t *testing.T) {
+	store := &fakeLeaseStore{}
+	owner := newTestKeeper(store, "owner", DefaultLeasePolicy)
+	peer := newTestKeeper(store, "peer", DefaultLeasePolicy)
+
+	if !owner.allow("%1") {
+		t.Fatal("failed to take an unowned lease")
+	}
+	for i := range 20 {
+		// The owner's pane already matches, so nothing is resized — this is the
+		// bare touch the geometry loop performs on every poll.
+		owner.allow("%1")
+		if peer.allow("%1") {
+			t.Fatalf("peer claimed a settled owner's lease on tick %d", i)
+		}
+	}
+	if leaseOwner(store.current()) != "owner" {
+		t.Fatalf("lease = %q, want it still held by the settled owner", store.current())
 	}
 }
 

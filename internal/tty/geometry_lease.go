@@ -1,11 +1,14 @@
 package tty
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -67,6 +70,11 @@ type LeaseObservation struct {
 	UnchangedTicks int
 	// TicksSinceWrite is how many ticks since this instance last wrote a token.
 	TicksSinceWrite int
+	// OwnerDefunct reports that Token was written by an instance the reader can
+	// prove is gone — in practice a previous sidecar on this same machine whose
+	// PID no longer exists. Only ever provable locally; a token from another
+	// machine is never defunct as far as this reader is concerned.
+	OwnerDefunct bool
 }
 
 // LeaseDecision is the verdict for one tick.
@@ -94,6 +102,11 @@ func DecideGeometryLease(obs LeaseObservation, policy LeasePolicy) LeaseDecision
 		// Refreshing on a cadence, not every tick, keeps tmux writes rare while
 		// still giving readers a token that visibly changes.
 		return LeaseDecision{Resize: true, Write: obs.TicksSinceWrite >= policy.RefreshTicks, Reason: "owner"}
+	case obs.OwnerDefunct:
+		// Our own previous incarnation: nothing clears the option on a crash, and
+		// waiting the staleness budget out would deny the very first resize after
+		// every restart — including the one-shot resize before an attach.
+		return LeaseDecision{Resize: true, Write: true, Reason: "defunct"}
 	case policy.StaleTicks > 0 && obs.UnchangedTicks >= policy.StaleTicks:
 		// Two instances can claim at once; the loser simply sees a foreign fresh
 		// token on its next tick and backs off, costing one extra resize.
@@ -109,6 +122,33 @@ func leaseOwner(token string) string {
 		return token[:i]
 	}
 	return token
+}
+
+// splitInstanceID takes an instance ID back apart into the host and PID
+// instanceID built it from. The PID never contains "-", so the last one splits
+// hostnames that do.
+func splitInstanceID(id string) (host string, pid int, ok bool) {
+	i := strings.LastIndex(id, "-")
+	if i <= 0 {
+		return "", 0, false
+	}
+	pid, err := strconv.Atoi(id[i+1:])
+	if err != nil || pid <= 0 {
+		return "", 0, false
+	}
+	return id[:i], pid, true
+}
+
+// processAlive reports whether a PID on this machine still exists. Signal 0
+// performs the permission and existence checks without delivering anything;
+// EPERM means the process is there but owned by somebody else.
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // leaseStore is the seam between arbitration and tmux, so the keeper is testable
@@ -172,6 +212,8 @@ type leaseKeeper struct {
 	interval time.Duration
 	now      func() time.Time
 	selfID   string
+	selfHost string
+	alive    func(pid int) bool
 
 	focused bool
 	counter uint64
@@ -180,12 +222,15 @@ type leaseKeeper struct {
 }
 
 func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration) *leaseKeeper {
+	host, pid := hostAndPID()
 	return &leaseKeeper{
 		store:    store,
 		policy:   policy,
 		interval: interval,
 		now:      time.Now,
-		selfID:   instanceID(),
+		selfID:   fmt.Sprintf("%s-%d", host, pid),
+		selfHost: host,
+		alive:    processAlive,
 		// Focused by default so a single instance behaves exactly as it did
 		// before the lease existed, including before any focus event arrives.
 		focused: true,
@@ -194,12 +239,27 @@ func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration
 	}
 }
 
-func instanceID() string {
+// hostAndPID names this instance. The PID is part of the identity so two
+// sidecars on one machine do not mistake each other for themselves; recognising
+// a dead PID (see defunct) is what keeps that from punishing a restart.
+func hostAndPID() (string, int) {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		host = "sidecar"
 	}
-	return fmt.Sprintf("%s-%d", host, os.Getpid())
+	return host, os.Getpid()
+}
+
+// defunct reports whether a foreign token was left behind by a sidecar on this
+// machine that has since exited. Nothing clears the option on a crash, and a
+// restart draws a new PID, so without this every restart would meet its own
+// leftover lease and decline to resize until the staleness budget elapsed.
+func (k *leaseKeeper) defunct(token string) bool {
+	host, pid, ok := splitInstanceID(leaseOwner(token))
+	if !ok || host != k.selfHost {
+		return false
+	}
+	return !k.alive(pid)
 }
 
 // allow reports whether this instance may assert geometry on target, claiming or
@@ -209,9 +269,11 @@ func instanceID() string {
 // server there is nobody to arbitrate with, and geometry must keep working.
 //
 // Ticking here rather than on a timer means the lease is refreshed by the work it
-// guards. A live pane attempts a resize on every poll, so an active owner refreshes
-// continuously; an owner with nothing to assert lets its lease lapse, which is the
-// right outcome — it is not currently driving geometry.
+// guards. What refreshes it is the geometry loop, not the resize: a caller whose
+// pane already matches skips ResizeTmuxPane and calls TouchGeometryLease instead,
+// so a settled owner keeps its lease. An instance that stops polling a pane
+// altogether lets that lease lapse, which is the right outcome — it is no longer
+// driving that geometry.
 func (k *leaseKeeper) allow(target string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -257,6 +319,8 @@ func (k *leaseKeeper) allow(target string) bool {
 		Focused:         k.focused,
 		UnchangedTicks:  state.unchangedTicks,
 		TicksSinceWrite: state.ticksSinceWrite,
+		// Only worth the liveness check when it could change the verdict.
+		OwnerDefunct: k.focused && token != "" && leaseOwner(token) != k.selfID && k.defunct(token),
 	}, k.policy)
 
 	if decision.Write {
@@ -282,20 +346,43 @@ func (k *leaseKeeper) setFocused(focused bool) {
 		return
 	}
 	k.focused = focused
-	var release []string
-	for session, state := range k.states {
-		if !focused && state.owned {
-			release = append(release, session)
-		}
-	}
 	// Tick history is meaningless across a focus change: it was accumulated
 	// while this instance was not a candidate.
-	k.states = make(map[string]*leaseState)
+	release := k.dropStatesLocked(!focused)
 	k.mu.Unlock()
 
 	for _, session := range release {
 		k.store.clear(session)
 	}
+}
+
+// release hands back every lease this instance holds. Called on a clean exit so
+// the next sidecar — here or on another machine — finds the option unset rather
+// than pointing at a process that no longer exists.
+func (k *leaseKeeper) release() {
+	k.mu.Lock()
+	sessions := k.dropStatesLocked(true)
+	k.mu.Unlock()
+
+	for _, session := range sessions {
+		k.store.clear(session)
+	}
+}
+
+// dropStatesLocked forgets all tick history and, when releasing, reports the
+// sessions whose leases this instance was holding.
+func (k *leaseKeeper) dropStatesLocked(releasing bool) []string {
+	var owned []string
+	if releasing {
+		for session, state := range k.states {
+			if state.owned {
+				owned = append(owned, session)
+			}
+		}
+	}
+	k.states = make(map[string]*leaseState)
+	k.targets = make(map[string]string)
+	return owned
 }
 
 // defaultLeaseKeeper is the arbitration ResizeTmuxPane consults. The tick
@@ -309,4 +396,22 @@ var defaultLeaseKeeper = newLeaseKeeper(tmuxLeaseStore{}, DefaultLeasePolicy, ti
 // plumbing of their own — observes the same bit.
 func SetAppFocused(focused bool) {
 	defaultLeaseKeeper.setFocused(focused)
+}
+
+// TouchGeometryLease advances the lease for target without asserting geometry.
+//
+// The lease is refreshed by the work it guards, and callers skip ResizeTmuxPane
+// once a pane already matches — so an owner that has settled on the right size
+// stops refreshing and eventually looks abandoned to everyone else. Every
+// geometry loop therefore ticks the lease on the passes where it decides not to
+// resize; polling the pane at all is what makes this instance the one driving
+// its geometry, not the resize call that occasionally follows.
+func TouchGeometryLease(target string) {
+	defaultLeaseKeeper.allow(target)
+}
+
+// ReleaseGeometryLeases gives up every lease this instance holds. Call it on the
+// way out of the process.
+func ReleaseGeometryLeases() {
+	defaultLeaseKeeper.release()
 }

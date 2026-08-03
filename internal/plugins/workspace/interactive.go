@@ -587,6 +587,9 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	return func() tea.Msg {
 		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
 			if actualWidth == previewWidth && actualHeight == previewHeight {
+				// Nothing to assert, but we are still the instance driving this
+				// pane's geometry — keep the lease from going stale under us.
+				tty.TouchGeometryLease(target)
 				return nil
 			}
 		}
@@ -617,14 +620,6 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
 	}
-	if paneWidth == previewWidth && paneHeight == previewHeight {
-		return nil
-	}
-
-	if !p.interactiveState.LastResizeAt.IsZero() && time.Since(p.interactiveState.LastResizeAt) < 500*time.Millisecond {
-		return nil
-	}
-	p.interactiveState.LastResizeAt = time.Now()
 	target := p.interactiveState.TargetPane
 	if target == "" {
 		target = p.interactiveState.TargetSession
@@ -632,6 +627,23 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	if target == "" {
 		return nil
 	}
+	// This poll runs whether or not a resize follows, and it is the poll — not the
+	// occasional resize — that marks this instance as the one driving the pane's
+	// geometry. Ticking the lease here keeps a settled owner from looking
+	// abandoned to another machine, which would hand ownership back and forth
+	// every staleness budget (td-ee222a).
+	touch := func() tea.Msg {
+		tty.TouchGeometryLease(target)
+		return nil
+	}
+	if paneWidth == previewWidth && paneHeight == previewHeight {
+		return touch
+	}
+
+	if !p.interactiveState.LastResizeAt.IsZero() && time.Since(p.interactiveState.LastResizeAt) < 500*time.Millisecond {
+		return touch
+	}
+	p.interactiveState.LastResizeAt = time.Now()
 	// The capture already returned the actual pane size. Trust that atomic
 	// observation instead of spawning two more display-message queries around
 	// the resize.
