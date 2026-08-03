@@ -268,14 +268,14 @@ func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd
 			HistorySize: capture.HistorySize,
 			CaptureBase: capture.CaptureBase,
 			HasHistory:  capture.Valid,
+			PaneWidth:   capture.PaneWidth,
+			PaneHeight:  capture.PaneHeight,
 		}
 		if cursor.Valid {
 			msg.HasCursor = true
 			msg.CursorRow = cursor.Row
 			msg.CursorCol = cursor.Col
 			msg.CursorVisible = cursor.Visible
-			msg.PaneHeight = cursor.PaneHeight
-			msg.PaneWidth = cursor.PaneWidth
 			msg.MouseReporting = cursor.MouseReporting
 		}
 		return msg

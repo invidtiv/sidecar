@@ -34,6 +34,13 @@ func (p *Plugin) Cursor() *tea.Cursor {
 	}
 	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
 	bufferBase, hasCursorHistory := cursorBufferBase(buffer, p.interactiveState)
+	// Same geometry the content render uses, or the cursor desyncs from it.
+	paneWidth, paneHeight := p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
+	if paneWidth <= 0 || paneHeight <= 0 {
+		if geometry := p.paneGeometryFor(termPanel); geometry.known() {
+			paneWidth, paneHeight = geometry.Width, geometry.Height
+		}
+	}
 	cursorX, cursorY, visible := terminalViewportCursorPosition(terminalViewportInput{
 		Buffer:            buffer,
 		Width:             width,
@@ -45,8 +52,8 @@ func (p *Plugin) Cursor() *tea.Cursor {
 		CursorRow:         p.interactiveState.CursorRow,
 		CursorCol:         p.interactiveState.CursorCol,
 		CursorVisible:     p.interactiveState.CursorVisible,
-		PaneHeight:        p.interactiveState.PaneHeight,
-		PaneWidth:         p.interactiveState.PaneWidth,
+		PaneHeight:        paneHeight,
+		PaneWidth:         paneWidth,
 		NativeCursor:      true,
 		AbsoluteBase:      absoluteBase,
 		TotalItems:        totalItems,

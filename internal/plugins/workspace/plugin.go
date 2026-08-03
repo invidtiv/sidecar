@@ -161,6 +161,7 @@ type Plugin struct {
 	selectionTermPanel            bool
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
+	paneGeometry                  map[string]paneGeometry
 	terminalSearch                terminalSearchState
 
 	// Kanban view state
@@ -485,6 +486,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
 	p.pollScheduler.Reset()
 	p.terminalHistory = make(map[string]terminalHistoryState)
+	p.paneGeometry = make(map[string]paneGeometry)
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)

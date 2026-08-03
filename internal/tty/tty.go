@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Config holds configuration options for a tty Model.
@@ -269,13 +270,52 @@ func (m *Model) View() string {
 		return ""
 	}
 
+	fit := m.paneFit()
 	lineCount := m.State.OutputBuf.LineCount()
-	start := lineCount - m.Height
-	if start < 0 || m.Height <= 0 {
+	start := lineCount - fit.Height
+	if start < 0 || fit.Height <= 0 {
 		start = 0
 	}
 	lines := m.State.OutputBuf.LinesRange(start, lineCount)
-	return strings.Join(lines, "\n")
+	if fit.Width <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	// Clip to the pane's real geometry: a wider pane would otherwise emit lines
+	// past the viewport and wrap over the surrounding layout (td-73fa86).
+	clipped := make([]string, len(lines))
+	for i, line := range lines {
+		if fit.ColOffset > 0 {
+			line = ansi.TruncateLeft(line, fit.ColOffset, "")
+		}
+		clipped[i] = ansi.Truncate(line, fit.Width, "")
+	}
+	return strings.Join(clipped, "\n")
+}
+
+// paneFit projects the pane's observed geometry onto the viewport the embedding
+// plugin gave this model. The pane can be any size — another sidecar instance
+// may be driving the same tmux session — so the requested size is only a
+// request (td-73fa86).
+func (m *Model) paneFit() PaneFit {
+	return FitPane(PaneFitInput{
+		ViewWidth:  m.Width,
+		ViewHeight: m.Height,
+		PaneWidth:  m.State.PaneWidth,
+		PaneHeight: m.State.PaneHeight,
+		CursorCol:  m.State.CursorCol,
+		HasCursor:  m.State.CursorVisible && m.State.CursorCol >= 0,
+	})
+}
+
+// SizeIndicator describes a pane that is larger than the viewport it is drawn
+// into, e.g. "200x50, showing 120x40". It returns "" when the whole pane is
+// visible, so callers can render it unconditionally.
+func (m *Model) SizeIndicator() string {
+	if !m.IsActive() {
+		return ""
+	}
+	fit := m.paneFit()
+	return PaneSizeIndicator(m.State.PaneWidth, m.State.PaneHeight, fit.Width, fit.Height)
 }
 
 // Cursor returns the native cursor position relative to View().
@@ -284,14 +324,20 @@ func (m *Model) Cursor() *tea.Cursor {
 		m.Width <= 0 || m.Height <= 0 || m.State.CursorRow < 0 || m.State.CursorCol < 0 {
 		return nil
 	}
-	row := m.State.CursorRow
-	if m.State.PaneHeight > 0 && m.State.PaneHeight != m.Height {
-		row -= m.State.PaneHeight - m.Height
-	}
-	if row < 0 || row >= m.Height {
+	fit := m.paneFit()
+	if fit.Width <= 0 || fit.Height <= 0 {
 		return nil
 	}
-	col := min(m.State.CursorCol, m.Width-1)
+	// View renders the buffer's last fit.Height lines, and the buffer's tail is
+	// the pane, so a pane row lands fit.Height-PaneHeight rows further down.
+	row := m.State.CursorRow
+	if m.State.PaneHeight > 0 {
+		row -= m.State.PaneHeight - fit.Height
+	}
+	if row < 0 || row >= fit.Height {
+		return nil
+	}
+	col := min(max(m.State.CursorCol-fit.ColOffset, 0), fit.Width-1)
 	cursor := tea.NewCursor(col, row)
 	cursor.Shape = tea.CursorBlock
 	cursor.Blink = true

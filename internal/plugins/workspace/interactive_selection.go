@@ -25,6 +25,9 @@ func (p *Plugin) interactiveColAtX(x, lineIdx int) (int, bool) {
 	if relX < 0 {
 		return 0, false
 	}
+	// A pane wider than the viewport is drawn scrolled, so screen column 0 is
+	// the pane's ColOffset (td-73fa86).
+	relX += p.terminalSelectionViewportLayout().Fit.ColOffset
 
 	buf := p.interactiveOutputBuffer()
 	if buf == nil {
@@ -270,9 +273,18 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 		Offset:      p.previewOffset,
 		Interactive: interactive,
 	}
+	// Same geometry the render path uses, or hit-testing drifts from the pixels
+	// (td-73fa86).
+	if geometry := p.paneGeometryFor(termPanel); geometry.known() {
+		input.PaneWidth, input.PaneHeight = geometry.Width, geometry.Height
+	}
 	if p.interactiveState != nil {
-		input.PaneHeight = p.interactiveState.PaneHeight
-		input.PaneWidth = p.interactiveState.PaneWidth
+		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
+			input.PaneHeight = p.interactiveState.PaneHeight
+			input.PaneWidth = p.interactiveState.PaneWidth
+		}
+		input.CursorCol = p.interactiveState.CursorCol
+		input.CursorVisible = p.interactiveState.CursorVisible
 	}
 	if termPanel {
 		if p.selection.Anchor.Valid() {

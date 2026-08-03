@@ -50,12 +50,10 @@ type captureCoordinator struct {
 }
 
 type capturedCursor struct {
-	Row        int
-	Col        int
-	PaneHeight int
-	PaneWidth  int
-	Visible    bool
-	Valid      bool
+	Row     int
+	Col     int
+	Visible bool
+	Valid   bool
 	// MouseReporting mirrors tmux's #{mouse_any_flag} for the captured pane.
 	// See tty.ControlSnapshot.MouseReporting for why it comes from tmux instead
 	// of the capture text.
@@ -63,9 +61,16 @@ type capturedCursor struct {
 	capturedPaneMetadata
 }
 
+// capturedPaneMetadata is the tmux state captured atomically with the pane's
+// text. PaneWidth/PaneHeight are the pane's real geometry, which need not match
+// the size sidecar last requested (td-73fa86); they are populated whenever tmux
+// answered, independently of Valid, which reports only that the history
+// metadata parsed.
 type capturedPaneMetadata struct {
 	HistorySize int
 	CaptureBase int
+	PaneWidth   int
+	PaneHeight  int
 	Valid       bool
 }
 
@@ -1051,8 +1056,8 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				CursorCol:      cursor.Col,
 				CursorVisible:  cursor.Visible,
 				HasCursor:      cursor.Valid,
-				PaneHeight:     cursor.PaneHeight,
-				PaneWidth:      cursor.PaneWidth,
+				PaneHeight:     capture.PaneHeight,
+				PaneWidth:      capture.PaneWidth,
 				HistorySize:    capture.HistorySize,
 				CaptureBase:    capture.CaptureBase,
 				HasHistory:     capture.Valid,
@@ -1070,8 +1075,8 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			CursorCol:      cursor.Col,
 			CursorVisible:  cursor.Visible,
 			HasCursor:      cursor.Valid,
-			PaneHeight:     cursor.PaneHeight,
-			PaneWidth:      cursor.PaneWidth,
+			PaneHeight:     capture.PaneHeight,
+			PaneWidth:      capture.PaneWidth,
 			HistorySize:    capture.HistorySize,
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
@@ -1150,7 +1155,7 @@ func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, er
 // capturePaneDirectWithJoinMetadata captures the live tail and the tmux
 // history size in one argv-only command chain.
 func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (string, capturedPaneMetadata, error) {
-	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size}", ";"}
+	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size},#{pane_width},#{pane_height}", ";"}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
@@ -1165,15 +1170,25 @@ func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (st
 	if !found {
 		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: missing history metadata")
 	}
-	historySize, err := strconv.Atoi(strings.TrimSpace(header))
+	fields := strings.Split(strings.TrimSpace(header), ",")
+	historySize, err := strconv.Atoi(strings.TrimSpace(fields[0]))
 	if err != nil || historySize < 0 {
 		return "", capturedPaneMetadata{}, fmt.Errorf("capture-pane: invalid history size %q", header)
 	}
-	return paneOutput, capturedPaneMetadata{
+	metadata := capturedPaneMetadata{
 		HistorySize: historySize,
 		CaptureBase: max(historySize-captureLineCount, 0),
 		Valid:       true,
-	}, nil
+	}
+	if len(fields) >= 3 {
+		width, errWidth := strconv.Atoi(strings.TrimSpace(fields[1]))
+		height, errHeight := strconv.Atoi(strings.TrimSpace(fields[2]))
+		if errWidth == nil && errHeight == nil {
+			metadata.PaneWidth = width
+			metadata.PaneHeight = height
+		}
+	}
+	return paneOutput, metadata, nil
 }
 
 func capturePaneArgs(sessionName string, joinWrapped bool) []string {
@@ -1233,20 +1248,18 @@ func parseCapturedCursor(header string) capturedCursor {
 		return capturedCursor{}
 	}
 	cursor := capturedCursor{
-		Row:        row,
-		Col:        col,
-		Visible:    parts[2] != "0",
-		PaneHeight: paneHeight,
-		PaneWidth:  paneWidth,
-		Valid:      true,
+		Row:     row,
+		Col:     col,
+		Visible: parts[2] != "0",
+		Valid:   true,
 	}
+	cursor.PaneHeight = paneHeight
+	cursor.PaneWidth = paneWidth
 	if len(parts) >= 6 {
 		if historySize, err := strconv.Atoi(parts[5]); err == nil && historySize >= 0 {
-			cursor.capturedPaneMetadata = capturedPaneMetadata{
-				HistorySize: historySize,
-				CaptureBase: max(historySize-captureLineCount, 0),
-				Valid:       true,
-			}
+			cursor.HistorySize = historySize
+			cursor.CaptureBase = max(historySize-captureLineCount, 0)
+			cursor.capturedPaneMetadata.Valid = true
 		}
 	}
 	if len(parts) >= 7 {

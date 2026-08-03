@@ -1386,34 +1386,42 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
-	paneWidth, paneHeight := p.calculatePreviewDimensions()
+	viewWidth, viewHeight := p.calculatePreviewDimensions()
 	if targetingTermPanel {
-		paneWidth, paneHeight = p.calculateTermPanelDimensions()
+		viewWidth, viewHeight = p.calculateTermPanelDimensions()
 	}
+	// The pane's real geometry decides what is on screen where; a wider pane is
+	// drawn horizontally scrolled, so a click lands ColOffset columns in
+	// (td-73fa86).
+	paneWidth, paneHeight := viewWidth, viewHeight
+	if geometry := p.paneGeometryFor(targetingTermPanel); geometry.known() {
+		paneWidth, paneHeight = geometry.Width, geometry.Height
+	}
+	cursorCol, cursorVisible := 0, false
 	if p.interactiveState != nil {
-		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneWidth < paneWidth {
-			paneWidth = p.interactiveState.PaneWidth
+		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
+			paneWidth, paneHeight = p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
 		}
-		if p.interactiveState.PaneHeight > 0 && p.interactiveState.PaneHeight < paneHeight {
-			paneHeight = p.interactiveState.PaneHeight
-		}
+		cursorCol, cursorVisible = p.interactiveState.CursorCol, p.interactiveState.CursorVisible
 	}
+	fit := tty.FitPane(tty.PaneFitInput{
+		ViewWidth:  viewWidth,
+		ViewHeight: viewHeight,
+		PaneWidth:  paneWidth,
+		PaneHeight: paneHeight,
+		CursorCol:  cursorCol,
+		HasCursor:  cursorVisible,
+	})
 
-	if paneWidth <= 0 || paneHeight <= 0 {
+	if fit.Width <= 0 || fit.Height <= 0 {
 		return 0, 0, false
 	}
-	if relX >= paneWidth || relY >= paneHeight {
+	if relX >= fit.Width || relY >= fit.Height {
 		return 0, 0, false
 	}
 
-	col = relX + 1
-	row = relY + 1
-	if col > paneWidth {
-		col = paneWidth
-	}
-	if row > paneHeight {
-		row = paneHeight
-	}
+	col = min(relX+fit.ColOffset+1, paneWidth)
+	row = min(relY+1, paneHeight)
 
 	return col, row, true
 }

@@ -313,6 +313,14 @@ func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 	sb.WriteString(styles.Title.Render(header))
 	sb.WriteString("  ")
 	sb.WriteString(styles.Muted.Render("(Ctrl+\\ or ESC ESC to exit)"))
+	// The tmux pane can be larger than this viewport when another sidecar
+	// instance drives the same session; say what is hidden (td-73fa86).
+	if p.inlineEditor != nil {
+		if indicator := p.inlineEditor.SizeIndicator(); indicator != "" {
+			sb.WriteString("  ")
+			sb.WriteString(styles.Muted.Render(indicator))
+		}
+	}
 	sb.WriteString("\n")
 
 	// Calculate content height (account for tab line and header)

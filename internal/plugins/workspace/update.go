@@ -537,6 +537,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
+			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
 			wt.Status = msg.Status
@@ -622,6 +623,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
+			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
@@ -1044,6 +1046,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				changed = shell.Agent.OutputBuf.Update(msg.Output)
 			}
+			p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
 			if changed {
 				shell.Agent.LastOutput = time.Now()
 			}
@@ -1628,6 +1631,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				contentChanged = p.termPanelOutput.Update(msg.Output)
 			}
+			p.recordPaneGeometry("panel", msg.SessionName, msg.PaneWidth, msg.PaneHeight)
 			p.ctx.Logger.Debug("termPanel: CaptureMsg OK", "session", msg.SessionName, "outputLen", len(msg.Output), "lines", p.termPanelOutput.LineCount(), "changed", contentChanged)
 		} else if msg.Err != nil {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg ERROR", "err", msg.Err)
