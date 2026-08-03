@@ -155,6 +155,10 @@ func (m *ControlManager) Subscribe(request ControlRequest) (*ControlSubscription
 }
 
 func (m *ControlManager) SetAppFocused(focused bool) {
+	// Geometry arbitration needs the same bit, and this is the one path the app
+	// already forwards focus down (td-ee222a).
+	SetAppFocused(focused)
+
 	m.mu.Lock()
 	if m.appFocused == focused || m.stopped {
 		m.mu.Unlock()

@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -545,6 +546,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
+	// Geometry arbitration is process-wide and must see focus even if no plugin
+	// with a control manager is loaded (td-ee222a).
+	tty.SetAppFocused(m.applicationFocused)
+
 	var cmds []tea.Cmd
 	for _, p := range m.registry.Plugins() {
 		_, cmd := p.Update(msg)

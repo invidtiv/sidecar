@@ -192,11 +192,18 @@ func TestMaybeResizeInteractivePaneUsesCapturedSizeWithoutQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(logged), "display-message") {
+	if strings.Contains(string(logged), "pane_width") {
 		t.Fatalf("resize re-queried pane size: %s", logged)
 	}
-	if lines := strings.Count(strings.TrimSpace(string(logged)), "\n") + 1; lines != 1 {
-		t.Fatalf("resize spawned %d tmux commands, want 1: %s", lines, logged)
+	// The ownership lease reads @sidecar-owner once per local tick (td-ee222a);
+	// that read resolves the session in the same invocation, so the resize still
+	// costs one tmux process beyond the resize itself and none of it re-derives
+	// geometry the capture already reported.
+	if lines := strings.Count(strings.TrimSpace(string(logged)), "\n") + 1; lines != 2 {
+		t.Fatalf("resize spawned %d tmux commands, want 2: %s", lines, logged)
+	}
+	if count := strings.Count(string(logged), "resize-"); count != 1 {
+		t.Fatalf("resize spawned %d resize commands, want 1: %s", count, logged)
 	}
 }
 
