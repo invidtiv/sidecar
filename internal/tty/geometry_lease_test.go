@@ -611,6 +611,187 @@ func TestLeaseKeeperExplicitClaimBeatsAFreshForeignLease(t *testing.T) {
 	}
 }
 
+// A tick is a poll, and polls run as slowly as 20s (pollIntervalDone,
+// pollIntervalUnfocused). A tick-counted refresh cadence meant the owner rewrote
+// only every second poll — 40s — while any peer polling at the same rate called
+// the lease abandoned on the wall-clock floor, with no idle guard to stop it. Two
+// machines nobody was using then traded geometry back and forth indefinitely.
+func TestLeaseKeeperDoesNotFlapAtSlowPollIntervals(t *testing.T) {
+	const poll = 20 * time.Second
+	store := &fakeLeaseStore{}
+	now := time.Now()
+	a := newClockedKeeper(store, "a", DefaultLeasePolicy, &now)
+	b := newClockedKeeper(store, "b", DefaultLeasePolicy, &now)
+	// Nobody has touched either machine for an hour, so no idle preemption is in
+	// play: whatever happens here is the staleness rule alone.
+	a.lastInput = now.Add(-time.Hour)
+	b.lastInput = now.Add(-time.Hour)
+
+	if !a.allow("%1") {
+		t.Fatal("failed to take an unowned lease")
+	}
+	owner := leaseOwner(store.current())
+	changes := 0
+	for range 40 {
+		now = now.Add(poll)
+		a.allow("%1")
+		b.allow("%1")
+		if got := leaseOwner(store.current()); got != owner {
+			changes++
+			owner = got
+		}
+	}
+	if changes != 0 {
+		t.Fatalf("ownership changed %d times over 40 polls at %s between two unattended machines", changes, poll)
+	}
+}
+
+// manualTicker is a hold's refresh cadence under test control.
+type manualTicker struct {
+	c       chan time.Time
+	stopped bool
+	mu      sync.Mutex
+}
+
+func (m *manualTicker) install(k *leaseKeeper) {
+	m.c = make(chan time.Time)
+	k.newTicker = func(time.Duration) (<-chan time.Time, func()) {
+		return m.c, func() {
+			m.mu.Lock()
+			m.stopped = true
+			m.mu.Unlock()
+		}
+	}
+}
+
+// waitForSets blocks until the store has taken want writes, so a test can order
+// itself against the hold's goroutine without sleeping for a fixed time.
+func waitForSets(t *testing.T, store *fakeLeaseStore, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		store.mu.Lock()
+		got := store.sets
+		store.mu.Unlock()
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lease refresher stalled at %d writes, want %d", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// tea.ExecProcess blocks the event loop for the whole attach, so the attaching
+// instance takes no ticks and refreshes nothing. A claim alone bought only the
+// staleness budget, after which a peer merely polling the same session — even an
+// unattended one, since the stale rule has no idle guard — resized the pane the
+// user was attached to, with nothing on this side able to answer until detach.
+func TestLeaseKeeperHeldLeaseSurvivesASuspendedEventLoop(t *testing.T) {
+	store := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	attached := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	attached.selfID = "attached"
+	attached.now = readNow
+	attached.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(attached)
+
+	peer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	peer.selfID = "peer"
+	peer.now = readNow
+	// The peer is unattended: only the staleness rule could hand it the lease.
+	peer.lastInput = readNow().Add(-time.Hour)
+
+	attached.hold("%1")
+	if leaseOwner(store.current()) != "attached" {
+		t.Fatalf("lease = %q, want it claimed by the attaching instance", store.current())
+	}
+	writes := 1
+
+	// The attach runs for minutes. The attaching instance never calls allow()
+	// again — its event loop is blocked — so only the background refresher stands
+	// between the user and a peer resizing the pane under them.
+	for i := range 40 {
+		advance(10 * time.Second)
+		ticker.c <- readNow()
+		writes++
+		waitForSets(t, store, writes)
+		if peer.allow("%1") {
+			t.Fatalf("an unattended peer took geometry from an attached machine after %s (lease %q)",
+				time.Duration(i+1)*10*time.Second, store.current())
+		}
+	}
+
+	// Detaching hands the lease back to the geometry loop and stops the goroutine.
+	attached.releaseHold("%1")
+	ticker.mu.Lock()
+	stopped := ticker.stopped
+	ticker.mu.Unlock()
+	if !stopped {
+		t.Fatal("releasing the hold left its ticker running")
+	}
+	if leaseOwner(store.current()) != "attached" {
+		t.Fatalf("lease = %q, want it still held after detach", store.current())
+	}
+}
+
+// A hold dies with the process that started it, so a crash mid-attach must not
+// strand the lease: the token simply stops changing and goes stale like any other.
+func TestLeaseKeeperHeldLeaseGoesStaleWhenTheHolderDies(t *testing.T) {
+	store := &fakeLeaseStore{}
+	now := time.Now()
+	attached := newClockedKeeper(store, "attached", DefaultLeasePolicy, &now)
+	ticker := &manualTicker{}
+	ticker.install(attached)
+	peer := newClockedKeeper(store, "peer", DefaultLeasePolicy, &now)
+	peer.lastInput = now.Add(-time.Hour)
+
+	attached.hold("%1")
+	if peer.allow("%1") {
+		t.Fatal("peer claimed a freshly held lease")
+	}
+	// The holder is gone: nothing refreshes the token from here on.
+	attached.release()
+	now = now.Add(2 * DefaultLeasePolicy.StaleAfter)
+	if !peer.allow("%1") {
+		t.Fatalf("a lease left behind by a dead holder was still declined: %q", store.current())
+	}
+}
+
+// claim() runs from asynchronous commands — a resumed shell, a pending worktree —
+// which can land after the user has already moved to the other machine. An
+// unfocused instance asserts nothing, whatever it was asked to do.
+func TestLeaseKeeperUnfocusedInstanceDoesNotClaim(t *testing.T) {
+	store := &fakeLeaseStore{}
+	other := newTestKeeper(store, "other", DefaultLeasePolicy)
+	k := newTestKeeper(store, "self", DefaultLeasePolicy)
+
+	other.allow("%1")
+	k.setFocused(false)
+	k.claim("%1")
+
+	if leaseOwner(store.current()) != "other" {
+		t.Fatalf("lease = %q, want an unfocused claim to leave it alone", store.current())
+	}
+	if k.allow("%1") {
+		t.Fatal("an unfocused instance asserted geometry after claiming")
+	}
+}
+
 func TestParseLeaseToken(t *testing.T) {
 	tests := []struct {
 		token     string

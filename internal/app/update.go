@@ -151,6 +151,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return (&m).handleKeyMsg(msg)
 
 	case tea.PasteMsg:
+		// Pasting is user input like any other; without this a session driven
+		// entirely by pastes would look unattended to arbitration (td-ee222a).
+		tty.NoteUserInput()
 		// v2: bracketed paste arrives as a dedicated message (not a KeyMsg).
 		// Route it into the active text-input modal so paste-into-filter works
 		// like v1; otherwise forward to plugins (notes editor handles it natively).

@@ -47,9 +47,18 @@ import (
 // panel, whose only ticks are resize events) would otherwise need one toggle per
 // tick of the budget before it could reclaim a dead machine's lease.
 //
+// A tick is a poll, not a timer, and poll intervals here range from 200ms to 20s
+// (internal/plugins/workspace/agent.go). Both halves of the budget are therefore
+// bounded in elapsed time as well as in ticks: the owner refreshes at latest
+// RefreshAfter, so its refresh period never scales past one poll interval, and
+// the staleness floor sits well above the slowest poll so a correctly refreshing
+// owner can never look abandoned to a peer polling just as slowly.
+//
 // An unambiguous local action — attaching, entering interactive mode — claims
 // outright. Pressing a key on this machine is better evidence of where the user
-// is than any lease.
+// is than any lease. Actions that suspend the TUI for their whole duration
+// (attaching) hold the lease from a goroutine instead, since no tick accrues
+// while the event loop is blocked.
 
 const leaseOptionName = "@sidecar-owner"
 
@@ -61,11 +70,19 @@ type LeasePolicy struct {
 	// unchanged before the lease is considered abandoned and claimable.
 	StaleTicks int
 	// StaleAfter is the wall-clock floor on the same judgement, for sessions
-	// whose ticks are sporadic. Zero disables it.
+	// whose ticks are sporadic. Zero disables it. It must stay comfortably above
+	// RefreshAfter *and* above the slowest poll interval any caller ticks on,
+	// since an owner can only refresh on a tick of its own.
 	StaleAfter time.Duration
 	// RefreshTicks is how many ticks the owner lets pass before writing a new
 	// token, so readers elsewhere keep seeing it change.
 	RefreshTicks int
+	// RefreshAfter bounds the same cadence in elapsed time. A tick is a poll,
+	// and polls run as slowly as 20s, so a tick count alone lets the owner's
+	// refresh period stretch to a multiple of an arbitrary poll interval — past
+	// the point where peers polling just as slowly call it abandoned. Zero
+	// disables the elapsed-time arm.
+	RefreshAfter time.Duration
 	// PreemptIdle is how much longer than us the current owner must have gone
 	// without user input before we take the lease off it. It doubles as the
 	// window in which our own last input counts as "the user is here". Zero
@@ -73,13 +90,15 @@ type LeasePolicy struct {
 	PreemptIdle time.Duration
 }
 
-// DefaultLeasePolicy leaves an owner roughly two refreshes of slack before
-// anyone else treats its lease as abandoned, and hands geometry to whichever
-// machine the user is actually typing on within a few seconds.
+// DefaultLeasePolicy leaves an owner at least three refreshes of slack at the
+// slowest poll interval in the app (20s) before anyone else treats its lease as
+// abandoned, and hands geometry to whichever machine the user is actually typing
+// on within a few seconds.
 var DefaultLeasePolicy = LeasePolicy{
 	StaleTicks:   5,
-	StaleAfter:   10 * time.Second,
+	StaleAfter:   60 * time.Second,
 	RefreshTicks: 2,
+	RefreshAfter: 5 * time.Second,
 	PreemptIdle:  5 * time.Second,
 }
 
@@ -101,6 +120,9 @@ type LeaseObservation struct {
 	UnchangedFor time.Duration
 	// TicksSinceWrite is how many ticks since this instance last wrote a token.
 	TicksSinceWrite int
+	// SinceWrite is how long since this instance last wrote a token, measured on
+	// its own clock. Zero when it never has.
+	SinceWrite time.Duration
 	// SelfIdle is how long since the user last gave this instance input.
 	SelfIdle time.Duration
 	// OwnerIdle is what the current token says its writer's idle time was when
@@ -138,7 +160,7 @@ func DecideGeometryLease(obs LeaseObservation, policy LeasePolicy) LeaseDecision
 	case leaseOwner(obs.Token) == obs.SelfID:
 		// Refreshing on a cadence, not every tick, keeps tmux writes rare while
 		// still giving readers a token that visibly changes.
-		return LeaseDecision{Resize: true, Write: obs.TicksSinceWrite >= policy.RefreshTicks, Reason: "owner"}
+		return LeaseDecision{Resize: true, Write: ownerRefreshes(obs, policy), Reason: "owner"}
 	case obs.OwnerDefunct:
 		// Our own previous incarnation: nothing clears the option on a crash, and
 		// waiting the staleness budget out would deny the very first resize after
@@ -158,9 +180,26 @@ func DecideGeometryLease(obs LeaseObservation, policy LeasePolicy) LeaseDecision
 	}
 }
 
+// ownerRefreshes reports whether the holder of a lease should stamp a new token.
+// The elapsed arm is what keeps the refresh period from scaling with the poll
+// interval: on a 20s poll a two-tick cadence would only rewrite every 40s, which
+// any peer polling at the same rate would read as an abandoned lease.
+func ownerRefreshes(obs LeaseObservation, policy LeasePolicy) bool {
+	if policy.RefreshTicks > 0 && obs.TicksSinceWrite >= policy.RefreshTicks {
+		return true
+	}
+	return policy.RefreshAfter > 0 && obs.SinceWrite >= policy.RefreshAfter
+}
+
 // idlePreempts reports whether recent input here outranks the current owner's.
 // Both halves matter: an instance nobody is using must never take a lease off
 // anybody, however idle that owner looks.
+//
+// A live peer on a sidecar predating the idle field writes two-field tokens and
+// so offers no evidence to compare: it can never be preempted, and while it
+// keeps refreshing it is never stale either, so ownership stays with it until
+// this machine does something explicit (attach, interactive mode). That is a
+// mixed-version condition only, and the explicit-claim path is the escape.
 func idlePreempts(obs LeaseObservation, policy LeasePolicy) bool {
 	if policy.PreemptIdle <= 0 || !obs.OwnerIdleKnown {
 		return false
@@ -289,9 +328,17 @@ type leaseState struct {
 	unchangedTicks  int
 	unchangedSince  time.Time
 	ticksSinceWrite int
+	lastWrite       time.Time
 	lastTick        time.Time
 	lastResize      bool
 	owned           bool
+}
+
+// leaseHold is one target's background refresher: the session it resolved to and
+// the func that stops it.
+type leaseHold struct {
+	session string
+	stop    func()
 }
 
 // leaseKeeper holds the per-session tick counters that DecideGeometryLease is
@@ -307,24 +354,35 @@ type leaseKeeper struct {
 	selfHost string
 	alive    func(pid int) bool
 
+	// holdEvery is how often a held lease is refreshed from its goroutine, and
+	// newTicker is the seam tests drive that goroutine through.
+	holdEvery time.Duration
+	newTicker func(time.Duration) (<-chan time.Time, func())
+
 	focused   bool
 	lastInput time.Time
 	counter   uint64
 	states    map[string]*leaseState
 	targets   map[string]string
+	// holds maps a target to the goroutine refreshing its lease across a TUI
+	// suspension, and doubles as the flag that stamps its tokens as attended.
+	holds map[string]*leaseHold
 }
 
 func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration) *leaseKeeper {
 	host, pid := hostAndPID()
 	now := time.Now()
 	return &leaseKeeper{
-		store:    store,
-		policy:   policy,
-		interval: interval,
-		now:      time.Now,
-		selfID:   fmt.Sprintf("%s-%d", host, pid),
-		selfHost: host,
-		alive:    processAlive,
+		store:     store,
+		policy:    policy,
+		interval:  interval,
+		now:       time.Now,
+		selfID:    fmt.Sprintf("%s-%d", host, pid),
+		selfHost:  host,
+		alive:     processAlive,
+		holdEvery: time.Second,
+		newTicker: realTicker,
+		holds:     make(map[string]*leaseHold),
 		// Focused by default so a single instance behaves exactly as it did
 		// before the lease existed, including before any focus event arrives.
 		focused: true,
@@ -335,6 +393,12 @@ func newLeaseKeeper(store leaseStore, policy LeasePolicy, interval time.Duration
 		states:    make(map[string]*leaseState),
 		targets:   make(map[string]string),
 	}
+}
+
+// realTicker is the production ticker behind held leases.
+func realTicker(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
 }
 
 // noteInput records that the user just gave this instance keyboard or mouse
@@ -359,9 +423,31 @@ func (k *leaseKeeper) idleLocked(now time.Time) time.Duration {
 
 // tokenLocked mints this instance's next token, stamping the idle time readers
 // on other machines arbitrate against.
-func (k *leaseKeeper) tokenLocked(now time.Time) string {
+//
+// A held session stamps zero: the user is attached to it here, so this machine
+// is where they are, even though sidecar itself sees no input for the duration.
+// That does shut idle preemption out for as long as the attach lasts, but only
+// for the passive preview path — an explicit action on the other machine still
+// claims — and the stamp cannot outlive the process refreshing it.
+func (k *leaseKeeper) tokenLocked(session string, now time.Time) string {
 	k.counter++
-	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(k.idleLocked(now).Seconds()))
+	idle := k.idleLocked(now)
+	if k.heldLocked(session) {
+		idle = 0
+	}
+	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(idle.Seconds()))
+}
+
+// heldLocked reports whether any target in session is being held across a TUI
+// suspension. The map is one entry per attach, so a scan is cheaper than a
+// second index.
+func (k *leaseKeeper) heldLocked(session string) bool {
+	for _, hold := range k.holds {
+		if hold.session == session {
+			return true
+		}
+	}
+	return false
 }
 
 // hostAndPID names this instance. The PID is part of the identity so two
@@ -448,6 +534,7 @@ func (k *leaseKeeper) allow(target string) bool {
 		UnchangedTicks:  state.unchangedTicks,
 		UnchangedFor:    now.Sub(state.unchangedSince),
 		TicksSinceWrite: state.ticksSinceWrite,
+		SinceWrite:      sinceWrite(state.lastWrite, now),
 		SelfIdle:        k.idleLocked(now),
 		OwnerIdle:       parsed.idle,
 		OwnerIdleKnown:  foreign && parsed.idleKnown,
@@ -463,14 +550,28 @@ func (k *leaseKeeper) allow(target string) bool {
 	return decision.Resize
 }
 
+// sinceWrite is how long ago this instance last stamped a token, zero when it
+// never has — a case where the elapsed refresh arm has nothing to say anyway,
+// since a lease we have never written is not ours.
+func sinceWrite(lastWrite, now time.Time) time.Duration {
+	if lastWrite.IsZero() {
+		return 0
+	}
+	if d := now.Sub(lastWrite); d > 0 {
+		return d
+	}
+	return 0
+}
+
 // writeLocked stamps a fresh token and resets the history it invalidates.
 func (k *leaseKeeper) writeLocked(session string, state *leaseState, now time.Time) {
-	fresh := k.tokenLocked(now)
+	fresh := k.tokenLocked(session, now)
 	k.store.set(session, fresh)
 	state.token = fresh
 	state.unchangedTicks = 0
 	state.unchangedSince = now
 	state.ticksSinceWrite = 0
+	state.lastWrite = now
 }
 
 // claim takes the lease for target outright, whatever anyone else holds.
@@ -478,17 +579,27 @@ func (k *leaseKeeper) writeLocked(session string, state *leaseState, now time.Ti
 // Arbitration is evidence about where the user is, and an explicit local action
 // — attaching, entering interactive mode — is the strongest evidence there is.
 // Without this, a machine facing a fresh foreign lease would attach at the other
-// machine's preview geometry and stay letterboxed for the whole session: while
-// attached, sidecar's TUI is suspended, so no tick accrues and nothing retries.
+// machine's preview geometry and stay letterboxed. A claim only makes the next
+// resize land, though; keeping it is hold's job.
+//
+// The claim is still gated on focus: these callers are asynchronous commands, so
+// one can land after the user has already moved to the other machine, and an
+// unfocused instance asserts nothing whatever it was asked to do.
 func (k *leaseKeeper) claim(target string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.claimLocked(target)
+}
 
+func (k *leaseKeeper) claimLocked(target string) (string, bool) {
+	if !k.focused {
+		return "", false
+	}
 	now := k.now()
 	k.lastInput = now
 	session, _, ok := k.store.read(target)
 	if !ok {
-		return
+		return "", false
 	}
 	k.targets[target] = session
 	state := k.states[session]
@@ -500,6 +611,101 @@ func (k *leaseKeeper) claim(target string) {
 	state.lastTick = now
 	state.owned = true
 	state.lastResize = true
+	return session, true
+}
+
+// hold claims target and then keeps its lease refreshed from a goroutine until
+// releaseHold.
+//
+// Attaching runs through tea.ExecProcess, which blocks the event loop for the
+// whole attach: no Update, no poll, no tick. A claim alone would only buy the
+// staleness budget, after which a peer merely polling the same session — even an
+// unattended one, since the stale rule has no idle guard — would resize the pane
+// the user is sitting in, with nothing on this side able to answer until detach.
+// The refresher runs outside that loop, so the lease keeps changing.
+//
+// It cannot strand the lease: the goroutine lives and dies with this process, so
+// a crash mid-attach stops the token changing and peers reclaim it normally.
+func (k *leaseKeeper) hold(target string) {
+	k.mu.Lock()
+	session, ok := k.claimLocked(target)
+	if !ok {
+		k.mu.Unlock()
+		return
+	}
+	if k.holds[target] != nil {
+		k.mu.Unlock()
+		return
+	}
+	ticks, stopTicker := k.newTicker(k.holdEvery)
+	done := make(chan struct{})
+	k.holds[target] = &leaseHold{
+		session: session,
+		stop: func() {
+			stopTicker()
+			close(done)
+		},
+	}
+	k.mu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticks:
+				k.refreshHold(target)
+			}
+		}
+	}()
+}
+
+// refreshHold stamps a new token for a held target. It rebuilds the tick state if
+// something dropped it — a focus change during the attach — because while a hold
+// is live this instance is the one driving that geometry by definition.
+func (k *leaseKeeper) refreshHold(target string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	hold := k.holds[target]
+	if hold == nil {
+		return
+	}
+	state := k.states[hold.session]
+	if state == nil {
+		state = &leaseState{}
+		k.states[hold.session] = state
+	}
+	now := k.now()
+	k.targets[target] = hold.session
+	k.writeLocked(hold.session, state, now)
+	state.lastTick = now
+	state.owned = true
+	state.lastResize = true
+}
+
+// releaseHold ends the background refresh for target. The lease itself stays put
+// — the instance that just detached is still the one the user is at — and goes
+// back to being refreshed by the geometry loop's ticks.
+func (k *leaseKeeper) releaseHold(target string) {
+	k.mu.Lock()
+	hold := k.holds[target]
+	delete(k.holds, target)
+	k.mu.Unlock()
+
+	if hold != nil {
+		hold.stop()
+	}
+}
+
+// dropHoldsLocked stops every background refresher, for a process on its way out.
+func (k *leaseKeeper) dropHoldsLocked() []func() {
+	stops := make([]func(), 0, len(k.holds))
+	for target, hold := range k.holds {
+		stops = append(stops, hold.stop)
+		delete(k.holds, target)
+	}
+	return stops
 }
 
 // setFocused records application focus. Losing focus releases every lease this
@@ -533,9 +739,13 @@ func (k *leaseKeeper) setFocused(focused bool) {
 // than pointing at a process that no longer exists.
 func (k *leaseKeeper) release() {
 	k.mu.Lock()
+	stops := k.dropHoldsLocked()
 	sessions := k.dropStatesLocked(true)
 	k.mu.Unlock()
 
+	for _, stop := range stops {
+		stop()
+	}
 	for _, session := range sessions {
 		k.store.clear(session)
 	}
@@ -587,6 +797,28 @@ func ClaimGeometryLease(target string) {
 		return
 	}
 	defaultLeaseKeeper.claim(target)
+}
+
+// HoldGeometryLease claims target and keeps its lease refreshed from outside the
+// event loop, for actions that suspend the TUI for their whole duration —
+// attaching to a session. Pair every call with ReleaseGeometryHold on the way
+// back; a crash in between is safe, since the refresher dies with the process and
+// the lease then goes stale like any other.
+func HoldGeometryLease(target string) {
+	if target == "" {
+		return
+	}
+	defaultLeaseKeeper.hold(target)
+}
+
+// ReleaseGeometryHold ends the background refresh started by HoldGeometryLease.
+// The lease stays with this instance; it just goes back to being refreshed by the
+// geometry loop.
+func ReleaseGeometryHold(target string) {
+	if target == "" {
+		return
+	}
+	defaultLeaseKeeper.releaseHold(target)
 }
 
 // TouchGeometryLease advances the lease for target without asserting geometry.

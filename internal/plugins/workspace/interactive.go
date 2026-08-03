@@ -685,10 +685,11 @@ func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
 			return nil
 		}
 		// Attaching is proof the user is at this machine, so it outranks another
-		// instance's geometry lease. Nothing retries this resize: the TUI is
-		// suspended for the whole attach, so a declined one would leave the
-		// session drawn at the other machine's preview size (td-ee222a).
-		tty.ClaimGeometryLease(target)
+		// instance's geometry lease. The hold, not the claim, is what makes it
+		// stick: the TUI is suspended for the whole attach, so nothing here ticks
+		// the lease and a peer would otherwise reclaim the session the user is
+		// sitting in a few seconds in (td-ee222a). attachWithResize releases it.
+		tty.HoldGeometryLease(target)
 		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}
@@ -700,6 +701,9 @@ func (p *Plugin) attachWithResize(target, sessionName, displayName string, onCom
 	c := exec.Command("tmux", "attach-session", "-t", sessionName)
 	termState, _ := term.GetState(int(os.Stdout.Fd()))
 	wrappedOnComplete := func(err error) tea.Msg {
+		// The event loop is running again, so the geometry loop takes the lease
+		// back over from the background refresher resizeForAttachCmd started.
+		tty.ReleaseGeometryHold(target)
 		if termState != nil {
 			_ = term.Restore(int(os.Stdout.Fd()), termState)
 		}
