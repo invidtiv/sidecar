@@ -128,8 +128,11 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 						p.lastDragForwardTime = time.Time{}
 						return p, p.forwardMousePressToInlineEditor(col, row)
 					}
-					cmd := p.inlineEditor.Update(msg)
-					return p, cmd
+					// The click landed on letterbox padding, outside the real
+					// pane. Drop it as hover and release do: forwarding to the
+					// tty model would send absolute screen coordinates, which
+					// the pane never had.
+					return p, nil
 				}
 			}
 

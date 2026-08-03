@@ -207,6 +207,56 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 	}
 }
 
+// The editor draws a pane larger than this viewport clipped and scrolled, so a
+// forwarded click has to be mapped through the same fit or it lands on the
+// wrong character (td-73fa86).
+func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
+	p := &Plugin{width: 100, height: 24, listWidth: 30}
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-note", "")
+	// Another instance resized the shared session: the pane is wider and taller
+	// than this viewport, with the cursor near its bottom-right.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width + 40
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height + 10
+	p.inlineEditor.State.CursorCol = p.inlineEditor.State.PaneWidth - 1
+	p.inlineEditor.State.CursorRow = p.inlineEditor.State.PaneHeight - 1
+	p.inlineEditor.State.CursorVisible = true
+
+	col, row, ok := p.calculateInlineEditorMouseCoords(33, 2)
+	if !ok {
+		t.Fatal("top-left content cell reported no hit")
+	}
+	if col != 41 || row != 11 {
+		t.Fatalf("coords = (%d,%d), want (41,11) — the pane cell actually drawn there", col, row)
+	}
+}
+
+// A pane smaller than the viewport is letterboxed, so a click in the padding is
+// not a pane cell at all — it must be dropped rather than falling back to the
+// raw mapping and forwarding a coordinate outside the pane (td-73fa86).
+func TestCalculateInlineEditorMouseCoordsRejectsLetterboxPadding(t *testing.T) {
+	p := &Plugin{width: 100, height: 30, listWidth: 30}
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-note", "")
+	// Another instance on a smaller terminal drives the shared session.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2); !ok || col != 1 || row != 1 {
+		t.Fatalf("in-pane coords = (%d,%d,%v), want (1,1,true)", col, row, ok)
+	}
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33+p.inlineEditor.State.PaneWidth, 2); ok {
+		t.Fatalf("click in horizontal letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2+p.inlineEditor.State.PaneHeight); ok {
+		t.Fatalf("click in vertical letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+}
+
 func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 	known := []string{
 		"vim", "nvim", "vi", "nano", "emacs", "emacsclient",
@@ -394,4 +444,51 @@ exit 0
 	t.Setenv("TMUX_TEST_LOG", logPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+// Rejecting an out-of-pane click is only half the job: the press handler used
+// to fall through to inlineEditor.Update on a miss, which forwards absolute
+// screen coordinates to tmux — further outside the pane than the raw mapping it
+// replaced. A padding click must be dropped outright, as hover and release do.
+func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
+	p := New()
+	p.width, p.height = 100, 30
+	p.listWidth = 30
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-note", "")
+	// Another instance on a smaller terminal drives the shared session.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+	p.inlineEditor.State.MouseReportingEnabled = true
+	p.inlineEditMode = true
+
+	// Find the pane's left edge, then step one column past its right edge.
+	padY := 10
+	originX := -1
+	for x := 0; x < p.width; x++ {
+		if _, _, ok := p.calculateInlineEditorMouseCoords(x, padY); ok {
+			originX = x
+			break
+		}
+	}
+	if originX < 0 {
+		t.Fatal("no in-pane column found on the test row")
+	}
+	padX := originX + p.inlineEditor.State.PaneWidth
+	if _, _, ok := p.calculateInlineEditorMouseCoords(padX, padY); ok {
+		t.Fatalf("(%d,%d) is inside the pane; pick a padding cell", padX, padY)
+	}
+
+	p.mouseHandler.Clear()
+	p.mouseHandler.HitMap.AddRect(regionEditorPane, 30, 0, 70, 30, nil)
+
+	_, cmd := p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: padX, Y: padY, Button: tea.MouseLeft}))
+	if cmd != nil {
+		t.Fatal("press on letterbox padding produced a command; it must be dropped, not forwarded to tmux")
+	}
+	if p.inlineEditorDragging {
+		t.Fatal("press on letterbox padding started a drag")
+	}
 }

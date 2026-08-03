@@ -313,6 +313,14 @@ func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 	sb.WriteString(styles.Title.Render(header))
 	sb.WriteString("  ")
 	sb.WriteString(styles.Muted.Render("(Ctrl+\\ or ESC ESC to exit)"))
+	// The tmux pane can be larger than this viewport when another sidecar
+	// instance drives the same session; say what is hidden (td-73fa86).
+	if p.inlineEditor != nil {
+		if indicator := p.inlineEditor.SizeIndicator(); indicator != "" {
+			sb.WriteString("  ")
+			sb.WriteString(styles.Muted.Render(indicator))
+		}
+	}
 	sb.WriteString("\n")
 
 	// Calculate content height (account for tab line and header)
@@ -477,7 +485,16 @@ func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bo
 		return 0, 0, false
 	}
 
-	// SGR mouse protocol uses 1-indexed coordinates
+	// SGR mouse protocol uses 1-indexed coordinates, and the editor renders the
+	// pane at its observed size — clipped and scrolled when it is larger than
+	// this viewport — so map through the fit rather than assuming they line up
+	// (td-73fa86).
+	// A miss from an active editor means the click landed outside the pane —
+	// letterbox padding around a pane smaller than the viewport — so it must not
+	// fall back to the raw mapping and forward a cell the pane does not have.
+	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		return p.inlineEditor.PaneCoords(relX+1, relY+1)
+	}
 	return relX + 1, relY + 1, true
 }
 

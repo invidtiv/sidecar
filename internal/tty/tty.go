@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Config holds configuration options for a tty Model.
@@ -269,13 +270,84 @@ func (m *Model) View() string {
 		return ""
 	}
 
+	fit := m.paneFit()
 	lineCount := m.State.OutputBuf.LineCount()
-	start := lineCount - m.Height
-	if start < 0 || m.Height <= 0 {
+	// The buffer's tail is the pane, so pane row 0 is at paneTop and the visible
+	// window starts RowOffset rows into it — which is the pane's tail unless the
+	// cursor pulls the window up (td-73fa86). paneTop never goes negative, so
+	// View and Cursor stay anchored to the same row even when tmux captured
+	// fewer lines than the pane is tall.
+	start := lineCount - fit.Height
+	if m.State.PaneHeight > 0 {
+		start = m.paneTop(lineCount) + fit.RowOffset
+	}
+	if start < 0 || fit.Height <= 0 {
 		start = 0
 	}
-	lines := m.State.OutputBuf.LinesRange(start, lineCount)
-	return strings.Join(lines, "\n")
+	end := lineCount
+	if fit.Height > 0 && start+fit.Height < end {
+		end = start + fit.Height
+	}
+	lines := m.State.OutputBuf.LinesRange(start, end)
+	if fit.Width <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	// Clip to the pane's real geometry: a wider pane would otherwise emit lines
+	// past the viewport and wrap over the surrounding layout (td-73fa86).
+	clipped := make([]string, len(lines))
+	for i, line := range lines {
+		if fit.ColOffset > 0 {
+			line = ansi.TruncateLeft(line, fit.ColOffset, "")
+		}
+		clipped[i] = ansi.Truncate(line, fit.Width, "")
+	}
+	return strings.Join(clipped, "\n")
+}
+
+// paneTop is the buffer line holding pane row 0. tmux trims trailing blank rows
+// from a capture, so the buffer can be shorter than the pane; clamping at 0
+// keeps the mapping from pane row to buffer line one-to-one in that case
+// instead of letting View clamp while Cursor does not (td-73fa86).
+func (m *Model) paneTop(lineCount int) int {
+	return max(lineCount-m.State.PaneHeight, 0)
+}
+
+// paneFit projects the pane's observed geometry onto the viewport the embedding
+// plugin gave this model. The pane can be any size — another sidecar instance
+// may be driving the same tmux session — so the requested size is only a
+// request (td-73fa86).
+func (m *Model) paneFit() PaneFit {
+	return FitPane(PaneFitInput{
+		ViewWidth:  m.Width,
+		ViewHeight: m.Height,
+		PaneWidth:  m.State.PaneWidth,
+		PaneHeight: m.State.PaneHeight,
+		CursorCol:  m.State.CursorCol,
+		CursorRow:  m.State.CursorRow,
+		HasCursor:  m.State.CursorVisible && m.State.CursorCol >= 0 && m.State.CursorRow >= 0,
+	})
+}
+
+// PaneCoords maps 1-indexed coordinates within the rendered content area to the
+// 1-indexed pane coordinates tmux's mouse protocol expects. A clipped pane is
+// drawn scrolled, so a click lands ColOffset columns and RowOffset rows in
+// (td-73fa86).
+func (m *Model) PaneCoords(col, row int) (int, int, bool) {
+	if !m.IsActive() {
+		return 0, 0, false
+	}
+	return m.paneFit().PaneCoords(col-1, row-1, m.State.PaneWidth, m.State.PaneHeight)
+}
+
+// SizeIndicator describes a pane that is larger than the viewport it is drawn
+// into, e.g. "200x50, showing 120x40". It returns "" when the whole pane is
+// visible, so callers can render it unconditionally.
+func (m *Model) SizeIndicator() string {
+	if !m.IsActive() {
+		return ""
+	}
+	fit := m.paneFit()
+	return PaneSizeIndicator(m.State.PaneWidth, m.State.PaneHeight, fit.Width, fit.Height)
 }
 
 // Cursor returns the native cursor position relative to View().
@@ -284,14 +356,17 @@ func (m *Model) Cursor() *tea.Cursor {
 		m.Width <= 0 || m.Height <= 0 || m.State.CursorRow < 0 || m.State.CursorCol < 0 {
 		return nil
 	}
-	row := m.State.CursorRow
-	if m.State.PaneHeight > 0 && m.State.PaneHeight != m.Height {
-		row -= m.State.PaneHeight - m.Height
-	}
-	if row < 0 || row >= m.Height {
+	fit := m.paneFit()
+	if fit.Width <= 0 || fit.Height <= 0 {
 		return nil
 	}
-	col := min(m.State.CursorCol, m.Width-1)
+	// View renders pane rows fit.RowOffset..+fit.Height, so a pane row lands
+	// RowOffset rows higher on screen.
+	row := m.State.CursorRow - fit.RowOffset
+	if row < 0 || row >= fit.Height {
+		return nil
+	}
+	col := min(max(m.State.CursorCol-fit.ColOffset, 0), fit.Width-1)
 	cursor := tea.NewCursor(col, row)
 	cursor.Shape = tea.CursorBlock
 	cursor.Blink = true

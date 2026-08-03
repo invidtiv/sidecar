@@ -192,11 +192,54 @@ func TestMaybeResizeInteractivePaneUsesCapturedSizeWithoutQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(logged), "display-message") {
+	if strings.Contains(string(logged), "pane_width") {
 		t.Fatalf("resize re-queried pane size: %s", logged)
 	}
-	if lines := strings.Count(strings.TrimSpace(string(logged)), "\n") + 1; lines != 1 {
-		t.Fatalf("resize spawned %d tmux commands, want 1: %s", lines, logged)
+	// The ownership lease reads @sidecar-owner once per local tick (td-ee222a);
+	// that read resolves the session in the same invocation, so the resize still
+	// costs one tmux process beyond the resize itself and none of it re-derives
+	// geometry the capture already reported.
+	if lines := strings.Count(strings.TrimSpace(string(logged)), "\n") + 1; lines != 2 {
+		t.Fatalf("resize spawned %d tmux commands, want 2: %s", lines, logged)
+	}
+	if count := strings.Count(string(logged), "resize-"); count != 1 {
+		t.Fatalf("resize spawned %d resize commands, want 1: %s", count, logged)
+	}
+}
+
+// The option the geometry lease lives under, spelled out here so the test fails
+// loudly if internal/tty renames it.
+const leaseOptionForTest = "@sidecar-owner"
+
+// A pane that already matches needs no resize, but the geometry lease still has
+// to be ticked: it is kept alive by the poll, not by the resize. An owner that
+// stopped ticking once it settled looked abandoned to the other machine, which
+// claimed and resized, which un-settled this one — ownership ping-ponging on the
+// staleness period (td-ee222a).
+func TestMaybeResizeInteractivePaneTicksLeaseWhenSizeAlreadyMatches(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width = 100
+	p.height = 30
+	p.interactiveState.TargetPane = "%42"
+	w, h := p.calculatePreviewDimensions()
+
+	cmd := p.maybeResizeInteractivePane(w, h)
+	if cmd == nil {
+		t.Fatal("matched pane produced no command, so the lease is never refreshed")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("lease touch reported a resize: %#v", msg)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), leaseOptionForTest) {
+		t.Fatalf("matched pane did not tick the ownership lease: %q", logged)
+	}
+	if strings.Contains(string(logged), "resize-") {
+		t.Fatalf("matched pane resized anyway: %q", logged)
 	}
 }
 

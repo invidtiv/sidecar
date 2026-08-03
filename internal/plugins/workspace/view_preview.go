@@ -223,8 +223,18 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 		p.interactiveState.TermPanel == termPanel
 	var cursorRow, cursorCol, paneHeight, paneWidth int
 	var cursorVisible bool
+	// Rendering derives from the pane's observed geometry, not the size sidecar
+	// last requested (td-73fa86). Interactive mode has a fresher copy on the
+	// interactive state; list view relies on the per-pane cache.
+	if geometry := p.paneGeometryFor(termPanel); geometry.known() {
+		paneWidth, paneHeight = geometry.Width, geometry.Height
+	}
 	if interactive {
-		cursorRow, cursorCol, paneHeight, paneWidth, cursorVisible, _ = p.getCursorPosition()
+		row, col, statePaneHeight, statePaneWidth, visible, _ := p.getCursorPosition()
+		cursorRow, cursorCol, cursorVisible = row, col, visible
+		if statePaneWidth > 0 && statePaneHeight > 0 {
+			paneWidth, paneHeight = statePaneWidth, statePaneHeight
+		}
 		if p.interactiveState.MouseReportingEnabled {
 			hint += " " + dimText("app mouse • ⇧drag select")
 		}
@@ -283,6 +293,16 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	}, p.truncateCache)
 	if result.Content == "" {
 		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
+	}
+	// A pane larger than this viewport is clipped, so say so rather than let the
+	// missing columns/rows look like corruption (td-73fa86). Gated on the pane's
+	// own fit: the scrollbar column is chrome, not a mismatch, and would
+	// otherwise make the banner permanent.
+	if result.Layout.PaneClipped {
+		if indicator := tty.PaneSizeIndicator(paneWidth, paneHeight,
+			result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
+			hint += " " + dimText(indicator)
+		}
 	}
 	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))

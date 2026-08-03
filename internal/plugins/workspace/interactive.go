@@ -388,6 +388,9 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
 		}
 		tty.SetWindowSizeManual(sessionName)
+		// Entering interactive mode is an explicit local action; the user is
+		// here, so this instance's geometry wins (td-ee222a).
+		tty.ClaimGeometryLease(target)
 		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		// Verify and retry once if resize didn't take effect
 		if w, h, ok := tty.QueryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
@@ -457,6 +460,9 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	// Resize terminal panel pane to match its split dimensions
 	w, h := p.calculateTermPanelDimensions()
 	tty.SetWindowSizeManual(sessionName)
+	// Explicit local action: claim the terminal panel session outright rather
+	// than render it at another machine's geometry (td-ee222a).
+	tty.ClaimGeometryLease(target)
 	tty.ResizeTmuxPane(target, w, h)
 	if aw, ah, ok := tty.QueryPaneSize(target); ok && (aw != w || ah != h) {
 		tty.ResizeTmuxPane(target, w, h)
@@ -587,6 +593,9 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	return func() tea.Msg {
 		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
 			if actualWidth == previewWidth && actualHeight == previewHeight {
+				// Nothing to assert, but we are still the instance driving this
+				// pane's geometry — keep the lease from going stale under us.
+				tty.TouchGeometryLease(target)
 				return nil
 			}
 		}
@@ -617,14 +626,6 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
 	}
-	if paneWidth == previewWidth && paneHeight == previewHeight {
-		return nil
-	}
-
-	if !p.interactiveState.LastResizeAt.IsZero() && time.Since(p.interactiveState.LastResizeAt) < 500*time.Millisecond {
-		return nil
-	}
-	p.interactiveState.LastResizeAt = time.Now()
 	target := p.interactiveState.TargetPane
 	if target == "" {
 		target = p.interactiveState.TargetSession
@@ -632,6 +633,23 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	if target == "" {
 		return nil
 	}
+	// This poll runs whether or not a resize follows, and it is the poll — not the
+	// occasional resize — that marks this instance as the one driving the pane's
+	// geometry. Ticking the lease here keeps a settled owner from looking
+	// abandoned to another machine, which would hand ownership back and forth
+	// every staleness budget (td-ee222a).
+	touch := func() tea.Msg {
+		tty.TouchGeometryLease(target)
+		return nil
+	}
+	if paneWidth == previewWidth && paneHeight == previewHeight {
+		return touch
+	}
+
+	if !p.interactiveState.LastResizeAt.IsZero() && time.Since(p.interactiveState.LastResizeAt) < 500*time.Millisecond {
+		return touch
+	}
+	p.interactiveState.LastResizeAt = time.Now()
 	// The capture already returned the actual pane size. Trust that atomic
 	// observation instead of spawning two more display-message queries around
 	// the resize.
@@ -666,6 +684,12 @@ func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
 		if w <= 0 || h <= 0 {
 			return nil
 		}
+		// Attaching is proof the user is at this machine, so it outranks another
+		// instance's geometry lease. The hold, not the claim, is what makes it
+		// stick: the TUI is suspended for the whole attach, so nothing here ticks
+		// the lease and a peer would otherwise reclaim the session the user is
+		// sitting in a few seconds in (td-ee222a). attachWithResize releases it.
+		tty.HoldGeometryLease(target)
 		tty.ResizeTmuxPane(target, w, h)
 		return nil
 	}
@@ -677,6 +701,9 @@ func (p *Plugin) attachWithResize(target, sessionName, displayName string, onCom
 	c := exec.Command("tmux", "attach-session", "-t", sessionName)
 	termState, _ := term.GetState(int(os.Stdout.Fd()))
 	wrappedOnComplete := func(err error) tea.Msg {
+		// The event loop is running again, so the geometry loop takes the lease
+		// back over from the background refresher resizeForAttachCmd started.
+		tty.ReleaseGeometryHold(target)
 		if termState != nil {
 			_ = term.Restore(int(os.Stdout.Fd()), termState)
 		}
@@ -1386,34 +1413,35 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
-	paneWidth, paneHeight := p.calculatePreviewDimensions()
+	// The pane's real geometry decides what is on screen where, so hit testing
+	// reads the layout the render path produced rather than re-deriving one: a
+	// wider pane is drawn horizontally scrolled, a taller one starts partway
+	// down, and the scrollbar takes a column off both (td-73fa86).
+	viewWidth, viewHeight := p.calculatePreviewDimensions()
 	if targetingTermPanel {
-		paneWidth, paneHeight = p.calculateTermPanelDimensions()
+		viewWidth, viewHeight = p.calculateTermPanelDimensions()
 	}
-	if p.interactiveState != nil {
-		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneWidth < paneWidth {
-			paneWidth = p.interactiveState.PaneWidth
-		}
-		if p.interactiveState.PaneHeight > 0 && p.interactiveState.PaneHeight < paneHeight {
-			paneHeight = p.interactiveState.PaneHeight
-		}
+	paneWidth, paneHeight := viewWidth, viewHeight
+	if geometry := p.paneGeometryFor(targetingTermPanel); geometry.known() {
+		paneWidth, paneHeight = geometry.Width, geometry.Height
 	}
-
-	if paneWidth <= 0 || paneHeight <= 0 {
-		return 0, 0, false
-	}
-	if relX >= paneWidth || relY >= paneHeight {
-		return 0, 0, false
+	if p.interactiveState != nil &&
+		p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
+		paneWidth, paneHeight = p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
 	}
 
-	col = relX + 1
-	row = relY + 1
-	if col > paneWidth {
-		col = paneWidth
+	layout := p.terminalSelectionViewportLayout()
+	if layout.DisplayWidth <= 0 || layout.DisplayHeight <= 0 {
+		return 0, 0, false
 	}
-	if row > paneHeight {
-		row = paneHeight
+	if relX >= layout.DisplayWidth || relY >= layout.DisplayHeight {
+		return 0, 0, false
 	}
+
+	col = min(relX+layout.Fit.ColOffset+1, paneWidth)
+	// Vertical placement comes from the buffer window, not the fit: the
+	// workspace viewport scrolls history as well as the live pane.
+	row = min(max(layout.paneRowAt(relY)+1, 1), paneHeight)
 
 	return col, row, true
 }

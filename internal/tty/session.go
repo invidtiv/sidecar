@@ -140,8 +140,15 @@ func SendKeys(sessionName string, keys ...KeySpec) error {
 
 // ResizeTmuxPane resizes a tmux window/pane to the specified dimensions.
 // resize-window works for detached sessions; resize-pane is a fallback.
+//
+// The geometry ownership lease is enforced here rather than at the dozen call
+// sites (td-ee222a): callers stay dumb, and an instance that does not own the
+// session simply renders the geometry it finds. See geometry_lease.go.
 func ResizeTmuxPane(paneID string, width, height int) {
 	if width <= 0 && height <= 0 {
+		return
+	}
+	if !defaultLeaseKeeper.allow(paneID) {
 		return
 	}
 

@@ -25,6 +25,9 @@ func (p *Plugin) interactiveColAtX(x, lineIdx int) (int, bool) {
 	if relX < 0 {
 		return 0, false
 	}
+	// A pane wider than the viewport is drawn scrolled, so screen column 0 is
+	// the pane's ColOffset (td-73fa86).
+	relX += p.terminalSelectionViewportLayout().Fit.ColOffset
 
 	buf := p.interactiveOutputBuffer()
 	if buf == nil {
@@ -245,10 +248,10 @@ func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
 }
 
 func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
+	// A nil buffer is fine: the layout's geometry (the fit, the display size)
+	// comes from the viewport and the pane, and hit testing needs it whether or
+	// not any output has been captured yet.
 	buffer := p.interactiveOutputBuffer()
-	if buffer == nil {
-		return terminalViewportLayout{}
-	}
 
 	width, height := p.calculatePreviewDimensions()
 	termPanel := p.selectionTermPanel
@@ -270,10 +273,28 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 		Offset:      p.previewOffset,
 		Interactive: interactive,
 	}
-	if p.interactiveState != nil {
-		input.PaneHeight = p.interactiveState.PaneHeight
-		input.PaneWidth = p.interactiveState.PaneWidth
+	// Same geometry the render path uses, or hit-testing drifts from the pixels
+	// (td-73fa86).
+	if geometry := p.paneGeometryFor(termPanel); geometry.known() {
+		input.PaneWidth, input.PaneHeight = geometry.Width, geometry.Height
 	}
+	if p.interactiveState != nil {
+		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
+			input.PaneHeight = p.interactiveState.PaneHeight
+			input.PaneWidth = p.interactiveState.PaneWidth
+		}
+		input.CursorCol = p.interactiveState.CursorCol
+		input.CursorRow = p.interactiveState.CursorRow
+		input.CursorVisible = p.interactiveState.CursorVisible
+		if interactive {
+			input.CursorHistorySize = p.interactiveState.CursorHistorySize
+			input.BufferBase, input.HasCursorHistory = cursorBufferBase(buffer, p.interactiveState)
+		}
+	}
+	// The scrollbar takes a column from the content, which moves every column
+	// the user can click on; hit testing has to see the same viewport the render
+	// does (td-73fa86).
+	_, input.TotalItems, _ = p.terminalHistorySummary(termPanel, buffer)
 	if termPanel {
 		if p.selection.Anchor.Valid() {
 			input.Follow = false

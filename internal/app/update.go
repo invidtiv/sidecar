@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -144,9 +145,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.forwardApplicationFocus(msg)
 
 	case tea.KeyPressMsg:
+		// Input is what geometry arbitration uses to tell two focused instances
+		// apart: the machine the user walked away from never blurs (td-ee222a).
+		tty.NoteUserInput()
 		return (&m).handleKeyMsg(msg)
 
 	case tea.PasteMsg:
+		// Pasting is user input like any other; without this a session driven
+		// entirely by pastes would look unattended to arbitration (td-ee222a).
+		tty.NoteUserInput()
 		// v2: bracketed paste arrives as a dedicated message (not a KeyMsg).
 		// Route it into the active text-input modal so paste-into-filter works
 		// like v1; otherwise forward to plugins (notes editor handles it natively).
@@ -188,6 +195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tea.MouseMsg:
+		tty.NoteUserInput()
 		// Route mouse events to active modal (priority order)
 		switch m.activeModal() {
 		case ModalPalette:
@@ -545,6 +553,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
+	// Geometry arbitration is process-wide and must see focus even if no plugin
+	// with a control manager is loaded (td-ee222a).
+	tty.SetAppFocused(m.applicationFocused)
+
 	var cmds []tea.Cmd
 	for _, p := range m.registry.Plugins() {
 		_, cmd := p.Update(msg)

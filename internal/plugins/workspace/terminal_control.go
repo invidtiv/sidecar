@@ -477,6 +477,7 @@ func (p *Plugin) applyPanelControlSnapshot(snapshot tty.ControlSnapshot) {
 	} else {
 		p.termPanelOutput.Update(output)
 	}
+	p.recordPaneGeometry("panel", snapshot.Session, snapshot.PaneWidth, snapshot.PaneHeight)
 	if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
 		p.interactiveState.CursorRow = snapshot.CursorRow
 		p.interactiveState.CursorCol = snapshot.CursorCol
@@ -520,6 +521,11 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 	} else {
 		changed = buffer.Update(output)
 	}
+	geometryTarget := consumer.Session
+	if consumer.Source == "shell" {
+		geometryTarget = consumer.SourceID
+	}
+	p.recordPaneGeometry(consumer.Source, geometryTarget, snapshot.PaneWidth, snapshot.PaneHeight)
 	if changed {
 		switch consumer.Source {
 		case "agent":
