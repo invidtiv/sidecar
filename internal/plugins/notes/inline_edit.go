@@ -238,10 +238,11 @@ func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bo
 	// pane at its observed size — clipped and scrolled when it is larger than
 	// this viewport — so map through the fit rather than assuming they line up
 	// (td-73fa86).
-	if p.inlineEditor != nil {
-		if col, row, ok := p.inlineEditor.PaneCoords(relX+1, relY+1); ok {
-			return col, row, true
-		}
+	// A miss from an active editor means the click landed outside the pane —
+	// letterbox padding around a pane smaller than the viewport — so it must not
+	// fall back to the raw mapping and forward a cell the pane does not have.
+	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		return p.inlineEditor.PaneCoords(relX+1, relY+1)
 	}
 	return relX + 1, relY + 1, true
 }

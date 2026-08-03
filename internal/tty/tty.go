@@ -272,12 +272,14 @@ func (m *Model) View() string {
 
 	fit := m.paneFit()
 	lineCount := m.State.OutputBuf.LineCount()
-	// The buffer's tail is the pane, so pane row 0 is lineCount-PaneHeight and
-	// the visible window starts RowOffset rows into it — which is the pane's
-	// tail unless the cursor pulls the window up (td-73fa86).
+	// The buffer's tail is the pane, so pane row 0 is at paneTop and the visible
+	// window starts RowOffset rows into it — which is the pane's tail unless the
+	// cursor pulls the window up (td-73fa86). paneTop never goes negative, so
+	// View and Cursor stay anchored to the same row even when tmux captured
+	// fewer lines than the pane is tall.
 	start := lineCount - fit.Height
 	if m.State.PaneHeight > 0 {
-		start = lineCount - m.State.PaneHeight + fit.RowOffset
+		start = m.paneTop(lineCount) + fit.RowOffset
 	}
 	if start < 0 || fit.Height <= 0 {
 		start = 0
@@ -300,6 +302,14 @@ func (m *Model) View() string {
 		clipped[i] = ansi.Truncate(line, fit.Width, "")
 	}
 	return strings.Join(clipped, "\n")
+}
+
+// paneTop is the buffer line holding pane row 0. tmux trims trailing blank rows
+// from a capture, so the buffer can be shorter than the pane; clamping at 0
+// keeps the mapping from pane row to buffer line one-to-one in that case
+// instead of letting View clamp while Cursor does not (td-73fa86).
+func (m *Model) paneTop(lineCount int) int {
+	return max(lineCount-m.State.PaneHeight, 0)
 }
 
 // paneFit projects the pane's observed geometry onto the viewport the embedding

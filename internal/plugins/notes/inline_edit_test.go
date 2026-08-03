@@ -233,6 +233,30 @@ func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 	}
 }
 
+// A pane smaller than the viewport is letterboxed, so a click in the padding is
+// not a pane cell at all — it must be dropped rather than falling back to the
+// raw mapping and forwarding a coordinate outside the pane (td-73fa86).
+func TestCalculateInlineEditorMouseCoordsRejectsLetterboxPadding(t *testing.T) {
+	p := &Plugin{width: 100, height: 30, listWidth: 30}
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-note", "")
+	// Another instance on a smaller terminal drives the shared session.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2); !ok || col != 1 || row != 1 {
+		t.Fatalf("in-pane coords = (%d,%d,%v), want (1,1,true)", col, row, ok)
+	}
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33+p.inlineEditor.State.PaneWidth, 2); ok {
+		t.Fatalf("click in horizontal letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2+p.inlineEditor.State.PaneHeight); ok {
+		t.Fatalf("click in vertical letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+}
+
 func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 	known := []string{
 		"vim", "nvim", "vi", "nano", "emacs", "emacsclient",

@@ -111,6 +111,35 @@ func TestModelViewAnchorsTallPaneOnCursor(t *testing.T) {
 	}
 }
 
+// tmux trims trailing blank rows from a capture, so the buffer can hold fewer
+// lines than the pane is tall. View and Cursor have to agree on which buffer
+// line pane row 0 is, or the cursor lands on a line the user is not editing
+// (td-73fa86).
+func TestModelViewShortBufferKeepsCursorOnEditedRow(t *testing.T) {
+	model := New(nil)
+	model.Width = 10
+	model.Height = 4
+	model.Enter("current", "")
+	model.State.OutputBuf.Write("aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\ndddddddddd\neeeeeeeeee\nffffffffff")
+	model.State.PaneWidth = 10
+	model.State.PaneHeight = 10
+	model.State.CursorRow = 5
+	model.State.CursorCol = 0
+	model.State.CursorVisible = true
+
+	if got, want := model.View(), "cccccccccc\ndddddddddd\neeeeeeeeee\nffffffffff"; got != want {
+		t.Fatalf("View() = %q, want %q", got, want)
+	}
+	cursor := model.Cursor()
+	if cursor == nil {
+		t.Fatal("Cursor() = nil, want the cursor on the edited row")
+	}
+	// The edited row is the last of the four rendered lines.
+	if cursor.X != 0 || cursor.Y != 3 {
+		t.Fatalf("Cursor() = (%d,%d), want (0,3)", cursor.X, cursor.Y)
+	}
+}
+
 // Mouse coordinates forwarded to tmux have to move with the pixels: a clipped
 // pane is drawn scrolled on both axes.
 func TestModelPaneCoordsAccountForClipping(t *testing.T) {

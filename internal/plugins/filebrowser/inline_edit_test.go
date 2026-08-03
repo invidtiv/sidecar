@@ -293,6 +293,33 @@ func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 	}
 }
 
+// A pane smaller than the viewport is letterboxed, so a click in the padding is
+// not a pane cell at all — it must be dropped rather than falling back to the
+// raw mapping and forwarding a coordinate outside the pane (td-73fa86).
+func TestCalculateInlineEditorMouseCoordsRejectsLetterboxPadding(t *testing.T) {
+	p := &Plugin{width: 100, height: 30}
+	p.inlineEditor = tty.New(nil)
+	p.inlineEditor.Width = p.calculateInlineEditorWidth()
+	p.inlineEditor.Height = p.calculateInlineEditorHeight()
+	p.inlineEditor.Enter("sidecar-edit", "")
+	// Another instance on a smaller terminal drives the shared session.
+	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
+	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+
+	// Inside the pane: mapped normally.
+	if col, row, ok := p.calculateInlineEditorMouseCoords(2, 2); !ok || col != 1 || row != 1 {
+		t.Fatalf("in-pane coords = (%d,%d,%v), want (1,1,true)", col, row, ok)
+	}
+	// Past the pane's right edge but inside the editor viewport.
+	if col, row, ok := p.calculateInlineEditorMouseCoords(2+p.inlineEditor.State.PaneWidth, 2); ok {
+		t.Fatalf("click in horizontal letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+	// Past the pane's bottom edge but inside the editor viewport.
+	if col, row, ok := p.calculateInlineEditorMouseCoords(2, 2+p.inlineEditor.State.PaneHeight); ok {
+		t.Fatalf("click in vertical letterbox padding = (%d,%d,true), want no hit", col, row)
+	}
+}
+
 func TestSendEditorSaveAndQuit_KnownEditors(t *testing.T) {
 	// Test that known editors return true (sequence is sent)
 	// We can't test the actual tmux commands without a session,
