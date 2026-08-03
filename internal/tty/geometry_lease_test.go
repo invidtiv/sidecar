@@ -25,11 +25,21 @@ type fakeLeaseStore struct {
 	// mark stands in for tmux's activity marker for the client on this machine's
 	// terminal. Tests advance it to model the user typing inside an attach.
 	mark string
+	// flakyMark makes every other read of the marker come back empty, standing
+	// in for a tmux invocation that failed rather than for any user input.
+	flakyMark bool
+	markReads int
 }
 
 func (s *fakeLeaseStore) inputMark(string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.markReads++
+	// A tmux exec can fail transiently under load, and a machine with no
+	// resolvable tty fails every time. Both surface as an empty marker.
+	if s.flakyMark && s.markReads%2 == 0 {
+		return ""
+	}
 	return s.mark
 }
 
@@ -1008,5 +1018,73 @@ func TestLeaseKeeperAllowsWhenSessionUnknown(t *testing.T) {
 	k := newTestKeeper(store, "self", DefaultLeasePolicy)
 	if !k.allow("%1") {
 		t.Fatal("declined a resize on an unresolvable target")
+	}
+}
+
+// A failed marker read must not read as user input. tmux's activity marker is
+// fetched by shelling out, and that exec can fail transiently — under load, or
+// against a momentarily unresponsive server. An empty answer also arrives on
+// every tick for a machine whose tty never resolved. Counting either as "the
+// marker changed" stamps input on an attach nobody is sitting at, so a machine
+// the user has walked away from defends geometry against the one they walked to.
+func TestLeaseKeeperFailedMarkReadIsNotInput(t *testing.T) {
+	store := &fakeLeaseStore{mark: "steady", flakyMark: true}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	attached := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	attached.selfID = "attached"
+	attached.now = readNow
+	attached.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(attached)
+
+	peer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	peer.selfID = "peer"
+	peer.now = readNow
+	peer.lastInput = readNow()
+
+	attached.hold("%1")
+	tick := func() {
+		t.Helper()
+		before := store.activity()
+		ticker.c <- readNow()
+		waitForActivity(t, store, before)
+	}
+
+	// The user leaves this machine attached and walks to the peer. Nobody types
+	// here, so the real marker never moves — only the failing reads do.
+	for range 30 {
+		advance(time.Second)
+		tick()
+		peer.allow("%1")
+	}
+
+	// They start working on the peer. It must be able to take geometry.
+	took := 0
+	for i := 1; i <= 30; i++ {
+		peer.noteInput()
+		advance(time.Second)
+		tick()
+		peer.allow("%1")
+		if leaseOwner(store.current()) == "peer" {
+			took = i
+			break
+		}
+	}
+	if took == 0 {
+		t.Fatalf("the machine the user moved to never took geometry from an attach "+
+			"nobody was sitting at: failed marker reads forged input there (lease %q)",
+			store.current())
 	}
 }

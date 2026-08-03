@@ -783,7 +783,13 @@ func (k *leaseKeeper) refreshHold(target string) {
 	}
 	now := k.now()
 	if session, known := k.targets[target]; known {
-		if mark := k.store.inputMark(session); mark != hold.mark {
+		// An empty mark is absence of evidence, not evidence of input: it is
+		// what a failed tmux read returns, and equally what a machine with no
+		// resolvable tty returns on every tick. Treating it as a change would
+		// stamp input on an attach nobody is sitting at — one unlucky exec and
+		// this machine defends geometry the user has walked away from for a
+		// further PreemptIdle. Only a real marker that differs is input here.
+		if mark := k.store.inputMark(session); mark != "" && mark != hold.mark {
 			hold.mark = mark
 			k.lastInput = now
 		}
