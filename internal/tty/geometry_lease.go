@@ -57,8 +57,9 @@ import (
 // An unambiguous local action — attaching, entering interactive mode — claims
 // outright. Pressing a key on this machine is better evidence of where the user
 // is than any lease. Actions that suspend the TUI for their whole duration
-// (attaching) hold the lease from a goroutine instead, since no tick accrues
-// while the event loop is blocked.
+// (attaching) also hold the lease from a goroutine, since no tick accrues while
+// the event loop is blocked; that goroutine supplies the missing ticks and
+// nothing more, so an attach nobody is sitting at can still be preempted.
 
 const leaseOptionName = "@sidecar-owner"
 
@@ -334,11 +335,10 @@ type leaseState struct {
 	owned           bool
 }
 
-// leaseHold is one target's background refresher: the session it resolved to and
-// the func that stops it.
+// leaseHold is one target's background refresher, reduced to the func that stops
+// it.
 type leaseHold struct {
-	session string
-	stop    func()
+	stop func()
 }
 
 // leaseKeeper holds the per-session tick counters that DecideGeometryLease is
@@ -424,30 +424,17 @@ func (k *leaseKeeper) idleLocked(now time.Time) time.Duration {
 // tokenLocked mints this instance's next token, stamping the idle time readers
 // on other machines arbitrate against.
 //
-// A held session stamps zero: the user is attached to it here, so this machine
-// is where they are, even though sidecar itself sees no input for the duration.
-// That does shut idle preemption out for as long as the attach lasts, but only
-// for the passive preview path — an explicit action on the other machine still
-// claims — and the stamp cannot outlive the process refreshing it.
-func (k *leaseKeeper) tokenLocked(session string, now time.Time) string {
+// Idle is always measured from the last input this instance saw, holds included.
+// Stamping zero for the duration of an attach looks tempting — the user is at
+// this machine, even though the keystrokes go to tmux rather than to sidecar —
+// but nothing in the arbitration can observe when that stops being true, so a
+// machine left attached and walked away from would defend geometry against the
+// machine the user moved to for as long as the attach lasted. A hold keeps the
+// token changing instead, which is enough to hold off any peer nobody is using,
+// since only recent input on the peer's own side can preempt.
+func (k *leaseKeeper) tokenLocked(now time.Time) string {
 	k.counter++
-	idle := k.idleLocked(now)
-	if k.heldLocked(session) {
-		idle = 0
-	}
-	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(idle.Seconds()))
-}
-
-// heldLocked reports whether any target in session is being held across a TUI
-// suspension. The map is one entry per attach, so a scan is cheaper than a
-// second index.
-func (k *leaseKeeper) heldLocked(session string) bool {
-	for _, hold := range k.holds {
-		if hold.session == session {
-			return true
-		}
-	}
-	return false
+	return fmt.Sprintf("%s:%d:%d", k.selfID, k.counter, int64(k.idleLocked(now).Seconds()))
 }
 
 // hostAndPID names this instance. The PID is part of the identity so two
@@ -498,7 +485,17 @@ func (k *leaseKeeper) allow(target string) bool {
 			return state.lastResize
 		}
 	}
+	return k.tickLocked(target, now, true)
+}
 
+// tickLocked is one round of arbitration for target: read the shared option,
+// advance this instance's own history, apply the verdict.
+//
+// rateLimit skips the round when this session already ticked inside the current
+// interval, which is what keeps a per-poll caller to one tmux read per tick. A
+// hold's refresher passes false: while the event loop is suspended its ticks are
+// the only cadence there is, so they must never be thrown away.
+func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) bool {
 	session, token, ok := k.store.read(target)
 	if !ok {
 		return true
@@ -511,7 +508,7 @@ func (k *leaseKeeper) allow(target string) bool {
 		k.states[session] = state
 	}
 	// A second target in the same session can resolve inside an existing tick.
-	if !state.lastTick.IsZero() && now.Sub(state.lastTick) < k.interval {
+	if rateLimit && !state.lastTick.IsZero() && now.Sub(state.lastTick) < k.interval {
 		return state.lastResize
 	}
 	state.lastTick = now
@@ -565,7 +562,7 @@ func sinceWrite(lastWrite, now time.Time) time.Duration {
 
 // writeLocked stamps a fresh token and resets the history it invalidates.
 func (k *leaseKeeper) writeLocked(session string, state *leaseState, now time.Time) {
-	fresh := k.tokenLocked(session, now)
+	fresh := k.tokenLocked(now)
 	k.store.set(session, fresh)
 	state.token = fresh
 	state.unchangedTicks = 0
@@ -591,15 +588,16 @@ func (k *leaseKeeper) claim(target string) {
 	k.claimLocked(target)
 }
 
-func (k *leaseKeeper) claimLocked(target string) (string, bool) {
+// claimLocked writes this instance onto the lease, reporting whether it did.
+func (k *leaseKeeper) claimLocked(target string) bool {
 	if !k.focused {
-		return "", false
+		return false
 	}
 	now := k.now()
 	k.lastInput = now
 	session, _, ok := k.store.read(target)
 	if !ok {
-		return "", false
+		return false
 	}
 	k.targets[target] = session
 	state := k.states[session]
@@ -611,7 +609,7 @@ func (k *leaseKeeper) claimLocked(target string) (string, bool) {
 	state.lastTick = now
 	state.owned = true
 	state.lastResize = true
-	return session, true
+	return true
 }
 
 // hold claims target and then keeps its lease refreshed from a goroutine until
@@ -624,12 +622,15 @@ func (k *leaseKeeper) claimLocked(target string) (string, bool) {
 // the user is sitting in, with nothing on this side able to answer until detach.
 // The refresher runs outside that loop, so the lease keeps changing.
 //
+// What it supplies is ticks, not authority: each one is an ordinary arbitration
+// round, so an attach the user has walked away from still loses to the machine
+// they are typing on rather than defending geometry until they come back.
+//
 // It cannot strand the lease: the goroutine lives and dies with this process, so
 // a crash mid-attach stops the token changing and peers reclaim it normally.
 func (k *leaseKeeper) hold(target string) {
 	k.mu.Lock()
-	session, ok := k.claimLocked(target)
-	if !ok {
+	if !k.claimLocked(target) {
 		k.mu.Unlock()
 		return
 	}
@@ -640,7 +641,6 @@ func (k *leaseKeeper) hold(target string) {
 	ticks, stopTicker := k.newTicker(k.holdEvery)
 	done := make(chan struct{})
 	k.holds[target] = &leaseHold{
-		session: session,
 		stop: func() {
 			stopTicker()
 			close(done)
@@ -660,28 +660,23 @@ func (k *leaseKeeper) hold(target string) {
 	}()
 }
 
-// refreshHold stamps a new token for a held target. It rebuilds the tick state if
-// something dropped it — a focus change during the attach — because while a hold
-// is live this instance is the one driving that geometry by definition.
+// refreshHold takes one arbitration tick on a held target's behalf, standing in
+// for the geometry loop poll the suspended event loop cannot make.
+//
+// It is a tick source, not an override. Refreshing unconditionally would defend
+// the lease against every peer, including the one the user actually walked over
+// to; going through the ordinary verdict keeps the attach safe from peers nobody
+// is using — they have no recent input to preempt with, and the token they read
+// keeps changing — while still yielding to a machine that is being typed on, and
+// reclaiming later if that machine in turn goes quiet.
 func (k *leaseKeeper) refreshHold(target string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	hold := k.holds[target]
-	if hold == nil {
+	if k.holds[target] == nil {
 		return
 	}
-	state := k.states[hold.session]
-	if state == nil {
-		state = &leaseState{}
-		k.states[hold.session] = state
-	}
-	now := k.now()
-	k.targets[target] = hold.session
-	k.writeLocked(hold.session, state, now)
-	state.lastTick = now
-	state.owned = true
-	state.lastResize = true
+	k.tickLocked(target, k.now(), false)
 }
 
 // releaseHold ends the background refresh for target. The lease itself stays put

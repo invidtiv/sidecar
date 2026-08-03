@@ -749,6 +749,84 @@ func TestLeaseKeeperHeldLeaseSurvivesASuspendedEventLoop(t *testing.T) {
 	}
 }
 
+// activity counts every touch of the store, so a test can tell that a hold's
+// goroutine has taken a tick without assuming whether that tick wrote.
+func (s *fakeLeaseStore) activity() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads + s.sets
+}
+
+// waitForActivity blocks until the store has been touched again, ordering a test
+// against the hold's goroutine without sleeping for a fixed time.
+func waitForActivity(t *testing.T, store *fakeLeaseStore, above int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for store.activity() <= above {
+		if time.Now().After(deadline) {
+			t.Fatalf("lease refresher stalled at %d store touches", above)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A hold stands in for the ticks a suspended event loop cannot take; it is not a
+// standing claim that the user is here. Stamping idle=0 for the whole attach let
+// a machine that was attached and then walked away from outrank the machine the
+// user was actually typing on — and since the token kept changing, neither
+// staleness nor idle preemption could ever unseat it before the user physically
+// detached, which may be hours.
+func TestLeaseKeeperHeldLeaseYieldsToTheMachineTheUserIsTypingOn(t *testing.T) {
+	store := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	attached := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	attached.selfID = "attached"
+	attached.now = readNow
+	attached.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(attached)
+
+	typing := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	typing.selfID = "typing"
+	typing.now = readNow
+	typing.lastInput = readNow()
+
+	attached.hold("%1")
+	if leaseOwner(store.current()) != "attached" {
+		t.Fatalf("lease = %q, want it claimed by the attaching instance", store.current())
+	}
+
+	// The user walks to the other machine and types there continuously. The
+	// attached instance is left behind, refreshing from its goroutine.
+	for range 30 {
+		advance(2 * time.Second)
+		before := store.activity()
+		ticker.c <- readNow()
+		waitForActivity(t, store, before)
+		typing.noteInput()
+		if typing.allow("%1") {
+			if leaseOwner(store.current()) != "typing" {
+				t.Fatalf("lease = %q, want the machine being typed on to hold it", store.current())
+			}
+			return
+		}
+	}
+	t.Fatalf("the machine being typed on never took geometry from an attached machine the user had left (lease %q)",
+		store.current())
+}
+
 // A hold dies with the process that started it, so a crash mid-attach must not
 // strand the lease: the token simply stops changing and goes stale like any other.
 func TestLeaseKeeperHeldLeaseGoesStaleWhenTheHolderDies(t *testing.T) {
