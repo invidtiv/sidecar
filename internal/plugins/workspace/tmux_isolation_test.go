@@ -28,17 +28,22 @@ func socketPath(tmpDir string) string {
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "sidecar-tmux-test")
 	if err != nil {
-		os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 	if err := os.Setenv("TMUX_TMPDIR", dir); err != nil {
-		os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
+		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
 	// TMUX is set when the tests are themselves run from inside tmux. Left in
 	// place, tmux treats commands as coming from that client and can resolve a
 	// bare target against the outer server instead of the private one.
-	os.Unsetenv("TMUX")
+	if err := os.Unsetenv("TMUX"); err != nil {
+		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
 
 	code := m.Run()
 
