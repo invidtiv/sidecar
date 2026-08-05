@@ -529,6 +529,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.issueSearchLoading = false
 		if msg.Error == nil {
 			m.issueSearchResults = msg.Results
+			// Auto-select the sole hit so it is highlighted and Enter is consistent.
+			if len(m.issueSearchResults) == 1 {
+				m.issueSearchCursor = 0
+			}
 		}
 		m.issueSearchScrollOffset = 0
 		m.issueInputModal = nil
@@ -2103,15 +2107,23 @@ func (m *Model) handleProjectAddCommunityKeys(msg tea.KeyPressMsg) (tea.Model, t
 	return m, nil
 }
 
+// resolveIssueOpenID picks which issue ID to open from the issue input modal.
+// Priority: selected result (cursor ≥ 0) → sole visible search result when
+// cursor is unset → typed value (direct ID open / multi-result fallback).
+func resolveIssueOpenID(cursor int, results []IssueSearchResult, typed string) string {
+	if cursor >= 0 && cursor < len(results) {
+		return results[cursor].ID
+	}
+	if cursor < 0 && len(results) == 1 {
+		return results[0].ID
+	}
+	return strings.TrimSpace(typed)
+}
+
 // issueInputSubmit resolves the current issue input (selected result or typed ID)
 // and either opens the full issue in TD monitor or shows a lightweight preview.
 func (m *Model) issueInputSubmit() (tea.Model, tea.Cmd) {
-	var issueID string
-	if m.issueSearchCursor >= 0 && m.issueSearchCursor < len(m.issueSearchResults) {
-		issueID = m.issueSearchResults[m.issueSearchCursor].ID
-	} else {
-		issueID = strings.TrimSpace(m.issueInputInput.Value())
-	}
+	issueID := resolveIssueOpenID(m.issueSearchCursor, m.issueSearchResults, m.issueInputInput.Value())
 	if issueID == "" {
 		return m, nil
 	}

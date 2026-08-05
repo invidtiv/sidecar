@@ -2,6 +2,81 @@ package app
 
 import "testing"
 
+func TestResolveIssueOpenID(t *testing.T) {
+	results := []IssueSearchResult{
+		{ID: "td-zdefab", Title: "sole hit"},
+		{ID: "td-other", Title: "second"},
+	}
+	tests := []struct {
+		name    string
+		cursor  int
+		results []IssueSearchResult
+		typed   string
+		want    string
+	}{
+		{
+			name:    "selected cursor wins",
+			cursor:  1,
+			results: results,
+			typed:   "zdef",
+			want:    "td-other",
+		},
+		{
+			name:    "sole result with unset cursor",
+			cursor:  -1,
+			results: results[:1],
+			typed:   "zdef",
+			want:    "td-zdefab",
+		},
+		{
+			name:    "zero results uses typed value",
+			cursor:  -1,
+			results: nil,
+			typed:   "td-exactid",
+			want:    "td-exactid",
+		},
+		{
+			name:    "multi result unset cursor uses typed value",
+			cursor:  -1,
+			results: results,
+			typed:   "zdef",
+			want:    "zdef",
+		},
+		{
+			name:    "empty typed and no selection",
+			cursor:  -1,
+			results: nil,
+			typed:   "  ",
+			want:    "",
+		},
+		{
+			name:    "out of range cursor falls back to sole result",
+			cursor:  5,
+			results: results[:1],
+			typed:   "zdef",
+			// cursor invalid → sole-result path only when cursor < 0;
+			// out-of-range non-negative falls through to typed
+			want: "zdef",
+		},
+		{
+			name:    "selected sole result",
+			cursor:  0,
+			results: results[:1],
+			typed:   "zdef",
+			want:    "td-zdefab",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveIssueOpenID(tt.cursor, tt.results, tt.typed)
+			if got != tt.want {
+				t.Errorf("resolveIssueOpenID(%d, %v, %q) = %q, want %q",
+					tt.cursor, tt.results, tt.typed, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsGlobalRefreshContext(t *testing.T) {
 	tests := []struct {
 		context string

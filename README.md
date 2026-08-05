@@ -205,6 +205,7 @@ See [Theme Creation Skill](.claude/skills/create-theme/SKILL.md) for custom them
 | `@`                 | Open project switcher            |
 | `W`                 | Open worktree switcher           |
 | `#`                 | Open theme switcher              |
+| `i`                 | Open issue                       |
 | `tab` / `shift+tab` | Navigate plugins                 |
 | `1-9`               | Focus plugin by number           |
 | `j/k`, `↓/↑`        | Navigate items                   |

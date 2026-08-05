@@ -54,6 +54,9 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `?` | toggle-palette | Command palette |
 | `!` | toggle-diagnostics | Diagnostics overlay |
 | `@` | switch-project | Project switcher |
+| `W` | switch-worktree | Worktree switcher |
+| `#` | switch-theme | Theme switcher |
+| `i` | open-issue | Open issue |
 | `r` | refresh | Refresh |
 | `q` | quit | Quit (root contexts only) |
 | `ctrl+c` | quit | Force quit |

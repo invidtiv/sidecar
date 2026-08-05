@@ -5,12 +5,17 @@ func DefaultBindings() []Binding {
 	return []Binding{
 		// Global context
 		{Key: "q", Command: "quit", Context: "global"},
+		{Key: "ctrl+c", Command: "quit", Context: "global"},
 		{Key: "?", Command: "toggle-palette", Context: "global"},
 		{Key: "!", Command: "toggle-diagnostics", Context: "global"},
 		{Key: "`", Command: "next-plugin", Context: "global"},
 		{Key: "~", Command: "prev-plugin", Context: "global"},
 		{Key: "@", Command: "switch-project", Context: "global"},
+		{Key: "W", Command: "switch-worktree", Context: "global"},
+		{Key: "#", Command: "switch-theme", Context: "global"},
 		{Key: "^", Command: "open-in", Context: "global"},
+		{Key: "i", Command: "open-issue", Context: "global"},
+		{Key: "r", Command: "refresh", Context: "global"},
 		{Key: "1", Command: "focus-plugin-1", Context: "global"},
 		{Key: "2", Command: "focus-plugin-2", Context: "global"},
 		{Key: "3", Command: "focus-plugin-3", Context: "global"},

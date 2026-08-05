@@ -219,3 +219,41 @@ func TestRegistry_GetCommand(t *testing.T) {
 		t.Error("GetCommand should return false for missing command")
 	}
 }
+
+func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
+	// App-level globals hard-coded in update.go must also appear here so the
+	// command palette (BuildEntries) can discover them.
+	want := map[string]string{
+		"i":      "open-issue",
+		"W":      "switch-worktree",
+		"#":      "switch-theme",
+		"r":      "refresh",
+		"ctrl+c": "quit",
+		"q":      "quit",
+		"@":      "switch-project",
+		"^":      "open-in",
+		"?":      "toggle-palette",
+		"!":      "toggle-diagnostics",
+	}
+
+	found := make(map[string]string)
+	for _, b := range DefaultBindings() {
+		if b.Context != "global" {
+			continue
+		}
+		if _, ok := want[b.Key]; ok {
+			found[b.Key] = b.Command
+		}
+	}
+
+	for key, cmd := range want {
+		got, ok := found[key]
+		if !ok {
+			t.Errorf("missing global binding for key %q (want command %q)", key, cmd)
+			continue
+		}
+		if got != cmd {
+			t.Errorf("global key %q: command = %q, want %q", key, got, cmd)
+		}
+	}
+}
