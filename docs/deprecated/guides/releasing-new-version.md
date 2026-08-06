@@ -1,6 +1,9 @@
 # Releasing a New Version
 
-Guide for creating new sidecar releases.
+> **Deprecated.** The live operator contract is [`docs/releasing.md`](../../releasing.md).
+> Prefer `RELEASE_VERSION=vX.Y.Z make release`.
+
+Guide for creating new sidecar releases (historical; may be inaccurate).
 
 ## Prerequisites
 

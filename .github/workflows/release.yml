@@ -34,7 +34,9 @@ jobs:
         env:
           GOWORK: "off"
         run: |
-          make fmt-check-all test build release-snapshot
+          # Align with go-ci: full-tree gofmt is not a gate (legacy debt).
+          # Snapshot + archive/guard tests catch release packaging regressions.
+          make test build release-snapshot
           ./scripts/verify-release-archives.sh dist
           ./scripts/test-release-guards.sh dist
           ./scripts/test-release-publication.sh
@@ -44,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GOWORK: "off"
     steps:
       - uses: actions/checkout@v7
         with:
