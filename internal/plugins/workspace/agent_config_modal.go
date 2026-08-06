@@ -27,8 +27,10 @@ func (p *Plugin) openAgentConfigModal(wt *Worktree, isRestart bool) {
 	p.agentConfigWorktree = wt
 	p.agentConfigIsRestart = isRestart
 	// Keep current/stored agent visible even if hidden from the global allowlist.
-	agents := withPreferredAgent(p.selectableAgentTypes(), p.resolveWorktreeAgentType(wt))
-	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agents, p.resolveWorktreeAgentType(wt), -1)
+	// List is fixed for the modal lifetime so key/mouse index sync cannot drop preferred.
+	preferred := p.resolveWorktreeAgentType(wt)
+	p.agentConfigAgentList = withPreferredAgent(p.selectableAgentTypes(), preferred)
+	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(p.agentConfigAgentList, preferred, -1)
 	p.agentConfigSkipPerms = false
 	p.agentConfigPromptIdx = -1
 	p.agentConfigPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
@@ -43,6 +45,7 @@ func (p *Plugin) clearAgentConfigModal() {
 	p.agentConfigIsRestart = false
 	p.agentConfigAgentType = ""
 	p.agentConfigAgentIdx = 0
+	p.agentConfigAgentList = nil
 	p.agentConfigSkipPerms = false
 	p.agentConfigPromptIdx = -1
 	p.agentConfigPrompts = nil
@@ -96,15 +99,16 @@ func (p *Plugin) ensureAgentConfigModal() {
 	}
 	p.agentConfigModalWidth = modalW
 
-	// Prefer stored/current type so restart does not silently switch agents.
-	preferred := AgentNone
-	if p.agentConfigWorktree != nil {
-		preferred = p.resolveWorktreeAgentType(p.agentConfigWorktree)
+	// Use the list fixed at modal open so navigation cannot change list identity.
+	agentTypes := p.agentConfigAgentList
+	if len(agentTypes) == 0 {
+		preferred := AgentNone
+		if p.agentConfigWorktree != nil {
+			preferred = p.resolveWorktreeAgentType(p.agentConfigWorktree)
+		}
+		agentTypes = withPreferredAgent(p.selectableAgentTypes(), preferred)
+		p.agentConfigAgentList = agentTypes
 	}
-	if p.agentConfigAgentType != "" {
-		preferred = p.agentConfigAgentType
-	}
-	agentTypes := withPreferredAgent(p.selectableAgentTypes(), preferred)
 	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agentTypes, p.agentConfigAgentType, p.agentConfigAgentIdx)
 	items := make([]modal.ListItem, len(agentTypes))
 	for i, at := range agentTypes {

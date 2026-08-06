@@ -336,11 +336,10 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 	prevAgentIdx := p.agentConfigAgentIdx
 	action := p.agentConfigModal.HandleMouse(msg, p.mouseHandler)
 
-	// Sync agent type when list selection changes via mouse
+	// Sync agent type when list selection changes via mouse (fixed modal list)
 	if p.agentConfigAgentIdx != prevAgentIdx {
-		agents := withPreferredAgent(p.selectableAgentTypes(), p.agentConfigAgentType)
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(agents) {
-			p.agentConfigAgentType = agents[p.agentConfigAgentIdx]
+		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
+			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
 		}
 	}
 

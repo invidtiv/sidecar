@@ -97,3 +97,40 @@ func TestIsKnownAgentType_Grok(t *testing.T) {
 		t.Fatal("AgentGrok should be known")
 	}
 }
+
+func TestAgentConfigModalListStableWhenNavigating(t *testing.T) {
+	// Simulate open: preferred hidden agent is in the fixed list.
+	cfg := config.Default()
+	cfg.Plugins.Workspace.Agents = []string{"claude", "grok"}
+	p := &Plugin{ctx: &plugin.Context{Config: cfg}}
+	preferred := AgentCopilot
+	p.agentConfigAgentList = withPreferredAgent(p.selectableAgentTypes(), preferred)
+	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(p.agentConfigAgentList, preferred, -1)
+	if p.agentConfigAgentType != AgentCopilot {
+		t.Fatalf("open selection = %q, want copilot", p.agentConfigAgentType)
+	}
+	// Navigate away then back: list length must stay stable (include preferred).
+	lenOpen := len(p.agentConfigAgentList)
+	// Select claude
+	for i, at := range p.agentConfigAgentList {
+		if at == AgentClaude {
+			p.agentConfigAgentIdx = i
+			p.agentConfigAgentType = p.agentConfigAgentList[i]
+			break
+		}
+	}
+	if len(p.agentConfigAgentList) != lenOpen {
+		t.Fatalf("list length changed after navigate: %d -> %d", lenOpen, len(p.agentConfigAgentList))
+	}
+	// Select back to preferred index
+	for i, at := range p.agentConfigAgentList {
+		if at == AgentCopilot {
+			p.agentConfigAgentIdx = i
+			p.agentConfigAgentType = p.agentConfigAgentList[i]
+			break
+		}
+	}
+	if p.agentConfigAgentType != AgentCopilot {
+		t.Fatalf("reselect preferred = %q, want copilot", p.agentConfigAgentType)
+	}
+}

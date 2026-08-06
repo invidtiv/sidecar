@@ -310,6 +310,7 @@ type Plugin struct {
 	agentConfigIsRestart  bool
 	agentConfigAgentType  AgentType
 	agentConfigAgentIdx   int
+	agentConfigAgentList  []AgentType // Fixed picker list for modal lifetime (includes preferred)
 	agentConfigSkipPerms  bool
 	agentConfigPromptIdx  int
 	agentConfigPrompts    []Prompt

@@ -328,9 +328,8 @@ func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Sync agent type when selection changes
 	if p.agentConfigAgentIdx != prevAgentIdx {
-		agents := withPreferredAgent(p.selectableAgentTypes(), p.agentConfigAgentType)
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(agents) {
-			p.agentConfigAgentType = agents[p.agentConfigAgentIdx]
+		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
+			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
 		}
 	}
 
