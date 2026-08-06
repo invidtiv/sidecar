@@ -170,9 +170,10 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.syncCreateModalFocus()
 		return nil
 	}
-	if idx, ok := parseIndexedID(createAgentItemPrefix, action); ok && idx < len(AgentTypeOrder) {
+	agents := p.selectableAgentTypes()
+	if idx, ok := parseIndexedID(createAgentItemPrefix, action); ok && idx < len(agents) {
 		p.createAgentIdx = idx
-		p.createAgentType = AgentTypeOrder[idx]
+		p.createAgentType = agents[idx]
 		p.createFocus = 4
 		p.syncCreateModalFocus()
 		return nil
@@ -337,8 +338,9 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 
 	// Sync agent type when list selection changes via mouse
 	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(AgentTypeOrder) {
-			p.agentConfigAgentType = AgentTypeOrder[p.agentConfigAgentIdx]
+		agents := withPreferredAgent(p.selectableAgentTypes(), p.agentConfigAgentType)
+		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(agents) {
+			p.agentConfigAgentType = agents[p.agentConfigAgentIdx]
 		}
 	}
 
@@ -850,8 +852,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionCreateAgentOption:
 		// Click on agent option
 		if idx, ok := action.Region.Data.(int); ok {
-			if idx >= 0 && idx < len(AgentTypeOrder) {
-				p.createAgentType = AgentTypeOrder[idx]
+			agents := p.selectableAgentTypes()
+			if idx >= 0 && idx < len(agents) {
+				p.createAgentType = agents[idx]
+				p.createAgentIdx = idx
 			}
 		}
 	case regionCreateCheckbox:

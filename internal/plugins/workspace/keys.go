@@ -71,8 +71,9 @@ func (p *Plugin) handleTypeSelectorKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Sync agent type when agent index changes (td-f42a86)
 	// No need to rebuild modal - When sections handle visibility dynamically
-	if p.typeSelectorAgentIdx != prevAgentIdx && p.typeSelectorAgentIdx >= 0 && p.typeSelectorAgentIdx < len(ShellAgentOrder) {
-		p.typeSelectorAgentType = ShellAgentOrder[p.typeSelectorAgentIdx]
+	shellAgents := p.selectableShellAgentTypes()
+	if p.typeSelectorAgentIdx != prevAgentIdx && p.typeSelectorAgentIdx >= 0 && p.typeSelectorAgentIdx < len(shellAgents) {
+		p.typeSelectorAgentType = shellAgents[p.typeSelectorAgentIdx]
 	}
 
 	switch action {
@@ -327,8 +328,9 @@ func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Sync agent type when selection changes
 	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(AgentTypeOrder) {
-			p.agentConfigAgentType = AgentTypeOrder[p.agentConfigAgentIdx]
+		agents := withPreferredAgent(p.selectableAgentTypes(), p.agentConfigAgentType)
+		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(agents) {
+			p.agentConfigAgentType = agents[p.agentConfigAgentIdx]
 		}
 	}
 
@@ -1315,8 +1317,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	wasAgentIdx := p.createAgentIdx
 	action, cmd := p.createModal.HandleKey(msg)
-	if p.createAgentIdx != wasAgentIdx && p.createAgentIdx < len(AgentTypeOrder) {
-		p.createAgentType = AgentTypeOrder[p.createAgentIdx]
+	agents := p.selectableAgentTypes()
+	if p.createAgentIdx != wasAgentIdx && p.createAgentIdx < len(agents) {
+		p.createAgentType = agents[p.createAgentIdx]
 		p.syncCreateModalFocus()
 	}
 
@@ -1381,12 +1384,7 @@ func (p *Plugin) shouldShowShellSkipPerms() bool {
 }
 
 func (p *Plugin) agentTypeIndex(agentType AgentType) int {
-	for i, at := range AgentTypeOrder {
-		if at == agentType {
-			return i
-		}
-	}
-	return 0
+	return agentTypeIndexIn(p.selectableAgentTypes(), agentType)
 }
 
 // blurCreateInputs blurs all create modal textinputs.

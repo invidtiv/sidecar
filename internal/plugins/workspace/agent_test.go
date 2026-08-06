@@ -145,6 +145,7 @@ func TestGetAgentCommand(t *testing.T) {
 		{AgentOpenCode, "opencode"},
 		{AgentPi, "pi"},
 		{AgentAmp, "amp"},
+		{AgentGrok, "grok"},
 		{AgentCustom, "claude"}, // Falls back to claude
 	}
 
@@ -671,6 +672,7 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		{AgentOpenCode, false}, // No known flag
 		{AgentPi, false},       // No known flag
 		{AgentAmp, true},       // Has --dangerously-allow-all
+		{AgentGrok, true},      // Has --always-approve
 	}
 
 	p := &Plugin{}
@@ -867,6 +869,8 @@ func TestBuildAgentCommandSyntax(t *testing.T) {
 		{AgentPi, true, "pi"}, // No skip flag
 		{AgentAmp, false, "amp"},
 		{AgentAmp, true, "amp --dangerously-allow-all"},
+		{AgentGrok, false, "grok"},
+		{AgentGrok, true, "grok --always-approve"},
 		{AgentAider, false, "aider"},
 		{AgentAider, true, "aider --yes"},
 	}

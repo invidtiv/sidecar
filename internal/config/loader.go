@@ -85,6 +85,7 @@ type rawWorkspaceConfig struct {
 	DirPrefix            *bool                    `json:"dirPrefix"`
 	DefaultAgentType     string                   `json:"defaultAgentType"`
 	LegacyDefaultAgent   string                   `json:"defaultAgent"` // Backward compatibility
+	Agents               []string                 `json:"agents"`
 	AgentStart           json.RawMessage          `json:"agentStart"`
 	TmuxCaptureMaxBytes  *int                     `json:"tmuxCaptureMaxBytes"`
 	AutoCreateShell      *bool                    `json:"autoCreateShell"`
@@ -254,6 +255,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if cfg.Plugins.Workspace.DefaultAgentType == "" && raw.Plugins.Workspace.LegacyDefaultAgent != "" {
 		cfg.Plugins.Workspace.DefaultAgentType = raw.Plugins.Workspace.LegacyDefaultAgent
+	}
+	if len(raw.Plugins.Workspace.Agents) > 0 {
+		cfg.Plugins.Workspace.Agents = append([]string(nil), raw.Plugins.Workspace.Agents...)
 	}
 	if agentStart, ok := parseAgentStartOverrides(raw.Plugins.Workspace.AgentStart); ok {
 		cfg.Plugins.Workspace.AgentStart = agentStart

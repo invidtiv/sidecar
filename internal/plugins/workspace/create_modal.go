@@ -55,8 +55,9 @@ func (p *Plugin) ensureCreateModal() {
 	}
 	p.createModalWidth = modalW
 
-	items := make([]modal.ListItem, len(AgentTypeOrder))
-	for i, at := range AgentTypeOrder {
+	agentTypes := p.selectableAgentTypes()
+	items := make([]modal.ListItem, len(agentTypes))
+	for i, at := range agentTypes {
 		items[i] = modal.ListItem{
 			ID:    createIndexedID(createAgentItemPrefix, i),
 			Label: AgentDisplayNames[at],
@@ -119,13 +120,8 @@ func (p *Plugin) normalizeCreateFocus() {
 }
 
 func (p *Plugin) syncCreateAgentIdx() {
-	if p.createAgentIdx < 0 || p.createAgentIdx >= len(AgentTypeOrder) {
-		p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-		return
-	}
-	if AgentTypeOrder[p.createAgentIdx] != p.createAgentType {
-		p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-	}
+	agents := p.selectableAgentTypes()
+	p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
 }
 
 func (p *Plugin) createFocusID() string {

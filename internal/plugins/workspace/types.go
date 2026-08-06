@@ -139,6 +139,7 @@ const (
 	AgentOpenCode AgentType = "opencode" // OpenCode
 	AgentPi       AgentType = "pi"       // Pi Agent
 	AgentAmp      AgentType = "amp"      // Amp
+	AgentGrok     AgentType = "grok"     // Grok Build
 	AgentCustom   AgentType = "custom"   // Custom command
 	AgentShell    AgentType = "shell"    // Project shell (not an AI agent)
 )
@@ -154,6 +155,7 @@ var SkipPermissionsFlags = map[AgentType]string{
 	AgentOpenCode: "", // No known flag
 	AgentPi:       "", // No known flag
 	AgentAmp:      "--dangerously-allow-all",
+	AgentGrok:     "--always-approve",
 }
 
 // PrintModeArgs maps agent types to their non-interactive/print mode CLI arguments.
@@ -176,6 +178,7 @@ var AgentDisplayNames = map[AgentType]string{
 	AgentOpenCode: "OpenCode",
 	AgentPi:       "Pi Agent",
 	AgentAmp:      "Amp",
+	AgentGrok:     "Grok",
 	AgentShell:    "Project Shell",
 }
 
@@ -190,6 +193,7 @@ var shellAgentAbbreviations = map[AgentType]string{
 	AgentOpenCode: "OpenCode",
 	AgentPi:       "Pi",
 	AgentAmp:      "Amp",
+	AgentGrok:     "Grok",
 }
 
 // AgentCommands maps agent types to their CLI commands.
@@ -203,6 +207,7 @@ var AgentCommands = map[AgentType]string{
 	AgentOpenCode: "opencode",
 	AgentPi:       "pi",
 	AgentAmp:      "amp",
+	AgentGrok:     "grok",
 }
 
 // AgentTypeOrder defines the order of agents in selection UI.
@@ -215,6 +220,7 @@ var AgentTypeOrder = []AgentType{
 	AgentOpenCode,
 	AgentPi,
 	AgentAmp,
+	AgentGrok,
 	AgentNone,
 }
 
@@ -230,6 +236,7 @@ var ShellAgentOrder = []AgentType{
 	AgentOpenCode,
 	AgentPi,
 	AgentAmp,
+	AgentGrok,
 }
 
 // kanbanCardData stores column and row for Kanban card hit regions.

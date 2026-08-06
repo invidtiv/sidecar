@@ -1211,9 +1211,10 @@ func (p *Plugin) ensureTypeSelectorModal() {
 	// Set placeholder for name input
 	p.typeSelectorNameInput.Placeholder = p.nextShellDisplayName()
 
-	// Build agent list items for shell (td-a902fe)
-	agentItems := make([]modal.ListItem, len(ShellAgentOrder))
-	for i, at := range ShellAgentOrder {
+	// Build agent list items for shell (td-a902fe); order from config allowlist
+	shellAgents := p.selectableShellAgentTypes()
+	agentItems := make([]modal.ListItem, len(shellAgents))
+	for i, at := range shellAgents {
 		agentItems[i] = modal.ListItem{
 			ID:    typeSelectorAgentItemPfx + string(at),
 			Label: AgentDisplayNames[at],

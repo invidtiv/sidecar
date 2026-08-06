@@ -193,6 +193,7 @@ func TestLoadFrom_WorkspaceAgentSettings(t *testing.T) {
 		"plugins": {
 			"workspace": {
 				"defaultAgentType": "opencode",
+				"agents": ["claude", "grok", "opencode"],
 				"agentStart": {
 					"opencode": "opencode --profile fast"
 				}
@@ -213,6 +214,15 @@ func TestLoadFrom_WorkspaceAgentSettings(t *testing.T) {
 	}
 	if got := cfg.Plugins.Workspace.AgentStart["opencode"]; got != "opencode --profile fast" {
 		t.Errorf("AgentStart[opencode] = %q, want %q", got, "opencode --profile fast")
+	}
+	wantAgents := []string{"claude", "grok", "opencode"}
+	if len(cfg.Plugins.Workspace.Agents) != len(wantAgents) {
+		t.Fatalf("Agents = %v, want %v", cfg.Plugins.Workspace.Agents, wantAgents)
+	}
+	for i, a := range wantAgents {
+		if cfg.Plugins.Workspace.Agents[i] != a {
+			t.Errorf("Agents[%d] = %q, want %q", i, cfg.Plugins.Workspace.Agents[i], a)
+		}
 	}
 }
 

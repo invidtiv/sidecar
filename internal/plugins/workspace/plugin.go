@@ -238,7 +238,7 @@ type Plugin struct {
 	createTaskID          string
 	createTaskTitle       string    // Title of selected task for display
 	createAgentType       AgentType // Selected agent type (default: AgentClaude)
-	createAgentIdx        int       // Selected agent index in AgentTypeOrder
+	createAgentIdx        int       // Selected agent index in selectableAgentTypes()
 	createSkipPermissions bool      // Skip permissions checkbox
 	createFocus           int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
 	createButtonHover     int       // 0=none, 1=create, 2=cancel
@@ -858,15 +858,22 @@ func (p *Plugin) resolveWorktreeAgentType(wt *Worktree) AgentType {
 
 // getDefaultCreateAgentType returns the default agent for create-worktree modal.
 // .sidecar-agent in the current workspace is treated equivalently to config defaultAgentType.
+// Result is clamped to the selectable allowlist when the preferred type is hidden.
 func (p *Plugin) getDefaultCreateAgentType() AgentType {
+	var preferred AgentType
 	if p != nil && p.ctx != nil {
 		fileAgent := loadAgentType(p.ctx.ProjectRoot, p.ctx.WorkDir)
 		if isKnownAgentType(fileAgent) {
-			return fileAgent
+			preferred = fileAgent
+		} else {
+			preferred = p.getConfigDefaultAgentType()
 		}
-		return p.getConfigDefaultAgentType()
+	} else {
+		preferred = p.getConfigDefaultAgentType()
 	}
-	return p.getConfigDefaultAgentType()
+	agents := p.selectableAgentTypes()
+	got, _ := clampAgentSelection(agents, preferred, -1)
+	return got
 }
 
 // clearCreateModal resets create modal state.

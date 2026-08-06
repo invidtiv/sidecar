@@ -26,8 +26,9 @@ func (p *Plugin) openAgentConfigModal(wt *Worktree, isRestart bool) {
 	configDir := filepath.Join(home, ".config", "sidecar")
 	p.agentConfigWorktree = wt
 	p.agentConfigIsRestart = isRestart
-	p.agentConfigAgentType = p.resolveWorktreeAgentType(wt)
-	p.agentConfigAgentIdx = p.agentTypeIndex(p.agentConfigAgentType)
+	// Keep current/stored agent visible even if hidden from the global allowlist.
+	agents := withPreferredAgent(p.selectableAgentTypes(), p.resolveWorktreeAgentType(wt))
+	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agents, p.resolveWorktreeAgentType(wt), -1)
 	p.agentConfigSkipPerms = false
 	p.agentConfigPromptIdx = -1
 	p.agentConfigPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
@@ -95,8 +96,18 @@ func (p *Plugin) ensureAgentConfigModal() {
 	}
 	p.agentConfigModalWidth = modalW
 
-	items := make([]modal.ListItem, len(AgentTypeOrder))
-	for i, at := range AgentTypeOrder {
+	// Prefer stored/current type so restart does not silently switch agents.
+	preferred := AgentNone
+	if p.agentConfigWorktree != nil {
+		preferred = p.resolveWorktreeAgentType(p.agentConfigWorktree)
+	}
+	if p.agentConfigAgentType != "" {
+		preferred = p.agentConfigAgentType
+	}
+	agentTypes := withPreferredAgent(p.selectableAgentTypes(), preferred)
+	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agentTypes, p.agentConfigAgentType, p.agentConfigAgentIdx)
+	items := make([]modal.ListItem, len(agentTypes))
+	for i, at := range agentTypes {
 		items[i] = modal.ListItem{
 			ID:    fmt.Sprintf("%s%d", agentConfigAgentItemPrefix, i),
 			Label: AgentDisplayNames[at],

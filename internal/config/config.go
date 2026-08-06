@@ -76,10 +76,16 @@ type WorkspacePluginConfig struct {
 	// This helps associate conversations with the repo after workspace deletion. Default: true.
 	DirPrefix bool `json:"dirPrefix"`
 	// DefaultAgentType sets the default agent family selected when creating a workspace.
-	// Uses workspace.AgentType values (e.g. "claude", "codex", "opencode").
+	// Uses workspace.AgentType values (e.g. "claude", "codex", "opencode", "grok").
 	DefaultAgentType string `json:"defaultAgentType,omitempty"`
+	// Agents is an ordered allowlist of agent type IDs shown in Create Shell, Create Worktree,
+	// and Start Agent pickers (e.g. ["claude","codex","grok"]). Empty/omitted shows all
+	// built-in UI agents. Unknown IDs are ignored. "None (attach only)" is always offered
+	// in pickers regardless of this list. Stored agent types on existing workspaces still
+	// resolve even if hidden from pickers.
+	Agents []string `json:"agents,omitempty"`
 	// AgentStart maps agent family (AgentType string) to default startup command.
-	// Example: {"claude":"claude", "opencode":"opencode --profile fast"}.
+	// Example: {"claude":"claude", "opencode":"opencode --profile fast", "grok":"grok"}.
 	// Per-workspace .sidecar-agent-start still takes precedence when present.
 	AgentStart map[string]string `json:"agentStart,omitempty"`
 	// TmuxCaptureMaxBytes caps tmux pane capture size for the preview pane. Default: 2MB.

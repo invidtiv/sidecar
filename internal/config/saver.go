@@ -54,6 +54,7 @@ type saveConversationsConfig struct {
 type saveWorkspaceConfig struct {
 	DirPrefix            *bool                 `json:"dirPrefix,omitempty"`
 	DefaultAgentType     string                `json:"defaultAgentType,omitempty"`
+	Agents               []string              `json:"agents,omitempty"`
 	AgentStart           map[string]string     `json:"agentStart,omitempty"`
 	TmuxCaptureMaxBytes  *int                  `json:"tmuxCaptureMaxBytes,omitempty"`
 	AutoCreateShell      *bool                 `json:"autoCreateShell,omitempty"`
@@ -93,6 +94,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 			Workspace: saveWorkspaceConfig{
 				DirPrefix:            &cfg.Plugins.Workspace.DirPrefix,
 				DefaultAgentType:     cfg.Plugins.Workspace.DefaultAgentType,
+				Agents:               cfg.Plugins.Workspace.Agents,
 				AgentStart:           cfg.Plugins.Workspace.AgentStart,
 				TmuxCaptureMaxBytes:  &cfg.Plugins.Workspace.TmuxCaptureMaxBytes,
 				AutoCreateShell:      &cfg.Plugins.Workspace.AutoCreateShell,
