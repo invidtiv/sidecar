@@ -44,7 +44,7 @@ func gitMainWorktree(dir string) string {
 }
 
 // ResolveTDRoot reads .td-root file and returns the resolved root path.
-// Returns workDir if no .td-root exists or it's empty.
+// Returns workDir if no .td-root exists, it's empty, or the target path does not exist.
 func ResolveTDRoot(workDir string) string {
 	// Check centralized location first
 	projDir, err := projectdir.Resolve(workDir)
@@ -53,7 +53,10 @@ func ResolveTDRoot(workDir string) string {
 		if data, err := os.ReadFile(tdRootPath); err == nil {
 			rootDir := strings.TrimSpace(string(data))
 			if rootDir != "" {
-				return filepath.Clean(rootDir)
+				cleaned := filepath.Clean(rootDir)
+				if fi, err := os.Stat(cleaned); err == nil && fi.IsDir() {
+					return cleaned
+				}
 			}
 		}
 	}
@@ -68,7 +71,10 @@ func ResolveTDRoot(workDir string) string {
 			if data, err := os.ReadFile(mainLinkPath); err == nil {
 				rootDir := strings.TrimSpace(string(data))
 				if rootDir != "" {
-					return filepath.Clean(rootDir)
+					cleaned := filepath.Clean(rootDir)
+					if fi, err := os.Stat(cleaned); err == nil && fi.IsDir() {
+						return cleaned
+					}
 				}
 			}
 			todosPath := filepath.Join(mainRoot, TodosDir)
@@ -84,7 +90,12 @@ func ResolveTDRoot(workDir string) string {
 		return workDir
 	}
 
-	return filepath.Clean(rootDir)
+	cleaned := filepath.Clean(rootDir)
+	if fi, err := os.Stat(cleaned); err == nil && fi.IsDir() {
+		return cleaned
+	}
+
+	return workDir
 }
 
 // ResolveDBPath returns the full path to the td database.
