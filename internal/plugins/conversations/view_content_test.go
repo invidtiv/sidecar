@@ -28,9 +28,9 @@ func TestAdapterAbbrev(t *testing.T) {
 			want:    "OC",
 		},
 		{
-			name:    "gemini-cli",
-			session: adapter.Session{AdapterID: "gemini-cli"},
-			want:    "GC",
+			name:    "antigravity",
+			session: adapter.Session{AdapterID: "antigravity"},
+			want:    "AG",
 		},
 		{
 			name:    "custom adapter with name",

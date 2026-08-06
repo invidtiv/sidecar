@@ -335,7 +335,7 @@ func (p *Plugin) loadMessages(sessionID string) tea.Cmd {
 // Uses tiered watching (td-dca6fe) to reduce FD count:
 // - HOT tier: recently active sessions use real-time fsnotify
 // - COLD tier: All other sessions use periodic polling (every 30s)
-// File-based adapters (claudecode, codex, geminicli, opencode) use tiered watcher.
+// File-based adapters (claudecode, codex, antigravity, opencode) use tiered watcher.
 // Database adapters (cursor, warp) still use their own Watch() methods.
 func (p *Plugin) startWatcher() tea.Cmd {
 	return func() tea.Msg {
@@ -425,7 +425,7 @@ func (p *Plugin) startWatcher() tea.Cmd {
 		if len(adapterConfigs) > 0 {
 			extractID := func(path string) string {
 				base := filepath.Base(path)
-				// Strip known prefixes for gemini-cli sessions
+				// Strip known prefixes for session files
 				base = strings.TrimPrefix(base, "session-")
 				return strings.TrimSuffix(base, filepath.Ext(base))
 			}

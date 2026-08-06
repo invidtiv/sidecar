@@ -169,8 +169,7 @@ func renderAdapterIcon(session adapter.Session) string {
 	case "claude-code":
 		// Amber for Claude Code (matches existing StatusModified)
 		return styles.StatusModified.Render(icon)
-	case "gemini-cli":
-		// Google blue
+	case "antigravity":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#4285F4")).Render(icon)
 	case "codex":
 		// OpenAI green
@@ -194,8 +193,8 @@ func adapterAbbrev(session adapter.Session) string {
 		return "CX"
 	case "opencode":
 		return "OC"
-	case "gemini-cli":
-		return "GC"
+	case "antigravity":
+		return "AG"
 	case "amp":
 		return "AM"
 	default:
@@ -228,8 +227,8 @@ func adapterShortName(session *adapter.Session) string {
 		return "codex"
 	case "opencode":
 		return "opencode"
-	case "gemini-cli":
-		return "gemini"
+	case "antigravity":
+		return "antigravity"
 	case "warp":
 		return "warp"
 	case "amp":
@@ -290,13 +289,13 @@ func adapterFilterOptions(adapters map[string]adapter.Adapter) []adapterFilterOp
 	if a, ok := adapters["opencode"]; ok {
 		addOption("opencode", a.Name(), "p")
 	}
-	if a, ok := adapters["gemini-cli"]; ok {
-		addOption("gemini-cli", a.Name(), "g")
+	if a, ok := adapters["antigravity"]; ok {
+		addOption("antigravity", a.Name(), "g")
 	}
 
 	var extra []adapterFilterOption
 	for id, a := range adapters {
-		if id == "claude-code" || id == "codex" || id == "opencode" || id == "gemini-cli" {
+		if id == "claude-code" || id == "codex" || id == "opencode" || id == "antigravity" {
 			continue
 		}
 		name := a.Name()
@@ -337,8 +336,8 @@ func resumeCommand(session *adapter.Session) string {
 		return fmt.Sprintf("codex resume %s", session.ID)
 	case "opencode":
 		return fmt.Sprintf("opencode --continue -s %s", session.ID)
-	case "gemini-cli":
-		return fmt.Sprintf("gemini --resume %s", session.ID)
+	case "antigravity":
+		return fmt.Sprintf("agy --conversation %s", session.ID)
 	case "cursor-cli":
 		return fmt.Sprintf("cursor-agent --resume %s", session.ID)
 	case "amp":

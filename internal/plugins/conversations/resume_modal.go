@@ -369,8 +369,8 @@ func defaultAgentIdxForAdapter(adapterID string) int {
 		agentType = workspace.AgentClaude
 	case "codex":
 		agentType = workspace.AgentCodex
-	case "gemini-cli":
-		agentType = workspace.AgentGemini
+	case "antigravity", "agy":
+		agentType = workspace.AgentAntigravity
 	case "cursor-cli":
 		agentType = workspace.AgentCursor
 	case "opencode":

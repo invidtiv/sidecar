@@ -2,8 +2,6 @@ package workspace
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -97,8 +95,8 @@ func detectAgentSessionStatus(agentType AgentType, worktreePath string) (Worktre
 		return detectClaudeSessionStatus(worktreePath)
 	case AgentCodex:
 		return detectCodexSessionStatus(worktreePath)
-	case AgentGemini:
-		return detectGeminiSessionStatus(worktreePath)
+	case AgentAntigravity:
+		return detectAntigravitySessionStatus(worktreePath)
 	case AgentOpenCode:
 		return detectOpenCodeSessionStatus(worktreePath)
 	case AgentCursor:
@@ -223,30 +221,47 @@ func detectCodexSessionStatus(worktreePath string) (WorktreeStatus, bool) {
 	return getCodexLastMessageStatus(sessionFile)
 }
 
-// detectGeminiSessionStatus checks Gemini CLI session files.
-// Gemini stores sessions in ~/.gemini/tmp/{sha256-hash}/chats/session-*.json
-func detectGeminiSessionStatus(worktreePath string) (WorktreeStatus, bool) {
+// detectAntigravitySessionStatus checks Antigravity CLI session files.
+// Antigravity stores sessions under ~/.gemini/antigravity-cli/brain/<session-id>/.system_generated/logs/transcript.jsonl
+func detectAntigravitySessionStatus(worktreePath string) (WorktreeStatus, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return 0, false
 	}
 
-	absPath, err := filepath.Abs(worktreePath)
-	if err != nil {
+	brainDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+	entries, err := os.ReadDir(brainDir)
+	if err != nil || len(entries) == 0 {
 		return 0, false
 	}
 
-	// SHA256 hash of absolute path
-	hash := sha256.Sum256([]byte(absPath))
-	pathHash := hex.EncodeToString(hash[:])
-	chatsDir := filepath.Join(home, ".gemini", "tmp", pathHash, "chats")
+	var newestFile string
+	var newestMtime time.Time
 
-	sessionFile, err := findMostRecentJSON(chatsDir, "session-")
-	if err != nil || sessionFile == "" {
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		logFile := filepath.Join(brainDir, entry.Name(), ".system_generated", "logs", "transcript.jsonl")
+		info, err := os.Stat(logFile)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newestMtime) {
+			newestMtime = info.ModTime()
+			newestFile = logFile
+		}
+	}
+
+	if newestFile == "" {
 		return 0, false
 	}
 
-	return getGeminiLastMessageStatus(sessionFile)
+	if isFileRecentlyModified(newestFile, sessionActivityThreshold) {
+		return StatusActive, true
+	}
+
+	return getAntigravityLastMessageStatus(newestFile)
 }
 
 // detectOpenCodeSessionStatus checks OpenCode session files.
@@ -898,35 +913,41 @@ func getCodexLastMessageStatus(path string) (WorktreeStatus, bool) {
 	return 0, false
 }
 
-// getGeminiLastMessageStatus reads Gemini JSON session file.
-func getGeminiLastMessageStatus(path string) (WorktreeStatus, bool) {
-	data, err := os.ReadFile(path)
+// getAntigravityLastMessageStatus reads Antigravity JSONL log file.
+func getAntigravityLastMessageStatus(path string) (WorktreeStatus, bool) {
+	file, err := os.Open(path)
 	if err != nil {
 		return 0, false
 	}
+	defer file.Close()
 
-	var session struct {
-		Messages []struct {
-			Type string `json:"type"` // "user", "gemini", "info"
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(data, &session); err != nil {
-		return 0, false
-	}
-
-	// Find last user/gemini message
 	var lastType string
-	for _, msg := range session.Messages {
-		if msg.Type == "user" || msg.Type == "gemini" {
-			lastType = msg.Type
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	type logLine struct {
+		Type string `json:"type"`
+	}
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var msg logLine
+		if err := json.Unmarshal(line, &msg); err == nil {
+			if msg.Type == "USER_INPUT" || msg.Type == "PLANNER_RESPONSE" {
+				lastType = msg.Type
+			}
 		}
 	}
 
 	switch lastType {
-	case "gemini": // gemini = assistant
-		return StatusWaiting, true
-	case "user":
+	case "USER_INPUT":
 		return StatusActive, true
+	case "PLANNER_RESPONSE":
+		return StatusWaiting, true
 	default:
 		return 0, false
 	}

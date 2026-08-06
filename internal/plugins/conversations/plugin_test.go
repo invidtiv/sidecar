@@ -3070,9 +3070,9 @@ func TestResumeCommand(t *testing.T) {
 			expected: "opencode --continue -s ses_abc123",
 		},
 		{
-			name:     "gemini-cli adapter",
-			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "gemini-cli"},
-			expected: "gemini --resume ses_abc123",
+			name:     "antigravity adapter",
+			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "antigravity"},
+			expected: "agy --conversation ses_abc123",
 		},
 		{
 			name:     "cursor-cli adapter",

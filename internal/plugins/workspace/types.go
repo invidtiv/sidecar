@@ -129,33 +129,33 @@ func (s WorktreeStatus) Icon() string {
 type AgentType string
 
 const (
-	AgentNone     AgentType = ""         // No agent (attach only)
-	AgentClaude   AgentType = "claude"   // Claude Code
-	AgentCodex    AgentType = "codex"    // Codex CLI
-	AgentCopilot  AgentType = "copilot"  // GitHub Copilot CLI
-	AgentAider    AgentType = "aider"    // Aider
-	AgentGemini   AgentType = "gemini"   // Gemini CLI
-	AgentCursor   AgentType = "cursor"   // Cursor Agent
-	AgentOpenCode AgentType = "opencode" // OpenCode
-	AgentPi       AgentType = "pi"       // Pi Agent
-	AgentAmp      AgentType = "amp"      // Amp
-	AgentGrok     AgentType = "grok"     // Grok Build
-	AgentCustom   AgentType = "custom"   // Custom command
-	AgentShell    AgentType = "shell"    // Project shell (not an AI agent)
+	AgentNone        AgentType = ""            // No agent (attach only)
+	AgentClaude      AgentType = "claude"      // Claude Code
+	AgentCodex       AgentType = "codex"       // Codex CLI
+	AgentCopilot     AgentType = "copilot"     // GitHub Copilot CLI
+	AgentAider       AgentType = "aider"       // Aider
+	AgentAntigravity AgentType = "antigravity" // Antigravity (agy)
+	AgentCursor      AgentType = "cursor"      // Cursor Agent
+	AgentOpenCode    AgentType = "opencode"    // OpenCode
+	AgentPi          AgentType = "pi"          // Pi Agent
+	AgentAmp         AgentType = "amp"         // Amp
+	AgentGrok        AgentType = "grok"        // Grok Build
+	AgentCustom      AgentType = "custom"      // Custom command
+	AgentShell       AgentType = "shell"       // Project shell (not an AI agent)
 )
 
 // SkipPermissionsFlags maps agent types to their skip-permissions CLI flags.
 var SkipPermissionsFlags = map[AgentType]string{
-	AgentClaude:   "--dangerously-skip-permissions",
-	AgentCodex:    "--dangerously-bypass-approvals-and-sandbox",
-	AgentCopilot:  "", // No known flag
-	AgentAider:    "--yes",
-	AgentGemini:   "--yolo",
-	AgentCursor:   "-f",
-	AgentOpenCode: "", // No known flag
-	AgentPi:       "", // No known flag
-	AgentAmp:      "--dangerously-allow-all",
-	AgentGrok:     "--always-approve",
+	AgentClaude:      "--dangerously-skip-permissions",
+	AgentCodex:       "--dangerously-bypass-approvals-and-sandbox",
+	AgentCopilot:     "", // No known flag
+	AgentAider:       "--yes",
+	AgentAntigravity: "--dangerously-skip-permissions",
+	AgentCursor:      "-f",
+	AgentOpenCode:    "", // No known flag
+	AgentPi:          "", // No known flag
+	AgentAmp:         "--dangerously-allow-all",
+	AgentGrok:        "--always-approve",
 }
 
 // PrintModeArgs maps agent types to their non-interactive/print mode CLI arguments.
@@ -163,51 +163,52 @@ var SkipPermissionsFlags = map[AgentType]string{
 // Only agents that support true non-interactive one-shot output are included.
 // Values are passed as arguments to exec.Command after the agent binary name.
 var PrintModeArgs = map[AgentType][]string{
-	AgentClaude: {"-p"},        // claude -p: reads prompt from stdin, prints response to stdout
-	AgentCodex:  {"exec", "-"}, // codex exec -: "-" reads prompt from stdin (convention), prints to stdout
+	AgentClaude:      {"-p"},        // claude -p: reads prompt from stdin, prints response to stdout
+	AgentCodex:       {"exec", "-"}, // codex exec -: "-" reads prompt from stdin (convention), prints to stdout
+	AgentAntigravity: {"-p"},        // agy -p: reads prompt from stdin/args, prints to stdout
 }
 
 // AgentDisplayNames provides human-readable names for agent types.
 var AgentDisplayNames = map[AgentType]string{
-	AgentNone:     "None (attach only)",
-	AgentClaude:   "Claude Code",
-	AgentCodex:    "Codex CLI",
-	AgentCopilot:  "GitHub Copilot CLI",
-	AgentGemini:   "Gemini CLI",
-	AgentCursor:   "Cursor Agent",
-	AgentOpenCode: "OpenCode",
-	AgentPi:       "Pi Agent",
-	AgentAmp:      "Amp",
-	AgentGrok:     "Grok",
-	AgentShell:    "Project Shell",
+	AgentNone:        "None (attach only)",
+	AgentClaude:      "Claude Code",
+	AgentCodex:       "Codex CLI",
+	AgentCopilot:     "GitHub Copilot CLI",
+	AgentAntigravity: "Antigravity",
+	AgentCursor:      "Cursor Agent",
+	AgentOpenCode:    "OpenCode",
+	AgentPi:          "Pi Agent",
+	AgentAmp:         "Amp",
+	AgentGrok:        "Grok",
+	AgentShell:       "Project Shell",
 }
 
 // shellAgentAbbreviations provides short labels for agent types in shell entries.
 // td-a29b76: Used to show agent type in sidebar without taking too much space.
 var shellAgentAbbreviations = map[AgentType]string{
-	AgentClaude:   "Claude",
-	AgentCodex:    "Codex",
-	AgentCopilot:  "Copilot",
-	AgentGemini:   "Gemini",
-	AgentCursor:   "Cursor",
-	AgentOpenCode: "OpenCode",
-	AgentPi:       "Pi",
-	AgentAmp:      "Amp",
-	AgentGrok:     "Grok",
+	AgentClaude:      "Claude",
+	AgentCodex:       "Codex",
+	AgentCopilot:     "Copilot",
+	AgentAntigravity: "Antigravity",
+	AgentCursor:      "Cursor",
+	AgentOpenCode:    "OpenCode",
+	AgentPi:          "Pi",
+	AgentAmp:         "Amp",
+	AgentGrok:        "Grok",
 }
 
 // AgentCommands maps agent types to their CLI commands.
 var AgentCommands = map[AgentType]string{
-	AgentClaude:   "claude",
-	AgentCodex:    "codex",
-	AgentCopilot:  "copilot",
-	AgentAider:    "aider", // Not in UI, but supported for backward compat
-	AgentGemini:   "gemini",
-	AgentCursor:   "cursor-agent",
-	AgentOpenCode: "opencode",
-	AgentPi:       "pi",
-	AgentAmp:      "amp",
-	AgentGrok:     "grok",
+	AgentClaude:      "claude",
+	AgentCodex:       "codex",
+	AgentCopilot:     "copilot",
+	AgentAider:       "aider", // Not in UI, but supported for backward compat
+	AgentAntigravity: "agy",
+	AgentCursor:      "cursor-agent",
+	AgentOpenCode:    "opencode",
+	AgentPi:          "pi",
+	AgentAmp:         "amp",
+	AgentGrok:        "grok",
 }
 
 // AgentTypeOrder defines the order of agents in selection UI.
@@ -215,7 +216,7 @@ var AgentTypeOrder = []AgentType{
 	AgentClaude,
 	AgentCodex,
 	AgentCopilot,
-	AgentGemini,
+	AgentAntigravity,
 	AgentCursor,
 	AgentOpenCode,
 	AgentPi,
@@ -231,7 +232,7 @@ var ShellAgentOrder = []AgentType{
 	AgentClaude,
 	AgentCodex,
 	AgentCopilot,
-	AgentGemini,
+	AgentAntigravity,
 	AgentCursor,
 	AgentOpenCode,
 	AgentPi,

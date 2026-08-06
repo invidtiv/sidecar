@@ -1,4 +1,4 @@
-package geminicli
+package antigravity
 
 import (
 	"github.com/marcus/sidecar/internal/adapter"

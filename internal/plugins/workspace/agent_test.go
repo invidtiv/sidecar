@@ -140,7 +140,7 @@ func TestGetAgentCommand(t *testing.T) {
 		{AgentClaude, "claude"},
 		{AgentCodex, "codex"},
 		{AgentAider, "aider"},
-		{AgentGemini, "gemini"},
+		{AgentAntigravity, "agy"},
 		{AgentCursor, "cursor-agent"},
 		{AgentOpenCode, "opencode"},
 		{AgentPi, "pi"},
@@ -667,7 +667,7 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		{AgentNone, false},     // No agent, no checkbox
 		{AgentClaude, true},    // Has --dangerously-skip-permissions
 		{AgentCodex, true},     // Has --dangerously-bypass-approvals-and-sandbox
-		{AgentGemini, true},    // Has --yolo
+		{AgentAntigravity, true}, // Has --dangerously-skip-permissions
 		{AgentCursor, true},    // Has -f flag
 		{AgentOpenCode, false}, // No known flag
 		{AgentPi, false},       // No known flag
@@ -730,21 +730,21 @@ func TestBuildAgentCommand(t *testing.T) {
 			wantFlag:   "--dangerously-bypass-approvals-and-sandbox",
 			wantPrompt: false,
 		},
-		// Gemini tests
+		// Antigravity tests
 		{
-			name:       "gemini no skip no task",
-			agentType:  AgentGemini,
+			name:       "antigravity no skip no task",
+			agentType:  AgentAntigravity,
 			skipPerms:  false,
 			taskID:     "",
 			wantFlag:   "",
 			wantPrompt: false,
 		},
 		{
-			name:       "gemini with skip no task",
-			agentType:  AgentGemini,
+			name:       "antigravity with skip no task",
+			agentType:  AgentAntigravity,
 			skipPerms:  true,
 			taskID:     "",
-			wantFlag:   "--yolo",
+			wantFlag:   "--dangerously-skip-permissions",
 			wantPrompt: false,
 		},
 		// Cursor tests
@@ -859,8 +859,8 @@ func TestBuildAgentCommandSyntax(t *testing.T) {
 		{AgentClaude, true, "claude --dangerously-skip-permissions"},
 		{AgentCodex, false, "codex"},
 		{AgentCodex, true, "codex --dangerously-bypass-approvals-and-sandbox"},
-		{AgentGemini, false, "gemini"},
-		{AgentGemini, true, "gemini --yolo"},
+		{AgentAntigravity, false, "agy"},
+		{AgentAntigravity, true, "agy --dangerously-skip-permissions"},
 		{AgentCursor, false, "cursor-agent"},
 		{AgentCursor, true, "cursor-agent -f"},
 		{AgentOpenCode, false, "opencode"},
@@ -1281,8 +1281,8 @@ func TestResolveConfigAgentStart_WildcardFallbackChain(t *testing.T) {
 			want:       "default-agent",
 		},
 		{
-			name:      "all miss returns empty",
-			agentStart: map[string]string{"gemini": "gemini-agent"},
+			name:       "all miss returns empty",
+			agentStart: map[string]string{"antigravity": "agy-agent"},
 			agentType:  AgentCodex,
 			want:       "",
 		},

@@ -649,7 +649,7 @@ SIDECAR_PROMPT_EOF
 rm -f %q
 `, shellSetup, baseCmd, prompt, launcherFile)
 	default:
-		// Most agents (claude, codex, gemini, cursor) take prompt as positional argument
+		// Most agents (claude, codex, antigravity, cursor) take prompt as positional argument
 		script = fmt.Sprintf(`#!/bin/bash
 %s
 %s "$(cat <<'SIDECAR_PROMPT_EOF'
@@ -1413,7 +1413,7 @@ func tailUTF8Safe(s string, n int) string {
 
 // detectStatus determines agent status from captured output.
 // This is the tmux-based fallback for agents without session file support (td-2fca7d).
-// For supported agents (Claude, Codex, Gemini, OpenCode), session file analysis runs
+// For supported agents (Claude, Codex, Antigravity, OpenCode), session file analysis runs
 // first in handlePollAgent and is more reliable than tmux pattern matching.
 func detectStatus(output string) WorktreeStatus {
 	// Check tail of output for status patterns (avoids splitting entire string)

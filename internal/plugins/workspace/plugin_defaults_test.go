@@ -30,7 +30,7 @@ func TestGetDefaultCreateAgentType_SidecarAgentPrecedence(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", stateDir)
 
 	cfg := config.Default()
-	cfg.Plugins.Workspace.DefaultAgentType = string(AgentGemini)
+	cfg.Plugins.Workspace.DefaultAgentType = string(AgentAntigravity)
 
 	// Use saveAgentType to write to centralized storage (same as production code).
 	if err := saveAgentType(projectRoot, workDir, AgentCodex); err != nil {
@@ -112,7 +112,7 @@ func TestResolveWorktreeAgentType_SidecarFilePrecedence(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", stateDir)
 
 	cfg := config.Default()
-	cfg.Plugins.Workspace.DefaultAgentType = string(AgentGemini)
+	cfg.Plugins.Workspace.DefaultAgentType = string(AgentAntigravity)
 
 	// Use saveAgentType to write to centralized storage (same as production code).
 	if err := saveAgentType(projectRoot, workDir, AgentCodex); err != nil {

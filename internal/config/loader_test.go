@@ -252,14 +252,14 @@ func TestLoadFrom_WorkspaceDefaultAgentTypeEnvOverride(t *testing.T) {
 }
 
 func TestLoadFrom_WorkspaceDefaultAgentTypeEnvOverride_NoConfigFile(t *testing.T) {
-	t.Setenv("SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE", "gemini")
+	t.Setenv("SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE", "antigravity")
 
 	cfg, err := LoadFrom("/definitely/missing/config.json")
 	if err != nil {
 		t.Fatalf("LoadFrom failed: %v", err)
 	}
-	if cfg.Plugins.Workspace.DefaultAgentType != "gemini" {
-		t.Errorf("DefaultAgentType = %q, want %q", cfg.Plugins.Workspace.DefaultAgentType, "gemini")
+	if cfg.Plugins.Workspace.DefaultAgentType != "antigravity" {
+		t.Errorf("DefaultAgentType = %q, want %q", cfg.Plugins.Workspace.DefaultAgentType, "antigravity")
 	}
 }
 
@@ -327,7 +327,7 @@ func TestLoadFrom_WorkspaceAgentStartLegacyStringBackwardCompat(t *testing.T) {
 
 func TestApplyEnvOverrides_WorkspaceVarTakesPrecedence(t *testing.T) {
 	t.Setenv(envWorkspaceDefaultAgentType, "opencode")
-	t.Setenv(envDefaultAgentType, "gemini")
+	t.Setenv(envDefaultAgentType, "antigravity")
 
 	cfg := Default()
 	applyEnvOverrides(cfg)
@@ -341,13 +341,13 @@ func TestApplyEnvOverrides_FallsThruWhenWorkspaceVarBlank(t *testing.T) {
 	// When SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE is set but blank, we should
 	// NOT short-circuit — SIDECAR_DEFAULT_AGENT_TYPE must still be honoured.
 	t.Setenv(envWorkspaceDefaultAgentType, "   ")
-	t.Setenv(envDefaultAgentType, "gemini")
+	t.Setenv(envDefaultAgentType, "antigravity")
 
 	cfg := Default()
 	applyEnvOverrides(cfg)
 
-	if cfg.Plugins.Workspace.DefaultAgentType != "gemini" {
-		t.Errorf("DefaultAgentType = %q, want %q (blank workspace var should fall through)", cfg.Plugins.Workspace.DefaultAgentType, "gemini")
+	if cfg.Plugins.Workspace.DefaultAgentType != "antigravity" {
+		t.Errorf("DefaultAgentType = %q, want %q (blank workspace var should fall through)", cfg.Plugins.Workspace.DefaultAgentType, "antigravity")
 	}
 }
 

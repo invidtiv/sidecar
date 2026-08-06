@@ -298,8 +298,8 @@ func renderSessionHeader(sr SessionSearchResult, selected bool, maxWidth int) st
 			adapterBadge = "\u25c6" // Diamond
 		case "codex":
 			adapterBadge = "C"
-		case "gemini-cli":
-			adapterBadge = "G"
+		case "antigravity":
+			adapterBadge = "★"
 		case "amp":
 			adapterBadge = "\u26a1"
 		default:
