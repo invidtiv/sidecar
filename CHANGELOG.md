@@ -2,6 +2,23 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.92.0] - 2026-08-06
+
+### Features
+- **Grok is a first-class workspace agent.** Create and start workspaces with Grok (`grok`, skip-permissions via `--always-approve`) alongside Claude, Codex, and the rest. Configure which agents appear and in what order with `plugins.workspace.agents` (for example `["grok", "claude"]` to hide Copilot and put Grok first); create/start pickers, defaults, and shell lists all honor the allowlist, and an unknown default falls back to the first listed agent.
+- **Embedded terminals render at their true pane size.** Tmux panes are sized and mapped through hit testing so the program inside lays out for the visible area rather than a mismatched rectangle; letterbox padding no longer steals editor clicks.
+- **Focus-gated ownership lease for shared tmux geometry.** When several sidecar instances (or a sidecar and an attached client) share a session, geometry ownership follows where the user is — focus and attach hold ticks with bounded refresh, dead leases are reclaimed, and an attach no longer claims permanent authority. Held sessions read input back out of tmux so a background holder does not starve the active client.
+
+### Bug Fixes
+- **Global shortcuts show up in the command palette.** Hard-coded app bindings (`i`, `W`, `#`, `r`, `ctrl+c`) are registered in the keymap so discovery matches what the app actually handles.
+- **Open Issue Enter uses the sole search result** when the cursor has not been moved, instead of submitting a partial typed query.
+- **The agent config picker list is pinned for the modal lifetime** so a config reload cannot reshuffle options under the cursor mid-choice.
+- **Modals take keyboard focus from a live terminal** so typing goes to the dialog rather than the session underneath.
+- Terminal view and cursor stay on one pane-row anchor; geometry decisions use user presence rather than focus alone; failed marker reads are treated as absence of evidence rather than proof of a hold.
+
+### Developer
+- **Streamlined releases.** `RELEASE_VERSION=vX.Y.Z make release` fail-closed-preflights (clean tree, live `main`, changelog entry, no `replace`, tag absence), pushes an annotated tag, waits for CI, and verifies or resumes the Homebrew formula. CI runs verify → GoReleaser → template-rendered `Formula/sidecar.rb` with downgrade/idempotency/race guards. See `docs/releasing.md`.
+
 ## [v0.91.0] - 2026-08-01
 
 ### Features

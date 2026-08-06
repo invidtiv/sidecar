@@ -1,9 +1,20 @@
-.PHONY: build install install-dev test test-v clean check-clean tag goreleaser-snapshot fmt fmt-check fmt-check-all lint lint-all
+.PHONY: build install install-dev test test-v clean check-clean tag \
+	release-snapshot check-release-state release release-tap \
+	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks
 
 # Default target
 all: build
 
 LINT_BASE ?= main
+
+# RELEASE_VERSION must come from the environment so Make never interpolates an
+# untrusted command-line value into shell source (see scripts/test-release-guards.sh).
+release_goals := $(filter check-release-state release release-tap,$(MAKECMDGOALS))
+ifneq ($(release_goals),)
+ifneq ($(origin RELEASE_VERSION),environment)
+$(error set RELEASE_VERSION in the environment, for example: RELEASE_VERSION=v0.92.0 make $(firstword $(release_goals)))
+endif
+endif
 
 # Build the binary
 build:
@@ -29,7 +40,7 @@ test-v:
 
 # Clean build artifacts
 clean:
-	rm -rf bin/
+	rm -rf bin/ dist/
 	go clean
 
 # Check for clean working tree
@@ -40,7 +51,7 @@ check-clean:
 		exit 1; \
 	fi
 
-# Create a new version tag
+# Legacy local tag helper. Prefer: RELEASE_VERSION=vX.Y.Z make release
 # Usage: make tag VERSION=v0.1.0
 tag: check-clean
 ifndef VERSION
@@ -52,7 +63,7 @@ endif
 	fi
 	@echo "Creating tag $(VERSION)"
 	git tag -a $(VERSION) -m "Release $(VERSION)"
-	@echo "Tag $(VERSION) created. Run 'git push origin $(VERSION)' to trigger the release."
+	@echo "Tag $(VERSION) created. Prefer RELEASE_VERSION=$(VERSION) make release"
 
 # Show version that would be used
 version:
@@ -101,8 +112,22 @@ build-all:
 	GOOS=linux GOARCH=arm64 go build -o bin/sidecar-linux-arm64 ./cmd/sidecar
 
 # Test GoReleaser locally (creates snapshot build without publishing)
-goreleaser-snapshot:
+release-snapshot goreleaser-snapshot:
 	goreleaser release --snapshot --clean
+
+check-release-state:
+	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
+	./scripts/check-release-state.sh pre-tag
+
+# Cut a release: preflight, tag, wait for CI, verify/publish Homebrew formula.
+release:
+	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
+	./scripts/publish-release.sh
+
+# Resume Homebrew tap publication after a successful tag/release.
+release-tap:
+	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
+	./scripts/publish-homebrew-tap.sh
 
 # Install pre-commit hooks
 install-hooks:

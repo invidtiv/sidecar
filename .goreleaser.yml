@@ -37,8 +37,8 @@ changelog:
 
 # Note: GoReleaser does NOT publish the Homebrew formula (there is intentionally
 # no `brews:` block). Formula/sidecar.rb in marcus/homebrew-tap builds from
-# source (to avoid Gatekeeper warnings on macOS) and is bumped automatically by
-# the separate `update-homebrew-tap` job in .github/workflows/release.yml, which
-# rewrites the tag URL and source-tarball sha256 after each tagged build. The td
-# and nightshift formulas are NOT touched by that job — bump them by hand when
-# co-releasing.
+# source (to avoid Gatekeeper warnings on macOS) and is rendered from
+# packaging/homebrew/sidecar.rb.tmpl by the `update-homebrew-tap` job in
+# .github/workflows/release.yml (or by `make release-tap` for local resume).
+# The td and nightshift formulas are NOT touched by that job — bump them by
+# hand when co-releasing.

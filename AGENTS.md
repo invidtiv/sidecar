@@ -34,10 +34,11 @@ go test ./...
 # Install with version (use semantic versioning)
 go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar
 
-# Tag a release
+# Tag a release (prefer the one-shot path)
+RELEASE_VERSION=v0.1.0 make release
 ```
 
-See .claude/skills/release-sidecar/SKILL.md
+See `docs/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
 
 ## Keyboard Shortcut Parity
