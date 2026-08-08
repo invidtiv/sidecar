@@ -185,7 +185,7 @@ func (p *Plugin) stopTerminalControls() {
 }
 
 func (p *Plugin) terminalOutputSurfaceVisible() bool {
-	if !p.focused || p.activePane != PanePreview {
+	if !p.focused {
 		return false
 	}
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {

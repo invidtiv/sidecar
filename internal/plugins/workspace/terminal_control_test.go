@@ -214,6 +214,26 @@ func TestTerminalPanelControlTracksVisibilityAndApplicationFocus(t *testing.T) {
 	}
 }
 
+func TestSelectedTerminalControlRemainsVisibleFromWorkspaceListWhileAppBlurred(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	p.activePane = PaneSidebar
+
+	p.Update(tea.BlurMsg{})
+
+	if p.applicationFocused {
+		t.Fatal("application remained focused after blur")
+	}
+	if len(manager.requests) != 1 {
+		t.Fatalf("control subscriptions = %d, want 1 for selected visible terminal", len(manager.requests))
+	}
+	request := manager.requests[0]
+	if request.Session != "agent-session" || request.Pane != "%11" ||
+		!request.Visible || !request.Focused {
+		t.Fatalf("control request = %#v", request)
+	}
+}
+
 func TestPrimaryControlSwitchesAgentAndShellWithoutCompetingPolls(t *testing.T) {
 	manager := &fakeWorkspaceControlManager{}
 	p := primaryControlPlugin(manager)
@@ -348,7 +368,7 @@ func TestPrimaryControlFallbackAndSynchronousFailureResumePolling(t *testing.T) 
 	if failedConsumer == nil || !failedConsumer.Degraded || failedConsumer.Sub != nil {
 		t.Fatalf("synchronous failure consumer = %#v", failedConsumer)
 	}
-	failed.activePane = PaneSidebar
+	failed.previewTab = PreviewTabDiff
 	failed.reconcileTerminalControls() // Must not call Close on a nil subscription.
 	if failed.controlConsumers[workspaceControlPrimary] != nil {
 		t.Fatal("hidden failed consumer was retained")

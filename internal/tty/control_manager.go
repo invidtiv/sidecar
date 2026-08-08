@@ -109,7 +109,6 @@ type ControlManager struct {
 	subs       map[uint64]*managerControlSubscription
 	clients    map[string]*sessionControlClient
 	starting   map[string]bool
-	appFocused bool
 	stopped    bool
 }
 
@@ -127,7 +126,6 @@ func newControlManager(factory controlChannelFactory, coalesce time.Duration) *C
 		subs:       make(map[uint64]*managerControlSubscription),
 		clients:    make(map[string]*sessionControlClient),
 		starting:   make(map[string]bool),
-		appFocused: true,
 	}
 }
 
@@ -160,24 +158,11 @@ func (m *ControlManager) Subscribe(request ControlRequest) (*ControlSubscription
 }
 
 func (m *ControlManager) SetAppFocused(focused bool) {
-	// Geometry arbitration needs the same bit, and this is the one path the app
-	// already forwards focus down (td-ee222a).
+	// Geometry arbitration needs this bit so an unfocused Sidecar never resizes
+	// a shared tmux pane (td-ee222a). Output capture has a different ownership
+	// rule: a visible subscription must stay current even while the host terminal
+	// is blurred, so application focus does not gate control-mode snapshots.
 	SetAppFocused(focused)
-
-	m.mu.Lock()
-	if m.appFocused == focused || m.stopped {
-		m.mu.Unlock()
-		return
-	}
-	m.appFocused = focused
-	clients := make([]*sessionControlClient, 0, len(m.clients))
-	for _, client := range m.clients {
-		clients = append(clients, client)
-	}
-	m.mu.Unlock()
-	for _, client := range clients {
-		client.setAppFocused(focused)
-	}
 }
 
 func (m *ControlManager) Stop() {
@@ -263,7 +248,7 @@ func (m *ControlManager) startClient(session string) {
 		_ = channel.Close()
 		return
 	}
-	client := newSessionControlClient(m, session, channel, m.coalesce, m.appFocused)
+	client := newSessionControlClient(m, session, channel, m.coalesce)
 	m.clients[session] = client
 	for _, sub := range active {
 		client.add(sub)
@@ -475,12 +460,11 @@ type sessionControlClient struct {
 	subs       map[uint64]sessionSubscriber
 	deliveries map[uint64]*subscriberDeliveryGate
 	panes      map[string]*paneCaptureState
-	appFocused bool
 	closed     bool
 	closeOnce  sync.Once
 }
 
-func newSessionControlClient(manager *ControlManager, session string, channel controlChannel, coalesce time.Duration, appFocused bool) *sessionControlClient {
+func newSessionControlClient(manager *ControlManager, session string, channel controlChannel, coalesce time.Duration) *sessionControlClient {
 	client := &sessionControlClient{
 		manager:    manager,
 		session:    session,
@@ -489,7 +473,6 @@ func newSessionControlClient(manager *ControlManager, session string, channel co
 		subs:       make(map[uint64]sessionSubscriber),
 		deliveries: make(map[uint64]*subscriberDeliveryGate),
 		panes:      make(map[string]*paneCaptureState),
-		appFocused: appFocused,
 	}
 	go client.run()
 	// Feature-detect flow control: older tmux versions return an error, which is
@@ -590,21 +573,6 @@ func (c *sessionControlClient) setFocused(id, generation uint64, focused bool) {
 	pane := sub.request.Pane
 	c.mu.Unlock()
 	if focused {
-		c.scheduleIfEligible(pane)
-	}
-}
-
-func (c *sessionControlClient) setAppFocused(focused bool) {
-	c.mu.Lock()
-	c.appFocused = focused
-	var panes []string
-	if focused {
-		for pane := range c.panes {
-			panes = append(panes, pane)
-		}
-	}
-	c.mu.Unlock()
-	for _, pane := range panes {
 		c.scheduleIfEligible(pane)
 	}
 }
@@ -775,9 +743,6 @@ func (c *sessionControlClient) captureFinished(pane string, scrollback int, resp
 }
 
 func (c *sessionControlClient) paneEligibleLocked(pane string) bool {
-	if !c.appFocused {
-		return false
-	}
 	for _, sub := range c.subs {
 		if sub.request.Pane == pane && sub.request.Visible && sub.request.Focused {
 			return true

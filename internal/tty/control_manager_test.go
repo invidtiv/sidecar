@@ -195,7 +195,7 @@ func TestControlManagerStartsClientOffSubscriptionPath(t *testing.T) {
 	waitFor(t, func() bool { return channel.closeCount() == 1 })
 }
 
-func TestControlManagerNotificationCaptureCoalescingAndFocusGate(t *testing.T) {
+func TestControlManagerNotificationCaptureCoalescingKeepsVisiblePaneCurrentWhileAppBlurred(t *testing.T) {
 	factory := newFakeControlFactory()
 	manager := newControlManager(factory.create, 2*time.Millisecond)
 	defer manager.Stop()
@@ -246,12 +246,14 @@ func TestControlManagerNotificationCaptureCoalescingAndFocusGate(t *testing.T) {
 
 	manager.SetAppFocused(false)
 	channel.events <- controlEvent{Kind: controlEventOutput, Pane: "%1"}
-	time.Sleep(8 * time.Millisecond)
-	if got := channel.commandCountContaining("capture-pane"); got != 3 {
-		t.Fatalf("blurred output spawned capture %d", got)
-	}
-	manager.SetAppFocused(true)
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 4 })
+	channel.respondCapture(3, controlResponse{Lines: []string{"7,5,1,24,80,700", "blurred-visible"}})
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(snapshots) == 4
+	})
+	manager.SetAppFocused(true)
 
 	mu.Lock()
 	first := snapshots[0]
