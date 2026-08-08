@@ -255,7 +255,7 @@ func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
 	}
 }
 
-func TestAntigravityFallbackStillDebouncesIdle(t *testing.T) {
+func TestRealAntigravityCompletedFallbackStillCreatesUnseenDone(t *testing.T) {
 	result := DetectAntigravity(readObservationFixture(t, "antigravity", "idle_fallback.txt"))
 	var tracker Tracker
 	now := time.Unix(200, 0)
@@ -263,7 +263,7 @@ func TestAntigravityFallbackStillDebouncesIdle(t *testing.T) {
 	if tracker.Apply(result, now.Add(time.Second)) {
 		t.Fatal("fallback idle published without debounce")
 	}
-	if !tracker.Apply(result, now.Add(time.Second+IdleDebounce)) || tracker.DisplayState() != "idle" {
+	if !tracker.Apply(result, now.Add(time.Second+IdleDebounce)) || tracker.DisplayState() != "done" {
 		t.Fatalf("fallback not published after debounce: %+v", tracker)
 	}
 }

@@ -17,7 +17,7 @@ func DetectClaude(ob Observation) Result {
 	}
 	result := Evaluate(ob, claudeRules)
 	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "claude.known-live-fallback", FallbackIdle: true}
+		return Result{State: StateIdle, Evidence: "claude.known-live-fallback"}
 	}
 	return result
 }

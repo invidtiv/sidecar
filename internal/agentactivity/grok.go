@@ -23,7 +23,7 @@ func DetectGrok(ob Observation) Result {
 		return Result{State: StateIdle, Evidence: "grok.title.idle", VisibleIdle: true}
 	}
 	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "grok.known-live-fallback", FallbackIdle: true}
+		return Result{State: StateIdle, Evidence: "grok.known-live-fallback"}
 	}
 	return result
 }
