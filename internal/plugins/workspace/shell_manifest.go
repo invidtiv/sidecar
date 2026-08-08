@@ -11,6 +11,7 @@ import (
 
 	"log/slog"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
@@ -47,6 +48,13 @@ const manifestVersion = 1
 // LoadShellManifest loads the shell manifest from disk.
 // Returns an empty manifest (not error) if file doesn't exist or is corrupted.
 func LoadShellManifest(path string) (*ShellManifest, error) {
+	// A process that claims isolated state must not even observe the real
+	// user's manifest: reading it is how an isolated instance would come to
+	// believe those shells are its own (td-8d18de).
+	if err := config.AssertIsolatedPath(path); err != nil {
+		return nil, err
+	}
+
 	m := &ShellManifest{
 		Version: manifestVersion,
 		Shells:  []ShellDefinition{},
@@ -88,6 +96,14 @@ func (m *ShellManifest) Save() error {
 
 // saveLocked writes the manifest to disk. Caller must hold m.mu.
 func (m *ShellManifest) saveLocked() error {
+	// The hard floor for td-8d18de. Every writer (Save, AddShell, EnsureShells,
+	// RemoveShell, UpdateShell) funnels through here, and the check runs before
+	// MkdirAll and before the lock file is created so an isolated run leaves no
+	// .tmp or .lock debris in the real user's tree either.
+	if err := config.AssertIsolatedPath(m.path); err != nil {
+		return err
+	}
+
 	// Ensure .sidecar directory exists
 	dir := filepath.Dir(m.path)
 	if err := os.MkdirAll(dir, 0755); err != nil {

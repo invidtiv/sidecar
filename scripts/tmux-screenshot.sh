@@ -16,6 +16,17 @@
 
 set -e
 
+# This script drives the DEFAULT tmux server and gives sidecar no state
+# isolation at all: the instance it starts writes the developer's real shell
+# manifest, and a live Sidecar watching that file will drop shells whose
+# sessions are still running (td-8d18de). Use scripts/tmux-drive.sh, which
+# isolates both the tmux socket and the Sidecar state tree.
+if [ "${SIDECAR_ALLOW_UNISOLATED:-}" != "1" ]; then
+    echo "refusing to run: this script uses the default tmux server and the real ~/.local/state/sidecar." >&2
+    echo "Use ./scripts/tmux-drive.sh instead, or set SIDECAR_ALLOW_UNISOLATED=1 if you truly mean it." >&2
+    exit 1
+fi
+
 SESSION_NAME="sidecar-screenshot"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/../docs/screenshots"

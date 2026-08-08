@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/config"
 )
 
 func TestShellManifest_LoadMissing(t *testing.T) {
@@ -448,5 +450,101 @@ func TestShellManifest_LockAcquisitionNonBlocking(t *testing.T) {
 		case <-timeout:
 			t.Fatal("concurrent operations timed out - possible deadlock")
 		}
+	}
+}
+
+// TestSaveRefusesRealUserManifestUnderIsolation is the td-8d18de regression at
+// the write choke point: an instance that declared isolated state must not be
+// able to touch the real user's manifest, not even to create the lock or temp
+// file next to it.
+func TestSaveRefusesRealUserManifestUnderIsolation(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv(config.IsolationEnv, "1")
+
+	realDir := filepath.Join(fakeHome, ".local", "state", "sidecar", "projects", "sidecar")
+	if err := os.MkdirAll(realDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(realDir, "shells.json")
+
+	m := &ShellManifest{Version: manifestVersion, path: path}
+	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
+
+	if err := m.Save(); err == nil {
+		t.Fatal("Save() = nil, want refusal to write the real user manifest")
+	}
+	// Every other writer funnels through saveLocked, so they must refuse too.
+	if err := m.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-2"}); err == nil {
+		t.Error("AddShell() = nil, want refusal")
+	}
+	if err := m.UpdateShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-1"}); err == nil {
+		t.Error("UpdateShell() = nil, want refusal")
+	}
+	if err := m.RemoveShell("sidecar-sh-sidecar-1"); err == nil {
+		t.Error("RemoveShell() = nil, want refusal")
+	}
+	if _, err := m.EnsureShells([]ShellDefinition{{TmuxName: "sidecar-sh-sidecar-3"}}); err == nil {
+		t.Error("EnsureShells() = nil, want refusal")
+	}
+
+	for _, name := range []string{"shells.json", "shells.json.tmp", "shells.json.lock"} {
+		if _, err := os.Stat(filepath.Join(realDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s exists in the real user tree after a refused write", name)
+		}
+	}
+}
+
+// TestLoadRefusesRealUserManifestUnderIsolation is the read counterpart: an
+// isolated instance must not even observe the real manifest, or it would adopt
+// the developer's live shells as its own.
+func TestLoadRefusesRealUserManifestUnderIsolation(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv(config.IsolationEnv, "1")
+
+	realDir := filepath.Join(fakeHome, ".local", "state", "sidecar", "projects", "sidecar")
+	if err := os.MkdirAll(realDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(realDir, "shells.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"shells":[{"tmuxName":"sidecar-sh-sidecar-1"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadShellManifest(path)
+	if err == nil {
+		t.Fatal("LoadShellManifest() = nil error, want refusal to read the real user manifest")
+	}
+	if m != nil {
+		t.Errorf("LoadShellManifest() returned a manifest alongside the error: %+v", m)
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "shells.json.lock")); !os.IsNotExist(err) {
+		t.Error("shells.json.lock exists in the real user tree after a refused read")
+	}
+}
+
+// TestSaveAllowsRealUserManifestWithoutIsolation is the other half of the
+// guarantee: with no isolation promise, an ordinary run still writes its real
+// manifest exactly as before.
+func TestSaveAllowsRealUserManifestWithoutIsolation(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv(config.IsolationEnv, "")
+	// The package-wide TestMain sets a test state dir, which itself asserts
+	// isolation; clear it for this one case.
+	config.ResetTestStateDir()
+	t.Cleanup(func() { config.SetTestStateDir(filepath.Join(os.Getenv("XDG_STATE_HOME"), "sidecar")) })
+
+	realDir := filepath.Join(fakeHome, ".local", "state", "sidecar", "projects", "sidecar")
+	path := filepath.Join(realDir, "shells.json")
+
+	m := &ShellManifest{Version: manifestVersion, path: path}
+	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
+	if err := m.Save(); err != nil {
+		t.Fatalf("Save() = %v, want nil for an ordinary run", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("manifest not written: %v", err)
 	}
 }
