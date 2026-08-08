@@ -3,8 +3,6 @@ package agentactivity
 import "regexp"
 
 var copilotRules = []Rule{
-	// Compatibility safety markers only: Copilot CLI was unavailable for capture.
-	{ID: "copilot.overlay-or-interruption.retain", State: StateUnknown, Region: RegionCurrent, LastN: 12, Skip: true, Regexp: regexp.MustCompile(`(?ims)(\b(?:transcript|history|help)\b.*(?:esc to close|q to quit)|(?:esc to close|q to quit).*\b(?:transcript|history|help)\b|^\s*(?:conversation )?(?:cancelled|canceled|interrupted)\b)`)},
 	// Compatibility rules from Herdr copilot manifest 2026.07.07.1.
 	{ID: "copilot.screen.blocked", State: StateBlocked, Region: RegionCurrent, LastN: 12, Regexp: regexp.MustCompile(`(?is)((esc (?:to )?cancel).*?(enter (?:to )?(?:select|confirm|submit|accept))|(enter (?:to )?(?:select|confirm|submit|accept)).*?(esc (?:to )?cancel))`)},
 	{ID: "copilot.screen.working", State: StateWorking, Region: RegionCurrent, LastN: 8, Regexp: regexp.MustCompile(`(?i)esc (?:to cancel|cancel|again to cancel|interrupt)`)},
@@ -16,7 +14,7 @@ func DetectCopilot(ob Observation) Result {
 	}
 	result := Evaluate(ob, copilotRules)
 	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "copilot.known-live-fallback"}
+		return Result{State: StateIdle, Evidence: "copilot.known-live-fallback", FallbackIdle: true}
 	}
 	return result
 }

@@ -1,12 +1,36 @@
 package workspace
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/plugin"
 )
+
+func TestExpandedProviderListKanbanGolden(t *testing.T) {
+	providers := []AgentType{AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp}
+	p := &Plugin{ctx: &plugin.Context{}}
+	var lines []string
+	for _, provider := range providers {
+		agent := &Agent{Type: provider, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked}}
+		wt := &Worktree{Name: string(provider) + "-proof", Status: StatusWaiting, Agent: agent}
+		list := strings.Join(strings.Fields(ansi.Strip(p.renderWorktreeItem(wt, false, 64))), " ")
+		kanban := strings.Join(strings.Fields(ansi.Strip(p.renderKanbanCardLine(wt, 0, 32, false)+" "+p.renderKanbanCardLine(wt, 1, 32, false))), " ")
+		lines = append(lines, string(provider)+" | List: "+list+" | Kanban: "+kanban)
+	}
+	got := strings.Join(lines, "\n") + "\n"
+	want, err := os.ReadFile(filepath.Join("testdata", "expanded-provider-surfaces.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Fatalf("surface proof mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
 
 func TestActivityRenderingParityForWorktreeAndAgentShell(t *testing.T) {
 	p := &Plugin{activePane: PaneSidebar, ctx: &plugin.Context{}}

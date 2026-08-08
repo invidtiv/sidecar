@@ -22,7 +22,7 @@ func DetectCodex(ob Observation) Result {
 	}
 	result := Evaluate(ob, codexRules)
 	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "codex.known-live-fallback"}
+		return Result{State: StateIdle, Evidence: "codex.known-live-fallback", FallbackIdle: true}
 	}
 	return result
 }

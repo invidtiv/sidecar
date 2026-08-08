@@ -32,6 +32,10 @@ type Result struct {
 	VisibleWorking  bool
 	VisibleBlocker  bool
 	SkipStateUpdate bool
+	// FallbackIdle distinguishes provider-owned explicit idle evidence from the
+	// conservative no-match policy for a positively identified live process.
+	// Fallback idle may establish/display idle, but cannot announce completion.
+	FallbackIdle bool
 }
 
 type Region string
@@ -189,7 +193,7 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 		t.Seen = false
 	} else if result.State == StateIdle {
 		// Initial/restart idle is quiet; only a transition from live work creates done.
-		t.Seen = previous == StateUnknown || previous == ""
+		t.Seen = result.FallbackIdle || previous == StateUnknown || previous == ""
 	}
 	return true
 }

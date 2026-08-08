@@ -1,5 +1,0 @@
-kind: safety-contract-not-real-capture
-pane_current_command: amp
-pane_title: unavailable
-screen:
-Turn interrupted

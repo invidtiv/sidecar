@@ -2,10 +2,7 @@ kind: isolated-compatibility-proof
 date: 2026-08-08
 provider: cursor-agent-cli
 real_cli: unavailable; Cursor desktop is not CLI proof; no text or PNG capture claimed
-journey: fixture -> DetectCursor -> Tracker -> worktree/shell semantic projection -> List/Kanban
-tests: TestExpandedPerProviderFixtures; TestExpandedProviderOverlayAndInterruptionRetainPastIdleDebounce; TestExpandedProviderTransientMarkersMustBeCurrentAndSpecific; workspace semantic parity tests
-harness_socket: /tmp/sidecar-drive-501/tmux/tmux-501/default
-harness_state_cache_config: all under /tmp/sidecar-drive-501
-default_tmux_before_after_sha256: 3b7be7c2b1d011fdc98e47269943eabd8549b9282fdb6c0c18c25ed652dae03d unchanged
-production_manifest_metadata_before_after_sha256: 9aab2dd83f616ea779c5bdfdd111505423787305f7bc675a833c937070f1b23e unchanged
-kanban_text_sha256: 9a9145748aac83d61b67d05ff8edcef2efe9b63bf4bc116c929f6947269b3e3 (49 lines)
+journey: sourced fixture -> DetectCursor -> fallback-safe Tracker -> worktree/shell semantic projection -> List/Kanban
+inspectable_artifacts: ../proof/isolated-paths.txt; ../proof/before-after-invariants.txt; ../../../plugins/workspace/testdata/expanded-provider-surfaces.txt
+tests: TestExpandedPerProviderFixtures; TestKnownLiveFallbackIdleNeverCreatesUnseenDone; TestExpandedProviderListKanbanGolden
+unavailable: real viewer, interruption, completion, text, title, and PNG proof

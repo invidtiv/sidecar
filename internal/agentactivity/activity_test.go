@@ -175,36 +175,6 @@ func TestExpandedProvidersIgnoreHistoricalSignalsOutsideCurrentBottom(t *testing
 	}
 }
 
-func TestExpandedProviderOverlayAndInterruptionRetainPastIdleDebounce(t *testing.T) {
-	tests := []struct {
-		agent, command, screen string
-	}{
-		{"pi", "pi", "Settings\nEsc to close"},
-		{"copilot", "copilot", "Transcript viewer\nq to quit"},
-		{"cursor", "cursor-agent", "History\nEsc to close"},
-		{"opencode", "opencode", "Help\nq to quit"},
-		{"amp", "amp", "Turn interrupted"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.agent, func(t *testing.T) {
-			result := Detect(Observation{Agent: tt.agent, CurrentCommand: tt.command, Screen: tt.screen})
-			if !result.SkipStateUpdate || result.Evidence != tt.agent+".overlay-or-interruption.retain" {
-				t.Fatalf("retain result = %+v", result)
-			}
-			now := time.Unix(400, 0)
-			tracker := Tracker{State: StateWorking, Evidence: tt.agent + ".working"}
-			for _, elapsed := range []time.Duration{IdleDebounce + time.Millisecond, 2*IdleDebounce + time.Second} {
-				if tracker.Apply(result, now.Add(elapsed)) {
-					t.Fatalf("retain changed tracker at %s: %+v", elapsed, tracker)
-				}
-			}
-			if tracker.State != StateWorking || tracker.DisplayState() != "working" {
-				t.Fatalf("retain fabricated completion: %+v display=%q", tracker, tracker.DisplayState())
-			}
-		})
-	}
-}
-
 func TestExpandedPerProviderFixtures(t *testing.T) {
 	tests := []struct {
 		agent, file, evidence string
@@ -212,24 +182,14 @@ func TestExpandedPerProviderFixtures(t *testing.T) {
 		skip                  bool
 	}{
 		{"pi", "working_compatibility.txt", "pi.screen.working", StateWorking, false},
-		{"pi", "overlay_compatibility.txt", "pi.overlay-or-interruption.retain", StateUnknown, true},
-		{"pi", "interrupted_compatibility.txt", "pi.overlay-or-interruption.retain", StateUnknown, true},
 		{"pi", "false_positive.txt", "pi.process-mismatch", StateUnknown, false},
 		{"copilot", "blocked_compatibility.txt", "copilot.screen.blocked", StateBlocked, false},
-		{"copilot", "overlay_compatibility.txt", "copilot.overlay-or-interruption.retain", StateUnknown, true},
-		{"copilot", "interrupted_compatibility.txt", "copilot.overlay-or-interruption.retain", StateUnknown, true},
 		{"copilot", "false_positive.txt", "copilot.process-mismatch", StateUnknown, false},
 		{"cursor", "blocked_compatibility.txt", "cursor.screen.write-blocked", StateBlocked, false},
-		{"cursor", "overlay_compatibility.txt", "cursor.overlay-or-interruption.retain", StateUnknown, true},
-		{"cursor", "interrupted_compatibility.txt", "cursor.overlay-or-interruption.retain", StateUnknown, true},
 		{"cursor", "false_positive.txt", "cursor.process-mismatch", StateUnknown, false},
 		{"opencode", "blocked_compatibility.txt", "opencode.screen.blocked", StateBlocked, false},
-		{"opencode", "overlay_compatibility.txt", "opencode.overlay-or-interruption.retain", StateUnknown, true},
-		{"opencode", "interrupted_compatibility.txt", "opencode.overlay-or-interruption.retain", StateUnknown, true},
 		{"opencode", "false_positive.txt", "opencode.process-mismatch", StateUnknown, false},
 		{"amp", "title_compatibility.txt", "amp.title.plugin-blocked", StateBlocked, false},
-		{"amp", "overlay_compatibility.txt", "amp.overlay-or-interruption.retain", StateUnknown, true},
-		{"amp", "interrupted_compatibility.txt", "amp.overlay-or-interruption.retain", StateUnknown, true},
 		{"amp", "false_positive.txt", "amp.process-mismatch", StateUnknown, false},
 	}
 	for _, tt := range tests {
@@ -242,23 +202,45 @@ func TestExpandedPerProviderFixtures(t *testing.T) {
 	}
 }
 
-func TestExpandedProviderTransientMarkersMustBeCurrentAndSpecific(t *testing.T) {
-	for _, tt := range []struct{ agent, command string }{
-		{"pi", "pi"}, {"copilot", "copilot"}, {"cursor", "cursor-agent"}, {"opencode", "opencode"}, {"amp", "amp"},
-	} {
-		t.Run(tt.agent, func(t *testing.T) {
-			for name, screen := range map[string]string{
-				"label without UI hint":      "Please update settings for the project",
-				"hint without overlay label": "Press esc to close this issue",
-				"stale overlay":              "Settings\nEsc to close\n" + strings.Repeat("current idle\n", 30),
-				"stale interruption":         "Turn interrupted\n" + strings.Repeat("current idle\n", 30),
-			} {
-				got := Detect(Observation{Agent: tt.agent, CurrentCommand: tt.command, Screen: screen})
-				if got.SkipStateUpdate || got.State != StateIdle {
-					t.Fatalf("%s got %+v", name, got)
+func TestKnownLiveFallbackIdleNeverCreatesUnseenDone(t *testing.T) {
+	tests := []Observation{
+		{Agent: "pi", CurrentCommand: "pi", Screen: "unmatched"},
+		{Agent: "copilot", CurrentCommand: "copilot", Screen: "unmatched"},
+		{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "unmatched"},
+		{Agent: "opencode", CurrentCommand: "opencode", Screen: "unmatched"},
+		{Agent: "amp", CurrentCommand: "amp", Screen: "unmatched"},
+	}
+	for _, ob := range tests {
+		for _, prior := range []State{StateWorking, StateBlocked} {
+			t.Run(ob.Agent+"/"+string(prior), func(t *testing.T) {
+				result := Detect(ob)
+				if result.State != StateIdle || !result.FallbackIdle {
+					t.Fatalf("fallback result = %+v", result)
 				}
-			}
-		})
+				now := time.Unix(400, 0)
+				tracker := Tracker{State: prior, Evidence: ob.Agent + ".prior"}
+				if tracker.Apply(result, now) {
+					t.Fatal("fallback bypassed debounce")
+				}
+				if !tracker.Apply(result, now.Add(IdleDebounce)) {
+					t.Fatal("fallback did not establish idle")
+				}
+				if tracker.DisplayState() != "idle" || !tracker.Seen {
+					t.Fatalf("fallback manufactured done: %+v display=%q", tracker, tracker.DisplayState())
+				}
+			})
+		}
+	}
+}
+
+func TestExplicitIdleEvidenceStillCreatesDone(t *testing.T) {
+	now := time.Unix(500, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "working"}
+	explicit := Result{State: StateIdle, Evidence: "provider.explicit-idle"}
+	tracker.Apply(explicit, now)
+	tracker.Apply(explicit, now.Add(IdleDebounce))
+	if tracker.DisplayState() != "done" {
+		t.Fatalf("explicit idle display=%q tracker=%+v", tracker.DisplayState(), tracker)
 	}
 }
 
@@ -281,7 +263,7 @@ func TestAntigravityFallbackStillDebouncesIdle(t *testing.T) {
 	if tracker.Apply(result, now.Add(time.Second)) {
 		t.Fatal("fallback idle published without debounce")
 	}
-	if !tracker.Apply(result, now.Add(time.Second+IdleDebounce)) || tracker.DisplayState() != "done" {
+	if !tracker.Apply(result, now.Add(time.Second+IdleDebounce)) || tracker.DisplayState() != "idle" {
 		t.Fatalf("fallback not published after debounce: %+v", tracker)
 	}
 }

@@ -15,7 +15,7 @@ func DetectAntigravity(ob Observation) Result {
 	}
 	result := Evaluate(ob, antigravityRules)
 	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "antigravity.known-live-fallback"}
+		return Result{State: StateIdle, Evidence: "antigravity.known-live-fallback", FallbackIdle: true}
 	}
 	return result
 }

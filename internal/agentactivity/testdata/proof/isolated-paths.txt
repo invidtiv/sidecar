@@ -1,0 +1,9 @@
+command: ./scripts/tmux-drive.sh paths
+captured_at: 2026-08-08
+run dir:       /tmp/sidecar-drive-501
+inner socket:  /tmp/sidecar-drive-501/tmux/tmux-501/default
+state home:    /tmp/sidecar-drive-501/state
+cache home:    /tmp/sidecar-drive-501/cache
+config:        /tmp/sidecar-drive-501/config/config.json
+manifest:      /tmp/sidecar-drive-501/state/sidecar/projects/<slug>/shells.json
+result: every writable proof path is isolated; no proof provider process was launched because all five CLIs were unavailable
