@@ -717,6 +717,29 @@ func filterProjects(all []config.ProjectConfig, query string) []config.ProjectCo
 	return matches
 }
 
+// updateProjectSwitcherFilter sends text input to the project filter and
+// refreshes the derived list state. Mouse-driven modal transitions can leave
+// the bubbles input blurred, so filtering always explicitly reclaims focus.
+func (m *Model) updateProjectSwitcherFilter(msg tea.Msg) tea.Cmd {
+	m.projectSwitcherInput.Focus()
+
+	var cmd tea.Cmd
+	m.projectSwitcherInput, cmd = m.projectSwitcherInput.Update(msg)
+	m.projectSwitcherFiltered = filterProjects(m.cfg.Projects.List, m.projectSwitcherInput.Value())
+	m.clearProjectSwitcherModal()
+
+	if m.projectSwitcherCursor >= len(m.projectSwitcherFiltered) {
+		m.projectSwitcherCursor = len(m.projectSwitcherFiltered) - 1
+	}
+	if m.projectSwitcherCursor < 0 {
+		m.projectSwitcherCursor = 0
+	}
+	m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, 0, 8)
+	m.previewProjectTheme()
+
+	return cmd
+}
+
 // projectSwitcherEnsureCursorVisible adjusts scroll to keep cursor in view.
 // Returns the new scroll offset.
 func projectSwitcherEnsureCursorVisible(cursor, scroll, maxVisible int) int {

@@ -83,11 +83,7 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		// The project-add sub-flow has multiple focus-dependent inputs; leave it
 		// to the plugin-forward fallback rather than guess the focused field.
 		if !m.projectAddMode {
-			var cmd tea.Cmd
-			m.projectSwitcherInput, cmd = m.projectSwitcherInput.Update(msg)
-			m.projectSwitcherFiltered = filterProjects(m.cfg.Projects.List, m.projectSwitcherInput.Value())
-			m.clearProjectSwitcherModal()
-			return m, cmd
+			return m, m.updateProjectSwitcherFilter(msg)
 		}
 
 	case ModalThemeSwitcher:
@@ -966,25 +962,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Forward other keys to text input for filtering
-		var cmd tea.Cmd
-		m.projectSwitcherInput, cmd = m.projectSwitcherInput.Update(msg)
-
-		// Re-filter on input change
-		m.projectSwitcherFiltered = filterProjects(allProjects, m.projectSwitcherInput.Value())
-		m.clearProjectSwitcherModal() // Clear modal cache on filter change
-		// Reset cursor if it's beyond filtered list
-		if m.projectSwitcherCursor >= len(m.projectSwitcherFiltered) {
-			m.projectSwitcherCursor = len(m.projectSwitcherFiltered) - 1
-		}
-		if m.projectSwitcherCursor < 0 {
-			m.projectSwitcherCursor = 0
-		}
-		m.projectSwitcherScroll = 0
-		m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
-		m.previewProjectTheme()
-
-		return m, cmd
+		return m, m.updateProjectSwitcherFilter(msg)
 	}
 
 	// Handle theme switcher modal keys (Esc handled above)

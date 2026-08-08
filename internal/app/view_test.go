@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -120,6 +121,56 @@ func TestRepoNameClick_OpensProjectSwitcher(t *testing.T) {
 	}
 	if updated.activeContext != "project-switcher" {
 		t.Errorf("activeContext should be 'project-switcher', got %q", updated.activeContext)
+	}
+}
+
+func TestRepoNameClick_FocusesProjectFilter(t *testing.T) {
+	cfg := &config.Config{
+		Projects: config.ProjectsConfig{
+			List: []config.ProjectConfig{
+				{Name: "alpha", Path: "/tmp/alpha"},
+				{Name: "bravo", Path: "/tmp/bravo"},
+			},
+		},
+	}
+	m := Model{
+		intro:    IntroModel{RepoName: "testrepo", Done: true},
+		cfg:      cfg,
+		ui:       &UIState{},
+		registry: plugin.NewRegistry(nil),
+		keymap:   keymap.NewRegistry(),
+		width:    120,
+		height:   40,
+		ready:    true,
+	}
+
+	start, end, ok := m.getRepoNameBounds()
+	if !ok {
+		t.Fatal("getRepoNameBounds() should return ok=true")
+	}
+	click := tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft}
+	newModel, _ := m.Update(click)
+	newModel.View()
+
+	// A physical click produces a release after the press that opens the modal.
+	newModel, _ = newModel.Update(tea.MouseReleaseMsg{X: click.X, Y: click.Y, Button: tea.MouseLeft})
+	newModel.View()
+	newModel, _ = newModel.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	var updated Model
+	switch value := newModel.(type) {
+	case Model:
+		updated = value
+	case *Model:
+		updated = *value
+	default:
+		t.Fatalf("updated model = %T, want app.Model or *app.Model", newModel)
+	}
+
+	if got := updated.projectSwitcherInput.Value(); got != "b" {
+		t.Fatalf("project filter = %q, want %q", got, "b")
+	}
+	if got := len(updated.projectSwitcherFiltered); got != 1 {
+		t.Fatalf("filtered projects = %d, want 1", got)
 	}
 }
 
