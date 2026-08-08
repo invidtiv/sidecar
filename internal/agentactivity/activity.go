@@ -137,7 +137,6 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 		return false
 	}
 	previous := t.State
-	previousSeen := t.Seen
 	t.State = result.State
 	t.Evidence = result.Evidence
 	t.ChangedAt = now
@@ -145,7 +144,7 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 		t.Seen = false
 	} else if result.State == StateIdle {
 		// Initial/restart idle is quiet; only a transition from live work creates done.
-		t.Seen = previous == StateUnknown || previous == "" || previousSeen
+		t.Seen = previous == StateUnknown || previous == ""
 	}
 	return true
 }

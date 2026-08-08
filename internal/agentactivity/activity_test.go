@@ -90,6 +90,7 @@ func TestTrackerDebouncesIdleAndAcknowledgesDone(t *testing.T) {
 	if tracker.DisplayState() != "working" {
 		t.Fatal(tracker.DisplayState())
 	}
+	tracker.Acknowledge() // Viewing work does not acknowledge its future completion.
 	if tracker.Apply(Result{State: StateIdle, Evidence: "idle"}, now.Add(time.Second)) {
 		t.Fatal("first idle published")
 	}
