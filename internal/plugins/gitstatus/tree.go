@@ -1,7 +1,6 @@
 package gitstatus
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -74,7 +73,6 @@ func LoadFileTree(workDir string) (*FileTree, error) {
 		return nil, err
 	}
 	_ = tree.loadDiffStats()
-	_ = tree.loadUntrackedStats()
 	tree.groupUntrackedFolders()
 	return tree, nil
 }
@@ -200,16 +198,18 @@ func (t *FileTree) parseRenamedEntry(line string) *FileEntry {
 
 	xy := fields[1]
 	path := fields[9]
+	status := StatusRenamed
+	if fields[8][0] == 'C' {
+		status = StatusCopied
+	}
 
 	entry := &FileEntry{
 		Path:   path,
-		Status: StatusRenamed,
-		Staged: true,
+		Status: status,
 	}
-
-	// Check if there are also worktree changes
-	if len(xy) >= 2 && xy[1] != '.' {
-		entry.Unstaged = true
+	if len(xy) >= 2 {
+		entry.Staged = xy[0] != '.'
+		entry.Unstaged = xy[1] != '.'
 	}
 
 	return entry
@@ -262,7 +262,7 @@ func (t *FileTree) loadDiffStats() error {
 
 // loadDiffStatsFor loads diff stats for staged or unstaged changes.
 func (t *FileTree) loadDiffStatsFor(staged bool) error {
-	args := []string{"diff", "--numstat"}
+	args := []string{"diff", "--numstat", "-z"}
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -274,104 +274,50 @@ func (t *FileTree) loadDiffStatsFor(staged bool) error {
 		return err
 	}
 
-	// Parse numstat output: <additions>\t<deletions>\t<path>
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	re := regexp.MustCompile(`^(\d+|-)\t(\d+|-)\t(.+)$`)
-
-	for scanner.Scan() {
-		matches := re.FindStringSubmatch(scanner.Text())
-		if len(matches) != 4 {
-			continue
-		}
-
-		additions, _ := strconv.Atoi(matches[1])
-		deletions, _ := strconv.Atoi(matches[2])
-		path := matches[3]
-
-		// Handle renamed files (path\told_path)
-		if idx := strings.Index(path, "\t"); idx > 0 {
-			path = path[:idx]
-		}
-
-		// Find and update the entry
-		entries := t.Modified
-		if staged {
-			entries = t.Staged
-		}
-		for _, e := range entries {
-			if e.Path == path || filepath.Base(e.Path) == filepath.Base(path) {
-				e.DiffStats = DiffStats{
-					Additions: additions,
-					Deletions: deletions,
-				}
-				break
-			}
+	entries := t.Modified
+	if staged {
+		entries = t.Staged
+	}
+	byPath := make(map[string]*FileEntry, len(entries))
+	for _, entry := range entries {
+		byPath[entry.Path] = entry
+	}
+	for _, stat := range parseNumstat(output) {
+		if entry := byPath[stat.Path]; entry != nil {
+			entry.DiffStats = stat.Stats
 		}
 	}
-
 	return nil
 }
 
-// loadUntrackedStats counts lines in untracked files to show as additions.
-func (t *FileTree) loadUntrackedStats() error {
-	if len(t.Untracked) == 0 {
-		return nil
-	}
+type numstatEntry struct {
+	Path  string
+	Stats DiffStats
+}
 
-	// Collect file paths (skip folders)
-	var paths []string
-	entryMap := make(map[string]*FileEntry)
-	for _, e := range t.Untracked {
-		if e.IsFolder {
+// parseNumstat parses `git diff --numstat -z`. Rename and copy headers have an
+// empty path followed by separate old and new NUL-delimited path records.
+func parseNumstat(output []byte) []numstatEntry {
+	parts := bytes.Split(output, []byte{0})
+	stats := make([]numstatEntry, 0, len(parts))
+	for i := 0; i < len(parts); i++ {
+		fields := bytes.SplitN(parts[i], []byte{'\t'}, 3)
+		if len(fields) != 3 {
 			continue
 		}
-		fullPath := filepath.Join(t.workDir, e.Path)
-		paths = append(paths, fullPath)
-		entryMap[fullPath] = e
-	}
-	if len(paths) == 0 {
-		return nil
-	}
-
-	// Batch wc calls to avoid ARG_MAX limits with many untracked files
-	const batchSize = 500
-	for i := 0; i < len(paths); i += batchSize {
-		end := i + batchSize
-		if end > len(paths) {
-			end = len(paths)
-		}
-		batch := paths[i:end]
-
-		args := append([]string{"-l"}, batch...)
-		cmd := exec.Command("wc", args...)
-		output, err := cmd.Output()
-		if err != nil {
-			continue // Skip failed batch, try next
-		}
-
-		// Parse wc output: "  123 /path/to/file"
-		scanner := bufio.NewScanner(bytes.NewReader(output))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			parts := strings.SplitN(line, " ", 2)
-			if len(parts) != 2 {
+		path := string(fields[2])
+		if path == "" {
+			if i+2 >= len(parts) {
 				continue
 			}
-			count, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-			if err != nil {
-				continue
-			}
-			path := strings.TrimSpace(parts[1])
-			// Skip the "total" summary line emitted by wc when given multiple files
-			if path == "total" {
-				continue
-			}
-			if e, ok := entryMap[path]; ok {
-				e.DiffStats = DiffStats{Additions: count, Deletions: 0}
-			}
+			i += 2
+			path = string(parts[i])
 		}
+		additions, _ := strconv.Atoi(string(fields[0]))
+		deletions, _ := strconv.Atoi(string(fields[1]))
+		stats = append(stats, numstatEntry{Path: path, Stats: DiffStats{Additions: additions, Deletions: deletions}})
 	}
-	return nil
+	return stats
 }
 
 // TotalCount returns the total number of changed files.
