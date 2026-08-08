@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -38,6 +39,7 @@ type shellStartupHooks struct {
 	getWorkspaceState func(string) state.WorkspaceState
 	setWorkspaceState func(string, state.WorkspaceState) error
 	now               func() time.Time
+	namespace         func() string
 }
 
 func defaultShellStartupHooks() shellStartupHooks {
@@ -52,6 +54,7 @@ func defaultShellStartupHooks() shellStartupHooks {
 		getWorkspaceState: state.GetWorkspaceState,
 		setWorkspaceState: state.SetWorkspaceState,
 		now:               time.Now,
+		namespace:         tmuxenv.Namespace,
 	}
 }
 
@@ -80,6 +83,9 @@ func (h shellStartupHooks) withDefaults() shellStartupHooks {
 	}
 	if h.now == nil {
 		h.now = defaults.now
+	}
+	if h.namespace == nil {
+		h.namespace = defaults.namespace
 	}
 	return h
 }
@@ -202,15 +208,39 @@ func reconcileShellStartup(
 		running[name] = true
 	}
 
+	// live is a snapshot: the loop below consumes `running` as it matches
+	// manifest entries, but the final construction still needs to know which
+	// retained definitions are actually alive.
+	live := make(map[string]bool, len(running))
+	for name := range running {
+		live[name] = true
+	}
+
+	pattern := shellDiscoveryPattern(workDir)
+	ns := hooks.namespace()
+
 	changed := false
 	definitions := make([]ShellDefinition, 0, len(manifest.Shells)+len(running))
 	for _, definition := range manifest.Shells {
-		if !running[definition.TmuxName] {
+		if running[definition.TmuxName] {
+			if definition.Namespace != ns {
+				definition.Namespace = ns
+				changed = true
+			}
+			definitions = append(definitions, definition)
+			delete(running, definition.TmuxName)
+			continue
+		}
+		// Not live here. Absence is evidence of death only when this instance
+		// could have discovered it: same tmux server AND a name our own
+		// discovery pattern can produce. Anything else belongs to someone else
+		// — a sibling worktree, another tmux server, an isolated test run —
+		// and pruning it is the td-8d18de data loss.
+		if definition.Namespace == ns && pattern.MatchString(definition.TmuxName) {
 			changed = true
 			continue
 		}
 		definitions = append(definitions, definition)
-		delete(running, definition.TmuxName)
 	}
 
 	discovered := make([]string, 0, len(running))
@@ -223,6 +253,7 @@ func reconcileShellStartup(
 		definitions = append(definitions, ShellDefinition{
 			TmuxName:    name,
 			DisplayName: deriveShellDisplayName(workDir, name),
+			Namespace:   ns,
 			CreatedAt:   now,
 		})
 		changed = true
@@ -254,8 +285,11 @@ func reconcileShellStartup(
 	shells := make([]*ShellSession, 0, len(definitions))
 	managed := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
-		shells = append(shells, shellSessionFromDefinition(definition, true, hooks.getPaneID))
-		managed[definition.TmuxName] = true
+		running := live[definition.TmuxName]
+		shells = append(shells, shellSessionFromDefinition(definition, running, hooks.getPaneID))
+		if running {
+			managed[definition.TmuxName] = true
+		}
 	}
 	return shells, managed
 }

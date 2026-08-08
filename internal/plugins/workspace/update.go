@@ -70,6 +70,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if !p.refreshing {
 			p.refreshing = true
 			cmds = append(cmds, p.refreshWorktrees())
+			// td-8d18de: `r` re-runs safe tmux discovery so shells that
+			// survived a foreign manifest rewrite come back without
+			// restarting the app. syncShellsFromManifest never prunes — it
+			// merges — so refresh can only ever add sessions back.
+			if cmd := p.syncShellsFromManifest(p.currentShellStartupScope()); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 
 	case WorkDirDeletedMsg:

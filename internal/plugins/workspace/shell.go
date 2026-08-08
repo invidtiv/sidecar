@@ -211,10 +211,17 @@ type (
 // pollShellMsg triggers a shell output poll (legacy, polls selected shell).
 type pollShellMsg struct{}
 
-func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
-	projectName := filepath.Base(workDir)
-	basePrefix := shellSessionPrefix + sanitizeName(projectName)
+// shellDiscoveryPattern matches exactly the session names this instance's
+// discovery could ever produce for workDir. It doubles as the "could I have
+// discovered that?" predicate during reconciliation: a manifest entry this
+// pattern rejects belongs to some other working directory (a sibling worktree,
+// say), so our not seeing it is no evidence at all that it died (td-8d18de).
+func shellDiscoveryPattern(workDir string) *regexp.Regexp {
+	basePrefix := shellSessionPrefix + sanitizeName(filepath.Base(workDir))
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(basePrefix) + `(?:-(\d+))?$`)
+}
 
+func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
@@ -222,7 +229,7 @@ func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
 	}
 
 	var result []string
-	indexPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(basePrefix) + `(?:-(\d+))?$`)
+	indexPattern := shellDiscoveryPattern(workDir)
 
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
@@ -260,10 +267,11 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 			paneIDs[name] = hooks.getPaneID(name)
 		}
 		return shellManifestSyncMsg{
-			Scope:    scope,
-			Manifest: newManifest,
-			Running:  running,
-			PaneIDs:  paneIDs,
+			Scope:     scope,
+			Manifest:  newManifest,
+			Running:   running,
+			PaneIDs:   paneIDs,
+			Namespace: hooks.namespace(),
 		}
 	}
 }
@@ -274,62 +282,52 @@ type shellManifestSyncMsg struct {
 	Manifest *ShellManifest
 	Running  map[string]bool
 	PaneIDs  map[string]string
+	// Namespace is this instance's tmux server identity, resolved on the
+	// command goroutine so Update never touches the environment.
+	Namespace string
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
-// Called after receiving shellManifestSyncMsg.
+// Called after receiving shellManifestSyncMsg. The union rules live in
+// mergeShellState; this is the adapter that applies them to plugin state.
 func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
 	if p.shellManifest == nil {
 		return
 	}
 
-	// Build map of current shells by TmuxName
-	currentShells := make(map[string]*ShellSession)
+	result := mergeShellState(shellMergeInput{
+		Existing:  p.shells,
+		Manifest:  p.shellManifest.Shells,
+		Running:   sync.Running,
+		PaneID:    func(name string) string { return sync.PaneIDs[name] },
+		WorkDir:   p.ctx.WorkDir,
+		Namespace: sync.Namespace,
+	})
+
+	p.shells = result.Shells
+
+	// Only shells that vanished from the manifest *and* are not running here
+	// reach Dropped, i.e. an explicit delete elsewhere.
+	for _, name := range result.Dropped {
+		delete(p.managedSessions, name)
+		globalPaneCache.remove(name)
+		globalActiveRegistry.remove(name)
+	}
+	if p.managedSessions == nil {
+		p.managedSessions = make(map[string]bool)
+	}
 	for _, shell := range p.shells {
-		currentShells[shell.TmuxName] = shell
-	}
-
-	// Track which shells exist in manifest
-	manifestShells := make(map[string]bool)
-	for _, def := range p.shellManifest.Shells {
-		manifestShells[def.TmuxName] = true
-	}
-
-	// Process manifest entries - add new or update existing
-	var newShells []*ShellSession
-	for _, def := range p.shellManifest.Shells {
-		isRunning := sync.Running[def.TmuxName]
-
-		if existing, ok := currentShells[def.TmuxName]; ok {
-			// Update existing shell
-			existing.Name = def.DisplayName
-			existing.ChosenAgent = definitionToAgentType(def.AgentType)
-			existing.SkipPerms = def.SkipPerms
-			existing.IsOrphaned = !isRunning
-			newShells = append(newShells, existing)
-		} else {
-			// New shell from manifest
-			shell := shellSessionFromDefinition(def, isRunning, func(name string) string {
-				return sync.PaneIDs[name]
-			})
-			newShells = append(newShells, shell)
-			if isRunning {
-				p.managedSessions[def.TmuxName] = true
-			}
+		if sync.Running[shell.TmuxName] {
+			p.managedSessions[shell.TmuxName] = true
 		}
 	}
 
-	// Remove shells not in manifest
-	for _, shell := range p.shells {
-		if !manifestShells[shell.TmuxName] {
-			// Shell was deleted in another instance
-			delete(p.managedSessions, shell.TmuxName)
-			globalPaneCache.remove(shell.TmuxName)
-			globalActiveRegistry.remove(shell.TmuxName)
-		}
+	// Heal the file: put back the live sessions the writer did not know about.
+	// This converges rather than ping-pongs — the peer instance re-reads a
+	// superset manifest, finds nothing missing, and writes nothing.
+	if len(result.Restored) > 0 {
+		_, _ = p.shellManifest.EnsureShells(result.Restored)
 	}
-
-	p.shells = newShells
 
 	// Adjust selection if needed
 	if p.shellSelected && p.selectedShellIdx >= len(p.shells) {

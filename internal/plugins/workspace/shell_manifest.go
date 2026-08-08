@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"log/slog"
+
+	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
 // ShellManifest stores persistent shell definitions for cross-instance sync
@@ -24,11 +26,19 @@ type ShellManifest struct {
 
 // ShellDefinition contains all info needed to recreate a shell session.
 type ShellDefinition struct {
-	TmuxName    string    `json:"tmuxName"`
-	DisplayName string    `json:"displayName"`
-	CreatedAt   time.Time `json:"createdAt"`
-	AgentType   string    `json:"agentType,omitempty"`
-	SkipPerms   bool      `json:"skipPerms,omitempty"`
+	TmuxName    string `json:"tmuxName"`
+	DisplayName string `json:"displayName"`
+	// Namespace identifies the tmux server that owns this session
+	// (tmuxenv.Namespace). Empty means a pre-td-8d18de entry of unknown
+	// origin: it is never pruned, because this instance cannot prove the
+	// session was ever visible to it, and it is stamped the first time the
+	// entry is seen live locally. Legacy entries whose session is really gone
+	// therefore surface as orphans rather than vanishing, and clear on an
+	// explicit kill.
+	Namespace string    `json:"namespace,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	AgentType string    `json:"agentType,omitempty"`
+	SkipPerms bool      `json:"skipPerms,omitempty"`
 }
 
 // manifestVersion is the current manifest format version.
@@ -122,6 +132,36 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 	}
 	m.Shells = append(m.Shells, def)
 	return m.saveLocked()
+}
+
+// EnsureShells adds any definitions the manifest is missing and saves once.
+// Existing entries are left untouched. Returns true when the file changed.
+//
+// This is the additive counterpart to AddShell: it heals a manifest another
+// instance narrowed (td-8d18de) without ever overwriting what that instance
+// wrote.
+func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	present := make(map[string]bool, len(m.Shells))
+	for _, s := range m.Shells {
+		present[s.TmuxName] = true
+	}
+
+	changed := false
+	for _, def := range defs {
+		if present[def.TmuxName] {
+			continue
+		}
+		m.Shells = append(m.Shells, def)
+		present[def.TmuxName] = true
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, m.saveLocked()
 }
 
 // RemoveShell removes a shell by tmuxName and saves.
@@ -234,6 +274,7 @@ func shellToDefinition(shell *ShellSession) ShellDefinition {
 	return ShellDefinition{
 		TmuxName:    shell.TmuxName,
 		DisplayName: shell.Name,
+		Namespace:   tmuxenv.Namespace(),
 		CreatedAt:   shell.CreatedAt,
 		AgentType:   agentType,
 		SkipPerms:   shell.SkipPerms,
