@@ -491,16 +491,25 @@ Phase 3 is tracked by epic `td-10b798` and children `td-8ac0a8`,
   session-file status inference on normal, unchanged/title-only, and terminal-
   control paths. Their `WorktreeStatus` remains available to kanban as a
   projection of semantic activity; unsupported agents retain legacy detection.
+- Terminal-control capture includes fresh `pane_current_command` and
+  `pane_title` in its existing in-band metadata response. It never evaluates a
+  current screen against process/title identity cached before ordinary polling
+  was suspended. Regressions cover stale working and blocked state returning to
+  zsh for all four providers on worktree and shell paths, plus the observed
+  Codex blocked-to-working transition.
 - Worktree and agent-backed shell rows share `activityPresentation`. Missing
   worktree and orphaned tmux health remain higher-priority and cannot render as
   semantic completion or blockage.
 - Normal debug logging records only agent type, prior/new semantic state,
   stable evidence ID, and capture age. Regression coverage verifies terminal
   screen/title content is absent and unchanged observations emit no transition.
-- Focused and full tests plus `go build ./...` pass at `a9cef03`. Isolated proof
-  artifacts are under `/tmp/sidecar-phase3-proof/`, including text/PNG captures
-  of a real Codex-backed shell and a supported Codex worktree entry. The proof
-  used `scripts/tmux-drive.sh` with private tmux, state, cache, and config roots.
-  Before/after diffs prove the default tmux PID/socket/panes and production
-  Sidecar manifest checksums were byte-identical; only proof-owned isolated
-  sessions were stopped.
+- Focused and full tests plus `go build ./...` pass. The corrected isolated
+  control proof is under `/tmp/sidecar-phase3-control-proof/`:
+  `codex-idle`, `codex-working-control`, and
+  `codex-exited-to-shell-control` accurately show an agent-backed shell moving
+  from idle to working, then to unknown when fresh control metadata reports
+  `pane_current_command=zsh`. The proof used `scripts/tmux-drive.sh` with
+  private tmux, state, cache, and config roots. Before/after diffs prove the
+  default tmux PID/socket/panes and production Sidecar manifest checksums were
+  byte-identical; only proof-owned isolated sessions were stopped. Earlier
+  artifact names containing `blocked` were inaccurate and are not evidence.
