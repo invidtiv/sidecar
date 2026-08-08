@@ -43,6 +43,35 @@ if grep -E '^\s*replace\s' go.mod >/dev/null 2>&1; then
   exit 1
 fi
 
+# Go CI (tests + golangci-lint) must be green on the commit being released.
+# This used to be a manual checklist item ("confirm Go CI is green") and main
+# sat red for a full day across two merges before a release caught it.
+# Only enforced when origin resolves to a real GitHub repo `gh` can query
+# (skipped for the synthetic local-bare-remote repos test-release-guards.sh
+# exercises this script against).
+if command -v gh >/dev/null 2>&1 && gh repo view >/dev/null 2>&1; then
+  ci_runs=$(gh run list --workflow=go-ci.yml --branch main --limit 20 \
+    --json headSha,status,conclusion -q \
+    "[.[] | select(.headSha == \"$remote_head\")]" 2>/dev/null || echo '[]')
+  ci_count=$(jq 'length' <<<"$ci_runs")
+  if [[ $ci_count == 0 ]]; then
+    echo "Error: no Go CI run found for $remote_head yet; wait for it to start" >&2
+    exit 1
+  fi
+  ci_status=$(jq -r '.[0].status' <<<"$ci_runs")
+  ci_conclusion=$(jq -r '.[0].conclusion' <<<"$ci_runs")
+  if [[ $ci_status != completed ]]; then
+    echo "Error: Go CI is still $ci_status on $remote_head; wait for it to finish" >&2
+    exit 1
+  fi
+  if [[ $ci_conclusion != success ]]; then
+    echo "Error: Go CI is $ci_conclusion on $remote_head; fix it before releasing" >&2
+    exit 1
+  fi
+else
+  echo "Warning: gh unavailable or origin is not a resolvable GitHub repo; skipping automated Go CI status check" >&2
+fi
+
 case "$mode" in
   pre-tag)
     if [[ $(git branch --show-current) != main ]]; then

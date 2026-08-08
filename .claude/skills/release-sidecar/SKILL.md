@@ -14,7 +14,10 @@ this checklist by hand.
 
 - Go matching `go.mod`
 - Clean working tree; `main` identical to live `origin/main`
-- Tests and **Go CI** green on the commit you will tag (tests *and* lint)
+- Tests and **Go CI** green on the commit you will tag (tests *and* lint) —
+  `check-release-state.sh` now checks this itself via `gh run list
+  --workflow=go-ci.yml` and fails closed if it's red/running/missing, so you
+  don't have to remember to look
 - GitHub CLI authenticated with push access to `marcus/homebrew-tap`
 - No `replace` directives in `go.mod`
 - `HOMEBREW_TAP_TOKEN` secret present in the GitHub repo (CI tap job)
@@ -131,7 +134,7 @@ See `docs/guides/active/releasing.md`.
 
 ## Checklist
 
-- [ ] Go CI green (tests + lint) on the commit to tag
+- [ ] Go CI green (tests + lint) on the commit to tag — enforced automatically by `check-release-state.sh`
 - [ ] Working tree clean; `main` == `origin/main`
 - [ ] td bump considered; td tab smoke if td moved
 - [ ] No `replace` in go.mod; `GOWORK=off` build works
