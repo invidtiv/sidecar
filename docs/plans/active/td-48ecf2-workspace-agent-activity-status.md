@@ -410,6 +410,17 @@ For each of Codex, Claude, Grok, and Antigravity:
 - Grok OSC progress until tmux exposes it reliably or Sidecar owns a PTY parser
   that captures it before consumption.
 
+## tmux safety for implementation and proof
+
+Never stop, restart, kill, or replace the user's main tmux server while testing
+this work. Sidecar sessions may contain irreplaceable live agent state, and
+restarting the main server destroys those sessions. All automated fixtures,
+proof runs, and cleanup must use an isolated tmux socket/server (including
+`scripts/tmux-drive.sh`'s isolated test server) and may clean up only sessions
+created on that isolated server. Installing or replacing the Sidecar binary
+does not require restarting tmux; exit and relaunch Sidecar normally while the
+existing tmux server remains running.
+
 ## Risks and mitigations
 
 | Risk | Mitigation |
