@@ -1,0 +1,6 @@
+kind: safety-contract-not-real-capture
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+History
+Esc to close

@@ -1,0 +1,6 @@
+kind: safety-contract-not-real-capture
+pane_current_command: pi
+pane_title: unavailable
+screen:
+Settings
+Esc to close

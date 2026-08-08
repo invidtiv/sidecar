@@ -1,0 +1,6 @@
+kind: herdr-compatibility
+manifest: amp 2026.07.09.1
+pane_current_command: amp
+pane_title: Plugin confirmation needed
+screen:
+unavailable

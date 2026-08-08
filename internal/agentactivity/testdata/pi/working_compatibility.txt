@@ -1,0 +1,6 @@
+kind: herdr-compatibility
+manifest: pi 2026.06.10.1
+pane_current_command: pi
+pane_title: unavailable
+screen:
+Working...

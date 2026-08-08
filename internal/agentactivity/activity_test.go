@@ -175,6 +175,93 @@ func TestExpandedProvidersIgnoreHistoricalSignalsOutsideCurrentBottom(t *testing
 	}
 }
 
+func TestExpandedProviderOverlayAndInterruptionRetainPastIdleDebounce(t *testing.T) {
+	tests := []struct {
+		agent, command, screen string
+	}{
+		{"pi", "pi", "Settings\nEsc to close"},
+		{"copilot", "copilot", "Transcript viewer\nq to quit"},
+		{"cursor", "cursor-agent", "History\nEsc to close"},
+		{"opencode", "opencode", "Help\nq to quit"},
+		{"amp", "amp", "Turn interrupted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.agent, func(t *testing.T) {
+			result := Detect(Observation{Agent: tt.agent, CurrentCommand: tt.command, Screen: tt.screen})
+			if !result.SkipStateUpdate || result.Evidence != tt.agent+".overlay-or-interruption.retain" {
+				t.Fatalf("retain result = %+v", result)
+			}
+			now := time.Unix(400, 0)
+			tracker := Tracker{State: StateWorking, Evidence: tt.agent + ".working"}
+			for _, elapsed := range []time.Duration{IdleDebounce + time.Millisecond, 2*IdleDebounce + time.Second} {
+				if tracker.Apply(result, now.Add(elapsed)) {
+					t.Fatalf("retain changed tracker at %s: %+v", elapsed, tracker)
+				}
+			}
+			if tracker.State != StateWorking || tracker.DisplayState() != "working" {
+				t.Fatalf("retain fabricated completion: %+v display=%q", tracker, tracker.DisplayState())
+			}
+		})
+	}
+}
+
+func TestExpandedPerProviderFixtures(t *testing.T) {
+	tests := []struct {
+		agent, file, evidence string
+		want                  State
+		skip                  bool
+	}{
+		{"pi", "working_compatibility.txt", "pi.screen.working", StateWorking, false},
+		{"pi", "overlay_compatibility.txt", "pi.overlay-or-interruption.retain", StateUnknown, true},
+		{"pi", "interrupted_compatibility.txt", "pi.overlay-or-interruption.retain", StateUnknown, true},
+		{"pi", "false_positive.txt", "pi.process-mismatch", StateUnknown, false},
+		{"copilot", "blocked_compatibility.txt", "copilot.screen.blocked", StateBlocked, false},
+		{"copilot", "overlay_compatibility.txt", "copilot.overlay-or-interruption.retain", StateUnknown, true},
+		{"copilot", "interrupted_compatibility.txt", "copilot.overlay-or-interruption.retain", StateUnknown, true},
+		{"copilot", "false_positive.txt", "copilot.process-mismatch", StateUnknown, false},
+		{"cursor", "blocked_compatibility.txt", "cursor.screen.write-blocked", StateBlocked, false},
+		{"cursor", "overlay_compatibility.txt", "cursor.overlay-or-interruption.retain", StateUnknown, true},
+		{"cursor", "interrupted_compatibility.txt", "cursor.overlay-or-interruption.retain", StateUnknown, true},
+		{"cursor", "false_positive.txt", "cursor.process-mismatch", StateUnknown, false},
+		{"opencode", "blocked_compatibility.txt", "opencode.screen.blocked", StateBlocked, false},
+		{"opencode", "overlay_compatibility.txt", "opencode.overlay-or-interruption.retain", StateUnknown, true},
+		{"opencode", "interrupted_compatibility.txt", "opencode.overlay-or-interruption.retain", StateUnknown, true},
+		{"opencode", "false_positive.txt", "opencode.process-mismatch", StateUnknown, false},
+		{"amp", "title_compatibility.txt", "amp.title.plugin-blocked", StateBlocked, false},
+		{"amp", "overlay_compatibility.txt", "amp.overlay-or-interruption.retain", StateUnknown, true},
+		{"amp", "interrupted_compatibility.txt", "amp.overlay-or-interruption.retain", StateUnknown, true},
+		{"amp", "false_positive.txt", "amp.process-mismatch", StateUnknown, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.agent+"/"+tt.file, func(t *testing.T) {
+			got := Detect(readObservationFixture(t, tt.agent, tt.file))
+			if got.State != tt.want || got.Evidence != tt.evidence || got.SkipStateUpdate != tt.skip {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestExpandedProviderTransientMarkersMustBeCurrentAndSpecific(t *testing.T) {
+	for _, tt := range []struct{ agent, command string }{
+		{"pi", "pi"}, {"copilot", "copilot"}, {"cursor", "cursor-agent"}, {"opencode", "opencode"}, {"amp", "amp"},
+	} {
+		t.Run(tt.agent, func(t *testing.T) {
+			for name, screen := range map[string]string{
+				"label without UI hint":      "Please update settings for the project",
+				"hint without overlay label": "Press esc to close this issue",
+				"stale overlay":              "Settings\nEsc to close\n" + strings.Repeat("current idle\n", 30),
+				"stale interruption":         "Turn interrupted\n" + strings.Repeat("current idle\n", 30),
+			} {
+				got := Detect(Observation{Agent: tt.agent, CurrentCommand: tt.command, Screen: screen})
+				if got.SkipStateUpdate || got.State != StateIdle {
+					t.Fatalf("%s got %+v", name, got)
+				}
+			}
+		})
+	}
+}
+
 func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
 	got := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "repo - grok"})
 	if got.State != StateIdle || got.Evidence != "grok.title.idle" {

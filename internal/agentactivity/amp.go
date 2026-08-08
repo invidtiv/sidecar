@@ -3,6 +3,8 @@ package agentactivity
 import "regexp"
 
 var ampRules = []Rule{
+	// Compatibility safety markers only: Amp was unavailable for capture.
+	{ID: "amp.overlay-or-interruption.retain", State: StateUnknown, Region: RegionCurrent, LastN: 12, Skip: true, Regexp: regexp.MustCompile(`(?ims)(\b(?:settings|history|help)\b.*(?:esc to close|q to quit)|(?:esc to close|q to quit).*\b(?:settings|history|help)\b|^\s*(?:turn )?interrupted\b)`)},
 	// Compatibility rules from Herdr amp manifest 2026.07.09.1.
 	{ID: "amp.title.plugin-blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Plugin confirmation needed"}},
 	{ID: "amp.title.working", State: StateWorking, Region: RegionTitle, Regexp: regexp.MustCompile(`^[⠀-⣿] `)},
@@ -17,7 +19,7 @@ func DetectAmp(ob Observation) Result {
 		return Result{State: StateUnknown, Evidence: "amp.process-mismatch"}
 	}
 	result := Evaluate(ob, ampRules)
-	if result.State == StateUnknown {
+	if result.State == StateUnknown && !result.SkipStateUpdate {
 		return Result{State: StateIdle, Evidence: "amp.known-live-fallback"}
 	}
 	return result
