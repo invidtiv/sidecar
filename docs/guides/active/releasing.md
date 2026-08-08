@@ -67,6 +67,12 @@ brew install marcus/tap/sidecar
 brew test marcus/tap/sidecar
 ```
 
+After public verification, deliberately choose the development machine's active
+binary. Use `make install-local` to return to the canonical `main` checkout, or
+`make use-homebrew` to keep the released formula active. Finish with
+`make install-status`; it reports both interactive and non-interactive login
+shell resolution, which can differ on this machine.
+
 ## Sidecar-specific notes
 
 - **td embedding:** decide deliberately whether to take `@latest` or pin; a large

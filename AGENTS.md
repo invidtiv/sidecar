@@ -31,8 +31,17 @@ go build ./...
 # Run tests
 go test ./...
 
-# Install with version (use semantic versioning)
-go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar
+# Managed install from the canonical main checkout
+make install-local
+
+# Deliberately activate the current branch/worktree
+make install-worktree
+
+# Inspect the managed link and actual shell resolution
+make install-status
+
+# Restore the installed Homebrew release
+make use-homebrew
 
 # Tag a release (prefer the one-shot path)
 RELEASE_VERSION=v0.1.0 make release
@@ -40,6 +49,9 @@ RELEASE_VERSION=v0.1.0 make release
 
 See `docs/guides/active/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
+`make install-dev` is a compatibility alias for `make install-local`. Plain
+`make install` is an unmanaged `go install` into `GOBIN`; it does not alter
+Homebrew links or guarantee which `sidecar` wins PATH precedence.
 
 ## Keyboard Shortcut Parity
 

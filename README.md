@@ -275,17 +275,28 @@ to `""` to leave the title alone.
 ## Development
 
 ```bash
-make build        # Build to ./bin/sidecar
-make test         # Run tests
-make test-v       # Verbose test output
-make install-dev  # Install with git version info
-make fmt          # Format code
-make fmt-check    # Verify formatting for changed Go files
-make fmt-check-all # Verify formatting across full codebase
-make lint         # Lint new issues only (merge-base with main)
-make lint-all     # Lint entire codebase (includes legacy debt)
-make install-hooks # Install pre-commit hooks (gofmt, go vet, go build)
+make build            # Build to ./bin/sidecar
+make test             # Run Go tests
+make test-dev-install # Test managed install switching in an isolated fake prefix
+make test-v           # Verbose Go test output
+make install-local    # Activate the canonical main checkout
+make install-worktree # Deliberately activate the current branch/worktree
+make install-status   # Show managed link plus current/login shell resolution
+make use-homebrew     # Restore the installed Homebrew release
+make install          # Unmanaged go install to GOBIN (does not change Homebrew)
+make fmt              # Format code
+make fmt-check        # Verify formatting for changed Go files
+make fmt-check-all    # Verify formatting across full codebase
+make lint             # Lint new issues only (merge-base with main)
+make lint-all         # Lint entire codebase (includes legacy debt)
+make install-hooks    # Install pre-commit hooks (gofmt, go vet, go build)
 ```
+
+`make install-local` refuses branches and linked worktrees so an incidental
+checkout cannot silently replace the normal development binary. Use
+`make install-worktree` when that replacement is intentional. Both managed
+commands require Homebrew; use `make install` for a separate, unmanaged Go
+installation.
 
 ### Go Lint Baseline
 
