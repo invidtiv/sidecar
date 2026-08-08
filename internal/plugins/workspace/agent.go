@@ -1023,8 +1023,8 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			(!capture.Valid && outputBuf.WouldChange(output))
 
 		activity := agentactivity.Result{}
-		if agentType == AgentCodex {
-			activity = agentactivity.DetectCodex(agentactivity.Observation{
+		if supportsAgentActivity(agentType) {
+			activity = agentactivity.Detect(agentactivity.Observation{
 				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
 				CurrentCommand: capture.CurrentCommand, CapturedAt: time.Now(),
 			})

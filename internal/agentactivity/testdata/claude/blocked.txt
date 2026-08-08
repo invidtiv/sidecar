@@ -1,0 +1,10 @@
+source: real Claude Code 2.1.220 AskUserQuestion, isolated tmux socket
+pane_title: ✳ Count from one to twenty
+pane_current_command: 2.1.220
+screen:
+ ☐ Choice
+Which option would you like to go with?
+❯ 1. Alpha
+  2. Beta
+  3. Type something.
+Enter to select · ↑/↓ to navigate · Esc to cancel

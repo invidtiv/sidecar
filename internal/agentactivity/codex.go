@@ -3,7 +3,7 @@ package agentactivity
 import "regexp"
 
 var (
-	brailleSpinner = regexp.MustCompile(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]`)
+	brailleSpinner = regexp.MustCompile(`[⠂⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]`)
 	codexRules     = []Rule{
 		{ID: "codex.title.blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Action Required"}},
 		{ID: "codex.screen.blocked", State: StateBlocked, Region: RegionLastLines, LastN: 18, Regexp: regexp.MustCompile(`(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)`)},

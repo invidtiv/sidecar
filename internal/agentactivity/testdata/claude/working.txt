@@ -1,0 +1,8 @@
+source: real Claude Code 2.1.220, isolated tmux socket
+pane_title: ⠂ Count from one to twenty
+pane_current_command: 2.1.220
+screen:
+⏺ Running 1 shell command…
+  ⎿  $ printf phase2-claude-proof
+✶ Cerebrating… (1s · ↓ 25 tokens)
+  ⏸ manual mode on · esc to interrupt · ← for agents

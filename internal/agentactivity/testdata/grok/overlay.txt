@@ -1,0 +1,8 @@
+source: real Grok 1.0.0 startup/resume overlay, isolated tmux socket
+pane_title: grok
+pane_current_command: grok-1.0.0-maco
+screen:
+New worktree ctrl+w
+Resume session ctrl+s
+Changelog
+Quit ctrl+q

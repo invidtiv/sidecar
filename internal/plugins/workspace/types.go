@@ -129,6 +129,15 @@ func (s WorktreeStatus) Icon() string {
 // AgentType represents the type of AI coding agent.
 type AgentType string
 
+func supportsAgentActivity(agentType AgentType) bool {
+	switch agentType {
+	case AgentCodex, AgentClaude, AgentGrok, AgentAntigravity:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	AgentNone        AgentType = ""            // No agent (attach only)
 	AgentClaude      AgentType = "claude"      // Claude Code

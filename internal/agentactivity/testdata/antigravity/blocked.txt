@@ -1,0 +1,9 @@
+source: real Antigravity CLI 1.1.11 trust blocker, isolated tmux socket
+pane_title: aerie
+pane_current_command: agy
+screen:
+Do you trust the contents of this project?
+Antigravity CLI requires permission to read, edit, and execute files here.
+> Yes, I trust this folder
+  No, exit
+↑/↓ Navigate · enter Confirm

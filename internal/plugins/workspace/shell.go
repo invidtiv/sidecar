@@ -821,8 +821,8 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			capture.CaptureBase += removedRows
 		}
 		activity := agentactivity.Result{}
-		if agentType == AgentCodex {
-			activity = agentactivity.DetectCodex(agentactivity.Observation{
+		if supportsAgentActivity(agentType) {
+			activity = agentactivity.Detect(agentactivity.Observation{
 				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
 				CurrentCommand: capture.CurrentCommand, CapturedAt: time.Now(),
 			})

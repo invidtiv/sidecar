@@ -16,10 +16,30 @@ foreground process-group rows, sanitized commands, and reproducible capture
 commands are committed in `codex/process_identity.txt`. Working and blocker title changes
 were independently observed. The canceled blocker command did not execute.
 
-Claude, Grok, and Antigravity are installed and version-pinned below, but their
-runtime state harvest and probes are Phase 2. No synthetic state fixtures were
-created. Their availability records deliberately document every unavailable
-Phase 0 state so Phase 1 cannot accidentally claim provider support.
+Claude, Grok, and Antigravity are installed and version-pinned below, and Phase
+2 harvested their current output on the isolated tmux socket
+`sidecar-phase2-fixtures-95423`. Their minimal fixtures now cover:
+
+- Claude: real idle, title/screen working, AskUserQuestion blocker, and
+  interruption. The model-picker fixture remains a compatibility fixture from
+  the pinned Herdr manifest because changing the active model/settings was not
+  safe or necessary for runtime proof. A filesystem permission prompt was not
+  available in the installed manual-mode configuration and is not synthesized.
+- Grok: real idle, interruption, and startup/resume overlay. The installed
+  non-tool turn completed before the capture interval; working remains a
+  pinned-Herdr compatibility fixture. No safe blocker was available without
+  attempting a consequential tool action, so no blocker is synthesized. Pane
+  title and screen are used; OSC 9;4 is explicitly deferred because tmux does
+  not expose it after consumption.
+- Antigravity: real trust blocker, working, interrupted, and completed screens.
+  The completed screen deliberately exercises `known-live-fallback`; the
+  installed UI exposes no stable explicit idle marker beyond its composer.
+  No additional permission blocker was safely available and none is synthesized.
+
+Claude, Grok, and Antigravity were originally installed and version-pinned, but
+their runtime state harvest and probes are Phase 2. Compatibility fixtures are
+identified explicitly; unavailable real states are never represented as real
+captures. Their availability records preserve the earlier Phase 0 limitations.
 
 Herdr compatibility provenance remains pinned in
 `docs/plans/active/td-48ecf2-workspace-agent-activity-status.md` at commit

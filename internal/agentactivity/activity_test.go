@@ -61,6 +61,91 @@ func TestRealCodexFixtures(t *testing.T) {
 	}
 }
 
+func readObservationFixture(t *testing.T, agent, file string) Observation {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", agent, file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.SplitN(string(data), "screen:\n", 2)
+	if len(fields) != 2 {
+		t.Fatal("fixture missing screen")
+	}
+	ob := Observation{Agent: agent, Screen: fields[1]}
+	for _, line := range strings.Split(fields[0], "\n") {
+		if strings.HasPrefix(line, "pane_title: ") {
+			ob.PaneTitle = strings.TrimPrefix(line, "pane_title: ")
+		}
+		if strings.HasPrefix(line, "pane_current_command: ") {
+			ob.CurrentCommand = strings.TrimPrefix(line, "pane_current_command: ")
+		}
+	}
+	return ob
+}
+
+func TestRealPhase2ProviderFixtures(t *testing.T) {
+	tests := []struct {
+		agent, file, evidence string
+		want                  State
+		skip                  bool
+	}{
+		{"claude", "idle.txt", "claude.screen.idle", StateIdle, false},
+		{"claude", "working.txt", "claude.title.working", StateWorking, false},
+		{"claude", "blocked.txt", "claude.screen.blocked", StateBlocked, false},
+		{"claude", "interrupted.txt", "claude.screen.idle", StateIdle, false},
+		{"claude", "overlay.txt", "claude.overlay.retain", StateUnknown, true},
+		{"grok", "idle.txt", "grok.screen.idle", StateIdle, false},
+		{"grok", "working.txt", "grok.title.working", StateWorking, false},
+		{"grok", "interrupted.txt", "grok.screen.idle", StateIdle, false},
+		{"grok", "overlay.txt", "grok.overlay.retain", StateUnknown, true},
+		{"antigravity", "blocked.txt", "antigravity.screen.blocked", StateBlocked, false},
+		{"antigravity", "working.txt", "antigravity.screen.working", StateWorking, false},
+		{"antigravity", "idle_fallback.txt", "antigravity.known-live-fallback", StateIdle, false},
+		{"antigravity", "interrupted.txt", "antigravity.known-live-fallback", StateIdle, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.agent+"/"+tt.file, func(t *testing.T) {
+			got := Detect(readObservationFixture(t, tt.agent, tt.file))
+			if got.State != tt.want || got.Evidence != tt.evidence || got.SkipStateUpdate != tt.skip {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestPhase2ProviderProcessGates(t *testing.T) {
+	for _, agent := range []string{"claude", "grok", "antigravity"} {
+		got := Detect(Observation{Agent: agent, CurrentCommand: "zsh", Screen: "Action Required\nGenerating..."})
+		if got.State != StateUnknown || !strings.HasSuffix(got.Evidence, ".process-mismatch") {
+			t.Fatalf("%s mismatch got %+v", agent, got)
+		}
+	}
+}
+
+func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
+	got := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "repo - grok"})
+	if got.State != StateIdle || got.Evidence != "grok.title.idle" {
+		t.Fatalf("got %+v", got)
+	}
+	got = DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "⠼ Working - grok"})
+	if got.State != StateWorking || got.Evidence != "grok.title.working" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAntigravityFallbackStillDebouncesIdle(t *testing.T) {
+	result := DetectAntigravity(readObservationFixture(t, "antigravity", "idle_fallback.txt"))
+	var tracker Tracker
+	now := time.Unix(200, 0)
+	tracker.Apply(Result{State: StateWorking, Evidence: "antigravity.screen.working"}, now)
+	if tracker.Apply(result, now.Add(time.Second)) {
+		t.Fatal("fallback idle published without debounce")
+	}
+	if !tracker.Apply(result, now.Add(time.Second+IdleDebounce)) || tracker.DisplayState() != "done" {
+		t.Fatalf("fallback not published after debounce: %+v", tracker)
+	}
+}
+
 func TestCodexWorkingIdleAndViewer(t *testing.T) {
 	tests := []struct {
 		name string

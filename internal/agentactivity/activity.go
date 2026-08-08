@@ -53,6 +53,24 @@ type Rule struct {
 	Skip     bool
 }
 
+// Detect dispatches an observation to the expected provider probe. Keeping
+// dispatch here lets the workspace poll remain product-neutral while each
+// provider owns its evidence table.
+func Detect(ob Observation) Result {
+	switch ob.Agent {
+	case "codex":
+		return DetectCodex(ob)
+	case "claude":
+		return DetectClaude(ob)
+	case "grok":
+		return DetectGrok(ob)
+	case "antigravity":
+		return DetectAntigravity(ob)
+	default:
+		return Result{State: StateUnknown, Evidence: "unsupported-agent"}
+	}
+}
+
 // Evaluate applies rules in caller-supplied priority order. Rules are kept
 // deliberately small: provider files own their evidence and ordering.
 func Evaluate(ob Observation, rules []Rule) Result {

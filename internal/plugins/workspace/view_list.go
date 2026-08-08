@@ -814,7 +814,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 }
 
 func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {
-	if agent == nil || agent.Type != AgentCodex {
+	if agent == nil || !supportsAgentActivity(agent.Type) {
 		return "", "", lipgloss.Style{}, false
 	}
 	switch agent.Activity.DisplayState() {
