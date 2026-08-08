@@ -544,7 +544,7 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 					capturedAt := time.Now()
 					result := agentactivity.Detect(agentactivity.Observation{
 						Agent: string(wt.Agent.Type), Screen: output,
-						PaneTitle: wt.Agent.ActivityPaneTitle, CurrentCommand: wt.Agent.ActivityCommand,
+						PaneTitle: snapshot.PaneTitle, CurrentCommand: snapshot.CurrentCommand,
 						CapturedAt: capturedAt,
 					})
 					applyAgentActivity(wt.Agent, result, capturedAt, capturedAt)
@@ -560,6 +560,15 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 		case "shell":
 			if shell := p.findShellByName(consumer.SourceID); shell != nil && shell.Agent != nil {
 				shell.Agent.LastOutput = time.Now()
+				if supportsAgentActivity(shell.Agent.Type) {
+					capturedAt := time.Now()
+					result := agentactivity.Detect(agentactivity.Observation{
+						Agent: string(shell.Agent.Type), Screen: output,
+						PaneTitle: snapshot.PaneTitle, CurrentCommand: snapshot.CurrentCommand,
+						CapturedAt: capturedAt,
+					})
+					applyAgentActivity(shell.Agent, result, capturedAt, capturedAt)
+				}
 			}
 		}
 	}

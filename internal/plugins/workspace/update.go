@@ -545,8 +545,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if supportsAgentActivity(wt.Agent.Type) {
-				wt.Agent.ActivityPaneTitle = msg.PaneTitle
-				wt.Agent.ActivityCommand = msg.CurrentCommand
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
@@ -650,8 +648,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if supportsAgentActivity(wt.Agent.Type) {
-				wt.Agent.ActivityPaneTitle = msg.PaneTitle
-				wt.Agent.ActivityCommand = msg.CurrentCommand
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
@@ -1090,8 +1086,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		shell := p.findShellByName(msg.TmuxName)
 		if shell != nil && shell.Agent != nil {
 			if supportsAgentActivity(shell.ChosenAgent) {
-				shell.Agent.ActivityPaneTitle = msg.PaneTitle
-				shell.Agent.ActivityCommand = msg.CurrentCommand
 				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.shellOutputVisibleFor(shell.TmuxName) {
 					shell.Agent.Activity.Acknowledge()

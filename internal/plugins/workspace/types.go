@@ -295,22 +295,17 @@ type ShellSession struct {
 
 // Agent represents an AI coding agent process.
 type Agent struct {
-	Type        AgentType // claude, codex, aider, gemini
-	TmuxSession string    // tmux session name
-	TmuxPane    string    // Pane identifier (e.g., "%12" - globally unique)
-	PID         int       // Process ID (if available)
-	StartedAt   time.Time
-	LastOutput  time.Time         // Last time output was detected
-	OutputBuf   *tty.OutputBuffer // Last N lines of output
-	Status      AgentStatus
-	WaitingFor  string // Prompt text if waiting
-	Activity    agentactivity.Tracker
-	// Activity metadata is retained so in-band terminal-control snapshots can
-	// be evaluated by the same provider probe without falling back to generic
-	// scrollback or session-file heuristics.
+	Type               AgentType // claude, codex, aider, gemini
+	TmuxSession        string    // tmux session name
+	TmuxPane           string    // Pane identifier (e.g., "%12" - globally unique)
+	PID                int       // Process ID (if available)
+	StartedAt          time.Time
+	LastOutput         time.Time         // Last time output was detected
+	OutputBuf          *tty.OutputBuffer // Last N lines of output
+	Status             AgentStatus
+	WaitingFor         string // Prompt text if waiting
+	Activity           agentactivity.Tracker
 	ActivityCapturedAt time.Time
-	ActivityPaneTitle  string
-	ActivityCommand    string
 
 	// Runaway detection fields (td-018f25)
 	// Track recent poll times to detect continuous output that would cause CPU spikes.

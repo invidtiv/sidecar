@@ -503,20 +503,23 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 		t.Fatal("unsafe pane target accepted")
 	}
 	snapshot, err := parseControlSnapshot("session", "%12", 900, []string{
-		"9,4,0,30,100,1250", "line one", "%output %12 pane content",
+		"9,4,0,30,100,1250,1,node,Action Required, repo", "line one", "%output %12 pane content",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.Output != "line one\n%output %12 pane content" ||
 		snapshot.CursorVisible || snapshot.CursorCol != 9 || snapshot.CursorRow != 4 ||
-		!snapshot.HasHistory || snapshot.HistorySize != 1250 || snapshot.CaptureBase != 350 {
+		!snapshot.HasHistory || snapshot.HistorySize != 1250 || snapshot.CaptureBase != 350 ||
+		snapshot.CurrentCommand != "node" || snapshot.PaneTitle != "Action Required, repo" || !snapshot.MouseReporting {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
-	// A metadata line predating the mouse flag still parses, and reports no
-	// mouse tracking rather than failing the whole snapshot.
-	if snapshot.MouseReporting {
-		t.Fatalf("legacy metadata reported mouse tracking: %#v", snapshot)
+	if !strings.Contains(metadata, "#{pane_current_command}") || !strings.Contains(metadata, "#{pane_title}") {
+		t.Fatalf("metadata command omits fresh activity identity: %q", metadata)
+	}
+	legacy, err := parseControlSnapshot("session", "%12", 900, []string{"9,4,0,30,100,1250", "line"})
+	if err != nil || legacy.MouseReporting || legacy.CurrentCommand != "" || legacy.PaneTitle != "" {
+		t.Fatalf("legacy metadata = %#v, err=%v", legacy, err)
 	}
 }
 

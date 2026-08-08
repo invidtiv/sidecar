@@ -34,6 +34,11 @@ type ControlSnapshot struct {
 	// rather than scanned out of the capture because `capture-pane -e` emits
 	// rendering escapes only — DECSET mode sequences never survive it.
 	MouseReporting bool
+	// PaneTitle and CurrentCommand are captured in the same control-mode
+	// metadata response as the screen. Semantic agent probes must never reuse
+	// identity from an older ordinary poll while that polling path is suspended.
+	PaneTitle      string
+	CurrentCommand string
 }
 
 // ControlRequest describes one active/visible terminal consumer. Consumers
@@ -832,7 +837,7 @@ func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture
 		scrollback = 600
 	}
 	metadata = "display-message -p -t " + pane +
-		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag}'"
+		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}'"
 	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, capture, nil
 }
@@ -841,7 +846,10 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 	if len(lines) == 0 {
 		return ControlSnapshot{}, errors.New("tmux control capture: missing cursor metadata")
 	}
-	parts := strings.Split(strings.TrimSpace(lines[0]), ",")
+	// SplitN preserves commas in pane titles. pane_current_command is a tmux
+	// command name rather than arbitrary terminal content and cannot contain a
+	// comma in ordinary tmux output.
+	parts := strings.SplitN(strings.TrimSpace(lines[0]), ",", 9)
 	// Fields past the sixth are optional so a metadata line produced before they
 	// were added still parses.
 	if len(parts) < 6 {
@@ -860,6 +868,14 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 		scrollback = 600
 	}
 	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
+	currentCommand := ""
+	paneTitle := ""
+	if len(parts) >= 8 {
+		currentCommand = parts[7]
+	}
+	if len(parts) >= 9 {
+		paneTitle = parts[8]
+	}
 	return ControlSnapshot{
 		Session:        session,
 		Pane:           pane,
@@ -873,5 +889,7 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 		PaneHeight:     height,
 		PaneWidth:      width,
 		MouseReporting: mouseReporting,
+		PaneTitle:      paneTitle,
+		CurrentCommand: currentCommand,
 	}, nil
 }
