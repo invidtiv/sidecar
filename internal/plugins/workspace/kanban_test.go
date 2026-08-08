@@ -1,10 +1,13 @@
 package workspace
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/mouse"
 )
 
 func TestKanbanSemanticParityMatrix(t *testing.T) {
@@ -51,7 +54,7 @@ func TestKanbanSemanticParityMatrix(t *testing.T) {
 func TestKanbanCardsReuseActivityPresentationWithHealthPriority(t *testing.T) {
 	p := &Plugin{}
 	agent := &Agent{Type: AgentClaude, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked}}
-	wt := &Worktree{Name: "feature", Agent: agent}
+	wt := &Worktree{Name: "feature", Status: StatusActive, Agent: agent}
 	shell := &ShellSession{Name: "review", ChosenAgent: AgentClaude, Agent: agent}
 
 	if got := p.renderKanbanCardLine(wt, 0, 24, false) + p.renderKanbanCardLine(wt, 1, 24, false); !strings.Contains(got, "◆") || !strings.Contains(got, "blocked") {
@@ -64,6 +67,87 @@ func TestKanbanCardsReuseActivityPresentationWithHealthPriority(t *testing.T) {
 	shell.IsOrphaned = true
 	if got := p.renderKanbanShellCardLine(shell, 0, 24, false) + p.renderKanbanShellCardLine(shell, 1, 24, false); !strings.Contains(got, "◌") || !strings.Contains(got, "offline") || strings.Contains(got, "blocked") {
 		t.Fatalf("shell health did not override activity: %q", got)
+	}
+}
+
+func TestKanbanHealthPresentationOverridesStaleActivity(t *testing.T) {
+	for _, state := range []agentactivity.State{agentactivity.StateWorking, agentactivity.StateBlocked, agentactivity.StateIdle} {
+		t.Run(string(state), func(t *testing.T) {
+			wt := &Worktree{Name: "broken", Status: StatusError, Agent: &Agent{
+				Type: AgentCodex, Activity: agentactivity.Tracker{State: state},
+			}}
+			presentation := kanbanPresentationForWorktree(wt)
+			if presentation.lane != kanbanLanePaused || !presentation.health {
+				t.Fatalf("presentation = %#v, want paused health", presentation)
+			}
+			p := &Plugin{}
+			got := p.renderKanbanCardLine(wt, 0, 24, false) + p.renderKanbanCardLine(wt, 1, 24, false)
+			if !strings.Contains(got, "✗") || !strings.Contains(got, "error") {
+				t.Fatalf("error health absent from card: %q", got)
+			}
+			for _, stale := range []string{"working", "blocked", "done", "idle"} {
+				if strings.Contains(got, stale) {
+					t.Fatalf("card leaked stale %q activity: %q", stale, got)
+				}
+			}
+		})
+	}
+	for _, tt := range []struct {
+		name, want string
+		wt         *Worktree
+	}{
+		{"missing", "folder missing", &Worktree{Name: "missing", Status: StatusActive, IsMissing: true}},
+		{"orphaned", "session ended", &Worktree{Name: "orphaned", Status: StatusActive, IsOrphaned: true}},
+		{"paused", "paused", &Worktree{Name: "paused", Status: StatusPaused, Agent: &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			presentation := kanbanPresentationForWorktree(tt.wt)
+			got := (&Plugin{}).renderKanbanCardLine(tt.wt, 1, 24, false)
+			if presentation.lane != kanbanLanePaused || !presentation.health || !strings.Contains(got, tt.want) || strings.Contains(got, "working") {
+				t.Fatalf("presentation=%#v card=%q", presentation, got)
+			}
+		})
+	}
+}
+
+func TestKanbanDeterministicSemanticFixture(t *testing.T) {
+	agent := func(provider AgentType, state agentactivity.State, seen bool) *Agent {
+		return &Agent{Type: provider, Activity: agentactivity.Tracker{State: state, Seen: seen}}
+	}
+	p := &Plugin{
+		mouseHandler: mouse.NewHandler(),
+		worktrees: []*Worktree{
+			{Name: "working-wt", Status: StatusActive, Agent: agent(AgentCodex, agentactivity.StateWorking, false)},
+			{Name: "blocked-wt", Status: StatusWaiting, Agent: agent(AgentClaude, agentactivity.StateBlocked, false)},
+			{Name: "done-wt", Status: StatusWaiting, Agent: agent(AgentGrok, agentactivity.StateIdle, false)},
+			{Name: "idle-wt", Status: StatusWaiting, Agent: agent(AgentAntigravity, agentactivity.StateIdle, true)},
+			{Name: "error-wt", Status: StatusError, Agent: agent(AgentCodex, agentactivity.StateWorking, false)},
+		},
+		shells: []*ShellSession{
+			{Name: "working-shell", ChosenAgent: AgentCodex, Agent: agent(AgentCodex, agentactivity.StateWorking, false)},
+			{Name: "blocked-shell", ChosenAgent: AgentClaude, Agent: agent(AgentClaude, agentactivity.StateBlocked, false)},
+			{Name: "done-shell", ChosenAgent: AgentGrok, Agent: agent(AgentGrok, agentactivity.StateIdle, false)},
+			{Name: "idle-shell", ChosenAgent: AgentAntigravity, Agent: agent(AgentAntigravity, agentactivity.StateIdle, true)},
+		},
+	}
+	got := p.renderKanbanView(200, 50)
+	for _, want := range []string{
+		"Working (1)", "Blocked (1)", "Done (1)", "Idle (1)", "Paused (1)",
+		"working-wt", "blocked-wt", "done-wt", "idle-wt", "error-wt",
+		"working-shell", "blocked-shell", "done-shell", "idle-shell",
+		"codex · working", "Claude · blocked", "Grok · done", "Antigravity · idle", "error",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fixture lacks %q", want)
+		}
+	}
+	if proofDir := os.Getenv("SIDECAR_KANBAN_PROOF_DIR"); proofDir != "" {
+		if err := os.MkdirAll(proofDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(proofDir, "kanban-semantic-fixture.txt"), []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

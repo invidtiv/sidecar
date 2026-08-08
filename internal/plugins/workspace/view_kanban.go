@@ -251,6 +251,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 // lineIdx: 0=name, 1=agent, 2=task, 3=stats
 func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelected bool) string {
 	var content string
+	presentation := kanbanPresentationForWorktree(wt)
 
 	switch lineIdx {
 	case 0:
@@ -260,15 +261,7 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 		if runes := []rune(name); len(runes) > maxNameLen {
 			name = string(runes[:maxNameLen-3]) + "..."
 		}
-		statusIcon := wt.Status.Icon()
-		if wt.IsMissing {
-			statusIcon = "✗"
-		} else if wt.IsOrphaned {
-			statusIcon = "⚠"
-		} else if icon, _, _, ok := activityPresentation(wt.Agent); ok {
-			statusIcon = icon
-		}
-		content = fmt.Sprintf(" %s %s", statusIcon, name)
+		content = fmt.Sprintf(" %s %s", presentation.icon, name)
 	case 1:
 		// Line 1: Agent type and semantic activity, with health priority.
 		agentStr := ""
@@ -277,12 +270,10 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
 			agentStr = "  " + string(wt.ChosenAgentType)
 		}
-		if wt.IsMissing {
-			agentStr = "  folder missing"
-		} else if wt.IsOrphaned {
-			agentStr = "  session ended"
-		} else if _, text, _, ok := activityPresentation(wt.Agent); ok {
-			agentStr += " · " + text
+		if presentation.health {
+			agentStr = "  " + presentation.statusText
+		} else if presentation.statusText != "" {
+			agentStr += " · " + presentation.statusText
 		}
 		content = agentStr
 	case 2:

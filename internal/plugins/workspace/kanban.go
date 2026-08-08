@@ -22,6 +22,13 @@ var kanbanLaneOrder = []kanbanLane{
 	kanbanLanePaused,
 }
 
+type kanbanWorktreePresentation struct {
+	lane       kanbanLane
+	icon       string
+	statusText string
+	health     bool
+}
+
 const kanbanShellColumnIndex = 0
 
 func kanbanColumnCount() int { return len(kanbanLaneOrder) + 1 }
@@ -38,34 +45,51 @@ func kanbanLaneForColumn(col int) (kanbanLane, bool) {
 }
 
 func kanbanLaneForWorktree(wt *Worktree) kanbanLane {
-	// Health and liveness are orthogonal to activity and always win.
-	if wt == nil || wt.IsMissing || wt.IsOrphaned || wt.Status == StatusError {
-		return kanbanLanePaused
+	return kanbanPresentationForWorktree(wt).lane
+}
+
+// kanbanPresentationForWorktree is the single precedence decision for both
+// lane grouping and card rendering. Health/liveness wins over stale activity.
+func kanbanPresentationForWorktree(wt *Worktree) kanbanWorktreePresentation {
+	if wt == nil {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "?", statusText: "unavailable", health: true}
 	}
-	if displayState, ok := activityDisplayState(wt.Agent); ok {
-		switch displayState {
+	if wt.IsMissing {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "✗", statusText: "folder missing", health: true}
+	}
+	if wt.IsOrphaned {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "⚠", statusText: "session ended", health: true}
+	}
+	if wt.Status == StatusError {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusError.Icon(), statusText: "error", health: true}
+	}
+	if wt.Status == StatusPaused {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusPaused.Icon(), statusText: "paused", health: true}
+	}
+	if icon, text, _, ok := activityPresentation(wt.Agent); ok {
+		lane := kanbanLanePaused
+		switch text {
 		case "working":
-			return kanbanLaneWorking
+			lane = kanbanLaneWorking
 		case "blocked":
-			return kanbanLaneBlocked
+			lane = kanbanLaneBlocked
 		case "done":
-			return kanbanLaneDone
+			lane = kanbanLaneDone
 		case "idle":
-			return kanbanLaneIdle
-		default:
-			return kanbanLanePaused
+			lane = kanbanLaneIdle
 		}
+		return kanbanWorktreePresentation{lane: lane, icon: icon, statusText: text}
 	}
 	// Legacy fallback for agents without semantic activity probes.
 	switch wt.Status {
 	case StatusActive, StatusThinking:
-		return kanbanLaneWorking
+		return kanbanWorktreePresentation{lane: kanbanLaneWorking, icon: wt.Status.Icon()}
 	case StatusWaiting:
-		return kanbanLaneBlocked
+		return kanbanWorktreePresentation{lane: kanbanLaneBlocked, icon: wt.Status.Icon()}
 	case StatusDone:
-		return kanbanLaneDone
+		return kanbanWorktreePresentation{lane: kanbanLaneDone, icon: wt.Status.Icon()}
 	default:
-		return kanbanLanePaused
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: wt.Status.Icon()}
 	}
 }
 
