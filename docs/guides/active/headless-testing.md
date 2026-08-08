@@ -6,20 +6,82 @@ session on a dedicated socket, sends it keystrokes, and captures the screen as
 text and PNG. Every bug in the embedded-terminal audit was reproduced and
 verified this way.
 
-## Why a dedicated socket
+## Two isolation axes: tmux transport AND Sidecar state
 
-Sidecar creates tmux sessions of its own — one per shell, per agent, per inline
-editor — on the user's default tmux server. If the host session lived there too,
-`tmux list-panes -a` could not tell "the pane sidecar is drawn in" from "a pane
-sidecar created", and a stray `kill-server` would take out the user's real work.
+A proof run touches the developer's machine in two independent places, and
+isolating one of them is not isolating the run:
 
-So there are up to three tmux servers in play:
+1. **tmux** — the sessions sidecar creates and the pane it renders into.
+2. **Sidecar state** — `shells.json`, `state.json`, `config.json`, `debug.log`.
+
+"Never restart the default tmux server" is necessary but **not sufficient**. In
+td-8d18de a proof run held a private tmux socket and still resolved the real
+`~/.local/state/sidecar`. It rewrote the shared shell manifest down to its own
+single session; the developer's live Sidecar was watching that file and dropped
+six shells from the Workspaces sidebar whose tmux sessions were still running.
+No tmux server was ever harmed. The damage was entirely on axis 2.
+
+### Axis 1 — tmux
+
+`cmd/sidecar/main.go` **unsets `TMUX`** on startup, and no tmux call site in the
+codebase passes `-L` or `-S`. So wrapping the launch in `tmux -L something` moves
+only the *outer host pane*; every `sidecar-sh-*` / `sidecar-edit-*` session
+sidecar creates for itself still lands on whatever server `TMUX_TMPDIR` resolves
+to — the user's default one, by default. **`TMUX_TMPDIR` is the only lever that
+isolates sidecar's own sessions.**
 
 | Socket | Session | What it is |
 | --- | --- | --- |
 | `-L sidecar-drive` | `host` | The pane sidecar itself renders into |
-| default | `sidecar-sh-*`, `sidecar-edit-*` | Sessions sidecar creates |
+| `$TMUX_TMPDIR/tmux-$(id -u)/default` | `sidecar-sh-*`, `sidecar-edit-*` | Sessions sidecar creates — private only because `TMUX_TMPDIR` moved them |
 | `-L sidecar-view` | `viewer` | Optional real client, only needed for cursor checks |
+
+### Axis 2 — Sidecar state
+
+| Lever | What it actually moves |
+| --- | --- |
+| `XDG_STATE_HOME` | The state dir, and with it `projects/<slug>/shells.json` |
+| `XDG_CONFIG_HOME` | **Nothing.** `config.ConfigPath()` and `state.Init()` are `$HOME`-based and deliberately ignore it |
+| `-config <path>` | `config.json`, and via its directory `state.json` and `debug.log` |
+| `SIDECAR_ISOLATED_STATE=1` | Turns on the fail-closed guard |
+
+With the guard on, any path that still resolves inside `$HOME/.local/state/sidecar`
+or `$HOME/.config/sidecar` is a hard error: the manifest refuses to load or save,
+and the binary exits 1 at startup rather than writing a byte.
+
+`scripts/tmux-drive.sh` does both axes for you. It keeps one stable run root per
+user (`/tmp/sidecar-drive-$(id -u)`, override with `SIDECAR_DRIVE_RUN_DIR`) so
+`start`, `keys`, `snap` and `stop` — separate processes — agree on which server
+and which state tree they mean:
+
+```
+$RUN_DIR/tmux/tmux-<uid>/default   the private tmux server (TMUX_TMPDIR)
+$RUN_DIR/state/sidecar/...         XDG_STATE_HOME, holds shells.json
+$RUN_DIR/cache/                    XDG_CACHE_HOME
+$RUN_DIR/config/config.json        passed as -config
+```
+
+Check it before you trust it, and confirm nothing resolves under
+`~/.local/state/sidecar` or `~/.config/sidecar`:
+
+```bash
+./scripts/tmux-drive.sh paths
+```
+
+`SIDECAR_DIAG_PATHS=1` makes the binary itself say what it resolved (it is
+printed unconditionally when isolation is asserted, and always goes to the log):
+
+```
+sidecar paths: state=/tmp/sidecar-drive-501/state/sidecar config=/tmp/sidecar-drive-501/config/config.json tmux-socket=/tmp/sidecar-drive-501/tmux/tmux-501/default project-root=/Users/you/code/sidecar manifest=/tmp/sidecar-drive-501/state/sidecar/projects/sidecar/shells.json
+```
+
+Launching sidecar for a proof by hand means doing all of it yourself:
+
+```bash
+XDG_STATE_HOME=/tmp/proof/state XDG_CACHE_HOME=/tmp/proof/cache \
+TMUX_TMPDIR=/tmp/proof/tmux SIDECAR_ISOLATED_STATE=1 \
+  sidecar -config /tmp/proof/config/config.json
+```
 
 ## Basic loop
 
@@ -80,10 +142,14 @@ tmux -L sidecar-view display-message -t viewer -p 'flag=#{cursor_flag} at #{curs
 ```
 
 `flag=0` means sidecar is not drawing a cursor at all. Compare against the pane
-sidecar is mirroring:
+sidecar is mirroring — that pane is on the *private* inner server, so name its
+socket explicitly rather than letting a bare `tmux` fall through to the
+developer's default one:
 
 ```bash
-tmux display-message -t sidecar-sh-<project>-1 -p 'cur=#{cursor_x},#{cursor_y} hist=#{history_size}'
+INNER_SOCKET="${SIDECAR_DRIVE_RUN_DIR:-/tmp/sidecar-drive-$(id -u)}/tmux/tmux-$(id -u)/default"
+tmux -S "$INNER_SOCKET" display-message -t sidecar-sh-<project>-1 \
+  -p 'cur=#{cursor_x},#{cursor_y} hist=#{history_size}'
 ```
 
 Two coordinate spaces meet here and mixing them up is the usual bug. A capture
@@ -106,11 +172,20 @@ full-screen program had scrolled the pane.
   plain prompt.
 - **`capture-pane` strips trailing blank lines**, so a capture's length is not
   the pane height.
-- **Pre-existing sessions.** `panes` greps for sidecar-created sessions, which
-  will include ones from the user's real sidecar. Match on the session name for
-  the project under test.
-- **Clean up on the way out.** `stop` kills the host session but not the shells
-  sidecar created; kill those by name. Never `kill-server` on the default socket.
+- **Pre-existing sessions.** `panes` lists the inner server by explicit socket
+  path, so it can only ever report sessions this run created. If you query
+  sessions yourself, pass `-S "$INNER_SOCKET"` for the same reason.
+- **A shared `shells.json` is a cross-instance blast radius.** The shell manifest
+  is a file several sidecars read and write. An un-isolated proof run does not
+  just pollute it — it rewrites the live user's sidebar, and the shells that
+  disappear are still running in tmux with unsaved work in them. Reconciliation
+  is conservative now (td-8d18de: a foreign instance's absence is not evidence of
+  death, and `r` re-runs discovery to self-heal), but the only real fix is to
+  never point a test at that file. Isolate axis 2.
+- **Clean up on the way out.** `stop` kills the host session and then the inner
+  server by explicit socket path (`tmux -S "$INNER_SOCKET" kill-server`). Never
+  run a bare `kill-server`: with no `-S` it trusts the ambient environment and
+  will take down the developer's default server and every session on it.
 
 ## Reading the output
 

@@ -1,5 +1,25 @@
 # Capturing Sidecar Screenshots
 
+> **DO NOT USE. This guide is deprecated and parts of it are actively
+> destructive.** Use
+> [`docs/guides/active/headless-testing.md`](../active/headless-testing.md)
+> instead.
+>
+> - It tells you to run `tmux kill-server` (see "Reload the config or restart
+>   tmux", below). With no `-S`/`-L` that hits the machine's **default** tmux
+>   server and destroys every live session on it — the user's Sidecar, their
+>   agents, their shells and whatever unsaved work was in them.
+> - It runs sidecar against the real `~/.local/state/sidecar`, so it can rewrite
+>   the shared shell manifest a running Sidecar is watching and silently evict
+>   live shells from that user's sidebar (td-8d18de).
+> - `scripts/tmux-screenshot.sh`, which this guide drives, is now guarded: it
+>   refuses to run unless `SIDECAR_ALLOW_UNISOLATED=1` is set. That escape hatch
+>   exists for one-off documentation captures on a machine with nothing live on
+>   it — never for verifying a change.
+>
+> The replacement, `scripts/tmux-drive.sh`, isolates both the tmux server and the
+> Sidecar state tree and captures PNGs just the same.
+
 This guide explains how to capture screenshots of Sidecar for documentation purposes.
 
 ## Prerequisites
@@ -97,8 +117,13 @@ Before you can interact with sidecar via tmux, you must configure tmux to allow 
    ```bash
    tmux source-file ~/.tmux.conf
    # or
-   tmux kill-server  # kills all sessions
+   tmux kill-server  # DO NOT RUN: destroys every session on the default server
    ```
+
+   **Never run that second command.** It is the destructive instruction called
+   out in the banner at the top of this file. Reload the config with
+   `source-file`, or if a restart is genuinely unavoidable, name a private
+   socket: `tmux -S /tmp/some-scratch-socket kill-server`.
    After restarting tmux, the session will be ready for agent interaction.
 
 3. **In interact mode:**

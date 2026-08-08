@@ -2,6 +2,14 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+- **A second sidecar can no longer make your running shells disappear.** The shell manifest is a file every sidecar instance on the machine shares, and startup used to prune every entry whose tmux session it could not personally see — so a sibling worktree, or a test run on its own tmux socket, would quietly rewrite `shells.json` down to its own sessions. A live instance watching that file then dropped six shells from the Workspaces sidebar whose tmux sessions were still running, and `r` did not bring them back. Persisted definitions now record which tmux server owns them, absence is only treated as death when this instance could actually have discovered the session, in-memory shells that are alive locally survive any manifest another instance writes (and are healed back into the file), and `r` re-runs discovery so surviving sessions come back without restarting the app or hand-editing JSON. (td-8d18de)
+
+### Developer
+- **Proof runs are isolated on both axes, and fail closed if they are not.** "Never restart the default tmux server" turned out to be necessary but not sufficient: the run that caused the bug above held a private tmux socket and still resolved the developer's real `~/.local/state/sidecar`. Sidecar now refuses to read or write anything under the real state or config tree when `SIDECAR_ISOLATED_STATE=1` is set, exiting at startup rather than touching a byte; `SIDECAR_DIAG_PATHS=1` (implied under asserted isolation) prints the resolved state, config, tmux socket and manifest paths. `scripts/tmux-drive.sh` now isolates `TMUX_TMPDIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `-config` under one run root, adds a `paths` subcommand, and tears the inner server down by explicit socket path; `scripts/tmux-screenshot.sh` refuses to run un-isolated. A cross-instance regression suite proves an isolated instance cannot evict a peer's live shells or write the real manifest, and the headless-testing guide, `AGENTS.md` and `PRIVACY.md` now document both isolation axes (including that `XDG_CONFIG_HOME` moves nothing). (td-8d18de)
+
 ## [v0.92.0] - 2026-08-06
 
 ### Features
