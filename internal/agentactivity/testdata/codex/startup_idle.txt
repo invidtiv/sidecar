@@ -1,0 +1,6 @@
+pane_title: sidecar-agent-status
+pane_current_command: node
+state: idle
+screen:
+OpenAI Codex (v0.147.0)
+› Write tests for @filename

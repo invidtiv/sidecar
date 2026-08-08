@@ -1,0 +1,7 @@
+pane_title: sidecar-agent-status
+pane_current_command: node
+state: retain
+screen:
+/ T R A N S C R I P T /
+↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+q to quit   esc to edit prev

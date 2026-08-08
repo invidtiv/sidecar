@@ -1,0 +1,4 @@
+installed_version: 1.0.0 (3cd0d0cbcebe) [stable]
+runtime_states_harvested: none
+unavailable_in_phase_1: startup,idle,working,tool_execution,blocker,interrupted,completed,transcript_viewer,exit
+reason: Provider runtime harvest and probe are explicitly Phase 2; OSC 9;4 remains deferred.

@@ -1,0 +1,6 @@
+pane_title: ⠼ sidecar-agent-status
+pane_current_command: node
+state: working
+screen:
+• Ran sleep 3
+  └ (no output)
