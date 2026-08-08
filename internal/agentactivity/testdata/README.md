@@ -11,7 +11,9 @@ Versions: tmux 3.6b; Codex CLI 0.147.0; Claude Code 2.1.220; Grok 1.0.0
 Codex is exhaustive for the Phase 1 steel thread: startup/idle, working, tool
 execution, permission blocker, interruption, completion, transcript viewer, and
 exit. `pane_current_command` is `node` for the installed Codex npm launcher;
-the direct process tree was zsh -> node/Codex. Working and blocker title changes
+the direct process tree was zsh -> node/Codex. The exact real pane PID, TPGID,
+foreground process-group rows, sanitized commands, and reproducible capture
+commands are committed in `codex/process_identity.txt`. Working and blocker title changes
 were independently observed. The canceled blocker command did not execute.
 
 Claude, Grok, and Antigravity are installed and version-pinned below, but their
