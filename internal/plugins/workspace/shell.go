@@ -176,6 +176,7 @@ type (
 		Output         string
 		Err            error
 		Activity       agentactivity.Result
+		CapturedAt     time.Time
 		PaneTitle      string
 		CurrentCommand string
 		// Cursor position captured atomically with output (only set in interactive mode)
@@ -876,11 +877,12 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		if capture.Valid {
 			capture.CaptureBase += removedRows
 		}
+		capturedAt := time.Now()
 		activity := agentactivity.Result{}
 		if supportsAgentActivity(agentType) {
 			activity = agentactivity.Detect(agentactivity.Observation{
 				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
-				CurrentCommand: capture.CurrentCommand, CapturedAt: time.Now(),
+				CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
 			})
 		}
 
@@ -899,6 +901,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			HasHistory:     capture.Valid,
 			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
+			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
 			CurrentCommand: capture.CurrentCommand,
 		}

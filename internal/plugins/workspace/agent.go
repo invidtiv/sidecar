@@ -904,6 +904,7 @@ type AgentPollUnchangedMsg struct {
 	// when HasCursor is set.
 	MouseReporting bool
 	Activity       agentactivity.Result
+	CapturedAt     time.Time
 	PaneTitle      string
 	CurrentCommand string
 }
@@ -1022,11 +1023,12 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			outputBuf.WouldChangeSnapshot(output, capture.CaptureBase)) ||
 			(!capture.Valid && outputBuf.WouldChange(output))
 
+		capturedAt := time.Now()
 		activity := agentactivity.Result{}
 		if supportsAgentActivity(agentType) {
 			activity = agentactivity.Detect(agentactivity.Observation{
 				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
-				CurrentCommand: capture.CurrentCommand, CapturedAt: time.Now(),
+				CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
 			})
 		}
 
@@ -1037,7 +1039,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		// may finish while tmux output stays the same (td-2fca7d v8).
 		status := currentStatus
 		waitingFor := ""
-		if outputChanged {
+		if !supportsAgentActivity(agentType) && outputChanged {
 			// Tmux pattern detection only when output changes (same output = same patterns).
 			status = detectStatus(output)
 			if status == StatusWaiting {
@@ -1046,7 +1048,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		}
 		// Session file check runs every poll — mtime changes independently of tmux output.
 		// Only override active/waiting; preserve tmux-detected thinking/done/error.
-		if status == StatusActive || status == StatusWaiting {
+		if !supportsAgentActivity(agentType) && (status == StatusActive || status == StatusWaiting) {
 			if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
 				prevStatus := status
 				status = sessionStatus
@@ -1082,6 +1084,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				HasHistory:     capture.Valid,
 				MouseReporting: cursor.MouseReporting,
 				Activity:       activity,
+				CapturedAt:     capturedAt,
 				PaneTitle:      capture.PaneTitle,
 				CurrentCommand: capture.CurrentCommand,
 			}
@@ -1104,6 +1107,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			HasHistory:     capture.Valid,
 			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
+			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
 			CurrentCommand: capture.CurrentCommand,
 		}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -379,6 +380,9 @@ func (p *Plugin) scheduleControlAgentStatus(consumer *workspaceControlConsumer) 
 	if wt == nil || wt.Agent == nil || wt.Agent.TmuxSession != consumer.Session {
 		return nil
 	}
+	if supportsAgentActivity(wt.Agent.Type) {
+		return nil
+	}
 	token := consumer.Token
 	session := consumer.Session
 	sourceID := consumer.SourceID
@@ -409,7 +413,10 @@ func (p *Plugin) applyControlAgentStatus(msg workspaceControlAgentStatusMsg) tea
 		wt.Agent.TmuxSession != msg.Session {
 		return nil
 	}
-	// Preserve the legacy detector precedence: session files only refine
+	if supportsAgentActivity(wt.Agent.Type) {
+		return p.scheduleControlAgentStatus(consumer)
+	}
+	// Preserve the legacy detector precedence for unsupported providers: session files only refine
 	// active/waiting. Tmux-rendered thinking/done/error states stay authoritative.
 	if msg.Available && (wt.Status == StatusActive || wt.Status == StatusWaiting) {
 		wt.Status = msg.Status
@@ -533,10 +540,21 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 		case "agent":
 			if wt := p.findWorktree(consumer.SourceID); wt != nil && wt.Agent != nil {
 				wt.Agent.LastOutput = time.Now()
-				wt.Status = detectStatus(output)
-				wt.Agent.WaitingFor = ""
-				if wt.Status == StatusWaiting {
-					wt.Agent.WaitingFor = extractPrompt(output)
+				if supportsAgentActivity(wt.Agent.Type) {
+					capturedAt := time.Now()
+					result := agentactivity.Detect(agentactivity.Observation{
+						Agent: string(wt.Agent.Type), Screen: output,
+						PaneTitle: wt.Agent.ActivityPaneTitle, CurrentCommand: wt.Agent.ActivityCommand,
+						CapturedAt: capturedAt,
+					})
+					applyAgentActivity(wt.Agent, result, capturedAt, capturedAt)
+					wt.Status = worktreeStatusForActivity(wt.Agent, wt.Status)
+				} else {
+					wt.Status = detectStatus(output)
+					wt.Agent.WaitingFor = ""
+					if wt.Status == StatusWaiting {
+						wt.Agent.WaitingFor = extractPrompt(output)
+					}
 				}
 			}
 		case "shell":

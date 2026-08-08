@@ -305,6 +305,12 @@ type Agent struct {
 	Status      AgentStatus
 	WaitingFor  string // Prompt text if waiting
 	Activity    agentactivity.Tracker
+	// Activity metadata is retained so in-band terminal-control snapshots can
+	// be evaluated by the same provider probe without falling back to generic
+	// scrollback or session-file heuristics.
+	ActivityCapturedAt time.Time
+	ActivityPaneTitle  string
+	ActivityCommand    string
 
 	// Runaway detection fields (td-018f25)
 	// Track recent poll times to detect continuous output that would cause CPU spikes.

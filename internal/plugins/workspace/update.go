@@ -545,7 +545,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if supportsAgentActivity(wt.Agent.Type) {
-				wt.Agent.Activity.Apply(msg.Activity, time.Now())
+				wt.Agent.ActivityPaneTitle = msg.PaneTitle
+				wt.Agent.ActivityCommand = msg.CurrentCommand
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
 				}
@@ -561,7 +563,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
-			wt.Status = msg.Status
+			wt.Status = worktreeStatusForActivity(wt.Agent, msg.Status)
 			// Track poll time for runaway detection (td-018f25)
 			wt.Agent.RecordPollTime()
 		}
@@ -648,7 +650,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if supportsAgentActivity(wt.Agent.Type) {
-				wt.Agent.Activity.Apply(msg.Activity, time.Now())
+				wt.Agent.ActivityPaneTitle = msg.PaneTitle
+				wt.Agent.ActivityCommand = msg.CurrentCommand
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
 				}
@@ -666,7 +670,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
 			// (e.g., agent finishes but terminal output stays the same).
-			wt.Status = msg.CurrentStatus
+			wt.Status = worktreeStatusForActivity(wt.Agent, msg.CurrentStatus)
 			wt.Agent.WaitingFor = msg.WaitingFor
 		}
 		// An app can toggle mouse tracking without changing a single rendered
@@ -1086,7 +1090,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		shell := p.findShellByName(msg.TmuxName)
 		if shell != nil && shell.Agent != nil {
 			if supportsAgentActivity(shell.ChosenAgent) {
-				shell.Agent.Activity.Apply(msg.Activity, time.Now())
+				shell.Agent.ActivityPaneTitle = msg.PaneTitle
+				shell.Agent.ActivityCommand = msg.CurrentCommand
+				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, time.Now())
 				if p.shellOutputVisibleFor(shell.TmuxName) {
 					shell.Agent.Activity.Acknowledge()
 				}

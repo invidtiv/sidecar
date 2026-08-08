@@ -1,6 +1,10 @@
 package workspace
 
-import "github.com/marcus/sidecar/internal/agentactivity"
+import (
+	"time"
+
+	"github.com/marcus/sidecar/internal/agentactivity"
+)
 
 // RefreshMsg triggers a worktree list refresh.
 type RefreshMsg struct{}
@@ -49,6 +53,7 @@ type AgentOutputMsg struct {
 	// cursor metadata. Only meaningful when HasCursor is set.
 	MouseReporting bool
 	Activity       agentactivity.Result
+	CapturedAt     time.Time
 	PaneTitle      string
 	CurrentCommand string
 }

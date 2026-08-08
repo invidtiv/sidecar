@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -386,5 +387,42 @@ func TestPrimaryControlAgentStatusRefreshPreservesDetectorPrecedence(t *testing.
 		Status: StatusWaiting, Available: true,
 	}); stale != nil || p.worktrees[0].Status != StatusActive {
 		t.Fatalf("stale status message applied: status=%v cmd=%v", p.worktrees[0].Status, stale)
+	}
+}
+
+func TestPrimaryControlSupportedAgentRejectsSessionFileAuthority(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	p.worktrees[0].Agent.Type = AgentCodex
+	p.worktrees[0].Agent.Activity.State = agentactivity.StateWorking
+	p.reconcileTerminalControls()
+	consumer := p.controlConsumers[workspaceControlPrimary]
+	consumer.Using = true
+
+	if cmd := p.scheduleControlAgentStatus(consumer); cmd != nil {
+		t.Fatal("supported provider scheduled legacy session-file authority")
+	}
+	p.applyControlAgentStatus(workspaceControlAgentStatusMsg{
+		Token: consumer.Token, Session: consumer.Session, SourceID: consumer.SourceID,
+		Status: StatusError, Available: true,
+	})
+	if p.worktrees[0].Agent.Activity.State != agentactivity.StateWorking || p.worktrees[0].Status != StatusActive {
+		t.Fatalf("legacy control status changed supported provider: activity=%q status=%v",
+			p.worktrees[0].Agent.Activity.State, p.worktrees[0].Status)
+	}
+}
+
+func TestPrimaryControlSnapshotUsesSemanticAuthority(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	agent := p.worktrees[0].Agent
+	agent.Type = AgentCodex
+	agent.Activity = agentactivity.Tracker{State: agentactivity.StateWorking}
+	agent.ActivityCommand = "codex"
+	agent.ActivityPaneTitle = "Action Required"
+	consumer := &workspaceControlConsumer{Source: "agent", SourceID: "agent-worktree", Session: "agent-session"}
+	p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{Output: "Action Required\nPress enter to confirm\n"})
+	if agent.Activity.State != agentactivity.StateBlocked || p.worktrees[0].Status != StatusWaiting {
+		t.Fatalf("control snapshot activity=%q evidence=%q status=%v", agent.Activity.State, agent.Activity.Evidence, p.worktrees[0].Status)
 	}
 }
