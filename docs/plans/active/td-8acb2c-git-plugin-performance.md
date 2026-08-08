@@ -8,9 +8,11 @@
 
 Make every Git operation leave the Bubble Tea event loop immediately, batch path
 operations into one Git invocation, and make refresh a single-flight snapshot
-pipeline. The first implementation slice should fix staging end to end; the same
-operation/result boundary can then absorb the other synchronous writes without a
-large plugin rewrite.
+pipeline. The first implementation slice should fix stage/unstage end to end;
+the same operation/result boundary can then absorb the other synchronous writes
+without a large plugin rewrite. Keep the first slice narrow: inject only the Git
+write executor it needs, then consolidate read execution when the snapshot work
+has demonstrated the shared policy.
 
 Do not add a Sidecar Git CLI or API. Sidecar is a presentation-layer client of
 Git, which already owns complete headless behavior. Keep path selection,
@@ -152,14 +154,14 @@ type operationKind string
 
 type operationRequest struct {
     ID       uint64
-    Epoch    uint64
+    Epoch    uint64 // implements the existing plugin.EpochMessage contract
     Kind     operationKind
     Paths    []string
 }
 
 type operationResultMsg struct {
     ID    uint64
-    Epoch uint64
+    Epoch uint64 // implements the existing plugin.EpochMessage contract
     Kind  operationKind
     Err   error
 }
@@ -205,9 +207,15 @@ Centralize command construction in a concrete internal runner that supports:
 - NUL-safe output where Git supports it;
 - captured stderr and consistent typed errors;
 - injectable execution for tests and subprocess counting;
-- context cancellation for plugin stop/project switch;
+- context cancellation for reads and operations known to be safely interruptible;
 - explicit interactive/remote policy so Git never unexpectedly reads the TUI's
   terminal.
+
+Do not automatically kill an in-flight index or worktree mutation on plugin
+switch, project switch, or shutdown. Its result message may become stale and be
+ignored by the new model, but cancellation is allowed only after the specific
+Git operation is shown to have safe interruption semantics. This avoids trading
+a stale UI result for a partially applied repository mutation.
 
 Keep parsing and domain-shaped functions separate from execution. The runner is
 an adapter at the external-process seam, not a new service locator or interface
@@ -246,12 +254,15 @@ prove an external stage/commit becomes visible.
 
 ### Slice 1 — staging steel thread (P0)
 
-- Add operation request/result state and a test-injectable Git runner seam.
+- Add operation request/result state and the smallest test-injectable Git write
+  executor seam; do not migrate unrelated read helpers yet.
 - Move file, folder, stage-all, and unstage operations into `tea.Cmd`.
 - Batch every logical selection into one Git invocation.
 - Add busy feedback, conflicting-write refusal, error output, and stable
   selection restoration.
 - Prove 1,000-file folder staging remains interactive and spawns one `git add`.
+- Prove the same stage/unstage behavior in a linked worktree. Correct watcher
+  invalidation for *external* linked-worktree changes remains Slice 4.
 
 This slice directly fixes the reported defect and establishes the pattern for
 later writes.
@@ -355,8 +366,9 @@ Use behavior and relative measurements rather than machine-specific promises:
 - No Sidecar Git CLI/API/MCP surface; Sidecar does not own Git's capability.
 - No speculative renderer rewrite, background worker pool, or generalized job
   framework. Add concurrency only at measured seams and keep writes serialized.
-- No automatic cancellation of a write merely because the user switches plugins;
-  project reinitialization/exit cancellation semantics must be explicit and safe.
+- No automatic cancellation of a write merely because the user switches plugins,
+  projects, or exits; project reinitialization/exit cancellation semantics must
+  be operation-specific, explicit, and proven safe.
 
 ## Review checklist
 
