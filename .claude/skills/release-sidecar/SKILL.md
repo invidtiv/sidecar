@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Releasing a New Version
 
-Operator contract: **`docs/releasing.md`**. Enforcement lives in `scripts/` and
+Operator contract: **`docs/guides/active/releasing.md`**. Enforcement lives in `scripts/` and
 `RELEASE_VERSION=vX.Y.Z make release`. Prefer the one-shot command over replaying
 this checklist by hand.
 
@@ -80,7 +80,7 @@ make release-snapshot
 RELEASE_VERSION=vX.Y.Z make release
 ```
 
-What `make release` enforces and does is documented in `docs/releasing.md`.
+What `make release` enforces and does is documented in `docs/guides/active/releasing.md`.
 
 Resume only the tap step if the tag/release already exists:
 
@@ -121,7 +121,7 @@ make install-dev
 ## Recovery
 
 Prefer a new patch release. Keep tags. Resume tap with `make release-tap`.
-See `docs/releasing.md`.
+See `docs/guides/active/releasing.md`.
 
 ## Checklist
 

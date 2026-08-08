@@ -284,6 +284,6 @@ Registered in:
 
 ## References
 
-- Interactive shell guide: `docs/guides/interactive-shell-implementation.md`
+- Interactive shell guide: `docs/guides/deprecated/interactive-shell-implementation.md`
 - TTY model: `internal/tty/tty.go`
 - Feature flags: `internal/features/features.go`

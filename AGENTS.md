@@ -38,7 +38,7 @@ go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar
 RELEASE_VERSION=v0.1.0 make release
 ```
 
-See `docs/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
+See `docs/guides/active/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
 
 ## Keyboard Shortcut Parity
@@ -83,7 +83,7 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 
 Note that the embedded terminal's cursor is a **native** cursor drawn by the host
 terminal, so `capture-pane` cannot see it; checking cursor placement needs an
-attached viewer client. See `docs/guides/headless-testing.md` for that, for the
+attached viewer client. See `docs/guides/active/headless-testing.md` for that, for the
 key-pacing rules, and for the tmux coordinate spaces the terminal code works in.
 
 ## Plugin View Rendering

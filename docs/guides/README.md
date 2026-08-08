@@ -2,22 +2,22 @@
 
 The Markdown guides that used to live in this folder were migrated to **skills**.
 
-- Primary skill location for this repo: `/Users/marcusvorwaller/code/sidecar/.claude/skills/`
-- Additional shared skills may be listed in `/Users/marcusvorwaller/code/sidecar/AGENTS.md`
+- Primary skill location for this repo: `.agents/skills/`
+- Additional shared skills may be listed in `AGENTS.md`
 
 Legacy guide files are preserved at:
 
-- `/Users/marcusvorwaller/code/sidecar/docs/deprecated/guides/`
+- `docs/guides/deprecated/`
 
 ## Quick Skill Tutorial
 
 1. Find a relevant skill
-   - Browse the available skill list in `/Users/marcusvorwaller/code/sidecar/AGENTS.md`
-   - Or list local repo skills with `ls /Users/marcusvorwaller/code/sidecar/.claude/skills`
+   - Browse the available skill list in `AGENTS.md`
+   - Or list local repo skills with `ls .agents/skills`
 
 2. Open the skill instructions
    - Each skill is documented in `SKILL.md`
-   - Example: `cat /Users/marcusvorwaller/code/sidecar/.claude/skills/create-plugin/SKILL.md`
+   - Example: `cat .agents/skills/create-plugin/SKILL.md`
 
 3. Follow the referenced workflow files
    - Skills may point to `references/`, `scripts/`, or templates
@@ -29,7 +29,8 @@ Legacy guide files are preserved at:
 
 ## Migration Note
 
-If you find an old `docs/guides/...` link, replace it with either:
+If you find an old guide link, replace it with either:
 
-- the corresponding skill (`.claude/skills/<name>/SKILL.md`), or
-- the archived copy under `docs/deprecated/guides/`
+- the corresponding skill (`.agents/skills/<name>/SKILL.md`), or
+- the archived copy under `docs/guides/deprecated/`
+

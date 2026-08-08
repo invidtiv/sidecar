@@ -331,4 +331,4 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 ## References
 
 - [Tmux integration notes](references/tmux-notes.md) -- detailed tmux CLI techniques, cursor tracking, resize sync, bracketed paste, mouse forwarding, modified keys, adaptive polling, debugging
-- Original spec: `docs/spec-tmux-interactive-input.md`
+- Original spec: `docs/plans/implemented/spec-tmux-interactive-input.md`

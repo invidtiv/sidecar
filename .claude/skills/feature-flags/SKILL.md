@@ -102,5 +102,5 @@ features.IsKnownFeature(name string) bool       // Check if registered
 - Use `snake_case` for feature names (e.g., `my_new_feature`)
 - New experimental features should default to `false`
 - Provide clear descriptions for each feature
-- Document features in `docs/guides/feature-flags.md` when adding them
+- Document features in `docs/guides/deprecated/feature-flags.md` when adding them
 - Remove feature flags once features are stable

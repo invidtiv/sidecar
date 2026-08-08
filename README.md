@@ -28,7 +28,7 @@ This builds from source and avoids macOS Gatekeeper warnings.
 curl -fsSL https://raw.githubusercontent.com/marcus/sidecar/main/scripts/setup.sh | bash
 ```
 
-**More options:** [Binary downloads](https://github.com/marcus/sidecar/releases) · [Manual install](docs/getting-started.md)
+**More options:** [Binary downloads](https://github.com/marcus/sidecar/releases) · [Manual install](docs/guides/active/getting-started.md)
 
 ## Requirements
 

@@ -10,7 +10,7 @@ description: >
 
 # Keyboard Shortcuts
 
-Complete shortcut listings and context reference for all sidecar plugins. For implementation patterns, see `docs/guides/ui-feature-guide.md`. For a detailed assessment of inconsistencies, vim alignment, mnemonic quality, and improvement proposals, see `references/assessment.md` in this skill directory.
+Complete shortcut listings and context reference for all sidecar plugins. For implementation patterns, see `docs/guides/deprecated/ui-feature-guide.md`. For a detailed assessment of inconsistencies, vim alignment, mnemonic quality, and improvement proposals, see `references/assessment.md` in this skill directory.
 
 ## Architecture
 

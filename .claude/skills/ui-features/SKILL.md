@@ -19,7 +19,7 @@ Single entry point for sidecar UI work. All new modals must use `internal/modal`
 
 ## Modals (internal/modal)
 
-All new modals must use `internal/modal`. See `docs/guides/declarative-modal-guide.md` for the full API.
+All new modals must use `internal/modal`. See `docs/guides/deprecated/declarative-modal-guide.md` for the full API.
 
 ### Create a modal
 
