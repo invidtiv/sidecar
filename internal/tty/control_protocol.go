@@ -23,10 +23,22 @@ type controlResponse struct {
 }
 
 type controlEvent struct {
-	Kind     controlEventKind
-	Pane     string
-	Data     []byte
+	Kind controlEventKind
+	Pane string
+	// Payload carries the %output bytes still in tmux's octal escaping, as a
+	// substring of the parsed line. Decoding is deliberately deferred: the only
+	// consumer treats output notifications as a per-pane dirty flag and never
+	// reads the bytes, so eager decoding would allocate on every notification
+	// for a value nobody reads. Call DecodedPayload (decodeControlBytes) when a
+	// real byte-fed screen model starts consuming these bytes — see
+	// docs/research/active/lessons-from-herdr.md.
+	Payload  string
 	Response controlResponse
+}
+
+// DecodedPayload unescapes Payload on demand.
+func (e controlEvent) DecodedPayload() []byte {
+	return decodeControlBytes(e.Payload)
 }
 
 type controlFrame struct {
@@ -97,7 +109,7 @@ func parseControlNotification(line string) (controlEvent, bool) {
 		if !ok {
 			return controlEvent{}, false
 		}
-		return controlEvent{Kind: controlEventOutput, Pane: pane, Data: decodeControlBytes(encoded)}, true
+		return controlEvent{Kind: controlEventOutput, Pane: pane, Payload: encoded}, true
 
 	case strings.HasPrefix(line, "%extended-output "):
 		rest := strings.TrimPrefix(line, "%extended-output ")
@@ -106,7 +118,7 @@ func parseControlNotification(line string) (controlEvent, bool) {
 			return controlEvent{}, false
 		}
 		if _, encoded, ok := strings.Cut(rest, " : "); ok {
-			return controlEvent{Kind: controlEventOutput, Pane: pane, Data: decodeControlBytes(encoded)}, true
+			return controlEvent{Kind: controlEventOutput, Pane: pane, Payload: encoded}, true
 		}
 		return controlEvent{}, false
 

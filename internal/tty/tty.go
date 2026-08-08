@@ -9,6 +9,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// DefaultScrollbackLines is the number of scrollback lines captured from a pane
+// when no explicit scrollback is requested. The live capture stays small; older
+// ranges are fetched lazily as the user scrolls past the loaded boundary.
+const DefaultScrollbackLines = 600
+
 // Config holds configuration options for a tty Model.
 type Config struct {
 	// ExitKey is the keybinding to exit interactive mode (default: "ctrl+\\").
@@ -23,7 +28,8 @@ type Config struct {
 	// PasteKey is the keybinding to paste clipboard (default: "alt+v").
 	PasteKey string
 
-	// ScrollbackLines is the number of scrollback lines to capture (default: 600).
+	// ScrollbackLines is the number of scrollback lines to capture
+	// (default: DefaultScrollbackLines).
 	ScrollbackLines int
 }
 
@@ -34,7 +40,7 @@ func DefaultConfig() Config {
 		AttachKey:       "ctrl+]",
 		CopyKey:         "alt+c",
 		PasteKey:        "alt+v",
-		ScrollbackLines: 600,
+		ScrollbackLines: DefaultScrollbackLines,
 	}
 }
 

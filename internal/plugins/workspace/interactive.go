@@ -1139,8 +1139,9 @@ const maxWheelNotchesPerFlush = 10
 // the layout looking torn (the reported symptom).
 //
 // Otherwise the notch scrolls the captured pane output using previewOffset. No
-// tmux subprocesses needed — we scroll through the already-captured 600 lines of
-// scrollback. Scroll up (delta < 0) pauses auto-scroll, scroll down (delta > 0)
+// tmux subprocesses needed — we scroll through the already-captured capture
+// window (captureLineCount) of scrollback. Scroll up (delta < 0) pauses
+// auto-scroll, scroll down (delta > 0)
 // moves toward live output.
 func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
 	now := time.Now()

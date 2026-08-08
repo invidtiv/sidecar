@@ -139,7 +139,7 @@ func (m *ControlManager) Subscribe(request ControlRequest) (*ControlSubscription
 		return nil, fmt.Errorf("tmux control: invalid pane %q", request.Pane)
 	}
 	if request.Scrollback <= 0 {
-		request.Scrollback = 600
+		request.Scrollback = DefaultScrollbackLines
 	}
 	id := m.nextID.Add(1)
 	sub := &managerControlSubscription{id: id, generation: 1, request: request}
@@ -676,7 +676,7 @@ func (c *sessionControlClient) startCapture(pane string) {
 		c.mu.Unlock()
 		return
 	}
-	scrollback := 600
+	scrollback := DefaultScrollbackLines
 	for _, sub := range c.subs {
 		if sub.request.Pane == pane && sub.request.Focused && sub.request.Scrollback > 0 {
 			scrollback = sub.request.Scrollback
@@ -834,7 +834,7 @@ func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture
 		return "", "", fmt.Errorf("tmux control: invalid pane %q", pane)
 	}
 	if scrollback <= 0 {
-		scrollback = 600
+		scrollback = DefaultScrollbackLines
 	}
 	metadata = "display-message -p -t " + pane +
 		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}'"
@@ -865,7 +865,7 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
 	}
 	if scrollback <= 0 {
-		scrollback = 600
+		scrollback = DefaultScrollbackLines
 	}
 	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
 	currentCommand := ""

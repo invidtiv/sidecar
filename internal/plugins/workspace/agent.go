@@ -232,9 +232,12 @@ const (
 	// Tmux session prefix for sidecar-managed worktree sessions
 	tmuxSessionPrefix = "sidecar-ws-"
 
-	// Lines to capture from tmux (slightly > outputBufferCap for margin)
-	// We only need recent output for status detection and display
-	captureLineCount = 600
+	// Lines to capture from tmux. We only need recent output for status
+	// detection and display; the same window is requested from the tty control
+	// manager, so it tracks tty.DefaultScrollbackLines rather than restating it.
+	// Older ranges beyond this window are fetched lazily on scroll, which is why
+	// this is far below outputBufferCap.
+	captureLineCount = tty.DefaultScrollbackLines
 
 	// Hard cap on captured output size to avoid runaway memory for TUI-heavy panes.
 	defaultTmuxCaptureMaxBytes = 2 * 1024 * 1024
