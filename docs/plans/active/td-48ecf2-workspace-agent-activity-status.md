@@ -481,3 +481,26 @@ working), `background-working.{txt,png}`, and
 `background-return-idle.{txt,png}`. The background completion remains unseen
 while Git is focused; returning to its already-selected live output immediately
 acknowledges it to idle, as designed. Proof-only shells/sessions were removed.
+
+## Phase 3 implementation evidence (2026-08-08)
+
+Phase 3 is tracked by epic `td-10b798` and children `td-8ac0a8`,
+`td-e48244`, `td-eef998`, and `td-22b195`.
+
+- Codex, Claude, Grok, and Antigravity now bypass generic scrollback and
+  session-file status inference on normal, unchanged/title-only, and terminal-
+  control paths. Their `WorktreeStatus` remains available to kanban as a
+  projection of semantic activity; unsupported agents retain legacy detection.
+- Worktree and agent-backed shell rows share `activityPresentation`. Missing
+  worktree and orphaned tmux health remain higher-priority and cannot render as
+  semantic completion or blockage.
+- Normal debug logging records only agent type, prior/new semantic state,
+  stable evidence ID, and capture age. Regression coverage verifies terminal
+  screen/title content is absent and unchanged observations emit no transition.
+- Focused and full tests plus `go build ./...` pass at `a9cef03`. Isolated proof
+  artifacts are under `/tmp/sidecar-phase3-proof/`, including text/PNG captures
+  of a real Codex-backed shell and a supported Codex worktree entry. The proof
+  used `scripts/tmux-drive.sh` with private tmux, state, cache, and config roots.
+  Before/after diffs prove the default tmux PID/socket/panes and production
+  Sidecar manifest checksums were byte-identical; only proof-owned isolated
+  sessions were stopped.
