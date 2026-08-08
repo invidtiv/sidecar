@@ -525,14 +525,14 @@ func ExecuteAmend(workDir, message string) (string, error) {
 }
 
 // getLastCommitMessage returns the message of the most recent commit.
-func getLastCommitMessage(workDir string) string {
+func getLastCommitMessage(workDir string) (string, error) {
 	cmd := gitReadOnly("log", "-1", "--format=%B")
 	cmd.Dir = workDir
 	output, err := cmd.Output()
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimRight(string(output), "\n")
+	return strings.TrimRight(string(output), "\n"), nil
 }
 
 // CommitError wraps a git commit error with its output.

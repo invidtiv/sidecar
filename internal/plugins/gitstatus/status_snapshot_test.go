@@ -109,7 +109,7 @@ func TestIndexWriteRefreshDoesNotReloadHistory(t *testing.T) {
 func TestWatcherIndexInvalidationCoalescesWithoutHistoryReload(t *testing.T) {
 	p := snapshotPlugin(1)
 	p.activeStatusRequestID = 1
-	_, cmd := p.Update(WatchEventMsg{History: false})
+	_, cmd := p.Update(WatchEventMsg{Epoch: 1, RepoRoot: p.repoRoot, Watcher: p.watcher, History: false})
 	if cmd != nil {
 		t.Fatal("index event scheduled work besides the coalesced status follow-up")
 	}
@@ -118,7 +118,7 @@ func TestWatcherIndexInvalidationCoalescesWithoutHistoryReload(t *testing.T) {
 	}
 
 	p.statusRefreshDirty = false
-	_, cmd = p.Update(WatchEventMsg{History: true})
+	_, cmd = p.Update(WatchEventMsg{Epoch: 1, RepoRoot: p.repoRoot, Watcher: p.watcher, History: true})
 	if cmd == nil {
 		t.Fatal("HEAD/ref event did not schedule history refresh")
 	}

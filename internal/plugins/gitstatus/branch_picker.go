@@ -85,13 +85,15 @@ func (p *Plugin) doSwitchBranch(branchName string) tea.Cmd {
 	if p.writeInProgress() {
 		return p.writeBusyToast()
 	}
+	p.auxWriteInProgress = true
 	workDir := p.repoRoot
+	epoch := p.currentEpoch()
 	return func() tea.Msg {
 		err := CheckoutBranch(workDir, branchName)
 		if err != nil {
-			return BranchErrorMsg{Err: err}
+			return BranchErrorMsg{Epoch: epoch, Err: err}
 		}
-		return BranchSwitchSuccessMsg{Branch: branchName}
+		return BranchSwitchSuccessMsg{Epoch: epoch, Branch: branchName}
 	}
 }
 
@@ -102,7 +104,7 @@ func (p *Plugin) loadBranches() tea.Cmd {
 	return func() tea.Msg {
 		branches, err := GetBranches(workDir)
 		if err != nil {
-			return BranchErrorMsg{Err: err}
+			return BranchErrorMsg{Epoch: epoch, Err: err}
 		}
 		return BranchListLoadedMsg{Epoch: epoch, Branches: branches}
 	}

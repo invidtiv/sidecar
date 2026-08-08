@@ -2,6 +2,7 @@ package gitstatus
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,6 +167,7 @@ type Plugin struct {
 	activeOperation    *operationRequest
 	operationError     string
 	operationSelection selectionIdentity
+	auxWriteInProgress bool // discard, stash, and branch mutations
 
 	// Commit state
 	commitMessage         textarea.Model
@@ -176,6 +178,8 @@ type Plugin struct {
 	commitButtonHover     bool // true when mouse is hovering over button
 	commitModal           *modal.Modal
 	commitModalWidthCache int
+	amendMessageRequestID uint64
+	amendMessageLoading   bool
 
 	// Mouse support
 	mouseHandler *mouse.Handler
@@ -287,6 +291,9 @@ func (p *Plugin) inNoRepoMode() bool {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	if p.watcher != nil {
+		p.watcher.Stop()
+	}
 	// Preserve resources that are expensive to recreate or have no project-specific state
 	mouseHandler := p.mouseHandler
 	truncateCache := p.truncateCache
@@ -442,17 +449,29 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
 
 	case WatchStartedMsg:
-		if p.inNoRepoMode() {
+		if plugin.IsStale(p.ctx, msg) || msg.RepoRoot != p.repoRoot || p.inNoRepoMode() {
 			if msg.Watcher != nil {
 				msg.Watcher.Stop()
 			}
 			return p, nil
 		}
+		if p.watcher != nil && p.watcher != msg.Watcher {
+			p.watcher.Stop()
+		}
 		p.watcher = msg.Watcher
 		return p, p.listenForWatchEvents()
 
+	case WatchStartFailedMsg:
+		if plugin.IsStale(p.ctx, msg) || msg.RepoRoot != p.repoRoot {
+			return p, nil
+		}
+		slog.Warn("git watcher unavailable", "repo", p.repoRoot, "err", msg.Err)
+		return p, func() tea.Msg {
+			return app.ToastMsg{Message: "Git watcher unavailable: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
+
 	case WatchEventMsg:
-		if p.inNoRepoMode() {
+		if plugin.IsStale(p.ctx, msg) || msg.RepoRoot != p.repoRoot || msg.Watcher != p.watcher || p.inNoRepoMode() {
 			return p, nil
 		}
 		// refresh single-flights event bursts and retains one dirty follow-up.
@@ -478,7 +497,16 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.operationError = ""
 		return p, p.refresh()
 
-	case DiscardDoneMsg:
+	case DiscardResultMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.auxWriteInProgress = false
+		if msg.Err != nil {
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: "Discard failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			}
+		}
 		return p, p.refresh()
 
 	case StatusSnapshotLoadedMsg:
@@ -548,15 +576,35 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case CommitSuccessMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		// Commit succeeded, return to status view and refresh
 		p.viewMode = ViewModeStatus
 		p.commitMessage.Reset()
 		p.commitInProgress = false
 		p.commitAmend = false
 		p.commitError = ""
-		return p, p.refresh()
+		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
+
+	case AmendMessageLoadedMsg:
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.amendMessageRequestID {
+			return p, nil
+		}
+		p.amendMessageLoading = false
+		if msg.Err != nil {
+			p.commitError = "Load amend message: " + msg.Err.Error()
+			return p, nil
+		}
+		if p.viewMode == ViewModeCommit && p.commitAmend && strings.TrimSpace(p.commitMessage.Value()) == "" {
+			p.commitMessage.SetValue(msg.Message)
+		}
+		return p, nil
 
 	case CommitErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		// Commit failed, show error and keep message for retry
 		p.commitError = msg.Err.Error()
 		p.commitInProgress = false
@@ -770,6 +818,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case PushSuccessMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.pushInProgress = false
 		p.pushError = ""
 		p.pushSuccess = true
@@ -779,6 +830,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPushSuccessAfterDelay())
 
 	case PushErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.pushInProgress = false
 		p.pushError = msg.Err.Error()
 		p.pushPreservedCommitHash = "" // Clear stale hash on error
@@ -793,6 +847,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case StashResultMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.auxWriteInProgress = false
 		if msg.Err != nil {
 			// Show error toast
 			toastMsg := "Stash failed: " + msg.Err.Error()
@@ -812,7 +870,6 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, tea.Batch(
 			p.refresh(),
-			p.loadRecentCommits(),
 			func() tea.Msg {
 				return app.ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
 			},
@@ -833,6 +890,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case BranchSwitchSuccessMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.auxWriteInProgress = false
 		// Branch switched, close picker and refresh
 		p.viewMode = p.branchReturnMode
 		p.branches = nil
@@ -840,29 +901,45 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
 
 	case BranchErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.auxWriteInProgress = false
 		p.showErrorModal("Branch Error", msg.Err)
 		return p, nil
 
 	case FetchSuccessMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.fetchInProgress = false
 		p.fetchSuccess = true
 		p.fetchError = ""
 		// Refresh to show updated ahead/behind
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearFetchSuccessAfterDelay())
+		return p, tea.Batch(p.loadRecentCommits(), p.clearFetchSuccessAfterDelay())
 
 	case FetchErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.fetchInProgress = false
 		p.fetchError = msg.Err.Error()
 		p.showErrorModal("Fetch Failed", msg.Err)
 		return p, nil
 
 	case PullSuccessMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.pullInProgress = false
 		p.pullSuccess = true
 		p.pullError = ""
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPullSuccessAfterDelay())
 
 	case PullErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		p.pullInProgress = false
 		if IsConflictError(msg.Err) {
 			// Detect conflict type from strategy
@@ -887,6 +964,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case PullAbortedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.pullInProgress = false
 		p.pullConflictFiles = nil
 		p.pullConflictType = ""
 		p.pullError = ""
@@ -1265,12 +1346,14 @@ func (p *Plugin) startWatcher() tea.Cmd {
 	if !p.hasRepo || p.repoRoot == "" {
 		return nil
 	}
+	epoch := p.currentEpoch()
+	repoRoot := p.repoRoot
 	return func() tea.Msg {
-		watcher, err := NewWatcher(p.repoRoot)
+		watcher, err := NewWatcher(repoRoot)
 		if err != nil {
-			return ErrorMsg{Err: err}
+			return WatchStartFailedMsg{Epoch: epoch, RepoRoot: repoRoot, Err: err}
 		}
-		return WatchStartedMsg{Watcher: watcher}
+		return WatchStartedMsg{Epoch: epoch, RepoRoot: repoRoot, Watcher: watcher}
 	}
 }
 
@@ -1281,13 +1364,15 @@ func (p *Plugin) listenForWatchEvents() tea.Cmd {
 	if w == nil {
 		return nil
 	}
+	epoch := p.currentEpoch()
+	repoRoot := p.repoRoot
 	return func() tea.Msg {
 		// When watcher is stopped, Events() channel is closed and this returns
 		event, ok := <-w.Events()
 		if !ok {
 			return nil
 		}
-		return WatchEventMsg{History: event.History}
+		return WatchEventMsg{Epoch: epoch, RepoRoot: repoRoot, Watcher: w, History: event.History}
 	}
 }
 
@@ -1372,9 +1457,38 @@ type StatusSnapshotLoadedMsg struct {
 
 func (m StatusSnapshotLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
-type DiscardDoneMsg struct{}
-type WatchEventMsg struct{ History bool }
-type WatchStartedMsg struct{ Watcher *Watcher }
+type DiscardResultMsg struct {
+	Epoch uint64
+	Err   error
+}
+
+func (m DiscardResultMsg) GetEpoch() uint64 { return m.Epoch }
+
+type WatchEventMsg struct {
+	Epoch    uint64
+	RepoRoot string
+	Watcher  *Watcher
+	History  bool
+}
+
+func (m WatchEventMsg) GetEpoch() uint64 { return m.Epoch }
+
+type WatchStartedMsg struct {
+	Epoch    uint64
+	RepoRoot string
+	Watcher  *Watcher
+}
+
+func (m WatchStartedMsg) GetEpoch() uint64 { return m.Epoch }
+
+type WatchStartFailedMsg struct {
+	Epoch    uint64
+	RepoRoot string
+	Err      error
+}
+
+func (m WatchStartFailedMsg) GetEpoch() uint64 { return m.Epoch }
+
 type ErrorMsg struct{ Err error }
 type DiffLoadedMsg struct {
 	Epoch     uint64 // Epoch when request was issued (for stale detection)
@@ -1388,12 +1502,29 @@ type DiffLoadedMsg struct {
 func (m DiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 type CommitSuccessMsg struct {
+	Epoch   uint64
 	Hash    string
 	Subject string
 }
-type CommitErrorMsg struct {
-	Err error
+
+type AmendMessageLoadedMsg struct {
+	Epoch     uint64
+	RequestID uint64
+	Message   string
+	Err       error
 }
+
+func (m AmendMessageLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+
+var _ plugin.EpochMessage = AmendMessageLoadedMsg{}
+
+type CommitErrorMsg struct {
+	Epoch uint64
+	Err   error
+}
+
+func (m CommitSuccessMsg) GetEpoch() uint64 { return m.Epoch }
+func (m CommitErrorMsg) GetEpoch() uint64   { return m.Epoch }
 
 // FullFileDiffLoadedMsg is sent when full-file content is loaded for the full-file diff view.
 type FullFileDiffLoadedMsg struct {
@@ -1464,13 +1595,18 @@ func (m CommitStatsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // PushSuccessMsg is sent when a push completes successfully.
 type PushSuccessMsg struct {
+	Epoch  uint64
 	Output string
 }
 
 // PushErrorMsg is sent when a push fails.
 type PushErrorMsg struct {
-	Err error
+	Epoch uint64
+	Err   error
 }
+
+func (m PushSuccessMsg) GetEpoch() uint64 { return m.Epoch }
+func (m PushErrorMsg) GetEpoch() uint64   { return m.Epoch }
 
 // PushStatusLoadedMsg is sent when push status is loaded.
 type PushStatusLoadedMsg struct {
@@ -1482,10 +1618,13 @@ type PushSuccessClearMsg struct{}
 
 // StashResultMsg is sent when a stash operation completes.
 type StashResultMsg struct {
+	Epoch     uint64
 	Operation string // "push", "pop", or "apply"
 	Ref       string // stash ref for display (e.g. "stash@{0}")
 	Err       error
 }
+
+func (m StashResultMsg) GetEpoch() uint64 { return m.Epoch }
 
 // BranchListLoadedMsg is sent when branch list is loaded.
 type BranchListLoadedMsg struct {
@@ -1498,37 +1637,54 @@ func (m BranchListLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // BranchSwitchSuccessMsg is sent when branch switch succeeds.
 type BranchSwitchSuccessMsg struct {
+	Epoch  uint64
 	Branch string
 }
 
 // BranchErrorMsg is sent when a branch operation fails.
 type BranchErrorMsg struct {
-	Err error
+	Epoch uint64
+	Err   error
 }
+
+func (m BranchSwitchSuccessMsg) GetEpoch() uint64 { return m.Epoch }
+func (m BranchErrorMsg) GetEpoch() uint64         { return m.Epoch }
 
 // FetchSuccessMsg is sent when fetch succeeds.
 type FetchSuccessMsg struct {
+	Epoch  uint64
 	Output string
 }
 
 // FetchErrorMsg is sent when fetch fails.
 type FetchErrorMsg struct {
-	Err error
+	Epoch uint64
+	Err   error
 }
+
+func (m FetchSuccessMsg) GetEpoch() uint64 { return m.Epoch }
+func (m FetchErrorMsg) GetEpoch() uint64   { return m.Epoch }
 
 // PullSuccessMsg is sent when pull succeeds.
 type PullSuccessMsg struct {
+	Epoch  uint64
 	Output string
 }
 
 // PullErrorMsg is sent when pull fails.
 type PullErrorMsg struct {
+	Epoch    uint64
 	Err      error
 	Strategy string // "merge", "rebase", "ff-only", "autostash"
 }
 
+func (m PullSuccessMsg) GetEpoch() uint64 { return m.Epoch }
+func (m PullErrorMsg) GetEpoch() uint64   { return m.Epoch }
+
 // PullAbortedMsg is sent when a conflicted pull is aborted.
-type PullAbortedMsg struct{}
+type PullAbortedMsg struct{ Epoch uint64 }
+
+func (m PullAbortedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // StashErrorMsg is sent when stash operations fail.
 type StashErrorMsg struct {

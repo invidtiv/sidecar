@@ -10,13 +10,13 @@ import (
 
 // PushStatus represents the push state of the current branch.
 type PushStatus struct {
-	HasUpstream    bool   // Whether an upstream branch is configured
-	UpstreamBranch string // Name of upstream branch (e.g., "origin/main")
-	Ahead          int    // Commits ahead of upstream
-	Behind         int    // Commits behind upstream
+	HasUpstream    bool     // Whether an upstream branch is configured
+	UpstreamBranch string   // Name of upstream branch (e.g., "origin/main")
+	Ahead          int      // Commits ahead of upstream
+	Behind         int      // Commits behind upstream
 	UnpushedHashes []string // Hashes of unpushed commits
-	DetachedHead   bool   // Whether HEAD is detached
-	CurrentBranch  string // Current branch name (empty if detached)
+	DetachedHead   bool     // Whether HEAD is detached
+	CurrentBranch  string   // Current branch name (empty if detached)
 }
 
 // GetPushStatus retrieves the push status for the current branch.
@@ -116,8 +116,7 @@ func ExecutePush(workDir string, force bool) (string, error) {
 	}
 	args = append(args, "-u", remote, "HEAD")
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), &PushError{Output: string(output), Err: err}
@@ -217,8 +216,7 @@ func ExecutePushForce(workDir string) (string, error) {
 		return "", &PushError{Output: "No remote configured", Err: errors.New("no remote configured")}
 	}
 
-	cmd := exec.Command("git", "push", "--force-with-lease", remote, "HEAD")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "push", "--force-with-lease", remote, "HEAD")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), &PushError{Output: string(output), Err: err}
@@ -246,8 +244,7 @@ func ExecutePushSetUpstream(workDir string) (string, error) {
 		return "", &PushError{Output: "Detached HEAD - cannot push", Err: errors.New("detached head")}
 	}
 
-	cmd := exec.Command("git", "push", "-u", remote, branch)
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "push", "-u", remote, branch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), &PushError{Output: string(output), Err: err}

@@ -6,10 +6,30 @@ import (
 	"strings"
 )
 
+func remoteGitCommand(workDir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	// Remote operations run behind the TUI and cannot safely borrow its terminal
+	// for credentials. Fail with Git's diagnostic instead of hanging or consuming
+	// keystrokes intended for Sidecar.
+	env := os.Environ()
+	for _, name := range []string{"GIT_TERMINAL_PROMPT", "GCM_INTERACTIVE", "SSH_ASKPASS_REQUIRE"} {
+		prefix := name + "="
+		filtered := env[:0]
+		for _, value := range env {
+			if !strings.HasPrefix(value, prefix) {
+				filtered = append(filtered, value)
+			}
+		}
+		env = filtered
+	}
+	cmd.Env = append(env, "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "SSH_ASKPASS_REQUIRE=never")
+	return cmd
+}
+
 // ExecuteFetch runs git fetch.
 func ExecuteFetch(workDir string) (string, error) {
-	cmd := exec.Command("git", "fetch")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "fetch")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", &RemoteError{Output: string(output), Err: err}
@@ -19,8 +39,7 @@ func ExecuteFetch(workDir string) (string, error) {
 
 // ExecutePull runs git pull.
 func ExecutePull(workDir string) (string, error) {
-	cmd := exec.Command("git", "pull")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "pull")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", &RemoteError{Output: string(output), Err: err}
@@ -30,8 +49,7 @@ func ExecutePull(workDir string) (string, error) {
 
 // ExecutePullRebase runs git pull --rebase.
 func ExecutePullRebase(workDir string) (string, error) {
-	cmd := exec.Command("git", "pull", "--rebase")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "pull", "--rebase")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", &RemoteError{Output: string(output), Err: err}
@@ -41,8 +59,7 @@ func ExecutePullRebase(workDir string) (string, error) {
 
 // ExecutePullFFOnly runs git pull --ff-only.
 func ExecutePullFFOnly(workDir string) (string, error) {
-	cmd := exec.Command("git", "pull", "--ff-only")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "pull", "--ff-only")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", &RemoteError{Output: string(output), Err: err}
@@ -52,8 +69,7 @@ func ExecutePullFFOnly(workDir string) (string, error) {
 
 // ExecutePullAutostash runs git pull --rebase --autostash.
 func ExecutePullAutostash(workDir string) (string, error) {
-	cmd := exec.Command("git", "pull", "--rebase", "--autostash")
-	cmd.Dir = workDir
+	cmd := remoteGitCommand(workDir, "pull", "--rebase", "--autostash")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", &RemoteError{Output: string(output), Err: err}

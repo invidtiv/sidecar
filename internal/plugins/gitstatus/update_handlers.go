@@ -281,9 +281,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.commitAmend = true
 			p.viewMode = ViewModeCommit
 			p.initCommitTextarea()
-			msg := getLastCommitMessage(p.repoRoot)
-			p.commitMessage.SetValue(msg)
-			return p, nil
+			return p, p.loadAmendMessage()
 		}
 
 	case "P":
@@ -965,8 +963,7 @@ func (p *Plugin) updateCommit(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.commitModalWidthCache = 0
 			// If enabling amend and message is empty, prefill with last commit message
 			if p.commitAmend && strings.TrimSpace(p.commitMessage.Value()) == "" {
-				msg := getLastCommitMessage(p.repoRoot)
-				p.commitMessage.SetValue(msg)
+				return p, p.loadAmendMessage()
 			}
 		}
 		return p, nil
@@ -1101,6 +1098,12 @@ func (p *Plugin) updatePullMenu(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 // executePullMenuAction executes the pull menu action by ID.
 func (p *Plugin) executePullMenuAction(actionID string) (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	if actionID != pullMenuOptionMerge && actionID != pullMenuOptionRebase && actionID != pullMenuOptionFFOnly && actionID != pullMenuOptionAutostash {
+		return p, nil
+	}
 	p.viewMode = p.pullMenuReturnMode
 	p.pullInProgress = true
 	p.pullError = ""
@@ -1163,6 +1166,10 @@ func (p *Plugin) updatePullConflict(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd
 }
 
 func (p *Plugin) abortPullConflict() (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	p.pullInProgress = true
 	p.viewMode = ViewModeStatus
 	p.clearPullConflictModal()
 	return p, p.doAbortPull()
@@ -1177,6 +1184,12 @@ func (p *Plugin) dismissPullConflict() (plugin.Plugin, tea.Cmd) {
 
 // executePushMenuAction executes the push menu action at the given index.
 func (p *Plugin) executePushMenuAction(idx int) (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	if idx < 0 || idx > 2 {
+		return p, nil
+	}
 	p.viewMode = p.pushMenuReturnMode
 	p.pushInProgress = true
 	p.pushError = ""

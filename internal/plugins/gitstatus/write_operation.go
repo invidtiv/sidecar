@@ -107,11 +107,14 @@ func (p *Plugin) writeBusyToast() tea.Cmd {
 	}
 }
 
-func (p *Plugin) writeInProgress() bool { return p.activeOperation != nil }
+func (p *Plugin) writeInProgress() bool {
+	return p.activeOperation != nil || p.auxWriteInProgress || p.commitInProgress ||
+		p.pushInProgress || p.fetchInProgress || p.pullInProgress
+}
 
 func isStatusMutationKey(key string) bool {
 	switch key {
-	case "s", "u", "S", "U", "c", "A", "D", "z", "Z", "ctrl+z", "b", "L":
+	case "s", "u", "S", "U", "c", "A", "D", "z", "Z", "ctrl+z", "b", "L", "P", "f":
 		return true
 	default:
 		return false
@@ -124,7 +127,8 @@ func writeBlockedCommand(id string) bool {
 		"commit", "amend", "execute-commit", "discard-changes",
 		"stash", "stash-pop", "stash-apply", "confirm-pop",
 		"branch-picker", "pull", "pull-merge", "pull-rebase",
-		"pull-ff-only", "pull-autostash", "abort-pull":
+		"pull-ff-only", "pull-autostash", "abort-pull", "push",
+		"force-push", "push-upstream", "fetch":
 		return true
 	default:
 		return false

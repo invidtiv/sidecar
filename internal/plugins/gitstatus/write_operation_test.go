@@ -181,6 +181,58 @@ func TestWriteBusyRefusesRelevantModalAndHelperFlows(t *testing.T) {
 	assertBusy("branch switch", p.doSwitchBranch("other"))
 }
 
+func TestWriteBusyRefusesRemoteActionBoundariesAndAbort(t *testing.T) {
+	assertRefused := func(t *testing.T, p *Plugin, result plugin.Plugin, cmd tea.Cmd, wantMode ViewMode) {
+		t.Helper()
+		if result != p || cmd == nil {
+			t.Fatal("action boundary did not return a refusal")
+		}
+		if _, ok := cmd().(app.ToastMsg); !ok {
+			t.Fatalf("refusal returned %T", cmd())
+		}
+		if p.viewMode != wantMode {
+			t.Fatalf("refusal changed view mode to %v", p.viewMode)
+		}
+	}
+
+	t.Run("pull", func(t *testing.T) {
+		p := &Plugin{activeOperation: &operationRequest{ID: 1}, viewMode: ViewModePullMenu}
+		result, cmd := p.executePullMenuAction(pullMenuOptionMerge)
+		assertRefused(t, p, result, cmd, ViewModePullMenu)
+		if p.pullInProgress {
+			t.Fatal("refused pull became active")
+		}
+	})
+	t.Run("push", func(t *testing.T) {
+		p := &Plugin{activeOperation: &operationRequest{ID: 1}, viewMode: ViewModePushMenu}
+		result, cmd := p.executePushMenuAction(0)
+		assertRefused(t, p, result, cmd, ViewModePushMenu)
+		if p.pushInProgress {
+			t.Fatal("refused push became active")
+		}
+	})
+	t.Run("abort", func(t *testing.T) {
+		p := &Plugin{activeOperation: &operationRequest{ID: 1}, viewMode: ViewModePullConflict}
+		result, cmd := p.abortPullConflict()
+		assertRefused(t, p, result, cmd, ViewModePullConflict)
+		if p.pullInProgress {
+			t.Fatal("refused abort became active")
+		}
+	})
+}
+
+func TestAbortPullJoinsAndClearsWriteLifecycle(t *testing.T) {
+	p := &Plugin{ctx: &plugin.Context{Epoch: 3}, viewMode: ViewModePullConflict, pullConflictType: "merge"}
+	_, cmd := p.abortPullConflict()
+	if cmd == nil || !p.pullInProgress || !p.writeInProgress() {
+		t.Fatal("abort did not enter write lifecycle")
+	}
+	_, _ = p.Update(PullAbortedMsg{Epoch: 3})
+	if p.pullInProgress || p.writeInProgress() {
+		t.Fatal("abort result did not clear write lifecycle")
+	}
+}
+
 func TestWriteBusyHidesIncompatibleCommands(t *testing.T) {
 	p := &Plugin{activeOperation: &operationRequest{ID: 1}}
 	for _, command := range p.Commands() {
@@ -277,6 +329,42 @@ func TestGitWritesInNormalAndLinkedWorktrees(t *testing.T) {
 				t.Fatalf("still staged: %q", got)
 			}
 		})
+	}
+}
+
+func TestAmendMessageLoadsAsynchronouslyAndRejectsStaleResult(t *testing.T) {
+	p := &Plugin{ctx: &plugin.Context{Epoch: 4}, repoRoot: t.TempDir(), hasRepo: true, tree: NewFileTree(t.TempDir())}
+	p.recentCommits = []*Commit{{Hash: "abc"}}
+	_, cmd := p.updateStatus(tea.KeyPressMsg{Code: 'A', Text: "A"})
+	if cmd == nil || !p.amendMessageLoading {
+		t.Fatal("amend did not start an asynchronous message load")
+	}
+	if got := p.commitMessage.Value(); got != "" {
+		t.Fatalf("message changed synchronously: %q", got)
+	}
+	requestID := p.amendMessageRequestID
+	_, _ = p.Update(AmendMessageLoadedMsg{Epoch: 3, RequestID: requestID, Message: "stale"})
+	if got := p.commitMessage.Value(); got != "" {
+		t.Fatalf("stale message applied: %q", got)
+	}
+	_, _ = p.Update(AmendMessageLoadedMsg{Epoch: 4, RequestID: requestID, Message: "current"})
+	if got := p.commitMessage.Value(); got != "current" {
+		t.Fatalf("message = %q", got)
+	}
+}
+
+func TestRemoteGitCommandDisablesInteractivePrompts(t *testing.T) {
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+	t.Setenv("GCM_INTERACTIVE", "Always")
+	cmd := remoteGitCommand(t.TempDir(), "fetch")
+	got := strings.Join(cmd.Env, "\n")
+	for _, want := range []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "SSH_ASKPASS_REQUIRE=never"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("environment missing %q", want)
+		}
+	}
+	if strings.Contains(got, "GIT_TERMINAL_PROMPT=1") || strings.Contains(got, "GCM_INTERACTIVE=Always") {
+		t.Fatalf("interactive override survived: %s", got)
 	}
 }
 
