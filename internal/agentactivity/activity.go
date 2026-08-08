@@ -39,6 +39,7 @@ type Region string
 const (
 	RegionScreen    Region = "screen"
 	RegionLastLines Region = "last_lines"
+	RegionCurrent   Region = "current_bottom"
 	RegionTitle     Region = "pane_title"
 )
 
@@ -97,6 +98,22 @@ func regionText(ob Observation, rule Rule) string {
 		n := rule.LastN
 		if n <= 0 {
 			n = 12
+		}
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		return strings.Join(lines, "\n")
+	case RegionCurrent:
+		// capture-pane includes historical scrollback and preserves a tall
+		// pane's trailing blank rows. Drop only that padding, then inspect a
+		// bounded current-bottom window so resolved historical UI cannot win.
+		lines := strings.Split(ob.Screen, "\n")
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		n := rule.LastN
+		if n <= 0 {
+			n = 24
 		}
 		if len(lines) > n {
 			lines = lines[len(lines)-n:]

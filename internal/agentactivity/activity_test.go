@@ -171,6 +171,36 @@ func TestPhase2FullScreenFormsSurviveTallPanePadding(t *testing.T) {
 	}
 }
 
+func TestResolvedHistoricalPhase2StateDoesNotOverrideCurrentIdle(t *testing.T) {
+	padding := strings.Repeat("\n", 30)
+	tests := []struct {
+		name string
+		got  Result
+	}{
+		{
+			name: "Claude resolved question remains in scrollback",
+			got: DetectClaude(Observation{
+				Agent: "claude", CurrentCommand: "2.1.220",
+				Screen: "Which option?\nEnter to select · ↑/↓ to navigate · Esc to cancel\nanswered: Alpha\n❯ " + padding,
+			}),
+		},
+		{
+			name: "Antigravity completed generation remains in scrollback",
+			got: DetectAntigravity(Observation{
+				Agent: "antigravity", CurrentCommand: "agy",
+				Screen: "Generating...\nesc to cancel\ndone\n>\n? for shortcuts · Gemini 3.6 Flash · high" + padding,
+			}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got.State != StateIdle {
+				t.Fatalf("resolved historical state classified as %+v; want idle", tt.got)
+			}
+		})
+	}
+}
+
 func TestCodexWorkingIdleAndViewer(t *testing.T) {
 	tests := []struct {
 		name string
