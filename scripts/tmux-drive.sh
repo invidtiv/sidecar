@@ -9,6 +9,11 @@
 #     debug.log out of the developer's live tree. SIDECAR_ISOLATED_STATE=1 makes
 #     sidecar fail closed if anything still resolves back into it.
 #
+# One run root per driver. Two agents driving proofs at once would otherwise
+# share a tmux server AND a state tree, and the second start would kill the
+# first mid-capture - the very cross-instance contention this isolates against.
+# Set SIDECAR_DRIVE_RUN_DIR per agent when running concurrently.
+#
 #   ./scripts/tmux-drive.sh start [COLS] [LINES]  - launch sidecar (default 200x50)
 #   ./scripts/tmux-drive.sh keys <args...>        - tmux send-keys passthrough
 #   ./scripts/tmux-drive.sh type <text>           - send literal text
@@ -44,7 +49,15 @@ start() {
             exit 1
             ;;
     esac
-    "${T[@]}" kill-session -t "$SESSION" 2>/dev/null || true
+    if "${T[@]}" has-session -t "$SESSION" 2>/dev/null; then
+        if [ "${SIDECAR_DRIVE_FORCE:-0}" != "1" ]; then
+            echo "a drive session is already running in $RUN_DIR." >&2
+            echo "another agent may be mid-capture. Set SIDECAR_DRIVE_RUN_DIR to your own" >&2
+            echo "scratch dir, or SIDECAR_DRIVE_FORCE=1 to take this one over." >&2
+            exit 1
+        fi
+        "${T[@]}" kill-session -t "$SESSION" 2>/dev/null || true
+    fi
     mkdir -p "$OUT_DIR" "$TMUX_TMPDIR" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$(dirname "$CONFIG")"
     "${T[@]}" new-session -d -s "$SESSION" -x "$cols" -y "$lines" -c "$REPO_DIR" \
         "TERM=xterm-256color ${SIDECAR_BIN:-sidecar} -config $CONFIG"

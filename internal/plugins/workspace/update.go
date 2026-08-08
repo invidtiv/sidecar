@@ -76,6 +76,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// merges — so refresh can only ever add sessions back.
 			if cmd := p.syncShellsFromManifest(p.currentShellStartupScope()); cmd != nil {
 				cmds = append(cmds, cmd)
+			} else if p.shellManifest == nil {
+				// Startup never got a manifest (an I/O error, or the isolation
+				// guard refusing the path), so there is nothing to sync from.
+				// Retry the whole load instead of making `r` a no-op — that is
+				// exactly the "restart the app" the ticket wants to avoid.
+				if cmd := p.loadShellStartup(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 
@@ -1039,12 +1047,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Manifest == nil {
 			return p, nil
 		}
+		// The snapshot was taken before a local write (a delete, a rename) that
+		// has since landed. Applying it would resurrect what we just removed,
+		// so throw it away and take a fresh one (td-8d18de).
+		if p.shellManifest != nil && p.shellManifest.Revision() != msg.BaseRevision {
+			return p, p.syncShellsFromManifest(msg.Scope)
+		}
 		p.shellManifest = msg.Manifest
-		p.applyManifestSync(msg)
+		cmds = append(cmds, p.applyManifestSync(msg))
 		// Reload content if a shell is selected
 		if p.shellSelected {
-			return p, p.loadSelectedContent()
+			cmds = append(cmds, p.loadSelectedContent())
 		}
+		return p, tea.Batch(cmds...)
 
 	case ShellOutputMsg:
 		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {

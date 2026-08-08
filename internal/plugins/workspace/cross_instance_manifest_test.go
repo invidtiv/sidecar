@@ -29,8 +29,8 @@ import (
 // environment further, and it does so to point at a *fake* home.
 
 const (
-	namespaceA = "hostA:/tmp/sock-a/default"
-	namespaceB = "hostA:/tmp/sock-b/default"
+	namespaceA = "/tmp/sock-a/default"
+	namespaceB = "/tmp/sock-b/default"
 )
 
 // fakeInstance builds the hooks of one Sidecar instance: its own working
@@ -43,10 +43,10 @@ func fakeInstance(t *testing.T, manifestPath, workDir, namespace string, live []
 			return filepath.Dir(manifestPath), nil
 		},
 		loadManifest: LoadShellManifest,
-		discoverSessions: func(string) []string {
+		discoverSessions: func(string) ([]string, error) {
 			// Discovery is per working directory in the real code; the caller
 			// has already picked names this workDir could produce.
-			return append([]string(nil), live...)
+			return append([]string(nil), live...), nil
 		},
 		getPaneID:         func(name string) string { return "%" + name },
 		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
@@ -67,7 +67,11 @@ func runStartup(t *testing.T, hooks shellStartupHooks, manifestPath, workDir str
 	if err != nil {
 		t.Fatalf("LoadShellManifest(%s) error = %v", manifestPath, err)
 	}
-	return reconcileShellStartup(manifest, hooks.discoverSessions(workDir), workDir, workDir, hooks)
+	sessions, err := hooks.discoverSessions(workDir)
+	if err != nil {
+		t.Fatalf("discoverSessions(%s) error = %v", workDir, err)
+	}
+	return reconcileShellStartup(manifest, sessions, false, workDir, workDir, hooks)
 }
 
 func manifestNames(t *testing.T, manifestPath string) []string {
@@ -211,16 +215,21 @@ func TestForeignManifestCannotRemoveLiveShellsFromMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShellManifest() error = %v", err)
 	}
-	p.update(shellManifestSyncMsg{
-		Scope:     p.currentShellStartupScope(),
-		Manifest:  reloaded,
-		Running:   running,
-		PaneIDs:   paneIDs,
-		Namespace: namespaceA,
+	_, command := p.update(shellManifestSyncMsg{
+		Scope:        p.currentShellStartupScope(),
+		Manifest:     reloaded,
+		Running:      running,
+		PaneIDs:      paneIDs,
+		Namespace:    namespaceA,
+		BaseRevision: p.shellManifest.Revision(),
 	})
+	runCommandTree(command)
 
-	if len(p.shells) != 4 {
-		t.Fatalf("shells after foreign rewrite = %d, want 4 (B's entry plus A's 3 live)", len(p.shells))
+	// A's three live shells stay on screen. B's entry stays in the *file* (see
+	// the heal assertion below) but is not displayed here: it belongs to a
+	// sibling worktree, and an offline row A could never open is noise.
+	if len(p.shells) != 3 {
+		t.Fatalf("shells after foreign rewrite = %d, want A's 3 live shells", len(p.shells))
 	}
 	for _, name := range liveA {
 		shell := shellByTmuxName(p.shells, name)
@@ -238,6 +247,21 @@ func TestForeignManifestCannotRemoveLiveShellsFromMemory(t *testing.T) {
 	healed := manifestNames(t, manifestPath)
 	if len(healed) != 4 {
 		t.Fatalf("manifest after sync = %v, want 4 entries (healed by EnsureShells)", healed)
+	}
+}
+
+// runCommandTree drains a command (and any batch it produces) the way the
+// Bubble Tea runtime would. The manifest heal is deliberately scheduled off the
+// Update loop, so a test that never runs the command never sees the file heal.
+func runCommandTree(command tea.Cmd) {
+	if command == nil {
+		return
+	}
+	msg := command()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, cmd := range batch {
+			runCommandTree(cmd)
+		}
 	}
 }
 
@@ -340,7 +364,8 @@ func TestRefreshSelfHealsClobberedManifest(t *testing.T) {
 	if sync == nil {
 		t.Fatal("refresh did not schedule tmux rediscovery")
 	}
-	p.update(sync)
+	_, applyCmd := p.update(sync)
+	runCommandTree(applyCmd)
 
 	if len(p.shells) != 3 {
 		t.Fatalf("shells after refresh = %d, want the 3 surviving sessions", len(p.shells))
@@ -357,5 +382,60 @@ func TestRefreshSelfHealsClobberedManifest(t *testing.T) {
 	healed := manifestNames(t, manifestPath)
 	if len(healed) != 3 {
 		t.Fatalf("manifest after refresh = %v, want all 3 surviving sessions", healed)
+	}
+}
+
+// TestStaleSyncSnapshotIsDiscarded covers the delete-during-refresh race: the
+// discovery round started before the user deleted a shell, so its Running map
+// still contains the killed session. Applying it would put the shell back on
+// screen and re-persist it (td-8d18de).
+func TestStaleSyncSnapshotIsDiscarded(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "shells.json")
+	workDir := filepath.Join(root, "sidecar")
+	live := sessionNameSeries(3, "sidecar-sh-sidecar")
+
+	hooks := fakeInstance(t, manifestPath, workDir, namespaceA, live)
+	p := newInstancePlugin(t, hooks, workDir)
+	installLiveShells(p, live, hooks.getPaneID)
+
+	manifest, err := LoadShellManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	p.shellManifest = manifest
+	for _, shell := range p.shells {
+		if err := manifest.AddShell(shellToDefinition(shell)); err != nil {
+			t.Fatalf("AddShell() error = %v", err)
+		}
+	}
+
+	// The snapshot a sync goroutine would have taken before the delete.
+	stale := shellManifestSyncMsg{
+		Scope:        p.currentShellStartupScope(),
+		Manifest:     manifest,
+		Running:      map[string]bool{live[0]: true, live[1]: true, live[2]: true},
+		PaneIDs:      map[string]string{},
+		Namespace:    namespaceA,
+		BaseRevision: manifest.Revision(),
+	}
+
+	// The user deletes the third shell while that sync is in flight.
+	p.shells = p.shells[:2]
+	delete(p.managedSessions, live[2])
+	if err := manifest.RemoveShell(live[2]); err != nil {
+		t.Fatalf("RemoveShell() error = %v", err)
+	}
+
+	_, command := p.update(stale)
+
+	if len(p.shells) != 2 {
+		t.Fatalf("shells = %d, want 2: a stale snapshot resurrected a deleted shell", len(p.shells))
+	}
+	if command == nil {
+		t.Fatal("a discarded sync must schedule a fresh one, not drop the refresh")
+	}
+	if names := manifestNames(t, manifestPath); len(names) != 2 {
+		t.Fatalf("manifest = %v, want the deleted shell to stay deleted", names)
 	}
 }

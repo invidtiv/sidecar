@@ -71,6 +71,16 @@ func main() {
 	// flag at a temp dir moves the whole config axis (td-8d18de).
 	config.SetConfigPath(*configPath)
 
+	// Fail closed before anything touches the filesystem. This has to precede
+	// openLogFile, which creates the config directory and appends to debug.log:
+	// a run that claims isolation must not have already written the real user
+	// tree by the time it refuses to run (td-8d18de). CheckStateIsolation needs
+	// nothing from the config file — only the resolved state and config paths.
+	if err := config.CheckStateIsolation(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	// Unset TMUX so sidecar's internal tmux sessions are independent of any
 	// outer tmux session. This allows prefix+d to detach from the workspace's
 	// inner session rather than the user's outer tmux.
@@ -127,14 +137,6 @@ func main() {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Fail closed before any state is touched: a run that claims isolation but
-	// resolved back onto the real user tree would overwrite a live instance's
-	// shell manifest (td-8d18de). A normal run is unaffected.
-	if err := config.CheckStateIsolation(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
@@ -366,11 +368,10 @@ func openLogFile() (*os.File, error) {
 // moved — tmux transport and Sidecar state are separate, and isolating only one
 // is what let a test overwrite a live shell manifest (td-8d18de).
 func logResolvedPaths(logger *slog.Logger, projectRootPath string) {
-	manifest := "<unresolved>"
-	if dir, err := projectdir.Resolve(projectRootPath); err == nil {
+	// Lookup, not Resolve: reporting a path must not create it.
+	manifest := "<not yet created>"
+	if dir, ok := projectdir.Lookup(projectRootPath); ok {
 		manifest = filepath.Join(dir, "shells.json")
-	} else {
-		manifest = fmt.Sprintf("<unresolved: %v>", err)
 	}
 
 	line := fmt.Sprintf("sidecar paths: state=%s config=%s tmux-socket=%s project-root=%s manifest=%s",

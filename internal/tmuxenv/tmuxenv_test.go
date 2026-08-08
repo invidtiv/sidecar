@@ -41,17 +41,17 @@ func TestSocketPathTracksEnvChanges(t *testing.T) {
 	}
 }
 
-func TestNamespaceIncludesHostAndSocket(t *testing.T) {
+// The namespace is the socket path and nothing else: a hostname component would
+// change under a macOS network rename and orphan every manifest entry.
+func TestNamespaceIsTheSocketPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMUX_TMPDIR", dir)
 
-	namespace := Namespace()
-	if !strings.HasSuffix(namespace, ":"+SocketPath()) {
-		t.Fatalf("Namespace() = %q, want suffix %q", namespace, ":"+SocketPath())
+	if namespace, socket := Namespace(), SocketPath(); namespace != socket {
+		t.Fatalf("Namespace() = %q, want %q", namespace, socket)
 	}
-	host := strings.TrimSuffix(namespace, ":"+SocketPath())
-	if host == "" {
-		t.Fatalf("Namespace() = %q, want a non-empty host component", namespace)
+	if strings.Contains(Namespace(), ":") {
+		t.Fatalf("Namespace() = %q, want no host component", Namespace())
 	}
 }
 

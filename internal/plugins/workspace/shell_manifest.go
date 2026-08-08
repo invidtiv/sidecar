@@ -21,8 +21,23 @@ type ShellManifest struct {
 	Version int               `json:"version"`
 	Shells  []ShellDefinition `json:"shells"`
 
-	path string     // not serialized - file path
-	mu   sync.Mutex // protects concurrent access
+	path     string     // not serialized - file path
+	mu       sync.Mutex // protects concurrent access
+	revision uint64     // bumped on every successful local write
+}
+
+// Revision counts the successful writes this process has made through this
+// manifest object. A reconciliation that started before a local delete and
+// lands after it would resurrect the deleted shell, so callers stamp the
+// revision they observed and discard (or re-run) a sync whose base moved
+// underneath them (td-8d18de).
+func (m *ShellManifest) Revision() uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revision
 }
 
 // ShellDefinition contains all info needed to recreate a shell session.
@@ -30,12 +45,17 @@ type ShellDefinition struct {
 	TmuxName    string `json:"tmuxName"`
 	DisplayName string `json:"displayName"`
 	// Namespace identifies the tmux server that owns this session
-	// (tmuxenv.Namespace). Empty means a pre-td-8d18de entry of unknown
-	// origin: it is never pruned, because this instance cannot prove the
-	// session was ever visible to it, and it is stamped the first time the
-	// entry is seen live locally. Legacy entries whose session is really gone
-	// therefore surface as orphans rather than vanishing, and clear on an
-	// explicit kill.
+	// (tmuxenv.Namespace — the resolved socket path). Empty means a
+	// pre-td-8d18de entry: reconciliation claims it if its name matches this
+	// working directory's own discovery pattern (only this machine's default
+	// server could have produced that name, so it stays prunable), and
+	// otherwise leaves it alone, because absence is not proof of death.
+	//
+	// The deliberate consequence: an entry belonging to a working directory
+	// that no longer exists — a deleted worktree — is retained in the shared
+	// file indefinitely. It is not displayed by any instance (visibility is
+	// per-workDir), so it costs a few bytes rather than a sidebar row, and an
+	// explicit kill still removes it.
 	Namespace string    `json:"namespace,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	AgentType string    `json:"agentType,omitempty"`
@@ -94,12 +114,15 @@ func (m *ShellManifest) Save() error {
 	return m.saveLocked()
 }
 
-// saveLocked writes the manifest to disk. Caller must hold m.mu.
+// saveLocked replaces the whole file with this process's copy. Caller must hold
+// m.mu. Reserved for the startup reconciliation, which has just computed the
+// authoritative list; every single-entry edit goes through mutateLocked so it
+// merges instead of clobbering.
 func (m *ShellManifest) saveLocked() error {
-	// The hard floor for td-8d18de. Every writer (Save, AddShell, EnsureShells,
-	// RemoveShell, UpdateShell) funnels through here, and the check runs before
-	// MkdirAll and before the lock file is created so an isolated run leaves no
-	// .tmp or .lock debris in the real user's tree either.
+	// The hard floor for td-8d18de. Every writer funnels through here or
+	// mutateLocked, and the check runs before MkdirAll and before the lock file
+	// is created so an isolated run leaves no .tmp or .lock debris in the real
+	// user's tree either.
 	if err := config.AssertIsolatedPath(m.path); err != nil {
 		return err
 	}
@@ -117,7 +140,67 @@ func (m *ShellManifest) saveLocked() error {
 	}
 	defer releaseManifestLock(lockFile)
 
-	// Ensure version is set
+	return m.writeLocked()
+}
+
+// mutateLocked applies a single-entry edit against the manifest as it exists on
+// disk *right now*, not against this process's possibly-stale snapshot.
+//
+// Every writer used to marshal its in-memory copy over the whole file. Between
+// loading that copy and writing it, a sibling instance can have renamed a shell
+// or recorded a new one; the blind rewrite silently reverted it (td-8d18de).
+// Re-reading inside the exclusive lock makes each edit a merge: we change the
+// one entry we mean to change and preserve everything else the file has gained.
+//
+// apply receives the fresh definitions and returns the new list plus whether
+// anything actually changed. Caller must hold m.mu.
+func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
+	if err := config.AssertIsolatedPath(m.path); err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(m.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	lockFile, err := acquireManifestLock(m.path, true)
+	if err != nil {
+		return err
+	}
+	defer releaseManifestLock(lockFile)
+
+	fresh := m.readFromDiskLocked()
+	next, changed := apply(fresh)
+	m.Shells = next
+	if !changed {
+		return nil
+	}
+	return m.writeLocked()
+}
+
+// readFromDiskLocked returns the definitions currently on disk, falling back to
+// the in-memory copy when the file is missing or unreadable. Caller must hold
+// both m.mu and the exclusive file lock.
+func (m *ShellManifest) readFromDiskLocked() []ShellDefinition {
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("manifest: read-before-write failed, using in-memory copy", "err", err)
+		}
+		return m.Shells
+	}
+	var onDisk ShellManifest
+	if err := json.Unmarshal(data, &onDisk); err != nil {
+		slog.Warn("manifest: read-before-write parse failed, using in-memory copy", "err", err)
+		return m.Shells
+	}
+	return onDisk.Shells
+}
+
+// writeLocked marshals and atomically replaces the file. Caller must hold m.mu,
+// the exclusive file lock, and must already have asserted path isolation.
+func (m *ShellManifest) writeLocked() error {
 	m.Version = manifestVersion
 
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -125,29 +208,30 @@ func (m *ShellManifest) saveLocked() error {
 		return err
 	}
 
-	// Atomic write: temp file + rename
 	tmpPath := m.path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
 	}
-
-	return os.Rename(tmpPath, m.path)
+	if err := os.Rename(tmpPath, m.path); err != nil {
+		return err
+	}
+	m.revision++
+	return nil
 }
 
 // AddShell adds a shell definition and saves.
 func (m *ShellManifest) AddShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Check for duplicate
-	for i, s := range m.Shells {
-		if s.TmuxName == def.TmuxName {
-			// Update existing
-			m.Shells[i] = def
-			return m.saveLocked()
+	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		for i, s := range shells {
+			if s.TmuxName == def.TmuxName {
+				shells[i] = def
+				return shells, true
+			}
 		}
-	}
-	m.Shells = append(m.Shells, def)
-	return m.saveLocked()
+		return append(shells, def), true
+	})
 }
 
 // EnsureShells adds any definitions the manifest is missing and saves once.
@@ -157,40 +241,43 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 // instance narrowed (td-8d18de) without ever overwriting what that instance
 // wrote.
 func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
+	if len(defs) == 0 {
+		return false, nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	present := make(map[string]bool, len(m.Shells))
-	for _, s := range m.Shells {
-		present[s.TmuxName] = true
-	}
-
 	changed := false
-	for _, def := range defs {
-		if present[def.TmuxName] {
-			continue
+	err := m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		present := make(map[string]bool, len(shells))
+		for _, s := range shells {
+			present[s.TmuxName] = true
 		}
-		m.Shells = append(m.Shells, def)
-		present[def.TmuxName] = true
-		changed = true
-	}
-	if !changed {
-		return false, nil
-	}
-	return true, m.saveLocked()
+		for _, def := range defs {
+			if present[def.TmuxName] {
+				continue
+			}
+			shells = append(shells, def)
+			present[def.TmuxName] = true
+			changed = true
+		}
+		return shells, changed
+	})
+	return changed, err
 }
 
 // RemoveShell removes a shell by tmuxName and saves.
 func (m *ShellManifest) RemoveShell(tmuxName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i, s := range m.Shells {
-		if s.TmuxName == tmuxName {
-			m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
-			return m.saveLocked()
+	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		for i, s := range shells {
+			if s.TmuxName == tmuxName {
+				return append(shells[:i], shells[i+1:]...), true
+			}
 		}
-	}
-	return nil // Not found, nothing to remove
+		return shells, false // Not found, nothing to remove
+	})
 }
 
 // FindShell returns a shell definition by tmuxName, or nil if not found.
@@ -209,15 +296,16 @@ func (m *ShellManifest) FindShell(tmuxName string) *ShellDefinition {
 func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i, s := range m.Shells {
-		if s.TmuxName == def.TmuxName {
-			m.Shells[i] = def
-			return m.saveLocked()
+	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		for i, s := range shells {
+			if s.TmuxName == def.TmuxName {
+				shells[i] = def
+				return shells, true
+			}
 		}
-	}
-	// Not found - add it
-	m.Shells = append(m.Shells, def)
-	return m.saveLocked()
+		// Not found - add it
+		return append(shells, def), true
+	})
 }
 
 // Path returns the manifest file path.

@@ -47,7 +47,15 @@ isolates sidecar's own sessions.**
 
 With the guard on, any path that still resolves inside `$HOME/.local/state/sidecar`
 or `$HOME/.config/sidecar` is a hard error: the manifest refuses to load or save,
-and the binary exits 1 at startup rather than writing a byte.
+project state directories refuse to be created, the version caches quietly skip
+themselves, and the binary exits 1 at startup — before it opens `debug.log` —
+rather than writing a byte.
+
+Go test binaries assert isolation automatically. A package that forgets to move
+`XDG_STATE_HOME` gets a refusal rather than silently creating directories in the
+developer's real `~/.local/state/sidecar/projects`. A test that deliberately
+exercises the ordinary unisolated path opts out with `SIDECAR_ALLOW_REAL_STATE=1`,
+and must point `HOME` at a temp dir first.
 
 `scripts/tmux-drive.sh` does both axes for you. It keeps one stable run root per
 user (`/tmp/sidecar-drive-$(id -u)`, override with `SIDECAR_DRIVE_RUN_DIR`) so
@@ -67,6 +75,13 @@ Check it before you trust it, and confirm nothing resolves under
 ```bash
 ./scripts/tmux-drive.sh paths
 ```
+
+**One run root per driver.** Two agents driving proofs at the same time would
+share that tmux server *and* that state tree, which is the cross-instance
+contention this guide exists to avoid, merely relocated off the real tree.
+`start` refuses when a session is already running in the run root; give each
+agent its own `SIDECAR_DRIVE_RUN_DIR`, or pass `SIDECAR_DRIVE_FORCE=1` if you are
+certain the existing session is yours and finished.
 
 `SIDECAR_DIAG_PATHS=1` makes the binary itself say what it resolved (it is
 printed unconditionally when isolation is asserted, and always goes to the log):

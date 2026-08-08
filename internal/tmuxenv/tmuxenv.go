@@ -27,10 +27,16 @@ func SocketPath() string {
 }
 
 // Namespace returns a stable identity for the tmux server this process talks
-// to, in the form "<hostname>:<socket path>". Two Sidecar instances share a
-// namespace exactly when they can see each other's sessions.
+// to: the resolved socket path. Two Sidecar instances share a namespace exactly
+// when they can see each other's sessions.
+//
+// The hostname is deliberately NOT part of the identity. shells.json is
+// per-machine state, the socket path already distinguishes every server on that
+// machine, and macOS rewrites the host name when networks change ("aerie" ->
+// "aerie-2"). Including it would make every existing manifest entry
+// unrecognizable — and therefore unprunable — after a DHCP rename.
 func Namespace() string {
-	return hostname() + ":" + SocketPath()
+	return SocketPath()
 }
 
 func tmpDir() string {
@@ -38,12 +44,4 @@ func tmpDir() string {
 		return dir
 	}
 	return "/tmp"
-}
-
-func hostname() string {
-	name, err := os.Hostname()
-	if err != nil || name == "" {
-		return "unknown"
-	}
-	return name
 }

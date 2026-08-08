@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -221,11 +222,22 @@ func shellDiscoveryPattern(workDir string) *regexp.Regexp {
 	return regexp.MustCompile(`^` + regexp.QuoteMeta(basePrefix) + `(?:-(\d+))?$`)
 }
 
-func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
+// discoverTmuxSessionNamesForWorkDir lists this instance's shell sessions.
+//
+// The error is part of the contract (td-8d18de): "tmux told me there are no
+// sessions" and "I could not ask tmux" must never look the same, because the
+// first is permission to prune a manifest entry and the second is not. tmux
+// exits 1 with "no server running" when the server is simply down — that is a
+// genuine empty answer — while a missing binary, a broken socket or a fork
+// failure is an unknown answer and must prune nothing.
+func discoverTmuxSessionNamesForWorkDir(workDir string) ([]string, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil
+		if !tmuxReportedNoServer(err) {
+			return nil, fmt.Errorf("tmux list-sessions: %w", err)
+		}
+		return nil, nil
 	}
 
 	var result []string
@@ -241,7 +253,20 @@ func discoverTmuxSessionNamesForWorkDir(workDir string) []string {
 		}
 	}
 
-	return result
+	return result, nil
+}
+
+// tmuxReportedNoServer reports whether the failure was tmux answering "there is
+// no server", which is a real, trustworthy "no sessions" answer. Anything else
+// — exec.ErrNotFound, a permissions problem, a fork failure — is unknown.
+func tmuxReportedNoServer(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	stderr := strings.ToLower(string(exitErr.Stderr))
+	return strings.Contains(stderr, "no server running") ||
+		strings.Contains(stderr, "no sessions")
 }
 
 // syncShellsFromManifest reloads the manifest and syncs the shell list.
@@ -251,6 +276,7 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 		return nil
 	}
 	manifestPath := p.shellManifest.Path()
+	baseRevision := p.shellManifest.Revision()
 	workDir := p.ctx.WorkDir
 	hooks := p.shellStartupHooks.withDefaults()
 	return func() tea.Msg {
@@ -260,18 +286,27 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 			return nil
 		}
 
+		// If we cannot ask tmux, we know nothing about what is running, and a
+		// merge fed an empty Running map would orphan every shell on screen.
+		// Say nothing instead (td-8d18de).
+		names, discoveryErr := hooks.discoverSessions(workDir)
+		if discoveryErr != nil {
+			return nil
+		}
+
 		running := make(map[string]bool)
 		paneIDs := make(map[string]string)
-		for _, name := range hooks.discoverSessions(workDir) {
+		for _, name := range names {
 			running[name] = true
 			paneIDs[name] = hooks.getPaneID(name)
 		}
 		return shellManifestSyncMsg{
-			Scope:     scope,
-			Manifest:  newManifest,
-			Running:   running,
-			PaneIDs:   paneIDs,
-			Namespace: hooks.namespace(),
+			Scope:        scope,
+			Manifest:     newManifest,
+			Running:      running,
+			PaneIDs:      paneIDs,
+			Namespace:    hooks.namespace(),
+			BaseRevision: baseRevision,
 		}
 	}
 }
@@ -285,14 +320,24 @@ type shellManifestSyncMsg struct {
 	// Namespace is this instance's tmux server identity, resolved on the
 	// command goroutine so Update never touches the environment.
 	Namespace string
+	// BaseRevision is the manifest revision this snapshot was taken against.
+	// A local delete that lands while the sync is in flight moves the revision,
+	// and applying the stale snapshot would resurrect the deleted shell — so
+	// the handler re-runs the sync instead of applying it (td-8d18de).
+	BaseRevision uint64
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
 // Called after receiving shellManifestSyncMsg. The union rules live in
 // mergeShellState; this is the adapter that applies them to plugin state.
-func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
+//
+// It returns the work that must happen off the Update loop: healing the file
+// (a locked, retrying disk write, which would otherwise freeze the TUI for up
+// to lockTimeout in exactly the contended cross-instance case this exists for)
+// and polling shells that just came back to life.
+func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	if p.shellManifest == nil {
-		return
+		return nil
 	}
 
 	result := mergeShellState(shellMergeInput{
@@ -322,13 +367,6 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
 		}
 	}
 
-	// Heal the file: put back the live sessions the writer did not know about.
-	// This converges rather than ping-pongs — the peer instance re-reads a
-	// superset manifest, finds nothing missing, and writes nothing.
-	if len(result.Restored) > 0 {
-		_, _ = p.shellManifest.EnsureShells(result.Restored)
-	}
-
 	// Adjust selection if needed
 	if p.shellSelected && p.selectedShellIdx >= len(p.shells) {
 		if len(p.shells) > 0 {
@@ -338,6 +376,26 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) {
 			p.selectedIdx = 0
 		}
 	}
+
+	var commands []tea.Cmd
+	// Heal the file: put back the live sessions the writer did not know about.
+	// This converges rather than ping-pongs — the peer instance re-reads a
+	// superset manifest, finds nothing missing, and writes nothing.
+	if len(result.Restored) > 0 {
+		manifest := p.shellManifest
+		restored := result.Restored
+		logger := p.ctx.Logger
+		commands = append(commands, func() tea.Msg {
+			if _, err := manifest.EnsureShells(restored); err != nil && logger != nil {
+				logger.Warn("shell manifest heal failed", "error", err)
+			}
+			return nil
+		})
+	}
+	for _, shell := range result.Revived {
+		commands = append(commands, p.pollShellSessionByName(shell.TmuxName))
+	}
+	return tea.Batch(commands...)
 }
 
 // nextShellIndex returns the next available shell index based on existing sessions.

@@ -71,7 +71,11 @@ func TestAssertIsolatedPath(t *testing.T) {
 			if tt.isolated {
 				t.Setenv(IsolationEnv, "1")
 			} else {
+				// A test binary asserts isolation by default; opt this case
+				// out explicitly to model an ordinary run. HOME is a temp dir,
+				// so nothing real is at risk.
 				t.Setenv(IsolationEnv, "")
+				t.Setenv(AllowRealStateEnv, "1")
 			}
 
 			err := AssertIsolatedPath(tt.path(home))
@@ -125,10 +129,17 @@ func TestCheckStateIsolation(t *testing.T) {
 }
 
 func TestIsolationAsserted(t *testing.T) {
+	// A go test binary is isolated by default (td-8d18de): forgetting to
+	// isolate must fail loudly rather than write the developer's real tree.
 	t.Setenv(IsolationEnv, "")
-	if IsolationAsserted() {
-		t.Fatal("IsolationAsserted() = true with no env and no test override")
+	if !IsolationAsserted() {
+		t.Fatal("IsolationAsserted() = false inside a test binary")
 	}
+	t.Setenv(AllowRealStateEnv, "1")
+	if IsolationAsserted() {
+		t.Fatal("IsolationAsserted() = true with the explicit test opt-out")
+	}
+	t.Setenv(AllowRealStateEnv, "")
 	t.Setenv(IsolationEnv, "1")
 	if !IsolationAsserted() {
 		t.Fatal("IsolationAsserted() = false with the env set")

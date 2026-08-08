@@ -183,3 +183,53 @@ func TestMergePreservesManifestOrder(t *testing.T) {
 		t.Fatalf("existing shell did not pick up the manifest display name: %q", result.Shells[1].Name)
 	}
 }
+
+// TestMergeBuildsAgentForRevivedShell pins the "self-heal means usable" half of
+// td-8d18de item 5: a shell that comes back to life must get an Agent, or it
+// renders as live while enterInteractiveMode, recreateOrphanedShell and the
+// terminal controller all refuse it — forever, since `r` re-runs this same merge.
+func TestMergeBuildsAgentForRevivedShell(t *testing.T) {
+	orphan := mergeTestShell("sidecar-sh-sidecar-1", "Shell 1")
+	orphan.IsOrphaned = true
+
+	result := mergeShellState(shellMergeInput{
+		Existing: []*ShellSession{orphan},
+		Manifest: []ShellDefinition{
+			{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "Shell 1"},
+		},
+		Running: map[string]bool{"sidecar-sh-sidecar-1": true},
+		PaneID:  func(string) string { return "%7" },
+		WorkDir: "/tmp/x/sidecar",
+	})
+
+	if orphan.IsOrphaned {
+		t.Fatal("revived shell is still marked orphaned")
+	}
+	if orphan.Agent == nil {
+		t.Fatal("revived shell has no Agent: it renders live but can never be opened")
+	}
+	if orphan.Agent.TmuxPane != "%7" {
+		t.Errorf("revived agent pane = %q, want %%7", orphan.Agent.TmuxPane)
+	}
+	if len(result.Revived) != 1 || result.Revived[0] != orphan {
+		t.Fatalf("Revived = %v, want the revived shell so the caller can poll it", result.Revived)
+	}
+}
+
+// TestMergeHidesSiblingWorktreeEntries separates persistence from display: all
+// worktrees of a repo share one shells.json, and a definition this working
+// directory could never have produced must stay in the file but off the screen.
+func TestMergeHidesSiblingWorktreeEntries(t *testing.T) {
+	result := mergeShellState(shellMergeInput{
+		Manifest: []ShellDefinition{
+			{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "Mine"},
+			{TmuxName: "sidecar-sh-sidecar-agent-status-1", DisplayName: "Sibling's"},
+		},
+		WorkDir: "/tmp/x/sidecar",
+	})
+
+	assertNames(t, "shells", shellNames(result.Shells), []string{"sidecar-sh-sidecar-1"})
+	if len(result.Dropped) != 0 {
+		t.Fatalf("Dropped = %v, want nothing removed from the shared file", result.Dropped)
+	}
+}

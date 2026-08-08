@@ -21,6 +21,9 @@ type shellMergeResult struct {
 	Shells   []*ShellSession   // the union, in stable order
 	Restored []ShellDefinition // must be written back into the manifest
 	Dropped  []string          // tmux names to purge from caches
+	// Revived are shells that just came back to life and had an Agent built
+	// for them. The caller owns them now: mark them managed and poll them.
+	Revived []*ShellSession
 }
 
 // mergeShellState reconciles a manifest with what this instance already knows
@@ -30,10 +33,12 @@ type shellMergeResult struct {
 //
 // The rules:
 //
-//	(a) Every manifest definition yields a shell. An existing *ShellSession
-//	    with the same tmux name is reused (so buffers and panes survive) with
-//	    its display name, agent and skip-perms refreshed from the definition;
-//	    otherwise a fresh session is built.
+//	(a) Every manifest definition this working directory could own yields a
+//	    shell. An existing *ShellSession with the same tmux name is reused (so
+//	    buffers and panes survive) with its display name, agent and skip-perms
+//	    refreshed from the definition; otherwise a fresh session is built. A
+//	    definition that is neither live here nor matchable by this workDir's
+//	    discovery pattern is kept in the manifest but not displayed.
 //	(b) An existing shell absent from the manifest but still Running here is
 //	    KEPT — appended after the manifest-ordered shells — and reported in
 //	    Restored so the caller can heal the file. This is the exact eviction
@@ -63,6 +68,14 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 	result := shellMergeResult{}
 	seen := make(map[string]bool, len(in.Manifest))
 
+	// Visibility is a narrower question than survival. A definition survives in
+	// the manifest whenever we cannot prove it died; it belongs on *this*
+	// instance's screen only when its name is one this working directory could
+	// have produced. Sibling worktrees share one shells.json, so without this
+	// split every worktree would list its siblings' shells as offline rows that
+	// can never be opened (td-8d18de).
+	visible := shellDiscoveryPattern(in.WorkDir)
+
 	for _, definition := range in.Manifest {
 		seen[definition.TmuxName] = true
 		running := in.Running[definition.TmuxName]
@@ -71,7 +84,21 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 			shell.ChosenAgent = definitionToAgentType(definition.AgentType)
 			shell.SkipPerms = definition.SkipPerms
 			shell.IsOrphaned = !running
+			// A shell that comes back to life needs an Agent, or it renders as
+			// live while every open path refuses it: enterInteractiveMode wants
+			// an Agent, recreateOrphanedShell only handles orphans, and no
+			// later sync would ever repair it (td-8d18de).
+			if running && shell.Agent == nil {
+				attachAgentToShell(shell, definition, paneID)
+				result.Revived = append(result.Revived, shell)
+			}
 			result.Shells = append(result.Shells, shell)
+			continue
+		}
+		if !running && !visible.MatchString(definition.TmuxName) {
+			// Retained for persistence only: it belongs to a sibling worktree
+			// or another tmux server. Keeping it in the manifest is the fix;
+			// showing it as an offline shell we could never open is not.
 			continue
 		}
 		result.Shells = append(result.Shells, shellSessionFromDefinition(definition, running, paneID))

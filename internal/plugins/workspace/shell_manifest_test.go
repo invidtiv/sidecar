@@ -531,6 +531,9 @@ func TestSaveAllowsRealUserManifestWithoutIsolation(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 	t.Setenv(config.IsolationEnv, "")
+	// A test binary asserts isolation by default; this is the one case that
+	// deliberately exercises the ordinary path, against a temp HOME.
+	t.Setenv(config.AllowRealStateEnv, "1")
 	// The package-wide TestMain sets a test state dir, which itself asserts
 	// isolation; clear it for this one case.
 	config.ResetTestStateDir()
@@ -546,5 +549,67 @@ func TestSaveAllowsRealUserManifestWithoutIsolation(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("manifest not written: %v", err)
+	}
+}
+
+// TestManifestWritesMergeWithDisk is the concurrent-instance half of td-8d18de:
+// a writer must not marshal its own stale snapshot over what another instance
+// has since written. Each edit re-reads the file inside the exclusive lock.
+func TestManifestWritesMergeWithDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+
+	peer, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	if err := peer.AddShell(ShellDefinition{TmuxName: "peer-1", DisplayName: "Peer shell"}); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
+	}
+
+	// A snapshot taken before the peer's write.
+	stale := &ShellManifest{Version: manifestVersion, path: path}
+
+	if err := stale.AddShell(ShellDefinition{TmuxName: "mine-1", DisplayName: "My shell"}); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
+	}
+
+	reloaded, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	if len(reloaded.Shells) != 2 {
+		t.Fatalf("manifest = %#v, want both the peer's entry and ours", reloaded.Shells)
+	}
+	if reloaded.FindShell("peer-1") == nil {
+		t.Error("a stale writer erased the peer's concurrently written entry")
+	}
+	if reloaded.FindShell("mine-1") == nil {
+		t.Error("our own entry was not written")
+	}
+}
+
+// TestManifestRevisionTracksWrites backs the stale-sync guard: a reconciliation
+// that started before a local delete must be able to tell that it did.
+func TestManifestRevisionTracksWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	m, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+
+	before := m.Revision()
+	if err := m.AddShell(ShellDefinition{TmuxName: "shell-1"}); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
+	}
+	if m.Revision() == before {
+		t.Fatal("Revision() did not move after a write")
+	}
+
+	after := m.Revision()
+	if err := m.RemoveShell("does-not-exist"); err != nil {
+		t.Fatalf("RemoveShell() error = %v", err)
+	}
+	if m.Revision() != after {
+		t.Fatal("Revision() moved on a no-op write")
 	}
 }

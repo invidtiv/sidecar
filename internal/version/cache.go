@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/marcus/sidecar/internal/config"
 )
 
 const (
@@ -22,17 +24,39 @@ type CacheEntry struct {
 }
 
 // cachePath returns the full path to the cache file.
+//
+// It follows config.ConfigPath() rather than $HOME so -config moves it with the
+// rest of the config axis, and it returns "" when isolation is asserted and the
+// path still lands in the real user tree. A version cache is optional, so a
+// refusal simply means no caching for that run (td-8d18de).
 func cachePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	return isolatedConfigFile(cacheFile)
+}
+
+// tdCachePath returns the full path to the td cache file.
+func tdCachePath() string {
+	return isolatedConfigFile(tdCacheFile)
+}
+
+func isolatedConfigFile(name string) string {
+	dir := filepath.Dir(config.ConfigPath())
+	if dir == "" || dir == "." {
 		return ""
 	}
-	return filepath.Join(home, ".config", "sidecar", cacheFile)
+	path := filepath.Join(dir, name)
+	if err := config.AssertIsolatedPath(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // LoadCache reads cached version check result from disk.
 func LoadCache() (*CacheEntry, error) {
-	data, err := os.ReadFile(cachePath())
+	path := cachePath()
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -81,18 +105,13 @@ func IsCacheValid(entry *CacheEntry, currentVersion string) bool {
 	return true
 }
 
-// tdCachePath returns the full path to the td cache file.
-func tdCachePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "sidecar", tdCacheFile)
-}
-
 // LoadTdCache reads cached td version check result from disk.
 func LoadTdCache() (*CacheEntry, error) {
-	data, err := os.ReadFile(tdCachePath())
+	path := tdCachePath()
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

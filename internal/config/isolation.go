@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
 )
 
 // IsolationEnv is the promise a harness makes: this process must never read or
@@ -42,9 +43,25 @@ func RealUserConfigDir() string {
 	return filepath.Join(home, configDir)
 }
 
+// AllowRealStateEnv opts a process out of the automatic isolation that applies
+// to every `go test` binary. Set it to "1" only in a test that deliberately
+// proves the ordinary, unisolated path still works — and only with HOME already
+// pointed at a temp dir.
+const AllowRealStateEnv = "SIDECAR_ALLOW_REAL_STATE"
+
 // IsolationAsserted reports whether this process claims isolated state.
+//
+// A test binary asserts it by default. Isolation used to be opt-in, which meant
+// the guard was silently inert in every package that had not thought about it,
+// and `go test ./...` went on creating directories in the developer's real
+// ~/.local/state/sidecar/projects tree — the same tree that holds the shell
+// manifest td-8d18de destroyed. Defaulting to on makes forgetting to isolate a
+// loud failure instead of a silent write.
 func IsolationAsserted() bool {
-	return os.Getenv(IsolationEnv) == "1" || testStateDir != ""
+	if os.Getenv(IsolationEnv) == "1" || testStateDir != "" {
+		return true
+	}
+	return testing.Testing() && os.Getenv(AllowRealStateEnv) != "1"
 }
 
 // AssertIsolatedPath returns an error when isolation is asserted and path
