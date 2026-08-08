@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -115,6 +116,49 @@ func TestTerminalPanelControlStartsVisibleAndKeepsPollUntilSnapshot(t *testing.T
 	}
 	if p.scheduleTermPanelPoll(0) != nil {
 		t.Fatal("panel polling continued after control activation")
+	}
+}
+
+func TestTerminalControlsReserveScrollbarColumn(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := terminalPanelControlPlugin(manager)
+	_, panelHeight := p.calculateTermPanelDimensions()
+	p.termPanelOutput.Update(strings.Repeat("line\n", panelHeight+1))
+	panel, ok := p.desiredPanelControl()
+	if !ok {
+		t.Fatal("terminal panel control was not available")
+	}
+	panelBoxWidth, _ := p.calculateTermPanelDimensions()
+	if panel.Width != panelBoxWidth-1 {
+		t.Fatalf("panel control width = %d, want %d with scrollbar", panel.Width, panelBoxWidth-1)
+	}
+
+	p = primaryControlPlugin(manager)
+	_, primaryHeight := p.calculateAgentPaneDimensions()
+	p.worktrees[0].Agent.OutputBuf.Update(strings.Repeat("line\n", primaryHeight+1))
+	agent, ok := p.desiredPrimaryControl()
+	if !ok {
+		t.Fatal("agent control was not available")
+	}
+	primaryBoxWidth, _ := p.calculateAgentPaneDimensions()
+	if agent.Width != primaryBoxWidth-1 {
+		t.Fatalf("agent control width = %d, want %d with scrollbar", agent.Width, primaryBoxWidth-1)
+	}
+
+	p.shells = []*ShellSession{{
+		TmuxName: "shell-session",
+		Agent: &Agent{TmuxSession: "shell-session", TmuxPane: "%12",
+			OutputBuf: tty.NewOutputBuffer(outputBufferCap)},
+	}}
+	p.shellSelected = true
+	shellBoxWidth, shellHeight := p.calculateAgentPaneDimensions()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("line\n", shellHeight+1))
+	shell, ok := p.desiredPrimaryControl()
+	if !ok {
+		t.Fatal("shell control was not available")
+	}
+	if shell.Width != shellBoxWidth-1 {
+		t.Fatalf("shell control width = %d, want %d with scrollbar", shell.Width, shellBoxWidth-1)
 	}
 }
 

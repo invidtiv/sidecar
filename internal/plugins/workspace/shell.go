@@ -756,6 +756,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			} else {
 				previewWidth, previewHeight = p.calculatePreviewDimensions()
 			}
+			previewWidth = p.terminalContentWidth(previewWidth, previewHeight, false)
 			resizeTarget = p.previewResizeTarget()
 		}
 	}

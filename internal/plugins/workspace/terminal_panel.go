@@ -393,6 +393,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 		target = p.termPanelSession
 	}
 	w, h := p.calculateTermPanelDimensions()
+	w = p.terminalContentWidth(w, h, true)
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, w, h)
 		return nil

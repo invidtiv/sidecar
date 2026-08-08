@@ -435,6 +435,38 @@ func TestRenderTerminalViewportPinsScrollbarToRightEdge(t *testing.T) {
 	}
 }
 
+func TestTerminalContentWidthReservesVisibleScrollbar(t *testing.T) {
+	buffer := testTerminalBuffer("123456789\nabcdefghi\nABCDEFGHI")
+	p := &Plugin{
+		shellSelected: true,
+		shells:        []*ShellSession{{Agent: &Agent{OutputBuf: buffer}}},
+	}
+
+	if got := p.terminalContentWidth(10, 2, false); got != 9 {
+		t.Fatalf("content width with scrollbar = %d, want 9", got)
+	}
+	if got := p.terminalContentWidth(10, 3, false); got != 10 {
+		t.Fatalf("content width without scrollbar = %d, want 10", got)
+	}
+
+	// Once tmux has wrapped to the reserved width, the last pane cell remains
+	// visible immediately beside the scrollbar instead of being truncated.
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:     buffer,
+		Width:      10,
+		Height:     2,
+		Follow:     true,
+		PaneWidth:  9,
+		PaneHeight: 2,
+		TotalItems: 3,
+	}, ui.NewTruncateCache(32))
+	for i, line := range strings.Split(ansi.Strip(result.Content), "\n") {
+		if !strings.HasPrefix(line, []string{"abcdefghi", "ABCDEFGHI"}[i]) {
+			t.Fatalf("line %d lost its rightmost pane cell: %q", i, line)
+		}
+	}
+}
+
 func TestPadLinesToWidth(t *testing.T) {
 	tests := []struct {
 		name  string

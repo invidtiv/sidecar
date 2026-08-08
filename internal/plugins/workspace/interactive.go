@@ -387,6 +387,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		} else {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
 		}
+		previewWidth = p.terminalContentWidth(previewWidth, previewHeight, false)
 		tty.SetWindowSizeManual(sessionName)
 		// Entering interactive mode is an explicit local action; the user is
 		// here, so this instance's geometry wins (td-ee222a).
@@ -459,6 +460,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 
 	// Resize terminal panel pane to match its split dimensions
 	w, h := p.calculateTermPanelDimensions()
+	w = p.terminalContentWidth(w, h, true)
 	tty.SetWindowSizeManual(sessionName)
 	// Explicit local action: claim the terminal panel session outright rather
 	// than render it at another machine's geometry (td-ee222a).
@@ -590,6 +592,7 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
 	}
+	previewWidth = p.terminalContentWidth(previewWidth, previewHeight, isTermPanel)
 	return func() tea.Msg {
 		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
 			if actualWidth == previewWidth && actualHeight == previewHeight {
@@ -626,6 +629,7 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
 	}
+	previewWidth = p.terminalContentWidth(previewWidth, previewHeight, isTermPanel)
 	target := p.interactiveState.TargetPane
 	if target == "" {
 		target = p.interactiveState.TargetSession
@@ -657,6 +661,63 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		return paneResizedMsg{}
 	}
+}
+
+// terminalContentWidth returns the columns tmux can actually render into.
+// The terminal scrollbar is viewport chrome, so when it is visible tmux must
+// wrap one column earlier instead of rendering a final column that Sidecar then
+// clips off (td-e8bdcf).
+func (p *Plugin) terminalContentWidth(width, height int, termPanel bool) int {
+	if width <= 1 || height <= 0 {
+		return width
+	}
+	buffer := p.terminalOutputBuffer(termPanel)
+	_, total, _ := p.terminalHistorySummary(termPanel, buffer)
+	if total > height {
+		return width - 1
+	}
+	return width
+}
+
+// maybeResizeVisiblePaneForScrollbar reacts when output crosses the scrollbar
+// threshold in passive mode. Creation and layout events cannot cover this: a
+// fresh pane often starts without scrollback and grows a scrollbar later.
+func (p *Plugin) maybeResizeVisiblePaneForScrollbar(target string, paneWidth, paneHeight int, termPanel bool) tea.Cmd {
+	if target == "" || paneWidth <= 0 || paneHeight <= 0 {
+		return nil
+	}
+	var width, height int
+	if termPanel {
+		width, height = p.calculateTermPanelDimensions()
+	} else if p.termPanelVisible {
+		width, height = p.calculateAgentPaneDimensions()
+	} else {
+		width, height = p.calculatePreviewDimensions()
+	}
+	width = p.terminalContentWidth(width, height, termPanel)
+	if paneWidth == width && paneHeight == height {
+		return nil
+	}
+	return func() tea.Msg {
+		tty.ResizeTmuxPane(target, width, height)
+		return paneResizedMsg{}
+	}
+}
+
+func (p *Plugin) terminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
+	if termPanel {
+		return p.termPanelOutput
+	}
+	if p.shellSelected {
+		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
+			return shell.Agent.OutputBuf
+		}
+		return nil
+	}
+	if wt := p.selectedWorktree(); wt != nil && wt.Agent != nil {
+		return wt.Agent.OutputBuf
+	}
+	return nil
 }
 
 // resizeSelectedPaneCmd resizes the currently selected tmux pane to match the

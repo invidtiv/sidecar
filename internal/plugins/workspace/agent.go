@@ -954,6 +954,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				} else {
 					previewWidth, previewHeight = p.calculatePreviewDimensions()
 				}
+				previewWidth = p.terminalContentWidth(previewWidth, previewHeight, false)
 				resizeTarget = p.previewResizeTarget()
 			}
 		}

@@ -568,6 +568,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
+		if p.viewMode == ViewModeList && !p.shellSelected {
+			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName && wt.Agent != nil {
+				target := wt.Agent.TmuxPane
+				if target == "" {
+					target = wt.Agent.TmuxSession
+				}
+				if resizeCmd := p.maybeResizeVisiblePaneForScrollbar(target, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
+					cmds = append(cmds, resizeCmd)
+				}
+			}
+		}
 		// Schedule next poll with adaptive interval based on status
 		interval := pollIntervalActive
 		switch msg.Status {
@@ -1071,6 +1082,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
+					cmds = append(cmds, resizeCmd)
+				}
+			}
+		}
+		if p.viewMode == ViewModeList && p.shellSelected {
+			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
+				if resizeCmd := p.maybeResizeVisiblePaneForScrollbar(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
 				}
 			}
@@ -1651,7 +1669,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// decay polling as agent/shell panes (pollingDecayFast=50ms) for
 		// responsive keystroke feedback.
 		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			return p, p.pollInteractivePane()
+			return p, tea.Batch(
+				p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight),
+				p.pollInteractivePane(),
+			)
 		}
 		// Non-interactive: adaptive polling based on content changes
 		interval := termPanelPollIdle
@@ -1664,7 +1685,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		} else if !p.focused && interval < termPanelPollUnfocus {
 			interval = termPanelPollUnfocus
 		}
-		return p, p.scheduleTermPanelPoll(interval)
+		return p, tea.Batch(
+			p.maybeResizeVisiblePaneForScrollbar(msg.SessionName, msg.PaneWidth, msg.PaneHeight, true),
+			p.scheduleTermPanelPoll(interval),
+		)
 
 	case termPanelPollMsg:
 		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||

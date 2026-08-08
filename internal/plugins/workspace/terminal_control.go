@@ -199,6 +199,7 @@ func (p *Plugin) desiredPanelControl() (workspaceControlDesired, bool) {
 		return workspaceControlDesired{}, false
 	}
 	width, height := p.calculateTermPanelDimensions()
+	width = p.terminalContentWidth(width, height, true)
 	return workspaceControlDesired{
 		Role: workspaceControlPanel, Session: p.termPanelSession, Pane: p.termPanelPaneID,
 		Width: width, Height: height, Source: "panel", SourceID: p.termPanelSession,
@@ -210,6 +211,7 @@ func (p *Plugin) desiredPrimaryControl() (workspaceControlDesired, bool) {
 		return workspaceControlDesired{}, false
 	}
 	width, height := p.calculateAgentPaneDimensions()
+	width = p.terminalContentWidth(width, height, false)
 	if p.shellSelected {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.IsOrphaned || shell.Agent == nil || shell.Agent.OutputBuf == nil ||

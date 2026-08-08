@@ -166,21 +166,7 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 }
 
 func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
-	if p.effectiveSelectionTermPanel() {
-		return p.termPanelOutput
-	}
-	if p.shellSelected {
-		shell := p.getSelectedShell()
-		if shell != nil && shell.Agent != nil {
-			return shell.Agent.OutputBuf
-		}
-		return nil
-	}
-	wt := p.selectedWorktree()
-	if wt == nil || wt.Agent == nil {
-		return nil
-	}
-	return wt.Agent.OutputBuf
+	return p.terminalOutputBuffer(p.effectiveSelectionTermPanel())
 }
 
 func (p *Plugin) effectiveSelectionTermPanel() bool {

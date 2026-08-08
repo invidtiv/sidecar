@@ -126,11 +126,15 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	// one (td-73fa86).
 	layout.PaneClipped = fit.Clipped()
 	if in.TotalItems > layout.DisplayHeight && layout.DisplayWidth > 1 {
-		layout.DisplayWidth--
+		// The scrollbar owns the viewport's final column. A pane already sized
+		// to the remaining content area fits as-is; subtracting again would clip
+		// its own final column (td-e8bdcf).
+		contentWidth := max(in.Width, 0) - 1
+		layout.DisplayWidth = min(layout.DisplayWidth, contentWidth)
 		fit = fit.WithWidth(layout.DisplayWidth, in.PaneWidth, in.CursorCol, in.Interactive && in.CursorVisible)
 		// Keep the scrollbar pinned to the viewport edge even when a narrower
 		// pane letterboxes the content.
-		layout.PadWidth = max(layout.DisplayWidth, max(in.Width, 0)-1)
+		layout.PadWidth = max(layout.DisplayWidth, contentWidth)
 		layout.ShowScrollbar = true
 	}
 	layout.Fit = fit
