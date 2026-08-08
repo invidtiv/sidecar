@@ -28,8 +28,8 @@ func TestInit_NoRepoKeepsPluginAvailable(t *testing.T) {
 	if got := p.FocusContext(); got != "git-no-repo" {
 		t.Fatalf("FocusContext() = %q, want %q", got, "git-no-repo")
 	}
-	if cmd := p.Start(); cmd != nil {
-		t.Fatalf("Start() should return nil in no-repo mode")
+	if cmd := p.Start(); cmd == nil {
+		t.Fatalf("Start() should detect repositories asynchronously")
 	}
 }
 
@@ -45,6 +45,7 @@ func TestInit_SwitchRepoToNoRepoClearsRepoState(t *testing.T) {
 	if err := p.Init(&plugin.Context{WorkDir: repoDir}); err != nil {
 		t.Fatalf("Init(repo) error = %v", err)
 	}
+	p.activateRepo(repoDir)
 	if !p.hasRepo {
 		t.Fatalf("hasRepo = false after repo init")
 	}
@@ -134,7 +135,7 @@ func TestEnsureGitignoreEntries_AllSidecarEntries(t *testing.T) {
 	}
 }
 
-func TestStart_EnsuresGitignoreForExistingRepo(t *testing.T) {
+func TestStart_DoesNotMutateGitignoreForExistingRepo(t *testing.T) {
 	repoDir := t.TempDir()
 	initCmd := exec.Command("git", "init")
 	initCmd.Dir = repoDir
@@ -152,18 +153,70 @@ func TestStart_EnsuresGitignoreForExistingRepo(t *testing.T) {
 	if err := p.Init(&plugin.Context{WorkDir: repoDir}); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	// Call Start() synchronously — we only care about the side-effect (gitignore update)
-	_ = p.Start()
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned nil; repository detection must be asynchronous")
+	}
 
 	data, err := os.ReadFile(gitignore)
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
 	content := string(data)
-	for _, entry := range sidecarGitignoreEntries {
-		if !strings.Contains(content, entry) {
-			t.Errorf("after Start(), .gitignore missing entry %q\ncontent:\n%s", entry, content)
+	if content != "node_modules/\n" {
+		t.Fatalf("Start() mutated .gitignore synchronously: %q", content)
+	}
+}
+
+func TestInitAndStartDoNotSpawnGitSynchronously(t *testing.T) {
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "git-called")
+	shim := filepath.Join(tmp, "git")
+	content := "#!/bin/sh\nprintf called >\"$SIDECAR_TEST_GIT_MARKER\"\n"
+	if err := os.WriteFile(shim, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tmp)
+	t.Setenv("SIDECAR_TEST_GIT_MARKER", marker)
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: tmp}); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := p.Start(); cmd == nil {
+		t.Fatal("Start() returned nil")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("Init or Start synchronously spawned git: %v", err)
+	}
+}
+
+func TestDiagnosticsReportDegradedGitData(t *testing.T) {
+	p := New()
+	p.hasRepo = true
+	p.tree = NewFileTree(t.TempDir())
+	p.statusError = "status unavailable"
+	p.historyError = "history unavailable"
+	p.watcherError = "watcher unavailable"
+
+	got := p.Diagnostics()
+	if len(got) != 4 {
+		t.Fatalf("Diagnostics() count = %d, want 4: %#v", len(got), got)
+	}
+	want := map[string]string{
+		"git-status-refresh": "status unavailable",
+		"git-history":        "history unavailable",
+		"git-watcher":        "watcher unavailable",
+	}
+	for _, diagnostic := range got {
+		if detail, ok := want[diagnostic.ID]; ok {
+			if diagnostic.Status != "warn" || diagnostic.Detail != detail {
+				t.Errorf("diagnostic %q = %#v", diagnostic.ID, diagnostic)
+			}
+			delete(want, diagnostic.ID)
 		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing diagnostics: %#v", want)
 	}
 }
 

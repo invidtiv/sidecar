@@ -4,8 +4,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+func (p *Plugin) nextPreviewID() uint64 {
+	p.nextPreviewRequestID++
+	return p.nextPreviewRequestID
+}
+
 // loadDiff loads the diff for a file.
 func (p *Plugin) loadDiff(path string, staged bool, status FileStatus) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
@@ -19,15 +26,17 @@ func (p *Plugin) loadDiff(path string, staged bool, status FileStatus) tea.Cmd {
 			rawDiff, err = GetDiff(workDir, path, staged)
 		}
 		if err != nil {
-			return ErrorMsg{Err: err}
+			return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 
-		return DiffLoadedMsg{Epoch: epoch, Content: rawDiff, Raw: rawDiff}
+		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: rawDiff, Raw: rawDiff}
 	}
 }
 
 // loadInlineDiff loads a diff for inline preview in the three-pane view.
 func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.inlinePreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
@@ -41,23 +50,34 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 			rawDiff, err = GetDiff(workDir, path, staged)
 		}
 		if err != nil {
-			return InlineDiffLoadedMsg{Epoch: epoch, File: path, Raw: "", Parsed: nil}
+			return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Raw: "", Parsed: nil}
 		}
 		parsed, _ := ParseUnifiedDiff(rawDiff)
-		return InlineDiffLoadedMsg{Epoch: epoch, File: path, Raw: rawDiff, Parsed: parsed}
+		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Raw: rawDiff, Parsed: parsed}
 	}
 }
 
 // loadRecentCommits loads recent commits for the sidebar with push status.
 func (p *Plugin) loadRecentCommits() tea.Cmd {
+	if p.activeHistoryRequestID != 0 {
+		p.historyRefreshDirty = true
+		return nil
+	}
+	p.nextHistoryRequestID++
+	requestID := p.nextHistoryRequestID
+	p.activeHistoryRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
+	loader := p.historyLoader
+	if loader == nil {
+		loader = GetCommitHistoryWithPushStatus
+	}
 	return func() tea.Msg {
-		commits, pushStatus, err := GetCommitHistoryWithPushStatus(workDir, commitHistoryPageSize)
+		commits, pushStatus, err := loader(workDir, commitHistoryPageSize)
 		if err != nil {
-			return RecentCommitsLoadedMsg{Epoch: epoch, Commits: nil, PushStatus: nil}
+			return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
-		return RecentCommitsLoadedMsg{Epoch: epoch, Commits: commits, PushStatus: pushStatus}
+		return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Commits: commits, PushStatus: pushStatus}
 	}
 }
 
@@ -100,6 +120,8 @@ func (p *Plugin) loadFilteredCommits() tea.Cmd {
 
 // loadFolderDiff loads a concatenated diff for all files in a folder.
 func (p *Plugin) loadFolderDiff(entry *FileEntry) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.inlinePreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	folderPath := entry.Path
@@ -107,46 +129,56 @@ func (p *Plugin) loadFolderDiff(entry *FileEntry) tea.Cmd {
 	return func() tea.Msg {
 		rawDiff, err := GetFolderDiff(workDir, children)
 		if err != nil {
-			return InlineDiffLoadedMsg{Epoch: epoch, File: folderPath, Raw: "", Parsed: nil}
+			return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: folderPath, Raw: "", Parsed: nil}
 		}
 		parsed, _ := ParseUnifiedDiff(rawDiff)
-		return InlineDiffLoadedMsg{Epoch: epoch, File: folderPath, Raw: rawDiff, Parsed: parsed}
+		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: folderPath, Raw: rawDiff, Parsed: parsed}
 	}
 }
 
 // loadFullFolderDiff loads a concatenated diff for full-screen view.
 func (p *Plugin) loadFullFolderDiff(entry *FileEntry) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	children := entry.Children
 	return func() tea.Msg {
 		rawDiff, err := GetFolderDiff(workDir, children)
 		if err != nil {
-			return ErrorMsg{Err: err}
+			return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 
-		return DiffLoadedMsg{Epoch: epoch, Content: rawDiff, Raw: rawDiff}
+		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: rawDiff, Raw: rawDiff}
 	}
 }
 
 // loadCommitFileDiff loads diff for a file in a commit.
 // parentHash should be the first parent hash for merge commits, or "" for regular commits.
 func (p *Plugin) loadCommitFileDiff(hash, path, parentHash string) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		rawDiff, err := GetCommitDiff(workDir, hash, path, parentHash)
 		if err != nil {
-			return ErrorMsg{Err: err}
+			return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 
-		return DiffLoadedMsg{Epoch: epoch, Content: rawDiff, Raw: rawDiff}
+		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: rawDiff, Raw: rawDiff}
 	}
 }
 
 // loadFullFileDiff loads the full file content (old + new) for full-file diff view.
 // forInline indicates whether this is for the inline diff pane or the full-screen diff view.
 func (p *Plugin) loadFullFileDiff(path string, staged bool, status FileStatus, commitHash string, forInline bool) tea.Cmd {
+	requestID := p.nextPreviewID()
+	if forInline {
+		p.inlineFullFileRequestID = requestID
+	} else {
+		p.fullScreenFileRequestID = requestID
+	}
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
@@ -181,6 +213,7 @@ func (p *Plugin) loadFullFileDiff(path string, staged bool, status FileStatus, c
 
 		return FullFileDiffLoadedMsg{
 			Epoch:      epoch,
+			RequestID:  requestID,
 			File:       path,
 			OldContent: oldContent,
 			NewContent: newContent,
@@ -192,13 +225,15 @@ func (p *Plugin) loadFullFileDiff(path string, staged bool, status FileStatus, c
 
 // loadCommitDetailForPreview loads commit detail for inline preview.
 func (p *Plugin) loadCommitDetailForPreview(hash string) tea.Cmd {
+	requestID := p.nextPreviewID()
+	p.commitPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		commit, err := GetCommitDetail(workDir, hash)
 		if err != nil {
-			return ErrorMsg{Err: err}
+			return CommitPreviewLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
-		return CommitPreviewLoadedMsg{Epoch: epoch, Commit: commit}
+		return CommitPreviewLoadedMsg{Epoch: epoch, RequestID: requestID, Commit: commit}
 	}
 }

@@ -1,7 +1,9 @@
 package gitstatus
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,124 +12,194 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// Watcher monitors the .git directory for changes.
+// Watcher monitors Git's administrative files. These are not necessarily below
+// <worktree>/.git: linked worktrees keep HEAD and index in a per-worktree admin
+// directory while refs live in the common repository directory.
 type Watcher struct {
-	fsWatcher *fsnotify.Watcher
-	events    chan struct{}
-	stop      chan struct{}
-	mu        sync.Mutex
-	stopped   bool
+	fsWatcher    *fsnotify.Watcher
+	events       chan WatchEvent
+	stop         chan struct{}
+	mu           sync.Mutex
+	stopped      bool
+	indexPath    string
+	historyPaths map[string]struct{}
+	refsDirs     []string
 }
 
-// NewWatcher creates a new git directory watcher.
+type WatchEvent struct{ History bool }
+
+func resolveGitPath(workDir, name string) (string, error) {
+	cmd := gitReadOnly("rev-parse", "--path-format=absolute", "--git-path", name)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve git path %s: %w", name, err)
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("resolve git path %s: empty result", name)
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	return filepath.Clean(path), nil
+}
+
+func addWatchDir(fsWatcher *fsnotify.Watcher, seen map[string]struct{}, dir string) error {
+	dir = filepath.Clean(dir)
+	if _, ok := seen[dir]; ok {
+		return nil
+	}
+	if err := fsWatcher.Add(dir); err != nil {
+		return err
+	}
+	seen[dir] = struct{}{}
+	return nil
+}
+
 func NewWatcher(workDir string) (*Watcher, error) {
+	paths := make(map[string]string)
+	for _, name := range []string{"index", "HEAD", "COMMIT_EDITMSG", "FETCH_HEAD", "packed-refs", "refs"} {
+		path, err := resolveGitPath(workDir, name)
+		if err != nil {
+			return nil, err
+		}
+		paths[name] = path
+	}
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
-
-	w := &Watcher{
-		fsWatcher: fsWatcher,
-		events:    make(chan struct{}, 1),
-		stop:      make(chan struct{}),
+	w := &Watcher{fsWatcher: fsWatcher, events: make(chan WatchEvent, 1), stop: make(chan struct{}), indexPath: paths["index"], historyPaths: make(map[string]struct{})}
+	for _, name := range []string{"HEAD", "COMMIT_EDITMSG", "FETCH_HEAD", "packed-refs"} {
+		w.historyPaths[paths[name]] = struct{}{}
 	}
 
-	// Watch .git/index for staging changes
-	gitDir := filepath.Join(workDir, ".git")
-	indexPath := filepath.Join(gitDir, "index")
-	headPath := filepath.Join(gitDir, "HEAD")
-	refsDir := filepath.Join(gitDir, "refs")
-
-	// Add watches
-	if err := fsWatcher.Add(gitDir); err != nil {
+	seen := make(map[string]struct{})
+	for _, name := range []string{"index", "HEAD", "COMMIT_EDITMSG", "FETCH_HEAD", "packed-refs"} {
+		if err := addWatchDir(fsWatcher, seen, filepath.Dir(paths[name])); err != nil {
+			_ = fsWatcher.Close()
+			return nil, fmt.Errorf("watch git path %s: %w", paths[name], err)
+		}
+	}
+	refsRoot := paths["refs"]
+	err = filepath.WalkDir(refsRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if err := addWatchDir(fsWatcher, seen, path); err != nil {
+			return err
+		}
+		w.refsDirs = append(w.refsDirs, filepath.Clean(path))
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
 		_ = fsWatcher.Close()
-		return nil, err
+		return nil, fmt.Errorf("watch git refs %s: %w", refsRoot, err)
 	}
-	// Try to watch index directly (may not exist yet)
-	if err := fsWatcher.Add(indexPath); err != nil {
-		slog.Debug("watcher: add index", "err", err)
-	}
-	if err := fsWatcher.Add(headPath); err != nil {
-		slog.Debug("watcher: add HEAD", "err", err)
-	}
-	if err := fsWatcher.Add(refsDir); err != nil {
-		slog.Debug("watcher: add refs", "err", err)
-	}
-
 	go w.run()
-
 	return w, nil
 }
 
-// Events returns the channel that receives change notifications.
-func (w *Watcher) Events() <-chan struct{} {
-	return w.events
+func (w *Watcher) Events() <-chan WatchEvent { return w.events }
+
+func (w *Watcher) deliver(event WatchEvent) {
+	select {
+	case w.events <- event:
+		return
+	default:
+	}
+	select {
+	case pending := <-w.events:
+		event.History = event.History || pending.History
+	default:
+	}
+	select {
+	case w.events <- event:
+	default:
+	}
 }
 
-// Stop stops the watcher. The events channel is closed when run() exits.
 func (w *Watcher) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	if w.stopped {
 		return
 	}
 	w.stopped = true
-
 	close(w.stop)
 	_ = w.fsWatcher.Close()
-	// Note: w.events is closed by run() goroutine on exit, not here
-	// Closing here would race with run()'s debounce timer sending to the channel
 }
 
-// run processes file system events.
+func (w *Watcher) classify(path string) (WatchEvent, bool) {
+	path = filepath.Clean(path)
+	if path == w.indexPath {
+		return WatchEvent{}, true
+	}
+	if _, ok := w.historyPaths[path]; ok {
+		return WatchEvent{History: true}, true
+	}
+	for _, dir := range w.refsDirs {
+		if path != dir && strings.HasPrefix(path, dir+string(filepath.Separator)) {
+			return WatchEvent{History: true}, true
+		}
+	}
+	return WatchEvent{}, false
+}
+
 func (w *Watcher) run() {
-	defer close(w.events) // Close channel when goroutine exits
-
-	// Debounce timer
-	var debounceTimer *time.Timer
-	debounceDelay := 100 * time.Millisecond
-
+	defer close(w.events)
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	pendingHistory := false
 	for {
 		select {
 		case <-w.stop:
-			if debounceTimer != nil {
-				debounceTimer.Stop()
+			if timer != nil {
+				timer.Stop()
 			}
 			return
-
 		case event, ok := <-w.fsWatcher.Events:
 			if !ok {
 				return
 			}
-
-			// Only care about relevant files
-			name := filepath.Base(event.Name)
-			dir := filepath.Dir(event.Name)
-			if name != "index" && name != "HEAD" && name != "COMMIT_EDITMSG" && name != "FETCH_HEAD" {
-				// Check if it's a refs change
-				if !strings.Contains(dir, "refs") {
-					continue
+			classified, relevant := w.classify(event.Name)
+			if !relevant {
+				continue
+			}
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if err := w.fsWatcher.Add(event.Name); err != nil {
+						slog.Warn("git watcher could not add new refs directory", "path", event.Name, "err", err)
+					} else {
+						w.refsDirs = append(w.refsDirs, filepath.Clean(event.Name))
+					}
 				}
 			}
-
-			// Debounce rapid events
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceTimer = time.AfterFunc(debounceDelay, func() {
-				select {
-				case w.events <- struct{}{}:
-				default:
-					// Channel full, skip
+			pendingHistory = pendingHistory || classified.History
+			if timer == nil {
+				timer = time.NewTimer(100 * time.Millisecond)
+				timerC = timer.C
+			} else {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
 				}
-			})
-
-		case _, ok := <-w.fsWatcher.Errors:
+				timer.Reset(100 * time.Millisecond)
+			}
+		case <-timerC:
+			w.deliver(WatchEvent{History: pendingHistory})
+			pendingHistory = false
+		case err, ok := <-w.fsWatcher.Errors:
 			if !ok {
 				return
 			}
-			// Log error but continue
+			slog.Warn("git watcher error", "err", err)
 		}
 	}
 }

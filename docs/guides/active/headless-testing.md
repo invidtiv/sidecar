@@ -76,6 +76,16 @@ Check it before you trust it, and confirm nothing resolves under
 ./scripts/tmux-drive.sh paths
 ```
 
+The launch repository defaults to the Sidecar checkout. To prove behavior in a
+fixture, set `SIDECAR_DRIVE_REPO` to an absolute existing directory. `paths`
+prints the resolved launch repository, and `start` uses it as both the tmux
+working directory and Sidecar project root. This does not change any isolation
+path:
+
+```bash
+SIDECAR_DRIVE_REPO=/tmp/my-fixture ./scripts/tmux-drive.sh paths
+```
+
 **One run root per driver.** Two agents driving proofs at the same time would
 share that tmux server *and* that state tree, which is the cross-instance
 contention this guide exists to avoid, merely relocated off the real tree.

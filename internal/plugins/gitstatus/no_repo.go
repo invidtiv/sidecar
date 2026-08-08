@@ -13,9 +13,9 @@ import (
 )
 
 // sidecarGitignoreEntries lists all sidecar state paths that should be ignored
-// by git. These are added both when initializing a new repository and when
-// sidecar first opens an existing repository, ensuring worktree operations
-// never produce unexpected git noise.
+// by git. They are added only when the user explicitly initializes a new
+// repository from Sidecar; merely opening an existing repository never mutates
+// its .gitignore.
 var sidecarGitignoreEntries = []string{
 	".todos/",
 	".sidecar/",

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -39,6 +38,9 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	entries := p.tree.AllEntries()
 	totalItems := p.totalSelectableItems()
+	if p.writeInProgress() && isStatusMutationKey(msg.String()) {
+		return p, p.writeBusyToast()
+	}
 
 	switch msg.String() {
 	case "j", "down":
@@ -159,37 +161,14 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if len(entries) > 0 && p.cursor < len(entries) {
 			entry := entries[p.cursor]
 			if !entry.Staged {
-				stagedCount := len(p.tree.Staged)
-				totalEntries := len(entries)
-
-				// Handle folder entries - stage all children
-				if entry.IsFolder {
-					var firstErr error
-					for _, child := range entry.Children {
-						if err := p.tree.StageFile(child.Path); err != nil && firstErr == nil {
-							firstErr = err
-						}
-					}
-					if firstErr != nil {
-						return p, func() tea.Msg {
-							return app.ToastMsg{Message: "Stage failed: " + firstErr.Error(), Duration: 3 * time.Second, IsError: true}
-						}
-					}
-				} else {
-					if err := p.tree.StageFile(entry.Path); err != nil {
-						return p, func() tea.Msg {
-							return app.ToastMsg{Message: "Stage failed: " + err.Error(), Duration: 3 * time.Second, IsError: true}
-						}
-					}
+				if p.activeOperation != nil {
+					return p, p.writeBusyToast()
 				}
-				// After staging, move cursor to first unstaged file position
-				newFirstUnstaged := stagedCount + 1
-				if newFirstUnstaged < totalEntries {
-					p.cursor = newFirstUnstaged
-				} else {
-					p.cursor = totalEntries - 1
+				selectionPath := entry.Path
+				if entry.IsFolder && len(entry.Children) > 0 {
+					selectionPath = entry.Children[0].Path
 				}
-				return p, tea.Batch(p.refresh(), p.loadRecentCommits())
+				return p, p.beginWrite(operationStage, []string{"add", "--", entry.Path}, selectionIdentity{path: selectionPath, wantStaged: true})
 			}
 		}
 
@@ -197,12 +176,10 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if len(entries) > 0 && p.cursor < len(entries) {
 			entry := entries[p.cursor]
 			if entry.Staged {
-				if err := p.tree.UnstageFile(entry.Path); err != nil {
-					return p, func() tea.Msg {
-						return app.ToastMsg{Message: "Unstage failed: " + err.Error(), Duration: 3 * time.Second, IsError: true}
-					}
+				if p.activeOperation != nil {
+					return p, p.writeBusyToast()
 				}
-				return p, tea.Batch(p.refresh(), p.loadRecentCommits())
+				return p, p.beginWrite(operationUnstage, []string{"restore", "--staged", "--", entry.Path}, selectionIdentity{path: entry.Path})
 			}
 		}
 
@@ -253,21 +230,25 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	case "S":
 		// Stage all files
-		if err := p.tree.StageAll(); err != nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Stage all failed: " + err.Error(), Duration: 3 * time.Second, IsError: true}
-			}
+		if p.activeOperation != nil {
+			return p, p.writeBusyToast()
 		}
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
+		selection := selectionIdentity{}
+		if p.cursor < len(entries) {
+			selection = selectionIdentity{path: entries[p.cursor].Path, wantStaged: true}
+		}
+		return p, p.beginWrite(operationStageAll, []string{"add", "-A"}, selection)
 
 	case "U":
 		// Unstage all files
-		if err := p.tree.UnstageAll(); err != nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Unstage all failed: " + err.Error(), Duration: 3 * time.Second, IsError: true}
-			}
+		if p.activeOperation != nil {
+			return p, p.writeBusyToast()
 		}
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
+		selection := selectionIdentity{}
+		if p.cursor < len(entries) {
+			selection = selectionIdentity{path: entries[p.cursor].Path}
+		}
+		return p, p.beginWrite(operationUnstageAll, []string{"reset", "HEAD"}, selection)
 
 	case "h":
 		// Jump cursor to commits section (show history)
@@ -300,9 +281,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.commitAmend = true
 			p.viewMode = ViewModeCommit
 			p.initCommitTextarea()
-			msg := getLastCommitMessage(p.repoRoot)
-			p.commitMessage.SetValue(msg)
-			return p, nil
+			return p, p.loadAmendMessage()
 		}
 
 	case "P":
@@ -984,8 +963,7 @@ func (p *Plugin) updateCommit(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.commitModalWidthCache = 0
 			// If enabling amend and message is empty, prefill with last commit message
 			if p.commitAmend && strings.TrimSpace(p.commitMessage.Value()) == "" {
-				msg := getLastCommitMessage(p.repoRoot)
-				p.commitMessage.SetValue(msg)
+				return p, p.loadAmendMessage()
 			}
 		}
 		return p, nil
@@ -1021,6 +999,9 @@ func (p *Plugin) updateCommit(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 // tryCommit attempts to execute the commit (or amend) if message is valid.
 func (p *Plugin) tryCommit() tea.Cmd {
+	if p.writeInProgress() {
+		return p.writeBusyToast()
+	}
 	message := strings.TrimSpace(p.commitMessage.Value())
 	if message == "" {
 		p.commitError = "Commit message cannot be empty"
@@ -1117,6 +1098,12 @@ func (p *Plugin) updatePullMenu(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 // executePullMenuAction executes the pull menu action by ID.
 func (p *Plugin) executePullMenuAction(actionID string) (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	if actionID != pullMenuOptionMerge && actionID != pullMenuOptionRebase && actionID != pullMenuOptionFFOnly && actionID != pullMenuOptionAutostash {
+		return p, nil
+	}
 	p.viewMode = p.pullMenuReturnMode
 	p.pullInProgress = true
 	p.pullError = ""
@@ -1179,6 +1166,10 @@ func (p *Plugin) updatePullConflict(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd
 }
 
 func (p *Plugin) abortPullConflict() (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	p.pullInProgress = true
 	p.viewMode = ViewModeStatus
 	p.clearPullConflictModal()
 	return p, p.doAbortPull()
@@ -1193,6 +1184,12 @@ func (p *Plugin) dismissPullConflict() (plugin.Plugin, tea.Cmd) {
 
 // executePushMenuAction executes the push menu action at the given index.
 func (p *Plugin) executePushMenuAction(idx int) (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
+	if idx < 0 || idx > 2 {
+		return p, nil
+	}
 	p.viewMode = p.pushMenuReturnMode
 	p.pushInProgress = true
 	p.pushError = ""
@@ -1248,6 +1245,9 @@ func (p *Plugin) updateConfirmDiscard(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 
 // confirmDiscard executes the discard and closes the modal.
 func (p *Plugin) confirmDiscard() (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
 	var cmd tea.Cmd
 	if p.discardFile != nil {
 		cmd = p.doDiscard(p.discardFile)

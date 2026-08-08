@@ -96,6 +96,9 @@ func (p *Plugin) handleStashPopMouse(msg tea.MouseMsg) (plugin.Plugin, tea.Cmd) 
 
 // executeStashPop performs the stash pop and closes the modal.
 func (p *Plugin) executeStashPop() (plugin.Plugin, tea.Cmd) {
+	if p.writeInProgress() {
+		return p, p.writeBusyToast()
+	}
 	var cmd tea.Cmd
 	if p.stashPopItem != nil {
 		cmd = p.doStashPop()

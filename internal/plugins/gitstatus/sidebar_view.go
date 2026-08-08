@@ -206,8 +206,21 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 	sb.WriteString("\n")
 	currentY++
 
-	// Remote operation status (push/fetch/pull)
-	if p.pushInProgress {
+	// Git operation status
+	if p.activeOperation != nil {
+		sb.WriteString(styles.StatusInProgress.Render(operationProgressLabel(p.activeOperation.Kind)))
+		sb.WriteString("\n")
+		currentY++
+	} else if p.operationError != "" {
+		errMsg := p.operationError
+		maxLen := p.sidebarWidth - 8
+		if len(errMsg) > maxLen && maxLen > 3 {
+			errMsg = errMsg[:maxLen-3] + "..."
+		}
+		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
+		sb.WriteString("\n")
+		currentY++
+	} else if p.pushInProgress {
 		sb.WriteString(styles.StatusInProgress.Render("Pushing..."))
 		sb.WriteString("\n")
 		currentY++
@@ -631,7 +644,7 @@ func (p *Plugin) renderGraphLinePlain(gl GraphLine, width int) string {
 // renderDiffPane renders the right diff pane.
 func (p *Plugin) renderDiffPane(visibleHeight int) string {
 	// If previewing a commit, render commit preview instead of diff
-	if p.previewCommit != nil && p.cursorOnCommit() {
+	if p.hasSelectedCommit() {
 		return p.renderCommitPreview(visibleHeight)
 	}
 
@@ -763,6 +776,12 @@ func (p *Plugin) renderCommitPreview(visibleHeight int) string {
 
 	c := p.previewCommit
 	if c == nil {
+		if p.previewCommitError != "" {
+			sb.WriteString(styles.Title.Render("Unable to load commit"))
+			sb.WriteString("\n\n")
+			sb.WriteString(styles.Muted.Render(p.previewCommitError))
+			return sb.String()
+		}
 		sb.WriteString(styles.Muted.Render("Loading commit..."))
 		return sb.String()
 	}
