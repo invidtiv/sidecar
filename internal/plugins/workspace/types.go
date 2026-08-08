@@ -303,8 +303,7 @@ type Agent struct {
 	StartedAt          time.Time
 	LastOutput         time.Time         // Last time output was detected
 	OutputBuf          *tty.OutputBuffer // Last N lines of output
-	Status             AgentStatus
-	WaitingFor         string // Prompt text if waiting
+	WaitingFor         string            // Prompt text if waiting
 	Activity           agentactivity.Tracker
 	ActivityCapturedAt time.Time
 
@@ -410,17 +409,6 @@ type InteractiveState struct {
 	// LastResizeAt tracks the last time we attempted to resize the tmux pane.
 	LastResizeAt time.Time
 }
-
-// AgentStatus represents the current status of an agent.
-type AgentStatus int
-
-const (
-	AgentStatusIdle AgentStatus = iota
-	AgentStatusRunning
-	AgentStatusWaiting
-	AgentStatusDone
-	AgentStatusError
-)
 
 // GitStats holds file change statistics.
 type GitStats struct {

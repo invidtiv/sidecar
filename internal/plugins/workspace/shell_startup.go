@@ -358,7 +358,6 @@ func attachAgentToShell(shell *ShellSession, definition ShellDefinition, paneID 
 		TmuxPane:    paneID(definition.TmuxName),
 		OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 		StartedAt:   startedAt,
-		Status:      AgentStatusRunning,
 	}
 }
 

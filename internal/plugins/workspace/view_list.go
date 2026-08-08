@@ -690,33 +690,10 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	} else if hasActivity {
 		statusIcon = activityIcon
 		statusStyle = activityStyle
-	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-		// td-a29b76: Show agent-specific status when an AI agent is running
-		// Shell has an AI agent - show agent status
-		if shell.Agent != nil {
-			switch shell.Agent.Status {
-			case AgentStatusRunning:
-				statusIcon = "●"
-				statusStyle = styles.StatusCompleted // Green - active
-			case AgentStatusWaiting:
-				statusIcon = "○"
-				statusStyle = styles.StatusModified // Yellow - waiting for input
-			case AgentStatusDone:
-				statusIcon = "✓"
-				statusStyle = styles.StatusCompleted // Green/blue - done
-			case AgentStatusError:
-				statusIcon = "✗"
-				statusStyle = styles.StatusDeleted // Red - error
-			default:
-				statusIcon = "○"
-				statusStyle = styles.Muted // Gray - idle/paused
-			}
-		} else {
-			statusIcon = "○"
-			statusStyle = styles.Muted
-		}
 	} else if shell.Agent != nil {
-		// Plain shell (no AI agent)
+		// A live session with no semantic activity signal: agent-backed shells
+		// whose provider has no activity detector (aider and friends) and plain
+		// shells both render simply as running.
 		statusIcon = "●"
 		statusStyle = styles.StatusCompleted // Green
 	} else {

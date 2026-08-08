@@ -766,7 +766,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				TmuxPane:    msg.PaneID,
 				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 				StartedAt:   time.Now(),
-				Status:      AgentStatusRunning,
 			}
 			p.managedSessions[msg.SessionName] = true
 
@@ -791,7 +790,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
 					OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 					StartedAt:   time.Now(),
-					Status:      AgentStatusRunning,
 				},
 				CreatedAt:   time.Now(),
 				ChosenAgent: msg.AgentType, // td-317b64: Track chosen agent
@@ -862,7 +860,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.shells[i].SkipPerms = msg.SkipPerms
 				if p.shells[i].Agent != nil {
 					p.shells[i].Agent.Type = msg.AgentType
-					p.shells[i].Agent.Status = AgentStatusRunning
 				}
 				break
 			}
