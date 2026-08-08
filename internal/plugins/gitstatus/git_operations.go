@@ -76,6 +76,9 @@ func (p *Plugin) canPush() bool {
 
 // doStashPush stashes all current changes.
 func (p *Plugin) doStashPush() tea.Cmd {
+	if p.writeInProgress() {
+		return p.writeBusyToast()
+	}
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		err := StashPush(workDir)
@@ -85,6 +88,9 @@ func (p *Plugin) doStashPush() tea.Cmd {
 
 // doStashPop pops the latest stash.
 func (p *Plugin) doStashPop() tea.Cmd {
+	if p.writeInProgress() {
+		return p.writeBusyToast()
+	}
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		err := StashPop(workDir)
@@ -94,6 +100,9 @@ func (p *Plugin) doStashPop() tea.Cmd {
 
 // doStashApply applies the latest stash without removing it.
 func (p *Plugin) doStashApply() tea.Cmd {
+	if p.writeInProgress() {
+		return p.writeBusyToast()
+	}
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		err := StashApply(workDir, "stash@{0}")

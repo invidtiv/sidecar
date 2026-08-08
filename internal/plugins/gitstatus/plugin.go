@@ -142,6 +142,14 @@ type Plugin struct {
 	watcher     *Watcher
 	lastRefresh time.Time // Debounce rapid refreshes
 
+	// Index write state. Only one write may run at a time; navigation and
+	// rendering remain available while its tea.Cmd executes.
+	writeExecutor      gitWriteExecutor
+	nextOperationID    uint64
+	activeOperation    *operationRequest
+	operationError     string
+	operationSelection selectionIdentity
+
 	// Commit state
 	commitMessage         textarea.Model
 	commitError           string
@@ -437,6 +445,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.lastRefresh = time.Now()
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.listenForWatchEvents())
 
+	case operationResultMsg:
+		if plugin.IsStale(p.ctx, msg) || p.activeOperation == nil || p.activeOperation.ID != msg.ID {
+			return p, nil
+		}
+		p.activeOperation = nil
+		if msg.Err != nil {
+			p.operationSelection = selectionIdentity{}
+			p.operationError = msg.Err.Error()
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: strings.Title(string(msg.Kind)) + " failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			}
+		}
+		p.operationError = ""
+		return p, p.refresh()
+
 	case RefreshDoneMsg:
 		if p.inNoRepoMode() {
 			return p, nil
@@ -449,6 +472,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.cursor > maxCursor {
 			p.cursor = maxCursor
 		}
+		p.restoreOperationSelection()
 		// Auto-load preview for current cursor position after refresh
 		if p.viewMode == ViewModeStatus {
 			return p, p.autoLoadPreview(true)
@@ -975,7 +999,7 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
-	return []plugin.Command{
+	commands := []plugin.Command{
 		// git-no-repo context
 		{ID: "init-repo", Name: "Init", Description: "Initialize a git repository", Category: plugin.CategoryGit, Context: "git-no-repo", Priority: 1},
 		{ID: "refresh", Name: "Retry", Description: "Re-check for a git repository", Category: plugin.CategoryActions, Context: "git-no-repo", Priority: 2},
@@ -1069,6 +1093,16 @@ func (p *Plugin) Commands() []plugin.Command {
 		{ID: "confirm-pop", Name: "Pop", Description: "Confirm stash pop", Category: plugin.CategoryGit, Context: "git-stash-pop", Priority: 1},
 		{ID: "dismiss", Name: "Cancel", Description: "Cancel stash pop", Category: plugin.CategoryNavigation, Context: "git-stash-pop", Priority: 2},
 	}
+	if !p.writeInProgress() {
+		return commands
+	}
+	available := commands[:0]
+	for _, command := range commands {
+		if !writeBlockedCommand(command.ID) {
+			available = append(available, command)
+		}
+	}
+	return available
 }
 
 // FocusContext returns the current focus context.

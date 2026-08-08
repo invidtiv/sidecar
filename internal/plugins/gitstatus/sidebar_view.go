@@ -206,8 +206,21 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 	sb.WriteString("\n")
 	currentY++
 
-	// Remote operation status (push/fetch/pull)
-	if p.pushInProgress {
+	// Git operation status
+	if p.activeOperation != nil {
+		sb.WriteString(styles.StatusInProgress.Render(operationProgressLabel(p.activeOperation.Kind)))
+		sb.WriteString("\n")
+		currentY++
+	} else if p.operationError != "" {
+		errMsg := p.operationError
+		maxLen := p.sidebarWidth - 8
+		if len(errMsg) > maxLen && maxLen > 3 {
+			errMsg = errMsg[:maxLen-3] + "..."
+		}
+		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
+		sb.WriteString("\n")
+		currentY++
+	} else if p.pushInProgress {
 		sb.WriteString(styles.StatusInProgress.Render("Pushing..."))
 		sb.WriteString("\n")
 		currentY++

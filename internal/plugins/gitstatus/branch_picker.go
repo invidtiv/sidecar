@@ -82,6 +82,9 @@ func (p *Plugin) updateBranchPicker(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd
 
 // doSwitchBranch switches to a different branch.
 func (p *Plugin) doSwitchBranch(branchName string) tea.Cmd {
+	if p.writeInProgress() {
+		return p.writeBusyToast()
+	}
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		err := CheckoutBranch(workDir, branchName)
