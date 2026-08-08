@@ -1117,15 +1117,10 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	}
 }
 
-// capturePane captures the last N lines of a tmux pane.
+// capturePaneWithMetadata captures the last N lines of a tmux pane.
 // Uses caching to avoid redundant subprocess calls when multiple worktrees poll simultaneously.
 // On cache miss, captures active sessions at once to populate cache for concurrent polls.
 // Only captures sessions that have been recently polled (td-018f25).
-func capturePane(sessionName string) (string, error) {
-	output, _, err := capturePaneWithMetadata(sessionName)
-	return output, err
-}
-
 func capturePaneWithMetadata(sessionName string) (string, capturedPaneMetadata, error) {
 	// Mark this session as active (td-018f25)
 	globalActiveRegistry.markActive(sessionName)
@@ -1162,34 +1157,6 @@ func capturePaneWithMetadata(sessionName string) (string, capturedPaneMetadata, 
 
 	// Session not in batch results - try direct capture
 	return capturePaneDirectWithJoinMetadata(sessionName, !features.IsEnabled(features.TmuxInteractiveInput.Name))
-}
-
-// capturePaneDirect captures a single pane without caching.
-// When tmux_interactive_input is enabled, panes are resized to match preview width,
-// so we skip -J to preserve tmux's native wrapping (matches interactive mode rendering).
-func capturePaneDirect(sessionName string) (string, error) {
-	joinWrapped := !features.IsEnabled(features.TmuxInteractiveInput.Name)
-	return capturePaneDirectWithJoin(sessionName, joinWrapped)
-}
-
-// capturePaneDirectWithJoin captures a single pane without caching.
-// When joinWrapped is false, tmux preserves wrapped lines for correct cursor alignment.
-func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, error) {
-	args := capturePaneArgs(sessionName, joinWrapped)
-	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	output, err := cmd.Output()
-	if ctx.Err() == context.DeadlineExceeded {
-		return "", fmt.Errorf("capture-pane: timeout after %s", tmuxCaptureTimeout)
-	}
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-			return "", fmt.Errorf("capture-pane: %s", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return "", fmt.Errorf("capture-pane: %w", err)
-	}
-	return string(output), nil
 }
 
 // capturePaneDirectWithJoinMetadata captures the live tail and the tmux

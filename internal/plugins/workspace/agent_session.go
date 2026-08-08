@@ -682,39 +682,6 @@ func findRecentJSONLFiles(dir string, excludePrefix string) ([]string, error) {
 	return result, nil
 }
 
-// findMostRecentJSON finds most recent .json file with given prefix.
-func findMostRecentJSON(dir string, prefix string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
-	}
-
-	var mostRecent string
-	var mostRecentTime int64
-
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		if prefix != "" && !strings.HasPrefix(e.Name(), prefix) {
-			continue
-		}
-
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-
-		modTime := info.ModTime().UnixNano()
-		if modTime > mostRecentTime {
-			mostRecentTime = modTime
-			mostRecent = filepath.Join(dir, e.Name())
-		}
-	}
-
-	return mostRecent, nil
-}
-
 // readTailLines reads up to maxBytes from the end of a file and returns lines.
 // If the read starts mid-line, the first partial line is dropped.
 func readTailLines(path string, maxBytes int) ([]string, error) {
@@ -919,7 +886,7 @@ func getAntigravityLastMessageStatus(path string) (WorktreeStatus, bool) {
 	if err != nil {
 		return 0, false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var lastType string
 	scanner := bufio.NewScanner(file)

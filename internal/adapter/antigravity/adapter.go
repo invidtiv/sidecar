@@ -221,7 +221,7 @@ func (a *Adapter) Messages(sessionID string) ([]adapter.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open transcript: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var messages []adapter.Message
 	scanner := bufio.NewScanner(file)
@@ -325,7 +325,7 @@ func (a *Adapter) sessionMetadata(sessionID, path string, info os.FileInfo) (*Se
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	meta := &SessionMetadata{
 		SessionID: sessionID,
@@ -361,12 +361,13 @@ func (a *Adapter) sessionMetadata(sessionID, path string, info os.FileInfo) (*Se
 
 		meta.TotalTokens += len(entry.Content) / 4
 
-		if entry.Type == "USER_INPUT" {
+		switch entry.Type {
+		case "USER_INPUT":
 			meta.MessageCount++
 			if meta.FirstUserMessage == "" {
 				meta.FirstUserMessage = entry.Content
 			}
-		} else if entry.Type == "PLANNER_RESPONSE" {
+		case "PLANNER_RESPONSE":
 			meta.MessageCount++
 		}
 	}

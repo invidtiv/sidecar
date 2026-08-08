@@ -19,6 +19,20 @@ const (
 	operationUnstageAll operationKind = "unstage all"
 )
 
+// titleCase capitalizes the first letter of each space-separated word in an
+// operationKind (e.g. "stage all" -> "Stage All"). All values are ASCII, so
+// this avoids pulling in golang.org/x/text/cases for ordinary word casing.
+func titleCase(s string) string {
+	words := strings.Split(s, " ")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
+}
+
 type gitWriteExecutor func(workDir string, args []string) error
 
 type operationRequest struct {

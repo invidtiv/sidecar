@@ -189,9 +189,10 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 	t.State = result.State
 	t.Evidence = result.Evidence
 	t.ChangedAt = now
-	if result.State == StateWorking || result.State == StateBlocked {
+	switch result.State {
+	case StateWorking, StateBlocked:
 		t.Seen = false
-	} else if result.State == StateIdle {
+	case StateIdle:
 		// Initial/restart idle is quiet; only a transition from live work creates done.
 		t.Seen = result.FallbackIdle || previous == StateUnknown || previous == ""
 	}

@@ -44,7 +44,9 @@ func TestStatusRefreshSingleFlightCoalescesOneFollowUp(t *testing.T) {
 	}
 
 	first := p.refresh()
-	if p.refresh() != nil || p.refresh() != nil {
+	second := p.refresh()
+	third := p.refresh()
+	if second != nil || third != nil {
 		t.Fatal("invalidation started a second concurrent load")
 	}
 	firstMsg := first().(StatusSnapshotLoadedMsg)

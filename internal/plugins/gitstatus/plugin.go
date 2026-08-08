@@ -480,7 +480,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.operationSelection = selectionIdentity{}
 			p.operationError = msg.Err.Error()
 			return p, func() tea.Msg {
-				return app.ToastMsg{Message: strings.Title(string(msg.Kind)) + " failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+				return app.ToastMsg{Message: titleCase(string(msg.Kind)) + " failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
 			}
 		}
 		p.operationError = ""
