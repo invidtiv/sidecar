@@ -1,6 +1,8 @@
 # Replacing Sidecar's tmux integration with Herdr
 
-Status: research proposal, 2026-08-08  
+Status: **on hold**, 2026-08-08 — see
+[What Sidecar can learn from Herdr without replacing tmux](./lessons-from-herdr.md)
+for the value being harvested instead.  
 Herdr source inspected: [`herdrdev/herdr`](https://github.com/herdrdev/herdr) at `10974c822d607f03e20e9741ec027910f0c1f93a`  
 Herdr binary exercised: `herdr 0.8.0` (installed), API protocol `19`  
 Related research: [Herdr session persistence](./herdr-session-persistence.md)
