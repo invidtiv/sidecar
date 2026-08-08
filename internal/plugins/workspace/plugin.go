@@ -1076,6 +1076,15 @@ func (p *Plugin) moveCursor(delta int) {
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
 		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
 	if selectionChanged {
+		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
+			if agent := p.shells[p.selectedShellIdx].Agent; agent != nil {
+				agent.Activity.Acknowledge()
+			}
+		} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
+			if agent := p.worktrees[p.selectedIdx].Agent; agent != nil {
+				agent.Activity.Acknowledge()
+			}
+		}
 		p.previewOffset = 0
 		p.autoScrollOutput = true
 		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)

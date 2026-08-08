@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -294,6 +295,7 @@ type Agent struct {
 	OutputBuf   *tty.OutputBuffer // Last N lines of output
 	Status      AgentStatus
 	WaitingFor  string // Prompt text if waiting
+	Activity    agentactivity.Tracker
 
 	// Runaway detection fields (td-018f25)
 	// Track recent poll times to detect continuous output that would cause CPU spikes.

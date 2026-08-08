@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -421,7 +422,13 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	// Status indicator - use special icon for main worktree
 	var statusIcon string
-	if wt.IsMain {
+	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(wt.Agent)
+	if wt.IsOrphaned || wt.IsMissing {
+		hasActivity = false
+	}
+	if hasActivity {
+		statusIcon = activityIcon
+	} else if wt.IsMain {
 		statusIcon = "◉" // Bullseye icon for main/primary worktree
 	} else {
 		statusIcon = wt.Status.Icon()
@@ -516,6 +523,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 			parts = append(parts, "—")
 		}
 	}
+	if hasActivity {
+		parts = append(parts, activityText)
+	}
 	if !sdCfg.HideTask && wt.TaskID != "" {
 		parts = append(parts, wt.TaskID)
 	}
@@ -573,7 +583,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	// Not selected - use colored styles for visual interest
 	var statusStyle lipgloss.Style
-	if wt.IsMain {
+	if hasActivity {
+		statusStyle = activityStyle
+	} else if wt.IsMain {
 		// Primary/cyan color for main worktree to stand out
 		statusStyle = lipgloss.NewStyle().Foreground(styles.Primary)
 	} else {
@@ -624,6 +636,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 			styledParts = append(styledParts, "—")
 		}
 	}
+	if hasActivity {
+		styledParts = append(styledParts, dimText(activityText))
+	}
 	if !sdCfg.HideTask && wt.TaskID != "" {
 		styledParts = append(styledParts, wt.TaskID)
 	}
@@ -668,9 +683,13 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	var statusStyle lipgloss.Style
 
 	// td-f88fdd: Handle orphaned shells (manifest entry exists but tmux session is gone)
+	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(shell.Agent)
 	if shell.IsOrphaned {
 		statusIcon = "◌" // Empty circle for orphaned
 		statusStyle = styles.Muted
+	} else if hasActivity {
+		statusIcon = activityIcon
+		statusStyle = activityStyle
 	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
 		// td-a29b76: Show agent-specific status when an AI agent is running
 		// Shell has an AI agent - show agent status
@@ -728,7 +747,11 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 			agentAbbrev = string(shell.ChosenAgent)
 		}
 		if shell.Agent != nil {
-			statusText = fmt.Sprintf("%s · running", agentAbbrev)
+			if hasActivity {
+				statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
+			} else {
+				statusText = fmt.Sprintf("%s · running", agentAbbrev)
+			}
 		} else {
 			statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
 		}
@@ -788,4 +811,22 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	}
 	content := line1 + "\n" + line2
 	return styles.ListItemNormal.Width(width).Render(content)
+}
+
+func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {
+	if agent == nil || agent.Type != AgentCodex {
+		return "", "", lipgloss.Style{}, false
+	}
+	switch agent.Activity.DisplayState() {
+	case string(agentactivity.StateWorking):
+		return "●", "working", styles.StatusCompleted, true
+	case string(agentactivity.StateBlocked):
+		return "◆", "blocked", styles.StatusModified, true
+	case "done":
+		return "✓", "done", styles.StatusCompleted, true
+	case string(agentactivity.StateIdle):
+		return "○", "idle", styles.Muted, true
+	default:
+		return "?", "unknown", styles.Muted, true
+	}
 }

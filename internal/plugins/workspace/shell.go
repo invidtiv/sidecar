@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -169,10 +170,13 @@ type (
 
 	// ShellOutputMsg signals shell output was captured (for polling)
 	ShellOutputMsg struct {
-		TmuxName   string // Session name (stable identifier)
-		Generation int
-		Output     string
-		Err        error
+		TmuxName       string // Session name (stable identifier)
+		Generation     int
+		Output         string
+		Err            error
+		Activity       agentactivity.Result
+		PaneTitle      string
+		CurrentCommand string
 		// Cursor position captured atomically with output (only set in interactive mode)
 		CursorRow     int
 		CursorCol     int
@@ -730,6 +734,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 
 	// Capture references before spawning closure to avoid data races
 	maxBytes := p.tmuxCaptureMaxBytes
+	agentType := shell.ChosenAgent
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
@@ -815,6 +820,13 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		if capture.Valid {
 			capture.CaptureBase += removedRows
 		}
+		activity := agentactivity.Result{}
+		if agentType == AgentCodex {
+			activity = agentactivity.DetectCodex(agentactivity.Observation{
+				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
+				CurrentCommand: capture.CurrentCommand, CapturedAt: time.Now(),
+			})
+		}
 
 		return ShellOutputMsg{
 			TmuxName:       tmuxName,
@@ -830,6 +842,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			MouseReporting: cursor.MouseReporting,
+			Activity:       activity,
+			PaneTitle:      capture.PaneTitle,
+			CurrentCommand: capture.CurrentCommand,
 		}
 	}
 }

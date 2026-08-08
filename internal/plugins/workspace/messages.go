@@ -1,5 +1,7 @@
 package workspace
 
+import "github.com/marcus/sidecar/internal/agentactivity"
+
 // RefreshMsg triggers a worktree list refresh.
 type RefreshMsg struct{}
 
@@ -46,6 +48,9 @@ type AgentOutputMsg struct {
 	// MouseReporting is tmux's #{mouse_any_flag} for the pane, captured with the
 	// cursor metadata. Only meaningful when HasCursor is set.
 	MouseReporting bool
+	Activity       agentactivity.Result
+	PaneTitle      string
+	CurrentCommand string
 }
 
 // AgentStoppedMsg signals an agent has stopped.

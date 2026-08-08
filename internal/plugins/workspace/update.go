@@ -529,6 +529,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.Type == AgentCodex {
+				wt.Agent.Activity.Apply(msg.Activity, time.Now())
+				if selected := p.selectedWorktree(); selected != nil && selected.Name == wt.Name && p.previewTab == PreviewTabOutput {
+					wt.Agent.Activity.Acknowledge()
+				}
+			}
 			if wt.Agent.OutputBuf != nil {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
@@ -589,6 +595,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Check for runaway session and throttle if needed (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.Type == AgentCodex {
+				wt.Agent.Activity.Apply(msg.Activity, time.Now())
+				if selected := p.selectedWorktree(); selected != nil && selected.Name == wt.Name && p.previewTab == PreviewTabOutput {
+					wt.Agent.Activity.Acknowledge()
+				}
+			}
 			if wt.Agent.CheckRunaway() {
 				interval = pollIntervalThrottled
 			}
@@ -1051,6 +1063,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
 		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
+			if shell.ChosenAgent == AgentCodex {
+				shell.Agent.Activity.Apply(msg.Activity, time.Now())
+				if selected := p.getSelectedShell(); selected != nil && selected.TmuxName == shell.TmuxName && p.previewTab == PreviewTabOutput {
+					shell.Agent.Activity.Acknowledge()
+				}
+			}
 			if msg.HasHistory {
 				changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 				p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
