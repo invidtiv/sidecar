@@ -1,0 +1,9 @@
+source: real Claude Code 2.1.220, isolated tmux socket
+pane_title: ✳ Count from one to twenty
+pane_current_command: 2.1.220
+screen:
+✻ Churned for 2s
+────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

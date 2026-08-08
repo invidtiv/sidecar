@@ -1,0 +1,6 @@
+kind: herdr-compatibility
+manifest: opencode 2026.06.10.1
+pane_current_command: opencode
+pane_title: unavailable
+screen:
+△ Permission required

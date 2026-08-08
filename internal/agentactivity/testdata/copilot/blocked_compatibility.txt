@@ -1,0 +1,7 @@
+kind: herdr-compatibility
+manifest: copilot 2026.07.07.1
+pane_current_command: copilot
+pane_title: unavailable
+screen:
+esc to cancel
+enter to confirm

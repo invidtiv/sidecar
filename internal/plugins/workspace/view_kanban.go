@@ -50,19 +50,19 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 	shellCount := len(p.shells)
 
 	// Column headers and colors
-	columnTitles := map[WorktreeStatus]string{
-		StatusActive:   "● Active",
-		StatusThinking: "◐ Thinking",
-		StatusWaiting:  "⧗ Waiting",
-		StatusDone:     "✓ Ready",
-		StatusPaused:   "⏸ Paused",
+	columnTitles := map[kanbanLane]string{
+		kanbanLaneWorking: "● Working",
+		kanbanLaneBlocked: "◆ Blocked",
+		kanbanLaneDone:    "✓ Done",
+		kanbanLaneIdle:    "○ Idle",
+		kanbanLanePaused:  "⏸ Paused",
 	}
-	columnColors := map[WorktreeStatus]color.Color{
-		StatusActive:   styles.StatusCompleted.GetForeground(), // Green
-		StatusThinking: styles.Primary,                         // Purple
-		StatusWaiting:  styles.StatusModified.GetForeground(),  // Yellow
-		StatusDone:     styles.Secondary,                       // Cyan/Blue
-		StatusPaused:   styles.TextMuted,                       // Gray
+	columnColors := map[kanbanLane]color.Color{
+		kanbanLaneWorking: styles.StatusCompleted.GetForeground(),
+		kanbanLaneBlocked: styles.StatusModified.GetForeground(),
+		kanbanLaneDone:    styles.Secondary,
+		kanbanLaneIdle:    styles.TextMuted,
+		kanbanLanePaused:  styles.TextMuted,
 	}
 
 	// Calculate column widths (account for panel borders)
@@ -81,10 +81,10 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 			title = fmt.Sprintf("Shells (%d)", shellCount)
 			headerStyle = lipgloss.NewStyle().Bold(true).Foreground(styles.Muted.GetForeground()).Width(colWidth)
 		} else {
-			status := kanbanColumnOrder[colIdx-1]
-			items := columns[status]
-			title = fmt.Sprintf("%s (%d)", columnTitles[status], len(items))
-			headerStyle = lipgloss.NewStyle().Bold(true).Foreground(columnColors[status]).Width(colWidth)
+			lane := kanbanLaneOrder[colIdx-1]
+			items := columns[lane]
+			title = fmt.Sprintf("%s (%d)", columnTitles[lane], len(items))
+			headerStyle = lipgloss.NewStyle().Bold(true).Foreground(columnColors[lane]).Width(colWidth)
 		}
 		// Highlight selected column header
 		if colIdx == p.kanbanCol {
@@ -113,9 +113,9 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 	if shellCount > maxInColumn {
 		maxInColumn = shellCount
 	}
-	for _, status := range kanbanColumnOrder {
-		if len(columns[status]) > maxInColumn {
-			maxInColumn = len(columns[status])
+	for _, lane := range kanbanLaneOrder {
+		if len(columns[lane]) > maxInColumn {
+			maxInColumn = len(columns[lane])
 		}
 	}
 	if maxInColumn > maxCards {
@@ -135,8 +135,8 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 					p.mouseHandler.HitMap.AddRect(regionKanbanCard, cardColX, cardY, colWidth-1, cardHeight, kanbanCardData{col: colIdx, row: cardIdx})
 				}
 			} else {
-				status := kanbanColumnOrder[colIdx-1]
-				items := columns[status]
+				lane := kanbanLaneOrder[colIdx-1]
+				items := columns[lane]
 				if cardIdx < len(items) {
 					p.mouseHandler.HitMap.AddRect(regionKanbanCard, cardColX, cardY, colWidth-1, cardHeight, kanbanCardData{col: colIdx, row: cardIdx})
 				}
@@ -158,8 +158,8 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 						cellContent = strings.Repeat(" ", colWidth-1)
 					}
 				} else {
-					status := kanbanColumnOrder[colIdx-1]
-					items := columns[status]
+					lane := kanbanLaneOrder[colIdx-1]
+					items := columns[lane]
 					if cardIdx < len(items) {
 						wt := items[cardIdx]
 						cellContent = p.renderKanbanCardLine(wt, lineIdx, colWidth-1, isSelected)
@@ -198,7 +198,11 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 	switch lineIdx {
 	case 0:
 		statusIcon := "○"
-		if shell.Agent != nil {
+		if shell.IsOrphaned {
+			statusIcon = "◌"
+		} else if icon, _, _, ok := activityPresentation(shell.Agent); ok {
+			statusIcon = icon
+		} else if shell.Agent != nil {
 			statusIcon = "●"
 		}
 		name := shell.Name
@@ -209,7 +213,15 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 		content = fmt.Sprintf(" %s %s", statusIcon, name)
 	case 1:
 		statusText := "  shell · no session"
-		if shell.Agent != nil {
+		if shell.IsOrphaned {
+			statusText = "  shell · offline"
+		} else if _, text, _, ok := activityPresentation(shell.Agent); ok {
+			agentName := shellAgentAbbreviations[shell.ChosenAgent]
+			if agentName == "" && shell.Agent != nil {
+				agentName = string(shell.Agent.Type)
+			}
+			statusText = fmt.Sprintf("  %s · %s", agentName, text)
+		} else if shell.Agent != nil {
 			statusText = "  shell · running"
 		}
 		content = statusText
@@ -239,6 +251,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 // lineIdx: 0=name, 1=agent, 2=task, 3=stats
 func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelected bool) string {
 	var content string
+	presentation := kanbanPresentationForWorktree(wt)
 
 	switch lineIdx {
 	case 0:
@@ -248,14 +261,19 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 		if runes := []rune(name); len(runes) > maxNameLen {
 			name = string(runes[:maxNameLen-3]) + "..."
 		}
-		content = fmt.Sprintf(" %s %s", wt.Status.Icon(), name)
+		content = fmt.Sprintf(" %s %s", presentation.icon, name)
 	case 1:
-		// Line 1: Agent type
+		// Line 1: Agent type and semantic activity, with health priority.
 		agentStr := ""
 		if wt.Agent != nil {
 			agentStr = "  " + string(wt.Agent.Type)
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
 			agentStr = "  " + string(wt.ChosenAgentType)
+		}
+		if presentation.health {
+			agentStr = "  " + presentation.statusText
+		} else if presentation.statusText != "" {
+			agentStr += " · " + presentation.statusText
 		}
 		content = agentStr
 	case 2:

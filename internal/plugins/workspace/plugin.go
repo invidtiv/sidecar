@@ -711,6 +711,16 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 	return true
 }
 
+// shellOutputVisibleFor reports whether a shell's live output is actually being
+// viewed. Selection alone is insufficient while another plugin is focused.
+func (p *Plugin) shellOutputVisibleFor(tmuxName string) bool {
+	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) || p.previewTab != PreviewTabOutput {
+		return false
+	}
+	shell := p.getSelectedShell()
+	return shell != nil && shell.TmuxName == tmuxName
+}
+
 // backgroundPollInterval returns the poll delay when output isn't visible.
 func (p *Plugin) backgroundPollInterval() time.Duration {
 	if p.focused {
@@ -1076,6 +1086,15 @@ func (p *Plugin) moveCursor(delta int) {
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
 		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
 	if selectionChanged {
+		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
+			if agent := p.shells[p.selectedShellIdx].Agent; agent != nil {
+				agent.Activity.Acknowledge()
+			}
+		} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
+			if agent := p.worktrees[p.selectedIdx].Agent; agent != nil {
+				agent.Activity.Acknowledge()
+			}
+		}
 		p.previewOffset = 0
 		p.autoScrollOutput = true
 		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)

@@ -1,0 +1,8 @@
+kind: isolated-compatibility-proof
+date: 2026-08-08
+provider: opencode
+real_cli: unavailable; plugin dependencies are not CLI proof; no text or PNG capture claimed
+journey: sourced fixture -> DetectOpenCode -> fallback-safe Tracker -> worktree/shell semantic projection -> List/Kanban
+inspectable_artifacts: ../proof/isolated-paths.txt; ../proof/before-after-invariants.txt; ../../../plugins/workspace/testdata/expanded-provider-surfaces.txt
+tests: TestExpandedPerProviderFixtures; TestKnownLiveFallbackIdleNeverCreatesUnseenDone; TestExpandedProviderListKanbanGolden
+unavailable: real viewer, interruption, completion, lifecycle, text, title, and PNG proof

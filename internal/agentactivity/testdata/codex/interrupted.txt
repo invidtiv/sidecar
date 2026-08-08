@@ -1,0 +1,6 @@
+pane_title: sidecar-agent-status
+pane_current_command: node
+state: idle
+screen:
+■ Conversation interrupted - tell the model what to do differently.
+› Write tests for @filename

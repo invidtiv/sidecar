@@ -1,0 +1,6 @@
+kind: compatibility-false-positive
+pane_current_command: zsh
+pane_title: unavailable
+screen:
+esc to cancel
+enter to confirm

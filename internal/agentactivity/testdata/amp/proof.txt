@@ -1,0 +1,8 @@
+kind: isolated-compatibility-proof
+date: 2026-08-08
+provider: amp
+real_cli: unavailable; no text, OSC-title, or PNG capture claimed
+journey: sourced fixture -> DetectAmp -> fallback-safe Tracker -> worktree/shell semantic projection -> List/Kanban
+inspectable_artifacts: ../proof/isolated-paths.txt; ../proof/before-after-invariants.txt; ../../../plugins/workspace/testdata/expanded-provider-surfaces.txt
+tests: TestExpandedPerProviderFixtures; TestKnownLiveFallbackIdleNeverCreatesUnseenDone; TestExpandedProviderListKanbanGolden
+unavailable: real viewer, interruption, completion, text, OSC-title, and PNG proof

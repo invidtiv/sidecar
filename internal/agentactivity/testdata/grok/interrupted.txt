@@ -1,0 +1,8 @@
+source: real Grok 1.0.0, isolated tmux socket
+pane_title: Count from 1 to 20 Slowly - grok
+pane_current_command: grok-1.0.0-maco
+screen:
+❯ Write a very long detailed essay about terminal multiplexers.
+Turn cancelled by user in 1.0s.
+│ ❯ │
+Shift+Tab:mode  │  Ctrl+x:shortcuts

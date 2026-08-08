@@ -1,0 +1,9 @@
+source: real Claude Code 2.1.220 completed prompt after interruption
+pane_title: ✳ Count from one to twenty
+pane_current_command: 2.1.220
+screen:
+  ⎿ Interrupted · What should Claude do instead?
+────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

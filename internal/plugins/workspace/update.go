@@ -544,6 +544,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if supportsAgentActivity(wt.Agent.Type) {
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
+				if p.outputVisibleFor(wt.Name) {
+					wt.Agent.Activity.Acknowledge()
+				}
+			}
 			if wt.Agent.OutputBuf != nil {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
@@ -555,7 +561,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
-			wt.Status = msg.Status
+			wt.Status = worktreeStatusForActivity(wt.Agent, msg.Status)
 			// Track poll time for runaway detection (td-018f25)
 			wt.Agent.RecordPollTime()
 		}
@@ -641,6 +647,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if supportsAgentActivity(wt.Agent.Type) {
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
+				if p.outputVisibleFor(wt.Name) {
+					wt.Agent.Activity.Acknowledge()
+				}
+			}
 			if wt.Agent.OutputBuf != nil {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
@@ -654,7 +666,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
 			// (e.g., agent finishes but terminal output stays the same).
-			wt.Status = msg.CurrentStatus
+			wt.Status = worktreeStatusForActivity(wt.Agent, msg.CurrentStatus)
 			wt.Agent.WaitingFor = msg.WaitingFor
 		}
 		// An app can toggle mouse tracking without changing a single rendered
@@ -1072,12 +1084,20 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
-		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
-			if msg.HasHistory {
-				changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
-				p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
-			} else {
-				changed = shell.Agent.OutputBuf.Update(msg.Output)
+		if shell != nil && shell.Agent != nil {
+			if supportsAgentActivity(shell.ChosenAgent) {
+				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, time.Now())
+				if p.shellOutputVisibleFor(shell.TmuxName) {
+					shell.Agent.Activity.Acknowledge()
+				}
+			}
+			if shell.Agent.OutputBuf != nil {
+				if msg.HasHistory {
+					changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
+				} else {
+					changed = shell.Agent.OutputBuf.Update(msg.Output)
+				}
 			}
 			p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
 			if changed {

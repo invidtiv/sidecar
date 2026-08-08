@@ -1,0 +1,6 @@
+source: compatibility fixture from pinned Herdr manifest; real overlay unavailable without disturbing active settings
+pane_title: ✳ Claude Code
+pane_current_command: 2.1.220
+screen:
+Select a model
+Enter to select · Esc to close

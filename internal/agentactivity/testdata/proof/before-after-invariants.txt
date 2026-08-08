@@ -1,0 +1,8 @@
+captured_at: 2026-08-08
+default_tmux_snapshot_command: (tmux list-sessions -F '#{session_id}' || true) | sort | shasum -a 256
+default_tmux_before: 89501093c6bea6f74901fcbc378db58aaa8509c808231ec06a5dbe6b043c1634
+default_tmux_after:  89501093c6bea6f74901fcbc378db58aaa8509c808231ec06a5dbe6b043c1634
+production_snapshot_command: find $HOME/.local/state/sidecar -name shells.json -type f -exec stat -f '%N %z %m' {} + | sort | shasum -a 256
+production_before: 9aab2dd83f616ea779c5bdfdd111505423787305f7bc675a833c937070f1b23e
+production_after:  9aab2dd83f616ea779c5bdfdd111505423787305f7bc675a833c937070f1b23e
+result: read-only snapshots match; no default tmux or production manifest mutation

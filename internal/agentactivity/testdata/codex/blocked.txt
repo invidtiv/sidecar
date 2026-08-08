@@ -1,0 +1,8 @@
+pane_title: [ ! ] Action Required | sidecar-agent-status
+pane_current_command: node
+state: blocked
+screen:
+Would you like to run the following command?
+› 1. Yes, proceed (y)
+  3. No, and tell Codex what to do differently (esc)
+Press enter to confirm or esc to cancel

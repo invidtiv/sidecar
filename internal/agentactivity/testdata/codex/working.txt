@@ -1,0 +1,6 @@
+pane_title: ⠼ sidecar-agent-status
+pane_current_command: node
+state: working
+screen:
+• Working (0s • esc to interrupt)
+› Write tests for @filename

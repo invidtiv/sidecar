@@ -1,0 +1,8 @@
+source: real Antigravity CLI 1.1.11, isolated tmux socket
+pane_title: aerie
+pane_current_command: agy
+screen:
+> Write a very long detailed essay about terminal multiplexers.
+⎿ Interrupted · What should Antigravity CLI do instead?
+>
+? for shortcuts · Gemini 3.6 Flash · high

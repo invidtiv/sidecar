@@ -1,0 +1,8 @@
+kind: herdr-compatibility
+manifest: cursor 2026.08.03.1
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Write to this file?
+Proceed (y)
+reject & propose changes

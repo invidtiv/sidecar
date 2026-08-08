@@ -1,0 +1,6 @@
+pane_title:
+pane_current_command: zsh
+state: exited-outside-detector
+screen:
+To continue this session, run codex resume SESSION_ID
+prompt>

@@ -1,0 +1,7 @@
+kind: compatibility-false-positive
+pane_current_command: zsh
+pane_title: unavailable
+screen:
+Working...
+Settings
+Esc to close

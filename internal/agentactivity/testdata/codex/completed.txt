@@ -1,0 +1,6 @@
+pane_title: sidecar-agent-status
+pane_current_command: node
+state: idle
+screen:
+• EVIDENCE_OK
+› Write tests for @filename

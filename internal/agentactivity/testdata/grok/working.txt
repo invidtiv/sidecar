@@ -1,0 +1,5 @@
+source: compatibility fixture from pinned Herdr manifest; installed turn completed before capture
+pane_title: ⠼ Working - grok
+pane_current_command: grok-1.0.0-maco
+screen:
+Thinking… [stop]

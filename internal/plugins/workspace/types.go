@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -127,6 +128,16 @@ func (s WorktreeStatus) Icon() string {
 
 // AgentType represents the type of AI coding agent.
 type AgentType string
+
+func supportsAgentActivity(agentType AgentType) bool {
+	switch agentType {
+	case AgentCodex, AgentClaude, AgentGrok, AgentAntigravity,
+		AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	AgentNone        AgentType = ""            // No agent (attach only)
@@ -285,15 +296,17 @@ type ShellSession struct {
 
 // Agent represents an AI coding agent process.
 type Agent struct {
-	Type        AgentType // claude, codex, aider, gemini
-	TmuxSession string    // tmux session name
-	TmuxPane    string    // Pane identifier (e.g., "%12" - globally unique)
-	PID         int       // Process ID (if available)
-	StartedAt   time.Time
-	LastOutput  time.Time         // Last time output was detected
-	OutputBuf   *tty.OutputBuffer // Last N lines of output
-	Status      AgentStatus
-	WaitingFor  string // Prompt text if waiting
+	Type               AgentType // claude, codex, aider, gemini
+	TmuxSession        string    // tmux session name
+	TmuxPane           string    // Pane identifier (e.g., "%12" - globally unique)
+	PID                int       // Process ID (if available)
+	StartedAt          time.Time
+	LastOutput         time.Time         // Last time output was detected
+	OutputBuf          *tty.OutputBuffer // Last N lines of output
+	Status             AgentStatus
+	WaitingFor         string // Prompt text if waiting
+	Activity           agentactivity.Tracker
+	ActivityCapturedAt time.Time
 
 	// Runaway detection fields (td-018f25)
 	// Track recent poll times to detect continuous output that would cause CPU spikes.

@@ -1,0 +1,8 @@
+source: real Grok 1.0.0 3cd0d0cbcebe stable, isolated tmux socket
+pane_title: Count from 1 to 20 Slowly - grok
+pane_current_command: grok-1.0.0-maco
+screen:
+  ╭──────────────────────────────────────────────────────╮
+  │ ❯                                                    │
+  ╰──────────────────────────────────── Grok 4.5 (high) ─╯
+  Shift+Tab:mode  │  Ctrl+x:shortcuts

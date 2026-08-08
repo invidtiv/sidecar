@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tty"
@@ -67,11 +68,13 @@ type capturedCursor struct {
 // answered, independently of Valid, which reports only that the history
 // metadata parsed.
 type capturedPaneMetadata struct {
-	HistorySize int
-	CaptureBase int
-	PaneWidth   int
-	PaneHeight  int
-	Valid       bool
+	HistorySize    int
+	CaptureBase    int
+	PaneWidth      int
+	PaneHeight     int
+	PaneTitle      string
+	CurrentCommand string
+	Valid          bool
 }
 
 func newCaptureCoordinator() *captureCoordinator {
@@ -900,6 +903,10 @@ type AgentPollUnchangedMsg struct {
 	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
 	// when HasCursor is set.
 	MouseReporting bool
+	Activity       agentactivity.Result
+	CapturedAt     time.Time
+	PaneTitle      string
+	CurrentCommand string
 }
 
 // handlePollAgent captures output from a tmux session asynchronously.
@@ -992,7 +999,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		} else if interactiveCapture || directCapture {
 			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, joinWrapped)
 		} else {
-			output, err = capturePane(sessionName)
+			output, capture, err = capturePaneWithMetadata(sessionName)
 		}
 		if err != nil {
 			// Session may have been killed
@@ -1016,6 +1023,15 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			outputBuf.WouldChangeSnapshot(output, capture.CaptureBase)) ||
 			(!capture.Valid && outputBuf.WouldChange(output))
 
+		capturedAt := time.Now()
+		activity := agentactivity.Result{}
+		if supportsAgentActivity(agentType) {
+			activity = agentactivity.Detect(agentactivity.Observation{
+				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
+				CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+			})
+		}
+
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):
 		//   - tmux patterns: thinking, done, error (high-signal, session files can't detect these)
 		//   - session files: active vs waiting (reliable, tmux patterns are noisy for this)
@@ -1023,7 +1039,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		// may finish while tmux output stays the same (td-2fca7d v8).
 		status := currentStatus
 		waitingFor := ""
-		if outputChanged {
+		if !supportsAgentActivity(agentType) && outputChanged {
 			// Tmux pattern detection only when output changes (same output = same patterns).
 			status = detectStatus(output)
 			if status == StatusWaiting {
@@ -1032,7 +1048,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		}
 		// Session file check runs every poll — mtime changes independently of tmux output.
 		// Only override active/waiting; preserve tmux-detected thinking/done/error.
-		if status == StatusActive || status == StatusWaiting {
+		if !supportsAgentActivity(agentType) && (status == StatusActive || status == StatusWaiting) {
 			if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
 				prevStatus := status
 				status = sessionStatus
@@ -1067,6 +1083,10 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				CaptureBase:    capture.CaptureBase,
 				HasHistory:     capture.Valid,
 				MouseReporting: cursor.MouseReporting,
+				Activity:       activity,
+				CapturedAt:     capturedAt,
+				PaneTitle:      capture.PaneTitle,
+				CurrentCommand: capture.CurrentCommand,
 			}
 		}
 
@@ -1086,6 +1106,10 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			MouseReporting: cursor.MouseReporting,
+			Activity:       activity,
+			CapturedAt:     capturedAt,
+			PaneTitle:      capture.PaneTitle,
+			CurrentCommand: capture.CurrentCommand,
 		}
 	}
 }
@@ -1095,12 +1119,18 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 // On cache miss, captures active sessions at once to populate cache for concurrent polls.
 // Only captures sessions that have been recently polled (td-018f25).
 func capturePane(sessionName string) (string, error) {
+	output, _, err := capturePaneWithMetadata(sessionName)
+	return output, err
+}
+
+func capturePaneWithMetadata(sessionName string) (string, capturedPaneMetadata, error) {
 	// Mark this session as active (td-018f25)
 	globalActiveRegistry.markActive(sessionName)
 
 	// Check cache first
 	if output, ok := globalPaneCache.get(sessionName); ok {
-		return output, nil
+		paneOutput, metadata := splitCaptureEnvelope(output)
+		return paneOutput, metadata, nil
 	}
 
 	// Cache miss - batch capture active sidecar sessions (singleflight)
@@ -1108,13 +1138,14 @@ func capturePane(sessionName string) (string, error) {
 	if !ran {
 		// Another goroutine captured; re-check cache
 		if output, ok := globalPaneCache.get(sessionName); ok {
-			return output, nil
+			paneOutput, metadata := splitCaptureEnvelope(output)
+			return paneOutput, metadata, nil
 		}
-		return capturePaneDirect(sessionName)
+		return capturePaneDirectWithJoinMetadata(sessionName, !features.IsEnabled(features.TmuxInteractiveInput.Name))
 	}
 	if err != nil {
 		// Fall back to single capture on batch error
-		return capturePaneDirect(sessionName)
+		return capturePaneDirectWithJoinMetadata(sessionName, !features.IsEnabled(features.TmuxInteractiveInput.Name))
 	}
 
 	// Cache all results from batch
@@ -1122,11 +1153,12 @@ func capturePane(sessionName string) (string, error) {
 
 	// Return requested session's output
 	if output, ok := outputs[sessionName]; ok {
-		return output, nil
+		paneOutput, metadata := splitCaptureEnvelope(output)
+		return paneOutput, metadata, nil
 	}
 
 	// Session not in batch results - try direct capture
-	return capturePaneDirect(sessionName)
+	return capturePaneDirectWithJoinMetadata(sessionName, !features.IsEnabled(features.TmuxInteractiveInput.Name))
 }
 
 // capturePaneDirect captures a single pane without caching.
@@ -1160,7 +1192,7 @@ func capturePaneDirectWithJoin(sessionName string, joinWrapped bool) (string, er
 // capturePaneDirectWithJoinMetadata captures the live tail and the tmux
 // history size in one argv-only command chain.
 func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (string, capturedPaneMetadata, error) {
-	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size},#{pane_width},#{pane_height}", ";"}
+	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size},#{pane_width},#{pane_height},#{pane_current_command},#{pane_title}", ";"}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
@@ -1192,6 +1224,10 @@ func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (st
 			metadata.PaneWidth = width
 			metadata.PaneHeight = height
 		}
+	}
+	if len(fields) >= 5 {
+		metadata.CurrentCommand = strings.TrimSpace(fields[3])
+		metadata.PaneTitle = strings.Join(fields[4:], ",")
 	}
 	return paneOutput, metadata, nil
 }
@@ -1233,7 +1269,7 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
 	args := []string{
 		"display-message", "-t", cursorTarget, "-p",
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag}",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}",
 		";",
 	}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
@@ -1269,6 +1305,10 @@ func parseCapturedCursor(header string) capturedCursor {
 	}
 	if len(parts) >= 7 {
 		cursor.MouseReporting = parts[6] != "0" && parts[6] != ""
+	}
+	if len(parts) >= 9 {
+		cursor.CurrentCommand = strings.TrimSpace(parts[7])
+		cursor.PaneTitle = strings.Join(parts[8:], ",")
 	}
 	return cursor
 }
@@ -1322,6 +1362,13 @@ func batchCaptureMarker(nonce string, index int) string {
 	return fmt.Sprintf("===SIDECAR_CAPTURE:%s:%d===", nonce, index)
 }
 
+const captureMetadataSeparator = "\x1f"
+
+func batchCaptureMetadataMarker(nonce string, index int) string {
+	return batchCaptureMarker(nonce, index) + captureMetadataSeparator +
+		"#{pane_current_command}" + captureMetadataSeparator + "#{pane_title}"
+}
+
 func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []string {
 	var args []string
 	for i, session := range sessions {
@@ -1329,7 +1376,7 @@ func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []
 			args = append(args, ";")
 		}
 		args = append(args,
-			"display-message", "-p", "-t", session, batchCaptureMarker(nonce, i),
+			"display-message", "-p", "-t", session, batchCaptureMetadataMarker(nonce, i),
 			";",
 		)
 		args = append(args, capturePaneArgs(session, joinWrapped)...)
@@ -1345,19 +1392,37 @@ func parseBatchCaptureOutput(output string, sessions []string, nonce string) map
 		if start < 0 {
 			continue
 		}
-		start += len(marker)
-		if start < len(output) && output[start] == '\n' {
-			start++
+		lineEnd := strings.IndexByte(output[start:], '\n')
+		if lineEnd < 0 {
+			continue
 		}
+		metadataLine := output[start : start+lineEnd]
+		start += lineEnd + 1
 		end := len(output)
 		if i+1 < len(sessions) {
 			if next := strings.Index(output[start:], batchCaptureMarker(nonce, i+1)); next >= 0 {
 				end = start + next
 			}
 		}
-		results[session] = strings.Clone(output[start:end])
+		if strings.Contains(metadataLine, captureMetadataSeparator) {
+			results[session] = strings.Clone(metadataLine + "\n" + output[start:end])
+		} else {
+			results[session] = strings.Clone(output[start:end])
+		}
 	}
 	return results
+}
+
+func splitCaptureEnvelope(output string) (string, capturedPaneMetadata) {
+	header, paneOutput, found := strings.Cut(output, "\n")
+	if !found {
+		return output, capturedPaneMetadata{}
+	}
+	parts := strings.SplitN(header, captureMetadataSeparator, 3)
+	if len(parts) != 3 {
+		return output, capturedPaneMetadata{}
+	}
+	return paneOutput, capturedPaneMetadata{CurrentCommand: parts[1], PaneTitle: parts[2]}
 }
 
 // trimCapturedOutputRows applies the byte cap only at a complete line

@@ -410,6 +410,17 @@ For each of Codex, Claude, Grok, and Antigravity:
 - Grok OSC progress until tmux exposes it reliably or Sidecar owns a PTY parser
   that captures it before consumption.
 
+## tmux safety for implementation and proof
+
+Never stop, restart, kill, or replace the user's main tmux server while testing
+this work. Sidecar sessions may contain irreplaceable live agent state, and
+restarting the main server destroys those sessions. All automated fixtures,
+proof runs, and cleanup must use an isolated tmux socket/server (including
+`scripts/tmux-drive.sh`'s isolated test server) and may clean up only sessions
+created on that isolated server. Installing or replacing the Sidecar binary
+does not require restarting tmux; exit and relaunch Sidecar normally while the
+existing tmux server remains running.
+
 ## Risks and mitigations
 
 | Risk | Mitigation |
@@ -432,3 +443,73 @@ For each of Codex, Claude, Grok, and Antigravity:
 - [ ] Idle-versus-unseen-done acknowledgement behavior
 - [ ] Focused/full tests, build, performance probe, and tmux-drive visual proof
 - [ ] Independent review completed and findings resolved
+
+## Phase 0/1 implementation evidence (2026-08-08)
+
+Implementation is tracked by epic `td-8625a6` and children `td-31ab2b`,
+`td-495065`, and `td-52abdf`. Phase 2 provider probes remain unimplemented.
+
+- Runtime fixtures and exact installed versions are under
+  `internal/agentactivity/testdata/`. Codex 0.147.0 covers startup/idle,
+  working, tool execution, blocker, interruption, completion, transcript
+  viewer, and exit. Claude, Grok, and Antigravity availability/unavailable
+  Phase 2 states are explicit rather than synthetic.
+- `go test ./internal/agentactivity ./internal/plugins/workspace`,
+  `go test ./...`, and `go build ./...` pass at `4f4b9a4`.
+- The no-extra-process contract is protected by
+  `TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation`: each pane's
+  title/current-command display and screen capture remain one tmux argv chain.
+- A real `v0.1.0-phase1-proof2` binary was driven at 200x50. Text and PNG
+  artifacts are in `/tmp/sidecar-drive-phase1/`: `phase1-working-final`,
+  `phase1-done-final`, `phase1-seen-idle-final`, and
+  `phase1-blocked-final`. They prove worktree working plus agent-backed shell
+  working -> unseen done -> selected idle and an immediate permission blocker.
+  The header/footer remain visible in every inspected PNG.
+- Real proof found and fixed a seen-state bug before handoff: a viewed working
+  state no longer acknowledges a future idle transition. The approval command
+  used for blocker proof was canceled and `/tmp/sidecar-phase1-proof-never-create`
+  was verified absent. Proof-only shells and tmux sessions were removed.
+
+Independent-review follow-up at `651dc26` adds durable process-group evidence
+and closes two integration gaps. `AgentPollUnchangedMsg` now applies semantic
+activity, and acknowledgement requires focused, actually visible Workspaces
+output rather than selection alone. The reviewer overlay reproductions and new
+worktree/shell regressions pass. A real `v0.1.0-phase1-reviewfix` binary was
+driven again at 200x50; `/tmp/sidecar-drive-phase1-reviewfix/` contains
+`title-only-working.{txt,png}` (unchanged screen, spinner title alone publishes
+working), `background-working.{txt,png}`, and
+`background-return-idle.{txt,png}`. The background completion remains unseen
+while Git is focused; returning to its already-selected live output immediately
+acknowledges it to idle, as designed. Proof-only shells/sessions were removed.
+
+## Phase 3 implementation evidence (2026-08-08)
+
+Phase 3 is tracked by epic `td-10b798` and children `td-8ac0a8`,
+`td-e48244`, `td-eef998`, and `td-22b195`.
+
+- Codex, Claude, Grok, and Antigravity now bypass generic scrollback and
+  session-file status inference on normal, unchanged/title-only, and terminal-
+  control paths. Their `WorktreeStatus` remains available to kanban as a
+  projection of semantic activity; unsupported agents retain legacy detection.
+- Terminal-control capture includes fresh `pane_current_command` and
+  `pane_title` in its existing in-band metadata response. It never evaluates a
+  current screen against process/title identity cached before ordinary polling
+  was suspended. Regressions cover stale working and blocked state returning to
+  zsh for all four providers on worktree and shell paths, plus the observed
+  Codex blocked-to-working transition.
+- Worktree and agent-backed shell rows share `activityPresentation`. Missing
+  worktree and orphaned tmux health remain higher-priority and cannot render as
+  semantic completion or blockage.
+- Normal debug logging records only agent type, prior/new semantic state,
+  stable evidence ID, and capture age. Regression coverage verifies terminal
+  screen/title content is absent and unchanged observations emit no transition.
+- Focused and full tests plus `go build ./...` pass. The corrected isolated
+  control proof is under `/tmp/sidecar-phase3-control-proof/`:
+  `codex-idle`, `codex-working-control`, and
+  `codex-exited-to-shell-control` accurately show an agent-backed shell moving
+  from idle to working, then to unknown when fresh control metadata reports
+  `pane_current_command=zsh`. The proof used `scripts/tmux-drive.sh` with
+  private tmux, state, cache, and config roots. Before/after diffs prove the
+  default tmux PID/socket/panes and production Sidecar manifest checksums were
+  byte-identical; only proof-owned isolated sessions were stopped. Earlier
+  artifact names containing `blocked` were inaccurate and are not evidence.

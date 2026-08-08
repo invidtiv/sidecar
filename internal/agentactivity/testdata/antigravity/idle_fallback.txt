@@ -1,0 +1,8 @@
+source: real Antigravity CLI 1.1.11; no stable explicit idle rule, conservative fallback required
+pane_title: aerie
+pane_current_command: agy
+screen:
+> Count from 1 to 20 slowly in your reasoning, then reply only done.
+done
+>
+? for shortcuts · Gemini 3.6 Flash · high

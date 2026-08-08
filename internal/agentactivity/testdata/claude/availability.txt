@@ -1,0 +1,4 @@
+installed_version: 2.1.220
+runtime_states_harvested: none
+unavailable_in_phase_1: startup,idle,working,tool_execution,blocker,interrupted,completed,transcript_viewer,exit
+reason: Provider runtime harvest and probe are explicitly Phase 2.

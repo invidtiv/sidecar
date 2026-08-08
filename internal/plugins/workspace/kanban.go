@@ -1,34 +1,107 @@
 package workspace
 
-// kanbanColumnOrder defines the order of columns in kanban view.
-var kanbanColumnOrder = []WorktreeStatus{StatusActive, StatusThinking, StatusWaiting, StatusDone, StatusPaused}
+// kanbanLane is a presentation grouping, deliberately separate from the
+// legacy WorktreeStatus transport. Supported agents are grouped from the same
+// semantic activity tracker used by List; unsupported agents retain the
+// legacy projection.
+type kanbanLane int
+
+const (
+	kanbanLaneWorking kanbanLane = iota
+	kanbanLaneBlocked
+	kanbanLaneDone
+	kanbanLaneIdle
+	kanbanLanePaused
+)
+
+var kanbanLaneOrder = []kanbanLane{
+	kanbanLaneWorking,
+	kanbanLaneBlocked,
+	kanbanLaneDone,
+	kanbanLaneIdle,
+	kanbanLanePaused,
+}
+
+type kanbanWorktreePresentation struct {
+	lane       kanbanLane
+	icon       string
+	statusText string
+	health     bool
+}
 
 const kanbanShellColumnIndex = 0
 
-func kanbanColumnCount() int {
-	return len(kanbanColumnOrder) + 1 // Shells column + worktree columns
-}
+func kanbanColumnCount() int { return len(kanbanLaneOrder) + 1 }
 
-func kanbanStatusForColumn(col int) (WorktreeStatus, bool) {
+func kanbanLaneForColumn(col int) (kanbanLane, bool) {
 	if col <= kanbanShellColumnIndex {
 		return 0, false
 	}
 	idx := col - 1
-	if idx < 0 || idx >= len(kanbanColumnOrder) {
+	if idx < 0 || idx >= len(kanbanLaneOrder) {
 		return 0, false
 	}
-	return kanbanColumnOrder[idx], true
+	return kanbanLaneOrder[idx], true
 }
 
-func (p *Plugin) kanbanColumnItemCount(col int, columns map[WorktreeStatus][]*Worktree) int {
+func kanbanLaneForWorktree(wt *Worktree) kanbanLane {
+	return kanbanPresentationForWorktree(wt).lane
+}
+
+// kanbanPresentationForWorktree is the single precedence decision for both
+// lane grouping and card rendering. Health/liveness wins over stale activity.
+func kanbanPresentationForWorktree(wt *Worktree) kanbanWorktreePresentation {
+	if wt == nil {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "?", statusText: "unavailable", health: true}
+	}
+	if wt.IsMissing {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "✗", statusText: "folder missing", health: true}
+	}
+	if wt.IsOrphaned {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "⚠", statusText: "session ended", health: true}
+	}
+	if wt.Status == StatusError {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusError.Icon(), statusText: "error", health: true}
+	}
+	if wt.Status == StatusPaused {
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusPaused.Icon(), statusText: "paused", health: true}
+	}
+	if icon, text, _, ok := activityPresentation(wt.Agent); ok {
+		lane := kanbanLanePaused
+		switch text {
+		case "working":
+			lane = kanbanLaneWorking
+		case "blocked":
+			lane = kanbanLaneBlocked
+		case "done":
+			lane = kanbanLaneDone
+		case "idle":
+			lane = kanbanLaneIdle
+		}
+		return kanbanWorktreePresentation{lane: lane, icon: icon, statusText: text}
+	}
+	// Legacy fallback for agents without semantic activity probes.
+	switch wt.Status {
+	case StatusActive, StatusThinking:
+		return kanbanWorktreePresentation{lane: kanbanLaneWorking, icon: wt.Status.Icon()}
+	case StatusWaiting:
+		return kanbanWorktreePresentation{lane: kanbanLaneBlocked, icon: wt.Status.Icon()}
+	case StatusDone:
+		return kanbanWorktreePresentation{lane: kanbanLaneDone, icon: wt.Status.Icon()}
+	default:
+		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: wt.Status.Icon()}
+	}
+}
+
+func (p *Plugin) kanbanColumnItemCount(col int, columns map[kanbanLane][]*Worktree) int {
 	if col == kanbanShellColumnIndex {
 		return len(p.shells)
 	}
-	status, ok := kanbanStatusForColumn(col)
+	lane, ok := kanbanLaneForColumn(col)
 	if !ok {
 		return 0
 	}
-	return len(columns[status])
+	return len(columns[lane])
 }
 
 func (p *Plugin) kanbanShellAt(row int) *ShellSession {
@@ -38,45 +111,34 @@ func (p *Plugin) kanbanShellAt(row int) *ShellSession {
 	return p.shells[row]
 }
 
-// getKanbanColumns returns worktrees grouped by status for kanban view.
-// StatusError worktrees are grouped with StatusPaused since they require user intervention.
-func (p *Plugin) getKanbanColumns() map[WorktreeStatus][]*Worktree {
-	columns := map[WorktreeStatus][]*Worktree{
-		StatusActive:   {},
-		StatusThinking: {},
-		StatusWaiting:  {},
-		StatusDone:     {},
-		StatusPaused:   {},
+func (p *Plugin) getKanbanColumns() map[kanbanLane][]*Worktree {
+	columns := make(map[kanbanLane][]*Worktree, len(kanbanLaneOrder))
+	for _, lane := range kanbanLaneOrder {
+		columns[lane] = []*Worktree{}
 	}
 	for _, wt := range p.worktrees {
-		status := wt.Status
-		// Group error worktrees with paused since they require user intervention
-		if status == StatusError {
-			status = StatusPaused
-		}
-		columns[status] = append(columns[status], wt)
+		lane := kanbanLaneForWorktree(wt)
+		columns[lane] = append(columns[lane], wt)
 	}
 	return columns
 }
 
-// selectedKanbanWorktree returns the worktree at the current kanban position.
 func (p *Plugin) selectedKanbanWorktree() *Worktree {
 	columns := p.getKanbanColumns()
 	if p.kanbanCol == kanbanShellColumnIndex {
 		return nil
 	}
-	status, ok := kanbanStatusForColumn(p.kanbanCol)
+	lane, ok := kanbanLaneForColumn(p.kanbanCol)
 	if !ok {
 		return nil
 	}
-	items := columns[status]
+	items := columns[lane]
 	if p.kanbanRow < 0 || p.kanbanRow >= len(items) {
 		return nil
 	}
 	return items[p.kanbanRow]
 }
 
-// syncKanbanToList syncs the kanban selection to the list selectedIdx.
 func (p *Plugin) syncKanbanToList() {
 	if p.kanbanCol == kanbanShellColumnIndex {
 		shell := p.kanbanShellAt(p.kanbanRow)
@@ -114,22 +176,17 @@ func (p *Plugin) applyKanbanSelectionChange(oldShellSelected bool, oldShellIdx, 
 	return selectionChanged
 }
 
-// moveKanbanColumn moves the kanban cursor to an adjacent column (navigation only, no selection sync).
 func (p *Plugin) moveKanbanColumn(delta int) {
 	columns := p.getKanbanColumns()
 	newCol := p.kanbanCol + delta
-
-	// Wrap around or clamp
 	if newCol < 0 {
 		newCol = 0
 	}
 	if newCol >= kanbanColumnCount() {
 		newCol = kanbanColumnCount() - 1
 	}
-
 	if newCol != p.kanbanCol {
 		p.kanbanCol = newCol
-		// Try to preserve row position, but clamp to new column's item count
 		count := p.kanbanColumnItemCount(p.kanbanCol, columns)
 		if count == 0 {
 			p.kanbanRow = 0
@@ -139,15 +196,12 @@ func (p *Plugin) moveKanbanColumn(delta int) {
 	}
 }
 
-// moveKanbanRow moves the kanban cursor within the current column (navigation only, no selection sync).
 func (p *Plugin) moveKanbanRow(delta int) {
 	columns := p.getKanbanColumns()
 	count := p.kanbanColumnItemCount(p.kanbanCol, columns)
-
 	if count == 0 {
 		return
 	}
-
 	newRow := p.kanbanRow + delta
 	if newRow < 0 {
 		newRow = 0
@@ -155,29 +209,25 @@ func (p *Plugin) moveKanbanRow(delta int) {
 	if newRow >= count {
 		newRow = count - 1
 	}
-
 	p.kanbanRow = newRow
 }
 
-// getKanbanWorktree returns the worktree at the given Kanban coordinates.
 func (p *Plugin) getKanbanWorktree(col, row int) *Worktree {
 	columns := p.getKanbanColumns()
 	if col == kanbanShellColumnIndex {
 		return nil
 	}
-	status, ok := kanbanStatusForColumn(col)
+	lane, ok := kanbanLaneForColumn(col)
 	if !ok {
 		return nil
 	}
-	items := columns[status]
+	items := columns[lane]
 	if row >= 0 && row < len(items) {
 		return items[row]
 	}
 	return nil
 }
 
-// syncListToKanban syncs the list selectedIdx to kanban position.
-// Called when switching from list to kanban view.
 func (p *Plugin) syncListToKanban() {
 	if p.shellSelected {
 		p.kanbanCol = kanbanShellColumnIndex
@@ -190,24 +240,17 @@ func (p *Plugin) syncListToKanban() {
 	}
 	wt := p.selectedWorktree()
 	if wt == nil {
-		p.kanbanCol = 0
-		p.kanbanRow = 0
+		p.kanbanCol, p.kanbanRow = 0, 0
 		return
 	}
-
 	columns := p.getKanbanColumns()
-	for colIdx, status := range kanbanColumnOrder {
-		items := columns[status]
-		for rowIdx, item := range items {
+	for colIdx, lane := range kanbanLaneOrder {
+		for rowIdx, item := range columns[lane] {
 			if item.Name == wt.Name {
-				p.kanbanCol = colIdx + 1
-				p.kanbanRow = rowIdx
+				p.kanbanCol, p.kanbanRow = colIdx+1, rowIdx
 				return
 			}
 		}
 	}
-
-	// Worktree not found in any column, default to first column
-	p.kanbanCol = 0
-	p.kanbanRow = 0
+	p.kanbanCol, p.kanbanRow = 0, 0
 }

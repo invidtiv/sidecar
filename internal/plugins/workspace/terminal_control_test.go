@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -386,5 +387,94 @@ func TestPrimaryControlAgentStatusRefreshPreservesDetectorPrecedence(t *testing.
 		Status: StatusWaiting, Available: true,
 	}); stale != nil || p.worktrees[0].Status != StatusActive {
 		t.Fatalf("stale status message applied: status=%v cmd=%v", p.worktrees[0].Status, stale)
+	}
+}
+
+func TestPrimaryControlSupportedAgentRejectsSessionFileAuthority(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	p.worktrees[0].Agent.Type = AgentCodex
+	p.worktrees[0].Agent.Activity.State = agentactivity.StateWorking
+	p.reconcileTerminalControls()
+	consumer := p.controlConsumers[workspaceControlPrimary]
+	consumer.Using = true
+
+	if cmd := p.scheduleControlAgentStatus(consumer); cmd != nil {
+		t.Fatal("supported provider scheduled legacy session-file authority")
+	}
+	p.applyControlAgentStatus(workspaceControlAgentStatusMsg{
+		Token: consumer.Token, Session: consumer.Session, SourceID: consumer.SourceID,
+		Status: StatusError, Available: true,
+	})
+	if p.worktrees[0].Agent.Activity.State != agentactivity.StateWorking || p.worktrees[0].Status != StatusActive {
+		t.Fatalf("legacy control status changed supported provider: activity=%q status=%v",
+			p.worktrees[0].Agent.Activity.State, p.worktrees[0].Status)
+	}
+}
+
+func TestPrimaryControlSnapshotUsesSemanticAuthority(t *testing.T) {
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	agent := p.worktrees[0].Agent
+	agent.Type = AgentCodex
+	agent.Activity = agentactivity.Tracker{State: agentactivity.StateWorking}
+	consumer := &workspaceControlConsumer{Source: "agent", SourceID: "agent-worktree", Session: "agent-session"}
+	p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{
+		Output: "Action Required\nPress enter to confirm\n", PaneTitle: "Action Required", CurrentCommand: "codex",
+	})
+	if agent.Activity.State != agentactivity.StateBlocked || p.worktrees[0].Status != StatusWaiting {
+		t.Fatalf("control snapshot activity=%q evidence=%q status=%v", agent.Activity.State, agent.Activity.Evidence, p.worktrees[0].Status)
+	}
+	p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{
+		Output: "Working (3s • esc to interrupt)\n", PaneTitle: "⠴ sidecar-agent-status", CurrentCommand: "node",
+	})
+	if agent.Activity.State != agentactivity.StateWorking || p.worktrees[0].Status != StatusActive {
+		t.Fatalf("fresh working snapshot retained stale blocker: activity=%q evidence=%q status=%v",
+			agent.Activity.State, agent.Activity.Evidence, p.worktrees[0].Status)
+	}
+}
+
+func TestPrimaryControlFreshProcessIdentityRejectsStaleSupportedState(t *testing.T) {
+	providers := []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp}
+	priorStates := []agentactivity.State{agentactivity.StateWorking, agentactivity.StateBlocked}
+	for _, provider := range providers {
+		for _, priorState := range priorStates {
+			t.Run(string(provider)+"/"+string(priorState), func(t *testing.T) {
+				p := primaryControlPlugin(&fakeWorkspaceControlManager{})
+				agent := p.worktrees[0].Agent
+				agent.Type = provider
+				agent.Activity = agentactivity.Tracker{State: priorState, Evidence: string(provider) + ".stale", Seen: false}
+				consumer := &workspaceControlConsumer{Source: "agent", SourceID: "agent-worktree", Session: "agent-session"}
+
+				// The visible pane has returned to a shell. Blocker-looking screen/title
+				// from the previous provider must not win over the fresh command.
+				p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{
+					Output:    "Action Required\nPress enter to confirm\n$ ",
+					PaneTitle: "Action Required", CurrentCommand: "zsh",
+				})
+				if agent.Activity.State != agentactivity.StateUnknown {
+					t.Fatalf("stale %s remained %q (evidence %q)", provider, agent.Activity.State, agent.Activity.Evidence)
+				}
+				if agent.Activity.DisplayState() == "done" {
+					t.Fatal("process mismatch manufactured done")
+				}
+
+				shellAgent := &Agent{Type: provider, TmuxSession: "supported-shell", OutputBuf: tty.NewOutputBuffer(outputBufferCap), Activity: agentactivity.Tracker{
+					State: priorState, Evidence: string(provider) + ".stale", Seen: false,
+				}}
+				shellAgent.OutputBuf.Update("old provider screen")
+				shell := &ShellSession{TmuxName: "supported-shell", ChosenAgent: provider, Agent: shellAgent}
+				p = &Plugin{shells: []*ShellSession{shell}, tmuxCaptureMaxBytes: outputBufferCap}
+				p.applyPrimaryControlSnapshot(&workspaceControlConsumer{
+					Source: "shell", SourceID: shell.TmuxName, Session: shell.TmuxName,
+				}, tty.ControlSnapshot{
+					Output:    "Action Required\nPress enter to confirm\n$ ",
+					PaneTitle: "Action Required", CurrentCommand: "zsh",
+				})
+				if shellAgent.Activity.State != agentactivity.StateUnknown || shellAgent.Activity.DisplayState() == "done" {
+					t.Fatalf("shell stale %s became state=%q display=%q", provider, shellAgent.Activity.State, shellAgent.Activity.DisplayState())
+				}
+			})
+		}
 	}
 }
