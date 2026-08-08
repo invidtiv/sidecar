@@ -435,7 +435,7 @@ func TestPrimaryControlSnapshotUsesSemanticAuthority(t *testing.T) {
 }
 
 func TestPrimaryControlFreshProcessIdentityRejectsStaleSupportedState(t *testing.T) {
-	providers := []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity}
+	providers := []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp}
 	priorStates := []agentactivity.State{agentactivity.StateWorking, agentactivity.StateBlocked}
 	for _, provider := range providers {
 		for _, priorState := range priorStates {

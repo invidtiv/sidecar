@@ -67,6 +67,16 @@ func Detect(ob Observation) Result {
 		return DetectGrok(ob)
 	case "antigravity":
 		return DetectAntigravity(ob)
+	case "pi":
+		return DetectPi(ob)
+	case "copilot":
+		return DetectCopilot(ob)
+	case "cursor":
+		return DetectCursor(ob)
+	case "opencode":
+		return DetectOpenCode(ob)
+	case "amp":
+		return DetectAmp(ob)
 	default:
 		return Result{State: StateUnknown, Evidence: "unsupported-agent"}
 	}

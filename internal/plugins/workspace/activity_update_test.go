@@ -30,7 +30,7 @@ func TestActivityTitleOnlyUnchangedPollUpdatesWorktree(t *testing.T) {
 }
 
 func TestSupportedProviderPollStatusIsProjectedOnlyFromSemanticActivity(t *testing.T) {
-	for _, agentType := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity} {
+	for _, agentType := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp} {
 		t.Run(string(agentType), func(t *testing.T) {
 			agent := &Agent{Type: agentType, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 			p := &Plugin{worktrees: []*Worktree{{Name: "w", Status: StatusActive, Agent: agent}}, selectedIdx: -1}

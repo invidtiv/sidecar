@@ -122,6 +122,59 @@ func TestPhase2ProviderProcessGates(t *testing.T) {
 	}
 }
 
+func TestExpandedProviderCompatibilityRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		ob       Observation
+		want     State
+		evidence string
+	}{
+		{"pi working", Observation{Agent: "pi", CurrentCommand: "pi", Screen: "Working..."}, StateWorking, "pi.screen.working"},
+		{"pi idle fallback", Observation{Agent: "pi", CurrentCommand: "pi", Screen: "ready"}, StateIdle, "pi.known-live-fallback"},
+		{"copilot blocked wins", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc to cancel\nenter to confirm"}, StateBlocked, "copilot.screen.blocked"},
+		{"copilot cancel working", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc again to cancel"}, StateWorking, "copilot.screen.working"},
+		{"cursor write blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Write to this file?\nProceed (y)\nreject & propose changes"}, StateBlocked, "cursor.screen.write-blocked"},
+		{"cursor working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "ctrl+c to stop"}, StateWorking, "cursor.screen.stop-working"},
+		{"opencode blocked", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "△ Permission required"}, StateBlocked, "opencode.screen.blocked"},
+		{"opencode working", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "■■⬝⬝"}, StateWorking, "opencode.screen.progress-working"},
+		{"amp title blocked", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "Plugin confirmation needed"}, StateBlocked, "amp.title.plugin-blocked"},
+		{"amp title working", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "⠼ repo - amp - task"}, StateWorking, "amp.title.working"},
+		{"amp title idle", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "repo - amp - task"}, StateIdle, "amp.title.idle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Detect(tt.ob)
+			if got.State != tt.want || got.Evidence != tt.evidence {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestExpandedProvidersRequirePositiveProcessIdentity(t *testing.T) {
+	for _, agent := range []string{"pi", "copilot", "cursor", "opencode", "amp"} {
+		got := Detect(Observation{Agent: agent, CurrentCommand: "zsh", PaneTitle: "Plugin confirmation needed", Screen: "Working...\nesc to cancel\nenter to confirm"})
+		if got.State != StateUnknown || got.Evidence != agent+".process-mismatch" {
+			t.Fatalf("%s mismatch got %+v", agent, got)
+		}
+	}
+}
+
+func TestExpandedProvidersIgnoreHistoricalSignalsOutsideCurrentBottom(t *testing.T) {
+	old := "Working...\nesc to cancel\nenter to confirm\n△ Permission required\n" + strings.Repeat("resolved\n", 30)
+	for _, ob := range []Observation{
+		{Agent: "pi", CurrentCommand: "pi", Screen: old},
+		{Agent: "copilot", CurrentCommand: "copilot", Screen: old},
+		{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: old},
+		{Agent: "opencode", CurrentCommand: "opencode", Screen: old},
+		{Agent: "amp", CurrentCommand: "amp", Screen: old},
+	} {
+		if got := Detect(ob); got.State != StateIdle {
+			t.Fatalf("%s historical signal got %+v", ob.Agent, got)
+		}
+	}
+}
+
 func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
 	got := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "repo - grok"})
 	if got.State != StateIdle || got.Evidence != "grok.title.idle" {

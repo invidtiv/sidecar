@@ -131,7 +131,8 @@ type AgentType string
 
 func supportsAgentActivity(agentType AgentType) bool {
 	switch agentType {
-	case AgentCodex, AgentClaude, AgentGrok, AgentAntigravity:
+	case AgentCodex, AgentClaude, AgentGrok, AgentAntigravity,
+		AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp:
 		return true
 	default:
 		return false

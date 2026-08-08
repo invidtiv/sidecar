@@ -1,0 +1,14 @@
+kind: herdr-compatibility-not-real-terminal-capture
+captured_at: 2026-08-08
+providers:
+  pi: manifest 2026.06.10.1
+  copilot: manifest 2026.07.07.1
+  cursor: manifest 2026.08.03.1
+  opencode: manifest 2026.06.10.1
+  amp: manifest 2026.07.09.1
+constraints:
+  - positive pane_current_command identity is required
+  - screen rules inspect only a bounded current-bottom region
+  - unmatched known-live output falls back to idle through shared debounce
+  - process mismatch is unknown and cannot manufacture done
+  - conversation storage and session identity hooks are not status authorities

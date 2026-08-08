@@ -27,9 +27,9 @@ func TestKanbanSemanticParityMatrix(t *testing.T) {
 		{"orphan health wins", &Worktree{Status: StatusActive, IsOrphaned: true, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
 		{"missing health wins", &Worktree{Status: StatusActive, IsMissing: true, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
 		{"error health wins", &Worktree{Status: StatusError, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
-		{"unsupported active fallback", &Worktree{Status: StatusActive, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneWorking},
-		{"unsupported waiting fallback", &Worktree{Status: StatusWaiting, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneBlocked},
-		{"unsupported done fallback", &Worktree{Status: StatusDone, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneDone},
+		{"unsupported active fallback", &Worktree{Status: StatusActive, Agent: &Agent{Type: AgentCustom}}, kanbanLaneWorking},
+		{"unsupported waiting fallback", &Worktree{Status: StatusWaiting, Agent: &Agent{Type: AgentCustom}}, kanbanLaneBlocked},
+		{"unsupported done fallback", &Worktree{Status: StatusDone, Agent: &Agent{Type: AgentCustom}}, kanbanLaneDone},
 		{"no agent paused fallback", &Worktree{Status: StatusPaused}, kanbanLanePaused},
 	}
 	for _, tt := range tests {
@@ -39,7 +39,7 @@ func TestKanbanSemanticParityMatrix(t *testing.T) {
 			}
 		})
 	}
-	for _, provider := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity} {
+	for _, provider := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp} {
 		t.Run("supported provider "+string(provider), func(t *testing.T) {
 			wt := &Worktree{Status: StatusActive, Agent: &Agent{
 				Type: provider, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked},
