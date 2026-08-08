@@ -45,12 +45,14 @@ func TestWatcherReinitRejectsReversedStartsAndOldEvents(t *testing.T) {
 	if err := p.Init(ctxA); err != nil {
 		t.Fatal(err)
 	}
+	p.activateRepo(repoA)
 	startA := p.startWatcher()
 
 	ctxB := &plugin.Context{Epoch: 2, WorkDir: repoB}
 	if err := p.Init(ctxB); err != nil {
 		t.Fatal(err)
 	}
+	p.activateRepo(repoB)
 	startB := p.startWatcher()
 	msgB := startB().(WatchStartedMsg)
 	_, listenB := p.Update(msgB)
@@ -81,6 +83,7 @@ func TestWatcherStartStopsSupersededWatcher(t *testing.T) {
 	if err := p.Init(&plugin.Context{Epoch: 1, WorkDir: repo}); err != nil {
 		t.Fatal(err)
 	}
+	p.activateRepo(repo)
 	first := p.startWatcher()().(WatchStartedMsg)
 	p.Update(first)
 	second := p.startWatcher()().(WatchStartedMsg)

@@ -196,6 +196,26 @@ func BenchmarkAllEntriesRebuild(b *testing.B) {
 	}
 }
 
+func BenchmarkViewThousandFiles(b *testing.B) {
+	tree := NewFileTree("/benchmark")
+	for i := 0; i < 1000; i++ {
+		tree.Untracked = append(tree.Untracked, &FileEntry{
+			Path:     fmt.Sprintf("fixture/file-%04d.txt", i),
+			Status:   StatusUntracked,
+			Unstaged: true,
+		})
+	}
+	p := New()
+	p.hasRepo = true
+	p.repoRoot = "/benchmark"
+	p.tree = tree
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = p.View(200, 50)
+	}
+}
+
 func BenchmarkLoadFileTree(b *testing.B) {
 	repo := b.TempDir()
 	cmd := exec.Command("git", "init")

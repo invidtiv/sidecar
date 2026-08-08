@@ -75,7 +75,7 @@ func (p *Plugin) loadRecentCommits() tea.Cmd {
 	return func() tea.Msg {
 		commits, pushStatus, err := loader(workDir, commitHistoryPageSize)
 		if err != nil {
-			return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID}
+			return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 		return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Commits: commits, PushStatus: pushStatus}
 	}

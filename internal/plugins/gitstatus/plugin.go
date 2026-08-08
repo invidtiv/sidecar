@@ -141,8 +141,11 @@ type Plugin struct {
 	height int
 
 	// Watcher
-	watcher     *Watcher
-	lastRefresh time.Time // Debounce rapid refreshes
+	watcher      *Watcher
+	lastRefresh  time.Time // Debounce rapid refreshes
+	watcherError string
+	statusError  string
+	historyError string
 
 	statusLoader           func(string) (*FileTree, error)
 	nextStatusRequestID    uint64
@@ -289,6 +292,12 @@ func (p *Plugin) inNoRepoMode() bool {
 	return p.ctx != nil && !p.hasRepo
 }
 
+func (p *Plugin) activateRepo(root string) {
+	p.hasRepo = true
+	p.repoRoot = root
+	p.tree = NewFileTree(root)
+}
+
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
 	if p.watcher != nil {
@@ -330,36 +339,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.showCommitGraph = state.GetGitGraphEnabled()
 	p.diffWrapEnabled = state.GetLineWrapEnabled()
 
-	// Resolve git repo root (works from any subdirectory).
-	// If no repo exists, keep plugin active in a dedicated "no repo" state.
-	root, err := resolveGitRoot(ctx.WorkDir)
-	if err != nil {
-		p.hasRepo = false
-		p.repoRoot = ""
-		return nil
-	}
-
-	p.hasRepo = true
-	p.repoRoot = root
-	p.tree = NewFileTree(root)
-
 	return nil
 }
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
-	if !p.hasRepo {
-		return nil
-	}
-	// Ensure all sidecar state paths are in .gitignore on every startup.
-	// This is intentionally best-effort: failures are non-fatal since the
-	// project already has a repo and the user can still work.
-	_ = ensureGitignoreEntries(p.repoRoot, sidecarGitignoreEntries)
-	return tea.Batch(
-		p.refresh(),
-		p.startWatcher(),
-		p.loadRecentCommits(),
-	)
+	// Repository discovery invokes Git, so it must remain inside the command.
+	// Existing repositories are never mutated merely by opening Sidecar.
+	return p.detectRepo()
 }
 
 // Stop cleans up plugin resources.
@@ -459,6 +446,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.watcher.Stop()
 		}
 		p.watcher = msg.Watcher
+		p.watcherError = ""
 		return p, p.listenForWatchEvents()
 
 	case WatchStartFailedMsg:
@@ -466,6 +454,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		slog.Warn("git watcher unavailable", "repo", p.repoRoot, "err", msg.Err)
+		p.watcherError = msg.Err.Error()
 		return p, func() tea.Msg {
 			return app.ToastMsg{Message: "Git watcher unavailable: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
 		}
@@ -516,6 +505,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.activeStatusRequestID = 0
 		if msg.Err == nil && msg.Tree != nil {
 			p.tree = msg.Tree
+			p.statusError = ""
 		}
 		var followUp tea.Cmd
 		if p.statusRefreshDirty {
@@ -523,6 +513,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			followUp = p.refresh()
 		}
 		if msg.Err != nil {
+			p.statusError = msg.Err.Error()
 			return p, tea.Batch(followUp, func() tea.Msg {
 				return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
 			})
@@ -667,6 +658,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil // Ignore stale message from previous project
 		}
 		p.activeHistoryRequestID = 0
+		if msg.Err != nil {
+			p.historyError = msg.Err.Error()
+		} else {
+			p.historyError = ""
+		}
 		var historyFollowUp tea.Cmd
 		if p.historyRefreshDirty {
 			p.historyRefreshDirty = false
@@ -988,9 +984,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Root == "" {
 			return p, nil
 		}
-		if err := p.Init(p.ctx); err != nil {
-			return p, nil
-		}
+		p.activateRepo(msg.Root)
 		return p, tea.Batch(p.refresh(), p.startWatcher(), p.loadRecentCommits())
 
 	case RepoInitDoneMsg:
@@ -1007,11 +1001,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				return app.ToastMsg{Message: errMsg, Duration: 3 * time.Second, IsError: true}
 			}
 		}
-		if err := p.Init(p.ctx); err != nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Repository initialized but refresh failed", Duration: 3 * time.Second, IsError: true}
-			}
-		}
+		p.activateRepo(msg.Root)
 		if msg.Err != nil {
 			return p, tea.Batch(
 				p.refresh(),
@@ -1312,9 +1302,19 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	if p.tree.TotalCount() == 0 {
 		status = "clean"
 	}
-	return []plugin.Diagnostic{
+	diagnostics := []plugin.Diagnostic{
 		{ID: "git-status", Status: status, Detail: detail},
 	}
+	if p.statusError != "" {
+		diagnostics = append(diagnostics, plugin.Diagnostic{ID: "git-status-refresh", Status: "warn", Detail: p.statusError})
+	}
+	if p.historyError != "" {
+		diagnostics = append(diagnostics, plugin.Diagnostic{ID: "git-history", Status: "warn", Detail: p.historyError})
+	}
+	if p.watcherError != "" {
+		diagnostics = append(diagnostics, plugin.Diagnostic{ID: "git-watcher", Status: "warn", Detail: p.watcherError})
+	}
+	return diagnostics
 }
 
 // refresh reloads the git status.
@@ -1558,6 +1558,7 @@ type RecentCommitsLoadedMsg struct {
 	RequestID  uint64
 	Commits    []*Commit
 	PushStatus *PushStatus
+	Err        error
 }
 
 // GetEpoch implements plugin.EpochMessage.

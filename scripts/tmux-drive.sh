@@ -13,6 +13,8 @@
 # share a tmux server AND a state tree, and the second start would kill the
 # first mid-capture - the very cross-instance contention this isolates against.
 # Set SIDECAR_DRIVE_RUN_DIR per agent when running concurrently.
+# Set SIDECAR_DRIVE_REPO to an absolute existing fixture directory when the
+# proof must launch outside this Sidecar checkout.
 #
 #   ./scripts/tmux-drive.sh start [COLS] [LINES]  - launch sidecar (default 200x50)
 #   ./scripts/tmux-drive.sh keys <args...>        - tmux send-keys passthrough
@@ -28,6 +30,7 @@ set -euo pipefail
 SOCKET="sidecar-drive"
 SESSION="host"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LAUNCH_REPO="${SIDECAR_DRIVE_REPO:-$REPO_DIR}"
 OUT_DIR="${SIDECAR_DRIVE_OUT:-/tmp/sidecar-drive}"
 T=(tmux -L "$SOCKET")
 
@@ -40,6 +43,21 @@ export XDG_CACHE_HOME="$RUN_DIR/cache"
 export SIDECAR_ISOLATED_STATE=1
 CONFIG="$RUN_DIR/config/config.json"
 INNER_SOCKET="$TMUX_TMPDIR/tmux-$(id -u)/default"
+
+validate_launch_repo() {
+    case "$LAUNCH_REPO" in
+        /*) ;;
+        *)
+            echo "refusing launch repo '$LAUNCH_REPO': SIDECAR_DRIVE_REPO must be an absolute path" >&2
+            exit 1
+            ;;
+    esac
+    if [ ! -d "$LAUNCH_REPO" ]; then
+        echo "refusing launch repo '$LAUNCH_REPO': directory does not exist" >&2
+        exit 1
+    fi
+    LAUNCH_REPO="$(cd "$LAUNCH_REPO" && pwd -P)"
+}
 
 start() {
     local cols="${1:-200}" lines="${2:-50}"
@@ -59,10 +77,10 @@ start() {
         "${T[@]}" kill-session -t "$SESSION" 2>/dev/null || true
     fi
     mkdir -p "$OUT_DIR" "$TMUX_TMPDIR" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$(dirname "$CONFIG")"
-    "${T[@]}" new-session -d -s "$SESSION" -x "$cols" -y "$lines" -c "$REPO_DIR" \
+    "${T[@]}" new-session -d -s "$SESSION" -x "$cols" -y "$lines" -c "$LAUNCH_REPO" \
         "TERM=xterm-256color ${SIDECAR_BIN:-sidecar} -config $CONFIG"
     "${T[@]}" set-option -t "$SESSION" status off
-    echo "started ${cols}x${lines} in $REPO_DIR (run dir $RUN_DIR)"
+    echo "started ${cols}x${lines} in $LAUNCH_REPO (run dir $RUN_DIR)"
 }
 
 snap() {
@@ -95,6 +113,7 @@ panes() {
 }
 
 paths() {
+    echo "launch repo:   $LAUNCH_REPO"
     echo "run dir:       $RUN_DIR"
     echo "inner socket:  $INNER_SOCKET"
     echo "state home:    $XDG_STATE_HOME"
@@ -102,6 +121,8 @@ paths() {
     echo "config:        $CONFIG"
     echo "manifest:      $XDG_STATE_HOME/sidecar/projects/<slug>/shells.json"
 }
+
+validate_launch_repo
 
 case "${1:-}" in
     start) shift; start "$@" ;;

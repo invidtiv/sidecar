@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -46,9 +47,10 @@ func GetStashList(workDir string) (*StashList, error) {
 			continue
 		}
 
-		var idx int
-		_, _ = exec.Command("echo").Output() // dummy to avoid import error
-		idx = len(list.Stashes)
+		idx, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
 
 		stash := &Stash{
 			Index: idx,
@@ -78,20 +80,6 @@ func StashPush(workDir string) error {
 	return cmd.Run()
 }
 
-// StashPushWithMessage creates a new stash with a custom message.
-func StashPushWithMessage(workDir, message string) error {
-	cmd := exec.Command("git", "stash", "push", "-m", message)
-	cmd.Dir = workDir
-	return cmd.Run()
-}
-
-// StashPushIncludeUntracked creates a stash including untracked files.
-func StashPushIncludeUntracked(workDir string) error {
-	cmd := exec.Command("git", "stash", "push", "--include-untracked")
-	cmd.Dir = workDir
-	return cmd.Run()
-}
-
 // StashPop pops the most recent stash.
 func StashPop(workDir string) error {
 	cmd := exec.Command("git", "stash", "pop")
@@ -103,31 +91,9 @@ func StashPop(workDir string) error {
 	return nil
 }
 
-// StashPopRef pops a specific stash by reference.
-func StashPopRef(workDir, ref string) error {
-	cmd := exec.Command("git", "stash", "pop", ref)
-	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return &StashError{Output: string(output), Err: err}
-	}
-	return nil
-}
-
 // StashApply applies a stash without removing it.
 func StashApply(workDir, ref string) error {
 	cmd := exec.Command("git", "stash", "apply", ref)
-	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return &StashError{Output: string(output), Err: err}
-	}
-	return nil
-}
-
-// StashDrop removes a stash.
-func StashDrop(workDir, ref string) error {
-	cmd := exec.Command("git", "stash", "drop", ref)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
