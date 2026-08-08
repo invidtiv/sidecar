@@ -1,8 +1,71 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/agentactivity"
 )
+
+func TestKanbanSemanticParityMatrix(t *testing.T) {
+	supported := func(state agentactivity.State, seen bool) *Agent {
+		return &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: state, Seen: seen}}
+	}
+	tests := []struct {
+		name string
+		wt   *Worktree
+		want kanbanLane
+	}{
+		{"supported working", &Worktree{Status: StatusWaiting, Agent: supported(agentactivity.StateWorking, false)}, kanbanLaneWorking},
+		{"supported blocked", &Worktree{Status: StatusActive, Agent: supported(agentactivity.StateBlocked, false)}, kanbanLaneBlocked},
+		{"supported unseen idle is done", &Worktree{Status: StatusWaiting, Agent: supported(agentactivity.StateIdle, false)}, kanbanLaneDone},
+		{"supported seen idle", &Worktree{Status: StatusWaiting, Agent: supported(agentactivity.StateIdle, true)}, kanbanLaneIdle},
+		{"supported unknown", &Worktree{Status: StatusActive, Agent: supported(agentactivity.StateUnknown, false)}, kanbanLanePaused},
+		{"orphan health wins", &Worktree{Status: StatusActive, IsOrphaned: true, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
+		{"missing health wins", &Worktree{Status: StatusActive, IsMissing: true, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
+		{"error health wins", &Worktree{Status: StatusError, Agent: supported(agentactivity.StateWorking, false)}, kanbanLanePaused},
+		{"unsupported active fallback", &Worktree{Status: StatusActive, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneWorking},
+		{"unsupported waiting fallback", &Worktree{Status: StatusWaiting, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneBlocked},
+		{"unsupported done fallback", &Worktree{Status: StatusDone, Agent: &Agent{Type: AgentCopilot}}, kanbanLaneDone},
+		{"no agent paused fallback", &Worktree{Status: StatusPaused}, kanbanLanePaused},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := kanbanLaneForWorktree(tt.wt); got != tt.want {
+				t.Fatalf("lane = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	for _, provider := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity} {
+		t.Run("supported provider "+string(provider), func(t *testing.T) {
+			wt := &Worktree{Status: StatusActive, Agent: &Agent{
+				Type: provider, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked},
+			}}
+			if got := kanbanLaneForWorktree(wt); got != kanbanLaneBlocked {
+				t.Fatalf("lane = %v, want blocked", got)
+			}
+		})
+	}
+}
+
+func TestKanbanCardsReuseActivityPresentationWithHealthPriority(t *testing.T) {
+	p := &Plugin{}
+	agent := &Agent{Type: AgentClaude, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked}}
+	wt := &Worktree{Name: "feature", Agent: agent}
+	shell := &ShellSession{Name: "review", ChosenAgent: AgentClaude, Agent: agent}
+
+	if got := p.renderKanbanCardLine(wt, 0, 24, false) + p.renderKanbanCardLine(wt, 1, 24, false); !strings.Contains(got, "◆") || !strings.Contains(got, "blocked") {
+		t.Fatalf("worktree card lacks activity parity: %q", got)
+	}
+	if got := p.renderKanbanShellCardLine(shell, 0, 24, false) + p.renderKanbanShellCardLine(shell, 1, 24, false); !strings.Contains(got, "◆") || !strings.Contains(got, "blocked") {
+		t.Fatalf("shell card lacks activity parity: %q", got)
+	}
+
+	shell.IsOrphaned = true
+	if got := p.renderKanbanShellCardLine(shell, 0, 24, false) + p.renderKanbanShellCardLine(shell, 1, 24, false); !strings.Contains(got, "◌") || !strings.Contains(got, "offline") || strings.Contains(got, "blocked") {
+		t.Fatalf("shell health did not override activity: %q", got)
+	}
+}
 
 func TestGetKanbanColumns(t *testing.T) {
 	p := &Plugin{
@@ -18,18 +81,18 @@ func TestGetKanbanColumns(t *testing.T) {
 
 	columns := p.getKanbanColumns()
 
-	if len(columns[StatusActive]) != 2 {
-		t.Errorf("expected 2 active worktrees, got %d", len(columns[StatusActive]))
+	if len(columns[kanbanLaneWorking]) != 2 {
+		t.Errorf("expected 2 working worktrees, got %d", len(columns[kanbanLaneWorking]))
 	}
-	if len(columns[StatusWaiting]) != 1 {
-		t.Errorf("expected 1 waiting worktree, got %d", len(columns[StatusWaiting]))
+	if len(columns[kanbanLaneBlocked]) != 1 {
+		t.Errorf("expected 1 blocked worktree, got %d", len(columns[kanbanLaneBlocked]))
 	}
-	if len(columns[StatusDone]) != 1 {
-		t.Errorf("expected 1 done worktree, got %d", len(columns[StatusDone]))
+	if len(columns[kanbanLaneDone]) != 1 {
+		t.Errorf("expected 1 done worktree, got %d", len(columns[kanbanLaneDone]))
 	}
 	// Paused should include both StatusPaused and StatusError worktrees
-	if len(columns[StatusPaused]) != 2 {
-		t.Errorf("expected 2 paused worktrees (1 paused + 1 error), got %d", len(columns[StatusPaused]))
+	if len(columns[kanbanLanePaused]) != 2 {
+		t.Errorf("expected 2 paused worktrees (1 paused + 1 error), got %d", len(columns[kanbanLanePaused]))
 	}
 }
 
@@ -40,9 +103,9 @@ func TestGetKanbanColumnsEmpty(t *testing.T) {
 
 	columns := p.getKanbanColumns()
 
-	for _, status := range kanbanColumnOrder {
-		if len(columns[status]) != 0 {
-			t.Errorf("expected empty column for %v, got %d items", status, len(columns[status]))
+	for _, lane := range kanbanLaneOrder {
+		if len(columns[lane]) != 0 {
+			t.Errorf("expected empty column for %v, got %d items", lane, len(columns[lane]))
 		}
 	}
 }
@@ -60,8 +123,8 @@ func TestSyncListToKanban(t *testing.T) {
 
 	p.syncListToKanban()
 
-	if p.kanbanCol != 4 { // Done column (Shells=0, Active=1, Thinking=2, Waiting=3, Done=4, Paused=5)
-		t.Errorf("expected kanbanCol=4 (Done), got %d", p.kanbanCol)
+	if p.kanbanCol != 3 { // Done column (Shells=0, Working=1, Blocked=2, Done=3, Idle=4, Paused=5)
+		t.Errorf("expected kanbanCol=3 (Done), got %d", p.kanbanCol)
 	}
 	if p.kanbanRow != 0 { // First item in Done column
 		t.Errorf("expected kanbanRow=0, got %d", p.kanbanRow)
@@ -113,7 +176,7 @@ func TestSyncKanbanToList(t *testing.T) {
 			{Name: "wt3", Status: StatusDone},
 			{Name: "wt4", Status: StatusPaused},
 		},
-		kanbanCol:   3, // Waiting column (Shells=0, Active=1, Thinking=2, Waiting=3)
+		kanbanCol:   2, // Blocked column
 		kanbanRow:   0, // First item (wt2)
 		selectedIdx: 0,
 	}
@@ -130,7 +193,7 @@ func TestSyncKanbanToListEmptyColumn(t *testing.T) {
 		worktrees: []*Worktree{
 			{Name: "wt1", Status: StatusActive},
 		},
-		kanbanCol:   3, // Waiting column (empty) (Shells=0, Active=1, Thinking=2, Waiting=3)
+		kanbanCol:   2, // Blocked column (empty)
 		kanbanRow:   0,
 		selectedIdx: 0,
 	}
@@ -227,7 +290,7 @@ func TestMoveKanbanRowEmptyColumn(t *testing.T) {
 		worktrees: []*Worktree{
 			{Name: "wt1", Status: StatusActive},
 		},
-		kanbanCol: 3, // Waiting column (empty) (Shells=0, Active=1, Thinking=2, Waiting=3)
+		kanbanCol: 2, // Blocked column (empty)
 		kanbanRow: 0,
 	}
 
@@ -244,7 +307,7 @@ func TestSelectedKanbanWorktree(t *testing.T) {
 			{Name: "wt1", Status: StatusActive},
 			{Name: "wt2", Status: StatusWaiting},
 		},
-		kanbanCol: 3, // Waiting column (Shells=0, Active=1, Thinking=2, Waiting=3)
+		kanbanCol: 2, // Blocked column
 		kanbanRow: 0,
 	}
 
@@ -262,7 +325,7 @@ func TestSelectedKanbanWorktreeEmptyColumn(t *testing.T) {
 		worktrees: []*Worktree{
 			{Name: "wt1", Status: StatusActive},
 		},
-		kanbanCol: 3, // Waiting column (empty) (Shells=0, Active=1, Thinking=2, Waiting=3)
+		kanbanCol: 2, // Blocked column (empty)
 		kanbanRow: 0,
 	}
 
@@ -299,13 +362,13 @@ func TestMoveKanbanColumnClampsRow(t *testing.T) {
 			{Name: "wt1", Status: StatusActive},
 			{Name: "wt2", Status: StatusActive},
 			{Name: "wt3", Status: StatusActive},
-			{Name: "wt4", Status: StatusThinking}, // Only 1 item in Thinking
+			{Name: "wt4", Status: StatusWaiting}, // Only 1 item in Blocked
 		},
 		kanbanCol: 1, // Active column (3 items)
 		kanbanRow: 2, // Last item
 	}
 
-	// Move to Thinking column (only 1 item)
+	// Move to Blocked column (only 1 item)
 	p.moveKanbanColumn(1)
 
 	if p.kanbanCol != 2 {

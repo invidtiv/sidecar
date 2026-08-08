@@ -814,10 +814,11 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 }
 
 func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {
-	if agent == nil || !supportsAgentActivity(agent.Type) {
+	displayState, ok := activityDisplayState(agent)
+	if !ok {
 		return "", "", lipgloss.Style{}, false
 	}
-	switch agent.Activity.DisplayState() {
+	switch displayState {
 	case string(agentactivity.StateWorking):
 		return "●", "working", styles.StatusCompleted, true
 	case string(agentactivity.StateBlocked):
@@ -829,4 +830,11 @@ func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style
 	default:
 		return "?", "unknown", styles.Muted, true
 	}
+}
+
+func activityDisplayState(agent *Agent) (string, bool) {
+	if agent == nil || !supportsAgentActivity(agent.Type) {
+		return "", false
+	}
+	return agent.Activity.DisplayState(), true
 }
