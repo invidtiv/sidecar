@@ -146,6 +146,31 @@ func TestAntigravityFallbackStillDebouncesIdle(t *testing.T) {
 	}
 }
 
+func TestPhase2FullScreenFormsSurviveTallPanePadding(t *testing.T) {
+	padding := strings.Repeat("\n", 30)
+	claude := DetectClaude(Observation{
+		Agent: "claude", CurrentCommand: "2.1.220",
+		Screen: "Which option?\nEnter to select · ↑/↓ to navigate · Esc to cancel" + padding,
+	})
+	if claude.State != StateBlocked {
+		t.Fatalf("Claude tall-pane blocker got %+v", claude)
+	}
+	antigravity := DetectAntigravity(Observation{
+		Agent: "antigravity", CurrentCommand: "agy",
+		Screen: "Do you trust the contents of this project?\nYes, I trust this folder" + padding,
+	})
+	if antigravity.State != StateBlocked {
+		t.Fatalf("Antigravity tall-pane blocker got %+v", antigravity)
+	}
+	antigravity = DetectAntigravity(Observation{
+		Agent: "antigravity", CurrentCommand: "agy",
+		Screen: "⣽  Generating...\nesc to cancel" + padding,
+	})
+	if antigravity.State != StateWorking {
+		t.Fatalf("Antigravity tall-pane working got %+v", antigravity)
+	}
+}
+
 func TestCodexWorkingIdleAndViewer(t *testing.T) {
 	tests := []struct {
 		name string
