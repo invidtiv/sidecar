@@ -711,6 +711,16 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 	return true
 }
 
+// shellOutputVisibleFor reports whether a shell's live output is actually being
+// viewed. Selection alone is insufficient while another plugin is focused.
+func (p *Plugin) shellOutputVisibleFor(tmuxName string) bool {
+	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) || p.previewTab != PreviewTabOutput {
+		return false
+	}
+	shell := p.getSelectedShell()
+	return shell != nil && shell.TmuxName == tmuxName
+}
+
 // backgroundPollInterval returns the poll delay when output isn't visible.
 func (p *Plugin) backgroundPollInterval() time.Duration {
 	if p.focused {

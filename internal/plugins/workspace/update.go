@@ -531,7 +531,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
 			if wt.Agent.Type == AgentCodex {
 				wt.Agent.Activity.Apply(msg.Activity, time.Now())
-				if selected := p.selectedWorktree(); selected != nil && selected.Name == wt.Name && p.previewTab == PreviewTabOutput {
+				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -595,12 +595,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Check for runaway session and throttle if needed (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
-			if wt.Agent.Type == AgentCodex {
-				wt.Agent.Activity.Apply(msg.Activity, time.Now())
-				if selected := p.selectedWorktree(); selected != nil && selected.Name == wt.Name && p.previewTab == PreviewTabOutput {
-					wt.Agent.Activity.Acknowledge()
-				}
-			}
 			if wt.Agent.CheckRunaway() {
 				interval = pollIntervalThrottled
 			}
@@ -638,6 +632,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			if wt.Agent.Type == AgentCodex {
+				wt.Agent.Activity.Apply(msg.Activity, time.Now())
+				if p.outputVisibleFor(wt.Name) {
+					wt.Agent.Activity.Acknowledge()
+				}
+			}
 			if wt.Agent.OutputBuf != nil {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
@@ -1062,18 +1062,20 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
-		if shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
+		if shell != nil && shell.Agent != nil {
 			if shell.ChosenAgent == AgentCodex {
 				shell.Agent.Activity.Apply(msg.Activity, time.Now())
-				if selected := p.getSelectedShell(); selected != nil && selected.TmuxName == shell.TmuxName && p.previewTab == PreviewTabOutput {
+				if p.shellOutputVisibleFor(shell.TmuxName) {
 					shell.Agent.Activity.Acknowledge()
 				}
 			}
-			if msg.HasHistory {
-				changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
-				p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
-			} else {
-				changed = shell.Agent.OutputBuf.Update(msg.Output)
+			if shell.Agent.OutputBuf != nil {
+				if msg.HasHistory {
+					changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
+					p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
+				} else {
+					changed = shell.Agent.OutputBuf.Update(msg.Output)
+				}
 			}
 			p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
 			if changed {
