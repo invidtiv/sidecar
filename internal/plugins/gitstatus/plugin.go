@@ -88,6 +88,7 @@ type Plugin struct {
 
 	// Commit preview state (for three-pane view when on commit)
 	previewCommit       *Commit // Commit being previewed in right pane
+	previewCommitError  string  // Terminal error for the current commit preview request
 	previewCommitCursor int     // Cursor for file list in preview
 	previewCommitScroll int     // Scroll offset for preview content
 	commitBodyExpanded  bool    // Whether full commit message is shown
@@ -141,6 +142,22 @@ type Plugin struct {
 	// Watcher
 	watcher     *Watcher
 	lastRefresh time.Time // Debounce rapid refreshes
+
+	statusLoader           func(string) (*FileTree, error)
+	nextStatusRequestID    uint64
+	activeStatusRequestID  uint64
+	statusRefreshDirty     bool
+	historyLoader          func(string, int) ([]*Commit, *PushStatus, error)
+	nextHistoryRequestID   uint64
+	activeHistoryRequestID uint64
+	historyRefreshDirty    bool
+
+	nextPreviewRequestID       uint64
+	inlinePreviewRequestID     uint64
+	fullScreenPreviewRequestID uint64
+	inlineFullFileRequestID    uint64
+	fullScreenFileRequestID    uint64
+	commitPreviewRequestID     uint64
 
 	// Index write state. Only one write may run at a time; navigation and
 	// rendering remain available while its tea.Cmd executes.
@@ -438,12 +455,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.inNoRepoMode() {
 			return p, nil
 		}
-		// File system changed, refresh and continue listening (debounce 500ms)
-		if time.Since(p.lastRefresh) < 500*time.Millisecond {
-			return p, p.listenForWatchEvents() // Skip refresh, keep listening
+		// refresh single-flights event bursts and retains one dirty follow-up.
+		// Only HEAD/ref-class events invalidate history; index writes do not.
+		var history tea.Cmd
+		if msg.History {
+			history = p.loadRecentCommits()
 		}
-		p.lastRefresh = time.Now()
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.listenForWatchEvents())
+		return p, tea.Batch(p.refresh(), history, p.listenForWatchEvents())
 
 	case operationResultMsg:
 		if plugin.IsStale(p.ctx, msg) || p.activeOperation == nil || p.activeOperation.ID != msg.ID {
@@ -460,9 +478,26 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.operationError = ""
 		return p, p.refresh()
 
-	case RefreshDoneMsg:
-		if p.inNoRepoMode() {
+	case DiscardDoneMsg:
+		return p, p.refresh()
+
+	case StatusSnapshotLoadedMsg:
+		if p.inNoRepoMode() || plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeStatusRequestID {
 			return p, nil
+		}
+		p.activeStatusRequestID = 0
+		if msg.Err == nil && msg.Tree != nil {
+			p.tree = msg.Tree
+		}
+		var followUp tea.Cmd
+		if p.statusRefreshDirty {
+			p.statusRefreshDirty = false
+			followUp = p.refresh()
+		}
+		if msg.Err != nil {
+			return p, tea.Batch(followUp, func() tea.Msg {
+				return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			})
 		}
 		// Clamp cursor to valid range if files changed
 		maxCursor := p.totalSelectableItems() - 1
@@ -475,17 +510,25 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.restoreOperationSelection()
 		// Auto-load preview for current cursor position after refresh
 		if p.viewMode == ViewModeStatus {
-			return p, p.autoLoadPreview(true)
+			return p, tea.Batch(p.autoLoadPreview(true), followUp)
 		}
-		return p, nil
+		return p, followUp
 
 	case DiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
 			return p, nil // Ignore stale message from previous project
 		}
 		p.diffContent = msg.Content
 		p.diffRaw = msg.Raw
 		p.diffLoaded = true
+		if msg.Err != nil {
+			p.diffContent = ""
+			p.diffRaw = ""
+			p.parsedDiff = nil
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: "Diff load failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			}
+		}
 		// Always parse diff for built-in rendering (even if delta is available)
 		// This allows toggling between delta and built-in rendering at runtime
 		p.parsedDiff, _ = ParseUnifiedDiff(msg.Raw)
@@ -520,7 +563,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case InlineDiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.inlinePreviewRequestID {
 			return p, nil // Ignore stale message from previous project
 		}
 		// Only update if this is still the selected file
@@ -549,6 +592,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
+		if msg.ForInline && msg.RequestID != p.inlineFullFileRequestID {
+			return p, nil
+		}
+		if !msg.ForInline && msg.RequestID != p.fullScreenFileRequestID {
+			return p, nil
+		}
 		ffd := BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 		if msg.ForInline {
 			if msg.File == p.selectedDiffFile {
@@ -566,15 +615,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case RecentCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeHistoryRequestID {
 			return p, nil // Ignore stale message from previous project
+		}
+		p.activeHistoryRequestID = 0
+		var historyFollowUp tea.Cmd
+		if p.historyRefreshDirty {
+			p.historyRefreshDirty = false
+			historyFollowUp = p.loadRecentCommits()
 		}
 		if msg.Commits == nil {
 			if msg.PushStatus != nil {
 				p.pushStatus = msg.PushStatus
 				PopulatePushStatus(p.recentCommits, p.pushStatus)
 			}
-			return p, nil
+			return p, historyFollowUp
 		}
 
 		p.moreCommitsAvailable = len(msg.Commits) >= commitHistoryPageSize
@@ -615,7 +670,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.cursor > maxCursor {
 			p.cursor = maxCursor
 		}
-		return p, p.ensureCommitListFilled()
+		return p, tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
 
 	case MoreCommitsLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -680,11 +735,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case CommitPreviewLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.commitPreviewRequestID {
 			return p, nil // Ignore stale message from previous project
+		}
+		if msg.Err != nil {
+			p.previewCommit = nil
+			p.previewCommitError = msg.Err.Error()
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: "Commit preview failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			}
 		}
 		// Commit preview loaded for right pane (in status view)
 		p.previewCommit = msg.Commit
+		p.previewCommitError = ""
 		p.previewCommitCursor = 0
 		p.previewCommitScroll = 0
 		p.commitBodyExpanded = false
@@ -909,8 +972,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 // CommitPreviewLoadedMsg is sent when commit preview is loaded.
 type CommitPreviewLoadedMsg struct {
-	Epoch  uint64 // Epoch when request was issued (for stale detection)
-	Commit *Commit
+	Epoch     uint64 // Epoch when request was issued (for stale detection)
+	RequestID uint64
+	Commit    *Commit
+	Err       error
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -1176,11 +1241,22 @@ func (p *Plugin) refresh() tea.Cmd {
 	if !p.hasRepo || p.tree == nil {
 		return nil
 	}
+	if p.activeStatusRequestID != 0 {
+		p.statusRefreshDirty = true
+		return nil
+	}
+	p.nextStatusRequestID++
+	requestID := p.nextStatusRequestID
+	p.activeStatusRequestID = requestID
+	epoch := p.ctx.Epoch
+	workDir := p.repoRoot
+	loader := p.statusLoader
+	if loader == nil {
+		loader = LoadFileTree
+	}
 	return func() tea.Msg {
-		if err := p.tree.Refresh(); err != nil {
-			return ErrorMsg{Err: err}
-		}
-		return RefreshDoneMsg{}
+		tree, err := loader(workDir)
+		return StatusSnapshotLoadedMsg{Epoch: epoch, RequestID: requestID, Tree: tree, Err: err}
 	}
 }
 
@@ -1207,8 +1283,11 @@ func (p *Plugin) listenForWatchEvents() tea.Cmd {
 	}
 	return func() tea.Msg {
 		// When watcher is stopped, Events() channel is closed and this returns
-		<-w.Events()
-		return WatchEventMsg{}
+		event, ok := <-w.Events()
+		if !ok {
+			return nil
+		}
+		return WatchEventMsg{History: event.History}
 	}
 }
 
@@ -1284,14 +1363,25 @@ func countLines(s string) int {
 }
 
 // Message types
-type RefreshDoneMsg struct{}
-type WatchEventMsg struct{}
+type StatusSnapshotLoadedMsg struct {
+	Epoch     uint64
+	RequestID uint64
+	Tree      *FileTree
+	Err       error
+}
+
+func (m StatusSnapshotLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+
+type DiscardDoneMsg struct{}
+type WatchEventMsg struct{ History bool }
 type WatchStartedMsg struct{ Watcher *Watcher }
 type ErrorMsg struct{ Err error }
 type DiffLoadedMsg struct {
-	Epoch   uint64 // Epoch when request was issued (for stale detection)
-	Content string // Rendered content (may be from delta)
-	Raw     string // Raw diff for built-in rendering
+	Epoch     uint64 // Epoch when request was issued (for stale detection)
+	RequestID uint64
+	Content   string // Rendered content (may be from delta)
+	Raw       string // Raw diff for built-in rendering
+	Err       error
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -1308,6 +1398,7 @@ type CommitErrorMsg struct {
 // FullFileDiffLoadedMsg is sent when full-file content is loaded for the full-file diff view.
 type FullFileDiffLoadedMsg struct {
 	Epoch      uint64
+	RequestID  uint64
 	File       string
 	OldContent string
 	NewContent string
@@ -1320,10 +1411,11 @@ func (m FullFileDiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // InlineDiffLoadedMsg is sent when an inline diff finishes loading.
 type InlineDiffLoadedMsg struct {
-	Epoch  uint64 // Epoch when request was issued (for stale detection)
-	File   string
-	Raw    string
-	Parsed *ParsedDiff
+	Epoch     uint64 // Epoch when request was issued (for stale detection)
+	RequestID uint64
+	File      string
+	Raw       string
+	Parsed    *ParsedDiff
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -1332,6 +1424,7 @@ func (m InlineDiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 // RecentCommitsLoadedMsg is sent when recent commits are loaded for sidebar.
 type RecentCommitsLoadedMsg struct {
 	Epoch      uint64 // Epoch when request was issued (for stale detection)
+	RequestID  uint64
 	Commits    []*Commit
 	PushStatus *PushStatus
 }

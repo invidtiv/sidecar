@@ -59,34 +59,35 @@ func NewFileTree(workDir string) *FileTree {
 	return &FileTree{workDir: workDir}
 }
 
+// LoadFileTree builds a complete status snapshot without mutating a tree that
+// may be visible to the Bubble Tea event loop.
+func LoadFileTree(workDir string) (*FileTree, error) {
+	cmd := gitReadOnly("status", "--porcelain=v2", "-z", "--untracked-files=all")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	tree := &FileTree{workDir: workDir}
+	if err := tree.parseStatus(output); err != nil {
+		return nil, err
+	}
+	_ = tree.loadDiffStats()
+	_ = tree.loadUntrackedStats()
+	tree.groupUntrackedFolders()
+	return tree, nil
+}
+
 // Refresh reloads the git status from disk.
 func (t *FileTree) Refresh() error {
-	// Run git status with porcelain v2 format (null-separated)
-	// Use --untracked-files=all to recursively list all files in untracked folders
-	cmd := gitReadOnly("status", "--porcelain=v2", "-z", "--untracked-files=all")
-	cmd.Dir = t.workDir
-	output, err := cmd.Output()
+	snapshot, err := LoadFileTree(t.workDir)
 	if err != nil {
 		return err
 	}
-
-	// Build new data into temporary tree to avoid flashing during parse
-	temp := &FileTree{workDir: t.workDir}
-	if err := temp.parseStatus(output); err != nil {
-		return err
-	}
-
-	// Get diff stats for all files
-	_ = temp.loadDiffStats()        // Non-fatal: continue without stats
-	_ = temp.loadUntrackedStats()   // Non-fatal: continue without stats
-
-	// Group untracked files by folder
-	temp.groupUntrackedFolders()
-
-	// Swap in new data atomically
-	t.Staged = temp.Staged
-	t.Modified = temp.Modified
-	t.Untracked = temp.Untracked
+	t.Staged = snapshot.Staged
+	t.Modified = snapshot.Modified
+	t.Untracked = snapshot.Untracked
 
 	return nil
 }

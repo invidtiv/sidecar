@@ -214,6 +214,6 @@ func (p *Plugin) doDiscard(entry *FileEntry) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return RefreshDoneMsg{}
+		return DiscardDoneMsg{}
 	}
 }
