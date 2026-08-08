@@ -432,3 +432,29 @@ For each of Codex, Claude, Grok, and Antigravity:
 - [ ] Idle-versus-unseen-done acknowledgement behavior
 - [ ] Focused/full tests, build, performance probe, and tmux-drive visual proof
 - [ ] Independent review completed and findings resolved
+
+## Phase 0/1 implementation evidence (2026-08-08)
+
+Implementation is tracked by epic `td-8625a6` and children `td-31ab2b`,
+`td-495065`, and `td-52abdf`. Phase 2 provider probes remain unimplemented.
+
+- Runtime fixtures and exact installed versions are under
+  `internal/agentactivity/testdata/`. Codex 0.147.0 covers startup/idle,
+  working, tool execution, blocker, interruption, completion, transcript
+  viewer, and exit. Claude, Grok, and Antigravity availability/unavailable
+  Phase 2 states are explicit rather than synthetic.
+- `go test ./internal/agentactivity ./internal/plugins/workspace`,
+  `go test ./...`, and `go build ./...` pass at `4f4b9a4`.
+- The no-extra-process contract is protected by
+  `TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation`: each pane's
+  title/current-command display and screen capture remain one tmux argv chain.
+- A real `v0.1.0-phase1-proof2` binary was driven at 200x50. Text and PNG
+  artifacts are in `/tmp/sidecar-drive-phase1/`: `phase1-working-final`,
+  `phase1-done-final`, `phase1-seen-idle-final`, and
+  `phase1-blocked-final`. They prove worktree working plus agent-backed shell
+  working -> unseen done -> selected idle and an immediate permission blocker.
+  The header/footer remain visible in every inspected PNG.
+- Real proof found and fixed a seen-state bug before handoff: a viewed working
+  state no longer acknowledges a future idle transition. The approval command
+  used for blocker proof was canceled and `/tmp/sidecar-phase1-proof-never-create`
+  was verified absent. Proof-only shells and tmux sessions were removed.
