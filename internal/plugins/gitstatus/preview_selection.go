@@ -47,6 +47,16 @@ func (p *Plugin) selectedCommitIndex() int {
 	return p.cursor - len(entries)
 }
 
+// hasSelectedCommit distinguishes a real commit row from the empty-list
+// boundary, where cursorOnCommit alone is true because both counts are zero.
+func (p *Plugin) hasSelectedCommit() bool {
+	if !p.cursorOnCommit() {
+		return false
+	}
+	idx := p.selectedCommitIndex()
+	return idx >= 0 && idx < len(p.activeCommits())
+}
+
 // autoLoadDiff triggers loading the diff for the currently selected file or folder.
 func (p *Plugin) autoLoadDiff() tea.Cmd {
 	entries := p.tree.AllEntries()
@@ -75,6 +85,7 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 	// only if diffPaneFullFileDiff is nil (new file) or needs refresh.
 	// Clear commit preview when switching to file
 	p.previewCommit = nil
+	p.previewCommitError = ""
 
 	// Handle folder entries
 	if entry.IsFolder {
@@ -88,6 +99,7 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 func (p *Plugin) autoLoadCommitPreview() tea.Cmd {
 	if !p.cursorOnCommit() {
 		p.previewCommit = nil
+		p.previewCommitError = ""
 		return nil
 	}
 
@@ -95,6 +107,7 @@ func (p *Plugin) autoLoadCommitPreview() tea.Cmd {
 	commitIdx := p.selectedCommitIndex()
 	if commitIdx < 0 || commitIdx >= len(commits) {
 		p.previewCommit = nil
+		p.previewCommitError = ""
 		return nil
 	}
 
@@ -107,6 +120,7 @@ func (p *Plugin) autoLoadCommitPreview() tea.Cmd {
 	// Clear file diff when switching to commit
 	p.selectedDiffFile = ""
 	p.diffPaneParsedDiff = nil
+	p.previewCommitError = ""
 	p.previewCommitCursor = 0
 	p.previewCommitScroll = 0
 

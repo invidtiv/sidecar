@@ -644,7 +644,7 @@ func (p *Plugin) renderGraphLinePlain(gl GraphLine, width int) string {
 // renderDiffPane renders the right diff pane.
 func (p *Plugin) renderDiffPane(visibleHeight int) string {
 	// If previewing a commit, render commit preview instead of diff
-	if p.previewCommit != nil && p.cursorOnCommit() {
+	if p.hasSelectedCommit() {
 		return p.renderCommitPreview(visibleHeight)
 	}
 
@@ -776,6 +776,12 @@ func (p *Plugin) renderCommitPreview(visibleHeight int) string {
 
 	c := p.previewCommit
 	if c == nil {
+		if p.previewCommitError != "" {
+			sb.WriteString(styles.Title.Render("Unable to load commit"))
+			sb.WriteString("\n\n")
+			sb.WriteString(styles.Muted.Render(p.previewCommitError))
+			return sb.String()
+		}
 		sb.WriteString(styles.Muted.Render("Loading commit..."))
 		return sb.String()
 	}
