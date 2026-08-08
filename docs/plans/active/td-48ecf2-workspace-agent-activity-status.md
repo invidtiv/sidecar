@@ -458,3 +458,15 @@ Implementation is tracked by epic `td-8625a6` and children `td-31ab2b`,
   state no longer acknowledges a future idle transition. The approval command
   used for blocker proof was canceled and `/tmp/sidecar-phase1-proof-never-create`
   was verified absent. Proof-only shells and tmux sessions were removed.
+
+Independent-review follow-up at `651dc26` adds durable process-group evidence
+and closes two integration gaps. `AgentPollUnchangedMsg` now applies semantic
+activity, and acknowledgement requires focused, actually visible Workspaces
+output rather than selection alone. The reviewer overlay reproductions and new
+worktree/shell regressions pass. A real `v0.1.0-phase1-reviewfix` binary was
+driven again at 200x50; `/tmp/sidecar-drive-phase1-reviewfix/` contains
+`title-only-working.{txt,png}` (unchanged screen, spinner title alone publishes
+working), `background-working.{txt,png}`, and
+`background-return-idle.{txt,png}`. The background completion remains unseen
+while Git is focused; returning to its already-selected live output immediately
+acknowledges it to idle, as designed. Proof-only shells/sessions were removed.
