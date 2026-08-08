@@ -114,8 +114,14 @@ clobber a dev machine's `sidecar`.
 ## Dev machine after release
 
 ```bash
-make install-dev
-# or: brew unlink sidecar
+# Return to the canonical main development build:
+make install-local
+
+# Or keep the released Homebrew build active:
+make use-homebrew
+
+# In either case, prove the managed link and both login-shell modes:
+make install-status
 ```
 
 ## Recovery
@@ -133,4 +139,4 @@ See `docs/guides/active/releasing.md`.
 - [ ] `RELEASE_VERSION=vX.Y.Z make release` succeeded
 - [ ] Release assets present; formula URL/sha match (automatic)
 - [ ] `go install` verified into throwaway `GOBIN`
-- [ ] Dev machine still on the binary you want
+- [ ] `make install-status` proves the dev machine is on the intended binary

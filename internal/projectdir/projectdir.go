@@ -29,6 +29,13 @@ func Resolve(projectRoot string) (string, error) {
 	return resolveWithBase(base, projectRoot)
 }
 
+// Lookup returns the already-registered data directory for a project root
+// without creating anything. Diagnostics use it: a function whose job is to
+// report what this process will write to must not itself write.
+func Lookup(projectRoot string) (string, bool) {
+	return findByMeta(filepath.Join(config.StateDir(), "projects"), projectRoot)
+}
+
 // WorktreeDir returns the worktree-specific data directory for a project.
 // The directory is created if it does not exist.
 func WorktreeDir(projectRoot, worktreePath string) (string, error) {
@@ -68,6 +75,15 @@ func worktreeDirWithBase(base, projectRoot, worktreePath string) (string, error)
 // sidecar state directory (e.g. ~/.local/state/sidecar) instead of
 // deriving it from config.StateDir().
 func resolveWithBase(base, projectRoot string) (string, error) {
+	// Slug allocation is order-dependent and creating: an unisolated test that
+	// claims projects/<basename> for a temp path pushes the developer's real
+	// project onto <basename>-2, which is a different directory and therefore
+	// an empty shell manifest — the "my shells vanished" symptom of td-8d18de
+	// by another route. Refuse the real tree whenever isolation is asserted.
+	if err := config.AssertIsolatedPath(base); err != nil {
+		return "", err
+	}
+
 	projectsDir := filepath.Join(base, "projects")
 
 	// Scan existing project directories for a matching path.

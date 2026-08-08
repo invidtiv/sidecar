@@ -91,7 +91,9 @@ go test -race ./...                        # Race detector
 go test ./internal/plugins/workspace/      # Single package
 ```
 
-Install with version: `go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar`
+For a managed development install, use `make install-local` from canonical
+`main` or deliberately use `make install-worktree` elsewhere, then run
+`make install-status`. Plain `make install` remains an unmanaged `go install`.
 
 ## Critical Rules
 

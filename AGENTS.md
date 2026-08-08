@@ -31,8 +31,17 @@ go build ./...
 # Run tests
 go test ./...
 
-# Install with version (use semantic versioning)
-go install -ldflags "-X main.Version=v0.1.0" ./cmd/sidecar
+# Managed install from the canonical main checkout
+make install-local
+
+# Deliberately activate the current branch/worktree
+make install-worktree
+
+# Inspect the managed link and actual shell resolution
+make install-status
+
+# Restore the installed Homebrew release
+make use-homebrew
 
 # Tag a release (prefer the one-shot path)
 RELEASE_VERSION=v0.1.0 make release
@@ -40,6 +49,9 @@ RELEASE_VERSION=v0.1.0 make release
 
 See `docs/guides/active/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
+`make install-dev` is a compatibility alias for `make install-local`. Plain
+`make install` is an unmanaged `go install` into `GOBIN`; it does not alter
+Homebrew links or guarantee which `sidecar` wins PATH precedence.
 
 ## Keyboard Shortcut Parity
 
@@ -61,6 +73,7 @@ To measure:
 ```bash
 SIDECAR_STARTUP_TRACE=stderr sidecar 2> trace.out   # or =1 to log instead
 SIDECAR_STARTUP_TRACE_DELAY=10s                     # dump later to catch async work
+SIDECAR_DIAG_PATHS=1 sidecar                        # print the state/config/tmux paths resolved
 ```
 
 The trace lists each phase with its offset from process start and its duration,
@@ -76,10 +89,24 @@ keystrokes, and captures the screen as text and PNG, so a UI change can be
 verified without a human at the keyboard:
 
 ```bash
+./scripts/tmux-drive.sh paths                       # confirm the run is isolated first
 SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 ./scripts/tmux-drive.sh keys 5 && ./scripts/tmux-drive.sh snap workspaces
 ./scripts/tmux-drive.sh stop
 ```
+
+**A proof run must isolate BOTH the tmux server and the Sidecar state tree.**
+They are independent axes, and isolating only one is how td-8d18de destroyed six
+of a live user's shells: a private tmux socket did nothing to stop the run from
+rewriting the real `~/.local/state/sidecar/projects/sidecar/shells.json` that the
+developer's running Sidecar was watching. `tmux-drive.sh` now does both by
+default — run `./scripts/tmux-drive.sh paths` before you trust it and confirm
+that nothing resolves under `~/.local/state/sidecar` or `~/.config/sidecar`.
+Never launch sidecar for a proof by hand without `XDG_STATE_HOME`, `TMUX_TMPDIR`,
+`-config <temp path>` and `SIDECAR_ISOLATED_STATE=1` (that last one makes the
+binary refuse to start rather than touch the real tree). Note that
+`XDG_CONFIG_HOME` moves nothing — config and `state.json` are `$HOME`-based, so
+`-config` is the only lever for them.
 
 Note that the embedded terminal's cursor is a **native** cursor drawn by the host
 terminal, so `capture-pane` cannot see it; checking cursor placement needs an

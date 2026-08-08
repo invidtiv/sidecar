@@ -82,10 +82,13 @@ Sidecar reads:
 - `EDITOR`, `VISUAL` — to open files in your editor
 - `SIDECAR_PPROF` — profiling server port (development only)
 - `SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE`, `SIDECAR_DEFAULT_AGENT_TYPE` — override workspace default agent type at startup
-- `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` — standard directories for locating agent data on Linux
+- `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` — standard directories for locating agent data on Linux. `XDG_STATE_HOME` also relocates sidecar's own state directory; `XDG_CONFIG_HOME` is read for agent data only and does **not** relocate sidecar's `config.json` or `state.json`, which are `$HOME`-based (use the `-config` flag)
 - `AMP_DATA_HOME` — Amp-specific data directory
 - `APPDATA`, `LOCALAPPDATA` — Windows data directories
-- `TMUX` — unset on startup to isolate sidecar's tmux sessions
+- `TMUX` — unset on startup so sidecar's own tmux commands are not treated as coming from an attached client. This is detach semantics, not test isolation: the sessions sidecar creates still land on whichever server `TMUX_TMPDIR` resolves to
+- `TMUX_TMPDIR` — read by tmux itself; the only variable that moves sidecar-created tmux sessions to a private server
+- `SIDECAR_ISOLATED_STATE` — set to `1` by test and proof harnesses; makes sidecar refuse to read or write anything under the real `~/.local/state/sidecar` or `~/.config/sidecar`
+- `SIDECAR_DIAG_PATHS` — set to `1` to print the resolved state, config, tmux socket and manifest paths at startup
 - `GOBIN`, `GOPATH`, `GOFLAGS`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, `VIRTUAL_ENV` — read and selectively cleared in worktree environments to prevent build conflicts
 - `TD_SESSION_ID` — task tracker session context
 

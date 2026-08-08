@@ -1,4 +1,5 @@
-.PHONY: build install install-dev test test-v clean check-clean tag \
+.PHONY: build install install-dev install-local install-worktree use-homebrew \
+	install-status test-dev-install test test-v clean check-clean tag \
 	release-snapshot check-release-state release release-tap \
 	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks
 
@@ -20,15 +21,28 @@ endif
 build:
 	go build -o bin/sidecar ./cmd/sidecar
 
-# Install to GOBIN
+# Unmanaged Go install to GOBIN. This does not change Homebrew links or PATH.
 install:
 	go install ./cmd/sidecar
 
-# Install with version info from git
-install-dev:
-	$(eval VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev"))
-	@echo "Installing sidecar with Version=$(VERSION)"
-	go install -ldflags "-X main.Version=$(VERSION)" ./cmd/sidecar
+# Managed machine-wide development installs and Homebrew switching.
+install-local:
+	./scripts/dev-install.sh install-local
+
+install-worktree:
+	./scripts/dev-install.sh install-worktree
+
+use-homebrew:
+	./scripts/dev-install.sh use-homebrew
+
+install-status:
+	./scripts/dev-install.sh status
+
+# Compatibility alias. The canonical-main guard still applies.
+install-dev: install-local
+
+test-dev-install:
+	./scripts/test-dev-install.sh
 
 # Run tests
 test:

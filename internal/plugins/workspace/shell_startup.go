@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -32,12 +33,13 @@ type shellStartupScope struct {
 type shellStartupHooks struct {
 	resolveProjectDir func(string) (string, error)
 	loadManifest      func(string) (*ShellManifest, error)
-	discoverSessions  func(string) []string
+	discoverSessions  func(string) ([]string, error)
 	getPaneID         func(string) string
 	newWatcher        func(string) (shellManifestWatcher, error)
 	getWorkspaceState func(string) state.WorkspaceState
 	setWorkspaceState func(string, state.WorkspaceState) error
 	now               func() time.Time
+	namespace         func() string
 }
 
 func defaultShellStartupHooks() shellStartupHooks {
@@ -52,6 +54,7 @@ func defaultShellStartupHooks() shellStartupHooks {
 		getWorkspaceState: state.GetWorkspaceState,
 		setWorkspaceState: state.SetWorkspaceState,
 		now:               time.Now,
+		namespace:         tmuxenv.Namespace,
 	}
 }
 
@@ -81,6 +84,9 @@ func (h shellStartupHooks) withDefaults() shellStartupHooks {
 	if h.now == nil {
 		h.now = defaults.now
 	}
+	if h.namespace == nil {
+		h.namespace = defaults.namespace
+	}
 	return h
 }
 
@@ -92,6 +98,7 @@ type shellStartupResultMsg struct {
 	watcher         shellManifestWatcher
 	err             error
 	watcherErr      error
+	discoveryErr    error
 }
 
 type shellManifestChangedMsg struct {
@@ -172,11 +179,17 @@ func (p *Plugin) loadShellStartup() tea.Cmd {
 			return result
 		}
 
-		sessions := hooks.discoverSessions(workDir)
+		// A discovery failure is not an empty tmux server. Passing it through
+		// as "nothing is running" would prune every same-namespace entry and
+		// save the truncated file — the td-8d18de symptom with no second
+		// instance required.
+		sessions, discoveryErr := hooks.discoverSessions(workDir)
+		result.discoveryErr = discoveryErr
 		result.manifest = manifest
 		result.shells, result.managedSessions = reconcileShellStartup(
 			manifest,
 			sessions,
+			discoveryErr != nil,
 			workDir,
 			projectRoot,
 			hooks,
@@ -193,6 +206,7 @@ func (p *Plugin) loadShellStartup() tea.Cmd {
 func reconcileShellStartup(
 	manifest *ShellManifest,
 	sessionNames []string,
+	discoveryFailed bool,
 	workDir string,
 	projectRoot string,
 	hooks shellStartupHooks,
@@ -202,15 +216,49 @@ func reconcileShellStartup(
 		running[name] = true
 	}
 
+	// live is a snapshot: the loop below consumes `running` as it matches
+	// manifest entries, but the final construction still needs to know which
+	// retained definitions are actually alive.
+	live := make(map[string]bool, len(running))
+	for name := range running {
+		live[name] = true
+	}
+
+	pattern := shellDiscoveryPattern(workDir)
+	ns := hooks.namespace()
+
 	changed := false
 	definitions := make([]ShellDefinition, 0, len(manifest.Shells)+len(running))
 	for _, definition := range manifest.Shells {
-		if !running[definition.TmuxName] {
+		if running[definition.TmuxName] {
+			if definition.Namespace != ns {
+				definition.Namespace = ns
+				changed = true
+			}
+			definitions = append(definitions, definition)
+			delete(running, definition.TmuxName)
+			continue
+		}
+		// Not live here. Absence is evidence of death only when we actually
+		// asked tmux and got an answer, AND this instance could have discovered
+		// the session: same tmux server AND a name our own discovery pattern
+		// can produce. Anything else belongs to someone else — a sibling
+		// worktree, another tmux server, an isolated test run — and pruning it
+		// is the td-8d18de data loss.
+		ours := definition.Namespace == ns && pattern.MatchString(definition.TmuxName)
+		if definition.Namespace == "" && pattern.MatchString(definition.TmuxName) {
+			// One-shot migration for pre-td-8d18de entries. A name only this
+			// working directory's discovery could produce can only have come
+			// from this machine's default tmux server, so claiming it is safe —
+			// and without the claim these entries could never be pruned and
+			// would linger as offline rows forever.
+			ours = true
+		}
+		if !discoveryFailed && ours {
 			changed = true
 			continue
 		}
 		definitions = append(definitions, definition)
-		delete(running, definition.TmuxName)
 	}
 
 	discovered := make([]string, 0, len(running))
@@ -223,6 +271,7 @@ func reconcileShellStartup(
 		definitions = append(definitions, ShellDefinition{
 			TmuxName:    name,
 			DisplayName: deriveShellDisplayName(workDir, name),
+			Namespace:   ns,
 			CreatedAt:   now,
 		})
 		changed = true
@@ -251,11 +300,22 @@ func reconcileShellStartup(
 		_ = hooks.setWorkspaceState(projectRoot, legacy)
 	}
 
+	// Survival and visibility are different questions. Definitions retained
+	// above because we could not prove they died may belong to a sibling
+	// worktree sharing this shells.json; listing them here would fill every
+	// worktree's sidebar with offline rows whose only action — recreate — fails
+	// against a session name that already exists elsewhere (td-8d18de).
 	shells := make([]*ShellSession, 0, len(definitions))
 	managed := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
-		shells = append(shells, shellSessionFromDefinition(definition, true, hooks.getPaneID))
-		managed[definition.TmuxName] = true
+		running := live[definition.TmuxName]
+		if !running && !pattern.MatchString(definition.TmuxName) {
+			continue
+		}
+		shells = append(shells, shellSessionFromDefinition(definition, running, hooks.getPaneID))
+		if running {
+			managed[definition.TmuxName] = true
+		}
 	}
 	return shells, managed
 }
@@ -276,20 +336,30 @@ func shellSessionFromDefinition(
 	if !running {
 		return shell
 	}
+	attachAgentToShell(shell, definition, paneID)
+	return shell
+}
 
+// attachAgentToShell gives a live shell the Agent every interactive path
+// requires. It is shared by first construction and by revival during a manifest
+// sync, so a shell that comes back is as usable as one that never left.
+func attachAgentToShell(shell *ShellSession, definition ShellDefinition, paneID func(string) string) {
 	displayType := AgentShell
 	if shell.ChosenAgent != AgentNone {
 		displayType = shell.ChosenAgent
+	}
+	startedAt := definition.CreatedAt
+	if startedAt.IsZero() {
+		startedAt = shell.CreatedAt
 	}
 	shell.Agent = &Agent{
 		Type:        displayType,
 		TmuxSession: definition.TmuxName,
 		TmuxPane:    paneID(definition.TmuxName),
 		OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
-		StartedAt:   definition.CreatedAt,
+		StartedAt:   startedAt,
 		Status:      AgentStatusRunning,
 	}
-	return shell
 }
 
 func deriveShellDisplayName(workDir, tmuxName string) string {
@@ -321,6 +391,12 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	}
 	if result.watcherErr != nil && p.ctx.Logger != nil {
 		p.ctx.Logger.Debug("shell manifest watcher unavailable", "error", result.watcherErr)
+	}
+	if result.discoveryErr != nil && p.ctx.Logger != nil {
+		// Nothing was pruned, so this is recoverable: press `r` once tmux is
+		// reachable again and the live sessions come back.
+		p.ctx.Logger.Warn("tmux session discovery failed; kept every manifest entry",
+			"error", result.discoveryErr)
 	}
 
 	p.shellManifest = result.manifest

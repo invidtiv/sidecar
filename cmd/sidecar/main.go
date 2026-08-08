@@ -16,11 +16,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	_ "github.com/marcus/sidecar/internal/adapter/amp"
+	_ "github.com/marcus/sidecar/internal/adapter/antigravity"
 	_ "github.com/marcus/sidecar/internal/adapter/claudecode"
 	_ "github.com/marcus/sidecar/internal/adapter/codex"
 	_ "github.com/marcus/sidecar/internal/adapter/copilot"
 	_ "github.com/marcus/sidecar/internal/adapter/cursor"
-	_ "github.com/marcus/sidecar/internal/adapter/antigravity"
 	_ "github.com/marcus/sidecar/internal/adapter/kiro"
 	_ "github.com/marcus/sidecar/internal/adapter/omp"
 	_ "github.com/marcus/sidecar/internal/adapter/opencode"
@@ -39,11 +39,13 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/notes"
 	"github.com/marcus/sidecar/internal/plugins/tdmonitor"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termtitle"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
@@ -63,6 +65,21 @@ var (
 
 func main() {
 	flag.Parse()
+
+	// Record -config before anything derives a path from it: the config
+	// directory is also where debug.log and state.json live, so pointing the
+	// flag at a temp dir moves the whole config axis (td-8d18de).
+	config.SetConfigPath(*configPath)
+
+	// Fail closed before anything touches the filesystem. This has to precede
+	// openLogFile, which creates the config directory and appends to debug.log:
+	// a run that claims isolation must not have already written the real user
+	// tree by the time it refuses to run (td-8d18de). CheckStateIsolation needs
+	// nothing from the config file — only the resolved state and config paths.
+	if err := config.CheckStateIsolation(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	// Unset TMUX so sidecar's internal tmux sessions are independent of any
 	// outer tmux session. This allows prefix+d to detach from the workspace's
@@ -128,7 +145,11 @@ func main() {
 	applyFeatureOverrides()
 
 	// Load persistent state (ignore errors - state is optional)
-	startuptrace.Track("state.Init", func() { _ = state.Init() })
+	// state.json lives next to config.json, so -config relocates it too.
+	// With no flag this is ~/.config/sidecar, identical to state.Init().
+	startuptrace.Track("state.Init", func() {
+		_ = state.InitWithDir(filepath.Dir(config.ConfigPath()))
+	})
 
 	// Create event dispatcher
 	dispatcher := event.NewWithLogger(logger)
@@ -149,6 +170,8 @@ func main() {
 	if projectRootPath == "" {
 		projectRootPath = workDir
 	}
+
+	logResolvedPaths(logger, projectRootPath)
 
 	// Apply theme from config (after workDir is known for per-project themes)
 	startuptrace.Track("theme.Resolve+Apply", func() {
@@ -332,8 +355,34 @@ func init() {
 
 // openLogFile creates/opens the debug log file in config directory.
 func openLogFile() (*os.File, error) {
-	logPath := filepath.Join(filepath.Dir(config.ConfigPath()), "debug.log")
+	dir := filepath.Dir(config.ConfigPath())
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	logPath := filepath.Join(dir, "debug.log")
 	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+// logResolvedPaths records, in one line, every root this process will write to.
+// Proof runs need it to confirm at a glance that both isolation axes actually
+// moved — tmux transport and Sidecar state are separate, and isolating only one
+// is what let a test overwrite a live shell manifest (td-8d18de).
+func logResolvedPaths(logger *slog.Logger, projectRootPath string) {
+	// Lookup, not Resolve: reporting a path must not create it.
+	manifest := "<not yet created>"
+	if dir, ok := projectdir.Lookup(projectRootPath); ok {
+		manifest = filepath.Join(dir, "shells.json")
+	}
+
+	line := fmt.Sprintf("sidecar paths: state=%s config=%s tmux-socket=%s project-root=%s manifest=%s",
+		config.StateDir(), config.ConfigPath(), tmuxenv.SocketPath(), projectRootPath, manifest)
+	logger.Info(line)
+
+	// Stderr is only safe here because bubbletea has not taken the screen yet.
+	// Exactly one line, and only when someone asked for it.
+	if os.Getenv("SIDECAR_DIAG_PATHS") == "1" || config.IsolationAsserted() {
+		fmt.Fprintln(os.Stderr, line)
+	}
 }
 
 // applyFeatureOverrides applies CLI feature flag overrides.

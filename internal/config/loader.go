@@ -18,6 +18,13 @@ const (
 // testConfigPath overrides the config path for testing.
 var testConfigPath string
 
+// overrideConfigPath is the -config flag value. Unlike testConfigPath it is a
+// real user-facing lever: it relocates config.json and everything derived from
+// its directory (debug.log, state.json), which is what makes -config a complete
+// config-axis isolation switch. ConfigPath() ignores XDG_CONFIG_HOME by design,
+// so this flag is the only way to move it.
+var overrideConfigPath string
+
 // testStateDir overrides the state directory for testing.
 var testStateDir string
 
@@ -30,6 +37,13 @@ func SetTestConfigPath(path string) {
 // ResetTestConfigPath clears the test config path override.
 func ResetTestConfigPath() {
 	testConfigPath = ""
+}
+
+// SetConfigPath records the explicit config path (the -config flag) so that
+// ConfigPath, and everything that derives a directory from it, follow it.
+// Passing "" leaves the default in place.
+func SetConfigPath(path string) {
+	overrideConfigPath = path
 }
 
 // SetTestStateDir sets a custom state directory for testing.
@@ -408,6 +422,9 @@ func ExpandPath(path string) string {
 func ConfigPath() string {
 	if testConfigPath != "" {
 		return testConfigPath
+	}
+	if overrideConfigPath != "" {
+		return overrideConfigPath
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
