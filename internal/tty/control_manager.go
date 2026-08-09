@@ -54,6 +54,20 @@ type ControlRequest struct {
 	Focused    bool
 	OnSnapshot func(ControlSnapshot)
 	OnFallback func(error)
+
+	// OnModelFrame opts this subscription into the byte-fed screen model
+	// (slice 1 of the td-64c916 spike). It is nil everywhere in production:
+	// with it nil no model is built, no extra tmux command is issued, and the
+	// %output payload is never even decoded, so ControlSnapshot delivery is
+	// bit-identical to the pre-slice-1 behavior.
+	//
+	// A frame is published only after a seed transaction and its post-seed
+	// replay have both completed. Until then — and forever, in this slice —
+	// capture/polling ownership is unchanged.
+	OnModelFrame func(ModelFrame)
+	// OnModelInvalid reports that the pane model needs a fresh seed or has
+	// stopped. It never implies anything about the capture path.
+	OnModelInvalid func(ModelInvalidation)
 }
 
 type managerControlSubscription struct {
@@ -462,7 +476,25 @@ type sessionControlClient struct {
 	panes      map[string]*paneCaptureState
 	closed     bool
 	closeOnce  sync.Once
+
+	// actions, models, modelTick, modelTimer and discardArmed belong to the
+	// ordered actor goroutine (run). Lifecycle calls arriving on other
+	// goroutines are funnelled through actions so that model state and pane
+	// bytes are only ever touched in one place, in receive order.
+	actions     chan func()
+	quit        chan struct{}
+	models      map[uint64]*paneModelFeed
+	modelTick   chan struct{}
+	modelTimer  bool
+	discardWait bool
 }
+
+// discardProbeInterval is how often a client with at least one live pane model
+// asks tmux for its client_discarded counter. It is a cadence, not a per-burst
+// command: growth means tmux dropped output for this client, which invalidates
+// every model on it. tmux's pause-after flow control normally pauses a pane
+// before discarding, so this is the backstop for the case where it does not.
+const discardProbeInterval = time.Second
 
 func newSessionControlClient(manager *ControlManager, session string, channel controlChannel, coalesce time.Duration) *sessionControlClient {
 	client := &sessionControlClient{
@@ -473,6 +505,10 @@ func newSessionControlClient(manager *ControlManager, session string, channel co
 		subs:       make(map[uint64]sessionSubscriber),
 		deliveries: make(map[uint64]*subscriberDeliveryGate),
 		panes:      make(map[string]*paneCaptureState),
+		actions:    make(chan func(), 256),
+		quit:       make(chan struct{}),
+		models:     make(map[uint64]*paneModelFeed),
+		modelTick:  make(chan struct{}, 1),
 	}
 	go client.run()
 	// Feature-detect flow control: older tmux versions return an error, which is
@@ -481,15 +517,31 @@ func newSessionControlClient(manager *ControlManager, session string, channel co
 	return client
 }
 
+// post hands work to the ordered actor. It never blocks past client shutdown.
+func (c *sessionControlClient) post(action func()) {
+	select {
+	case c.actions <- action:
+	case <-c.quit:
+	}
+}
+
+// run is the single ordered actor. Command responses reach it on the same
+// stream as %output notifications and carry their FIFO callback, so a seed
+// capture response is processed at exactly its position in the byte stream.
 func (c *sessionControlClient) run() {
 	for {
 		select {
+		case action := <-c.actions:
+			action()
 		case event := <-c.channel.Events():
 			c.handleEvent(event)
+		case <-c.modelTick:
+			c.publishModelFrames()
 		case err := <-c.channel.Done():
 			if err == nil {
 				err = fmt.Errorf("tmux control exited")
 			}
+			c.failAllModels(ResyncReconnect, err)
 			c.manager.clientFailed(c, err)
 			return
 		}
@@ -498,20 +550,44 @@ func (c *sessionControlClient) run() {
 
 func (c *sessionControlClient) handleEvent(event controlEvent) {
 	switch event.Kind {
+	case controlEventResponse:
+		// Invoked here rather than on the reader goroutine: this is the
+		// ordering barrier. Callbacks must not defer their work back onto the
+		// action queue or the barrier is lost.
+		if event.Callback != nil {
+			event.Callback(event.Response)
+		}
 	case controlEventOutput:
+		c.feedModels(event)
 		c.markDirty(event.Pane)
 	case controlEventLayout:
 		if event.Pane != "" {
+			c.requestSeedForPane(event.Pane, ResyncLayout)
 			c.markDirty(event.Pane)
 		} else {
+			c.requestSeedForAll(ResyncLayout)
 			c.markAllDirty()
 		}
 	case controlEventPause:
 		if controlPanePattern.MatchString(event.Pane) {
-			_ = c.channel.Send("refresh-client -A "+event.Pane+":continue", func(controlResponse) {})
+			// The pane target must be quoted. tmux's command parser treats a
+			// bare leading '%' as the start of a conditional directive, so
+			// `refresh-client -A %7:continue` is a parse error and the pane
+			// stays paused forever. Verified against tmux 3.6b.
+			_ = c.channel.Send("refresh-client -A '"+event.Pane+":continue'", func(controlResponse) {})
+			// tmux drops the pane's buffered output while it is paused, so
+			// byte continuity is broken across the pause regardless of how it
+			// is resumed.
+			c.requestSeedForPane(event.Pane, ResyncPause)
+		}
+	case controlEventContinue:
+		if controlPanePattern.MatchString(event.Pane) {
+			c.requestSeedForPane(event.Pane, ResyncPause)
 		}
 	case controlEventExit:
-		c.manager.clientFailed(c, fmt.Errorf("tmux control exit notification"))
+		err := fmt.Errorf("tmux control exit notification")
+		c.failAllModels(ResyncReconnect, err)
+		c.manager.clientFailed(c, err)
 	}
 }
 
@@ -532,6 +608,10 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 	c.mu.Unlock()
 	c.configureSize(sub.request.Width, sub.request.Height)
 	c.scheduleIfEligible(sub.request.Pane)
+	if sub.request.OnModelFrame != nil {
+		joined := sub
+		c.post(func() { c.startModelFeed(joined) })
+	}
 }
 
 func (c *sessionControlClient) remove(id uint64) {
@@ -546,6 +626,7 @@ func (c *sessionControlClient) remove(id uint64) {
 		delete(c.deliveries, id)
 	}
 	c.mu.Unlock()
+	c.post(func() { c.stopModelFeed(id) })
 }
 
 func (c *sessionControlClient) has(id, generation uint64) bool {
@@ -592,6 +673,11 @@ func (c *sessionControlClient) resize(id, generation uint64, width, height int) 
 	c.mu.Unlock()
 	c.configureSize(width, height)
 	c.scheduleIfEligible(pane)
+	// Conservative resize: tmux is resized first and the reseed reads back the
+	// authoritative resulting geometry. There is no in-model resize in this
+	// slice. tmux's own %layout-change for the applied size triggers a second
+	// reseed, which is what makes the final geometry authoritative.
+	c.post(func() { c.requestSeed(id, ResyncResize) })
 }
 
 func (c *sessionControlClient) configureSize(width, height int) {
@@ -790,6 +876,13 @@ func (c *sessionControlClient) close() {
 		for _, gate := range gates {
 			gate.wait()
 		}
+		// Best effort: release emulators on the actor that owns them. If the
+		// actor has already exited, its Done path did the same teardown.
+		select {
+		case c.actions <- func() { c.failAllModels(ResyncReconnect, errClientClosed) }:
+		default:
+		}
+		close(c.quit)
 		_ = c.channel.Close()
 	})
 }

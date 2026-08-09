@@ -297,10 +297,17 @@ func (m *Model) Seed(s Seed) error {
 
 // seedBody converts a capture-pane rendering into bytes the emulator can
 // replay. capture-pane separates rows with a bare "\n"; without the carriage
-// return the emulator would stair-step them. The final newline is dropped so
-// replaying a full-height capture does not scroll a row off immediately.
+// return the emulator would stair-step them.
+//
+// Output is row separated, not row terminated: N-1 newlines mean N rows, and
+// the seed writes exactly that many. A trailing newline therefore means a final
+// blank row and is honoured, because that is what tmux reports when the cursor
+// sits on an empty line below the content. An earlier version trimmed it, which
+// silently wrote one row too few and shifted the whole screen up by one against
+// the cursor position the same transaction reported — the first real
+// mid-stream seed lost a line to it. Callers that hold a shell-style
+// newline-terminated capture must strip that terminator themselves.
 func seedBody(output string) string {
-	output = strings.TrimSuffix(output, "\n")
 	return strings.ReplaceAll(output, "\n", "\r\n")
 }
 

@@ -35,6 +35,16 @@ func (f *fakeControlChannel) Send(command string, callback func(controlResponse)
 	return nil
 }
 
+func (f *fakeControlChannel) SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append(f.commands,
+		fakeControlCommand{text: first, callback: firstCallback},
+		fakeControlCommand{text: second, callback: secondCallback},
+	)
+	return nil
+}
+
 func (f *fakeControlChannel) Events() <-chan controlEvent { return f.events }
 func (f *fakeControlChannel) Done() <-chan error          { return f.done }
 func (f *fakeControlChannel) Close() error {
@@ -66,11 +76,23 @@ func (f *fakeControlChannel) respondCapture(index int, response controlResponse)
 	f.mu.Lock()
 	var metadata []fakeControlCommand
 	var captures []fakeControlCommand
+	// Seed transactions are the byte-fed model's, not the capture path's. They
+	// use the same two tmux commands, so they are excluded by the format field
+	// only the seed asks for.
+	skipNextCapture := false
 	for _, command := range f.commands {
+		if strings.Contains(command.text, "#{alternate_on}") {
+			skipNextCapture = true
+			continue
+		}
 		if strings.Contains(command.text, "display-message") {
 			metadata = append(metadata, command)
 		}
 		if strings.Contains(command.text, "capture-pane") {
+			if skipNextCapture {
+				skipNextCapture = false
+				continue
+			}
 			captures = append(captures, command)
 		}
 	}
@@ -488,7 +510,10 @@ func TestControlClientContinuesPausedPaneAndCapturesLayoutChange(t *testing.T) {
 	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0"}})
 
 	channel.events <- controlEvent{Kind: controlEventPause, Pane: "%7"}
-	waitFor(t, func() bool { return channel.commandCountContaining("refresh-client -A %7:continue") == 1 })
+	// The pane target must be quoted: tmux's parser reads a bare leading '%' as
+	// a conditional directive and rejects the whole command, which would leave
+	// the pane paused forever.
+	waitFor(t, func() bool { return channel.commandCountContaining("refresh-client -A '%7:continue'") == 1 })
 	channel.events <- controlEvent{Kind: controlEventLayout}
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 2 })
 }

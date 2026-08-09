@@ -53,8 +53,22 @@ func TestProcessControlChannelCorrelatesResponsesFIFO(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Responses are correlated FIFO on the reader goroutine but delivered on the
+	// single ordered event stream, so the callback travels with the event and is
+	// run by whoever drains it. That is the barrier the screen model relies on.
 	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Lines: []string{"one"}}})
 	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Lines: []string{"two"}}})
+	for range 2 {
+		select {
+		case event := <-channel.Events():
+			if event.Kind != controlEventResponse || event.Callback == nil {
+				t.Fatalf("event = %#v", event)
+			}
+			event.Callback(event.Response)
+		default:
+			t.Fatal("response was not placed on the ordered event stream")
+		}
+	}
 	if strings.Join(got, ",") != "one,two" {
 		t.Fatalf("callbacks = %#v", got)
 	}

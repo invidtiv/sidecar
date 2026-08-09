@@ -374,7 +374,12 @@ type seedInput struct {
 
 func (s seedInput) toSeed() Seed {
 	return Seed{
-		Output:        s.Output,
+		// Fixtures record `capture-pane -p` exactly as the shell printed it, so
+		// the final row carries a trailing terminator. Seed.Output is row
+		// separated rather than row terminated, so the terminator is stripped
+		// here rather than inside the model, where it is indistinguishable from
+		// a real trailing blank row.
+		Output:        strings.TrimSuffix(s.Output, "\n"),
 		Width:         s.Width,
 		Height:        s.Height,
 		CaptureBase:   s.CaptureBase,

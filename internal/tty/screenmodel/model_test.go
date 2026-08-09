@@ -405,3 +405,32 @@ func renderOnce(t *testing.T, input string, splits []int) Frame {
 	}
 	return f
 }
+
+// Seed.Output is row separated, not row terminated. tmux reports a trailing
+// blank row whenever the cursor sits on an empty line below the content, and
+// dropping it shifts the whole screen up by one against the cursor position
+// reported in the same transaction — which silently overwrote the last line of
+// the first real mid-stream seed.
+func TestSeedHonoursATrailingBlankRow(t *testing.T) {
+	m := New(6, 4)
+	defer m.Close()
+	// Four rows: two of content and two blank, with the cursor on row 2.
+	if err := m.Seed(Seed{Output: "aa\nbb\n\n", Width: 6, Height: 4, CursorRow: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write([]byte("cc")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Split(f.Output, "\n")
+	if len(rows) != 4 {
+		t.Fatalf("frame rows = %d: %q", len(rows), f.Output)
+	}
+	if strings.TrimSpace(rows[0]) != "aa" || strings.TrimSpace(rows[1]) != "bb" ||
+		strings.TrimSpace(rows[2]) != "cc" {
+		t.Fatalf("seed lost a row: %#v", rows)
+	}
+}
