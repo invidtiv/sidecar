@@ -1,10 +1,14 @@
 # Plan: Graduate the byte-fed tmux terminal integration
 
-**Task:** `td-94e749` — Graduate or retire the byte-fed terminal canary flag
+**Task:** `td-94e749` — Graduate or retire the byte-fed terminal rollout flag
 
 **Upstream follow-ups:** `td-a04666`
 
-**Decision:** Graduate the byte-fed renderer. Marcus has judged the live canary
+**Status (2026-08-09): Complete.** Implementation, isolated real-app
+fallback/reseed proof, focused/race/full/build gates, managed worktree install
+proof, slice reviews, and final integrated review all passed.
+
+**Decision:** Graduate the byte-fed renderer. Marcus has judged the live rollout
 materially better overall despite the known `x/vt` gaps. Those gaps remain
 tracked upstream, but they no longer block adoption.
 
@@ -30,12 +34,12 @@ control mode or the byte-fed model is unavailable. What is removed is the old
 *steady-state capture renderer* and its duplicate terminal-state heuristics,
 not the recovery path.
 
-The `tmux_byte_screen` launch/config flag and all flag-only branches disappear.
-There is one intended rendering path rather than a permanent old/new toggle.
+The temporary launch/config rollout switch and all switch-only branches are
+removed. There is one intended rendering path rather than an old/new toggle.
 
-## Current state
+## Implemented state
 
-The canary already provides the hard transport and rendering pieces:
+The shared component now provides the hard transport and rendering pieces:
 
 ```text
 tmux %output bytes
@@ -45,19 +49,19 @@ tmux %output bytes
   -> OutputBuffer and existing terminal viewport
   -> native cursor, modes, history, search, and selection
 
-model cannot establish/retain authority
+model cannot establish/retain presentation
   -> capture seed or keyed polling fallback
 ```
 
-The remaining product split is at the consumers:
+Every consumer now uses that component:
 
-| Consumer | Current authority | Required result |
+| Consumer | Implemented presentation contract |
 | --- | --- | --- |
-| Per-worktree terminal panel | Byte-fed only with `tmux_byte_screen` | Byte-fed unconditionally |
-| Worktree agent preview/interactive pane | Control-driven `capture-pane` | Same byte-fed subscription and fallback contract |
-| Project shell preview/interactive pane and terminal panel | Control-driven `capture-pane` (panel can opt into the flag) | Same byte-fed subscription and fallback contract |
-| Files inline editor | `tty.Model` polling `capture-pane` | Shared byte-fed `tty.Model` lifecycle |
-| Notes inline editor | `tty.Model` polling `capture-pane` | Shared byte-fed `tty.Model` lifecycle |
+| Per-worktree terminal panel | Shared byte-fed model with capture seed/recovery |
+| Worktree agent preview/interactive pane | Shared byte-fed model; separate semantic activity observation |
+| Project shell preview/interactive pane and terminal panel | Shared byte-fed model; separate semantic activity observation |
+| Files inline editor | Shared byte-fed `tty.Model` lifecycle |
+| Notes inline editor | Shared byte-fed `tty.Model` lifecycle |
 
 The model adapter, control protocol, ordered seed barrier, alternate-screen
 seeding, invalidation, capture fallback, output buffer, and viewport already
@@ -125,7 +129,7 @@ Plugins own only their product and layout policy:
   epochs, and the terminal's pane origin.
 
 Neither the component API nor plugin code should expose `ControlManager`,
-`screenmodel`, capture polling, model frames, or an authority feature flag. A
+`screenmodel`, capture polling, model frames, or a renderer feature flag. A
 future plugin should be able to embed a terminal by supplying a target and
 viewport, routing `Update`, and rendering `View`/`Cursor`, without implementing
 transport or recovery logic.
@@ -134,7 +138,7 @@ transport or recovery logic.
 
 ### 1. Establish the shared model-first terminal component
 
-- Refactor the proven canary lifecycle behind the one reusable terminal-surface
+- Refactor the proven rollout lifecycle behind the one reusable terminal-surface
   API described above. Preserve the existing `internal/tty/screenmodel` adapter
   and session-pooled `ControlManager` internally; do not leak either one to
   plugins.
@@ -165,7 +169,7 @@ the shared component.
 ### 2. Make the shared component the ordinary Worktrees and workspace contract
 
 - Remove the feature check from
-  `internal/plugins/workspace/terminal_control.go` and request model authority
+  `internal/plugins/workspace/terminal_control.go` and request model presentation
   for every visible per-worktree terminal panel, worktree agent, project shell,
   and shell terminal-panel consumer.
 - Replace the plugin-private control/model lifecycle with the shared terminal
@@ -177,12 +181,12 @@ the shared component.
 - Preserve the independently scheduled semantic status cadence for agent
   activity. Verify List, Interactive, and Kanban behavior against actual agent
   and shell consumers rather than treating rendered output as status evidence.
-- Preserve mixed-subscriber correctness: a capture-authoritative or diagnostic
-  subscriber sharing a pane must still receive its captures, and one
-  subscriber's failure must not revoke another subscriber's valid authority.
-- Replace canary-specific names and comments (`ModelAuthority`, panel-only
-  helpers, “default-off”) with names that describe the permanent contract. Keep
-  an explicit authority state if it still distinguishes seeded model delivery
+- Preserve mixed-subscriber correctness: a capture-dependent diagnostic or
+  semantic subscriber sharing a pane must still receive its captures, and one
+  subscriber's failure must not revoke another subscriber's valid presentation.
+- Replace rollout-era ownership names, panel-only helpers, and opt-in comments
+  with names that describe the permanent presentation contract. Keep
+  an explicit live-model state if it still distinguishes seeded model delivery
   from provisional/fallback capture; remove it if it has become an always-true
   request option.
 
@@ -203,7 +207,7 @@ truthful in List and Kanban.
   copy-pasting lifecycle or fallback logic into each plugin.
 - Verify Files tab switching and editor reattachment: an inactive tab must not
   keep applying frames, and returning to the tab must seed the still-running
-  tmux editor before transferring authority.
+  tmux editor before transferring presentation.
 - Verify Notes autosave and project reinitialization remain independent of the
   renderer. A stale terminal message must never reach a newly opened note or a
   store from the previous project epoch.
@@ -212,7 +216,7 @@ truthful in List and Kanban.
   keys, multiline paste, editor exit, and full tmux attach.
 
 Acceptance evidence for this slice: the real Files and Notes inline-editor
-journeys are model-authoritative in an isolated Sidecar run, and instrumentation
+journeys use model presentation in an isolated Sidecar run, and instrumentation
 shows no steady-state `capture-pane` for ordinary editor output. Run the shared
 embedding contract against Worktrees, Files, and Notes and prove that the
 component contains no plugin-name/type switch or callback that exposes its
@@ -220,9 +224,9 @@ transport internals.
 
 ### 4. Remove the old product path and temporary rollout surface
 
-- Delete `features.TmuxByteScreen`, its registry/default test, CLI/config
-  discoverability, and the `--enable-feature=tmux_byte_screen` behavior.
-- Remove flag-disabled tests and rewrite canary-specific tests as permanent
+- Delete the temporary renderer feature symbol, registry/default test, and
+  CLI/config discoverability.
+- Remove flag-disabled tests and rewrite rollout-specific tests as permanent
   contract and fallback tests. Keep negative tests for failure recovery rather
   than preserving an artificial “old mode”.
 - Delete code used only by steady-state capture rendering: redundant
@@ -232,16 +236,16 @@ transport internals.
   worktree-only copy of the legacy renderer may remain.
 - Keep `SIDECAR_TMUX_SCREEN_COMPARE` only if it remains useful as a diagnostic
   oracle for upstream upgrades. It is not a user-selectable renderer and must
-  not restore capture authority in normal operation.
+  not restore capture presentation in normal operation.
 - Update the shell-integration skill, feature documentation, headless-testing
   guidance, transport decision record, and the earlier byte-screen plan to say
-  that model authority is the normal path and capture is the bootstrap/recovery
+  that model presentation is the normal path and capture is the bootstrap/recovery
   adapter.
 - Record the explicit graduation decision and the non-blocking status of
   `td-a04666` in `td-94e749`.
 
-Acceptance evidence for this slice: repository search finds no stale
-`tmux_byte_screen` symbol/string or default-off/canary claim, and there is no
+Acceptance evidence for this slice: repository search finds no stale rollout
+switch or experimental-renderer claim, and there is no
 reachable healthy-state capture renderer hidden behind another condition.
 
 ## Test and proof plan

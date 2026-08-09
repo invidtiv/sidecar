@@ -13,9 +13,9 @@ import (
 // These benchmarks isolate the two per-burst paths inside Sidecar so that
 // question has a number instead of an argument.
 //
-// What they do NOT measure, and what no in-process benchmark can measure while
-// capture-pane is still authoritative: tmux's own cost of rendering and
-// serialising a 624-line capture, and the round trip for it. The capture path's
+// What they do NOT measure, and what no in-process benchmark can measure:
+// tmux's own cost of rendering and serialising a 624-line capture, and the
+// round trip for it. The capture path's
 // real cost is therefore *under*-stated here, and the model path's advantage is
 // correspondingly understated. The end-to-end latency comparison in the soak
 // test is the measurement that includes both sides.

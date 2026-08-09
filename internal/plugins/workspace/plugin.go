@@ -135,12 +135,14 @@ type Plugin struct {
 	width   int
 	height  int
 
-	// Persistent tmux control-mode transport for visible terminal surfaces.
-	controlManager     workspaceControlManager
-	controlMailbox     *workspaceControlMailbox
-	controlConsumers   map[workspaceControlRole]*workspaceControlConsumer
-	controlNextToken   uint64
-	applicationFocused bool
+	// Shared terminal components for the selected primary pane and its optional
+	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
+	// tty.Model owns transport, model presentation, fallback, input, and delivery.
+	primaryTerminal       *tty.Model
+	panelTerminal         *tty.Model
+	primaryTerminalTarget workspaceTerminalTarget
+	panelTerminalTarget   workspaceTerminalTarget
+	applicationFocused    bool
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -546,16 +548,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activityAnimationFrame = 0
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
-	p.stopTerminalControls()
+	p.stopTerminalModels()
 	p.ctx = ctx
 	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
 	p.repoSnapshot = nil
 	p.refreshOperationID = ""
 	p.activeLifecycleOperationID = ""
 	p.resetLifecycleState()
-	p.controlManager = tty.NewControlManager()
-	p.controlMailbox = newWorkspaceControlMailbox()
-	p.controlConsumers = make(map[workspaceControlRole]*workspaceControlConsumer)
+	p.resetTerminalModels()
 	p.applicationFocused = true
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
@@ -563,7 +563,6 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()
-	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	// Reset agent-related state for clean reinit (important for project switching)
 	// Without this, reconnectAgents() won't run again after switching projects
@@ -682,7 +681,6 @@ func (p *Plugin) Start() tea.Cmd {
 	return tea.Batch(
 		p.refreshWorktrees(),
 		p.loadShellStartup(),
-		p.listenForTerminalControl(),
 	)
 }
 
@@ -693,7 +691,7 @@ func (p *Plugin) Stop() {
 		p.operationCancel = nil
 	}
 	p.invalidateShellStartup()
-	p.stopTerminalControls()
+	p.stopTerminalModels()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
 }

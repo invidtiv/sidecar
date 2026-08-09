@@ -24,11 +24,15 @@ type InlineEditStartedMsg struct {
 	FilePath      string
 	OriginalMtime time.Time // File mtime before editing (to detect changes)
 	Editor        string    // Editor command used (vim, nano, emacs, etc.)
+	Activation    uint64
+	Epoch         uint64
 }
 
 // InlineEditExitedMsg is sent when inline edit mode exits.
 type InlineEditExitedMsg struct {
-	FilePath string
+	FilePath   string
+	Activation uint64
+	Epoch      uint64
 }
 
 // enterInlineEditMode starts inline editing for the specified file.
@@ -50,6 +54,12 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 	// off the bottom of the pane (td-a87445).
 	editorWidth := p.calculateInlineEditorWidth()
 	editorHeight := p.calculateInlineEditorHeight()
+	p.inlineEditActivation++
+	activation := p.inlineEditActivation
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
 
 	return func() tea.Msg {
 		if !tty.EditorAvailable() {
@@ -84,12 +94,17 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 			FilePath:      path,
 			OriginalMtime: origMtime,
 			Editor:        session.Editor,
+			Activation:    activation,
+			Epoch:         epoch,
 		}
 	}
 }
 
 // handleInlineEditStarted processes the InlineEditStartedMsg and activates the tty model.
 func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
+	if msg.Activation != p.inlineEditActivation || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
+		return p.cleanupStaleInlineEditStart(msg)
+	}
 	p.inlineEditMode = true
 	p.activePane = PanePreview
 	p.inlineEditSession = msg.SessionName
@@ -98,9 +113,10 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	p.inlineEditEditor = msg.Editor
 
 	// Configure the tty model callbacks
+	activation, epoch, filePath := msg.Activation, msg.Epoch, msg.FilePath
 	p.inlineEditor.OnExit = func() tea.Cmd {
 		return func() tea.Msg {
-			return InlineEditExitedMsg{FilePath: p.inlineEditFile}
+			return InlineEditExitedMsg{FilePath: filePath, Activation: activation, Epoch: epoch}
 		}
 	}
 	p.inlineEditor.OnAttach = func() tea.Cmd {
@@ -111,9 +127,9 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	// Enter interactive mode on the tty model
 	width := p.calculateInlineEditorWidth()
 	height := p.calculateInlineEditorHeight()
-	p.inlineEditor.SetDimensions(width, height)
+	p.inlineEditor.Resize(width, height)
 
-	enterCmd := p.inlineEditor.Enter(msg.SessionName, "")
+	enterCmd := p.inlineEditor.Open(tty.Target{Session: msg.SessionName})
 
 	// Show copy/paste hint toast on first entry
 	if !p.inlineEditCopyPasteHintShown {
@@ -127,6 +143,18 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 		return tea.Batch(enterCmd, hintCmd)
 	}
 	return enterCmd
+}
+
+func (p *Plugin) cleanupStaleInlineEditStart(msg InlineEditStartedMsg) tea.Cmd {
+	// A delayed start may refer to a name that tmux has since reused for the
+	// currently active editor. Never let stale-message cleanup kill the target
+	// that owns the live model activation.
+	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		if p.inlineEditSession == msg.SessionName || p.inlineEditor.GetTarget() == msg.SessionName {
+			return nil
+		}
+	}
+	return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
 }
 
 // getInlineEditCopyKey returns the configured copy key for inline edit mode.
@@ -178,11 +206,18 @@ func (p *Plugin) reattachInlineEditSession() tea.Cmd {
 		return nil
 	}
 	p.activePane = PanePreview
+	p.inlineEditActivation++
+	activation := p.inlineEditActivation
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
+	filePath := p.inlineEditFile
 
 	// Configure the tty model callbacks (same as handleInlineEditStarted)
 	p.inlineEditor.OnExit = func() tea.Cmd {
 		return func() tea.Msg {
-			return InlineEditExitedMsg{FilePath: p.inlineEditFile}
+			return InlineEditExitedMsg{FilePath: filePath, Activation: activation, Epoch: epoch}
 		}
 	}
 	p.inlineEditor.OnAttach = func() tea.Cmd {
@@ -192,9 +227,9 @@ func (p *Plugin) reattachInlineEditSession() tea.Cmd {
 	// Enter interactive mode with the existing session
 	width := p.calculateInlineEditorWidth()
 	height := p.calculateInlineEditorHeight()
-	p.inlineEditor.SetDimensions(width, height)
+	p.inlineEditor.Resize(width, height)
 
-	return p.inlineEditor.Enter(p.inlineEditSession, "")
+	return p.inlineEditor.Open(tty.Target{Session: p.inlineEditSession})
 }
 
 // exitInlineEditMode cleans up inline edit state and kills the tmux session.
@@ -205,8 +240,13 @@ func (p *Plugin) exitInlineEditMode() {
 	p.inlineEditFile = ""
 	p.inlineEditOrigMtime = time.Time{}
 	p.inlineEditEditor = ""
+	p.inlineEditActivation++
 	p.inlineEditorDragging = false
-	p.inlineEditor.Exit()
+	p.inlineEditor.Close()
+}
+
+func (p *Plugin) ownsInlineEditMessage(activation, epoch uint64) bool {
+	return p.ctx != nil && activation == p.inlineEditActivation && epoch == p.ctx.Epoch
 }
 
 // isInlineEditSessionAlive checks if the tmux session for inline editing still exists.

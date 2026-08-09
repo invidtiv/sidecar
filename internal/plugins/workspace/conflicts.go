@@ -1,13 +1,5 @@
 package workspace
 
-import (
-	"context"
-	"os/exec"
-	"strings"
-
-	tea "charm.land/bubbletea/v2"
-)
-
 // Conflict represents a file conflict between worktrees.
 type Conflict struct {
 	Worktrees []string // Stable keys of worktrees with overlapping dirty files
@@ -21,54 +13,8 @@ type ConflictsDetectedMsg struct {
 	Err       error
 }
 
-// detectConflicts scans all worktrees for files modified in multiple worktrees.
-// Returns a list of conflicts where each conflict indicates which worktrees
-// are modifying the same files.
+// conflictCandidate identifies a worktree for conflict detection.
 type conflictCandidate struct{ Key, Name, Path string }
-
-func detectConflicts(worktrees []conflictCandidate) []Conflict {
-	if len(worktrees) < 2 {
-		return nil // Need at least 2 worktrees for conflicts
-	}
-
-	// Build a map of modified files per worktree
-	filesByWorktree := make(map[string][]string)
-	names := make(map[string]string, len(worktrees))
-	for _, wt := range worktrees {
-		changes, _ := collectWorktreeChanges(context.Background(), wt.Path, nil)
-		if changes.Err != nil {
-			continue
-		}
-		names[wt.Key] = wt.Name
-		if len(changes.Dirty) > 0 {
-			filesByWorktree[wt.Key] = changes.Dirty
-		}
-	}
-
-	// Find overlaps between worktrees
-	var conflicts []Conflict
-	worktreeNames := make([]string, 0, len(filesByWorktree))
-	for name := range filesByWorktree {
-		worktreeNames = append(worktreeNames, name)
-	}
-
-	for i := 0; i < len(worktreeNames); i++ {
-		for j := i + 1; j < len(worktreeNames); j++ {
-			wt1 := worktreeNames[i]
-			wt2 := worktreeNames[j]
-
-			overlap := intersection(filesByWorktree[wt1], filesByWorktree[wt2])
-			if len(overlap) > 0 {
-				conflicts = append(conflicts, Conflict{
-					Worktrees: []string{names[wt1], names[wt2]},
-					Files:     overlap,
-				})
-			}
-		}
-	}
-
-	return conflicts
-}
 
 func detectConflictsFromChanges(worktrees []*Worktree) []Conflict {
 	candidates := make([]conflictCandidate, 0, len(worktrees))
@@ -90,57 +36,6 @@ func detectConflictsFromChanges(worktrees []*Worktree) []Conflict {
 		}
 	}
 	return result
-}
-
-// loadConflicts returns a command to detect conflicts across worktrees.
-func (p *Plugin) loadConflicts() tea.Cmd {
-	_, scope := p.newOperationScope(nil)
-	candidates := make([]conflictCandidate, 0, len(p.worktrees))
-	for _, wt := range p.worktrees {
-		candidates = append(candidates, conflictCandidate{Key: wt.IdentityKey(), Name: wt.Name, Path: wt.Path})
-	}
-	return func() tea.Msg {
-		conflicts := detectConflicts(candidates)
-		return ConflictsDetectedMsg{OperationScope: scope, Conflicts: conflicts}
-	}
-}
-
-// getModifiedFiles returns a list of files modified in the worktree.
-// This includes both staged and unstaged changes.
-func getModifiedFiles(workdir string) ([]string, error) {
-	// Get list of modified files (staged + unstaged) relative to HEAD
-	cmd := exec.Command("git", "diff", "--name-only", "HEAD")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
-	if err != nil {
-		// No HEAD yet or other error, try just diff
-		cmd = exec.Command("git", "diff", "--name-only")
-		cmd.Dir = workdir
-		output, _ = cmd.Output()
-	}
-
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			files = append(files, line)
-		}
-	}
-
-	// Also get untracked files that are new
-	cmd = exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	cmd.Dir = workdir
-	untrackedOutput, err := cmd.Output()
-	if err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(untrackedOutput)), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				files = append(files, line)
-			}
-		}
-	}
-
-	return files, nil
 }
 
 // intersection returns the common elements between two slices.

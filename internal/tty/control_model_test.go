@@ -208,7 +208,7 @@ func extractNumbers(output string) []string {
 }
 
 // No frame may be published before the seed and its replay complete: until then
-// the consumer owns nothing and the existing capture path is still authoritative.
+// provisional capture remains the presentation source.
 func TestControlModelPublishesNoFrameBeforeSeedCompletes(t *testing.T) {
 	recorder := &modelRecorder{}
 	_, _, channel := startModelSubscription(t, recorder)
@@ -439,16 +439,16 @@ func TestCaptureDeliveryUnchangedWhenModelPathOff(t *testing.T) {
 	}
 }
 
-func TestModelAuthoritySuppressesOnlySteadyStateOutputCaptures(t *testing.T) {
+func TestModelPresentationSuppressesOnlySteadyStateOutputCaptures(t *testing.T) {
 	recorder := &modelRecorder{}
 	factory := newFakeControlFactory()
 	manager := newControlManager(factory.create, time.Millisecond)
 	defer manager.Stop()
 	sub, err := manager.Subscribe(ControlRequest{
 		Session: "one", Pane: "%1", Visible: true, Focused: true, Scrollback: 100,
-		ModelAuthority: true,
-		OnModelFrame:   recorder.onFrame,
-		OnModelInvalid: recorder.onInvalid,
+		ModelPresentation: true,
+		OnModelFrame:      recorder.onFrame,
+		OnModelInvalid:    recorder.onInvalid,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -483,14 +483,14 @@ func TestModelAuthoritySuppressesOnlySteadyStateOutputCaptures(t *testing.T) {
 	}
 }
 
-func TestModelAuthorityDoesNotSuppressSamePaneUnfocusedCaptureSubscriber(t *testing.T) {
+func TestModelPresentationDoesNotSuppressSamePaneUnfocusedCaptureSubscriber(t *testing.T) {
 	recorder := &modelRecorder{}
 	factory := newFakeControlFactory()
 	manager := newControlManager(factory.create, time.Millisecond)
 	defer manager.Stop()
 	authority, err := manager.Subscribe(ControlRequest{
 		Session: "one", Pane: "%1", Visible: true, Focused: true, Scrollback: 100,
-		ModelAuthority: true, OnModelFrame: recorder.onFrame,
+		ModelPresentation: true, OnModelFrame: recorder.onFrame,
 	})
 	if err != nil {
 		t.Fatal(err)

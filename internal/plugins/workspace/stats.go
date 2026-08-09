@@ -12,37 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 const maxUntrackedTotalBytes int64 = 4 << 20
-
-// loadStats remains for operation-completion refreshes. Normal repository
-// refreshes populate Worktree.Changes and Worktree.Stats together in one
-// bounded pass (see loadRefreshChanges).
-func (p *Plugin) loadStats(wt *Worktree) tea.Cmd {
-	if wt == nil {
-		return nil
-	}
-	ctx, scope := p.newOperationScope(wt)
-	path, name := wt.Path, wt.Name
-	return func() tea.Msg {
-		changes, stats := collectWorktreeChanges(ctx, path, nil)
-		if changes.Err != nil {
-			return StatsErrorMsg{OperationScope: scope, WorkspaceName: name,
-				Command: "git status --porcelain=v1 -z --untracked-files=all", Err: changes.Err}
-		}
-		return StatsLoadedMsg{OperationScope: scope, WorkspaceName: name, Stats: stats}
-	}
-}
-
-// computeStats is retained as a focused helper for callers/tests, but uses the
-// same authoritative status/stat collection as refresh.
-func computeStats(workdir string) (*GitStats, error) {
-	changes, stats := collectWorktreeChanges(context.Background(), workdir, nil)
-	return stats, changes.Err
-}
 
 func collectWorktreeChanges(ctx context.Context, workdir string, processes *atomic.Int64) (*WorktreeChanges, *GitStats) {
 	changes := &WorktreeChanges{State: LoadStateLoading}
@@ -189,17 +161,3 @@ func countLinesBounded(r io.Reader, limit int64) (int, error) {
 	return n, s.Err()
 }
 
-func getAheadBehind(workdir string, stats *GitStats) error {
-	cmd := exec.Command("git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
-	if err != nil {
-		return err
-	}
-	parts := strings.Fields(strings.TrimSpace(string(output)))
-	if len(parts) == 2 {
-		stats.Behind, _ = strconv.Atoi(parts[0])
-		stats.Ahead, _ = strconv.Atoi(parts[1])
-	}
-	return nil
-}

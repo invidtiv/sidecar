@@ -793,6 +793,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	// Capture references before spawning closure to avoid data races
 	maxBytes := p.tmuxCaptureMaxBytes
 	agentType := shell.Agent.Type
+	modelPresentation := p.primaryTerminalOwns("shell", tmuxName)
+	semanticScreen := shellSemanticNeedsScreen(agentType)
+	ctx := p.ctx
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
@@ -834,6 +837,28 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	}
 
 	return func() tea.Msg {
+		if ctx != nil {
+			traceTerminalCapture(ctx.Logger, "workspace", "shell", "semantic_activity", generation)
+		}
+		if modelPresentation && !semanticScreen {
+			capture, err := capturePaneEvidence(tmuxName)
+			if err != nil {
+				return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
+			}
+			capturedAt := time.Now()
+			observation := agentactivity.Observation{
+				PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+			}
+			observedAgentType := AgentType(agentactivity.Identify(observation))
+			if observedAgentType == "" {
+				observedAgentType = agentType
+			}
+			return ShellOutputMsg{
+				TmuxName: tmuxName, Generation: generation, AgentType: observedAgentType,
+				CapturedAt: capturedAt, PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand,
+				PaneHeight: capture.PaneHeight, PaneWidth: capture.PaneWidth,
+			}
+		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
 			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
@@ -919,12 +944,13 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 // scheduleShellPollByName schedules a poll for a specific shell's output by name.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when shells are removed.
 func (p *Plugin) scheduleShellPollByName(tmuxName string, delay time.Duration) tea.Cmd {
-	if p.primaryControlUsing("shell", tmuxName) {
-		return nil
-	}
 	return p.pollScheduler.Schedule(shellPollKey(tmuxName), delay, func(gen int) tea.Msg {
 		return pollShellByNameMsg{TmuxName: tmuxName, Generation: gen}
 	})
+}
+
+func shellSemanticNeedsScreen(agentType AgentType) bool {
+	return supportsAgentActivity(agentType)
 }
 
 // findShellByName returns the shell with the given TmuxName, or nil if not found.

@@ -56,7 +56,7 @@ func (a *Adapter) sessionsFromStateDB(projectRoot string) ([]adapter.Session, bo
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(0)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), stateDBReadTimeout)
 	defer cancel()
@@ -64,7 +64,7 @@ func (a *Adapter) sessionsFromStateDB(projectRoot string) ([]adapter.Session, bo
 	if err != nil {
 		return nil, false
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	resolved := newResolvedProjectPath(projectRoot)
 	sessions := make([]adapter.Session, 0, 64)
@@ -190,7 +190,7 @@ func (a *Adapter) sessionByIDFromStateDB(sessionID string) (*adapter.Session, bo
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(0)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), stateDBReadTimeout)
 	defer cancel()
 	row := db.QueryRowContext(ctx, stateThreadsQuery+" AND id = ?", sessionID)
@@ -251,9 +251,7 @@ func (a *Adapter) SessionIDFromPath(path string) (string, error) {
 				a.cacheSessionPath(id, path)
 				return id, nil
 			}
-			if err != nil && err != sql.ErrNoRows {
-				// Schema drift falls through to rollout metadata.
-			}
+			// Any other outcome, including schema drift, falls through to rollout metadata.
 		}
 	}
 	info, err := os.Stat(path)
@@ -280,7 +278,7 @@ func (a *Adapter) rolloutPathFromStateDB(sessionID string) (string, bool) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(0)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var path string
 	ctx, cancel := context.WithTimeout(context.Background(), stateDBReadTimeout)
 	defer cancel()

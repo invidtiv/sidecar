@@ -81,7 +81,7 @@ func removePendingCreation(plan *CreateOperationPlan) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		return file.Sync()
 	})
 }
@@ -376,7 +376,7 @@ func containedRegularFile(root, rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return file.Name(), nil
 }
 
@@ -403,7 +403,7 @@ func openContainedRegularFileWithHook(root, rel string, beforeWalk func()) (*os.
 	if err != nil {
 		return nil, err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	leaf := filepath.Base(filepath.Clean(rel))
 	fd, err := unix.Openat(int(dir.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -413,11 +413,11 @@ func openContainedRegularFileWithHook(root, rel string, beforeWalk func()) (*os.
 	file := os.NewFile(uintptr(fd), target)
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("artifact is not a regular file: %s", target)
 	}
 	return file, nil
@@ -442,7 +442,7 @@ func walkPinnedDirectory(current *os.File, rel string, create bool) (*os.File, e
 		return current, nil
 	}
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		current.Close()
+		_ = current.Close()
 		return nil, fmt.Errorf("directory path escapes pinned root")
 	}
 	for _, component := range strings.Split(clean, string(filepath.Separator)) {
@@ -451,14 +451,14 @@ func walkPinnedDirectory(current *os.File, rel string, create bool) (*os.File, e
 		}
 		if create {
 			if err := unix.Mkdirat(int(current.Fd()), component, 0755); err != nil && !errors.Is(err, unix.EEXIST) {
-				current.Close()
+				_ = current.Close()
 				return nil, err
 			}
 		}
 		nextFD, err := unix.Openat(int(current.Fd()), component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 		if err != nil {
 			path := filepath.Join(current.Name(), component)
-			current.Close()
+			_ = current.Close()
 			return nil, normalizeContainmentOpenError(path, err)
 		}
 		next := os.NewFile(uintptr(nextFD), filepath.Join(current.Name(), component))
@@ -570,7 +570,7 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 	if err != nil {
 		return nil, fmt.Errorf("pin destination parent: %w", err)
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	leaf := filepath.Base(plan.Path)
 	if fd, openErr := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0); openErr == nil {
 		_ = unix.Close(fd)
@@ -582,7 +582,7 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 	if err != nil {
 		return nil, fmt.Errorf("pin destination root: %w", err)
 	}
-	defer rootDir.Close()
+	defer func() { _ = rootDir.Close() }()
 	stagingName, err := mkdirPinnedTemp(rootDir)
 	if err != nil {
 		return nil, fmt.Errorf("create pinned staging directory: %w", err)
@@ -732,7 +732,7 @@ func writeDurableFile(path string, data []byte, mode os.FileMode) (err error) {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
 
@@ -745,7 +745,7 @@ func runSetupHookContextWithHook(ctx context.Context, plan *CreateOperationPlan,
 	if err != nil {
 		return fmt.Errorf("validate setup hook: %w", err)
 	}
-	defer hook.Close()
+	defer func() { _ = hook.Close() }()
 	cmd := exec.CommandContext(ctx, "bash", "/dev/fd/3")
 	cmd.ExtraFiles = []*os.File{hook}
 	cmd.Dir = plan.Path

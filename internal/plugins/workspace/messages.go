@@ -22,7 +22,7 @@ type RefreshDoneMsg struct {
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m RefreshDoneMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
+func (m RefreshDoneMsg) GetEpoch() uint64 { return m.Epoch }
 
 // WatchEventMsg signals a filesystem change was detected.
 type WatchEventMsg struct {
@@ -87,7 +87,7 @@ type DiffLoadedMsg struct {
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m DiffLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
+func (m DiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // DiffErrorMsg signals diff loading failed.
 type DiffErrorMsg struct {
@@ -98,7 +98,7 @@ type DiffErrorMsg struct {
 	BaseRef       string
 }
 
-func (m DiffErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
+func (m DiffErrorMsg) GetEpoch() uint64 { return m.Epoch }
 
 // StatsLoadedMsg delivers git stats for a worktree.
 type StatsLoadedMsg struct {
@@ -108,7 +108,7 @@ type StatsLoadedMsg struct {
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m StatsLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
+func (m StatsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // StatsErrorMsg signals stats loading failed.
 type StatsErrorMsg struct {
@@ -118,7 +118,7 @@ type StatsErrorMsg struct {
 	Command       string
 }
 
-func (m StatsErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
+func (m StatsErrorMsg) GetEpoch() uint64 { return m.Epoch }
 
 // CreateWorktreeMsg requests worktree creation.
 type CreateWorktreeMsg struct {

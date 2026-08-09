@@ -289,7 +289,7 @@ func pollPRContext(ctx context.Context, dir string, identity PRIdentity) PRPollR
 	if got.Number != identity.Number || (identity.NodeID != "" && got.NodeID != identity.NodeID) {
 		return PRPollResult{Kind: PRPollRepository, Identity: identity, Err: errors.New("GitHub returned a different pull request identity")}
 	}
-	kind := PRPollOpen
+	var kind PRPollKind
 	switch got.State {
 	case "MERGED":
 		kind = PRPollMerged

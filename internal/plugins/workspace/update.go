@@ -723,7 +723,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
-			if wt.Agent.OutputBuf != nil {
+			modelOwns := p.primaryTerminalOwns("agent", wt.IdentityKey())
+			if wt.Agent.OutputBuf != nil && !modelOwns {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
@@ -731,7 +732,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
-			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+			if !modelOwns {
+				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
 			wt.Status = worktreeStatusForActivity(wt.Agent, msg.Status)
@@ -740,7 +743,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
@@ -763,7 +766,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if p.viewMode == ViewModeList && !p.shellSelected {
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeList && !p.shellSelected {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName && wt.Agent != nil {
 				target := wt.Agent.TmuxPane
 				if target == "" {
@@ -774,8 +777,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		// Schedule next poll with adaptive interval based on status
+		// Presentation is model-driven; this capture cadence remains solely for
+		// semantic agent evidence and must not accelerate after terminal bursts.
 		interval := pollIntervalActive
+		if p.primaryTerminalOwns("agent", msg.WorkspaceName) {
+			interval = p.semanticAgentPollInterval()
+		}
 		switch msg.Status {
 		case StatusWaiting:
 			interval = pollIntervalWaiting
@@ -805,12 +812,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
 			}
+		}
+		if p.primaryTerminalOwns("agent", msg.WorkspaceName) {
+			interval = p.semanticAgentPollInterval()
 		}
 		cmds = append(cmds, p.scheduleAgentPoll(msg.WorkspaceName, interval))
 		return p, tea.Batch(cmds...)
@@ -829,7 +839,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
-			if wt.Agent.OutputBuf != nil {
+			modelOwns := p.primaryTerminalOwns("agent", wt.IdentityKey())
+			if wt.Agent.OutputBuf != nil && !modelOwns {
 				if msg.HasHistory {
 					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
@@ -837,7 +848,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
-			p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+			if !modelOwns {
+				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
 			// Session files may change even when tmux output is unchanged
@@ -850,7 +863,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// cell — Claude Code sitting idle at its prompt is the common case — so
 		// the flag has to be refreshed on unchanged polls too, or wheel notches
 		// would keep scrolling local scrollback until the app next redraws.
-		if msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.setPaneMouseReporting(msg.MouseReporting)
@@ -858,6 +871,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Content unchanged - use longer interval based on current status
 		interval := pollIntervalIdle
+		if p.primaryTerminalOwns("agent", msg.WorkspaceName) {
+			interval = p.semanticAgentPollInterval()
+		}
 		switch msg.CurrentStatus {
 		case StatusWaiting:
 			interval = pollIntervalWaiting
@@ -882,7 +898,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
-		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -901,6 +917,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 				return p, tea.Batch(cmds...)
 			}
+		}
+		if p.primaryTerminalOwns("agent", msg.WorkspaceName) {
+			interval = p.semanticAgentPollInterval()
 		}
 		cmds = append(cmds, p.scheduleAgentPoll(msg.WorkspaceName, interval))
 		return p, tea.Batch(cmds...)
@@ -1267,7 +1286,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					shell.Agent.Activity.Acknowledge()
 				}
 			}
-			if shell.Agent.OutputBuf != nil {
+			modelOwns := p.primaryTerminalOwns("shell", shell.TmuxName)
+			if shell.Agent.OutputBuf != nil && !modelOwns {
 				if msg.HasHistory {
 					changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
@@ -1275,14 +1295,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					changed = shell.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
-			p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
+			if !modelOwns {
+				p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
+			}
 			if changed {
 				shell.Agent.LastOutput = time.Now()
 			}
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
@@ -1305,7 +1327,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if p.viewMode == ViewModeList && p.shellSelected {
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.shellSelected {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				if resizeCmd := p.maybeResizeVisiblePaneForScrollbar(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1320,6 +1342,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		interval := pollIntervalActive
 		if !changed {
 			interval = pollIntervalIdle
+		}
+		if p.primaryTerminalOwns("shell", msg.TmuxName) {
+			interval = p.semanticAgentPollInterval()
 		}
 		selectedShell := p.getSelectedShell()
 		isSelectedShell := selectedShell != nil && selectedShell.TmuxName == msg.TmuxName
@@ -1340,12 +1365,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
-		if p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
 			}
+		}
+		if p.primaryTerminalOwns("shell", msg.TmuxName) {
+			interval = p.semanticAgentPollInterval()
 		}
 		cmds = append(cmds, p.scheduleShellPollByName(msg.TmuxName, interval))
 		return p, tea.Batch(cmds...)
@@ -1610,17 +1638,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 						wt.PRState = normalizeWorktreePRState(msg.PR.State, true)
 						_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, msg.PR)
 					}
-					if msg.PR.State == "CLOSED" {
+					switch msg.PR.State {
+					case "CLOSED":
 						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
 						p.mergeState.Step = MergeStepWaitingMerge
 						p.mergeState.PRPollKind = PRPollClosed
 						p.mergeState.PRWatchStopped = true
 						p.clearMergeModal()
-					} else if msg.PR.State == "MERGED" {
+					case "MERGED":
 						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
 						p.mergeState.Step = MergeStepWaitingMerge
 						cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
-					} else {
+					default:
 						cmds = append(cmds, p.advanceMergeStep())
 					}
 				case MergeStepCleanup:
@@ -1968,75 +1997,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.SessionName == p.termPanelSession {
 			p.termPanelPaneID = msg.PaneID
-			// Session ready — resize to match split dimensions and start polling
+			// Session ready — resize to match split dimensions. The shared
+			// terminal model opens during reconciliation after this update.
 			return p, tea.Batch(
 				p.resizeTermPanelPaneCmd(),
 				p.resizeSelectedPaneCmd(),
-				p.scheduleTermPanelPoll(0),
 			)
 		}
-
-	case TermPanelCaptureMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
-			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
-			p.ctx.Logger.Debug("termPanel: CaptureMsg DROPPED", "session", msg.SessionName, "current", p.termPanelSession, "visible", p.termPanelVisible)
-			return p, nil
-		}
-		contentChanged := false
-		if msg.Err == nil && p.termPanelOutput != nil {
-			if msg.HasHistory {
-				contentChanged = p.termPanelOutput.UpdateSnapshot(msg.Output, msg.CaptureBase)
-				p.recordTerminalHistory("panel", msg.SessionName, msg.HistorySize)
-			} else {
-				contentChanged = p.termPanelOutput.Update(msg.Output)
-			}
-			p.recordPaneGeometry("panel", msg.SessionName, msg.PaneWidth, msg.PaneHeight)
-			p.ctx.Logger.Debug("termPanel: CaptureMsg OK", "session", msg.SessionName, "outputLen", len(msg.Output), "lines", p.termPanelOutput.LineCount(), "changed", contentChanged)
-		} else if msg.Err != nil {
-			p.ctx.Logger.Debug("termPanel: CaptureMsg ERROR", "err", msg.Err)
-		}
-		// Update cursor position when interactive mode targets the terminal panel
-		if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			p.setPaneMouseReporting(msg.MouseReporting)
-			p.interactiveState.CursorRow = msg.CursorRow
-			p.interactiveState.CursorCol = msg.CursorCol
-			p.interactiveState.CursorVisible = msg.CursorVisible
-			p.interactiveState.PaneHeight = msg.PaneHeight
-			p.interactiveState.PaneWidth = msg.PaneWidth
-			p.interactiveState.CursorHistorySize = msg.HistorySize
-			p.interactiveState.HasCursorHistory = msg.HasHistory
-		}
-		// In interactive mode targeting terminal panel, use the same adaptive
-		// decay polling as agent/shell panes (pollingDecayFast=50ms) for
-		// responsive keystroke feedback.
-		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			return p, tea.Batch(
-				p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight),
-				p.pollInteractivePane(),
-			)
-		}
-		// Non-interactive: adaptive polling based on content changes
-		interval := termPanelPollIdle
-		if contentChanged {
-			interval = termPanelPollActive
-		}
-		// Slow down when plugin is not focused
-		if !p.applicationFocused {
-			interval = pollIntervalUnfocused
-		} else if !p.focused && interval < termPanelPollUnfocus {
-			interval = termPanelPollUnfocus
-		}
-		return p, tea.Batch(
-			p.maybeResizeVisiblePaneForScrollbar(msg.SessionName, msg.PaneWidth, msg.PaneHeight, true),
-			p.scheduleTermPanelPoll(interval),
-		)
-
-	case termPanelPollMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
-			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
-			return p, nil // Stale timer or panel hidden
-		}
-		return p, p.handleTermPanelPoll(msg.SessionName, msg.Generation)
 
 	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)

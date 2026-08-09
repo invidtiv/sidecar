@@ -15,13 +15,6 @@ import (
 )
 
 // Modal style functions - return fresh styles using current theme colors.
-func modalStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.BorderActive).
-		Padding(1, 2)
-}
-
 func inputStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).

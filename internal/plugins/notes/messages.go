@@ -14,9 +14,10 @@ func (m NotesLoadedMsg) GetEpoch() uint64 {
 
 // NoteSavedMsg is sent when a note is created or updated.
 type NoteSavedMsg struct {
-	Note  *Note
-	Err   error
-	Epoch uint64
+	Note             *Note
+	Err              error
+	Epoch            uint64
+	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -62,9 +63,10 @@ func (m NoteArchiveToggledMsg) GetEpoch() uint64 {
 
 // NoteContentSavedMsg is sent when a note's content is saved from the editor.
 type NoteContentSavedMsg struct {
-	ID    string
-	Err   error
-	Epoch uint64
+	ID               string
+	Err              error
+	Epoch            uint64
+	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -99,8 +101,12 @@ type InlineAutoSaveTickMsg struct {
 
 // InlineAutoSaveResultMsg is sent after an inline auto-save completes.
 type InlineAutoSaveResultMsg struct {
-	Err   error
-	Epoch uint64
+	Err        error
+	Epoch      uint64
+	Activation uint64
+	Generation int
+	Content    string
+	Saved      bool
 }
 
 // GetEpoch returns the epoch for staleness detection.

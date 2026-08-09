@@ -982,6 +982,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// typed after it were read as workspace bindings (td-10c761).
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal.
 		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+			if p.termPanelFocused && p.termPanelVisible {
+				return p.enterTermPanelInteractiveMode()
+			}
 			return p.enterInteractiveMode()
 		}
 	case "v":
@@ -2179,6 +2182,10 @@ func (p *Plugin) applyDiffScope() {
 	default:
 		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
 		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
+		// Commits are listed below the files so a clean worktree still shows the
+		// branch's work. Both come from the same pinned snapshot, so the two
+		// sections can never describe different revisions.
+		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
 	}
 }
 

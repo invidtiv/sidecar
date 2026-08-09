@@ -7,7 +7,3 @@ func agentPollKey(worktreeName string) string {
 func shellPollKey(tmuxName string) string {
 	return "shell:" + tmuxName
 }
-
-func termPanelPollKey() string {
-	return "terminal-panel"
-}

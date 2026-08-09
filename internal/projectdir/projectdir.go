@@ -211,10 +211,6 @@ func readWorktreeMeta(dir string) (worktreeMeta, error) {
 	return meta, nil
 }
 
-func legacyWorktreeAmbiguous(projectRoot, target string) (bool, error) {
-	return legacyWorktreeAmbiguousContext(context.Background(), projectRoot, target)
-}
-
 func legacyWorktreeAmbiguousContext(ctx context.Context, projectRoot, target string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", projectRoot, "worktree", "list", "--porcelain")
 	out, err := cmd.Output()
@@ -229,10 +225,6 @@ func legacyWorktreeAmbiguousContext(ctx context.Context, projectRoot, target str
 		}
 	}
 	return matches > 1, nil
-}
-
-func copyDir(src, dst string) error {
-	return copyDirContext(context.Background(), src, dst)
 }
 
 func copyDirContext(ctx context.Context, src, dst string) error {
@@ -259,7 +251,7 @@ func copyDirContext(ctx context.Context, src, dst string) error {
 		if err != nil {
 			return err
 		}
-		defer in.Close()
+		defer func() { _ = in.Close() }()
 		info, err := entry.Info()
 		if err != nil {
 			return err
