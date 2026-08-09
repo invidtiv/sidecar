@@ -422,7 +422,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	// Status indicator - use special icon for main worktree
 	var statusIcon string
-	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(wt.Agent)
+	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(wt.Agent)
 	if wt.IsOrphaned || wt.IsMissing {
 		hasActivity = false
 	}
@@ -683,7 +683,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	var statusStyle lipgloss.Style
 
 	// td-f88fdd: Handle orphaned shells (manifest entry exists but tmux session is gone)
-	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(shell.Agent)
+	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
 	if shell.IsOrphaned {
 		statusIcon = "◌" // Empty circle for orphaned
 		statusStyle = styles.Muted
@@ -717,23 +717,27 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 		} else {
 			statusText = "shell · offline"
 		}
+	} else if shell.Agent != nil {
+		// Show the live pane owner; ChosenAgent is only the launch preference.
+		liveType := shell.Agent.Type
+		agentAbbrev := shellAgentAbbreviations[liveType]
+		if agentAbbrev == "" {
+			agentAbbrev = string(liveType)
+		}
+		if agentAbbrev == "" {
+			agentAbbrev = "shell"
+		}
+		if hasActivity {
+			statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
+		} else {
+			statusText = fmt.Sprintf("%s · running", agentAbbrev)
+		}
 	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-		// Show agent type abbreviation
 		agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]
 		if agentAbbrev == "" {
 			agentAbbrev = string(shell.ChosenAgent)
 		}
-		if shell.Agent != nil {
-			if hasActivity {
-				statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
-			} else {
-				statusText = fmt.Sprintf("%s · running", agentAbbrev)
-			}
-		} else {
-			statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
-		}
-	} else if shell.Agent != nil {
-		statusText = "shell · running"
+		statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
 	} else {
 		statusText = "shell · no session"
 	}

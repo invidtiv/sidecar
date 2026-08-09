@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 type State string
@@ -36,6 +38,55 @@ type Result struct {
 	// conservative no-match policy for a positively identified live process.
 	// Fallback idle may establish/display idle, but cannot announce completion.
 	FallbackIdle bool
+}
+
+var (
+	semanticVersionCommand = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	claudeScreenIdentity   = regexp.MustCompile(`(?ms)(^─{8,}\s*$\n^❯.*$\n^─{8,}\s*$|manual mode on · \? for shortcuts)`)
+	codexScreenIdentity    = regexp.MustCompile(`(?im)(^OpenAI Codex \(v[^)]+\)\s*$|^• Working \(.*esc to interrupt\)\s*$|^\s*\d+\. No, and tell Codex what to do differently.*$|^› Write tests for @filename\s*$|^/ T R A N S C R I P T /\s*$)`)
+)
+
+// Identify returns the live program owning an agent pane when the existing
+// tmux metadata or current UI makes that identity unambiguous. It deliberately
+// returns an empty string for shared runtimes such as node and bun unless the
+// current screen distinguishes the provider. Callers can retain their prior
+// identity in that case without paying for a process-tree scan.
+func Identify(ob Observation) string {
+	command := strings.ToLower(strings.TrimSpace(ob.CurrentCommand))
+	switch {
+	case command == "claude" || semanticVersionCommand.MatchString(command):
+		return "claude"
+	case command == "codex" || command == "codex-cli":
+		return "codex"
+	case command == "grok" || strings.HasPrefix(command, "grok-"):
+		return "grok"
+	case command == "agy" || command == "antigravity":
+		return "antigravity"
+	case command == "pi":
+		return "pi"
+	case oneOf(command, "copilot", "github-copilot", "ghcs"):
+		return "copilot"
+	case oneOf(command, "cursor-agent", "cursor"):
+		return "cursor"
+	case oneOf(command, "opencode", "open-code"):
+		return "opencode"
+	case oneOf(command, "amp", "amp-local"):
+		return "amp"
+	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
+		return "shell"
+	}
+
+	if command != "node" && command != "bun" {
+		return ""
+	}
+	current := ansi.Strip(regionText(ob, Rule{Region: RegionCurrent, LastN: 24}))
+	if claudeScreenIdentity.MatchString(current) {
+		return "claude"
+	}
+	if codexScreenIdentity.MatchString(current) {
+		return "codex"
+	}
+	return ""
 }
 
 type Region string
@@ -163,6 +214,18 @@ type Tracker struct {
 
 const IdleDebounce = 400 * time.Millisecond
 
+// ResetForProcessChange clears semantic state from the prior pane owner while
+// allowing a confirmed new process's first explicit idle observation to land
+// immediately. That first idle is initialization, not a completion event.
+func (t *Tracker) ResetForProcessChange(now time.Time) {
+	*t = Tracker{
+		State:           StateUnknown,
+		Evidence:        "live-process-changed",
+		Seen:            true,
+		idleCandidateAt: now.Add(-IdleDebounce),
+	}
+}
+
 func (t *Tracker) Apply(result Result, now time.Time) bool {
 	if result.SkipStateUpdate {
 		return false
@@ -172,12 +235,16 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 			t.idleCandidateAt = time.Time{}
 			return false
 		}
-		if t.idleCandidateAt.IsZero() {
-			t.idleCandidateAt = now
-			return false
-		}
-		if now.Sub(t.idleCandidateAt) < IdleDebounce {
-			return false
+		if result.VisibleIdle {
+			t.idleCandidateAt = time.Time{}
+		} else {
+			if t.idleCandidateAt.IsZero() {
+				t.idleCandidateAt = now
+				return false
+			}
+			if now.Sub(t.idleCandidateAt) < IdleDebounce {
+				return false
+			}
 		}
 	} else {
 		t.idleCandidateAt = time.Time{}

@@ -173,6 +173,7 @@ type (
 	ShellOutputMsg struct {
 		TmuxName       string // Session name (stable identifier)
 		Generation     int
+		AgentType      AgentType // Live provider inferred from the captured pane
 		Output         string
 		Err            error
 		Activity       agentactivity.Result
@@ -791,7 +792,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 
 	// Capture references before spawning closure to avoid data races
 	maxBytes := p.tmuxCaptureMaxBytes
-	agentType := shell.ChosenAgent
+	agentType := shell.Agent.Type
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
@@ -878,17 +879,24 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			capture.CaptureBase += removedRows
 		}
 		capturedAt := time.Now()
+		observation := agentactivity.Observation{
+			Screen: output, PaneTitle: capture.PaneTitle,
+			CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+		}
+		observedAgentType := AgentType(agentactivity.Identify(observation))
+		if observedAgentType == "" {
+			observedAgentType = agentType
+		}
 		activity := agentactivity.Result{}
-		if supportsAgentActivity(agentType) {
-			activity = agentactivity.Detect(agentactivity.Observation{
-				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
-				CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
-			})
+		if supportsAgentActivity(observedAgentType) {
+			observation.Agent = string(observedAgentType)
+			activity = agentactivity.Detect(observation)
 		}
 
 		return ShellOutputMsg{
 			TmuxName:       tmuxName,
 			Generation:     generation,
+			AgentType:      observedAgentType,
 			Output:         output,
 			CursorRow:      cursor.Row,
 			CursorCol:      cursor.Col,

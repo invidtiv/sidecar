@@ -20,6 +20,59 @@ func TestCodexPrecedenceAndProcessGate(t *testing.T) {
 	}
 }
 
+func TestIdentifyLivePaneOwner(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		screen  string
+		want    string
+	}{
+		{"Claude version executable", "2.1.220", "", "claude"},
+		{"Codex command", "codex", "", "codex"},
+		{"returned to shell", "zsh", "Action Required", "shell"},
+		{"shared runtime ANSI Claude UI", "node", "\x1b[2m────────────────\x1b[0m\n\x1b[36m❯ \x1b[0m\n────────────────\n  ⏸ manual mode on · ? for shortcuts", "claude"},
+		{"shared runtime Codex UI", "node", "• Working (2s • esc to interrupt)\n› edit the file", "codex"},
+		{"prompt glyphs in transcript are not identity", "node", "example output:\n❯ \nthen later:\n› ", ""},
+		{"provider mention is not identity", "node", "I recommend OpenAI Codex here", ""},
+		{"shared runtime ambiguous", "node", "ordinary output", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Identify(Observation{CurrentCommand: tt.command, Screen: tt.screen}); got != tt.want {
+				t.Fatalf("Identify() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTrackerProcessChangeAcceptsInitialIdleImmediately(t *testing.T) {
+	now := time.Unix(100, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "codex.screen.working"}
+	tracker.ResetForProcessChange(now)
+	changed := tracker.Apply(Result{State: StateIdle, Evidence: "claude.screen.idle"}, now)
+	if !changed || tracker.State != StateIdle || tracker.DisplayState() != "idle" {
+		t.Fatalf("initial idle after process change = %#v, changed=%v", tracker, changed)
+	}
+}
+
+func TestTrackerExplicitVisibleIdleDoesNotNeedAnotherOutputEvent(t *testing.T) {
+	now := time.Unix(200, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "claude.screen.working"}
+	result := Result{State: StateIdle, Evidence: "claude.screen.idle", VisibleIdle: true}
+	if !tracker.Apply(result, now) || tracker.State != StateIdle {
+		t.Fatalf("explicit visible idle did not settle immediately: %#v", tracker)
+	}
+}
+
+func TestTrackerVisibleIdleEvidenceChangeDoesNotManufactureDone(t *testing.T) {
+	now := time.Unix(300, 0)
+	tracker := Tracker{State: StateIdle, Evidence: "claude.screen.resolved-idle", Seen: true}
+	result := Result{State: StateIdle, Evidence: "claude.screen.idle", VisibleIdle: true}
+	if tracker.Apply(result, now) || tracker.DisplayState() != "idle" || !tracker.Seen {
+		t.Fatalf("idle evidence change mutated acknowledged idle: %#v", tracker)
+	}
+}
+
 func TestRealCodexFixtures(t *testing.T) {
 	tests := []struct {
 		file string

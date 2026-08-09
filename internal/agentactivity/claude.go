@@ -24,5 +24,5 @@ func DetectClaude(ob Observation) Result {
 
 func claudeProcess(command string) bool {
 	return command == "claude" || command == "node" || command == "bun" ||
-		regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(command)
+		semanticVersionCommand.MatchString(command)
 }

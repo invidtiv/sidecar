@@ -22,6 +22,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case activityAnimationTickMsg:
+		if msg.generation != p.activityAnimationGeneration {
+			return p, nil
+		}
+		p.activityAnimationScheduled = false
+		if !p.activityAnimationNeeded() {
+			p.activityAnimationFrame = 0
+			return p, nil
+		}
+		p.activityAnimationFrame++
+		return p, p.startActivityAnimation()
+
+	case tea.FocusMsg:
+		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
+
 	case shellStartupResultMsg:
 		return p, p.applyShellStartup(msg)
 
@@ -56,7 +71,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case app.PluginFocusedMsg:
 		if p.focused {
-			focusCmds := []tea.Cmd{p.maybeAutoCreateShell()}
+			focusCmds := []tea.Cmd{p.maybeAutoCreateShell(), p.startActivityAnimation()}
 			// Poll shell or selected agent when plugin gains focus
 			if shell := p.getSelectedShell(); shell != nil {
 				focusCmds = append(focusCmds, p.pollShellSessionByName(shell.TmuxName))
@@ -544,8 +559,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Ownership is checked before the async capture mutates UI state.
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			now := time.Now()
+			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
-				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
 				}
@@ -565,6 +582,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Track poll time for runaway detection (td-018f25)
 			wt.Agent.RecordPollTime()
 		}
+		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
@@ -647,8 +665,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Track unchanged poll for throttle reset (td-018f25)
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil && wt.Agent != nil {
+			now := time.Now()
+			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
-				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, time.Now())
+				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
 				if p.outputVisibleFor(wt.Name) {
 					wt.Agent.Activity.Acknowledge()
 				}
@@ -669,6 +689,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			wt.Status = worktreeStatusForActivity(wt.Agent, msg.CurrentStatus)
 			wt.Agent.WaitingFor = msg.WaitingFor
 		}
+		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// An app can toggle mouse tracking without changing a single rendered
 		// cell — Claude Code sitting idle at its prompt is the common case — so
 		// the flag has to be refreshed on unchanged polls too, or wheel notches
@@ -1082,8 +1103,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
 		if shell != nil && shell.Agent != nil {
-			if supportsAgentActivity(shell.ChosenAgent) {
-				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, time.Now())
+			now := time.Now()
+			applyObservedAgentType(shell.Agent, msg.AgentType, now)
+			if supportsAgentActivity(shell.Agent.Type) {
+				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, now)
 				if p.shellOutputVisibleFor(shell.TmuxName) {
 					shell.Agent.Activity.Acknowledge()
 				}
@@ -1101,6 +1124,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				shell.Agent.LastOutput = time.Now()
 			}
 		}
+		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if p.viewMode == ViewModeInteractive && p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
@@ -1763,6 +1787,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 	}
 
+	cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 	return p, tea.Batch(cmds...)
 }
 

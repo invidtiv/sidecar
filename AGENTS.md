@@ -1,6 +1,3 @@
-This file is the single entry point for agent instructions. `GEMINI.md` is a
-symlink to it; there is no separate `CLAUDE.md`.
-
 <!-- td-agent-instructions:start -->
 <!-- td-agent-instructions:version=3 -->
 
