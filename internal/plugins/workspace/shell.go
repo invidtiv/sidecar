@@ -190,6 +190,9 @@ type (
 		HistorySize   int
 		CaptureBase   int
 		HasHistory    bool
+		// RowsJoined says the capture was taken with -J, so it carries no usable
+		// history/pane split.
+		RowsJoined bool
 		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
 		// meaningful when HasCursor is set.
 		MouseReporting bool
@@ -468,8 +471,9 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	// Size the pane at creation. Without -x/-y tmux uses default-size (80x24),
 	// and anything the user starts before the follow-up resize lands — an editor
 	// especially — lays itself out for 24 rows (td-9b181e). The shell is not
-	// selected yet, so ask for shell dimensions explicitly.
-	previewWidth, previewHeight := p.previewDimensionsFor(true)
+	// selected yet, which no longer matters: every terminal surface reserves the
+	// same single header row, so the preview size does not depend on the kind.
+	previewWidth, previewHeight := p.calculatePreviewDimensions()
 
 	created := ShellCreatedMsg{
 		SessionName:   sessionName,
@@ -586,7 +590,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 
 	sessionName := shell.TmuxName
 	workDir := p.ctx.WorkDir
-	previewWidth, previewHeight := p.previewDimensionsFor(true)
+	previewWidth, previewHeight := p.calculatePreviewDimensions()
 
 	return func() tea.Msg {
 		// Create new detached session
@@ -932,6 +936,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			HistorySize:    capture.HistorySize,
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
+			RowsJoined:     capture.RowsJoined,
 			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,

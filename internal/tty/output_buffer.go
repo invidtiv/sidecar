@@ -34,6 +34,80 @@ var (
 	mouseSequenceDetector = regexp.MustCompile(`\[<\d+[;\d]*`)
 )
 
+// PaneSnapshot is one atomically observed screen: history rows followed by the
+// live pane grid, plus the split between them. The producer states the split
+// rather than leaving it to be inferred from the content, because every way of
+// re-deriving it downstream mixes observations taken at different instants and
+// drifts (td-d29821).
+//
+// PaneRows is also what disambiguates the serialization. Capture-shaped output
+// is row *separated*, so a final blank row and a trailing terminator look
+// identical once split — and the difference is exactly one grid row, the row a
+// cursor sits on at the bottom of a screen.
+type PaneSnapshot struct {
+	// Output is history rows followed by PaneRows live grid rows.
+	Output string
+	// BaseLine is the absolute line number of Output's first row. It is
+	// meaningful only when Absolute is set.
+	BaseLine int
+	// Absolute says the snapshot carries trustworthy absolute coordinates, so
+	// lazily loaded older history can be merged with it.
+	Absolute bool
+	// HistoryRows is how many of Output's leading rows sit above pane row 0, and
+	// PaneRows how many trailing rows are the live grid. PaneRows of 0 means the
+	// producer does not know the split; the buffer then reports no pane top and
+	// consumers fall back to their own geometry.
+	HistoryRows int
+	PaneRows    int
+}
+
+// CaptureInput is one capture-pane rendering plus the geometry observed with
+// it, as handed to CaptureSnapshot.
+type CaptureInput struct {
+	// Output is the capture text and BaseLine its first row's absolute line
+	// number, meaningful only when Absolute is set.
+	Output   string
+	BaseLine int
+	Absolute bool
+
+	// PaneHeight is the pane's grid height at the instant of the capture. Zero
+	// means no geometry was observed, and no split is published.
+	PaneHeight int
+
+	// RowsJoined says the capture was taken with tmux's -J, which collapses each
+	// wrapped line into a single row. Such a capture has no row-for-row
+	// correspondence with the grid, so no split can be stated for it.
+	RowsJoined bool
+}
+
+// CaptureSnapshot describes a capture-pane rendering: PaneHeight grid rows
+// preceded by whatever history the capture carried. It is a plain function over
+// the capture and the geometry observed with it, so every capture-shaped
+// producer — control snapshots, poll fallbacks, the workspace's own pollers —
+// states the split the same way.
+//
+// The invariant it rests on is that the capture's rows and the pane's rows
+// correspond one for one, which is what makes "the last PaneHeight rows are the
+// grid" true. A -J capture breaks it — wrapped lines arrive collapsed, so the
+// capture has fewer rows than the grid and both halves of the split would be
+// wrong — and RowsJoined is how a producer says so. It publishes no split
+// rather than an authoritative wrong one; consumers then fall back to their own
+// geometry, which is where they were before the split was carried at all.
+//
+// A degenerate capture that carries fewer rows than the pane is tall has no
+// usable split either; it is reported as all-pane, which puts pane row 0 at the
+// top of the buffer, matching what such a capture actually shows.
+func CaptureSnapshot(in CaptureInput) PaneSnapshot {
+	snapshot := PaneSnapshot{Output: in.Output, BaseLine: in.BaseLine, Absolute: in.Absolute}
+	if in.PaneHeight <= 0 || in.RowsJoined {
+		return snapshot
+	}
+	rows := len(splitOutputLines(in.Output))
+	snapshot.PaneRows = min(in.PaneHeight, rows)
+	snapshot.HistoryRows = rows - snapshot.PaneRows
+	return snapshot
+}
+
 // OutputBuffer is a thread-safe bounded buffer for terminal output.
 // Uses maphash for efficient content change detection to avoid duplicate processing.
 type OutputBuffer struct {
@@ -47,6 +121,14 @@ type OutputBuffer struct {
 	lastLen     int          // Length of last content (collision guard)
 	lastBase    int          // Absolute base of the last live snapshot
 	hashSeed    maphash.Seed // Seed for stable hashing
+
+	// paneBase is the line holding pane row 0, in the same coordinate space as
+	// baseLine, and paneKnown says a producer has supplied it. It is stored
+	// alongside the content it describes and updated in the same critical
+	// section, so a reader can never pair a row count from one publication with
+	// a split from another.
+	paneBase  int
+	paneKnown bool
 }
 
 // NewOutputBuffer creates a new output buffer with the given capacity.
@@ -60,19 +142,42 @@ func NewOutputBuffer(capacity int) *OutputBuffer {
 
 // Update replaces buffer content if it has changed (detected via hash).
 // Returns true if content was updated, false if content was unchanged.
+//
+// The content carries no pane split, so the buffer reports none. Producers that
+// know where the live grid starts should call ApplySnapshot instead.
 func (b *OutputBuffer) Update(content string) bool {
+	return b.ApplySnapshot(PaneSnapshot{Output: content})
+}
+
+// UpdateSnapshot merges a live capture whose first line has the supplied
+// absolute pane coordinate. Older lines loaded with PrependSnapshot are
+// retained while the overlapping live tail is replaced.
+func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
+	return b.ApplySnapshot(PaneSnapshot{Output: content, BaseLine: baseLine, Absolute: true})
+}
+
+// ApplySnapshot replaces the buffer's live tail with one observed snapshot,
+// recording its pane split in the same critical section as its content.
+func (b *OutputBuffer) ApplySnapshot(s PaneSnapshot) bool {
+	if !s.Absolute {
+		return b.applyRelative(s)
+	}
+	return b.applyAbsolute(s)
+}
+
+func (b *OutputBuffer) applyRelative(s PaneSnapshot) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	// Check hash BEFORE expensive regex processing
 	// Compute hash of raw content first
-	rawHash := maphash.String(b.hashSeed, content)
-	rawLen := len(content)
+	rawHash := maphash.String(b.hashSeed, s.Output)
+	rawLen := len(s.Output)
 	if !b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen {
 		return false // Content unchanged - skip ALL processing
 	}
 
-	content = cleanOutput(content)
+	content := cleanOutput(s.Output)
 
 	// Store cleaned content hash for future comparisons
 	cleanHash := maphash.String(b.hashSeed, content)
@@ -82,26 +187,18 @@ func (b *OutputBuffer) Update(content string) bool {
 	b.baseLine = 0
 	b.absolute = false
 	b.lastBase = 0
-	// Trim trailing newline before split to avoid spurious empty element.
-	// tmux capture-pane output ends with \n, which would create an extra empty
-	// element after split, causing cursor alignment to be off by one line.
-	b.lines = strings.Split(strings.TrimSuffix(content, "\n"), "\n")
-
-	// Trim to capacity (keep most recent lines)
-	if len(b.lines) > b.cap {
-		b.lines = b.lines[len(b.lines)-b.cap:]
-	}
+	b.lines = splitSnapshotRows(content, s)
+	b.setPaneSplitLocked(0, s)
+	b.trimLocked()
 
 	return true
 }
 
-// UpdateSnapshot merges a live capture whose first line has the supplied
-// absolute pane coordinate. Older lines loaded with PrependSnapshot are
-// retained while the overlapping live tail is replaced.
-func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
+func (b *OutputBuffer) applyAbsolute(s PaneSnapshot) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	content, baseLine := s.Output, s.BaseLine
 	rawHash := maphash.String(b.hashSeed, content)
 	rawLen := len(content)
 	if b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen && baseLine == b.lastBase {
@@ -109,7 +206,7 @@ func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
 	}
 
 	cleaned := cleanOutput(content)
-	incoming := splitOutputLines(cleaned)
+	incoming := splitSnapshotRows(cleaned, s)
 	if baseLine < 0 {
 		baseLine = 0
 	}
@@ -125,6 +222,7 @@ func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
 		b.baseLine = baseLine
 	}
 	b.absolute = true
+	b.setPaneSplitLocked(baseLine, s)
 	b.trimLocked()
 
 	b.lastHash = maphash.String(b.hashSeed, cleaned)
@@ -132,6 +230,40 @@ func (b *OutputBuffer) UpdateSnapshot(content string, baseLine int) bool {
 	b.lastLen = rawLen
 	b.lastBase = baseLine
 	return true
+}
+
+// setPaneSplitLocked records where pane row 0 sits in the buffer's own
+// coordinates. base is the coordinate of the snapshot's first row: its absolute
+// base for an absolute buffer, and 0 for a relative one.
+func (b *OutputBuffer) setPaneSplitLocked(base int, s PaneSnapshot) {
+	if s.PaneRows <= 0 {
+		b.paneKnown = false
+		return
+	}
+	b.paneBase = base + s.HistoryRows
+	b.paneKnown = true
+}
+
+// splitSnapshotRows splits capture-shaped output into rows. Without a stated row
+// count every trailing newline is treated as a terminator, which is what tmux's
+// capture-pane emits. With one, only the newlines past that count are, so a
+// blank final grid row survives instead of being eaten by the terminator rule —
+// it is the row a cursor sits on at the bottom of a screen, and losing it left
+// the buffer one row shorter than the pane (td-d29821).
+//
+// A count larger than the content is not padded out: a snapshot can legitimately
+// carry fewer rows than the pane is tall, and inventing blank rows would put
+// content at coordinates tmux never used.
+func splitSnapshotRows(content string, s PaneSnapshot) []string {
+	want := s.HistoryRows + s.PaneRows
+	if s.PaneRows <= 0 || want <= 0 {
+		return splitOutputLines(content)
+	}
+	lines := strings.Split(content, "\n")
+	for len(lines) > want && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // PrependSnapshot merges an older bounded capture into an absolute buffer.
@@ -152,6 +284,9 @@ func (b *OutputBuffer) PrependSnapshot(content string, baseLine int) bool {
 		b.lines = incoming
 		b.baseLine = baseLine
 		b.absolute = true
+		// The older capture replaced the buffer wholesale, so whatever split the
+		// previous relative content had no longer describes these rows.
+		b.paneKnown = false
 		b.trimLocked()
 		return true
 	}
@@ -223,6 +358,7 @@ func (b *OutputBuffer) Write(content string) {
 	b.baseLine = 0
 	b.absolute = false
 	b.lastBase = 0
+	b.paneKnown = false
 
 	// Trim to capacity (keep most recent lines)
 	b.trimLocked()
@@ -290,6 +426,19 @@ func (b *OutputBuffer) AbsoluteRange() (start, end int, ok bool) {
 	return b.baseLine, b.baseLine + len(b.lines), true
 }
 
+// PaneWindow reports the buffer's line count together with the index of the
+// line holding pane row 0, both read under one lock. ok is false until a
+// producer has stated the split, which is what a consumer needs in order to
+// fall back to its own geometry rather than trust a stale or invented value.
+func (b *OutputBuffer) PaneWindow() (lineCount, paneTop int, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.paneKnown {
+		return len(b.lines), 0, false
+	}
+	return len(b.lines), min(max(b.paneBase-b.baseLine, 0), len(b.lines)), true
+}
+
 // LineCount returns the number of lines without copying.
 func (b *OutputBuffer) LineCount() int {
 	b.mu.Lock()
@@ -327,6 +476,8 @@ func (b *OutputBuffer) Clear() {
 	b.lastRawHash = 0
 	b.lastLen = 0
 	b.lastBase = 0
+	b.paneBase = 0
+	b.paneKnown = false
 }
 
 // Len returns the number of lines in the buffer.
@@ -344,7 +495,11 @@ func (b *OutputBuffer) trimLocked() {
 	b.lines = b.lines[drop:]
 	if b.absolute {
 		b.baseLine += drop
+		return
 	}
+	// Relative buffers have no base to move, so the pane split — an index into
+	// the lines that were just dropped from the front — moves instead.
+	b.paneBase = max(b.paneBase-drop, 0)
 }
 
 func cleanOutput(content string) string {

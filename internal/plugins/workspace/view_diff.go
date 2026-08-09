@@ -113,24 +113,12 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 		diffPaneWidth = 10
 	}
 
-	// Calculate absolute X position of diff tab content for hit region registration.
+	// Absolute origin of diff tab content, for hit region registration.
 	// Preview content starts after sidebar + main divider + panel border/padding.
-	var contentBaseX int
-	if !p.sidebarVisible {
-		contentBaseX = panelOverhead / 2
-	} else {
-		available := p.width - dividerWidth
-		sidebarW := (available * p.sidebarWidth) / 100
-		if sidebarW < 15 {
-			sidebarW = 15
-		}
-		if sidebarW > available-40 {
-			sidebarW = available - 40
-		}
-		contentBaseX = sidebarW + dividerWidth + panelOverhead/2
-	}
-	// baseY: panel border (1) + tab header (1) + blank line (1) = 3
-	baseY := 3
+	contentBaseX := p.previewSplit().ContentX
+	// The diff tab is not a terminal surface, so it still renders the standalone
+	// tab row and its spacer above its content.
+	baseY := previewBorderRows + previewTabRows
 
 	// Register hit region for the diff tab divider (for drag-to-resize).
 	absXDivider := contentBaseX + fileListWidth

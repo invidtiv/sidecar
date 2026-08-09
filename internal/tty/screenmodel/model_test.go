@@ -2,6 +2,7 @@ package screenmodel
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -69,11 +70,12 @@ func TestModeAndCursorStateTracked(t *testing.T) {
 func TestSeedRestoresScreenCursorAndModes(t *testing.T) {
 	m := New(8, 4)
 	defer m.Close()
+	// Five scrolled-off rows above the four live ones: history_size 12 with 5
+	// loaded rows puts the capture's first row at absolute 7.
 	err := m.Seed(Seed{
-		Output:        "hello\nworld",
+		Output:        "h0\nh1\nh2\nh3\nh4\nhello\nworld\n\n",
 		Width:         8,
 		Height:        4,
-		CaptureBase:   7,
 		HistorySize:   12,
 		CursorRow:     2,
 		CursorCol:     3,
@@ -161,7 +163,8 @@ func TestResizeChangesReportedGeometry(t *testing.T) {
 func TestHistoryGrowsAsLinesScrollOff(t *testing.T) {
 	m := New(10, 3)
 	defer m.Close()
-	if err := m.Seed(Seed{Output: "a\nb\nc", Width: 10, Height: 3, HistorySize: 5, CaptureBase: 2, CursorRow: 2, CursorCol: 1}); err != nil {
+	// history_size 5 with three loaded rows: the capture starts at absolute 2.
+	if err := m.Seed(Seed{Output: "x\ny\nz\na\nb\nc", Width: 10, Height: 3, HistorySize: 5, CursorRow: 2, CursorCol: 1}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := m.Write([]byte("\r\nd\r\ne")); err != nil {
@@ -181,9 +184,9 @@ func TestHistoryGrowsAsLinesScrollOff(t *testing.T) {
 	// not a smoke test: the loaded scrolled-off lines in order, then exactly
 	// Height live rows, newline separated and nothing else.
 	got := strings.Split(f.CombinedOutput(), "\n")
-	want := []string{"a", "b", "c", "d", "e"}
+	want := []string{"x", "y", "z", "a", "b", "c", "d", "e"}
 	if !slices.Equal(got, want) {
-		t.Errorf("output lines = %#v, want %#v (2 scrolled-off then the 3 live rows)", got, want)
+		t.Errorf("output lines = %#v, want %#v (5 scrolled-off then the 3 live rows)", got, want)
 	}
 }
 
@@ -192,7 +195,7 @@ func TestAbsoluteHistoryOutgrowsRetainedScrollback(t *testing.T) {
 	defer m.Close()
 	if err := m.Seed(Seed{
 		Output: "seed-a\nseed-b", Width: 8, Height: 2,
-		HistorySize: 100, CaptureBase: 100, HistoryLimit: 3, CursorRow: 1,
+		HistorySize: 100, HistoryLimit: 3, CursorRow: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +225,7 @@ func TestED3ResetsAbsoluteAndLoadedHistoryCoordinates(t *testing.T) {
 	defer m.Close()
 	if err := m.Seed(Seed{
 		Output: "old-a\nold-b\nlive-a\nlive-b", Width: 8, Height: 2,
-		HistorySize: 100, CaptureBase: 98, HistoryLimit: 3, CursorRow: 1,
+		HistorySize: 100, HistoryLimit: 3, CursorRow: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -596,5 +599,119 @@ func TestSeedHonoursATrailingBlankRow(t *testing.T) {
 	if strings.TrimSpace(rows[0]) != "aa" || strings.TrimSpace(rows[1]) != "bb" ||
 		strings.TrimSpace(rows[2]) != "cc" {
 		t.Fatalf("seed lost a row: %#v", rows)
+	}
+}
+
+// assertHistoryAccounting checks the one invariant the viewport's cursor and
+// scrollback arithmetic both stand on: the absolute window a frame describes,
+// HistorySize-CaptureBase, is exactly the history it actually carries.
+func assertHistoryAccounting(t *testing.T, m *Model, stage string) Frame {
+	t.Helper()
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatalf("%s: frame: %v", stage, err)
+	}
+	if got, want := f.HistorySize-f.CaptureBase, f.LoadedHistory.Rows(); got != want {
+		t.Fatalf("%s: HistorySize-CaptureBase = %d-%d = %d, want the %d loaded rows",
+			stage, f.HistorySize, f.CaptureBase, got, want)
+	}
+	return f
+}
+
+// seedWithHistory builds a capture of historyRows scrolled-off rows followed by
+// height live rows — the shape tmux delivers, trailing blanks included — and
+// pairs it with the history_size the metadata reported. The two disagree when
+// the capture and the display-message that accompanied it were observed at
+// different instants, which is the race behind td-d29821.
+func seedWithHistory(historyRows, height, reportedHistorySize int) Seed {
+	rows := make([]string, 0, historyRows+height)
+	for i := range historyRows {
+		rows = append(rows, fmt.Sprintf("hist%02d", i))
+	}
+	for i := range height {
+		rows = append(rows, fmt.Sprintf("screen%02d", i))
+	}
+	return Seed{
+		Output:      strings.Join(rows, "\n"),
+		Width:       12,
+		Height:      height,
+		HistorySize: reportedHistorySize,
+		CursorRow:   height - 1,
+	}
+}
+
+// td-d29821: the seed freezes the absolute coordinate system, so a seed whose
+// capture and metadata disagree stays wrong until the pane is re-seeded. The
+// accounting therefore has to come out consistent at the seed itself, and stay
+// consistent through writes, ED 2, and a full clear.
+func TestHistoryAccountingInvariantHolds(t *testing.T) {
+	const height = 4
+
+	for _, tc := range []struct {
+		name        string
+		historyRows int
+		reported    int
+		wantHistory int
+		wantBase    int
+	}{
+		// The ordinary case: the metadata describes the capture it arrived with.
+		{"consistent", 12, 12, 12, 0},
+		// Two lines scrolled off between the display-message and the capture, so
+		// the capture carries history the metadata never counted. The capture is
+		// the fresher observation and wins.
+		{"capture ahead of metadata", 14, 12, 14, 0},
+		// The mirror case: history_size names rows the capture did not deliver,
+		// so those rows sit below the loaded window rather than in it.
+		{"capture behind metadata", 10, 12, 12, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(12, height)
+			defer m.Close()
+			if err := m.Seed(seedWithHistory(tc.historyRows, height, tc.reported)); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			f := assertHistoryAccounting(t, m, "seed")
+			if f.HistorySize != tc.wantHistory || f.CaptureBase != tc.wantBase {
+				t.Fatalf("seed history/base = %d/%d, want %d/%d",
+					f.HistorySize, f.CaptureBase, tc.wantHistory, tc.wantBase)
+			}
+			if f.LoadedHistory.Rows() != tc.historyRows {
+				t.Fatalf("loaded rows = %d, want the %d the capture carried",
+					f.LoadedHistory.Rows(), tc.historyRows)
+			}
+
+			// Ordinary output that scrolls rows off the bottom.
+			if err := m.Write([]byte("\r\nnew-a\r\nnew-b\r\nnew-c")); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			scrolled := assertHistoryAccounting(t, m, "after scrolling writes")
+			if scrolled.HistorySize != f.HistorySize+3 {
+				t.Fatalf("history = %d after three rows scrolled off, want %d",
+					scrolled.HistorySize, f.HistorySize+3)
+			}
+
+			// ED 2 erases the screen and, in this emulator as in tmux, pushes the
+			// erased rows into history rather than dropping them. Either way the
+			// accounting has to follow whatever it did.
+			if err := m.Write([]byte("\x1b[H\x1b[2J")); err != nil {
+				t.Fatalf("ED 2: %v", err)
+			}
+			cleared := assertHistoryAccounting(t, m, "after ED 2")
+			if cleared.HistorySize < scrolled.HistorySize {
+				t.Fatalf("ED 2 shrank history to %d from %d without clearing it",
+					cleared.HistorySize, scrolled.HistorySize)
+			}
+
+			// A full `clear` drops history entirely, which resets the coordinate
+			// system rather than merely shrinking the loaded window.
+			if err := m.Write([]byte("\x1b[3J\x1b[H\x1b[2J")); err != nil {
+				t.Fatalf("clear: %v", err)
+			}
+			wiped := assertHistoryAccounting(t, m, "after clear")
+			if wiped.HistorySize != 0 || wiped.CaptureBase != 0 || wiped.LoadedHistory.Rows() != 0 {
+				t.Fatalf("clear left history/base/loaded = %d/%d/%d, want 0/0/0",
+					wiped.HistorySize, wiped.CaptureBase, wiped.LoadedHistory.Rows())
+			}
+		})
 	}
 }

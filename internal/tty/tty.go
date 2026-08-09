@@ -79,9 +79,8 @@ type State struct {
 	MouseReportingEnabled bool
 
 	// Visible buffer range for selection mapping
-	VisibleStart     int
-	VisibleEnd       int
-	ContentRowOffset int
+	VisibleStart int
+	VisibleEnd   int
 
 	// Resize debouncing
 	LastResizeAt time.Time
@@ -373,15 +372,14 @@ func (m *Model) View() string {
 	}
 
 	fit := m.paneFit()
-	lineCount := m.State.OutputBuf.LineCount()
-	// The buffer's tail is the pane, so pane row 0 is at paneTop and the visible
-	// window starts RowOffset rows into it — which is the pane's tail unless the
-	// cursor pulls the window up (td-73fa86). paneTop never goes negative, so
-	// View and Cursor stay anchored to the same row even when tmux captured
-	// fewer lines than the pane is tall.
+	lineCount, paneTop, known := m.State.OutputBuf.PaneWindow()
+	// The visible window starts RowOffset rows into the pane — which is the
+	// pane's tail unless the cursor pulls the window up (td-73fa86). paneTop
+	// never goes negative, so View and Cursor stay anchored to the same row even
+	// when tmux captured fewer lines than the pane is tall.
 	start := lineCount - fit.Height
-	if m.State.PaneHeight > 0 {
-		start = m.paneTop(lineCount) + fit.RowOffset
+	if known || m.State.PaneHeight > 0 {
+		start = m.paneTop(lineCount, paneTop, known) + fit.RowOffset
 	}
 	if start < 0 || fit.Height <= 0 {
 		start = 0
@@ -406,11 +404,17 @@ func (m *Model) View() string {
 	return strings.Join(clipped, "\n")
 }
 
-// paneTop is the buffer line holding pane row 0. tmux trims trailing blank rows
-// from a capture, so the buffer can be shorter than the pane; clamping at 0
-// keeps the mapping from pane row to buffer line one-to-one in that case
-// instead of letting View clamp while Cursor does not (td-73fa86).
-func (m *Model) paneTop(lineCount int) int {
+// paneTop is the buffer line holding pane row 0. It prefers the split the
+// producer published with the content, and falls back to the buffer's tail for
+// a buffer that never received one. The fallback is only ever an approximation:
+// a capture whose final grid rows were blank leaves the tail short, and the
+// pane then appears to start a row too early (td-d29821). Clamping at 0 keeps
+// the mapping from pane row to buffer line one-to-one in that case instead of
+// letting View clamp while Cursor does not (td-73fa86).
+func (m *Model) paneTop(lineCount, paneTop int, known bool) int {
+	if known {
+		return paneTop
+	}
 	return max(lineCount-m.State.PaneHeight, 0)
 }
 
@@ -766,8 +770,14 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 		return m.schedulePoll(PollingDecayFast)
 	}
 
-	// Update output buffer
-	changed := m.State.OutputBuf.Update(msg.Output)
+	// Update output buffer. The poll carries no absolute coordinates, but its
+	// capture and its pane height were observed together, so it can still state
+	// where the live grid starts. CapturePaneOutput never passes -J, so the
+	// capture's rows are the grid's rows.
+	changed := m.State.OutputBuf.ApplySnapshot(CaptureSnapshot(CaptureInput{
+		Output:     msg.Output,
+		PaneHeight: msg.PaneHeight,
+	}))
 	m.history = HistoryInfo{}
 	if m.recoveryPending {
 		m.fallbackEstablished = true

@@ -3,7 +3,6 @@ package workspace
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -24,16 +23,13 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 	}
 
 	// When shell is selected, show shell content directly without tabs
-	// (Output/Diff/Task tabs are not relevant for the project shell)
+	// (Output/Diff/Task tabs are not relevant for the project shell). The shell's
+	// name is the left region of the terminal's own header row instead.
 	if p.shellSelected {
-		var content string
 		if p.termPanelVisible {
-			content = p.renderShellWithTermPanel(width, height)
-		} else {
-			content = p.renderShellOutput(width, height)
+			return p.renderShellWithTermPanel(width, height)
 		}
-		content = p.prependFlashHint(content, width)
-		return content
+		return p.renderShellOutput(width, height)
 	}
 
 	// Main worktree: show informational view instead of normal tabs
@@ -41,49 +37,34 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 		return p.truncateAllLines(p.renderMainWorktreeView(width, height), width)
 	}
 
-	// Tab header (only for worktrees, not shell)
-	tabs := p.renderTabs(width)
-	lines = append(lines, tabs)
-	lines = append(lines, "") // Empty line after header
+	// The Output tab is a terminal surface, and a terminal surface owns its own
+	// header row: the tab chips are its left region, so there is no standalone
+	// tab row and the terminal starts on the row below the panel border.
+	if p.previewTab == PreviewTabOutput {
+		if p.termPanelVisible {
+			// Terminal viewport renderers already expand tabs and truncate once.
+			return p.renderOutputWithTermPanel(width, height)
+		}
+		return p.renderOutputContent(width, height)
+	}
 
-	contentHeight := height - 2 // header + empty line
+	// Diff and Task are not terminals, so they keep the standalone tab row and
+	// the blank spacer under it.
+	lines = append(lines, p.renderTabs(width))
+	lines = append(lines, "")
 
-	// Render content based on active tab
+	contentHeight := height - previewTabRows
+
 	var content string
 	switch p.previewTab {
-	case PreviewTabOutput:
-		if p.termPanelVisible {
-			content = p.renderOutputWithTermPanel(width, contentHeight)
-		} else {
-			content = p.renderOutputContent(width, contentHeight)
-		}
 	case PreviewTabDiff:
 		content = p.renderDiffContent(width, contentHeight)
 	case PreviewTabTask:
 		content = p.renderTaskContent(width, contentHeight)
 	}
-
 	lines = append(lines, content)
 
-	result := strings.Join(lines, "\n")
-	result = p.prependFlashHint(result, width)
-	if p.previewTab == PreviewTabOutput {
-		// Terminal viewport renderers already expand tabs and truncate once.
-		return result
-	}
-	return p.truncateAllLines(result, width)
-}
-
-// prependFlashHint adds an attach hint at the top of content when flash is active.
-func (p *Plugin) prependFlashHint(content string, width int) string {
-	if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-		hintStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
-			Bold(true)
-		hint := p.truncateCache.Truncate(hintStyle.Render("Enter or double-click to attach"), width, "")
-		return hint + "\n" + content
-	}
-	return content
+	return p.truncateAllLines(strings.Join(lines, "\n"), width)
 }
 
 // renderWelcomeGuide renders a helpful guide when no worktree is selected.
@@ -186,73 +167,135 @@ func (p *Plugin) truncateAllLines(content string, maxWidth int) string {
 	return sb.String()
 }
 
-// renderTabs renders the preview pane tab header.
-func (p *Plugin) renderTabs(width int) string {
+// previewTabChips renders the Output / Diff / Task pills as separate chips, so
+// the header row can drop whole chips rather than clip one in half.
+func (p *Plugin) previewTabChips() []string {
 	tabs := []string{"Output", "Diff", "Task"}
-	var rendered []string
+	rendered := make([]string, 0, len(tabs))
 
 	for i, tab := range tabs {
+		style := styles.BarChip
 		if PreviewTab(i) == p.previewTab {
-			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChipActive, nil))
-		} else {
-			rendered = append(rendered, styles.RenderPillWithStyle(tab, styles.BarChip, nil))
+			style = styles.BarChipActive
 		}
+		rendered = append(rendered, styles.RenderPillWithStyle(tab, style, nil))
 	}
-
-	return p.truncateCache.Truncate(strings.Join(rendered, " "), width, "")
+	return rendered
 }
 
-func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
-	truncateHint := func(value string) string {
-		return p.truncateCache.Truncate(ui.ExpandTabs(value, tabStopWidth), width, "")
+// previewTabsVisible reports whether the preview is in a state that draws the
+// Output/Diff/Task chips at all. The shell has no tabs, and neither the welcome
+// guide nor the main-worktree view is a tab; anything else — including the
+// Output tab's no-agent and orphaned states — puts them on its first row.
+func (p *Plugin) previewTabsVisible() bool {
+	if p.shellSelected {
+		return false
+	}
+	wt := p.selectedWorktree()
+	return wt != nil && !wt.IsMain
+}
+
+// renderTabs renders the standalone tab row the Diff and Task tabs still use.
+// It goes through the same header layout the Output tab's chips do, so the tab
+// hit regions describe this row too.
+func (p *Plugin) renderTabs(width int) string {
+	return p.terminalHeader(p.previewTabChips(), "", width, 0)
+}
+
+// paneFocusChip renders a sub-pane's identity chip, marked when that sub-pane
+// holds focus. It is the left region of the surface's header row.
+func (p *Plugin) paneFocusChip(label string, focused bool) string {
+	if focused {
+		return lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("▸ " + label)
+	}
+	return dimText(label)
+}
+
+// terminalHeader renders a surface's single header row at the plugin's
+// truncation settings. hintFloor is the columns the right region keeps at the
+// chips' expense; zero leaves the chips first in line.
+func (p *Plugin) terminalHeader(chips []string, hints string, width, hintFloor int) string {
+	return terminalHeaderRow(chips, ui.ExpandTabs(hints, tabStopWidth), width, hintFloor,
+		func(value string, max int) string {
+			return p.truncateCache.Truncate(value, max, "")
+		})
+}
+
+// interactiveExitHint is the header hint that must survive at any width: the
+// mode label and the key that leaves it. Callers put it at the head of their
+// hint string and pass its width as the header's hint floor, so a narrow pane
+// drops tab chips rather than the way out of interactive mode.
+func (p *Plugin) interactiveExitHint() string {
+	interactiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
+		Bold(true)
+	return interactiveStyle.Render("INTERACTIVE") + " " + dimText(p.getInteractiveExitKey()+" exit")
+}
+
+// interactiveHintFloor is the columns interactiveExitHint needs to stay whole.
+func (p *Plugin) interactiveHintFloor() int {
+	return ansi.StringWidth(p.interactiveExitHint())
+}
+
+// renderCapturedTerminal draws one embedded terminal: its header row — identity
+// chips left, hints right — and then the viewport, which runs from the next row
+// to the bottom of the surface.
+func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+	interactive := p.interactiveDescribes(termPanel)
+	// While interactive the exit key leads the hints and is what the row must
+	// keep; the chips give way for it instead of the other way round.
+	hintFloor := 0
+	if interactive {
+		hintFloor = p.interactiveHintFloor()
+	}
+
+	// The attach flash lives in the right region rather than on a row of its
+	// own, so flashing never costs the terminal a row. Hints are clipped from
+	// the right, so it leads the region — except while interactive, where the
+	// exit key holds that spot and the flash follows it.
+	if p.previewFlashActive() {
+		flashStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
+			Bold(true)
+		flash := flashStyle.Render("Enter or double-click to attach")
+		switch {
+		case hint == "":
+			hint = flash
+		case interactive:
+			hint += " " + flash
+		default:
+			hint = flash + " " + hint
+		}
 	}
 	truncateEmpty := func(value string) string {
 		return p.truncateCache.Truncate(ui.ExpandTabs(dimText(value), tabStopWidth), width, "")
 	}
-	height-- // Reserve one line for the hint.
+	height -= terminalHeaderRows // The header occupies the surface's first row.
 	if height < 1 {
-		return truncateHint(hint)
+		return p.terminalHeader(chips, hint, width, hintFloor)
 	}
 	if buffer == nil || buffer.LineCount() == 0 {
-		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
+		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 
-	interactive := p.viewMode == ViewModeInteractive &&
-		p.interactiveState != nil &&
-		p.interactiveState.Active &&
-		p.interactiveState.TermPanel == termPanel
-	var cursorRow, cursorCol, paneHeight, paneWidth int
+	var cursorRow, cursorCol int
 	var cursorVisible bool
 	// Rendering derives from the pane's observed geometry, not the size sidecar
 	// last requested (td-73fa86). Interactive mode has a fresher copy on the
 	// interactive state; list view relies on the per-pane cache.
-	if geometry := p.paneGeometryFor(termPanel); geometry.known() {
-		paneWidth, paneHeight = geometry.Width, geometry.Height
-	}
+	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, interactive)
 	if interactive {
-		row, col, statePaneHeight, statePaneWidth, visible, _ := p.getCursorPosition()
+		row, col, _, _, visible, _ := p.getCursorPosition()
 		cursorRow, cursorCol, cursorVisible = row, col, visible
-		if statePaneWidth > 0 && statePaneHeight > 0 {
-			paneWidth, paneHeight = statePaneWidth, statePaneHeight
-		}
 		if p.interactiveState.MouseReportingEnabled {
 			hint += " " + dimText("app mouse • ⇧drag select")
 		}
 	}
 
-	follow := p.autoScrollOutput
-	offset := p.previewOffset
-	offsetFromBottom := false
+	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
+		p.selectionTermPanel && p.selection.Anchor.Valid())
 	trimTrailing := p.autoScrollOutput && !interactive
 	if termPanel {
-		if p.selectionTermPanel && p.selection.Anchor.Valid() {
-			follow = false
-			offset = p.termPanelSelectionOffset
-		} else {
-			follow = p.termPanelScroll == 0
-			offset = p.termPanelScroll
-			offsetFromBottom = true
-		}
 		trimTrailing = !interactive
 	}
 	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
@@ -260,39 +303,29 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 	if p.selectionTermPanel == termPanel {
 		selection = &p.selection
 	}
-	var cursorHistorySize, bufferBase int
-	var hasCursorHistory bool
-	if interactive {
-		cursorHistorySize = p.interactiveState.CursorHistorySize
-		bufferBase, hasCursorHistory = cursorBufferBase(buffer, p.interactiveState)
-	}
-
 	result := renderTerminalViewport(terminalViewportInput{
-		Buffer:            buffer,
-		Width:             width,
-		Height:            height,
-		Offset:            offset,
-		OffsetFromBottom:  offsetFromBottom,
-		Follow:            follow,
-		TrimTrailing:      trimTrailing,
-		Interactive:       interactive,
-		Selection:         selection,
-		CursorRow:         cursorRow,
-		CursorCol:         cursorCol,
-		CursorVisible:     cursorVisible,
-		PaneHeight:        paneHeight,
-		PaneWidth:         paneWidth,
-		NativeCursor:      interactive,
-		AbsoluteBase:      absoluteBase,
-		TotalItems:        totalItems,
-		LoadingOlder:      loadingOlder,
-		SearchMatches:     p.terminalSearchMatches(termPanel),
-		CursorHistorySize: cursorHistorySize,
-		BufferBase:        bufferBase,
-		HasCursorHistory:  hasCursorHistory,
+		Buffer:           buffer,
+		Width:            width,
+		Height:           height,
+		Offset:           offset,
+		OffsetFromBottom: offsetFromBottom,
+		Follow:           follow,
+		TrimTrailing:     trimTrailing,
+		Interactive:      interactive,
+		Selection:        selection,
+		CursorRow:        cursorRow,
+		CursorCol:        cursorCol,
+		CursorVisible:    cursorVisible,
+		PaneHeight:       paneHeight,
+		PaneWidth:        paneWidth,
+		NativeCursor:     interactive,
+		AbsoluteBase:     absoluteBase,
+		TotalItems:       totalItems,
+		LoadingOlder:     loadingOlder,
+		SearchMatches:    p.terminalSearchMatches(termPanel),
 	}, p.truncateCache)
 	if result.Content == "" {
-		return truncateHint(hint) + "\n" + truncateEmpty(emptyText)
+		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 	// A pane larger than this viewport is clipped, so say so rather than let the
 	// missing columns/rows look like corruption (td-73fa86). Gated on the pane's
@@ -323,43 +356,54 @@ func (p *Plugin) renderCapturedTerminal(hint string, buffer *tty.OutputBuffer, w
 			}
 		}
 	}
-	return truncateHint(hint) + "\n" + result.Content
+	return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + result.Content
 }
 
 // renderOutputContent renders agent output.
 func (p *Plugin) renderOutputContent(width, height int) string {
+	// The tab chips are this surface's left region. When the terminal panel is
+	// up they are followed by the agent sub-pane's own identity chip, so both
+	// children of the split name themselves and neither can be truncated away —
+	// the chips are also the row's only hit region (regionPreviewTab).
+	chips := p.previewTabChips()
+
+	// The states below have no terminal to draw, but they are still the Output
+	// tab, so they still owe the header row the tabs live on: without it a
+	// freshly created worktree shows no tabs at all while their hit regions stay
+	// live underneath the message.
+	notice := func(body string) string {
+		return p.terminalHeader(chips, "", width, 0) + "\n" + p.truncateAllLines(body, width)
+	}
+
 	wt := p.selectedWorktree()
 	if wt == nil {
-		return p.truncateAllLines(dimText("No worktree selected"), width)
+		return notice(dimText("No worktree selected"))
 	}
 
 	// Check for orphaned worktree (agent file exists but tmux session gone)
 	if wt.IsOrphaned && wt.Agent == nil {
-		return p.truncateAllLines(p.renderOrphanedMessage(wt.ChosenAgentType), width)
+		return notice(p.renderOrphanedMessage(wt.ChosenAgentType))
 	}
 
 	if wt.Agent == nil {
-		return p.truncateAllLines(dimText("No agent running\nPress 's' to start an agent"), width)
+		return notice(dimText("No agent running\nPress 's' to start an agent"))
 	}
 
 	// Hint depends on mode - interactive mode shows exit hints
 	var hint string
-	if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-		// Interactive mode targeting this agent pane - show exit hint with highlight
-		interactiveStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
-			Bold(true)
-		hint = interactiveStyle.Render("INTERACTIVE") + " " + dimText(p.getInteractiveExitKey()+" exit • "+p.getInteractiveAttachKey()+" attach")
-	} else if p.termPanelVisible && !p.termPanelFocused && p.activePane == PanePreview {
-		// Terminal panel visible and agent sub-pane is focused
-		focusStyle := lipgloss.NewStyle().
-			Foreground(styles.Primary).
-			Bold(true)
-		hint = focusStyle.Render("▸ Agent") + " " + dimText("enter interactive")
-	} else if p.termPanelVisible && p.termPanelFocused && p.activePane == PanePreview {
-		// Terminal panel visible but terminal sub-pane is focused
-		hint = dimText("Agent")
-	} else {
+	switch {
+	case p.interactiveDescribes(false):
+		// Interactive mode targeting this agent pane - show exit hint with
+		// highlight. The exit key leads, so the header's hint floor keeps it.
+		hint = p.interactiveExitHint() + dimText(" • "+p.getInteractiveAttachKey()+" attach")
+	case p.termPanelVisible && p.activePane == PanePreview:
+		// Split with the terminal panel: say which child has focus.
+		agentFocused := !p.termPanelFocused
+		chips = append(chips, p.paneFocusChip("Agent", agentFocused))
+		if agentFocused {
+			hint = dimText("enter interactive")
+		}
+	default:
 		// Only show "E for interactive" hint if feature flag is enabled
 		detach := getTmuxDetachHint()
 		if features.IsEnabled(features.TmuxInteractiveInput.Name) {
@@ -368,7 +412,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
 		}
 	}
-	return p.renderCapturedTerminal(hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
+	return p.renderCapturedTerminal(chips, hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 // renderOrphanedMessage renders the recovery prompt for orphaned worktrees.
@@ -409,22 +453,26 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 		return p.truncateAllLines(p.renderShellPrimer(width, height), width)
 	}
 
+	// A shell has no tabs, so its left region is its own name — the thing the
+	// sidebar selected — carrying the same focus marking the split children use.
+	name := shell.Name
+	if name == "" {
+		name = "Shell"
+	}
+	shellFocused := p.termPanelVisible && !p.termPanelFocused && p.activePane == PanePreview
+	chips := []string{p.paneFocusChip(name, shellFocused)}
+
 	// Hint depends on mode - interactive mode shows exit hints
 	var hint string
-	if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+	switch {
+	case p.interactiveDescribes(false):
 		// Interactive mode targeting this shell pane
-		interactiveStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
-			Bold(true)
-		hint = interactiveStyle.Render("INTERACTIVE") + " " + dimText(p.getInteractiveExitKey()+" exit")
-	} else if p.termPanelVisible && !p.termPanelFocused && p.activePane == PanePreview {
-		focusStyle := lipgloss.NewStyle().
-			Foreground(styles.Primary).
-			Bold(true)
-		hint = focusStyle.Render("▸ Shell") + " " + dimText("enter interactive")
-	} else if p.termPanelVisible && p.termPanelFocused && p.activePane == PanePreview {
-		hint = dimText("Shell")
-	} else {
+		hint = p.interactiveExitHint()
+	case p.termPanelVisible && p.activePane == PanePreview:
+		if shellFocused {
+			hint = dimText("enter interactive")
+		}
+	default:
 		// Only show "E for interactive" hint if feature flag is enabled
 		detach := getTmuxDetachHint()
 		if features.IsEnabled(features.TmuxInteractiveInput.Name) {
@@ -433,7 +481,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
 		}
 	}
-	return p.renderCapturedTerminal(hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
+	return p.renderCapturedTerminal(chips, hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 func padLinesToHeight(lines []string, target int) []string {

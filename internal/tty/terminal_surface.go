@@ -288,15 +288,25 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 			cmd = m.retryControl()
 			break
 		}
+		// The frame knows its own split exactly and publishes it with the content
+		// it describes: LoadedHistory.Rows() rows above pane row 0, then Height
+		// grid rows. Nothing downstream has to re-derive it from the serialized
+		// form, where a blank final grid row is indistinguishable from a trailing
+		// terminator and used to cost the buffer a row (td-d29821).
+		m.State.OutputBuf.ApplySnapshot(PaneSnapshot{
+			Output:      output,
+			BaseLine:    frame.Frame.CaptureBase,
+			Absolute:    frame.Frame.HasHistory,
+			HistoryRows: frame.Frame.LoadedHistory.Rows(),
+			PaneRows:    frame.Frame.Height,
+		})
 		if frame.Frame.HasHistory {
-			m.State.OutputBuf.UpdateSnapshot(output, frame.Frame.CaptureBase)
 			m.history = HistoryInfo{
 				HistorySize: frame.Frame.HistorySize,
 				CaptureBase: frame.Frame.CaptureBase,
 				HasHistory:  true,
 			}
 		} else {
-			m.State.OutputBuf.Update(output)
 			m.history = HistoryInfo{}
 		}
 		m.State.CursorRow = frame.Frame.CursorRow
@@ -317,8 +327,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		if !m.modelLive {
 			s := msg.Event.snapshot
 			if !m.preserveRecoveryBlank(s.Output) {
-				m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting,
-					s.HasHistory, s.CaptureBase, s.HistorySize)
+				m.applySnapshot(s)
 			}
 		}
 	case terminalInvalidEvent:
@@ -341,20 +350,28 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	return tea.Batch(cmd, m.listenControl())
 }
 
-func (m *Model) applyOutput(output string, row, col int, visible bool, height, width int, mouse, hasHistory bool, captureBase, historySize int) {
-	var changed bool
-	if hasHistory {
-		changed = m.State.OutputBuf.UpdateSnapshot(output, captureBase)
-		m.history = HistoryInfo{HistorySize: historySize, CaptureBase: captureBase, HasHistory: true}
+// applySnapshot adopts one control-mode capture as presentation. The snapshot
+// counted its own rows while it still had them as a line slice, so the split it
+// carries survives being joined into a string — where a blank final pane row is
+// indistinguishable from a trailing terminator (td-d29821).
+func (m *Model) applySnapshot(s ControlSnapshot) {
+	changed := m.State.OutputBuf.ApplySnapshot(PaneSnapshot{
+		Output:      s.Output,
+		BaseLine:    s.CaptureBase,
+		Absolute:    s.HasHistory,
+		HistoryRows: s.HistoryRows,
+		PaneRows:    s.PaneRows,
+	})
+	if s.HasHistory {
+		m.history = HistoryInfo{HistorySize: s.HistorySize, CaptureBase: s.CaptureBase, HasHistory: true}
 	} else {
-		changed = m.State.OutputBuf.Update(output)
 		m.history = HistoryInfo{}
 	}
-	m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible = row, col, visible
-	m.State.PaneHeight, m.State.PaneWidth = height, width
-	m.State.MouseReportingEnabled = mouse
+	m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible = s.CursorRow, s.CursorCol, s.CursorVisible
+	m.State.PaneHeight, m.State.PaneWidth = s.PaneHeight, s.PaneWidth
+	m.State.MouseReportingEnabled = s.MouseReporting
 	if changed {
-		m.State.BracketedPasteEnabled = DetectBracketedPasteMode(output)
+		m.State.BracketedPasteEnabled = DetectBracketedPasteMode(s.Output)
 	}
 }
 

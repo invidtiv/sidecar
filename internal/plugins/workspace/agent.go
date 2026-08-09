@@ -75,6 +75,11 @@ type capturedPaneMetadata struct {
 	PaneTitle      string
 	CurrentCommand string
 	Valid          bool
+	// RowsJoined records that the capture was taken with -J, so its rows do not
+	// correspond one for one with the grid's. It travels with the text it
+	// describes all the way to tty.CaptureSnapshot, which then publishes no
+	// history/pane split rather than a wrong one.
+	RowsJoined bool
 }
 
 func newCaptureCoordinator() *captureCoordinator {
@@ -919,6 +924,9 @@ type AgentPollUnchangedMsg struct {
 	HistorySize   int
 	CaptureBase   int
 	HasHistory    bool
+	// RowsJoined says the capture was taken with -J, so it carries no usable
+	// history/pane split.
+	RowsJoined bool
 	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
 	// when HasCursor is set.
 	MouseReporting bool
@@ -1112,6 +1120,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				HistorySize:    capture.HistorySize,
 				CaptureBase:    capture.CaptureBase,
 				HasHistory:     capture.Valid,
+				RowsJoined:     capture.RowsJoined,
 				MouseReporting: cursor.MouseReporting,
 				Activity:       activity,
 				CapturedAt:     capturedAt,
@@ -1136,6 +1145,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			HistorySize:    capture.HistorySize,
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
+			RowsJoined:     capture.RowsJoined,
 			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
@@ -1214,6 +1224,7 @@ func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (st
 		HistorySize: historySize,
 		CaptureBase: max(historySize-captureLineCount, 0),
 		Valid:       true,
+		RowsJoined:  joinWrapped,
 	}
 	if len(fields) >= 3 {
 		width, errWidth := strconv.Atoi(strings.TrimSpace(fields[1]))
@@ -1290,7 +1301,9 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 	if !found {
 		return "", capturedCursor{}, fmt.Errorf("capture-pane: missing cursor metadata")
 	}
-	return paneOutput, parseCapturedCursor(header), nil
+	cursor := parseCapturedCursor(header)
+	cursor.RowsJoined = joinWrapped
+	return paneOutput, cursor, nil
 }
 
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {

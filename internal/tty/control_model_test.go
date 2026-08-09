@@ -430,6 +430,9 @@ func TestCaptureDeliveryUnchangedWhenModelPathOff(t *testing.T) {
 	want := ControlSnapshot{
 		Session: "one", Pane: "%1", Output: "line one\nline two",
 		HistorySize: 1250, CaptureBase: 350, HasHistory: true,
+		// The capture carried two rows for a 30-row pane, so it is all pane and
+		// no history: an undersized capture has no scrolled-off rows in it.
+		HistoryRows: 0, PaneRows: 2,
 		CursorRow: 4, CursorCol: 9, CursorVisible: false,
 		PaneHeight: 30, PaneWidth: 100, Generation: 1,
 		MouseReporting: true, PaneTitle: "Action Required", CurrentCommand: "node",

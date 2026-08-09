@@ -452,6 +452,12 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	if p.termPanelSession == "" || !p.termPanelVisible {
 		return nil
 	}
+	// Resize terminal panel pane to match its split dimensions. A split too
+	// small to draw has no panel to interact with.
+	w, h, ok := p.calculateTermPanelDimensions()
+	if !ok {
+		return nil
+	}
 
 	sessionName := p.termPanelSession
 	paneID := p.termPanelPaneID
@@ -460,8 +466,6 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		target = sessionName
 	}
 
-	// Resize terminal panel pane to match its split dimensions
-	w, h := p.calculateTermPanelDimensions()
 	w = p.terminalContentWidth(w, h, true)
 	tty.SetWindowSizeManual(sessionName)
 	// Explicit local action: claim the terminal panel session outright rather
@@ -493,57 +497,24 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 // calculatePreviewDimensions returns the content width and height for the preview pane.
 // Used to resize tmux panes to match the visible area.
 // IMPORTANT: This must stay in sync with renderListView() width calculations.
+// It no longer takes a selection kind: every terminal surface now reserves the
+// same single header row, so a shell and a worktree are sized identically and a
+// session can be sized before it is known which kind will render it (td-9b181e).
 func (p *Plugin) calculatePreviewDimensions() (width, height int) {
-	return p.previewDimensionsFor(p.shellSelected)
-}
-
-// previewDimensionsFor computes preview dimensions for a given selection kind
-// rather than the current one. Sizing a tmux session at creation time needs the
-// dimensions the pane will be rendered into once it is selected, which is not
-// necessarily what is selected right now.
-func (p *Plugin) previewDimensionsFor(shellSelected bool) (width, height int) {
 	if p.width <= 0 || p.height <= 0 {
 		if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && h > 0 {
-			return w - panelOverhead, h - panelBorderWidth - 1
+			return w - panelOverhead, h - panelBorderWidth - terminalHeaderRows
 		}
 		return 80, 24 // Safe defaults
 	}
 
-	// Calculate preview pane width based on sidebar visibility
-	// Uses panelOverhead constant to ensure consistency with render path
-	if !p.sidebarVisible {
-		// Full width minus panel overhead (borders + padding)
-		width = p.width - panelOverhead
-	} else {
-		// Account for sidebar and divider (same calculation as renderListView)
-		available := p.width - dividerWidth
-		sidebarW := (available * p.sidebarWidth) / 100
-		if sidebarW < 15 {
-			sidebarW = 15
-		}
-		if sidebarW > available-40 {
-			sidebarW = available - 40
-		}
-		previewW := available - sidebarW
-		if previewW < 40 {
-			previewW = 40
-		}
-		// Subtract panel overhead for content width
-		width = previewW - panelOverhead
-	}
+	// Width comes from the shared split, so this cannot drift from renderListView.
+	width = p.previewSplit().ContentWidth
 
-	// Calculate height: total height minus borders (2) and UI elements
-	// - panelBorderWidth for top/bottom panel borders
-	// - 1 for hint line
-	// - 2 for tabs header (worktrees only)
+	// Height: the pane minus its top/bottom borders, then the one header row
+	// renderCapturedTerminal draws above the viewport.
 	paneHeight := p.height - panelBorderWidth
-	if shellSelected {
-		// Shell: no tabs, just hint
-		height = paneHeight - 1
-	} else {
-		// Worktree: tabs header + hint
-		height = paneHeight - 3
-	}
+	height = paneHeight - terminalHeaderRows
 
 	if width < 20 {
 		width = 20
@@ -584,7 +555,12 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	var previewWidth, previewHeight int
 	isTermPanel := p.termPanelVisible && (target == p.termPanelPaneID || target == p.termPanelSession)
 	if isTermPanel {
-		previewWidth, previewHeight = p.calculateTermPanelDimensions()
+		var drawn bool
+		previewWidth, previewHeight, drawn = p.calculateTermPanelDimensions()
+		if !drawn {
+			// No panel is drawn at this size, so there is no geometry to assert.
+			return nil
+		}
 	} else if p.termPanelVisible {
 		previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 	} else {
@@ -621,7 +597,11 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	var previewWidth, previewHeight int
 	isTermPanel := p.interactiveState.TermPanel
 	if isTermPanel && p.termPanelVisible {
-		previewWidth, previewHeight = p.calculateTermPanelDimensions()
+		var drawn bool
+		previewWidth, previewHeight, drawn = p.calculateTermPanelDimensions()
+		if !drawn {
+			return nil
+		}
 	} else if p.termPanelVisible {
 		previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 	} else {
@@ -686,7 +666,11 @@ func (p *Plugin) maybeResizeVisiblePaneForScrollbar(target string, paneWidth, pa
 	}
 	var width, height int
 	if termPanel {
-		width, height = p.calculateTermPanelDimensions()
+		var drawn bool
+		width, height, drawn = p.calculateTermPanelDimensions()
+		if !drawn {
+			return nil
+		}
 	} else if p.termPanelVisible {
 		width, height = p.calculateAgentPaneDimensions()
 	} else {
@@ -1302,7 +1286,9 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 
 	pageSize := p.getPreviewVisibleHeight()
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		_, pageSize = p.calculateTermPanelDimensions()
+		if _, panelHeight, ok := p.calculateTermPanelDimensions(); ok {
+			pageSize = panelHeight
+		}
 	}
 	pageSize = max(pageSize-1, 1)
 
@@ -1409,61 +1395,21 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
-	previewX := 0
-	if p.sidebarVisible {
-		available := p.width - dividerWidth
-		sidebarW := (available * p.sidebarWidth) / 100
-		if sidebarW < 15 {
-			sidebarW = 15
-		}
-		if sidebarW > available-40 {
-			sidebarW = available - 40
-		}
-		previewX = sidebarW + dividerWidth
+	// Origin and size of the surface interactive mode is targeting. This used to
+	// re-derive the terminal panel's offset from calculatePreviewDimensions while
+	// the split itself divides the container height, so in the bottom layout it
+	// landed a row off — and a click was forwarded to the wrong tmux row — for
+	// every window height where the two floors disagreed. There is now one
+	// derivation, and it is the one the render path draws with.
+	targetingTermPanel := p.interactiveState != nil && p.interactiveState.Active &&
+		p.interactiveState.TermPanel && p.termPanelVisible
+	surface := p.terminalSurfaceGeometry(targetingTermPanel)
+	if !surface.OK {
+		return 0, 0, false
 	}
 
-	contentX := previewX + panelOverhead/2
-	contentY := 1
-	if !p.shellSelected {
-		contentY += 2
-	}
-	if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-		contentY++
-	}
-	contentY++ // hint line
-
-	// When interactive mode targets the terminal panel, adjust content origin
-	// to account for the terminal panel's position within the preview area.
-	targetingTermPanel := p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel && p.termPanelVisible
-	if targetingTermPanel {
-		previewWidth, previewHeight := p.calculatePreviewDimensions()
-		size := p.termPanelEffectiveSize()
-		if p.termPanelLayout == TermPanelRight {
-			termWidth := previewWidth * size / 100
-			if termWidth < 10 {
-				termWidth = 10
-			}
-			outputWidth := previewWidth - termWidth - 1
-			if outputWidth < 10 {
-				outputWidth = 10
-			}
-			contentX += outputWidth + 1 // skip agent output + divider
-		} else {
-			termHeight := previewHeight * size / 100
-			if termHeight < 3 {
-				termHeight = 3
-			}
-			outputHeight := previewHeight - termHeight - 1
-			if outputHeight < 3 {
-				outputHeight = 3
-			}
-			contentY += outputHeight + 1 // skip agent output + divider
-		}
-		contentY++ // terminal panel hint/label line
-	}
-
-	relX := x - contentX
-	relY := y - contentY
+	relX := x - surface.X
+	relY := y - surface.Y
 	if relX < 0 || relY < 0 {
 		return 0, 0, false
 	}
@@ -1472,17 +1418,9 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 	// reads the layout the render path produced rather than re-deriving one: a
 	// wider pane is drawn horizontally scrolled, a taller one starts partway
 	// down, and the scrollbar takes a column off both (td-73fa86).
-	viewWidth, viewHeight := p.calculatePreviewDimensions()
-	if targetingTermPanel {
-		viewWidth, viewHeight = p.calculateTermPanelDimensions()
-	}
-	paneWidth, paneHeight := viewWidth, viewHeight
-	if geometry := p.paneGeometryFor(targetingTermPanel); geometry.known() {
-		paneWidth, paneHeight = geometry.Width, geometry.Height
-	}
-	if p.interactiveState != nil &&
-		p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
-		paneWidth, paneHeight = p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
+	paneWidth, paneHeight := p.resolvedPaneGeometry(targetingTermPanel, p.interactiveDescribes(targetingTermPanel))
+	if paneWidth <= 0 || paneHeight <= 0 {
+		paneWidth, paneHeight = surface.Width, surface.Height
 	}
 
 	layout := p.terminalSelectionViewportLayout()

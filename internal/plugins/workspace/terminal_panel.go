@@ -11,7 +11,6 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -26,6 +25,11 @@ const (
 
 	// termPanelMaxSize is the maximum percentage the terminal panel can occupy.
 	termPanelMaxSize = 85
+
+	// termPanelMinBoxCols / termPanelMinBoxRows are the floors each child of the
+	// split gets before the split is abandoned as too small to draw.
+	termPanelMinBoxCols = 10
+	termPanelMinBoxRows = 3
 )
 
 // TermPanelSessionCreatedMsg is sent when the terminal panel tmux session is created.
@@ -194,29 +198,85 @@ func (p *Plugin) termPanelEffectiveSize() int {
 	return size
 }
 
-// calculateTermPanelDimensions returns the width and height that the terminal
-// panel's tmux pane should be resized to, based on the current layout and split.
-func (p *Plugin) calculateTermPanelDimensions() (width, height int) {
+// termPanelSplitBoxes reports the split the current layout divides the preview
+// into: columns in the right layout, rows in the bottom one. It is the single
+// place the split is measured — the sizers, the renderers and
+// terminalSurfaceGeometry all take it from here, against the same preview
+// dimensions — because two callers deriving it from differently floored inputs
+// could reach different fits verdicts, and one of them would then size or place
+// a panel the other never drew.
+//
+// fits false means there is no terminal panel on screen at all: the renderers
+// fall back to an output-only layout, and nothing may be sized or located.
+func (p *Plugin) termPanelSplitBoxes() (outputBox, termBox int, fits bool) {
 	previewWidth, previewHeight := p.calculatePreviewDimensions()
 	size := p.termPanelEffectiveSize()
-
 	if p.termPanelLayout == TermPanelRight {
-		termWidth := previewWidth * size / 100
-		if termWidth < 10 {
-			termWidth = 10
-		}
-		return termWidth, previewHeight
+		return termPanelRightBoxes(previewWidth, size)
 	}
-	// Bottom layout
-	// previewHeight excludes the main pane's hint. The split renderer divides
-	// the container that includes both child hints, then each child renderer
-	// reserves its own hint row before terminal content is drawn.
-	containerHeight := previewHeight + 1
-	termBoxHeight := containerHeight * size / 100
-	if termBoxHeight < 3 {
-		termBoxHeight = 3
+	// The renderer splits the whole preview content area, which is previewHeight
+	// plus the one header row previewHeight has already taken off; see
+	// termPanelContainerHeight.
+	return termPanelBottomBoxes(termPanelContainerHeight(previewHeight), size)
+}
+
+// calculateTermPanelDimensions returns the width and height that the terminal
+// panel's tmux pane should be resized to, based on the current layout and
+// split. ok is false when the split does not fit, which means no panel is drawn
+// and there is nothing to size.
+func (p *Plugin) calculateTermPanelDimensions() (width, height int, ok bool) {
+	previewWidth, previewHeight := p.calculatePreviewDimensions()
+	_, termBox, fits := p.termPanelSplitBoxes()
+	if !fits {
+		return 0, 0, false
 	}
-	return previewWidth, max(termBoxHeight-1, 1)
+	if p.termPanelLayout == TermPanelRight {
+		return termBox, previewHeight, true
+	}
+	// Each child box spends its own first row on its header, so the terminal
+	// inside it is one row shorter than the box.
+	return previewWidth, max(termBox-terminalHeaderRows, 1), true
+}
+
+// termPanelContainerHeight converts the primary terminal's viewport height into
+// the height of the container the bottom split divides: the preview content area
+// below the panel border, header row included.
+func termPanelContainerHeight(previewHeight int) int {
+	return previewHeight + terminalHeaderRows
+}
+
+// termPanelBottomBoxes is the bottom split's box arithmetic, shared by the
+// sizers and the renderers so a child's tmux pane cannot be sized against a
+// different split than the one drawn. The box heights include each child's own
+// header row. fits is false when the two floors together overflow the
+// container, which is every caller's cue to fall back to a full-height,
+// output-only layout.
+func termPanelBottomBoxes(containerHeight, size int) (outputBox, termBox int, fits bool) {
+	termBox = containerHeight * size / 100
+	if termBox < termPanelMinBoxRows {
+		termBox = termPanelMinBoxRows
+	}
+	outputBox = containerHeight - termBox - termPanelDividerRows
+	if outputBox < termPanelMinBoxRows {
+		outputBox = termPanelMinBoxRows
+	}
+	return outputBox, termBox, outputBox+termBox+termPanelDividerRows <= containerHeight
+}
+
+// termPanelRightBoxes is the right split's column arithmetic, and exists for the
+// same reason termPanelBottomBoxes does: it was hand-rolled identically in the
+// two sizers and both renderers, which is where the next drift would have
+// started.
+func termPanelRightBoxes(containerWidth, size int) (outputBox, termBox int, fits bool) {
+	termBox = containerWidth * size / 100
+	if termBox < termPanelMinBoxCols {
+		termBox = termPanelMinBoxCols
+	}
+	outputBox = containerWidth - termBox - termPanelDividerCols
+	if outputBox < termPanelMinBoxCols {
+		outputBox = termPanelMinBoxCols
+	}
+	return outputBox, termBox, outputBox+termBox+termPanelDividerCols <= containerWidth
 }
 
 // calculateAgentPaneDimensions returns the width and height for the agent
@@ -227,45 +287,27 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 	if !p.termPanelVisible {
 		return previewWidth, previewHeight
 	}
-	size := p.termPanelEffectiveSize()
-
-	if p.termPanelLayout == TermPanelRight {
-		termWidth := previewWidth * size / 100
-		if termWidth < 10 {
-			termWidth = 10
-		}
-		outputWidth := previewWidth - termWidth - 1 // -1 for divider
-		if outputWidth < 10 {
-			outputWidth = 10
-		}
-		// If both minimums exceed available width, fall back to full preview
-		if outputWidth+termWidth+1 > previewWidth {
-			return previewWidth, previewHeight
-		}
-		return outputWidth, previewHeight
-	}
-	// Bottom layout
-	containerHeight := previewHeight + 1
-	termBoxHeight := containerHeight * size / 100
-	if termBoxHeight < 3 {
-		termBoxHeight = 3
-	}
-	outputBoxHeight := containerHeight - termBoxHeight - 1 // -1 for divider
-	if outputBoxHeight < 3 {
-		outputBoxHeight = 3
-	}
-	// If both minimums exceed available height, fall back to full preview
-	if outputBoxHeight+termBoxHeight+1 > containerHeight {
+	outputBox, _, fits := p.termPanelSplitBoxes()
+	// If both minimums exceed the available space, the renderers draw no panel
+	// and this surface gets the whole preview.
+	if !fits {
 		return previewWidth, previewHeight
 	}
-	return previewWidth, max(outputBoxHeight-1, 1)
+	if p.termPanelLayout == TermPanelRight {
+		return outputBox, previewHeight
+	}
+	// The box spends its first row on the header, like every other surface.
+	return previewWidth, max(outputBox-terminalHeaderRows, 1)
 }
 
 func (p *Plugin) termPanelMaxScroll() int {
 	if p.termPanelOutput == nil {
 		return 0
 	}
-	_, height := p.calculateTermPanelDimensions()
+	_, height, ok := p.calculateTermPanelDimensions()
+	if !ok {
+		return 0
+	}
 	lineCount := p.termPanelOutput.LineCount()
 	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
 		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
@@ -283,7 +325,11 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 	if target == "" {
 		target = p.termPanelSession
 	}
-	w, h := p.calculateTermPanelDimensions()
+	w, h, ok := p.calculateTermPanelDimensions()
+	if !ok {
+		// No panel is drawn at this size, so there is no pane geometry to assert.
+		return nil
+	}
 	w = p.terminalContentWidth(w, h, true)
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, w, h)
@@ -291,35 +337,39 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 	}
 }
 
-// termPanelHintLine renders the focus-aware label for the terminal panel sub-pane.
-func (p *Plugin) termPanelHintLine() string {
-	if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-		interactiveStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(styles.GetCurrentTheme().Colors.Warning)).
-			Bold(true)
-		return interactiveStyle.Render("INTERACTIVE") + " " + dimText(p.getInteractiveExitKey()+" exit")
+// termPanelChip is the terminal panel's identity chip, the left region of its
+// header row.
+func (p *Plugin) termPanelChip() string {
+	return p.paneFocusChip("Terminal", p.termPanelFocused)
+}
+
+// termPanelHints is the right region of the terminal panel's header row.
+func (p *Plugin) termPanelHints() string {
+	if p.interactiveDescribes(true) {
+		return p.interactiveExitHint()
 	}
 	if p.termPanelFocused {
-		focusStyle := lipgloss.NewStyle().
-			Foreground(styles.Primary).
-			Bold(true)
-		return focusStyle.Render("▸ Terminal") + " " + dimText("enter interactive")
+		return dimText("enter interactive")
 	}
-	return dimText("Terminal")
+	return ""
 }
 
 // renderTermPanelOutput renders the terminal panel's captured output.
 func (p *Plugin) renderTermPanelOutput(width, height int) string {
-	hint := p.termPanelHintLine()
+	chips := []string{p.termPanelChip()}
 	if p.termPanelOutput == nil {
-		hint = p.truncateCache.Truncate(ui.ExpandTabs(hint, tabStopWidth), width, "")
-		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
-		if height <= 1 {
-			return hint
+		hintFloor := 0
+		if p.interactiveDescribes(true) {
+			hintFloor = p.interactiveHintFloor()
 		}
-		return hint + "\n" + empty
+		header := p.terminalHeader(chips, p.termPanelHints(), width, hintFloor)
+		if height <= terminalHeaderRows {
+			return header
+		}
+		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
+		return header + "\n" + empty
 	}
-	return p.renderCapturedTerminal(hint, p.termPanelOutput, width, height, true, "Terminal ready")
+	return p.renderCapturedTerminal(chips, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
 // renderTermPanelDividerH renders a horizontal divider (for bottom layout).
@@ -343,43 +393,25 @@ func (p *Plugin) renderTermPanelDividerV(height int) string {
 
 // renderOutputWithTermPanel renders the output content split with the terminal panel.
 func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
-	size := p.termPanelEffectiveSize()
-	// Calculate the absolute X offset where preview content starts.
-	// This is needed to register hit regions at the correct screen position.
-	previewContentX := panelOverhead / 2
-	if p.sidebarVisible {
-		available := p.width - dividerWidth
-		sidebarW := (available * p.sidebarWidth) / 100
-		if sidebarW < 15 {
-			sidebarW = 15
-		}
-		if sidebarW > available-40 {
-			sidebarW = available - 40
-		}
-		previewContentX = sidebarW + dividerWidth + panelOverhead/2
-	}
-
-	// Absolute Y offset for content within preview: panel border (1) + tab header (1) + blank line (1) = 3.
-	// For shells (no tabs), the content starts at panel border (1).
-	previewContentY := 1
-	if !p.shellSelected {
-		previewContentY = 3
-	}
+	// The split comes from termPanelSplitBoxes rather than from the handed-in
+	// width/height, so the boxes drawn here are the boxes the sizers resized the
+	// tmux panes to and the ones terminalSurfaceGeometry places.
+	outputBox, termBox, fits := p.termPanelSplitBoxes()
+	// Absolute origin where preview content starts, so hit regions land on the
+	// screen positions the render actually produces. The flash hint used to be
+	// prepended as a row after these regions registered, leaving them a row high
+	// for its duration; it now lives in the header's right region and shifts
+	// nothing.
+	previewContentX := p.previewSplit().ContentX
+	previewContentY := p.previewContentY()
 
 	if p.termPanelLayout == TermPanelRight {
-		// Right layout: output | divider | terminal
-		termWidth := width * size / 100
-		if termWidth < 10 {
-			termWidth = 10
-		}
-		outputWidth := width - termWidth - 1 // -1 for divider
-		if outputWidth < 10 {
-			outputWidth = 10
-		}
+		// Right layout: output | divider | terminal.
 		// Guard: if total exceeds width, fall back to output-only
-		if outputWidth+termWidth+1 > width {
+		if !fits {
 			return p.renderOutputContent(width, height)
 		}
+		outputWidth, termWidth := outputBox, termBox
 
 		// Register hit regions for the vertical divider and terminal panel content
 		absX := previewContentX + outputWidth
@@ -400,19 +432,12 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, outputPane, divider, termPane)
 	}
 
-	// Bottom layout: output / divider / terminal
-	termHeight := height * size / 100
-	if termHeight < 3 {
-		termHeight = 3
-	}
-	outputHeight := height - termHeight - 1 // -1 for divider
-	if outputHeight < 3 {
-		outputHeight = 3
-	}
+	// Bottom layout: output / divider / terminal.
 	// Guard: if total exceeds height, fall back to output-only
-	if outputHeight+termHeight+1 > height {
+	if !fits {
 		return p.renderOutputContent(width, height)
 	}
+	outputHeight, termHeight := outputBox, termBox
 
 	// Register hit regions for the horizontal divider and terminal panel content
 	absY := previewContentY + outputHeight
@@ -428,35 +453,17 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 
 // renderShellWithTermPanel renders the shell output split with the terminal panel.
 func (p *Plugin) renderShellWithTermPanel(width, height int) string {
-	size := p.termPanelEffectiveSize()
+	outputBox, termBox, fits := p.termPanelSplitBoxes()
 
-	previewContentX := panelOverhead / 2
-	if p.sidebarVisible {
-		available := p.width - dividerWidth
-		sidebarW := (available * p.sidebarWidth) / 100
-		if sidebarW < 15 {
-			sidebarW = 15
-		}
-		if sidebarW > available-40 {
-			sidebarW = available - 40
-		}
-		previewContentX = sidebarW + dividerWidth + panelOverhead/2
-	}
-	previewContentY := 1 // Shell has no tabs, only panel border
+	previewContentX := p.previewSplit().ContentX
+	previewContentY := p.previewContentY()
 
 	if p.termPanelLayout == TermPanelRight {
-		termWidth := width * size / 100
-		if termWidth < 10 {
-			termWidth = 10
-		}
-		outputWidth := width - termWidth - 1
-		if outputWidth < 10 {
-			outputWidth = 10
-		}
 		// Guard: if total exceeds width, fall back to shell-only
-		if outputWidth+termWidth+1 > width {
+		if !fits {
 			return p.renderShellOutput(width, height)
 		}
+		outputWidth, termWidth := outputBox, termBox
 
 		absX := previewContentX + outputWidth
 		p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, absX, previewContentY, dividerHitWidth, height, nil)
@@ -475,18 +482,11 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	}
 
 	// Bottom layout
-	termHeight := height * size / 100
-	if termHeight < 3 {
-		termHeight = 3
-	}
-	outputHeight := height - termHeight - 1
-	if outputHeight < 3 {
-		outputHeight = 3
-	}
 	// Guard: if total exceeds height, fall back to shell-only
-	if outputHeight+termHeight+1 > height {
+	if !fits {
 		return p.renderShellOutput(width, height)
 	}
+	outputHeight, termHeight := outputBox, termBox
 
 	absY := previewContentY + outputHeight
 	p.mouseHandler.HitMap.AddRect(regionTermPanelDivider, previewContentX, absY, width, dividerHitWidth, nil)

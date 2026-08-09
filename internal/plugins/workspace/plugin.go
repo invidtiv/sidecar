@@ -917,7 +917,13 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 			return h
 		}
 	}
-	h := p.height - 4 // tabs header + empty line + hint line + margin
+	// Terminal surfaces spend one row on their own header; Diff and Task keep
+	// the standalone tab row and the blank spacer under it.
+	chrome := previewTabRows
+	if p.previewTab == PreviewTabOutput || p.shellSelected {
+		chrome = terminalHeaderRows
+	}
+	h := p.height - panelBorderWidth - chrome
 	if h < 1 {
 		h = 1
 	}

@@ -35,20 +35,6 @@ type terminalViewportInput struct {
 	TotalItems    int
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
-
-	// CursorHistorySize and BufferBase place the cursor in buffer coordinates.
-	//
-	// A capture is `capture-pane -S -N`, i.e. scrollback lines followed by the
-	// pane's rows with trailing blanks stripped — so the buffer's tail is not
-	// the pane. In tmux's absolute line space pane row j is history_size+j, and
-	// BufferBase is the absolute index of the buffer's first line, so the
-	// cursor's buffer index is CursorHistorySize + CursorRow - BufferBase.
-	// HasCursorHistory is false when the capture carried no history metadata,
-	// in which case placement falls back to treating the buffer tail as the
-	// pane (td-d29821).
-	CursorHistorySize int
-	BufferBase        int
-	HasCursorHistory  bool
 }
 
 type terminalViewportLayout struct {
@@ -77,7 +63,23 @@ type terminalViewportLayout struct {
 	PaneClipped bool
 
 	// PaneTop is the buffer index of pane row 0, so a rendered row maps back to
-	// the pane row tmux would report for it.
+	// the pane row tmux would report for it, and so the native cursor lands on
+	// the row it belongs to.
+	//
+	// It comes from the buffer, which was told the split by whoever published
+	// the content — a screen-model frame knows its loaded history rows and its
+	// grid height at the instant it is built, and a capture knows its own row
+	// count and the pane height read with it. Both alternatives were tried and
+	// both drift. The absolute-coordinate form (history_size + cursor_row -
+	// buffer base) mixes two independently observed quantities: display-message
+	// and capture-pane are separate writes, so N lines can scroll into history
+	// between them and the cursor is drawn N rows too high until the pane is
+	// re-seeded. Re-deriving it as "the buffer's last PaneHeight lines" instead
+	// assumes a serialization detail that does not hold: a grid whose final row
+	// is blank ends in a newline that reads as a terminator, the buffer is a row
+	// short, and the cursor is drawn one row too high (td-d29821). Absolute
+	// coordinates are still what scrollback, search, and selection use, where a
+	// transient off-by-N is harmless.
 	PaneTop int
 }
 
@@ -144,11 +146,31 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 		return layout
 	}
 
-	layout.EffectiveCount = in.Buffer.LineCount()
+	lineCount, paneTop, paneKnown := in.Buffer.PaneWindow()
+	layout.EffectiveCount = lineCount
 	if in.TrimTrailing {
 		layout.EffectiveCount = in.Buffer.LastNonEmptyLine() + 1
 	}
 	layout.MaxOffset = max(layout.EffectiveCount-layout.DisplayHeight, 0)
+	// Pane row 0, in buffer coordinates. Settled before the scroll window so the
+	// clipped-follow anchor below and the cursor placement agree with it by
+	// construction. A buffer that has never been told its split falls back to
+	// its tail; PaneHeight of 0 means no geometry has been observed either, and
+	// the visible window is treated as the pane once Start is known.
+	//
+	// Between a resize and the capture that follows it, paneTop still describes
+	// the old pane height while in.PaneHeight is already the new one, so the
+	// cursor sits off by the delta for one poll. That is the accepted cost of
+	// taking the split from the producer: the alternative — inferring it from
+	// the buffer's tail — was self-consistent across a resize but wrong whenever
+	// the grid's last row was blank, which is every prompt at the bottom of a
+	// screen rather than the instant after a drag (td-d29821).
+	switch {
+	case paneKnown:
+		layout.PaneTop = min(paneTop, layout.EffectiveCount)
+	case in.PaneHeight > 0:
+		layout.PaneTop = max(layout.EffectiveCount-in.PaneHeight, 0)
+	}
 
 	switch {
 	case in.Follow:
@@ -161,20 +183,19 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	// A pane taller than the viewport is clipped, so pin the window to the
 	// cursor when following: the live row matters more than the pane's last
 	// row, which is usually blank padding below it (td-73fa86).
-	if fit.ClippedHeight && in.Follow && in.HasCursorHistory {
-		cursorLine := in.CursorHistorySize + in.CursorRow - in.BufferBase
-		if cursorLine >= 0 {
-			layout.Start = min(layout.Start, max(cursorLine-layout.DisplayHeight+1, 0))
-		}
+	// Gated on interactive mode, which is the only state that carries a cursor
+	// row at all; ClippedHeight implies observed geometry, so PaneTop is already
+	// set. Deliberately not gated on the cursor being *visible*: a full-screen
+	// app that hides it (less, some TUIs) still has a live row, and anchoring on
+	// the pane's tail instead would clip exactly what the user is looking at.
+	if fit.ClippedHeight && in.Follow && in.Interactive {
+		cursorLine := layout.PaneTop + in.CursorRow
+		layout.Start = min(layout.Start, max(cursorLine-layout.DisplayHeight+1, 0))
 	}
 	layout.End = min(layout.Start+layout.DisplayHeight, layout.EffectiveCount)
 	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
-	// Pane row 0 in buffer coordinates: from the capture's history metadata when
-	// it carried any, otherwise assuming the buffer's tail is the pane.
-	if in.HasCursorHistory {
-		layout.PaneTop = in.CursorHistorySize - in.BufferBase
-	} else if in.PaneHeight > 0 {
-		layout.PaneTop = layout.EffectiveCount - in.PaneHeight
+	if !paneKnown && in.PaneHeight <= 0 {
+		layout.PaneTop = layout.Start
 	}
 	return layout
 }
@@ -248,22 +269,6 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 }
 
-// cursorBufferBase reports the absolute index of the buffer's first line and
-// whether the cursor can be placed in absolute coordinates. Both the capture
-// having supplied history metadata and the buffer having been fed an absolute
-// snapshot are required; a buffer still on the relative Update path has no
-// absolute base to subtract.
-func cursorBufferBase(buffer *tty.OutputBuffer, state *InteractiveState) (base int, ok bool) {
-	if buffer == nil || state == nil || !state.HasCursorHistory {
-		return 0, false
-	}
-	base, _, absolute := buffer.AbsoluteRange()
-	if !absolute {
-		return 0, false
-	}
-	return base, true
-}
-
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
 	layout := calculateTerminalViewportLayout(in)
 	if in.Buffer == nil || layout.EffectiveCount == 0 ||
@@ -278,20 +283,11 @@ func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool
 	if visibleRows <= 0 {
 		return 0, 0, false
 	}
-	if in.HasCursorHistory {
-		// Buffer coordinates: absolute cursor row, minus the buffer's absolute
-		// base, minus the scroll offset.
-		y = in.CursorHistorySize + in.CursorRow - in.BufferBase - layout.Start
-	} else {
-		// No history metadata — assume the buffer's last DisplayHeight lines are
-		// the pane and place the cursor relative to that.
-		y = in.CursorRow
-		if in.PaneHeight > visibleRows {
-			y -= in.PaneHeight - visibleRows
-		} else if in.PaneHeight > 0 && in.PaneHeight < visibleRows {
-			y += visibleRows - in.PaneHeight
-		}
-	}
+	// Pane row 0 is a buffer index; the cursor is CursorRow rows below it, and
+	// the scroll offset turns that into a rendered row. This is the same PaneTop
+	// hit testing maps clicks through, so the drawn cursor and the pane row tmux
+	// reports for it can never disagree (td-d29821).
+	y = layout.PaneTop + in.CursorRow - layout.Start
 	if y < 0 || y >= visibleRows {
 		return 0, 0, false
 	}

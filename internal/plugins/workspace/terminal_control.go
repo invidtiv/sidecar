@@ -154,7 +154,10 @@ func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
 		p.termPanelSession == "" || p.termPanelPaneID == "" {
 		return workspaceTerminalTarget{}, false
 	}
-	width, height := p.calculateTermPanelDimensions()
+	width, height, ok := p.calculateTermPanelDimensions()
+	if !ok {
+		return workspaceTerminalTarget{}, false
+	}
 	width = p.terminalContentWidth(width, height, true)
 	return workspaceTerminalTarget{
 		Session: p.termPanelSession, Pane: p.termPanelPaneID,
@@ -309,10 +312,6 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 	p.interactiveState.MouseReportingEnabled = state.MouseReportingEnabled
 	p.interactiveState.PaneMouseReporting = state.MouseReportingEnabled
 	p.interactiveState.LastKeyTime = state.LastKeyTime
-	if history.HasHistory {
-		p.interactiveState.CursorHistorySize = history.HistorySize
-		p.interactiveState.HasCursorHistory = true
-	}
 }
 
 func (p *Plugin) activeInteractiveTerminal() *tty.Model {

@@ -116,16 +116,16 @@ func TestTerminalHistorySummaryReportsBufferBaseWithoutTrackedHistory(t *testing
 	}
 }
 
-func TestTerminalHistorySummaryMatchesSearchAndCursorCoordinates(t *testing.T) {
+func TestTerminalHistorySummaryMatchesSearchCoordinates(t *testing.T) {
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 	p := New()
-	p.interactiveState = &InteractiveState{HasCursorHistory: true}
+	p.interactiveState = &InteractiveState{}
 
 	// recomputeTerminalSearch and revealTerminalSearchMatch derive match lines
-	// straight from the buffer, and cursorBufferBase does the same. The render
-	// path maps them back through terminalHistorySummary, so the two must agree
-	// whether or not the buffer has tracked history state.
+	// straight from the buffer. The render path maps them back through
+	// terminalHistorySummary, so the two must agree whether or not the buffer
+	// has tracked history state.
 	wantBase, _, _ := buffer.AbsoluteRange()
 	for _, tracked := range []bool{false, true} {
 		if tracked {
@@ -139,10 +139,6 @@ func TestTerminalHistorySummaryMatchesSearchAndCursorCoordinates(t *testing.T) {
 		base, _, _ := p.terminalHistorySummary(false, buffer)
 		if base != wantBase {
 			t.Fatalf("tracked=%v: summary base = %d, want %d", tracked, base, wantBase)
-		}
-		cursorBase, ok := cursorBufferBase(buffer, p.interactiveState)
-		if !ok || cursorBase != base {
-			t.Fatalf("tracked=%v: cursor base = %d (ok=%v), want %d", tracked, cursorBase, ok, base)
 		}
 	}
 }

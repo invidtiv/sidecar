@@ -25,7 +25,7 @@ func TestGetMaxScrollOffset(t *testing.T) {
 			height:     20,
 			lineCount:  100,
 			previewTab: PreviewTabOutput,
-			want:       84, // 100 - (20-4) = 84
+			want:       83, // 100 - (20-3) = 83
 		},
 		{
 			name:       "output with content shorter than viewport",
@@ -53,7 +53,8 @@ func TestGetMaxScrollOffset(t *testing.T) {
 			height:     20,
 			lineCount:  50,
 			previewTab: PreviewTabTask,
-			want:       34, // 50 - 16 = 34
+			// Diff and Task keep the two-row tab chrome: 50 - (20-2-2) = 34.
+			want: 34,
 		},
 	}
 
@@ -237,7 +238,7 @@ func TestGGJumpToBottom(t *testing.T) {
 	}
 
 	p.previewOffset = p.getMaxScrollOffset()
-	expected := 84 // 100 - 16
+	expected := 84 // Task tab: 100 - (20 - borders - the two-row tab chrome)
 	if p.previewOffset != expected {
 		t.Errorf("after G: previewOffset = %d, want %d", p.previewOffset, expected)
 	}
@@ -383,16 +384,24 @@ func TestGetPreviewVisibleHeight(t *testing.T) {
 	tests := []struct {
 		name   string
 		height int
+		tab    PreviewTab
+		shell  bool
 		want   int
 	}{
-		{"normal height", 30, 26},
-		{"small height", 5, 1},
-		{"zero height", 0, 1},
-		{"negative height", -5, 1},
+		// A terminal surface spends one row on its own header...
+		{"output normal height", 30, PreviewTabOutput, false, 27},
+		{"output small height", 5, PreviewTabOutput, false, 2},
+		{"shell normal height", 30, PreviewTabDiff, true, 27},
+		// ...while Diff and Task keep the tab row and its blank spacer.
+		{"diff normal height", 30, PreviewTabDiff, false, 26},
+		{"task normal height", 30, PreviewTabTask, false, 26},
+		{"task small height", 5, PreviewTabTask, false, 1},
+		{"zero height", 0, PreviewTabOutput, false, 1},
+		{"negative height", -5, PreviewTabOutput, false, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &Plugin{height: tt.height}
+			p := &Plugin{height: tt.height, previewTab: tt.tab, shellSelected: tt.shell}
 			got := p.getPreviewVisibleHeight()
 			if got != tt.want {
 				t.Errorf("getPreviewVisibleHeight() = %d, want %d", got, tt.want)

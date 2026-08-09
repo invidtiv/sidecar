@@ -732,7 +732,6 @@ func seedFromResponses(metaLines, mainLines, captureLines []string, scrollback i
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
 	}
-	captureBase := max(meta.HistorySize-scrollback, 0)
 	activeLines := captureLines
 	mainOutput := mainLines
 	if meta.AltScreen {
@@ -758,7 +757,6 @@ func seedFromResponses(metaLines, mainLines, captureLines []string, scrollback i
 		MainOutput:    strings.Join(mainOutput, "\n"),
 		MainCursorRow: meta.MainCursorRow,
 		MainCursorCol: meta.MainCursorCol,
-		CaptureBase:   captureBase,
 		HistorySize:   meta.HistorySize,
 		HistoryLimit:  scrollback,
 		Width:         meta.Width,

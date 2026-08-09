@@ -2,6 +2,7 @@ package tty
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -640,6 +641,104 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 	legacy, err := parseControlSnapshot("session", "%12", 900, []string{"9,4,0,30,100,1250", "line"})
 	if err != nil || legacy.MouseReporting || legacy.CurrentCommand != "" || legacy.PaneTitle != "" {
 		t.Fatalf("legacy metadata = %#v, err=%v", legacy, err)
+	}
+}
+
+// td-d29821: the capture path writes its display-message and its capture-pane
+// separately, so history_size can be stale by the time the rows arrive. The
+// capture's own row count is the only self-consistent source for where those
+// rows sit in tmux's absolute line space.
+func TestControlSnapshotDerivesCaptureBaseFromTheCapture(t *testing.T) {
+	const paneHeight = 4
+	metadata := func(historySize int) string {
+		return fmt.Sprintf("0,0,1,%d,80,%d", paneHeight, historySize)
+	}
+	capture := func(rows int) []string {
+		lines := make([]string, rows)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("row-%02d", i)
+		}
+		return lines
+	}
+
+	for _, tc := range []struct {
+		name        string
+		historySize int
+		rows        int
+		wantBase    int
+	}{
+		// 600 history rows delivered, so the first one is absolute 400.
+		{"metadata agrees with the capture", 1000, 600 + paneHeight, 400},
+		// Two rows scrolled into history after the metadata was read: the capture
+		// carries 602 of them, and the base moves with the rows, not the stale
+		// count.
+		{"capture ran ahead of the metadata", 1000, 602 + paneHeight, 398},
+		// Shorter session than the requested window: every history row is loaded,
+		// so the capture starts at absolute 0 rather than history_size-scrollback.
+		{"history shorter than the request", 12, 12 + paneHeight, 0},
+		// Nothing but the live pane.
+		{"no history at all", 0, paneHeight, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := append([]string{metadata(tc.historySize)}, capture(tc.rows)...)
+			snapshot, err := parseControlSnapshot("session", "%12", 600, lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.CaptureBase != tc.wantBase {
+				t.Fatalf("capture base = %d, want %d (history_size %d, %d rows for a %d-row pane)",
+					snapshot.CaptureBase, tc.wantBase, tc.historySize, tc.rows, paneHeight)
+			}
+			// The invariant the viewport depends on: the rows delivered fill the
+			// absolute window the snapshot claims.
+			if got := snapshot.HistorySize - snapshot.CaptureBase; got != tc.rows-paneHeight {
+				t.Fatalf("absolute history window = %d, want the %d delivered history rows",
+					got, tc.rows-paneHeight)
+			}
+			// And the split the consumer places the cursor with is counted from
+			// the same delivered rows, while they are still a line slice.
+			if snapshot.HistoryRows != tc.rows-paneHeight || snapshot.PaneRows != paneHeight {
+				t.Fatalf("split = %d history + %d pane rows, want %d + %d",
+					snapshot.HistoryRows, snapshot.PaneRows, tc.rows-paneHeight, paneHeight)
+			}
+		})
+	}
+
+	// Degenerate captures carry no usable row count, so the requested window is
+	// still the best available answer.
+	short, err := parseControlSnapshot("session", "%12", 600, []string{metadata(1000), "only-one-row"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if short.CaptureBase != 400 {
+		t.Fatalf("short-capture base = %d, want the requested-window fallback 400", short.CaptureBase)
+	}
+	if short.HistoryRows != 0 || short.PaneRows != 1 {
+		t.Fatalf("short-capture split = %d history + %d pane rows, want 0 + 1",
+			short.HistoryRows, short.PaneRows)
+	}
+	noGeometry, err := parseControlSnapshot("session", "%12", 600, []string{"0,0,1,0,80,1000", "a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noGeometry.CaptureBase != 400 {
+		t.Fatalf("no-pane-height base = %d, want the requested-window fallback 400", noGeometry.CaptureBase)
+	}
+	if noGeometry.PaneRows != 0 {
+		t.Fatalf("no-pane-height pane rows = %d, want the split reported as unknown", noGeometry.PaneRows)
+	}
+
+	// A capture whose final pane row is blank ends in an empty line. The split
+	// has to count it, because once Output is joined that line is exactly what a
+	// trailing terminator looks like.
+	blankTail, err := parseControlSnapshot("session", "%12", 600,
+		[]string{metadata(2), "history-0", "history-1", "pane-0", "pane-1", "pane-2", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blankTail.HistoryRows != 2 || blankTail.PaneRows != paneHeight {
+		t.Fatalf("blank-tail split = %d history + %d pane rows, want 2 + %d",
+			blankTail.HistoryRows, blankTail.PaneRows, paneHeight)
 	}
 }
 
