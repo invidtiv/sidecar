@@ -1,11 +1,104 @@
 package codex
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/adapter/cache"
 )
+
+func BenchmarkSessionsStateIndex(b *testing.B) {
+	root := b.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		b.Fatal(err)
+	}
+	dbPath := filepath.Join(root, "state_5.sqlite")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, source TEXT NOT NULL, cwd TEXT NOT NULL, title TEXT NOT NULL, tokens_used INTEGER NOT NULL, archived INTEGER NOT NULL, first_user_message TEXT NOT NULL, thread_source TEXT, model TEXT, has_user_event INTEGER NOT NULL)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < 500; i++ {
+		path := filepath.Join(sessionsDir, "2026", "08", "08", fmt.Sprintf("rollout-%d.jsonl", i))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+			b.Fatal(err)
+		}
+		_, err = db.Exec(`INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, fmt.Sprintf("id-%d", i), path, int64(1), int64(i+2), "cli", project, fmt.Sprintf("Session %d", i), i, 0, "prompt", "user", "gpt", 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		b.Fatal(err)
+	}
+	a := New()
+	a.sessionsDir = sessionsDir
+	a.stateDBPath = dbPath
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := a.Sessions(project); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMessagesCurrent(b *testing.B) {
+	root := b.TempDir()
+	id := "bench-current"
+	path := filepath.Join(root, "rollout.jsonl")
+	lines := generateSessionLines(8000)
+	if err := writeSessionFile(path, lines); err != nil {
+		b.Fatal(err)
+	}
+	a := New()
+	a.sessionsDir = root
+	a.sessionIndex = map[string]string{id: path}
+	b.Run("Full", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			a.msgCache = cache.New[messageCacheEntry](msgCacheMaxEntries)
+			if _, err := a.Messages(id); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	if _, err := a.Messages(id); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("CacheHit", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if _, err := a.Messages(id); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("IncrementalAppend", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_, err = fmt.Fprintf(f, "{\"timestamp\":\"2026-08-08T12:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"append-%d\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n", i)
+			_ = f.Close()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := a.Messages(id); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 // BenchmarkSessionFiles measures directory walking performance.
 func BenchmarkSessionFiles(b *testing.B) {

@@ -490,17 +490,24 @@ func TestMessagesCaching_ToolCallAcrossBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs2) != 3 {
-		t.Fatalf("expected 3 msgs, got %d", len(msgs2))
+	if len(msgs2) != 2 {
+		t.Fatalf("expected pending tool projection to be replaced, got %d msgs", len(msgs2))
 	}
 
 	// Assistant message should have tool with output linked
-	if len(msgs2[2].ToolUses) != 1 {
-		t.Fatalf("expected 1 tool use in assistant message, got %d", len(msgs2[2].ToolUses))
+	if len(msgs2[1].ToolUses) != 1 {
+		t.Fatalf("expected 1 tool use in assistant message, got %d", len(msgs2[1].ToolUses))
 	}
 	// Output is "hello\n" with quotes because the JSON payload contains \"hello\\n\"
 	// which rawToString unmarshals to the literal string "hello\n" (with quotes)
-	if msgs2[2].ToolUses[0].Output == "" {
+	if msgs2[1].ToolUses[0].Output == "" {
 		t.Error("tool use output should be linked, got empty")
+	}
+	if len(msgs2[1].ContentBlocks) != 3 {
+		t.Fatalf("expected tool_use, tool_result, text blocks, got %+v", msgs2[1].ContentBlocks)
+	}
+	if msgs2[1].ContentBlocks[0].Type != "tool_use" || msgs2[1].ContentBlocks[1].Type != "tool_result" ||
+		msgs2[1].ContentBlocks[0].ToolUseID != "call-123" || msgs2[1].ContentBlocks[1].ToolUseID != "call-123" {
+		t.Fatalf("incremental ContentBlocks linkage mismatch: %+v", msgs2[1].ContentBlocks)
 	}
 }

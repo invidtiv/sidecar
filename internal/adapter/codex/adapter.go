@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	adapterID           = "codex"
-	adapterName         = "Codex"
-	metaCacheMaxEntries = 2048
-	msgCacheMaxEntries  = 128 // fewer entries since messages are larger
-	dirCacheTTL         = 500 * time.Millisecond // TTL for directory listing cache (td-c9ff3aac)
+	adapterID              = "codex"
+	adapterName            = "Codex"
+	metaCacheMaxEntries    = 2048
+	msgCacheMaxEntries     = 128 // fewer entries since messages are larger
+	sessionIndexMaxEntries = 4096
+	totalUsageMaxEntries   = 128
+	dirCacheTTL            = 500 * time.Millisecond // TTL for directory listing cache (td-c9ff3aac)
 	// Two-pass parsing thresholds (td-a2c1dd41)
 	metaParseSmallFileThreshold = 16 * 1024 // Files smaller than 16KB use full scan
 	metaParseHeadLines          = 100       // Read first N lines for session_meta
@@ -37,12 +39,13 @@ type dirCacheEntry struct {
 // Adapter implements the adapter.Adapter interface for Codex CLI sessions.
 type Adapter struct {
 	sessionsDir     string
-	sessionIndex    map[string]string                // sessionID -> file path cache
-	totalUsageCache map[string]*TokenUsage           // sessionID -> total usage (populated by Messages)
-	mu              sync.RWMutex                     // guards sessionIndex and totalUsageCache
+	stateDBPath     string
+	sessionIndex    map[string]string      // sessionID -> file path cache
+	totalUsageCache map[string]*TokenUsage // sessionID -> total usage (populated by Messages)
+	mu              sync.RWMutex           // guards sessionIndex and totalUsageCache
 	metaCache       map[string]sessionMetaCacheEntry
-	metaMu          sync.RWMutex                        // guards metaCache
-	msgCache        *cache.Cache[messageCacheEntry]     // path -> cached messages
+	metaMu          sync.RWMutex                    // guards metaCache
+	msgCache        *cache.Cache[messageCacheEntry] // path -> cached messages
 	dirCache        *dirCacheEntry
 	dirCacheMu      sync.RWMutex // guards dirCache
 }
@@ -53,6 +56,7 @@ type messageCacheEntry struct {
 	pendingTools    []adapter.ToolUse
 	toolIndex       map[string]int
 	pendingThinking []adapter.ThinkingBlock
+	pendingBlocks   []adapter.ContentBlock
 	pendingUsage    *adapter.TokenUsage
 	currentModel    string
 	totalUsage      *TokenUsage
@@ -65,6 +69,7 @@ func New() *Adapter {
 	home, _ := os.UserHomeDir()
 	return &Adapter{
 		sessionsDir:     filepath.Join(home, ".codex", "sessions"),
+		stateDBPath:     filepath.Join(home, ".codex", "state_5.sqlite"),
 		sessionIndex:    make(map[string]string),
 		totalUsageCache: make(map[string]*TokenUsage),
 		metaCache:       make(map[string]sessionMetaCacheEntry),
@@ -90,6 +95,9 @@ func (a *Adapter) Icon() string { return "▶" }
 // intercepts each open. Newest-first turns the common case (a project worked
 // on recently) into a handful of reads (td-9c7bf2).
 func (a *Adapter) Detect(projectRoot string) (bool, error) {
+	if sessions, ok := a.sessionsFromStateDB(projectRoot); ok {
+		return len(sessions) > 0, nil
+	}
 	files, err := a.sessionFiles()
 	if err != nil {
 		return false, err
@@ -125,6 +133,15 @@ func (a *Adapter) Capabilities() adapter.CapabilitySet {
 
 // Sessions returns all sessions for the given project, sorted by update time.
 func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
+	if sessions, ok := a.sessionsFromStateDB(projectRoot); ok {
+		return sessions, nil
+	}
+	return a.sessionsFromJSONL(projectRoot)
+}
+
+// sessionsFromJSONL is the schema-drift and availability fallback for Codex
+// versions without a compatible state database.
+func (a *Adapter) sessionsFromJSONL(projectRoot string) ([]adapter.Session, error) {
 	files, err := a.sessionFiles()
 	if err != nil {
 		return nil, err
@@ -175,10 +192,9 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		newIndex[meta.SessionID] = f.path
 	}
 
-	// Atomically swap in the new index
-	a.mu.Lock()
-	a.sessionIndex = newIndex
-	a.mu.Unlock()
+	// Merge into the global index: Conversations calls global adapters once per
+	// related worktree, so replacing here would evict IDs from earlier calls.
+	a.cacheSessionPaths(newIndex)
 
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
@@ -211,7 +227,10 @@ func (a *Adapter) Messages(sessionID string) ([]adapter.Message, error) {
 		if ok {
 			// Exact cache hit: file unchanged
 			if info.Size() == cachedSize && info.ModTime().Equal(cachedModTime) {
-				return copyMessages(cached.messages), nil
+				if cached.totalUsage != nil {
+					a.cacheTotalUsage(sessionID, cached.totalUsage)
+				}
+				return messagesFromCacheEntry(sessionID, cached), nil
 			}
 
 			// File grew: incremental parse from saved offset
@@ -221,9 +240,7 @@ func (a *Adapter) Messages(sessionID string) ([]adapter.Message, error) {
 					a.msgCache.Set(path, entry, info.Size(), info.ModTime(), entry.byteOffset)
 					// Update total usage cache
 					if entry.totalUsage != nil {
-						a.mu.Lock()
-						a.totalUsageCache[sessionID] = entry.totalUsage
-						a.mu.Unlock()
+						a.cacheTotalUsage(sessionID, entry.totalUsage)
 					}
 					return messages, nil
 				}
@@ -245,12 +262,19 @@ func (a *Adapter) Messages(sessionID string) ([]adapter.Message, error) {
 
 	// Update total usage cache
 	if entry.totalUsage != nil {
-		a.mu.Lock()
-		a.totalUsageCache[sessionID] = entry.totalUsage
-		a.mu.Unlock()
+		a.cacheTotalUsage(sessionID, entry.totalUsage)
 	}
 
 	return messages, nil
+}
+
+func messagesFromCacheEntry(sessionID string, cached messageCacheEntry) []adapter.Message {
+	state := &parseState{sessionID: sessionID, messages: copyMessages(cached.messages),
+		pendingTools: copyToolUses(cached.pendingTools), toolIndex: copyToolIndex(cached.toolIndex),
+		pendingThinking: copyThinkingBlocks(cached.pendingThinking), pendingBlocks: copyContentBlocks(cached.pendingBlocks),
+		pendingUsage: cached.pendingUsage, currentModel: cached.currentModel, totalUsage: cached.totalUsage,
+		lastTimestamp: cached.lastTimestamp}
+	return state.messagesForDisplay()
 }
 
 // parseMessagesFull parses all messages from a session file.
@@ -283,14 +307,12 @@ func (a *Adapter) parseMessagesFull(path, sessionID string, info os.FileInfo) ([
 
 	a.invalidateSessionMetaCacheIfChanged(path, info)
 
-	// Flush any remaining pending state
-	state.flushPending()
-
 	entry := messageCacheEntry{
 		messages:        copyMessages(state.messages),
 		pendingTools:    copyToolUses(state.pendingTools),
 		toolIndex:       copyToolIndex(state.toolIndex),
 		pendingThinking: copyThinkingBlocks(state.pendingThinking),
+		pendingBlocks:   copyContentBlocks(state.pendingBlocks),
 		pendingUsage:    state.pendingUsage,
 		currentModel:    state.currentModel,
 		totalUsage:      state.totalUsage,
@@ -298,7 +320,7 @@ func (a *Adapter) parseMessagesFull(path, sessionID string, info os.FileInfo) ([
 		byteOffset:      bytesRead,
 	}
 
-	return state.messages, entry, nil
+	return state.messagesForDisplay(), entry, nil
 }
 
 // parseMessagesIncremental resumes parsing from a byte offset.
@@ -318,6 +340,7 @@ func (a *Adapter) parseMessagesIncremental(path, sessionID string, cached messag
 		pendingTools:    copyToolUses(cached.pendingTools),
 		toolIndex:       copyToolIndex(cached.toolIndex),
 		pendingThinking: copyThinkingBlocks(cached.pendingThinking),
+		pendingBlocks:   copyContentBlocks(cached.pendingBlocks),
 		pendingUsage:    cached.pendingUsage,
 		currentModel:    cached.currentModel,
 		totalUsage:      cached.totalUsage,
@@ -337,14 +360,12 @@ func (a *Adapter) parseMessagesIncremental(path, sessionID string, cached messag
 
 	a.invalidateSessionMetaCacheIfChanged(path, info)
 
-	// Flush any remaining pending state
-	state.flushPending()
-
 	entry := messageCacheEntry{
 		messages:        copyMessages(state.messages),
 		pendingTools:    copyToolUses(state.pendingTools),
 		toolIndex:       copyToolIndex(state.toolIndex),
 		pendingThinking: copyThinkingBlocks(state.pendingThinking),
+		pendingBlocks:   copyContentBlocks(state.pendingBlocks),
 		pendingUsage:    state.pendingUsage,
 		currentModel:    state.currentModel,
 		totalUsage:      state.totalUsage,
@@ -352,7 +373,7 @@ func (a *Adapter) parseMessagesIncremental(path, sessionID string, cached messag
 		byteOffset:      reader.Offset(),
 	}
 
-	return state.messages, entry, nil
+	return state.messagesForDisplay(), entry, nil
 }
 
 // parseState holds mutable state during message parsing.
@@ -362,6 +383,7 @@ type parseState struct {
 	pendingTools    []adapter.ToolUse
 	toolIndex       map[string]int
 	pendingThinking []adapter.ThinkingBlock
+	pendingBlocks   []adapter.ContentBlock
 	pendingUsage    *adapter.TokenUsage
 	totalUsage      *TokenUsage
 	currentModel    string
@@ -381,13 +403,14 @@ func (s *parseState) flushPending() {
 		return
 	}
 	msg := adapter.Message{
-		ID:             "synthetic-" + shortID(s.sessionID) + "-" + fmt.Sprintf("%d", len(s.messages)),
+		ID:             s.pendingMessageID(),
 		Role:           "assistant",
 		Content:        "tool calls",
 		Timestamp:      s.lastTimestamp,
 		Model:          s.currentModel,
 		ToolUses:       append([]adapter.ToolUse(nil), s.pendingTools...),
 		ThinkingBlocks: append([]adapter.ThinkingBlock(nil), s.pendingThinking...),
+		ContentBlocks:  copyContentBlocks(s.pendingBlocks),
 	}
 	if s.pendingUsage != nil {
 		msg.TokenUsage = *s.pendingUsage
@@ -396,7 +419,33 @@ func (s *parseState) flushPending() {
 	s.messages = append(s.messages, msg)
 	s.pendingTools = nil
 	s.pendingThinking = nil
+	s.pendingBlocks = nil
 	s.toolIndex = make(map[string]int)
+}
+
+func (s *parseState) pendingMessageID() string {
+	if len(s.pendingTools) > 0 && s.pendingTools[0].ID != "" {
+		return "synthetic-" + s.pendingTools[0].ID
+	}
+	return "synthetic-" + shortID(s.sessionID) + "-" + fmt.Sprintf("%d", len(s.messages))
+}
+
+// messagesForDisplay projects unfinished EOF state without consuming it. The
+// retained state is essential when a tool result or assistant message arrives
+// in a later append.
+func (s *parseState) messagesForDisplay() []adapter.Message {
+	result := copyMessages(s.messages)
+	if len(s.pendingTools) == 0 && len(s.pendingThinking) == 0 && len(s.pendingBlocks) == 0 {
+		return result
+	}
+	id := s.pendingMessageID()
+	msg := adapter.Message{ID: id, Role: "assistant", Content: "tool calls", Timestamp: s.lastTimestamp,
+		Model: s.currentModel, ToolUses: copyToolUses(s.pendingTools),
+		ThinkingBlocks: copyThinkingBlocks(s.pendingThinking), ContentBlocks: copyContentBlocks(s.pendingBlocks)}
+	if s.pendingUsage != nil {
+		msg.TokenUsage = *s.pendingUsage
+	}
+	return append(result, msg)
 }
 
 // processMessageRecord parses a single JSONL record and updates parse state.
@@ -431,22 +480,35 @@ func (a *Adapter) processMessageRecord(line []byte, state *parseState) {
 				return
 			}
 			if msg.Role == "user" {
+				msg.Content = visibleUserContentBlocks(msg.Content)
+				if len(msg.Content) == 0 {
+					return
+				}
+			}
+			if msg.Role == "user" {
 				state.flushPending()
 			}
 
 			content := contentFromBlocks(msg.Content)
+			id := msg.ID
+			if id == "" {
+				id = fmt.Sprintf("%s-%d", state.sessionID, len(state.messages))
+			}
 			message := adapter.Message{
-				ID:        fmt.Sprintf("%s-%d", state.sessionID, len(state.messages)),
-				Role:      msg.Role,
-				Content:   content,
-				Timestamp: record.Timestamp,
-				Model:     state.currentModel,
+				ID:            id,
+				Role:          msg.Role,
+				Content:       content,
+				Timestamp:     record.Timestamp,
+				Model:         state.currentModel,
+				ContentBlocks: textContentBlocks(msg.Content),
 			}
 			if msg.Role == "assistant" {
 				message.ToolUses = append(message.ToolUses, state.pendingTools...)
 				message.ThinkingBlocks = append(message.ThinkingBlocks, state.pendingThinking...)
+				message.ContentBlocks = append(copyContentBlocks(state.pendingBlocks), message.ContentBlocks...)
 				state.pendingTools = nil
 				state.pendingThinking = nil
+				state.pendingBlocks = nil
 				state.toolIndex = make(map[string]int)
 				if state.pendingUsage != nil {
 					message.TokenUsage = *state.pendingUsage
@@ -468,6 +530,9 @@ func (a *Adapter) processMessageRecord(line []byte, state *parseState) {
 			}
 			state.toolIndex[call.CallID] = len(state.pendingTools)
 			state.pendingTools = append(state.pendingTools, tool)
+			state.pendingBlocks = append(state.pendingBlocks, adapter.ContentBlock{
+				Type: "tool_use", ToolUseID: call.CallID, ToolName: call.Name, ToolInput: input,
+			})
 
 		case "function_call_output", "custom_tool_call_output":
 			var output ResponseToolOutputPayload
@@ -484,6 +549,9 @@ func (a *Adapter) processMessageRecord(line []byte, state *parseState) {
 					Output: out,
 				})
 			}
+			state.pendingBlocks = append(state.pendingBlocks, adapter.ContentBlock{
+				Type: "tool_result", ToolUseID: output.CallID, ToolOutput: out,
+			})
 
 		case "reasoning":
 			var reason ResponseReasoningPayload
@@ -494,10 +562,12 @@ func (a *Adapter) processMessageRecord(line []byte, state *parseState) {
 				if strings.TrimSpace(summary.Text) == "" {
 					continue
 				}
-				state.pendingThinking = append(state.pendingThinking, adapter.ThinkingBlock{
+				thinking := adapter.ThinkingBlock{
 					Content:    summary.Text,
 					TokenCount: len(summary.Text) / 4,
-				})
+				}
+				state.pendingThinking = append(state.pendingThinking, thinking)
+				state.pendingBlocks = append(state.pendingBlocks, adapter.ContentBlock{Type: "thinking", Text: thinking.Content, TokenCount: thinking.TokenCount})
 			}
 		}
 
@@ -509,10 +579,12 @@ func (a *Adapter) processMessageRecord(line []byte, state *parseState) {
 		switch event.Type {
 		case "agent_reasoning":
 			if strings.TrimSpace(event.Text) != "" {
-				state.pendingThinking = append(state.pendingThinking, adapter.ThinkingBlock{
+				thinking := adapter.ThinkingBlock{
 					Content:    event.Text,
 					TokenCount: len(event.Text) / 4,
-				})
+				}
+				state.pendingThinking = append(state.pendingThinking, thinking)
+				state.pendingBlocks = append(state.pendingBlocks, adapter.ContentBlock{Type: "thinking", Text: thinking.Content, TokenCount: thinking.TokenCount})
 			}
 		case "token_count":
 			if event.Info == nil {
@@ -572,6 +644,15 @@ func copyThinkingBlocks(blocks []adapter.ThinkingBlock) []adapter.ThinkingBlock 
 	return cp
 }
 
+func copyContentBlocks(blocks []adapter.ContentBlock) []adapter.ContentBlock {
+	if blocks == nil {
+		return nil
+	}
+	cp := make([]adapter.ContentBlock, len(blocks))
+	copy(cp, blocks)
+	return cp
+}
+
 // copyToolIndex creates a copy of tool index map.
 func copyToolIndex(idx map[string]int) map[string]int {
 	if idx == nil {
@@ -600,16 +681,17 @@ func (a *Adapter) Usage(sessionID string) (*adapter.UsageStats, error) {
 		stats.MessageCount++
 	}
 
-	// If per-message stats are zero, use cached total from Messages() scan
-	if stats.TotalInputTokens == 0 && stats.TotalOutputTokens == 0 && stats.TotalCacheRead == 0 {
-		a.mu.RLock()
-		usage := a.totalUsageCache[sessionID]
-		a.mu.RUnlock()
-		if usage != nil {
-			stats.TotalInputTokens = usage.InputTokens
-			stats.TotalOutputTokens = usage.OutputTokens + usage.ReasoningOutputTokens
-			stats.TotalCacheRead = usage.CachedInputTokens
-		}
+	// Codex token_count totals are authoritative cumulative values. Per-message
+	// deltas can be absent, delayed until after the assistant message, or
+	// overwritten by a later EOF event, so always prefer the final total.
+	a.mu.RLock()
+	usage := a.totalUsageCache[sessionID]
+	a.mu.RUnlock()
+	if usage != nil {
+		stats.TotalInputTokens = usage.InputTokens
+		stats.TotalOutputTokens = usage.OutputTokens + usage.ReasoningOutputTokens
+		stats.TotalCacheRead = usage.CachedInputTokens
+		stats.TotalCacheWrite = usage.CacheWriteInputTokens
 	}
 
 	return stats, nil
@@ -617,8 +699,12 @@ func (a *Adapter) Usage(sessionID string) (*adapter.UsageStats, error) {
 
 // Watch returns a channel that emits events when session data changes.
 func (a *Adapter) Watch(projectRoot string) (<-chan adapter.Event, io.Closer, error) {
-	return NewWatcher(a.sessionsDir)
+	return NewWatcher(a.sessionsDir, a.SessionIDFromPath)
 }
+
+// WatchForProjectDiscovery keeps the global Codex watcher alive even when the
+// current project has no prior sessions, so its first rollout can appear.
+func (a *Adapter) WatchForProjectDiscovery() bool { return true }
 
 // WatchScope returns Global because codex watches a global sessions directory (td-7a72b6f7).
 func (a *Adapter) WatchScope() adapter.WatchScope {
@@ -923,6 +1009,7 @@ func (a *Adapter) parseSessionMetadataTailOnly(path string, headMeta *SessionMet
 		CWD:              headMeta.CWD,
 		FirstMsg:         headMeta.FirstMsg,
 		FirstUserMessage: headMeta.FirstUserMessage,
+		IsSubAgent:       headMeta.IsSubAgent,
 	}
 
 	var sessionTimestamp time.Time
@@ -977,6 +1064,14 @@ func (a *Adapter) processMetadataRecord(line []byte, meta *SessionMetadata, sess
 		if meta.SessionID == "" {
 			meta.SessionID = payload.ID
 		}
+		// ID is the rollout/thread identity. session_id may point at a parent
+		// session in spawned rollouts and must not replace it.
+		if meta.SessionID == "" {
+			meta.SessionID = payload.SessionID
+		}
+		if isSubagentSource(string(payload.Source), payload.ThreadSource) {
+			meta.IsSubAgent = true
+		}
 		if meta.CWD == "" {
 			meta.CWD = payload.CWD
 		}
@@ -998,6 +1093,12 @@ func (a *Adapter) processMetadataRecord(line []byte, meta *SessionMetadata, sess
 		}
 		if msg.Role != "user" && msg.Role != "assistant" {
 			return
+		}
+		if msg.Role == "user" {
+			msg.Content = visibleUserContentBlocks(msg.Content)
+			if len(msg.Content) == 0 {
+				return
+			}
 		}
 		if meta.FirstMsg.IsZero() {
 			meta.FirstMsg = record.Timestamp
@@ -1071,6 +1172,12 @@ func (a *Adapter) sessionFilePath(sessionID string) string {
 		return path
 	}
 	a.mu.RUnlock()
+	if path, ok := a.rolloutPathFromStateDB(sessionID); ok {
+		if path != "" {
+			a.cacheSessionPath(sessionID, path)
+		}
+		return path
+	}
 
 	files, err := a.sessionFiles()
 	if err != nil {
@@ -1095,6 +1202,45 @@ func (a *Adapter) sessionFilePath(sessionID string) string {
 	return ""
 }
 
+func (a *Adapter) cacheSessionPath(id, path string) { a.cacheSessionPaths(map[string]string{id: path}) }
+
+func (a *Adapter) cacheSessionPaths(paths map[string]string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, path := range paths {
+		if id != "" && path != "" {
+			a.sessionIndex[id] = path
+		}
+	}
+	for len(a.sessionIndex) > sessionIndexMaxEntries {
+		for id := range a.sessionIndex {
+			delete(a.sessionIndex, id)
+			break
+		}
+	}
+}
+
+func (a *Adapter) cacheTotalUsage(id string, usage *TokenUsage) {
+	if id == "" || usage == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copyUsage := *usage
+	a.totalUsageCache[id] = &copyUsage
+	for len(a.totalUsageCache) > totalUsageMaxEntries {
+		for cachedID := range a.totalUsageCache {
+			if cachedID != id {
+				delete(a.totalUsageCache, cachedID)
+				break
+			}
+		}
+		if len(a.totalUsageCache) > totalUsageMaxEntries {
+			delete(a.totalUsageCache, id)
+		}
+	}
+}
+
 func contentFromBlocks(blocks []ContentBlock) string {
 	if len(blocks) == 0 {
 		return ""
@@ -1107,6 +1253,29 @@ func contentFromBlocks(blocks []ContentBlock) string {
 		parts = append(parts, block.Text)
 	}
 	return strings.Join(parts, "\n")
+}
+
+func visibleUserContentBlocks(blocks []ContentBlock) []ContentBlock {
+	visible := make([]ContentBlock, 0, len(blocks))
+	for _, block := range blocks {
+		if isCodexBootstrapBlock(block) {
+			continue
+		}
+		visible = append(visible, block)
+	}
+	return visible
+}
+
+func isCodexBootstrapBlock(block ContentBlock) bool {
+	if block.Type != "input_text" {
+		return false
+	}
+	text := strings.TrimSpace(block.Text)
+	if strings.HasPrefix(text, "# AGENTS.md instructions for ") &&
+		strings.Contains(text, "\n\n<INSTRUCTIONS>") && strings.HasSuffix(text, "</INSTRUCTIONS>") {
+		return true
+	}
+	return strings.HasPrefix(text, "<environment_context>") && strings.HasSuffix(text, "</environment_context>")
 }
 
 func toolInputString(arguments, input json.RawMessage) string {
@@ -1131,6 +1300,23 @@ func rawToString(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &str); err == nil {
 		return str
 	}
+	var items []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &items); err == nil {
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			if item.Text != "" {
+				parts = append(parts, item.Text)
+				continue
+			}
+			if item.Type == "image" || item.Type == "input_image" {
+				parts = append(parts, "[image]")
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
 	return string(raw)
 }
 
@@ -1142,7 +1328,19 @@ func convertUsage(usage *TokenUsage) *adapter.TokenUsage {
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens + usage.ReasoningOutputTokens,
 		CacheRead:    usage.CachedInputTokens,
+		CacheWrite:   usage.CacheWriteInputTokens,
 	}
+}
+
+func textContentBlocks(blocks []ContentBlock) []adapter.ContentBlock {
+	result := make([]adapter.ContentBlock, 0, len(blocks))
+	for _, block := range blocks {
+		if strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		result = append(result, adapter.ContentBlock{Type: "text", Text: block.Text})
+	}
+	return result
 }
 
 // resolvedProjectPath holds a pre-resolved project path for efficient matching.
