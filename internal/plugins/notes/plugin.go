@@ -447,6 +447,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case NoteSavedMsg:
+		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: save failed", "error", msg.Err)
 		} else {
@@ -479,6 +482,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case NoteContentSavedMsg:
+		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
 		} else {
@@ -612,6 +618,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, nil
+}
+
+func (p *Plugin) isStaleNoteSaveResult(epoch, editorActivation uint64) bool {
+	if p.ctx == nil || epoch != p.ctx.Epoch {
+		return true
+	}
+	return editorActivation != 0 && editorActivation != p.inlineEditActivation
 }
 
 // handleKey processes keyboard input.
@@ -1126,9 +1139,10 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
 	noteID := p.editorNote.ID
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
-		err := p.store.UpdateContent(noteID, content)
+		err := store.UpdateContent(noteID, content)
 		if err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
@@ -1185,6 +1199,7 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 
 	// External editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
+	store := p.store
 
 	return func() tea.Msg {
 		// Read back the edited content from temp file
@@ -1198,7 +1213,7 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 		_ = os.Remove(notePath)
 
 		// Update note content in database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 
@@ -1411,14 +1426,15 @@ func (p *Plugin) createNoteWithTitle(title string) tea.Cmd {
 		return nil
 	}
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	// Use title as initial content (first line) so cursor can be positioned after it
 	content := title
 
 	return func() tea.Msg {
-		note, err := p.store.Create(title, content)
+		note, err := store.Create(title, content)
 		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err}
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
 	}

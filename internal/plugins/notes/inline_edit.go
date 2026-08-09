@@ -199,6 +199,7 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	p.pendingEditorSyncID = noteID
 
 	epoch := p.ctx.Epoch
+	activation := p.inlineEditActivation
 	store := p.store
 
 	return func() tea.Msg {
@@ -213,10 +214,10 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
 	}
 }
 
@@ -524,6 +525,7 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 // processPendingClickActionWithSave handles the click and saves note content.
 func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Plugin, tea.Cmd) {
 	epoch := p.ctx.Epoch
+	activation := p.inlineEditActivation
 	store := p.store
 
 	// Create save command
@@ -543,10 +545,10 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
 	}
 
 	// Process the pending click
@@ -694,6 +696,7 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 	p.pendingEditorSyncID = noteID
 
 	epoch := p.ctx.Epoch
+	activation := p.inlineEditActivation
 	store := p.store
 
 	return func() tea.Msg {
@@ -708,10 +711,10 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
 	}
 }
 
@@ -725,6 +728,7 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 
 	// Exit inline edit mode (kills tmux session)
 	p.exitInlineEditMode()
+	activation := p.inlineEditActivation
 
 	if noteID == "" || notePath == "" || store == nil {
 		return nil
@@ -737,7 +741,7 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 		// Read content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch}
+			return NoteSavedMsg{Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
 		// Clean up temp file
@@ -745,9 +749,9 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 
 		// Save to database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch}
+			return NoteSavedMsg{Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
 	}
 }

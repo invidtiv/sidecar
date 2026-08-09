@@ -238,10 +238,16 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.store = oldStore
+	p.inlineEditActivation = 4
 	cmd := p.saveNoteAfterInlineExit(noteID, notePath)
 	p.store = newStore
 	p.ctx = &plugin.Context{Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	_ = cmd()
+	p.inlineEditActivation = 5
+	p.editorDirty = true
+	result, ok := cmd().(NoteContentSavedMsg)
+	if !ok {
+		t.Fatalf("exit save result = %T, want NoteContentSavedMsg", result)
+	}
 
 	oldNote, err := oldStore.Get(noteID)
 	if err != nil {
@@ -256,6 +262,28 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 	}
 	if newNote.Content != "new project content" {
 		t.Fatalf("exit save overwrote replacement store: %q", newNote.Content)
+	}
+	_, followup := p.Update(result)
+	if followup != nil {
+		t.Fatal("old-project exit result scheduled toast or reload in replacement project")
+	}
+	if !p.editorDirty {
+		t.Fatal("old-project exit result cleared replacement editor dirty state")
+	}
+
+	// Epoch equality alone is insufficient when another editor activation has
+	// started in the same project.
+	_, followup = p.Update(NoteContentSavedMsg{
+		ID: noteID, Epoch: 2, EditorActivation: 4,
+	})
+	if followup != nil || !p.editorDirty {
+		t.Fatal("old editor activation mutated the replacement editor")
+	}
+	_, followup = p.Update(NoteSavedMsg{
+		Note: &Note{ID: "stale-note"}, Epoch: 2, EditorActivation: 4,
+	})
+	if followup != nil || p.pendingEditID != "" {
+		t.Fatal("stale inline NoteSavedMsg reached replacement UI state")
 	}
 }
 
