@@ -138,6 +138,51 @@ func TestOverviewDispatchesBoundedInventoryWithoutAllProjectMetadataBarrier(t *t
 	}
 }
 
+func TestOverviewInterleavesInventoryBeforeHeldIdentityCompletes(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	projects := make([]Project, 5)
+	for i := range projects {
+		projects[i] = Project{Name: "project", Path: filepath.Join(t.TempDir(), "missing")}
+	}
+	panes := m.Start(projects)().(panesMsg)
+	initial := m.Update(panes)().(tea.BatchMsg)
+	if len(initial) != maxProjects {
+		t.Fatalf("initial identity batch = %d, want %d", len(initial), maxProjects)
+	}
+	// Keep one of the four bounded identity operations outstanding. Each other
+	// identity must make its unique inventory eligible ahead of the fifth
+	// identity, so useful project errors can paint without the held result.
+	held := initial[len(initial)-1]
+	if held == nil {
+		t.Fatal("held identity command is nil")
+	}
+	var inventory tea.Cmd
+	for _, identity := range initial[:len(initial)-1] {
+		next := m.Update(identity())
+		if next == nil {
+			t.Fatal("resolved identity did not dispatch unique inventory")
+		}
+		if inventory == nil {
+			inventory = next
+		}
+	}
+	if inventory == nil {
+		t.Fatal("no inventory dispatched while identity remained held")
+	}
+	if next := m.Update(inventory()); next == nil {
+		t.Fatal("inventory completion did not continue bounded scheduling")
+	}
+	if len(m.inventoryResults) == 0 || len(m.projectErrors) == 0 || len(m.projects) == 0 {
+		t.Fatalf("held identity blocked provisional result: inventories=%d errors=%d projects=%d", len(m.inventoryResults), len(m.projectErrors), len(m.projects))
+	}
+	if m.maxActive > maxProjects {
+		t.Fatalf("interleaved work exceeded bound: %d", m.maxActive)
+	}
+	if view := m.View(120, 24); !strings.Contains(view, "project unavailable") {
+		t.Fatalf("held identity blocked provisional error card: %q", view)
+	}
+}
+
 func TestOverviewCanonicalAliasesRunOneFullInventory(t *testing.T) {
 	runner := &stageRunner{}
 	m := New(workspaceinventory.Collector{Runner: runner})
@@ -156,7 +201,11 @@ func TestOverviewCanonicalAliasesRunOneFullInventory(t *testing.T) {
 		queue = queue[1:]
 		msg := cmd()
 		if batch, ok := msg.(tea.BatchMsg); ok {
-			queue = append(queue, batch...)
+			// Resolve every bounded batch out of order so a later alias can
+			// schedule and finish the sole inventory before index zero resolves.
+			for i := len(batch) - 1; i >= 0; i-- {
+				queue = append(queue, batch[i])
+			}
 			continue
 		}
 		if next := m.Update(msg); next != nil && m.loading {

@@ -78,43 +78,45 @@ func IsAsyncMessage(msg tea.Msg) bool {
 }
 
 type Model struct {
-	collector         workspaceinventory.Collector
-	refreshCollector  workspaceinventory.Collector
-	projects          []Project
-	roots             []string
-	generation        int
-	requestID         uint64
-	loading           bool
-	tmuxErr           error
-	results           map[string]workspaceinventory.ProjectResult
-	projectErrors     map[string]error
-	stale             map[string]bool
-	refreshing        map[string]bool
-	completed         map[int]bool
-	pending           []Project
-	phase             refreshPhase
-	identityProjects  map[int]Project
-	inventoryOrder    []Project
-	inventoryProjects map[int]Project
-	inventoryResults  map[int]workspaceinventory.ProjectResult
-	statusInputs      map[string]workspaceinventory.ProjectResult
-	active            int
-	currentPanes      []workspaceinventory.Pane
-	shellClaims       workspaceinventory.ShellClaims
-	liveOnly          bool
-	ctx               context.Context
-	cancel            context.CancelFunc
-	traceWriter       io.Writer
-	cycleStart        time.Time
-	configured        int
-	firstResult       bool
-	maxActive         int
-	pollScheduled     bool
-	board             kanban.Component
-	cards             map[string]workspaceinventory.Workspace
-	mouse             *mouse.Handler
-	width             int
-	height            int
+	collector          workspaceinventory.Collector
+	refreshCollector   workspaceinventory.Collector
+	projects           []Project
+	roots              []string
+	generation         int
+	requestID          uint64
+	loading            bool
+	tmuxErr            error
+	results            map[string]workspaceinventory.ProjectResult
+	projectErrors      map[string]error
+	stale              map[string]bool
+	refreshing         map[string]bool
+	completed          map[int]bool
+	pending            []Project
+	pendingInventory   []Project
+	phase              refreshPhase
+	identityProjects   map[int]Project
+	inventoryOrder     []Project
+	inventoryScheduled map[string]bool
+	inventoryProjects  map[string]Project
+	inventoryResults   map[string]workspaceinventory.ProjectResult
+	statusInputs       map[string]workspaceinventory.ProjectResult
+	active             int
+	currentPanes       []workspaceinventory.Pane
+	shellClaims        workspaceinventory.ShellClaims
+	liveOnly           bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	traceWriter        io.Writer
+	cycleStart         time.Time
+	configured         int
+	firstResult        bool
+	maxActive          int
+	pollScheduled      bool
+	board              kanban.Component
+	cards              map[string]workspaceinventory.Workspace
+	mouse              *mouse.Handler
+	width              int
+	height             int
 }
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -232,10 +234,12 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		} else {
 			m.phase = phaseIdentity
 			m.pending = indexedProjects(msg.Projects)
+			m.pendingInventory = nil
 			m.identityProjects = make(map[int]Project, len(msg.Projects))
 			m.inventoryOrder = nil
-			m.inventoryProjects = make(map[int]Project, len(msg.Projects))
-			m.inventoryResults = make(map[int]workspaceinventory.ProjectResult, len(msg.Projects))
+			m.inventoryScheduled = make(map[string]bool, len(msg.Projects))
+			m.inventoryProjects = make(map[string]Project, len(msg.Projects))
+			m.inventoryResults = make(map[string]workspaceinventory.ProjectResult, len(msg.Projects))
 			m.refreshCollector = m.collector.ForRefresh(maxCaptures)
 		}
 		m.tracef("cycle generation=%d configured=%d tmux_inventories=1 phase=%s", m.generation, m.configured, m.phase)
@@ -258,15 +262,19 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		m.completed[msg.Project.Index] = true
 		if msg.Phase == phaseIdentity {
 			m.identityProjects[msg.Project.Index] = msg.Project
+			if !m.inventoryScheduled[msg.Project.Key] {
+				m.inventoryScheduled[msg.Project.Key] = true
+				m.pendingInventory = append(m.pendingInventory, msg.Project)
+			}
 		} else if msg.Phase == phaseInventory {
-			m.inventoryProjects[msg.Project.Index] = msg.Project
-			m.inventoryResults[msg.Project.Index] = msg.Result
+			m.inventoryProjects[msg.Project.Key] = msg.Project
+			m.inventoryResults[msg.Project.Key] = msg.Result
 			m.applyInventoryIncrement(msg.Project, msg.Result)
 		} else {
 			m.applyStatusResult(msg.Result)
 		}
 		m.syncBoard()
-		if len(m.pending) > 0 || m.active > 0 {
+		if len(m.pendingInventory) > 0 || len(m.pending) > 0 || m.active > 0 {
 			return m.dispatchProjects()
 		}
 		return m.finishPhase()
@@ -317,16 +325,23 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 
 func (m *Model) dispatchProjects() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, maxProjects)
-	for m.active < maxProjects && len(m.pending) > 0 {
-		project := m.pending[0]
-		m.pending = m.pending[1:]
+	for m.active < maxProjects && (len(m.pendingInventory) > 0 || len(m.pending) > 0) {
+		phase := m.phase
+		var project Project
+		if m.phase == phaseIdentity && len(m.pendingInventory) > 0 {
+			project = m.pendingInventory[0]
+			m.pendingInventory = m.pendingInventory[1:]
+			phase = phaseInventory
+		} else {
+			project = m.pending[0]
+			m.pending = m.pending[1:]
+		}
 		m.active++
 		m.maxActive = max(m.maxActive, m.active)
 		generation, ctx := m.generation, m.ctx
 		roots := append([]string(nil), m.roots...)
 		inventory := append([]workspaceinventory.Pane(nil), m.currentPanes...)
 		collector := m.refreshCollector
-		phase := m.phase
 		previous := m.results[projectKey(project)]
 		if !m.liveOnly && phase == phaseStatus {
 			previous = m.statusInputs[projectKey(project)]
@@ -358,14 +373,8 @@ func (m *Model) finishPhase() tea.Cmd {
 			project.Index = len(m.inventoryOrder)
 			m.inventoryOrder = append(m.inventoryOrder, project)
 		}
+		m.tracef("cycle generation=%d identities=%d unique=%d inventory_complete", m.generation, m.configured, len(m.inventoryOrder))
 		m.phase = phaseInventory
-		m.pending = append(m.pending[:0], m.inventoryOrder...)
-		m.completed = make(map[int]bool, len(m.inventoryOrder))
-		m.active = 0
-		m.tracef("cycle generation=%d identities=%d unique=%d phase=inventory", m.generation, m.configured, len(m.inventoryOrder))
-		if len(m.pending) > 0 {
-			return m.dispatchProjects()
-		}
 	}
 	if m.phase == phaseInventory {
 		seen := make(map[string]bool, len(m.inventoryResults))
@@ -373,17 +382,21 @@ func (m *Model) finishPhase() tea.Cmd {
 		claimResults := make([]workspaceinventory.ProjectResult, 0, len(m.inventoryResults))
 		m.statusInputs = make(map[string]workspaceinventory.ProjectResult, len(m.inventoryResults))
 		for _, ordered := range m.inventoryOrder {
-			project, ok := m.inventoryProjects[ordered.Index]
+			project, ok := m.inventoryProjects[ordered.Key]
 			if !ok {
 				continue
 			}
-			result := m.inventoryResults[ordered.Index]
+			project = ordered
+			result := withProjectIdentity(m.inventoryResults[ordered.Key], project)
 			if seen[result.ProjectKey] {
 				continue
 			}
 			seen[result.ProjectKey] = true
 			projects = append(projects, project)
 			m.statusInputs[result.ProjectKey] = result
+			if previous, ok := m.results[result.ProjectKey]; ok {
+				m.results[result.ProjectKey] = withProjectIdentity(previous, project)
+			}
 			claimResult := result
 			if result.Err != nil {
 				if previous, ok := m.results[result.ProjectKey]; ok && len(previous.Workspaces) > 0 {
@@ -441,6 +454,20 @@ func (m *Model) applyInventoryIncrement(project Project, result workspaceinvento
 	if previous, ok := m.results[key]; !ok || previous.Err != nil {
 		m.results[key] = result
 	}
+}
+
+func withProjectIdentity(result workspaceinventory.ProjectResult, project Project) workspaceinventory.ProjectResult {
+	result.ProjectKey = project.Key
+	result.ProjectName = project.Name
+	result.ProjectRoot = project.Path
+	workspaces := append([]workspaceinventory.Workspace(nil), result.Workspaces...)
+	for i := range workspaces {
+		workspaces[i].ProjectKey = project.Key
+		workspaces[i].ProjectName = project.Name
+		workspaces[i].ProjectRoot = project.Path
+	}
+	result.Workspaces = workspaces
+	return result
 }
 
 func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
