@@ -13,40 +13,40 @@ import (
 func Convert(scheme *CommunityScheme) styles.ColorPalette {
 	bg := scheme.Background
 	fg := scheme.Foreground
-	isDark := Luminance(bg) < 0.5
+	isDark := styles.IsDarkBackground(bg)
 
-	bgSecondary := adjustBg(bg, 0.08, isDark)
+	bgSecondary := styles.AdjustSurface(bg, 0.08)
 	bgTertiary := scheme.SelectionBackground
-	if bgTertiary == "" || ColorDistance(bg, bgTertiary) < 20 {
-		bgTertiary = adjustBg(bg, 0.16, isDark)
+	derivedTertiary := bgTertiary == "" || ColorDistance(bg, bgTertiary) < 20
+	if derivedTertiary {
+		bgTertiary = styles.AdjustSurface(bg, 0.16)
 	}
 
-	// Compute muted text colors with contrast enforcement
-	textMuted := EnsureContrast(scheme.BrightBlack, bg, 3.0)
-	textSubtle := EnsureContrast(Blend(scheme.BrightBlack, bg, 0.30), bg, 2.5)
-	tabTextInactive := EnsureContrast(scheme.BrightBlack, bg, 3.0)
-
-	// Ensure primary/secondary text has sufficient contrast against the main background.
-	textPrimary := EnsureContrast(fg, bg, 4.5)
-	textSecondary := EnsureContrast(Blend(fg, bg, 0.25), bg, 3.5)
-
-	// Compute selection text color with guaranteed contrast against BgTertiary.
-	// This is independent of main background - selection text must always be readable.
-	textSelection := EnsureContrast(fg, bgTertiary, 4.5)
-
-	// Improve contrast on tertiary backgrounds if we can keep main background contrast.
-	if ContrastRatio(textPrimary, bgTertiary) < 4.5 {
-		adjusted := EnsureContrast(textPrimary, bgTertiary, 4.5)
-		if ContrastRatio(adjusted, bg) >= 4.5 {
-			textPrimary = adjusted
-		}
+	// Every surface ordinary text can land on. Enforcing against bg alone left
+	// the footer and header (BgSecondary) and the key hint pills
+	// (SurfaceRaised) unvalidated. A BgTertiary we derived ourselves counts as
+	// chrome too; one supplied by the scheme is the selection colour and gets
+	// its own dedicated foreground instead.
+	surfaceRaised := styles.DeriveSurfaceRaised(bg, bgSecondary)
+	chrome := []string{bg, bgSecondary}
+	textSurfaces := []string{bg, bgSecondary, surfaceRaised}
+	if derivedTertiary {
+		textSurfaces = append(textSurfaces, bgTertiary)
 	}
-	if ContrastRatio(textSecondary, bgTertiary) < 3.5 {
-		adjusted := EnsureContrast(textSecondary, bgTertiary, 3.5)
-		if ContrastRatio(adjusted, bg) >= 3.5 {
-			textSecondary = adjusted
-		}
-	}
+
+	textMuted := EnsureContrastOn(scheme.BrightBlack, textSurfaces, 4.5)
+	textSubtle := EnsureContrastOn(Blend(scheme.BrightBlack, bg, 0.30), chrome, 3.0)
+	tabTextInactive := EnsureContrastOn(scheme.BrightBlack, chrome, 3.5)
+
+	textPrimary := EnsureContrastOn(fg, textSurfaces, 4.5)
+	textSecondary := EnsureContrastOn(Blend(fg, bg, 0.25), textSurfaces, 4.0)
+
+	// Selection text is enforced against BgTertiary alone: that surface carries
+	// the scheme's own selection colour and is independent of the main chrome.
+	textSelection := EnsureContrastOn(fg, []string{bgTertiary}, 4.5)
+
+	diffAddBg := Blend(bg, scheme.Green, 0.15)
+	diffRemoveBg := Blend(bg, scheme.Red, 0.15)
 
 	return styles.ColorPalette{
 		Primary:   scheme.Blue,
@@ -63,12 +63,16 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 		TextMuted:     textMuted,
 		TextSubtle:    textSubtle,
 		TextSelection: textSelection,
-		TextHighlight: scheme.BrightWhite,
+		TextHighlight: EnsureContrastOn(scheme.BrightWhite, chrome, 4.5),
 
 		BgPrimary:   bg,
 		BgSecondary: bgSecondary,
 		BgTertiary:  bgTertiary,
 		BgOverlay:   WithAlpha(bg, "80"),
+
+		SurfaceRaised: surfaceRaised,
+		KeyHintFg:     EnsureContrastOn(textPrimary, []string{surfaceRaised}, 4.5),
+		OnPrimary:     onColor(scheme.Blue),
 
 		BorderNormal: scheme.BrightBlack,
 		BorderActive: scheme.Blue,
@@ -81,16 +85,16 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 		TabStyle:  "gradient",
 		TabColors: deriveTabGradient(scheme),
 
-		DiffAddFg:    scheme.Green,
-		DiffAddBg:    Blend(bg, scheme.Green, 0.15),
-		DiffRemoveFg: scheme.Red,
-		DiffRemoveBg: Blend(bg, scheme.Red, 0.15),
+		DiffAddFg:    EnsureContrastOn(scheme.Green, []string{diffAddBg}, 4.5),
+		DiffAddBg:    diffAddBg,
+		DiffRemoveFg: EnsureContrastOn(scheme.Red, []string{diffRemoveBg}, 4.5),
+		DiffRemoveBg: diffRemoveBg,
 
 		ButtonHover:      scheme.Purple,
 		TabTextInactive:  tabTextInactive,
-		Link:             scheme.BrightBlue,
-		ToastSuccessText: contrastText(scheme.Green),
-		ToastErrorText:   contrastText(scheme.Red),
+		Link:             EnsureContrastOn(scheme.BrightBlue, chrome, 4.5),
+		ToastSuccessText: onColor(scheme.Green),
+		ToastErrorText:   onColor(scheme.Red),
 
 		SyntaxTheme:   matchSyntaxTheme(bg),
 		MarkdownTheme: markdownTheme(isDark),
@@ -117,6 +121,9 @@ func PaletteToOverrides(p styles.ColorPalette) map[string]interface{} {
 		"bgSecondary":      p.BgSecondary,
 		"bgTertiary":       p.BgTertiary,
 		"bgOverlay":        p.BgOverlay,
+		"surfaceRaised":    p.SurfaceRaised,
+		"keyHintFg":        p.KeyHintFg,
+		"onPrimary":        p.OnPrimary,
 		"borderNormal":     p.BorderNormal,
 		"borderActive":     p.BorderActive,
 		"borderMuted":      p.BorderMuted,
@@ -168,12 +175,11 @@ func adjustBg(bg string, amount float64, isDark bool) string {
 	return Darken(bg, amount)
 }
 
-// contrastText returns black or white for maximum contrast.
-func contrastText(bg string) string {
-	if Luminance(bg) > 0.5 {
-		return "#000000"
-	}
-	return "#ffffff"
+// onColor returns a foreground for text drawn on bg, picked by measured
+// contrast. The old rule thresholded luminance at 0.5, but white and black
+// break even around 0.179 — everything in between got the wrong pole.
+func onColor(bg string) string {
+	return styles.EnsureContrastOn(styles.MaxContrastPole([]string{bg}), []string{bg}, 4.5)
 }
 
 func markdownTheme(isDark bool) string {
@@ -309,7 +315,7 @@ func ensureFallbackTabColors(picked []string, background string) []string {
 		return picked
 	}
 
-	isDark := Luminance(background) < 0.5
+	isDark := styles.IsDarkBackground(background)
 	addUnique(adjustBg(background, 0.12, isDark))
 	addUnique(adjustBg(background, 0.20, isDark))
 	addUnique(adjustBg(background, 0.28, isDark))
@@ -394,7 +400,7 @@ var chromaThemes = map[string]string{
 
 // matchSyntaxTheme finds the closest Chroma theme by background color.
 func matchSyntaxTheme(bg string) string {
-	isDark := Luminance(bg) < 0.5
+	isDark := styles.IsDarkBackground(bg)
 	best := "monokai"
 	if !isDark {
 		best = "github"
@@ -403,7 +409,7 @@ func matchSyntaxTheme(bg string) string {
 
 	for name, themeBg := range chromaThemes {
 		// Only match dark themes to dark, light to light
-		themeIsDark := Luminance(themeBg) < 0.5
+		themeIsDark := styles.IsDarkBackground(themeBg)
 		if themeIsDark != isDark {
 			continue
 		}
@@ -426,9 +432,8 @@ func matchSyntaxTheme(bg string) string {
 
 // FormatSchemeInfo returns a brief description for display.
 func FormatSchemeInfo(scheme *CommunityScheme) string {
-	lum := Luminance(scheme.Background)
 	mode := "dark"
-	if lum >= 0.5 {
+	if !styles.IsDarkBackground(scheme.Background) {
 		mode = "light"
 	}
 	return fmt.Sprintf("%s (%s)", scheme.Name, mode)

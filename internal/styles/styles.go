@@ -32,6 +32,11 @@ var (
 	BgTertiary  = lipgloss.Color("#374151")
 	BgOverlay   = lipgloss.Color("#00000080")
 
+	// Derived contrast-guaranteed roles (see NormalizePalette)
+	SurfaceRaised  = lipgloss.Color("#2B3544") // Chrome for key hints/chips
+	KeyHintFgColor = lipgloss.Color("#F9FAFB") // Shortcut key text on SurfaceRaised
+	OnPrimaryColor = lipgloss.Color("#FFFFFF") // Text on a Primary-coloured fill
+
 	// Border colors
 	BorderNormal = lipgloss.Color("#374151")
 	BorderActive = lipgloss.Color("#7C3AED")
@@ -137,8 +142,8 @@ var (
 		Underline(true)
 
 	KeyHint = lipgloss.NewStyle().
-		Foreground(TextMuted).
-		Background(BgTertiary).
+		Foreground(KeyHintFgColor).
+		Background(SurfaceRaised).
 		Padding(0, 1)
 
 	Logo = lipgloss.NewStyle().
@@ -207,7 +212,7 @@ var (
 				Background(BgTertiary)
 
 	ListItemFocused = lipgloss.NewStyle().
-			Foreground(TextPrimary).
+			Foreground(OnPrimaryColor).
 			Background(Primary)
 
 	ListCursor = lipgloss.NewStyle().
@@ -225,12 +230,12 @@ var (
 		Foreground(TextMuted)
 
 	BarChip = lipgloss.NewStyle().
-		Foreground(TextMuted).
-		Background(BgTertiary).
+		Foreground(KeyHintFgColor).
+		Background(SurfaceRaised).
 		Padding(0, 1)
 
 	BarChipActive = lipgloss.NewStyle().
-			Foreground(TextPrimary).
+			Foreground(OnPrimaryColor).
 			Background(Primary).
 			Padding(0, 1).
 			Bold(true)
@@ -293,10 +298,10 @@ var (
 	// Drop target row while dragging a file onto a directory. Deliberately
 	// uses Primary rather than the BgTertiary of ListItemSelected: during a
 	// drag both are on screen at once and must not look alike. The foreground
-	// is the dark background colour, not TextPrimary, which is near-illegible
-	// on Primary in most themes.
+	// is OnPrimary, not TextPrimary, which is near-illegible on Primary in
+	// most themes.
 	FileBrowserDropTarget = lipgloss.NewStyle().
-				Foreground(BgPrimary).
+				Foreground(OnPrimaryColor).
 				Background(Primary).
 				Bold(true)
 
@@ -311,7 +316,7 @@ var (
 
 	SearchMatchCurrent = lipgloss.NewStyle().
 				Background(Primary). // Purple background for current match
-				Foreground(TextPrimary)
+				Foreground(OnPrimaryColor)
 
 	// Fuzzy match character highlighting (bold in result list)
 	FuzzyMatchChar = lipgloss.NewStyle().
@@ -336,8 +341,8 @@ var (
 				Background(BgTertiary)
 
 	PaletteKey = lipgloss.NewStyle().
-			Foreground(TextMuted).
-			Background(BgTertiary).
+			Foreground(KeyHintFgColor).
+			Background(SurfaceRaised).
 			Padding(0, 1)
 
 	// Text selection for preview pane drag selection
