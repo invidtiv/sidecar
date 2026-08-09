@@ -1067,12 +1067,12 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 		DeleteWorktree: state.DeleteLocalWorktree, DeleteBranch: state.DeleteLocalBranch,
 		DeleteRemote: state.DeleteRemoteBranch, UpdateBase: state.PullAfterMerge,
 	}
-	// UI-owned session bookkeeping stays on the update goroutine.
-	_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-	delete(p.managedSessions, sessionName)
-	globalPaneCache.remove(sessionName)
 	return func() tea.Msg {
-		return CleanupDoneMsg{WorkspaceName: wt.Name, Results: runCleanupPlan(plan)}
+		results := runCleanupPlan(plan)
+		if results.LocalWorktreeDeleted {
+			_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+		}
+		return CleanupDoneMsg{WorkspaceName: wt.Name, Results: results}
 	}
 }
 

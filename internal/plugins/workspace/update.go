@@ -1509,6 +1509,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			// Remove worktree from list if deleted
 			if msg.Results.LocalWorktreeDeleted {
+				sessionName := tmuxSessionPrefix + sanitizeName(msg.WorkspaceName)
+				delete(p.managedSessions, sessionName)
+				globalPaneCache.remove(sessionName)
 				p.removeWorktreeByName(msg.WorkspaceName)
 				if p.selectedIdx >= len(p.worktrees) && p.selectedIdx > 0 {
 					p.selectedIdx--

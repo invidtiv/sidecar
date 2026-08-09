@@ -500,6 +500,10 @@ type BaseUpdateResult struct {
 }
 
 func updateCheckedOutBase(repoPath, branch, remote string) BaseUpdateResult {
+	return updateCheckedOutBaseWithBeforePull(repoPath, branch, remote, nil)
+}
+
+func updateCheckedOutBaseWithBeforePull(repoPath, branch, remote string, beforePull func()) BaseUpdateResult {
 	result := BaseUpdateResult{Branch: branch}
 	if remote == "" {
 		var err error
@@ -519,9 +523,11 @@ func updateCheckedOutBase(repoPath, branch, remote string) BaseUpdateResult {
 		result.Err = err
 		return result
 	}
+	var targetOID string
 	for _, wt := range worktrees {
 		if wt.Branch == branch && !wt.Bare && !wt.Detached && !wt.Locked && !wt.Prunable {
 			result.TargetPath = wt.Path
+			targetOID = wt.HEAD
 			break
 		}
 	}
@@ -540,6 +546,30 @@ func updateCheckedOutBase(repoPath, branch, remote string) BaseUpdateResult {
 		result.LeftUnchanged = true
 		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged", remote, branch, branch)
 		result.Err = fmt.Errorf("target has a Git operation in progress: %s", state)
+		return result
+	}
+	if targetOID == "" {
+		result.LeftUnchanged = true
+		result.Err = fmt.Errorf("target checkout has no pinned HEAD OID")
+		return result
+	}
+	if beforePull != nil {
+		beforePull()
+	}
+	if err := requireClean(result.TargetPath); err != nil {
+		result.LeftUnchanged = true
+		result.Err = fmt.Errorf("target changed before pull: %w", err)
+		return result
+	}
+	if state := gitOperationState(result.TargetPath); state != "clean" {
+		result.LeftUnchanged = true
+		result.Err = fmt.Errorf("target started a Git operation before pull: %s", state)
+		return result
+	}
+	if err := requireCheckoutIdentity(result.TargetPath, branch, targetOID); err != nil {
+		result.LeftUnchanged = true
+		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged", remote, branch, branch)
+		result.Err = fmt.Errorf("target checkout changed before pull: %w", err)
 		return result
 	}
 	if _, err := gitOutput(result.TargetPath, "pull", "--ff-only", remote, branch); err != nil {
@@ -608,8 +638,9 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 	}
 	// Every command below runs from RepoPath, which must be a surviving checkout.
 	if plan.DeleteWorktree {
-		if err := doDeleteWorktree(plan.RepoPath, plan.WorktreePath, false); err != nil {
+		if err := removeCleanLifecycleWorktree(plan.RepoPath, plan.WorktreePath, plan.Branch, plan.ExpectedOID); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Workspace: %v", err))
+			return results
 		} else {
 			results.LocalWorktreeDeleted = true
 		}
@@ -638,6 +669,29 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 		results.PullMessage = update.Message
 	}
 	return results
+}
+
+func removeCleanLifecycleWorktree(repoPath, worktreePath, branch, expectedOID string) error {
+	if expectedOID == "" {
+		return fmt.Errorf("cleanup identity has no expected HEAD OID")
+	}
+	if state := gitOperationState(worktreePath); state != "clean" {
+		return fmt.Errorf("worktree has a Git operation in progress: %s", state)
+	}
+	if err := requireCheckoutIdentity(worktreePath, branch, expectedOID); err != nil {
+		return err
+	}
+	if err := requireClean(worktreePath); err != nil {
+		return err
+	}
+	// This lifecycle path deliberately has no --force fallback. The identity
+	// and clean checks are immediately adjacent to the destructive command.
+	cmd := exec.Command("git", "worktree", "remove", worktreePath)
+	cmd.Dir = repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 func deleteBranchSafe(repoPath, branch string) error {

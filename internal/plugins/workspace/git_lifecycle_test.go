@@ -442,6 +442,40 @@ func TestUpdateCheckedOutBaseWithoutTargetOnlyFetches(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckedOutBaseRefusesSameOIDBranchSwitchBeforePull(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mainBefore := mustGit(t, r.main, "rev-parse", "refs/heads/main")
+	clone := filepath.Join(r.root, "publisher-switch")
+	mustGit(t, r.root, "clone", r.remote, clone)
+	mustGit(t, clone, "config", "user.email", "sidecar-test@example.com")
+	mustGit(t, clone, "config", "user.name", "Sidecar Test")
+	mustGit(t, clone, "checkout", "main")
+	mustWrite(t, filepath.Join(clone, "remote-switch.txt"), "remote update\n")
+	mustGit(t, clone, "add", "remote-switch.txt")
+	mustGit(t, clone, "commit", "-m", "remote switch update")
+	mustGit(t, clone, "push", "origin", "main")
+	remoteOID := mustGit(t, clone, "rev-parse", "HEAD")
+
+	result := updateCheckedOutBaseWithBeforePull(r.feature, "main", "origin", func() {
+		mustGit(t, r.main, "switch", "-c", "parking")
+	})
+	if result.Err == nil || !result.LeftUnchanged || !strings.Contains(result.Err.Error(), "expected \"main\"") {
+		t.Fatalf("update result: %+v", result)
+	}
+	if mainAfter := mustGit(t, r.main, "rev-parse", "refs/heads/main"); mainAfter != mainBefore {
+		t.Fatalf("local main moved: %s -> %s", mainBefore, mainAfter)
+	}
+	if parking := mustGit(t, r.main, "rev-parse", "HEAD"); parking != mainBefore {
+		t.Fatalf("parking moved: got %s want %s", parking, mainBefore)
+	}
+	if _, err := os.Stat(filepath.Join(r.main, "remote-switch.txt")); !os.IsNotExist(err) {
+		t.Fatalf("remote update was pulled into parking: %v", err)
+	}
+	if tracking := mustGit(t, r.main, "rev-parse", "origin/main"); tracking != remoteOID {
+		t.Fatalf("fetch result origin/main = %s, want %s", tracking, remoteOID)
+	}
+}
+
 func TestCleanupRunsFromSurvivingCheckoutAndRevalidatesIdentity(t *testing.T) {
 	r := newLifecycleRepo(t)
 	mustGit(t, r.main, "merge", "--ff-only", "feature")
@@ -458,6 +492,56 @@ func TestCleanupRunsFromSurvivingCheckoutAndRevalidatesIdentity(t *testing.T) {
 	}
 	if branch := mustGit(t, r.main, "branch", "--list", "feature"); branch != "" {
 		t.Fatalf("feature branch still exists: %q", branch)
+	}
+}
+
+func TestCleanupDirtyWorktreeRefusesWithoutForceOrOtherDeletion(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mustGit(t, r.feature, "push", "-u", "origin", "feature")
+	localOID := mustGit(t, r.feature, "rev-parse", "HEAD")
+	remoteOID, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valuablePath := filepath.Join(r.feature, "valuable.txt")
+	mustWrite(t, valuablePath, "irreplaceable untracked work\n")
+
+	results := runCleanupPlan(CleanupPlan{
+		RepoPath: r.main, WorktreePath: r.feature, Branch: "feature", ExpectedOID: localOID,
+		BranchRemote: "origin", ExpectedRemoteOID: remoteOID,
+		DeleteWorktree: true, DeleteBranch: true, DeleteRemote: true,
+	})
+	if len(results.Errors) == 0 || !strings.Contains(strings.Join(results.Errors, "\n"), "dirty") {
+		t.Fatalf("cleanup result = %+v, want dirty refusal", results)
+	}
+	if results.LocalWorktreeDeleted || results.LocalBranchDeleted || results.RemoteBranchDeleted {
+		t.Fatalf("dirty refusal reported destructive cleanup: %+v", results)
+	}
+	if got := mustRead(t, valuablePath); got != "irreplaceable untracked work\n" {
+		t.Fatalf("valuable untracked file changed: %q", got)
+	}
+	if branchOID := mustGit(t, r.main, "rev-parse", "refs/heads/feature"); branchOID != localOID {
+		t.Fatalf("local feature changed/deleted: got %s want %s", branchOID, localOID)
+	}
+	remoteAfter, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != remoteOID {
+		t.Fatalf("remote feature changed/deleted: got %s want %s", remoteAfter, remoteOID)
+	}
+	worktrees, err := readGitWorktrees(r.main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, wt := range worktrees {
+		if wt.Path == canonicalGitPath(r.feature) && wt.Branch == "feature" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("dirty feature worktree is no longer registered")
 	}
 }
 
