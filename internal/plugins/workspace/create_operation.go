@@ -76,14 +76,35 @@ func persistPendingCreation(ctx context.Context, plan *CreateOperationPlan, wt *
 }
 
 func removePendingCreation(plan *CreateOperationPlan) error {
+	return removePendingCreationWithOps(plan, os.Remove, func(dir string) error {
+		file, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		return file.Sync()
+	})
+}
+
+func removePendingCreationWithOps(plan *CreateOperationPlan, remove func(string) error, syncDir func(string) error) error {
 	path, err := pendingCreationPath(context.Background(), plan)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync pending creation journal directory: %w", err)
+	}
 	return nil
+}
+
+func (p *Plugin) clearPendingCreation(plan *CreateOperationPlan) error {
+	if p.removePendingCreationFn != nil {
+		return p.removePendingCreationFn(plan)
+	}
+	return removePendingCreation(plan)
 }
 
 func loadPendingCreation(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
@@ -351,46 +372,44 @@ func safeSetupRelativePath(path string) bool {
 }
 
 func containedRegularFile(root, rel string) (string, error) {
-	if !safeSetupRelativePath(rel) {
-		return "", fmt.Errorf("path must remain relative")
-	}
-	rootReal, err := filepath.EvalSymlinks(root)
+	file, err := openContainedRegularFile(root, rel)
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(rootReal, filepath.Clean(rel))
-	if err := ensureRealDirectoryPath(rootReal, filepath.Dir(target), true); err != nil {
-		return "", err
-	}
-	info, err := os.Lstat(target)
-	if err != nil {
-		return "", err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("symlink artifact is not allowed: %s", target)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("artifact is not a regular file: %s", target)
-	}
-	resolved, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", err
-	}
-	if filepath.Clean(resolved) != filepath.Clean(target) {
-		return "", fmt.Errorf("artifact resolves outside its confirmed path: %s", target)
-	}
-	return target, nil
+	defer file.Close()
+	return file.Name(), nil
 }
 
 func openContainedRegularFile(root, rel string) (*os.File, error) {
-	target, err := containedRegularFile(root, rel)
+	return openContainedRegularFileWithHook(root, rel, nil)
+}
+
+func openContainedRegularFileWithHook(root, rel string, beforeWalk func()) (*os.File, error) {
+	if !safeSetupRelativePath(rel) {
+		return nil, fmt.Errorf("path must remain relative")
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, err
 	}
-	fd, err := unix.Open(target, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+	rootDir, err := openPinnedDirectory(rootReal, ".", false)
 	if err != nil {
 		return nil, err
 	}
+	if beforeWalk != nil {
+		beforeWalk()
+	}
+	dir, err := walkPinnedDirectory(rootDir, filepath.Dir(filepath.Clean(rel)), false)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	leaf := filepath.Base(filepath.Clean(rel))
+	fd, err := unix.Openat(int(dir.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	target := filepath.Join(rootReal, filepath.Clean(rel))
 	file := os.NewFile(uintptr(fd), target)
 	info, err := file.Stat()
 	if err != nil {
@@ -402,6 +421,50 @@ func openContainedRegularFile(root, rel string) (*os.File, error) {
 		return nil, fmt.Errorf("artifact is not a regular file: %s", target)
 	}
 	return file, nil
+}
+
+func openPinnedDirectory(root, rel string, create bool) (*os.File, error) {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(rootReal, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	current := os.NewFile(uintptr(fd), rootReal)
+	return walkPinnedDirectory(current, rel, create)
+}
+
+func walkPinnedDirectory(current *os.File, rel string, create bool) (*os.File, error) {
+	clean := filepath.Clean(rel)
+	if clean == "." || clean == "" {
+		return current, nil
+	}
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		current.Close()
+		return nil, fmt.Errorf("directory path escapes pinned root")
+	}
+	for _, component := range strings.Split(clean, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		if create {
+			if err := unix.Mkdirat(int(current.Fd()), component, 0755); err != nil && !errors.Is(err, unix.EEXIST) {
+				current.Close()
+				return nil, err
+			}
+		}
+		nextFD, err := unix.Openat(int(current.Fd()), component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			current.Close()
+			return nil, err
+		}
+		next := os.NewFile(uintptr(nextFD), filepath.Join(current.Name(), component))
+		_ = current.Close()
+		current = next
+	}
+	return current, nil
 }
 
 func copyOpenFile(source *os.File, dst string) error {
@@ -476,30 +539,90 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 		return nil, fmt.Errorf("destination path now exists: %s", plan.Path)
 	}
 	allowedRoot := filepath.Dir(plan.MainWorktree)
-	if err := ensureRealDirectoryPath(allowedRoot, filepath.Dir(plan.Path), false); err != nil {
-		return nil, fmt.Errorf("destination parent changed: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(plan.Path), 0755); err != nil {
-		return nil, fmt.Errorf("create destination parent: %w", err)
-	}
-	if err := ensureRealDirectoryPath(allowedRoot, filepath.Dir(plan.Path), true); err != nil {
-		return nil, fmt.Errorf("destination parent changed: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", plan.Branch, plan.Path, plan.SourceOID)
-	cmd.Dir = plan.SourceWorktree
-	if output, err := run(cmd); err != nil {
-		addErr := fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
-		if head, verifyErr := gitOutputContext(context.Background(), plan.Path, "rev-parse", "HEAD"); verifyErr == nil && head == plan.SourceOID {
-			wt := createdWorktree(repoKey, plan, head)
-			return wt, addErr
-		}
-		return nil, addErr
-	}
-	head, err := gitOutputContext(ctx, plan.Path, "rev-parse", "HEAD")
+	parentRel, err := filepath.Rel(allowedRoot, filepath.Dir(plan.Path))
 	if err != nil {
-		return nil, fmt.Errorf("verify created worktree: %w", err)
+		return nil, fmt.Errorf("resolve destination parent: %w", err)
 	}
-	return createdWorktree(repoKey, plan, head), nil
+	parent, err := openPinnedDirectory(allowedRoot, parentRel, true)
+	if err != nil {
+		return nil, fmt.Errorf("pin destination parent: %w", err)
+	}
+	defer parent.Close()
+	leaf := filepath.Base(plan.Path)
+	if fd, openErr := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0); openErr == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("destination path already exists: %s", plan.Path)
+	} else if !errors.Is(openErr, unix.ENOENT) {
+		return nil, fmt.Errorf("inspect pinned destination: %w", openErr)
+	}
+	rootDir, err := openPinnedDirectory(allowedRoot, ".", false)
+	if err != nil {
+		return nil, fmt.Errorf("pin destination root: %w", err)
+	}
+	defer rootDir.Close()
+	stagingName, err := mkdirPinnedTemp(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("create pinned staging directory: %w", err)
+	}
+	rootPath, err := pinnedDirectoryPath(rootDir)
+	if err != nil {
+		_ = unix.Unlinkat(int(rootDir.Fd()), stagingName, unix.AT_REMOVEDIR)
+		return nil, err
+	}
+	stagingPath := filepath.Join(rootPath, stagingName)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", plan.Branch, stagingPath, plan.SourceOID)
+	cmd.Dir = plan.SourceWorktree
+	output, addRunErr := run(cmd)
+	head, stagingErr := gitOutputContext(context.Background(), stagingPath, "rev-parse", "HEAD")
+	if stagingErr != nil {
+		_ = unix.Unlinkat(int(rootDir.Fd()), stagingName, unix.AT_REMOVEDIR)
+		if addRunErr != nil {
+			return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), addRunErr)
+		}
+		return nil, fmt.Errorf("verify staged worktree: %w", stagingErr)
+	}
+	if head != plan.SourceOID {
+		return nil, fmt.Errorf("verify created worktree identity: got %s want %s", head, plan.SourceOID)
+	}
+	moveErr := unix.Renameat(int(rootDir.Fd()), stagingName, int(parent.Fd()), leaf)
+	actualPath := stagingPath
+	if moveErr == nil {
+		actualParent, pathErr := pinnedDirectoryPath(parent)
+		if pathErr != nil {
+			return createdWorktree(repoKey, plan, head), pathErr
+		}
+		actualPath = filepath.Join(actualParent, leaf)
+		if _, repairErr := gitOutputContext(context.Background(), plan.SourceWorktree, "worktree", "repair", actualPath); repairErr != nil {
+			movedPlan := *plan
+			movedPlan.Path = actualPath
+			return createdWorktree(repoKey, &movedPlan, head), fmt.Errorf("repair moved worktree metadata: %w", repairErr)
+		}
+	}
+	confirmedPath := filepath.Clean(plan.Path)
+	plan.Path = filepath.Clean(actualPath)
+	wt := createdWorktree(repoKey, plan, head)
+	if addRunErr != nil {
+		return wt, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), addRunErr)
+	}
+	if moveErr != nil {
+		return wt, fmt.Errorf("move staged worktree into pinned destination: %w", moveErr)
+	}
+	if plan.Path != confirmedPath {
+		return wt, fmt.Errorf("destination parent identity changed during creation; worktree was retained at %s", plan.Path)
+	}
+	return wt, nil
+}
+
+func mkdirPinnedTemp(root *os.File) (string, error) {
+	for attempt := 0; attempt < 100; attempt++ {
+		name := fmt.Sprintf(".sidecar-worktree-%d-%d", os.Getpid(), time.Now().UnixNano()+int64(attempt))
+		if err := unix.Mkdirat(int(root.Fd()), name, 0700); err == nil {
+			return name, nil
+		} else if !errors.Is(err, unix.EEXIST) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("could not allocate a staging directory")
 }
 
 func createdWorktree(repoKey string, plan *CreateOperationPlan, head string) *Worktree {
@@ -591,7 +714,11 @@ func writeDurableFile(path string, data []byte, mode os.FileMode) (err error) {
 }
 
 func runSetupHookContext(ctx context.Context, plan *CreateOperationPlan) error {
-	hook, err := openContainedRegularFile(plan.MainWorktree, plan.HookPath)
+	return runSetupHookContextWithHook(ctx, plan, nil)
+}
+
+func runSetupHookContextWithHook(ctx context.Context, plan *CreateOperationPlan, beforeOpen func()) error {
+	hook, err := openContainedRegularFileWithHook(plan.MainWorktree, plan.HookPath, beforeOpen)
 	if err != nil {
 		return fmt.Errorf("validate setup hook: %w", err)
 	}

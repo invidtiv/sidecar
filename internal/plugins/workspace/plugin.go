@@ -241,27 +241,28 @@ type Plugin struct {
 	conflicts []Conflict
 
 	// Create modal state
-	createNameInput       textinput.Model
-	createBaseBranchInput textinput.Model
-	createTaskID          string
-	createTaskTitle       string    // Title of selected task for display
-	createAgentType       AgentType // Selected agent type (default: AgentClaude)
-	createAgentIdx        int       // Selected agent index in selectableAgentTypes()
-	createSkipPermissions bool      // Skip permissions checkbox
-	createFocus           int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
-	createButtonHover     int       // 0=none, 1=create, 2=cancel
-	createError           string    // Error message to display in create modal
-	createModal           *modal.Modal
-	createModalWidth      int
-	createOperationModal  *modal.Modal
-	createOperationWidth  int
-	createPlan            *CreateOperationPlan
-	createSetupResult     *CreateSetupResult
-	createDeleteResult    *CreateRecoveryDeleteResult
-	createBusyStep        string
-	createCopyEnv         bool
-	createRunHook         bool
-	deferredCreations     []CreateWorktreeAddedMsg // stale cross-project results retained until matching repo returns
+	createNameInput         textinput.Model
+	createBaseBranchInput   textinput.Model
+	createTaskID            string
+	createTaskTitle         string    // Title of selected task for display
+	createAgentType         AgentType // Selected agent type (default: AgentClaude)
+	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
+	createSkipPermissions   bool      // Skip permissions checkbox
+	createFocus             int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
+	createButtonHover       int       // 0=none, 1=create, 2=cancel
+	createError             string    // Error message to display in create modal
+	createModal             *modal.Modal
+	createModalWidth        int
+	createOperationModal    *modal.Modal
+	createOperationWidth    int
+	createPlan              *CreateOperationPlan
+	createSetupResult       *CreateSetupResult
+	createDeleteResult      *CreateRecoveryDeleteResult
+	createBusyStep          string
+	createCopyEnv           bool
+	createRunHook           bool
+	deferredCreations       []CreateWorktreeAddedMsg         // stale cross-project results retained until matching repo returns
+	removePendingCreationFn func(*CreateOperationPlan) error // test seam for durable journal completion failures
 
 	// Branch name validation state
 	branchNameValid     bool     // Is current name valid?

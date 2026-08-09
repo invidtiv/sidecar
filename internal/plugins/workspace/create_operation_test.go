@@ -120,6 +120,42 @@ func TestCreateRejectsSymlinkDestinationParentAtMutation(t *testing.T) {
 	}
 }
 
+func TestCreatePinsDestinationIdentityAcrossParentSwapInRunner(t *testing.T) {
+	r := newCreateRepo(t)
+	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/auth", "main", false, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedPath := plan.Path
+	outside := filepath.Join(r.root, "outside-runner")
+	if err := os.Mkdir(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	validatedParent := filepath.Dir(plan.Path)
+	pinnedName := validatedParent + "-pinned"
+	wt, err := addCreatedWorktreeWithRunner(context.Background(), "repo", plan, func(cmd *exec.Cmd) ([]byte, error) {
+		if renameErr := os.Rename(validatedParent, pinnedName); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		if linkErr := os.Symlink(outside, validatedParent); linkErr != nil {
+			t.Fatal(linkErr)
+		}
+		return cmd.CombinedOutput()
+	})
+	if err == nil || wt == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("parent-swap result = wt %+v err %v", wt, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "auth")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside checkout created for %s: %v", confirmedPath, statErr)
+	}
+	if wt.Path != filepath.Join(pinnedName, "auth") {
+		t.Fatalf("retained checkout path = %q", wt.Path)
+	}
+	if got := mustGit(t, wt.Path, "rev-parse", "HEAD"); got != plan.SourceOID {
+		t.Fatalf("retained checkout HEAD = %s", got)
+	}
+}
+
 func TestCreateReconcilesInterruptedAddAfterGitMutation(t *testing.T) {
 	r := newCreateRepo(t)
 	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/interrupted", "main", false, config.WorktreeSetupConfig{})
@@ -183,6 +219,67 @@ func TestCreateSetupRejectsSymlinkArtifactSwaps(t *testing.T) {
 				}
 			} else if _, err := os.Stat(filepath.Join(wt.Path, tc.artifact)); !os.IsNotExist(err) {
 				t.Fatalf("outside env copied: %v", err)
+			}
+		})
+	}
+}
+
+func TestPinnedArtifactOpenRejectsParentSwapAfterValidation(t *testing.T) {
+	for _, hook := range []bool{false, true} {
+		name := "env"
+		if hook {
+			name = "hook"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := newCreateRepo(t)
+			safeDir := filepath.Join(r.main, "safe")
+			if err := os.Mkdir(safeDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			artifactName := "artifact"
+			mustWrite(t, filepath.Join(safeDir, artifactName), "safe\n")
+			outside := filepath.Join(r.root, "outside-"+name)
+			if err := os.Mkdir(outside, 0755); err != nil {
+				t.Fatal(err)
+			}
+			outsideArtifact := "OUTSIDE_SECRET\n"
+			if hook {
+				outsideArtifact = "#!/bin/sh\ntouch \"$WORKTREE_PATH/outside-parent-hook-ran\"\n"
+			}
+			mustWrite(t, filepath.Join(outside, artifactName), outsideArtifact)
+			plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/parent-"+name, "main", false, config.WorktreeSetupConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wt, err := addCreatedWorktree(context.Background(), "repo", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan.HookPath = filepath.Join("safe", artifactName)
+			swap := func() {
+				if err := os.Rename(safeDir, safeDir+"-pinned"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, safeDir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if hook {
+				err = runSetupHookContextWithHook(context.Background(), plan, swap)
+				if err == nil {
+					t.Fatal("hook parent swap was accepted")
+				}
+				if _, statErr := os.Stat(filepath.Join(wt.Path, "outside-parent-hook-ran")); !os.IsNotExist(statErr) {
+					t.Fatalf("outside hook executed: %v", statErr)
+				}
+			} else {
+				file, openErr := openContainedRegularFileWithHook(plan.MainWorktree, filepath.Join("safe", artifactName), swap)
+				if file != nil {
+					file.Close()
+				}
+				if openErr == nil {
+					t.Fatal("env parent swap was accepted")
+				}
 			}
 		})
 	}
@@ -483,6 +580,124 @@ func TestPendingCreationJournalRecoversAfterRestart(t *testing.T) {
 	}
 	if restarted.createSetupResult == nil || len(restarted.createSetupResult.Warnings()) == 0 {
 		t.Fatal("restart did not surface recovery")
+	}
+}
+
+func TestPendingCreationJournalRemovalFailuresAndDurableSuccess(t *testing.T) {
+	newPending := func(t *testing.T, branch string) (*CreateOperationPlan, *Worktree, string) {
+		r := newCreateRepo(t)
+		snapshot, err := BuildRepoSnapshot(context.Background(), r.main)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := resolveCreateOperation(context.Background(), r.main, r.main, branch, "main", false, config.WorktreeSetupConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan.RepoKey, plan.OperationID = snapshot.Key, "journal-"+branch
+		wt, err := addCreatedWorktree(context.Background(), snapshot.Key, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := persistPendingCreation(context.Background(), plan, wt); err != nil {
+			t.Fatal(err)
+		}
+		path, err := pendingCreationPath(context.Background(), plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan, wt, path
+	}
+
+	t.Run("unlink failure", func(t *testing.T) {
+		plan, _, path := newPending(t, "feature/unlink-fail")
+		err := removePendingCreationWithOps(plan, func(string) error { return os.ErrPermission }, func(string) error { t.Fatal("sync called after failed unlink"); return nil })
+		if err == nil {
+			t.Fatal("unlink failure was ignored")
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("journal lost after unlink failure: %v", statErr)
+		}
+	})
+
+	t.Run("directory sync failure", func(t *testing.T) {
+		plan, _, path := newPending(t, "feature/sync-fail")
+		err := removePendingCreationWithOps(plan, os.Remove, func(string) error { return os.ErrInvalid })
+		if err == nil || !strings.Contains(err.Error(), "sync") {
+			t.Fatalf("sync failure = %v", err)
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("journal still exists after successful unlink: %v", statErr)
+		}
+	})
+
+	t.Run("success does not resurrect", func(t *testing.T) {
+		plan, wt, path := newPending(t, "feature/no-resurrection")
+		if err := removePendingCreation(plan); err != nil {
+			t.Fatal(err)
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("journal still exists: %v", statErr)
+		}
+		restarted := New()
+		if err := restarted.Init(&plugin.Context{Epoch: 12, WorkDir: plan.MainWorktree, ProjectRoot: plan.MainWorktree, Config: config.Default()}); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := BuildRepoSnapshot(context.Background(), plan.MainWorktree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restarted.repoSnapshot, restarted.worktrees = snapshot, snapshotToWorktrees(snapshot)
+		if restarted.reconcilePendingCreation() || restarted.createSetupResult != nil {
+			t.Fatalf("completed creation resurrected for %s", wt.Path)
+		}
+	})
+}
+
+func TestOpenAnywayKeepsRecoveryWhenJournalCannotBeRemoved(t *testing.T) {
+	r := newCreateRepo(t)
+	snapshot, err := BuildRepoSnapshot(context.Background(), r.main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/open-fail", "main", false, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.RepoKey, plan.OperationID = snapshot.Key, "open-fail"
+	wt, err := addCreatedWorktree(context.Background(), snapshot.Key, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persistPendingCreation(context.Background(), plan, wt); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 14, WorkDir: plan.MainWorktree, ProjectRoot: plan.MainWorktree, Config: config.Default()}
+	p.viewMode, p.createPlan = ViewModeCreate, plan
+	p.createSetupResult = &CreateSetupResult{Worktree: wt, Outcomes: []CreateSetupOutcome{{Kind: CreateOutcomeHook, Action: "hook", Required: true, Err: os.ErrInvalid}}}
+	p.removePendingCreationFn = func(*CreateOperationPlan) error { return os.ErrPermission }
+	_, cmd := p.Update(CreateOpenAnywayMsg{})
+	if cmd != nil || p.viewMode != ViewModeCreate || p.createSetupResult == nil {
+		t.Fatal("Open Anyway cleared recovery after journal removal failure")
+	}
+	warnings := p.createSetupResult.Warnings()
+	if len(warnings) < 2 || !strings.Contains(warnings[len(warnings)-1].Action, "journal") {
+		t.Fatalf("journal failure not surfaced: %+v", warnings)
+	}
+
+	restarted := New()
+	if err := restarted.Init(&plugin.Context{Epoch: 15, WorkDir: plan.MainWorktree, ProjectRoot: plan.MainWorktree, Config: config.Default()}); err != nil {
+		t.Fatal(err)
+	}
+	restartedSnapshot, err := BuildRepoSnapshot(context.Background(), plan.MainWorktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.repoSnapshot, restarted.worktrees = restartedSnapshot, snapshotToWorktrees(restartedSnapshot)
+	if !restarted.reconcilePendingCreation() {
+		t.Fatal("failed journal removal did not remain restart-recoverable")
 	}
 }
 

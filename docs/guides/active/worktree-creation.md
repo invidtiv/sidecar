@@ -29,7 +29,10 @@ policy for that project. Relative env and hook paths are resolved from the canon
 main worktree, even when Sidecar is opened in a linked worktree or repository
 subdirectory. Sidecar never logs copied file contents or setup-hook output.
 Configured artifacts must be regular files reached without symlink traversal;
-destination parent directories are checked the same way before Git writes them.
+Sidecar walks their parents from the canonical main-worktree directory using
+directory file descriptors. Destination worktrees are staged safely and moved
+with descriptor-relative operations into the pinned destination-parent identity,
+so a concurrent pathname-to-symlink swap cannot redirect Git into another tree.
 
 The hook runs in the new worktree with `MAIN_WORKTREE`, `SOURCE_WORKTREE`,
 `WORKTREE_PATH`, and `WORKTREE_BRANCH` set. If a required setup action fails, Sidecar
@@ -43,3 +46,6 @@ Immediately after Git adds the worktree, Sidecar writes an inspectable
 directory. If the app changes projects, restarts, or loses the original operation
 result before setup finishes, returning to the repository restores the recovery
 dialog from this journal without applying the old UI state to another project.
+Finishing or opening the worktree removes that journal and syncs its containing
+directory. If either step fails, Sidecar keeps the recovery dialog visible rather
+than allowing a later restart to misrepresent the operation as newly interrupted.

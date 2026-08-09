@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -378,7 +379,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.selectCreatedWorktree(msg.Result.Worktree)
 			return p, nil
 		}
-		if err := removePendingCreation(msg.Plan); err != nil {
+		if err := p.clearPendingCreation(msg.Plan); err != nil {
 			msg.Result.Outcomes = append(msg.Result.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal", Required: true, Err: err})
 			p.selectCreatedWorktree(msg.Result.Worktree)
 			return p, nil
@@ -387,7 +388,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case CreateOpenAnywayMsg:
 		if p.createPlan != nil && p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
-			_ = removePendingCreation(p.createPlan)
+			if err := p.clearPendingCreation(p.createPlan); err != nil {
+				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal before opening", Required: true, Err: err})
+				p.createOperationModal = nil
+				p.createOperationWidth = 0
+				return p, nil
+			}
 			cmds = append(cmds, p.finishCreatedWorktree(p.createPlan, p.createSetupResult.Worktree)...)
 		}
 
@@ -407,7 +413,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			if p.createPlan != nil {
-				_ = removePendingCreation(p.createPlan)
+				if err := p.clearPendingCreation(p.createPlan); err != nil {
+					msg.Result.Err = errors.Join(msg.Result.Err, fmt.Errorf("finalize pending creation journal: %w", err))
+				}
 			}
 			if p.selectedIdx >= len(p.worktrees) {
 				p.selectedIdx = len(p.worktrees) - 1
