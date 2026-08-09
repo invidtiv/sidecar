@@ -161,9 +161,9 @@ The fixture has committed proof files, two linked worktrees, deterministic
 `nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in
 the agent picker. It refuses a nonempty destination and any path under `$HOME`.
 
-`control-kill` rechecks ancestry, exact argv shape, inherited `TMUX_TMPDIR`
-identity, and private-session membership immediately before sending `TERM`; it
-refuses zero or ambiguous matches. There
+`control-kill` rechecks ancestry, exact argv shape, inherited `TMUX_TMPDIR`, any
+nonempty `TMUX` socket identity, and private-session membership immediately
+before sending `TERM`; it refuses zero or ambiguous matches. There
 is intentionally no general process killer or inner `kill-server` command.
 The capture hook and its log live under `$SIDECAR_DRIVE_RUN_DIR/proof` and are
 installed only on the explicit inner socket. `SIDECAR_DRIVE_ARGS` is split on

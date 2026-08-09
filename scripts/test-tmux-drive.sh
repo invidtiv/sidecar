@@ -130,11 +130,18 @@ decoy_fifo="$SIDECAR_TEST_PWD_FILE.decoy.fifo"
 mkfifo "$real_fifo" "$decoy_fifo"
 exec 8<>"$real_fifo"
 exec 9<>"$decoy_fifo"
-tmux -S "$SIDECAR_TEST_INNER_SOCKET" -C attach-session -f ignore-size -t proof \
-    <&8 >/dev/null 2>&1 &
+# Production shape: no -L/-S and TMUX unset, so expected TMUX_TMPDIR selects
+# the real private server.
+TMUX_TMPDIR="$(dirname "$(dirname "$SIDECAR_TEST_INNER_SOCKET")")" \
+    tmux -C attach-session -f ignore-size -t proof <&8 >/dev/null 2>&1 &
 real_control_pid=$!
-tmux -S "$SIDECAR_TEST_DECOY_SOCKET" -C attach-session -f ignore-size -t proof \
-    <&9 >/dev/null 2>&1 &
+# Adversarial production shape: the expected TMUX_TMPDIR is retained, but a
+# nonempty TMUX selects the same-session decoy on another explicit private
+# socket. control-clients must reject this descendant.
+decoy_server_pid=$(tmux -S "$SIDECAR_TEST_DECOY_SOCKET" display-message -p '#{pid}')
+TMUX="$SIDECAR_TEST_DECOY_SOCKET,$decoy_server_pid,0" \
+TMUX_TMPDIR="$(dirname "$(dirname "$SIDECAR_TEST_INNER_SOCKET")")" \
+    tmux -C attach-session -f ignore-size -t proof <&9 >/dev/null 2>&1 &
 decoy_control_pid=$!
 printf '%s\n' "$real_control_pid" >"$SIDECAR_TEST_REAL_CONTROL_PID_FILE"
 printf '%s\n' "$decoy_control_pid" >"$SIDECAR_TEST_DECOY_CONTROL_PID_FILE"

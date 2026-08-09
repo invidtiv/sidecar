@@ -282,7 +282,7 @@ host_descendants() {
 }
 
 control_clients() {
-    local descendants pid command session process_env socket
+    local descendants pid command session process_env process_tmux socket
     descendants=$(host_descendants) || return 1
     while IFS=$'\t' read -r pid command; do
         # Match Sidecar's production shape or the test's stronger explicit-S
@@ -297,9 +297,16 @@ control_clients() {
         elif [[ "$command" =~ (^|/)(tmux)[[:space:]]+-C[[:space:]]+attach-session[[:space:]]+-f[[:space:]]+ignore-size[[:space:]]+-t[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
             session="${BASH_REMATCH[3]}"
             # The command has no -L/-S override, so its inherited TMUX_TMPDIR
-            # uniquely determines the socket it resolved at launch.
+            # determines the socket only when TMUX is unset/empty. If TMUX is
+            # present, its first field is the socket identity tmux actually
+            # uses and must name the same private inner socket.
             process_env=$(ps eww -p "$pid" -o command= 2>/dev/null || true)
+            process_tmux=""
+            if [[ "$process_env" =~ (^|[[:space:]])TMUX=([^[:space:]]*) ]]; then
+                process_tmux="${BASH_REMATCH[2]}"
+            fi
             if [[ " $process_env " == *" TMUX_TMPDIR=$TMUX_TMPDIR "* ]] && \
+                { [ -z "$process_tmux" ] || [ "${process_tmux%%,*}" = "$INNER_SOCKET" ]; } && \
                 tmux -S "$INNER_SOCKET" has-session -t "=$session" 2>/dev/null; then
                 printf '%s\t%s\t%s\n' "$pid" "$session" "$command"
             fi
