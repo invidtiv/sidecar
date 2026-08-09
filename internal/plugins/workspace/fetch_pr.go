@@ -11,7 +11,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/projectdir"
 )
 
@@ -52,20 +51,31 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
 	ctx, scope := p.newLifecycleScope(nil)
 	branch := pr.Branch
-	dirName := branch
-	if dirPrefix {
-		repoName := app.GetRepoName(workDir)
-		if repoName != "" {
-			dirName = repoName + "-" + branch
-		}
-	}
 	mainRepoDir := projectRoot
 	if mainRepoDir == "" {
 		mainRepoDir = workDir
 	}
-	wtPath := filepath.Join(filepath.Dir(mainRepoDir), dirName)
 
 	return func() tea.Msg {
+		dirName := branch
+		if dirPrefix {
+			if repoName := repoNameContext(ctx, workDir); repoName != "" {
+				dirName = repoName + "-" + branch
+			}
+			if err := ctx.Err(); err != nil {
+				return FetchPRDoneMsg{OperationScope: scope, Err: err}
+			}
+		}
+		wtPath := filepath.Join(filepath.Dir(mainRepoDir), dirName)
+		newWorktree := func(baseBranch string) *Worktree {
+			wt := &Worktree{
+				Name: dirName, Path: wtPath, Branch: branch, BaseBranch: baseBranch,
+				PRURL: pr.URL, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			}
+			wt.Key, _ = projectdir.WorktreeKey(wtPath)
+			wt.RepoKey = scope.RepoKey
+			return wt
+		}
 		// Fetch the remote branch
 		fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", branch)
 		fetchCmd.Dir = workDir
@@ -88,56 +98,43 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 					if strings.Contains(outStr2, "already") {
 						existingPath := findWorktreePathForBranchContext(ctx, workDir, branch)
 						if existingPath != "" {
-							_ = savePRURL(projectRoot, existingPath, pr.URL)
-							_ = saveBaseBranch(projectRoot, existingPath, detectDefaultBranch(workDir))
+							_ = savePRURLContext(ctx, projectRoot, existingPath, pr.URL)
+							_ = saveBaseBranchContext(ctx, projectRoot, existingPath, detectDefaultBranchContext(ctx, workDir))
+						}
+						if err := ctx.Err(); err != nil {
+							return FetchPRDoneMsg{OperationScope: scope, Err: err}
 						}
 						return FetchPRDoneMsg{OperationScope: scope, AlreadyLocal: true, Branch: branch}
 					}
 					return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s", outStr2)}
 				}
 				// Worktree created from existing local branch
-				_ = savePRURL(projectRoot, wtPath, pr.URL)
-				baseBranch := detectDefaultBranch(workDir)
-				_ = saveBaseBranch(projectRoot, wtPath, baseBranch)
-
-				wt := &Worktree{
-					Name:       dirName,
-					Path:       wtPath,
-					Branch:     branch,
-					BaseBranch: baseBranch,
-					PRURL:      pr.URL,
-					Status:     StatusPaused,
-					CreatedAt:  time.Now(),
-					UpdatedAt:  time.Now(),
+				wt := newWorktree("")
+				_ = savePRURLContext(ctx, projectRoot, wtPath, pr.URL)
+				baseBranch := detectDefaultBranchContext(ctx, workDir)
+				wt.BaseBranch = baseBranch
+				_ = saveBaseBranchContext(ctx, projectRoot, wtPath, baseBranch)
+				if err := ctx.Err(); err != nil {
+					return FetchPRDoneMsg{OperationScope: scope, Worktree: wt, Err: err}
 				}
-				wt.Key, _ = projectdir.WorktreeKey(wtPath)
-				wt.RepoKey = scope.RepoKey
 				return FetchPRDoneMsg{OperationScope: scope, Worktree: wt, AlreadyLocal: true}
 			}
 			return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s", outStr)}
 		}
 
 		// Write PR URL to centralized worktree data directory (non-fatal)
-		_ = savePRURL(projectRoot, wtPath, pr.URL)
+		wt := newWorktree("")
+		_ = savePRURLContext(ctx, projectRoot, wtPath, pr.URL)
 
 		// Detect base branch for diff
-		baseBranch := detectDefaultBranch(workDir)
+		baseBranch := detectDefaultBranchContext(ctx, workDir)
+		wt.BaseBranch = baseBranch
 
 		// Persist base branch to centralized worktree data directory (non-fatal)
-		_ = saveBaseBranch(projectRoot, wtPath, baseBranch)
-
-		wt := &Worktree{
-			Name:       dirName,
-			Path:       wtPath,
-			Branch:     branch,
-			BaseBranch: baseBranch,
-			PRURL:      pr.URL,
-			Status:     StatusPaused,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+		_ = saveBaseBranchContext(ctx, projectRoot, wtPath, baseBranch)
+		if err := ctx.Err(); err != nil {
+			return FetchPRDoneMsg{OperationScope: scope, Worktree: wt, Err: err}
 		}
-		wt.Key, _ = projectdir.WorktreeKey(wtPath)
-		wt.RepoKey = scope.RepoKey
 
 		return FetchPRDoneMsg{OperationScope: scope, Worktree: wt}
 	}

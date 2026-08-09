@@ -416,6 +416,9 @@ func detectDefaultBranch(workdir string) string {
 }
 
 func detectDefaultBranchContext(ctx context.Context, workdir string) string {
+	if ctx.Err() != nil {
+		return ""
+	}
 	defaultBranchCacheMu.RLock()
 	if branch, ok := defaultBranchCache[workdir]; ok {
 		defaultBranchCacheMu.RUnlock()
@@ -435,9 +438,15 @@ func detectDefaultBranchContext(ctx context.Context, workdir string) string {
 			return branch
 		}
 	}
+	if ctx.Err() != nil {
+		return ""
+	}
 
 	// Fallback: check which common branch exists
 	for _, branch := range []string{"main", "master"} {
+		if ctx.Err() != nil {
+			return ""
+		}
 		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branch)
 		cmd.Dir = workdir
 		if err := cmd.Run(); err == nil {
@@ -447,6 +456,9 @@ func detectDefaultBranchContext(ctx context.Context, workdir string) string {
 	}
 
 	// Last resort default
+	if ctx.Err() != nil {
+		return ""
+	}
 	setDefaultBranchCache(workdir, "main")
 	return "main"
 }

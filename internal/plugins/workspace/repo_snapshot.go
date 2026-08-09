@@ -109,9 +109,9 @@ func BuildRepoSnapshot(ctx context.Context, repoPath string) (*RepoSnapshot, err
 		if ref, ok := refs[state.Branch]; ok {
 			wt.Upstream, wt.Remote = ref.Upstream, ref.Remote
 		}
-		wt.BaseRef = loadBaseBranch(root, state.Path)
+		wt.BaseRef = loadBaseBranchContext(ctx, root, state.Path)
 		if wt.BaseRef == "" && !wt.IsMain {
-			wt.BaseRef = detectDefaultBranch(repoPath)
+			wt.BaseRef = detectDefaultBranchContext(ctx, repoPath)
 		}
 		if wt.BaseRef != "" {
 			wt.BaseOID, _ = gitOutputContext(ctx, repoPath, "rev-parse", "--verify", wt.BaseRef+"^{commit}")
@@ -122,6 +122,46 @@ func BuildRepoSnapshot(ctx context.Context, repoPath string) (*RepoSnapshot, err
 		snapshot.Worktrees = append(snapshot.Worktrees, wt)
 	}
 	return snapshot, nil
+}
+
+func mainWorktreePathContext(ctx context.Context, workDir string) string {
+	out, err := gitOutputContext(ctx, workDir, "--no-optional-locks", "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			return filepath.Clean(path)
+		}
+	}
+	return ""
+}
+
+func repoNameContext(ctx context.Context, workDir string) string {
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "remote", "get-url", "origin")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err == nil {
+		url := strings.TrimSuffix(strings.TrimSpace(string(output)), ".git")
+		if idx := strings.LastIndex(url, ":"); idx != -1 && !strings.Contains(url, "://") {
+			url = url[idx+1:]
+		}
+		if idx := strings.LastIndex(url, "/"); idx != -1 {
+			return url[idx+1:]
+		}
+		return url
+	}
+	if ctx.Err() != nil {
+		return ""
+	}
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() == 128 {
+		return ""
+	}
+	abs, absErr := filepath.Abs(workDir)
+	if absErr != nil {
+		return ""
+	}
+	return filepath.Base(abs)
 }
 
 func parseGitWorktreeStates(output string) ([]gitWorktreeState, error) {

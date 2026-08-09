@@ -311,6 +311,108 @@ func TestMergeLifecycleGitCommandsCancelledByStopOrReinit(t *testing.T) {
 	}
 }
 
+func TestCreatePostAddInventoryCancelledWithPartialResult(t *testing.T) {
+	for _, cancelWithInit := range []bool{false, true} {
+		name := "Stop"
+		if cancelWithInit {
+			name = "Init"
+		}
+		t.Run(name, func(t *testing.T) {
+			binDir := t.TempDir()
+			marker := filepath.Join(t.TempDir(), "inventory-started")
+			count := filepath.Join(t.TempDir(), "git-count")
+			git := filepath.Join(binDir, "git")
+			script := "#!/bin/sh\nn=0\n[ ! -f \"$SIDECAR_TEST_COUNT\" ] || n=$(cat \"$SIDECAR_TEST_COUNT\")\nn=$((n + 1))\nprintf '%s' \"$n\" > \"$SIDECAR_TEST_COUNT\"\nif [ \"$n\" -eq 1 ]; then exit 0; fi\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"
+			if err := os.WriteFile(git, []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("SIDECAR_TEST_MARKER", marker)
+			t.Setenv("SIDECAR_TEST_COUNT", count)
+
+			p := New()
+			oldDir := t.TempDir()
+			if err := p.Init(&plugin.Context{Epoch: 40, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
+				t.Fatal(err)
+			}
+			p.initCreateModalBase()
+			p.createNameInput.SetValue("feature")
+			cmd := p.createWorktree()
+			done := make(chan CreateDoneMsg, 1)
+			go func() { done <- cmd().(CreateDoneMsg) }()
+			waitForFile(t, marker)
+			if cancelWithInit {
+				newDir := t.TempDir()
+				if err := p.Init(&plugin.Context{Epoch: 41, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				p.Stop()
+			}
+			select {
+			case msg := <-done:
+				if msg.Worktree == nil || msg.Worktree.Branch != "feature" {
+					t.Fatalf("post-add cancellation lost partial worktree: %+v", msg.Worktree)
+				}
+				if msg.Err == nil {
+					t.Fatal("post-add cancellation returned no error")
+				}
+				if cancelWithInit {
+					p.worktrees = []*Worktree{{Key: "new-key", Name: "new-project"}}
+					p.update(msg)
+					if len(p.worktrees) != 1 || p.worktrees[0].Key != "new-key" {
+						t.Fatal("stale partial create result mutated the new project")
+					}
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("post-add worktree inventory survived cancellation")
+			}
+		})
+	}
+}
+
+func TestPRImportDefaultBranchDiscoveryCancelledAfterAdd(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "default-branch-started")
+	count := filepath.Join(t.TempDir(), "git-count")
+	git := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nn=0\n[ ! -f \"$SIDECAR_TEST_COUNT\" ] || n=$(cat \"$SIDECAR_TEST_COUNT\")\nn=$((n + 1))\nprintf '%s' \"$n\" > \"$SIDECAR_TEST_COUNT\"\nif [ \"$n\" -le 2 ]; then exit 0; fi\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"
+	if err := os.WriteFile(git, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	t.Setenv("SIDECAR_TEST_COUNT", count)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	p := New()
+	oldDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 50, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := p.fetchAndCreateWorktree(PRListItem{Branch: "feature", URL: "https://example.test/pr/1"})
+	done := make(chan FetchPRDoneMsg, 1)
+	go func() { done <- cmd().(FetchPRDoneMsg) }()
+	waitForFile(t, marker)
+	newDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 51, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-done:
+		if msg.Worktree == nil || msg.Worktree.Branch != "feature" || msg.Err == nil {
+			t.Fatalf("PR import cancellation did not retain partial result: worktree=%+v err=%v", msg.Worktree, msg.Err)
+		}
+		p.worktrees = []*Worktree{{Key: "new-key", Name: "new-project"}}
+		p.update(msg)
+		if len(p.worktrees) != 1 || p.worktrees[0].Key != "new-key" {
+			t.Fatal("stale partial PR import mutated the new project")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PR default-branch discovery survived reinit cancellation")
+	}
+}
+
 func TestDelayedTaskAndBranchResultsCannotMutateSwitchedProject(t *testing.T) {
 	binDir := t.TempDir()
 	markerDir := t.TempDir()

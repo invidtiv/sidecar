@@ -222,6 +222,12 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 }
 
 func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
+	repoKey := ""
+	if p.repoSnapshot != nil {
+		repoKey = p.repoSnapshot.Key
+	}
 	// Default base branch to current branch if not specified
 	if baseBranch == "" {
 		baseBranch = "HEAD"
@@ -232,8 +238,11 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	// This helps conversation adapters discover related worktree conversations
 	// by matching the directory path pattern after worktree deletion
 	dirName := name
-	if p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix {
-		repoName := app.GetRepoName(p.ctx.WorkDir)
+	if dirPrefix {
+		repoName := repoNameContext(ctx, workDir)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if repoName != "" {
 			dirName = repoName + "-" + name
 		}
@@ -243,9 +252,9 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	// Use ProjectRoot (the main worktree path, resolved from git) rather than
 	// WorkDir so that starting sidecar from a subfolder doesn't place the new
 	// worktree inside the repository instead of beside it. Fixes #174.
-	mainRepoDir := p.ctx.ProjectRoot
+	mainRepoDir := projectRoot
 	if mainRepoDir == "" {
-		mainRepoDir = p.ctx.WorkDir
+		mainRepoDir = workDir
 	}
 	parentDir := filepath.Dir(mainRepoDir)
 	wtPath := filepath.Join(parentDir, dirName)
@@ -258,24 +267,51 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	// Create worktree with new branch (branch name stays simple, just the user-provided name)
 	args := []string{"worktree", "add", "-b", name, wtPath, baseBranch}
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = p.ctx.WorkDir
+	cmd.Dir = workDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 
-	// Create .td-root file pointing to main repo for td database sharing
-	if err := p.setupTDRoot(wtPath); err != nil {
+	partial := &Worktree{
+		Key:             stablePathKey(wtPath),
+		RepoKey:         repoKey,
+		Name:            dirName,
+		Path:            wtPath,
+		Branch:          name,
+		BaseBranch:      baseBranch,
+		TaskID:          taskID,
+		TaskTitle:       taskTitle,
+		ChosenAgentType: agentType,
+		Status:          StatusPaused,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	if key, err := projectdir.WorktreeKey(wtPath); err == nil {
+		partial.Key = key
+	}
+
+	// Create .td-root file pointing to main repo for td database sharing.
+	if err := setupTDRootContext(ctx, workDir, projectRoot, wtPath); err != nil {
+		if ctx.Err() != nil {
+			return partial, ctx.Err()
+		}
 		// Log but don't fail - td integration is optional
 		p.ctx.Logger.Warn("failed to setup .td-root", "path", wtPath, "error", err)
 	}
 
 	// If task is linked, create task file in centralized dir and start the task
 	if taskID != "" {
-		wtDir, wtDirErr := projectdir.WorktreeDir(p.ctx.ProjectRoot, wtPath)
+		wtDir, wtDirErr := projectdir.WorktreeDirContext(ctx, projectRoot, wtPath)
 		if wtDirErr != nil {
+			if ctx.Err() != nil {
+				return partial, ctx.Err()
+			}
 			p.ctx.Logger.Warn("failed to resolve worktree dir for task", "path", wtPath, "error", wtDirErr)
 		} else {
 			taskPath := filepath.Join(wtDir, sidecarTaskFile)
+			if err := ctx.Err(); err != nil {
+				return partial, err
+			}
 			if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
 				p.ctx.Logger.Warn("failed to write task file", "path", taskPath, "error", err)
 			}
@@ -285,6 +321,9 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 		startCmd := exec.CommandContext(ctx, "td", "start", taskID)
 		startCmd.Dir = wtPath
 		if err := startCmd.Run(); err != nil {
+			if ctx.Err() != nil {
+				return partial, ctx.Err()
+			}
 			p.ctx.Logger.Warn("failed to start td task", "task", taskID, "error", err)
 		}
 	}
@@ -292,40 +331,37 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	// Determine actual base branch name
 	actualBase := baseBranch
 	if baseBranch == "HEAD" {
-		if b, err := getCurrentBranchContext(ctx, p.ctx.WorkDir); err == nil {
+		if b, err := getCurrentBranchContext(ctx, workDir); err == nil {
 			actualBase = b
+		} else if ctx.Err() != nil {
+			return partial, ctx.Err()
 		}
 	}
 
-	wt := &Worktree{
-		Name:            dirName,
-		Path:            wtPath,
-		Branch:          name,
-		BaseBranch:      actualBase,
-		TaskID:          taskID,
-		TaskTitle:       taskTitle,
-		ChosenAgentType: agentType,
-		Status:          StatusPaused,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-	}
-	wt.Key, _ = projectdir.WorktreeKey(wtPath)
-	if p.repoSnapshot != nil {
-		wt.RepoKey = p.repoSnapshot.Key
-	}
+	wt := partial
+	wt.BaseBranch = actualBase
 
 	// Persist agent type to centralized worktree data directory
-	if err := saveAgentType(p.ctx.ProjectRoot, wtPath, agentType); err != nil {
+	if err := saveAgentTypeContext(ctx, projectRoot, wtPath, agentType); err != nil {
+		if ctx.Err() != nil {
+			return partial, ctx.Err()
+		}
 		p.ctx.Logger.Warn("failed to save agent type", "path", wtPath, "error", err)
 	}
 
 	// Persist base branch to centralized worktree data directory
-	if err := saveBaseBranch(p.ctx.ProjectRoot, wtPath, actualBase); err != nil {
+	if err := saveBaseBranchContext(ctx, projectRoot, wtPath, actualBase); err != nil {
+		if ctx.Err() != nil {
+			return partial, ctx.Err()
+		}
 		p.ctx.Logger.Warn("failed to save base branch", "path", wtPath, "error", err)
 	}
 
 	// Run post-creation setup (env files, symlinks, setup script)
 	if err := p.setupWorktreeContext(ctx, wtPath, name); err != nil {
+		if ctx.Err() != nil {
+			return partial, ctx.Err()
+		}
 		p.ctx.Logger.Warn("workspace setup had errors", "path", wtPath, "error", err)
 		// Don't fail creation for setup errors
 	}
@@ -568,11 +604,18 @@ func filterBranches(query string, allBranches []string) []string {
 // setupTDRoot creates a .td-root file in the worktree pointing to the main repo.
 // This allows td commands in the worktree to use the main repo's database.
 func (p *Plugin) setupTDRoot(worktreePath string) error {
-	mainPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainPath == "" {
-		mainPath = p.ctx.WorkDir
+	return setupTDRootContext(context.Background(), p.ctx.WorkDir, p.ctx.ProjectRoot, worktreePath)
+}
+
+func setupTDRootContext(ctx context.Context, workDir, projectRoot, worktreePath string) error {
+	mainPath := mainWorktreePathContext(ctx, workDir)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return tdroot.CreateTDRoot(p.ctx.ProjectRoot, worktreePath, mainPath)
+	if mainPath == "" {
+		mainPath = workDir
+	}
+	return tdroot.CreateTDRoot(projectRoot, worktreePath, mainPath)
 }
 
 const sidecarTaskFile = "task"
@@ -587,9 +630,16 @@ const sidecarBaseFile = "base"
 
 // saveBaseBranch persists the base branch to the centralized worktree data directory.
 func saveBaseBranch(projectRoot, worktreePath string, branch string) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return saveBaseBranchContext(context.Background(), projectRoot, worktreePath, branch)
+}
+
+func saveBaseBranchContext(ctx context.Context, projectRoot, worktreePath string, branch string) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if branch == "" {
 		basePath := filepath.Join(wtDir, sidecarBaseFile)
@@ -602,7 +652,11 @@ func saveBaseBranch(projectRoot, worktreePath string, branch string) error {
 
 // loadBaseBranch reads the base branch from the centralized worktree data directory.
 func loadBaseBranch(projectRoot, worktreePath string) string {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return loadBaseBranchContext(context.Background(), projectRoot, worktreePath)
+}
+
+func loadBaseBranchContext(ctx context.Context, projectRoot, worktreePath string) string {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return ""
 	}
@@ -630,9 +684,16 @@ func loadTaskLink(projectRoot, worktreePath string) string {
 
 // saveAgentType persists the chosen agent type to the centralized worktree data directory.
 func saveAgentType(projectRoot, worktreePath string, agentType AgentType) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return saveAgentTypeContext(context.Background(), projectRoot, worktreePath, agentType)
+}
+
+func saveAgentTypeContext(ctx context.Context, projectRoot, worktreePath string, agentType AgentType) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if agentType == AgentNone || agentType == "" {
 		// Remove file if None selected
@@ -660,9 +721,16 @@ func loadAgentType(projectRoot, worktreePath string) AgentType {
 
 // savePRURL persists the PR URL to the centralized worktree data directory.
 func savePRURL(projectRoot, worktreePath string, prURL string) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return savePRURLContext(context.Background(), projectRoot, worktreePath, prURL)
+}
+
+func savePRURLContext(ctx context.Context, projectRoot, worktreePath string, prURL string) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if prURL == "" {
 		// Remove file if empty
@@ -706,7 +774,7 @@ func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
 		}
 
 		// Write task link file to centralized worktree data directory
-		wtDir, err := projectdir.WorktreeDir(projectRoot, path)
+		wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
 				OperationScope: scope,
@@ -715,6 +783,9 @@ func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
+		if err := ctx.Err(); err != nil {
+			return TaskLinkedMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
 			return TaskLinkedMsg{
 				OperationScope: scope,
@@ -733,11 +804,11 @@ func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
 
 // unlinkTask returns a command to unlink a td task from a worktree.
 func (p *Plugin) unlinkTask(wt *Worktree) tea.Cmd {
-	_, scope := p.newLifecycleScope(wt)
+	ctx, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
 	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		wtDir, err := projectdir.WorktreeDir(projectRoot, path)
+		wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
 				OperationScope: scope,
@@ -746,6 +817,9 @@ func (p *Plugin) unlinkTask(wt *Worktree) tea.Cmd {
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
+		if err := ctx.Err(); err != nil {
+			return TaskLinkedMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		if err := os.Remove(taskPath); err != nil && !os.IsNotExist(err) {
 			return TaskLinkedMsg{
 				OperationScope: scope,

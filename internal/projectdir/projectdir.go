@@ -6,6 +6,7 @@
 package projectdir
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -49,8 +50,14 @@ func Lookup(projectRoot string) (string, bool) {
 // WorktreeDir returns the worktree-specific data directory for a project.
 // The directory is created if it does not exist.
 func WorktreeDir(projectRoot, worktreePath string) (string, error) {
+	return WorktreeDirContext(context.Background(), projectRoot, worktreePath)
+}
+
+// WorktreeDirContext resolves worktree state while allowing legacy Git
+// inventory to be cancelled with its owning lifecycle operation.
+func WorktreeDirContext(ctx context.Context, projectRoot, worktreePath string) (string, error) {
 	base := config.StateDir()
-	return worktreeDirWithBase(base, projectRoot, worktreePath)
+	return worktreeDirWithBaseContext(ctx, base, projectRoot, worktreePath)
 }
 
 // WorktreeDirWithBase is the exported, testable form of WorktreeDir.
@@ -67,6 +74,13 @@ func ResolveWithBase(base, projectRoot string) (string, error) {
 
 // worktreeDirWithBase is the testable core of WorktreeDir.
 func worktreeDirWithBase(base, projectRoot, worktreePath string) (string, error) {
+	return worktreeDirWithBaseContext(context.Background(), base, projectRoot, worktreePath)
+}
+
+func worktreeDirWithBaseContext(ctx context.Context, base, projectRoot, worktreePath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	projectDir, err := resolveWithBase(base, projectRoot)
 	if err != nil {
 		return "", err
@@ -99,18 +113,21 @@ func worktreeDirWithBase(base, projectRoot, worktreePath string) (string, error)
 	// task/PR/agent metadata to the wrong checkout.
 	legacyDir := filepath.Join(worktreesDir, sanitizeSlug(filepath.Base(normalized)))
 	if info, statErr := os.Stat(legacyDir); statErr == nil && info.IsDir() {
-		ambiguous, inventoryErr := legacyWorktreeAmbiguous(projectRoot, normalized)
+		ambiguous, inventoryErr := legacyWorktreeAmbiguousContext(ctx, projectRoot, normalized)
 		if inventoryErr != nil {
 			return "", fmt.Errorf("cannot safely migrate legacy worktree state %s: %w", legacyDir, inventoryErr)
 		}
 		if ambiguous {
 			return "", fmt.Errorf("ambiguous legacy worktree state %s: multiple registered worktrees share basename %q", legacyDir, filepath.Base(normalized))
 		}
-		if err := copyDir(legacyDir, dir); err != nil {
+		if err := copyDirContext(ctx, legacyDir, dir); err != nil {
 			return "", fmt.Errorf("migrate legacy worktree state: %w", err)
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("creating worktree dir: %w", err)
 	}
@@ -166,7 +183,11 @@ func readWorktreeMeta(dir string) (worktreeMeta, error) {
 }
 
 func legacyWorktreeAmbiguous(projectRoot, target string) (bool, error) {
-	cmd := execCommand("git", "-C", projectRoot, "worktree", "list", "--porcelain")
+	return legacyWorktreeAmbiguousContext(context.Background(), projectRoot, target)
+}
+
+func legacyWorktreeAmbiguousContext(ctx context.Context, projectRoot, target string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", projectRoot, "worktree", "list", "--porcelain")
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -181,12 +202,15 @@ func legacyWorktreeAmbiguous(projectRoot, target string) (bool, error) {
 	return matches > 1, nil
 }
 
-// execCommand is a variable so migration refusal can be tested without a live
-// repository while production still asks Git for the authoritative inventory.
-var execCommand = exec.Command
-
 func copyDir(src, dst string) error {
+	return copyDirContext(context.Background(), src, dst)
+}
+
+func copyDirContext(ctx context.Context, src, dst string) error {
 	return filepath.WalkDir(src, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}

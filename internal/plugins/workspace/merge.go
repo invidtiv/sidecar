@@ -12,7 +12,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	"github.com/marcus/sidecar/internal/app"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 )
@@ -722,7 +721,7 @@ func getCommitLogForPR(workdir, baseBranch string) string {
 
 func getCommitLogForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
 	}
 	cmd := exec.CommandContext(ctx, "git", "log", baseBranch+"..HEAD", "--oneline", "--no-merges")
 	cmd.Dir = workdir
@@ -753,7 +752,7 @@ func getDiffForPR(workdir, baseBranch string) string {
 
 func getDiffForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
 	}
 
 	// Try merge-base for accurate diff
@@ -901,17 +900,18 @@ func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch strin
 	scope := p.lifecycleScope(wt)
 	ctx := p.operationCtx
 	repoPath := ""
+	workDir := p.ctx.WorkDir
 	if p.repoSnapshot != nil {
 		repoPath = p.repoSnapshot.CanonicalRoot
 	}
-	if repoPath == "" {
-		repoPath = app.GetMainWorktreePath(p.ctx.WorkDir)
-	}
-	if repoPath == "" {
-		repoPath = p.ctx.WorkDir
-	}
 	name := wt.Name
 	return func() tea.Msg {
+		if repoPath == "" {
+			repoPath = mainWorktreePathContext(ctx, workDir)
+		}
+		if repoPath == "" {
+			repoPath = workDir
+		}
 		result := updateCheckedOutBaseContext(ctx, repoPath, branch, "")
 		return PullAfterMergeMsg{OperationScope: scope, WorkspaceName: name, Branch: branch, Success: result.Updated || (result.Fetched && result.LeftUnchanged && result.Err == nil), Err: result.Err}
 	}
