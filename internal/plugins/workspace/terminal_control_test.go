@@ -101,6 +101,44 @@ func TestWorkspaceHealthyTerminalHasNoPresentationPoll(t *testing.T) {
 	}
 }
 
+func TestWorkspacePanelCaptureCannotOverwriteSharedModel(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.termPanelVisible = true
+	p.termPanelSession = "panel"
+	p.interactiveState = &InteractiveState{Active: true, TermPanel: true}
+	model := openTestTerminal(t, p, workspaceTerminalPanel, workspaceTerminalTarget{
+		Session: "panel", Source: "panel", SourceID: "panel",
+	})
+	p.bindTerminalBuffer(workspaceTerminalPanel, p.panelTerminalTarget, model)
+	applyFallbackCapture(model, "model output")
+	p.syncTerminalModels()
+
+	beforeBuffer := model.State.OutputBuf.String()
+	beforeCursorRow, beforeCursorCol := p.interactiveState.CursorRow, p.interactiveState.CursorCol
+	beforeGeometry := p.paneGeometryFor(true)
+	generation := p.pollScheduler.Invalidate(termPanelPollKey())
+	_, cmd := p.update(TermPanelCaptureMsg{
+		SessionName: "panel", Generation: generation,
+		Output: "stale legacy capture", HasHistory: true, CaptureBase: 400, HistorySize: 500,
+		HasCursor: true, CursorRow: 9, CursorCol: 10, CursorVisible: false,
+		PaneHeight: 50, PaneWidth: 120, MouseReporting: true,
+	})
+
+	if cmd != nil {
+		t.Fatal("model-owned panel capture rescheduled legacy work")
+	}
+	if got := model.State.OutputBuf.String(); got != beforeBuffer {
+		t.Fatalf("legacy panel capture overwrote shared buffer: %q", got)
+	}
+	if p.interactiveState.CursorRow != beforeCursorRow || p.interactiveState.CursorCol != beforeCursorCol {
+		t.Fatalf("legacy panel capture overwrote cursor: got %d,%d want %d,%d",
+			p.interactiveState.CursorRow, p.interactiveState.CursorCol, beforeCursorRow, beforeCursorCol)
+	}
+	if got := p.paneGeometryFor(true); got != beforeGeometry {
+		t.Fatalf("legacy panel capture overwrote geometry: got %#v want %#v", got, beforeGeometry)
+	}
+}
+
 func TestWorkspaceActivityCadenceDoesNotOverwriteModelPresentation(t *testing.T) {
 	p := newTerminalEmbeddingTestPlugin()
 	wt := &Worktree{

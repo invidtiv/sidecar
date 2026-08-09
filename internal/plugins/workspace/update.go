@@ -2009,6 +2009,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.ctx.Logger.Debug("termPanel: CaptureMsg DROPPED", "session", msg.SessionName, "current", p.termPanelSession, "visible", p.termPanelVisible)
 			return p, nil
 		}
+		// A legacy capture may already be queued when reconciliation opens and
+		// binds the shared terminal model. From that point tty.Model owns both its
+		// healthy byte-fed presentation and provisional/fallback captures; this
+		// handler must not overwrite the aliased buffer/cursor/geometry or revive
+		// the legacy polling chain.
+		if p.panelTerminalOwns() {
+			return p, nil
+		}
 		contentChanged := false
 		if msg.Err == nil && p.termPanelOutput != nil {
 			if msg.HasHistory {
