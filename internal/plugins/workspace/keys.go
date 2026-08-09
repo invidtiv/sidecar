@@ -1538,6 +1538,22 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Ensure modal is built for key handling
 	p.ensureMergeModal()
+	if p.mergeState.Step == MergeStepGeneratePR && !p.mergeState.PRGenerationActive {
+		switch msg.String() {
+		case "d":
+			return p.startPRDraft(false)
+		case "a":
+			return p.startPRDraft(true)
+		}
+	}
+	if p.mergeState.Step == MergeStepEditPR && msg.String() == "ctrl+s" {
+		return p.advanceMergeStep()
+	}
+	if p.mergeState.Step == MergeStepWaitingMerge && msg.String() == "s" {
+		p.mergeState.PRWatchStopped = true
+		p.clearMergeModal()
+		return nil
+	}
 
 	// Handle error step — yank, dismiss
 	if p.mergeState.Step == MergeStepError {
@@ -1577,6 +1593,35 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 		return nil
+	}
+
+	// For PostMergeConfirmation step, delegate to modal library for Tab/Enter/Space
+	if (p.mergeState.Step == MergeStepGeneratePR || p.mergeState.Step == MergeStepEditPR || p.mergeState.Step == MergeStepWaitingMerge) && p.mergeModal != nil {
+		action, cmd := p.mergeModal.HandleKey(msg)
+		switch action {
+		case mergeFallbackDraftID:
+			return p.startPRDraft(false)
+		case mergeAgentDraftID:
+			return p.startPRDraft(true)
+		case mergeCreatePRID:
+			return p.advanceMergeStep()
+		case "check-pr":
+			return p.checkPRMerged(p.mergeState.Worktree)
+		case mergeStopWatchingID:
+			p.mergeState.PRWatchStopped = true
+			p.clearMergeModal()
+			return nil
+		case "cancel":
+			p.cancelMergeWorkflow()
+			p.clearMergeModal()
+			return nil
+		case "":
+			if cmd != nil {
+				return cmd
+			}
+		default:
+			return cmd
+		}
 	}
 
 	// For PostMergeConfirmation step, delegate to modal library for Tab/Enter/Space

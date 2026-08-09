@@ -3,13 +3,14 @@ package workspace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -24,7 +25,8 @@ const (
 	MergeStepTargetBranch                   // Choose target branch for merge/PR
 	MergeStepMergeMethod                    // Choose: PR workflow or direct merge
 	MergeStepPush
-	MergeStepGeneratePR // Agent generates PR title/body
+	MergeStepGeneratePR // User chooses deterministic or disclosed agent assistance
+	MergeStepEditPR     // User edits title/body before creation
 	MergeStepCreatePR
 	MergeStepWaitingMerge
 	MergeStepDirectMerge           // Performing direct merge (no PR)
@@ -46,7 +48,9 @@ func (s MergeWorkflowStep) String() string {
 	case MergeStepPush:
 		return "Push Branch"
 	case MergeStepGeneratePR:
-		return "Generate PR"
+		return "Draft PR"
+	case MergeStepEditPR:
+		return "Edit PR"
 	case MergeStepCreatePR:
 		return "Create PR"
 	case MergeStepWaitingMerge:
@@ -75,7 +79,10 @@ type MergeWorkflowState struct {
 	PRTitle          string
 	PRBody           string
 	PRURL            string
+	PR               PRIdentity
 	ExistingPR       bool // True if using an existing PR (vs newly created)
+	ReviewedOID      string
+	PushRemote       string
 	Error            error
 	ErrorTitle       string                       // Short title for error display (e.g. "Direct Merge Failed")
 	ErrorDetail      string                       // Full error text for display and clipboard copy
@@ -102,8 +109,16 @@ type MergeWorkflowState struct {
 	ConfirmationHover   int    // Mouse hover state
 
 	// PR generation state
-	PRGenerationDots   int                // Animation counter for progress dots (0-3)
-	PRGenerationCancel context.CancelFunc // Cancel func for in-flight agent process
+	PRGenerationDots       int                // Animation counter for progress dots (0-3)
+	PRGenerationCancel     context.CancelFunc // Cancel func for in-flight agent process
+	PRGenerationActive     bool
+	PRTitleInput           textinput.Model
+	PRBodyInput            textarea.Model
+	PRPollAttempt          int
+	PRWatchStopped         bool
+	PRPollKind             PRPollKind
+	ForceDeleteRequired    bool // squash/rebase means ordinary branch -d cannot prove safety
+	ForceDeleteLocalBranch bool // explicit user choice after the explanation is shown
 
 	// Cleanup results for summary display
 	CleanupResults    *CleanupResults
@@ -138,14 +153,15 @@ type MergeStepCompleteMsg struct {
 	Data            string // Step-specific data (e.g., PR URL)
 	Err             error
 	ExistingPRFound bool // True if PR already existed (vs newly created)
+	PR              PRIdentity
+	ReviewedOID     string
 }
 
 // CheckPRMergedMsg signals the result of checking if a PR was merged.
 type CheckPRMergedMsg struct {
 	OperationScope
 	WorkspaceName string
-	Merged        bool
-	Err           error
+	Result        PRPollResult
 }
 
 // UncommittedChangesCheckMsg signals the result of checking for uncommitted changes.
@@ -359,6 +375,10 @@ func (p *Plugin) loadMergeDiff(wt *Worktree) tea.Cmd {
 	ctx := p.operationCtx
 	path, name, baseBranch := wt.Path, wt.Name, resolveBaseBranch(wt)
 	return func() tea.Msg {
+		reviewedOID, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepReviewDiff, Err: fmt.Errorf("resolve reviewed HEAD: %w", err)}
+		}
 		stat, err := getDiffStatFromBaseContext(ctx, path, baseBranch)
 		if err != nil {
 			return MergeStepCompleteMsg{
@@ -375,6 +395,7 @@ func (p *Plugin) loadMergeDiff(wt *Worktree) tea.Cmd {
 			WorkspaceName:  name,
 			Step:           MergeStepReviewDiff,
 			Data:           stat,
+			ReviewedOID:    reviewedOID,
 		}
 	}
 }
@@ -394,50 +415,66 @@ func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
 	ctx := p.operationCtx
 	path, branch, name := wt.Path, wt.Branch, wt.Name
+	reviewedOID := ""
+	if p.mergeState != nil {
+		reviewedOID = p.mergeState.ReviewedOID
+	}
 	return func() tea.Msg {
-		err := doPushContext(ctx, path, branch, false, true)
+		if reviewedOID == "" {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("reviewed source OID is missing; return to review")}
+		}
+		head, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
+		if err != nil || head != reviewedOID {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("HEAD changed after review; return to review")}
+		}
+		repository, repoErr := currentGitHubRepositoryContext(ctx, path)
+		if repoErr != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: repoErr}
+		}
+		remote, err := resolveBranchRemoteContext(ctx, path, branch)
+		if err != nil {
+			remote, err = resolveRemoteForRepositoryContext(ctx, path, repository)
+		}
+		if err == nil {
+			_, err = gitOutputContext(ctx, path, "push", "-u", remote, reviewedOID+":refs/heads/"+branch)
+		}
+		if err == nil {
+			head, err = gitOutputContext(ctx, path, "rev-parse", "HEAD")
+			if err == nil && head != reviewedOID {
+				err = fmt.Errorf("HEAD changed while pushing; return to review")
+			}
+		}
+		pr := PRIdentity{Repository: repository, HeadRef: branch, HeadOID: reviewedOID}
+		if remote != "" {
+			pr.HeadRepo = repositoryFromRemoteContext(ctx, path, remote)
+			if owner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok {
+				pr.HeadOwner = owner
+			}
+		}
 		return MergeStepCompleteMsg{
 			OperationScope: scope,
 			WorkspaceName:  name,
 			Step:           MergeStepPush,
+			Data:           remote,
 			Err:            err,
+			PR:             pr,
 		}
 	}
 }
 
-// parseExistingPRURL extracts the PR URL from a "PR already exists" error message.
-// Returns the URL and true if found, empty string and false otherwise.
-func parseExistingPRURL(output string) (string, bool) {
-	// Error format: "a pull request for branch X into branch Y already exists: <URL>: exit status 1"
-	const marker = "already exists:"
-	idx := strings.Index(output, marker)
-	if idx == -1 {
-		return "", false
+func repositoryFromRemoteContext(ctx context.Context, path, remote string) string {
+	url, err := gitOutputContext(ctx, path, "remote", "get-url", remote)
+	if err != nil {
+		return ""
 	}
-
-	// Extract URL after marker
-	rest := strings.TrimSpace(output[idx+len(marker):])
-
-	// Find the URL - it starts with http and ends before ": exit" or end of string
-	if !strings.HasPrefix(rest, "http") {
-		return "", false
+	url = strings.TrimSuffix(strings.TrimSuffix(url, ".git"), "/")
+	for _, prefix := range []string{"git@github.com:", "ssh://git@github.com/", "https://github.com/"} {
+		url = strings.TrimPrefix(url, prefix)
 	}
-
-	// Find where URL ends - look for ": exit" pattern which follows the URL
-	endIdx := strings.Index(rest, ": exit")
-	if endIdx == -1 {
-		// No ": exit" suffix, URL goes to end (trim whitespace)
-		endIdx = strings.IndexAny(rest, " \t\n")
-		if endIdx == -1 {
-			endIdx = len(rest)
-		}
+	if strings.Count(url, "/") == 1 {
+		return url
 	}
-
-	url := strings.TrimSpace(rest[:endIdx])
-	if url == "" {
-		return "", false
-	}
-	return url, true
+	return ""
 }
 
 // createPR creates a pull request using gh CLI.
@@ -445,40 +482,45 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 	scope := p.lifecycleScope(wt)
 	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
-	args := []string{"pr", "create", "--title", title, "--body", body, "--base", targetBranch}
+	pr := PRIdentity{HeadRef: wt.Branch, BaseRef: targetBranch}
+	if p.mergeState != nil {
+		pr = p.mergeState.PR
+		pr.BaseRef = targetBranch
+	}
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		cmd.Dir = path
-		output, err := cmd.CombinedOutput()
-
+		repository, err := currentGitHubRepositoryContext(ctx, path)
 		if err != nil {
-			// Check if PR already exists
-			outputStr := string(output)
-			if existingURL, found := parseExistingPRURL(outputStr); found {
-				return MergeStepCompleteMsg{
-					OperationScope:  scope,
-					WorkspaceName:   name,
-					Step:            MergeStepCreatePR,
-					Data:            existingURL,
-					ExistingPRFound: true,
-				}
-			}
-			return MergeStepCompleteMsg{
-				OperationScope: scope,
-				WorkspaceName:  name,
-				Step:           MergeStepCreatePR,
-				Err:            fmt.Errorf("gh pr create: %s: %w", strings.TrimSpace(outputStr), err),
-			}
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
 		}
-
-		// Output should contain the PR URL
+		pr.Repository = repository
+		existing, err := queryExistingPRContext(ctx, path, repository, pr.HeadOwner, pr.HeadRef, targetBranch)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
+		if existing != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Data: existing.URL, PR: *existing, ExistingPRFound: true}
+		}
+		head := pr.HeadRef
+		if pr.HeadOwner != "" {
+			head = pr.HeadOwner + ":" + pr.HeadRef
+		}
+		args := []string{"pr", "create", "--repo", repository, "--title", title, "--body", body, "--base", targetBranch, "--head", head}
+		output, err := ghOutputContext(ctx, path, args...)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
 		prURL := strings.TrimSpace(string(output))
+		created, err := viewPRIdentityContext(ctx, path, prURL, repository)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
 
 		return MergeStepCompleteMsg{
 			OperationScope: scope,
 			WorkspaceName:  name,
 			Step:           MergeStepCreatePR,
 			Data:           prURL,
+			PR:             created,
 		}
 	}
 }
@@ -487,7 +529,7 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 // Runs the agent CLI in print/non-interactive mode with git context piped via stdin.
 // Falls back to a basic commit-based description if the agent doesn't support print mode
 // or if generation fails.
-func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cmd {
+func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string, useAgent bool) tea.Cmd {
 	scope := p.lifecycleScope(wt)
 	agentType := wt.ChosenAgentType
 	wtName := wt.Name
@@ -511,6 +553,10 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 		// Gather git context
 		commitLog := getCommitLogForPRContext(ctx, wtPath, targetBranch)
 		diffStat := getDiffStatForPRContext(ctx, wtPath, targetBranch)
+		if !useAgent {
+			title, body := buildFallbackPRDescription(branch, commitLog, diffStat)
+			return PRGenerationDoneMsg{OperationScope: scope, WorkspaceName: wtName, Title: title, Body: body}
+		}
 		diff := getDiffForPRContext(ctx, wtPath, targetBranch)
 
 		// Check if agent supports print mode
@@ -809,37 +855,23 @@ func (p *Plugin) checkPRMerged(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
 	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
+	identity := PRIdentity{}
+	reviewedOID, targetBranch := "", ""
+	if p.mergeState != nil {
+		identity = p.mergeState.PR
+		reviewedOID, targetBranch = p.mergeState.ReviewedOID, p.mergeState.TargetBranch
+	}
 	return func() tea.Msg {
-		// Use gh pr view to check status
-		cmd := exec.CommandContext(ctx, "gh", "pr", "view", "--json", "state,mergedAt")
-		cmd.Dir = path
-		output, err := cmd.Output()
-
-		if err != nil {
-			return CheckPRMergedMsg{
-				OperationScope: scope,
-				WorkspaceName:  name,
-				Merged:         false,
-				Err:            err,
+		result := pollPRContext(ctx, path, identity)
+		if result.Kind == PRPollMerged {
+			force, err := validateMergedPRForCleanupContext(ctx, path, reviewedOID, targetBranch, result.Identity)
+			if err != nil {
+				result.Kind, result.Err = PRPollRepository, err
+			} else {
+				result.ForceDeleteRequired = force
 			}
 		}
-
-		// Parse JSON response
-		var prStatus struct {
-			State    string `json:"state"`
-			MergedAt string `json:"mergedAt"`
-		}
-
-		merged := false
-		if err := json.Unmarshal(output, &prStatus); err == nil {
-			merged = prStatus.MergedAt != "" || prStatus.State == "MERGED"
-		}
-
-		return CheckPRMergedMsg{
-			OperationScope: scope,
-			WorkspaceName:  name,
-			Merged:         merged,
-		}
+		return CheckPRMergedMsg{OperationScope: scope, WorkspaceName: name, Result: result}
 	}
 }
 
@@ -1183,6 +1215,11 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 			BaseRemote: baseRemote, BaseBranch: targetBranch,
 			DeleteWorktree: deleteWorktree, DeleteBranch: deleteBranch,
 			DeleteRemote: deleteRemote, UpdateBase: updateBase,
+			ReviewedOID: state.ReviewedOID, ForceDeleteBranch: state.ForceDeleteLocalBranch,
+		}
+		if state.PR.Number > 0 {
+			identity := state.PR
+			plan.PRIdentity = &identity
 		}
 		results := runCleanupPlanContext(ctx, plan)
 		if results.LocalWorktreeDeleted {
@@ -1303,31 +1340,24 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 		return nil
 
 	case MergeStepPush:
-		// Mark Push as done, move to PR generation step
+		// Mark Push as done, then let the user explicitly choose whether an
+		// external agent may receive the capped diff.
 		p.mergeState.StepStatus[MergeStepPush] = "done"
 		p.mergeState.Step = MergeStepGeneratePR
 		p.mergeState.StepStatus[MergeStepGeneratePR] = "running"
-		p.mergeState.PRGenerationDots = 0
-		// Launch agent-powered PR description generation + animation tick
-		return tea.Batch(
-			p.generatePRDescription(p.mergeState.Worktree, p.mergeState.TargetBranch),
-			p.schedulePRGenerationTick(p.mergeState.Worktree.Name),
-		)
+		p.mergeState.PRGenerationActive = false
+		return nil
 
-	case MergeStepGeneratePR:
-		// PR description generated, now create the PR
-		p.mergeState.StepStatus[MergeStepGeneratePR] = "done"
+	case MergeStepEditPR:
+		p.mergeState.PRTitle = strings.TrimSpace(p.mergeState.PRTitleInput.Value())
+		p.mergeState.PRBody = p.mergeState.PRBodyInput.Value()
+		if p.mergeState.PRTitle == "" {
+			return nil
+		}
+		p.mergeState.StepStatus[MergeStepEditPR] = "done"
 		p.mergeState.Step = MergeStepCreatePR
 		p.mergeState.StepStatus[MergeStepCreatePR] = "running"
-		title := p.mergeState.PRTitle
-		if title == "" {
-			title, _ = buildFallbackPRDescription(p.mergeState.Worktree.Branch, "", "")
-		}
-		body := p.mergeState.PRBody
-		if body == "" {
-			body = "Created from worktree manager"
-		}
-		return p.createPR(p.mergeState.Worktree, title, body, p.mergeState.TargetBranch)
+		return p.createPR(p.mergeState.Worktree, p.mergeState.PRTitle, p.mergeState.PRBody, p.mergeState.TargetBranch)
 
 	case MergeStepCreatePR:
 		// Mark CreatePR as done, move to waiting for merge
@@ -1387,6 +1417,17 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 	}
 
 	return nil
+}
+
+func (p *Plugin) startPRDraft(useAgent bool) tea.Cmd {
+	if p.mergeState == nil || p.mergeState.Step != MergeStepGeneratePR || p.mergeState.PRGenerationActive {
+		return nil
+	}
+	p.mergeState.PRGenerationActive = true
+	p.mergeState.PRGenerationDots = 0
+	p.clearMergeModal()
+	cmd := p.generatePRDescription(p.mergeState.Worktree, p.mergeState.TargetBranch, useAgent)
+	return tea.Batch(cmd, p.schedulePRGenerationTick(p.mergeState.Worktree.Name))
 }
 
 // cancelMergeWorkflow cancels the merge workflow and returns to list view.

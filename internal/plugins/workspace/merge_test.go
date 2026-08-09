@@ -14,7 +14,8 @@ func TestMergeWorkflowStepString(t *testing.T) {
 	}{
 		{MergeStepReviewDiff, "Review Diff"},
 		{MergeStepPush, "Push Branch"},
-		{MergeStepGeneratePR, "Generate PR"},
+		{MergeStepGeneratePR, "Draft PR"},
+		{MergeStepEditPR, "Edit PR"},
 		{MergeStepCreatePR, "Create PR"},
 		{MergeStepWaitingMerge, "Waiting for Merge"},
 		{MergeStepPostMergeConfirmation, "Confirm Cleanup"},
@@ -256,64 +257,6 @@ func TestDeleteDoneMsgWarnings(t *testing.T) {
 	}
 }
 
-func TestParseExistingPRURL(t *testing.T) {
-	tests := []struct {
-		name      string
-		output    string
-		wantURL   string
-		wantFound bool
-	}{
-		{
-			name:      "standard error with PR URL",
-			output:    `a pull request for branch "workspace-improvements" into branch "main" already exists: https://github.com/marcus/sidecar/pull/30: exit status 1`,
-			wantURL:   "https://github.com/marcus/sidecar/pull/30",
-			wantFound: true,
-		},
-		{
-			name:      "error without exit status suffix",
-			output:    `a pull request for branch "feature" into branch "main" already exists: https://github.com/owner/repo/pull/123`,
-			wantURL:   "https://github.com/owner/repo/pull/123",
-			wantFound: true,
-		},
-		{
-			name:      "different error message",
-			output:    `GraphQL: Could not resolve to a Repository with the name 'owner/repo'.`,
-			wantURL:   "",
-			wantFound: false,
-		},
-		{
-			name:      "empty output",
-			output:    ``,
-			wantURL:   "",
-			wantFound: false,
-		},
-		{
-			name:      "already exists but no URL",
-			output:    `a pull request already exists: `,
-			wantURL:   "",
-			wantFound: false,
-		},
-		{
-			name:      "URL with trailing newline",
-			output:    "a pull request already exists: https://github.com/o/r/pull/1\n",
-			wantURL:   "https://github.com/o/r/pull/1",
-			wantFound: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotURL, gotFound := parseExistingPRURL(tt.output)
-			if gotURL != tt.wantURL {
-				t.Errorf("parseExistingPRURL() url = %q, want %q", gotURL, tt.wantURL)
-			}
-			if gotFound != tt.wantFound {
-				t.Errorf("parseExistingPRURL() found = %v, want %v", gotFound, tt.wantFound)
-			}
-		})
-	}
-}
-
 func TestParsePRGenerationOutput(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -406,27 +349,27 @@ func TestBuildFallbackPRDescription(t *testing.T) {
 		wantBodyHas []string
 	}{
 		{
-			name:      "basic branch name cleanup",
-			branch:    "feature/add-user-auth",
-			commitLog: "abc1234 Add login endpoint\ndef5678 Add logout",
-			diffStat:  " 3 files changed, 50 insertions(+)",
-			wantTitle: "feature add user auth",
+			name:        "basic branch name cleanup",
+			branch:      "feature/add-user-auth",
+			commitLog:   "abc1234 Add login endpoint\ndef5678 Add logout",
+			diffStat:    " 3 files changed, 50 insertions(+)",
+			wantTitle:   "feature add user auth",
 			wantBodyHas: []string{"Add login endpoint", "Add logout", "Files Changed"},
 		},
 		{
-			name:      "underscore and dash cleanup",
-			branch:    "fix_the-broken_thing",
-			commitLog: "",
-			diffStat:  "",
-			wantTitle: "fix the broken thing",
+			name:        "underscore and dash cleanup",
+			branch:      "fix_the-broken_thing",
+			commitLog:   "",
+			diffStat:    "",
+			wantTitle:   "fix the broken thing",
 			wantBodyHas: []string{"## Summary"},
 		},
 		{
-			name:      "empty everything",
-			branch:    "",
-			commitLog: "",
-			diffStat:  "",
-			wantTitle: "",
+			name:        "empty everything",
+			branch:      "",
+			commitLog:   "",
+			diffStat:    "",
+			wantTitle:   "",
 			wantBodyHas: []string{"## Summary"},
 		},
 	}

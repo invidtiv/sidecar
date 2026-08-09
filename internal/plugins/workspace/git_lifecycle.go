@@ -693,6 +693,9 @@ type CleanupPlan struct {
 	DeleteBranch      bool
 	DeleteRemote      bool
 	UpdateBase        bool
+	PRIdentity        *PRIdentity
+	ReviewedOID       string
+	ForceDeleteBranch bool
 }
 
 func runCleanupPlan(plan CleanupPlan) *CleanupResults {
@@ -701,6 +704,17 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 
 func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResults {
 	results := &CleanupResults{}
+	if plan.PRIdentity != nil {
+		forceRequired, err := validateMergedPRForCleanupContext(ctx, plan.WorktreePath, plan.ReviewedOID, plan.BaseBranch, *plan.PRIdentity)
+		if err != nil {
+			results.Errors = append(results.Errors, "Pull request: "+err.Error())
+			return results
+		}
+		if plan.ForceDeleteBranch && !forceRequired {
+			results.Errors = append(results.Errors, "Branch: force deletion was selected but is not required by the validated merge")
+			return results
+		}
+	}
 	// Revalidate the selected identity before deleting anything.
 	worktrees, err := readGitWorktreesContext(ctx, plan.RepoPath)
 	if err != nil {
@@ -749,7 +763,7 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 	if plan.DeleteBranch {
 		if !results.LocalWorktreeDeleted && plan.DeleteWorktree {
 			results.Errors = append(results.Errors, "Branch: skipped because worktree deletion failed")
-		} else if err := deleteBranchSafeContext(ctx, plan.RepoPath, plan.Branch); err != nil {
+		} else if err := deleteBranchAfterMergeContext(ctx, plan.RepoPath, plan.Branch, plan.ForceDeleteBranch); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Branch: %v", err))
 		} else {
 			results.LocalBranchDeleted = true
@@ -770,6 +784,18 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 		results.PullMessage = update.Message
 	}
 	return results
+}
+
+func deleteBranchAfterMergeContext(ctx context.Context, repoPath, branch string, force bool) error {
+	if isMainBranchContext(ctx, repoPath, branch) {
+		return fmt.Errorf("refusing to delete main branch %q", branch)
+	}
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	_, err := gitOutputContext(ctx, repoPath, "branch", flag, branch)
+	return err
 }
 
 func removeCleanLifecycleWorktree(repoPath, worktreePath, branch, expectedOID string) error {

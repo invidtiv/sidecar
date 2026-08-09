@@ -344,13 +344,25 @@ type FetchPRDoneMsg struct {
 
 // PRListItem represents an open pull request for the fetch modal.
 type PRListItem struct {
-	Number    int      `json:"number"`
-	Title     string   `json:"title"`
-	Branch    string   `json:"headRefName"`
-	Author    prAuthor `json:"author"`
-	URL       string   `json:"url"`
-	CreatedAt string   `json:"createdAt"`
-	IsDraft   bool     `json:"isDraft"`
+	Number     int          `json:"number"`
+	NodeID     string       `json:"id"`
+	Title      string       `json:"title"`
+	Branch     string       `json:"headRefName"`
+	HeadOID    string       `json:"headRefOid"`
+	BaseBranch string       `json:"baseRefName"`
+	HeadRepo   ghRepository `json:"headRepository"`
+	HeadOwner  ghOwner      `json:"headRepositoryOwner"`
+	Repository string       `json:"-"`
+	Author     prAuthor     `json:"author"`
+	URL        string       `json:"url"`
+	CreatedAt  string       `json:"createdAt"`
+	IsDraft    bool         `json:"isDraft"`
+}
+
+func (p PRListItem) identity() PRIdentity {
+	return PRIdentity{Number: p.Number, URL: p.URL, NodeID: p.NodeID, Repository: p.Repository,
+		HeadRef: p.Branch, HeadOwner: p.HeadOwner.Login, HeadRepo: p.HeadRepo.NameWithOwner,
+		HeadOID: p.HeadOID, BaseRef: p.BaseBranch, State: "OPEN"}
 }
 
 // prAuthor represents the author field from gh pr list --json.

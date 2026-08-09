@@ -415,6 +415,22 @@ func (p *Plugin) handleMergeModalMouse(msg tea.MouseMsg) tea.Cmd {
 			return openInBrowser(p.mergeState.PRURL)
 		}
 		return nil
+	case mergeFallbackDraftID:
+		return p.startPRDraft(false)
+	case mergeAgentDraftID:
+		return p.startPRDraft(true)
+	case mergeCreatePRID:
+		return p.advanceMergeStep()
+	case "check-pr":
+		if p.mergeState != nil {
+			return p.checkPRMerged(p.mergeState.Worktree)
+		}
+	case mergeStopWatchingID:
+		if p.mergeState != nil {
+			p.mergeState.PRWatchStopped = true
+			p.clearMergeModal()
+		}
+		return nil
 	case mergeMethodActionID, mergeTargetActionID, mergeCleanUpButtonID:
 		// Advance to next step
 		return p.advanceMergeStep()

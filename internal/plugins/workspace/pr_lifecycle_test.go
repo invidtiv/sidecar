@@ -1,0 +1,294 @@
+package workspace
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/plugin"
+)
+
+func installFakeGH(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	script := "#!/bin/sh\nset -eu\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return path
+}
+
+func TestExistingPRQueryUsesStructuredForkAndBaseIdentity(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_GH_LOG", log)
+	installFakeGH(t, `
+printf '%s\n' "$*" > "$FAKE_GH_LOG"
+printf '%s\n' '[{"number":42,"url":"https://github.com/base/repo/pull/42","id":"PR_node","headRefName":"topic","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefName":"release/2","state":"OPEN","mergedAt":"","headRepository":{"nameWithOwner":"fork/repo"},"headRepositoryOwner":{"login":"fork"},"mergeCommit":null}]'
+`)
+	id, err := queryExistingPRContext(context.Background(), t.TempDir(), "base/repo", "fork", "topic", "release/2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == nil || id.Number != 42 || id.NodeID != "PR_node" || id.HeadRepo != "fork/repo" || id.BaseRef != "release/2" {
+		t.Fatalf("identity = %+v", id)
+	}
+	args, _ := os.ReadFile(log)
+	want := []string{"--state all", "--head fork:topic", "--base release/2", "--json number,url,id"}
+	for _, s := range want {
+		if !strings.Contains(string(args), s) {
+			t.Fatalf("gh args %q missing %q", args, s)
+		}
+	}
+}
+
+func TestImportPRUsesPullRefForSameRepoAndFork(t *testing.T) {
+	for _, tc := range []struct{ name, headRepo, owner string }{
+		{"same-repo", "base/repo", "base"}, {"fork", "contributor/repo", "contributor"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, "repo")
+			bare := filepath.Join(root, "remote.git")
+			mustGit(t, root, "init", "--bare", bare)
+			mustGit(t, root, "init", "-b", "main", repo)
+			mustGit(t, repo, "config", "user.email", "test@example.com")
+			mustGit(t, repo, "config", "user.name", "Test")
+			mustWrite(t, filepath.Join(repo, "base"), "base\n")
+			mustGit(t, repo, "add", "base")
+			mustGit(t, repo, "commit", "-m", "base")
+			mustGit(t, repo, "remote", "add", "origin", "https://github.com/base/repo.git")
+			mustGit(t, repo, "config", "url."+bare+".insteadOf", "https://github.com/base/repo.git")
+			mustGit(t, repo, "push", "-u", "origin", "main")
+			mustGit(t, repo, "checkout", "-b", "topic")
+			mustWrite(t, filepath.Join(repo, "topic"), tc.name+"\n")
+			mustGit(t, repo, "add", "topic")
+			mustGit(t, repo, "commit", "-m", "topic")
+			head := mustGit(t, repo, "rev-parse", "HEAD")
+			mustGit(t, repo, "push", "origin", "HEAD:refs/pull/12/head")
+			mustGit(t, repo, "checkout", "main")
+			mustGit(t, repo, "branch", "-D", "topic")
+			config.SetTestStateDir(filepath.Join(root, "state"))
+			t.Cleanup(config.ResetTestStateDir)
+			p := New()
+			if err := p.Init(&plugin.Context{Epoch: 2, WorkDir: repo, ProjectRoot: repo}); err != nil {
+				t.Fatal(err)
+			}
+			pr := PRListItem{Number: 12, NodeID: "node12", Branch: "topic", HeadOID: head, BaseBranch: "main", Repository: "base/repo", URL: "https://github.com/base/repo/pull/12", HeadRepo: ghRepository{NameWithOwner: tc.headRepo}, HeadOwner: ghOwner{Login: tc.owner}}
+			msg := p.fetchAndCreateWorktree(pr)().(FetchPRDoneMsg)
+			if msg.Err != nil {
+				t.Fatal(msg.Err)
+			}
+			if got := mustGit(t, msg.Worktree.Path, "rev-parse", "HEAD"); got != head {
+				t.Fatalf("imported HEAD = %s, want %s", got, head)
+			}
+			if msg.Worktree.BaseBranch != "main" {
+				t.Fatalf("base = %q", msg.Worktree.BaseBranch)
+			}
+			stored := loadPRIdentityContext(context.Background(), repo, msg.Worktree.Path)
+			if stored.Number != 12 || stored.HeadRepo != tc.headRepo || stored.BaseRef != "main" {
+				t.Fatalf("stored identity = %+v", stored)
+			}
+		})
+	}
+}
+
+func TestPollPRStableIdentityAndTerminalStates(t *testing.T) {
+	tests := []struct {
+		name, body string
+		want       PRPollKind
+	}{
+		{"open", `printf '%s\n' '{"number":7,"url":"u","id":"node7","headRefName":"topic","headRefOid":"a","baseRefName":"main","state":"OPEN","mergedAt":"","headRepository":{"nameWithOwner":"o/r"},"headRepositoryOwner":{"login":"o"},"mergeCommit":null}'`, PRPollOpen},
+		{"merged", `printf '%s\n' '{"number":7,"url":"u","id":"node7","headRefName":"topic","headRefOid":"a","baseRefName":"main","state":"MERGED","mergedAt":"now","headRepository":{"nameWithOwner":"o/r"},"headRepositoryOwner":{"login":"o"},"mergeCommit":{"oid":"m"}}'`, PRPollMerged},
+		{"closed", `printf '%s\n' '{"number":7,"url":"u","id":"node7","headRefName":"topic","headRefOid":"a","baseRefName":"main","state":"CLOSED","mergedAt":"","headRepository":{"nameWithOwner":"o/r"},"headRepositoryOwner":{"login":"o"},"mergeCommit":null}'`, PRPollClosed},
+		{"auth", `echo 'authentication required' >&2; exit 1`, PRPollAuth},
+		{"network", `echo 'could not resolve host github.com' >&2; exit 1`, PRPollNetwork},
+		{"repository", `echo 'Could not resolve to a Repository' >&2; exit 1`, PRPollRepository},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installFakeGH(t, tt.body)
+			got := pollPRContext(context.Background(), t.TempDir(), PRIdentity{Number: 7, NodeID: "node7", Repository: "o/r"})
+			if got.Kind != tt.want {
+				t.Fatalf("kind = %q, want %q (%v)", got.Kind, tt.want, got.Err)
+			}
+		})
+	}
+	if nextPRPollDelay(99) != 2*time.Minute {
+		t.Fatalf("backoff is not capped: %v", nextPRPollDelay(99))
+	}
+}
+
+func TestPushForMergePinsReviewedOIDAndRejectsMovedHEAD(t *testing.T) {
+	installFakeGH(t, `printf '%s\n' '{"nameWithOwner":"base/repo"}'`)
+	r := newLifecycleRepo(t)
+	wt := &Worktree{Key: "feature", RepoKey: "repo", Name: "feature", Path: r.feature, Branch: "feature"}
+	p := New()
+	if err := p.Init(&plugin.Context{Epoch: 1, WorkDir: r.feature, ProjectRoot: r.main}); err != nil {
+		t.Fatal(err)
+	}
+	p.worktrees = []*Worktree{wt}
+	p.newLifecycleScope(wt)
+	reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
+	p.mergeState = &MergeWorkflowState{OperationScope: p.lifecycleScope(wt), Worktree: wt, ReviewedOID: reviewed}
+	msg := p.pushForMerge(wt)().(MergeStepCompleteMsg)
+	if msg.Err != nil {
+		t.Fatal(msg.Err)
+	}
+	if got := mustGit(t, r.main, "ls-remote", r.remote, "refs/heads/feature"); !strings.HasPrefix(got, reviewed) {
+		t.Fatalf("remote feature = %q, want %s", got, reviewed)
+	}
+	mustWrite(t, filepath.Join(r.feature, "moved.txt"), "moved\n")
+	mustGit(t, r.feature, "add", "moved.txt")
+	mustGit(t, r.feature, "commit", "-m", "moved")
+	msg = p.pushForMerge(wt)().(MergeStepCompleteMsg)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), "HEAD changed") {
+		t.Fatalf("moved HEAD error = %v", msg.Err)
+	}
+}
+
+func TestCreatePRUsesEditedFieldsAndStructuralExistingQuery(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "args")
+	count := filepath.Join(t.TempDir(), "count")
+	t.Setenv("FAKE_GH_LOG", log)
+	t.Setenv("FAKE_GH_COUNT", count)
+	installFakeGH(t, `
+printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+case "$*" in
+  'repo view --json nameWithOwner') echo '{"nameWithOwner":"base/repo"}' ;;
+  'pr list '*) echo '[]' ;;
+  'pr create '*) echo 'https://github.com/base/repo/pull/9' ;;
+  'pr view '*) echo '{"number":9,"url":"https://github.com/base/repo/pull/9","id":"node9","headRefName":"topic","headRefOid":"abc","baseRefName":"release","state":"OPEN","mergedAt":"","headRepository":{"nameWithOwner":"fork/repo"},"headRepositoryOwner":{"login":"fork"},"mergeCommit":null}' ;;
+esac
+`)
+	wt := &Worktree{Name: "topic", Path: t.TempDir(), Branch: "topic"}
+	p := New()
+	p.operationCtx = context.Background()
+	p.mergeState = &MergeWorkflowState{Worktree: wt, PR: PRIdentity{HeadRef: "topic", HeadOwner: "fork"}}
+	msg := p.createPR(wt, "edited title", "edited body", "release")().(MergeStepCompleteMsg)
+	if msg.Err != nil || msg.PR.Number != 9 {
+		t.Fatalf("create result = %+v", msg)
+	}
+	args, _ := os.ReadFile(log)
+	for _, want := range []string{"pr list --state all", "--head fork:topic", "--base release", "pr create --repo base/repo --title edited title --body edited body"} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("gh calls missing %q:\n%s", want, args)
+		}
+	}
+}
+
+func TestSquashMergeRequiresExplicitForceDeletion(t *testing.T) {
+	r := newLifecycleRepo(t)
+	reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
+	mustGit(t, r.main, "merge", "--squash", reviewed)
+	mustGit(t, r.main, "commit", "-m", "squash feature")
+	mergeOID := mustGit(t, r.main, "rev-parse", "HEAD")
+	mustGit(t, r.main, "push", "origin", "main")
+	identity := PRIdentity{Number: 1, State: "MERGED", HeadOID: reviewed, BaseRef: "main", MergeOID: mergeOID}
+	required, err := validateMergedPRForCleanupContext(context.Background(), r.feature, reviewed, "main", identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !required {
+		t.Fatal("squash merge did not require an explicit force deletion")
+	}
+	if err := deleteBranchAfterMergeContext(context.Background(), r.main, "feature", false); err == nil {
+		t.Fatal("ordinary -d unexpectedly deleted squash-merged branch")
+	}
+	if got := mustGit(t, r.main, "rev-parse", "refs/heads/feature"); got != reviewed {
+		t.Fatalf("branch changed after -d refusal: %s", got)
+	}
+}
+
+func TestPRDraftIsOptInEditableAndBounded(t *testing.T) {
+	wt := &Worktree{Name: "topic", Path: t.TempDir(), Branch: "topic", ChosenAgentType: AgentClaude}
+	p := New()
+	p.width, p.height = 60, 24
+	p.operationCtx = context.Background()
+	p.viewMode = ViewModeMerge
+	p.mergeState = &MergeWorkflowState{Worktree: wt, Step: MergeStepGeneratePR, StepStatus: map[MergeWorkflowStep]string{MergeStepGeneratePR: "running"}}
+	p.ensureMergeModal()
+	rendered := p.mergeModal.Render(60, 24, p.mouseHandler)
+	plain := ansi.Strip(rendered)
+	for _, want := range []string{"Commit Summary", "Use Agent", "external provider"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("draft modal missing %q:\n%s", want, plain)
+		}
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if ansi.StringWidth(line) > 60 {
+			t.Fatalf("modal line width %d > 60: %q", ansi.StringWidth(line), ansi.Strip(line))
+		}
+	}
+	if len(strings.Split(rendered, "\n")) > 24 {
+		t.Fatalf("modal height exceeds allocation: %d", len(strings.Split(rendered, "\n")))
+	}
+	cmd := p.handleMergeKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil || !p.mergeState.PRGenerationActive {
+		t.Fatal("default local draft action did not start")
+	}
+
+	p.mergeState.PRGenerationActive = false
+	p.mergeState.PRTitleInput = textinput.New()
+	p.mergeState.PRTitleInput.SetValue("generated")
+	p.mergeState.PRBodyInput = textarea.New()
+	p.mergeState.PRBodyInput.SetValue("generated body")
+	p.mergeState.Step = MergeStepEditPR
+	p.clearMergeModal()
+	if !p.ConsumesTextInput() {
+		t.Fatal("edit step does not claim text input")
+	}
+	p.mergeState.PRTitleInput.SetValue("edited title")
+	p.mergeState.PRBodyInput.SetValue("edited body")
+	createCmd := p.advanceMergeStep()
+	if createCmd == nil || p.mergeState.PRTitle != "edited title" || p.mergeState.PRBody != "edited body" || p.mergeState.Step != MergeStepCreatePR {
+		t.Fatalf("edited draft not preserved: %+v", p.mergeState)
+	}
+}
+
+func TestClosedAndUnavailablePollingStopWithoutLosingURL(t *testing.T) {
+	wt := &Worktree{Name: "topic", Path: t.TempDir(), Branch: "topic"}
+	p := New()
+	p.viewMode = ViewModeMerge
+	p.mergeState = &MergeWorkflowState{Worktree: wt, Step: MergeStepWaitingMerge, PRURL: "https://github.com/o/r/pull/7", StepStatus: map[MergeWorkflowStep]string{}}
+	p.update(CheckPRMergedMsg{WorkspaceName: "topic", Result: PRPollResult{Kind: PRPollClosed, Identity: PRIdentity{Number: 7, URL: p.mergeState.PRURL}}})
+	if !p.mergeState.PRWatchStopped || p.mergeState.PRPollKind != PRPollClosed || p.mergeState.PRURL == "" {
+		t.Fatalf("closed state lost terminal identity: %+v", p.mergeState)
+	}
+	p.mergeState.PRWatchStopped = false
+	for range 5 {
+		p.update(CheckPRMergedMsg{WorkspaceName: "topic", Result: PRPollResult{Kind: PRPollNetwork, Err: context.DeadlineExceeded}})
+	}
+	if !p.mergeState.PRWatchStopped || p.mergeState.PRURL == "" {
+		t.Fatalf("bounded network failure lost URL: %+v", p.mergeState)
+	}
+}
+
+func TestMovedHEADResultReturnsWorkflowToReview(t *testing.T) {
+	wt := &Worktree{Name: "topic", Path: t.TempDir(), Branch: "topic"}
+	p := New()
+	p.operationCtx = context.Background()
+	p.viewMode = ViewModeMerge
+	p.mergeState = &MergeWorkflowState{Worktree: wt, Step: MergeStepPush, ReviewedOID: strings.Repeat("a", 40), StepStatus: map[MergeWorkflowStep]string{}}
+	_, cmd := p.update(MergeStepCompleteMsg{WorkspaceName: "topic", Step: MergeStepPush, Err: context.Canceled /* overwritten below */})
+	_ = cmd
+	// Only the explicit identity error takes the return-to-review path.
+	p.mergeState.Step = MergeStepPush
+	_, cmd = p.update(MergeStepCompleteMsg{WorkspaceName: "topic", Step: MergeStepPush, Err: &testError{"HEAD changed after review; return to review"}})
+	if p.mergeState.Step != MergeStepReviewDiff || p.mergeState.ReviewedOID != "" || cmd == nil {
+		t.Fatalf("moved HEAD did not return to review: %+v", p.mergeState)
+	}
+}
+
+type testError struct{ text string }
+
+func (e *testError) Error() string { return e.text }

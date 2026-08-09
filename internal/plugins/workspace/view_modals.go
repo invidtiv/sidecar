@@ -596,6 +596,8 @@ func (p *Plugin) ensureMergeModal() {
 		primaryAction = mergeMethodActionID
 	case MergeStepPostMergeConfirmation:
 		primaryAction = mergeCleanUpButtonID
+	case MergeStepEditPR:
+		primaryAction = mergeCreatePRID
 	}
 
 	// Build modal based on current step
@@ -609,8 +611,13 @@ func (p *Plugin) ensureMergeModal() {
 	}
 	m := modal.New(title, opts...)
 
-	// Add progress indicator section (always shown)
-	m.AddSection(p.mergeProgressSection())
+	// Keep the active action visible on compact terminals; the full progress
+	// list would otherwise consume most of a 60x24 viewport.
+	if p.height > 0 && p.height < 30 {
+		m.AddSection(modal.Text(dimText("Step: " + p.mergeState.Step.String())))
+	} else {
+		m.AddSection(p.mergeProgressSection())
+	}
 	m.AddSection(modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		return modal.RenderedSection{Content: strings.Repeat("─", min(contentWidth, 60))}
 	}, nil))
@@ -679,15 +686,40 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text("Pushing branch to remote..."))
 
 	case MergeStepGeneratePR:
-		agentName := AgentDisplayNames[p.mergeState.Worktree.ChosenAgentType]
-		if agentName == "" {
-			agentName = "Agent"
+		if p.mergeState.PRGenerationActive {
+			dots := strings.Repeat(".", p.mergeState.PRGenerationDots)
+			m.AddSection(modal.Text("Preparing editable PR draft" + dots))
+		} else {
+			agentName := AgentDisplayNames[p.mergeState.Worktree.ChosenAgentType]
+			if agentName == "" {
+				agentName = "Selected agent"
+			}
+			m.AddSection(modal.Text("Choose how to prepare the editable title and body."))
+			m.AddSection(modal.Text(fmt.Sprintf("Remote: %s   Base: %s:%s", p.mergeState.PushRemote, p.mergeState.PR.Repository, p.mergeState.TargetBranch)))
+			head := p.mergeState.PR.HeadRef
+			if p.mergeState.PR.HeadOwner != "" {
+				head = p.mergeState.PR.HeadOwner + ":" + head
+			}
+			m.AddSection(modal.Text("Head: " + head + " at " + shortOID(p.mergeState.ReviewedOID)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text("Commit summary stays local and is deterministic."))
+			m.AddSection(modal.Text(fmt.Sprintf("%s may send a capped code diff to its configured external provider.", agentName)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Buttons(
+				modal.Btn(" Commit Summary ", mergeFallbackDraftID, modal.BtnPrimary()),
+				modal.Btn(" Use Agent ", mergeAgentDraftID),
+				modal.Btn(" Cancel ", "cancel"),
+			))
 		}
-		dots := strings.Repeat(".", p.mergeState.PRGenerationDots)
-		padding := strings.Repeat(" ", 3-p.mergeState.PRGenerationDots)
-		m.AddSection(modal.Text(fmt.Sprintf("%s is generating PR description%s%s", agentName, dots, padding)))
+
+	case MergeStepEditPR:
+		m.AddSection(modal.Text("Review and edit everything GitHub will receive."))
+		m.AddSection(modal.Text(fmt.Sprintf("%s → %s:%s", p.mergeState.PR.HeadRef, p.mergeState.PR.Repository, p.mergeState.TargetBranch)))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("Analyzing commits and code changes...")))
+		m.AddSection(modal.InputWithLabel("merge-pr-title", "Title", &p.mergeState.PRTitleInput))
+		m.AddSection(modal.TextareaWithLabel("merge-pr-body", "Body", &p.mergeState.PRBodyInput, 8))
+		m.AddSection(modal.Spacer())
+		m.AddSection(modal.Buttons(modal.Btn(" Create PR ", mergeCreatePRID, modal.BtnPrimary()), modal.Btn(" Cancel ", "cancel")))
 
 	case MergeStepCreatePR:
 		m.AddSection(modal.Text("Creating pull request..."))
@@ -695,7 +727,8 @@ func (p *Plugin) ensureMergeModal() {
 	case MergeStepWaitingMerge:
 		m.AddSection(p.mergeWaitingSection())
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("Enter: check now   o: open PR   y: copy URL   Esc: exit   ↑/↓: change option")))
+		m.AddSection(modal.Buttons(modal.Btn(" Check Now ", "check-pr"), modal.Btn(" Stop Watching ", mergeStopWatchingID)))
+		m.AddSection(modal.Text(dimText("o: open PR   y: copy URL   Esc: exit")))
 
 	case MergeStepPostMergeConfirmation:
 		m.AddSection(p.mergePostMergeHeaderSection())
@@ -707,6 +740,10 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text(dimText("  Removes " + p.mergeState.Worktree.Path)))
 		m.AddSection(modal.Checkbox(mergeConfirmBranchID, "Delete local branch", &p.mergeState.DeleteLocalBranch))
 		m.AddSection(modal.Text(dimText("  Removes '" + p.mergeState.Worktree.Branch + "' locally")))
+		if p.mergeState.ForceDeleteRequired {
+			m.AddSection(modal.Checkbox(mergeForceBranchID, "Force-delete local branch", &p.mergeState.ForceDeleteLocalBranch))
+			m.AddSection(modal.Text(dimText("  Required after squash/rebase: Git cannot prove the reviewed head is an ancestor.")))
+		}
 		m.AddSection(modal.Checkbox(mergeConfirmRemoteID, "Delete remote branch", &p.mergeState.DeleteRemoteBranch))
 		m.AddSection(modal.Text(dimText("  Removes from GitHub (often auto-deleted)")))
 		m.AddSection(modal.Spacer())
@@ -802,6 +839,7 @@ func (p *Plugin) mergeProgressSection() modal.Section {
 				MergeStepMergeMethod,
 				MergeStepPush,
 				MergeStepGeneratePR,
+				MergeStepEditPR,
 				MergeStepCreatePR,
 				MergeStepWaitingMerge,
 				MergeStepPostMergeConfirmation,
@@ -890,7 +928,7 @@ func (p *Plugin) mergeMethodHintsSection() modal.Section {
 		var sb strings.Builder
 
 		if p.mergeState.MergeMethodOption == 0 {
-			sb.WriteString(dimText("Push to origin and create a GitHub PR for review"))
+			sb.WriteString(dimText("Push the reviewed commit to the resolved remote and create a GitHub PR"))
 		} else {
 			sb.WriteString(dimText(fmt.Sprintf("Merge directly to '%s' without PR", p.mergeState.TargetBranch)))
 			sb.WriteString("\n")
@@ -915,6 +953,12 @@ func (p *Plugin) mergeWaitingSection() modal.Section {
 			sb.WriteString(lipgloss.NewStyle().Bold(true).Render("Pull Request Created"))
 		}
 		sb.WriteString("\n\n")
+		if p.mergeState.PRPollKind != "" {
+			fmt.Fprintf(&sb, "Status: %s\n", p.mergeState.PRPollKind)
+			if p.mergeState.PRWatchStopped {
+				sb.WriteString(dimText("Watching stopped; the PR URL is preserved.") + "\n")
+			}
+		}
 
 		var focusables []modal.FocusableInfo
 		urlLineY := 2 // header (line 0), blank (line 1), URL (line 2)
@@ -935,7 +979,9 @@ func (p *Plugin) mergeWaitingSection() modal.Section {
 		}
 
 		sb.WriteString("\n")
-		sb.WriteString("Checking merge status every 30 seconds...")
+		if !p.mergeState.PRWatchStopped {
+			sb.WriteString("Watching pull request by repository and number...")
+		}
 		sb.WriteString("\n\n")
 		sb.WriteString(strings.Repeat("─", min(contentWidth, 60)))
 		sb.WriteString("\n\n")

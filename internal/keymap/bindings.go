@@ -404,6 +404,16 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "workspace-fetch-pr"},
 		{Key: "enter", Command: "fetch", Context: "workspace-fetch-pr"},
 
+		// Workspace merge/PR lifecycle
+		{Key: "esc", Command: "cancel", Context: "workspace-merge"},
+		{Key: "enter", Command: "continue", Context: "workspace-merge"},
+		{Key: "d", Command: "merge-fallback-draft", Context: "workspace-merge"},
+		{Key: "a", Command: "merge-agent-draft", Context: "workspace-merge"},
+		{Key: "ctrl+s", Command: "merge-create-pr", Context: "workspace-merge"},
+		{Key: "s", Command: "merge-stop-watching", Context: "workspace-merge"},
+		{Key: "o", Command: "open-pr", Context: "workspace-merge"},
+		{Key: "y", Command: "copy-pr", Context: "workspace-merge"},
+
 		// Workspace preview context
 		{Key: "h", Command: "focus-left", Context: "workspace-preview"},
 		{Key: "left", Command: "focus-left", Context: "workspace-preview"},

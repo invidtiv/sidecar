@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
@@ -1523,6 +1525,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case MergeStepCompleteMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
 			if msg.Err != nil {
+				if msg.Step == MergeStepPush && strings.Contains(msg.Err.Error(), "HEAD changed") {
+					p.mergeState.Step = MergeStepReviewDiff
+					p.mergeState.StepStatus[MergeStepPush] = "pending"
+					p.mergeState.StepStatus[MergeStepReviewDiff] = "running"
+					p.mergeState.ReviewedOID = ""
+					p.clearMergeModal()
+					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.ShowToast("HEAD changed; review the updated diff before pushing", 4*time.Second))
+					break
+				}
 				title := fmt.Sprintf("%s Failed", msg.Step.String())
 				p.transitionToMergeError(msg.Step, title, msg.Err)
 			} else {
@@ -1531,19 +1542,38 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					// ReviewDiff: User manually advances, so mark done here
 					p.mergeState.StepStatus[msg.Step] = "done"
 					p.mergeState.DiffSummary = msg.Data
+					p.mergeState.ReviewedOID = msg.ReviewedOID
 				case MergeStepPush:
+					p.mergeState.PushRemote = msg.Data
+					p.mergeState.PR.Repository = msg.PR.Repository
+					p.mergeState.PR.HeadRef = msg.PR.HeadRef
+					p.mergeState.PR.HeadOwner = msg.PR.HeadOwner
+					p.mergeState.PR.HeadRepo = msg.PR.HeadRepo
+					p.mergeState.PR.HeadOID = msg.PR.HeadOID
 					// Push complete - advanceMergeStep handles status transition
 					cmds = append(cmds, p.advanceMergeStep())
 				case MergeStepCreatePR:
 					p.mergeState.PRURL = msg.Data
+					p.mergeState.PR = msg.PR
 					p.mergeState.ExistingPR = msg.ExistingPRFound
 					// Save PR URL to worktree for indicator in list
 					if wt := p.mergeState.Worktree; wt != nil && msg.Data != "" {
 						wt.PRURL = msg.Data
-						_ = savePRURL(p.ctx.ProjectRoot, wt.Path, msg.Data)
+						_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, msg.PR)
 					}
-					// PR created (or existing found) - advanceMergeStep handles status transition
-					cmds = append(cmds, p.advanceMergeStep())
+					if msg.PR.State == "CLOSED" {
+						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
+						p.mergeState.Step = MergeStepWaitingMerge
+						p.mergeState.PRPollKind = PRPollClosed
+						p.mergeState.PRWatchStopped = true
+						p.clearMergeModal()
+					} else if msg.PR.State == "MERGED" {
+						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
+						p.mergeState.Step = MergeStepWaitingMerge
+						cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
+					} else {
+						cmds = append(cmds, p.advanceMergeStep())
+					}
 				case MergeStepCleanup:
 					// Cleanup done, mark done and remove from worktree list
 					p.mergeState.StepStatus[msg.Step] = "done"
@@ -1558,20 +1588,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case PRGenerationDoneMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
-			// Store generated title and body, then advance to CreatePR.
-			// Even if the agent failed (msg.Err != nil), we still have a fallback
-			// title/body from commit messages, so we proceed with a toast notification.
+			// Always stop at an editable form before creating anything on GitHub.
 			p.mergeState.PRTitle = msg.Title
 			p.mergeState.PRBody = msg.Body
+			p.mergeState.PRGenerationActive = false
+			p.mergeState.StepStatus[MergeStepGeneratePR] = "done"
+			p.mergeState.Step = MergeStepEditPR
+			p.mergeState.StepStatus[MergeStepEditPR] = "running"
+			p.mergeState.PRTitleInput = textinput.New()
+			p.mergeState.PRTitleInput.SetValue(msg.Title)
+			p.mergeState.PRBodyInput = textarea.New()
+			p.mergeState.PRBodyInput.SetValue(msg.Body)
 			p.clearMergeModal()
-			advanceCmd := p.advanceMergeStep()
 			if msg.Err != nil {
 				cmds = append(cmds,
-					advanceCmd,
 					appmsg.ShowToast("Agent failed, using commit summary", 3*time.Second),
 				)
-			} else {
-				cmds = append(cmds, advanceCmd)
 			}
 		}
 
@@ -1586,21 +1618,40 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case CheckPRMergedMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
-			if msg.Err != nil {
-				// Silently ignore check errors, will retry
-				cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, 30*time.Second))
-			} else if msg.Merged {
-				// PR was merged! Move to cleanup step
+			p.mergeState.PRPollKind = msg.Result.Kind
+			if msg.Result.Identity.URL != "" {
+				p.mergeState.PR = msg.Result.Identity
+				p.mergeState.PRURL = msg.Result.Identity.URL
+			}
+			switch msg.Result.Kind {
+			case PRPollMerged:
+				p.mergeState.PRPollAttempt = 0
+				p.mergeState.ForceDeleteRequired = msg.Result.ForceDeleteRequired
+				p.mergeState.ForceDeleteLocalBranch = false
 				p.mergeState.StepStatus[MergeStepWaitingMerge] = "done"
 				cmds = append(cmds, p.advanceMergeStep())
-			} else {
-				// Not merged yet, check again later
-				cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, 30*time.Second))
+			case PRPollClosed:
+				p.mergeState.PRWatchStopped = true
+				p.clearMergeModal()
+			case PRPollOpen:
+				p.mergeState.PRPollAttempt = 0
+				if !p.mergeState.PRWatchStopped {
+					cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, nextPRPollDelay(0)))
+				}
+			default:
+				p.mergeState.PRPollAttempt++
+				if p.mergeState.PRPollAttempt >= 5 {
+					p.mergeState.PRWatchStopped = true
+				}
+				if !p.mergeState.PRWatchStopped {
+					cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, nextPRPollDelay(p.mergeState.PRPollAttempt)))
+				}
+				p.clearMergeModal()
 			}
 		}
 
 	case checkPRMergeMsg:
-		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
+		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName && !p.mergeState.PRWatchStopped {
 			cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
 		}
 

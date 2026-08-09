@@ -71,6 +71,16 @@ func (p *Plugin) Commands() []plugin.Command {
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Push", Description: "Push branch", Context: "workspace-merge", Priority: 2})
 			case MergeStepWaitingMerge:
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Check", Description: "Check merge status", Context: "workspace-merge", Priority: 2})
+				cmds = append(cmds, plugin.Command{ID: mergeStopWatchingID, Name: "Stop", Description: "Stop watching and keep PR URL", Context: "workspace-merge", Priority: 3})
+				cmds = append(cmds, plugin.Command{ID: "open-pr", Name: "Open", Description: "Open PR in browser", Context: "workspace-merge", Priority: 4})
+				cmds = append(cmds, plugin.Command{ID: "copy-pr", Name: "Copy", Description: "Copy PR URL", Context: "workspace-merge", Priority: 5})
+			case MergeStepGeneratePR:
+				cmds = append(cmds,
+					plugin.Command{ID: mergeFallbackDraftID, Name: "Draft", Description: "Use local commit summary", Context: "workspace-merge", Priority: 2},
+					plugin.Command{ID: mergeAgentDraftID, Name: "Agent", Description: "Send capped diff to configured agent provider", Context: "workspace-merge", Priority: 3},
+				)
+			case MergeStepEditPR:
+				cmds = append(cmds, plugin.Command{ID: mergeCreatePRID, Name: "Create", Description: "Create PR with edited title and body (Ctrl+S)", Context: "workspace-merge", Priority: 2})
 			case MergeStepDone:
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Done", Description: "Close modal", Context: "workspace-merge", Priority: 2})
 			}
@@ -377,6 +387,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 		ViewModeTypeSelector,
 		ViewModeFetchPR:
 		return true
+	case ViewModeMerge:
+		return p.mergeState != nil && p.mergeState.Step == MergeStepEditPR
 	default:
 		return false
 	}

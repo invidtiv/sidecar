@@ -19,8 +19,13 @@ func (p *Plugin) fetchPRList() tea.Cmd {
 	workDir := p.ctx.WorkDir
 	ctx, scope := p.newLifecycleScope(nil)
 	return func() tea.Msg {
+		repository, err := currentGitHubRepositoryContext(ctx, workDir)
+		if err != nil {
+			return FetchPRListMsg{OperationScope: scope, Err: err}
+		}
 		cmd := exec.CommandContext(ctx, "gh", "pr", "list",
-			"--json", "number,title,headRefName,url,isDraft,createdAt,author",
+			"--repo", repository,
+			"--json", "number,id,title,headRefName,headRefOid,baseRefName,headRepository,headRepositoryOwner,url,isDraft,createdAt,author",
 			"--limit", "30",
 		)
 		cmd.Dir = workDir
@@ -38,6 +43,9 @@ func (p *Plugin) fetchPRList() tea.Cmd {
 		var prs []PRListItem
 		if err := json.Unmarshal(output, &prs); err != nil {
 			return FetchPRListMsg{OperationScope: scope, Err: fmt.Errorf("parse pr list: %w", err)}
+		}
+		for i := range prs {
+			prs[i].Repository = repository
 		}
 
 		return FetchPRListMsg{OperationScope: scope, PRs: prs}
@@ -76,15 +84,21 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 			wt.RepoKey = scope.RepoKey
 			return wt
 		}
-		// Fetch the remote branch
-		fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", branch)
+		baseRemote, err := resolveRemoteForRepositoryContext(ctx, workDir, pr.Repository)
+		if err != nil {
+			return FetchPRDoneMsg{OperationScope: scope, Err: err}
+		}
+		// GitHub exposes refs/pull/<number>/head on the base repository. Fetching
+		// that immutable PR ref works for same-repository and fork pull requests.
+		refspec := fmt.Sprintf("refs/pull/%d/head:refs/heads/%s", pr.Number, branch)
+		fetchCmd := exec.CommandContext(ctx, "git", "fetch", baseRemote, refspec)
 		fetchCmd.Dir = workDir
 		if output, err := fetchCmd.CombinedOutput(); err != nil {
 			return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git fetch: %s", strings.TrimSpace(string(output)))}
 		}
 
 		// Create worktree tracking the remote branch
-		addCmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branch, wtPath, "origin/"+branch)
+		addCmd := exec.CommandContext(ctx, "git", "worktree", "add", wtPath, branch)
 		addCmd.Dir = workDir
 		if output, err := addCmd.CombinedOutput(); err != nil {
 			outStr := strings.TrimSpace(string(output))
@@ -98,8 +112,8 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 					if strings.Contains(outStr2, "already") {
 						existingPath := findWorktreePathForBranchContext(ctx, workDir, branch)
 						if existingPath != "" {
-							_ = savePRURLContext(ctx, projectRoot, existingPath, pr.URL)
-							_ = saveBaseBranchContext(ctx, projectRoot, existingPath, detectDefaultBranchContext(ctx, workDir))
+							_ = savePRIdentityContext(ctx, projectRoot, existingPath, pr.identity())
+							_ = saveBaseBranchContext(ctx, projectRoot, existingPath, pr.BaseBranch)
 						}
 						if err := ctx.Err(); err != nil {
 							return FetchPRDoneMsg{OperationScope: scope, Err: err}
@@ -110,8 +124,8 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 				}
 				// Worktree created from existing local branch
 				wt := newWorktree("")
-				_ = savePRURLContext(ctx, projectRoot, wtPath, pr.URL)
-				baseBranch := detectDefaultBranchContext(ctx, workDir)
+				_ = savePRIdentityContext(ctx, projectRoot, wtPath, pr.identity())
+				baseBranch := pr.BaseBranch
 				wt.BaseBranch = baseBranch
 				_ = saveBaseBranchContext(ctx, projectRoot, wtPath, baseBranch)
 				if err := ctx.Err(); err != nil {
@@ -124,10 +138,10 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 
 		// Write PR URL to centralized worktree data directory (non-fatal)
 		wt := newWorktree("")
-		_ = savePRURLContext(ctx, projectRoot, wtPath, pr.URL)
+		_ = savePRIdentityContext(ctx, projectRoot, wtPath, pr.identity())
 
 		// Detect base branch for diff
-		baseBranch := detectDefaultBranchContext(ctx, workDir)
+		baseBranch := pr.BaseBranch
 		wt.BaseBranch = baseBranch
 
 		// Persist base branch to centralized worktree data directory (non-fatal)

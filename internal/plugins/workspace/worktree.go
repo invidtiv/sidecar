@@ -691,6 +691,7 @@ const sidecarAgentFile = "agent"
 // for that specific worktree/branch.
 const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
+const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
 
 // saveBaseBranch persists the base branch to the centralized worktree data directory.
@@ -790,6 +791,15 @@ func savePRURL(projectRoot, worktreePath string, prURL string) error {
 }
 
 func savePRURLContext(ctx context.Context, projectRoot, worktreePath string, prURL string) error {
+	identity := loadPRIdentityContext(ctx, projectRoot, worktreePath)
+	identity.URL = prURL
+	return savePRIdentityContext(ctx, projectRoot, worktreePath, identity)
+}
+
+// savePRIdentityContext persists stable PR identity as inspectable JSON. The
+// legacy URL file is also maintained so existing Sidecar versions degrade to
+// the PR link instead of losing it.
+func savePRIdentityContext(ctx context.Context, projectRoot, worktreePath string, identity PRIdentity) error {
 	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
@@ -797,18 +807,30 @@ func savePRURLContext(ctx context.Context, projectRoot, worktreePath string, prU
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if prURL == "" {
+	if identity.URL == "" {
 		// Remove file if empty
 		prPath := filepath.Join(wtDir, sidecarPRFile)
 		_ = os.Remove(prPath)
+		_ = os.Remove(filepath.Join(wtDir, sidecarPRIdentityFile))
 		return nil
 	}
 	prPath := filepath.Join(wtDir, sidecarPRFile)
-	return os.WriteFile(prPath, []byte(prURL+"\n"), 0644)
+	if err := os.WriteFile(prPath, []byte(identity.URL+"\n"), 0644); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(identity, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode PR identity: %w", err)
+	}
+	data = append(data, '\n')
+	return os.WriteFile(filepath.Join(wtDir, sidecarPRIdentityFile), data, 0644)
 }
 
 // loadPRURL reads the PR URL from the centralized worktree data directory.
 func loadPRURL(projectRoot, worktreePath string) string {
+	if identity := loadPRIdentityContext(context.Background(), projectRoot, worktreePath); identity.URL != "" {
+		return identity.URL
+	}
 	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
 	if err != nil {
 		return ""
@@ -819,6 +841,22 @@ func loadPRURL(projectRoot, worktreePath string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(content))
+}
+
+func loadPRIdentityContext(ctx context.Context, projectRoot, worktreePath string) PRIdentity {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
+	if err != nil {
+		return PRIdentity{}
+	}
+	content, err := os.ReadFile(filepath.Join(wtDir, sidecarPRIdentityFile))
+	if err != nil {
+		return PRIdentity{}
+	}
+	var identity PRIdentity
+	if json.Unmarshal(content, &identity) != nil {
+		return PRIdentity{}
+	}
+	return identity
 }
 
 // linkTask returns a command to link a td task to a worktree.
