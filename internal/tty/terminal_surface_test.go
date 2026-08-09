@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
@@ -36,6 +37,36 @@ func (f *fakeTerminalControlSubscription) Resize(w, h int) {
 	f.resizes = append(f.resizes, [2]int{w, h})
 }
 func (f *fakeTerminalControlSubscription) Close() { f.closed++ }
+
+type fakeTerminalInputCall struct {
+	kind   string
+	target string
+	keys   []KeySpec
+	text   string
+}
+
+type fakeTerminalInputSender struct{ calls []fakeTerminalInputCall }
+
+func (f *fakeTerminalInputSender) record(call fakeTerminalInputCall) tea.Cmd {
+	f.calls = append(f.calls, call)
+	return nil
+}
+
+func (f *fakeTerminalInputSender) SendKeys(_ MessageScope, target string, keys ...KeySpec) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "keys", target: target, keys: keys})
+}
+func (f *fakeTerminalInputSender) SendPaste(_ MessageScope, target, text string) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "paste", target: target, text: text})
+}
+func (f *fakeTerminalInputSender) SendEscapePaste(_ MessageScope, target, text string) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "escape-paste", target: target, text: text})
+}
+func (f *fakeTerminalInputSender) PasteClipboard(_ MessageScope, target string) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "clipboard", target: target})
+}
+func (f *fakeTerminalInputSender) SendMouse(_ MessageScope, target string, col, row int) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "mouse", target: target})
+}
 
 func newContractTerminal(source terminalControlSource) *Model {
 	m := New(nil)
@@ -177,7 +208,11 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 		t.Fatal("hidden terminal retained model authority")
 	}
 	m.SetVisible(true)
-	source.requests[0].OnModelFrame(seededFrame("editor", "%3", "before resize"))
+	if h.closed != 1 || len(source.requests) != 2 {
+		t.Fatalf("visibility cycle did not replace subscription: closed=%d requests=%d", h.closed, len(source.requests))
+	}
+	active := source.handles[1]
+	source.requests[1].OnModelFrame(seededFrame("editor", "%3", "before resize"))
 	deliverTerminalEvent(t, m)
 	if !m.modelLive {
 		t.Fatal("seed did not establish model authority before resize")
@@ -186,11 +221,98 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 	if m.modelLive {
 		t.Fatal("resize did not restore provisional capture authority")
 	}
-	if len(h.focused) != 1 || h.focused[0] || len(h.visible) != 2 || h.visible[0] || !h.visible[1] {
-		t.Fatalf("lifecycle forwarding mismatch: focused=%v visible=%v", h.focused, h.visible)
+	if len(h.focused) != 1 || h.focused[0] {
+		t.Fatalf("focus forwarding mismatch: focused=%v", h.focused)
 	}
-	if len(h.resizes) != 1 || h.resizes[0] != [2]int{100, 40} {
-		t.Fatalf("resize forwarding = %v", h.resizes)
+	if len(active.resizes) != 1 || active.resizes[0] != [2]int{100, 40} {
+		t.Fatalf("resize forwarding = %v", active.resizes)
+	}
+}
+
+func TestTerminalContractQueuedPreHideFrameIsRejectedAndShowReseeds(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%10"})
+	first := source.requests[0]
+	first.OnModelFrame(seededFrame("editor", "%10", "queued before hide"))
+	m.SetVisible(false)
+	deliverTerminalEvent(t, m)
+	if got := m.State.OutputBuf.String(); got != "" || m.modelLive {
+		t.Fatalf("hidden queued frame applied: output=%q live=%v", got, m.modelLive)
+	}
+
+	m.SetVisible(true)
+	if len(source.requests) != 2 || m.modelLive {
+		t.Fatalf("show did not restart provisional control: requests=%d live=%v", len(source.requests), m.modelLive)
+	}
+	second := source.requests[1]
+	second.OnModelFrame(seededFrame("editor", "%10", "reseeded after show"))
+	deliverTerminalEvent(t, m)
+	if got := m.State.OutputBuf.String(); got != "reseeded after show" || !m.modelLive {
+		t.Fatalf("show reseed failed: output=%q live=%v", got, m.modelLive)
+	}
+}
+
+func TestTerminalContractHiddenFallbackDoesNotStrandControl(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%11"})
+	first := source.requests[0]
+	first.OnFallback(errors.New("queued EOF"))
+	m.SetVisible(false)
+	deliverTerminalEvent(t, m)
+	if len(source.requests) != 1 || m.subscription != nil {
+		t.Fatalf("hidden fallback unexpectedly restarted control: requests=%d subscription=%v", len(source.requests), m.subscription != nil)
+	}
+
+	m.SetVisible(true)
+	if len(source.requests) != 2 || m.subscription == nil {
+		t.Fatalf("show left control stranded: requests=%d subscription=%v", len(source.requests), m.subscription != nil)
+	}
+	source.requests[1].OnModelFrame(seededFrame("editor", "%11", "recovered"))
+	deliverTerminalEvent(t, m)
+	if got := m.State.OutputBuf.String(); got != "recovered" || !m.modelLive {
+		t.Fatalf("hidden fallback recovery failed: output=%q live=%v", got, m.modelLive)
+	}
+}
+
+func TestTerminalContractAllInputTargetsDisplayedPane(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	input := &fakeTerminalInputSender{}
+	m := newContractTerminal(source)
+	m.input = input
+	m.Open(Target{Session: "multi-pane-session", Pane: "%9"})
+
+	m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModAlt})
+	m.Update(tea.PasteMsg{Content: "paste message"})
+	m.State.EscapePressed = true
+	m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m.State.EscapePressed = true
+	m.Update(tea.KeyPressMsg{Code: 'x', Text: "a long pasted value"})
+	m.State.EscapePressed = true
+	m.State.EscapeTimerPending = true
+	m.Update(EscapeTimerMsg{Scope: m.Scope()})
+	m.State.MouseReportingEnabled = true
+	m.Update(tea.MouseClickMsg{X: 2, Y: 3, Button: tea.MouseLeft})
+
+	if len(input.calls) != 7 {
+		t.Fatalf("input calls = %#v", input.calls)
+	}
+	wantKinds := []string{"keys", "clipboard", "paste", "keys", "escape-paste", "keys", "mouse"}
+	for i, call := range input.calls {
+		if call.target != "%9" {
+			t.Errorf("%s targeted %q, want displayed pane %%9", call.kind, call.target)
+		}
+		if call.kind != wantKinds[i] {
+			t.Errorf("input call %d kind = %q, want %q", i, call.kind, wantKinds[i])
+		}
+	}
+	if got := input.calls[3]; got.kind != "keys" || len(got.keys) != 2 || got.keys[0].Value != "Escape" {
+		t.Errorf("pending escape key call = %#v", got)
+	}
+	if got := input.calls[4]; got.kind != "escape-paste" {
+		t.Errorf("pending escape paste call = %#v", got)
 	}
 }
 
@@ -232,7 +354,7 @@ func TestTerminalContractMailboxPressureNeverBlocksAndForcesReseed(t *testing.T)
 		request.OnModelFrame(seededFrame("editor", "%5", "burst"))
 	}
 	msg := deliverTerminalEvent(t, m)
-	if !msg.Overflow {
+	if msg.OverflowGen == 0 {
 		t.Fatal("mailbox pressure was not surfaced to Bubble Tea")
 	}
 	if len(source.requests) != 1 || source.handles[0].closed != 1 {

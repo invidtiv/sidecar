@@ -110,6 +110,7 @@ type Model struct {
 	modelLive     bool
 	visible       bool
 	focused       bool
+	input         terminalInputSender
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -147,6 +148,7 @@ func New(config *Config) *Model {
 		control: sharedTerminalControl,
 		visible: true,
 		focused: true,
+		input:   defaultTerminalInputSender{},
 	}
 }
 
@@ -469,6 +471,12 @@ func (m *Model) GetTarget() string {
 	return m.State.TargetSession
 }
 
+// inputTarget is the single routing decision for embedded terminal input.
+// Rendering, capture, and input must all address the explicit pane when one is
+// known. Full-session attach remains a separate, deliberately session-scoped
+// capability owned by the embedding callback.
+func (m *Model) inputTarget() string { return m.GetTarget() }
+
 // handleKey processes key input in interactive mode.
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if !m.IsActive() {
@@ -557,30 +565,22 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Paste key
 	if msg.String() == m.Config.PasteKey {
 		m.State.LastKeyTime = time.Now()
-		return PasteClipboardToTmuxCmd(m.Scope(), m.State.TargetSession)
+		return m.input.PasteClipboard(m.Scope(), m.inputTarget())
 	}
 
 	// Update last key time
 	m.State.LastKeyTime = time.Now()
 
-	sessionName := m.State.TargetSession
+	target := m.inputTarget()
 
 	// Check for paste input
 	if IsPasteInput(msg) {
 		text := msg.Text
 		scope := m.Scope()
 		if pendingEscape {
-			cmds = append(cmds, func() tea.Msg {
-				if err := SendKeyToTmux(sessionName, "Escape"); err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{Scope: scope}
-				}
-				if err := SendPasteToTmux(sessionName, text); err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{Scope: scope}
-				}
-				return nil
-			})
+			cmds = append(cmds, m.input.SendEscapePaste(scope, target, text))
 		} else {
-			cmds = append(cmds, SendPasteInputCmd(scope, sessionName, text))
+			cmds = append(cmds, m.input.SendPaste(scope, target, text))
 		}
 		cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		return tea.Batch(cmds...)
@@ -590,7 +590,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	key, useLiteral := MapKeyToTmux(msg)
 	if key == "" {
 		if pendingEscape {
-			cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{"Escape", false}))
+			cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{"Escape", false}))
 			cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		}
 		return tea.Batch(cmds...)
@@ -598,12 +598,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Send keys
 	if pendingEscape {
-		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName,
+		cmds = append(cmds, m.input.SendKeys(m.Scope(), target,
 			KeySpec{"Escape", false},
 			KeySpec{key, useLiteral},
 		))
 	} else {
-		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{key, useLiteral}))
+		cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{key, useLiteral}))
 	}
 
 	cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
@@ -618,7 +618,7 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 	}
 	m.State.LastKeyTime = time.Now()
 	cmds := []tea.Cmd{
-		SendPasteInputCmd(m.Scope(), m.State.TargetSession, content),
+		m.input.SendPaste(m.Scope(), m.inputTarget(), content),
 		m.schedulePoll(KeystrokeDebounce),
 	}
 	return tea.Batch(cmds...)
@@ -649,22 +649,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	col := mouse.X + 1
 	row := mouse.Y + 1
 
-	sessionName := m.State.TargetSession
-	scope := m.Scope()
-	return func() tea.Msg {
-		if err := SendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			if IsSessionDeadError(err) {
-				return SessionDeadMsg{Scope: scope}
-			}
-			return nil
-		}
-		if err := SendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			if IsSessionDeadError(err) {
-				return SessionDeadMsg{Scope: scope}
-			}
-		}
-		return nil
-	}
+	return m.input.SendMouse(m.Scope(), m.inputTarget(), col, row)
 }
 
 // handleEscapeTimer processes the escape delay timer firing.
@@ -684,7 +669,7 @@ func (m *Model) handleEscapeTimer() tea.Cmd {
 	m.State.LastKeyTime = time.Now()
 
 	return tea.Batch(
-		SendKeysCmd(m.Scope(), m.State.TargetSession, KeySpec{"Escape", false}),
+		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{"Escape", false}),
 		m.schedulePoll(0),
 	)
 }

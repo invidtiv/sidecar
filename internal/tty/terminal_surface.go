@@ -16,8 +16,8 @@ import (
 const terminalMailboxCapacity = 32
 
 type terminalMailbox struct {
-	events chan terminalControlEvent
-	full   atomic.Bool
+	events      chan terminalControlEvent
+	overflowGen atomic.Uint64
 }
 
 type terminalControlSubscription interface {
@@ -25,6 +25,55 @@ type terminalControlSubscription interface {
 	SetFocused(bool)
 	Resize(int, int)
 	Close()
+}
+
+type terminalInputSender interface {
+	SendKeys(MessageScope, string, ...KeySpec) tea.Cmd
+	SendPaste(MessageScope, string, string) tea.Cmd
+	SendEscapePaste(MessageScope, string, string) tea.Cmd
+	PasteClipboard(MessageScope, string) tea.Cmd
+	SendMouse(MessageScope, string, int, int) tea.Cmd
+}
+
+type defaultTerminalInputSender struct{}
+
+func (defaultTerminalInputSender) SendKeys(scope MessageScope, target string, keys ...KeySpec) tea.Cmd {
+	return SendKeysCmd(scope, target, keys...)
+}
+
+func (defaultTerminalInputSender) SendPaste(scope MessageScope, target, text string) tea.Cmd {
+	return SendPasteInputCmd(scope, target, text)
+}
+
+func (defaultTerminalInputSender) SendEscapePaste(scope MessageScope, target, text string) tea.Cmd {
+	return func() tea.Msg {
+		if err := SendKeyToTmux(target, "Escape"); err != nil && IsSessionDeadError(err) {
+			return SessionDeadMsg{Scope: scope}
+		}
+		if err := SendPasteToTmux(target, text); err != nil && IsSessionDeadError(err) {
+			return SessionDeadMsg{Scope: scope}
+		}
+		return nil
+	}
+}
+
+func (defaultTerminalInputSender) PasteClipboard(scope MessageScope, target string) tea.Cmd {
+	return PasteClipboardToTmuxCmd(scope, target)
+}
+
+func (defaultTerminalInputSender) SendMouse(scope MessageScope, target string, col, row int) tea.Cmd {
+	return func() tea.Msg {
+		if err := SendSGRMouse(target, 0, col, row, false); err != nil {
+			if IsSessionDeadError(err) {
+				return SessionDeadMsg{Scope: scope}
+			}
+			return nil
+		}
+		if err := SendSGRMouse(target, 0, col, row, true); err != nil && IsSessionDeadError(err) {
+			return SessionDeadMsg{Scope: scope}
+		}
+		return nil
+	}
 }
 
 type terminalControlSource interface {
@@ -58,9 +107,9 @@ type terminalControlEvent struct {
 }
 
 type terminalControlMsg struct {
-	Scope    MessageScope
-	Event    terminalControlEvent
-	Overflow bool
+	Scope       MessageScope
+	Event       terminalControlEvent
+	OverflowGen uint64
 }
 
 type paneResolvedMsg struct {
@@ -97,7 +146,7 @@ func enqueueTerminalControl(mailbox *terminalMailbox, event terminalControlEvent
 	default:
 		// Coalescing a frame is safe only while byte continuity is known. Treat
 		// any pressure as lost authority and let Update perform a clean reseed.
-		mailbox.full.Store(true)
+		mailbox.overflowGen.Store(event.gen)
 	}
 }
 
@@ -109,7 +158,7 @@ func (m *Model) listenControl() tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case event := <-mailbox.events:
-			return terminalControlMsg{Scope: scope, Event: event, Overflow: mailbox.full.Swap(false)}
+			return terminalControlMsg{Scope: scope, Event: event, OverflowGen: mailbox.overflowGen.Swap(0)}
 		case <-done:
 			return nil
 		}
@@ -171,13 +220,16 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	if !m.owns(msg.Scope) {
 		return nil
 	}
-	if msg.Overflow {
-		m.modelLive = false
-		m.stopControl()
-		return tea.Batch(m.schedulePoll(0), m.retryControl(), m.listenControl())
+	if !m.visible {
+		return m.listenControl()
 	}
 	if msg.Event.gen != m.controlGen {
 		return m.listenControl()
+	}
+	if msg.OverflowGen == m.controlGen {
+		m.modelLive = false
+		m.stopControl()
+		return tea.Batch(m.schedulePoll(0), m.retryControl(), m.listenControl())
 	}
 
 	var cmd tea.Cmd
@@ -232,16 +284,24 @@ func (m *Model) applyOutput(output string, row, col int, visible bool, height, w
 
 // SetVisible controls transport activity without destroying the target.
 func (m *Model) SetVisible(visible bool) tea.Cmd {
-	m.visible = visible
-	if m.subscription != nil {
-		m.subscription.SetVisible(visible)
+	if m.visible == visible {
+		if visible && m.IsActive() && m.subscription == nil {
+			m.startControl()
+			return m.schedulePoll(0)
+		}
+		return nil
 	}
+	m.visible = visible
 	if !m.IsActive() || !visible {
 		if m.State != nil {
 			m.State.PollGeneration++
 		}
 		m.modelLive = false
+		m.stopControl()
 		return nil
+	}
+	if m.subscription == nil {
+		m.startControl()
 	}
 	return m.schedulePoll(0)
 }
