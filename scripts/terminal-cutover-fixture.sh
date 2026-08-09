@@ -4,27 +4,50 @@
 # proof artifacts all remain below one unique scratch directory.
 set -euo pipefail
 
-ROOT="${1:-}"
-if [ -z "$ROOT" ]; then
-    ROOT=$(mktemp -d /tmp/sidecar-terminal-cutover.XXXXXX)
-else
-    case "$ROOT" in
-        /*) ;;
-        *) echo "fixture root must be absolute" >&2; exit 1 ;;
-    esac
-    if [ -e "$ROOT" ] && [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
+RAW_ROOT="${1:-}"
+if [ -z "$RAW_ROOT" ]; then
+    RAW_ROOT=$(mktemp -d /tmp/sidecar-terminal-cutover.XXXXXX)
+fi
+
+case "$RAW_ROOT" in
+    /*) ;;
+    *) echo "fixture root must be absolute" >&2; exit 1 ;;
+esac
+case "/$RAW_ROOT/" in
+    */./*|*/../*) echo "fixture root cannot contain dot or dotdot components" >&2; exit 1 ;;
+esac
+case "$RAW_ROOT" in
+    *[!A-Za-z0-9_./-]*) echo "fixture root contains unsupported characters" >&2; exit 1 ;;
+esac
+
+PARENT=$(dirname "$RAW_ROOT")
+BASE=$(basename "$RAW_ROOT")
+[ -d "$PARENT" ] || { echo "fixture root parent must already exist" >&2; exit 1; }
+CANONICAL_PARENT=$(cd "$PARENT" && pwd -P)
+ROOT="$CANONICAL_PARENT/$BASE"
+if [ -e "$RAW_ROOT" ]; then
+    [ -d "$RAW_ROOT" ] || { echo "fixture root is not a directory" >&2; exit 1; }
+    [ "$(cd "$RAW_ROOT" && pwd -P)" = "$ROOT" ] || {
+        echo "fixture root cannot traverse a symlink" >&2
+        exit 1
+    }
+fi
+
+SYSTEM_TMP=$(cd /tmp && pwd -P)
+ENV_TMP=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+case "$ROOT" in
+    "$SYSTEM_TMP"/*|"$ENV_TMP"/*) ;;
+    *) echo "fixture root must be under /tmp or TMPDIR" >&2; exit 1 ;;
+esac
+
+if [ -e "$ROOT" ]; then
+    if [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
         echo "fixture root must not exist or must be empty: $ROOT" >&2
         exit 1
     fi
+else
     mkdir -p "$ROOT"
 fi
-
-case "$ROOT" in
-    "/"|"$HOME"|"$HOME"/*)
-        echo "fixture root must be a scratch directory outside HOME" >&2
-        exit 1
-        ;;
-esac
 
 MAIN="$ROOT/main"
 mkdir -p "$MAIN" "$ROOT/config" "$ROOT/editors"

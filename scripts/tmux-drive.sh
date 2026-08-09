@@ -36,16 +36,95 @@
 
 set -euo pipefail
 
+# Never let the caller's attached tmux client select a server implicitly. Every
+# driver operation below uses either the private outer -L name or inner -S path.
+unset TMUX
+
 SOCKET="sidecar-drive"
 SESSION="host"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_REPO="${SIDECAR_DRIVE_REPO:-$REPO_DIR}"
-OUT_DIR="${SIDECAR_DRIVE_OUT:-/tmp/sidecar-drive}"
 T=(tmux -L "$SOCKET")
 
 # One stable run root per user so start/keys/snap/stop - separate processes -
 # all agree on which private tmux server and which state tree they mean.
-RUN_DIR="${SIDECAR_DRIVE_RUN_DIR:-/tmp/sidecar-drive-$(id -u)}"
+RAW_RUN_DIR="${SIDECAR_DRIVE_RUN_DIR:-/tmp/sidecar-drive-$(id -u)}"
+
+canonicalize_run_dir() {
+    local raw="$RAW_RUN_DIR" parent base canonical_parent canonical_run
+    local tmp_root system_tmp_root allowed=0
+    case "$raw" in
+        /*) ;;
+        *)
+            echo "refusing RUN_DIR='$raw': SIDECAR_DRIVE_RUN_DIR must be absolute" >&2
+            exit 1
+            ;;
+    esac
+    case "$raw" in
+        */) echo "refusing RUN_DIR='$raw': trailing slash is not allowed" >&2; exit 1 ;;
+    esac
+    case "/$raw/" in
+        */./*|*/../*)
+            echo "refusing RUN_DIR='$raw': dot and dotdot path components are not allowed" >&2
+            exit 1
+            ;;
+    esac
+    case "$raw" in
+        *[!A-Za-z0-9_./-]*)
+            echo "refusing RUN_DIR='$raw': path contains unsupported characters" >&2
+            exit 1
+            ;;
+    esac
+
+    parent=$(dirname "$raw")
+    base=$(basename "$raw")
+    [ -d "$parent" ] || {
+        echo "refusing RUN_DIR='$raw': its immediate parent must already exist" >&2
+        exit 1
+    }
+    canonical_parent=$(cd "$parent" && pwd -P)
+    canonical_run="$canonical_parent/$base"
+    if [ -e "$raw" ]; then
+        [ -d "$raw" ] || { echo "refusing RUN_DIR='$raw': not a directory" >&2; exit 1; }
+        [ "$(cd "$raw" && pwd -P)" = "$canonical_run" ] || {
+            echo "refusing RUN_DIR='$raw': symlink traversal is not allowed" >&2
+            exit 1
+        }
+    fi
+
+    system_tmp_root=$(cd /tmp && pwd -P)
+    tmp_root=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+    case "$canonical_run" in
+        "$system_tmp_root"/*|"$tmp_root"/*) allowed=1 ;;
+    esac
+    [ "$allowed" -eq 1 ] || {
+        echo "refusing RUN_DIR='$raw': canonical path must be under /tmp or TMPDIR" >&2
+        exit 1
+    }
+    RUN_DIR="$canonical_run"
+}
+
+canonicalize_run_dir
+OUT_DIR="${SIDECAR_DRIVE_OUT:-$RUN_DIR/out}"
+case "$OUT_DIR" in
+    "$RUN_DIR"/*)
+        out_suffix=${OUT_DIR#"$RUN_DIR"/}
+        case "$out_suffix" in
+            ""|.|..|*/*)
+                echo "refusing output directory outside a direct RUN_DIR child: $OUT_DIR" >&2
+                exit 1
+                ;;
+        esac
+        if [ -e "$OUT_DIR" ] && [ "$(cd "$OUT_DIR" && pwd -P)" != "$OUT_DIR" ]; then
+            echo "refusing symlink output directory: $OUT_DIR" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "refusing output directory outside RUN_DIR: $OUT_DIR" >&2
+        exit 1
+        ;;
+esac
 export TMUX_TMPDIR="$RUN_DIR/tmux"
 export XDG_STATE_HOME="$RUN_DIR/state"
 export XDG_CACHE_HOME="$RUN_DIR/cache"
@@ -56,33 +135,18 @@ CAPTURE_DIR="$RUN_DIR/proof"
 CAPTURE_LOG="$CAPTURE_DIR/capture-hooks.log"
 CAPTURE_HELPER="$CAPTURE_DIR/capture-hook.sh"
 
-validate_run_dir() {
-    case "$RUN_DIR" in
-        /*) ;;
-        *)
-            echo "refusing RUN_DIR='$RUN_DIR': SIDECAR_DRIVE_RUN_DIR must be absolute" >&2
-            exit 1
-            ;;
-    esac
-    case "$RUN_DIR" in
-        ""|"/"|"$HOME"|"$HOME"/*)
-            echo "refusing RUN_DIR='$RUN_DIR': use a scratch directory outside HOME" >&2
-            exit 1
-            ;;
-    esac
-    case "$RUN_DIR" in
-        *[!A-Za-z0-9_./-]*)
-            echo "refusing RUN_DIR='$RUN_DIR': path contains unsupported characters" >&2
-            exit 1
-            ;;
-    esac
-    case "$INNER_SOCKET" in
-        "$RUN_DIR"/*) ;;
-        *)
-            echo "refusing inner socket outside RUN_DIR: $INNER_SOCKET" >&2
-            exit 1
-            ;;
-    esac
+validate_derived_paths() {
+    local path
+    for path in "$OUT_DIR" "$TMUX_TMPDIR" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
+        "$CONFIG" "$INNER_SOCKET" "$CAPTURE_DIR" "$CAPTURE_LOG" "$CAPTURE_HELPER"; do
+        case "$path" in
+            "$RUN_DIR"/*) ;;
+            *)
+                echo "refusing derived path outside RUN_DIR: $path" >&2
+                exit 1
+                ;;
+        esac
+    done
 }
 
 validate_launch_repo() {
@@ -218,14 +282,25 @@ host_descendants() {
 }
 
 control_clients() {
-    local descendants pid command session
+    local descendants pid command session process_env socket
     descendants=$(host_descendants) || return 1
     while IFS=$'\t' read -r pid command; do
-        # Match only the command shape Sidecar starts. The target is rechecked
-        # against the isolated inner server before the process is reported.
-        if [[ "$command" =~ (^|/)(tmux)[[:space:]]+-C[[:space:]]+attach-session[[:space:]]+-f[[:space:]]+ignore-size[[:space:]]+-t[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
+        # Match Sidecar's production shape or the test's stronger explicit-S
+        # shape. In both cases the socket identity and target are rechecked.
+        if [[ "$command" =~ (^|/)(tmux)[[:space:]]+-S[[:space:]]+([^[:space:]]+)[[:space:]]+-C[[:space:]]+attach-session[[:space:]]+-f[[:space:]]+ignore-size[[:space:]]+-t[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
+            socket="${BASH_REMATCH[3]}"
+            session="${BASH_REMATCH[4]}"
+            if [ "$socket" = "$INNER_SOCKET" ] && \
+                tmux -S "$INNER_SOCKET" has-session -t "=$session" 2>/dev/null; then
+                printf '%s\t%s\t%s\n' "$pid" "$session" "$command"
+            fi
+        elif [[ "$command" =~ (^|/)(tmux)[[:space:]]+-C[[:space:]]+attach-session[[:space:]]+-f[[:space:]]+ignore-size[[:space:]]+-t[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
             session="${BASH_REMATCH[3]}"
-            if tmux -S "$INNER_SOCKET" has-session -t "=$session" 2>/dev/null; then
+            # The command has no -L/-S override, so its inherited TMUX_TMPDIR
+            # uniquely determines the socket it resolved at launch.
+            process_env=$(ps eww -p "$pid" -o command= 2>/dev/null || true)
+            if [[ " $process_env " == *" TMUX_TMPDIR=$TMUX_TMPDIR "* ]] && \
+                tmux -S "$INNER_SOCKET" has-session -t "=$session" 2>/dev/null; then
                 printf '%s\t%s\t%s\n' "$pid" "$session" "$command"
             fi
         fi
@@ -295,7 +370,7 @@ paths() {
 }
 
 validate_launch_repo
-validate_run_dir
+validate_derived_paths
 
 case "${1:-}" in
     start) shift; start "$@" ;;

@@ -67,7 +67,13 @@ $RUN_DIR/tmux/tmux-<uid>/default   the private tmux server (TMUX_TMPDIR)
 $RUN_DIR/state/sidecar/...         XDG_STATE_HOME, holds shells.json
 $RUN_DIR/cache/                    XDG_CACHE_HOME
 $RUN_DIR/config/config.json        passed as -config
+$RUN_DIR/out/                      text and PNG snapshots
 ```
+
+The run root is canonicalized before any of these paths are derived. It must
+have an existing parent, contain no `.`/`..` components or symlink traversal,
+and resolve beneath `/tmp` or `$TMPDIR`. A custom `SIDECAR_DRIVE_OUT` must also
+remain beneath that canonical run root.
 
 Check it before you trust it, and confirm nothing resolves under
 `~/.local/state/sidecar` or `~/.config/sidecar`:
@@ -118,7 +124,7 @@ sleep 3                                   # let the first frame paint
 ./scripts/tmux-drive.sh type 'echo hi'    # literal text
 ./scripts/tmux-drive.sh keys Enter
 
-./scripts/tmux-drive.sh snap my-check     # -> /tmp/sidecar-drive/my-check.{txt,png}
+./scripts/tmux-drive.sh snap my-check     # -> $SIDECAR_DRIVE_RUN_DIR/out/my-check.{txt,png}
 ./scripts/tmux-drive.sh panes             # inner pane sizes and commands
 ./scripts/tmux-drive.sh stop
 ```
@@ -155,8 +161,9 @@ The fixture has committed proof files, two linked worktrees, deterministic
 `nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in
 the agent picker. It refuses a nonempty destination and any path under `$HOME`.
 
-`control-kill` rechecks ancestry, argv shape, and private-session membership
-immediately before sending `TERM`; it refuses zero or ambiguous matches. There
+`control-kill` rechecks ancestry, exact argv shape, inherited `TMUX_TMPDIR`
+identity, and private-session membership immediately before sending `TERM`; it
+refuses zero or ambiguous matches. There
 is intentionally no general process killer or inner `kill-server` command.
 The capture hook and its log live under `$SIDECAR_DRIVE_RUN_DIR/proof` and are
 installed only on the explicit inner socket. `SIDECAR_DRIVE_ARGS` is split on
@@ -254,7 +261,7 @@ full-screen program had scrolled the pane.
 
 ## Reading the output
 
-`snap` writes `$SIDECAR_DRIVE_OUT` (default `/tmp/sidecar-drive`). The `.txt`
+`snap` writes `$SIDECAR_DRIVE_OUT` (default `$RUN_DIR/out`). The `.txt`
 keeps ANSI, which is what you want for grepping styles; strip it for width
 assertions, and measure display width rather than byte length:
 
