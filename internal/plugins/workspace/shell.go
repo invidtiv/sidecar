@@ -1044,8 +1044,9 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeCmd string) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	workDir := p.ctx.WorkDir
+	name, path := wt.Name, wt.Path
 	return func() tea.Msg {
-		sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+		sessionName := tmuxSessionPrefix + sanitizeName(name)
 
 		// Check if session already exists
 		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
@@ -1054,7 +1055,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			paneID := getPaneID(sessionName)
 			return AgentStartedMsg{
 				Epoch:         epoch,
-				WorkspaceName: wt.Name,
+				WorkspaceName: name,
 				SessionName:   sessionName,
 				PaneID:        paneID,
 				AgentType:     agentType,
@@ -1067,7 +1068,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			"new-session",
 			"-d",              // Detached
 			"-s", sessionName, // Session name
-			"-c", wt.Path, // Working directory
+			"-c", path, // Working directory
 		}
 
 		if err := tty.NewSession(args...); err != nil {
@@ -1100,7 +1101,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 
 		return AgentStartedMsg{
 			Epoch:         epoch,
-			WorkspaceName: wt.Name,
+			WorkspaceName: name,
 			SessionName:   sessionName,
 			PaneID:        paneID,
 			AgentType:     agentType,

@@ -237,10 +237,11 @@ type PullAfterMergeMsg struct {
 // checkUncommittedChanges checks if a worktree has uncommitted changes.
 func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		tree := gitstatus.NewFileTree(path)
-		if err := tree.Refresh(); err != nil {
+		tree, err := gitstatus.LoadFileTreeContext(ctx, path)
+		if err != nil {
 			return UncommittedChangesCheckMsg{
 				OperationScope: scope,
 				WorkspaceName:  name,
@@ -268,6 +269,7 @@ func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 // stageAllAndCommit stages all changes and commits with the given message.
 func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
 		tree := gitstatus.NewFileTree(path)
@@ -275,12 +277,12 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 			return MergeCommitDoneMsg{
 				OperationScope: scope,
 				WorkspaceName:  name,
-				Err:            fmt.Errorf("failed to initialize git tree for %s", wt.Path),
+				Err:            fmt.Errorf("failed to initialize git tree for %s", path),
 			}
 		}
 
 		// Stage all changes
-		if err := tree.StageAll(); err != nil {
+		if err := tree.StageAllContext(ctx); err != nil {
 			return MergeCommitDoneMsg{
 				OperationScope: scope,
 				WorkspaceName:  name,
@@ -289,7 +291,7 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 		}
 
 		// Execute commit
-		hash, err := gitstatus.ExecuteCommit(path, message)
+		hash, err := gitstatus.ExecuteCommitContext(ctx, path, message)
 		if err != nil {
 			return MergeCommitDoneMsg{
 				OperationScope: scope,
@@ -1124,8 +1126,9 @@ func (p *Plugin) deleteRemoteBranch(wt *Worktree) tea.Cmd {
 func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState) tea.Cmd {
 	scope := state.OperationScope
 	ctx := p.operationCtx
+	name, path, branch := wt.Name, wt.Path, wt.Branch
 	// Compute session name before entering closure (consistent with executeDelete)
-	sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+	sessionName := tmuxSessionPrefix + sanitizeName(name)
 
 	repoPath := p.ctx.ProjectRoot
 	if p.repoSnapshot != nil {
@@ -1134,12 +1137,11 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	if state.DirectOperation != nil && state.DirectOperation.TargetPath != "" {
 		repoPath = state.DirectOperation.TargetPath
 	}
-	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(wt.Path) {
+	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(path) {
 		return func() tea.Msg {
-			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: wt.Name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
+			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
 		}
 	}
-	name, path, branch := wt.Name, wt.Path, wt.Branch
 	targetBranch := state.TargetBranch
 	deleteWorktree, deleteBranch := state.DeleteLocalWorktree, state.DeleteLocalBranch
 	deleteRemote, updateBase := state.DeleteRemoteBranch, state.PullAfterMerge

@@ -253,6 +253,64 @@ func TestCleanupCommandCancelledByStop(t *testing.T) {
 	}
 }
 
+func TestMergeLifecycleGitCommandsCancelledByStopOrReinit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		start  func(*Plugin, *Worktree) tea.Cmd
+		cancel func(*testing.T, *Plugin)
+	}{
+		{
+			name: "status on Stop",
+			start: func(p *Plugin, wt *Worktree) tea.Cmd {
+				return p.startMergeWorkflow(wt)
+			},
+			cancel: func(_ *testing.T, p *Plugin) { p.Stop() },
+		},
+		{
+			name: "stage on Init",
+			start: func(p *Plugin, wt *Worktree) tea.Cmd {
+				p.newLifecycleScope(wt)
+				return p.stageAllAndCommit(wt, "test commit")
+			},
+			cancel: func(t *testing.T, p *Plugin) {
+				newDir := t.TempDir()
+				if err := p.Init(&plugin.Context{Epoch: 31, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			marker := filepath.Join(t.TempDir(), "git-started")
+			git := filepath.Join(binDir, "git")
+			if err := os.WriteFile(git, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("SIDECAR_TEST_MARKER", marker)
+
+			p := New()
+			workDir := t.TempDir()
+			if err := p.Init(&plugin.Context{Epoch: 30, WorkDir: workDir, ProjectRoot: workDir}); err != nil {
+				t.Fatal(err)
+			}
+			wt := &Worktree{Key: "worktree-key", RepoKey: "repo-key", Name: "feature", Path: workDir, Branch: "feature"}
+			p.worktrees = []*Worktree{wt}
+			cmd := tc.start(p, wt)
+			done := make(chan tea.Msg, 1)
+			go func() { done <- cmd() }()
+			waitForFile(t, marker)
+			tc.cancel(t, p)
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("merge lifecycle git subprocess survived cancellation")
+			}
+		})
+	}
+}
+
 func TestDelayedTaskAndBranchResultsCannotMutateSwitchedProject(t *testing.T) {
 	binDir := t.TempDir()
 	markerDir := t.TempDir()
