@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,20 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
+
+type stageRunner struct {
+	tmuxCalls atomic.Int64
+	gitCalls  atomic.Int64
+}
+
+func (r *stageRunner) Output(_ context.Context, name string, _ ...string) ([]byte, error) {
+	if name == "tmux" {
+		r.tmuxCalls.Add(1)
+		return nil, nil
+	}
+	r.gitCalls.Add(1)
+	return nil, errors.New("not git")
+}
 
 func TestOverviewIncrementalPartialErrorAndCompactStates(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
@@ -62,9 +77,21 @@ func TestNormalizeProjectsPreservesFirstConfiguredIdentity(t *testing.T) {
 	if err := os.Symlink(real, alias); err != nil {
 		t.Fatal(err)
 	}
-	projects := normalizeProjects([]Project{{Name: "first", Path: real}, {Name: "duplicate", Path: alias}, {Name: "missing", Path: filepath.Join(real, "missing")}})
-	if len(projects) != 2 || projects[0].Name != "first" || projects[0].Path != workspaceinventory.CanonicalPath(real) || projects[1].Name != "missing" {
-		t.Fatalf("normalized projects = %#v", projects)
+	configured := []Project{{Name: "first", Path: real, Index: 0}, {Name: "duplicate", Path: alias, Index: 1}, {Name: "missing", Path: filepath.Join(real, "missing"), Index: 2}}
+	m := New(workspaceinventory.Collector{})
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.phase, m.configured = phaseInventory, len(configured)
+	m.inventoryProjects = make(map[int]Project)
+	m.inventoryResults = make(map[int]workspaceinventory.ProjectResult)
+	for i, project := range configured {
+		project = normalizeProject(project)
+		m.inventoryProjects[i] = project
+		m.inventoryResults[i] = workspaceinventory.ProjectResult{ProjectKey: project.Key, ProjectRoot: project.Path}
+	}
+	m.refreshCollector = m.collector.ForRefresh(maxCaptures)
+	_ = m.finishPhase()
+	if len(m.projects) != 2 || m.projects[0].Name != "first" || m.projects[0].Path != workspaceinventory.CanonicalPath(real) || m.projects[1].Name != "missing" {
+		t.Fatalf("normalized projects = %#v", m.projects)
 	}
 }
 
@@ -78,7 +105,7 @@ func TestOverviewBoundsProjectFanout(t *testing.T) {
 		m.roots = append(m.roots, path)
 	}
 	m.pending = append([]Project(nil), m.projects...)
-	m.completed = make(map[string]bool)
+	m.completed = make(map[int]bool)
 	m.refreshCollector = m.collector.ForRefresh(maxCaptures)
 	msg, ok := m.dispatchProjects()().(tea.BatchMsg)
 	if !ok || len(msg) != maxProjects || m.active != maxProjects || m.maxActive != maxProjects {
@@ -91,37 +118,68 @@ func TestOverviewBoundsProjectFanout(t *testing.T) {
 	}
 }
 
+func TestOverviewDispatchesBoundedInventoryWithoutAllProjectMetadataBarrier(t *testing.T) {
+	runner := &stageRunner{}
+	m := New(workspaceinventory.Collector{Runner: runner})
+	projects := make([]Project, 30)
+	for i := range projects {
+		projects[i] = Project{Name: "project", Path: filepath.Join("/unread-projects", string(rune('a'+i)))}
+	}
+	msg, ok := m.Start(projects)().(panesMsg)
+	if !ok || runner.tmuxCalls.Load() != 1 || runner.gitCalls.Load() != 0 {
+		t.Fatalf("initial stage msg=%T tmux=%d git=%d", msg, runner.tmuxCalls.Load(), runner.gitCalls.Load())
+	}
+	cmd := m.Update(msg)
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != maxProjects || runner.gitCalls.Load() != 0 {
+		t.Fatalf("first dispatch batch=%T len=%d git=%d", batch, len(batch), runner.gitCalls.Load())
+	}
+	first := batch[0]().(projectMsg)
+	_ = m.Update(first)
+	if len(m.inventoryResults) != 1 || !m.loading {
+		t.Fatalf("first incremental inventory results=%d loading=%v", len(m.inventoryResults), m.loading)
+	}
+}
+
 func TestOverviewTmuxFailurePreservesLastGoodButEmptyInventoryDoesNot(t *testing.T) {
 	root := t.TempDir()
 	key := clean(root)
-	old := workspaceinventory.Workspace{ID: "old", ProjectKey: key, ProjectName: "repo", ProjectRoot: root, Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Freshness: agentstatus.FreshnessCurrent}}
+	old := workspaceinventory.Workspace{ID: "old", ProjectKey: key, ProjectName: "repo", ProjectRoot: root, Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneBlocked, Label: "blocked", Attention: true, Evidence: "permission prompt", Freshness: agentstatus.FreshnessCurrent}}
 	m := New(workspaceinventory.Collector{})
 	m.generation, m.loading = 4, true
+	m.projects = []Project{{Name: "repo", Path: root, Key: key}}
 	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{old}}
-	m.Update(panesMsg{Generation: 4, Projects: []Project{{Name: "repo", Path: root}}, Err: errors.New("tmux permission denied")})
+	m.roots = []string{root}
+	m.Update(panesMsg{Generation: 4, Projects: []Project{{Name: "repo", Path: root, Key: key}}, LiveOnly: true, Err: errors.New("tmux permission denied")})
 	newWorkspace := old
 	newWorkspace.ID = "new"
-	m.Update(projectMsg{Generation: 4, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
+	m.Update(projectMsg{Generation: 4, Project: Project{Index: 0}, Phase: phaseStatus, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
 	if got := m.results[key].Workspaces; len(got) != 1 || got[0].ID != "old" || got[0].Presentation.Freshness != agentstatus.FreshnessStale {
 		t.Fatalf("tmux failure replaced last good: %#v", got)
 	}
 	if view := m.View(150, 24); !strings.Contains(view, "stale") || !strings.Contains(view, "tmux unavailable") {
 		t.Fatalf("stale tmux view = %q", view)
 	}
+	position, ok := m.board.Board().PositionOf("old")
+	if !ok || m.board.Board().Lanes[position.Column].ID != kanban.LaneID(agentstatus.LanePaused) || m.results[key].Workspaces[0].Presentation.Evidence != "permission prompt" {
+		t.Fatalf("stale blocked projection position=%#v result=%#v", position, m.results[key])
+	}
 
 	m.generation, m.loading = 5, true
-	m.Update(panesMsg{Generation: 5, Projects: []Project{{Name: "repo", Path: root}}, Panes: []workspaceinventory.Pane{}})
-	m.Update(projectMsg{Generation: 5, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
+	m.Update(panesMsg{Generation: 5, Projects: []Project{{Name: "repo", Path: root, Key: key}}, Panes: []workspaceinventory.Pane{}, LiveOnly: true})
+	m.Update(projectMsg{Generation: 5, Project: Project{Index: 0}, Phase: phaseStatus, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
 	if got := m.results[key].Workspaces; len(got) != 1 || got[0].ID != "new" {
 		t.Fatalf("successful empty tmux inventory did not replace snapshot: %#v", got)
 	}
 
 	firstLoad := New(workspaceinventory.Collector{})
 	firstLoad.generation, firstLoad.loading = 1, true
-	firstLoad.Update(panesMsg{Generation: 1, Projects: []Project{{Name: "repo", Path: root, Key: key}}, Err: errors.New("tmux unavailable")})
+	firstLoad.projects = []Project{{Name: "repo", Path: root, Key: key}}
+	firstLoad.roots = []string{root}
+	firstLoad.Update(panesMsg{Generation: 1, Projects: []Project{{Name: "repo", Path: root, Key: key}}, LiveOnly: true, Err: errors.New("tmux unavailable")})
 	unavailable := newWorkspace
 	unavailable.Presentation.Freshness = agentstatus.FreshnessUnavailable
-	firstLoad.Update(projectMsg{Generation: 1, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{unavailable}}})
+	firstLoad.Update(projectMsg{Generation: 1, Project: Project{Index: 0}, Phase: phaseStatus, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{unavailable}}})
 	if view := firstLoad.View(150, 24); strings.Contains(view, "stale · refresh failed") || !strings.Contains(view, "unavailable") {
 		t.Fatalf("first-load tmux failure view = %q", view)
 	}
@@ -165,6 +223,7 @@ func TestOverviewRefreshPrunesRemovedProjectAndPreservesSelectedCardMovement(t *
 	}
 	m.generation, m.loading = 8, true
 	m.Update(panesMsg{Generation: 8, Projects: []Project{{Name: "one", Path: one}}})
+	m.Update(projectMsg{Generation: 8, Project: Project{Name: "one", Path: one, Key: oneKey, Index: 0}, Phase: phaseInventory, Result: workspaceinventory.ProjectResult{ProjectKey: oneKey, ProjectRoot: one}})
 	if _, exists := m.results[twoKey]; exists {
 		t.Fatal("removed configured project survived refresh")
 	}
@@ -196,7 +255,7 @@ func TestOverviewCancellationStopsPollAndTraceIsPrivacySafe(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("poll command did not drain after Stop")
 	}
-	if first == nil || strings.Contains(trace.String(), "secret-name") || strings.Contains(trace.String(), "secret-path") || !strings.Contains(trace.String(), "configured=1") {
+	if first == nil || strings.Contains(trace.String(), "secret-name") || strings.Contains(trace.String(), "secret-path") || !strings.Contains(trace.String(), "configured=1") || !strings.Contains(trace.String(), "poll_cancel_requested") || !strings.Contains(trace.String(), "poll_drained") {
 		t.Fatalf("privacy-safe trace = %q", trace.String())
 	}
 }
@@ -210,6 +269,23 @@ func TestOverviewAdaptivePollCadence(t *testing.T) {
 	if got := m.pollInterval(); got != livePollEvery {
 		t.Fatalf("live cadence = %s", got)
 	}
+}
+
+func TestOverviewPollReusesFailedInventoryWithoutStatOrGit(t *testing.T) {
+	runner := &stageRunner{}
+	m := New(workspaceinventory.Collector{Runner: runner})
+	root := filepath.Join(t.TempDir(), "still-missing")
+	key := workspaceinventory.CanonicalPath(root)
+	m.projects = []Project{{Name: "missing", Path: root, Key: key}}
+	m.roots = []string{root}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, ProjectName: "missing", ProjectRoot: root, Err: errors.New("configured project missing")}
+	panes := m.start(m.projects, "poll")().(panesMsg)
+	cmd := m.Update(panes)
+	result := cmd().(projectMsg)
+	if result.Result.Err == nil || runner.tmuxCalls.Load() != 1 || runner.gitCalls.Load() != 0 || m.refreshCollector.Metrics().ProjectOps != 0 {
+		t.Fatalf("failed poll result=%#v tmux=%d git=%d metrics=%#v", result.Result, runner.tmuxCalls.Load(), runner.gitCalls.Load(), m.refreshCollector.Metrics())
+	}
+	_ = m.Update(result)
 }
 
 func TestOverviewExplicitRefreshCancelsAndStartsNewGeneration(t *testing.T) {

@@ -29,7 +29,17 @@ const (
 	idlePollEvery  = 30 * time.Second
 )
 
-type Project struct{ Name, Path, Key string }
+type Project struct {
+	Name, Path, Key string
+	Index           int
+}
+
+type refreshPhase string
+
+const (
+	phaseInventory refreshPhase = "inventory"
+	phaseStatus    refreshPhase = "status"
+)
 
 type NavigateMsg struct {
 	Workspace  workspaceinventory.Workspace
@@ -43,15 +53,16 @@ type ValidationMsg struct {
 	Err        error
 }
 type panesMsg struct {
-	Generation  int
-	Projects    []Project
-	Panes       []workspaceinventory.Pane
-	ShellClaims workspaceinventory.ShellClaims
-	LiveOnly    bool
-	Err         error
+	Generation int
+	Projects   []Project
+	Panes      []workspaceinventory.Pane
+	LiveOnly   bool
+	Err        error
 }
 type projectMsg struct {
 	Generation int
+	Project    Project
+	Phase      refreshPhase
 	Result     workspaceinventory.ProjectResult
 }
 type pollMsg struct{ Generation int }
@@ -66,41 +77,46 @@ func IsAsyncMessage(msg tea.Msg) bool {
 }
 
 type Model struct {
-	collector        workspaceinventory.Collector
-	refreshCollector workspaceinventory.Collector
-	projects         []Project
-	roots            []string
-	generation       int
-	requestID        uint64
-	loading          bool
-	tmuxErr          error
-	results          map[string]workspaceinventory.ProjectResult
-	projectErrors    map[string]error
-	stale            map[string]bool
-	refreshing       map[string]bool
-	completed        map[string]bool
-	pending          []Project
-	active           int
-	currentPanes     []workspaceinventory.Pane
-	shellClaims      workspaceinventory.ShellClaims
-	liveOnly         bool
-	ctx              context.Context
-	cancel           context.CancelFunc
-	traceWriter      io.Writer
-	cycleStart       time.Time
-	configured       int
-	firstResult      bool
-	maxActive        int
-	board            kanban.Component
-	cards            map[string]workspaceinventory.Workspace
-	mouse            *mouse.Handler
-	width            int
-	height           int
+	collector         workspaceinventory.Collector
+	refreshCollector  workspaceinventory.Collector
+	projects          []Project
+	roots             []string
+	generation        int
+	requestID         uint64
+	loading           bool
+	tmuxErr           error
+	results           map[string]workspaceinventory.ProjectResult
+	projectErrors     map[string]error
+	stale             map[string]bool
+	refreshing        map[string]bool
+	completed         map[int]bool
+	pending           []Project
+	phase             refreshPhase
+	inventoryProjects map[int]Project
+	inventoryResults  map[int]workspaceinventory.ProjectResult
+	statusInputs      map[string]workspaceinventory.ProjectResult
+	active            int
+	currentPanes      []workspaceinventory.Pane
+	shellClaims       workspaceinventory.ShellClaims
+	liveOnly          bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	traceWriter       io.Writer
+	cycleStart        time.Time
+	configured        int
+	firstResult       bool
+	maxActive         int
+	pollScheduled     bool
+	board             kanban.Component
+	cards             map[string]workspaceinventory.Workspace
+	mouse             *mouse.Handler
+	width             int
+	height            int
 }
 
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), refreshing: make(map[string]bool), completed: make(map[string]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), refreshing: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -112,7 +128,12 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
+	m.collector.InvalidateObservations()
 	if m.cancel != nil {
+		if m.pollScheduled {
+			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
+			m.pollScheduled = false
+		}
 		if m.loading || m.active > 0 {
 			m.tracef("cycle generation=%d canceled active_projects=%d", m.generation, m.active)
 		}
@@ -122,7 +143,7 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	m.requestID++
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.loading, m.tmuxErr = true, nil
-	m.completed = make(map[string]bool)
+	m.completed = make(map[int]bool)
 	for key := range m.results {
 		m.refreshing[key] = true
 	}
@@ -134,28 +155,19 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	generation := m.generation
 	ctx := m.ctx
 	configured := append([]Project(nil), projects...)
-	cachedShellClaims := cloneShellClaims(m.shellClaims)
 	return func() tea.Msg {
-		normalized := configured
 		liveOnly := reason == "poll"
-		if !liveOnly {
-			normalized = normalizeProjects(configured)
-		}
-		roots := make([]string, 0, len(normalized))
-		for _, project := range normalized {
-			roots = append(roots, project.Path)
-		}
 		panes, err := m.collector.ListPanes(ctx)
-		shellClaims := cachedShellClaims
-		if !liveOnly {
-			shellClaims = workspaceinventory.AgentShellClaims(roots)
-		}
-		return panesMsg{Generation: generation, Projects: normalized, Panes: panes, ShellClaims: shellClaims, LiveOnly: liveOnly, Err: err}
+		return panesMsg{Generation: generation, Projects: configured, Panes: panes, LiveOnly: liveOnly, Err: err}
 	}
 }
 
 func (m *Model) Stop() {
 	if m.cancel != nil {
+		if m.pollScheduled {
+			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
+			m.pollScheduled = false
+		}
 		if m.loading || m.active > 0 {
 			m.tracef("cycle generation=%d canceled active_projects=%d", m.generation, m.active)
 		}
@@ -206,37 +218,25 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if msg.Generation != m.generation {
 			return nil
 		}
-		m.projects = msg.Projects
-		m.roots = m.roots[:0]
-		keep := make(map[string]bool, len(m.projects))
-		for _, project := range m.projects {
-			key := projectKey(project)
-			m.roots = append(m.roots, project.Path)
-			keep[key] = true
-			m.refreshing[key] = true
-		}
-		for key := range m.results {
-			if !keep[key] {
-				delete(m.results, key)
-				delete(m.projectErrors, key)
-				delete(m.stale, key)
-				delete(m.refreshing, key)
-			}
-		}
 		m.tmuxErr = msg.Err
-		m.pending = append(m.pending[:0], m.projects...)
-		m.completed = make(map[string]bool, len(m.projects))
-		m.active = 0
 		m.currentPanes = append(m.currentPanes[:0], msg.Panes...)
-		m.shellClaims = msg.ShellClaims
 		m.liveOnly = msg.LiveOnly
-		m.refreshCollector = m.collector.ForRefresh(maxCaptures, msg.ShellClaims)
-		m.tracef("cycle generation=%d configured=%d deduped=%d tmux_inventories=1", m.generation, m.configured, len(m.projects))
-		m.syncBoard()
+		m.completed = make(map[int]bool, len(msg.Projects))
+		m.active = 0
+		if msg.LiveOnly {
+			m.phase = phaseStatus
+			m.pending = indexedProjects(msg.Projects)
+			m.refreshCollector = m.collector.ForRefresh(maxCaptures, m.shellClaims)
+		} else {
+			m.phase = phaseInventory
+			m.pending = indexedProjects(msg.Projects)
+			m.inventoryProjects = make(map[int]Project, len(msg.Projects))
+			m.inventoryResults = make(map[int]workspaceinventory.ProjectResult, len(msg.Projects))
+			m.refreshCollector = m.collector.ForRefresh(maxCaptures)
+		}
+		m.tracef("cycle generation=%d configured=%d tmux_inventories=1 phase=%s", m.generation, m.configured, m.phase)
 		if len(m.pending) == 0 {
-			m.loading = false
-			m.tracef("cycle generation=%d complete_ms=%d project_ops=0 captures=0 max_project_concurrency=0 max_capture_concurrency=0", m.generation, time.Since(m.cycleStart).Milliseconds())
-			return m.pollCmd()
+			return m.finishPhase()
 		}
 		return m.dispatchProjects()
 	case projectMsg:
@@ -247,56 +247,29 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if m.active > 0 {
 			m.active--
 		}
-		key := msg.Result.ProjectKey
 		if !m.firstResult {
 			m.firstResult = true
 			m.tracef("cycle generation=%d first_result_ms=%d", m.generation, time.Since(m.cycleStart).Milliseconds())
 		}
-		m.completed[key] = true
-		m.refreshing[key] = false
-		if m.tmuxErr != nil {
-			if previous, ok := m.results[key]; ok && previous.Err == nil {
-				for i := range previous.Workspaces {
-					previous.Workspaces[i].Presentation.Freshness = agentstatus.FreshnessStale
-					previous.Workspaces[i].Presentation.Attention = false
-				}
-				m.results[key] = previous
-				m.projectErrors[key] = m.tmuxErr
-				m.stale[key] = true
-			} else {
-				m.results[key] = msg.Result
-				m.projectErrors[key] = m.tmuxErr
-				m.stale[key] = false
-			}
-		} else if msg.Result.Err == nil {
-			m.results[key] = msg.Result
-			delete(m.projectErrors, key)
-			delete(m.stale, key)
-		} else if previous, ok := m.results[key]; ok && previous.Err == nil {
-			for i := range previous.Workspaces {
-				previous.Workspaces[i].Presentation.Freshness = agentstatus.FreshnessStale
-				previous.Workspaces[i].Presentation.Attention = false
-			}
-			m.results[key] = previous
-			m.projectErrors[key] = msg.Result.Err
-			m.stale[key] = true
+		m.completed[msg.Project.Index] = true
+		if msg.Phase == phaseInventory {
+			m.inventoryProjects[msg.Project.Index] = msg.Project
+			m.inventoryResults[msg.Project.Index] = msg.Result
+			m.applyInventoryIncrement(msg.Project, msg.Result)
 		} else {
-			m.results[key] = msg.Result
-			m.projectErrors[key] = msg.Result.Err
-			m.stale[key] = false
+			m.applyStatusResult(msg.Result)
 		}
-		m.loading = len(m.completed) < len(m.projects)
 		m.syncBoard()
-		if m.loading {
+		if len(m.pending) > 0 || m.active > 0 {
 			return m.dispatchProjects()
 		}
-		metrics := m.refreshCollector.Metrics()
-		m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
-		return m.pollCmd()
+		return m.finishPhase()
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
+			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)
 			return nil
 		}
+		m.pollScheduled = false
 		return m.start(m.projects, "poll")
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -347,16 +320,152 @@ func (m *Model) dispatchProjects() tea.Cmd {
 		roots := append([]string(nil), m.roots...)
 		inventory := append([]workspaceinventory.Pane(nil), m.currentPanes...)
 		collector := m.refreshCollector
-		previous, hasPrevious := m.results[projectKey(project)]
-		liveOnly := m.liveOnly && hasPrevious && previous.Err == nil
+		phase := m.phase
+		previous := m.results[projectKey(project)]
+		if !m.liveOnly && phase == phaseStatus {
+			previous = m.statusInputs[projectKey(project)]
+		}
 		cmds = append(cmds, func() tea.Msg {
-			if liveOnly {
-				return projectMsg{Generation: generation, Result: collector.RefreshProjectStatus(ctx, previous, roots, inventory)}
+			if phase == phaseInventory {
+				project = normalizeProject(project)
+				return projectMsg{Generation: generation, Project: project, Phase: phase, Result: collector.CollectProjectInventory(ctx, project.Name, project.Path)}
 			}
-			return projectMsg{Generation: generation, Result: collector.CollectProject(ctx, project.Name, project.Path, roots, inventory)}
+			return projectMsg{Generation: generation, Project: project, Phase: phase, Result: collector.RefreshProjectStatus(ctx, previous, roots, inventory)}
 		})
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) finishPhase() tea.Cmd {
+	if m.phase == phaseInventory {
+		seen := make(map[string]bool, len(m.inventoryResults))
+		projects := make([]Project, 0, len(m.inventoryResults))
+		claimResults := make([]workspaceinventory.ProjectResult, 0, len(m.inventoryResults))
+		m.statusInputs = make(map[string]workspaceinventory.ProjectResult, len(m.inventoryResults))
+		for index := 0; index < m.configured; index++ {
+			project, ok := m.inventoryProjects[index]
+			if !ok {
+				continue
+			}
+			result := m.inventoryResults[index]
+			if seen[result.ProjectKey] {
+				continue
+			}
+			seen[result.ProjectKey] = true
+			projects = append(projects, project)
+			m.statusInputs[result.ProjectKey] = result
+			claimResult := result
+			if result.Err != nil {
+				if previous, ok := m.results[result.ProjectKey]; ok && len(previous.Workspaces) > 0 {
+					claimResult = previous
+				}
+			}
+			claimResults = append(claimResults, claimResult)
+		}
+		m.projects = projects
+		m.roots = m.roots[:0]
+		for _, project := range projects {
+			m.roots = append(m.roots, project.Path)
+		}
+		for key := range m.results {
+			if !seen[key] {
+				delete(m.results, key)
+				delete(m.projectErrors, key)
+				delete(m.stale, key)
+				delete(m.refreshing, key)
+			}
+		}
+		m.shellClaims = workspaceinventory.BuildShellClaims(claimResults)
+		m.refreshCollector = m.refreshCollector.WithShellClaims(m.shellClaims)
+		m.phase = phaseStatus
+		m.pending = append(m.pending[:0], projects...)
+		m.completed = make(map[int]bool, len(projects))
+		m.active = 0
+		m.tracef("cycle generation=%d deduped=%d phase=status", m.generation, len(projects))
+		m.syncBoard()
+		if len(m.pending) > 0 {
+			return m.dispatchProjects()
+		}
+	}
+	m.loading = false
+	for key := range m.refreshing {
+		m.refreshing[key] = false
+	}
+	metrics := m.refreshCollector.Metrics()
+	m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
+	m.syncBoard()
+	return m.pollCmd()
+}
+
+func (m *Model) applyInventoryIncrement(project Project, result workspaceinventory.ProjectResult) {
+	key := result.ProjectKey
+	if !containsProject(m.projects, key) {
+		m.projects = append(m.projects, project)
+	}
+	m.refreshing[key] = true
+	if result.Err != nil {
+		m.applyFailure(key, result, result.Err)
+		return
+	}
+	if previous, ok := m.results[key]; !ok || previous.Err != nil {
+		m.results[key] = result
+	}
+}
+
+func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
+	key := result.ProjectKey
+	m.refreshing[key] = false
+	if m.tmuxErr != nil {
+		m.applyFailure(key, result, m.tmuxErr)
+		return
+	}
+	if result.Err != nil {
+		m.applyFailure(key, result, result.Err)
+		return
+	}
+	m.results[key] = result
+	delete(m.projectErrors, key)
+	delete(m.stale, key)
+}
+
+func (m *Model) applyFailure(key string, result workspaceinventory.ProjectResult, err error) {
+	if previous, ok := m.results[key]; ok && previous.Err == nil {
+		for i := range previous.Workspaces {
+			previous.Workspaces[i].Presentation = stalePresentation(previous.Workspaces[i].Presentation)
+		}
+		m.results[key] = previous
+		m.stale[key] = true
+	} else {
+		m.results[key] = result
+		m.stale[key] = false
+	}
+	m.projectErrors[key] = err
+}
+
+func stalePresentation(p agentstatus.Presentation) agentstatus.Presentation {
+	p.Freshness = agentstatus.FreshnessStale
+	p.Attention = false
+	p.Lane = agentstatus.LanePaused
+	p.Label = "stale"
+	p.Icon = "?"
+	return p
+}
+
+func indexedProjects(projects []Project) []Project {
+	indexed := append([]Project(nil), projects...)
+	for i := range indexed {
+		indexed[i].Index = i
+	}
+	return indexed
+}
+
+func containsProject(projects []Project, key string) bool {
+	for _, project := range projects {
+		if project.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) tracef(format string, args ...any) {
@@ -366,6 +475,7 @@ func (m *Model) tracef(format string, args ...any) {
 }
 
 func (m *Model) pollCmd() tea.Cmd {
+	m.pollScheduled = true
 	generation, ctx, delay := m.generation, m.ctx, m.pollInterval()
 	return func() tea.Msg {
 		timer := time.NewTimer(delay)
@@ -417,7 +527,11 @@ func (m *Model) View(width, height int) string {
 
 func (m *Model) summary() string {
 	if m.loading {
-		return fmt.Sprintf("Loading %d/%d", len(m.completed), len(m.projects))
+		total := m.configured
+		if m.phase == phaseStatus {
+			total = len(m.projects)
+		}
+		return fmt.Sprintf("Loading %d/%d", len(m.completed), total)
 	}
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
@@ -529,20 +643,11 @@ func (m *Model) Commands() []struct{ Key, Name string } {
 
 func clean(path string) string { return workspaceinventory.CanonicalPath(path) }
 
-func normalizeProjects(configured []Project) []Project {
-	seen := make(map[string]bool, len(configured))
-	projects := make([]Project, 0, len(configured))
-	for _, project := range configured {
-		root := workspaceinventory.CanonicalProjectPath(project.Path)
-		if seen[root] {
-			continue
-		}
-		seen[root] = true
-		project.Path = root
-		project.Key = root
-		projects = append(projects, project)
-	}
-	return projects
+func normalizeProject(project Project) Project {
+	root := workspaceinventory.CanonicalProjectPath(project.Path)
+	project.Path = root
+	project.Key = root
+	return project
 }
 
 func projectKey(project Project) string {
@@ -552,16 +657,6 @@ func projectKey(project Project) string {
 	return clean(project.Path)
 }
 
-func cloneShellClaims(claims workspaceinventory.ShellClaims) workspaceinventory.ShellClaims {
-	cloned := workspaceinventory.ShellClaims{Sessions: make(map[string]bool, len(claims.Sessions)), Owners: make(map[string]string, len(claims.Owners))}
-	for value, present := range claims.Sessions {
-		cloned.Sessions[value] = present
-	}
-	for value, owner := range claims.Owners {
-		cloned.Owners[value] = owner
-	}
-	return cloned
-}
 func choose(a, b string) string {
 	if a != "" {
 		return a

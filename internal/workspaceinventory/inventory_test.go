@@ -8,9 +8,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
@@ -322,29 +325,103 @@ func TestShellSessionCollisionRequiresExactProjectPathOwnership(t *testing.T) {
 }
 
 func TestAgentShellClaimsRefuseDuplicateDurableOwners(t *testing.T) {
+	results := []ProjectResult{
+		{ProjectKey: "/one", Workspaces: []Workspace{{Kind: KindShell, TmuxName: "shared", Provider: "codex"}}},
+		{ProjectKey: "/two", Workspaces: []Workspace{{Kind: KindShell, TmuxName: "shared", Provider: "claude", Namespace: tmuxenv.Namespace()}}},
+	}
+	claims := BuildShellClaims(results)
+	if !claims.Sessions["shared"] || claims.Owners["shared"] != "" {
+		t.Fatalf("duplicate claims = %#v", claims)
+	}
+}
+
+func TestShellMetadataRefusesBlockingFIFO(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "shells.json")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	done := make(chan []shellDefinition, 1)
+	go func() { done <- readShells(fifo) }()
+	select {
+	case shells := <-done:
+		if len(shells) != 0 {
+			t.Fatalf("FIFO metadata parsed as shells: %#v", shells)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shell metadata blocked on FIFO")
+	}
+}
+
+func TestLegacyAgentShellSessionIsReservedFromWorktreeCapture(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)
 	t.Cleanup(config.ResetTestStateDir)
-	base := t.TempDir()
-	var roots []string
-	for _, name := range []string{"one", "two"} {
-		root := filepath.Join(base, name)
-		if err := os.MkdirAll(root, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		stateDir, err := projectdir.ResolveWithBase(stateBase, root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		manifest := `{"shells":[{"tmuxName":"shared","agentType":"codex","namespace":"` + tmuxenv.Namespace() + `"}]}`
-		if err := os.WriteFile(filepath.Join(stateDir, "shells.json"), []byte(manifest), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		roots = append(roots, root)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	claims := AgentShellClaims(roots)
-	if !claims.Sessions["shared"] || claims.Owners["shared"] != "" {
-		t.Fatalf("duplicate claims = %#v", claims)
+	worktreeState, err := projectdir.WorktreeDirWithBase(stateBase, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeState, "agent"), []byte("codex"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"shells":[{"tmuxName":"legacy-agent","displayName":"Legacy","agentType":"claude"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	captures := 0
+	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "working", nil }}.WithDefaults()
+	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
+	claims := BuildShellClaims([]ProjectResult{inventory})
+	result := base.ForRefresh(4, claims).RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "legacy-agent", Path: root, Command: "codex"}})
+	if captures != 0 || !claims.Sessions["legacy-agent"] {
+		t.Fatalf("legacy session captures=%d claims=%#v", captures, claims)
+	}
+	for _, workspace := range result.Workspaces {
+		if workspace.PaneID != "" || workspace.Presentation.Freshness != agentstatus.FreshnessUnavailable {
+			t.Fatalf("legacy collision workspace = %#v", workspace)
+		}
+	}
+}
+
+func TestCanceledCaptureCannotMutateSharedTracker(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls int64
+	base := (Collector{Capture: func(string, int) (string, error) {
+		call := atomic.AddInt64(&calls, 1)
+		if call == 1 {
+			close(started)
+			<-release
+			return "› Write tests for @filename", nil
+		}
+		return "• Working (1s • esc to interrupt)", nil
+	}}).WithDefaults()
+	oldCollector := base.ForRefresh(1)
+	oldCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		workspace := Workspace{ID: "same-agent", Provider: "codex"}
+		oldCollector.observeContext(oldCtx, &workspace, []Pane{{ID: "%1", Command: "codex"}}, time.Now())
+		close(done)
+	}()
+	<-started
+	cancel()
+	base.InvalidateObservations()
+	currentCollector := base.ForRefresh(1)
+	current := Workspace{ID: "same-agent", Provider: "codex"}
+	currentCollector.observeContext(context.Background(), &current, []Pane{{ID: "%1", Command: "codex"}}, time.Now().Add(time.Second))
+	close(release)
+	<-done
+	base.trackers.mu.Lock()
+	tracker := base.trackers.values["same-agent"]
+	base.trackers.mu.Unlock()
+	if tracker.State != agentactivity.StateWorking {
+		t.Fatalf("canceled capture contaminated tracker: %#v", tracker)
 	}
 }
 

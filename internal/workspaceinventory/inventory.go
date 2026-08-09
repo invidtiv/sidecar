@@ -38,7 +38,7 @@ type Workspace struct {
 	ID, ProjectKey, ProjectName, ProjectRoot string
 	Kind                                     Kind
 	Key, Name, Path, Branch, TaskID          string
-	TmuxName, PaneID, Provider               string
+	TmuxName, PaneID, Provider, Namespace    string
 	Presentation                             agentstatus.Presentation
 	ObservedAt                               time.Time
 }
@@ -81,7 +81,7 @@ func (c Collector) ValidateWorkspace(ctx context.Context, workspace Workspace) e
 		if !ok {
 			return fmt.Errorf("worktree agent identity is no longer available")
 		}
-		agent, err := os.ReadFile(filepath.Join(stateDir, "agent"))
+		agent, err := readRegularFile(filepath.Join(stateDir, "agent"))
 		if err != nil || strings.TrimSpace(string(agent)) == "" {
 			return fmt.Errorf("worktree agent identity changed")
 		}
@@ -121,6 +121,7 @@ type Collector struct {
 	metrics          *RefreshMetrics
 	reservedSessions map[string]bool
 	shellOwners      map[string]string
+	generation       uint64
 }
 
 // RefreshMetrics contains privacy-safe operation and concurrency counters for
@@ -137,8 +138,9 @@ type MetricsSnapshot struct {
 }
 
 type trackerStore struct {
-	mu     sync.Mutex
-	values map[string]agentactivity.Tracker
+	mu         sync.Mutex
+	values     map[string]agentactivity.Tracker
+	generation atomic.Uint64
 }
 
 func (c Collector) defaults() Collector {
@@ -159,6 +161,13 @@ func (c Collector) defaults() Collector {
 
 func (c Collector) WithDefaults() Collector { return c.defaults() }
 
+// InvalidateObservations prevents any in-flight collector from applying
+// provider evidence after its owning Overview generation has been canceled.
+func (c Collector) InvalidateObservations() {
+	c = c.defaults()
+	c.trackers.generation.Add(1)
+}
+
 // ForRefresh returns a collector sharing provider history with its parent while
 // independently bounding pane captures for one refresh generation.
 func (c Collector) ForRefresh(maxCaptures int, claims ...ShellClaims) Collector {
@@ -168,10 +177,17 @@ func (c Collector) ForRefresh(maxCaptures int, claims ...ShellClaims) Collector 
 	}
 	c.captures = make(chan struct{}, maxCaptures)
 	c.metrics = &RefreshMetrics{}
+	c.generation = c.trackers.generation.Load()
 	if len(claims) > 0 {
 		c.reservedSessions = claims[0].Sessions
 		c.shellOwners = claims[0].Owners
 	}
+	return c
+}
+
+func (c Collector) WithShellClaims(claims ShellClaims) Collector {
+	c.reservedSessions = claims.Sessions
+	c.shellOwners = claims.Owners
 	return c
 }
 
@@ -210,6 +226,21 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 
 // CollectProject reads one Git inventory and already-existing Sidecar metadata.
 func (c Collector) CollectProject(ctx context.Context, name, root string, allRoots []string, panes []Pane) ProjectResult {
+	result := c.CollectProjectInventory(ctx, name, root)
+	if result.Err != nil {
+		return result
+	}
+	if c.reservedSessions == nil {
+		c = c.ForRefresh(max(1, cap(c.captures)), BuildShellClaims([]ProjectResult{result}))
+	}
+	return c.RefreshProjectStatus(ctx, result, allRoots, panes)
+}
+
+// CollectProjectInventory reads one project's lightweight Git and existing
+// Sidecar metadata without inspecting tmux or capturing panes. Callers can
+// therefore fan this stage out with the same project bound as the rest of a
+// refresh and paint each result before global shell collision resolution.
+func (c Collector) CollectProjectInventory(ctx context.Context, name, root string) ProjectResult {
 	c = c.defaults()
 	if c.metrics != nil {
 		c.metrics.projectOps.Add(1)
@@ -219,13 +250,6 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 	var shells []shellDefinition
 	if projectState, ok := lookupProject(root); ok {
 		shells = readShells(filepath.Join(projectState, "shells.json"))
-	}
-	shellSessions := make(map[string]bool, len(shells))
-	for _, shell := range shells {
-		shellSessions[shell.TmuxName] = true
-	}
-	if c.reservedSessions != nil {
-		shellSessions = c.reservedSessions
 	}
 	info, err := os.Stat(root)
 	if err != nil {
@@ -246,15 +270,15 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 		if !ok {
 			continue
 		}
-		agentBytes, err := os.ReadFile(filepath.Join(stateDir, "agent"))
+		agentBytes, err := readRegularFile(filepath.Join(stateDir, "agent"))
 		if err != nil || strings.TrimSpace(string(agentBytes)) == "" {
 			continue
 		}
 		provider := strings.TrimSpace(string(agentBytes))
-		taskBytes, _ := os.ReadFile(filepath.Join(stateDir, "task"))
+		taskBytes, _ := readRegularFile(filepath.Join(stateDir, "task"))
 		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: strings.TrimSpace(string(taskBytes)), Provider: provider, ObservedAt: now}
 		workspace.ID = workspace.ProjectKey + ":worktree:" + workspace.Key
-		c.observeContext(ctx, &workspace, panesForPath(workspace.Path, allRoots, panes, shellSessions), now)
+		workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(provider), Orphaned: true, CapturedAt: now, Now: now})
 		result.Workspaces = append(result.Workspaces, workspace)
 	}
 
@@ -263,13 +287,9 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 			if shell.AgentType == "" {
 				continue
 			}
-			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, ObservedAt: now}
+			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, ObservedAt: now}
 			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
-			matches := []Pane(nil)
-			if shell.Namespace != "" && shell.Namespace == tmuxenv.Namespace() {
-				matches = panesForOwnedSession(shell.TmuxName, result.ProjectRoot, allRoots, panes, c.shellOwners)
-			}
-			c.observeContext(ctx, &workspace, matches, now)
+			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
 			result.Workspaces = append(result.Workspaces, workspace)
 		}
 	}
@@ -285,8 +305,10 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 	now := c.Now()
 	result := previous
 	result.ObservedAt = now
-	result.Err = nil
 	result.Workspaces = append([]Workspace(nil), previous.Workspaces...)
+	if previous.Err != nil {
+		return result
+	}
 	for i := range result.Workspaces {
 		workspace := &result.Workspaces[i]
 		workspace.ObservedAt = now
@@ -295,7 +317,9 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 		case KindWorktree:
 			matches = panesForPath(workspace.Path, allRoots, panes, c.reservedSessions)
 		case KindShell:
-			matches = panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
+			if workspace.Namespace != "" && workspace.Namespace == tmuxenv.Namespace() {
+				matches = panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
+			}
 		}
 		c.observeContext(ctx, workspace, matches, now)
 	}
@@ -320,12 +344,33 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		} else if output, err := c.capturePane(ctx, pane.ID, 80); err != nil {
 			input.Err = true
 		} else {
+			select {
+			case <-ctx.Done():
+				input.Unavailable = true
+				workspace.Presentation = agentstatus.Resolve(input)
+				return
+			default:
+			}
 			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, CapturedAt: now}
 			if identified := agentactivity.Identify(ob); identified != "" && identified != "shell" {
 				workspace.Provider, ob.Agent = identified, identified
 				input.ProviderSupported = supported(identified)
 			}
 			c.trackers.mu.Lock()
+			if c.generation != c.trackers.generation.Load() {
+				c.trackers.mu.Unlock()
+				input.Unavailable = true
+				workspace.Presentation = agentstatus.Resolve(input)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				c.trackers.mu.Unlock()
+				input.Unavailable = true
+				workspace.Presentation = agentstatus.Resolve(input)
+				return
+			default:
+			}
 			tracker := c.trackers.values[workspace.ID]
 			tracker.Apply(agentactivity.Detect(ob), now)
 			c.trackers.values[workspace.ID] = tracker
@@ -391,7 +436,7 @@ type shellFile struct {
 }
 
 func readShells(path string) []shellDefinition {
-	data, err := os.ReadFile(path)
+	data, err := readRegularFile(path)
 	if err != nil {
 		return nil
 	}
@@ -400,6 +445,17 @@ func readShells(path string) []shellDefinition {
 		return nil
 	}
 	return file.Shells
+}
+
+func readRegularFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	return os.ReadFile(path)
 }
 
 func panesForOwnedSession(name, projectRoot string, roots []string, panes []Pane, owners ...map[string]string) []Pane {
@@ -497,7 +553,7 @@ func CanonicalProjectPath(path string) string {
 	if err == nil && info.IsDir() {
 		return root
 	}
-	data, err := os.ReadFile(gitEntry)
+	data, err := readRegularFile(gitEntry)
 	if err != nil {
 		return root
 	}
@@ -508,7 +564,7 @@ func CanonicalProjectPath(path string) string {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(root, gitDir)
 	}
-	commonData, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	commonData, err := readRegularFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
 		return root
 	}
@@ -530,21 +586,16 @@ type ShellClaims struct {
 	Owners   map[string]string
 }
 
-func AgentShellClaims(roots []string) ShellClaims {
+func BuildShellClaims(results []ProjectResult) ShellClaims {
 	claims := ShellClaims{Sessions: make(map[string]bool), Owners: make(map[string]string)}
-	for _, root := range roots {
-		rootKey := canonical(root)
-		projectState, ok := lookupProject(root)
-		if !ok {
-			continue
-		}
-		for _, shell := range readShells(filepath.Join(projectState, "shells.json")) {
-			if shell.AgentType != "" && shell.TmuxName != "" && shell.Namespace == tmuxenv.Namespace() {
-				claims.Sessions[shell.TmuxName] = true
-				if owner, exists := claims.Owners[shell.TmuxName]; exists && owner != rootKey {
-					claims.Owners[shell.TmuxName] = ""
+	for _, result := range results {
+		for _, workspace := range result.Workspaces {
+			if workspace.Kind == KindShell && workspace.Provider != "" && workspace.TmuxName != "" {
+				claims.Sessions[workspace.TmuxName] = true
+				if owner, exists := claims.Owners[workspace.TmuxName]; exists && owner != result.ProjectKey {
+					claims.Owners[workspace.TmuxName] = ""
 				} else if !exists {
-					claims.Owners[shell.TmuxName] = rootKey
+					claims.Owners[workspace.TmuxName] = result.ProjectKey
 				}
 			}
 		}
