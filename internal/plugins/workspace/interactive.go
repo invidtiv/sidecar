@@ -424,7 +424,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		p.pollScheduler.Invalidate(shellPollKey(sessionName))
 	} else {
 		if wt := p.selectedWorktree(); wt != nil {
-			p.pollScheduler.Invalidate(agentPollKey(wt.Name))
+			p.pollScheduler.Invalidate(agentPollKey(wt.IdentityKey()))
 		}
 	}
 
@@ -1568,7 +1568,7 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 			return p.scheduleShellPollByName(shellName, delay)
 		}
 	} else if wt := p.selectedWorktree(); wt != nil {
-		p.pollScheduler.Invalidate(agentPollKey(wt.Name))
+		p.pollScheduler.Invalidate(agentPollKey(wt.IdentityKey()))
 		return p.scheduleInteractivePoll(wt.Name, delay)
 	}
 

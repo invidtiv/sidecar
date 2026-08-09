@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -10,15 +9,21 @@ import (
 )
 
 // loadStats returns a command to load git stats for a worktree.
-func (p *Plugin) loadStats(path string) tea.Cmd {
-	epoch := p.ctx.Epoch // Capture epoch for stale detection
+func (p *Plugin) loadStats(wt *Worktree) tea.Cmd {
+	if wt == nil {
+		return nil
+	}
+	ctx, scope := p.newOperationScope(wt)
+	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		name := filepath.Base(path)
+		if err := ctx.Err(); err != nil {
+			return StatsErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		stats, err := computeStats(path)
 		if err != nil {
-			return StatsErrorMsg{WorkspaceName: name, Err: err}
+			return StatsErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
 		}
-		return StatsLoadedMsg{Epoch: epoch, WorkspaceName: name, Stats: stats}
+		return StatsLoadedMsg{OperationScope: scope, WorkspaceName: name, Stats: stats}
 	}
 }
 

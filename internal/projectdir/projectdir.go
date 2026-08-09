@@ -6,9 +6,12 @@
 package projectdir
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -18,6 +21,13 @@ import (
 // projectMeta is stored as meta.json inside each project slug directory.
 type projectMeta struct {
 	Path string `json:"path"`
+}
+
+// worktreeMeta makes the collision-safe directory name inspectable and permits
+// state to be recovered without relying on the slug allocation algorithm.
+type worktreeMeta struct {
+	Path string `json:"path"`
+	Key  string `json:"key"`
 }
 
 // Resolve returns the data directory for the given project root path.
@@ -62,13 +72,156 @@ func worktreeDirWithBase(base, projectRoot, worktreePath string) (string, error)
 		return "", err
 	}
 
-	wtSlug := sanitizeSlug(filepath.Base(worktreePath))
-	dir := filepath.Join(projectDir, "worktrees", wtSlug)
+	normalized, err := normalizePath(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("normalize worktree path: %w", err)
+	}
+	worktreesDir := filepath.Join(projectDir, "worktrees")
+	key := pathKey(normalized)
+	wtSlug := sanitizeSlug(filepath.Base(normalized)) + "-" + key[:12]
+	dir := filepath.Join(worktreesDir, wtSlug)
+
+	if meta, readErr := readWorktreeMeta(dir); readErr == nil {
+		if meta.Path != normalized || meta.Key != key {
+			return "", fmt.Errorf("worktree state identity mismatch in %s", dir)
+		}
+		return dir, nil
+	} else if _, statErr := os.Stat(dir); statErr == nil {
+		return "", fmt.Errorf("worktree state directory %s exists without valid meta.json", dir)
+	} else if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("stat worktree dir: %w", statErr)
+	}
+
+	// Older Sidecar releases used only the basename. Copy that state on first
+	// unambiguous access, keeping the source intact until the new mapping has
+	// been verified by a later read. Two registered worktrees with the same
+	// basename are deliberately refused: choosing either would silently assign
+	// task/PR/agent metadata to the wrong checkout.
+	legacyDir := filepath.Join(worktreesDir, sanitizeSlug(filepath.Base(normalized)))
+	if info, statErr := os.Stat(legacyDir); statErr == nil && info.IsDir() {
+		ambiguous, inventoryErr := legacyWorktreeAmbiguous(projectRoot, normalized)
+		if inventoryErr != nil {
+			return "", fmt.Errorf("cannot safely migrate legacy worktree state %s: %w", legacyDir, inventoryErr)
+		}
+		if ambiguous {
+			return "", fmt.Errorf("ambiguous legacy worktree state %s: multiple registered worktrees share basename %q", legacyDir, filepath.Base(normalized))
+		}
+		if err := copyDir(legacyDir, dir); err != nil {
+			return "", fmt.Errorf("migrate legacy worktree state: %w", err)
+		}
+	}
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("creating worktree dir: %w", err)
 	}
+	data, err := json.Marshal(worktreeMeta{Path: normalized, Key: key})
+	if err != nil {
+		return "", fmt.Errorf("marshaling worktree meta: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+		return "", fmt.Errorf("writing worktree meta.json: %w", err)
+	}
 	return dir, nil
+}
+
+// WorktreeKey is stable across restarts and independent of presentation names.
+func WorktreeKey(worktreePath string) (string, error) {
+	normalized, err := normalizePath(worktreePath)
+	if err != nil {
+		return "", err
+	}
+	return pathKey(normalized), nil
+}
+
+func normalizePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = filepath.Clean(resolved)
+	}
+	return abs, nil
+}
+
+func pathKey(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func readWorktreeMeta(dir string) (worktreeMeta, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		return worktreeMeta{}, err
+	}
+	var meta worktreeMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return worktreeMeta{}, err
+	}
+	if meta.Path == "" || meta.Key == "" {
+		return worktreeMeta{}, fmt.Errorf("incomplete worktree metadata")
+	}
+	return meta, nil
+}
+
+func legacyWorktreeAmbiguous(projectRoot, target string) (bool, error) {
+	cmd := execCommand("git", "-C", projectRoot, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	basename := filepath.Base(target)
+	matches := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok && filepath.Base(filepath.Clean(path)) == basename {
+			matches++
+		}
+	}
+	return matches > 1, nil
+}
+
+// execCommand is a variable so migration refusal can be tested without a live
+// repository while production still asks Git for the authoritative inventory.
+var execCommand = exec.Command
+
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, in)
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
 }
 
 // resolveWithBase is the testable core of Resolve. It uses base as the

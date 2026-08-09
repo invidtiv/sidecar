@@ -20,6 +20,12 @@ import (
 // reconciles persistent terminal subscriptions after every state transition.
 func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
+	if scoped, ok := msg.(interface{ GetOperationScope() OperationScope }); ok {
+		scope := scoped.GetOperationScope()
+		if scope.OperationID != "" && !p.scopeMatches(scope) {
+			return p, nil
+		}
+	}
 
 	switch msg := msg.(type) {
 	case shellStartupResultMsg:
@@ -97,25 +103,26 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.OperationID != p.refreshOperationID || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
 		p.refreshing = false
 		p.lastRefresh = time.Now()
 		if msg.Err == nil {
-			// Preserve selection by name (not index) across refresh
-			var selectedName string
+			// Preserve selection by stable identity (not display name) across refresh.
+			var selectedKey string
 			if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-				selectedName = p.worktrees[p.selectedIdx].Name
+				selectedKey = p.worktrees[p.selectedIdx].IdentityKey()
 			}
 
+			p.repoSnapshot = msg.Snapshot
 			p.worktrees = msg.Worktrees
 			p.worktreesLoaded = true
 
 			// Restore selection by finding the worktree with the same name
-			if selectedName != "" {
+			if selectedKey != "" {
 				for i, wt := range p.worktrees {
-					if wt.Name == selectedName {
+					if wt.IdentityKey() == selectedKey {
 						p.selectedIdx = i
 						break
 					}
@@ -134,7 +141,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			// Preserve agent pointers from existing agents map
 			for _, wt := range p.worktrees {
-				if agent, ok := p.agents[wt.Name]; ok {
+				if agent, ok := p.agents[wt.IdentityKey()]; ok {
 					wt.Agent = agent
 				}
 			}
@@ -143,7 +150,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				if wt.IsMissing {
 					continue // Skip metadata for worktrees with missing directories
 				}
-				cmds = append(cmds, p.loadStats(wt.Path))
+				cmds = append(cmds, p.loadStats(wt))
 				// Load linked task ID from centralized worktree data directory
 				wt.TaskID = loadTaskLink(p.ctx.ProjectRoot, wt.Path)
 				// Load chosen agent type from centralized worktree data directory
@@ -173,22 +180,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case StatsLoadedMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
-		for _, wt := range p.worktrees {
-			if wt.Name == msg.WorkspaceName {
-				wt.Stats = msg.Stats
-				break
-			}
+		if wt := p.findWorktree(msg.WorktreeKey); wt != nil {
+			wt.Stats = msg.Stats
 		}
 
 	case DiffLoadedMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
-		if p.selectedWorktree() != nil && p.selectedWorktree().Name == msg.WorkspaceName {
+		if p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorktreeKey {
 			p.diffContent = msg.Content
 			p.diffRaw = msg.Raw
 			// Parse multi-file diff for file headers and navigation
@@ -399,6 +403,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case FetchPRListMsg:
+		if !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
 		p.fetchPRLoading = false
 		if msg.Err != nil {
 			p.fetchPRError = msg.Err.Error()
@@ -409,6 +416,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.clearFetchPRModal() // Invalidate cache: async content arrived
 
 	case FetchPRDoneMsg:
+		if !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
 		p.fetchPRLoading = false
 		if msg.Err != nil {
 			p.fetchPRError = msg.Err.Error()
@@ -501,12 +511,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
-			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
+			key := msg.WorktreeKey
+			if key == "" {
+				key = msg.WorkspaceName
+			}
+			if wt := p.findWorktree(key); wt != nil {
 				wt.Agent = agent
 				wt.Status = StatusActive
 				wt.IsOrphaned = false
+				p.agents[wt.IdentityKey()] = agent
 			}
-			p.agents[msg.WorkspaceName] = agent
 			p.managedSessions[msg.SessionName] = true
 
 			// Resize pane to match preview width immediately
@@ -514,7 +528,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			// Start polling for output
-			cmds = append(cmds, p.scheduleAgentPoll(msg.WorkspaceName, pollIntervalInitial))
+			pollKey := msg.WorktreeKey
+			if pollKey == "" {
+				pollKey = msg.WorkspaceName
+			}
+			cmds = append(cmds, p.scheduleAgentPoll(pollKey, pollIntervalInitial))
 
 			// If this is a resume operation, enter interactive mode (td-aa4136)
 			if p.pendingResumeWorktree == msg.WorkspaceName {
@@ -1226,8 +1244,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			globalPaneCache.remove(sessionName)
 			globalActiveRegistry.remove(sessionName)
 			delete(p.managedSessions, sessionName)
+			delete(p.agents, wt.IdentityKey())
 		}
-		delete(p.agents, msg.WorkspaceName)
 		return p, nil
 
 	case restartAgentMsg:
@@ -1466,7 +1484,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				p.mergeState.DirectOperation = msg.Operation
 				p.clearMergeModal()
-				cmds = append(cmds, executeDirectMerge(msg.WorkspaceName, msg.BaseBranch, msg.Operation))
+				cmds = append(cmds, executeDirectMerge(msg.OperationScope, msg.WorkspaceName, msg.BaseBranch, msg.Operation))
 			}
 		}
 
@@ -1600,11 +1618,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case reconnectedAgentsMsg:
+		var pollingCmds []tea.Cmd
+		for _, result := range msg.Agents {
+			wt := p.findWorktree(result.WorktreeKey)
+			if wt == nil || result.Agent == nil {
+				continue
+			}
+			wt.Agent = result.Agent
+			p.agents[wt.IdentityKey()] = result.Agent
+			p.managedSessions[result.Agent.TmuxSession] = true
+			pollingCmds = append(pollingCmds, p.scheduleAgentPoll(wt.IdentityKey(), 0))
+		}
 		// After reconnecting to existing sessions, detect orphaned worktrees
 		// (worktrees with .sidecar-agent file but no tmux session)
 		p.detectOrphanedWorktrees()
 		// Start periodic session validation to prevent memory leaks (td-41695b)
-		pollingCmds := append(msg.Cmds, p.scheduleSessionValidation(60*time.Second))
+		pollingCmds = append(pollingCmds, p.scheduleSessionValidation(60*time.Second))
 		return p, tea.Batch(pollingCmds...)
 
 	case validateManagedSessionsMsg:

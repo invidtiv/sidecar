@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -135,8 +137,14 @@ type Plugin struct {
 	applicationFocused bool
 
 	// Worktree state
-	worktrees []*Worktree
-	agents    map[string]*Agent
+	worktrees                  []*Worktree
+	agents                     map[string]*Agent
+	repoSnapshot               *RepoSnapshot
+	operationCtx               context.Context
+	operationCancel            context.CancelFunc
+	operationSeq               uint64
+	refreshOperationID         string
+	activeLifecycleOperationID string
 
 	// Session tracking for safe cleanup
 	managedSessions map[string]bool
@@ -461,9 +469,17 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	if p.operationCancel != nil {
+		p.operationCancel()
+	}
 	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	p.ctx = ctx
+	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
+	p.repoSnapshot = nil
+	p.refreshOperationID = ""
+	p.activeLifecycleOperationID = ""
+	p.resetLifecycleState()
 	p.controlManager = tty.NewControlManager()
 	p.controlMailbox = newWorkspaceControlMailbox()
 	p.controlConsumers = make(map[workspaceControlRole]*workspaceControlConsumer)
@@ -591,10 +607,93 @@ func (p *Plugin) Start() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	if p.operationCancel != nil {
+		p.operationCancel()
+		p.operationCancel = nil
+	}
 	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
+}
+
+func (p *Plugin) resetLifecycleState() {
+	if p.mergeState != nil && p.mergeState.PRGenerationCancel != nil {
+		p.mergeState.PRGenerationCancel()
+	}
+	p.activeLifecycleOperationID = ""
+	p.mergeState = nil
+	p.mergeModal = nil
+	p.mergeCommitState = nil
+	p.commitForMergeModal = nil
+	p.linkingWorktree = nil
+	p.deleteConfirmWorktree = nil
+	p.deleteConfirmModal = nil
+	p.fetchPRItems = nil
+	p.fetchPRLoading = false
+	p.fetchPRError = ""
+	p.fetchPRModal = nil
+	switch p.viewMode {
+	case ViewModeCreate, ViewModeTaskLink, ViewModeMerge, ViewModeCommitForMerge,
+		ViewModeConfirmDelete, ViewModeFetchPR:
+		p.viewMode = ViewModeList
+	}
+}
+
+func (p *Plugin) newOperationScope(wt *Worktree) (context.Context, OperationScope) {
+	p.operationSeq++
+	scope := OperationScope{Epoch: p.ctx.Epoch, OperationID: fmt.Sprintf("%d-%d", p.ctx.Epoch, p.operationSeq)}
+	if p.repoSnapshot != nil {
+		scope.RepoKey = p.repoSnapshot.Key
+	}
+	if wt != nil {
+		scope.WorktreeKey = wt.IdentityKey()
+		if scope.RepoKey == "" {
+			scope.RepoKey = wt.RepoKey
+		}
+	}
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx, scope
+}
+
+func (p *Plugin) newLifecycleScope(wt *Worktree) (context.Context, OperationScope) {
+	ctx, scope := p.newOperationScope(wt)
+	scope.Lifecycle = true
+	p.activeLifecycleOperationID = scope.OperationID
+	return ctx, scope
+}
+
+func (p *Plugin) lifecycleScope(wt *Worktree) OperationScope {
+	if p.mergeState != nil && p.mergeState.Worktree != nil && wt != nil &&
+		p.mergeState.Worktree.IdentityKey() == wt.IdentityKey() {
+		return p.mergeState.OperationScope
+	}
+	_, scope := p.newLifecycleScope(wt)
+	return scope
+}
+
+func (p *Plugin) scopeMatches(scope OperationScope) bool {
+	// Zero scope is accepted only for old internal/test-only messages. New
+	// lifecycle command constructors always stamp a non-empty operation ID.
+	if scope.OperationID == "" {
+		return true
+	}
+	if p.ctx == nil || scope.Epoch != p.ctx.Epoch {
+		return false
+	}
+	if scope.RepoKey != "" && p.repoSnapshot != nil && scope.RepoKey != p.repoSnapshot.Key {
+		return false
+	}
+	if scope.WorktreeKey != "" && p.findWorktree(scope.WorktreeKey) == nil {
+		return false
+	}
+	if scope.Lifecycle && scope.OperationID != p.activeLifecycleOperationID {
+		return false
+	}
+	return true
 }
 
 // saveSelectionState persists the current selection to disk.
@@ -705,7 +804,7 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 		return false
 	}
 	wt := p.selectedWorktree()
-	if wt == nil || wt.Name != worktreeName {
+	if wt == nil || wt.IdentityKey() != worktreeName {
 		return false
 	}
 	return true
@@ -800,10 +899,10 @@ func (p *Plugin) pollSelectedAgentNowIfVisible() tea.Cmd {
 	if wt == nil || wt.Agent == nil {
 		return nil
 	}
-	if !p.outputVisibleFor(wt.Name) {
+	if !p.outputVisibleFor(wt.IdentityKey()) {
 		return nil
 	}
-	return p.scheduleAgentPoll(wt.Name, 0)
+	return p.scheduleAgentPoll(wt.IdentityKey(), 0)
 }
 
 // pollAllAgentStatusesNow triggers an immediate poll for every worktree that has
@@ -814,7 +913,7 @@ func (p *Plugin) pollAllAgentStatusesNow() tea.Cmd {
 		if wt.Agent == nil || p.attachedSession == wt.Name {
 			continue
 		}
-		cmds = append(cmds, p.scheduleAgentPoll(wt.Name, 0))
+		cmds = append(cmds, p.scheduleAgentPoll(wt.IdentityKey(), 0))
 	}
 	if len(cmds) == 0 {
 		return nil

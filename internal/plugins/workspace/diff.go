@@ -31,7 +31,7 @@ func (p *Plugin) loadSelectedDiff() tea.Cmd {
 		return nil
 	}
 
-	cmds := []tea.Cmd{p.loadDiff(wt.Path, wt.Name)}
+	cmds := []tea.Cmd{p.loadDiff(wt)}
 
 	// Also load task details if Task tab is active
 	if p.previewTab == PreviewTabTask && wt.TaskID != "" {
@@ -42,14 +42,21 @@ func (p *Plugin) loadSelectedDiff() tea.Cmd {
 }
 
 // loadDiff returns a command to load diff for a worktree.
-func (p *Plugin) loadDiff(path, name string) tea.Cmd {
-	epoch := p.ctx.Epoch // Capture epoch for stale detection
+func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
+	if wt == nil {
+		return nil
+	}
+	ctx, scope := p.newOperationScope(wt)
+	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
+		if err := ctx.Err(); err != nil {
+			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		content, raw, err := getDiff(path)
 		if err != nil {
-			return DiffErrorMsg{WorkspaceName: name, Err: err}
+			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
 		}
-		return DiffLoadedMsg{Epoch: epoch, WorkspaceName: name, Content: content, Raw: raw}
+		return DiffLoadedMsg{OperationScope: scope, WorkspaceName: name, Content: content, Raw: raw}
 	}
 }
 

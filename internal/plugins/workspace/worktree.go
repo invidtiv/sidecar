@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,8 +28,8 @@ type WorkDirDeletedMsg struct {
 // refreshWorktrees returns a command to refresh the worktree list.
 func (p *Plugin) refreshWorktrees() tea.Cmd {
 	workDir := p.ctx.WorkDir
-	// Capture epoch for stale detection on project switch
-	epoch := p.ctx.Epoch
+	ctx, scope := p.newOperationScope(nil)
+	p.refreshOperationID = scope.OperationID
 	return func() tea.Msg {
 		// Check if current WorkDir still exists (may have been a deleted worktree)
 		if _, err := os.Stat(workDir); os.IsNotExist(err) {
@@ -40,8 +41,8 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 			}
 		}
 
-		worktrees, err := p.listWorktrees()
-		return RefreshDoneMsg{Epoch: epoch, Worktrees: worktrees, Err: err}
+		snapshot, err := BuildRepoSnapshot(ctx, workDir)
+		return RefreshDoneMsg{OperationScope: scope, Worktrees: snapshotToWorktrees(snapshot), Snapshot: snapshot, Err: err}
 	}
 }
 
@@ -105,55 +106,8 @@ func findMainWorktreeFromDeleted(deletedPath string) string {
 
 // listWorktrees parses git worktree list --porcelain output.
 func (p *Plugin) listWorktrees() ([]*Worktree, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	cmd.Dir = p.ctx.WorkDir
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git worktree list: %w", err)
-	}
-
-	// Get the actual main worktree path (the original repo), not the current workdir
-	// This ensures IsMain is set correctly regardless of which worktree we're in
-	mainRepoPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainRepoPath == "" {
-		mainRepoPath = p.ctx.WorkDir // Fallback if detection fails
-	}
-
-	worktrees, err := parseWorktreeList(string(output), mainRepoPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Detect missing worktrees and auto-prune fully-gone ones
-	needsPrune := false
-	filtered := make([]*Worktree, 0, len(worktrees))
-	for _, wt := range worktrees {
-		if wt.IsMain {
-			filtered = append(filtered, wt)
-			continue
-		}
-
-		if _, statErr := os.Stat(wt.Path); os.IsNotExist(statErr) {
-			wt.IsMissing = true
-		}
-
-		if wt.IsMissing {
-			// If branch is also gone, auto-prune and exclude from list
-			if !branchExists(p.ctx.WorkDir, wt.Branch) {
-				needsPrune = true
-				continue // exclude from returned list
-			}
-			// Branch still exists but folder gone — keep with IsMissing=true
-		}
-
-		filtered = append(filtered, wt)
-	}
-
-	if needsPrune {
-		_ = doWorktreePrune(p.ctx.WorkDir)
-	}
-
-	return filtered, nil
+	snapshot, err := BuildRepoSnapshot(context.Background(), p.ctx.WorkDir)
+	return snapshotToWorktrees(snapshot), err
 }
 
 // parseWorktreeList parses porcelain format output.
@@ -233,6 +187,7 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 
 // createWorktree returns a command to create a new worktree.
 func (p *Plugin) createWorktree() tea.Cmd {
+	_, scope := p.newLifecycleScope(nil)
 	name := p.createNameInput.Value()
 	baseBranch := p.createBaseBranchInput.Value()
 	taskID := p.createTaskID
@@ -248,13 +203,16 @@ func (p *Plugin) createWorktree() tea.Cmd {
 
 	if name == "" {
 		return func() tea.Msg {
-			return CreateDoneMsg{Err: fmt.Errorf("workspace name is required")}
+			return CreateDoneMsg{OperationScope: scope, Err: fmt.Errorf("workspace name is required")}
 		}
 	}
+	ctxCopy := *p.ctx
+	runner := *p
+	runner.ctx = &ctxCopy
 
 	return func() tea.Msg {
-		wt, err := p.doCreateWorktree(name, baseBranch, taskID, taskTitle, agentType)
-		return CreateDoneMsg{Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
+		wt, err := runner.doCreateWorktree(name, baseBranch, taskID, taskTitle, agentType)
+		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
 	}
 }
 
@@ -347,6 +305,10 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
+	wt.Key, _ = projectdir.WorktreeKey(wtPath)
+	if p.repoSnapshot != nil {
+		wt.RepoKey = p.repoSnapshot.Key
+	}
 
 	// Persist agent type to centralized worktree data directory
 	if err := saveAgentType(p.ctx.ProjectRoot, wtPath, agentType); err != nil {
@@ -397,13 +359,14 @@ func (p *Plugin) pushSelected() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
+	_, scope := p.newLifecycleScope(wt)
 	name := wt.Name
 	path := wt.Path
 	branch := wt.Branch
 
 	return func() tea.Msg {
 		err := doPush(path, branch, false, true)
-		return PushDoneMsg{WorkspaceName: name, Err: err}
+		return PushDoneMsg{OperationScope: scope, WorkspaceName: name, Err: err}
 	}
 }
 
@@ -515,12 +478,15 @@ func deleteRemoteBranchCmd(workdir, branch string) error {
 
 // checkRemoteBranch returns a command to check if a remote branch exists.
 func (p *Plugin) checkRemoteBranch(wt *Worktree) tea.Cmd {
+	_, scope := p.newLifecycleScope(wt)
+	workDir, branch, name := p.ctx.WorkDir, wt.Branch, wt.Name
 	return func() tea.Msg {
-		exists := checkRemoteBranchExists(p.ctx.WorkDir, wt.Branch)
+		exists := checkRemoteBranchExists(workDir, branch)
 		return RemoteCheckDoneMsg{
-			WorkspaceName: wt.Name,
-			Branch:        wt.Branch,
-			Exists:        exists,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			Branch:         branch,
+			Exists:         exists,
 		}
 	}
 }
@@ -686,63 +652,74 @@ func loadPRURL(projectRoot, worktreePath string) string {
 
 // linkTask returns a command to link a td task to a worktree.
 func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
+	_, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
+	workDir, path, name := p.ctx.WorkDir, wt.Path, wt.Name
 	return func() tea.Msg {
 		// Validate task exists by running td show
 		cmd := exec.Command("td", "show", taskID)
-		cmd.Dir = p.ctx.WorkDir
+		cmd.Dir = workDir
 		if err := cmd.Run(); err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("task not found: %s", taskID),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("task not found: %s", taskID),
 			}
 		}
 
 		// Write task link file to centralized worktree data directory
-		wtDir, err := projectdir.WorktreeDir(projectRoot, wt.Path)
+		wtDir, err := projectdir.WorktreeDir(projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("resolve worktree dir: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("resolve worktree dir: %w", err),
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
 		if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("write task file: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("write task file: %w", err),
 			}
 		}
 
 		return TaskLinkedMsg{
-			WorkspaceName: wt.Name,
-			TaskID:        taskID,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			TaskID:         taskID,
 		}
 	}
 }
 
 // unlinkTask returns a command to unlink a td task from a worktree.
 func (p *Plugin) unlinkTask(wt *Worktree) tea.Cmd {
+	_, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
+	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		wtDir, err := projectdir.WorktreeDir(projectRoot, wt.Path)
+		wtDir, err := projectdir.WorktreeDir(projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("resolve worktree dir: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("resolve worktree dir: %w", err),
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
 		if err := os.Remove(taskPath); err != nil && !os.IsNotExist(err) {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("remove task file: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("remove task file: %w", err),
 			}
 		}
 
 		return TaskLinkedMsg{
-			WorkspaceName: wt.Name,
-			TaskID:        "", // Empty means unlinked
+			OperationScope: scope,
+			WorkspaceName:  name,
+			TaskID:         "", // Empty means unlinked
 		}
 	}
 }

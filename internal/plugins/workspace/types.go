@@ -265,6 +265,8 @@ type dropdownItemData struct {
 
 // Worktree represents a git worktree with optional agent.
 type Worktree struct {
+	Key             string         // Stable normalized-path identity; never presentation
+	RepoKey         string         // Stable canonical common-dir identity
 	Name            string         // e.g., "auth-oauth-flow"
 	Path            string         // Absolute path
 	Branch          string         // Git branch name
@@ -284,6 +286,23 @@ type Worktree struct {
 	IsBare          bool // True if Git reports a bare worktree entry
 	IsDetached      bool // True if HEAD is detached
 	IsLocked        bool // True if Git reports the worktree as locked
+	IsPrunable      bool // True if Git reports the worktree record as prunable
+	HEADOID         string
+	BaseOID         string
+	Remote          string
+	Upstream        string
+}
+
+func (w *Worktree) IdentityKey() string {
+	if w == nil {
+		return ""
+	}
+	if w.Key != "" {
+		return w.Key
+	}
+	// Compatibility for synthetic tests and pre-inventory callers. Real Git
+	// worktrees are assigned Key before entering plugin state.
+	return w.Name
 }
 
 // ShellSession represents a tmux shell session (not tied to a git worktree).

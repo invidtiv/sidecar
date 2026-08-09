@@ -11,13 +11,14 @@ type RefreshMsg struct{}
 
 // RefreshDoneMsg signals that refresh has completed.
 type RefreshDoneMsg struct {
-	Epoch     uint64 // Epoch when request was issued (for stale detection)
+	OperationScope
 	Worktrees []*Worktree
+	Snapshot  *RepoSnapshot
 	Err       error
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m RefreshDoneMsg) GetEpoch() uint64 { return m.Epoch }
+func (m RefreshDoneMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // WatchEventMsg signals a filesystem change was detected.
 type WatchEventMsg struct {
@@ -74,33 +75,35 @@ type TmuxAttachFinishedMsg struct {
 
 // DiffLoadedMsg delivers diff content for a worktree.
 type DiffLoadedMsg struct {
-	Epoch         uint64 // Epoch when request was issued (for stale detection)
+	OperationScope
 	WorkspaceName string
 	Content       string
 	Raw           string
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m DiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+func (m DiffLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // DiffErrorMsg signals diff loading failed.
 type DiffErrorMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
 
 // StatsLoadedMsg delivers git stats for a worktree.
 type StatsLoadedMsg struct {
-	Epoch         uint64 // Epoch when request was issued (for stale detection)
+	OperationScope
 	WorkspaceName string
 	Stats         *GitStats
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m StatsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+func (m StatsLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // StatsErrorMsg signals stats loading failed.
 type StatsErrorMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
@@ -114,6 +117,7 @@ type CreateWorktreeMsg struct {
 
 // CreateDoneMsg signals worktree creation completed.
 type CreateDoneMsg struct {
+	OperationScope
 	Worktree  *Worktree
 	AgentType AgentType // Agent selected at creation
 	SkipPerms bool      // Whether to skip permissions
@@ -129,6 +133,7 @@ type DeleteWorktreeMsg struct {
 
 // DeleteDoneMsg signals worktree deletion completed.
 type DeleteDoneMsg struct {
+	OperationScope
 	Name     string
 	Err      error
 	Warnings []string // Non-fatal warnings (e.g., branch deletion failures)
@@ -136,6 +141,7 @@ type DeleteDoneMsg struct {
 
 // RemoteCheckDoneMsg signals remote branch existence check completed.
 type RemoteCheckDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Branch        string
 	Exists        bool
@@ -150,6 +156,7 @@ type PushMsg struct {
 
 // PushDoneMsg signals push operation completed.
 type PushDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
@@ -168,6 +175,7 @@ type BranchListMsg struct {
 
 // TaskLinkedMsg signals a task was linked to a worktree.
 type TaskLinkedMsg struct {
+	OperationScope
 	WorkspaceName string
 	TaskID        string
 	Err           error
@@ -269,12 +277,14 @@ type interactiveClickSentMsg struct {
 
 // FetchPRListMsg delivers the list of open PRs from gh CLI.
 type FetchPRListMsg struct {
+	OperationScope
 	PRs []PRListItem
 	Err error
 }
 
 // FetchPRDoneMsg signals that a PR branch was fetched and worktree created.
 type FetchPRDoneMsg struct {
+	OperationScope
 	Worktree     *Worktree
 	AlreadyLocal bool   // branch already existed locally
 	Branch       string // for finding existing worktree when Worktree is nil

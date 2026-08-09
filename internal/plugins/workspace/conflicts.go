@@ -15,6 +15,7 @@ type Conflict struct {
 
 // ConflictsDetectedMsg signals that conflicts have been detected.
 type ConflictsDetectedMsg struct {
+	OperationScope
 	Conflicts []Conflict
 	Err       error
 }
@@ -22,22 +23,24 @@ type ConflictsDetectedMsg struct {
 // detectConflicts scans all worktrees for files modified in multiple worktrees.
 // Returns a list of conflicts where each conflict indicates which worktrees
 // are modifying the same files.
-func (p *Plugin) detectConflicts() []Conflict {
-	if len(p.worktrees) < 2 {
+type conflictCandidate struct{ Key, Name, Path string }
+
+func detectConflicts(worktrees []conflictCandidate) []Conflict {
+	if len(worktrees) < 2 {
 		return nil // Need at least 2 worktrees for conflicts
 	}
 
 	// Build a map of modified files per worktree
 	filesByWorktree := make(map[string][]string)
-	for _, wt := range p.worktrees {
+	names := make(map[string]string, len(worktrees))
+	for _, wt := range worktrees {
 		files, err := getModifiedFiles(wt.Path)
 		if err != nil {
-			p.ctx.Logger.Debug("failed to get modified files",
-				"worktree", wt.Name, "error", err)
 			continue
 		}
+		names[wt.Key] = wt.Name
 		if len(files) > 0 {
-			filesByWorktree[wt.Name] = files
+			filesByWorktree[wt.Key] = files
 		}
 	}
 
@@ -56,7 +59,7 @@ func (p *Plugin) detectConflicts() []Conflict {
 			overlap := intersection(filesByWorktree[wt1], filesByWorktree[wt2])
 			if len(overlap) > 0 {
 				conflicts = append(conflicts, Conflict{
-					Worktrees: []string{wt1, wt2},
+					Worktrees: []string{names[wt1], names[wt2]},
 					Files:     overlap,
 				})
 			}
@@ -68,9 +71,14 @@ func (p *Plugin) detectConflicts() []Conflict {
 
 // loadConflicts returns a command to detect conflicts across worktrees.
 func (p *Plugin) loadConflicts() tea.Cmd {
+	_, scope := p.newOperationScope(nil)
+	candidates := make([]conflictCandidate, 0, len(p.worktrees))
+	for _, wt := range p.worktrees {
+		candidates = append(candidates, conflictCandidate{Key: wt.IdentityKey(), Name: wt.Name, Path: wt.Path})
+	}
 	return func() tea.Msg {
-		conflicts := p.detectConflicts()
-		return ConflictsDetectedMsg{Conflicts: conflicts}
+		conflicts := detectConflicts(candidates)
+		return ConflictsDetectedMsg{OperationScope: scope, Conflicts: conflicts}
 	}
 }
 

@@ -11,13 +11,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/projectdir"
 )
 
 // fetchPRList runs gh pr list and returns open PRs.
 func (p *Plugin) fetchPRList() tea.Cmd {
 	workDir := p.ctx.WorkDir
+	ctx, scope := p.newLifecycleScope(nil)
 	return func() tea.Msg {
-		cmd := exec.Command("gh", "pr", "list",
+		cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 			"--json", "number,title,headRefName,url,isDraft,createdAt,author",
 			"--limit", "30",
 		)
@@ -30,15 +32,15 @@ func (p *Plugin) fetchPRList() tea.Cmd {
 			if errMsg == "" {
 				errMsg = err.Error()
 			}
-			return FetchPRListMsg{Err: fmt.Errorf("gh pr list: %s", errMsg)}
+			return FetchPRListMsg{OperationScope: scope, Err: fmt.Errorf("gh pr list: %s", errMsg)}
 		}
 
 		var prs []PRListItem
 		if err := json.Unmarshal(output, &prs); err != nil {
-			return FetchPRListMsg{Err: fmt.Errorf("parse pr list: %w", err)}
+			return FetchPRListMsg{OperationScope: scope, Err: fmt.Errorf("parse pr list: %w", err)}
 		}
 
-		return FetchPRListMsg{PRs: prs}
+		return FetchPRListMsg{OperationScope: scope, PRs: prs}
 	}
 }
 
@@ -47,42 +49,37 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 	workDir := p.ctx.WorkDir
 	projectRoot := p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
+	ctx, scope := p.newLifecycleScope(nil)
+	branch := pr.Branch
+	dirName := branch
+	if dirPrefix {
+		repoName := app.GetRepoName(workDir)
+		if repoName != "" {
+			dirName = repoName + "-" + branch
+		}
+	}
+	mainRepoDir := projectRoot
+	if mainRepoDir == "" {
+		mainRepoDir = workDir
+	}
+	wtPath := filepath.Join(filepath.Dir(mainRepoDir), dirName)
 
 	return func() tea.Msg {
-		branch := pr.Branch
-
 		// Fetch the remote branch
-		fetchCmd := exec.Command("git", "fetch", "origin", branch)
+		fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", branch)
 		fetchCmd.Dir = workDir
 		if output, err := fetchCmd.CombinedOutput(); err != nil {
-			return FetchPRDoneMsg{Err: fmt.Errorf("git fetch: %s", strings.TrimSpace(string(output)))}
+			return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git fetch: %s", strings.TrimSpace(string(output)))}
 		}
-
-		// Determine worktree path
-		dirName := branch
-		if dirPrefix {
-			repoName := app.GetRepoName(workDir)
-			if repoName != "" {
-				dirName = repoName + "-" + branch
-			}
-		}
-		// Use projectRoot (the main worktree) rather than workDir so that
-		// starting from a subfolder doesn't place the worktree inside the repo. Fixes #174.
-		mainRepoDir := projectRoot
-		if mainRepoDir == "" {
-			mainRepoDir = workDir
-		}
-		parentDir := filepath.Dir(mainRepoDir)
-		wtPath := filepath.Join(parentDir, dirName)
 
 		// Create worktree tracking the remote branch
-		addCmd := exec.Command("git", "worktree", "add", "-b", branch, wtPath, "origin/"+branch)
+		addCmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branch, wtPath, "origin/"+branch)
 		addCmd.Dir = workDir
 		if output, err := addCmd.CombinedOutput(); err != nil {
 			outStr := strings.TrimSpace(string(output))
 			if strings.Contains(outStr, "already exists") {
 				// Branch exists locally. Try creating worktree without -b.
-				addCmd2 := exec.Command("git", "worktree", "add", wtPath, branch)
+				addCmd2 := exec.CommandContext(ctx, "git", "worktree", "add", wtPath, branch)
 				addCmd2.Dir = workDir
 				if output2, err2 := addCmd2.CombinedOutput(); err2 != nil {
 					outStr2 := strings.TrimSpace(string(output2))
@@ -93,9 +90,9 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 							_ = savePRURL(projectRoot, existingPath, pr.URL)
 							_ = saveBaseBranch(projectRoot, existingPath, detectDefaultBranch(workDir))
 						}
-						return FetchPRDoneMsg{AlreadyLocal: true, Branch: branch}
+						return FetchPRDoneMsg{OperationScope: scope, AlreadyLocal: true, Branch: branch}
 					}
-					return FetchPRDoneMsg{Err: fmt.Errorf("git worktree add: %s", outStr2)}
+					return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s", outStr2)}
 				}
 				// Worktree created from existing local branch
 				_ = savePRURL(projectRoot, wtPath, pr.URL)
@@ -112,9 +109,11 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 					CreatedAt:  time.Now(),
 					UpdatedAt:  time.Now(),
 				}
-				return FetchPRDoneMsg{Worktree: wt, AlreadyLocal: true}
+				wt.Key, _ = projectdir.WorktreeKey(wtPath)
+				wt.RepoKey = scope.RepoKey
+				return FetchPRDoneMsg{OperationScope: scope, Worktree: wt, AlreadyLocal: true}
 			}
-			return FetchPRDoneMsg{Err: fmt.Errorf("git worktree add: %s", outStr)}
+			return FetchPRDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s", outStr)}
 		}
 
 		// Write PR URL to centralized worktree data directory (non-fatal)
@@ -136,8 +135,10 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
+		wt.Key, _ = projectdir.WorktreeKey(wtPath)
+		wt.RepoKey = scope.RepoKey
 
-		return FetchPRDoneMsg{Worktree: wt}
+		return FetchPRDoneMsg{OperationScope: scope, Worktree: wt}
 	}
 }
 
