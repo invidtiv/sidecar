@@ -148,6 +148,42 @@ func TestAgentActivityTransitionLogIsPrivacySafe(t *testing.T) {
 	}
 }
 
+func TestFreshSkipCaptureCannotReuseRetainedBlockerForAttention(t *testing.T) {
+	now := time.Unix(500, 0)
+	agent := &Agent{Type: AgentCodex}
+	wt := &Worktree{Name: "review", Status: StatusWaiting, Agent: agent}
+
+	applyAgentActivity(agent, agentactivity.Result{
+		State: agentactivity.StateBlocked, Evidence: "codex.permission.blocked", VisibleBlocker: true,
+	}, now, now)
+	if got := agentStatusPresentation(wt); !got.Attention {
+		t.Fatalf("visible blocker did not produce attention: %#v", got)
+	}
+
+	overlayAt := now.Add(time.Second)
+	applyAgentActivity(agent, agentactivity.Result{
+		State: agentactivity.StateUnknown, Evidence: "codex.viewer.retain", SkipStateUpdate: true,
+	}, overlayAt, overlayAt)
+	if agent.Activity.State != agentactivity.StateBlocked || agent.ActivityCapturedAt != overlayAt {
+		t.Fatalf("skip capture did not retain state/update capture time: tracker=%#v captured=%v", agent.Activity, agent.ActivityCapturedAt)
+	}
+	if got := agentStatusPresentation(wt); got.Attention {
+		t.Fatalf("fresh non-evidence capture reused stale blocker attention: %#v", got)
+	}
+
+	idleAt := overlayAt.Add(time.Second)
+	applyAgentActivity(agent, agentactivity.Result{
+		State: agentactivity.StateIdle, Evidence: "codex.prompt.idle", VisibleIdle: true,
+	}, idleAt, idleAt)
+	if got := agentStatusPresentation(wt); got.Lane != kanbanLaneDone || got.Attention {
+		t.Fatalf("blocked-to-idle transition = %#v, want unseen Done", got)
+	}
+	agent.Activity.Acknowledge()
+	if got := agentStatusPresentation(wt); got.Lane != kanbanLaneIdle || got.Attention {
+		t.Fatalf("acknowledged idle = %#v, want Idle", got)
+	}
+}
+
 func TestBackgroundedWorktreeDoesNotAcknowledgeCompletion(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 	p := &Plugin{

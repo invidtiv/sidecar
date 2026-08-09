@@ -152,13 +152,7 @@ func (s WorktreeStatus) Icon() string {
 type AgentType string
 
 func supportsAgentActivity(agentType AgentType) bool {
-	switch agentType {
-	case AgentCodex, AgentClaude, AgentGrok, AgentAntigravity,
-		AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp:
-		return true
-	default:
-		return false
-	}
+	return agentactivity.Supports(string(agentType))
 }
 
 const (
@@ -271,12 +265,6 @@ var ShellAgentOrder = []AgentType{
 	AgentPi,
 	AgentAmp,
 	AgentGrok,
-}
-
-// kanbanCardData stores column and row for Kanban card hit regions.
-type kanbanCardData struct {
-	col int
-	row int
 }
 
 // dropdownItemData stores field ID and item index for dropdown hit regions.

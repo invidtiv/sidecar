@@ -25,6 +25,25 @@ type TextInputConsumer interface {
 	ConsumesTextInput() bool
 }
 
+type WorkspaceSelectionKind string
+
+const (
+	WorkspaceSelectionWorktree WorkspaceSelectionKind = "worktree"
+	WorkspaceSelectionShell    WorkspaceSelectionKind = "shell"
+)
+
+// PendingWorkspaceSelection is delivered synchronously after registry.Reinit,
+// before the returned async Start commands run.
+type PendingWorkspaceSelection struct {
+	Kind WorkspaceSelectionKind
+	Key  string
+	Path string
+}
+
+type PendingWorkspaceSelector interface {
+	SetPendingWorkspaceSelection(PendingWorkspaceSelection)
+}
+
 // Category represents a logical grouping of commands for the command palette.
 type Category string
 

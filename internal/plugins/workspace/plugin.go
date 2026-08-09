@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -152,6 +153,7 @@ type Plugin struct {
 	operationSeq               uint64
 	refreshOperationID         string
 	activeLifecycleOperationID string
+	pendingOverviewSelection   *plugin.PendingWorkspaceSelection
 
 	// Session tracking for safe cleanup
 	managedSessions map[string]bool
@@ -188,6 +190,7 @@ type Plugin struct {
 	// Kanban view state
 	kanbanCol int // Current column index (0=Shells, 1=Active, 2=Thinking, 3=Waiting, 4=Done, 5=Paused)
 	kanbanRow int // Current row within the column
+	kanban    boardkanban.Component
 
 	// Agent state
 	attachedSession     string // Name of worktree we're attached to (pauses polling)
@@ -498,6 +501,44 @@ func (p *Plugin) SetFocused(f bool) {
 	p.focused = f
 }
 
+func (p *Plugin) SetPendingWorkspaceSelection(selection plugin.PendingWorkspaceSelection) {
+	p.pendingOverviewSelection = &selection
+	p.applyPendingWorkspaceSelection()
+}
+
+func (p *Plugin) applyPendingWorkspaceSelection() bool {
+	if p.pendingOverviewSelection == nil {
+		return false
+	}
+	target := p.pendingOverviewSelection
+	switch target.Kind {
+	case plugin.WorkspaceSelectionWorktree:
+		for i, wt := range p.worktrees {
+			if filepath.Clean(wt.Path) == filepath.Clean(target.Path) {
+				p.shellSelected, p.selectedIdx = false, i
+				p.pendingOverviewSelection = nil
+				p.selectKanbanFromList()
+				return true
+			}
+		}
+	case plugin.WorkspaceSelectionShell:
+		for i, shell := range p.shells {
+			if shell.TmuxName == target.Key {
+				p.shellSelected, p.selectedShellIdx = true, i
+				p.pendingOverviewSelection = nil
+				p.selectKanbanFromList()
+				return true
+			}
+		}
+	}
+	if p.worktreesLoaded && !p.shellStartupLoading {
+		p.pendingOverviewSelection = nil
+		p.toastMessage = "Overview item is no longer available"
+		p.toastTime = time.Now()
+	}
+	return false
+}
+
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
 	if p.operationCancel != nil {
@@ -529,6 +570,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.agents = make(map[string]*Agent)
 	p.managedSessions = make(map[string]bool)
 	p.worktrees = make([]*Worktree, 0)
+	// pendingOverviewSelection is deliberately retained across app-owned Reinit.
 	p.attachedSession = ""
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project

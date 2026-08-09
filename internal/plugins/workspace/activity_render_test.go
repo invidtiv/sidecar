@@ -35,7 +35,7 @@ func TestExpandedProviderListKanbanGolden(t *testing.T) {
 func TestActivityRenderingParityForWorktreeAndAgentShell(t *testing.T) {
 	p := &Plugin{activePane: PaneSidebar, ctx: &plugin.Context{}}
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateBlocked}}
-	wt := &Worktree{Name: "feature", Agent: agent}
+	wt := &Worktree{Name: "feature", Status: StatusActive, Agent: agent}
 	shell := &ShellSession{Name: "review", ChosenAgent: AgentCodex, Agent: agent}
 
 	for name, output := range map[string]string{
@@ -58,5 +58,9 @@ func TestActivityRenderingShowsUnseenDoneThenSeenIdle(t *testing.T) {
 	agent.Activity.Acknowledge()
 	if got := p.renderShellEntryForSession(shell, false, 40); !strings.Contains(got, "○") || !strings.Contains(got, "idle") {
 		t.Fatalf("seen idle: %q", got)
+	}
+	wt := &Worktree{Name: "feature", Status: StatusWaiting, Agent: agent}
+	if got := p.renderWorktreeItem(wt, false, 40); !strings.Contains(got, "○") || !strings.Contains(got, "idle") {
+		t.Fatalf("seen worktree idle: %q", got)
 	}
 }

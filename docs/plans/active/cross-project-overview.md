@@ -532,7 +532,11 @@ Drive and capture this journey as text and PNG:
 
 Record process/tmux counts and refresh timing from this same behavior-faithful
 fixture. Unit tests and static screenshots alone do not prove the collector or
-navigation journey.
+navigation journey. Set `SIDECAR_OVERVIEW_TRACE=stderr` for privacy-safe
+per-cycle counts and timings (configured/de-duplicated projects, first result,
+completion, project operations, tmux inventories, captures, concurrency, and
+cancellation/draining). The trace never includes paths, pane IDs, or captured
+terminal content and is disabled by default.
 
 ## Acceptance criteria
 

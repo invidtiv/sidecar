@@ -8,7 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -409,8 +409,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	// Status indicator - use special icon for main worktree
 	var statusIcon string
+	resolvedStatus := agentStatusPresentation(wt)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(wt.Agent)
-	if wt.IsOrphaned || wt.IsMissing {
+	if resolvedStatus.Health {
 		hasActivity = false
 	}
 	if hasActivity {
@@ -710,8 +711,9 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	var statusStyle lipgloss.Style
 
 	// td-f88fdd: Handle orphaned shells (manifest entry exists but tmux session is gone)
+	resolvedStatus := shellAgentStatusPresentation(shell)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
-	if shell.IsOrphaned {
+	if resolvedStatus.Health {
 		statusIcon = "◌" // Empty circle for orphaned
 		statusStyle = styles.Muted
 	} else if hasActivity {
@@ -733,7 +735,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 
 	// td-a29b76: Build second line with agent type if present
 	var statusText string
-	if shell.IsOrphaned {
+	if resolvedStatus.Health {
 		// td-f88fdd: Orphaned shell - show "offline" status
 		if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
 			agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]
@@ -822,27 +824,20 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 }
 
 func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {
-	displayState, ok := activityDisplayState(agent)
-	if !ok {
+	if agent == nil || !supportsAgentActivity(agent.Type) {
 		return "", "", lipgloss.Style{}, false
 	}
-	switch displayState {
-	case string(agentactivity.StateWorking):
-		return "●", "working", styles.StatusCompleted, true
-	case string(agentactivity.StateBlocked):
-		return "◆", "blocked", styles.StatusModified, true
-	case "done":
-		return "✓", "done", styles.StatusCompleted, true
-	case string(agentactivity.StateIdle):
-		return "○", "idle", styles.Muted, true
+	p := agentstatus.Resolve(agentstatus.Input{ProviderSupported: true, Activity: agent.Activity, CapturedAt: agent.ActivityCapturedAt})
+	switch p.Lane {
+	case agentstatus.LaneWorking:
+		return p.Icon, p.Label, styles.StatusCompleted, true
+	case agentstatus.LaneBlocked:
+		return p.Icon, p.Label, styles.StatusModified, true
+	case agentstatus.LaneDone:
+		return p.Icon, p.Label, styles.StatusCompleted, true
+	case agentstatus.LaneIdle:
+		return p.Icon, p.Label, styles.Muted, true
 	default:
-		return "?", "unknown", styles.Muted, true
+		return p.Icon, p.Label, styles.Muted, true
 	}
-}
-
-func activityDisplayState(agent *Agent) (string, bool) {
-	if agent == nil || !supportsAgentActivity(agent.Type) {
-		return "", false
-	}
-	return agent.Activity.DisplayState(), true
 }

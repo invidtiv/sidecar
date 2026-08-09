@@ -47,6 +47,14 @@ var (
 		Default:     false,
 		Description: "Enable the notes plugin for capturing quick notes",
 	}
+
+	// CrossProjectOverview gates the cross-project agent overview while its
+	// steel thread is developed and proven.
+	CrossProjectOverview = Feature{
+		Name:        "cross_project_overview",
+		Default:     false,
+		Description: "Enable the experimental cross-project agent overview",
+	}
 )
 
 // allFeatures is the registry of all known features.
@@ -55,6 +63,7 @@ var allFeatures = []Feature{
 	TmuxInlineEdit,
 	FilesAutoRefresh,
 	NotesPlugin,
+	CrossProjectOverview,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

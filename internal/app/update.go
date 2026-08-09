@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -130,6 +131,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 // Update handles all messages and returns the updated model and commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	if m.overview != nil && overview.IsAsyncMessage(msg) {
+		return m, m.overview.Update(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.FocusMsg:
@@ -247,12 +251,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Check if click is on a tab
 			tabBounds := m.getTabBounds()
-			for i, bounds := range tabBounds {
+			for _, bounds := range tabBounds {
 				if mi.X >= bounds.Start && mi.X < bounds.End {
-					return m, m.SetActivePlugin(i)
+					m.exitOverview()
+					return m, m.SetActivePlugin(bounds.Plugin)
 				}
 			}
 			return m, nil
+		}
+
+		if m.overviewActive && m.overview != nil {
+			return m, m.overview.Update(offsetMouseY(msg, -headerHeight))
 		}
 
 		// Forward mouse events to active plugin with Y offset for app header (2 lines)
@@ -327,6 +336,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshMsg:
 		m.ui.MarkRefresh()
+		if m.overviewActive && m.overview != nil {
+			return m, m.overview.Start(m.overviewProjects())
+		}
 		// Refresh active plugin
 		if p := m.ActivePlugin(); p != nil {
 			_, cmd := p.Update(msg)
@@ -421,7 +433,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FocusPluginByIDMsg:
 		// Switch to requested plugin
+		m.exitOverview()
 		return m, m.FocusPluginByID(msg.PluginID)
+
+	case overview.NavigateMsg:
+		if m.overview == nil || !m.overviewActive || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
+			return m, nil
+		}
+		return m, m.overview.Validate(msg)
+
+	case overview.ValidationMsg:
+		if m.overview == nil || !m.overviewActive || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
+			return m, nil
+		}
+		if msg.Err != nil {
+			return m, func() tea.Msg {
+				return ToastMsg{Message: "Overview item is stale: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+			}
+		}
+		return m, m.navigateFromOverview(msg.Workspace)
 
 	case SwitchWorktreeMsg:
 		// Switch to the requested worktree
@@ -615,7 +645,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// Esc: clear filter if set, otherwise close
 			if m.projectSwitcherInput.Value() != "" {
 				m.projectSwitcherInput.SetValue("")
-				m.projectSwitcherFiltered = m.cfg.Projects.List
+				m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 				m.projectSwitcherCursor = 0
 				m.projectSwitcherScroll = 0
 				return m, nil
@@ -881,7 +911,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		allProjects := m.cfg.Projects.List
-		if len(allProjects) == 0 {
+		if len(allProjects) == 0 && m.overview == nil {
 			// No projects configured - handle y for LLM prompt, ctrl+a for add, close on q/@
 			switch msg.String() {
 			case "y":
@@ -902,10 +932,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			// Select project and switch to it
 			if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(projects) {
-				selectedProject := projects[m.projectSwitcherCursor]
-				m.resetProjectSwitcher()
-				m.updateContext()
-				return m, m.switchProject(selectedProject.Path)
+				return m, m.activateProjectSwitcherDestination(projects[m.projectSwitcherCursor])
 			}
 			return m, nil
 
@@ -1305,6 +1332,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.overviewActive && m.overview != nil {
+		switch msg.String() {
+		case "left", "h", "right", "l", "up", "k", "down", "j", "enter", "r":
+			return m, m.overview.Update(msg)
+		}
+	}
+
 	// Plugin switching
 	switch msg.String() {
 	case "`":
@@ -1312,12 +1346,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.consumesTextInput() {
 			break
 		}
+		m.exitOverview()
 		return m, m.NextPlugin()
 	case "~":
 		// Tilde cycles to previous plugin (except in text input contexts)
 		if m.consumesTextInput() {
 			break
 		}
+		m.exitOverview()
 		return m, m.PrevPlugin()
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		// Number keys for direct plugin switching
@@ -1326,6 +1362,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		idx := int([]rune(msg.Text)[0] - '1')
+		m.exitOverview()
 		return m, m.SetActivePlugin(idx)
 	}
 
@@ -1455,6 +1492,10 @@ func (m *Model) updateContext() {
 		m.activeContext = ctx
 		return
 	}
+	if m.overviewActive {
+		m.activeContext = "overview"
+		return
+	}
 	if p := m.ActivePlugin(); p != nil {
 		m.activeContext = p.FocusContext()
 	} else {
@@ -1477,7 +1518,7 @@ func (m *Model) consumesTextInput() bool {
 // Root contexts are plugin top-level views (not sub-views like detail/diff/commit).
 func isRootContext(ctx string) bool {
 	switch ctx {
-	case "global", "":
+	case "global", "", "overview":
 		return true
 	// Plugin root contexts where 'q' is not used for navigation
 	case "conversations", "conversations-sidebar", "conversations-main":
@@ -1596,10 +1637,7 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		if _, err := fmt.Sscanf(action, projectSwitcherItemPrefix+"%d", &idx); err == nil {
 			projects := m.projectSwitcherFiltered
 			if idx >= 0 && idx < len(projects) {
-				selectedProject := projects[idx]
-				m.resetProjectSwitcher()
-				m.updateContext()
-				return m, m.switchProject(selectedProject.Path)
+				return m, m.activateProjectSwitcherDestination(projects[idx])
 			}
 		}
 		return m, nil
@@ -1613,10 +1651,7 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 	case "select":
 		projects := m.projectSwitcherFiltered
 		if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(projects) {
-			selectedProject := projects[m.projectSwitcherCursor]
-			m.resetProjectSwitcher()
-			m.updateContext()
-			return m, m.switchProject(selectedProject.Path)
+			return m, m.activateProjectSwitcherDestination(projects[m.projectSwitcherCursor])
 		}
 		return m, nil
 	}

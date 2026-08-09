@@ -400,6 +400,7 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 
 	p.shellManifest = result.manifest
 	p.shells = result.shells
+	p.applyPendingWorkspaceSelection()
 	if p.managedSessions == nil {
 		p.managedSessions = make(map[string]bool)
 	}

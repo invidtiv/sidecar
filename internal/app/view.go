@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -75,7 +76,7 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
-		m.width < minWidth || m.height < minHeight {
+		m.width < minWidth || m.height < minHeight || m.overviewActive {
 		return nil
 	}
 	active := m.ActivePlugin()
@@ -224,11 +225,9 @@ func (m *Model) projectSwitcherInputSection() modal.Section {
 func (m *Model) projectSwitcherCountSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		allProjects := m.cfg.Projects.List
-		projects := m.projectSwitcherFiltered
-
 		var countText string
 		if m.projectSwitcherInput.Value() != "" {
-			countText = fmt.Sprintf("%d of %d projects", len(projects), len(allProjects))
+			countText = fmt.Sprintf("%d of %d projects", len(filterProjects(allProjects, m.projectSwitcherInput.Value())), len(allProjects))
 		} else if len(allProjects) > 0 {
 			countText = fmt.Sprintf("%d projects", len(allProjects))
 		}
@@ -245,7 +244,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		var b strings.Builder
 
 		// No projects configured
-		if len(allProjects) == 0 {
+		if len(allProjects) == 0 && m.overview == nil {
 			b.WriteString(styles.Muted.Render("No projects configured"))
 			return modal.RenderedSection{Content: b.String()}
 		}
@@ -280,9 +279,10 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		nameCurrentSelectedStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 
 		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(projects); i++ {
-			project := projects[i]
+			destination := projects[i]
 			isCursor := i == m.projectSwitcherCursor
-			isCurrent := project.Path == m.ui.WorkDir
+			isOverview := destination.Kind == destinationOverview
+			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.overviewActive)
 			itemID := projectSwitcherItemID(i)
 			isHovered := itemID == hoverID
 
@@ -305,12 +305,20 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 				nameStyle = nameNormalStyle
 			}
 
-			b.WriteString(nameStyle.Render(project.Name))
+			name := destination.Name
+			if isOverview {
+				name = "◫ " + name
+				nameStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+			}
+			b.WriteString(nameStyle.Render(name))
 			if isCurrent {
 				b.WriteString(styles.Muted.Render(" (current)"))
 			}
 			b.WriteString("\n")
-			pathDisplay := project.Path
+			pathDisplay := destination.Path
+			if isOverview {
+				pathDisplay = "All configured projects"
+			}
 			maxPathLen := contentWidth - 4
 			if len(pathDisplay) > maxPathLen {
 				pathDisplay = "..." + pathDisplay[len(pathDisplay)-maxPathLen+3:]
@@ -391,7 +399,7 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 		b.WriteString("\n")
 
 		// No projects configured
-		if len(allProjects) == 0 {
+		if len(allProjects) == 0 && m.overview == nil {
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -539,27 +547,49 @@ func (m Model) renderProjectAddThemePickerOverlay(content string) string {
 
 // renderHeader renders the top bar with title, tabs, and clock.
 func (m Model) renderHeader() string {
+	title, tabs, clock, spacing := m.headerLayout()
+	tabTexts := make([]string, 0, len(tabs))
+	for _, tab := range tabs {
+		tabTexts = append(tabTexts, tab.text)
+	}
+	header := title + strings.Repeat(" ", spacing/2) + strings.Join(tabTexts, " ") + strings.Repeat(" ", spacing-(spacing/2)) + clock
+	header = ansi.Truncate(header, m.width, "")
+	return styles.Header.Width(m.width).MaxWidth(m.width).Render(header)
+}
+
+type headerTab struct {
+	plugin int
+	text   string
+}
+
+// headerLayout keeps the header on the one physical row assumed by
+// headerHeight and mouse routing. Wide layouts retain every existing element;
+// narrow layouts drop the clock, then inactive tabs from the right, while
+// preserving the active destination title and active plugin tab.
+func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spacing int) {
 	// Check if we're in a worktree for the indicator
 	worktreeIndicator := ""
-	if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-		// Show worktree branch name as indicator
-		branchName := wtInfo.Branch
-		if branchName == "" {
-			branchName = "worktree"
+	if !m.overviewActive {
+		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
+			// Show worktree branch name as indicator
+			branchName := wtInfo.Branch
+			if branchName == "" {
+				branchName = "worktree"
+			}
+			worktreeIndicator = styles.WorktreeIndicator.Render(" [" + branchName + "]")
 		}
-		worktreeIndicator = styles.WorktreeIndicator.Render(" [" + branchName + "]")
 	}
 
 	// Calculate final title width (with repo name and worktree indicator) - used for tab positioning
 	finalTitleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	if m.intro.RepoName != "" {
-		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + m.intro.RepoName))
+	activeName := m.activeDestinationName()
+	if activeName != "" {
+		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
 	}
 	finalTitleWidth += lipgloss.Width(worktreeIndicator)
 	finalTitleWidth += 1 // trailing space
 
 	// Title with optional repo name and worktree indicator
-	var title string
 	if m.intro.Active {
 		// During animation, render into fixed-width container to keep tabs stable
 		titleContent := styles.BarTitle.Render(" "+m.intro.View()) + m.intro.RepoNameView() + worktreeIndicator + " "
@@ -567,94 +597,85 @@ func (m Model) renderHeader() string {
 	} else {
 		// Static title with repo name and worktree indicator
 		repoSuffix := ""
-		if m.intro.RepoName != "" {
-			repoSuffix = styles.Subtitle.Render(" / " + m.intro.RepoName)
+		if activeName != "" {
+			repoSuffix = styles.Subtitle.Render(" / " + activeName)
 		}
 		title = styles.BarTitle.Render(" Sidecar") + repoSuffix + worktreeIndicator + " "
 	}
 
 	// Plugin tabs (themed)
 	plugins := m.registry.Plugins()
-	var tabs []string
 	for i, p := range plugins {
-		isActive := i == m.activePlugin
+		isActive := !m.overviewActive && i == m.activePlugin
 		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		tabs = append(tabs, tab)
+		tabs = append(tabs, headerTab{plugin: i, text: tab})
 	}
-	tabBar := strings.Join(tabs, " ")
 
 	// Clock (conditional on config)
-	clock := ""
 	if m.showClock {
 		clock = styles.BarText.Render(m.ui.Clock.Format("15:04"))
 	}
 
-	// Calculate spacing (always use finalTitleWidth so tabs don't shift)
-	tabWidth := lipgloss.Width(tabBar)
-	clockWidth := lipgloss.Width(clock)
-	spacing := m.width - finalTitleWidth - tabWidth - clockWidth
-
-	if spacing < 0 {
-		spacing = 0
+	tabsWidth := func() int {
+		width := 0
+		for i, tab := range tabs {
+			width += lipgloss.Width(tab.text)
+			if i > 0 {
+				width++
+			}
+		}
+		return width
 	}
-
-	// Build header line
-	header := title + strings.Repeat(" ", spacing/2) + tabBar + strings.Repeat(" ", spacing-(spacing/2)) + clock
-
-	return styles.Header.Width(m.width).Render(header)
+	totalWidth := func() int {
+		return finalTitleWidth + tabsWidth() + lipgloss.Width(clock)
+	}
+	if totalWidth() > m.width {
+		clock = ""
+	}
+	for totalWidth() > m.width && len(tabs) > 0 {
+		remove := -1
+		for i := len(tabs) - 1; i >= 0; i-- {
+			if m.overviewActive || tabs[i].plugin != m.activePlugin {
+				remove = i
+				break
+			}
+		}
+		if remove < 0 {
+			break
+		}
+		tabs = append(tabs[:remove], tabs[remove+1:]...)
+	}
+	if totalWidth() > m.width {
+		// Only protected tabs remain. Reserve their rendered and clickable
+		// width first, then fit the destination title into the prefix space.
+		// The explicit separator is part of title width, keeping render and
+		// getTabBounds on identical geometry.
+		reserved := tabsWidth()
+		if reserved >= m.width {
+			title = ""
+			if len(tabs) == 1 {
+				tabs[0].text = ansi.Truncate(tabs[0].text, m.width, "")
+			}
+		} else {
+			titleBudget := max(0, m.width-reserved-1)
+			title = ansi.Truncate(title, titleBudget, "…") + " "
+		}
+		finalTitleWidth = lipgloss.Width(title)
+	}
+	spacing = max(0, m.width-totalWidth())
+	return title, tabs, clock, spacing
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
 // Used for mouse click detection on tabs.
 func (m Model) getTabBounds() []TabBounds {
-	// Always use final title width (must match renderHeader logic)
-	titleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	if m.intro.RepoName != "" {
-		titleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + m.intro.RepoName))
-	}
-	// Add worktree indicator width if applicable
-	if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-		branchName := wtInfo.Branch
-		if branchName == "" {
-			branchName = "worktree"
-		}
-		titleWidth += lipgloss.Width(styles.WorktreeIndicator.Render(" [" + branchName + "]"))
-	}
-	titleWidth += 1 // trailing space
-
-	// Calculate tab widths (using themed renderer)
-	plugins := m.registry.Plugins()
-	var tabWidths []int
-	totalTabWidth := 0
-	for i, p := range plugins {
-		isActive := i == m.activePlugin
-		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		w := lipgloss.Width(tab)
-		tabWidths = append(tabWidths, w)
-		totalTabWidth += w
-	}
-	// Add spaces between tabs
-	if len(plugins) > 1 {
-		totalTabWidth += len(plugins) - 1
-	}
-
-	// Clock width
-	clock := styles.BarText.Render(m.ui.Clock.Format("15:04"))
-	clockWidth := lipgloss.Width(clock)
-
-	// Calculate spacing
-	spacing := m.width - titleWidth - totalTabWidth - clockWidth
-	if spacing < 0 {
-		spacing = 0
-	}
-
-	// Calculate tab bounds
-	// Tabs start after: title + left spacing
-	tabStartX := titleWidth + spacing/2
-	bounds := make([]TabBounds, len(plugins))
+	title, tabs, _, spacing := m.headerLayout()
+	tabStartX := lipgloss.Width(title) + spacing/2
+	bounds := make([]TabBounds, 0, len(tabs))
 	x := tabStartX
-	for i, w := range tabWidths {
-		bounds[i] = TabBounds{Start: x, End: x + w}
+	for _, tab := range tabs {
+		w := lipgloss.Width(tab.text)
+		bounds = append(bounds, TabBounds{Start: x, End: x + w, Plugin: tab.plugin})
 		x += w + 1 // +1 for space between tabs
 	}
 
@@ -663,21 +684,35 @@ func (m Model) getTabBounds() []TabBounds {
 
 // getRepoNameBounds returns the X bounds for the repo name in the header.
 func (m Model) getRepoNameBounds() (start, end int, ok bool) {
-	if m.intro.RepoName == "" {
+	name := m.activeDestinationName()
+	if name == "" {
 		return 0, 0, false
 	}
 
 	titlePrefix := styles.BarTitle.Render(" Sidecar")
 	repoPrefix := styles.Subtitle.Render(" / ")
-	repoName := styles.Subtitle.Render(m.intro.RepoName)
+	repoName := styles.Subtitle.Render(name)
 
 	start = lipgloss.Width(titlePrefix) + lipgloss.Width(repoPrefix)
 	end = start + lipgloss.Width(repoName)
+	// headerLayout may truncate a long destination to reserve the active tab.
+	// Keep the project-switcher hit target inside the actually painted title so
+	// it cannot cover a fitted plugin tab to its right.
+	if m.width > 0 && m.registry != nil {
+		title, _, _, _ := m.headerLayout()
+		end = min(end, max(start, lipgloss.Width(title)-1))
+		if end <= start {
+			return 0, 0, false
+		}
+	}
 	return start, end, true
 }
 
 // getWorktreeIndicatorBounds returns the X bounds for the worktree indicator in the header.
 func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
+	if m.overviewActive {
+		return 0, 0, false
+	}
 	wtInfo := m.currentWorktreeInfo()
 	if wtInfo == nil || wtInfo.IsMain {
 		return 0, 0, false
@@ -704,6 +739,9 @@ func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
+	if m.overviewActive && m.overview != nil {
+		return m.overview.View(width, height)
+	}
 	p := m.ActivePlugin()
 	if p == nil {
 		msg := "No plugins loaded"
@@ -768,12 +806,21 @@ type footerHint struct {
 func (m Model) footerHints() []footerHint {
 	// Plugin-specific hints first - they're more contextually relevant
 	var hints []footerHint
-	if p := m.ActivePlugin(); p != nil {
+	if m.overviewActive && m.overview != nil {
+		hints = append(hints, footerHint{keys: "enter", label: "Open"}, footerHint{keys: "r", label: "Refresh"})
+	} else if p := m.ActivePlugin(); p != nil {
 		hints = m.pluginFooterHints(p, m.activeContext)
 	}
 	// Then essential global hints
 	hints = append(hints, m.globalFooterHints()...)
 	return hints
+}
+
+func (m Model) activeDestinationName() string {
+	if m.overviewActive {
+		return "Overview"
+	}
+	return m.intro.RepoName
 }
 
 func (m Model) globalFooterHints() []footerHint {

@@ -183,6 +183,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				wt.BaseBranch = loadBaseBranch(p.ctx.ProjectRoot, wt.Path)
 			}
 			p.reconcilePendingCreation()
+			p.applyPendingWorkspaceSelection()
 			// Load diff for the selected worktree so diff tab shows content immediately
 			p.diffState = LoadStateLoading
 			p.diffError = ""

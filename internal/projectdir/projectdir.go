@@ -47,6 +47,35 @@ func Lookup(projectRoot string) (string, bool) {
 	return findByMeta(filepath.Join(config.StateDir(), "projects"), projectRoot)
 }
 
+// LookupWorktree returns the already-registered data directory for worktreePath
+// without creating or migrating state. It is intended for read-only inventory
+// consumers such as diagnostics and the cross-project overview.
+func LookupWorktree(projectRoot, worktreePath string) (string, bool) {
+	projectDir, ok := Lookup(projectRoot)
+	if !ok {
+		return "", false
+	}
+	normalized, err := normalizePath(worktreePath)
+	if err != nil {
+		return "", false
+	}
+	entries, err := os.ReadDir(filepath.Join(projectDir, "worktrees"))
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(projectDir, "worktrees", entry.Name())
+		meta, err := readWorktreeMeta(dir)
+		if err == nil && meta.Path == normalized && meta.Key == pathKey(normalized) {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
 // WorktreeDir returns the worktree-specific data directory for a project.
 // The directory is created if it does not exist.
 func WorktreeDir(projectRoot, worktreePath string) (string, error) {
