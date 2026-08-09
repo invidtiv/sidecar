@@ -1,0 +1,14 @@
+{
+  "name": "scroll_region_and_origin",
+  "fingerprint": "e9ae530dd7c12c0c0a1f89b5123df725ae43eaf9d40218d099b6725f29b4482b",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 16,
+  "paneHeight": 8,
+  "capture": "a\nb\nORIGIN\n\n\n\ng\nEND\n",
+  "cursorX": 3,
+  "cursorY": 7,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 4
+}

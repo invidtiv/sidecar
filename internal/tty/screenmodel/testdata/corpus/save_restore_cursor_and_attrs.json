@@ -1,0 +1,14 @@
+{
+  "name": "save_restore_cursor_and_attrs",
+  "fingerprint": "c4b7314e6c7ffc1cd11ee88128eaaf35155280804b711fd7afb5574e02753a21",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 6,
+  "capture": "         \u001b[1m\u001b[31mmoved\u001b[0m\n\n  \u001b[1m\u001b[31mbold-redrestored\u001b[0m\n\nplain\n\u001b[1m\u001b[31mback\u001b[0m\n",
+  "cursorX": 4,
+  "cursorY": 5,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

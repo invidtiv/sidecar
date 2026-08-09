@@ -1,0 +1,14 @@
+{
+  "name": "autowrap_phantom_column",
+  "fingerprint": "6b4956c770d996ebeb9e58d5d3ac5d0b2b753f47f95950faca7df257fa17017e",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 10,
+  "paneHeight": 6,
+  "capture": "0123456789\nA\n012345678Y\nZbcdefghij\n\n\n",
+  "cursorX": 1,
+  "cursorY": 3,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

@@ -1,0 +1,14 @@
+{
+  "name": "resize_taller_then_shorter",
+  "fingerprint": "a6c4461b38f7f6881c7d5477cf69b5b71ba3f92efcb1f3620caa1a2b4bffc72d",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 16,
+  "paneHeight": 4,
+  "capture": "r4\ntaller\nshorter\n\n",
+  "cursorX": 0,
+  "cursorY": 3,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 3
+}

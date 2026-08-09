@@ -1,0 +1,14 @@
+{
+  "name": "osc8_hostile_termination",
+  "fingerprint": "eb1cf4877f3dc2121df324a51b0c5342ba4d5601b2ed824e2dad93a438c55446",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 6,
+  "capture": "pre\u001b]8;;https://example.com/e\u001b\\L2\u001b]8;;\u001b\\\n\u001b]8;;https://example.com/f?a=1;b=2\u001b\\L3\u001b]8;;\u001b\\\n\u001b]8;;https://example.com/g\u001b\\plainG\u001b]8;;\u001b\\\n\u001b]8;;https://example.com/g\u001b\\safe\u001b]8;;https://example.com/h\u001b\\LABEL\u001b]8;;\u001b\\\n\n\n",
+  "cursorX": 0,
+  "cursorY": 4,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

@@ -1,0 +1,14 @@
+{
+  "name": "cursor_motion",
+  "fingerprint": "7634cfd0af07a06b961bed96ee6f046d9e2d48e9df0c447d23df1e724bd9b571",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 20,
+  "paneHeight": 8,
+  "capture": "O\n          VPA\nCPL    up\nCNL\n    CUP\n         down    rig\nlHVP   CHA\n                   X\n",
+  "cursorX": 1,
+  "cursorY": 0,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

@@ -1,0 +1,14 @@
+{
+  "name": "modes_cursor_paste_sync_reset",
+  "fingerprint": "221a5d43a11ac13a04adafe315b67438522ccfdf3a7efce7012d31a80ada60a2",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 6,
+  "capture": "cursor hidden\ncursor shown\ncursor style bar\nbracketed on\nsync done\n\n",
+  "cursorX": 0,
+  "cursorY": 5,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": true,
+  "historySize": 0
+}

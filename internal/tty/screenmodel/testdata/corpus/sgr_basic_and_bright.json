@@ -1,0 +1,14 @@
+{
+  "name": "sgr_basic_and_bright",
+  "fingerprint": "2bbab1b2f49c89f5690d7271aa47d63418bdd84cb6338fef7153a67a788706ec",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 6,
+  "capture": "\u001b[31mred\u001b[32mgreen\u001b[39mplain\n\u001b[44monblue\u001b[49mdefault-bg\n\u001b[91mbright-red\u001b[107mbright-bg\u001b[39m\u001b[49m\n\u001b[30m\u001b[47minverted-ish\u001b[39m\u001b[49mreset-empty-param\nplain after color\n\n",
+  "cursorX": 0,
+  "cursorY": 5,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}
