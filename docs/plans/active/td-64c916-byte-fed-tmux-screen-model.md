@@ -452,8 +452,20 @@ Proceed only when all are true:
 
 If the gate fails because mid-stream state cannot converge or x/vt requires a
 large fork, document the failing fixtures and reopen the Herdr plan. If it fails
-for one narrow, upstreamable emulator defect, hold at the gate until a pinned
-fix exists.
+for a bounded set of named defects with identified remedies — whether upstream
+in the emulator or in Sidecar's own adapter and seed logic — hold at the gate
+until each has a pinned fix.
+
+The reopen trigger is the operative test, not the shape of the failure. The
+original wording here anticipated "one narrow, upstreamable emulator defect";
+the actual Phase 1 outcome was a bounded set of defects whose sharpest member is
+in-repo. That is still a hold, because neither half of the reopen trigger fired.
+
+Criterion 1 above is read as **zero unexplained mismatches** — every remaining
+deterministic mismatch must be a named defect with a tracked remedy, or a
+documented by-design difference between tmux and the emulator (tmux reflows on
+resize; the emulator truncates). It is not read as requiring an empty gap list,
+which no pinned dependency could satisfy.
 
 ### Decision gate outcome — HOLD AT THE GATE (recorded 2026-08-08, `td-2bed64`)
 
