@@ -115,6 +115,7 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 // TabBounds represents the X position range of a tab for mouse hit testing.
 type TabBounds struct {
 	Start, End int
+	Plugin     int
 }
 
 type projectAddState struct {

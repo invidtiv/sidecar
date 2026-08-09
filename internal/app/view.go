@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -546,6 +547,26 @@ func (m Model) renderProjectAddThemePickerOverlay(content string) string {
 
 // renderHeader renders the top bar with title, tabs, and clock.
 func (m Model) renderHeader() string {
+	title, tabs, clock, spacing := m.headerLayout()
+	tabTexts := make([]string, 0, len(tabs))
+	for _, tab := range tabs {
+		tabTexts = append(tabTexts, tab.text)
+	}
+	header := title + strings.Repeat(" ", spacing/2) + strings.Join(tabTexts, " ") + strings.Repeat(" ", spacing-(spacing/2)) + clock
+	header = ansi.Truncate(header, m.width, "")
+	return styles.Header.Width(m.width).MaxWidth(m.width).Render(header)
+}
+
+type headerTab struct {
+	plugin int
+	text   string
+}
+
+// headerLayout keeps the header on the one physical row assumed by
+// headerHeight and mouse routing. Wide layouts retain every existing element;
+// narrow layouts drop the clock, then inactive tabs from the right, while
+// preserving the active destination title and active plugin tab.
+func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spacing int) {
 	// Check if we're in a worktree for the indicator
 	worktreeIndicator := ""
 	if !m.overviewActive {
@@ -569,7 +590,6 @@ func (m Model) renderHeader() string {
 	finalTitleWidth += 1 // trailing space
 
 	// Title with optional repo name and worktree indicator
-	var title string
 	if m.intro.Active {
 		// During animation, render into fixed-width container to keep tabs stable
 		titleContent := styles.BarTitle.Render(" "+m.intro.View()) + m.intro.RepoNameView() + worktreeIndicator + " "
@@ -585,89 +605,57 @@ func (m Model) renderHeader() string {
 
 	// Plugin tabs (themed)
 	plugins := m.registry.Plugins()
-	var tabs []string
 	for i, p := range plugins {
 		isActive := !m.overviewActive && i == m.activePlugin
 		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		tabs = append(tabs, tab)
+		tabs = append(tabs, headerTab{plugin: i, text: tab})
 	}
-	tabBar := strings.Join(tabs, " ")
 
 	// Clock (conditional on config)
-	clock := ""
 	if m.showClock {
 		clock = styles.BarText.Render(m.ui.Clock.Format("15:04"))
 	}
 
-	// Calculate spacing (always use finalTitleWidth so tabs don't shift)
-	tabWidth := lipgloss.Width(tabBar)
-	clockWidth := lipgloss.Width(clock)
-	spacing := m.width - finalTitleWidth - tabWidth - clockWidth
-
-	if spacing < 0 {
-		spacing = 0
+	totalWidth := func() int {
+		width := finalTitleWidth + lipgloss.Width(clock)
+		for i, tab := range tabs {
+			width += lipgloss.Width(tab.text)
+			if i > 0 {
+				width++
+			}
+		}
+		return width
 	}
-
-	// Build header line
-	header := title + strings.Repeat(" ", spacing/2) + tabBar + strings.Repeat(" ", spacing-(spacing/2)) + clock
-
-	return styles.Header.Width(m.width).Render(header)
+	if totalWidth() > m.width {
+		clock = ""
+	}
+	for totalWidth() > m.width && len(tabs) > 0 {
+		remove := -1
+		for i := len(tabs) - 1; i >= 0; i-- {
+			if m.overviewActive || tabs[i].plugin != m.activePlugin {
+				remove = i
+				break
+			}
+		}
+		if remove < 0 {
+			break
+		}
+		tabs = append(tabs[:remove], tabs[remove+1:]...)
+	}
+	spacing = max(0, m.width-totalWidth())
+	return title, tabs, clock, spacing
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
 // Used for mouse click detection on tabs.
 func (m Model) getTabBounds() []TabBounds {
-	// Always use final title width (must match renderHeader logic)
-	titleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	activeName := m.activeDestinationName()
-	if activeName != "" {
-		titleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
-	}
-	// Add worktree indicator width if applicable
-	if !m.overviewActive {
-		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-			branchName := wtInfo.Branch
-			if branchName == "" {
-				branchName = "worktree"
-			}
-			titleWidth += lipgloss.Width(styles.WorktreeIndicator.Render(" [" + branchName + "]"))
-		}
-	}
-	titleWidth += 1 // trailing space
-
-	// Calculate tab widths (using themed renderer)
-	plugins := m.registry.Plugins()
-	var tabWidths []int
-	totalTabWidth := 0
-	for i, p := range plugins {
-		isActive := !m.overviewActive && i == m.activePlugin
-		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		w := lipgloss.Width(tab)
-		tabWidths = append(tabWidths, w)
-		totalTabWidth += w
-	}
-	// Add spaces between tabs
-	if len(plugins) > 1 {
-		totalTabWidth += len(plugins) - 1
-	}
-
-	// Clock width
-	clock := styles.BarText.Render(m.ui.Clock.Format("15:04"))
-	clockWidth := lipgloss.Width(clock)
-
-	// Calculate spacing
-	spacing := m.width - titleWidth - totalTabWidth - clockWidth
-	if spacing < 0 {
-		spacing = 0
-	}
-
-	// Calculate tab bounds
-	// Tabs start after: title + left spacing
-	tabStartX := titleWidth + spacing/2
-	bounds := make([]TabBounds, len(plugins))
+	title, tabs, _, spacing := m.headerLayout()
+	tabStartX := lipgloss.Width(title) + spacing/2
+	bounds := make([]TabBounds, 0, len(tabs))
 	x := tabStartX
-	for i, w := range tabWidths {
-		bounds[i] = TabBounds{Start: x, End: x + w}
+	for _, tab := range tabs {
+		w := lipgloss.Width(tab.text)
+		bounds = append(bounds, TabBounds{Start: x, End: x + w, Plugin: tab.plugin})
 		x += w + 1 // +1 for space between tabs
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -73,21 +74,67 @@ func TestCrossProjectOverviewFlagOffPreservesSwitcherAndDoesNoWork(t *testing.T)
 
 func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	cfg := config.Default()
-	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	registry := plugin.NewRegistry(nil)
+	for _, name := range []string{"td", "git", "files", "conversations", "workspaces"} {
+		if err := registry.Register(&navigationPlugin{id: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	m.overviewActive = true
 	m.intro.Active = false
 	m.width, m.height, m.ready = 72, 30, true
 	panes := m.overview.Start(nil)()
-	_ = m.overview.Update(panes) // finish the empty refresh; do not execute its poll timer
+	_ = m.overview.Update(panes) // build the production five-lane empty board; leave poll timer unexecuted
 
 	view := m.viewContent()
 	if got := lipgloss.Height(view); got != 30 {
 		t.Fatalf("app height = %d, want 30\n%s", got, view)
 	}
 	lines := strings.Split(view, "\n")
-	if !strings.Contains(lines[0], "Sidecar") || !strings.Contains(lines[len(lines)-1], "Open") {
+	if !strings.Contains(lines[0], "Sidecar") || !strings.Contains(lines[0], "Overview") || lines[1] != "" || !strings.Contains(lines[len(lines)-1], "Open") {
 		t.Fatalf("compact viewport hid app chrome: first=%q last=%q", lines[0], lines[len(lines)-1])
+	}
+	if got := lipgloss.Width(lines[0]); got != 72 {
+		t.Fatalf("header width = %d, want 72: %q", got, lines[0])
+	}
+	plainHeader := ansi.Strip(lines[0])
+	if !strings.Contains(plainHeader, "td") || !strings.Contains(plainHeader, "git") || !strings.Contains(plainHeader, "files") || !strings.Contains(plainHeader, "conversations") {
+		t.Fatalf("narrow header omitted discoverable tabs: %q", plainHeader)
+	}
+	if strings.Contains(plainHeader, "workspaces") || len(m.getTabBounds()) != 4 {
+		t.Fatalf("narrow header did not deterministically omit the final inactive tab: %q bounds=%#v", plainHeader, m.getTabBounds())
+	}
+	wide := m
+	wide.width = 140
+	if header := ansi.Strip(wide.renderHeader()); !strings.Contains(header, "workspaces") || len(wide.getTabBounds()) != 5 {
+		t.Fatalf("wide header changed existing full-tab layout: %q bounds=%#v", header, wide.getTabBounds())
+	}
+	active := m
+	active.overviewActive = false
+	active.activePlugin = 4
+	active.intro.RepoName = "Project"
+	active.width = 60
+	foundActive := false
+	for _, bounds := range active.getTabBounds() {
+		foundActive = foundActive || bounds.Plugin == 4
+	}
+	if header := ansi.Strip(active.renderHeader()); !strings.Contains(header, "Project") || !strings.Contains(header, "workspaces") || !foundActive {
+		t.Fatalf("narrow header lost active project/plugin: %q bounds=%#v", header, active.getTabBounds())
+	}
+	if !strings.Contains(ansi.Strip(lines[2]), "Agent Overview") {
+		t.Fatalf("content did not begin at global row 2: %q", lines[2])
+	}
+	// App mouse routing subtracts the one header row plus explicit spacing row;
+	// local compact card row 1 therefore begins at global row 3.
+	adjusted := offsetMouseY(tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft}, -headerHeight)
+	if got := adjusted.Mouse().Y; got != 1 {
+		t.Fatalf("compact content mouse local Y = %d, want 1", got)
+	}
+	updatedModel, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft})
+	if !updatedModel.(Model).overviewActive {
+		t.Fatal("content-row click was misrouted as wrapped header")
 	}
 }
 

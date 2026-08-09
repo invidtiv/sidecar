@@ -251,10 +251,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Check if click is on a tab
 			tabBounds := m.getTabBounds()
-			for i, bounds := range tabBounds {
+			for _, bounds := range tabBounds {
 				if mi.X >= bounds.Start && mi.X < bounds.End {
 					m.exitOverview()
-					return m, m.SetActivePlugin(i)
+					return m, m.SetActivePlugin(bounds.Plugin)
 				}
 			}
 			return m, nil
