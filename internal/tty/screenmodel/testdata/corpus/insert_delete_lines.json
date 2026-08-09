@@ -1,0 +1,14 @@
+{
+  "name": "insert_delete_lines",
+  "fingerprint": "9173c937ebc35ff5c3eda1fc31af19a014eb34af4afa6484c4fc507b64fee6bf",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 16,
+  "paneHeight": 8,
+  "capture": "top\n1111\n\n\n2222\n4444\n5555\n\n",
+  "cursorX": 3,
+  "cursorY": 0,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

@@ -7,8 +7,18 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
+
+func setTmuxByteScreenForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	features.Init(config.Default())
+	features.SetOverride(features.TmuxByteScreen.Name, enabled)
+	t.Cleanup(func() { features.Init(config.Default()) })
+}
 
 type fakeWorkspaceControlManager struct {
 	requests []tty.ControlRequest
@@ -75,6 +85,7 @@ func primaryControlPlugin(manager workspaceControlManager) *Plugin {
 const tTempPath = "/review-only/nonexistent-worktree"
 
 func TestTerminalPanelControlStartsVisibleAndKeepsPollUntilSnapshot(t *testing.T) {
+	setTmuxByteScreenForTest(t, false)
 	manager := &fakeWorkspaceControlManager{}
 	p := terminalPanelControlPlugin(manager)
 	cmds := p.reconcileTerminalControls()
@@ -83,7 +94,8 @@ func TestTerminalPanelControlStartsVisibleAndKeepsPollUntilSnapshot(t *testing.T
 	}
 	request := manager.requests[0]
 	if request.Session != "panel-session" || request.Pane != "%7" ||
-		!request.Visible || !request.Focused || request.Scrollback != captureLineCount {
+		!request.Visible || !request.Focused || request.Scrollback != captureLineCount ||
+		request.ModelAuthority || request.OnModelFrame != nil || request.OnModelInvalid != nil {
 		t.Fatalf("control request = %#v", request)
 	}
 	if len(cmds) != 1 || cmds[0] == nil {
@@ -117,6 +129,181 @@ func TestTerminalPanelControlStartsVisibleAndKeepsPollUntilSnapshot(t *testing.T
 	}
 	if p.scheduleTermPanelPoll(0) != nil {
 		t.Fatal("panel polling continued after control activation")
+	}
+}
+
+func TestTerminalPanelByteScreenTransfersOnFirstSeededFrame(t *testing.T) {
+	setTmuxByteScreenForTest(t, true)
+	manager := &fakeWorkspaceControlManager{}
+	p := terminalPanelControlPlugin(manager)
+	p.interactiveState = &InteractiveState{Active: true, TermPanel: true}
+	cmds := p.reconcileTerminalControls()
+	if len(cmds) != 1 || len(manager.requests) != 1 {
+		t.Fatalf("startup cmds=%d requests=%d", len(cmds), len(manager.requests))
+	}
+	request := manager.requests[0]
+	if !request.ModelAuthority || request.OnModelFrame == nil || request.OnModelInvalid == nil {
+		t.Fatalf("byte-screen request = %#v", request)
+	}
+	consumer := p.controlConsumers[workspaceControlPanel]
+	generation := p.pollScheduler.Current(termPanelPollKey())
+
+	// A provisional capture may paint while the model seeds, but it must not
+	// take ownership or stop the fallback poll chain.
+	request.OnSnapshot(tty.ControlSnapshot{
+		Session: "panel-session", Pane: "%7", Output: "provisional", PaneWidth: 20, PaneHeight: 3,
+	})
+	p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	if consumer.Using || p.pollScheduler.Current(termPanelPollKey()) != generation {
+		t.Fatal("provisional capture transferred byte-screen ownership")
+	}
+
+	model := screenmodel.New(20, 3)
+	defer model.Close()
+	if err := model.Seed(screenmodel.Seed{
+		Output: "history\nlive one\nlive two\nlive three", CaptureBase: 40, HistorySize: 41,
+		HistoryLimit: 100, Width: 20, Height: 3, CursorRow: 1, CursorCol: 4,
+		CursorVisible: true, Mouse: screenmodel.MouseState{Normal: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write([]byte("\x1b[?2004h")); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := model.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.OnModelFrame(tty.ModelFrame{
+		Session: "panel-session", Pane: "%7", Generation: 1, Seeds: 1, Frame: frame,
+	})
+	p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	if !consumer.Using || consumer.Degraded {
+		t.Fatalf("model authority using=%v degraded=%v", consumer.Using, consumer.Degraded)
+	}
+	if p.pollScheduler.Current(termPanelPollKey()) <= generation || p.scheduleTermPanelPoll(0) != nil {
+		t.Fatal("first seeded frame did not invalidate fallback polling")
+	}
+	base, _, absolute := p.termPanelOutput.AbsoluteRange()
+	if !absolute || base != frame.CaptureBase || !strings.Contains(p.termPanelOutput.String(), "history") ||
+		!strings.Contains(p.termPanelOutput.String(), "live three") {
+		t.Fatalf("model buffer base=%d absolute=%v output=%q", base, absolute, p.termPanelOutput.String())
+	}
+	if got := p.terminalHistory[terminalHistoryKey("panel", "panel-session")].HistorySize; got != frame.HistorySize {
+		t.Fatalf("history size = %d, want %d", got, frame.HistorySize)
+	}
+	if p.interactiveState.CursorRow != frame.CursorRow || p.interactiveState.CursorCol != frame.CursorCol ||
+		!p.interactiveState.CursorVisible || p.interactiveState.PaneWidth != frame.Width ||
+		p.interactiveState.PaneHeight != frame.Height || !p.interactiveState.BracketedPasteEnabled ||
+		!p.interactiveState.MouseReportingEnabled {
+		t.Fatalf("interactive model state = %#v", p.interactiveState)
+	}
+}
+
+func TestTerminalPanelByteScreenRejectsStaleFrame(t *testing.T) {
+	setTmuxByteScreenForTest(t, true)
+	manager := &fakeWorkspaceControlManager{}
+	p := terminalPanelControlPlugin(manager)
+	p.reconcileTerminalControls()
+	consumer := p.controlConsumers[workspaceControlPanel]
+	p.applyTerminalControlDelivery(workspaceControlDeliveryMsg{Events: []workspaceControlEvent{{
+		Role: workspaceControlPanel, Token: consumer.Token + 1,
+		Session: consumer.Session, Pane: consumer.Pane,
+		Model: &tty.ModelFrame{Session: consumer.Session, Pane: consumer.Pane, Seeds: 1},
+	}}})
+	if consumer.Using || p.termPanelOutput.String() != "" {
+		t.Fatalf("stale frame applied: using=%v output=%q", consumer.Using, p.termPanelOutput.String())
+	}
+}
+
+func TestTerminalPanelByteScreenInvalidationAndDeathResumeOnePoll(t *testing.T) {
+	setTmuxByteScreenForTest(t, true)
+	manager := &fakeWorkspaceControlManager{}
+	p := terminalPanelControlPlugin(manager)
+	p.reconcileTerminalControls()
+	request := manager.requests[0]
+	consumer := p.controlConsumers[workspaceControlPanel]
+	request.OnModelFrame(tty.ModelFrame{Session: consumer.Session, Pane: consumer.Pane, Seeds: 1})
+	p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	before := p.pollScheduler.Current(termPanelPollKey())
+
+	request.OnModelInvalid(tty.ModelInvalidation{
+		Session: consumer.Session, Pane: consumer.Pane, Reason: tty.ResyncDiscarded,
+	})
+	cmd := p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	if cmd == nil || consumer.Using || consumer.Degraded {
+		t.Fatalf("recoverable invalidation using=%v degraded=%v cmd=%v", consumer.Using, consumer.Degraded, cmd)
+	}
+	afterInvalid := p.pollScheduler.Current(termPanelPollKey())
+	if afterInvalid <= before {
+		t.Fatal("recoverable invalidation did not resume polling")
+	}
+	request.OnModelInvalid(tty.ModelInvalidation{
+		Session: consumer.Session, Pane: consumer.Pane, Reason: tty.ResyncDiscarded,
+	})
+	if duplicate := p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg)); duplicate != nil ||
+		p.pollScheduler.Current(termPanelPollKey()) != afterInvalid {
+		t.Fatal("duplicate invalidation scheduled another poll")
+	}
+
+	request.OnModelFrame(tty.ModelFrame{Session: consumer.Session, Pane: consumer.Pane, Seeds: 2})
+	p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	if !consumer.Using {
+		t.Fatal("reseeded frame did not restore model authority")
+	}
+	beforeDeath := p.pollScheduler.Current(termPanelPollKey())
+	request.OnModelInvalid(tty.ModelInvalidation{
+		Session: consumer.Session, Pane: consumer.Pane, Reason: tty.ResyncReconnect, Terminal: true,
+	})
+	request.OnFallback(errors.New("reader EOF"))
+	deathCmd := p.applyTerminalControlDelivery(p.controlMailbox.next().(workspaceControlDeliveryMsg))
+	if deathCmd == nil || consumer.Using || !consumer.Degraded || consumer.Sub != nil {
+		t.Fatalf("death state using=%v degraded=%v sub=%v cmd=%v", consumer.Using, consumer.Degraded, consumer.Sub, deathCmd)
+	}
+	if got := p.pollScheduler.Current(termPanelPollKey()); got <= beforeDeath {
+		t.Fatal("control death did not resume exactly one fallback poll")
+	}
+}
+
+func TestTerminalPanelByteScreenMailboxPreservesInvalidationBarrier(t *testing.T) {
+	setTmuxByteScreenForTest(t, true)
+	manager := &fakeWorkspaceControlManager{}
+	p := terminalPanelControlPlugin(manager)
+	p.reconcileTerminalControls()
+	request := manager.requests[0]
+	consumer := p.controlConsumers[workspaceControlPanel]
+
+	// The actor published a live frame, then invalidated it. A provisional
+	// capture already pending behind that lifecycle event may paint fallback
+	// data, but it must not re-transfer byte-screen authority.
+	request.OnModelFrame(tty.ModelFrame{Session: consumer.Session, Pane: consumer.Pane, Seeds: 1})
+	request.OnModelInvalid(tty.ModelInvalidation{
+		Session: consumer.Session, Pane: consumer.Pane, Reason: tty.ResyncDiscarded,
+	})
+	request.OnSnapshot(tty.ControlSnapshot{
+		Session: consumer.Session, Pane: consumer.Pane, Output: "fallback snapshot",
+	})
+	delivery := p.controlMailbox.next().(workspaceControlDeliveryMsg)
+	if len(delivery.Events) != 3 {
+		t.Fatalf("mailbox events = %d, want frame + invalidation + provisional snapshot", len(delivery.Events))
+	}
+	p.applyTerminalControlDelivery(delivery)
+	if consumer.Using || consumer.Degraded || p.termPanelOutput.String() != "fallback snapshot" {
+		t.Fatalf("post-barrier using=%v degraded=%v output=%q", consumer.Using, consumer.Degraded, p.termPanelOutput.String())
+	}
+}
+
+func TestTmuxByteScreenDoesNotMigratePrimaryAgent(t *testing.T) {
+	setTmuxByteScreenForTest(t, true)
+	manager := &fakeWorkspaceControlManager{}
+	p := primaryControlPlugin(manager)
+	p.reconcileTerminalControls()
+	if len(manager.requests) != 1 {
+		t.Fatalf("requests = %d", len(manager.requests))
+	}
+	request := manager.requests[0]
+	if request.ModelAuthority || request.OnModelFrame != nil || request.OnModelInvalid != nil {
+		t.Fatalf("primary agent opted into byte screen: %#v", request)
 	}
 }
 

@@ -1,0 +1,14 @@
+{
+  "name": "alt_screen_transitions",
+  "fingerprint": "d4c516c29004096a3b3f6bb4de2400fd73793efc7090b108994cd90affcb4ec8",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 20,
+  "paneHeight": 6,
+  "capture": "main one\nmain two\nback on main\nfinal main\n\n\n",
+  "cursorX": 10,
+  "cursorY": 3,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

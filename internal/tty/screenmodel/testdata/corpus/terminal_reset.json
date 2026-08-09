@@ -1,0 +1,14 @@
+{
+  "name": "terminal_reset",
+  "fingerprint": "e7c25c643609e10a5676e90ba1bfc4e2ced56f555ce87ce43d65bb16cabd9652",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 6,
+  "capture": "after hard reset\n\n\n\n\n\n",
+  "cursorX": 0,
+  "cursorY": 1,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 2
+}

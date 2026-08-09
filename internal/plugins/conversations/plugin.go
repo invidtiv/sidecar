@@ -91,10 +91,13 @@ type renderCacheKey struct {
 
 // Plugin implements the conversations plugin.
 type Plugin struct {
-	ctx          *plugin.Context
-	adapters     map[string]adapter.Adapter
-	focused      bool
-	mouseHandler *mouse.Handler
+	ctx      *plugin.Context
+	adapters map[string]adapter.Adapter
+	// discoveryAdapters contains global sources retained after Detect returned
+	// false so the first session for this project can be discovered live.
+	discoveryAdapters map[string]bool
+	focused           bool
+	mouseHandler      *mouse.Handler
 
 	// Current view
 	view View
@@ -221,11 +224,18 @@ type Plugin struct {
 	worktreeCacheTime   time.Time         // when the cache was last updated
 
 	// Session loading serialization to prevent FD accumulation (td-023577)
-	loadingMu       sync.Mutex // guards loadingSessions
-	loadingSessions bool       // true when loadSessions() goroutine is running
-	sessionLoadMu   sync.Mutex // guards in-flight per-adapter/worktree session loads
-	sessionLoadSeq  uint64     // monotonically increasing token for in-flight session loads
-	sessionLoads    map[string]uint64
+	loadingMu        sync.Mutex // guards loadingSessions/load generation
+	loadingSessions  bool       // true when loadSessions() goroutine is running
+	sessionLoadSeq   uint64     // monotonically increasing whole-load generation
+	activeLoadSeq    uint64     // generation allowed to publish/clear loading state
+	loadCancel       context.CancelFunc
+	refreshCtx       context.Context // canceled on Stop/project switch
+	refreshCancel    context.CancelFunc
+	sessionLoadMu    sync.Mutex               // guards in-flight per-adapter/worktree session loads
+	sessionCallGate  map[string]chan struct{} // serializes stateful adapter reads by adapter ID
+	sessionCallMapMu sync.Mutex
+	sessionPathSeq   uint64 // monotonically increasing token for in-flight path loads
+	sessionLoads     map[string]uint64
 
 	// Large session warning tracking (td-ee67d8)
 	warnedSessions map[string]bool // session ID -> already warned about size
@@ -299,8 +309,10 @@ func New() *Plugin {
 		sidebarRestore:      PaneSidebar,
 		warnedSessions:      make(map[string]bool),
 		sessionLoads:        make(map[string]uint64),
+		sessionCallGate:     make(map[string]chan struct{}),
 		skeleton:            ui.NewSkeleton(8, nil), // 8 placeholder rows
 	}
+	p.refreshCtx, p.refreshCancel = context.WithCancel(context.Background())
 	p.coalescer = NewEventCoalescer(0, coalesceChan)
 	return p
 }
@@ -328,8 +340,17 @@ func (p *Plugin) resetState() {
 	// Reset loading serialization flag (td-6f6ba1: prevent stale load blocking new project)
 	// Must be reset so new project's loadSessions() isn't skipped
 	p.loadingMu.Lock()
+	if p.loadCancel != nil {
+		p.loadCancel()
+		p.loadCancel = nil
+	}
+	p.activeLoadSeq++
 	p.loadingSessions = false
 	p.loadingMu.Unlock()
+	if p.refreshCancel != nil {
+		p.refreshCancel()
+	}
+	p.refreshCtx, p.refreshCancel = context.WithCancel(context.Background())
 	p.sessionLoadMu.Lock()
 	p.sessionLoads = make(map[string]uint64)
 	p.sessionLoadMu.Unlock()
@@ -341,6 +362,7 @@ func (p *Plugin) resetState() {
 	p.displayedCount = defaultSessionPageSize
 	p.hasMoreSessions = false
 	p.loadingAdapters = false
+	p.discoveryAdapters = make(map[string]bool)
 
 	// Message view state
 	p.selectedSession = ""
@@ -470,6 +492,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// an endpoint security agent intercepts every file open. Start() kicks it
 	// off asynchronously instead (td-9c7bf2).
 	p.adapters = make(map[string]adapter.Adapter)
+	p.discoveryAdapters = make(map[string]bool)
 
 	return nil
 }
@@ -504,6 +527,7 @@ func (p *Plugin) detectAdapters() tea.Cmd {
 	return func() tea.Msg {
 		var mu sync.Mutex
 		found := make(map[string]adapter.Adapter, len(all))
+		discoveryOnly := make(map[string]bool)
 
 		var wg sync.WaitGroup
 		for id, a := range all {
@@ -526,8 +550,17 @@ func (p *Plugin) detectAdapters() tea.Cmd {
 				startuptrace.Track("adapter.Detect:"+id, func() {
 					ok, err = a.Detect(projectRoot)
 				})
-				if err != nil || !ok {
+				if err != nil {
 					return
+				}
+				if !ok {
+					discovery, watches := a.(adapter.ProjectDiscoveryWatcher)
+					if !watches || !discovery.WatchForProjectDiscovery() {
+						return
+					}
+					mu.Lock()
+					discoveryOnly[id] = true
+					mu.Unlock()
 				}
 				mu.Lock()
 				found[id] = a
@@ -536,13 +569,24 @@ func (p *Plugin) detectAdapters() tea.Cmd {
 		}
 		wg.Wait()
 
-		return AdaptersDetectedMsg{Epoch: epoch, Adapters: found}
+		return AdaptersDetectedMsg{Epoch: epoch, Adapters: found, DiscoveryOnly: discoveryOnly}
 	}
 }
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
 	p.stopped = true
+	if p.refreshCancel != nil {
+		p.refreshCancel()
+	}
+	p.loadingMu.Lock()
+	if p.loadCancel != nil {
+		p.loadCancel()
+		p.loadCancel = nil
+	}
+	p.activeLoadSeq++
+	p.loadingSessions = false
+	p.loadingMu.Unlock()
 	// Cancel watcher goroutines (td-eb2699b4)
 	if p.watchCancel != nil {
 		p.watchCancel()
@@ -562,6 +606,10 @@ func (p *Plugin) Stop() {
 }
 
 func (p *Plugin) closeWatchers() {
+	if p.watchCancel != nil {
+		p.watchCancel()
+		p.watchCancel = nil
+	}
 	for _, closer := range p.watchClosers {
 		_ = closer.Close()
 	}
@@ -635,12 +683,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		p.detectingAdapters = false
 		p.adapters = msg.Adapters
+		p.discoveryAdapters = msg.DiscoveryOnly
 		if len(p.adapters) == 0 {
 			p.skeleton.Stop()
 			p.initialLoadDone = true
 			return p, nil
 		}
-		return p, tea.Batch(p.loadSessions(), p.startWatcher())
+		return p, p.loadSessions()
 
 	case LoadingStartedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -656,6 +705,16 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				return p, p.listenForAdapterBatch() // keep draining stale batches
 			}
 			return p, nil
+		}
+		var cmds []tea.Cmd
+		for _, notice := range msg.Notices {
+			n := notice
+			cmds = append(cmds, func() tea.Msg {
+				return app.ToastMsg{Message: n, Duration: 4 * time.Second, IsError: true}
+			})
+		}
+		if msg.AdapterID != "" && len(msg.Sessions) > 0 {
+			delete(p.discoveryAdapters, msg.AdapterID)
 		}
 
 		// Merge new sessions, deduplicating by ID
@@ -685,8 +744,6 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.coalescer.UpdateSessionSizes(p.sessions)
 		}
 
-		var cmds []tea.Cmd
-
 		if !msg.Final {
 			// Keep listening for more adapter batches
 			cmds = append(cmds, p.listenForAdapterBatch())
@@ -715,6 +772,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				cmds = append(cmds, tea.Tick(loadSettleDelay, func(time.Time) tea.Msg {
 					return LoadSettledMsg{Token: token}
 				}))
+			}
+			// Watcher setup starts only after the completed load so it can reuse the
+			// collected sessions and cannot race Sessions() over a stateful adapter.
+			if p.watchCancel == nil && p.watchChan == nil {
+				cmds = append(cmds, p.startWatcher())
 			}
 		}
 
@@ -1001,23 +1063,39 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case WatchStartedMsg:
-		// Watcher started, store channel and start listening
-		if msg.Channel == nil {
-			for _, closer := range msg.Closers {
-				_ = closer.Close()
+		if plugin.IsStale(p.ctx, msg) || p.stopped {
+			if msg.Cancel != nil {
+				msg.Cancel()
 			}
-			return p, nil // Watcher failed
-		}
-		if p.stopped {
+			if msg.Manager != nil {
+				_ = msg.Manager.Close()
+			}
 			for _, closer := range msg.Closers {
 				_ = closer.Close()
 			}
 			return p, nil
 		}
+		var watchCmds []tea.Cmd
+		for _, notice := range msg.Notices {
+			n := notice
+			watchCmds = append(watchCmds, func() tea.Msg {
+				return app.ToastMsg{Message: n, Duration: 4 * time.Second, IsError: true}
+			})
+		}
+		// Watcher started, store channel and start listening
+		if msg.Channel == nil {
+			for _, closer := range msg.Closers {
+				_ = closer.Close()
+			}
+			return p, tea.Batch(watchCmds...) // Watcher failed
+		}
 		p.closeWatchers()
+		p.watchCancel = msg.Cancel
+		p.tieredManager = msg.Manager
 		p.watchClosers = msg.Closers
 		p.watchChan = msg.Channel
-		return p, p.listenForWatchEvents()
+		watchCmds = append(watchCmds, p.listenForWatchEvents())
+		return p, tea.Batch(watchCmds...)
 
 	case WatchEventMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1029,7 +1107,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.ctx != nil {
 			epoch = p.ctx.Epoch
 		}
-		p.coalescer.Add(msg.SessionID, epoch)
+		sessionID := msg.SessionID
+		if p.discoveryAdapters[msg.AdapterID] || p.globalEventNeedsProjectRefresh(msg.AdapterID, sessionID) {
+			// SessionByID alone cannot prove that a global event belongs to the
+			// current project. Refresh through Sessions(project) until a matching
+			// session has arrived and discovery mode is cleared.
+			sessionID = ""
+		}
+		p.coalescer.Add(sessionID, epoch)
 
 		cmds := []tea.Cmd{
 			p.listenForWatchEvents(),
@@ -1037,7 +1122,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 		// Still reload messages immediately if selected session changed
 		// (coalescer handles session list refresh)
-		if msg.SessionID != "" && msg.SessionID == p.selectedSession {
+		if sessionID != "" && sessionID == p.selectedSession {
 			cmds = append(cmds, p.scheduleMessageReload(p.selectedSession))
 		}
 
@@ -1357,8 +1442,9 @@ func (p *Plugin) exportSessionToFile() tea.Cmd {
 // AdaptersDetectedMsg reports the adapters that have sessions for this project.
 // Detection runs off the startup path, so this arrives after the first frame.
 type AdaptersDetectedMsg struct {
-	Epoch    uint64
-	Adapters map[string]adapter.Adapter
+	Epoch         uint64
+	Adapters      map[string]adapter.Adapter
+	DiscoveryOnly map[string]bool
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -1404,6 +1490,7 @@ func (m MessagesLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 type WatchEventMsg struct {
 	Epoch     uint64 // Epoch when request was issued (for stale detection)
+	AdapterID string
 	SessionID string // ID of the session that changed (empty for periodic refresh)
 }
 
@@ -1411,9 +1498,17 @@ type WatchEventMsg struct {
 func (m WatchEventMsg) GetEpoch() uint64 { return m.Epoch }
 
 type WatchStartedMsg struct {
+	Epoch   uint64
 	Channel <-chan adapter.Event
 	Closers []io.Closer
+	Cancel  context.CancelFunc
+	Manager *tieredwatcher.Manager
+	Notices []string
 }
+
+// GetEpoch implements plugin.EpochMessage.
+func (m WatchStartedMsg) GetEpoch() uint64 { return m.Epoch }
+
 type ErrorMsg struct{ Err error }
 
 type PreviewLoadMsg struct {

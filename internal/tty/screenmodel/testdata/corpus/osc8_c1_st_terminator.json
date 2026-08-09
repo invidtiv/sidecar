@@ -1,0 +1,14 @@
+{
+  "name": "osc8_c1_st_terminator",
+  "fingerprint": "7fcc716afad3cccc2122eab7e1483b68c43a107e5c966b0301b75259a0a5777c",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 6,
+  "capture": "safe\n\n\n\n\n\n",
+  "cursorX": 4,
+  "cursorY": 0,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

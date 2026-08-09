@@ -169,6 +169,12 @@ type Plugin struct {
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
 
+	// One shared, demand-driven frame clock animates semantic agent activity.
+	// Ordinary running shells never enter this clock.
+	activityAnimationFrame      int
+	activityAnimationScheduled  bool
+	activityAnimationGeneration uint64
+
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	selectionTermPanel            bool
@@ -495,6 +501,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	if p.operationCancel != nil {
 		p.operationCancel()
 	}
+	p.activityAnimationGeneration++
+	p.activityAnimationFrame = 0
+	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	p.ctx = ctx

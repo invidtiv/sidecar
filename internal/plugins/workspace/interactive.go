@@ -152,9 +152,9 @@ func sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
 // sendInteractivePasteInputCmd sends paste text to tmux asynchronously (td-c2961e).
 // Used for multi-character terminal input (not clipboard paste which is already async).
 // Shares the keystroke queue so pasted text cannot overtake surrounding keys.
-func sendInteractivePasteInputCmd(sessionName, text string, bracketed bool) tea.Cmd {
+func sendInteractivePasteInputCmd(sessionName, text string) tea.Cmd {
 	return awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
-		return tty.SendPasteInput(sessionName, text, bracketed)
+		return tty.SendPasteInput(sessionName, text)
 	}))
 }
 
@@ -177,7 +177,6 @@ func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
 	if sessionName == "" {
 		return nil
 	}
-	bracketed := p.interactiveState.BracketedPasteEnabled
 
 	return func() tea.Msg {
 		text, err := clipboard.ReadAll()
@@ -192,7 +191,7 @@ func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
 		// later than a keystroke Cmd would. Going through the queue anyway keeps
 		// the paste from interleaving mid-write with concurrent keystrokes.
 		err = <-tty.SendOrdered(sessionName, func() error {
-			return tty.SendPasteInput(sessionName, text, bracketed)
+			return tty.SendPasteInput(sessionName, text)
 		})
 		if err != nil {
 			return InteractivePasteResultMsg{Err: err, SessionDead: tty.IsSessionDeadError(err)}
@@ -826,7 +825,7 @@ func (p *Plugin) handleInteractivePaste(content string) tea.Cmd {
 	}
 	sessionName := p.interactiveState.TargetSession
 	return tea.Batch(
-		sendInteractivePasteInputCmd(sessionName, content, p.interactiveState.BracketedPasteEnabled),
+		sendInteractivePasteInputCmd(sessionName, content),
 		p.pollInteractivePane(),
 	)
 }
@@ -1026,20 +1025,16 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Check for paste (multi-character input with newlines or long text)
 	if tty.IsPasteInput(msg) {
 		text := msg.Text
-		bracketed := p.interactiveState.BracketedPasteEnabled
 		// Send paste async (td-c2961e): escape + paste in order if pending
 		if pendingEscape {
 			cmds = append(cmds, awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
 				if err := tty.SendKeyToTmux(sessionName, "Escape"); err != nil {
 					return err
 				}
-				if bracketed {
-					return tty.SendBracketedPasteToTmux(sessionName, text)
-				}
 				return tty.SendPasteToTmux(sessionName, text)
 			})))
 		} else {
-			cmds = append(cmds, sendInteractivePasteInputCmd(sessionName, text, bracketed))
+			cmds = append(cmds, sendInteractivePasteInputCmd(sessionName, text))
 		}
 		cmds = append(cmds, p.pollInteractivePane())
 		return tea.Batch(cmds...)

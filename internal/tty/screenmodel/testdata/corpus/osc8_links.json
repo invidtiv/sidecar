@@ -1,0 +1,14 @@
+{
+  "name": "osc8_links",
+  "fingerprint": "7af5f5dcd344d0068915a306ce84a3d0aca9d7b4553aa9870e3a256834de4afc",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 6,
+  "capture": "\u001b]8;;https://example.com/a\u001b\\linkA\u001b]8;;\u001b\\ after\n\u001b]8;id=xyz;https://example.com/b\u001b\\linkB\u001b]8;;\u001b\\\n\u001b[31m\u001b]8;;https://example.com/c\u001b\\styled-link\u001b[39m\u001b]8;;\u001b\\\n\n\n\n",
+  "cursorX": 0,
+  "cursorY": 3,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

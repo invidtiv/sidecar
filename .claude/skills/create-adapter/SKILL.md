@@ -57,6 +57,11 @@ Every session from `Sessions()` must set:
 
 `FileSize` is used for dynamic debounce and huge-session auto-reload protection.
 
+Treat source identity separately from lineage. Use the source's durable thread/session ID
+for `Session.ID`; parent, root, fork, or lineage IDs describe relationships and must not
+collapse distinct sessions. Decode metadata fields defensively when the source has emitted
+multiple shapes over time (for example, a string in one version and an object in another).
+
 ### Path and Watch Strategy
 
 Set `Session.Path` only when Sidecar should use tiered file watching for that adapter:
@@ -74,7 +79,10 @@ Minimum cache keys:
 - Messages: `path + size + modTime`
 - SQLite/WAL: include WAL size+mtime in the key
 
-Use bounded LRU behavior. Prune stale paths.
+Use bounded LRU behavior for every cache and index. Prune stale paths. Assume caches evict
+independently: a hit in one cache must restore any derived state required by another, or the
+authoritative source must remain available so eviction cannot change results such as aggregate
+usage or ID-to-path resolution.
 
 ### 2) Incremental parsing for append-only formats
 
@@ -91,6 +99,11 @@ When incremental metadata parse is impractical:
 - Tail pass: latest timestamp, token totals
 - Skip middle of large files
 
+When the source owns a metadata index, prefer its read-only index over scanning large event
+logs. Probe the schema and required columns before use, open it read-only with bounded/FD-safe
+access, and fall back to event-log discovery when it is missing, locked, or incompatible. The
+source index is an adapter seam, not a second source of truth to mutate.
+
 ### 4) Avoid repeated expensive path work
 
 Resolve project path once per `Sessions()` call (`Abs`/`EvalSymlinks`), reuse for all matches.
@@ -106,6 +119,13 @@ For SQLite adapters:
 - `SetMaxOpenConns(1)`, `SetMaxIdleConns(0)`
 - Close rows and DB handles promptly
 - Avoid multiple DB connections per `Messages()` call
+
+### 7) Preserve aggregate facts across incremental loads
+
+Usage and similar cumulative facts may arrive as repeated totals or deltas. Define the source
+semantics, retain the authoritative aggregate across incremental parsing, and include all
+components the source exposes. Do not reconstruct a partial aggregate from whichever message
+cache entry survived eviction.
 
 ## Watching and FD Management
 
@@ -135,6 +155,27 @@ File-based adapters that set `Session.Path` get TieredWatcher's three-tier syste
 ### 6) Ensure cleanup
 All watcher paths must close cleanly on plugin stop. No goroutine or FD leaks.
 
+### 7) Combine known-file and discovery watching when needed
+
+Tiered watching of known `Session.Path` values handles cheap appends, but it cannot discover a
+project's first session or a new time-partitioned directory. Global file adapters may need both
+known-file watching and one adapter-native discovery watcher. Watch creation at every directory
+level that can appear later (including month/year rollover), and keep discovery project-filtered.
+
+### 8) Resolve path IDs through the adapter
+
+Do not assume a new file's basename is its session ID. If identity lives in metadata, implement
+`SessionPathResolver` so watch events carry the same durable ID returned by `Sessions()`.
+
+## Adapter Call Lifecycle
+
+Some global adapters maintain caches and indexes across calls. Consumers must serialize calls
+to a stateful adapter, make gate admission and work lifecycle/epoch cancellable, and reject stale
+results after project switches or shutdown. A slow `Sessions()` result must remain observable
+and eventually load (with a visible loading state); never time it out, silently discard it, and
+leave its goroutine running. Global targeted refresh must admit only sessions already belonging
+to the current project; unknown IDs require a project-filtered discovery pass.
+
 ## Message and Content Rendering
 
 Adapters must provide rich structured content for Conversation Flow UI.
@@ -162,12 +203,23 @@ Reduces refresh from O(N sessions) to O(1). Implement when adapter can resolve a
 ### ProjectDiscoverer
 Implement when source format allows discovery of sessions beyond current git worktrees.
 
+### SessionPathResolver
+Implement when a file path alone does not encode the source's durable session ID. Tiered and
+discovery watchers use it to turn new or changed paths into targeted refresh events.
+
+### ProjectDiscoveryWatcher
+Implement for global sources that must discover the first matching session even when
+`Sessions()` initially returns no known files. Share only one global watcher per adapter, and
+ensure its events trigger a project-filtered load before any session is admitted.
+
 ## Error Handling
 
 - `Detect()`: return `(false, nil)` for missing data directories
 - `Sessions()`: skip corrupt/unreadable entries and continue; hard-fail only on systemic errors
 - `Messages()`: return `nil, nil` for missing session files; fail on parse errors
 - `Watch()`: return `(nil, nil, err)` when watch setup fails
+- Slow calls: surface loading/error state and accept the eventual result; do not translate a
+  consumer timeout into a false empty history
 
 ## Benchmark Targets
 
@@ -176,6 +228,10 @@ New adapters should meet these performance targets:
 - `Messages()` incremental append: under 10ms
 - `Messages()` cache hit: under 1ms
 - `Sessions()` on 50 session files: under 50ms
+
+Also benchmark realistic source shapes: hundreds or thousands of indexed sessions, a large live-
+scale transcript, cache hits, and incremental appends. Record fixture size and session/event count
+with the result so a tiny synthetic benchmark cannot hide discovery or parsing regressions.
 
 ## Testing Requirements
 
@@ -187,8 +243,14 @@ Required tests for every new adapter:
 - File growth behavior (incremental parse path)
 - File shrink/rotation behavior (fallback full parse)
 - Tool use/result linking (including incremental append cases)
+- Incremental `ContentBlocks` tool-use/result ID parity, not only legacy `ToolUses`
+- Aggregate usage across multiple events, cache-write/read components, and independent cache eviction
 - Watcher event emission includes `SessionID`
 - Watcher cleanup (no leaked closers)
+- Repeated-call FD stability
+- Zero-history project followed by its first session creation
+- Time-partition rollover (for example, a new month under an existing year)
+- Global discovery and targeted refresh remain isolated across two projects/worktrees
 
 Run tests:
 ```bash
@@ -201,6 +263,7 @@ go test ./internal/adapter/<adapter> -bench . -benchmem
 ### A) Correctness
 - [ ] Full `adapter.Adapter` contract implemented
 - [ ] `Sessions()` sets required identity and timestamp fields
+- [ ] Durable source identity is distinct from parent/root lineage; historical metadata shapes parse
 - [ ] `FileSize` populated for every session
 - [ ] `Path` strategy explicit and correct for adapter type
 - [ ] Message role/content mapping correct
@@ -210,7 +273,9 @@ go test ./internal/adapter/<adapter> -bench . -benchmem
 ### B) Performance
 - [ ] Metadata cache implemented and bounded
 - [ ] Message cache implemented and bounded
+- [ ] Every auxiliary index/aggregate cache is bounded and correct under independent eviction
 - [ ] Incremental parse or two-pass strategy implemented
+- [ ] Source-owned metadata indexes are read-only, schema-probed, and have a safe fallback
 - [ ] No repeated `Abs/EvalSymlinks` in per-session loops
 - [ ] No duplicate parsing for single-pass data
 - [ ] Benchmarks added with realistic fixtures
@@ -218,15 +283,19 @@ go test ./internal/adapter/<adapter> -bench . -benchmem
 ### C) FD / Watching
 - [ ] Directory-level watches preferred
 - [ ] Global adapters implement `WatchScopeProvider`
+- [ ] Global discovery is project-isolated, including zero-history first creation
 - [ ] Watch events include `SessionID`
+- [ ] Metadata-backed IDs resolve through `SessionPathResolver`
 - [ ] Debounce + buffered + non-blocking send pattern
 - [ ] DB adapters account for WAL in invalidation/watch
+- [ ] Known-file and discovery watches cover time-partition rollover without duplication
 - [ ] Watchers and goroutines close cleanly
 
 ### D) Integration
 - [ ] Adapter registered via `register.go` and main import
 - [ ] Search uses adapter `Messages()` path
 - [ ] Large-session behavior validated (`FileSize`-driven)
+- [ ] Slow/global calls are serialized, lifecycle-cancellable, and never discarded as empty
 
 ## Session Classification
 
@@ -314,7 +383,7 @@ Lessons learned from building global-scope adapters (Pi, Codex):
 Global adapters (`WatchScopeGlobal`) store sessions in a single directory regardless of project. They must filter by CWD matching `projectRoot` in `Sessions()`:
 
 - Resolve `projectRoot` once per `Sessions()` call (Abs + EvalSymlinks)
-- Use a fast CWD cache that reads only the first JSONL line (session header) to avoid full-file parses for non-matching sessions
+- Read CWD from the cheapest authoritative source (a read-only metadata index or event-log header), and bound any cache used to avoid full-file parses for non-matching sessions
 - Match with `filepath.Rel` — a session matches if its CWD is equal to or a subdirectory of the project root
 
 ### Category Filter Interaction
@@ -327,16 +396,17 @@ Global adapters (`WatchScopeGlobal`) store sessions in a single directory regard
 
 Global adapters need to handle project switching gracefully:
 
-- The watcher persists across project switches, but `Sessions()` gets called with a new `projectRoot`
-- Directory listing caches with short TTLs (e.g., 500ms) naturally handle this
-- CWD caches keyed by file path are project-agnostic and don't need clearing
-- Session index maps (`sessionID -> path`) should be rebuilt on each `Sessions()` call to reflect the new project filter
+- Each `Sessions(projectRoot)` result is project-filtered, even when adapter caches retain source-global metadata
+- Cross-project/path identity indexes may accumulate across serialized calls, but must be bounded; eviction must fall back to authoritative index/log lookup rather than changing resolution behavior
+- Project reinitialization cancels and replaces the prior watcher lifecycle/epoch; stale loads and events must be rejected
+- Cache entries keyed only by source path may be shared across projects, while membership in a returned session list remains project-specific
 
-### Watcher Persistence
+### Watcher Lifecycle and Refresh
 
-- Global adapter watchers are created once and shared across project switches (the plugin deduplicates by adapter ID + WatchScope)
-- Watch events don't include project context — the coalescer triggers a full `Sessions()` refresh which applies the current project filter
-- Ensure watch goroutines don't hold stale project references
+- Create only one adapter-native global discovery watcher within the active lifecycle, alongside tiered watches for known files when applicable
+- Target refresh only for IDs already admitted to the current project's session list, and only through their owning adapter
+- Treat an unknown ID from a global watcher as discovery: run a project-filtered full load before admitting it
+- Ensure watch goroutines and queued calls use the current lifecycle context and cannot retain stale project state
 
 ## Schema References
 

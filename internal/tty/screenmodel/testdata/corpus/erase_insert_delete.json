@@ -1,0 +1,14 @@
+{
+  "name": "erase_insert_delete",
+  "fingerprint": "97507a1daa500f8526ae29106db22ce18cfb5aab08e1d8d85b9552fe019cde5d",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 20,
+  "paneHeight": 8,
+  "capture": "AAAA\n          BBBBBBBBBB\n\n  DDDD DDDDDDDDDD\nta\n\n\n\n",
+  "cursorX": 2,
+  "cursorY": 4,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

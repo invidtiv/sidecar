@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -12,6 +13,16 @@ import (
 
 type controlChannel interface {
 	Send(command string, callback func(controlResponse)) error
+	// SendPair writes two commands in a single write so tmux reads and queues
+	// them together and executes them back to back. tmux emits one response
+	// block per command line, so two FIFO callbacks are registered; a parse
+	// error in one line still produces that line's own error block, which keeps
+	// the FIFO 1:1. This exists so a seed transaction's metadata and its
+	// rendered capture describe the same moment.
+	SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error
+	// SendTriple has the same atomic-write and FIFO-response contract as
+	// SendPair for transactions that require three distinct tmux responses.
+	SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error
 	Events() <-chan controlEvent
 	Done() <-chan error
 	Close() error
@@ -24,6 +35,7 @@ type processControlChannel struct {
 	stdin  io.WriteCloser
 	events chan controlEvent
 	done   chan error
+	dead   chan struct{}
 	ready  chan struct{}
 
 	parser controlParser
@@ -43,10 +55,16 @@ func newProcessControlChannel(session string) (controlChannel, error) {
 	))
 }
 
+// newProcessControlChannelForSocket attaches to an explicitly named tmux socket.
+// It exists for tests: TMUX is scrubbed from the child environment so a suite
+// running inside tmux can never resolve a target against the developer's live
+// default server.
 func newProcessControlChannelForSocket(socket, session string) (controlChannel, error) {
-	return newProcessControlChannelCommand(session, exec.Command(
+	cmd := exec.Command( //nolint:gosec
 		"tmux", "-S", socket, "-C", "attach-session", "-f", "ignore-size", "-t", session,
-	))
+	)
+	cmd.Env = append(os.Environ(), "TMUX=")
+	return newProcessControlChannelCommand(session, cmd)
 }
 
 func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChannel, error) {
@@ -70,6 +88,7 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 		stdin:  stdin,
 		events: make(chan controlEvent, 128),
 		done:   make(chan error, 1),
+		dead:   make(chan struct{}),
 		ready:  make(chan struct{}),
 	}
 	if err := cmd.Start(); err != nil {
@@ -97,21 +116,57 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 }
 
 func (c *processControlChannel) Send(command string, callback func(controlResponse)) error {
-	if strings.ContainsAny(command, "\r\n") {
-		return fmt.Errorf("tmux control: multiline command rejected")
+	return c.write([]string{command}, []func(controlResponse){callback})
+}
+
+func (c *processControlChannel) SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error {
+	return c.write([]string{first, second}, []func(controlResponse){firstCallback, secondCallback})
+}
+
+func (c *processControlChannel) SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error {
+	return c.write(
+		[]string{first, second, third},
+		[]func(controlResponse){firstCallback, secondCallback, thirdCallback},
+	)
+}
+
+// write emits every command in one io.WriteString so tmux reads the whole group
+// in a single read and queues the commands together.
+//
+// This is safe to call from the ordered actor goroutine even though it blocks:
+// tmux never blocks writing to a control client. It buffers client output in
+// memory and, when a client falls behind, either drops bytes (counted by
+// client_discarded) or pauses the pane. Its event loop therefore keeps draining
+// our stdin, so a command write cannot deadlock against a stalled reader.
+func (c *processControlChannel) write(commands []string, callbacks []func(controlResponse)) error {
+	var payload strings.Builder
+	for _, command := range commands {
+		if strings.ContainsAny(command, "\r\n") {
+			return fmt.Errorf("tmux control: multiline command rejected")
+		}
+		payload.WriteString(command)
+		payload.WriteByte('\n')
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
 	c.mu.Lock()
-	c.pending = append(c.pending, callback)
+	c.pending = append(c.pending, callbacks...)
 	c.mu.Unlock()
-	if _, err := io.WriteString(c.stdin, command+"\n"); err != nil {
-		c.mu.Lock()
-		if len(c.pending) > 0 {
-			c.pending = c.pending[:len(c.pending)-1]
+	if written, err := io.WriteString(c.stdin, payload.String()); err != nil {
+		// Unregistering the callbacks is only sound when nothing reached tmux: a
+		// short write can still have delivered a whole command line, and tmux will
+		// answer it with a response block that the remaining FIFO must still line
+		// up against. On a partial write the callbacks are therefore left in place
+		// — the write error kills the channel anyway, so they are dropped with it,
+		// but they are never removed while a response for them may still arrive.
+		if written == 0 {
+			c.mu.Lock()
+			if drop := min(len(callbacks), len(c.pending)); drop > 0 {
+				c.pending = c.pending[:len(c.pending)-drop]
+			}
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 		c.finish(fmt.Errorf("tmux control write: %w", err))
 		return err
 	}
@@ -154,32 +209,37 @@ func (c *processControlChannel) readLoop(reader io.Reader) {
 	}
 }
 
+// dispatch places every parsed event on the single ordered stream. Command
+// responses are correlated with their FIFO callback here — on the reader
+// goroutine, where receive order is authoritative — but the callback is carried
+// on the event and invoked downstream by the one actor that also consumes
+// %output notifications. That is the ordering barrier the byte-fed screen model
+// depends on: a capture response can never be processed ahead of pane bytes
+// tmux emitted before it, nor behind bytes tmux emitted after it.
 func (c *processControlChannel) dispatch(event controlEvent) {
-	if event.Kind != controlEventResponse {
-		select {
-		case c.events <- event:
-		case <-c.done:
+	if event.Kind == controlEventResponse {
+		c.mu.Lock()
+		if !c.readyOK {
+			c.readyOK = true
+			close(c.ready)
+			c.mu.Unlock()
+			return
 		}
-		return
-	}
-
-	c.mu.Lock()
-	if !c.readyOK {
-		c.readyOK = true
-		close(c.ready)
+		if len(c.pending) == 0 {
+			c.mu.Unlock()
+			return
+		}
+		event.Callback = c.pending[0]
+		copy(c.pending, c.pending[1:])
+		c.pending = c.pending[:len(c.pending)-1]
 		c.mu.Unlock()
-		return
+		if event.Callback == nil {
+			return
+		}
 	}
-	if len(c.pending) == 0 {
-		c.mu.Unlock()
-		return
-	}
-	callback := c.pending[0]
-	copy(c.pending, c.pending[1:])
-	c.pending = c.pending[:len(c.pending)-1]
-	c.mu.Unlock()
-	if callback != nil {
-		callback(event.Response)
+	select {
+	case c.events <- event:
+	case <-c.dead:
 	}
 }
 
@@ -192,5 +252,6 @@ func (c *processControlChannel) finish(err error) {
 		case c.done <- err:
 		default:
 		}
+		close(c.dead)
 	})
 }

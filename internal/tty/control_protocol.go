@@ -34,6 +34,13 @@ type controlEvent struct {
 	// docs/research/active/lessons-from-herdr.md.
 	Payload  string
 	Response controlResponse
+	// Callback is the FIFO-correlated command callback for a response event.
+	// The transport pops it on the reader goroutine so command ordering is
+	// preserved, but it is invoked by the single ordered actor that also
+	// consumes notifications, so a response can never overtake pane bytes that
+	// tmux emitted before it. See docs/plans/active/
+	// td-64c916-byte-fed-tmux-screen-model-slice1-evidence.md.
+	Callback func(controlResponse)
 }
 
 // DecodedPayload unescapes Payload on demand.

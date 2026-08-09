@@ -1,7 +1,10 @@
 package adapter
 
 import (
+	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,6 +34,38 @@ type ProjectDiscoverer interface {
 // a single session by ID without scanning the full directory (td-2b8ebe).
 type TargetedRefresher interface {
 	SessionByID(sessionID string) (*Session, error)
+}
+
+// SessionPathResolver is implemented by file-based adapters whose session ID
+// cannot be derived from the session filename alone. Watchers use it for new
+// files that have not yet been registered in their path index.
+type SessionPathResolver interface {
+	SessionIDFromPath(path string) (string, error)
+}
+
+// ProjectDiscoveryWatcher is implemented by global sources that must remain
+// watched even when Detect reports no sessions for the current project. This
+// lets the first session for a project appear without restarting Sidecar.
+// Events from an adapter in discovery mode trigger a project-filtered full
+// refresh until the first matching session has been loaded.
+type ProjectDiscoveryWatcher interface {
+	WatchForProjectDiscovery() bool
+}
+
+// ResolveSessionID returns the adapter-correct session ID for path. Adapters
+// with metadata-backed IDs should implement SessionPathResolver; the basename
+// fallback preserves the convention used by simpler session-N.jsonl stores.
+func ResolveSessionID(a Adapter, path string) (string, error) {
+	if resolver, ok := a.(SessionPathResolver); ok {
+		return resolver.SessionIDFromPath(path)
+	}
+	base := filepath.Base(path)
+	base = strings.TrimPrefix(base, "session-")
+	id := strings.TrimSuffix(base, filepath.Ext(base))
+	if id == "" {
+		return "", fmt.Errorf("cannot resolve session ID from %q", path)
+	}
+	return id, nil
 }
 
 // WatchScope indicates whether an adapter watches global or per-project paths.
@@ -196,6 +231,7 @@ type UsageStats struct {
 // Event represents a change in session data.
 type Event struct {
 	Type      EventType
+	AdapterID string
 	SessionID string
 	Data      any
 }

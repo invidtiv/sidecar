@@ -20,6 +20,8 @@ import (
 
 // Data loading and file watching methods
 
+var adapterSlowLoadNoticeDelay = 5 * time.Second
+
 // loadSessions loads sessions from the adapter.
 // Queries sessions from all related worktree paths to show cross-worktree conversations.
 // Sessions from deleted worktrees are marked with "(deleted)" in their worktree name.
@@ -37,6 +39,7 @@ func (p *Plugin) loadSessions() tea.Cmd {
 	cachedNames := p.cachedWorktreeNames
 	cacheTime := p.worktreeCacheTime
 	adapters := p.adapters
+	batchChan := p.adapterBatchChan
 
 	// Handle nil context (e.g., in tests)
 	var workDir string
@@ -45,21 +48,13 @@ func (p *Plugin) loadSessions() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		// Serialize session loading to prevent FD accumulation (td-023577).
-		// Multiple concurrent loadSessions() goroutines each opening session files
-		// caused FD count to grow unbounded. Only allow one at a time.
-		p.loadingMu.Lock()
-		if p.loadingSessions {
-			p.loadingMu.Unlock()
-			return nil // Skip if another load is in progress
+		loadSeq, loadCtx, ok := p.beginWholeSessionLoad()
+		if !ok {
+			return nil
 		}
-		p.loadingSessions = true
-		p.loadingMu.Unlock()
 
 		if len(adapters) == 0 {
-			p.loadingMu.Lock()
-			p.loadingSessions = false
-			p.loadingMu.Unlock()
+			p.finishWholeSessionLoad(loadSeq)
 			return SessionsLoadedMsg{Epoch: epoch}
 		}
 
@@ -126,7 +121,8 @@ func (p *Plugin) loadSessions() tea.Cmd {
 			currentPath = absPath
 		}
 
-		// Launch per-adapter goroutines that send directly to channel (td-7198a5)
+		// Launch one worker per adapter. Paths for the same adapter are deliberately
+		// serial: global adapters often share mutable indexes across Sessions calls.
 		var wg sync.WaitGroup
 		for id, a := range adapters {
 			adapterID := id
@@ -135,59 +131,67 @@ func (p *Plugin) loadSessions() tea.Cmd {
 			go func() {
 				defer wg.Done()
 
-				// Channel to receive results with timeout
-				type result struct {
-					sessions []adapter.Session
-					err      error
-				}
-
 				var adapterSess []adapter.Session
 				for _, wtPath := range worktreePaths {
+					if loadCtx.Err() != nil {
+						return
+					}
 					loadToken, ok := p.beginSessionLoad(adapterID, wtPath)
 					if !ok {
 						continue
 					}
+					path := wtPath
+					timer := time.AfterFunc(adapterSlowLoadNoticeDelay, func() {
+						p.sendAdapterBatch(loadCtx, batchChan, AdapterBatchMsg{
+							Epoch:     epoch,
+							AdapterID: adapterID,
+							Notices:   []string{fmt.Sprintf("%s is still loading conversations from %s", adpt.Name(), path)},
+						})
+					})
 
-					resultChan := make(chan result, 1)
+					releaseCall, acquired := p.acquireSessionCall(loadCtx, adapterID)
+					if !acquired {
+						timer.Stop()
+						p.endSessionLoad(adapterID, wtPath, loadToken)
+						return
+					}
+					wtSessions, err := adpt.Sessions(wtPath)
+					releaseCall()
+					timer.Stop()
+					p.endSessionLoad(adapterID, wtPath, loadToken)
 
-					// Run each Sessions() call with timeout
-					go func(path string, token uint64) {
-						defer p.endSessionLoad(adapterID, path, token)
-						sess, err := adpt.Sessions(path)
-						resultChan <- result{sessions: sess, err: err}
-					}(wtPath, loadToken)
-
-					// Wait for result or timeout after 5 seconds per worktree
-					select {
-					case res := <-resultChan:
-						if res.err != nil {
-							continue
-						}
-						wtSessions := res.sessions
-						wtName := worktreeNames[wtPath]
-						for i := range wtSessions {
-							if wtSessions[i].AdapterID == "" {
-								wtSessions[i].AdapterID = adapterID
-							}
-							if wtSessions[i].AdapterName == "" {
-								wtSessions[i].AdapterName = adpt.Name()
-							}
-							if wtSessions[i].AdapterIcon == "" {
-								wtSessions[i].AdapterIcon = adpt.Icon()
-							}
-							absWtPath := wtPath
-							if abs, err := filepath.Abs(wtPath); err == nil {
-								absWtPath = abs
-							}
-							if absWtPath != currentPath {
-								wtSessions[i].WorktreeName = wtName
-								wtSessions[i].WorktreePath = absWtPath
-							}
-							adapterSess = append(adapterSess, wtSessions[i])
-						}
-					case <-time.After(5 * time.Second):
-						// Timeout: skip this worktree
+					if err != nil {
+						p.sendAdapterBatch(loadCtx, batchChan, AdapterBatchMsg{
+							Epoch:     epoch,
+							AdapterID: adapterID,
+							Notices:   []string{fmt.Sprintf("%s conversations failed to load: %v", adpt.Name(), err)},
+						})
 						continue
+					}
+					if loadCtx.Err() != nil {
+						return
+					}
+
+					wtName := worktreeNames[wtPath]
+					for i := range wtSessions {
+						if wtSessions[i].AdapterID == "" {
+							wtSessions[i].AdapterID = adapterID
+						}
+						if wtSessions[i].AdapterName == "" {
+							wtSessions[i].AdapterName = adpt.Name()
+						}
+						if wtSessions[i].AdapterIcon == "" {
+							wtSessions[i].AdapterIcon = adpt.Icon()
+						}
+						absWtPath := wtPath
+						if abs, err := filepath.Abs(wtPath); err == nil {
+							absWtPath = abs
+						}
+						if absWtPath != currentPath {
+							wtSessions[i].WorktreeName = wtName
+							wtSessions[i].WorktreePath = absWtPath
+						}
+						adapterSess = append(adapterSess, wtSessions[i])
 					}
 				}
 				// Mark sessions from deleted worktrees
@@ -198,40 +202,27 @@ func (p *Plugin) loadSessions() tea.Cmd {
 						}
 					}
 				}
-				p.adapterBatchChan <- AdapterBatchMsg{
-					Epoch:    epoch,
-					Sessions: adapterSess,
-				}
+				p.sendAdapterBatch(loadCtx, batchChan, AdapterBatchMsg{
+					Epoch:     epoch,
+					AdapterID: adapterID,
+					Sessions:  adapterSess,
+				})
 			}()
 		}
 
-		// Coordinator goroutine: wait for all, send final signal, release lock
+		// Coordinator waits for real completion. A slow call remains visible instead
+		// of being abandoned after five seconds while an orphan mutates the adapter.
 		go func() {
-			done := make(chan struct{})
-			go func() {
-				wg.Wait()
-				close(done)
-			}()
-
-			// Wait for completion or timeout after 30 seconds
-			select {
-			case <-done:
-				fdmonitor.Check(nil)
-			case <-time.After(30 * time.Second):
-				// Timeout: log and continue anyway to prevent infinite hang
-				fdmonitor.Check(nil)
-			}
+			wg.Wait()
+			fdmonitor.Check(nil)
 
 			finalMsg := AdapterBatchMsg{Epoch: epoch, Final: true}
 			if cacheUpdated {
 				finalMsg.WorktreePaths = worktreePaths
 				finalMsg.WorktreeNames = worktreeNames
 			}
-			p.adapterBatchChan <- finalMsg
-
-			p.loadingMu.Lock()
-			p.loadingSessions = false
-			p.loadingMu.Unlock()
+			p.sendAdapterBatch(loadCtx, batchChan, finalMsg)
+			p.finishWholeSessionLoad(loadSeq)
 		}()
 
 		// Return immediately — adapter goroutines will send results to channel
@@ -250,20 +241,43 @@ func (p *Plugin) refreshSessions(sessionIDs []string) tea.Cmd {
 	}
 
 	adapters := p.adapters
+	refreshCtx := p.refreshCtx
+	knownAdapters := make(map[string]string, len(p.sessions))
+	for _, s := range p.sessions {
+		knownAdapters[s.ID] = s.AdapterID
+	}
 
 	return func() tea.Msg {
-		if len(adapters) == 0 {
+		if len(adapters) == 0 || refreshCtx == nil || refreshCtx.Err() != nil {
 			return nil
 		}
 
 		var refreshed []adapter.Session
 
 		for _, sessionID := range sessionIDs {
-			// Try each adapter's TargetedRefresher interface
-			for _, a := range adapters {
+			// Targeted refresh is only safe for a session already admitted by the
+			// project-filtered Sessions load. Unknown IDs from global watchers must
+			// take the full-load path instead of importing a foreign project by ID.
+			knownAdapterID, known := knownAdapters[sessionID]
+			if !known {
+				continue
+			}
+			for adapterID, a := range adapters {
+				if knownAdapterID != "" && adapterID != knownAdapterID {
+					continue
+				}
 				if tr, ok := a.(adapter.TargetedRefresher); ok {
+					releaseCall, acquired := p.tryAcquireSessionCall(refreshCtx, adapterID)
+					if !acquired {
+						continue
+					}
 					s, err := tr.SessionByID(sessionID)
-					if err == nil && s != nil {
+					releaseCall()
+					if refreshCtx.Err() != nil {
+						return nil
+					}
+					if err == nil && s != nil && s.ID == sessionID &&
+						(s.AdapterID == "" || knownAdapterID == "" || s.AdapterID == knownAdapterID) {
 						refreshed = append(refreshed, *s)
 						break
 					}
@@ -277,6 +291,27 @@ func (p *Plugin) refreshSessions(sessionIDs []string) tea.Cmd {
 
 		return SessionsRefreshedMsg{Epoch: epoch, Refreshed: refreshed}
 	}
+}
+
+// globalEventNeedsProjectRefresh prevents a global adapter's event stream from
+// admitting sessions belonging to another project. Known sessions were already
+// filtered through Sessions(projectRoot); unknown IDs require that same full
+// project-filtered load before targeted refresh becomes safe.
+func (p *Plugin) globalEventNeedsProjectRefresh(adapterID, sessionID string) bool {
+	if adapterID == "" || sessionID == "" {
+		return false
+	}
+	a := p.adapters[adapterID]
+	scope, ok := a.(adapter.WatchScopeProvider)
+	if !ok || scope.WatchScope() != adapter.WatchScopeGlobal {
+		return false
+	}
+	for _, s := range p.sessions {
+		if s.ID == sessionID && (s.AdapterID == "" || s.AdapterID == adapterID) {
+			return false
+		}
+	}
+	return true
 }
 
 // loadMessages loads messages for a session with pagination support (td-313ea851).
@@ -338,29 +373,38 @@ func (p *Plugin) loadMessages(sessionID string) tea.Cmd {
 // File-based adapters (claudecode, codex, antigravity, opencode) use tiered watcher.
 // Database adapters (cursor, warp) still use their own Watch() methods.
 func (p *Plugin) startWatcher() tea.Cmd {
+	var epoch uint64
+	var workDir string
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+		workDir = p.ctx.WorkDir
+	}
+	adapters := p.adapters
+	sessions := append([]adapter.Session(nil), p.sessions...)
+	worktreePaths := append([]string(nil), p.cachedWorktreePaths...)
 	return func() tea.Msg {
-		if len(p.adapters) == 0 {
-			return WatchStartedMsg{Channel: nil}
+		if len(adapters) == 0 {
+			return WatchStartedMsg{Epoch: epoch, Channel: nil}
 		}
 
 		// Create context for cancellation (td-eb2699b4)
 		ctx, cancel := context.WithCancel(context.Background())
-		p.watchCancel = cancel
 
 		// Get all related worktree paths (main repo + all worktrees)
-		worktreePaths := app.GetAllRelatedPaths(p.ctx.WorkDir)
 		if len(worktreePaths) == 0 {
-			// Not a git repo or no worktrees - just use current workdir
-			worktreePaths = []string{p.ctx.WorkDir}
+			worktreePaths = app.GetAllRelatedPaths(workDir)
+			if len(worktreePaths) == 0 {
+				worktreePaths = []string{workDir}
+			}
 		}
 
 		// Create tiered watcher manager (td-dca6fe)
 		manager := tieredwatcher.NewManager()
-		p.tieredManager = manager
 
 		merged := make(chan adapter.Event, 32)
 		var wg sync.WaitGroup
 		watchCount := 0
+		var notices []string
 
 		// Collect all file-based sessions for tiered watching (td-dca6fe)
 		// Sessions with a Path field use the tiered watcher
@@ -372,63 +416,31 @@ func (p *Plugin) startWatcher() tea.Cmd {
 		adapterConfigs := make(map[string]*adapterTieredConfig)
 		fileBasedAdapters := make(map[string]bool) // adapters with file paths
 
-		for adapterID, a := range p.adapters {
-			// Check if adapter has global watch scope
-			isGlobal := false
-			if scopeProvider, ok := a.(adapter.WatchScopeProvider); ok {
-				isGlobal = scopeProvider.WatchScope() == adapter.WatchScopeGlobal
+		for _, s := range sessions {
+			if s.Path == "" || adapters[s.AdapterID] == nil {
+				continue
 			}
-
-			pathsToScan := worktreePaths
-			if isGlobal {
-				// Global adapters only need one scan call (uses first path)
-				pathsToScan = worktreePaths[:1]
+			adapterID := s.AdapterID
+			fileBasedAdapters[adapterID] = true
+			cfg := adapterConfigs[adapterID]
+			if cfg == nil {
+				cfg = &adapterTieredConfig{exts: make(map[string]bool)}
+				adapterConfigs[adapterID] = cfg
 			}
-
-			hasFilePaths := false
-			for _, wtPath := range pathsToScan {
-				sessions, _ := a.Sessions(wtPath)
-				for _, s := range sessions {
-					if s.Path != "" {
-						hasFilePaths = true
-						cfg := adapterConfigs[adapterID]
-						if cfg == nil {
-							cfg = &adapterTieredConfig{
-								exts: make(map[string]bool),
-							}
-							adapterConfigs[adapterID] = cfg
-						}
-						ext := filepath.Ext(s.Path)
-						cfg.exts[ext] = true
-						lastHot := time.Time{}
-						if s.IsActive {
-							lastHot = s.UpdatedAt
-							cfg.activeCount++
-						}
-						cfg.sessions = append(cfg.sessions, tieredwatcher.SessionInfo{
-							ID:       s.ID,
-							Path:     s.Path,
-							ModTime:  s.UpdatedAt,
-							LastHot:  lastHot,
-							FileSize: s.FileSize,
-						})
-					}
-				}
+			cfg.exts[filepath.Ext(s.Path)] = true
+			lastHot := time.Time{}
+			if s.IsActive {
+				lastHot = s.UpdatedAt
+				cfg.activeCount++
 			}
-			if hasFilePaths {
-				fileBasedAdapters[adapterID] = true
-			}
+			cfg.sessions = append(cfg.sessions, tieredwatcher.SessionInfo{
+				ID: s.ID, Path: s.Path, ModTime: s.UpdatedAt, LastHot: lastHot, FileSize: s.FileSize,
+			})
 		}
 
 		// Create tiered watchers for file-based sessions (td-dca6fe)
 		// This replaces a.Watch() calls for file-based adapters
 		if len(adapterConfigs) > 0 {
-			extractID := func(path string) string {
-				base := filepath.Base(path)
-				// Strip known prefixes for session files
-				base = strings.TrimPrefix(base, "session-")
-				return strings.TrimSuffix(base, filepath.Ext(base))
-			}
 			scale := p.hotTargetScale()
 
 			for adapterID, cfg := range adapterConfigs {
@@ -436,6 +448,14 @@ func (p *Plugin) startWatcher() tea.Cmd {
 					continue
 				}
 
+				adpt := adapters[adapterID]
+				extractID := func(path string) string {
+					id, err := adapter.ResolveSessionID(adpt, path)
+					if err != nil {
+						return ""
+					}
+					return id
+				}
 				extFilter := func(path string) bool { return true }
 				if len(cfg.exts) > 0 {
 					extFilter = func(path string) bool {
@@ -462,8 +482,12 @@ func (p *Plugin) startWatcher() tea.Cmd {
 						if err != nil {
 							continue
 						}
+						id := extractID(path)
+						if id == "" {
+							continue
+						}
 						result = append(result, tieredwatcher.SessionInfo{
-							ID:       extractID(path),
+							ID:       id,
 							Path:     path,
 							ModTime:  info.ModTime(),
 							FileSize: info.Size(),
@@ -479,6 +503,7 @@ func (p *Plugin) startWatcher() tea.Cmd {
 					ScanDir:     scanDir,
 				})
 				if err != nil {
+					notices = append(notices, fmt.Sprintf("%s conversation watcher failed: %v", adpt.Name(), err))
 					continue
 				}
 
@@ -512,15 +537,15 @@ func (p *Plugin) startWatcher() tea.Cmd {
 
 		// For adapters without file paths (database-based like cursor, warp),
 		// still use their Watch() methods
-		for adapterID, a := range p.adapters {
-			if fileBasedAdapters[adapterID] {
-				continue // Already using tiered watcher
-			}
+		for adapterID, a := range adapters {
 
 			// Check if adapter has global watch scope
 			isGlobal := false
 			if scopeProvider, ok := a.(adapter.WatchScopeProvider); ok {
 				isGlobal = scopeProvider.WatchScope() == adapter.WatchScopeGlobal
+			}
+			if fileBasedAdapters[adapterID] && !isGlobal {
+				continue // Project-scoped files are fully covered by tiered watching.
 			}
 
 			pathsToWatch := worktreePaths
@@ -531,6 +556,9 @@ func (p *Plugin) startWatcher() tea.Cmd {
 			for _, wtPath := range pathsToWatch {
 				ch, closer, err := a.Watch(wtPath)
 				if err != nil || ch == nil || closer == nil {
+					if err != nil {
+						notices = append(notices, fmt.Sprintf("%s conversation watcher failed: %v", a.Name(), err))
+					}
 					if closer != nil {
 						_ = closer.Close()
 					}
@@ -550,6 +578,7 @@ func (p *Plugin) startWatcher() tea.Cmd {
 							if !ok {
 								return
 							}
+							evt.AdapterID = aid
 							select {
 							case merged <- evt:
 							default:
@@ -561,9 +590,9 @@ func (p *Plugin) startWatcher() tea.Cmd {
 		}
 
 		if watchCount == 0 {
+			cancel()
 			_ = manager.Close()
-			p.tieredManager = nil
-			return WatchStartedMsg{Channel: nil, Closers: nil}
+			return WatchStartedMsg{Epoch: epoch, Channel: nil, Notices: notices}
 		}
 
 		// Close merged channel when all source channels are done
@@ -572,7 +601,7 @@ func (p *Plugin) startWatcher() tea.Cmd {
 			close(merged)
 		}()
 
-		return WatchStartedMsg{Channel: merged, Closers: nil}
+		return WatchStartedMsg{Epoch: epoch, Channel: merged, Cancel: cancel, Manager: manager, Notices: notices}
 	}
 }
 
@@ -592,14 +621,16 @@ func (p *Plugin) listenForWatchEvents() tea.Cmd {
 			// Channel closed
 			return nil
 		}
-		return WatchEventMsg{Epoch: epoch, SessionID: evt.SessionID}
+		return WatchEventMsg{Epoch: epoch, AdapterID: evt.AdapterID, SessionID: evt.SessionID}
 	}
 }
 
 // AdapterBatchMsg delivers sessions from a single adapter incrementally (td-7198a5).
 type AdapterBatchMsg struct {
 	Epoch         uint64
+	AdapterID     string
 	Sessions      []adapter.Session
+	Notices       []string
 	Final         bool // true when all adapters are done
 	WorktreePaths []string
 	WorktreeNames map[string]string
@@ -627,6 +658,80 @@ func (p *Plugin) listenForAdapterBatch() tea.Cmd {
 	}
 }
 
+func (p *Plugin) beginWholeSessionLoad() (uint64, context.Context, bool) {
+	p.loadingMu.Lock()
+	defer p.loadingMu.Unlock()
+	if p.loadingSessions {
+		return 0, nil, false
+	}
+	p.loadingSessions = true
+	p.sessionLoadSeq++
+	p.activeLoadSeq = p.sessionLoadSeq
+	ctx, cancel := context.WithCancel(context.Background())
+	p.loadCancel = cancel
+	return p.activeLoadSeq, ctx, true
+}
+
+func (p *Plugin) finishWholeSessionLoad(seq uint64) {
+	p.loadingMu.Lock()
+	defer p.loadingMu.Unlock()
+	if p.activeLoadSeq != seq {
+		return
+	}
+	p.loadingSessions = false
+	if p.loadCancel != nil {
+		p.loadCancel()
+	}
+	p.loadCancel = nil
+}
+
+func (p *Plugin) sendAdapterBatch(ctx context.Context, ch chan<- AdapterBatchMsg, msg AdapterBatchMsg) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case ch <- msg:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (p *Plugin) acquireSessionCall(ctx context.Context, adapterID string) (func(), bool) {
+	gate := p.sessionCallGateFor(adapterID)
+	select {
+	case <-gate:
+		return func() { gate <- struct{}{} }, true
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
+func (p *Plugin) tryAcquireSessionCall(ctx context.Context, adapterID string) (func(), bool) {
+	gate := p.sessionCallGateFor(adapterID)
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	select {
+	case <-gate:
+		return func() { gate <- struct{}{} }, true
+	default:
+		return nil, false
+	}
+}
+
+func (p *Plugin) sessionCallGateFor(adapterID string) chan struct{} {
+	p.sessionCallMapMu.Lock()
+	gate := p.sessionCallGate[adapterID]
+	if gate == nil {
+		gate = make(chan struct{}, 1)
+		gate <- struct{}{}
+		p.sessionCallGate[adapterID] = gate
+	}
+	p.sessionCallMapMu.Unlock()
+	return gate
+}
+
 func sessionLoadKey(adapterID, worktreePath string) string {
 	return adapterID + "\x00" + worktreePath
 }
@@ -640,8 +745,8 @@ func (p *Plugin) beginSessionLoad(adapterID, worktreePath string) (uint64, bool)
 		return 0, false
 	}
 
-	p.sessionLoadSeq++
-	token := p.sessionLoadSeq
+	p.sessionPathSeq++
+	token := p.sessionPathSeq
 	p.sessionLoads[key] = token
 	return token, true
 }

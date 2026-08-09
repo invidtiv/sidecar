@@ -1,0 +1,14 @@
+{
+  "name": "resize_wider_then_narrower",
+  "fingerprint": "938891c9344ceb5f7668201df729fb231fb823f736e6273b4584f004a9b206a6",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 12,
+  "paneHeight": 6,
+  "capture": "aaaaaaaa\nbbbb\nafter wider\nafter narrow\ner\n\n",
+  "cursorX": 0,
+  "cursorY": 5,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 1
+}

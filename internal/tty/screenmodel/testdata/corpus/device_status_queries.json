@@ -1,0 +1,14 @@
+{
+  "name": "device_status_queries",
+  "fingerprint": "cc3df3bab845fd61081056aff5f2c687dc8145663bb6f87aa5195728660c8c8a",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 6,
+  "capture": "before\nafter\n\n\n\n\n",
+  "cursorX": 0,
+  "cursorY": 2,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

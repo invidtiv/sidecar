@@ -744,6 +744,7 @@ func (m *Manager) AddWatcher(adapterID string, tw *TieredWatcher, ch <-chan adap
 	// Forward events from this watcher to the merged channel
 	go func() {
 		for evt := range ch {
+			evt.AdapterID = adapterID
 			m.mu.Lock()
 			closed := m.closed
 			m.mu.Unlock()

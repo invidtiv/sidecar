@@ -7,16 +7,15 @@ import (
 	"image/color"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
 // renderKanbanView renders the kanban board view.
 func (p *Plugin) renderKanbanView(width, height int) string {
 	numCols := kanbanColumnCount()
-	minColWidth := 16
-	minKanbanWidth := (minColWidth * numCols) + (numCols - 1) + 4
 	// Check minimum width - auto-collapse to list view if too narrow
-	if width < minKanbanWidth {
+	if kanbanUsesListFallback(width) {
 		// Fall back to list view when too narrow
 		return p.renderListView(width, height)
 	}
@@ -67,8 +66,8 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 
 	// Calculate column widths (account for panel borders)
 	colWidth := (innerWidth - numCols - 1) / numCols // -1 for separators
-	if colWidth < minColWidth {
-		colWidth = minColWidth
+	if colWidth < minKanbanColumnWidth {
+		colWidth = minKanbanColumnWidth
 	}
 
 	// Render column headers with colors and register hit regions
@@ -100,13 +99,13 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 	lines = append(lines, strings.Repeat(horizSep, innerWidth))
 
 	// Card dimensions: 4 lines per card (name, agent, task, stats)
-	cardHeight := 4
+	cardHeight := kanbanCardHeight
 	// Calculate content height (account for panel border + header + separators)
 	contentHeight := height - 6 // panel borders (2) + header + 2 separators + column headers
 	if contentHeight < cardHeight {
 		contentHeight = cardHeight
 	}
-	maxCards := contentHeight / cardHeight
+	maxCards := kanbanVisibleCardCount(height)
 
 	// Find the maximum number of cards in any column (for row rendering)
 	maxInColumn := 0
@@ -198,12 +197,19 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 	switch lineIdx {
 	case 0:
 		statusIcon := "○"
+		var statusStyle lipgloss.Style
+		hasAnimatedActivity := false
 		if shell.IsOrphaned {
 			statusIcon = "◌"
-		} else if icon, _, _, ok := activityPresentation(shell.Agent); ok {
+		} else if icon, _, style, ok := p.animatedActivityPresentation(shell.Agent); ok {
 			statusIcon = icon
+			statusStyle = style
+			hasAnimatedActivity = true
 		} else if shell.Agent != nil {
 			statusIcon = "●"
+		}
+		if hasAnimatedActivity && !isSelected {
+			statusIcon = statusStyle.Render(statusIcon)
 		}
 		name := shell.Name
 		maxNameLen := width - 3 // Account for icon and space
@@ -228,7 +234,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 	}
 
 	if lipgloss.Width(content) > width {
-		content = truncateString(content, width)
+		content = ansi.Truncate(content, width, "")
 	}
 
 	// Pad to width
@@ -252,16 +258,29 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelected bool) string {
 	var content string
 	presentation := kanbanPresentationForWorktree(wt)
+	var activityStyle lipgloss.Style
+	hasAnimatedActivity := false
+	if !presentation.health {
+		if icon, _, style, ok := p.animatedActivityPresentation(wt.Agent); ok {
+			presentation.icon = icon
+			activityStyle = style
+			hasAnimatedActivity = true
+		}
+	}
 
 	switch lineIdx {
 	case 0:
 		// Line 0: Status icon + name (rune-safe for Unicode)
+		icon := presentation.icon
+		if hasAnimatedActivity && !isSelected {
+			icon = activityStyle.Render(icon)
+		}
 		name := wt.Name
 		maxNameLen := width - 3 // Account for icon and space
 		if runes := []rune(name); len(runes) > maxNameLen {
 			name = string(runes[:maxNameLen-3]) + "..."
 		}
-		content = fmt.Sprintf(" %s %s", presentation.icon, name)
+		content = fmt.Sprintf(" %s %s", icon, name)
 	case 1:
 		// Line 1: Agent type and semantic activity, with health priority.
 		agentStr := ""

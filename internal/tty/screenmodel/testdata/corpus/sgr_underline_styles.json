@@ -1,0 +1,14 @@
+{
+  "name": "sgr_underline_styles",
+  "fingerprint": "262557d40fc67dd7e6d2c873653922d95a981a7b0b78ce0cf9b4400d3f28e587",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 8,
+  "capture": "\u001b[4msingle\u001b[0m off\n\u001b[4:2mdouble\u001b[0m\n\u001b[4:3mcurly\u001b[0m off\n\u001b[4:4mdotted\u001b[0;4:5mdashed\u001b[0m\n\u001b[4m\u001b[58;5;208mul-colored\u001b[0;4mul-default\n\u001b[58;2;10;20;30mul-rgb\u001b[0m\n\n\n",
+  "cursorX": 0,
+  "cursorY": 6,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

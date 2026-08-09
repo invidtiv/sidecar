@@ -1,0 +1,14 @@
+{
+  "name": "soft_reset_decstr",
+  "fingerprint": "f7a54af4748de95ddaa86367978b511059c55b40d28f898ff4048bfe420fe482",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 20,
+  "paneHeight": 8,
+  "capture": "a\nb\nc\nd\ne\nf\ng\nbottom\n",
+  "cursorX": 6,
+  "cursorY": 7,
+  "cursorFlag": false,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

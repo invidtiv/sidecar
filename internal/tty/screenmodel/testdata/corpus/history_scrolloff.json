@@ -1,0 +1,14 @@
+{
+  "name": "history_scrolloff",
+  "fingerprint": "9c9b08a7853b4741f98e5aaa92c7df1eb34c9bbfa1cd46f7aab4863164880c55",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 16,
+  "paneHeight": 6,
+  "capture": "line 16\nline 17\nline 18\nline 19\nline 20\n\n",
+  "cursorX": 0,
+  "cursorY": 5,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 15
+}

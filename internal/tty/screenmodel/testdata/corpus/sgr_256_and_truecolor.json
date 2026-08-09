@@ -1,0 +1,14 @@
+{
+  "name": "sgr_256_and_truecolor",
+  "fingerprint": "c4002da1c694a0cd4d9d9ebb198532bfcb45db19080a572da998a73489af75ef",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 6,
+  "capture": "\u001b[38;5;196midx196\u001b[48;5;21mbg21\n\u001b[38;2;18;52;86m\u001b[49mrgbfg\u001b[48;2;120;200;40mrgbbg\n\u001b[38;5;3m\u001b[49midx3-equals-sgr33\u001b[39m\n\u001b[33msgr33\u001b[39m\n\n\n",
+  "cursorX": 0,
+  "cursorY": 4,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

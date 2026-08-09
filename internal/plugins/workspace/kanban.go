@@ -31,7 +31,27 @@ type kanbanWorktreePresentation struct {
 
 const kanbanShellColumnIndex = 0
 
+const (
+	kanbanCardHeight     = 4
+	minKanbanColumnWidth = 16
+)
+
 func kanbanColumnCount() int { return len(kanbanLaneOrder) + 1 }
+
+func kanbanMinimumWidth() int {
+	numCols := kanbanColumnCount()
+	return (minKanbanColumnWidth * numCols) + (numCols - 1) + 4
+}
+
+func kanbanUsesListFallback(width int) bool { return width < kanbanMinimumWidth() }
+
+func kanbanVisibleCardCount(height int) int {
+	contentHeight := height - 6 // panel borders + header + separators + column headers
+	if contentHeight < kanbanCardHeight {
+		contentHeight = kanbanCardHeight
+	}
+	return contentHeight / kanbanCardHeight
+}
 
 func kanbanLaneForColumn(col int) (kanbanLane, bool) {
 	if col <= kanbanShellColumnIndex {

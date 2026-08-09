@@ -1,0 +1,14 @@
+{
+  "name": "unicode_wide_combining_emoji",
+  "fingerprint": "69e31319b4810ea8b45a284a6aa42c289dc427c50a9be96297d75b18ebff9226",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 8,
+  "capture": "ascii only\n日本語 wide\né combining\n你好，世界\n❤️ vs ❤\n👩‍💻 zwj\n❤️ vs ❤\n\n",
+  "cursorX": 7,
+  "cursorY": 6,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}

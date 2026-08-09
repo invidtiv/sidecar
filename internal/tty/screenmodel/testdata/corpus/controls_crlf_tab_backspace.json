@@ -1,0 +1,14 @@
+{
+  "name": "controls_crlf_tab_backspace",
+  "fingerprint": "8c1fd45a573f8913c731a136145ad73050f4059d554ea04d0c0e98e51a5bf9d3",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 40,
+  "paneHeight": 8,
+  "capture": "ab\tcd\nxQz\nindent\n      keeps column\nA\tB\tC\tD\tE\nzero\n\n\n",
+  "cursorX": 0,
+  "cursorY": 6,
+  "cursorFlag": true,
+  "alternateOn": false,
+  "mouseAnyFlag": false,
+  "historySize": 0
+}
