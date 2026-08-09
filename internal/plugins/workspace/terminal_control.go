@@ -369,6 +369,7 @@ func (p *Plugin) applyTerminalControlDelivery(msg workspaceControlDeliveryMsg) t
 			p.applyPrimaryControlSnapshot(consumer, *event.Snapshot)
 		}
 	}
+	cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 	return tea.Batch(cmds...)
 }
 

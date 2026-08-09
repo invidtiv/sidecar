@@ -422,7 +422,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	// Status indicator - use special icon for main worktree
 	var statusIcon string
-	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(wt.Agent)
+	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(wt.Agent)
 	if wt.IsOrphaned || wt.IsMissing {
 		hasActivity = false
 	}
@@ -683,7 +683,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	var statusStyle lipgloss.Style
 
 	// td-f88fdd: Handle orphaned shells (manifest entry exists but tmux session is gone)
-	activityIcon, activityText, activityStyle, hasActivity := activityPresentation(shell.Agent)
+	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
 	if shell.IsOrphaned {
 		statusIcon = "◌" // Empty circle for orphaned
 		statusStyle = styles.Muted
