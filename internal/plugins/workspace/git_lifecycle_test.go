@@ -144,6 +144,54 @@ func TestDirectMergeRefusesCleanTargetCommitAfterPostPullPin(t *testing.T) {
 	}
 }
 
+func TestDirectMergeRefusesSameOIDBranchSwitchAfterFetchBeforePull(t *testing.T) {
+	r := newLifecycleRepo(t)
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainBefore := mustGit(t, r.main, "rev-parse", "refs/heads/main")
+	clone := filepath.Join(r.root, "publisher-direct-pull")
+	mustGit(t, r.root, "clone", r.remote, clone)
+	mustGit(t, clone, "config", "user.email", "sidecar-test@example.com")
+	mustGit(t, clone, "config", "user.name", "Sidecar Test")
+	mustGit(t, clone, "checkout", "main")
+	mustWrite(t, filepath.Join(clone, "remote-direct.txt"), "remote direct update\n")
+	mustGit(t, clone, "add", "remote-direct.txt")
+	mustGit(t, clone, "commit", "-m", "remote direct update")
+	mustGit(t, clone, "push", "origin", "main")
+	remoteOID := mustGit(t, clone, "rev-parse", "HEAD")
+
+	op = runDirectMergeWithBeforePull(op, func() {
+		mustGit(t, r.main, "switch", "-c", "parking")
+	})
+	if op.Err == nil || !strings.Contains(op.Err.Error(), "expected \"main\"") {
+		t.Fatalf("direct merge result = %+v, want pre-pull checkout refusal", op)
+	}
+	if mainAfter := mustGit(t, r.main, "rev-parse", "refs/heads/main"); mainAfter != mainBefore {
+		t.Fatalf("local main moved: %s -> %s", mainBefore, mainAfter)
+	}
+	if parking := mustGit(t, r.main, "rev-parse", "HEAD"); parking != mainBefore {
+		t.Fatalf("parking moved: got %s want %s", parking, mainBefore)
+	}
+	if _, err := os.Stat(filepath.Join(r.main, "remote-direct.txt")); !os.IsNotExist(err) {
+		t.Fatalf("remote target was pulled into parking: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(r.main, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("feature was merged into parking: %v", err)
+	}
+	if tracking := mustGit(t, r.main, "rev-parse", "origin/main"); tracking != remoteOID {
+		t.Fatalf("fetched origin/main = %s, want %s", tracking, remoteOID)
+	}
+	remoteAfter, err := remoteBranchOID(r.main, "origin", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != remoteOID {
+		t.Fatalf("remote main changed unexpectedly: got %s want %s", remoteAfter, remoteOID)
+	}
+}
+
 func TestDirectMergeConflictCanAbortToPreMergeTarget(t *testing.T) {
 	r := newLifecycleRepo(t)
 	mustWrite(t, filepath.Join(r.main, "shared.txt"), "main change\n")

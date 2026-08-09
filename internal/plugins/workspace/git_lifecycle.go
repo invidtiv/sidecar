@@ -195,10 +195,18 @@ func preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch strin
 }
 
 func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
-	return runDirectMergeWithBeforeMerge(op, nil)
+	return runDirectMergeWithHooks(op, nil, nil)
 }
 
 func runDirectMergeWithBeforeMerge(op *DirectMergeOperation, beforeMerge func()) *DirectMergeOperation {
+	return runDirectMergeWithHooks(op, nil, beforeMerge)
+}
+
+func runDirectMergeWithBeforePull(op *DirectMergeOperation, beforePull func()) *DirectMergeOperation {
+	return runDirectMergeWithHooks(op, beforePull, nil)
+}
+
+func runDirectMergeWithHooks(op *DirectMergeOperation, beforePull, beforeMerge func()) *DirectMergeOperation {
 	if op == nil {
 		return &DirectMergeOperation{Err: fmt.Errorf("missing direct merge operation")}
 	}
@@ -209,6 +217,18 @@ func runDirectMergeWithBeforeMerge(op *DirectMergeOperation, beforeMerge func())
 		return failDirectMerge(op, fmt.Errorf("fetch %s: %w", op.Remote, err), DirectMergeRecoveryNone)
 	}
 	op.Completed = append(op.Completed, "fetch")
+	if beforePull != nil {
+		beforePull()
+	}
+	if err := requireClean(op.TargetPath); err != nil {
+		return failDirectMerge(op, fmt.Errorf("target changed before fast-forward: %w", err), DirectMergeRecoveryNone)
+	}
+	if state := gitOperationState(op.TargetPath); state != "clean" {
+		return failDirectMerge(op, fmt.Errorf("target started a Git operation before fast-forward: %s", state), DirectMergeRecoveryNone)
+	}
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.TargetOID); err != nil {
+		return failDirectMerge(op, fmt.Errorf("target checkout changed before fast-forward: %w", err), DirectMergeRecoveryNone)
+	}
 	if _, err := gitOutput(op.TargetPath, "pull", "--ff-only", op.Remote, op.TargetBranch); err != nil {
 		return failDirectMerge(op, fmt.Errorf("fast-forward target: %w", err), DirectMergeRecoveryNone)
 	}
