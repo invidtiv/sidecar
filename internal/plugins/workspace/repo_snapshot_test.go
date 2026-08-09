@@ -367,15 +367,27 @@ func TestCreatePostAddInventoryCancelledWithPartialResult(t *testing.T) {
 func TestPRImportDefaultBranchDiscoveryCancelledAfterAdd(t *testing.T) {
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "default-branch-started")
-	count := filepath.Join(t.TempDir(), "git-count")
 	git := filepath.Join(binDir, "git")
-	script := "#!/bin/sh\nn=0\n[ ! -f \"$SIDECAR_TEST_COUNT\" ] || n=$(cat \"$SIDECAR_TEST_COUNT\")\nn=$((n + 1))\nprintf '%s' \"$n\" > \"$SIDECAR_TEST_COUNT\"\nif [ \"$n\" -le 2 ]; then exit 0; fi\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"
+	script := `#!/bin/sh
+if [ "$1" = fetch ]; then exit 0; fi
+if [ "$1 $2" = "check-ref-format --branch" ]; then echo "$3"; exit 0; fi
+if [ "$1 $2 $3" = "rev-parse --verify --quiet" ]; then exit 1; fi
+if [ "$1 $2" = "worktree add" ]; then mkdir -p "$5"; exit 0; fi
+if [ "$1 $2" = "update-ref -d" ]; then exit 0; fi
+case "$*" in
+  remote) echo origin ;;
+  "config --get remote.origin.url") echo https://github.com/base/repo.git ;;
+  "rev-parse refs/sidecar/pr/1/"*"/head") printf '%040d\n' 1 ;;
+  "rev-parse refs/sidecar/pr/1/"*"/base") printf '%040d\n' 2 ;;
+  "rev-parse HEAD") touch "$SIDECAR_TEST_MARKER"; exec sleep 30 ;;
+  *) echo "unexpected git args: $*" >&2; exit 8 ;;
+esac
+`
 	if err := os.WriteFile(git, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SIDECAR_TEST_MARKER", marker)
-	t.Setenv("SIDECAR_TEST_COUNT", count)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	p := New()
@@ -383,7 +395,7 @@ func TestPRImportDefaultBranchDiscoveryCancelledAfterAdd(t *testing.T) {
 	if err := p.Init(&plugin.Context{Epoch: 50, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
 		t.Fatal(err)
 	}
-	cmd := p.fetchAndCreateWorktree(PRListItem{Branch: "feature", URL: "https://example.test/pr/1"})
+	cmd := p.fetchAndCreateWorktree(PRListItem{Number: 1, NodeID: "node1", Branch: "feature", HeadOID: "0000000000000000000000000000000000000001", BaseBranch: "main", Repository: "base/repo", URL: "https://example.test/pr/1"})
 	done := make(chan FetchPRDoneMsg, 1)
 	go func() { done <- cmd().(FetchPRDoneMsg) }()
 	waitForFile(t, marker)

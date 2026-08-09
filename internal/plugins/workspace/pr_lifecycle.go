@@ -77,6 +77,32 @@ const (
 	PRPollUnavailable PRPollKind = "unavailable"
 )
 
+var errReviewedSourceChanged = errors.New("reviewed source changed")
+
+func revalidateReviewedPushContext(ctx context.Context, dir, remote, branch, reviewedOID string) error {
+	if remote == "" || branch == "" || reviewedOID == "" {
+		return fmt.Errorf("%w: reviewed push identity is incomplete", errReviewedSourceChanged)
+	}
+	head, err := gitOutputContext(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || head != reviewedOID {
+		return fmt.Errorf("%w: local HEAD is %s, expected %s", errReviewedSourceChanged, head, reviewedOID)
+	}
+	remoteOID, err := remoteBranchOIDContext(ctx, dir, remote, branch)
+	if err != nil {
+		return err
+	}
+	if remoteOID != reviewedOID {
+		return fmt.Errorf("%w: remote %s/%s is %s, expected %s", errReviewedSourceChanged, remote, branch, remoteOID, reviewedOID)
+	}
+	// Make the local check adjacent to the create call as well; edits can occur
+	// while the remote query is in flight.
+	head, err = gitOutputContext(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || head != reviewedOID {
+		return fmt.Errorf("%w: local HEAD is %s, expected %s", errReviewedSourceChanged, head, reviewedOID)
+	}
+	return nil
+}
+
 type PRPollResult struct {
 	Kind                PRPollKind
 	Identity            PRIdentity
@@ -162,11 +188,10 @@ func currentGitHubRepositoryContext(ctx context.Context, dir string) (string, er
 }
 
 func queryExistingPRContext(ctx context.Context, dir, repository, headOwner, headRef, baseRef string) (*PRIdentity, error) {
-	head := headRef
-	if headOwner != "" {
-		head = headOwner + ":" + headRef
-	}
-	args := []string{"pr", "list", "--state", "all", "--head", head, "--base", baseRef, "--limit", "1", "--json", "number,url,id,headRefName,headRefOid,baseRefName,state,mergedAt,headRepository,headRepositoryOwner,mergeCommit"}
+	// gh pr list explicitly does not accept owner:branch for --head. Ask for
+	// the supported bare branch selector, then disambiguate forks from the
+	// structured owner/repository fields.
+	args := []string{"pr", "list", "--state", "all", "--head", headRef, "--base", baseRef, "--limit", "100", "--json", "number,url,id,headRefName,headRefOid,baseRefName,state,mergedAt,headRepository,headRepositoryOwner,mergeCommit"}
 	if repository != "" {
 		args = append(args, "--repo", repository)
 	}
@@ -178,11 +203,17 @@ func queryExistingPRContext(ctx context.Context, dir, repository, headOwner, hea
 	if err := json.Unmarshal(out, &prs); err != nil {
 		return nil, fmt.Errorf("parse existing pull request: %w", err)
 	}
-	if len(prs) == 0 {
-		return nil, nil
+	for _, raw := range prs {
+		id := raw.identity(repository)
+		if id.HeadRef != headRef || id.BaseRef != baseRef {
+			continue
+		}
+		if headOwner != "" && !strings.EqualFold(id.HeadOwner, headOwner) {
+			continue
+		}
+		return &id, nil
 	}
-	id := prs[0].identity(repository)
-	return &id, nil
+	return nil, nil
 }
 
 func pollPRContext(ctx context.Context, dir string, identity PRIdentity) PRPollResult {

@@ -483,9 +483,11 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
 	pr := PRIdentity{HeadRef: wt.Branch, BaseRef: targetBranch}
+	reviewedOID, pushRemote := "", ""
 	if p.mergeState != nil {
 		pr = p.mergeState.PR
 		pr.BaseRef = targetBranch
+		reviewedOID, pushRemote = p.mergeState.ReviewedOID, p.mergeState.PushRemote
 	}
 	return func() tea.Msg {
 		repository, err := currentGitHubRepositoryContext(ctx, path)
@@ -493,12 +495,21 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
 		}
 		pr.Repository = repository
+		if err := revalidateReviewedPushContext(ctx, path, pushRemote, pr.HeadRef, reviewedOID); err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
 		existing, err := queryExistingPRContext(ctx, path, repository, pr.HeadOwner, pr.HeadRef, targetBranch)
 		if err != nil {
 			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
 		}
 		if existing != nil {
+			if existing.HeadOID != reviewedOID {
+				return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("%w: existing PR head is %s, expected %s", errReviewedSourceChanged, existing.HeadOID, reviewedOID)}
+			}
 			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Data: existing.URL, PR: *existing, ExistingPRFound: true}
+		}
+		if err := revalidateReviewedPushContext(ctx, path, pushRemote, pr.HeadRef, reviewedOID); err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
 		}
 		head := pr.HeadRef
 		if pr.HeadOwner != "" {

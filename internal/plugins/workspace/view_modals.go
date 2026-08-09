@@ -596,8 +596,6 @@ func (p *Plugin) ensureMergeModal() {
 		primaryAction = mergeMethodActionID
 	case MergeStepPostMergeConfirmation:
 		primaryAction = mergeCleanUpButtonID
-	case MergeStepEditPR:
-		primaryAction = mergeCreatePRID
 	}
 
 	// Build modal based on current step

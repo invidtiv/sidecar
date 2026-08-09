@@ -1525,13 +1525,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case MergeStepCompleteMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
 			if msg.Err != nil {
-				if msg.Step == MergeStepPush && strings.Contains(msg.Err.Error(), "HEAD changed") {
+				if errors.Is(msg.Err, errReviewedSourceChanged) || (msg.Step == MergeStepPush && strings.Contains(msg.Err.Error(), "HEAD changed")) {
 					p.mergeState.Step = MergeStepReviewDiff
 					p.mergeState.StepStatus[MergeStepPush] = "pending"
 					p.mergeState.StepStatus[MergeStepReviewDiff] = "running"
 					p.mergeState.ReviewedOID = ""
 					p.clearMergeModal()
-					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.ShowToast("HEAD changed; review the updated diff before pushing", 4*time.Second))
+					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.ShowToast("Reviewed source changed; review the updated diff before pushing", 4*time.Second))
 					break
 				}
 				title := fmt.Sprintf("%s Failed", msg.Step.String())
