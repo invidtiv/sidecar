@@ -139,6 +139,62 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	}
 }
 
+func TestCollectorMatchesLiveSiblingWorktreeWithoutConfiguredOwner(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	base := t.TempDir()
+	projectRoot := filepath.Join(base, "sidecar")
+	worktree := filepath.Join(base, "sidecar-terminal-cutover")
+	for _, path := range []string{projectRoot, worktree} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stateDir, err := projectdir.WorktreeDirWithBase(stateBase, projectRoot, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "agent"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{projectRoot: strings.Join([]string{
+		"worktree " + projectRoot,
+		"branch refs/heads/main",
+		"",
+		"worktree " + worktree,
+		"branch refs/heads/terminal-cutover",
+		"",
+	}, "\n")}}
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+		if target != "%40" {
+			t.Fatalf("captured pane %q, want %%40", target)
+		}
+		return "• Working (1s • esc to interrupt)", nil
+	}}
+	result := collector.CollectProject(context.Background(), "sidecar", projectRoot, []string{projectRoot}, []Pane{{
+		ID: "%40", Session: "sidecar-ws-sidecar-terminal-cutover", Path: worktree, Command: "node",
+	}})
+	if result.Err != nil || len(result.Workspaces) != 1 {
+		t.Fatalf("sibling worktree result = %#v", result)
+	}
+	got := result.Workspaces[0]
+	if got.PaneID != "%40" || got.Presentation.Lane != agentstatus.LaneWorking {
+		t.Fatalf("sibling worktree = %#v, want pane %%40 in Working", got)
+	}
+}
+
+func TestPanesForPathDoesNotClaimNestedConfiguredProject(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "projects")
+	nested := filepath.Join(parent, "nested")
+	panes := []Pane{{ID: "%7", Session: "nested-agent", Path: nested}}
+
+	if got := panesForPath(parent, []string{parent, nested}, panes, nil); len(got) != 0 {
+		t.Fatalf("parent claimed nested configured project panes: %#v", got)
+	}
+}
+
 func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
 	collector := Collector{Capture: func(string, int) (string, error) {

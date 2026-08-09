@@ -315,7 +315,12 @@ func panesForPath(path string, roots []string, panes []Pane, ignoredSessions map
 				owner = root
 			}
 		}
-		if within(pane.Path, path) && within(path, owner) {
+		// Linked worktrees commonly live beside the configured main checkout,
+		// so no configured root owns their pane paths. Exact worktree matching
+		// is still authoritative in that case. When a configured root does own
+		// the pane, retain the longest-root guard so a parent project cannot
+		// claim panes from a nested configured project.
+		if within(pane.Path, path) && (owner == "" || within(path, owner)) {
 			out = append(out, pane)
 		}
 	}
