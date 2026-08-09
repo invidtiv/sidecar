@@ -257,7 +257,12 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 	if c.reservedSessions == nil {
 		c = c.ForRefresh(max(1, cap(c.captures)), BuildShellClaims([]ProjectResult{result}))
 	}
-	return c.RefreshProjectStatus(ctx, result, allRoots, panes)
+	result = c.RefreshProjectStatus(ctx, result, allRoots, panes)
+	// One-shot inventory callers receive only agent workspaces. Stateful
+	// consumers such as Overview use RefreshProjectStatus directly and retain
+	// hidden candidates so a later poll can notice an agent started in a shell.
+	result.Workspaces = slices.DeleteFunc(result.Workspaces, undetectedShell)
+	return result
 }
 
 // CollectProjectInventory reads one project's lightweight Git and existing
@@ -344,14 +349,11 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 		}
 		c.observeContext(ctx, workspace, matches, now)
 	}
-	// Shell manifests intentionally allow agentType to be absent: the workspace
-	// view can discover a provider from the live pane after a plain shell starts
-	// an agent. Retain those dynamically identified agents, while keeping truly
-	// plain terminals out of the agent-only Overview.
-	result.Workspaces = slices.DeleteFunc(result.Workspaces, func(workspace Workspace) bool {
-		return workspace.Kind == KindShell && strings.TrimSpace(workspace.Provider) == ""
-	})
 	return result
+}
+
+func undetectedShell(workspace Workspace) bool {
+	return workspace.Kind == KindShell && strings.TrimSpace(workspace.Provider) == ""
 }
 
 func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) {

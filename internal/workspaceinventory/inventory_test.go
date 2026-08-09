@@ -171,6 +171,37 @@ func TestCollectorDiscoversAgentStartedInUntypedShell(t *testing.T) {
 	}
 }
 
+func TestStatusPollDiscoversAgentStartedAfterUntypedShellWasPlain(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"late-agent","displayName":"Overview bug","namespace":"` + tmuxenv.Namespace() + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	output := "$ "
+	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { return output, nil }}.WithDefaults()
+	inventory := base.CollectProjectInventory(context.Background(), "sidecar", root)
+	collector := base.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory}))
+
+	first := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "zsh"}})
+	if len(first.Workspaces) != 1 || first.Workspaces[0].Provider != "" {
+		t.Fatalf("plain candidate was not retained internally: %#v", first.Workspaces)
+	}
+
+	output = "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)"
+	second := collector.RefreshProjectStatus(context.Background(), first, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "node"}})
+	if len(second.Workspaces) != 1 || second.Workspaces[0].Provider != "codex" || second.Workspaces[0].Presentation.Lane != agentstatus.LaneWorking {
+		t.Fatalf("late agent was not discovered by status poll: %#v", second.Workspaces)
+	}
+}
+
 func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)
