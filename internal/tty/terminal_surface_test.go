@@ -2,6 +2,7 @@ package tty
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -104,6 +105,14 @@ func seededFrameAt(session, pane, output string, width, height int) ModelFrame {
 	}
 }
 
+func seededHistoryFrame(session, pane, output string, captureBase, historySize int) ModelFrame {
+	frame := seededFrame(session, pane, output)
+	frame.Frame.HasHistory = true
+	frame.Frame.CaptureBase = captureBase
+	frame.Frame.HistorySize = historySize
+	return frame
+}
+
 func TestTerminalContractSeededModelOwnsHealthySteadyState(t *testing.T) {
 	source := &fakeTerminalControlSource{}
 	m := newContractTerminal(source)
@@ -140,6 +149,65 @@ func TestTerminalContractSeededModelOwnsHealthySteadyState(t *testing.T) {
 	}
 	if !m.State.BracketedPasteEnabled || !m.State.MouseReportingEnabled {
 		t.Fatal("model modes were not applied")
+	}
+}
+
+func TestTerminalContractModelHistoryPreservesAbsoluteCoordinatesAndOverlap(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%14"})
+	request := source.requests[0]
+
+	request.OnModelFrame(seededHistoryFrame("editor", "%14", "line40\nline41\nlive42", 40, 100))
+	deliverTerminalEvent(t, m)
+	if got := m.History(); got != (HistoryInfo{
+		HistorySize: 100, CaptureBase: 40, LoadedStart: 40, LoadedEnd: 43, HasHistory: true,
+	}) {
+		t.Fatalf("initial history = %+v", got)
+	}
+	if got := m.LinesAbsoluteRange(40, 43); !reflect.DeepEqual(got, []string{"line40", "line41", "live42"}) {
+		t.Fatalf("initial absolute lines = %#v", got)
+	}
+
+	if !m.PrependHistory("line38\nline39\nstale-line40", 38) {
+		t.Fatal("overlapping older history was not prepended")
+	}
+	if got := m.LinesAbsoluteRange(38, 43); !reflect.DeepEqual(got,
+		[]string{"line38", "line39", "line40", "line41", "live42"}) {
+		t.Fatalf("prepended absolute lines = %#v", got)
+	}
+
+	request.OnModelFrame(seededHistoryFrame("editor", "%14", "line41 changed\nlive42 changed\nlive43", 41, 101))
+	deliverTerminalEvent(t, m)
+	if got := m.History(); got != (HistoryInfo{
+		HistorySize: 101, CaptureBase: 41, LoadedStart: 38, LoadedEnd: 44, HasHistory: true,
+	}) {
+		t.Fatalf("updated history = %+v", got)
+	}
+	if got := m.LinesAbsoluteRange(38, 44); !reflect.DeepEqual(got,
+		[]string{"line38", "line39", "line40", "line41 changed", "live42 changed", "live43"}) {
+		t.Fatalf("updated absolute lines = %#v", got)
+	}
+}
+
+func TestTerminalContractProvisionalSnapshotRetainsHistoryMetadata(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%15"})
+	request := source.requests[0]
+	request.OnSnapshot(ControlSnapshot{
+		Session: "editor", Pane: "%15", Output: "history10\nlive11",
+		CaptureBase: 10, HistorySize: 50, HasHistory: true,
+		PaneWidth: 80, PaneHeight: 24,
+	})
+	deliverTerminalEvent(t, m)
+	if m.modelLive {
+		t.Fatal("provisional capture incorrectly gained model authority")
+	}
+	if got := m.History(); got != (HistoryInfo{
+		HistorySize: 50, CaptureBase: 10, LoadedStart: 10, LoadedEnd: 12, HasHistory: true,
+	}) {
+		t.Fatalf("provisional history = %+v", got)
 	}
 }
 

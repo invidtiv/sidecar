@@ -93,6 +93,17 @@ type State struct {
 	PollGeneration int
 }
 
+// HistoryInfo is the transport-neutral absolute history state exposed to an
+// embedding viewport. It contains coordinates only; control frames and the
+// screen-model implementation remain private to Model.
+type HistoryInfo struct {
+	HistorySize int
+	CaptureBase int
+	LoadedStart int
+	LoadedEnd   int
+	HasHistory  bool
+}
+
 // Model is an embeddable component that provides interactive tmux functionality.
 // Plugins embed this Model and delegate Update/View when interactive mode is active.
 type Model struct {
@@ -111,6 +122,7 @@ type Model struct {
 	visible       bool
 	focused       bool
 	input         terminalInputSender
+	history       HistoryInfo
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -174,6 +186,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	}
 	m.visible = true
 	m.modelLive = false
+	m.history = HistoryInfo{}
 	m.scopeTarget = paneID
 	if m.scopeTarget == "" {
 		m.scopeTarget = sessionName
@@ -477,6 +490,39 @@ func (m *Model) GetTarget() string {
 // capability owned by the embedding callback.
 func (m *Model) inputTarget() string { return m.GetTarget() }
 
+// History returns a read-only snapshot of absolute history metadata and the
+// currently loaded half-open range. HasHistory is false for legacy/provisional
+// captures that do not carry trustworthy absolute coordinates.
+func (m *Model) History() HistoryInfo {
+	info := m.history
+	if !m.IsActive() || m.State.OutputBuf == nil {
+		return HistoryInfo{}
+	}
+	if start, end, ok := m.State.OutputBuf.AbsoluteRange(); ok {
+		info.LoadedStart, info.LoadedEnd = start, end
+	} else {
+		info.LoadedStart, info.LoadedEnd = 0, 0
+	}
+	return info
+}
+
+// LinesAbsoluteRange returns loaded terminal rows in [start, end).
+func (m *Model) LinesAbsoluteRange(start, end int) []string {
+	if !m.IsActive() || m.State.OutputBuf == nil {
+		return nil
+	}
+	return m.State.OutputBuf.LinesAbsoluteRange(start, end)
+}
+
+// PrependHistory merges an older overlapping capture into the loaded absolute
+// buffer. Transport and scheduling remain owned by Model's embedding journey.
+func (m *Model) PrependHistory(content string, baseLine int) bool {
+	if !m.IsActive() || m.State.OutputBuf == nil || !m.history.HasHistory {
+		return false
+	}
+	return m.State.OutputBuf.PrependSnapshot(content, baseLine)
+}
+
 // handleKey processes key input in interactive mode.
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if !m.IsActive() {
@@ -695,6 +741,7 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 
 	// Update output buffer
 	changed := m.State.OutputBuf.Update(msg.Output)
+	m.history = HistoryInfo{}
 
 	// Update cursor state
 	m.State.CursorRow = msg.CursorRow

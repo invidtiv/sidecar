@@ -252,7 +252,18 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		if frame.Seeds < 1 || frame.Session != m.State.TargetSession || frame.Pane != m.State.TargetPane {
 			break
 		}
-		m.State.OutputBuf.Update(frame.Frame.CombinedOutput())
+		output := frame.Frame.CombinedOutput()
+		if frame.Frame.HasHistory {
+			m.State.OutputBuf.UpdateSnapshot(output, frame.Frame.CaptureBase)
+			m.history = HistoryInfo{
+				HistorySize: frame.Frame.HistorySize,
+				CaptureBase: frame.Frame.CaptureBase,
+				HasHistory:  true,
+			}
+		} else {
+			m.State.OutputBuf.Update(output)
+			m.history = HistoryInfo{}
+		}
 		m.State.CursorRow = frame.Frame.CursorRow
 		m.State.CursorCol = frame.Frame.CursorCol
 		m.State.CursorVisible = frame.Frame.CursorVisible
@@ -267,7 +278,8 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	case terminalSnapshotEvent:
 		if !m.modelLive {
 			s := msg.Event.snapshot
-			m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting)
+			m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting,
+				s.HasHistory, s.CaptureBase, s.HistorySize)
 		}
 	case terminalInvalidEvent:
 		m.modelLive = false
@@ -285,8 +297,15 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	return tea.Batch(cmd, m.listenControl())
 }
 
-func (m *Model) applyOutput(output string, row, col int, visible bool, height, width int, mouse bool) {
-	changed := m.State.OutputBuf.Update(output)
+func (m *Model) applyOutput(output string, row, col int, visible bool, height, width int, mouse, hasHistory bool, captureBase, historySize int) {
+	var changed bool
+	if hasHistory {
+		changed = m.State.OutputBuf.UpdateSnapshot(output, captureBase)
+		m.history = HistoryInfo{HistorySize: historySize, CaptureBase: captureBase, HasHistory: true}
+	} else {
+		changed = m.State.OutputBuf.Update(output)
+		m.history = HistoryInfo{}
+	}
 	m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible = row, col, visible
 	m.State.PaneHeight, m.State.PaneWidth = height, width
 	m.State.MouseReportingEnabled = mouse
