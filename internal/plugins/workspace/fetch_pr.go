@@ -195,11 +195,6 @@ func choosePRImportBranchContext(ctx context.Context, workDir, requested string,
 	return "", false, fmt.Errorf("local branches conflict with PR #%d; rename one or choose a different workspace name", number)
 }
 
-// findWorktreePathForBranch returns the worktree path for a branch, or "" if not found.
-func findWorktreePathForBranch(workDir, branch string) string {
-	return findWorktreePathForBranchContext(context.Background(), workDir, branch)
-}
-
 func findWorktreePathForBranchContext(ctx context.Context, workDir, branch string) string {
 	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = workDir

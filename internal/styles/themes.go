@@ -40,6 +40,23 @@ type ColorPalette struct {
 	BgTertiary  string `json:"bgTertiary"`
 	BgOverlay   string `json:"bgOverlay"`
 
+	// SurfaceRaised backs small chrome that sits on top of a bar — key hint
+	// pills, palette keys, bar chips. Derived from BgPrimary by
+	// NormalizePalette when empty; deliberately not BgTertiary, whose value
+	// comes from a terminal scheme's selection colour and can be any hue.
+	SurfaceRaised string `json:"surfaceRaised"`
+
+	// KeyHintFg is the shortcut key text drawn on SurfaceRaised.
+	KeyHintFg string `json:"keyHintFg"`
+
+	// OnPrimary is foreground text drawn on a Primary-coloured fill
+	// (focused rows, active chips, the current search match).
+	OnPrimary string `json:"onPrimary"`
+
+	// OnWarning is foreground text drawn on a Warning-coloured fill
+	// (search match highlights).
+	OnWarning string `json:"onWarning"`
+
 	// Border colors
 	BorderNormal string `json:"borderNormal"`
 	BorderActive string `json:"borderActive"`
@@ -709,6 +726,14 @@ func applySingleOverride(palette *ColorPalette, key, value string) {
 		palette.BgTertiary = value
 	case "bgOverlay":
 		palette.BgOverlay = value
+	case "surfaceRaised":
+		palette.SurfaceRaised = value
+	case "keyHintFg":
+		palette.KeyHintFg = value
+	case "onPrimary":
+		palette.OnPrimary = value
+	case "onWarning":
+		palette.OnWarning = value
 	case "borderNormal":
 		palette.BorderNormal = value
 	case "borderActive":
@@ -802,7 +827,10 @@ func applyFloatOverride(palette *ColorPalette, key string, value float64) {
 // It must only be called during initialization, before the TUI starts.
 // The TUI's single-threaded Bubble Tea model ensures safe access after init.
 func ApplyThemeColors(theme Theme) {
-	c := theme.Colors
+	// Enforce contrast on the finished palette, whatever produced it: a
+	// built-in theme, a converted community scheme, or user overrides.
+	c := NormalizePalette(theme.Colors)
+	theme.Colors = c
 
 	// Update color variables
 	Primary = lipgloss.Color(c.Primary)
@@ -829,6 +857,11 @@ func ApplyThemeColors(theme Theme) {
 	BgSecondary = lipgloss.Color(c.BgSecondary)
 	BgTertiary = lipgloss.Color(c.BgTertiary)
 	BgOverlay = lipgloss.Color(c.BgOverlay)
+
+	SurfaceRaised = lipgloss.Color(c.SurfaceRaised)
+	KeyHintFgColor = lipgloss.Color(c.KeyHintFg)
+	OnPrimaryColor = lipgloss.Color(c.OnPrimary)
+	OnWarningColor = lipgloss.Color(c.OnWarning)
 
 	BorderNormal = lipgloss.Color(c.BorderNormal)
 	BorderActive = lipgloss.Color(c.BorderActive)
@@ -959,8 +992,8 @@ func rebuildStyles() {
 		Underline(true)
 
 	KeyHint = lipgloss.NewStyle().
-		Foreground(TextMuted).
-		Background(BgTertiary).
+		Foreground(KeyHintFgColor).
+		Background(SurfaceRaised).
 		Padding(0, 1)
 
 	Logo = lipgloss.NewStyle().
@@ -1017,7 +1050,7 @@ func rebuildStyles() {
 		Background(BgTertiary)
 
 	ListItemFocused = lipgloss.NewStyle().
-		Foreground(TextPrimary).
+		Foreground(OnPrimaryColor).
 		Background(Primary)
 
 	ListCursor = lipgloss.NewStyle().
@@ -1033,12 +1066,12 @@ func rebuildStyles() {
 		Foreground(TextMuted)
 
 	BarChip = lipgloss.NewStyle().
-		Foreground(TextMuted).
-		Background(BgTertiary).
+		Foreground(KeyHintFgColor).
+		Background(SurfaceRaised).
 		Padding(0, 1)
 
 	BarChipActive = lipgloss.NewStyle().
-		Foreground(TextPrimary).
+		Foreground(OnPrimaryColor).
 		Background(Primary).
 		Padding(0, 1).
 		Bold(true)
@@ -1091,7 +1124,7 @@ func rebuildStyles() {
 	// on Primary is under 2:1 contrast in most built-in themes, which erased the
 	// filename on the one row the gesture depends on being readable.
 	FileBrowserDropTarget = lipgloss.NewStyle().
-		Foreground(BgPrimary).
+		Foreground(OnPrimaryColor).
 		Background(Primary).
 		Bold(true)
 
@@ -1101,11 +1134,12 @@ func rebuildStyles() {
 		Italic(true)
 
 	SearchMatch = lipgloss.NewStyle().
-		Background(Warning)
+		Background(Warning).
+		Foreground(OnWarningColor)
 
 	SearchMatchCurrent = lipgloss.NewStyle().
 		Background(Primary).
-		Foreground(TextPrimary)
+		Foreground(OnPrimaryColor)
 
 	FuzzyMatchChar = lipgloss.NewStyle().
 		Foreground(Primary).
@@ -1126,8 +1160,8 @@ func rebuildStyles() {
 		Background(BgTertiary)
 
 	PaletteKey = lipgloss.NewStyle().
-		Foreground(TextMuted).
-		Background(BgTertiary).
+		Foreground(KeyHintFgColor).
+		Background(SurfaceRaised).
 		Padding(0, 1)
 
 	TextSelection = lipgloss.NewStyle().

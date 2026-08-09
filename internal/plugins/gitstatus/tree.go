@@ -261,11 +261,6 @@ func (t *FileTree) addEntry(entry *FileEntry) {
 	}
 }
 
-// loadDiffStats loads +/- counts for all files.
-func (t *FileTree) loadDiffStats() error {
-	return t.loadDiffStatsContext(context.Background())
-}
-
 func (t *FileTree) loadDiffStatsContext(ctx context.Context) error {
 	// Get stats for staged changes
 	if err := t.loadDiffStatsForContext(ctx, true); err != nil {
@@ -274,11 +269,6 @@ func (t *FileTree) loadDiffStatsContext(ctx context.Context) error {
 
 	// Get stats for unstaged changes
 	return t.loadDiffStatsForContext(ctx, false)
-}
-
-// loadDiffStatsFor loads diff stats for staged or unstaged changes.
-func (t *FileTree) loadDiffStatsFor(staged bool) error {
-	return t.loadDiffStatsForContext(context.Background(), staged)
 }
 
 func (t *FileTree) loadDiffStatsForContext(ctx context.Context, staged bool) error {

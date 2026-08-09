@@ -74,9 +74,9 @@ type corpusEntry struct {
 // rather than silently comparing against the wrong expectation.
 func (e corpusEntry) fingerprint() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%d|%d|", e.Name, e.Width, e.Height)
+	_, _ = fmt.Fprintf(h, "%s|%d|%d|", e.Name, e.Width, e.Height)
 	for _, s := range e.Steps {
-		fmt.Fprintf(h, "%q;%d;%d|", s.Write, s.ResizeW, s.ResizeH)
+		_, _ = fmt.Fprintf(h, "%q;%d;%d|", s.Write, s.ResizeW, s.ResizeH)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -413,7 +413,7 @@ var corpus = []corpusEntry{
 			write("é combining\r\n"),
 			write("你好，世界\r\n"),
 			write("❤️ vs ❤\r\n"),
-			write("\U0001f469‍\U0001f4bb zwj\r\n"),
+			write("\U0001f469\u200d\U0001f4bb zwj\r\n"),
 			// Deliberately not newline-terminated. Every other step parks the
 			// cursor back at column 0, which hides GAP-9's second effect: a
 			// cluster split across Write calls is committed as two cells, so the

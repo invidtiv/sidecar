@@ -319,7 +319,7 @@ func TestWatcherDiscoversNewMonthUnderExistingYear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 	month := filepath.Join(year, next.Format("01"))
 	if err := os.Mkdir(month, 0o755); err != nil {
 		t.Fatal(err)

@@ -166,12 +166,6 @@ func findMainWorktreeFromDeleted(deletedPath string) string {
 	return ""
 }
 
-// listWorktrees parses git worktree list --porcelain output.
-func (p *Plugin) listWorktrees() ([]*Worktree, error) {
-	snapshot, err := BuildRepoSnapshot(context.Background(), p.ctx.WorkDir)
-	return snapshotToWorktrees(snapshot), err
-}
-
 // parseWorktreeList parses porcelain format output.
 func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 	var worktrees []*Worktree
@@ -398,11 +392,6 @@ func (p *Plugin) currentCreateScope() OperationScope {
 	return scope
 }
 
-// doCreateWorktree performs the actual worktree creation.
-func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
-	return p.doCreateWorktreeContext(context.Background(), name, baseBranch, taskID, taskTitle, agentType)
-}
-
 func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
@@ -432,12 +421,6 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 		}
 	}
 	return wt, nil
-}
-
-// doDeleteWorktree removes a worktree. When isMissing is true, uses prune
-// instead of remove since the directory no longer exists on disk.
-func doDeleteWorktree(workDir, path string, isMissing bool) error {
-	return doDeleteWorktreeContext(context.Background(), workDir, path, isMissing)
 }
 
 func doDeleteWorktreeContext(ctx context.Context, workDir, path string, isMissing bool) error {
@@ -479,11 +462,6 @@ func (p *Plugin) pushSelected() tea.Cmd {
 	}
 }
 
-// doPush pushes a branch to remote.
-func doPush(workdir, branch string, force, setUpstream bool) error {
-	return doPushContext(context.Background(), workdir, branch, force, setUpstream)
-}
-
 func doPushContext(ctx context.Context, workdir, branch string, force, setUpstream bool) error {
 	args := []string{"push"}
 	if force {
@@ -516,11 +494,6 @@ func getCurrentBranchContext(ctx context.Context, workdir string) (string, error
 	return strings.TrimSpace(string(output)), nil
 }
 
-// checkRemoteBranchExists checks if a remote branch exists for the given branch name.
-func checkRemoteBranchExists(workdir, branch string) bool {
-	return checkRemoteBranchExistsContext(context.Background(), workdir, branch)
-}
-
 func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string) bool {
 	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
 	cmd.Dir = workdir
@@ -529,18 +502,6 @@ func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string)
 		return false
 	}
 	return len(strings.TrimSpace(string(output))) > 0
-}
-
-// branchExists checks if a local branch exists using git rev-parse.
-func branchExists(workdir, branch string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", "refs/heads/"+branch)
-	cmd.Dir = workdir
-	return cmd.Run() == nil
-}
-
-// doWorktreePrune runs git worktree prune to clean up stale worktree references.
-func doWorktreePrune(workDir string) error {
-	return doWorktreePruneContext(context.Background(), workDir)
 }
 
 func doWorktreePruneContext(ctx context.Context, workDir string) error {
@@ -563,11 +524,6 @@ func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
 	return branch == detectDefaultBranchContext(ctx, workdir)
 }
 
-// deleteBranch deletes a local branch, trying safe delete first then force.
-func deleteBranch(workdir, branch string) error {
-	return deleteBranchContext(context.Background(), workdir, branch)
-}
-
 func deleteBranchContext(ctx context.Context, workdir, branch string) error {
 	if isMainBranchContext(ctx, workdir, branch) {
 		return fmt.Errorf("refusing to delete main branch %q", branch)
@@ -586,11 +542,6 @@ func deleteBranchContext(ctx context.Context, workdir, branch string) error {
 		return fmt.Errorf("delete branch: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	return nil
-}
-
-// deleteRemoteBranchCmd deletes the remote branch from origin.
-func deleteRemoteBranchCmd(workdir, branch string) error {
-	return deleteRemoteBranchCmdContext(context.Background(), workdir, branch)
 }
 
 func deleteRemoteBranchCmdContext(ctx context.Context, workdir, branch string) error {
@@ -666,12 +617,6 @@ func filterBranches(query string, allBranches []string) []string {
 	return matches
 }
 
-// setupTDRoot creates a .td-root file in the worktree pointing to the main repo.
-// This allows td commands in the worktree to use the main repo's database.
-func (p *Plugin) setupTDRoot(worktreePath string) error {
-	return setupTDRootContext(context.Background(), p.ctx.WorkDir, p.ctx.ProjectRoot, worktreePath)
-}
-
 func setupTDRootContext(ctx context.Context, workDir, projectRoot, worktreePath string) error {
 	mainPath := mainWorktreePathContext(ctx, workDir)
 	if err := ctx.Err(); err != nil {
@@ -693,11 +638,6 @@ const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
 const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
-
-// saveBaseBranch persists the base branch to the centralized worktree data directory.
-func saveBaseBranch(projectRoot, worktreePath string, branch string) error {
-	return saveBaseBranchContext(context.Background(), projectRoot, worktreePath, branch)
-}
 
 func saveBaseBranchContext(ctx context.Context, projectRoot, worktreePath string, branch string) error {
 	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
@@ -785,17 +725,6 @@ func loadAgentType(projectRoot, worktreePath string) AgentType {
 	return AgentType(strings.TrimSpace(string(content)))
 }
 
-// savePRURL persists the PR URL to the centralized worktree data directory.
-func savePRURL(projectRoot, worktreePath string, prURL string) error {
-	return savePRURLContext(context.Background(), projectRoot, worktreePath, prURL)
-}
-
-func savePRURLContext(ctx context.Context, projectRoot, worktreePath string, prURL string) error {
-	identity := loadPRIdentityContext(ctx, projectRoot, worktreePath)
-	identity.URL = prURL
-	return savePRIdentityContext(ctx, projectRoot, worktreePath, identity)
-}
-
 // savePRIdentityContext persists stable PR identity as inspectable JSON. The
 // legacy URL file is also maintained so existing Sidecar versions degrade to
 // the PR link instead of losing it.
@@ -824,12 +753,6 @@ func savePRIdentityContext(ctx context.Context, projectRoot, worktreePath string
 	}
 	data = append(data, '\n')
 	return os.WriteFile(filepath.Join(wtDir, sidecarPRIdentityFile), data, 0644)
-}
-
-// loadPRURL reads the PR URL from the centralized worktree data directory.
-func loadPRURL(projectRoot, worktreePath string) string {
-	identity, _ := loadPRMetadataContext(context.Background(), projectRoot, worktreePath)
-	return identity.URL
 }
 
 func loadLegacyPRURLContext(ctx context.Context, projectRoot, worktreePath string) string {

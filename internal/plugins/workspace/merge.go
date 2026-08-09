@@ -783,11 +783,6 @@ func buildFallbackPRDescription(branch, commitLog, diffStat string) (title, body
 	return title, sb.String()
 }
 
-// getCommitLogForPR returns the commit log for PR description generation.
-func getCommitLogForPR(workdir, baseBranch string) string {
-	return getCommitLogForPRContext(context.Background(), workdir, baseBranch)
-}
-
 func getCommitLogForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	if baseBranch == "" {
 		baseBranch = detectDefaultBranchContext(ctx, workdir)
@@ -801,22 +796,12 @@ func getCommitLogForPRContext(ctx context.Context, workdir, baseBranch string) s
 	return strings.TrimSpace(string(output))
 }
 
-// getDiffStatForPR returns the diff stat for PR description generation.
-func getDiffStatForPR(workdir, baseBranch string) string {
-	return getDiffStatForPRContext(context.Background(), workdir, baseBranch)
-}
-
 func getDiffStatForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	stat, err := getDiffStatFromBaseContext(ctx, workdir, baseBranch)
 	if err != nil {
 		return ""
 	}
 	return stat
-}
-
-// getDiffForPR returns the full diff for PR description generation.
-func getDiffForPR(workdir, baseBranch string) string {
-	return getDiffForPRContext(context.Background(), workdir, baseBranch)
 }
 
 func getDiffForPRContext(ctx context.Context, workdir, baseBranch string) string {
@@ -946,29 +931,6 @@ func (p *Plugin) recoverDirectMerge(action string) tea.Cmd {
 		}
 		op.runContext = nil
 		return DirectMergeDoneMsg{OperationScope: scope, WorkspaceName: name, BaseBranch: branch, Operation: op, Err: op.Err}
-	}
-}
-
-// pullAfterMerge updates the checkout that actually owns the base branch.
-// It never moves a checked-out ref behind its index and working tree.
-func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch string) tea.Cmd {
-	scope := p.lifecycleScope(wt)
-	ctx := p.operationCtx
-	repoPath := ""
-	workDir := p.ctx.WorkDir
-	if p.repoSnapshot != nil {
-		repoPath = p.repoSnapshot.CanonicalRoot
-	}
-	name := wt.Name
-	return func() tea.Msg {
-		if repoPath == "" {
-			repoPath = mainWorktreePathContext(ctx, workDir)
-		}
-		if repoPath == "" {
-			repoPath = workDir
-		}
-		result := updateCheckedOutBaseContext(ctx, repoPath, branch, "")
-		return PullAfterMergeMsg{OperationScope: scope, WorkspaceName: name, Branch: branch, Success: result.Updated || (result.Fetched && result.LeftUnchanged && result.Err == nil), Err: result.Err}
 	}
 }
 
@@ -1137,45 +1099,6 @@ func (p *Plugin) executeMergeResolution() tea.Cmd {
 	}
 }
 
-// deleteRemoteBranch deletes the remote branch from origin.
-func (p *Plugin) deleteRemoteBranch(wt *Worktree) tea.Cmd {
-	scope := p.lifecycleScope(wt)
-	ctx := p.operationCtx
-	branch, name, repoPath := wt.Branch, wt.Name, p.ctx.WorkDir
-	return func() tea.Msg {
-		// Delete remote branch: git push origin --delete <branch>
-		cmd := exec.CommandContext(ctx, "git", "push", "origin", "--delete", branch)
-		cmd.Dir = repoPath
-		output, err := cmd.CombinedOutput()
-
-		if err != nil {
-			outputStr := string(output)
-			// Check if branch was already deleted (GitHub auto-delete)
-			if strings.Contains(outputStr, "remote ref does not exist") ||
-				strings.Contains(outputStr, "unable to delete") ||
-				strings.Contains(outputStr, "couldn't find remote ref") {
-				// Not an error - branch already gone
-				return RemoteBranchDeleteMsg{
-					OperationScope: scope,
-					WorkspaceName:  name,
-					BranchName:     branch,
-				}
-			}
-			return RemoteBranchDeleteMsg{
-				OperationScope: scope,
-				WorkspaceName:  name,
-				BranchName:     branch,
-				Err:            fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr)),
-			}
-		}
-
-		return RemoteBranchDeleteMsg{
-			OperationScope: scope,
-			WorkspaceName:  name,
-			BranchName:     branch,
-		}
-	}
-}
 
 // performSelectedCleanup executes only the user-selected cleanup actions.
 func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState) tea.Cmd {

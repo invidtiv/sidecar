@@ -402,10 +402,6 @@ func (p *Plugin) createTaskSection() modal.Section {
 	return p.taskPickerSection(createTaskFieldID, createTaskItemPrefix, label, p.createTaskID != "", 8)
 }
 
-func (p *Plugin) taskDropdownVisible(focusID string) bool {
-	return focusID == createTaskFieldID || strings.HasPrefix(focusID, createTaskItemPrefix)
-}
-
 func (p *Plugin) createAgentLabelSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		return modal.RenderedSection{Content: "Agent:"}

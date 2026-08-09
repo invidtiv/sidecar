@@ -1637,17 +1637,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 						wt.PRState = normalizeWorktreePRState(msg.PR.State, true)
 						_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, msg.PR)
 					}
-					if msg.PR.State == "CLOSED" {
+					switch msg.PR.State {
+					case "CLOSED":
 						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
 						p.mergeState.Step = MergeStepWaitingMerge
 						p.mergeState.PRPollKind = PRPollClosed
 						p.mergeState.PRWatchStopped = true
 						p.clearMergeModal()
-					} else if msg.PR.State == "MERGED" {
+					case "MERGED":
 						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
 						p.mergeState.Step = MergeStepWaitingMerge
 						cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
-					} else {
+					default:
 						cmds = append(cmds, p.advanceMergeStep())
 					}
 				case MergeStepCleanup:
