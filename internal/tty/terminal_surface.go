@@ -42,10 +42,11 @@ type terminalCaptureSource interface {
 
 type defaultTerminalCaptureSource struct{}
 
-// terminalRecoveryBlankLimit covers the short attach/geometry redraw window
-// observed during control replacement (about 400ms of fast captures, or 2s of
-// replacement seed attempts) while bounding how long a genuinely cleared pane
-// can retain its previous presentation.
+// terminalRecoveryBlankLimit is one source-neutral consecutive-observation
+// budget shared by fallback captures, control snapshots, and replacement model
+// seeds. Eight observations cover the short attach/geometry redraw window while
+// bounding pure fast-capture retention at about 400ms and pure 250ms seed-retry
+// retention at about 2s. Any accepted nonblank candidate resets the budget.
 const terminalRecoveryBlankLimit = 8
 
 func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (string, int, int, int, int, bool, error) {
@@ -265,7 +266,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.modelLive = false
 		m.stopControl()
 		m.recoveryPending = true
-		m.recoveryBlankCaptures = 0
+		m.consecutiveRecoveryBlanks = 0
 		return tea.Batch(m.schedulePoll(0), m.listenControl())
 	}
 
@@ -277,13 +278,12 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 			break
 		}
 		output := frame.Frame.CombinedOutput()
-		if m.fallbackEstablished && terminalOutputBlank(output) && !terminalOutputBlank(m.State.OutputBuf.String()) && m.recoveryBlankCaptures < terminalRecoveryBlankLimit {
+		if m.preserveRecoveryBlank(output) {
 			// A replacement control client can capture the alternate screen during
 			// its attach/geometry redraw window. Keep the known-good subprocess
 			// fallback visible and ask for another clean seed rather than allowing
 			// a transient blank bootstrap to reclaim presentation authority. The
 			// bound lets a terminal that was genuinely cleared eventually win.
-			m.recoveryBlankCaptures++
 			m.stopControl()
 			cmd = m.retryControl()
 			break
@@ -306,24 +306,27 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.State.PaneWidth = frame.Frame.Width
 		m.State.BracketedPasteEnabled = frame.Frame.BracketedPaste
 		m.State.MouseReportingEnabled = frame.Frame.Mouse.Any()
-		if !m.modelLive {
-			m.modelLive = true
-			m.fallbackEstablished = false
-			m.recoveryBlankCaptures = 0
+		wasModelLive := m.modelLive
+		m.modelLive = true
+		m.fallbackEstablished = false
+		m.consecutiveRecoveryBlanks = 0
+		if !wasModelLive {
 			m.State.PollGeneration++ // reject every provisional capture/timer
 		}
 	case terminalSnapshotEvent:
-		if !m.modelLive && !m.fallbackEstablished {
+		if !m.modelLive {
 			s := msg.Event.snapshot
-			m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting,
-				s.HasHistory, s.CaptureBase, s.HistorySize)
+			if !m.preserveRecoveryBlank(s.Output) {
+				m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting,
+					s.HasHistory, s.CaptureBase, s.HistorySize)
+			}
 		}
 	case terminalInvalidEvent:
 		m.modelLive = false
 		if msg.Event.invalid.Terminal {
 			m.stopControl()
 			m.recoveryPending = true
-			m.recoveryBlankCaptures = 0
+			m.consecutiveRecoveryBlanks = 0
 			cmd = m.schedulePoll(0)
 			break
 		}
@@ -332,7 +335,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.modelLive = false
 		m.stopControl()
 		m.recoveryPending = true
-		m.recoveryBlankCaptures = 0
+		m.consecutiveRecoveryBlanks = 0
 		cmd = m.schedulePoll(0)
 	}
 	return tea.Batch(cmd, m.listenControl())
@@ -359,6 +362,24 @@ func terminalOutputBlank(output string) bool {
 	return strings.TrimSpace(ansi.Strip(output)) == ""
 }
 
+// preserveRecoveryBlank rejects a transient blank presentation candidate while
+// a known-good fallback is being established or remains authoritative. The
+// counter is consecutive across capture, snapshot, and model sources: every
+// accepted nonblank candidate starts a fresh budget.
+func (m *Model) preserveRecoveryBlank(output string) bool {
+	if !terminalOutputBlank(output) {
+		m.consecutiveRecoveryBlanks = 0
+		return false
+	}
+	if (m.recoveryPending || m.fallbackEstablished) &&
+		!terminalOutputBlank(m.State.OutputBuf.String()) &&
+		m.consecutiveRecoveryBlanks < terminalRecoveryBlankLimit {
+		m.consecutiveRecoveryBlanks++
+		return true
+	}
+	return false
+}
+
 // SetVisible controls transport activity without destroying the target.
 func (m *Model) SetVisible(visible bool) tea.Cmd {
 	if m.visible == visible {
@@ -376,7 +397,7 @@ func (m *Model) SetVisible(visible bool) tea.Cmd {
 		m.modelLive = false
 		m.recoveryPending = false
 		m.fallbackEstablished = false
-		m.recoveryBlankCaptures = 0
+		m.consecutiveRecoveryBlanks = 0
 		m.stopControl()
 		return nil
 	}

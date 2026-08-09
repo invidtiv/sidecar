@@ -110,23 +110,23 @@ type Model struct {
 	Config Config
 	State  *State
 
-	ownerID               uint64
-	runGeneration         uint64
-	scopeTarget           string
-	control               terminalControlSource
-	subscription          terminalControlSubscription
-	mailbox               *terminalMailbox
-	mailboxDone           chan struct{}
-	controlGen            uint64
-	modelLive             bool
-	visible               bool
-	focused               bool
-	input                 terminalInputSender
-	capture               terminalCaptureSource
-	history               HistoryInfo
-	recoveryPending       bool
-	fallbackEstablished   bool
-	recoveryBlankCaptures int
+	ownerID                   uint64
+	runGeneration             uint64
+	scopeTarget               string
+	control                   terminalControlSource
+	subscription              terminalControlSubscription
+	mailbox                   *terminalMailbox
+	mailboxDone               chan struct{}
+	controlGen                uint64
+	modelLive                 bool
+	visible                   bool
+	focused                   bool
+	input                     terminalInputSender
+	capture                   terminalCaptureSource
+	history                   HistoryInfo
+	recoveryPending           bool
+	fallbackEstablished       bool
+	consecutiveRecoveryBlanks int
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -193,7 +193,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	m.modelLive = false
 	m.recoveryPending = false
 	m.fallbackEstablished = false
-	m.recoveryBlankCaptures = 0
+	m.consecutiveRecoveryBlanks = 0
 	m.history = HistoryInfo{}
 	m.scopeTarget = paneID
 	if m.scopeTarget == "" {
@@ -260,6 +260,9 @@ func (m *Model) Exit() {
 	}
 	m.controlGen++
 	m.modelLive = false
+	m.recoveryPending = false
+	m.fallbackEstablished = false
+	m.consecutiveRecoveryBlanks = 0
 	if m.State != nil {
 		m.State.Active = false
 	}
@@ -756,11 +759,10 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.recoveryPending && terminalOutputBlank(msg.Output) && !terminalOutputBlank(m.State.OutputBuf.String()) && m.recoveryBlankCaptures < terminalRecoveryBlankLimit {
+	if m.preserveRecoveryBlank(msg.Output) {
 		// tmux may briefly expose an empty alternate grid while a replacement
 		// client changes geometry. Preserve the last known-good model frame and
 		// retry capture before accepting blank as real terminal state.
-		m.recoveryBlankCaptures++
 		return m.schedulePoll(PollingDecayFast)
 	}
 
@@ -769,7 +771,6 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 	m.history = HistoryInfo{}
 	if m.recoveryPending {
 		m.fallbackEstablished = true
-		m.recoveryBlankCaptures = 0
 	}
 
 	// Update cursor state
