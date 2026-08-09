@@ -23,10 +23,16 @@ const (
 
 type Project struct{ Name, Path string }
 
-type NavigateMsg struct{ Workspace workspaceinventory.Workspace }
+type NavigateMsg struct {
+	Workspace  workspaceinventory.Workspace
+	Generation int
+	RequestID  uint64
+}
 type ValidationMsg struct {
-	Workspace workspaceinventory.Workspace
-	Err       error
+	Workspace  workspaceinventory.Workspace
+	Generation int
+	RequestID  uint64
+	Err        error
 }
 type panesMsg struct {
 	Generation int
@@ -52,6 +58,7 @@ type Model struct {
 	projects   []Project
 	roots      []string
 	generation int
+	requestID  uint64
 	loading    bool
 	tmuxErr    error
 	results    map[string]workspaceinventory.ProjectResult
@@ -69,6 +76,7 @@ func New(collector workspaceinventory.Collector) *Model {
 
 func (m *Model) Start(projects []Project) tea.Cmd {
 	m.generation++
+	m.requestID++
 	m.projects = append([]Project(nil), projects...)
 	m.roots = m.roots[:0]
 	for _, project := range projects {
@@ -84,11 +92,42 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 	}
 }
 
-func (m *Model) Stop() { m.generation++; m.loading = false }
+func (m *Model) Stop() {
+	m.generation++
+	m.requestID++
+	m.loading = false
+}
 
-func (m *Model) Validate(workspace workspaceinventory.Workspace) tea.Cmd {
+// RequestNavigation binds a card activation to the current Overview lifecycle
+// and supersedes any prior in-flight destination validation.
+func (m *Model) RequestNavigation(workspace workspaceinventory.Workspace) tea.Cmd {
+	m.requestID++
+	msg := NavigateMsg{Workspace: workspace, Generation: m.generation, RequestID: m.requestID}
+	return func() tea.Msg { return msg }
+}
+
+func (m *Model) IsCurrentNavigation(generation int, requestID uint64) bool {
+	return generation == m.generation && requestID == m.requestID
+}
+
+// ConsumeValidation accepts a result at most once. A later duplicate or a
+// result superseded by another activation cannot navigate.
+func (m *Model) ConsumeValidation(generation int, requestID uint64) bool {
+	if !m.IsCurrentNavigation(generation, requestID) {
+		return false
+	}
+	m.requestID++
+	return true
+}
+
+func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 	return func() tea.Msg {
-		return ValidationMsg{Workspace: workspace, Err: m.collector.ValidateWorkspace(context.Background(), workspace)}
+		return ValidationMsg{
+			Workspace:  msg.Workspace,
+			Generation: msg.Generation,
+			RequestID:  msg.RequestID,
+			Err:        m.collector.ValidateWorkspace(context.Background(), msg.Workspace),
+		}
 	}
 }
 
@@ -168,7 +207,7 @@ func (m *Model) activate() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return func() tea.Msg { return NavigateMsg{Workspace: workspace} }
+	return m.RequestNavigation(workspace)
 }
 
 func (m *Model) View(width, height int) string {

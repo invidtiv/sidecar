@@ -437,12 +437,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.FocusPluginByID(msg.PluginID)
 
 	case overview.NavigateMsg:
-		if m.overview == nil {
+		if m.overview == nil || !m.overviewActive || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
 			return m, nil
 		}
-		return m, m.overview.Validate(msg.Workspace)
+		return m, m.overview.Validate(msg)
 
 	case overview.ValidationMsg:
+		if m.overview == nil || !m.overviewActive || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
+			return m, nil
+		}
 		if msg.Err != nil {
 			return m, func() tea.Msg {
 				return ToastMsg{Message: "Overview item is stale: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}

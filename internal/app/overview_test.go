@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -127,6 +129,16 @@ func TestProjectSwitcherLinkedWorktreeCursorFlagParity(t *testing.T) {
 func TestValidatedCrossProjectNavigationFocusesWorkspaceWithoutInput(t *testing.T) {
 	source := newOverviewGitRepo(t, "source")
 	target := newOverviewGitRepo(t, "target")
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	worktreeState, err := projectdir.WorktreeDirWithBase(stateBase, target, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeState, "agent"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.Default()
 	cfg.Projects.List = []config.ProjectConfig{{Name: "source", Path: source}, {Name: "target", Path: target}}
 	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
@@ -143,10 +155,21 @@ func TestValidatedCrossProjectNavigationFocusesWorkspaceWithoutInput(t *testing.
 		t.Fatal(err)
 	}
 	m := New(reg, km, cfg, "", source, source, "git")
-	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	m.overview = overview.New(workspaceinventory.Collector{})
 	m.overviewActive = true
 	workspace := workspaceinventory.Workspace{ProjectKey: workspaceinventory.CanonicalPath(target), ProjectRoot: target, Kind: workspaceinventory.KindWorktree, Key: workspaceinventory.CanonicalPath(target), Path: target}
-	updatedModel, cmd := m.Update(overview.ValidationMsg{Workspace: workspace})
+	navigation := overviewNavigation(t, m.overview, workspace)
+	initialGitInits, initialWorkspaceInits := gitPlugin.inits, workspacePlugin.inits
+	updatedModel, validationCmd := m.Update(navigation)
+	m = updatedModel.(Model)
+	if validationCmd == nil || m.ui.WorkDir != source || gitPlugin.inits != initialGitInits || workspacePlugin.inits != initialWorkspaceInits {
+		t.Fatalf("pre-validation state: cmd=%v work=%q gitInits=%d workspaceInits=%d", validationCmd != nil, m.ui.WorkDir, gitPlugin.inits, workspacePlugin.inits)
+	}
+	validation, ok := validationCmd().(overview.ValidationMsg)
+	if !ok || validation.Err != nil {
+		t.Fatalf("validation result = %#v", validation)
+	}
+	updatedModel, cmd := m.Update(validation)
 	updated := updatedModel.(Model)
 	if cmd == nil || updated.activePlugin != 1 || !workspacePlugin.focused {
 		t.Fatalf("navigation focus: cmd=%v active=%d focused=%v", cmd != nil, updated.activePlugin, workspacePlugin.focused)
@@ -173,7 +196,8 @@ func TestOverviewNavigationDoesNotMutateBeforeValidation(t *testing.T) {
 		Key:         workspaceinventory.CanonicalPath(target),
 		Path:        target,
 	}
-	updatedModel, cmd := m.Update(overview.NavigateMsg{Workspace: workspace})
+	navigation := overviewNavigation(t, m.overview, workspace)
+	updatedModel, cmd := m.Update(navigation)
 	updated := updatedModel.(Model)
 	if cmd == nil {
 		t.Fatal("navigation did not schedule validation")
@@ -197,7 +221,8 @@ func TestStaleValidationDoesNotMutateProjectOrReinit(t *testing.T) {
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	m.overviewActive = true
 	initialInits := p.inits
-	updatedModel, cmd := m.Update(overview.ValidationMsg{Err: errors.New("worktree disappeared")})
+	navigation := overviewNavigation(t, m.overview, workspaceinventory.Workspace{})
+	updatedModel, cmd := m.Update(overviewValidation(navigation, errors.New("worktree disappeared")))
 	updated := updatedModel.(Model)
 	if updated.ui.WorkDir != source || updated.ui.ProjectRoot != source || !updated.overviewActive || p.inits != initialInits {
 		t.Fatalf("stale navigation mutated state: work=%q root=%q overview=%v inits=%d", updated.ui.WorkDir, updated.ui.ProjectRoot, updated.overviewActive, p.inits)
@@ -207,6 +232,90 @@ func TestStaleValidationDoesNotMutateProjectOrReinit(t *testing.T) {
 	}
 	if toast, ok := cmd().(ToastMsg); !ok || !toast.IsError {
 		t.Fatalf("stale result = %#v", cmd())
+	}
+}
+
+func TestOverviewExitBeforeNavigateMsgIgnoresLateActivation(t *testing.T) {
+	m, p, source := newOverviewRaceModel(t)
+	target := newOverviewGitRepo(t, "target")
+	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
+	initialInits := p.inits
+
+	exitedModel, _ := m.handleKeyMsg(tea.KeyPressMsg{Code: '1', Text: "1"})
+	exited := *exitedModel.(*Model)
+	updatedModel, cmd := exited.Update(navigation)
+	updated := updatedModel.(Model)
+	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("late NavigateMsg mutated after numeric exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	}
+}
+
+func TestOverviewExitBeforeValidationMsgIgnoresLateResult(t *testing.T) {
+	m, p, source := newOverviewRaceModel(t)
+	target := newOverviewGitRepo(t, "target")
+	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
+	updatedModel, validationCmd := m.Update(navigation)
+	m = updatedModel.(Model)
+	if validationCmd == nil {
+		t.Fatal("current navigation did not schedule validation")
+	}
+	initialInits := p.inits
+
+	exitedModel, _ := m.Update(FocusPluginByIDMsg{PluginID: "git"})
+	exited := exitedModel.(Model)
+	updatedModel, cmd := exited.Update(overviewValidation(navigation, nil))
+	updated := updatedModel.(Model)
+	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("late ValidationMsg mutated after tab exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	}
+}
+
+func TestOverviewNewerActivationSupersedesOlderValidation(t *testing.T) {
+	m, p, source := newOverviewRaceModel(t)
+	firstTarget := newOverviewGitRepo(t, "first")
+	secondTarget := newOverviewGitRepo(t, "second")
+	first := overviewNavigation(t, m.overview, overviewWorkspace(firstTarget))
+	updatedModel, firstValidation := m.Update(first)
+	m = updatedModel.(Model)
+	if firstValidation == nil {
+		t.Fatal("first navigation did not schedule validation")
+	}
+	second := overviewNavigation(t, m.overview, overviewWorkspace(secondTarget))
+	updatedModel, secondValidation := m.Update(second)
+	m = updatedModel.(Model)
+	if secondValidation == nil {
+		t.Fatal("second navigation did not schedule validation")
+	}
+	initialInits := p.inits
+
+	updatedModel, toastCmd := m.Update(overviewValidation(second, errors.New("second target disappeared")))
+	m = updatedModel.(Model)
+	if toastCmd == nil {
+		t.Fatal("current validation error did not produce a toast")
+	}
+	updatedModel, cmd := m.Update(overviewValidation(first, nil))
+	updated := updatedModel.(Model)
+	if cmd != nil || !updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("older validation won race: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	}
+}
+
+func TestOverviewHeaderTabExitInvalidatesPendingNavigation(t *testing.T) {
+	m, p, source := newOverviewRaceModel(t)
+	target := newOverviewGitRepo(t, "target")
+	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
+	m.width, m.height, m.ready = 120, 40, true
+	bounds := m.getTabBounds()
+	if len(bounds) == 0 {
+		t.Fatal("missing tab bounds")
+	}
+	initialInits := p.inits
+	updatedModel, _ := m.Update(tea.MouseClickMsg{X: bounds[0].Start, Y: 0, Button: tea.MouseLeft})
+	exited := updatedModel.(Model)
+	updatedModel, cmd := exited.Update(navigation)
+	updated := updatedModel.(Model)
+	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("late navigation mutated after header exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
 	}
 }
 
@@ -231,4 +340,45 @@ func newOverviewGitRepo(t *testing.T, name string) string {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	return path
+}
+
+func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {
+	t.Helper()
+	source := newOverviewGitRepo(t, "source")
+	cfg := config.Default()
+	km := keymap.NewRegistry()
+	ctx := &plugin.Context{WorkDir: source, ProjectRoot: source, Config: cfg, Keymap: km}
+	reg := plugin.NewRegistry(ctx)
+	p := &navigationPlugin{id: "git"}
+	if err := reg.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, km, cfg, "", source, source, "git")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	m.overviewActive = true
+	m.overview.Start(nil)
+	return m, p, source
+}
+
+func overviewWorkspace(path string) workspaceinventory.Workspace {
+	canonical := workspaceinventory.CanonicalPath(path)
+	return workspaceinventory.Workspace{ProjectKey: canonical, ProjectRoot: path, Kind: workspaceinventory.KindWorktree, Key: canonical, Path: path}
+}
+
+func overviewNavigation(t *testing.T, model *overview.Model, workspace workspaceinventory.Workspace) overview.NavigateMsg {
+	t.Helper()
+	msg, ok := model.RequestNavigation(workspace)().(overview.NavigateMsg)
+	if !ok {
+		t.Fatal("request did not return NavigateMsg")
+	}
+	return msg
+}
+
+func overviewValidation(navigation overview.NavigateMsg, err error) overview.ValidationMsg {
+	return overview.ValidationMsg{
+		Workspace:  navigation.Workspace,
+		Generation: navigation.Generation,
+		RequestID:  navigation.RequestID,
+		Err:        err,
+	}
 }
