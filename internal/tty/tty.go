@@ -101,6 +101,15 @@ type Model struct {
 
 	ownerID       uint64
 	runGeneration uint64
+	scopeTarget   string
+	control       terminalControlSource
+	subscription  terminalControlSubscription
+	mailbox       *terminalMailbox
+	mailboxDone   chan struct{}
+	controlGen    uint64
+	modelLive     bool
+	visible       bool
+	focused       bool
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -135,6 +144,9 @@ func New(config *Config) *Model {
 	return &Model{
 		Config:  cfg,
 		ownerID: nextModelID.Add(1),
+		control: sharedTerminalControl,
+		visible: true,
+		focused: true,
 	}
 }
 
@@ -148,6 +160,7 @@ func (m *Model) IsActive() bool {
 // Enter enters interactive mode for the specified tmux session/pane.
 // Returns a tea.Cmd to start polling for output.
 func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
+	m.Exit()
 	m.runGeneration++
 	m.State = &State{
 		Active:        true,
@@ -157,6 +170,14 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		CursorVisible: true,
 		OutputBuf:     NewOutputBuffer(m.Config.ScrollbackLines),
 	}
+	m.visible = true
+	m.modelLive = false
+	m.scopeTarget = paneID
+	if m.scopeTarget == "" {
+		m.scopeTarget = sessionName
+	}
+	m.mailbox = &terminalMailbox{events: make(chan terminalControlEvent, terminalMailboxCapacity)}
+	m.mailboxDone = make(chan struct{})
 
 	// Resize pane to match view dimensions
 	target := paneID
@@ -167,16 +188,31 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		ResizeTmuxPane(target, m.Width, m.Height)
 	}
 
-	// Return command to trigger initial poll
-	return m.schedulePoll(0)
+	cmds := []tea.Cmd{m.schedulePoll(0), m.listenControl()}
+	if paneID != "" {
+		m.startControl()
+	} else {
+		cmds = append(cmds, resolvePaneCmd(m.Scope(), sessionName))
+	}
+	return tea.Batch(cmds...)
 }
+
+// Target identifies the tmux session and pane displayed by a Model.
+type Target struct {
+	Session string
+	Pane    string
+}
+
+// Open activates the terminal for target. Enter remains as the compatibility
+// spelling for existing embedders.
+func (m *Model) Open(target Target) tea.Cmd { return m.Enter(target.Session, target.Pane) }
 
 // Scope returns the identity of the current Model activation. Commands created
 // for this model should include this scope in their result messages.
 func (m *Model) Scope() MessageScope {
 	return MessageScope{
 		Owner:      m.ownerID,
-		Target:     m.GetTarget(),
+		Target:     m.scopeTarget,
 		Generation: m.runGeneration,
 	}
 }
@@ -191,11 +227,24 @@ func (m *Model) owns(scope MessageScope) bool {
 
 // Exit exits interactive mode.
 func (m *Model) Exit() {
+	if m.subscription != nil {
+		m.subscription.Close()
+		m.subscription = nil
+	}
+	if m.mailboxDone != nil {
+		close(m.mailboxDone)
+		m.mailboxDone = nil
+	}
+	m.controlGen++
+	m.modelLive = false
 	if m.State != nil {
 		m.State.Active = false
 	}
 	m.State = nil
 }
+
+// Close releases the current target and rejects all queued deliveries.
+func (m *Model) Close() { m.Exit() }
 
 // Update handles messages in interactive mode.
 // Returns the updated model and any commands to execute.
@@ -239,7 +288,28 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if !m.owns(msg.Scope) {
 			return nil
 		}
+		if m.modelLive {
+			return nil
+		}
 		return m.schedulePoll(0)
+
+	case paneResolvedMsg:
+		if !m.owns(msg.Scope) || msg.Err != nil || msg.Pane == "" {
+			return nil
+		}
+		m.State.TargetPane = msg.Pane
+		m.startControl()
+		return nil
+
+	case terminalControlMsg:
+		return m.handleControlDelivery(msg)
+
+	case terminalControlRetryMsg:
+		if !m.owns(msg.Scope) || msg.Gen != m.controlGen || !m.visible || m.subscription != nil {
+			return nil
+		}
+		m.startControl()
+		return nil
 
 	case SessionDeadMsg:
 		if !m.owns(msg.Scope) {
@@ -706,7 +776,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 
 // schedulePoll schedules a poll with the given delay.
 func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
-	if !m.IsActive() {
+	if !m.IsActive() || !m.visible || m.modelLive {
 		return nil
 	}
 
@@ -737,6 +807,11 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 
 	if !m.IsActive() {
 		return nil
+	}
+	if m.subscription != nil {
+		m.subscription.Resize(width, height)
+		m.modelLive = false
+		return m.schedulePoll(0)
 	}
 
 	// Debounce resize
@@ -775,6 +850,11 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 
 	if !m.IsActive() {
 		return nil
+	}
+	if m.subscription != nil {
+		m.subscription.Resize(width, height)
+		m.modelLive = false
+		return m.schedulePoll(0)
 	}
 
 	target := m.GetTarget()
