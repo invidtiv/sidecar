@@ -123,6 +123,46 @@ sleep 3                                   # let the first frame paint
 ./scripts/tmux-drive.sh stop
 ```
 
+For terminal-cutover proof, the driver also exposes narrowly scoped helpers for
+the private inner server. `PANE` must resolve on that server; the process helper
+only reports exact `tmux -C attach-session -f ignore-size -t SESSION` clients
+that are descendants of the Sidecar host pane and whose session exists on the
+private server:
+
+```bash
+FIXTURE_ROOT=$(mktemp -d /tmp/sidecar-terminal-cutover.XXXXXX)
+./scripts/terminal-cutover-fixture.sh "$FIXTURE_ROOT"
+export SIDECAR_DRIVE_RUN_DIR="$FIXTURE_ROOT"
+export SIDECAR_DRIVE_REPO="$FIXTURE_ROOT/main"
+export EDITOR="$FIXTURE_ROOT/editors/nvim-proof"
+
+SIDECAR_DRIVE_ARGS='--enable-feature=notes_plugin' ./scripts/tmux-drive.sh start 200 50
+./scripts/tmux-drive.sh panes
+./scripts/tmux-drive.sh inner-type %3 'printf "CUTOVER_MARKER\\n"'
+./scripts/tmux-drive.sh inner-keys %3 Enter
+
+./scripts/tmux-drive.sh capture-hook-install
+./scripts/tmux-drive.sh capture-hook-reset
+# Produce steady output, then require this to stay empty.
+./scripts/tmux-drive.sh capture-hook-show
+
+./scripts/tmux-drive.sh control-clients
+# Use only the exact PID printed above to exercise fallback/reseed.
+./scripts/tmux-drive.sh control-kill PID
+```
+
+The fixture has committed proof files, two linked worktrees, deterministic
+`nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in
+the agent picker. It refuses a nonempty destination and any path under `$HOME`.
+
+`control-kill` rechecks ancestry, argv shape, and private-session membership
+immediately before sending `TERM`; it refuses zero or ambiguous matches. There
+is intentionally no general process killer or inner `kill-server` command.
+The capture hook and its log live under `$SIDECAR_DRIVE_RUN_DIR/proof` and are
+installed only on the explicit inner socket. `SIDECAR_DRIVE_ARGS` is split on
+whitespace without shell evaluation, so use it only for flags whose individual
+values contain no spaces.
+
 `SIDECAR_BIN` defaults to whatever `sidecar` resolves to on `PATH`. Build to a
 temp path and point at it to compare a fix against its parent commit — that is
 how the keystroke-ordering regression was demonstrated:
