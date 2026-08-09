@@ -137,6 +137,16 @@ func Detect(ob Observation) Result {
 	}
 }
 
+// Supports reports whether Sidecar has provider-owned activity evidence rules.
+func Supports(agent string) bool {
+	switch agent {
+	case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp":
+		return true
+	default:
+		return false
+	}
+}
+
 // Evaluate applies rules in caller-supplied priority order. Rules are kept
 // deliberately small: provider files own their evidence and ordering.
 func Evaluate(ob Observation, rules []Rule) Result {

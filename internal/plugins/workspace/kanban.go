@@ -300,11 +300,20 @@ func (p *Plugin) syncListToKanban() {
 	columns := p.getKanbanColumns()
 	for colIdx, lane := range kanbanLaneOrder {
 		for rowIdx, item := range columns[lane] {
-			if item.Name == wt.Name {
+			if item.IdentityKey() == wt.IdentityKey() {
 				p.kanbanCol, p.kanbanRow = colIdx+1, rowIdx
 				return
 			}
 		}
 	}
 	p.kanbanCol, p.kanbanRow = 0, 0
+}
+
+func (p *Plugin) selectKanbanFromList() {
+	p.syncListToKanban()
+	requested := boardkanban.Selection{Column: p.kanbanCol, Row: p.kanbanRow}
+	p.syncKanbanComponent()
+	p.kanban.Select(requested)
+	selection := p.kanban.Selection()
+	p.kanbanCol, p.kanbanRow = selection.Column, selection.Row
 }

@@ -75,7 +75,7 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
-		m.width < minWidth || m.height < minHeight {
+		m.width < minWidth || m.height < minHeight || m.overviewActive {
 		return nil
 	}
 	active := m.ActivePlugin()
@@ -224,11 +224,9 @@ func (m *Model) projectSwitcherInputSection() modal.Section {
 func (m *Model) projectSwitcherCountSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		allProjects := m.cfg.Projects.List
-		projects := m.projectSwitcherFiltered
-
 		var countText string
 		if m.projectSwitcherInput.Value() != "" {
-			countText = fmt.Sprintf("%d of %d projects", len(projects), len(allProjects))
+			countText = fmt.Sprintf("%d of %d projects", len(filterProjects(allProjects, m.projectSwitcherInput.Value())), len(allProjects))
 		} else if len(allProjects) > 0 {
 			countText = fmt.Sprintf("%d projects", len(allProjects))
 		}
@@ -245,7 +243,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		var b strings.Builder
 
 		// No projects configured
-		if len(allProjects) == 0 {
+		if len(allProjects) == 0 && m.overview == nil {
 			b.WriteString(styles.Muted.Render("No projects configured"))
 			return modal.RenderedSection{Content: b.String()}
 		}
@@ -280,9 +278,10 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		nameCurrentSelectedStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 
 		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(projects); i++ {
-			project := projects[i]
+			destination := projects[i]
 			isCursor := i == m.projectSwitcherCursor
-			isCurrent := project.Path == m.ui.WorkDir
+			isOverview := destination.Kind == destinationOverview
+			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.overviewActive)
 			itemID := projectSwitcherItemID(i)
 			isHovered := itemID == hoverID
 
@@ -305,12 +304,20 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 				nameStyle = nameNormalStyle
 			}
 
-			b.WriteString(nameStyle.Render(project.Name))
+			name := destination.Name
+			if isOverview {
+				name = "◫ " + name
+				nameStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+			}
+			b.WriteString(nameStyle.Render(name))
 			if isCurrent {
 				b.WriteString(styles.Muted.Render(" (current)"))
 			}
 			b.WriteString("\n")
-			pathDisplay := project.Path
+			pathDisplay := destination.Path
+			if isOverview {
+				pathDisplay = "All configured projects"
+			}
 			maxPathLen := contentWidth - 4
 			if len(pathDisplay) > maxPathLen {
 				pathDisplay = "..." + pathDisplay[len(pathDisplay)-maxPathLen+3:]
@@ -391,7 +398,7 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 		b.WriteString("\n")
 
 		// No projects configured
-		if len(allProjects) == 0 {
+		if len(allProjects) == 0 && m.overview == nil {
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -541,19 +548,22 @@ func (m Model) renderProjectAddThemePickerOverlay(content string) string {
 func (m Model) renderHeader() string {
 	// Check if we're in a worktree for the indicator
 	worktreeIndicator := ""
-	if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-		// Show worktree branch name as indicator
-		branchName := wtInfo.Branch
-		if branchName == "" {
-			branchName = "worktree"
+	if !m.overviewActive {
+		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
+			// Show worktree branch name as indicator
+			branchName := wtInfo.Branch
+			if branchName == "" {
+				branchName = "worktree"
+			}
+			worktreeIndicator = styles.WorktreeIndicator.Render(" [" + branchName + "]")
 		}
-		worktreeIndicator = styles.WorktreeIndicator.Render(" [" + branchName + "]")
 	}
 
 	// Calculate final title width (with repo name and worktree indicator) - used for tab positioning
 	finalTitleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	if m.intro.RepoName != "" {
-		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + m.intro.RepoName))
+	activeName := m.activeDestinationName()
+	if activeName != "" {
+		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
 	}
 	finalTitleWidth += lipgloss.Width(worktreeIndicator)
 	finalTitleWidth += 1 // trailing space
@@ -567,8 +577,8 @@ func (m Model) renderHeader() string {
 	} else {
 		// Static title with repo name and worktree indicator
 		repoSuffix := ""
-		if m.intro.RepoName != "" {
-			repoSuffix = styles.Subtitle.Render(" / " + m.intro.RepoName)
+		if activeName != "" {
+			repoSuffix = styles.Subtitle.Render(" / " + activeName)
 		}
 		title = styles.BarTitle.Render(" Sidecar") + repoSuffix + worktreeIndicator + " "
 	}
@@ -577,7 +587,7 @@ func (m Model) renderHeader() string {
 	plugins := m.registry.Plugins()
 	var tabs []string
 	for i, p := range plugins {
-		isActive := i == m.activePlugin
+		isActive := !m.overviewActive && i == m.activePlugin
 		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
 		tabs = append(tabs, tab)
 	}
@@ -609,16 +619,19 @@ func (m Model) renderHeader() string {
 func (m Model) getTabBounds() []TabBounds {
 	// Always use final title width (must match renderHeader logic)
 	titleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	if m.intro.RepoName != "" {
-		titleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + m.intro.RepoName))
+	activeName := m.activeDestinationName()
+	if activeName != "" {
+		titleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
 	}
 	// Add worktree indicator width if applicable
-	if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-		branchName := wtInfo.Branch
-		if branchName == "" {
-			branchName = "worktree"
+	if !m.overviewActive {
+		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
+			branchName := wtInfo.Branch
+			if branchName == "" {
+				branchName = "worktree"
+			}
+			titleWidth += lipgloss.Width(styles.WorktreeIndicator.Render(" [" + branchName + "]"))
 		}
-		titleWidth += lipgloss.Width(styles.WorktreeIndicator.Render(" [" + branchName + "]"))
 	}
 	titleWidth += 1 // trailing space
 
@@ -627,7 +640,7 @@ func (m Model) getTabBounds() []TabBounds {
 	var tabWidths []int
 	totalTabWidth := 0
 	for i, p := range plugins {
-		isActive := i == m.activePlugin
+		isActive := !m.overviewActive && i == m.activePlugin
 		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
 		w := lipgloss.Width(tab)
 		tabWidths = append(tabWidths, w)
@@ -663,13 +676,14 @@ func (m Model) getTabBounds() []TabBounds {
 
 // getRepoNameBounds returns the X bounds for the repo name in the header.
 func (m Model) getRepoNameBounds() (start, end int, ok bool) {
-	if m.intro.RepoName == "" {
+	name := m.activeDestinationName()
+	if name == "" {
 		return 0, 0, false
 	}
 
 	titlePrefix := styles.BarTitle.Render(" Sidecar")
 	repoPrefix := styles.Subtitle.Render(" / ")
-	repoName := styles.Subtitle.Render(m.intro.RepoName)
+	repoName := styles.Subtitle.Render(name)
 
 	start = lipgloss.Width(titlePrefix) + lipgloss.Width(repoPrefix)
 	end = start + lipgloss.Width(repoName)
@@ -678,6 +692,9 @@ func (m Model) getRepoNameBounds() (start, end int, ok bool) {
 
 // getWorktreeIndicatorBounds returns the X bounds for the worktree indicator in the header.
 func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
+	if m.overviewActive {
+		return 0, 0, false
+	}
 	wtInfo := m.currentWorktreeInfo()
 	if wtInfo == nil || wtInfo.IsMain {
 		return 0, 0, false
@@ -704,6 +721,9 @@ func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
+	if m.overviewActive && m.overview != nil {
+		return m.overview.View(width, height)
+	}
 	p := m.ActivePlugin()
 	if p == nil {
 		msg := "No plugins loaded"
@@ -768,12 +788,21 @@ type footerHint struct {
 func (m Model) footerHints() []footerHint {
 	// Plugin-specific hints first - they're more contextually relevant
 	var hints []footerHint
-	if p := m.ActivePlugin(); p != nil {
+	if m.overviewActive && m.overview != nil {
+		hints = append(hints, footerHint{keys: "enter", label: "Open"}, footerHint{keys: "r", label: "Refresh"})
+	} else if p := m.ActivePlugin(); p != nil {
 		hints = m.pluginFooterHints(p, m.activeContext)
 	}
 	// Then essential global hints
 	hints = append(hints, m.globalFooterHints()...)
 	return hints
+}
+
+func (m Model) activeDestinationName() string {
+	if m.overviewActive {
+		return "Overview"
+	}
+	return m.intro.RepoName
 }
 
 func (m Model) globalFooterHints() []footerHint {

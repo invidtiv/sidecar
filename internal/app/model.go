@@ -12,15 +12,18 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/version"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 // ModalKind identifies an app-level modal with explicit priority ordering.
@@ -121,6 +124,18 @@ type projectAddState struct {
 	themeSelected string
 }
 
+type projectSwitcherDestination struct {
+	Kind    string
+	Name    string
+	Path    string
+	Project *config.ProjectConfig
+}
+
+const (
+	destinationProject  = "project"
+	destinationOverview = "overview"
+)
+
 // Model is the root Bubble Tea model for the sidecar application.
 type Model struct {
 	// Configuration
@@ -159,7 +174,7 @@ type Model struct {
 	projectSwitcherCursor       int
 	projectSwitcherScroll       int // scroll offset for list
 	projectSwitcherInput        textinput.Model
-	projectSwitcherFiltered     []config.ProjectConfig
+	projectSwitcherFiltered     []projectSwitcherDestination
 	projectSwitcherModal        *modal.Modal
 	projectSwitcherModalWidth   int
 	projectSwitcherMouseHandler *mouse.Handler
@@ -299,6 +314,11 @@ type Model struct {
 
 	// Intro animation
 	intro IntroModel
+
+	// Overview is an app-owned destination, not a project plugin. It is only
+	// constructed while the default-off feature is enabled.
+	overview       *overview.Model
+	overviewActive bool
 }
 
 // New creates a new application model.
@@ -320,7 +340,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		}
 	}
 
-	return Model{
+	m := Model{
 		cfg:                cfg,
 		registry:           reg,
 		keymap:             km,
@@ -336,6 +356,10 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		currentVersion:     currentVersion,
 		updatePhaseStatus:  make(map[UpdatePhase]string),
 	}
+	if features.IsEnabled(features.CrossProjectOverview.Name) {
+		m.overview = overview.New(workspaceinventory.Collector{})
+	}
+	return m
 }
 
 // Init initializes the model and returns initial commands.
@@ -687,19 +711,36 @@ func (m *Model) initProjectSwitcher() {
 	ti.CharLimit = 50
 	ti.SetWidth(40)
 	m.projectSwitcherInput = ti
-	m.projectSwitcherFiltered = m.cfg.Projects.List
+	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 	m.projectSwitcherCursor = 0
 	m.projectSwitcherScroll = 0
 
 	// Set cursor to current project if found
-	for i, proj := range m.projectSwitcherFiltered {
-		if proj.Path == m.ui.WorkDir {
+	for i, destination := range m.projectSwitcherFiltered {
+		if m.overviewActive && destination.Kind == destinationOverview {
+			m.projectSwitcherCursor = i
+			break
+		}
+		if !m.overviewActive && destination.Kind == destinationProject && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot) {
 			m.projectSwitcherCursor = i
 			break
 		}
 	}
 	// Preview the initially-selected project's theme
 	m.previewProjectTheme()
+}
+
+func (m *Model) projectSwitcherDestinations(query string) []projectSwitcherDestination {
+	projects := filterProjects(m.cfg.Projects.List, query)
+	result := make([]projectSwitcherDestination, 0, len(projects)+1)
+	if m.overview != nil {
+		result = append(result, projectSwitcherDestination{Kind: destinationOverview, Name: "Overview"})
+	}
+	for i := range projects {
+		project := projects[i]
+		result = append(result, projectSwitcherDestination{Kind: destinationProject, Name: project.Name, Path: project.Path, Project: &project})
+	}
+	return result
 }
 
 // filterProjects filters projects by name or path using a case-insensitive substring match.
@@ -726,7 +767,7 @@ func (m *Model) updateProjectSwitcherFilter(msg tea.Msg) tea.Cmd {
 
 	var cmd tea.Cmd
 	m.projectSwitcherInput, cmd = m.projectSwitcherInput.Update(msg)
-	m.projectSwitcherFiltered = filterProjects(m.cfg.Projects.List, m.projectSwitcherInput.Value())
+	m.projectSwitcherFiltered = m.projectSwitcherDestinations(m.projectSwitcherInput.Value())
 	m.clearProjectSwitcherModal()
 
 	if m.projectSwitcherCursor >= len(m.projectSwitcherFiltered) {
@@ -758,7 +799,54 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 	return m.switchProjectWithInventory(projectPath, nil)
 }
 
+func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
+	m.resetProjectSwitcher()
+	if destination.Kind == destinationOverview && m.overview != nil {
+		m.overviewActive = true
+		m.updateContext()
+		return m.overview.Start(m.overviewProjects())
+	}
+	m.exitOverview()
+	m.updateContext()
+	return m.switchProject(destination.Path)
+}
+
+func (m *Model) overviewProjects() []overview.Project {
+	if m.cfg == nil {
+		return nil
+	}
+	var selected []overview.Project
+	currentRoot := workspaceinventory.CanonicalPath(m.ui.ProjectRoot)
+	for _, project := range m.cfg.Projects.List {
+		if workspaceinventory.CanonicalPath(project.Path) == currentRoot {
+			selected = append(selected, overview.Project{Name: project.Name, Path: project.Path})
+			break
+		}
+	}
+	for _, project := range m.cfg.Projects.List {
+		if len(selected) > 0 && workspaceinventory.CanonicalPath(project.Path) == workspaceinventory.CanonicalPath(selected[0].Path) {
+			continue
+		}
+		selected = append(selected, overview.Project{Name: project.Name, Path: project.Path})
+		if len(selected) == 2 {
+			break
+		}
+	}
+	return selected
+}
+
+func (m *Model) exitOverview() {
+	if m.overviewActive && m.overview != nil {
+		m.overview.Stop()
+	}
+	m.overviewActive = false
+}
+
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
+	return m.switchProjectWithSelection(projectPath, inventory, nil)
+}
+
+func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection) tea.Cmd {
 	// Skip if already on this project
 	if projectPath == m.ui.WorkDir {
 		return func() tea.Msg {
@@ -835,6 +923,11 @@ func (m *Model) switchProjectWithInventory(projectPath string, inventory []Workt
 	// Reinitialize all plugins with the new working directory and project root
 	// This stops all plugins, updates the context, and starts them again
 	startCmds := m.registry.Reinit(targetPath, newProjectRoot)
+	if pending != nil {
+		if selector, ok := m.registry.Get("workspace").(plugin.PendingWorkspaceSelector); ok {
+			selector.SetPendingWorkspaceSelection(*pending)
+		}
+	}
 
 	// Send WindowSizeMsg to all plugins so they recalculate layout/bounds.
 	// Without this, plugins like td-monitor lose mouse interactivity because
@@ -878,12 +971,38 @@ func (m *Model) switchProjectWithInventory(projectPath string, inventory []Workt
 	)
 }
 
+func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
+	m.exitOverview()
+	kind := plugin.WorkspaceSelectionWorktree
+	target := workspace.Path
+	key := workspace.Key
+	if workspace.Kind == workspaceinventory.KindShell {
+		kind = plugin.WorkspaceSelectionShell
+		target = workspace.ProjectRoot
+		key = workspace.TmuxName
+	}
+	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path}
+	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) ||
+		(workspace.Kind == workspaceinventory.KindShell && workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.ProjectRoot)) {
+		if selector, ok := m.registry.Get("workspace").(plugin.PendingWorkspaceSelector); ok {
+			selector.SetPendingWorkspaceSelection(pending)
+		}
+		m.updateContext()
+		return m.FocusPluginByID("workspace")
+	}
+	return m.switchProjectWithSelection(target, nil, &pending)
+}
+
 // previewProjectTheme applies the theme for the currently selected project in the switcher.
 func (m *Model) previewProjectTheme() {
-	projects := m.projectSwitcherFiltered
-	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(projects) {
-		resolved := theme.ResolveTheme(m.cfg, projects[m.projectSwitcherCursor].Path)
-		theme.ApplyResolved(resolved)
+	destinations := m.projectSwitcherFiltered
+	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(destinations) {
+		destination := destinations[m.projectSwitcherCursor]
+		if destination.Kind == destinationOverview {
+			theme.ApplyResolved(theme.ResolveTheme(m.cfg, ""))
+			return
+		}
+		theme.ApplyResolved(theme.ResolveTheme(m.cfg, destination.Path))
 	}
 }
 
@@ -1169,7 +1288,7 @@ func (m *Model) saveProjectAdd() tea.Cmd {
 	m.cfg.Projects.List = cfg.Projects.List
 
 	// Refresh the filtered list
-	m.projectSwitcherFiltered = m.cfg.Projects.List
+	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 
 	return func() tea.Msg {
 		return ToastMsg{Message: fmt.Sprintf("Added project: %s", name), Duration: 3 * time.Second}
