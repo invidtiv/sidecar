@@ -4,7 +4,11 @@ package overview
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -19,9 +23,13 @@ import (
 const (
 	minColumnWidth = 17
 	cardHeight     = 4
+	maxProjects    = 4
+	maxCaptures    = 4
+	livePollEvery  = 5 * time.Second
+	idlePollEvery  = 30 * time.Second
 )
 
-type Project struct{ Name, Path string }
+type Project struct{ Name, Path, Key string }
 
 type NavigateMsg struct {
 	Workspace  workspaceinventory.Workspace
@@ -35,18 +43,22 @@ type ValidationMsg struct {
 	Err        error
 }
 type panesMsg struct {
-	Generation int
-	Panes      []workspaceinventory.Pane
-	Err        error
+	Generation  int
+	Projects    []Project
+	Panes       []workspaceinventory.Pane
+	ShellClaims workspaceinventory.ShellClaims
+	LiveOnly    bool
+	Err         error
 }
 type projectMsg struct {
 	Generation int
 	Result     workspaceinventory.ProjectResult
 }
+type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg:
+	case panesMsg, projectMsg, pollMsg:
 		return true
 	default:
 		return false
@@ -54,45 +66,102 @@ func IsAsyncMessage(msg tea.Msg) bool {
 }
 
 type Model struct {
-	collector  workspaceinventory.Collector
-	projects   []Project
-	roots      []string
-	generation int
-	requestID  uint64
-	loading    bool
-	tmuxErr    error
-	results    map[string]workspaceinventory.ProjectResult
-	board      kanban.Component
-	cards      map[string]workspaceinventory.Workspace
-	mouse      *mouse.Handler
-	width      int
-	height     int
+	collector        workspaceinventory.Collector
+	refreshCollector workspaceinventory.Collector
+	projects         []Project
+	roots            []string
+	generation       int
+	requestID        uint64
+	loading          bool
+	tmuxErr          error
+	results          map[string]workspaceinventory.ProjectResult
+	projectErrors    map[string]error
+	stale            map[string]bool
+	refreshing       map[string]bool
+	completed        map[string]bool
+	pending          []Project
+	active           int
+	currentPanes     []workspaceinventory.Pane
+	shellClaims      workspaceinventory.ShellClaims
+	liveOnly         bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	traceWriter      io.Writer
+	cycleStart       time.Time
+	configured       int
+	firstResult      bool
+	maxActive        int
+	board            kanban.Component
+	cards            map[string]workspaceinventory.Workspace
+	mouse            *mouse.Handler
+	width            int
+	height           int
 }
 
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
-	return &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), refreshing: make(map[string]bool), completed: make(map[string]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
+		m.traceWriter = os.Stderr
+	}
+	return m
 }
 
 func (m *Model) Start(projects []Project) tea.Cmd {
+	return m.start(projects, "refresh")
+}
+
+func (m *Model) start(projects []Project, reason string) tea.Cmd {
+	if m.cancel != nil {
+		if m.loading || m.active > 0 {
+			m.tracef("cycle generation=%d canceled active_projects=%d", m.generation, m.active)
+		}
+		m.cancel()
+	}
 	m.generation++
 	m.requestID++
-	m.projects = append([]Project(nil), projects...)
-	m.roots = m.roots[:0]
-	for _, project := range projects {
-		m.roots = append(m.roots, project.Path)
-	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.loading, m.tmuxErr = true, nil
-	m.results = make(map[string]workspaceinventory.ProjectResult)
-	m.syncBoard()
+	m.completed = make(map[string]bool)
+	for key := range m.results {
+		m.refreshing[key] = true
+	}
+	if len(m.projects) > 0 {
+		m.syncBoard()
+	}
+	m.cycleStart, m.configured, m.firstResult, m.maxActive = time.Now(), len(projects), false, 0
+	m.tracef("cycle generation=%d reason=%s configured=%d start", m.generation, reason, len(projects))
 	generation := m.generation
+	ctx := m.ctx
+	configured := append([]Project(nil), projects...)
+	cachedShellClaims := cloneShellClaims(m.shellClaims)
 	return func() tea.Msg {
-		panes, err := m.collector.ListPanes(context.Background())
-		return panesMsg{Generation: generation, Panes: panes, Err: err}
+		normalized := configured
+		liveOnly := reason == "poll"
+		if !liveOnly {
+			normalized = normalizeProjects(configured)
+		}
+		roots := make([]string, 0, len(normalized))
+		for _, project := range normalized {
+			roots = append(roots, project.Path)
+		}
+		panes, err := m.collector.ListPanes(ctx)
+		shellClaims := cachedShellClaims
+		if !liveOnly {
+			shellClaims = workspaceinventory.AgentShellClaims(roots)
+		}
+		return panesMsg{Generation: generation, Projects: normalized, Panes: panes, ShellClaims: shellClaims, LiveOnly: liveOnly, Err: err}
 	}
 }
 
 func (m *Model) Stop() {
+	if m.cancel != nil {
+		if m.loading || m.active > 0 {
+			m.tracef("cycle generation=%d canceled active_projects=%d", m.generation, m.active)
+		}
+		m.cancel()
+		m.cancel = nil
+	}
 	m.generation++
 	m.requestID++
 	m.loading = false
@@ -137,29 +206,98 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if msg.Generation != m.generation {
 			return nil
 		}
-		m.tmuxErr = msg.Err
-		cmds := make([]tea.Cmd, 0, len(m.projects))
+		m.projects = msg.Projects
+		m.roots = m.roots[:0]
+		keep := make(map[string]bool, len(m.projects))
 		for _, project := range m.projects {
-			project := project
-			panes := append([]workspaceinventory.Pane(nil), msg.Panes...)
-			generation := m.generation
-			cmds = append(cmds, func() tea.Msg {
-				return projectMsg{Generation: generation, Result: m.collector.CollectProject(context.Background(), project.Name, project.Path, m.roots, panes)}
-			})
+			key := projectKey(project)
+			m.roots = append(m.roots, project.Path)
+			keep[key] = true
+			m.refreshing[key] = true
 		}
-		if len(cmds) == 0 {
+		for key := range m.results {
+			if !keep[key] {
+				delete(m.results, key)
+				delete(m.projectErrors, key)
+				delete(m.stale, key)
+				delete(m.refreshing, key)
+			}
+		}
+		m.tmuxErr = msg.Err
+		m.pending = append(m.pending[:0], m.projects...)
+		m.completed = make(map[string]bool, len(m.projects))
+		m.active = 0
+		m.currentPanes = append(m.currentPanes[:0], msg.Panes...)
+		m.shellClaims = msg.ShellClaims
+		m.liveOnly = msg.LiveOnly
+		m.refreshCollector = m.collector.ForRefresh(maxCaptures, msg.ShellClaims)
+		m.tracef("cycle generation=%d configured=%d deduped=%d tmux_inventories=1", m.generation, m.configured, len(m.projects))
+		m.syncBoard()
+		if len(m.pending) == 0 {
 			m.loading = false
-			m.syncBoard()
+			m.tracef("cycle generation=%d complete_ms=%d project_ops=0 captures=0 max_project_concurrency=0 max_capture_concurrency=0", m.generation, time.Since(m.cycleStart).Milliseconds())
+			return m.pollCmd()
 		}
-		return tea.Batch(cmds...)
+		return m.dispatchProjects()
 	case projectMsg:
 		if msg.Generation != m.generation {
+			m.tracef("cycle generation=%d drained stale_generation=%d", m.generation, msg.Generation)
 			return nil
 		}
-		m.results[msg.Result.ProjectKey] = msg.Result
-		m.loading = len(m.results) < len(m.projects)
+		if m.active > 0 {
+			m.active--
+		}
+		key := msg.Result.ProjectKey
+		if !m.firstResult {
+			m.firstResult = true
+			m.tracef("cycle generation=%d first_result_ms=%d", m.generation, time.Since(m.cycleStart).Milliseconds())
+		}
+		m.completed[key] = true
+		m.refreshing[key] = false
+		if m.tmuxErr != nil {
+			if previous, ok := m.results[key]; ok && previous.Err == nil {
+				for i := range previous.Workspaces {
+					previous.Workspaces[i].Presentation.Freshness = agentstatus.FreshnessStale
+					previous.Workspaces[i].Presentation.Attention = false
+				}
+				m.results[key] = previous
+				m.projectErrors[key] = m.tmuxErr
+				m.stale[key] = true
+			} else {
+				m.results[key] = msg.Result
+				m.projectErrors[key] = m.tmuxErr
+				m.stale[key] = false
+			}
+		} else if msg.Result.Err == nil {
+			m.results[key] = msg.Result
+			delete(m.projectErrors, key)
+			delete(m.stale, key)
+		} else if previous, ok := m.results[key]; ok && previous.Err == nil {
+			for i := range previous.Workspaces {
+				previous.Workspaces[i].Presentation.Freshness = agentstatus.FreshnessStale
+				previous.Workspaces[i].Presentation.Attention = false
+			}
+			m.results[key] = previous
+			m.projectErrors[key] = msg.Result.Err
+			m.stale[key] = true
+		} else {
+			m.results[key] = msg.Result
+			m.projectErrors[key] = msg.Result.Err
+			m.stale[key] = false
+		}
+		m.loading = len(m.completed) < len(m.projects)
 		m.syncBoard()
-		return nil
+		if m.loading {
+			return m.dispatchProjects()
+		}
+		metrics := m.refreshCollector.Metrics()
+		m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
+		return m.pollCmd()
+	case pollMsg:
+		if msg.Generation != m.generation || m.ctx == nil {
+			return nil
+		}
+		return m.start(m.projects, "poll")
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "left", "h":
@@ -198,6 +336,60 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+func (m *Model) dispatchProjects() tea.Cmd {
+	cmds := make([]tea.Cmd, 0, maxProjects)
+	for m.active < maxProjects && len(m.pending) > 0 {
+		project := m.pending[0]
+		m.pending = m.pending[1:]
+		m.active++
+		m.maxActive = max(m.maxActive, m.active)
+		generation, ctx := m.generation, m.ctx
+		roots := append([]string(nil), m.roots...)
+		inventory := append([]workspaceinventory.Pane(nil), m.currentPanes...)
+		collector := m.refreshCollector
+		previous, hasPrevious := m.results[projectKey(project)]
+		liveOnly := m.liveOnly && hasPrevious && previous.Err == nil
+		cmds = append(cmds, func() tea.Msg {
+			if liveOnly {
+				return projectMsg{Generation: generation, Result: collector.RefreshProjectStatus(ctx, previous, roots, inventory)}
+			}
+			return projectMsg{Generation: generation, Result: collector.CollectProject(ctx, project.Name, project.Path, roots, inventory)}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) tracef(format string, args ...any) {
+	if m.traceWriter != nil {
+		_, _ = fmt.Fprintf(m.traceWriter, "overview "+format+"\n", args...)
+	}
+}
+
+func (m *Model) pollCmd() tea.Cmd {
+	generation, ctx, delay := m.generation, m.ctx, m.pollInterval()
+	return func() tea.Msg {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return pollMsg{Generation: generation}
+		case <-ctx.Done():
+			return pollMsg{Generation: generation}
+		}
+	}
+}
+
+func (m *Model) pollInterval() time.Duration {
+	for _, result := range m.results {
+		for _, workspace := range result.Workspaces {
+			if workspace.Presentation.Lane == agentstatus.LaneWorking || workspace.Presentation.Lane == agentstatus.LaneBlocked {
+				return livePollEvery
+			}
+		}
+	}
+	return idlePollEvery
+}
+
 func (m *Model) activate() tea.Cmd {
 	card, ok := m.board.Board().CardAt(m.board.Selection())
 	if !ok {
@@ -225,7 +417,7 @@ func (m *Model) View(width, height int) string {
 
 func (m *Model) summary() string {
 	if m.loading {
-		return fmt.Sprintf("Loading %d/%d", len(m.results), len(m.projects))
+		return fmt.Sprintf("Loading %d/%d", len(m.completed), len(m.projects))
 	}
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
@@ -240,7 +432,7 @@ func (m *Model) syncBoard() {
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	for _, project := range m.projects {
-		key := clean(project.Path)
+		key := projectKey(project)
 		result, loaded := m.results[key]
 		if !loaded {
 			if m.loading {
@@ -248,14 +440,20 @@ func (m *Model) syncBoard() {
 			}
 			continue
 		}
-		if result.Err != nil {
+		if result.Err != nil && len(result.Workspaces) == 0 {
 			card := kanban.Card{ID: "error:" + key, Title: project.Name, Subtitle: "project unavailable", Detail: result.Err.Error()}
 			lanes[4].Cards = append(lanes[4].Cards, card)
 			continue
 		}
 		for _, workspace := range result.Workspaces {
 			m.cards[workspace.ID] = workspace
-			card := kanban.Card{ID: workspace.ID, Title: workspace.ProjectName + " / " + workspace.Name, Subtitle: workspace.Provider + " · " + workspace.Presentation.Label, Detail: choose(workspace.TaskID, workspace.Branch), Meta: string(workspace.Presentation.Freshness)}
+			freshness := string(workspace.Presentation.Freshness)
+			if m.refreshing[key] {
+				freshness = "refreshing"
+			} else if m.stale[key] {
+				freshness = "stale · refresh failed"
+			}
+			card := kanban.Card{ID: workspace.ID, Title: workspace.ProjectName + " / " + workspace.Name, Subtitle: workspace.Provider + " · " + workspace.Presentation.Label, Detail: choose(workspace.TaskID, workspace.Branch), Meta: freshness}
 			for i := range lanes {
 				if lanes[i].ID == kanban.LaneID(workspace.Presentation.Lane) {
 					lanes[i].Cards = append(lanes[i].Cards, card)
@@ -263,6 +461,23 @@ func (m *Model) syncBoard() {
 				}
 			}
 		}
+	}
+	projectOrder := make(map[string]int, len(m.projects))
+	for i, project := range m.projects {
+		projectOrder[projectKey(project)] = i
+	}
+	for i := range lanes {
+		sort.SliceStable(lanes[i].Cards, func(a, b int) bool {
+			left, lok := m.cards[lanes[i].Cards[a].ID]
+			right, rok := m.cards[lanes[i].Cards[b].ID]
+			if lok && rok && !left.Presentation.ChangedAt.Equal(right.Presentation.ChangedAt) {
+				return left.Presentation.ChangedAt.After(right.Presentation.ChangedAt)
+			}
+			if lok && rok && projectOrder[left.ProjectKey] != projectOrder[right.ProjectKey] {
+				return projectOrder[left.ProjectKey] < projectOrder[right.ProjectKey]
+			}
+			return false
+		})
 	}
 	for i := range lanes {
 		if len(lanes[i].Cards) == 0 && lanes[i].State == kanban.CellReady {
@@ -313,6 +528,40 @@ func (m *Model) Commands() []struct{ Key, Name string } {
 }
 
 func clean(path string) string { return workspaceinventory.CanonicalPath(path) }
+
+func normalizeProjects(configured []Project) []Project {
+	seen := make(map[string]bool, len(configured))
+	projects := make([]Project, 0, len(configured))
+	for _, project := range configured {
+		root := workspaceinventory.CanonicalProjectPath(project.Path)
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		project.Path = root
+		project.Key = root
+		projects = append(projects, project)
+	}
+	return projects
+}
+
+func projectKey(project Project) string {
+	if project.Key != "" {
+		return project.Key
+	}
+	return clean(project.Path)
+}
+
+func cloneShellClaims(claims workspaceinventory.ShellClaims) workspaceinventory.ShellClaims {
+	cloned := workspaceinventory.ShellClaims{Sessions: make(map[string]bool, len(claims.Sessions)), Owners: make(map[string]string, len(claims.Owners))}
+	for value, present := range claims.Sessions {
+		cloned.Sessions[value] = present
+	}
+	for value, owner := range claims.Owners {
+		cloned.Owners[value] = owner
+	}
+	return cloned
+}
 func choose(a, b string) string {
 	if a != "" {
 		return a

@@ -74,7 +74,7 @@ func TestOverviewPinnedFilteredAndActivationIsLazy(t *testing.T) {
 	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
-	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}, {Name: "two", Path: "/tmp/two"}}
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}, {Name: "two", Path: "/tmp/two"}, {Name: "three", Path: "/tmp/three"}}
 	runner := &countingOverviewRunner{}
 	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: runner})
@@ -89,6 +89,9 @@ func TestOverviewPinnedFilteredAndActivationIsLazy(t *testing.T) {
 	}
 	if runner.calls != 0 {
 		t.Fatalf("collector ran before activation: %d", runner.calls)
+	}
+	if got := m.overviewProjects(); len(got) != 3 {
+		t.Fatalf("Overview projects = %#v, want all configured projects", got)
 	}
 	workDir, projectRoot, pluginIndex := m.ui.WorkDir, m.ui.ProjectRoot, m.activePlugin
 	cmd := m.activateProjectSwitcherDestination(m.projectSwitcherFiltered[0])

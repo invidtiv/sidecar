@@ -1,9 +1,14 @@
 package overview
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
@@ -48,6 +53,178 @@ func TestOverviewRejectsExitedGeneration(t *testing.T) {
 	m.Update(projectMsg{Generation: 2, Result: workspaceinventory.ProjectResult{ProjectKey: "stale"}})
 	if len(m.results) != 0 {
 		t.Fatal("stale project result applied after Overview exit")
+	}
+}
+
+func TestNormalizeProjectsPreservesFirstConfiguredIdentity(t *testing.T) {
+	real := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	projects := normalizeProjects([]Project{{Name: "first", Path: real}, {Name: "duplicate", Path: alias}, {Name: "missing", Path: filepath.Join(real, "missing")}})
+	if len(projects) != 2 || projects[0].Name != "first" || projects[0].Path != workspaceinventory.CanonicalPath(real) || projects[1].Name != "missing" {
+		t.Fatalf("normalized projects = %#v", projects)
+	}
+}
+
+func TestOverviewBoundsProjectFanout(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.generation = 3
+	for i := 0; i < 10; i++ {
+		path := filepath.Join(t.TempDir(), "repo")
+		m.projects = append(m.projects, Project{Name: string(rune('a' + i)), Path: path})
+		m.roots = append(m.roots, path)
+	}
+	m.pending = append([]Project(nil), m.projects...)
+	m.completed = make(map[string]bool)
+	m.refreshCollector = m.collector.ForRefresh(maxCaptures)
+	msg, ok := m.dispatchProjects()().(tea.BatchMsg)
+	if !ok || len(msg) != maxProjects || m.active != maxProjects || m.maxActive != maxProjects {
+		t.Fatalf("initial fanout msg=%T len=%d active=%d max=%d", msg, len(msg), m.active, m.maxActive)
+	}
+	first := m.projects[0]
+	cmd := m.Update(projectMsg{Generation: 3, Result: workspaceinventory.ProjectResult{ProjectKey: clean(first.Path), ProjectRoot: first.Path}})
+	if cmd == nil || m.active != maxProjects {
+		t.Fatalf("replacement dispatch active=%d cmd=%v", m.active, cmd)
+	}
+}
+
+func TestOverviewTmuxFailurePreservesLastGoodButEmptyInventoryDoesNot(t *testing.T) {
+	root := t.TempDir()
+	key := clean(root)
+	old := workspaceinventory.Workspace{ID: "old", ProjectKey: key, ProjectName: "repo", ProjectRoot: root, Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Freshness: agentstatus.FreshnessCurrent}}
+	m := New(workspaceinventory.Collector{})
+	m.generation, m.loading = 4, true
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{old}}
+	m.Update(panesMsg{Generation: 4, Projects: []Project{{Name: "repo", Path: root}}, Err: errors.New("tmux permission denied")})
+	newWorkspace := old
+	newWorkspace.ID = "new"
+	m.Update(projectMsg{Generation: 4, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
+	if got := m.results[key].Workspaces; len(got) != 1 || got[0].ID != "old" || got[0].Presentation.Freshness != agentstatus.FreshnessStale {
+		t.Fatalf("tmux failure replaced last good: %#v", got)
+	}
+	if view := m.View(150, 24); !strings.Contains(view, "stale") || !strings.Contains(view, "tmux unavailable") {
+		t.Fatalf("stale tmux view = %q", view)
+	}
+
+	m.generation, m.loading = 5, true
+	m.Update(panesMsg{Generation: 5, Projects: []Project{{Name: "repo", Path: root}}, Panes: []workspaceinventory.Pane{}})
+	m.Update(projectMsg{Generation: 5, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{newWorkspace}}})
+	if got := m.results[key].Workspaces; len(got) != 1 || got[0].ID != "new" {
+		t.Fatalf("successful empty tmux inventory did not replace snapshot: %#v", got)
+	}
+
+	firstLoad := New(workspaceinventory.Collector{})
+	firstLoad.generation, firstLoad.loading = 1, true
+	firstLoad.Update(panesMsg{Generation: 1, Projects: []Project{{Name: "repo", Path: root, Key: key}}, Err: errors.New("tmux unavailable")})
+	unavailable := newWorkspace
+	unavailable.Presentation.Freshness = agentstatus.FreshnessUnavailable
+	firstLoad.Update(projectMsg{Generation: 1, Result: workspaceinventory.ProjectResult{ProjectKey: key, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{unavailable}}})
+	if view := firstLoad.View(150, 24); strings.Contains(view, "stale · refresh failed") || !strings.Contains(view, "unavailable") {
+		t.Fatalf("first-load tmux failure view = %q", view)
+	}
+}
+
+func TestOverviewExplicitRefreshImmediatelyProjectsLastGoodAsRefreshing(t *testing.T) {
+	root := t.TempDir()
+	key := clean(root)
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "repo", Path: root, Key: key}}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{{
+		ID: "agent", ProjectKey: key, ProjectName: "repo", Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Freshness: agentstatus.FreshnessCurrent},
+	}}}
+	m.syncBoard()
+	cmd := m.Start(m.projects)
+	if cmd == nil || !strings.Contains(m.View(150, 24), "refreshing") || len(m.completed) != 0 {
+		t.Fatalf("immediate refreshing view = %q completed=%v", m.View(150, 24), m.completed)
+	}
+}
+
+func TestOverviewRefreshPrunesRemovedProjectAndPreservesSelectedCardMovement(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	oneKey, twoKey := clean(one), clean(two)
+	selected := workspaceinventory.Workspace{ID: "selected", ProjectKey: oneKey, ProjectName: "one", Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, ChangedAt: time.Now()}}
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "one", Path: one}, {Name: "two", Path: two}}
+	m.results[oneKey] = workspaceinventory.ProjectResult{ProjectKey: oneKey, Workspaces: []workspaceinventory.Workspace{selected}}
+	m.results[twoKey] = workspaceinventory.ProjectResult{ProjectKey: twoKey}
+	m.syncBoard()
+	pos, ok := m.board.Board().PositionOf(selected.ID)
+	if !ok {
+		t.Fatal("selected card missing")
+	}
+	m.board.Select(kanban.Selection(pos))
+	selected.Presentation.Lane = agentstatus.LaneBlocked
+	m.results[oneKey] = workspaceinventory.ProjectResult{ProjectKey: oneKey, Workspaces: []workspaceinventory.Workspace{selected}}
+	m.syncBoard()
+	card, ok := m.board.Board().CardAt(m.board.Selection())
+	if !ok || card.ID != selected.ID {
+		t.Fatalf("selection after lane move = %#v", card)
+	}
+	m.generation, m.loading = 8, true
+	m.Update(panesMsg{Generation: 8, Projects: []Project{{Name: "one", Path: one}}})
+	if _, exists := m.results[twoKey]; exists {
+		t.Fatal("removed configured project survived refresh")
+	}
+}
+
+func TestOverviewCancellationStopsPollAndTraceIsPrivacySafe(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	var trace bytes.Buffer
+	m.traceWriter = &trace
+	first := m.Start([]Project{{Name: "secret-name", Path: "/private/secret-path"}})
+	firstContext := m.ctx
+	_ = m.Start(nil)
+	select {
+	case <-firstContext.Done():
+	default:
+		t.Fatal("new refresh did not cancel prior generation")
+	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.generation = 10
+	poll := m.pollCmd()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- poll() }()
+	m.Stop()
+	select {
+	case msg := <-done:
+		if m.Update(msg) != nil {
+			t.Fatal("canceled poll restarted Overview")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("poll command did not drain after Stop")
+	}
+	if first == nil || strings.Contains(trace.String(), "secret-name") || strings.Contains(trace.String(), "secret-path") || !strings.Contains(trace.String(), "configured=1") {
+		t.Fatalf("privacy-safe trace = %q", trace.String())
+	}
+}
+
+func TestOverviewAdaptivePollCadence(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	if got := m.pollInterval(); got != idlePollEvery {
+		t.Fatalf("empty cadence = %s", got)
+	}
+	m.results["one"] = workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{{Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking}}}}
+	if got := m.pollInterval(); got != livePollEvery {
+		t.Fatalf("live cadence = %s", got)
+	}
+}
+
+func TestOverviewExplicitRefreshCancelsAndStartsNewGeneration(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "one", Path: t.TempDir()}}
+	_ = m.Start(m.projects)
+	oldContext, oldGeneration := m.ctx, m.generation
+	cmd := m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil || m.generation != oldGeneration+1 {
+		t.Fatalf("explicit refresh cmd=%v generation=%d", cmd, m.generation)
+	}
+	select {
+	case <-oldContext.Done():
+	default:
+		t.Fatal("explicit refresh did not cancel prior generation")
 	}
 }
 

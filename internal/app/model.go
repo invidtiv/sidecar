@@ -820,22 +820,9 @@ func (m *Model) overviewProjects() []overview.Project {
 	if m.cfg == nil {
 		return nil
 	}
-	var selected []overview.Project
-	currentRoot := workspaceinventory.CanonicalPath(m.ui.ProjectRoot)
+	selected := make([]overview.Project, 0, len(m.cfg.Projects.List))
 	for _, project := range m.cfg.Projects.List {
-		if workspaceinventory.CanonicalPath(project.Path) == currentRoot {
-			selected = append(selected, overview.Project{Name: project.Name, Path: project.Path})
-			break
-		}
-	}
-	for _, project := range m.cfg.Projects.List {
-		if len(selected) > 0 && workspaceinventory.CanonicalPath(project.Path) == workspaceinventory.CanonicalPath(selected[0].Path) {
-			continue
-		}
 		selected = append(selected, overview.Project{Name: project.Name, Path: project.Path})
-		if len(selected) == 2 {
-			break
-		}
 	}
 	return selected
 }

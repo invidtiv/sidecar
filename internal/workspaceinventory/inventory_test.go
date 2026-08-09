@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
@@ -17,6 +19,7 @@ import (
 
 type fakeRunner struct {
 	git     map[string]string
+	gitErr  map[string]error
 	tmux    string
 	tmuxErr error
 	list    int
@@ -29,10 +32,26 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	}
 	for i, arg := range args {
 		if arg == "-C" && i+1 < len(args) {
+			if err := r.gitErr[args[i+1]]; err != nil {
+				return nil, err
+			}
 			return []byte(r.git[args[i+1]]), nil
 		}
 	}
 	return nil, fmt.Errorf("unexpected command %s %v", name, args)
+}
+
+func TestCollectorDistinguishesMissingAndNonGitProjects(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	nonGit := t.TempDir()
+	runner := &fakeRunner{gitErr: map[string]error{nonGit: fmt.Errorf("not a git repository")}}
+	collector := Collector{Runner: runner}
+	if result := collector.CollectProject(context.Background(), "missing", missing, []string{missing}, nil); result.Err == nil || !strings.Contains(result.Err.Error(), "missing") {
+		t.Fatalf("missing result = %#v", result)
+	}
+	if result := collector.CollectProject(context.Background(), "plain", nonGit, []string{nonGit}, nil); result.Err == nil || !strings.Contains(result.Err.Error(), "not a Git repository") {
+		t.Fatalf("non-Git result = %#v", result)
+	}
 }
 
 func TestMissingTmuxServerIsAnEmptyInventory(t *testing.T) {
@@ -212,6 +231,120 @@ func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 	collector.observe(&second, pane, collector.Now())
 	if second.Presentation.Lane != agentstatus.LaneDone {
 		t.Fatalf("working -> idle presentation = %#v, want Done", second.Presentation)
+	}
+}
+
+func TestRefreshCollectorBoundsMatchedPaneCaptures(t *testing.T) {
+	collector := (Collector{Capture: func(string, int) (string, error) {
+		time.Sleep(10 * time.Millisecond)
+		return "› ready", nil
+	}}).ForRefresh(2)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			workspace := Workspace{ID: fmt.Sprintf("agent-%d", i), Provider: "codex"}
+			collector.observeContext(context.Background(), &workspace, []Pane{{ID: fmt.Sprintf("%%%d", i), Command: "codex"}}, time.Now())
+		}(i)
+	}
+	wg.Wait()
+	metrics := collector.Metrics()
+	if metrics.Captures != 8 || metrics.MaxCaptures != 2 {
+		t.Fatalf("capture metrics = %#v, want 8 captures bounded at 2", metrics)
+	}
+}
+
+func TestLiveStatusRefreshReusesInventoryWithoutGitOrMetadataReads(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	collector := (Collector{Runner: runner, Capture: func(string, int) (string, error) {
+		return "• Working (1s • esc to interrupt)", nil
+	}}).ForRefresh(2)
+	previous := ProjectResult{ProjectKey: canonical(root), ProjectRoot: root, Workspaces: []Workspace{{
+		ID: "repo:worktree:agent", ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Path: root, Provider: "codex",
+	}}}
+	result := collector.RefreshProjectStatus(context.Background(), previous, []string{root}, []Pane{{ID: "%1", Path: root, Command: "codex"}})
+	if runner.list != 0 || collector.Metrics().ProjectOps != 0 {
+		t.Fatalf("live refresh performed inventory work: runner=%#v metrics=%#v", runner, collector.Metrics())
+	}
+	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Lane != agentstatus.LaneWorking {
+		t.Fatalf("live refresh result = %#v", result)
+	}
+}
+
+func TestCanonicalProjectPathDeduplicatesLinkedWorktreeIdentity(t *testing.T) {
+	base := t.TempDir()
+	mainRoot := filepath.Join(base, "main")
+	linked := filepath.Join(base, "linked")
+	gitDir := filepath.Join(mainRoot, ".git", "worktrees", "linked")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := CanonicalProjectPath(linked); got != canonical(mainRoot) {
+		t.Fatalf("linked identity = %q, want main %q", got, canonical(mainRoot))
+	}
+}
+
+func TestShellSessionCollisionRequiresExactProjectPathOwnership(t *testing.T) {
+	base := t.TempDir()
+	one, two := filepath.Join(base, "one"), filepath.Join(base, "two")
+	for _, root := range []string{one, two} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	panes := []Pane{{ID: "%1", Session: "shared", Path: one}}
+	if got := panesForOwnedSession("shared", one, []string{one, two}, panes); len(got) != 1 {
+		t.Fatalf("owner match = %#v", got)
+	}
+	if got := panesForOwnedSession("shared", two, []string{one, two}, panes); len(got) != 0 {
+		t.Fatalf("colliding project claimed pane = %#v", got)
+	}
+	unique := map[string]string{"shared": canonical(one)}
+	roaming := []Pane{{ID: "%2", Session: "shared", Path: t.TempDir()}}
+	if got := panesForOwnedSession("shared", one, []string{one, two}, roaming, unique); len(got) != 1 {
+		t.Fatalf("durably owned roaming shell = %#v", got)
+	}
+	ambiguous := map[string]string{"shared": ""}
+	if got := panesForOwnedSession("shared", one, []string{one, two}, panes, ambiguous); len(got) != 0 {
+		t.Fatalf("ambiguous shell claim = %#v", got)
+	}
+}
+
+func TestAgentShellClaimsRefuseDuplicateDurableOwners(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	base := t.TempDir()
+	var roots []string
+	for _, name := range []string{"one", "two"} {
+		root := filepath.Join(base, name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stateDir, err := projectdir.ResolveWithBase(stateBase, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest := `{"shells":[{"tmuxName":"shared","agentType":"codex","namespace":"` + tmuxenv.Namespace() + `"}]}`
+		if err := os.WriteFile(filepath.Join(stateDir, "shells.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		roots = append(roots, root)
+	}
+	claims := AgentShellClaims(roots)
+	if !claims.Sessions["shared"] || claims.Owners["shared"] != "" {
+		t.Fatalf("duplicate claims = %#v", claims)
 	}
 }
 
