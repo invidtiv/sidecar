@@ -653,9 +653,20 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text(dimText("↑/↓: select   Enter: continue   Esc: cancel")))
 
 	case MergeStepDirectMerge:
-		m.AddSection(modal.Text("Merging directly to base branch..."))
-		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText(fmt.Sprintf("Merging '%s' into '%s'...", p.mergeState.Worktree.Branch, p.mergeState.TargetBranch))))
+		if op := p.mergeState.DirectOperation; op != nil {
+			m.AddSection(modal.Text(lipgloss.NewStyle().Foreground(styles.Success).Render("Preflight passed")))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(fmt.Sprintf("Source: %s at %s", op.SourceBranch, shortOID(op.SourceOID))))
+			m.AddSection(modal.Text(fmt.Sprintf("Target: %s at %s", op.TargetBranch, shortOID(op.TargetOID))))
+			m.AddSection(modal.Text(fmt.Sprintf("Checkout: %s", op.TargetPath)))
+			m.AddSection(modal.Text(fmt.Sprintf("Remote: %s", op.Remote)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(dimText("Fast-forwarding target, merging the reviewed source OID, then pushing...")))
+		} else {
+			m.AddSection(modal.Text("Running direct-merge preflight..."))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(dimText(fmt.Sprintf("Resolving a safe checkout for '%s'...", p.mergeState.TargetBranch))))
+		}
 
 	case MergeStepPush:
 		m.AddSection(modal.Text("Pushing branch to remote..."))
@@ -734,9 +745,25 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Spacer())
 		m.AddSection(modal.Text(p.mergeState.ErrorDetail))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Buttons(modal.Btn(" Dismiss ", "dismiss")))
+		buttons := []modal.ButtonDef{modal.Btn(" Dismiss ", "dismiss")}
+		if op := p.mergeState.DirectOperation; op != nil {
+			switch op.Recovery {
+			case DirectMergeRecoveryConflict:
+				buttons = []modal.ButtonDef{
+					modal.Btn(" Continue ", "continue"),
+					modal.Btn(" Abort ", "abort", modal.BtnDanger()),
+					modal.Btn(" Dismiss ", "dismiss"),
+				}
+			case DirectMergeRecoveryPushFailure:
+				buttons = []modal.ButtonDef{
+					modal.Btn(" Retry Push ", "retry-push"),
+					modal.Btn(" Dismiss ", "dismiss"),
+				}
+			}
+		}
+		m.AddSection(modal.Buttons(buttons...))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("y: copy error   Esc: dismiss")))
+		m.AddSection(modal.Text(dimText("Use the recovery action above, or y: copy error")))
 	}
 
 	p.mergeModal = m
@@ -971,7 +998,11 @@ func (p *Plugin) mergeDoneSection() modal.Section {
 			}
 			if results.PullAttempted {
 				if results.PullSuccess {
-					sb.WriteString(successStyle.Render("  ✓ Pulled latest changes"))
+					message := results.PullMessage
+					if message == "" {
+						message = "Pulled latest changes"
+					}
+					sb.WriteString(successStyle.Render("  ✓ " + message))
 					sb.WriteString("\n")
 				} else if results.PullError != nil {
 					warnStyle := lipgloss.NewStyle().Foreground(styles.Warning)

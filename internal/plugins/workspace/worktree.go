@@ -203,9 +203,12 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 				branch := strings.TrimPrefix(line, "branch refs/heads/")
 				current.Branch = branch
 			} else if line == "bare" {
-				// Bare worktree
+				current.IsBare = true
 			} else if line == "detached" {
 				current.Branch = "(detached)"
+				current.IsDetached = true
+			} else if line == "locked" || strings.HasPrefix(line, "locked ") {
+				current.IsLocked = true
 			} else if strings.HasPrefix(line, "prunable ") {
 				current.IsMissing = true
 			}

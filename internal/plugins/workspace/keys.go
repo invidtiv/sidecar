@@ -761,6 +761,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if wt == nil {
 			return nil
 		}
+		if reason := WorktreeActionRefusal(wt, WorktreeActionDelete); reason != "" {
+			return appmsg.ShowToast(reason, 3*time.Second)
+		}
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
 		p.deleteLocalBranchOpt = wt.IsMissing // Default ON when folder already gone
@@ -776,6 +779,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Check for remote branch existence asynchronously
 		return p.checkRemoteBranch(wt)
 	case "p":
+		if wt := p.selectedWorktree(); wt != nil {
+			if reason := WorktreeActionRefusal(wt, WorktreeActionPush); reason != "" {
+				return appmsg.ShowToast(reason, 3*time.Second)
+			}
+		}
 		return p.pushSelected()
 	case "l", "right":
 		if p.viewMode == ViewModeKanban {
@@ -1148,6 +1156,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Start merge workflow
 		wt := p.selectedWorktree()
 		if wt != nil {
+			if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
+				return appmsg.ShowToast(reason, 3*time.Second)
+			}
 			return p.startMergeWorkflow(wt)
 		}
 	case "O":
@@ -1467,14 +1478,23 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 		switch msg.String() {
 		case "y":
 			return p.yankMergeErrorToClipboard()
-		case "esc", "q", "enter":
+		case "c":
+			return p.recoverDirectMerge("continue")
+		case "a":
+			return p.recoverDirectMerge("abort")
+		case "r":
+			return p.recoverDirectMerge("retry-push")
+		case "esc", "q":
 			p.cancelMergeWorkflow()
 			p.clearMergeModal()
 			return nil
 		}
 		if p.mergeModal != nil {
 			action, cmd := p.mergeModal.HandleKey(msg)
-			if action == "dismiss" || action == "cancel" {
+			switch action {
+			case "continue", "abort", "retry-push":
+				return p.recoverDirectMerge(action)
+			case "dismiss", "cancel":
 				p.cancelMergeWorkflow()
 				p.clearMergeModal()
 				return nil

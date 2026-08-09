@@ -26,10 +26,22 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 	case ViewModeMerge:
 		if p.mergeState != nil && p.mergeState.Step == MergeStepError {
-			return []plugin.Command{
+			cmds := []plugin.Command{
 				{ID: "dismiss-merge-error", Name: "Dismiss", Description: "Dismiss error", Context: "workspace-merge-error", Priority: 1},
 				{ID: "yank-merge-error", Name: "Yank", Description: "Copy error to clipboard", Context: "workspace-merge-error", Priority: 2},
 			}
+			if op := p.mergeState.DirectOperation; op != nil {
+				switch op.Recovery {
+				case DirectMergeRecoveryConflict:
+					cmds = append([]plugin.Command{
+						{ID: "continue-merge", Name: "Continue", Description: "Continue after resolving conflicts", Context: "workspace-merge-error", Priority: 1},
+						{ID: "abort-merge", Name: "Abort", Description: "Abort and restore target", Context: "workspace-merge-error", Priority: 2},
+					}, cmds...)
+				case DirectMergeRecoveryPushFailure:
+					cmds = append([]plugin.Command{{ID: "retry-push", Name: "Retry", Description: "Retry push", Context: "workspace-merge-error", Priority: 1}}, cmds...)
+				}
+			}
+			return cmds
 		}
 		cmds := []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel merge workflow", Context: "workspace-merge", Priority: 1},
@@ -238,13 +250,17 @@ func (p *Plugin) Commands() []plugin.Command {
 					)
 				}
 			}
-			// Workspace commands
-			cmds = append(cmds,
-				plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected workspace", Context: "workspace-list", Priority: 5},
-				plugin.Command{ID: "push", Name: "Push", Description: "Push branch to remote", Context: "workspace-list", Priority: 6},
-				plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7},
-				plugin.Command{ID: "open-in-git", Name: "Git", Description: "Open in Git tab", Context: "workspace-list", Priority: 16},
-			)
+			// Only advertise mutating actions that are safe for this worktree.
+			if WorktreeActionRefusal(wt, WorktreeActionDelete) == "" {
+				cmds = append(cmds, plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected workspace", Context: "workspace-list", Priority: 5})
+			}
+			if WorktreeActionRefusal(wt, WorktreeActionPush) == "" {
+				cmds = append(cmds, plugin.Command{ID: "push", Name: "Push", Description: "Push branch to remote", Context: "workspace-list", Priority: 6})
+			}
+			if WorktreeActionRefusal(wt, WorktreeActionMerge) == "" {
+				cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7})
+			}
+			cmds = append(cmds, plugin.Command{ID: "open-in-git", Name: "Git", Description: "Open in Git tab", Context: "workspace-list", Priority: 16})
 			// Task linking
 			if wt.TaskID != "" {
 				cmds = append(cmds,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,7 +107,8 @@ type MergeWorkflowState struct {
 
 	// Cleanup results for summary display
 	CleanupResults    *CleanupResults
-	PendingCleanupOps int // Counter for parallel cleanup operations in flight
+	PendingCleanupOps int // Counter for cleanup result messages in flight
+	DirectOperation   *DirectMergeOperation
 }
 
 // CleanupResults holds the results of cleanup operations for display in summary.
@@ -123,6 +125,7 @@ type CleanupResults struct {
 	ShowErrorDetails bool   // Toggle for expanded error view
 	PullErrorSummary string // Concise 1-line summary
 	PullErrorFull    string // Full git output for details view
+	PullMessage      string // Explicit update/intentional-no-update result
 	BranchDiverged   bool   // Enables rebase/merge resolution actions
 	BaseBranch       string // Branch name for resolution commands
 }
@@ -200,6 +203,14 @@ type CleanupDoneMsg struct {
 type DirectMergeDoneMsg struct {
 	WorkspaceName string
 	BaseBranch    string
+	Operation     *DirectMergeOperation
+	Err           error
+}
+
+type DirectMergePreflightMsg struct {
+	WorkspaceName string
+	BaseBranch    string
+	Operation     *DirectMergeOperation
 	Err           error
 }
 
@@ -763,132 +774,57 @@ func (p *Plugin) checkPRMerged(wt *Worktree) tea.Cmd {
 
 // performDirectMerge merges the branch directly to base without creating a PR.
 func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
+	repoPath := app.GetMainWorktreePath(p.ctx.WorkDir)
+	if repoPath == "" {
+		repoPath = p.ctx.WorkDir
+	}
+	sourcePath, sourceBranch, name := wt.Path, wt.Branch, wt.Name
 	return func() tea.Msg {
-		baseBranch := targetBranch
-		workDir := p.ctx.WorkDir
-		branch := wt.Branch
-
-		// 1. Fetch latest from origin
-		fetchCmd := exec.Command("git", "fetch", "origin", baseBranch)
-		fetchCmd.Dir = workDir
-		if output, err := fetchCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("fetch origin: %s: %w", strings.TrimSpace(string(output)), err),
-			}
+		op, err := preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch)
+		if err != nil {
+			return DirectMergePreflightMsg{WorkspaceName: name, BaseBranch: targetBranch, Err: fmt.Errorf("preflight: %w", err)}
 		}
-
-		// 2. Checkout base branch
-		checkoutCmd := exec.Command("git", "checkout", baseBranch)
-		checkoutCmd.Dir = workDir
-		if output, err := checkoutCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 3. Pull latest
-		pullCmd := exec.Command("git", "pull", "origin", baseBranch)
-		pullCmd.Dir = workDir
-		if output, err := pullCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("pull origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 4. Merge the worktree branch
-		mergeMsg := fmt.Sprintf("Merge branch '%s'", branch)
-		mergeCmd := exec.Command("git", "merge", branch, "--no-ff", "-m", mergeMsg)
-		mergeCmd.Dir = workDir
-		if output, err := mergeCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("merge %s: %s: %w", branch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 5. Push the merge
-		pushCmd := exec.Command("git", "push", "origin", baseBranch)
-		pushCmd.Dir = workDir
-		if output, err := pushCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("push origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		return DirectMergeDoneMsg{
-			WorkspaceName: wt.Name,
-			BaseBranch:    baseBranch,
-		}
+		return DirectMergePreflightMsg{WorkspaceName: name, BaseBranch: targetBranch, Operation: op}
 	}
 }
 
-// pullAfterMerge updates the local base branch to match remote after merge.
-// If currently on the base branch, uses git pull --ff-only to safely update.
-// Otherwise uses git fetch + update-ref to update the branch without checkout.
-func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch string) tea.Cmd {
-	// Get main worktree path now, before potential worktree deletion.
-	// This is critical when sidecar is running inside the worktree being deleted -
-	// p.ctx.WorkDir would point to a directory that no longer exists after deletion.
-	mainPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainPath == "" {
-		mainPath = p.ctx.WorkDir // fallback if not in worktree context
-	}
-
+func executeDirectMerge(name, branch string, op *DirectMergeOperation) tea.Cmd {
 	return func() tea.Msg {
-		workDir := mainPath
+		op = runDirectMerge(op)
+		return DirectMergeDoneMsg{WorkspaceName: name, BaseBranch: branch, Operation: op, Err: op.Err}
+	}
+}
 
-		if currentBranch == branch {
-			// Currently on the base branch - use pull --ff-only for safety
-			// This will fail if there are local changes or divergent commits
-			pullCmd := exec.Command("git", "pull", "--ff-only", "origin", branch)
-			pullCmd.Dir = workDir
-			if output, err := pullCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("pull: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
-		} else {
-			// Not on base branch - fetch then update-ref (won't affect working tree)
-			fetchCmd := exec.Command("git", "fetch", "origin", branch)
-			fetchCmd.Dir = workDir
-			if output, err := fetchCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("fetch: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
-
-			updateCmd := exec.Command("git", "update-ref", "refs/heads/"+branch, "origin/"+branch)
-			updateCmd.Dir = workDir
-			if output, err := updateCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("update-ref: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
+func (p *Plugin) recoverDirectMerge(action string) tea.Cmd {
+	if p.mergeState == nil || p.mergeState.DirectOperation == nil {
+		return nil
+	}
+	op := p.mergeState.DirectOperation
+	name, branch := p.mergeState.Worktree.Name, p.mergeState.TargetBranch
+	return func() tea.Msg {
+		switch action {
+		case "continue":
+			op = continueDirectMerge(op)
+		case "abort":
+			op = abortDirectMerge(op)
+		case "retry-push":
+			op = retryDirectMergePush(op)
 		}
+		return DirectMergeDoneMsg{WorkspaceName: name, BaseBranch: branch, Operation: op, Err: op.Err}
+	}
+}
 
-		return PullAfterMergeMsg{
-			WorkspaceName: wt.Name,
-			Branch:        branch,
-			Success:       true,
-		}
+// pullAfterMerge updates the checkout that actually owns the base branch.
+// It never moves a checked-out ref behind its index and working tree.
+func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch string) tea.Cmd {
+	repoPath := app.GetMainWorktreePath(p.ctx.WorkDir)
+	if repoPath == "" {
+		repoPath = p.ctx.WorkDir
+	}
+	name := wt.Name
+	return func() tea.Msg {
+		result := updateCheckedOutBase(repoPath, branch, "")
+		return PullAfterMergeMsg{WorkspaceName: name, Branch: branch, Success: result.Updated || (result.Fetched && result.LeftUnchanged && result.Err == nil), Err: result.Err}
 	}
 }
 
@@ -1089,46 +1025,33 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	// Compute session name before entering closure (consistent with executeDelete)
 	sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
 
+	repoPath := app.GetMainWorktreePath(p.ctx.WorkDir)
+	if state.DirectOperation != nil && state.DirectOperation.TargetPath != "" {
+		repoPath = state.DirectOperation.TargetPath
+	}
+	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(wt.Path) {
+		return func() tea.Msg {
+			return CleanupDoneMsg{WorkspaceName: wt.Name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
+		}
+	}
+	expectedOID, _ := gitOutput(wt.Path, "rev-parse", "HEAD")
+	branchRemote, _ := resolveBranchRemote(repoPath, wt.Branch)
+	baseRemote, _ := resolveBranchRemote(repoPath, state.TargetBranch)
+	if state.DirectOperation != nil {
+		baseRemote = state.DirectOperation.Remote
+	}
+	plan := CleanupPlan{
+		RepoPath: repoPath, WorktreePath: wt.Path, Branch: wt.Branch, ExpectedOID: expectedOID,
+		BranchRemote: branchRemote, BaseRemote: baseRemote, BaseBranch: state.TargetBranch,
+		DeleteWorktree: state.DeleteLocalWorktree, DeleteBranch: state.DeleteLocalBranch,
+		DeleteRemote: state.DeleteRemoteBranch, UpdateBase: state.PullAfterMerge,
+	}
+	// UI-owned session bookkeeping stays on the update goroutine.
+	_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+	delete(p.managedSessions, sessionName)
+	globalPaneCache.remove(sessionName)
 	return func() tea.Msg {
-		results := &CleanupResults{}
-		name := wt.Name
-		path := wt.Path
-		branch := wt.Branch
-
-		// Stop agent if running and clean up tracking (always do this)
-		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-		delete(p.managedSessions, sessionName)
-		globalPaneCache.remove(sessionName)
-
-		// Delete local worktree if selected
-		if state.DeleteLocalWorktree {
-			if err := doDeleteWorktree(p.ctx.WorkDir, path, false); err != nil {
-				results.Errors = append(results.Errors, fmt.Sprintf("Workspace: %v", err))
-			} else {
-				results.LocalWorktreeDeleted = true
-			}
-		}
-
-		// Delete local branch if selected
-		if state.DeleteLocalBranch {
-			cmd := exec.Command("git", "branch", "-d", branch)
-			cmd.Dir = p.ctx.WorkDir
-			if _, err := cmd.CombinedOutput(); err != nil {
-				// Try force delete if safe delete fails
-				cmd = exec.Command("git", "branch", "-D", branch)
-				cmd.Dir = p.ctx.WorkDir
-				if output, err := cmd.CombinedOutput(); err != nil {
-					results.Errors = append(results.Errors,
-						fmt.Sprintf("Branch: %s", strings.TrimSpace(string(output))))
-				} else {
-					results.LocalBranchDeleted = true
-				}
-			} else {
-				results.LocalBranchDeleted = true
-			}
-		}
-
-		return CleanupDoneMsg{WorkspaceName: name, Results: results}
+		return CleanupDoneMsg{WorkspaceName: wt.Name, Results: runCleanupPlan(plan)}
 	}
 }
 
@@ -1305,33 +1228,10 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 		p.mergeState.Step = MergeStepCleanup
 		p.mergeState.StepStatus[MergeStepCleanup] = "running"
 
-		var cmds []tea.Cmd
-
-		// Count pending operations for completion tracking
-		pendingOps := 0
-
-		// Local cleanup (worktree + branch)
-		if p.mergeState.DeleteLocalWorktree || p.mergeState.DeleteLocalBranch {
-			cmds = append(cmds, p.performSelectedCleanup(p.mergeState.Worktree, p.mergeState))
-			pendingOps++
-		}
-
-		// Remote cleanup (in parallel)
-		if p.mergeState.DeleteRemoteBranch {
-			cmds = append(cmds, p.deleteRemoteBranch(p.mergeState.Worktree))
-			pendingOps++
-		}
-
-		// Pull changes to current branch (in parallel)
-		if p.mergeState.PullAfterMerge {
-			baseBranch := p.mergeState.TargetBranch
-			cmds = append(cmds, p.pullAfterMerge(p.mergeState.Worktree, baseBranch, p.mergeState.CurrentBranch))
-			pendingOps++
-		}
-
-		p.mergeState.PendingCleanupOps = pendingOps
-
-		return tea.Batch(cmds...)
+		// One command owns the ordered cleanup transaction. It always runs from a
+		// captured checkout that survives deletion of the feature worktree.
+		p.mergeState.PendingCleanupOps = 1
+		return p.performSelectedCleanup(p.mergeState.Worktree, p.mergeState)
 
 	case MergeStepCleanup:
 		// Done
@@ -1357,6 +1257,14 @@ func (p *Plugin) transitionToMergeError(fromStep MergeWorkflowStep, title string
 	p.mergeState.Error = err
 	p.mergeState.ErrorTitle = title
 	p.mergeState.ErrorDetail = err.Error()
+	if op := p.mergeState.DirectOperation; op != nil {
+		if len(op.Completed) > 0 {
+			p.mergeState.ErrorDetail += "\n\nCompleted: " + strings.Join(op.Completed, ", ")
+		}
+		if op.GitState != "" {
+			p.mergeState.ErrorDetail += "\n\nCurrent Git state:\n" + op.GitState
+		}
+	}
 	p.mergeState.ErrorFromStep = fromStep
 	p.mergeState.StepStatus[fromStep] = "error"
 	p.mergeState.Step = MergeStepError

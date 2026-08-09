@@ -1459,12 +1459,33 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
 		}
 
-	case DirectMergeDoneMsg:
+	case DirectMergePreflightMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
 			if msg.Err != nil {
+				p.transitionToMergeError(MergeStepDirectMerge, "Direct Merge Preflight Failed", msg.Err)
+			} else {
+				p.mergeState.DirectOperation = msg.Operation
+				p.clearMergeModal()
+				cmds = append(cmds, executeDirectMerge(msg.WorkspaceName, msg.BaseBranch, msg.Operation))
+			}
+		}
+
+	case DirectMergeDoneMsg:
+		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
+			if msg.Operation != nil {
+				p.mergeState.DirectOperation = msg.Operation
+			}
+			if msg.Err != nil {
 				p.transitionToMergeError(MergeStepDirectMerge, "Direct Merge Failed", msg.Err)
+			} else if msg.Operation != nil && msg.Operation.Aborted {
+				p.cancelMergeWorkflow()
+				p.clearMergeModal()
+				cmds = append(cmds, appmsg.ShowToast("Merge aborted; target restored", 3*time.Second))
 			} else {
 				// Direct merge succeeded, advance to confirmation
+				p.mergeState.Step = MergeStepDirectMerge
+				p.mergeState.StepStatus[MergeStepDirectMerge] = "running"
+				p.clearMergeModal()
 				cmds = append(cmds, p.advanceMergeStep())
 			}
 		}
@@ -1479,6 +1500,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeState.CleanupResults.LocalBranchDeleted = msg.Results.LocalBranchDeleted
 				p.mergeState.CleanupResults.Errors = append(
 					p.mergeState.CleanupResults.Errors, msg.Results.Errors...)
+				p.mergeState.CleanupResults.RemoteBranchDeleted = msg.Results.RemoteBranchDeleted
+				p.mergeState.CleanupResults.PullAttempted = msg.Results.PullAttempted
+				p.mergeState.CleanupResults.PullSuccess = msg.Results.PullSuccess
+				p.mergeState.CleanupResults.PullError = msg.Results.PullError
+				p.mergeState.CleanupResults.PullMessage = msg.Results.PullMessage
 			}
 
 			// Remove worktree from list if deleted

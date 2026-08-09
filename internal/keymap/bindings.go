@@ -433,6 +433,9 @@ func DefaultBindings() []Binding {
 		// Workspace merge error context
 		{Key: "esc", Command: "dismiss-merge-error", Context: "workspace-merge-error"},
 		{Key: "y", Command: "yank-merge-error", Context: "workspace-merge-error"},
+		{Key: "c", Command: "continue-merge", Context: "workspace-merge-error"},
+		{Key: "a", Command: "abort-merge", Context: "workspace-merge-error"},
+		{Key: "r", Command: "retry-push", Context: "workspace-merge-error"},
 
 		// Workspace interactive context bindings are registered dynamically
 		// by the workspace plugin Init() to reflect configured keys.

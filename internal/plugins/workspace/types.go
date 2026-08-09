@@ -281,6 +281,9 @@ type Worktree struct {
 	IsOrphaned      bool // True if agent file exists but tmux session is gone
 	IsMain          bool // True if this is the primary/main worktree (project root)
 	IsMissing       bool // True if worktree directory no longer exists (detected via os.Stat or git prunable)
+	IsBare          bool // True if Git reports a bare worktree entry
+	IsDetached      bool // True if HEAD is detached
+	IsLocked        bool // True if Git reports the worktree as locked
 }
 
 // ShellSession represents a tmux shell session (not tied to a git worktree).
