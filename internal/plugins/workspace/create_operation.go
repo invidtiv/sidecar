@@ -407,7 +407,7 @@ func openContainedRegularFileWithHook(root, rel string, beforeWalk func()) (*os.
 	leaf := filepath.Base(filepath.Clean(rel))
 	fd, err := unix.Openat(int(dir.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, err
+		return nil, normalizeContainmentOpenError(filepath.Join(rootReal, filepath.Clean(rel)), err)
 	}
 	target := filepath.Join(rootReal, filepath.Clean(rel))
 	file := os.NewFile(uintptr(fd), target)
@@ -457,14 +457,37 @@ func walkPinnedDirectory(current *os.File, rel string, create bool) (*os.File, e
 		}
 		nextFD, err := unix.Openat(int(current.Fd()), component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 		if err != nil {
+			path := filepath.Join(current.Name(), component)
 			current.Close()
-			return nil, err
+			return nil, normalizeContainmentOpenError(path, err)
 		}
 		next := os.NewFile(uintptr(nextFD), filepath.Join(current.Name(), component))
 		_ = current.Close()
 		current = next
 	}
 	return current, nil
+}
+
+// containmentPathError gives callers a stable, actionable refusal while
+// retaining the platform errno for errors.Is and diagnostics. With O_NOFOLLOW,
+// Darwin reports a final symlink as ELOOP and a symlink used as a directory as
+// ENOTDIR; both mean the path cannot be safely traversed.
+type containmentPathError struct {
+	Path string
+	Err  error
+}
+
+func (e *containmentPathError) Error() string {
+	return fmt.Sprintf("path containment refused for %q: symlink or non-directory component", e.Path)
+}
+
+func (e *containmentPathError) Unwrap() error { return e.Err }
+
+func normalizeContainmentOpenError(path string, err error) error {
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
+		return &containmentPathError{Path: path, Err: err}
+	}
+	return err
 }
 
 func copyOpenFile(source *os.File, dst string) error {

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,7 +113,9 @@ func TestCreateRejectsSymlinkDestinationParentAtMutation(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(r.root, "feature")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := addCreatedWorktree(context.Background(), "repo", plan); err == nil || !strings.Contains(err.Error(), "symlink") {
+	_, err = addCreatedWorktree(context.Background(), "repo", plan)
+	var containmentErr *containmentPathError
+	if err == nil || !errors.As(err, &containmentErr) || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("symlink destination error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "auth")); !os.IsNotExist(err) {
@@ -303,7 +306,9 @@ func TestResolveCreateRejectsSymlinkArtifactsBeforeConfirmation(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(r.main, link)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/"+tc.name, "main", false, tc.setup); err == nil || !strings.Contains(err.Error(), "symlink") {
+		_, err := resolveCreateOperation(context.Background(), r.main, r.main, "feature/"+tc.name, "main", false, tc.setup)
+		var containmentErr *containmentPathError
+		if err == nil || !errors.As(err, &containmentErr) || !strings.Contains(err.Error(), "symlink") {
 			t.Fatalf("symlink %s preflight error = %v", tc.name, err)
 		}
 		if err := os.Remove(filepath.Join(r.main, link)); err != nil {
