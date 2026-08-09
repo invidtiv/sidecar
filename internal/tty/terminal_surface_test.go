@@ -3,6 +3,7 @@ package tty
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -463,10 +464,20 @@ func TestTerminalContractControlDeathFallsBackAndRecovers(t *testing.T) {
 	first.OnFallback(errors.New("control EOF"))
 	deliverTerminalEvent(t, m)
 	if m.modelLive || len(source.requests) != 1 || source.handles[0].closed != 1 {
-		t.Fatalf("fallback did not restart subscription: live=%v requests=%d closed=%d", m.modelLive, len(source.requests), source.handles[0].closed)
+		t.Fatalf("fallback did not release control: live=%v requests=%d closed=%d", m.modelLive, len(source.requests), source.handles[0].closed)
 	}
-	if m.schedulePoll(0) == nil {
-		t.Fatal("fallback did not restore capture polling")
+	if !m.recoveryPending {
+		t.Fatal("control retry was not held behind fallback capture")
+	}
+	m.Update(CaptureResultMsg{
+		Scope: m.Scope(), PollGeneration: m.State.PollGeneration, Target: "%4",
+		Output: "fallback visible", CursorVisible: true, PaneWidth: 80, PaneHeight: 24,
+	})
+	if got := m.State.OutputBuf.String(); got != "fallback visible" || m.recoveryPending {
+		t.Fatalf("fallback capture output = %q pending=%v", got, m.recoveryPending)
+	}
+	if got := m.View(); !strings.Contains(got, "fallback visible") {
+		t.Fatalf("fallback capture was not visible: %q", got)
 	}
 	m.Update(terminalControlRetryMsg{Scope: m.Scope(), Gen: m.controlGen})
 	if len(source.requests) != 2 {
@@ -474,10 +485,15 @@ func TestTerminalContractControlDeathFallsBackAndRecovers(t *testing.T) {
 	}
 
 	second := source.requests[1]
-	second.OnModelFrame(seededFrame("editor", "%4", "reseeded"))
+	reseeded := seededFrame("editor", "%4", "fallback visible")
+	reseeded.Frame.AltScreen = true
+	second.OnModelFrame(reseeded)
 	deliverTerminalEvent(t, m)
-	if !m.modelLive || m.State.OutputBuf.String() != "reseeded" {
+	if !m.modelLive || m.State.OutputBuf.String() != "fallback visible" {
 		t.Fatalf("fallback recovery failed: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
+	}
+	if got := m.View(); !strings.Contains(got, "fallback visible") {
+		t.Fatalf("reseeded alternate screen was not visible: %q", got)
 	}
 }
 
@@ -496,6 +512,10 @@ func TestTerminalContractMailboxPressureNeverBlocksAndForcesReseed(t *testing.T)
 	if len(source.requests) != 1 || source.handles[0].closed != 1 {
 		t.Fatalf("pressure did not establish a clean subscription: requests=%d closed=%d", len(source.requests), source.handles[0].closed)
 	}
+	m.Update(CaptureResultMsg{
+		Scope: m.Scope(), PollGeneration: m.State.PollGeneration, Target: "%5",
+		Output: "pressure fallback", PaneWidth: 80, PaneHeight: 24,
+	})
 	m.Update(terminalControlRetryMsg{Scope: m.Scope(), Gen: m.controlGen})
 	if len(source.requests) != 2 {
 		t.Fatalf("pressure retry subscriptions = %d, want 2", len(source.requests))

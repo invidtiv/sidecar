@@ -110,19 +110,20 @@ type Model struct {
 	Config Config
 	State  *State
 
-	ownerID       uint64
-	runGeneration uint64
-	scopeTarget   string
-	control       terminalControlSource
-	subscription  terminalControlSubscription
-	mailbox       *terminalMailbox
-	mailboxDone   chan struct{}
-	controlGen    uint64
-	modelLive     bool
-	visible       bool
-	focused       bool
-	input         terminalInputSender
-	history       HistoryInfo
+	ownerID         uint64
+	runGeneration   uint64
+	scopeTarget     string
+	control         terminalControlSource
+	subscription    terminalControlSubscription
+	mailbox         *terminalMailbox
+	mailboxDone     chan struct{}
+	controlGen      uint64
+	modelLive       bool
+	visible         bool
+	focused         bool
+	input           terminalInputSender
+	history         HistoryInfo
+	recoveryPending bool
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -186,6 +187,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	}
 	m.visible = true
 	m.modelLive = false
+	m.recoveryPending = false
 	m.history = HistoryInfo{}
 	m.scopeTarget = paneID
 	if m.scopeTarget == "" {
@@ -736,6 +738,16 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 				return m.OnExit()
 			}
 		}
+		// A transient capture failure must not strand a dead-control recovery.
+		// Keep fallback polling alive and allow a clean control retry; the next
+		// successful capture remains provisional until its replacement seed.
+		if m.recoveryPending {
+			m.recoveryPending = false
+			return tea.Batch(
+				m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime)),
+				m.retryControl(),
+			)
+		}
 		return nil
 	}
 
@@ -756,8 +768,15 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 		m.State.MouseReportingEnabled = DetectMouseReportingMode(msg.Output)
 	}
 
-	// Schedule next poll with adaptive interval
-	return m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime))
+	// Control-death recovery is deliberately sequenced after this accepted
+	// capture. This guarantees the fallback screen becomes visible before a
+	// replacement seed can invalidate its poll generation.
+	nextPoll := m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime))
+	if m.recoveryPending {
+		m.recoveryPending = false
+		return tea.Batch(nextPoll, m.retryControl())
+	}
+	return nextPoll
 }
 
 // handlePollTick handles a poll tick message.

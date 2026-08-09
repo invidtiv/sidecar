@@ -242,7 +242,8 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	if msg.OverflowGen == m.controlGen {
 		m.modelLive = false
 		m.stopControl()
-		return tea.Batch(m.schedulePoll(0), m.retryControl(), m.listenControl())
+		m.recoveryPending = true
+		return tea.Batch(m.schedulePoll(0), m.listenControl())
 	}
 
 	var cmd tea.Cmd
@@ -285,14 +286,16 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.modelLive = false
 		if msg.Event.invalid.Terminal {
 			m.stopControl()
-			cmd = tea.Batch(m.schedulePoll(0), m.retryControl())
+			m.recoveryPending = true
+			cmd = m.schedulePoll(0)
 			break
 		}
 		cmd = m.schedulePoll(0)
 	case terminalFallbackEvent:
 		m.modelLive = false
 		m.stopControl()
-		cmd = tea.Batch(m.schedulePoll(0), m.retryControl())
+		m.recoveryPending = true
+		cmd = m.schedulePoll(0)
 	}
 	return tea.Batch(cmd, m.listenControl())
 }
@@ -329,6 +332,7 @@ func (m *Model) SetVisible(visible bool) tea.Cmd {
 			m.State.PollGeneration++
 		}
 		m.modelLive = false
+		m.recoveryPending = false
 		m.stopControl()
 		return nil
 	}
