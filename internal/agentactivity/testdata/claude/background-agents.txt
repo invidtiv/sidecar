@@ -1,0 +1,15 @@
+source: real Claude Code 2.1.220, harvested 2026-08-09 from a live Sidecar pane
+note: main loop idle while background agents run. The bottom bar has dropped
+      "esc to interrupt", so the prompt box alone reads as a finished turn;
+      the title still carries a braille frame and the task line still reports
+      agents outstanding. Frame U+2810 sits outside the ten-frame dots set.
+pane_title: ⠐ Redacted task description
+pane_current_command: 2.1.220
+screen:
+✻ Sautéed for 2m 22s
+──────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents · ↓ to manage
+  ◯ redacted-workflow  Redacted description… 2/3 agents done · 25m 23s
+  ⧉  redacted-worktree
