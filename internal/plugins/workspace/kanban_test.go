@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -132,9 +133,9 @@ func TestKanbanDeterministicSemanticFixture(t *testing.T) {
 			{Name: "idle-shell", ChosenAgent: AgentAntigravity, Agent: agent(AgentAntigravity, agentactivity.StateIdle, true)},
 		},
 	}
-	got := p.renderKanbanView(200, 50)
+	got := ansi.Strip(p.renderKanbanView(200, 50))
 	for _, want := range []string{
-		"Working (1)", "Blocked (1)", "Done (1)", "Idle (1)", "Paused (1)",
+		"Working 1", "Blocked 1", "Done 1", "Idle 1", "Paused 1",
 		"working-wt", "blocked-wt", "done-wt", "idle-wt", "error-wt",
 		"working-shell", "blocked-shell", "done-shell", "idle-shell",
 		"codex · working", "Claude · blocked", "Grok · done", "Antigravity · idle", "error",

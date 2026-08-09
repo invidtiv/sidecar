@@ -114,6 +114,7 @@ type Model struct {
 	pollScheduled      bool
 	board              kanban.Component
 	cards              map[string]workspaceinventory.Workspace
+	agentCount         int
 	compactScroll      int
 	mouse              *mouse.Handler
 	width              int
@@ -573,7 +574,7 @@ func (m *Model) activate() tea.Cmd {
 
 func (m *Model) View(width, height int) string {
 	m.width, m.height = width, height
-	result := m.board.Render(kanban.RenderOptions{Width: width, Height: height, Header: "Agent Overview", HeaderRight: m.summary(), MinColumnWidth: minColumnWidth, CardHeight: cardHeight, RenderCard: m.renderCard})
+	result := m.board.Render(kanban.RenderOptions{Width: width, Height: height, Header: "Agent Overview", HeaderRight: m.summary(), MinColumnWidth: minColumnWidth, CardHeight: cardHeight})
 	m.mouse.Clear()
 	if result.Compact {
 		return m.renderCompact(width, height)
@@ -595,16 +596,30 @@ func (m *Model) summary() string {
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
 	}
-	return fmt.Sprintf("%d projects", len(m.results))
+	return fmt.Sprintf("%d projects · %d agents", len(m.results), m.agentCount)
+}
+
+// cardOrder is the sort key syncBoard attaches to every card it builds:
+// project group in configured project order, then most-recent-first within
+// the group. Error cards carry a zero ChangedAt, which sorts them last
+// within their project group.
+type cardOrder struct {
+	project   int
+	changedAt time.Time
 }
 
 func (m *Model) syncBoard() {
 	lanes := []kanban.Lane{
-		{ID: "working", Label: "Working", State: kanban.CellReady}, {ID: "blocked", Label: "Needs attention", State: kanban.CellReady},
-		{ID: "done", Label: "Done", State: kanban.CellReady}, {ID: "idle", Label: "Idle", State: kanban.CellReady}, {ID: "paused", Label: "Paused", State: kanban.CellReady},
+		{ID: "working", Label: "WORKING", HeaderColor: styles.LaneColor("working"), State: kanban.CellReady},
+		{ID: "blocked", Label: "NEEDS ATTENTION", HeaderColor: styles.LaneColor("blocked"), State: kanban.CellReady},
+		{ID: "done", Label: "DONE", HeaderColor: styles.LaneColor("done"), State: kanban.CellReady},
+		{ID: "idle", Label: "IDLE", HeaderColor: styles.LaneColor("idle"), State: kanban.CellReady},
+		{ID: "paused", Label: "PAUSED", HeaderColor: styles.LaneColor("paused"), State: kanban.CellReady},
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
-	for _, project := range m.projects {
+	order := make(map[string]cardOrder)
+	now := time.Now()
+	for i, project := range m.projects {
 		key := projectKey(project)
 		result, loaded := m.results[key]
 		if !loaded {
@@ -614,7 +629,9 @@ func (m *Model) syncBoard() {
 			continue
 		}
 		if result.Err != nil && len(result.Workspaces) == 0 {
-			card := kanban.Card{ID: "error:" + key, Title: project.Name, Subtitle: "project unavailable", Detail: result.Err.Error()}
+			id := "error:" + key
+			order[id] = cardOrder{project: i}
+			card := kanban.Card{ID: id, Lines: errorCardLines(project.Name, result.Err)}
 			lanes[4].Cards = append(lanes[4].Cards, card)
 			continue
 		}
@@ -625,13 +642,8 @@ func (m *Model) syncBoard() {
 				continue
 			}
 			m.cards[workspace.ID] = workspace
-			freshness := string(workspace.Presentation.Freshness)
-			if m.refreshing[key] {
-				freshness = "refreshing"
-			} else if m.stale[key] {
-				freshness = "stale · refresh failed"
-			}
-			card := kanban.Card{ID: workspace.ID, Title: workspace.ProjectName + " / " + workspace.Name, Subtitle: workspace.Provider + " · " + workspace.Presentation.Label, Detail: choose(workspace.TaskID, workspace.Branch), Meta: freshness}
+			order[workspace.ID] = cardOrder{project: i, changedAt: workspace.Presentation.ChangedAt}
+			card := kanban.Card{ID: workspace.ID, Lines: cardLines(workspace, m.refreshing[key], m.stale[key], now)}
 			for i := range lanes {
 				if lanes[i].ID == kanban.LaneID(workspace.Presentation.Lane) {
 					lanes[i].Cards = append(lanes[i].Cards, card)
@@ -640,44 +652,121 @@ func (m *Model) syncBoard() {
 			}
 		}
 	}
-	projectOrder := make(map[string]int, len(m.projects))
-	for i, project := range m.projects {
-		projectOrder[projectKey(project)] = i
-	}
+	m.agentCount = len(m.cards)
 	for i := range lanes {
 		sort.SliceStable(lanes[i].Cards, func(a, b int) bool {
-			left, lok := m.cards[lanes[i].Cards[a].ID]
-			right, rok := m.cards[lanes[i].Cards[b].ID]
-			if lok && rok && !left.Presentation.ChangedAt.Equal(right.Presentation.ChangedAt) {
-				return left.Presentation.ChangedAt.After(right.Presentation.ChangedAt)
+			left, right := order[lanes[i].Cards[a].ID], order[lanes[i].Cards[b].ID]
+			if left.project != right.project {
+				return left.project < right.project
 			}
-			if lok && rok && projectOrder[left.ProjectKey] != projectOrder[right.ProjectKey] {
-				return projectOrder[left.ProjectKey] < projectOrder[right.ProjectKey]
-			}
-			return false
+			return left.changedAt.After(right.changedAt)
 		})
 	}
 	for i := range lanes {
 		if len(lanes[i].Cards) == 0 && lanes[i].State == kanban.CellReady {
-			lanes[i].State, lanes[i].Message = kanban.CellEmpty, "No agents"
+			lanes[i].State = kanban.CellEmpty
 		}
 	}
 	m.board.SetBoard(kanban.Board{Lanes: lanes})
 }
 
-func (m *Model) renderCard(card kanban.Card, line, width int, selected, _ bool) string {
-	values := []string{" " + card.Title, " " + card.Subtitle, " " + card.Detail, " " + card.Meta}
-	value := ""
-	if line < len(values) {
-		value = ansi.Truncate(values[line], width, "")
+// spineGlyph is the per-kind left accent every content line carries: solid
+// for a worktree, hairline for a shell. Redundant with kindGlyph on purpose —
+// colourblind-safe.
+func spineGlyph(kind workspaceinventory.Kind) string {
+	if kind == workspaceinventory.KindShell {
+		return "▏"
 	}
-	style := lipgloss.NewStyle().Width(width)
-	if selected {
-		style = styles.ListItemSelected.Width(width)
-	} else if line > 0 {
-		style = styles.Muted.Width(width)
+	return "▌"
+}
+
+func kindGlyph(kind workspaceinventory.Kind) string {
+	if kind == workspaceinventory.KindShell {
+		return "❯"
 	}
-	return style.Render(value)
+	return "⑂"
+}
+
+// cardLines builds the three styled content rows for a live workspace card.
+// refreshing and stale reflect the owning project's freshness trackers;
+// abnormal Presentation.Freshness (e.g. "unavailable") falls through to a
+// plain word when neither tracker applies.
+func cardLines(workspace workspaceinventory.Workspace, refreshing, stale bool, now time.Time) []kanban.Line {
+	hue := styles.ProjectHue(workspace.ProjectKey)
+	spine := spineGlyph(workspace.Kind)
+	line1 := kanban.Line{Spans: []kanban.Span{
+		{Text: spine, Foreground: hue},
+		{Text: " " + workspace.ProjectName, Foreground: hue, Bold: true},
+		{Text: " " + kindGlyph(workspace.Kind), Foreground: styles.TextMuted},
+		{Text: " " + workspace.Name, Foreground: styles.TextPrimary},
+	}}
+
+	status := workspace.Presentation.Label
+	if workspace.Presentation.Attention {
+		status = "▲ " + status
+	}
+	if age := relativeAge(workspace.Presentation.ChangedAt, now); age != "" {
+		status += " · " + age
+	}
+	line2 := kanban.Line{Spans: []kanban.Span{
+		{Text: spine, Foreground: hue},
+		{Text: " " + workspace.Provider, Foreground: styles.AgentColor(workspace.Provider), Background: styles.AgentChipFill()},
+		{Text: " " + status, Foreground: styles.LaneColor(string(workspace.Presentation.Lane))},
+	}}
+
+	detail := choose(workspace.TaskID, workspace.Branch)
+	if workspace.Kind == workspaceinventory.KindShell {
+		detail = "tmux " + workspace.TmuxName
+	}
+	switch {
+	case refreshing:
+		detail += " · refreshing…"
+	case stale:
+		detail += " · stale"
+	case workspace.Presentation.Freshness != "" && workspace.Presentation.Freshness != agentstatus.FreshnessCurrent:
+		detail += " · " + string(workspace.Presentation.Freshness)
+	}
+	line3 := kanban.Line{Spans: []kanban.Span{
+		{Text: spine, Foreground: hue},
+		{Text: " " + detail, Foreground: styles.TextMuted},
+	}}
+	return []kanban.Line{line1, line2, line3}
+}
+
+// errorCardLines renders a project-unavailable card with a muted spine —
+// there is no live workspace to hang a project hue off of.
+func errorCardLines(projectName string, err error) []kanban.Line {
+	spine := spineGlyph(workspaceinventory.KindWorktree)
+	return []kanban.Line{
+		{Spans: []kanban.Span{{Text: spine, Foreground: styles.TextMuted}, {Text: " " + projectName, Foreground: styles.TextPrimary}}},
+		{Spans: []kanban.Span{{Text: spine, Foreground: styles.TextMuted}, {Text: " project unavailable", Foreground: styles.TextMuted}}},
+		{Spans: []kanban.Span{{Text: spine, Foreground: styles.TextMuted}, {Text: " " + err.Error(), Foreground: styles.TextMuted}}},
+	}
+}
+
+// relativeAge formats the gap between changedAt and now as the small units
+// the board cards use: "12s", "3m", "1h", "2d". Anything under 5s reads
+// "now"; a zero changedAt renders nothing.
+func relativeAge(changedAt, now time.Time) string {
+	if changedAt.IsZero() {
+		return ""
+	}
+	d := now.Sub(changedAt)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < 5*time.Second:
+		return "now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 func (m *Model) renderCompact(width, height int) string {
@@ -717,8 +806,7 @@ func (m *Model) renderCompact(width, height int) string {
 	end := min(len(items), m.compactScroll+visibleRows)
 	for index := m.compactScroll; index < end; index++ {
 		item := items[index]
-		line := fmt.Sprintf(" %-15s %s  %s", item.lane, item.card.Title, item.card.Subtitle)
-		line = fitCompactLine(line, width)
+		line := fitCompactLine(compactCardText(item.lane, item.card, m.cards[item.card.ID]), width)
 		if index == selectedIndex {
 			line = styles.ListItemSelected.Render(line)
 		}
@@ -733,6 +821,19 @@ func (m *Model) renderCompact(width, height int) string {
 		lines = append(lines, strings.Repeat(" ", width))
 	}
 	return strings.Join(lines[:height], "\n")
+}
+
+// compactCardText renders the one-line compact fallback for a card, picking
+// up the project hue and agent colour when a live workspace backs the card.
+// Cards built outside syncBoard (tests, or a card with no Lines) fall back to
+// the plain Title/Subtitle fields.
+func compactCardText(lane string, card kanban.Card, workspace workspaceinventory.Workspace) string {
+	if workspace.ID == "" {
+		return fmt.Sprintf(" %-15s %s  %s", lane, card.Title, card.Subtitle)
+	}
+	project := lipgloss.NewStyle().Foreground(styles.ProjectHue(workspace.ProjectKey)).Render(workspace.ProjectName + " / " + workspace.Name)
+	agent := lipgloss.NewStyle().Foreground(styles.AgentColor(workspace.Provider)).Render(workspace.Provider)
+	return fmt.Sprintf(" %-15s %s  %s · %s", lane, project, agent, workspace.Presentation.Label)
 }
 
 func fitCompactLine(line string, width int) string {

@@ -7,12 +7,25 @@ import "image/color"
 
 type LaneID string
 
+// Span is a styled run of text within a card line.
+type Span struct {
+	Text       string
+	Foreground color.Color // nil inherits
+	Background color.Color // nil for none
+	Bold       bool
+}
+
+// Line is one rendered row of a card.
+type Line struct{ Spans []Span }
+
 type Card struct {
 	ID       string
 	Title    string
 	Subtitle string
 	Detail   string
 	Meta     string
+	// Lines, when non-empty, takes precedence over Title/Subtitle/Detail/Meta.
+	Lines []Line
 }
 
 type Lane struct {
@@ -48,10 +61,11 @@ type Position struct {
 }
 
 type Layout struct {
-	ColumnWidth int
-	CardHeight  int
-	MaxCards    int
-	ContentRows int
+	ColumnWidth  int
+	ColumnWidths []int
+	CardHeight   int
+	MaxCards     int
+	ContentRows  int
 }
 
 func (b Board) ColumnCount() int { return len(b.Lanes) }
@@ -136,9 +150,13 @@ func UsesCompact(width, columns, columnWidth, outerWidth int) bool {
 // height constraints testable independently of a view renderer.
 func CalculateLayout(width, height, columns, minColumnWidth, cardHeight int) Layout {
 	innerWidth := width - 4
+	widths := columnWidths(innerWidth, columns)
 	columnWidth := 0
 	if columns > 0 {
-		columnWidth = (innerWidth - columns - 1) / columns
+		// The base width is the narrowest lane, so a caller sizing content
+		// against ColumnWidth alone never overruns the columns that did not
+		// absorb the remainder.
+		columnWidth = widths[columns-1]
 		if columnWidth < minColumnWidth {
 			columnWidth = minColumnWidth
 		}
@@ -148,9 +166,33 @@ func CalculateLayout(width, height, columns, minColumnWidth, cardHeight int) Lay
 		contentRows = cardHeight
 	}
 	return Layout{
-		ColumnWidth: columnWidth,
-		CardHeight:  cardHeight,
-		MaxCards:    contentRows / cardHeight,
-		ContentRows: contentRows,
+		ColumnWidth:  columnWidth,
+		ColumnWidths: widths,
+		CardHeight:   cardHeight,
+		MaxCards:     contentRows / cardHeight,
+		ContentRows:  contentRows,
 	}
+}
+
+// columnWidths splits innerWidth across columns lanes, holding room for the
+// n-1 single-rune separators between them, so the widths plus separators sum
+// to exactly innerWidth. The division remainder goes to the leftmost lanes.
+func columnWidths(innerWidth, columns int) []int {
+	if columns <= 0 {
+		return nil
+	}
+	available := innerWidth - (columns - 1)
+	if available < 0 {
+		available = 0
+	}
+	base := available / columns
+	remainder := available % columns
+	widths := make([]int, columns)
+	for i := range widths {
+		widths[i] = base
+		if i < remainder {
+			widths[i]++
+		}
+	}
+	return widths
 }
