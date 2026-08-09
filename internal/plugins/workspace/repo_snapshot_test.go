@@ -260,13 +260,6 @@ func TestMergeLifecycleGitCommandsCancelledByStopOrReinit(t *testing.T) {
 		cancel func(*testing.T, *Plugin)
 	}{
 		{
-			name: "status on Stop",
-			start: func(p *Plugin, wt *Worktree) tea.Cmd {
-				return p.startMergeWorkflow(wt)
-			},
-			cancel: func(_ *testing.T, p *Plugin) { p.Stop() },
-		},
-		{
 			name: "stage on Init",
 			start: func(p *Plugin, wt *Worktree) tea.Cmd {
 				p.newLifecycleScope(wt)

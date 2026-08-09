@@ -58,19 +58,20 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 			return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot, Err: err,
 				Duration: time.Since(started), Processes: int(processes.Load())}
 		}
-		loadRefreshChanges(refreshCtx, worktrees, maxRefreshConcurrency, nil)
+		maxConcurrent := loadRefreshChanges(refreshCtx, worktrees, maxRefreshConcurrency, nil)
 		conflicts := detectConflictsFromChanges(worktrees)
 		return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot,
-			Conflicts: conflicts, Duration: time.Since(started), Processes: int(processes.Load())}
+			Conflicts: conflicts, Duration: time.Since(started), Processes: int(processes.Load()), MaxConcurrency: maxConcurrent}
 	}
 }
 
-func loadRefreshChanges(ctx context.Context, worktrees []*Worktree, limit int, processes *atomic.Int64) {
+func loadRefreshChanges(ctx context.Context, worktrees []*Worktree, limit int, processes *atomic.Int64) int {
 	if limit < 1 {
 		limit = 1
 	}
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
+	var active, maximum atomic.Int64
 	for _, wt := range worktrees {
 		if wt.IsMissing || wt.IsBare {
 			wt.Changes = &WorktreeChanges{State: LoadStateError, Err: fmt.Errorf("worktree path is unavailable: %s", wt.Path)}
@@ -87,11 +88,24 @@ func loadRefreshChanges(ctx context.Context, worktrees []*Worktree, limit int, p
 				wt.Changes = &WorktreeChanges{State: LoadStateError, Err: ctx.Err()}
 				return
 			}
+			if err := ctx.Err(); err != nil {
+				wt.Changes = &WorktreeChanges{State: LoadStateError, Err: err}
+				return
+			}
+			current := active.Add(1)
+			for {
+				observed := maximum.Load()
+				if current <= observed || maximum.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			defer active.Add(-1)
 			changes, stats := collectWorktreeChanges(ctx, wt.Path, processes)
 			wt.Changes, wt.Stats = changes, stats
 		}()
 	}
 	wg.Wait()
+	return int(maximum.Load())
 }
 
 // findMainWorktreeFromDeleted finds the main worktree path when the current

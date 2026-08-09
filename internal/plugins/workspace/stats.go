@@ -85,6 +85,15 @@ func refreshGitOutput(ctx context.Context, dir string, processes *atomic.Int64, 
 
 func parsePorcelainStatus(output []byte, changes *WorktreeChanges) {
 	seen := make(map[string]struct{})
+	addDirty := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; !ok {
+			seen[path] = struct{}{}
+			changes.Dirty = append(changes.Dirty, path)
+		}
+	}
 	fields := bytes.Split(output, []byte{0})
 	for i := 0; i < len(fields); i++ {
 		entry := fields[i]
@@ -93,11 +102,14 @@ func parsePorcelainStatus(output []byte, changes *WorktreeChanges) {
 		}
 		x, y := entry[0], entry[1]
 		path := string(entry[3:])
-		// In porcelain v1 -z, rename/copy records have an additional original
-		// path field. The first path is the destination and is the useful dirty
-		// identity for display/overlap.
+		// Porcelain v1 -z never C-quotes paths. Rename/copy records are
+		// "XY destination\0source\0" (regardless of score); preserve both
+		// identities so a rename overlaps another worktree editing the source.
 		if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
-			i++
+			if i+1 < len(fields) {
+				i++
+				addDirty(string(fields[i]))
+			}
 		}
 		if x == '?' && y == '?' {
 			changes.Untracked = append(changes.Untracked, path)
@@ -109,10 +121,7 @@ func parsePorcelainStatus(output []byte, changes *WorktreeChanges) {
 				changes.Unstaged = append(changes.Unstaged, path)
 			}
 		}
-		if _, ok := seen[path]; !ok {
-			seen[path] = struct{}{}
-			changes.Dirty = append(changes.Dirty, path)
-		}
+		addDirty(path)
 	}
 }
 

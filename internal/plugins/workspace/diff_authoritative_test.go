@@ -92,6 +92,131 @@ func TestLoadDiffSnapshotSeparatesAllThreeViewsAndBoundsUntracked(t *testing.T) 
 	}
 }
 
+func TestPinnedDiffSnapshotIgnoresMovingBaseRef(t *testing.T) {
+	dir := authoritativeRepo(t)
+	baseOID := strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "main"))
+	headOID := strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
+	// Move the human-readable base name onto the first feature commit after
+	// inventory. A ref-based load would now report only one unique commit.
+	runGitOutput(t, dir, "branch", "-f", "main", headOID+"~1")
+	s, err := loadDiffSnapshotPinned(context.Background(), dir, "main", baseOID, headOID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Commits) != 2 {
+		t.Fatalf("pinned commits = %d, want 2 after base ref moved", len(s.Commits))
+	}
+	if s.MergeBase != baseOID {
+		t.Fatalf("merge base = %s, want pinned %s", s.MergeBase, baseOID)
+	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, out, err)
+	}
+	return string(out)
+}
+
+func TestPorcelainRenamePreservesSourceAndDestination(t *testing.T) {
+	for _, tc := range []struct{ name, xy string }{
+		{"staged rename", "R "}, {"unstaged rename", " R"}, {"staged copy", "C "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changes := &WorktreeChanges{}
+			parsePorcelainStatus([]byte(tc.xy+" renamed \"file\".txt\x00shared\nfile.txt\x00"), changes)
+			if !containsPath(changes.Dirty, "renamed \"file\".txt") || !containsPath(changes.Dirty, "shared\nfile.txt") {
+				t.Fatalf("dirty paths = %q", changes.Dirty)
+			}
+		})
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRenameSourceOverlapsOtherWorktreeDirtyPath(t *testing.T) {
+	worktrees := []*Worktree{
+		{Key: "rename", Changes: &WorktreeChanges{Dirty: []string{"renamed.txt", "shared.txt"}}},
+		{Key: "modify", Changes: &WorktreeChanges{Dirty: []string{"shared.txt"}}},
+	}
+	conflicts := detectConflictsFromChanges(worktrees)
+	if len(conflicts) != 1 || !containsPath(conflicts[0].Files, "shared.txt") {
+		t.Fatalf("overlaps = %+v", conflicts)
+	}
+}
+
+func TestCollectedStatusPreservesStagedAndUnstagedRenameIdentities(t *testing.T) {
+	for _, staged := range []bool{true, false} {
+		name := "unstaged"
+		if staged {
+			name = "staged"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			runGitOutput(t, dir, "init", "-b", "main")
+			runGitOutput(t, dir, "config", "user.name", "Sidecar Test")
+			runGitOutput(t, dir, "config", "user.email", "sidecar@example.test")
+			if err := os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("shared\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runGitOutput(t, dir, "add", ".")
+			runGitOutput(t, dir, "commit", "-m", "base")
+			runGitOutput(t, dir, "mv", "shared.txt", "renamed.txt")
+			if !staged {
+				runGitOutput(t, dir, "reset", "HEAD")
+			}
+			changes, _ := collectWorktreeChanges(context.Background(), dir, nil)
+			if changes.Err != nil {
+				t.Fatal(changes.Err)
+			}
+			if !containsPath(changes.Dirty, "shared.txt") || !containsPath(changes.Dirty, "renamed.txt") {
+				t.Fatalf("dirty = %q", changes.Dirty)
+			}
+		})
+	}
+}
+
+func TestUntrackedCandidateCapBoundsAllLstatAttempts(t *testing.T) {
+	dir := authoritativeRepo(t)
+	for i := 0; i < maxUntrackedFiles+30; i++ {
+		if err := os.Symlink("missing-target", filepath.Join(dir, fmt.Sprintf("link-%03d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		stat func(string) (os.FileInfo, error)
+	}{
+		{"symlinks", os.Lstat},
+		{"missing races", func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			_, meta, err := getUntrackedFileDiffsWithLstat(context.Background(), dir, func(path string) (os.FileInfo, error) { calls++; return tc.stat(path) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != maxUntrackedFiles {
+				t.Fatalf("Lstat calls = %d, want cap %d", calls, maxUntrackedFiles)
+			}
+			if !meta.Truncated || meta.Omitted < 30 {
+				t.Fatalf("meta = %+v, want disclosed truncation", meta)
+			}
+		})
+	}
+}
+
 func TestMissingWorktreeRendersErrorNotClean(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone")
 	_, err := loadDiffSnapshot(context.Background(), missing, "main")
@@ -137,7 +262,7 @@ func TestRefreshStatusProcessAndLatencyBudgets(t *testing.T) {
 			}
 			var processes atomic.Int64
 			started := time.Now()
-			loadRefreshChanges(context.Background(), worktrees, maxRefreshConcurrency, &processes)
+			maximum := loadRefreshChanges(context.Background(), worktrees, maxRefreshConcurrency, &processes)
 			duration := time.Since(started)
 			if got, want := processes.Load(), int64(count*2); got != want {
 				t.Fatalf("processes = %d, want %d", got, want)
@@ -145,12 +270,103 @@ func TestRefreshStatusProcessAndLatencyBudgets(t *testing.T) {
 			if duration > 15*time.Second {
 				t.Fatalf("refresh duration %s exceeds recorded 15s local budget", duration)
 			}
+			if maximum < 1 || maximum > maxRefreshConcurrency {
+				t.Fatalf("max concurrency = %d, want 1..%d", maximum, maxRefreshConcurrency)
+			}
 			for _, wt := range worktrees {
 				if wt.Changes == nil || wt.Changes.Err != nil {
 					t.Fatalf("missing status result: %+v", wt.Changes)
 				}
 			}
 		})
+	}
+}
+
+func TestRefreshConcurrencyFailureAndCancellation(t *testing.T) {
+	t.Run("failure", func(t *testing.T) {
+		worktrees := make([]*Worktree, 20)
+		for i := range worktrees {
+			worktrees[i] = &Worktree{Key: fmt.Sprint(i), Path: filepath.Join(t.TempDir(), "missing")}
+		}
+		var processes atomic.Int64
+		maximum := loadRefreshChanges(context.Background(), worktrees, maxRefreshConcurrency, &processes)
+		if maximum > maxRefreshConcurrency {
+			t.Fatalf("max concurrency = %d", maximum)
+		}
+		if processes.Load() != int64(len(worktrees)) {
+			t.Fatalf("failed status processes = %d, want %d", processes.Load(), len(worktrees))
+		}
+		for _, wt := range worktrees {
+			if wt.Changes == nil || wt.Changes.Err == nil {
+				t.Fatal("failure result missing")
+			}
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		worktrees := make([]*Worktree, 50)
+		for i := range worktrees {
+			worktrees[i] = &Worktree{Key: fmt.Sprint(i), Path: t.TempDir()}
+		}
+		var processes atomic.Int64
+		done := make(chan int, 1)
+		go func() { done <- loadRefreshChanges(ctx, worktrees, maxRefreshConcurrency, &processes) }()
+		var maximum int
+		select {
+		case maximum = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancelled refresh workers leaked")
+		}
+		if maximum != 0 || processes.Load() != 0 {
+			t.Fatalf("cancelled metrics max=%d processes=%d", maximum, processes.Load())
+		}
+		for _, wt := range worktrees {
+			if wt.Changes == nil || wt.Changes.Err == nil {
+				t.Fatal("cancelled result missing")
+			}
+		}
+	})
+}
+
+func TestStaleRefreshResultCannotReplaceCurrentStatus(t *testing.T) {
+	current := &Worktree{Key: "current", Changes: &WorktreeChanges{State: LoadStateReady, Dirty: []string{"keep"}}}
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 9}
+	p.worktrees = []*Worktree{current}
+	p.refreshOperationID = "current-op"
+	p.update(RefreshDoneMsg{OperationScope: OperationScope{Epoch: 9, OperationID: "stale-op"},
+		Worktrees: []*Worktree{{Key: "stale"}}})
+	if len(p.worktrees) != 1 || p.worktrees[0] != current || !containsPath(p.worktrees[0].Changes.Dirty, "keep") {
+		t.Fatalf("stale refresh replaced current state: %+v", p.worktrees)
+	}
+}
+
+func TestMergeDirtyCheckUsesSharedStatus(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "unexpected-git")
+	git := filepath.Join(binDir, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1}
+	p.operationCtx = context.Background()
+	wt := &Worktree{Key: "wt", Name: "wt", Changes: &WorktreeChanges{State: LoadStateReady,
+		Staged: []string{"a"}, Unstaged: []string{"b"}, Untracked: []string{"c"}}}
+	msg := p.checkUncommittedChanges(wt)().(UncommittedChangesCheckMsg)
+	if msg.Err != nil || !msg.HasChanges || msg.StagedCount != 1 || msg.ModifiedCount != 1 || msg.UntrackedCount != 1 {
+		t.Fatalf("msg = %+v", msg)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("merge dirty gating spawned duplicate git status")
+	}
+	wt.Changes = &WorktreeChanges{State: LoadStateError, Err: os.ErrPermission}
+	msg = p.checkUncommittedChanges(wt)().(UncommittedChangesCheckMsg)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), "shared git status") {
+		t.Fatalf("error msg = %+v", msg)
 	}
 }
 

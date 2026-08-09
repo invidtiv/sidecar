@@ -12,12 +12,13 @@ type RefreshMsg struct{}
 // RefreshDoneMsg signals that refresh has completed.
 type RefreshDoneMsg struct {
 	OperationScope
-	Worktrees []*Worktree
-	Snapshot  *RepoSnapshot
-	Err       error
-	Conflicts []Conflict
-	Duration  time.Duration
-	Processes int
+	Worktrees      []*Worktree
+	Snapshot       *RepoSnapshot
+	Err            error
+	Conflicts      []Conflict
+	Duration       time.Duration
+	Processes      int
+	MaxConcurrency int
 }
 
 // GetEpoch implements plugin.EpochMessage.

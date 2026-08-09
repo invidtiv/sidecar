@@ -236,22 +236,30 @@ type PullAfterMergeMsg struct {
 // checkUncommittedChanges checks if a worktree has uncommitted changes.
 func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
-	ctx := p.operationCtx
-	path, name := wt.Path, wt.Name
+	name := wt.Name
+	var stagedCount, modifiedCount, untrackedCount int
+	var statusErr error
+	if wt.Changes == nil || wt.Changes.State == LoadStateLoading || wt.Changes.State == LoadStateUnknown {
+		statusErr = fmt.Errorf("shared git status is not loaded; refresh the workspace and retry")
+	} else if wt.Changes.Err != nil || wt.Changes.State == LoadStateError {
+		statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry")
+		if wt.Changes.Err != nil {
+			statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry: %w", wt.Changes.Err)
+		}
+	} else {
+		stagedCount = len(wt.Changes.Staged)
+		modifiedCount = len(wt.Changes.Unstaged)
+		untrackedCount = len(wt.Changes.Untracked)
+	}
 	return func() tea.Msg {
-		tree, err := gitstatus.LoadFileTreeContext(ctx, path)
-		if err != nil {
+		if statusErr != nil {
 			return UncommittedChangesCheckMsg{
 				OperationScope: scope,
 				WorkspaceName:  name,
 				HasChanges:     false,
-				Err:            err,
+				Err:            statusErr,
 			}
 		}
-
-		stagedCount := len(tree.Staged)
-		modifiedCount := len(tree.Modified)
-		untrackedCount := len(tree.Untracked)
 		hasChanges := stagedCount > 0 || modifiedCount > 0 || untrackedCount > 0
 
 		return UncommittedChangesCheckMsg{

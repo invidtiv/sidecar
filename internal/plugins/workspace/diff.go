@@ -68,11 +68,12 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 		return nil
 	}
 	ctx, scope := p.newOperationScope(wt)
-	path, name, baseRef := wt.Path, wt.IdentityKey(), wt.BaseBranch
+	path, name, baseRef, baseOID, headOID := wt.Path, wt.IdentityKey(), wt.BaseBranch, wt.BaseOID, wt.HEADOID
 	if baseRef == "" && p.repoSnapshot != nil {
 		for _, candidate := range p.repoSnapshot.Worktrees {
 			if candidate.Key == wt.IdentityKey() {
 				baseRef = candidate.BaseRef
+				baseOID, headOID = candidate.BaseOID, candidate.HEADOID
 				break
 			}
 		}
@@ -82,7 +83,15 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, BaseRef: baseRef,
 				Command: "load working tree, commits, and aggregate diff", Err: err}
 		}
-		snapshot, err := loadDiffSnapshot(ctx, path, baseRef)
+		var snapshot *DiffSnapshot
+		var err error
+		if p.repoSnapshot != nil {
+			snapshot, err = loadDiffSnapshotPinned(ctx, path, baseRef, baseOID, headOID)
+		} else {
+			// Compatibility for isolated callers without repository inventory:
+			// resolve once at command start, then use only the resulting OIDs.
+			snapshot, err = loadDiffSnapshot(ctx, path, baseRef)
+		}
 		if err != nil {
 			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, BaseRef: baseRef,
 				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", Err: err}
@@ -102,8 +111,29 @@ func loadDiffSnapshot(ctx context.Context, workdir, baseRef string) (*DiffSnapsh
 	if baseRef == "" {
 		return nil, fmt.Errorf("resolve base ref for git log and aggregate diff in %s", workdir)
 	}
+	baseOIDBytes, err := gitOutputBytes(ctx, workdir, "rev-parse", "--verify", baseRef+"^{commit}")
+	if err != nil {
+		return nil, fmt.Errorf("resolve base ref %q: %w", baseRef, err)
+	}
+	headOIDBytes, err := gitOutputBytes(ctx, workdir, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return nil, fmt.Errorf("resolve HEAD: %w", err)
+	}
+	return loadDiffSnapshotPinned(ctx, workdir, baseRef, strings.TrimSpace(string(baseOIDBytes)), strings.TrimSpace(string(headOIDBytes)))
+}
 
-	tracked, err := gitOutputBytes(ctx, workdir, "diff", "--binary", "HEAD")
+func loadDiffSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID string) (*DiffSnapshot, error) {
+	if _, err := os.Lstat(workdir); err != nil {
+		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
+	}
+	if baseOID == "" {
+		return nil, fmt.Errorf("resolved base OID is unavailable for %q", baseRef)
+	}
+	if headOID == "" {
+		return nil, fmt.Errorf("resolved HEAD OID is unavailable")
+	}
+
+	tracked, err := gitOutputBytes(ctx, workdir, "diff", "--binary", headOID)
 	if err != nil {
 		return nil, err
 	}
@@ -113,16 +143,16 @@ func loadDiffSnapshot(ctx context.Context, workdir, baseRef string) (*DiffSnapsh
 	}
 	working := joinDiffParts(string(tracked), untracked)
 
-	mergeBaseBytes, err := gitOutputBytes(ctx, workdir, "merge-base", baseRef, "HEAD")
+	mergeBaseBytes, err := gitOutputBytes(ctx, workdir, "merge-base", baseOID, headOID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve merge-base for base ref %q: %w", baseRef, err)
 	}
 	mergeBase := strings.TrimSpace(string(mergeBaseBytes))
-	committed, err := gitOutputBytes(ctx, workdir, "diff", "--binary", mergeBase+"..HEAD")
+	committed, err := gitOutputBytes(ctx, workdir, "diff", "--binary", mergeBase+".."+headOID)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate committed diff for %q (%s..HEAD): %w", baseRef, mergeBase, err)
 	}
-	commits, err := getWorktreeCommitsContext(ctx, workdir, baseRef)
+	commits, err := getWorktreeCommitsBetweenContext(ctx, workdir, baseOID, headOID)
 	if err != nil {
 		return nil, fmt.Errorf("unique commits for base ref %q using git log %s..HEAD: %w", baseRef, baseRef, err)
 	}
@@ -189,6 +219,10 @@ type untrackedDiffMeta struct {
 }
 
 func getUntrackedFileDiffsContext(ctx context.Context, workdir string) (string, untrackedDiffMeta, error) {
+	return getUntrackedFileDiffsWithLstat(ctx, workdir, os.Lstat)
+}
+
+func getUntrackedFileDiffsWithLstat(ctx context.Context, workdir string, lstat func(string) (os.FileInfo, error)) (string, untrackedDiffMeta, error) {
 	output, err := gitOutputBytes(ctx, workdir, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
 		return "", untrackedDiffMeta{}, err
@@ -197,26 +231,28 @@ func getUntrackedFileDiffsContext(ctx context.Context, workdir string) (string, 
 	var sb strings.Builder
 	var meta untrackedDiffMeta
 	var total int64
-	included := 0
+	inspected := 0
 	for _, field := range fields {
 		if len(field) == 0 {
 			continue
 		}
 		file := string(field)
-		if included >= maxUntrackedFiles {
+		if inspected >= maxUntrackedFiles {
 			meta.Omitted++
 			meta.Truncated = true
 			continue
 		}
+		// Every candidate consumes the file-count budget before any filesystem
+		// operation, including symlinks, directories, errors, and missing races.
+		inspected++
 		full := filepath.Join(workdir, filepath.FromSlash(file))
-		info, statErr := os.Lstat(full)
+		info, statErr := lstat(full)
 		if statErr != nil || !info.Mode().IsRegular() {
 			meta.Omitted++
 			meta.Truncated = true
 			continue
 		}
 		if info.Size() > maxUntrackedFileSize || total+info.Size() > maxUntrackedTotalBytes {
-			included++
 			meta.Omitted++
 			meta.BytesOmitted += info.Size()
 			meta.Truncated = true
@@ -234,7 +270,6 @@ func getUntrackedFileDiffsContext(ctx context.Context, workdir string) (string, 
 			continue
 		}
 		total += read
-		included++
 		meta.Shown++
 		if sb.Len() > 0 {
 			sb.WriteByte('\n')
@@ -509,7 +544,18 @@ func getWorktreeCommitsContext(ctx context.Context, workdir, baseBranch string) 
 	if err != nil {
 		return nil, err
 	}
+	return parseCommitStatusOutput(ctx, workdir, output, "HEAD")
+}
 
+func getWorktreeCommitsBetweenContext(ctx context.Context, workdir, baseOID, headOID string) ([]CommitStatusInfo, error) {
+	output, err := tryGitLogRangeContext(ctx, workdir, baseOID, headOID)
+	if err != nil {
+		return nil, err
+	}
+	return parseCommitStatusOutput(ctx, workdir, output, headOID)
+}
+
+func parseCommitStatusOutput(ctx context.Context, workdir string, output []byte, headRef string) ([]CommitStatusInfo, error) {
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
 		return []CommitStatusInfo{}, nil
@@ -517,7 +563,7 @@ func getWorktreeCommitsContext(ctx context.Context, workdir, baseBranch string) 
 
 	// Get remote tracking branch and find unpushed commits in one batch call
 	remoteBranch := getRemoteTrackingBranchContext(ctx, workdir)
-	unpushed := getUnpushedCommitsContext(ctx, workdir, remoteBranch)
+	unpushed := getUnpushedCommitsToContext(ctx, workdir, remoteBranch, headRef)
 
 	var commits []CommitStatusInfo
 	for _, line := range lines {
@@ -550,7 +596,11 @@ func tryGitLog(workdir, baseRef string) ([]byte, error) {
 }
 
 func tryGitLogContext(ctx context.Context, workdir, baseRef string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", "log", baseRef+"..HEAD", "--oneline", "--format=%h|%s")
+	return tryGitLogRangeContext(ctx, workdir, baseRef, "HEAD")
+}
+
+func tryGitLogRangeContext(ctx context.Context, workdir, baseRef, headRef string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "log", baseRef+".."+headRef, "--oneline", "--format=%h|%s")
 	cmd.Dir = workdir
 	return cmd.Output()
 }
@@ -653,10 +703,14 @@ func getUnpushedCommits(workdir, remoteBranch string) map[string]bool {
 }
 
 func getUnpushedCommitsContext(ctx context.Context, workdir, remoteBranch string) map[string]bool {
+	return getUnpushedCommitsToContext(ctx, workdir, remoteBranch, "HEAD")
+}
+
+func getUnpushedCommitsToContext(ctx context.Context, workdir, remoteBranch, headRef string) map[string]bool {
 	if remoteBranch == "" || workdir == "" {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "log", remoteBranch+"..HEAD", "--format=%h")
+	cmd := exec.CommandContext(ctx, "git", "log", remoteBranch+".."+headRef, "--format=%h")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
