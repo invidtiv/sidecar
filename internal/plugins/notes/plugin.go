@@ -142,13 +142,14 @@ type Plugin struct {
 	pendingEditorSyncID   string // One-shot sync after out-of-band editor saves
 
 	// Inline tty editor state (for true inline editing)
-	inlineEditor      *tty.Model
-	inlineEditMode    bool
-	inlineEditSession string
-	inlineEditNoteID  string
-	inlineEditPath    string
-	inlineEditEditor  string
-	orphanEditSession string // Defensive re-init cleanup, executed asynchronously in Start
+	inlineEditor         *tty.Model
+	inlineEditMode       bool
+	inlineEditSession    string
+	inlineEditNoteID     string
+	inlineEditPath       string
+	inlineEditEditor     string
+	inlineEditActivation uint64 // Scopes async editor start/exit to the current project activation
+	orphanEditSession    string // Defensive re-init cleanup, executed asynchronously in Start
 
 	// Inline editor mouse drag state (for text selection forwarding)
 	inlineEditorDragging bool      // True when mouse is being dragged in editor (for text selection)
@@ -368,9 +369,15 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case InlineEditStartedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+		}
 		return p, p.handleInlineEditStarted(msg)
 
 	case InlineEditExitedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, nil
+		}
 		return p, p.handleInlineEditExited(msg)
 
 	case tea.WindowSizeMsg:
@@ -378,12 +385,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.height = msg.Height
 		// Update textarea dimensions
 		p.updateTextareaDimensions()
-		// Update inline editor dimensions if active - use ResizeAndPollImmediate
-		// to bypass debounce and trigger immediate poll for smooth resize
+		// Resize through the shared terminal lifecycle so control-backed targets
+		// invalidate their old grid and reseed before regaining authority.
 		if p.inlineEditMode && p.inlineEditor != nil {
 			width := p.calculateInlineEditorWidth()
 			height := p.calculateInlineEditorHeight()
-			if cmd := p.inlineEditor.ResizeAndPollImmediate(width, height); cmd != nil {
+			if cmd := p.inlineEditor.Resize(width, height); cmd != nil {
 				return p, cmd
 			}
 		}
@@ -1505,7 +1512,12 @@ func (p *Plugin) copyEditorContent() tea.Cmd {
 func (p *Plugin) IsFocused() bool { return p.focused }
 
 // SetFocused sets the focus state.
-func (p *Plugin) SetFocused(f bool) { p.focused = f }
+func (p *Plugin) SetFocused(f bool) {
+	p.focused = f
+	if p.inlineEditor != nil {
+		p.inlineEditor.SetFocused(f)
+	}
+}
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {

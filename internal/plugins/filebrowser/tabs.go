@@ -554,8 +554,9 @@ func (p *Plugin) clearPluginEditState() {
 	p.inlineEditFile = ""
 	p.inlineEditOrigMtime = time.Time{}
 	p.inlineEditEditor = ""
+	p.inlineEditActivation++
 	p.inlineEditorDragging = false
-	p.inlineEditor.Exit()
+	p.inlineEditor.Close()
 }
 
 // restoreEditStateFromTab restores plugin-level edit state from the active tab.

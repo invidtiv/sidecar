@@ -57,6 +57,53 @@ func TestNormalizeEditorName(t *testing.T) {
 	}
 }
 
+func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
+	logPath := installNotesFakeTmux(t)
+	root := t.TempDir()
+	p := New()
+	p.ctx = &plugin.Context{
+		WorkDir: root, ProjectRoot: root, Epoch: 7,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	p.inlineEditActivation = 12
+
+	_, cmd := p.Update(InlineEditStartedMsg{
+		SessionName: "old-note-editor", NoteID: "old", NotePath: "/tmp/old",
+		Editor: "nvim", Activation: 11, Epoch: 6,
+	})
+	if cmd == nil {
+		t.Fatal("stale editor start did not schedule orphan cleanup")
+	}
+	_ = cmd()
+	if p.inlineEditMode || p.inlineEditor.IsActive() {
+		t.Fatal("stale editor start activated the new project")
+	}
+
+	p.inlineEditMode = true
+	p.inlineEditSession = "current-note-editor"
+	p.inlineEditNoteID = "current"
+	p.inlineEditPath = "/tmp/current"
+	p.inlineEditEditor = "nvim"
+	p.inlineEditor.Enter("current-note-editor", "")
+	_, cmd = p.Update(InlineEditExitedMsg{
+		NoteID: "old", NotePath: "/tmp/old", Activation: 11, Epoch: 6,
+	})
+	if cmd != nil {
+		t.Fatal("stale editor exit scheduled work against the new project")
+	}
+	if !p.inlineEditMode || p.inlineEditNoteID != "current" {
+		t.Fatal("stale editor exit cleared the current project editor")
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t old-note-editor") {
+		t.Fatalf("stale note editor session was not cleaned up; log:\n%s", data)
+	}
+}
+
 func TestCalculateInlineEditorHeight(t *testing.T) {
 	tests := []struct {
 		name   string
