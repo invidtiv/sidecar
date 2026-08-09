@@ -126,14 +126,14 @@ func (s *ControlSubscription) Close() {
 // tmux control clients are attached to exactly one session, so pooling by pane
 // alone would silently miss notifications from Sidecar's other sessions.
 type ControlManager struct {
-	mu         sync.Mutex
-	factory    controlChannelFactory
-	coalesce   time.Duration
-	nextID     atomic.Uint64
-	subs       map[uint64]*managerControlSubscription
-	clients    map[string]*sessionControlClient
-	starting   map[string]bool
-	stopped    bool
+	mu       sync.Mutex
+	factory  controlChannelFactory
+	coalesce time.Duration
+	nextID   atomic.Uint64
+	subs     map[uint64]*managerControlSubscription
+	clients  map[string]*sessionControlClient
+	starting map[string]bool
+	stopped  bool
 }
 
 func NewControlManager() *ControlManager {
@@ -145,11 +145,11 @@ func newControlManager(factory controlChannelFactory, coalesce time.Duration) *C
 		coalesce = 0
 	}
 	return &ControlManager{
-		factory:    factory,
-		coalesce:   coalesce,
-		subs:       make(map[uint64]*managerControlSubscription),
-		clients:    make(map[string]*sessionControlClient),
-		starting:   make(map[string]bool),
+		factory:  factory,
+		coalesce: coalesce,
+		subs:     make(map[uint64]*managerControlSubscription),
+		clients:  make(map[string]*sessionControlClient),
+		starting: make(map[string]bool),
 	}
 }
 
@@ -206,6 +206,7 @@ func (m *ControlManager) Stop() {
 	for _, client := range clients {
 		client.close()
 	}
+	writeScreenCompareReport()
 }
 
 func (m *ControlManager) activate(id uint64) {
@@ -220,6 +221,7 @@ func (m *ControlManager) activate(id uint64) {
 		copy := *sub
 		client.add(copy)
 		m.mu.Unlock()
+		client.startModel(copy)
 		return
 	}
 	session := sub.request.Session
@@ -278,6 +280,9 @@ func (m *ControlManager) startClient(session string) {
 		client.add(sub)
 	}
 	m.mu.Unlock()
+	for _, sub := range active {
+		client.startModel(sub)
+	}
 }
 
 func (m *ControlManager) setVisible(id uint64, visible bool) {
@@ -397,6 +402,7 @@ func (m *ControlManager) clientFailed(client *sessionControlClient, err error) {
 
 func callFallback(callback func(error), err error) {
 	if callback != nil {
+		screenCompareStats.bump(&screenCompareStats.Fallbacks, 1)
 		callback(err)
 	}
 }
@@ -474,6 +480,24 @@ type paneCaptureState struct {
 	timer    *time.Timer
 }
 
+// paneCompareState is shadow-comparison bookkeeping for one pane. Every field
+// is owned by the ordered actor goroutine; it exists only when
+// SIDECAR_TMUX_SCREEN_COMPARE is on.
+type paneCompareState struct {
+	// metaSeen/rawSinceMeta detect the capture path's own metadata race. Unlike
+	// the seed transaction, the capture path writes its display-message and its
+	// capture-pane as two separate writes, so pane bytes can land between the
+	// two responses and the delivered cursor can describe an older moment than
+	// the delivered screen. A cursor difference measured in that window says
+	// nothing about the model, so the comparison declines to score it.
+	metaSeen     bool
+	rawSinceMeta int
+	// pendingSince is when the first output arrived that this capture has not
+	// yet delivered. It is the start of the capture path's output-to-frame
+	// latency, measured against the identical start point on the model side.
+	pendingSince time.Time
+}
+
 type sessionControlClient struct {
 	manager  *ControlManager
 	session  string
@@ -497,6 +521,22 @@ type sessionControlClient struct {
 	modelTick   chan struct{}
 	modelTimer  bool
 	discardWait bool
+	// compare is nil unless shadow comparison is enabled.
+	compare map[string]*paneCompareState
+}
+
+// comparePane returns the pane's shadow-comparison state, or nil when shadow
+// comparison is off. Actor-only.
+func (c *sessionControlClient) comparePane(pane string) *paneCompareState {
+	if c.compare == nil {
+		return nil
+	}
+	state := c.compare[pane]
+	if state == nil {
+		state = &paneCompareState{}
+		c.compare[pane] = state
+	}
+	return state
 }
 
 // discardProbeInterval is how often a client with at least one live pane model
@@ -519,6 +559,9 @@ func newSessionControlClient(manager *ControlManager, session string, channel co
 		quit:       make(chan struct{}),
 		models:     make(map[uint64]*paneModelFeed),
 		modelTick:  make(chan struct{}, 1),
+	}
+	if ScreenCompareEnabled() {
+		client.compare = make(map[string]*paneCompareState)
 	}
 	go client.run()
 	// Feature-detect flow control: older tmux versions return an error, which is
@@ -568,6 +611,14 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 			event.Callback(event.Response)
 		}
 	case controlEventOutput:
+		if state := c.comparePane(event.Pane); state != nil {
+			if state.metaSeen {
+				state.rawSinceMeta++
+			}
+			if state.pendingSince.IsZero() {
+				state.pendingSince = time.Now()
+			}
+		}
 		c.feedModels(event)
 		c.markDirty(event.Pane)
 	case controlEventLayout:
@@ -618,10 +669,28 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 	c.mu.Unlock()
 	c.configureSize(sub.request.Width, sub.request.Height)
 	c.scheduleIfEligible(sub.request.Pane)
-	if sub.request.OnModelFrame != nil {
-		joined := sub
-		c.post(func() { c.startModelFeed(joined) })
+}
+
+// wantsModelFeed reports whether this subscription should run a byte-fed pane
+// model. A consumer that asked for frames always does; shadow comparison turns
+// it on for every subscription without any consumer opting in, which is what
+// keeps the workspace plugin — and therefore every user-visible code path —
+// completely untouched by slice 2.
+func wantsModelFeed(request ControlRequest) bool {
+	return request.OnModelFrame != nil || ScreenCompareEnabled()
+}
+
+// startModel posts the model-feed start. It is deliberately separate from add
+// so the caller can release the ControlManager mutex first: post can block on a
+// saturated action queue, and the actor takes that same manager mutex when tmux
+// dies, which is a lock-order cycle (slice-1 evidence §9, item 8). Posting after
+// the unlock removes the cycle. startModelFeed revalidates the subscription,
+// which covers the small window this opens.
+func (c *sessionControlClient) startModel(sub managerControlSubscription) {
+	if !wantsModelFeed(sub.request) {
+		return
 	}
+	c.post(func() { c.startModelFeed(sub) })
 }
 
 func (c *sessionControlClient) remove(id uint64) {
@@ -763,6 +832,13 @@ func (c *sessionControlClient) startCapture(pane string) {
 		finished.Do(func() { c.captureFinished(pane, scrollback, response) })
 	}
 	if err := c.channel.Send(metadataCommand, func(response controlResponse) {
+		// On the ordered actor: opening the window in which pane bytes would
+		// make this capture's metadata older than its screen.
+		if state := c.comparePane(pane); state != nil {
+			state.metaSeen = true
+			state.rawSinceMeta = 0
+			screenCompareStats.bump(&screenCompareStats.MetadataQueries, 1)
+		}
 		responseMu.Lock()
 		metadata = response
 		responseMu.Unlock()
@@ -797,11 +873,12 @@ func (c *sessionControlClient) captureFinished(pane string, scrollback int, resp
 		c.manager.clientFailed(c, response.Err)
 		return
 	}
-	snapshot, err := parseControlSnapshot(c.session, pane, scrollback, response.Lines)
+	snapshot, extras, err := parseControlSnapshotLayout(c.session, pane, scrollback, response.Lines, ScreenCompareEnabled())
 	if err != nil {
 		c.manager.clientFailed(c, err)
 		return
 	}
+	c.shadowCompare(pane, snapshot, extras)
 
 	c.mu.Lock()
 	state := c.ensurePaneLocked(pane)
@@ -897,31 +974,77 @@ func (c *sessionControlClient) close() {
 	})
 }
 
+// captureMetadataFields is the ordinary capture metadata. It is unchanged from
+// the pre-shadow behavior and is what every default (compare-off) run uses.
+const captureMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}," +
+	"#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}"
+
+// captureCompareMetadataFields adds the three fields the shadow comparison
+// needs — alternate-screen state, the SGR mouse encoding flag, and the client's
+// discarded-byte counter — to the same single display-message. Adding them to
+// the existing query rather than issuing a fourth command is deliberate: the
+// decision gate counts commands per output burst, and a diagnostic that
+// inflated that count would corrupt the measurement it exists to produce.
+//
+// pane_current_command and pane_title stay last so the SplitN limit still
+// preserves commas inside a pane title.
+const captureCompareMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}," +
+	"#{history_size},#{mouse_any_flag},#{alternate_on},#{mouse_sgr_flag},#{client_discarded}," +
+	"#{pane_current_command},#{pane_title}"
+
 func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture string, err error) {
+	return buildControlCaptureCommandsLayout(pane, scrollback, ScreenCompareEnabled())
+}
+
+func buildControlCaptureCommandsLayout(pane string, scrollback int, extended bool) (metadata, capture string, err error) {
 	if !controlPanePattern.MatchString(pane) {
 		return "", "", fmt.Errorf("tmux control: invalid pane %q", pane)
 	}
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
 	}
-	metadata = "display-message -p -t " + pane +
-		" '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}'"
+	fields := captureMetadataFields
+	if extended {
+		fields = captureCompareMetadataFields
+	}
+	metadata = "display-message -p -t " + pane + " '" + fields + "'"
 	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, capture, nil
 }
 
+// captureExtras is the shadow-comparison-only half of the capture metadata.
+// Valid is false whenever the ordinary layout was used, in which case the
+// comparison has no tmux-side authority for these fields and does not assert
+// them.
+type captureExtras struct {
+	Valid     bool
+	AltScreen bool
+	MouseSGR  bool
+	Discarded int64
+}
+
 func parseControlSnapshot(session, pane string, scrollback int, lines []string) (ControlSnapshot, error) {
+	snapshot, _, err := parseControlSnapshotLayout(session, pane, scrollback, lines, false)
+	return snapshot, err
+}
+
+func parseControlSnapshotLayout(session, pane string, scrollback int, lines []string, extended bool) (ControlSnapshot, captureExtras, error) {
+	var extras captureExtras
 	if len(lines) == 0 {
-		return ControlSnapshot{}, errors.New("tmux control capture: missing cursor metadata")
+		return ControlSnapshot{}, extras, errors.New("tmux control capture: missing cursor metadata")
 	}
 	// SplitN preserves commas in pane titles. pane_current_command is a tmux
 	// command name rather than arbitrary terminal content and cannot contain a
 	// comma in ordinary tmux output.
-	parts := strings.SplitN(strings.TrimSpace(lines[0]), ",", 9)
+	limit := 9
+	if extended {
+		limit = 12
+	}
+	parts := strings.SplitN(strings.TrimSpace(lines[0]), ",", limit)
 	// Fields past the sixth are optional so a metadata line produced before they
 	// were added still parses.
 	if len(parts) < 6 {
-		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
+		return ControlSnapshot{}, extras, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
 	}
 	col, errCol := strconv.Atoi(parts[0])
 	row, errRow := strconv.Atoi(parts[1])
@@ -930,19 +1053,35 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 	historySize, errHistory := strconv.Atoi(parts[5])
 	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil ||
 		errHistory != nil || historySize < 0 {
-		return ControlSnapshot{}, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
+		return ControlSnapshot{}, extras, fmt.Errorf("tmux control capture: invalid cursor metadata %q", lines[0])
 	}
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
 	}
 	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
+	commandIndex, titleIndex := 7, 8
+	if extended {
+		commandIndex, titleIndex = 10, 11
+		if len(parts) >= 10 {
+			extras.Valid = true
+			extras.AltScreen = parts[7] != "" && parts[7] != "0"
+			extras.MouseSGR = parts[8] != "" && parts[8] != "0"
+			// client_discarded is empty outside a control client; zero, not a
+			// parse failure.
+			if parts[9] != "" {
+				if value, err := strconv.ParseInt(parts[9], 10, 64); err == nil && value >= 0 {
+					extras.Discarded = value
+				}
+			}
+		}
+	}
 	currentCommand := ""
 	paneTitle := ""
-	if len(parts) >= 8 {
-		currentCommand = parts[7]
+	if len(parts) > commandIndex {
+		currentCommand = parts[commandIndex]
 	}
-	if len(parts) >= 9 {
-		paneTitle = parts[8]
+	if len(parts) > titleIndex {
+		paneTitle = parts[titleIndex]
 	}
 	return ControlSnapshot{
 		Session:        session,
@@ -959,5 +1098,5 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 		MouseReporting: mouseReporting,
 		PaneTitle:      paneTitle,
 		CurrentCommand: currentCommand,
-	}, nil
+	}, extras, nil
 }

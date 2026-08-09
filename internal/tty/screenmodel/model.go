@@ -120,6 +120,7 @@ type PaneModel interface {
 // Single-actor: one goroutine at a time. See the package doc.
 type Model struct {
 	emu           *vt.Emulator
+	replies       *replyDrain
 	width, height int
 
 	inUse  atomic.Bool
@@ -166,6 +167,13 @@ func (m *Model) reset(width, height int) {
 	if height < 1 {
 		height = 1
 	}
+	// Release the previous emulator and its reply drain before replacing it, or
+	// every reseed would leak an emulator, a 4 MB parser buffer, and a
+	// goroutine blocked on a pipe.
+	if m.replies != nil {
+		m.replies.shutdown()
+		m.replies = nil
+	}
 	m.width, m.height = width, height
 	m.altScreen = false
 	m.cursorVisible = true
@@ -186,6 +194,7 @@ func (m *Model) reset(width, height int) {
 		DisableMode: func(mode ansi.Mode) { m.setMode(mode, false) },
 	})
 	m.emu = emu
+	m.replies = newReplyDrain(emu)
 }
 
 func cursorStyle(s vt.CursorStyle) CursorStyle {
@@ -365,9 +374,13 @@ func (m *Model) frame() Frame {
 	screen := m.emu.Render()
 	if m.altScreen {
 		// The alternate screen has no scrollback, and tmux freezes
-		// history_size while an application owns it.
+		// history_size while an application owns it — at the value it had when
+		// the application switched, which includes everything that scrolled off
+		// the main screen since the seed. Reporting the seed's value alone made
+		// the model claim a history of 1 where tmux reported 202 for the same
+		// pane (slice 2 shadow run).
 		f.Output = screen
-		f.HistorySize = m.seedHistorySize
+		f.HistorySize = m.seedHistorySize + m.scrolledOff()
 	} else {
 		history := m.historyLines()
 		f.HistorySize = m.seedHistorySize + m.scrolledOff()
@@ -381,6 +394,29 @@ func (m *Model) frame() Frame {
 
 	f.Cells = m.grid()
 	return f
+}
+
+// approxCellBytes is a fixed per-cell accounting weight for [Model.Footprint].
+// It is an estimate, not a measurement: the emulator's cell holds a style, a
+// link, and a small string, and the exact layout is a dependency detail. The
+// number exists so retained memory can be tracked as a *bounded, comparable*
+// series across a soak, which is what the decision gate asks for; it is not a
+// substitute for a heap profile.
+const approxCellBytes = 64
+
+// Footprint estimates the memory the model retains: the live grid plus the
+// scrollback it has accumulated. Reported by the shadow-mode diagnostics.
+func (m *Model) Footprint() int64 {
+	var out int64
+	_ = m.do(func() error {
+		lines := int64(m.height)
+		if sb := m.emu.Scrollback(); sb != nil {
+			lines += int64(sb.Len())
+		}
+		out = lines * int64(m.width) * approxCellBytes
+		return nil
+	})
+	return out
 }
 
 // scrolledOff is the number of lines the model has pushed into scrollback
@@ -517,7 +553,11 @@ func (m *Model) Close() {
 	// Marked closed first, so a panic inside the emulator's own teardown still
 	// leaves the model refusing further use.
 	m.closed = true
-	if m.emu != nil {
-		_ = m.emu.Close()
+	if m.replies != nil {
+		// The drain goroutine owns Emulator.Close: it is the only goroutine that
+		// touches the emulator's I/O side, so closing from here would race its
+		// in-flight Read.
+		m.replies.shutdown()
+		m.replies = nil
 	}
 }

@@ -166,6 +166,11 @@ type paneModelFeed struct {
 	discarded        int64
 	discardSeen      bool
 	discardCheckedAt time.Time
+
+	// pendingSince is when the first byte arrived that has not yet reached a
+	// published frame. It is the model path's output-to-frame latency clock,
+	// started at the same event as the capture path's (paneCompareState).
+	pendingSince time.Time
 }
 
 func (f *paneModelFeed) close() {
@@ -274,6 +279,13 @@ func (c *sessionControlClient) startModelFeed(sub managerControlSubscription) {
 	if _, exists := c.models[sub.id]; exists {
 		return
 	}
+	// The start is posted after the manager lock is released (see
+	// ControlManager.activate), so the subscription can already have been
+	// removed by the time this runs. Starting a feed for a dead subscription
+	// would leak an emulator until the client closed.
+	if !c.has(sub.id, sub.generation) {
+		return
+	}
 	scrollback := sub.request.Scrollback
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
@@ -287,6 +299,7 @@ func (c *sessionControlClient) startModelFeed(sub managerControlSubscription) {
 		state:      modelIdle,
 	}
 	c.models[sub.id] = feed
+	screenCompareStats.bump(&screenCompareStats.ModelsOpened, 1)
 	c.armDiscardProbe()
 	c.beginSeed(feed, ResyncFirstSeed)
 }
@@ -298,6 +311,7 @@ func (c *sessionControlClient) stopModelFeed(id uint64) {
 	}
 	delete(c.models, id)
 	feed.close()
+	screenCompareStats.bump(&screenCompareStats.ModelsClosed, 1)
 }
 
 func (c *sessionControlClient) failAllModels(reason ResyncReason, err error) {
@@ -369,6 +383,7 @@ func (c *sessionControlClient) beginSeed(feed *paneModelFeed, reason ResyncReaso
 	onCapture := func(response controlResponse) {
 		c.seedCaptureResponse(id, generation, reason, response)
 	}
+	screenCompareStats.bump(&screenCompareStats.SeedCaptures, 1)
 	if err := c.channel.SendPair(metadata, capture, onMetadata, onCapture); err != nil {
 		c.faultFeed(feed, ResyncModelFault, fmt.Errorf("tmux control seed write: %w", err))
 	}
@@ -454,6 +469,8 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 	feed.state = modelLive
 	feed.seeds++
 	feed.frameDirty = true
+	feed.pendingSince = time.Time{}
+	screenCompareStats.recordSeed(reason)
 	if reason != ResyncFirstSeed || feed.seeds > 1 {
 		c.invalidate(feed, reason, nil, false)
 	}
@@ -492,9 +509,19 @@ func (c *sessionControlClient) feedModels(event controlEvent) {
 			if len(decoded) == 0 {
 				continue
 			}
+			started := time.Now()
 			if err := feed.model.Write(decoded); err != nil {
 				c.faultFeed(feed, ResyncModelFault, err)
 				continue
+			}
+			if ScreenCompareEnabled() {
+				screenCompareStats.recordRaw(len(decoded))
+				screenCompareStats.mu.Lock()
+				screenCompareStats.ModelWriteUS.add(time.Since(started))
+				screenCompareStats.mu.Unlock()
+				if feed.pendingSince.IsZero() {
+					feed.pendingSince = started
+				}
 			}
 			feed.frameDirty = true
 			c.armModelTick()
@@ -523,10 +550,23 @@ func (c *sessionControlClient) publishModelFrames() {
 		if feed.state != modelLive || !feed.frameDirty {
 			continue
 		}
+		rendered := time.Now()
 		frame, err := feed.model.Frame()
 		if err != nil {
 			c.faultFeed(feed, ResyncModelFault, err)
 			continue
+		}
+		if ScreenCompareEnabled() {
+			now := time.Now()
+			screenCompareStats.mu.Lock()
+			screenCompareStats.ModelFrames++
+			screenCompareStats.ModelRenderUS.add(now.Sub(rendered))
+			if !feed.pendingSince.IsZero() {
+				screenCompareStats.OutputToFrameUS.add(now.Sub(feed.pendingSince))
+			}
+			screenCompareStats.mu.Unlock()
+			feed.pendingSince = time.Time{}
+			screenCompareStats.recordModelBytes(feed.model.Footprint())
 		}
 		feed.frameDirty = false
 		payload := ModelFrame{
@@ -554,6 +594,7 @@ func (c *sessionControlClient) publishModelFrames() {
 // faultFeed invalidates exactly one pane model. It never touches the control
 // reader, the capture path, or any other subscription.
 func (c *sessionControlClient) faultFeed(feed *paneModelFeed, reason ResyncReason, err error) {
+	screenCompareStats.bump(&screenCompareStats.Faults, 1)
 	delete(c.models, feed.id)
 	c.invalidate(feed, reason, err, true)
 	feed.close()
@@ -593,6 +634,7 @@ func (c *sessionControlClient) armDiscardProbe() {
 			if len(c.models) == 0 {
 				return
 			}
+			screenCompareStats.bump(&screenCompareStats.DiscardProbes, 1)
 			_ = c.channel.Send("display-message -p '#{client_discarded}'", func(response controlResponse) {
 				c.discardResponse(response)
 			})
@@ -622,6 +664,9 @@ func (c *sessionControlClient) discardResponse(response controlResponse) {
 		if !feed.discardSeen || value <= feed.discarded {
 			continue
 		}
+		screenCompareStats.mu.Lock()
+		screenCompareStats.DiscardedBytes += value - feed.discarded
+		screenCompareStats.mu.Unlock()
 		feed.discarded = value
 		c.invalidate(feed, ResyncDiscarded, nil, false)
 		c.beginSeed(feed, ResyncDiscarded)

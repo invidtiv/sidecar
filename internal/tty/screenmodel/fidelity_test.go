@@ -93,7 +93,7 @@ func TestCorpusMatchesTmuxOracle(t *testing.T) {
 			}
 
 			var all []Mismatch
-			oracle := decodeCapture(f.Capture, f.PaneWidth, f.PaneHeight)
+			oracle := DecodeCapture(f.Capture, f.PaneWidth, f.PaneHeight)
 			all = append(all, CompareGrids(oracle, got.grid, f.PaneWidth, f.PaneHeight)...)
 			if !entry.SkipCursorAssert {
 				all = append(all, CompareCursor(
@@ -250,7 +250,7 @@ func TestSeedFromCaptureReproducesOracle(t *testing.T) {
 			if gerr != nil {
 				t.Fatalf("frame: %v", gerr)
 			}
-			oracle := decodeCapture(f.Capture, f.PaneWidth, f.PaneHeight)
+			oracle := DecodeCapture(f.Capture, f.PaneWidth, f.PaneHeight)
 			var all []Mismatch
 			all = append(all, CompareGrids(oracle, got.Cells, f.PaneWidth, f.PaneHeight)...)
 			all = append(all, CompareCursor(
@@ -301,7 +301,7 @@ func TestFrameOutputRendersTheFrame(t *testing.T) {
 			}
 			visible := strings.Join(lines[len(lines)-f.Height:], "\n")
 
-			if ms := CompareGrids(decodeCapture(visible, f.Width, f.Height), f.Cells, f.Width, f.Height); len(ms) > 0 {
+			if ms := CompareGrids(DecodeCapture(visible, f.Width, f.Height), f.Cells, f.Width, f.Height); len(ms) > 0 {
 				t.Fatalf("Output does not spell out the frame's own cells\n%s", FormatMismatches(ms, 30))
 			}
 

@@ -94,6 +94,7 @@ var planCategories = map[string]string{
 	"osc8-links":                      "",
 	"unicode-graphemes":               "",
 	"modes-cursor-paste-sync-reset":   "",
+	"device-queries":                  "",
 	"resize":                          "",
 	"control-transport": "slice 1: octal payload escapes, long notifications, " +
 		"pause/continue and dead control connections are properties of the " +
@@ -448,6 +449,27 @@ var corpus = []corpusEntry{
 			write(csi("?1000h") + csi("?1002h") + csi("?1006h")),
 			write(csi("?2004h") + "bracketed on\r\n"),
 			write(csi("?2026h") + "sync" + csi("?2026l") + " done\r\n"),
+		},
+	},
+	{
+		// Device queries. Added in slice 2 after the shadow run found that a
+		// single one of these deadlocks the emulator (and, through it, the whole
+		// control-client actor) unless the adapter drains the reply pipe. These
+		// are exactly the sequences nvim emits before its first paint. On the
+		// screen they must be invisible: tmux answers them into the pane's input,
+		// so neither side may print anything for them.
+		Name:       "device_status_queries",
+		Categories: []string{"device-queries"},
+		Width:      24, Height: 6,
+		Steps: []corpusStep{
+			write("before\r\n"),
+			write(csi("5n")),                     // DSR: operating status
+			write(csi("6n")),                     // DSR: cursor position report
+			write(csi("c")),                      // primary device attributes
+			write(csi(">c")),                     // secondary device attributes
+			write(csi("?69$p") + csi("?2026$p")), // DECRQM mode reports
+			write("\x1b]11;?\x07"),               // OSC 11 background colour query
+			write("after\r\n"),
 		},
 	},
 	{

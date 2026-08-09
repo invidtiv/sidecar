@@ -10,12 +10,17 @@ import (
 // This file is the oracle side of the fidelity harness: it turns tmux's
 // `capture-pane -p -e` rendering back into canonical cells.
 //
-// It is deliberately test-only and deliberately hand-written. Decoding the
-// capture with the emulator under test would make the comparison circular —
-// an SGR bug in x/vt would cancel itself out on both sides. This decoder
-// shares no code with x/vt: it does its own escape scanning, its own SGR
-// interpretation, and it uses rivo/uniseg for grapheme segmentation and width
-// rather than the clipperhouse tables x/ansi (and therefore x/vt) uses.
+// It is deliberately hand-written. Decoding the capture with the emulator under
+// test would make the comparison circular — an SGR bug in x/vt would cancel
+// itself out on both sides. This decoder shares no code with x/vt: it does its
+// own escape scanning, its own SGR interpretation, and it uses rivo/uniseg for
+// grapheme segmentation and width rather than the clipperhouse tables x/ansi
+// (and therefore x/vt) uses.
+//
+// It was test-only in slice 0. Slice 2's shadow comparison needs exactly the
+// same independent oracle at runtime, so it moved into the package proper
+// unchanged rather than being reimplemented — one decoder, one set of
+// assumptions, exercised by both the corpus and the live comparison.
 //
 // Known dependency: neither side can be a true oracle for *column placement*
 // of wide characters, because capture-pane emits the character once with no
@@ -23,8 +28,25 @@ import (
 // to lay cells out. tmux's own column arithmetic is observed independently
 // through the cursor_x metadata assertion instead.
 
-// decodeCapture converts capture-pane -e output into a w x h canonical grid.
-func decodeCapture(text string, w, h int) Grid {
+// DecodeCapture converts capture-pane -e output into a w x h canonical grid.
+func DecodeCapture(text string, w, h int) Grid {
+	g, _ := DecodeCaptureExtent(text, w, h)
+	return g
+}
+
+// DecodeCaptureExtent decodes a capture and also reports, per row, the column
+// its content ended at.
+//
+// The extent matters because `capture-pane -e` is lossy at the end of a row.
+// tmux trims trailing blank cells but keeps whatever SGR change it had already
+// emitted, so a row that ends "…ESC[48;2;20;22;27m" is indistinguishable
+// between "the rest of this row is blank in that background" (what nvim, fzf
+// and every full-screen application with a painted background actually mean)
+// and "that SGR belongs to the next row's first cell" (what the underline-style
+// fixture actually means — both were observed against tmux 3.6b). Neither
+// interpretation can be assumed, so the comparator treats the styling of cells
+// at or past the extent as unknowable rather than scoring a guess.
+func DecodeCaptureExtent(text string, w, h int) (Grid, []int) {
 	text = strings.TrimSuffix(text, "\n")
 	var lines []string
 	if text != "" {
@@ -38,17 +60,18 @@ func decodeCapture(text string, w, h int) Grid {
 	// the underline colour for a row without repeating the underline attribute
 	// the previous row turned on.
 	var p pen
+	extents := make([]int, h)
 	for y := range h {
 		row := make([]Cell, w)
 		for x := range row {
 			row[x] = BlankCell
 		}
 		if y < len(lines) {
-			decodeCaptureLine(lines[y], row, &p)
+			extents[y] = decodeCaptureLine(lines[y], row, &p)
 		}
 		g[y] = row
 	}
-	return g
+	return g, extents
 }
 
 // tabWidth is tmux's default tab stop interval. capture-pane emits a literal
@@ -85,7 +108,9 @@ func (p pen) cell(grapheme string, width int) Cell {
 	}
 }
 
-func decodeCaptureLine(line string, row []Cell, p *pen) {
+// decodeCaptureLine decodes one captured row and returns the column the row's
+// content ended at.
+func decodeCaptureLine(line string, row []Cell, p *pen) int {
 	col := 0
 	i := 0
 	for i < len(line) {
@@ -122,6 +147,7 @@ func decodeCaptureLine(line string, row []Cell, p *pen) {
 		}
 		col += width
 	}
+	return col
 }
 
 // decodeEscape consumes one escape sequence and returns its byte length.
