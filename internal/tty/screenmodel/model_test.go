@@ -311,6 +311,42 @@ func TestLoadedHistorySnapshotRemainsImmutable(t *testing.T) {
 	}
 }
 
+func TestLoadedHistorySnapshotOutputIsSafeWhileHistoryAppends(t *testing.T) {
+	m := New(8, 2)
+	defer m.Close()
+	if err := m.Seed(Seed{Output: "a\nb", Width: 8, Height: 2, CursorRow: 1, HistoryLimit: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write([]byte("\r\nc")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := snapshot.LoadedHistory.Output()
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 1000 {
+				if got := snapshot.LoadedHistory.Output(); got != want {
+					t.Errorf("published history changed during append: got %q want %q", got, want)
+					return
+				}
+			}
+		}()
+	}
+	for range 1000 {
+		if err := m.Write([]byte("\r\nx")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wg.Wait()
+}
+
 func TestAltScreenSeedRestoresSavedMainGrid(t *testing.T) {
 	m := New(10, 3)
 	defer m.Close()

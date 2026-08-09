@@ -2,6 +2,7 @@ package screenmodel
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestOnlyThisPackageImportsVT(t *testing.T) {
 
 	const format = `{{.ImportPath}}{{range .Imports}} {{.}}{{end}}` +
 		`{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}`
-	cmd := exec.Command("go", "list", "-e", "-f", format, "./...")
+	cmd := moduleGoCommand("list", "-e", "-f", format, "./...")
 	cmd.Dir = root
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -68,7 +69,7 @@ func TestGuardSeesThisPackagesOwnImport(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go tool not available")
 	}
-	cmd := exec.Command("go", "list", "-f", `{{range .Imports}}{{.}}
+	cmd := moduleGoCommand("list", "-f", `{{range .Imports}}{{.}}
 {{end}}`, ".")
 	// The test's working directory is this package's directory.
 	out, err := cmd.Output()
@@ -80,9 +81,36 @@ func TestGuardSeesThisPackagesOwnImport(t *testing.T) {
 	}
 }
 
+// moduleGoCommand keeps the import boundary tied to Sidecar's committed
+// module graph. A developer-local go.work may include sibling checkouts that
+// are absent or moving and must not make this guard fail before it can inspect
+// imports.
+func moduleGoCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("go", args...)
+	cmd.Env = make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GOWORK=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "GOWORK=off")
+	return cmd
+}
+
+func TestModuleGoCommandIgnoresLocalWorkspace(t *testing.T) {
+	t.Setenv("GOWORK", "/path/that/does/not/exist/go.work")
+	out, err := moduleGoCommand("env", "GOWORK").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "off" {
+		t.Fatalf("GOWORK = %q, want off", got)
+	}
+}
+
 func moduleRoot(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
+	out, err := moduleGoCommand("list", "-m", "-f", "{{.Dir}}").Output()
 	if err != nil {
 		t.Fatalf("locate module root: %v", err)
 	}

@@ -128,11 +128,11 @@ type Frame struct {
 }
 
 // HistorySnapshot is an immutable view of the loaded main-screen history at
-// one frame. The model may append to the shared backing buffer, but the view's
-// byte bounds never change; compaction allocates a new backing buffer so older
-// frames remain valid.
+// one frame. The snapshot owns its slice header while the model may append to
+// the shared backing array. Its byte bounds never change; compaction allocates
+// a new backing buffer so older frames remain valid.
 type HistorySnapshot struct {
-	data       *historyBuffer
+	data       []byte
 	start, end int
 	rows       int
 }
@@ -146,14 +146,14 @@ func (h HistorySnapshot) Rows() int { return h.rows }
 // when a compatibility consumer explicitly asks for the combined legacy form;
 // ordinary frame publication and the future incremental viewport do not.
 func (h HistorySnapshot) Output() string {
-	if h.data == nil || h.start >= h.end {
+	if h.start >= h.end {
 		return ""
 	}
 	end := h.end
-	if h.data.bytes[end-1] == '\n' {
+	if h.data[end-1] == '\n' {
 		end--
 	}
-	return string(h.data.bytes[h.start:end])
+	return string(h.data[h.start:end])
 }
 
 // CombinedOutput returns loaded history followed by the live grid, matching
@@ -638,7 +638,7 @@ func (m *Model) loadedHistorySnapshot() HistorySnapshot {
 		return HistorySnapshot{}
 	}
 	return HistorySnapshot{
-		data: m.historyData, start: m.historySpans[0][0],
+		data: m.historyData.bytes, start: m.historySpans[0][0],
 		end: m.historySpans[len(m.historySpans)-1][1], rows: len(m.historySpans),
 	}
 }
