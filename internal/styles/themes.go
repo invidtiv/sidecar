@@ -106,6 +106,15 @@ type ColorPalette struct {
 	// Third-party theme names
 	SyntaxTheme   string `json:"syntaxTheme"`   // Chroma theme name
 	MarkdownTheme string `json:"markdownTheme"` // Glamour theme name
+
+	// Overview board colours
+	ProjectHues []string          `json:"projectHues"` // ordered ramp, cycled by project
+	AgentColors map[string]string `json:"agentColors"` // provider name (lowercase) -> hex
+	LaneWorking string            `json:"laneWorking"`
+	LaneBlocked string            `json:"laneBlocked"`
+	LaneDone    string            `json:"laneDone"`
+	LaneIdle    string            `json:"laneIdle"`
+	LanePaused  string            `json:"lanePaused"`
 }
 
 // Theme represents a complete theme configuration
@@ -191,6 +200,22 @@ var (
 			// Third-party themes
 			SyntaxTheme:   "monokai",
 			MarkdownTheme: "dark",
+
+			// Overview board colours
+			ProjectHues: []string{"#A78BFA", "#22D3EE", "#FB923C", "#F472B6", "#60A5FA", "#A3E635"},
+			AgentColors: map[string]string{
+				"claude":      "#D97757",
+				"codex":       "#7DD3FC",
+				"grok":        "#E2E8F0",
+				"antigravity": "#5EEAD4",
+				"gemini":      "#60A5FA",
+				"cursor":      "#C4B5FD",
+			},
+			LaneWorking: "#34D399",
+			LaneBlocked: "#FBBF24",
+			LaneDone:    "#7AA2F7",
+			LaneIdle:    "#9CA3AF",
+			LanePaused:  "#6B7280",
 		},
 	}
 
@@ -676,6 +701,16 @@ func applyGenericOverrides(palette *ColorPalette, overrides map[string]interface
 			applyArrayOverride(palette, key, colors)
 		case []string:
 			applyArrayOverride(palette, key, v)
+		case map[string]interface{}:
+			colors := make(map[string]string, len(v))
+			for k, item := range v {
+				if s, ok := item.(string); ok {
+					colors[k] = s
+				}
+			}
+			applyMapOverride(palette, key, colors)
+		case map[string]string:
+			applyMapOverride(palette, key, v)
 		case float64:
 			applyFloatOverride(palette, key, v)
 		case int:
@@ -790,6 +825,16 @@ func applySingleOverride(palette *ColorPalette, key, value string) {
 		palette.ScrollbarTrack = value
 	case "scrollbarThumb":
 		palette.ScrollbarThumb = value
+	case "laneWorking":
+		palette.LaneWorking = value
+	case "laneBlocked":
+		palette.LaneBlocked = value
+	case "laneDone":
+		palette.LaneDone = value
+	case "laneIdle":
+		palette.LaneIdle = value
+	case "lanePaused":
+		palette.LanePaused = value
 	}
 }
 
@@ -810,6 +855,25 @@ func applyArrayOverride(palette *ColorPalette, key string, colors []string) {
 		palette.GradientBorderNormal = colors
 	case "tabColors":
 		palette.TabColors = colors
+	case "projectHues":
+		palette.ProjectHues = colors
+	}
+}
+
+// applyMapOverride applies a map override (for AgentColors, the first
+// map-valued palette field). Invalid entries are dropped individually rather
+// than rejecting the whole map, since each key is an independent provider.
+func applyMapOverride(palette *ColorPalette, key string, colors map[string]string) {
+	switch key {
+	case "agentColors":
+		if palette.AgentColors == nil {
+			palette.AgentColors = make(map[string]string, len(colors))
+		}
+		for k, v := range colors {
+			if IsValidHexColor(v) {
+				palette.AgentColors[k] = v
+			}
+		}
 	}
 }
 
@@ -933,8 +997,13 @@ func ApplyThemeColors(theme Theme) {
 	CurrentTabStyle = c.TabStyle
 	CurrentTabColors = parseTabColors(c.TabColors)
 
+	projectHues, agentColors, laneColors := overviewColorState(c)
+
 	themeMu.Lock()
 	currentThemeValue = theme
+	currentProjectHues = projectHues
+	currentAgentColors = agentColors
+	currentLaneColors = laneColors
 	themeMu.Unlock()
 
 	// Rebuild all styles that depend on these colors

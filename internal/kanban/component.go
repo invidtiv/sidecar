@@ -169,39 +169,44 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 	c.ensureSelectedVisible(layout.MaxCards)
 
 	borderStyle := lipgloss.NewStyle().Foreground(styles.BorderNormal)
-	horizSep, vertSep := borderStyle.Render("─"), borderStyle.Render("│")
+	vertSep := borderStyle.Render("│")
 	innerWidth := options.Width - 4
+	widths := layout.ColumnWidths
 	header := styles.Title.Render(options.Header)
 	right := styles.Muted.Render(options.HeaderRight)
 	headerGap := max(1, innerWidth-ansi.StringWidth(options.Header)-ansi.StringWidth(options.HeaderRight))
-	lines := []string{header + strings.Repeat(" ", headerGap) + right, strings.Repeat(horizSep, innerWidth)}
+	lines := []string{header + strings.Repeat(" ", headerGap) + right, borderStyle.Render(bracketRule(widths, "┬"))}
 
 	regions := make([]HitRegion, 0)
 	columnHeaders := make([]string, 0, len(c.board.Lanes))
 	columnX := 2
 	for column, lane := range c.board.Lanes {
-		style := lipgloss.NewStyle().Bold(true).Width(layout.ColumnWidth)
-		if lane.HeaderColor != nil {
-			style = style.Foreground(lane.HeaderColor)
-		}
-		if column == c.selection.Column {
-			style = style.Underline(true)
-		}
-		columnHeaders = append(columnHeaders, style.Render(fmt.Sprintf("%s (%d)", lane.Label, len(lane.Cards))))
-		regions = append(regions, HitRegion{Kind: RegionColumn, Column: column, Row: -1, X: columnX, Y: 3, W: layout.ColumnWidth, H: 1})
-		columnX += layout.ColumnWidth + 1
+		width := widths[column]
+		columnHeaders = append(columnHeaders, renderLaneHeader(lane, width, column == c.selection.Column))
+		regions = append(regions, HitRegion{Kind: RegionColumn, Column: column, Row: -1, X: columnX, Y: 3, W: width, H: 1})
+		columnX += width + 1
 	}
-	lines = append(lines, strings.Join(columnHeaders, vertSep), strings.Repeat(horizSep, innerWidth))
+	lines = append(lines, strings.Join(columnHeaders, vertSep), borderStyle.Render(bracketRule(widths, "┼")))
 
 	visibleByLane := make([][]Card, len(c.board.Lanes))
+	overflowByLane := make([]int, len(c.board.Lanes))
 	maxRows := 0
 	for column, lane := range c.board.Lanes {
 		start := c.scroll[lane.ID]
 		end := min(len(lane.Cards), start+layout.MaxCards)
-		if start < end {
-			visibleByLane[column] = lane.Cards[start:end]
+		visible := lane.Cards[start:end]
+		if hidden := len(lane.Cards) - end; hidden > 0 {
+			if len(visible) > 0 {
+				visible = visible[:len(visible)-1]
+				hidden++
+			}
+			overflowByLane[column] = hidden
 		}
-		rows := len(visibleByLane[column])
+		visibleByLane[column] = visible
+		rows := len(visible)
+		if overflowByLane[column] > 0 {
+			rows++
+		}
 		if rows == 0 && lane.State != CellReady {
 			rows = 1
 		}
@@ -211,19 +216,21 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 	for visibleRow := 0; visibleRow < maxRows; visibleRow++ {
 		columnX = 2
 		for column, lane := range c.board.Lanes {
+			width := widths[column]
 			if visibleRow < len(visibleByLane[column]) {
 				row := c.scroll[lane.ID] + visibleRow
 				card := visibleByLane[column][visibleRow]
-				regions = append(regions, HitRegion{Kind: RegionCard, Column: column, Row: row, CardID: card.ID, X: columnX, Y: 5 + visibleRow*layout.CardHeight, W: layout.ColumnWidth - 1, H: layout.CardHeight})
+				regions = append(regions, HitRegion{Kind: RegionCard, Column: column, Row: row, CardID: card.ID, X: columnX, Y: 5 + visibleRow*layout.CardHeight, W: width, H: layout.CardHeight})
 			}
-			columnX += layout.ColumnWidth + 1
+			columnX += width + 1
 		}
 		for line := 0; line < layout.CardHeight; line++ {
 			cells := make([]string, 0, len(c.board.Lanes))
 			for column, lane := range c.board.Lanes {
-				width := layout.ColumnWidth - 1
+				width := widths[column]
 				cell := ""
-				if visibleRow < len(visibleByLane[column]) {
+				switch {
+				case visibleRow < len(visibleByLane[column]):
 					card := visibleByLane[column][visibleRow]
 					selected := column == c.selection.Column && c.scroll[lane.ID]+visibleRow == c.selection.Row
 					if options.RenderCard != nil {
@@ -231,12 +238,12 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 					} else {
 						cell = defaultCardLine(card, line, width, selected)
 					}
-				} else if visibleRow == 0 && line == 0 && lane.State != CellReady {
-					message := lane.Message
-					if message == "" {
-						message = string(lane.State)
+				case visibleRow == len(visibleByLane[column]) && overflowByLane[column] > 0:
+					if line == 0 {
+						cell = styles.Muted.Render(fmt.Sprintf(" ▾ %d more", overflowByLane[column]))
 					}
-					cell = styles.Muted.Render(" " + message)
+				case visibleRow == 0 && line == 0 && lane.State != CellReady:
+					cell = styles.Muted.Render(" " + emptyCellMessage(lane))
 				}
 				cells = append(cells, fit(cell, width))
 			}
@@ -246,7 +253,7 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 	for rendered := maxRows * layout.CardHeight; rendered < layout.ContentRows; rendered++ {
 		cells := make([]string, len(c.board.Lanes))
 		for i := range cells {
-			cells[i] = strings.Repeat(" ", layout.ColumnWidth-1)
+			cells[i] = strings.Repeat(" ", widths[i])
 		}
 		lines = append(lines, strings.Join(cells, vertSep))
 	}
@@ -276,6 +283,12 @@ func (c *Component) clampScroll() {
 }
 
 func defaultCardLine(card Card, line, width int, selected bool) string {
+	if len(card.Lines) > 0 {
+		if line < 0 || line >= len(card.Lines) {
+			return blankCardCell(width, selected)
+		}
+		return renderSpans(card.Lines[line].Spans, width, selected)
+	}
 	values := []string{card.Title, card.Subtitle, card.Detail, card.Meta}
 	if line < 0 || line >= len(values) {
 		return strings.Repeat(" ", width)
@@ -288,6 +301,98 @@ func defaultCardLine(card Card, line, width int, selected bool) string {
 		return styles.Muted.Width(width).Render(fit(value, width))
 	}
 	return fit(value, width)
+}
+
+// blankCardCell fills a card row past the end of card.Lines, still carrying
+// the selection background so the highlight stays a solid block.
+func blankCardCell(width int, selected bool) string {
+	pad := strings.Repeat(" ", width)
+	if !selected {
+		return pad
+	}
+	return lipgloss.NewStyle().Background(styles.ListItemSelected.GetBackground()).Render(pad)
+}
+
+// renderSpans lays spans left to right against a running width budget,
+// truncating with ansi so multi-byte glyphs never split. Selection paints the
+// background across the full cell; each span keeps its own foreground.
+func renderSpans(spans []Span, width int, selected bool) string {
+	var b strings.Builder
+	remaining := width
+	selectionBg := styles.ListItemSelected.GetBackground()
+	for _, span := range spans {
+		if remaining <= 0 {
+			break
+		}
+		text := span.Text
+		if ansi.StringWidth(text) > remaining {
+			text = ansi.Truncate(text, remaining, "")
+		}
+		w := ansi.StringWidth(text)
+		if w == 0 {
+			continue
+		}
+		style := lipgloss.NewStyle()
+		if span.Foreground != nil {
+			style = style.Foreground(span.Foreground)
+		}
+		if selected {
+			style = style.Background(selectionBg)
+		} else if span.Background != nil {
+			style = style.Background(span.Background)
+		}
+		if span.Bold {
+			style = style.Bold(true)
+		}
+		b.WriteString(style.Render(text))
+		remaining -= w
+	}
+	if remaining > 0 {
+		pad := strings.Repeat(" ", remaining)
+		if selected {
+			pad = lipgloss.NewStyle().Background(selectionBg).Render(pad)
+		}
+		b.WriteString(pad)
+	}
+	return b.String()
+}
+
+// renderLaneHeader renders "LABEL count", the label in the lane's header
+// colour and the count muted, truncated to width like any other cell.
+func renderLaneHeader(lane Lane, width int, selected bool) string {
+	labelStyle := lipgloss.NewStyle().Bold(true)
+	if lane.HeaderColor != nil {
+		labelStyle = labelStyle.Foreground(lane.HeaderColor)
+	}
+	if selected {
+		labelStyle = labelStyle.Underline(true)
+	}
+	rendered := labelStyle.Render(lane.Label) + " " + styles.Muted.Render(fmt.Sprintf("%d", len(lane.Cards)))
+	return fit(rendered, width)
+}
+
+// bracketRule builds a per-column run of ─ joined by junction, landing the
+// junction glyphs on the same column indices as the │ separators above and
+// below it.
+func bracketRule(widths []int, junction string) string {
+	parts := make([]string, len(widths))
+	for i, w := range widths {
+		parts[i] = strings.Repeat("─", w)
+	}
+	return strings.Join(parts, junction)
+}
+
+// emptyCellMessage is the text shown in a lane's first content row when it
+// has no cards to render. CellEmpty with no explicit message is a dim dot
+// rather than a word.
+func emptyCellMessage(lane Lane) string {
+	if lane.Message != "" {
+		return lane.Message
+	}
+	if lane.State == CellEmpty {
+		return "·"
+	}
+	return string(lane.State)
 }
 
 func fit(value string, width int) string {

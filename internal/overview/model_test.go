@@ -48,7 +48,7 @@ func TestOverviewIncrementalPartialErrorAndCompactStates(t *testing.T) {
 	m.Update(projectMsg{Generation: 7, Result: workspaceinventory.ProjectResult{ProjectKey: workspaceinventory.CanonicalPath("/tmp/one"), ProjectName: "one", ProjectRoot: "/tmp/one", Workspaces: []workspaceinventory.Workspace{workspace}}})
 	m.Update(projectMsg{Generation: 7, Result: workspaceinventory.ProjectResult{ProjectKey: workspaceinventory.CanonicalPath("/tmp/two"), ProjectName: "two", ProjectRoot: "/tmp/two", Err: errors.New("missing repo")}})
 	view := m.View(150, 24)
-	if !strings.Contains(view, "one / agent") || !strings.Contains(view, "project unavailable") {
+	if stripped := ansi.Strip(view); !strings.Contains(stripped, "one ⑂ agent") || !strings.Contains(stripped, "project unavailable") {
 		t.Fatalf("partial/error view = %q", view)
 	}
 	compact := m.View(60, 12)

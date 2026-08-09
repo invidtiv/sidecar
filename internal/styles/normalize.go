@@ -94,6 +94,63 @@ func NormalizePalette(c ColorPalette) ColorPalette {
 		c.OnWarning = onColor(c.OnWarning, c.Warning)
 	}
 
+	c = normalizeOverviewColors(c, chrome, surface)
+
+	return c
+}
+
+// normalizeOverviewColors derives the Agent Overview board's project hues,
+// agent chip colours, and lane colours when a theme leaves them empty, then
+// runs every one of them through the same contrast guarantee as the text
+// roles above.
+func normalizeOverviewColors(c ColorPalette, chrome []string, surface string) ColorPalette {
+	if len(c.ProjectHues) == 0 {
+		// A tab ramp is only worth borrowing if it can actually tell projects
+		// apart. Nord ships a single tab colour, which would hash every project
+		// to the same spine and defeat the encoding entirely.
+		if len(c.TabColors) >= minProjectHues {
+			c.ProjectHues = append([]string(nil), c.TabColors...)
+		} else {
+			c.ProjectHues = append([]string(nil), defaultProjectHues...)
+		}
+	}
+	for i, hue := range c.ProjectHues {
+		c.ProjectHues[i] = EnsureContrastOn(hue, chrome, targetBodyText)
+	}
+
+	agentColors := make(map[string]string, len(defaultAgentColors))
+	for provider, hex := range defaultAgentColors {
+		agentColors[provider] = hex
+	}
+	for provider, hex := range c.AgentColors {
+		agentColors[provider] = hex
+	}
+	for provider, hex := range agentColors {
+		agentColors[provider] = EnsureContrastOn(hex, []string{surface}, targetBodyText)
+	}
+	c.AgentColors = agentColors
+
+	if c.LaneWorking == "" {
+		c.LaneWorking = c.Success
+	}
+	if c.LaneBlocked == "" {
+		c.LaneBlocked = c.Warning
+	}
+	if c.LaneDone == "" {
+		c.LaneDone = c.Info
+	}
+	if c.LaneIdle == "" {
+		c.LaneIdle = c.TextSecondary
+	}
+	if c.LanePaused == "" {
+		c.LanePaused = c.TextMuted
+	}
+	c.LaneWorking = EnsureContrastOn(c.LaneWorking, chrome, targetBodyText)
+	c.LaneBlocked = EnsureContrastOn(c.LaneBlocked, chrome, targetBodyText)
+	c.LaneDone = EnsureContrastOn(c.LaneDone, chrome, targetBodyText)
+	c.LaneIdle = EnsureContrastOn(c.LaneIdle, chrome, targetBodyText)
+	c.LanePaused = EnsureContrastOn(c.LanePaused, chrome, targetBodyText)
+
 	return c
 }
 
