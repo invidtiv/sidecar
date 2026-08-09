@@ -1,8 +1,12 @@
 package tty
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
@@ -23,42 +27,73 @@ func IsPasteInput(msg tea.KeyPressMsg) bool {
 	return strings.Contains(msg.Text, "\n") || len(runes) > 10
 }
 
-// SendPasteToTmux pastes multi-line text via tmux buffer.
-// Uses load-buffer + paste-buffer which works regardless of app paste mode state.
+// pasteBufferSeq disambiguates two pastes started inside the same nanosecond.
+var pasteBufferSeq atomic.Uint64
+
+// newPasteBufferName returns a buffer name no other paste can be using.
+//
+// tmux buffers are server-global: every client and every Sidecar pane attached
+// to the same server shares them, so the unnamed buffer is a race waiting to
+// happen. The pid scopes the name to this Sidecar process (a tmux server and
+// its clients are always on one host, so pids are unambiguous), the timestamp
+// scopes it within the process's lifetime across restarts and pid reuse, and
+// the counter separates pastes issued in the same nanosecond. Only characters
+// tmux accepts unquoted in a buffer name are used.
+func newPasteBufferName() string {
+	return fmt.Sprintf("sidecar-paste-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), pasteBufferSeq.Add(1))
+}
+
+// SendPasteToTmux pastes text into a pane through a uniquely named tmux buffer.
+//
+// tmux, not Sidecar, decides whether the paste is bracketed: `paste-buffer -p`
+// emits the bracketed-paste control codes only when the pane's application has
+// actually requested that mode. That state is not exposed as a tmux format and
+// cannot be reconstructed from a capture, so any bracketing Sidecar did itself
+// would be a guess. `-r` stops tmux rewriting line endings, `-d` drops the
+// buffer once it has been pasted, and `-t` names the pane explicitly.
 func SendPasteToTmux(sessionName, text string) error {
-	// Load text into tmux default buffer via stdin
-	loadCmd := exec.Command("tmux", "load-buffer", "-")
+	return sendPasteToTmuxSocket("", sessionName, text)
+}
+
+// sendPasteToTmuxSocket is SendPasteToTmux against an explicit tmux socket.
+// An empty socket means the ambient server; tests pass a throwaway socket so
+// they never touch it.
+func sendPasteToTmuxSocket(socket, sessionName, text string) error {
+	buffer := newPasteBufferName()
+	tmux := func(args ...string) *exec.Cmd {
+		if socket != "" {
+			args = append([]string{"-S", socket}, args...)
+		}
+		return exec.Command("tmux", args...) //nolint:gosec
+	}
+
+	loadCmd := tmux("load-buffer", "-b", buffer, "-")
 	loadCmd.Stdin = strings.NewReader(text)
-	if err := loadCmd.Run(); err != nil {
+	if output, err := loadCmd.CombinedOutput(); err != nil {
+		if len(output) > 0 {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		}
 		return err
 	}
 
-	// Paste buffer into target pane
-	pasteCmd := exec.Command("tmux", "paste-buffer", "-t", sessionName)
-	return pasteCmd.Run()
+	output, err := tmux("paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", sessionName).CombinedOutput()
+	if err != nil {
+		// -d only deletes on the success path. A pane that died between the two
+		// commands would otherwise leave the named buffer on the user's server
+		// forever, once per failed paste.
+		_ = tmux("delete-buffer", "-b", buffer).Run()
+		if len(output) > 0 {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		}
+		return err
+	}
+	return nil
 }
 
-// SendBracketedPasteToTmux sends text wrapped in bracketed paste sequences.
-// Used when the target app has enabled bracketed paste mode.
-func SendBracketedPasteToTmux(sessionName, text string) error {
-	// Send bracketed paste start sequence
-	if err := SendLiteralToTmux(sessionName, BracketedPasteStart); err != nil {
-		return err
-	}
-
-	// Send the actual text
-	if err := SendLiteralToTmux(sessionName, text); err != nil {
-		return err
-	}
-
-	// Send bracketed paste end sequence
-	return SendLiteralToTmux(sessionName, BracketedPasteEnd)
-}
-
-// PasteClipboardToTmuxCmd returns a tea.Cmd that pastes clipboard content to a tmux session.
-// The bracketed parameter determines whether to use bracketed paste mode.
+// PasteClipboardToTmuxCmd returns a tea.Cmd that pastes clipboard content to a
+// tmux session. Whether the paste is bracketed is tmux's call, not the caller's.
 // Returns a PasteResultMsg with the result.
-func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string, bracketed bool) tea.Cmd {
+func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string) tea.Cmd {
 	return func() tea.Msg {
 		text, err := clipboard.ReadAll()
 		if err != nil {
@@ -68,12 +103,7 @@ func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string, bracketed b
 			return PasteResultMsg{Scope: scope, Empty: true}
 		}
 
-		if bracketed {
-			err = SendBracketedPasteToTmux(sessionName, text)
-		} else {
-			err = SendPasteToTmux(sessionName, text)
-		}
-		if err != nil {
+		if err = SendPasteToTmux(sessionName, text); err != nil {
 			return PasteResultMsg{Scope: scope, Err: err, SessionDead: IsSessionDeadError(err)}
 		}
 
@@ -83,9 +113,9 @@ func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string, bracketed b
 
 // SendPasteInputCmd sends paste text to tmux asynchronously.
 // Used for multi-character terminal input (not clipboard paste which is already async).
-func SendPasteInputCmd(scope MessageScope, sessionName, text string, bracketed bool) tea.Cmd {
+func SendPasteInputCmd(scope MessageScope, sessionName, text string) tea.Cmd {
 	return func() tea.Msg {
-		err := SendPasteInput(sessionName, text, bracketed)
+		err := SendPasteInput(sessionName, text)
 		if err != nil && IsSessionDeadError(err) {
 			return SessionDeadMsg{Scope: scope}
 		}
@@ -93,11 +123,8 @@ func SendPasteInputCmd(scope MessageScope, sessionName, text string, bracketed b
 	}
 }
 
-// SendPasteInput forwards paste text using the target applications current
-// bracketed-paste mode.
-func SendPasteInput(sessionName, text string, bracketed bool) error {
-	if bracketed {
-		return SendBracketedPasteToTmux(sessionName, text)
-	}
+// SendPasteInput forwards paste text to the pane, letting tmux apply the
+// target application's current bracketed-paste mode.
+func SendPasteInput(sessionName, text string) error {
 	return SendPasteToTmux(sessionName, text)
 }

@@ -487,7 +487,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Paste key
 	if msg.String() == m.Config.PasteKey {
 		m.State.LastKeyTime = time.Now()
-		return PasteClipboardToTmuxCmd(m.Scope(), m.State.TargetSession, m.State.BracketedPasteEnabled)
+		return PasteClipboardToTmuxCmd(m.Scope(), m.State.TargetSession)
 	}
 
 	// Update last key time
@@ -498,26 +498,19 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Check for paste input
 	if IsPasteInput(msg) {
 		text := msg.Text
-		bracketed := m.State.BracketedPasteEnabled
 		scope := m.Scope()
 		if pendingEscape {
 			cmds = append(cmds, func() tea.Msg {
 				if err := SendKeyToTmux(sessionName, "Escape"); err != nil && IsSessionDeadError(err) {
 					return SessionDeadMsg{Scope: scope}
 				}
-				var err error
-				if bracketed {
-					err = SendBracketedPasteToTmux(sessionName, text)
-				} else {
-					err = SendPasteToTmux(sessionName, text)
-				}
-				if err != nil && IsSessionDeadError(err) {
+				if err := SendPasteToTmux(sessionName, text); err != nil && IsSessionDeadError(err) {
 					return SessionDeadMsg{Scope: scope}
 				}
 				return nil
 			})
 		} else {
-			cmds = append(cmds, SendPasteInputCmd(scope, sessionName, text, bracketed))
+			cmds = append(cmds, SendPasteInputCmd(scope, sessionName, text))
 		}
 		cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		return tea.Batch(cmds...)
@@ -548,14 +541,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // handlePaste forwards bracketed-paste content (delivered as a tea.PasteMsg in
-// v2) to the tmux session, honoring the target app's bracketed paste mode.
+// v2) to the tmux session; tmux applies the target app's bracketed paste mode.
 func (m *Model) handlePaste(content string) tea.Cmd {
 	if !m.IsActive() || content == "" {
 		return nil
 	}
 	m.State.LastKeyTime = time.Now()
 	cmds := []tea.Cmd{
-		SendPasteInputCmd(m.Scope(), m.State.TargetSession, content, m.State.BracketedPasteEnabled),
+		SendPasteInputCmd(m.Scope(), m.State.TargetSession, content),
 		m.schedulePoll(KeystrokeDebounce),
 	}
 	return tea.Batch(cmds...)
