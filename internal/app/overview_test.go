@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -66,6 +68,26 @@ func TestCrossProjectOverviewFlagOffPreservesSwitcherAndDoesNoWork(t *testing.T)
 	m.initProjectSwitcher()
 	if len(m.projectSwitcherFiltered) != 1 || m.projectSwitcherFiltered[0].Kind != destinationProject {
 		t.Fatalf("flag-off destinations = %#v", m.projectSwitcherFiltered)
+	}
+}
+
+func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
+	cfg := config.Default()
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	m.overviewActive = true
+	m.intro.Active = false
+	m.width, m.height, m.ready = 72, 30, true
+	panes := m.overview.Start(nil)()
+	_ = m.overview.Update(panes) // finish the empty refresh; do not execute its poll timer
+
+	view := m.viewContent()
+	if got := lipgloss.Height(view); got != 30 {
+		t.Fatalf("app height = %d, want 30\n%s", got, view)
+	}
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[0], "Sidecar") || !strings.Contains(lines[len(lines)-1], "Open") {
+		t.Fatalf("compact viewport hid app chrome: first=%q last=%q", lines[0], lines[len(lines)-1])
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -59,6 +62,127 @@ func TestOverviewIncrementalPartialErrorAndCompactStates(t *testing.T) {
 	if got, ok := cmd().(NavigateMsg); !ok || got.Workspace.ID != workspace.ID {
 		t.Fatalf("activation = %#v", cmd())
 	}
+}
+
+func TestOverviewCompactViewportConstrainsHeightAndHeaderWidth(t *testing.T) {
+	m := compactOverviewModel(34)
+	view := m.View(72, 27)
+	if got := lipgloss.Height(view); got != 27 {
+		t.Fatalf("72x27 compact height = %d, want 27\n%s", got, view)
+	}
+	if got := len(m.mouse.HitMap.Regions()); got != 26 {
+		t.Fatalf("72x27 visible card rows = %d, want 26", got)
+	}
+	view = m.View(20, 7)
+	if got := lipgloss.Height(view); got != 7 {
+		t.Fatalf("compact height = %d, want 7\n%s", got, view)
+	}
+	for row, line := range strings.Split(view, "\n") {
+		if got := ansi.StringWidth(line); got != 20 {
+			t.Fatalf("row %d width = %d, want 20: %q", row, got, line)
+		}
+	}
+	if lines := strings.Split(view, "\n"); !strings.Contains(lines[0], "Agent Overview") || strings.Contains(lines[1], "projects") {
+		t.Fatalf("compact header wrapped: %q", view)
+	}
+}
+
+func TestOverviewCompactViewportFollowsSelectionTopMiddleBottomAndReorder(t *testing.T) {
+	m := compactOverviewModel(20)
+	assertCompactWindow(t, m, 0, 6, "card-00", "card-04")
+	assertCompactWindow(t, m, 10, 6, "card-06", "card-10")
+	assertCompactWindow(t, m, 19, 6, "card-15", "card-19")
+
+	selected, _ := m.board.Board().CardAt(m.board.Selection())
+	current := m.board.Board()
+	reordered := kanban.Board{Lanes: append([]kanban.Lane(nil), current.Lanes...)}
+	reordered.Lanes[0].Cards = append([]kanban.Card{{ID: "new", Title: "new"}}, reordered.Lanes[0].Cards...)
+	for i, card := range reordered.Lanes[0].Cards {
+		if card.ID == selected.ID {
+			reordered.Lanes[0].Cards[0], reordered.Lanes[0].Cards[i] = reordered.Lanes[0].Cards[i], reordered.Lanes[0].Cards[0]
+			break
+		}
+	}
+	m.board.SetBoard(reordered)
+	m.View(72, 6)
+	visible := compactRegionIDs(m)
+	if len(visible) == 0 || visible[0] != selected.ID {
+		t.Fatalf("selected card lost after reorder: selected=%s visible=%v", selected.ID, visible)
+	}
+}
+
+func TestOverviewCompactViewportRegistersOnlyVisibleLocalHitRows(t *testing.T) {
+	m := compactOverviewModel(20)
+	m.board.Select(kanban.Selection{Column: 0, Row: 10})
+	m.View(72, 6)
+	regions := m.mouse.HitMap.Regions()
+	if len(regions) != 5 {
+		t.Fatalf("compact regions = %d, want 5: %#v", len(regions), regions)
+	}
+	for i, region := range regions {
+		hit, ok := region.Data.(kanban.HitRegion)
+		if !ok || region.Rect.Y != i+1 || region.Rect.H != 1 || hit.Y != i+1 || hit.Row != i+6 {
+			t.Fatalf("region %d has wrong local coordinates: %#v", i, region)
+		}
+	}
+}
+
+func TestOverviewCompactViewportRetainsKeyboardAndMouseActivation(t *testing.T) {
+	m := compactOverviewModel(12)
+	m.board.Select(kanban.Selection{Column: 0, Row: 11})
+	m.View(72, 5)
+	if cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || cmd().(NavigateMsg).Workspace.ID != "card-11" {
+		t.Fatal("compact keyboard activation did not preserve selected card")
+	}
+	regions := m.mouse.HitMap.Regions()
+	region := regions[0]
+	click := tea.MouseClickMsg{X: region.Rect.X, Y: region.Rect.Y, Button: tea.MouseLeft}
+	if cmd := m.Update(click); cmd != nil {
+		t.Fatal("compact single click unexpectedly activated")
+	}
+	cmd := m.Update(click)
+	if cmd == nil || cmd().(NavigateMsg).Workspace.ID != region.Data.(kanban.HitRegion).CardID {
+		t.Fatal("compact double click did not activate visible card")
+	}
+}
+
+func compactOverviewModel(count int) *Model {
+	m := New(workspaceinventory.Collector{})
+	cards := make([]kanban.Card, count)
+	for i := range cards {
+		id := fmt.Sprintf("card-%02d", i)
+		cards[i] = kanban.Card{ID: id, Title: "Project / " + id, Subtitle: "codex · idle"}
+		m.cards[id] = workspaceinventory.Workspace{ID: id, Path: "/tmp/" + id}
+	}
+	m.board.SetBoard(kanban.Board{Lanes: []kanban.Lane{
+		{ID: "idle", Label: "Idle", Cards: cards},
+		{ID: "working", Label: "Working"},
+		{ID: "blocked", Label: "Needs attention"},
+		{ID: "done", Label: "Done"},
+		{ID: "paused", Label: "Paused"},
+	}})
+	return m
+}
+
+func assertCompactWindow(t *testing.T, m *Model, row, height int, first, last string) {
+	t.Helper()
+	m.board.Select(kanban.Selection{Column: 0, Row: row})
+	m.View(72, height)
+	ids := compactRegionIDs(m)
+	if len(ids) == 0 || ids[0] != first || ids[len(ids)-1] != last {
+		t.Fatalf("selection row %d window = %v, want %s...%s", row, ids, first, last)
+	}
+}
+
+func compactRegionIDs(m *Model) []string {
+	regions := m.mouse.HitMap.Regions()
+	ids := make([]string, 0, len(regions))
+	for _, region := range regions {
+		if hit, ok := region.Data.(kanban.HitRegion); ok && hit.Kind == kanban.RegionCard {
+			ids = append(ids, hit.CardID)
+		}
+	}
+	return ids
 }
 
 func TestOverviewRejectsExitedGeneration(t *testing.T) {

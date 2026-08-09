@@ -114,6 +114,7 @@ type Model struct {
 	pollScheduled      bool
 	board              kanban.Component
 	cards              map[string]workspaceinventory.Workspace
+	compactScroll      int
 	mouse              *mouse.Handler
 	width              int
 	height             int
@@ -675,24 +676,66 @@ func (m *Model) renderCard(card kanban.Card, line, width int, selected, _ bool) 
 }
 
 func (m *Model) renderCompact(width, height int) string {
-	var lines []string
-	lines = append(lines, styles.Title.Render("Agent Overview")+"  "+styles.Muted.Render(m.summary()))
-	selected, _ := m.board.Board().CardAt(m.board.Selection())
-	for column, lane := range m.board.Board().Lanes {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	type compactCard struct {
+		column, row int
+		lane        string
+		card        kanban.Card
+	}
+	board := m.board.Board()
+	items := make([]compactCard, 0)
+	selectedIndex := -1
+	selection := m.board.Selection()
+	for column, lane := range board.Lanes {
 		for row, card := range lane.Cards {
-			line := fmt.Sprintf(" %-15s %s  %s", lane.Label, card.Title, card.Subtitle)
-			style := lipgloss.NewStyle()
-			if card.ID == selected.ID {
-				style = styles.ListItemSelected
+			if column == selection.Column && row == selection.Row {
+				selectedIndex = len(items)
 			}
-			lines = append(lines, style.Render(ansi.Truncate(line, max(1, width-2), "")))
-			m.mouse.HitMap.AddRect("overview-card", 0, len(lines)-1, width, 1, kanban.HitRegion{Kind: kanban.RegionCard, Column: column, Row: row, CardID: card.ID, X: 0, Y: len(lines) - 1, W: width, H: 1})
+			items = append(items, compactCard{column: column, row: row, lane: lane.Label, card: card})
 		}
 	}
-	if len(lines) == 1 {
-		lines = append(lines, styles.Muted.Render(" No agent-backed workspaces found"))
+	visibleRows := max(0, height-1)
+	if selectedIndex >= 0 && visibleRows > 0 {
+		if selectedIndex < m.compactScroll {
+			m.compactScroll = selectedIndex
+		} else if selectedIndex >= m.compactScroll+visibleRows {
+			m.compactScroll = selectedIndex - visibleRows + 1
+		}
 	}
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
+	maxScroll := max(0, len(items)-visibleRows)
+	m.compactScroll = min(max(0, m.compactScroll), maxScroll)
+
+	header := styles.Title.Render("Agent Overview") + "  " + styles.Muted.Render(m.summary())
+	lines := []string{fitCompactLine(header, width)}
+	end := min(len(items), m.compactScroll+visibleRows)
+	for index := m.compactScroll; index < end; index++ {
+		item := items[index]
+		line := fmt.Sprintf(" %-15s %s  %s", item.lane, item.card.Title, item.card.Subtitle)
+		line = fitCompactLine(line, width)
+		if index == selectedIndex {
+			line = styles.ListItemSelected.Render(line)
+		}
+		lines = append(lines, line)
+		y := len(lines) - 1
+		m.mouse.HitMap.AddRect("overview-card", 0, y, width, 1, kanban.HitRegion{Kind: kanban.RegionCard, Column: item.column, Row: item.row, CardID: item.card.ID, X: 0, Y: y, W: width, H: 1})
+	}
+	if len(items) == 0 && len(lines) < height {
+		lines = append(lines, fitCompactLine(styles.Muted.Render(" No agent-backed workspaces found"), width))
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	return strings.Join(lines[:height], "\n")
+}
+
+func fitCompactLine(line string, width int) string {
+	line = ansi.Truncate(line, width, "")
+	if gap := width - ansi.StringWidth(line); gap > 0 {
+		line += strings.Repeat(" ", gap)
+	}
+	return line
 }
 
 func (m *Model) Commands() []struct{ Key, Name string } {
