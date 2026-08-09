@@ -320,3 +320,112 @@ func TestHistoryIsComparedAgainstTheCaptureWindow(t *testing.T) {
 			screenmodel.FormatMismatches(res.Mismatches, 10))
 	}
 }
+
+// classOf runs one history comparison and returns the class the classifier
+// chose. The two history classes below are the ones an independent review found
+// acting as catch-alls, so each is asserted to require positive evidence of the
+// mechanism it names.
+func classOf(t *testing.T, frame screenmodel.Frame, tmuxHistory int) string {
+	t.Helper()
+	res := compareCaptureWithModel(screenCompareInput{
+		CaptureOutput: frame.Output, Width: frame.Width, Height: frame.Height,
+		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol, CursorVisible: frame.CursorVisible,
+		HistorySize: tmuxHistory, AltScreen: frame.AltScreen,
+		MouseAny: frame.Mouse.Any(), MouseSGR: frame.Mouse.SGR,
+		CursorTrustworthy: true,
+	}, frame)
+	for i, m := range res.Mismatches {
+		if m.Kind == "history" && m.Field == "size" {
+			return res.Classes[i]
+		}
+	}
+	t.Fatalf("no history/size mismatch was produced (mismatches: %v)", res.Mismatches)
+	return ""
+}
+
+func TestHistoryClassesRequireEvidenceOfTheirMechanism(t *testing.T) {
+	// No RIS, not at the scrollback cap: a zero model history against a
+	// non-zero tmux history explains nothing and must stay unexplained.
+	frame := buildModelFrame(t, 20, 4, "hello")
+	if frame.HardResets != 0 || frame.ScrollbackAtCap {
+		t.Fatalf("precondition: frame = HardResets %d, atCap %v", frame.HardResets, frame.ScrollbackAtCap)
+	}
+	if got := classOf(t, frame, 7); got != gapClassUnexplained {
+		t.Errorf("without a RIS or a pinned scrollback the class must be %q, got %q",
+			gapClassUnexplained, got)
+	}
+
+	// With a real RIS in the byte stream the GAP-8 attribution is earned.
+	withRIS := buildModelFrame(t, 20, 4, "hello\x1bc")
+	if withRIS.HardResets != 1 {
+		t.Fatalf("the model did not observe the RIS: HardResets = %d", withRIS.HardResets)
+	}
+	if got := classOf(t, withRIS, 7); got != gapClassRISHistory {
+		t.Errorf("after a RIS the class must be %q, got %q", gapClassRISHistory, got)
+	}
+}
+
+// A large reported history is not the drift defect. The defect is the model's
+// scrolled-off delta being pinned at the emulator's cap, and the class must
+// require exactly that rather than the number merely being big.
+func TestHistoryDriftClassRequiresAPinnedScrollback(t *testing.T) {
+	model := screenmodel.New(20, 4)
+	t.Cleanup(model.Close)
+	if err := model.Seed(screenmodel.Seed{
+		Output: "seeded", Width: 20, Height: 4,
+		HistorySize: screenmodel.DefaultScrollback + 2000, CursorVisible: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := model.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.HistorySize < screenmodel.DefaultScrollback {
+		t.Fatalf("precondition: HistorySize = %d", frame.HistorySize)
+	}
+	if frame.ScrollbackAtCap {
+		t.Fatal("precondition: a freshly seeded model has an empty scrollback")
+	}
+	if got := classOf(t, frame, frame.HistorySize+5); got != gapClassUnexplained {
+		t.Errorf("a big history with an unpinned scrollback must be %q, got %q",
+			gapClassUnexplained, got)
+	}
+}
+
+func TestRISIsCountedAcrossAWriteBoundary(t *testing.T) {
+	model := screenmodel.New(20, 4)
+	t.Cleanup(model.Close)
+	if err := model.Write([]byte("abc\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write([]byte("c")); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := model.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.HardResets != 1 {
+		t.Errorf("a RIS split across a write boundary was missed: HardResets = %d", frame.HardResets)
+	}
+}
+
+// A comparison whose capture describes no surface must not be scored as a clean
+// comparison. It previously was, which would have inflated the fidelity result
+// with comparisons that never happened.
+func TestDegenerateGeometryIsNotACleanComparison(t *testing.T) {
+	res := compareCaptureWithModel(screenCompareInput{Width: 0, Height: 0}, screenmodel.Frame{})
+	if !res.Invalid {
+		t.Fatal("a zero-sized capture must produce an invalid comparison")
+	}
+	stats := &ScreenCompareStats{}
+	stats.recordComparison(res, true, false, 0)
+	snap := stats.Snapshot()
+	if snap.ComparisonsClean != 0 {
+		t.Errorf("a degenerate comparison was scored clean: %+v", snap)
+	}
+	if snap.ComparisonsSkipped != 1 {
+		t.Errorf("comparisons_skipped = %d, want 1", snap.ComparisonsSkipped)
+	}
+}

@@ -1,6 +1,7 @@
 package screenmodel
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -102,6 +103,17 @@ type Frame struct {
 	// only — tmux, not this model, is the authority for paste correctness.
 	CursorStyle    CursorStyle
 	BracketedPaste bool
+
+	// HardResets is the number of RIS (ESC c) sequences the model has seen
+	// since the last seed. It exists so a diagnostic cannot attribute a
+	// difference to the RIS defect (slice-0 GAP-8) without positive evidence
+	// that a RIS actually happened.
+	HardResets int
+	// ScrollbackAtCap reports that the emulator's retained scrollback has
+	// reached [DefaultScrollback], which is the exact precondition of the
+	// absolute-history-drift defect. Without it, an absolute history
+	// difference has some other cause.
+	ScrollbackAtCap bool
 }
 
 // PaneModel is the behavior contract the workspace will eventually depend on.
@@ -142,6 +154,12 @@ type Model struct {
 	seedCaptureBase int
 	seedHistorySize int
 	baseScrollback  int
+
+	// hardResets counts RIS sequences observed in the byte stream since the
+	// last seed; pendingESC carries a trailing ESC across a Write boundary.
+	// See scanHardResets.
+	hardResets int
+	pendingESC bool
 }
 
 var _ PaneModel = (*Model)(nil)
@@ -181,6 +199,8 @@ func (m *Model) reset(width, height int) {
 	m.mouse = MouseState{}
 	m.bracketedPaste = false
 	m.baseScrollback = 0
+	m.hardResets = 0
+	m.pendingESC = false
 
 	emu := vt.NewEmulator(width, height)
 	emu.SetScrollbackSize(DefaultScrollback)
@@ -327,11 +347,46 @@ func (m *Model) Write(p []byte) error {
 		if len(p) == 0 {
 			return nil
 		}
+		m.scanHardResets(p)
 		if _, err := m.emu.Write(p); err != nil {
 			return fmt.Errorf("%w: write: %w", ErrModelFault, err)
 		}
 		return nil
 	})
+}
+
+// scanHardResets counts RIS (ESC c) sequences in a write, carrying a trailing
+// ESC across the write boundary.
+//
+// It is a byte scan, not a parse: a RIS is exactly two bytes and cannot legally
+// appear inside a string payload, but a hostile OSC could still contain the
+// pair. That asymmetry is deliberate. The count is only ever used to *withhold*
+// an amnesty — a mismatch is attributed to the RIS defect only when a RIS was
+// actually seen — so a miscount can make a result look worse, never better.
+func (m *Model) scanHardResets(p []byte) {
+	i := 0
+	if m.pendingESC {
+		m.pendingESC = false
+		if p[0] == 'c' {
+			m.hardResets++
+			i = 1
+		}
+	}
+	for i < len(p) {
+		j := bytes.IndexByte(p[i:], 0x1b)
+		if j < 0 {
+			return
+		}
+		i += j + 1
+		if i >= len(p) {
+			m.pendingESC = true
+			return
+		}
+		if p[i] == 'c' {
+			m.hardResets++
+			i++
+		}
+	}
 }
 
 // Resize resizes the model's grid. Callers resize tmux first and pass the
@@ -359,14 +414,16 @@ func (m *Model) Frame() (Frame, error) {
 
 func (m *Model) frame() Frame {
 	f := Frame{
-		Width:          m.width,
-		Height:         m.height,
-		CursorVisible:  m.cursorVisible,
-		AltScreen:      m.altScreen,
-		Mouse:          m.mouse,
-		CursorStyle:    m.cursorStyle,
-		BracketedPaste: m.bracketedPaste,
-		CaptureBase:    m.seedCaptureBase,
+		Width:           m.width,
+		Height:          m.height,
+		CursorVisible:   m.cursorVisible,
+		AltScreen:       m.altScreen,
+		Mouse:           m.mouse,
+		CursorStyle:     m.cursorStyle,
+		BracketedPaste:  m.bracketedPaste,
+		CaptureBase:     m.seedCaptureBase,
+		HardResets:      m.hardResets,
+		ScrollbackAtCap: m.emu.ScrollbackLen() >= DefaultScrollback,
 	}
 	pos := m.emu.CursorPosition()
 	f.CursorCol, f.CursorRow = pos.X, pos.Y

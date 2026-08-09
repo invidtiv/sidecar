@@ -559,7 +559,6 @@ func TestSeedTransactionHalvesAreNotInterleaved(t *testing.T) {
 	h.tmux.stopWriter()
 }
 
-
 func lastNumber(values []int) int {
 	if len(values) == 0 {
 		return -1

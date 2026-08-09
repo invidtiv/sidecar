@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,7 +55,12 @@ set -g mouse off
 func startCompareTmux(t *testing.T, cols, rows int) *compareTmux {
 	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
+		// Deliberately fatal, not a skip. This harness only runs under an
+		// explicit -screencompare, which is also the documented command for
+		// reproducing the decision-gate evidence. A skip would turn a box
+		// without tmux into a fully green evidence run that performed zero
+		// comparisons.
+		t.Fatalf("tmux is not installed, so the shadow comparison evidence cannot be produced: %v", err)
 	}
 	root, err := os.MkdirTemp("", "sccmp")
 	if err != nil {
@@ -135,6 +141,35 @@ func (s *compareTmux) currentCommand() string {
 	return strings.TrimSpace(s.run("display-message", "-p", "-t", s.pane, "#{pane_current_command}"))
 }
 
+// waitForCommand blocks until tmux reports want as the pane's foreground
+// command, and fails the test otherwise.
+//
+// This is launch verification, and it is the difference between "the model
+// rendered nvim correctly" and "nvim never started and we compared two shell
+// prompts". Without it every scenario in the matrix is vacuous when its program
+// is missing, broken, or exits immediately.
+func (s *compareTmux) waitForCommand(want string, timeout time.Duration) {
+	s.t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for time.Now().Before(deadline) {
+		last = s.currentCommand()
+		if last == want {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	s.t.Fatalf("launch verification failed: %q never became the pane's foreground command "+
+		"(last observed %q). The scenario would have compared a shell prompt, not %s.",
+		want, last, want)
+}
+
+// altScreen reports tmux's own alternate_on flag for the pane.
+func (s *compareTmux) altScreen() bool {
+	s.t.Helper()
+	return strings.TrimSpace(s.run("display-message", "-p", "-t", s.pane, "#{alternate_on}")) == "1"
+}
+
 // compareHarness wires the real ControlManager to the isolated tmux with a
 // subscription shaped exactly like the workspace plugin's: OnSnapshot and
 // OnFallback only. Nothing opts into model frames, so the model exists purely
@@ -148,6 +183,7 @@ type compareHarness struct {
 	// from the test goroutine.
 	snapshots atomic.Int64
 	fallbacks atomic.Int64
+	closeOnce sync.Once
 }
 
 func newCompareHarness(t *testing.T, cols, rows int) *compareHarness {
@@ -157,8 +193,18 @@ func newCompareHarness(t *testing.T, cols, rows int) *compareHarness {
 	h.manager = newControlManager(func(session string) (controlChannel, error) {
 		return newProcessControlChannelForSocket(server.sock, session)
 	}, 12*time.Millisecond)
-	t.Cleanup(h.manager.Stop)
+	t.Cleanup(h.close)
 	return h
+}
+
+// close tears the harness down eagerly so a scenario's tmux server, shell and
+// any program it left running do not outlive it. Idempotent: t.Cleanup keeps it
+// as a backstop. The kill-server always carries this harness's explicit -S.
+func (h *compareHarness) close() {
+	h.closeOnce.Do(func() {
+		h.manager.Stop()
+		_ = h.tmux.cmd("kill-server").Run()
+	})
 }
 
 func (h *compareHarness) subscribe() {
@@ -204,37 +250,84 @@ func (r scenarioResult) unexplained() int {
 	return total
 }
 
-// runScenario resets the counters, runs body, and returns the delta.
-func runScenario(t *testing.T, name, description string, body func()) scenarioResult {
+// upstreamGapCells and adapterDefectCells split the "known gap" total, which
+// otherwise silently mixes two very different things: defects in the dependency
+// (gap-*) and defects Sidecar owns (adapter-*). Only the first kind is
+// "explained and not ours".
+func (r scenarioResult) upstreamGapCells() int {
+	total := 0
+	for class, n := range r.Stats.MismatchesByClass {
+		if strings.HasPrefix(class, "gap-") {
+			total += n
+		}
+	}
+	return total
+}
+
+func (r scenarioResult) adapterDefectCells() int {
+	total := 0
+	for class, n := range r.Stats.MismatchesByClass {
+		if strings.HasPrefix(class, "adapter-") {
+			total += n
+		}
+	}
+	return total
+}
+
+// runScenario builds a *fresh* harness — its own tmux server, its own control
+// client, its own subscription and its own pane model — runs body against it,
+// and returns that scenario's counters alone.
+//
+// The isolation is the point. An earlier version shared one persistent model
+// and one subscription across every scenario, which meant a divergence created
+// in one scenario (say, a mid-alternate-screen attach in the editor row) was
+// still present in the next one. Nothing in that arrangement could tell an
+// inherited divergence from a fresh one, so it could not support a
+// single-root-cause claim about the cells it counted.
+func runScenario(t *testing.T, name, description string, body func(h *compareHarness)) scenarioResult {
 	t.Helper()
+	h := newCompareHarness(t, 80, 24)
+	defer h.close()
+	h.subscribe()
+	// Let the seed transaction complete before the scenario's counters start,
+	// so a scenario measures its own steady state rather than its bootstrap.
+	waitUntil(t, 20*time.Second, "the first shadow comparison", func() bool {
+		return screenCompareStats.Snapshot().Comparisons > 0
+	})
+	h.tmux.typeLine("PS1='$ '")
+	h.settle(300 * time.Millisecond)
+
 	ResetScreenCompare()
 	start := time.Now()
-	body()
+	body(h)
 	res := scenarioResult{
 		Name: name, Available: true, Description: description,
 		Stats: screenCompareStats.Snapshot(), Duration: time.Since(start),
 	}
-	t.Logf("scenario %-26s bursts=%d captures=%d comparisons=%d clean=%d mismatched=%d unexplained-cells=%d seeds=%d faults=%d",
+	t.Logf("scenario %-26s bursts=%d captures=%d comparisons=%d clean=%d mismatched=%d unexplained-cells=%d upstream-gap=%d adapter-defect=%d seeds=%d faults=%d",
 		name, res.Stats.RawEvents, res.Stats.Captures, res.Stats.Comparisons, res.Stats.ComparisonsClean,
-		res.Stats.FramesWithMismatch, res.unexplained(), res.Stats.Seeds, res.Stats.Faults)
+		res.Stats.FramesWithMismatch, res.unexplained(), res.upstreamGapCells(), res.adapterDefectCells(),
+		res.Stats.Seeds, res.Stats.Faults)
+	t.Logf("scenario %-26s signatures=%v classes=%v", name,
+		res.Stats.MismatchesBySignature, res.Stats.MismatchesByClass)
 	return res
 }
 
 // TestScreenCompareRealApplicationMatrix is the slice-2 evidence run. It is
 // gated behind -screencompare because it drives real applications for tens of
 // seconds; `go test ./...` must stay fast.
+//
+// Every scenario runs against its own tmux server, control client, subscription
+// and pane model (see runScenario), so a scenario's numbers describe that
+// scenario and nothing it inherited.
+//
+// The test asserts. An evidence harness that only prints cannot fail, and a
+// harness that cannot fail is not evidence.
 func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 	if !*runMatrix {
 		t.Skip("pass -screencompare to run the slice-2 evidence matrix")
 	}
 	forceScreenCompare(t, true)
-
-	h := newCompareHarness(t, 80, 24)
-	h.subscribe()
-	// Give the seed transaction time to complete before the first scenario.
-	waitUntil(t, 20*time.Second, "the first shadow comparison", func() bool {
-		return screenCompareStats.Snapshot().Comparisons > 0
-	})
 
 	var results []scenarioResult
 	availability := map[string]string{}
@@ -244,14 +337,19 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 			availability[name] = "NOT INSTALLED"
 			return "", false
 		}
-		availability[name] = path
+		// The resolved path is recorded for the evidence, but the report is a
+		// committed document: a tool installed under the developer's home
+		// directory would otherwise publish their account name. The scenario
+		// still runs the real absolute path.
+		availability[name] = redactHome(path)
 		return path, true
 	}
 
 	// --- zsh: prompt editing, multiline, completion, long wrapped output ----
 	results = append(results, runScenario(t, "zsh-prompt-editing",
-		"line editing, kill/yank, multiline continuation, TAB completion, wrapped output", func() {
-			h.tmux.typeLine("PS1='$ '")
+		"line editing, kill/yank, multiline continuation, TAB completion, wrapped output",
+		func(h *compareHarness) {
+			h.tmux.waitForCommand("zsh", 10*time.Second)
 			// Line editing: type, move to start, edit, move to end.
 			h.tmux.literal("echo alpha bravo charlie")
 			h.tmux.keys("C-a")
@@ -286,15 +384,21 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 	} else if path, ok := lookup("vim"); ok {
 		editor = path
 	}
+	editorName := filepath.Base(editor)
 	if editor == "" {
 		results = append(results, scenarioResult{
 			Name: "editor-nvim-or-vim", Skipped: "neither nvim nor vim is installed",
 		})
 	} else {
 		results = append(results, runScenario(t, "editor-nvim-or-vim",
-			"alternate screen, insert, split, search, live resize, quit", func() {
+			"alternate screen, insert, split, search, live resize, quit",
+			func(h *compareHarness) {
 				h.tmux.typeLine(editor + " -u NONE -i NONE " + filepath.Join(h.tmux.home, "scratch.txt"))
+				h.tmux.waitForCommand(editorName, 20*time.Second)
 				h.settle(1200 * time.Millisecond)
+				if !h.tmux.altScreen() {
+					t.Fatalf("%s is running but the pane is not on the alternate screen", editorName)
+				}
 				h.tmux.keys("i")
 				h.tmux.literal("alpha bravo charlie\ndelta echo foxtrot\ngolf hotel india\n")
 				h.tmux.keys("Escape")
@@ -311,6 +415,39 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 				h.sub.Resize(80, 24)
 				h.settle(1200 * time.Millisecond)
 				h.tmux.typeLine(":qa!")
+				h.tmux.waitForCommand("zsh", 15*time.Second)
+				h.settle(800 * time.Millisecond)
+			}))
+	}
+
+	// --- the same editor, with no seed/resync while it owns the screen -------
+	//
+	// This is the control for the editor row above. It runs the same
+	// application through the same transitions but issues no tmux layout or
+	// resize event, so the model is never reseeded while alternate_on=1. If the
+	// divergence is caused by seeding from a capture that can only carry the
+	// alternate grid, this row is clean and the row above is not.
+	if editor == "" {
+		results = append(results, scenarioResult{
+			Name: "editor-no-resync-control", Skipped: "neither nvim nor vim is installed",
+		})
+	} else {
+		results = append(results, runScenario(t, "editor-no-resync-control",
+			"control: same editor, same edits and search, but no resize/layout reseed",
+			func(h *compareHarness) {
+				h.tmux.typeLine(editor + " -u NONE -i NONE " + filepath.Join(h.tmux.home, "control.txt"))
+				h.tmux.waitForCommand(editorName, 20*time.Second)
+				h.settle(1200 * time.Millisecond)
+				h.tmux.keys("i")
+				h.tmux.literal("alpha bravo charlie\ndelta echo foxtrot\ngolf hotel india\n")
+				h.tmux.keys("Escape")
+				h.settle(400 * time.Millisecond)
+				h.tmux.typeLine(":vsplit")
+				h.settle(600 * time.Millisecond)
+				h.tmux.typeLine("/echo")
+				h.settle(1200 * time.Millisecond)
+				h.tmux.typeLine(":qa!")
+				h.tmux.waitForCommand("zsh", 15*time.Second)
 				h.settle(800 * time.Millisecond)
 			}))
 	}
@@ -320,8 +457,14 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 		results = append(results, scenarioResult{Name: "less", Skipped: "less is not installed"})
 	} else {
 		results = append(results, runScenario(t, "less",
-			"alternate screen pager: paging, search, quit", func() {
-				h.tmux.typeLine("seq 1 500 | less")
+			"alternate screen pager: paging, search, quit",
+			func(h *compareHarness) {
+				// Not a pipeline: with `seq ... | less` tmux reports the pane's
+				// foreground command as the shell, so the scenario could not be
+				// launch-verified at all.
+				h.tmux.typeLine("seq 1 500 > lines.txt")
+				h.tmux.typeLine("less lines.txt")
+				h.tmux.waitForCommand("less", 15*time.Second)
 				h.settle(800 * time.Millisecond)
 				h.tmux.keys("Space")
 				h.settle(300 * time.Millisecond)
@@ -333,22 +476,38 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 				h.tmux.keys("G")
 				h.settle(400 * time.Millisecond)
 				h.tmux.keys("q")
+				h.tmux.waitForCommand("zsh", 15*time.Second)
 				h.settle(800 * time.Millisecond)
 			}))
 	}
 
 	// --- a continuously updating program ------------------------------------
+	// NOTE: `top -s 1` is macOS/BSD syntax (Linux spells the interval -d), so
+	// this row is not portable as written and the evidence records that as a
+	// platform limit. It is also deliberately *interactive* top rather than the
+	// earlier `top -l 0`: macOS logging mode streams plain text, never takes
+	// the alternate screen, and ignores the keyboard, so it exercised neither a
+	// repainting full-screen program nor a clean quit.
 	if _, ok := lookup("top"); !ok {
 		results = append(results, scenarioResult{Name: "top", Skipped: "top is not installed"})
+	} else if runtime.GOOS != "darwin" {
+		results = append(results, scenarioResult{
+			Name:    "top-continuous-update",
+			Skipped: "`top -s 1` is macOS-only syntax; this row needs a per-platform command",
+		})
 	} else {
 		results = append(results, runScenario(t, "top-continuous-update",
-			"continuously repainting full-screen program", func() {
-				h.tmux.typeLine("top -l 0 -s 1")
+			"continuously repainting full-screen program",
+			func(h *compareHarness) {
+				h.tmux.typeLine("top -s 1")
+				h.tmux.waitForCommand("top", 15*time.Second)
 				h.settle(6 * time.Second)
+				if !h.tmux.altScreen() {
+					t.Fatal("top is running but the pane is not on the alternate screen")
+				}
 				h.tmux.keys("q")
+				h.tmux.waitForCommand("zsh", 15*time.Second)
 				h.settle(1 * time.Second)
-				h.tmux.keys("C-c")
-				h.settle(500 * time.Millisecond)
 			}))
 	}
 
@@ -357,17 +516,19 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 		results = append(results, scenarioResult{Name: "fzf-mouse", Skipped: "fzf is not installed"})
 	} else {
 		results = append(results, runScenario(t, "fzf-mouse-aware",
-			"mouse tracking modes enabled and disabled by a real TUI", func() {
-				h.tmux.typeLine("seq 1 200 | fzf --height 100%")
+			"mouse tracking modes enabled and disabled by a real TUI",
+			func(h *compareHarness) {
+				h.tmux.typeLine("seq 1 200 > items.txt")
+				h.tmux.typeLine("fzf --height 100% < items.txt")
+				h.tmux.waitForCommand("fzf", 15*time.Second)
 				h.settle(1200 * time.Millisecond)
 				h.tmux.literal("12")
 				h.settle(600 * time.Millisecond)
 				h.tmux.keys("C-n")
 				h.settle(300 * time.Millisecond)
 				h.tmux.keys("Escape")
+				h.tmux.waitForCommand("zsh", 15*time.Second)
 				h.settle(1 * time.Second)
-				h.tmux.keys("C-c")
-				h.settle(500 * time.Millisecond)
 			}))
 	}
 
@@ -378,11 +539,18 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 		})
 	} else {
 		results = append(results, runScenario(t, "alt-screen-cycling",
-			"four alternate-screen round trips, then the restored shell history", func() {
+			"four alternate-screen round trips, then the restored shell history",
+			func(h *compareHarness) {
 				for i := range 4 {
 					h.tmux.typeLine(fmt.Sprintf("echo before-%d", i))
-					h.tmux.typeLine(editor + " -u NONE -i NONE +q")
-					h.settle(700 * time.Millisecond)
+					h.tmux.typeLine(editor + " -u NONE -i NONE")
+					// Launch verification inside the loop: an editor that failed
+					// to start would make every round trip a no-op while the
+					// scenario still reported clean comparisons.
+					h.tmux.waitForCommand(editorName, 20*time.Second)
+					h.settle(500 * time.Millisecond)
+					h.tmux.typeLine(":q!")
+					h.tmux.waitForCommand("zsh", 15*time.Second)
 					h.tmux.typeLine(fmt.Sprintf("echo after-%d", i))
 				}
 				h.settle(1 * time.Second)
@@ -390,13 +558,17 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 	}
 
 	// --- an agent TUI --------------------------------------------------------
-	results = append(results, agentScenario(t, h, lookup))
+	results = append(results, agentScenario(t, lookup))
 
 	// --- attach / switch away and back / model restart -----------------------
 	results = append(results, runScenario(t, "attach-switch-restart",
-		"hide and show the subscription, then drop and recreate it entirely", func() {
+		"hide and show the subscription, then drop and recreate it entirely",
+		func(h *compareHarness) {
 			h.tmux.typeLine("i=0; while [ $i -lt 400 ]; do printf 'S%03d\\n' $i; i=$((i+1)); sleep 0.02; done &")
 			h.settle(1 * time.Second)
+			if got := screenCompareStats.Snapshot().RawEvents; got == 0 {
+				t.Fatal("no pane output reached the model: the background writer never ran")
+			}
 			h.sub.SetVisible(false)
 			h.settle(700 * time.Millisecond)
 			h.sub.SetVisible(true)
@@ -411,7 +583,8 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 
 	// --- forced control-client failure and reconnect -------------------------
 	results = append(results, runScenario(t, "forced-control-failure",
-		"kill the tmux control client, take the fallback, then reattach", func() {
+		"kill the tmux control client, take the fallback, then reattach",
+		func(h *compareHarness) {
 			before := h.fallbacks.Load()
 			h.tmux.run("kill-session", "-t", h.tmux.session)
 			waitUntil(t, 15*time.Second, "the control client to fail", func() bool {
@@ -419,6 +592,8 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 			})
 			h.settle(500 * time.Millisecond)
 		}))
+
+	assertMatrixFidelity(t, results)
 
 	report := renderMatrixReport(t, results, availability)
 	t.Log("\n" + report)
@@ -429,10 +604,79 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 	}
 }
 
+// scenariosExpectedToDiverge are the rows whose divergence is this slice's
+// recorded finding rather than an accident. They are asserted to *keep*
+// diverging, exactly like TestAltScreenAttachCannotRestoreTheMainScreen: if one
+// of them goes clean, the evidence document is wrong and must be rewritten
+// rather than have the assertion relaxed.
+var scenariosExpectedToDiverge = map[string]string{
+	"editor-nvim-or-vim": "a seed/resync taken while the pane is on the alternate screen can only " +
+		"carry the alternate grid, so the model's main screen is lost and never recovers",
+}
+
+// scenariosExpectedClean must produce zero unexplained cells. A regression here
+// is a real fidelity failure.
+var scenariosExpectedClean = map[string]bool{
+	"zsh-prompt-editing":       true,
+	"editor-no-resync-control": true,
+	"less":                     true,
+	"top-continuous-update":    true,
+	"alt-screen-cycling":       true,
+	"attach-switch-restart":    true,
+}
+
+// assertMatrixFidelity is what turns the matrix from a report into a test.
+func assertMatrixFidelity(t *testing.T, results []scenarioResult) {
+	t.Helper()
+	ran := 0
+	for _, r := range results {
+		if r.Skipped != "" {
+			continue
+		}
+		ran++
+		s := r.Stats
+		if s.Faults != 0 {
+			t.Errorf("%s: %d model faults", r.Name, s.Faults)
+		}
+		if s.SeedRaces != 0 {
+			t.Errorf("%s: %d seed races", r.Name, s.SeedRaces)
+		}
+		if s.DiscardedBytes != 0 {
+			t.Errorf("%s: tmux discarded %d bytes; the comparison is not attributable",
+				r.Name, s.DiscardedBytes)
+		}
+		if s.ComparisonsSkipped != 0 {
+			t.Errorf("%s: %d comparisons had degenerate capture geometry", r.Name, s.ComparisonsSkipped)
+		}
+		// The discard-window prefix silently removes a mismatch from the
+		// unexplained tally, so an unnoticed break in client_discarded parsing
+		// would look like a perfect result. Assert the window is never open.
+		if s.ComparisonsOpenWin != 0 {
+			t.Errorf("%s: %d comparisons ran inside an open discard window; their mismatches are "+
+				"recorded under discard-window/* and excluded from the headline number",
+				r.Name, s.ComparisonsOpenWin)
+		}
+		if r.Name != "forced-control-failure" && s.Comparisons == 0 {
+			t.Errorf("%s: zero comparisons — the scenario proved nothing", r.Name)
+		}
+		if scenariosExpectedClean[r.Name] && r.unexplained() != 0 {
+			t.Errorf("%s: expected zero unexplained cells, got %d (signatures %v)",
+				r.Name, r.unexplained(), s.MismatchesBySignature)
+		}
+		if why, ok := scenariosExpectedToDiverge[r.Name]; ok && r.unexplained() == 0 {
+			t.Errorf("%s: EXPECTED DIVERGENCE DID NOT REPRODUCE (%s). If this is a real fix, the "+
+				"slice-2 evidence must be rewritten, not this assertion relaxed.", r.Name, why)
+		}
+	}
+	if ran < 3 {
+		t.Fatalf("only %d scenarios ran; this is not a matrix", ran)
+	}
+}
+
 // agentScenario exercises a real agent TUI when one can be run without the
 // user's credentials or network access. Availability is recorded honestly: a
 // synthetic full-screen program is never substituted for an agent.
-func agentScenario(t *testing.T, h *compareHarness, lookup func(string) (string, bool)) scenarioResult {
+func agentScenario(t *testing.T, lookup func(string) (string, bool)) scenarioResult {
 	t.Helper()
 	var agent string
 	for _, name := range []string{"claude", "codex"} {
@@ -446,13 +690,14 @@ func agentScenario(t *testing.T, h *compareHarness, lookup func(string) (string,
 	if os.Getenv("SIDECAR_SCREENCOMPARE_AGENT") != "1" {
 		return scenarioResult{
 			Name: "agent-tui",
-			Skipped: "agent CLI installed at " + agent + " but NOT RUN: starting it needs the " +
+			Skipped: "agent CLI installed at " + redactHome(agent) + " but NOT RUN: starting it needs the " +
 				"developer's real credentials and network. Set SIDECAR_SCREENCOMPARE_AGENT=1 to run it " +
 				"deliberately; no synthetic program is substituted.",
 		}
 	}
-	return runScenario(t, "agent-tui", "real agent TUI: idle, streaming, interrupt, exit", func() {
+	return runScenario(t, "agent-tui", "real agent TUI: idle, streaming, interrupt, exit", func(h *compareHarness) {
 		h.tmux.typeLine(agent)
+		h.tmux.waitForCommand(filepath.Base(agent), 30*time.Second)
 		h.settle(6 * time.Second)
 		h.tmux.literal("say hello in five words")
 		h.settle(500 * time.Millisecond)
@@ -480,21 +725,17 @@ func renderMatrixReport(t *testing.T, results []scenarioResult, availability map
 	}
 
 	fmt.Fprintf(&b, "\n## Per-scenario result\n\n")
-	fmt.Fprintf(&b, "| Scenario | Comparisons | Clean | With mismatch | Unexplained cells | Known-gap cells | Open discard window | Metadata race | Seeds |\n")
-	fmt.Fprintf(&b, "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	fmt.Fprintf(&b, "| Scenario | Comparisons | Clean | With mismatch | Unexplained cells | Upstream-gap cells (x/vt) | Adapter-defect cells (Sidecar) | Open discard window | Metadata race | Seeds |\n")
+	fmt.Fprintf(&b, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	total := scenarioResult{Name: "TOTAL", Stats: ScreenCompareSnapshot{
 		MismatchesByClass: map[string]int{}, MismatchesBySignature: map[string]int{}, Resyncs: map[string]int{},
 	}}
 	for _, r := range results {
 		if r.Skipped != "" {
-			fmt.Fprintf(&b, "| %s | _skipped: %s_ | | | | | | | |\n", r.Name, r.Skipped)
+			fmt.Fprintf(&b, "| %s | _skipped: %s_ | | | | | | | | |\n", r.Name, r.Skipped)
 			continue
 		}
-		known := 0
 		for class, n := range r.Stats.MismatchesByClass {
-			if class != gapClassUnexplained && !strings.HasPrefix(class, "discard-window/") {
-				known += n
-			}
 			total.Stats.MismatchesByClass[class] += n
 		}
 		for sig, n := range r.Stats.MismatchesBySignature {
@@ -509,6 +750,8 @@ func renderMatrixReport(t *testing.T, results []scenarioResult, availability map
 		total.Stats.ComparisonsOpenWin += r.Stats.ComparisonsOpenWin
 		total.Stats.ComparisonsMetaRaced += r.Stats.ComparisonsMetaRaced
 		total.Stats.UncomparableCells += r.Stats.UncomparableCells
+		total.Stats.ComparedCells += r.Stats.ComparedCells
+		total.Stats.ComparisonsSkipped += r.Stats.ComparisonsSkipped
 		total.Stats.Seeds += r.Stats.Seeds
 		total.Stats.Captures += r.Stats.Captures
 		total.Stats.CapturesWhileModelLive += r.Stats.CapturesWhileModelLive
@@ -529,14 +772,15 @@ func renderMatrixReport(t *testing.T, results []scenarioResult, availability map
 		mergeLatency(&total.Stats.ModelRenderUS, r.Stats.ModelRenderUS)
 		mergeLatency(&total.Stats.CompareUS, r.Stats.CompareUS)
 
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 			r.Name, r.Stats.Comparisons, r.Stats.ComparisonsClean, r.Stats.FramesWithMismatch,
-			r.unexplained(), known, r.Stats.ComparisonsOpenWin, r.Stats.ComparisonsMetaRaced,
-			r.Stats.Seeds)
+			r.unexplained(), r.upstreamGapCells(), r.adapterDefectCells(),
+			r.Stats.ComparisonsOpenWin, r.Stats.ComparisonsMetaRaced, r.Stats.Seeds)
 	}
-	fmt.Fprintf(&b, "| **%s** | %d | %d | %d | %d | — | %d | %d | %d |\n",
+	fmt.Fprintf(&b, "| **%s** | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 		total.Name, total.Stats.Comparisons, total.Stats.ComparisonsClean,
 		total.Stats.FramesWithMismatch, total.unexplained(),
+		total.upstreamGapCells(), total.adapterDefectCells(),
 		total.Stats.ComparisonsOpenWin, total.Stats.ComparisonsMetaRaced, total.Stats.Seeds)
 
 	fmt.Fprintf(&b, "\n## Per-scenario mismatch detail\n\n")
@@ -590,7 +834,10 @@ func renderMatrixReport(t *testing.T, results []scenarioResult, availability map
 	fmt.Fprintf(&b, "| model faults | %d |\n", total.Stats.Faults)
 	fmt.Fprintf(&b, "| control fallbacks | %d |\n", total.Stats.Fallbacks)
 	fmt.Fprintf(&b, "| model memory, peak estimate (bytes) | %d |\n", total.Stats.ModelBytesPeak)
-	fmt.Fprintf(&b, "| cells capture-pane could not describe (trailing blanks) | %d |\n", total.Stats.UncomparableCells)
+	fmt.Fprintf(&b, "| comparisons skipped (degenerate capture geometry) | %d |\n", total.Stats.ComparisonsSkipped)
+	fmt.Fprintf(&b, "| cells offered to the comparator (width x height per comparison) | %d |\n", total.Stats.ComparedCells)
+	fmt.Fprintf(&b, "| cells capture-pane could not describe (trailing blanks) | %d (%.1f%% of the compared surface) |\n",
+		total.Stats.UncomparableCells, percent(int64(total.Stats.UncomparableCells), total.Stats.ComparedCells))
 
 	fmt.Fprintf(&b, "\n| Path | n | mean us | max us |\n| --- | --- | --- | --- |\n")
 	for _, l := range []struct {
@@ -606,6 +853,19 @@ func renderMatrixReport(t *testing.T, results []scenarioResult, availability map
 		fmt.Fprintf(&b, "| %s | %d | %.1f | %d |\n", l.name, l.stat.N, l.stat.Mean(), l.stat.Max)
 	}
 	return b.String()
+}
+
+// redactHome rewrites a path under the developer's home directory to a
+// ~-relative one so the committed evidence report carries no account name.
+func redactHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if rel, err := filepath.Rel(home, path); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.Join("~", rel)
+	}
+	return path
 }
 
 func mergeLatency(into *latencyStat, from latencyStat) {

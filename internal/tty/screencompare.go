@@ -125,6 +125,14 @@ type ScreenCompareSnapshot struct {
 	// cannot express the answer (trailing trimmed blanks). They are neither
 	// agreements nor mismatches; recorded so "clean" is never overstated.
 	UncomparableCells int `json:"uncomparable_cells"`
+	// ComparedCells is the total visible surface offered to the comparator
+	// (width × height per comparison). It is the denominator UncomparableCells
+	// has to be read against; without it an absolute count of declined cells
+	// says nothing about how much of the screen was actually covered.
+	ComparedCells int64 `json:"compared_cells"`
+	// ComparisonsSkipped counts comparisons abandoned because the capture side
+	// described no surface. They are not clean and not mismatched.
+	ComparisonsSkipped int `json:"comparisons_skipped"`
 
 	// Mismatches, split the way the decision gate is judged.
 	MismatchesBySignature map[string]int `json:"mismatches_by_signature"`
@@ -286,7 +294,10 @@ func (s *ScreenCompareStats) Report() string {
 		{"comparisons with a capture-metadata race", snap.ComparisonsMetaRaced},
 		{"comparisons with any mismatch", snap.FramesWithMismatch},
 		{"comparisons with an unexplained mismatch", snap.FramesWithUnexplainedMismatch},
-		{"cells capture-pane could not describe (trailing blanks)", snap.UncomparableCells},
+		{"comparisons skipped (degenerate capture geometry)", snap.ComparisonsSkipped},
+		{"cells capture-pane could not describe (trailing blanks)",
+			fmt.Sprintf("%d of %d compared cells (%.1f%%)", snap.UncomparableCells, snap.ComparedCells,
+				percent(int64(snap.UncomparableCells), snap.ComparedCells))},
 		{"model memory, peak / last (bytes)", fmt.Sprintf("%d / %d", snap.ModelBytesPeak, snap.ModelBytesLast)},
 	}
 	for _, row := range rows {
@@ -338,6 +349,14 @@ func (s *ScreenCompareStats) Report() string {
 		}
 	}
 	return b.String()
+}
+
+// percent renders a/b as a percentage, or 0 when b is zero.
+func percent(a, b int64) float64 {
+	if b == 0 {
+		return 0
+	}
+	return 100 * float64(a) / float64(b)
 }
 
 func sortedKeys(m map[string]int) []string {
@@ -419,7 +438,13 @@ type screenCompareResult struct {
 	// agreed. Reported so the clean-comparison number is never read as broader
 	// than it is.
 	Uncomparable int
+	// VisibleCells is the size of the compared surface (width × height). It is
+	// the denominator Uncomparable has to be read against.
 	VisibleCells int
+	// Invalid marks a comparison that could not be performed at all — today
+	// only degenerate capture geometry. It must never be folded in as a clean
+	// comparison; recordComparison counts it separately.
+	Invalid bool
 }
 
 // beyondCaptureExtent reports whether a cell difference falls in the region
@@ -460,6 +485,11 @@ func compareCaptureWithModel(in screenCompareInput, frame screenmodel.Frame) scr
 
 	w, h := in.Width, in.Height
 	if w < 1 || h < 1 {
+		// A degenerate capture describes no surface, so nothing can be
+		// concluded from it. Returning an empty result here used to score as a
+		// clean comparison, which would have inflated the fidelity numbers with
+		// comparisons that never happened.
+		res.Invalid = true
 		return res
 	}
 
@@ -523,13 +553,20 @@ func compareCaptureWithModel(in screenCompareInput, frame screenmodel.Frame) scr
 	if frame.HistorySize != in.HistorySize {
 		class := gapClassUnexplained
 		switch {
-		case frame.HistorySize < in.HistorySize && frame.HistorySize == 0:
+		case frame.HistorySize == 0 && in.HistorySize > 0 && frame.HardResets > 0:
+			// GAP-8: on RIS the emulator discards the screen where tmux pushes
+			// it into history. Requires positive evidence that a RIS actually
+			// reached the model since the last seed — without that, any cause
+			// that zeroes the model's history would be amnestied by this class.
 			class = gapClassRISHistory
-		case frame.HistorySize >= screenmodel.DefaultScrollback:
+		case frame.ScrollbackAtCap:
 			// The model counts scrolled-off lines against the emulator's own
 			// bounded scrollback, so once that cap is reached the absolute
 			// count stops tracking tmux's. Slice 0 recorded the limitation;
-			// this is it being reached in a real session.
+			// this is it being reached in a real session. The precondition is
+			// the emulator being *at* its cap, not the reported number being
+			// large: a big history that the model is still tracking correctly
+			// has no excuse here.
 			class = adapterHistoryDrift
 		}
 		add(screenmodel.Mismatch{Kind: "history", Field: "size", Row: -1, Col: -1}, class)
@@ -711,6 +748,14 @@ func (c *sessionControlClient) shadowCompare(pane string, snapshot ControlSnapsh
 	// the same transaction as the screen, so the check is exact here rather than
 	// bounded by the 1 s cadence — the window closes at the comparison point
 	// itself. It stays open only when the counter grew or was never read.
+	//
+	// STRUCTURAL HAZARD, disclosed rather than removed: this defaults to
+	// *false*, and an unattributable mismatch is recorded under a
+	// "discard-window/" prefix that the unexplained tally and the evidence
+	// table both exclude. A break in client_discarded parsing would therefore
+	// zero the headline mismatch number while every comparison still counted.
+	// ComparisonsOpenWin is the tripwire: the matrix asserts it is zero, so the
+	// silent-amnesty path cannot be entered without failing the evidence run.
 	attributable := feed.discardSeen && extras.Valid && extras.Discarded == feed.discarded
 	if extras.Valid && extras.Discarded > feed.discarded {
 		screenCompareStats.mu.Lock()
@@ -740,6 +785,11 @@ func (s *ScreenCompareStats) recordComparison(res screenCompareResult, attributa
 	s.Comparisons++
 	s.CompareUS.add(took)
 	s.UncomparableCells += res.Uncomparable
+	s.ComparedCells += int64(res.VisibleCells)
+	if res.Invalid {
+		s.ComparisonsSkipped++
+		return false
+	}
 	if attributable {
 		s.ComparisonsAttrib++
 	} else {

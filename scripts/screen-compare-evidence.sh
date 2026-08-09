@@ -60,7 +60,7 @@ FAILED=0
 run deterministic-corpus \
     go test ./internal/tty/screenmodel -count=1 -v -run 'TestCorpus|TestSeed|TestFrameOutput|TestSplit|TestDeviceQueries|TestReseeding'
 run shadow-unit \
-    go test ./internal/tty -count=1 -v -run 'TestCaptureCommandsUnchangedWhenCompareOff|TestCompareOn|TestBothMetadataLayouts|TestCompare|TestCursor|TestClassifier|TestReportAndJSON|TestHistoryIs|TestCaptureDeliveryUnchangedWhenModelPathOff'
+    go test ./internal/tty -count=1 -v -run 'TestCaptureCommandsUnchangedWhenCompareOff|TestCompareOn|TestBothMetadataLayouts|TestCompare|TestCursor|TestClassifier|TestReportAndJSON|TestHistory|TestRISIs|TestDegenerateGeometry|TestCaptureDeliveryUnchangedWhenModelPathOff'
 run real-application-matrix \
     go test ./internal/tty -count=1 -v -timeout 900s -screencompare \
     -screencompare-out "$OUT_DIR/matrix.md" -run TestScreenCompareRealApplicationMatrix
