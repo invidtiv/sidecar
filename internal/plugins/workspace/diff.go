@@ -306,7 +306,7 @@ func getUntrackedFileDiffBounded(workdir, file string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, maxUntrackedFileSize+1))
 	if err != nil {
 		return "", 0, err
@@ -331,11 +331,6 @@ func getUntrackedFileDiffBounded(workdir, file string) (string, int64, error) {
 
 func truncatedUntrackedDiff(file string, size int64) string {
 	return fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,1 @@\n+[File too large to display: content omitted by %d-byte untracked file cap (%d bytes)]\n", file, file, file, maxUntrackedFileSize, size)
-}
-
-// getDiffStatFromBase returns the --stat output compared to the base branch.
-func getDiffStatFromBase(workdir, baseBranch string) (string, error) {
-	return getDiffStatFromBaseContext(context.Background(), workdir, baseBranch)
 }
 
 func getDiffStatFromBaseContext(ctx context.Context, workdir, baseBranch string) (string, error) {
@@ -496,30 +491,6 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// loadCommitStatus returns a command to load commit status for a worktree.
-//
-// The Diff tab no longer uses this: its commits come from the pinned
-// DiffSnapshot so the file and commit sections can never describe different
-// revisions. This ref-based loader resolves the base fresh and is therefore
-// unpinned — do not re-wire it into the Diff tab.
-func (p *Plugin) loadCommitStatus(wt *Worktree) tea.Cmd {
-	if wt == nil {
-		return nil
-	}
-	epoch := p.ctx.Epoch // Capture epoch for stale detection
-	name := wt.IdentityKey()
-	path := wt.Path
-	baseBranch := wt.BaseBranch
-
-	return func() tea.Msg {
-		commits, err := getWorktreeCommits(path, baseBranch)
-		if err != nil {
-			return CommitStatusLoadedMsg{Epoch: epoch, WorkspaceName: name, Err: err}
-		}
-		return CommitStatusLoadedMsg{Epoch: epoch, WorkspaceName: name, Commits: commits}
-	}
-}
-
 // getWorktreeCommits returns commits unique to this branch vs base branch with status.
 func getWorktreeCommits(workdir, baseBranch string) ([]CommitStatusInfo, error) {
 	return getWorktreeCommitsContext(context.Background(), workdir, baseBranch)
@@ -597,11 +568,6 @@ func parseCommitStatusOutput(ctx context.Context, workdir string, output []byte,
 	}
 
 	return commits, nil
-}
-
-// tryGitLog attempts to get commit log comparing HEAD to a base ref.
-func tryGitLog(workdir, baseRef string) ([]byte, error) {
-	return tryGitLogContext(context.Background(), workdir, baseRef)
 }
 
 func tryGitLogContext(ctx context.Context, workdir, baseRef string) ([]byte, error) {
@@ -688,11 +654,6 @@ func resolveBaseBranch(wt *Worktree) string {
 		return wt.BaseBranch
 	}
 	return detectDefaultBranch(wt.Path)
-}
-
-// getRemoteTrackingBranch returns the remote tracking branch for HEAD.
-func getRemoteTrackingBranch(workdir string) string {
-	return getRemoteTrackingBranchContext(context.Background(), workdir)
 }
 
 func getRemoteTrackingBranchContext(ctx context.Context, workdir string) string {

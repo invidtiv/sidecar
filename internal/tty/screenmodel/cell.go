@@ -123,7 +123,7 @@ func canonicalColor(c color.Color) Color {
 		return IndexedColor(int(v))
 	case ansi.IndexedColor:
 		return IndexedColor(int(v))
-	case ansi.TrueColor:
+	case ansi.TrueColor: //nolint:staticcheck // kept for any Color implementation still constructing it directly
 		return RGBColor(uint8(v>>16), uint8(v>>8), uint8(v)) //nolint:gosec
 	}
 	r, g, b, _ := c.RGBA()

@@ -370,10 +370,6 @@ func retryDirectMergePushContext(ctx context.Context, op *DirectMergeOperation) 
 	return pushDirectMergeContext(ctx, op)
 }
 
-func pushDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
-	return pushDirectMergeContext(context.Background(), op)
-}
-
 func pushDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil {
 		return failDirectMerge(nil, fmt.Errorf("missing direct merge operation"), DirectMergeRecoveryNone)
@@ -401,10 +397,6 @@ func pushDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *Dire
 	return op
 }
 
-func revalidateConflictRecovery(op *DirectMergeOperation) error {
-	return revalidateConflictRecoveryContext(context.Background(), op)
-}
-
 func revalidateConflictRecoveryContext(ctx context.Context, op *DirectMergeOperation) error {
 	if op.SourceOID == "" || op.PreMergeOID == "" {
 		return fmt.Errorf("conflict recovery identity is incomplete")
@@ -420,10 +412,6 @@ func revalidateConflictRecoveryContext(ctx context.Context, op *DirectMergeOpera
 		return fmt.Errorf("refusing recovery because MERGE_HEAD changed: got %q, expected %q", mergeHead, op.SourceOID)
 	}
 	return nil
-}
-
-func revalidateDirectMerge(op *DirectMergeOperation) error {
-	return revalidateDirectMergeContext(context.Background(), op)
 }
 
 func revalidateDirectMergeContext(ctx context.Context, op *DirectMergeOperation) error {
@@ -443,10 +431,6 @@ func revalidateDirectMergeContext(ctx context.Context, op *DirectMergeOperation)
 		}
 	}
 	return nil
-}
-
-func requireCheckoutIdentity(path, branch, oid string) error {
-	return requireCheckoutIdentityContext(context.Background(), path, branch, oid)
 }
 
 func requireCheckoutIdentityContext(ctx context.Context, path, branch, oid string) error {
@@ -492,10 +476,6 @@ func failDirectMerge(op *DirectMergeOperation, err error, recovery DirectMergeRe
 	return op
 }
 
-func resolveBranchRemote(repoPath, branch string) (string, error) {
-	return resolveBranchRemoteContext(context.Background(), repoPath, branch)
-}
-
 func resolveBranchRemoteContext(ctx context.Context, repoPath, branch string) (string, error) {
 	if remote, err := gitOutputContext(ctx, repoPath, "config", "--get", "branch."+branch+".remote"); err == nil && remote != "" && remote != "." {
 		return remote, nil
@@ -512,10 +492,6 @@ func resolveBranchRemoteContext(ctx context.Context, repoPath, branch string) (s
 		return "", fmt.Errorf("no remote is configured for target branch %q", branch)
 	}
 	return "", fmt.Errorf("target branch %q has no remote and repository has multiple remotes", branch)
-}
-
-func requireClean(path string) error {
-	return requireCleanContext(context.Background(), path)
 }
 
 func requireCleanContext(ctx context.Context, path string) error {
@@ -552,10 +528,6 @@ func gitOperationStateContext(ctx context.Context, path string) string {
 	return "clean"
 }
 
-func currentGitState(path string) string {
-	return currentGitStateContext(context.Background(), path)
-}
-
 func currentGitStateContext(ctx context.Context, path string) string {
 	head, _ := gitOutputContext(ctx, path, "rev-parse", "--short", "HEAD")
 	branch, _ := gitOutputContext(ctx, path, "branch", "--show-current")
@@ -565,10 +537,6 @@ func currentGitStateContext(ctx context.Context, path string) string {
 		return state + "; working tree clean"
 	}
 	return state + "; status:\n" + status
-}
-
-func gitOutput(path string, args ...string) (string, error) {
-	return gitOutputContext(context.Background(), path, args...)
 }
 
 func appendUnique(items []string, item string) []string {
@@ -801,10 +769,6 @@ func deleteBranchAfterMergeContext(ctx context.Context, repoPath, branch string,
 	return err
 }
 
-func removeCleanLifecycleWorktree(repoPath, worktreePath, branch, expectedOID string) error {
-	return removeCleanLifecycleWorktreeContext(context.Background(), repoPath, worktreePath, branch, expectedOID)
-}
-
 func removeCleanLifecycleWorktreeContext(ctx context.Context, repoPath, worktreePath, branch, expectedOID string) error {
 	if expectedOID == "" {
 		return fmt.Errorf("cleanup identity has no expected HEAD OID")
@@ -826,22 +790,6 @@ func removeCleanLifecycleWorktreeContext(ctx context.Context, repoPath, worktree
 		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	return nil
-}
-
-func deleteBranchSafe(repoPath, branch string) error {
-	return deleteBranchSafeContext(context.Background(), repoPath, branch)
-}
-
-func deleteBranchSafeContext(ctx context.Context, repoPath, branch string) error {
-	if isMainBranchContext(ctx, repoPath, branch) {
-		return fmt.Errorf("refusing to delete main branch %q", branch)
-	}
-	_, err := gitOutputContext(ctx, repoPath, "branch", "-d", branch)
-	return err
-}
-
-func deleteRemoteBranchFrom(repoPath, remote, branch, expectedOID string) error {
-	return deleteRemoteBranchFromContext(context.Background(), repoPath, remote, branch, expectedOID)
 }
 
 func deleteRemoteBranchFromContext(ctx context.Context, repoPath, remote, branch, expectedOID string) error {

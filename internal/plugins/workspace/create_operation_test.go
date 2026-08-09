@@ -278,7 +278,7 @@ func TestPinnedArtifactOpenRejectsParentSwapAfterValidation(t *testing.T) {
 			} else {
 				file, openErr := openContainedRegularFileWithHook(plan.MainWorktree, filepath.Join("safe", artifactName), swap)
 				if file != nil {
-					file.Close()
+					_ = file.Close()
 				}
 				if openErr == nil {
 					t.Fatal("env parent swap was accepted")
