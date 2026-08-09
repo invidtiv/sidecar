@@ -952,5 +952,3 @@ during the independent review.
 
 The developer's default tmux server was listed before and after every run in this
 slice: 20 sessions before, 20 sessions after, unchanged.
-</content>
-</invoke>

@@ -455,6 +455,138 @@ large fork, document the failing fixtures and reopen the Herdr plan. If it fails
 for one narrow, upstreamable emulator defect, hold at the gate until a pinned
 fix exists.
 
+### Decision gate outcome — HOLD AT THE GATE (recorded 2026-08-08, `td-2bed64`)
+
+**Outcome: hold. Do not adopt, do not reopen Herdr.** Phase 2 (Slices 3–5) does
+not start. `capture-pane` remains authoritative; shadow comparison stays
+`SIDECAR_TMUX_SCREEN_COMPARE=1`-only. The hold is tracked as its own epic,
+**`td-b7aa77`**, whose four children are the preconditions listed below.
+
+Evidence judged: [slice 0](./td-64c916-byte-fed-tmux-screen-model-slice0-evidence.md),
+[slice 1](./td-64c916-byte-fed-tmux-screen-model-slice1-evidence.md),
+[slice 2](./td-64c916-byte-fed-tmux-screen-model-slice2-evidence.md), and the
+implementation in `internal/tty/screenmodel/`, `internal/tty/control_model.go`,
+`internal/tty/screencompare.go` (commits `2369a6d` … `325d17c`).
+
+#### Per-criterion verdict
+
+| # | Criterion | Verdict | Evidence |
+| --- | --- | --- | --- |
+| 1 | Zero deterministic-fixture mismatches | **FAIL as written** | slice 0 §4–§5 (GAP-1…GAP-9 still present upstream), slice 2 §3. 24 fixtures pass whole, at every split boundary, byte-at-a-time, through the seed round trip and through `Frame.Output`; every remaining mismatch is a named upstream defect with a minimal reproducer and no new one appeared. That is "no *unexplained* mismatches", not "zero mismatches". GAP-9 (grapheme cluster across a `Write`, which also mis-places the cursor) blocks authority on its own. |
+| 2 | Zero unexplained steady-state real-application mismatches; no persistent mismatch after supported seed/resync | **FAIL** | slice 2 §4.2, §4.4, §4.8, §6.1. 127 unexplained cells over 295 comparisons; 59 of 295 comparisons carried a mismatch; 55 further cells of a known Sidecar defect (alt-screen frame history) in 5 of 8 scenarios. The second half is exactly what §4.2 fails. |
+| 3 | Attach/restart converge without injected keystrokes, signals or fake resizes | **FAIL** | slice 2 §4.2 and `TestAltScreenAttachCannotRestoreTheMainScreen` (reproduced independently at this gate on an isolated socket: 2 comparisons, 0 clean, `cell/grapheme` 98). Attach on the **main** screen converges cleanly — 182/182 clean including a full drop-and-recreate of the subscription. Any seed or resync taken while `alternate_on=1` never recovers the main screen. |
+| 4 | Ordered barrier and `client_discarded` prove no duplicated or omitted bytes under sustained output and `pause-after` | **PASS** | slice 1 §1.1–§1.2 (six scenarios, four with the straddle assertion, two mutation-checked), slice 2 §6.3 (131 605 bursts / 38.6 MB, `discarded_bytes = 0`, `seed_races = 0`, zero open discard windows, zero capture-metadata races). Caveat recorded, not disqualifying: the tmux ordering guarantee is empirical on 3.6b/darwin-arm64, and the pause row proves correct recovery rather than replay. |
+| 5 | Zero `capture-pane`/`display-message` per output burst in steady state | **PASS** | slice 2 §6.1 "Commands". All 295 capture transactions ran while a live model already held the same screen; the irreducible remainder is 10 seed transactions plus a 1 s `client_discarded` cadence probe, which is not per burst. |
+| 6 | Work/allocations scale with the byte delta, not the 600-line window; memory bounded under soak | **FAIL on work; NOT PROVEN on memory** | slice 2 §4.5, §6.3, §7.10. `Write` scales with the delta; `Frame()` scales with the capture window (861 µs, 470 KB per frame at 600 lines). The flat memory series is `Model.Footprint()`, bounded by construction by the emulator's scrollback cap and provably blind to the per-reseed emulator + 4 MB parser-buffer leak this spike found. A heap profile is required. |
+| 7 | Latency and CPU improve over the in-band capture baseline, no startup/idle regression | **NOT PROVEN** | slice 2 §6.4, §7.1, §7.9. CPU is unmeasurable while capture is authoritative. Interactive latency is at **parity** (13 710 µs vs 13 822 µs; 13 279 vs 13 219 in the real app), against a baseline the diagnostic itself inflates. The ~4× holds only for the 38 MB soak. No startup or idle path is touched with the variable unset. |
+| 8 | Removing capture authority will delete the old heuristics rather than leave two renderers | **PARTIAL** | slice 2 §4.4–§4.5. The model already supplies cursor, mouse modes and alt-screen state in the same ordered stream, so the per-burst `display-message` becomes deletable. But the alt-screen history shape and the non-incremental frame mean the model's frame is not a drop-in for `ControlSnapshot.Output` today — i.e. a second renderer, which is what this criterion excludes. |
+
+**Tally: 2 pass (4, 5), 1 partial (8), 1 not proven (7), 4 fail (1, 2, 3, 6).**
+This is the slice-2 §5 scoring, re-derived independently at the gate rather than
+adopted; it stands.
+
+#### Resolving the tension: a convergence failure that is not "cannot converge"
+
+Criterion 3 fails at the place this plan named as the primary no-go signal, and
+the plan's reopen trigger is *"mid-stream state cannot converge or x/vt requires
+a large fork"*. Both halves of that trigger were tested against the code, not
+assumed:
+
+- **The state can converge.** While `alternate_on=1`, tmux hands over *both*
+  grids: `capture-pane -a` returns the saved main screen and plain
+  `capture-pane` returns the alternate one. That is measured on tmux 3.6b and
+  asserted in `TestAltScreenAttachCannotRestoreTheMainScreen`, and it was
+  re-run at this gate. Nothing is missing from tmux; Sidecar's seed transaction
+  simply never asks for the main screen.
+- **The defect is Sidecar's, not x/vt's.** `seedFromResponses`
+  (`internal/tty/control_model.go:677`) builds the seed from a single
+  `capture-pane`, and `screenmodel.Model.Seed`
+  (`internal/tty/screenmodel/model.go:281`) writes `ESC[?1049h` and then paints
+  that grid — leaving the emulator's **main** screen empty. x/vt keeps a correct
+  main screen: the slice-0 fixtures `alt_screen_active` and
+  `alt_screen_transitions` are exact whole, at every split boundary,
+  byte-at-a-time *and* through the seed round trip with `alternate_on=1`. The
+  main screen is empty only because Sidecar never wrote one. The fix is in-repo:
+  a second capture in the seed transaction, one new `Seed` field, and seeding
+  main before switching to alternate.
+- **No fork, no growing patch layer.** 131 non-test lines in the adapter, zero
+  application-specific escape repairs in `internal/tty/screenmodel`, one pinned
+  upstream module, and the one upstream sharp edge that was hit (GAP-10, `x/vt`
+  blocking forever on the first device query) was fixed cleanly at the adapter
+  seam by draining the emulator's reply stream — honouring its `io.ReadWriter`
+  contract, not repairing an application's escapes.
+
+So the failure is a *convergence bug*, not an *inability to converge*, and the
+reopen branch does not apply. Equally, four failing criteria — one of them the
+central risk — cannot be adopted. Hold is the correct branch.
+
+One honest imprecision in this plan's own text, recorded rather than papered
+over: the hold branch is written as *"one narrow, upstreamable emulator
+defect"*, and this hold does not match that wording. The sharpest defect is
+narrow but **Sidecar-side and in-repo**, and there are further named blockers
+(upstream GAP-9/GAP-7/GAP-3/GAP-4/GAP-6; in-repo absolute-history drift,
+alt-screen frame history, non-incremental frames) plus missing evidence. That
+makes the hold *broader* than the plan anticipated, but it does not move it
+toward reopening: every item is named, bounded and has an identified remedy, and
+the discriminator the plan actually reasons from — convergence and fork size —
+points the other way. Treat the branch wording as "hold until the named,
+bounded blockers are closed", and this section as the correction to it.
+
+#### Hold conditions (epic `td-b7aa77`)
+
+Phase 2 must not start until all of these are closed:
+
+1. **`td-744b34`** — seed the main screen from `capture-pane -a` whenever
+   `alternate_on=1`, on **every** seed and resync path. The trigger observed in
+   practice was the routine, plan-sanctioned **resize** reseed, not mid-stream
+   attach: `editor-nvim-or-vim` (6 seeds) diverged by 126 cells where
+   `editor-no-resync-control` (same edits, 0 seeds) was clean.
+   `TestAltScreenAttachCannotRestoreTheMainScreen` must then be rewritten to
+   assert convergence.
+2. **`td-3c0696`** — repin `x/vt` to a commit fixing GAP-9 (with a stated flush
+   policy the adapter honours), GAP-7, GAP-3/GAP-4 and GAP-6. **GAP-9 is still
+   unexercised live** — the classifier cannot separate it from GAP-6 — and needs
+   a deliberate test of a cluster split across an `%output` boundary. No
+   vendoring, no fork.
+3. **`td-09fc80`** — fix absolute history tracking past the emulator scrollback
+   cap, decide the alternate-screen frame's history shape, and make frame
+   publication incremental (criteria 2, 6, 8).
+4. **`td-2d167d`** — produce the missing evidence: the **agent-TUI row, which
+   was never run** (it needs real credentials and network; under the harness's
+   isolated `HOME` it would exercise an authentication screen, so it was
+   correctly not attempted and no synthetic program was substituted — the
+   credentialed-run decision is outstanding); **CPU**, which is unmeasurable
+   while capture is authoritative; **interactive latency re-measured with the
+   shadow comparison disabled**, since the diagnostic inflates the baseline it
+   is compared against; and a **heap profile** in place of `Model.Footprint()`.
+5. **`td-58cebc`** — control-client silent freeze on a saturated event queue is
+   **unfixed**, is reachable whenever shadow mode is on, and would be reachable
+   on the user path under authority. The epic depends on it.
+
+#### No experimental renderer on the user path
+
+Verified from the code at this gate, not assumed:
+
+- `SIDECAR_TMUX_SCREEN_COMPARE` is read only in `internal/tty/screencompare.go`;
+  it is not a `internal/features` flag and does not appear in config.
+- **No `tmux_byte_screen` flag exists** anywhere in the tree; the registry still
+  holds only `tmux_interactive_input`, `tmux_inline_edit`, `files_auto_refresh`
+  and `notes_plugin`.
+- **Nothing outside `internal/tty` sets `OnModelFrame`** — a tree-wide sweep
+  returns no hits outside that package, so `wantsModelFeed`
+  (`internal/tty/control_manager.go:679`) is false by default: no model is
+  built, no seed transaction is issued, and the `%output` payload is never
+  decoded.
+- `TestCaptureCommandsUnchangedWhenCompareOff` asserts the pre-slice-2 command
+  strings character for character, and
+  `TestCaptureDeliveryUnchangedWhenModelPathOff` asserts the delivered
+  `ControlSnapshot` as an exact struct value.
+- `internal/plugins/workspace/terminal_control.go` is unmodified by the spike.
+  The only shipped user-visible change is the plan's tmux-owned paste
+  prerequisite (`internal/tty/paste.go`, `tty.go`, `workspace/interactive.go`)
+  plus the `refresh-client -A '%N:continue'` quoting fix — both intended
+  Slice 1 product changes, neither a renderer.
+
 ### Slice 3 — terminal-panel canary
 
 - Register `tmux_byte_screen`, default false.
@@ -560,3 +692,8 @@ outcomes is independently reviewed:
 2. **Do not adopt:** the failing fidelity/bootstrap evidence is durable, no
    experimental renderer remains on the user path, and the Herdr replacement
    decision is reopened with the concrete failure as its leading rationale.
+
+**Status:** neither outcome was reached. The recorded gate decision is the third
+branch — **hold**, see "Decision gate outcome" above. Phase 1 ends there; the
+plan is complete only when the hold conditions (`td-b7aa77`) close and the gate
+is re-adjudicated.
