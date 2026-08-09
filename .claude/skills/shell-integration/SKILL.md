@@ -172,9 +172,10 @@ continues independently for provider activity evidence; those captures never
 overwrite a model-owned presentation buffer.
 
 Set `SIDECAR_TERMINAL_TRACE=1` only in an isolated proof run to log privacy-safe
-capture metadata (`surface`, `role`, session/pane identity, reason, generation)
-without terminal text, commands, paths, titles, or provider payloads. This
-distinguishes intentional semantic observation from presentation fallback.
+capture metadata (`surface`, `role`, `reason`, and `generation`). It never logs
+session or pane identity, terminal text, commands, paths, titles, or provider
+payloads. This distinguishes intentional semantic observation from presentation
+fallback.
 
 ### Visibility and focus
 
