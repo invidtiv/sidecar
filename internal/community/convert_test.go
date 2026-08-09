@@ -329,3 +329,19 @@ func isValidHex(s string) bool {
 	}
 	return true
 }
+
+// TestAllSchemesMeetPaletteContrast sweeps every community scheme through the
+// same requirement table the built-in themes are held to, applied at the point
+// the palette actually reaches the UI: after NormalizePalette.
+func TestAllSchemesMeetPaletteContrast(t *testing.T) {
+	for _, name := range ListSchemes() {
+		scheme := GetScheme(name)
+		if scheme == nil {
+			continue
+		}
+		palette := styles.NormalizePalette(Convert(scheme))
+		for _, failure := range styles.CheckPaletteContrast(palette) {
+			t.Errorf("%s: %s", name, failure)
+		}
+	}
+}
