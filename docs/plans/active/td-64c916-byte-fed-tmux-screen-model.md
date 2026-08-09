@@ -575,29 +575,38 @@ Phase 2 must not start until all of these are closed:
    **unfixed**, is reachable whenever shadow mode is on, and would be reachable
    on the user path under authority. The epic depends on it.
 
-#### No experimental renderer on the user path
+#### User-directed terminal-panel canary amendment (2026-08-08)
 
-Verified from the code at this gate, not assumed:
+The hold above remains the verdict for broad adoption, but it no longer means
+that no experimental renderer exists. Marcus explicitly authorized proceeding
+to a locally testable, default-off terminal-panel canary without treating the
+known upstream parser gaps, CPU evidence, or credentialed agent-TUI row as
+blocking that stopping point. The exception is tracked by `td-5f1575` and
+`td-c0d144`; it does not change the open acceptance criteria in `td-b7aa77`.
 
-- `SIDECAR_TMUX_SCREEN_COMPARE` is read only in `internal/tty/screencompare.go`;
-  it is not a `internal/features` flag and does not appear in config.
-- **No `tmux_byte_screen` flag exists** anywhere in the tree; the registry still
-  holds only `tmux_interactive_input`, `tmux_inline_edit`, `files_auto_refresh`
-  and `notes_plugin`.
-- **Nothing outside `internal/tty` sets `OnModelFrame`** — a tree-wide sweep
-  returns no hits outside that package, so `wantsModelFeed`
-  (`internal/tty/control_manager.go:679`) is false by default: no model is
-  built, no seed transaction is issued, and the `%output` payload is never
-  decoded.
-- `TestCaptureCommandsUnchangedWhenCompareOff` asserts the pre-slice-2 command
-  strings character for character, and
-  `TestCaptureDeliveryUnchangedWhenModelPathOff` asserts the delivered
-  `ControlSnapshot` as an exact struct value.
-- `internal/plugins/workspace/terminal_control.go` is unmodified by the spike.
-  The only shipped user-visible change is the plan's tmux-owned paste
-  prerequisite (`internal/tty/paste.go`, `tty.go`, `workspace/interactive.go`)
-  plus the `refresh-client -A '%N:continue'` quoting fix — both intended
-  Slice 1 product changes, neither a renderer.
+The reviewed canary now has these boundaries:
+
+- `tmux_byte_screen` is registered and defaults false. With it disabled, the
+  pre-canary capture path remains exact.
+- Only the workspace terminal panel opts into explicit model authority. Primary
+  agents, shells, and inline editors remain capture-authoritative.
+- Ownership transfers only after the first accepted seeded model frame. Seed
+  and resync captures, lazy older history, shadow comparison, and keyed polling
+  fallback remain available.
+- A live authoritative model suppresses per-burst capture only when no visible
+  capture-authoritative subscriber shares that pane. Model invalidation or
+  control death resumes polling/capture.
+- Independent review closed `td-c0d144`. An isolated live run proved terminal
+  input, loaded-history scrolling, return to the live edge, and hide/show
+  reseeding. The local managed worktree build is the intended evidence-window
+  artifact, not a default-on rollout.
+
+Known gaps remain explicit: the pinned `x/vt` still needs the fixes tracked by
+`td-3c0696`; exact absolute history cannot observe compound ED3-clear-plus-scroll
+inside one arbitrary `Write` until upstream exposes a clear/delta event; and
+`td-2d167d` still owns CPU, heap, latency, load/race, cursor, and credentialed
+agent-TUI evidence. Sidecar does not add a second escape/grapheme parser to hide
+those gaps.
 
 ### Slice 3 — terminal-panel canary
 

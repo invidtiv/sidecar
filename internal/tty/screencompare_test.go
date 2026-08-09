@@ -110,7 +110,7 @@ func buildModelFrame(t *testing.T, width, height int, payload string) screenmode
 func TestCompareIsCleanWhenTheTwoSidesAgree(t *testing.T) {
 	frame := buildModelFrame(t, 20, 4, "\x1b[31mred\x1b[0m plain\r\nsecond line")
 	res := compareCaptureWithModel(screenCompareInput{
-		CaptureOutput: frame.Output, Width: 20, Height: 4,
+		CaptureOutput: frame.CombinedOutput(), Width: 20, Height: 4,
 		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol, CursorVisible: frame.CursorVisible,
 		HistorySize: frame.HistorySize, AltScreen: frame.AltScreen,
 		MouseAny: frame.Mouse.Any(), MouseSGR: frame.Mouse.SGR,
@@ -154,7 +154,7 @@ func TestCompareReportsCellCursorModeAndGeometryDifferences(t *testing.T) {
 func TestCursorIsNotScoredDuringACaptureMetadataRace(t *testing.T) {
 	frame := buildModelFrame(t, 10, 2, "abc")
 	res := compareCaptureWithModel(screenCompareInput{
-		CaptureOutput: frame.Output, Width: 10, Height: 2,
+		CaptureOutput: frame.CombinedOutput(), Width: 10, Height: 2,
 		CursorRow: 1, CursorCol: 9, CursorVisible: true,
 		CursorTrustworthy: false,
 	}, frame)
@@ -289,7 +289,7 @@ func TestHistoryIsComparedAgainstTheCaptureWindow(t *testing.T) {
 		t.Fatal("expected the model to have scrolled lines off")
 	}
 	res := compareCaptureWithModel(screenCompareInput{
-		CaptureOutput: frame.Output, Width: 12, Height: 2,
+		CaptureOutput: frame.CombinedOutput(), Width: 12, Height: 2,
 		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol, CursorVisible: frame.CursorVisible,
 		HistorySize: frame.HistorySize, CursorTrustworthy: true,
 	}, frame)
@@ -303,7 +303,7 @@ func TestHistoryIsComparedAgainstTheCaptureWindow(t *testing.T) {
 
 	// A corrupted history row must be reported under the history kind, not
 	// silently folded into the visible grid.
-	corrupt := strings.Replace(frame.Output, "l1", "XX", 1)
+	corrupt := strings.Replace(frame.CombinedOutput(), "l1", "XX", 1)
 	res = compareCaptureWithModel(screenCompareInput{
 		CaptureOutput: corrupt, Width: 12, Height: 2,
 		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol, CursorVisible: frame.CursorVisible,
@@ -328,7 +328,7 @@ func TestHistoryIsComparedAgainstTheCaptureWindow(t *testing.T) {
 func classOf(t *testing.T, frame screenmodel.Frame, tmuxHistory int) string {
 	t.Helper()
 	res := compareCaptureWithModel(screenCompareInput{
-		CaptureOutput: frame.Output, Width: frame.Width, Height: frame.Height,
+		CaptureOutput: frame.CombinedOutput(), Width: frame.Width, Height: frame.Height,
 		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol, CursorVisible: frame.CursorVisible,
 		HistorySize: tmuxHistory, AltScreen: frame.AltScreen,
 		MouseAny: frame.Mouse.Any(), MouseSGR: frame.Mouse.SGR,

@@ -65,7 +65,7 @@ run real-application-matrix \
     go test ./internal/tty -count=1 -v -timeout 900s -screencompare \
     -screencompare-out "$OUT_DIR/matrix.md" -run TestScreenCompareRealApplicationMatrix
 run alt-screen-attach-finding \
-    go test ./internal/tty -count=1 -v -timeout 300s -screencompare -run TestAltScreenAttachCannotRestoreTheMainScreen
+    go test ./internal/tty -count=1 -v -timeout 300s -screencompare -run TestAltScreenAttachRestoresTheMainScreen
 run sustained-output-soak \
     go test ./internal/tty -count=1 -v -timeout 600s -screencompare -run TestScreenCompareSustainedOutputSoak
 run per-burst-benchmarks \

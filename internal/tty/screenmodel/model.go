@@ -64,9 +64,17 @@ const (
 // rendering; everything else comes from tmux format metadata captured in the
 // same transaction.
 type Seed struct {
-	Output        string
+	Output string
+	// MainOutput is the saved main-screen capture returned by `capture-pane -a`
+	// while Output contains the active alternate grid. It is populated only when
+	// AltScreen is true. Seeding both grids is what lets a later DECSET 1049 exit
+	// restore the same main screen tmux restores.
+	MainOutput    string
+	MainCursorRow int
+	MainCursorCol int
 	CaptureBase   int
 	HistorySize   int
+	HistoryLimit  int
 	Width, Height int
 	CursorRow     int
 	CursorCol     int
@@ -79,11 +87,14 @@ type Seed struct {
 // tty.ControlSnapshot without translation, so the existing viewport, history,
 // search, and selection journey keeps working unchanged.
 type Frame struct {
-	// Output is the ANSI-rendered loaded history followed by the live pane
-	// rows, newline separated, in the same shape `capture-pane -p -e` produces.
-	Output      string
-	CaptureBase int
-	HistorySize int
+	// Output is exactly the live pane rows. LoadedHistory is kept separate so a
+	// frame publication never recopies Sidecar's 600-line history window merely
+	// because the cursor or one cell changed. Consumers that still need the old
+	// capture-shaped string can call CombinedOutput at that compatibility edge.
+	Output        string
+	LoadedHistory HistorySnapshot
+	CaptureBase   int
+	HistorySize   int
 	// HasHistory reports whether any scrolled-off lines are loaded.
 	HasHistory    bool
 	Width, Height int
@@ -114,6 +125,46 @@ type Frame struct {
 	// absolute-history-drift defect. Without it, an absolute history
 	// difference has some other cause.
 	ScrollbackAtCap bool
+}
+
+// HistorySnapshot is an immutable view of the loaded main-screen history at
+// one frame. The model may append to the shared backing buffer, but the view's
+// byte bounds never change; compaction allocates a new backing buffer so older
+// frames remain valid.
+type HistorySnapshot struct {
+	data       *historyBuffer
+	start, end int
+	rows       int
+}
+
+type historyBuffer struct{ bytes []byte }
+
+// Rows reports the number of loaded history rows.
+func (h HistorySnapshot) Rows() int { return h.rows }
+
+// Output renders the loaded history in capture-pane shape. It allocates only
+// when a compatibility consumer explicitly asks for the combined legacy form;
+// ordinary frame publication and the future incremental viewport do not.
+func (h HistorySnapshot) Output() string {
+	if h.data == nil || h.start >= h.end {
+		return ""
+	}
+	end := h.end
+	if h.data.bytes[end-1] == '\n' {
+		end--
+	}
+	return string(h.data.bytes[h.start:end])
+}
+
+// CombinedOutput returns loaded history followed by the live grid, matching
+// capture-pane -p -e. It is the compatibility seam for diagnostics and the
+// current OutputBuffer until that consumer accepts the two pieces directly.
+func (f Frame) CombinedOutput() string {
+	history := f.LoadedHistory.Output()
+	if f.LoadedHistory.Rows() == 0 {
+		return f.Output
+	}
+	return history + "\n" + f.Output
 }
 
 // PaneModel is the behavior contract the workspace will eventually depend on.
@@ -151,9 +202,13 @@ type Model struct {
 	// Absolute tmux history coordinates. The emulator's own scrollback is a
 	// bounded local cache; these keep the viewport's lazy-older-history
 	// requests in tmux's coordinate space.
+	absoluteHistory int
+	historyLimit    int
 	seedCaptureBase int
-	seedHistorySize int
-	baseScrollback  int
+	seedLoaded      int
+	pushedSinceSeed int
+	historyData     *historyBuffer
+	historySpans    [][2]int
 
 	// hardResets counts RIS sequences observed in the byte stream since the
 	// last seed; pendingESC carries a trailing ESC across a Write boundary.
@@ -198,7 +253,13 @@ func (m *Model) reset(width, height int) {
 	m.cursorStyle = CursorBlock
 	m.mouse = MouseState{}
 	m.bracketedPaste = false
-	m.baseScrollback = 0
+	m.absoluteHistory = 0
+	m.historyLimit = 600
+	m.seedCaptureBase = 0
+	m.seedLoaded = 0
+	m.pushedSinceSeed = 0
+	m.historyData = &historyBuffer{}
+	m.historySpans = nil
 	m.hardResets = 0
 	m.pendingESC = false
 
@@ -285,9 +346,18 @@ func (m *Model) Seed(s Seed) error {
 		}
 		m.reset(s.Width, s.Height)
 
+		if s.HistoryLimit > 0 {
+			m.historyLimit = s.HistoryLimit
+		}
+		// Paint the main grid first. When tmux is currently on the alternate
+		// screen MainOutput contains its saved main grid and Output contains the
+		// active alternate grid. Switching before painting would leave the main
+		// screen empty and make the first DECSET 1049 exit diverge permanently.
 		var b strings.Builder
 		if s.AltScreen {
-			b.WriteString("\x1b[?1049h")
+			b.WriteString(seedBody(s.MainOutput))
+			fmt.Fprintf(&b, "\x1b[%d;%dH", s.MainCursorRow+1, s.MainCursorCol+1)
+			b.WriteString("\x1b[?1049h\x1b[H")
 		}
 		b.WriteString(seedBody(s.Output))
 		// tmux reports cursor_x/cursor_y zero-based; CUP is one-based.
@@ -317,9 +387,11 @@ func (m *Model) Seed(s Seed) error {
 			return fmt.Errorf("%w: seed write: %w", ErrModelFault, err)
 		}
 
+		m.absoluteHistory = s.HistorySize
+		m.emu.SetScrollbackSize(m.historyLimit)
 		m.seedCaptureBase = s.CaptureBase
-		m.seedHistorySize = s.HistorySize
-		m.baseScrollback = m.emu.ScrollbackLen()
+		m.seedLoaded = m.emu.ScrollbackLen()
+		m.rebuildLoadedHistory()
 		return nil
 	})
 }
@@ -348,9 +420,40 @@ func (m *Model) Write(p []byte) error {
 			return nil
 		}
 		m.scanHardResets(p)
+		before := m.emu.ScrollbackLen()
+		// x/vt's ScrollbackLen is bounded, but tmux history_size is absolute. Give
+		// this write enough temporary headroom that every pushed row is observable,
+		// then trim back to Sidecar's loaded-history window. A single input byte can
+		// scroll at most one screenful (for example a compact CSI SU), so this bound
+		// scales with the byte delta and geometry rather than session lifetime.
+		headroom := before + len(p)*max(m.height, 1)
+		if headroom < before { // integer overflow from a hostile payload
+			headroom = int(^uint(0) >> 1)
+		}
+		m.emu.SetScrollbackSize(max(headroom, m.historyLimit))
 		if _, err := m.emu.Write(p); err != nil {
 			return fmt.Errorf("%w: write: %w", ErrModelFault, err)
 		}
+		after := m.emu.ScrollbackLen()
+		if after > before {
+			pushed := after - before
+			m.absoluteHistory += pushed
+			m.pushedSinceSeed += pushed
+			m.appendLoadedHistory(after-pushed, after)
+		} else if after < before {
+			// The only byte-stream operation x/vt exposes that shrinks main
+			// scrollback is ED 3 (CSI 3 J), which tmux also defines as clearing
+			// history_size. `after` may be non-zero when the same payload clears
+			// and then scrolls new rows, so reset the absolute coordinate system to
+			// the post-write buffer rather than blindly setting it to zero.
+			m.absoluteHistory = after
+			m.seedCaptureBase = 0
+			m.seedLoaded = after
+			m.pushedSinceSeed = 0
+			m.rebuildLoadedHistory()
+		}
+		m.emu.SetScrollbackSize(m.historyLimit)
+		m.trimLoadedHistory(m.historyLimit)
 		return nil
 	})
 }
@@ -414,43 +517,49 @@ func (m *Model) Frame() (Frame, error) {
 
 func (m *Model) frame() Frame {
 	f := Frame{
-		Width:           m.width,
-		Height:          m.height,
-		CursorVisible:   m.cursorVisible,
-		AltScreen:       m.altScreen,
-		Mouse:           m.mouse,
-		CursorStyle:     m.cursorStyle,
-		BracketedPaste:  m.bracketedPaste,
-		CaptureBase:     m.seedCaptureBase,
+		Width:          m.width,
+		Height:         m.height,
+		CursorVisible:  m.cursorVisible,
+		AltScreen:      m.altScreen,
+		Mouse:          m.mouse,
+		CursorStyle:    m.cursorStyle,
+		BracketedPaste: m.bracketedPaste,
+		CaptureBase: max(m.seedCaptureBase+
+			(m.seedLoaded+m.pushedSinceSeed-m.emu.ScrollbackLen()), 0),
 		HardResets:      m.hardResets,
-		ScrollbackAtCap: m.emu.ScrollbackLen() >= DefaultScrollback,
+		ScrollbackAtCap: false,
 	}
 	pos := m.emu.CursorPosition()
 	f.CursorCol, f.CursorRow = pos.X, pos.Y
 
-	screen := m.emu.Render()
-	if m.altScreen {
-		// The alternate screen has no scrollback, and tmux freezes
-		// history_size while an application owns it — at the value it had when
-		// the application switched, which includes everything that scrolled off
-		// the main screen since the seed. Reporting the seed's value alone made
-		// the model claim a history of 1 where tmux reported 202 for the same
-		// pane (slice 2 shadow run).
-		f.Output = screen
-		f.HistorySize = m.seedHistorySize + m.scrolledOff()
-	} else {
-		history := m.historyLines()
-		f.HistorySize = m.seedHistorySize + m.scrolledOff()
-		f.HasHistory = f.HistorySize > 0
-		if len(history) > 0 {
-			f.Output = strings.Join(history, "\n") + "\n" + screen
-		} else {
-			f.Output = screen
-		}
-	}
+	screen := ensureOutputRows(m.emu.Render(), m.height)
+	// The viewport's capture-shaped input always contains the loaded tail of the
+	// main-screen history above the live grid, including while a full-screen
+	// application owns the alternate screen. tmux freezes history_size in that
+	// mode but capture-pane -S still returns those rows; omitting them here made
+	// the user's scrollback disappear exactly when less/vim/top was active.
+	f.HistorySize = m.absoluteHistory
+	f.HasHistory = f.HistorySize > 0
+	f.Output = screen
+	f.LoadedHistory = m.loadedHistorySnapshot()
 
 	f.Cells = m.grid()
 	return f
+}
+
+func ensureOutputRows(output string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	rows := strings.Count(output, "\n") + 1
+	if rows < height {
+		return output + strings.Repeat("\n", height-rows)
+	}
+	if rows > height {
+		lines := strings.Split(output, "\n")
+		return strings.Join(lines[len(lines)-height:], "\n")
+	}
+	return output
 }
 
 // approxCellBytes is a fixed per-cell accounting weight for [Model.Footprint].
@@ -470,43 +579,68 @@ func (m *Model) Footprint() int64 {
 		if sb := m.emu.Scrollback(); sb != nil {
 			lines += int64(sb.Len())
 		}
-		out = lines * int64(m.width) * approxCellBytes
+		out = lines*int64(m.width)*approxCellBytes + int64(len(m.historyData.bytes))
 		return nil
 	})
 	return out
 }
 
-// scrolledOff is the number of lines the model has pushed into scrollback
-// since seeding.
-//
-// Known limitation (slice 0): once the emulator's scrollback reaches
-// DefaultScrollback the oldest line is dropped on every push, so this delta
-// stops growing and the absolute history count under-reports. Sidecar's
-// capture window is 600 lines, far below the cap, so nothing in this slice is
-// affected; slice 1 owns real absolute-coordinate tracking.
-func (m *Model) scrolledOff() int {
-	n := m.emu.ScrollbackLen() - m.baseScrollback
-	if n < 0 {
-		return 0
-	}
-	return n
-}
-
-// historyLines renders the loaded scrolled-off lines.
-func (m *Model) historyLines() []string {
+func (m *Model) rebuildLoadedHistory() {
+	m.historyData = &historyBuffer{}
+	m.historySpans = nil
 	sb := m.emu.Scrollback()
 	if sb == nil {
-		return nil
+		return
 	}
-	n := sb.Len()
-	if n == 0 {
-		return nil
+	m.appendLoadedHistory(0, sb.Len())
+}
+
+func (m *Model) appendLoadedHistory(start, end int) {
+	sb := m.emu.Scrollback()
+	if sb == nil || start >= end {
+		return
 	}
-	out := make([]string, 0, n)
-	for i := range n {
-		out = append(out, sb.Line(i).Render())
+	for i := start; i < end; i++ {
+		from := len(m.historyData.bytes)
+		m.historyData.bytes = append(m.historyData.bytes, sb.Line(i).Render()...)
+		m.historyData.bytes = append(m.historyData.bytes, '\n')
+		m.historySpans = append(m.historySpans, [2]int{from, len(m.historyData.bytes)})
 	}
-	return out
+}
+
+func (m *Model) trimLoadedHistory(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	if drop := len(m.historySpans) - limit; drop > 0 {
+		m.historySpans = m.historySpans[drop:]
+	}
+	if len(m.historySpans) == 0 {
+		m.historyData = &historyBuffer{}
+		return
+	}
+	// Compact only after the dead prefix dominates. This keeps retained memory
+	// bounded while making rolling-window maintenance amortized O(byte delta).
+	start := m.historySpans[0][0]
+	if start > 64<<10 && start > len(m.historyData.bytes)/2 {
+		old := m.historyData.bytes
+		fresh := &historyBuffer{bytes: append([]byte(nil), old[start:]...)}
+		for i := range m.historySpans {
+			m.historySpans[i][0] -= start
+			m.historySpans[i][1] -= start
+		}
+		m.historyData = fresh
+	}
+}
+
+func (m *Model) loadedHistorySnapshot() HistorySnapshot {
+	if len(m.historySpans) == 0 {
+		return HistorySnapshot{}
+	}
+	return HistorySnapshot{
+		data: m.historyData, start: m.historySpans[0][0],
+		end: m.historySpans[len(m.historySpans)-1][1], rows: len(m.historySpans),
+	}
 }
 
 // grid converts the visible screen into canonical cells.

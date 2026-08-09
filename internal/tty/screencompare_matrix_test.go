@@ -604,20 +604,11 @@ func TestScreenCompareRealApplicationMatrix(t *testing.T) {
 	}
 }
 
-// scenariosExpectedToDiverge are the rows whose divergence is this slice's
-// recorded finding rather than an accident. They are asserted to *keep*
-// diverging, exactly like TestAltScreenAttachCannotRestoreTheMainScreen: if one
-// of them goes clean, the evidence document is wrong and must be rewritten
-// rather than have the assertion relaxed.
-var scenariosExpectedToDiverge = map[string]string{
-	"editor-nvim-or-vim": "a seed/resync taken while the pane is on the alternate screen can only " +
-		"carry the alternate grid, so the model's main screen is lost and never recovers",
-}
-
 // scenariosExpectedClean must produce zero unexplained cells. A regression here
 // is a real fidelity failure.
 var scenariosExpectedClean = map[string]bool{
 	"zsh-prompt-editing":       true,
+	"editor-nvim-or-vim":       true,
 	"editor-no-resync-control": true,
 	"less":                     true,
 	"top-continuous-update":    true,
@@ -659,13 +650,13 @@ func assertMatrixFidelity(t *testing.T, results []scenarioResult) {
 		if r.Name != "forced-control-failure" && s.Comparisons == 0 {
 			t.Errorf("%s: zero comparisons — the scenario proved nothing", r.Name)
 		}
+		if defects := r.adapterDefectCells(); defects != 0 {
+			t.Errorf("%s: %d Sidecar adapter-defect mismatches remain (classes %v)",
+				r.Name, defects, s.MismatchesByClass)
+		}
 		if scenariosExpectedClean[r.Name] && r.unexplained() != 0 {
 			t.Errorf("%s: expected zero unexplained cells, got %d (signatures %v)",
 				r.Name, r.unexplained(), s.MismatchesBySignature)
-		}
-		if why, ok := scenariosExpectedToDiverge[r.Name]; ok && r.unexplained() == 0 {
-			t.Errorf("%s: EXPECTED DIVERGENCE DID NOT REPRODUCE (%s). If this is a real fix, the "+
-				"slice-2 evidence must be rewritten, not this assertion relaxed.", r.Name, why)
 		}
 	}
 	if ran < 3 {
@@ -908,21 +899,10 @@ func tmuxVersionForReport() string {
 	return string(out)
 }
 
-// TestAltScreenAttachCannotRestoreTheMainScreen pins the slice-2 headline
-// finding as evidence rather than prose.
-//
-// A seed built from `capture-pane` while an application owns the alternate
-// screen can only carry the *alternate* grid, so the model's main screen is
-// empty. tmux kept the real one. The moment the application exits the alternate
-// screen the two disagree about the whole visible grid, and nothing resyncs, so
-// the divergence is permanent. This is the plan's "mid-stream attach is the
-// central risk" made concrete.
-//
-// The test also records the remedy: tmux's `capture-pane -a` returns the saved
-// main screen while the pane is on the alternate screen, so a seed transaction
-// that captured both could converge. That is a slice-3 design change and is
-// deliberately not made here.
-func TestAltScreenAttachCannotRestoreTheMainScreen(t *testing.T) {
+// TestAltScreenAttachRestoresTheMainScreen is the regression for a mid-alt
+// attach or resync: Sidecar seeds the saved main grid and active alternate grid
+// in one ordered transaction, so leaving the alternate screen converges.
+func TestAltScreenAttachRestoresTheMainScreen(t *testing.T) {
 	if !*runMatrix {
 		t.Skip("pass -screencompare to run the slice-2 evidence matrix")
 	}
@@ -950,8 +930,7 @@ func TestAltScreenAttachCannotRestoreTheMainScreen(t *testing.T) {
 		t.Fatal("plain capture-pane returned main-screen content while on the alternate screen; " +
 			"the premise of this finding does not hold")
 	}
-	t.Log("recorded: `capture-pane -a` returns the saved main screen while alternate_on=1, " +
-		"so a two-capture seed is a viable slice-3 remedy")
+	t.Log("verified: `capture-pane -a` returns the saved main screen while alternate_on=1")
 
 	// Now attach mid-alternate-screen, exactly as a pane switch or a Sidecar
 	// restart does.
@@ -962,8 +941,8 @@ func TestAltScreenAttachCannotRestoreTheMainScreen(t *testing.T) {
 	})
 	h.settle(1 * time.Second)
 
-	// Leave the alternate screen. tmux restores the real main screen; the model
-	// restores the empty one it was seeded with.
+	// Leave the alternate screen. tmux and the model must restore the same saved
+	// main grid, cursor and loaded history without another seed.
 	ResetScreenCompare()
 	h.tmux.typeLine("printf '\\033[?1049l'")
 	h.settle(1500 * time.Millisecond)
@@ -974,13 +953,10 @@ func TestAltScreenAttachCannotRestoreTheMainScreen(t *testing.T) {
 	if stats.Comparisons == 0 {
 		t.Fatal("no comparison ran after the alternate-screen exit")
 	}
-	if stats.FramesWithMismatch == 0 {
-		t.Fatal("EXPECTED FAILURE DID NOT REPRODUCE: the model restored the main screen after " +
-			"a mid-alternate-screen attach. If this is a real fix, the slice-2 evidence must be " +
-			"rewritten, not this assertion relaxed.")
-	}
-	if stats.MismatchesBySignature["cell/grapheme"] == 0 {
-		t.Errorf("expected whole-grid content divergence, got %v", stats.MismatchesBySignature)
+	if stats.FramesWithMismatch != 0 || stats.ComparisonsClean != stats.Comparisons {
+		t.Fatalf("mid-alt attach did not converge: clean=%d/%d mismatched=%d signatures=%v classes=%v",
+			stats.ComparisonsClean, stats.Comparisons, stats.FramesWithMismatch,
+			stats.MismatchesBySignature, stats.MismatchesByClass)
 	}
 }
 

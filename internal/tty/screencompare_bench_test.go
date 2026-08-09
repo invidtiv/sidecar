@@ -63,12 +63,10 @@ func BenchmarkModelPathWritePerBurst(b *testing.B) {
 	}
 }
 
-// BenchmarkModelPathRenderPerFrame is the other half: rendering a frame. It is
-// separated because it is the part that does NOT scale with the byte delta —
-// today publishModelFrames re-renders the whole loaded history plus the grid on
-// every coalesced tick, which is the same order of work as parsing a capture.
-// The gate's "scales with the delta, not the capture window" criterion is
-// decided by this number, not by the write above.
+// BenchmarkModelPathRenderPerFrame is the other half: rendering a frame. Loaded
+// history is an immutable view maintained incrementally by Write, so the 600-row
+// case must cost the same order as the zero-history case: current-grid work,
+// not a second rendering of the capture window.
 func BenchmarkModelPathRenderPerFrame(b *testing.B) {
 	for _, history := range []int{0, 600} {
 		b.Run(fmt.Sprint("history=", history), func(b *testing.B) {
@@ -108,7 +106,7 @@ func BenchmarkShadowComparePerCapture(b *testing.B) {
 		b.Fatal(err)
 	}
 	in := screenCompareInput{
-		CaptureOutput: frame.Output, Width: 80, Height: 24,
+		CaptureOutput: frame.CombinedOutput(), Width: 80, Height: 24,
 		CursorRow: frame.CursorRow, CursorCol: frame.CursorCol,
 		CursorVisible: frame.CursorVisible, HistorySize: frame.HistorySize,
 		CursorTrustworthy: true,

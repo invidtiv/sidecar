@@ -14,6 +14,7 @@ type testWriteCloser struct {
 	mu       sync.Mutex
 	buffer   bytes.Buffer
 	writeErr error
+	writes   int
 	closes   int
 }
 
@@ -23,7 +24,43 @@ func (w *testWriteCloser) Write(p []byte) (int, error) {
 	if w.writeErr != nil {
 		return 0, w.writeErr
 	}
+	w.writes++
 	return w.buffer.Write(p)
+}
+
+func TestProcessControlChannelSendTripleUsesOneWriteAndThreeFIFOResponses(t *testing.T) {
+	writer := &testWriteCloser{}
+	channel := &processControlChannel{
+		stdin:   writer,
+		events:  make(chan controlEvent, 3),
+		done:    make(chan error, 1),
+		dead:    make(chan struct{}),
+		ready:   make(chan struct{}),
+		readyOK: true,
+	}
+	var got []string
+	callback := func(response controlResponse) {
+		got = append(got, strings.Join(response.Lines, ""))
+	}
+	if err := channel.SendTriple("metadata", "capture-main", "capture-active", callback, callback, callback); err != nil {
+		t.Fatal(err)
+	}
+	if writer.writes != 1 || writer.buffer.String() != "metadata\ncapture-main\ncapture-active\n" {
+		t.Fatalf("writes = %d, payload = %q", writer.writes, writer.buffer.String())
+	}
+	for _, response := range []string{"meta", "main", "active"} {
+		channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Lines: []string{response}}})
+	}
+	for range 3 {
+		event := <-channel.Events()
+		if event.Callback == nil {
+			t.Fatal("response did not retain its FIFO callback")
+		}
+		event.Callback(event.Response)
+	}
+	if strings.Join(got, ",") != "meta,main,active" {
+		t.Fatalf("callbacks = %#v", got)
+	}
 }
 
 func (w *testWriteCloser) Close() error {
@@ -39,6 +76,7 @@ func TestProcessControlChannelCorrelatesResponsesFIFO(t *testing.T) {
 		stdin:   writer,
 		events:  make(chan controlEvent, 4),
 		done:    make(chan error, 1),
+		dead:    make(chan struct{}),
 		ready:   make(chan struct{}),
 		readyOK: true,
 	}
@@ -86,6 +124,7 @@ func TestProcessControlChannelWriteFailureSignalsDone(t *testing.T) {
 		stdin:   writer,
 		events:  make(chan controlEvent, 1),
 		done:    make(chan error, 1),
+		dead:    make(chan struct{}),
 		ready:   make(chan struct{}),
 		readyOK: true,
 	}
@@ -136,6 +175,7 @@ func TestProcessControlChannelPartialWriteKeepsTheFIFOAligned(t *testing.T) {
 				stdin:   &partialWriteCloser{n: tc.written},
 				events:  make(chan controlEvent, 4),
 				done:    make(chan error, 1),
+				dead:    make(chan struct{}),
 				ready:   make(chan struct{}),
 				readyOK: true,
 			}
@@ -153,11 +193,44 @@ func TestProcessControlChannelPartialWriteKeepsTheFIFOAligned(t *testing.T) {
 	}
 }
 
+func TestProcessControlChannelTriplePartialWriteKeepsTheFIFOAligned(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		written     int
+		wantPending int
+	}{
+		{name: "nothing reached tmux", written: 0, wantPending: 0},
+		{name: "one command line reached tmux", written: len("metadata\n"), wantPending: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &processControlChannel{
+				stdin:   &partialWriteCloser{n: tc.written},
+				events:  make(chan controlEvent, 4),
+				done:    make(chan error, 1),
+				dead:    make(chan struct{}),
+				ready:   make(chan struct{}),
+				readyOK: true,
+			}
+			noop := func(controlResponse) {}
+			if err := channel.SendTriple("metadata", "capture-main", "capture-active", noop, noop, noop); err == nil {
+				t.Fatal("write error not returned")
+			}
+			channel.mu.Lock()
+			pending := len(channel.pending)
+			channel.mu.Unlock()
+			if pending != tc.wantPending {
+				t.Fatalf("pending callbacks = %d, want %d", pending, tc.wantPending)
+			}
+		})
+	}
+}
+
 func TestProcessControlChannelReadLoopHandlesHandshakeAndEOF(t *testing.T) {
 	channel := &processControlChannel{
 		stdin:  &testWriteCloser{},
 		events: make(chan controlEvent, 1),
 		done:   make(chan error, 1),
+		dead:   make(chan struct{}),
 		ready:  make(chan struct{}),
 	}
 	channel.readLoop(strings.NewReader("%begin 1 1 0\nattached\n%end 1 1 0\n"))
@@ -183,6 +256,7 @@ func TestProcessControlChannelCloseIsIdempotent(t *testing.T) {
 		stdin:  writer,
 		events: make(chan controlEvent, 1),
 		done:   make(chan error, 1),
+		dead:   make(chan struct{}),
 		ready:  make(chan struct{}),
 	}
 	if err := channel.Close(); err != nil {

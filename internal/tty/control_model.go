@@ -154,6 +154,9 @@ type paneModelFeed struct {
 	// between the two, which is the seed-race detector.
 	metaLines     []string
 	metaSeen      bool
+	mainLines     []string
+	mainErr       error
+	mainSeen      bool
 	rawDuringMeta int
 	seedRaces     int
 
@@ -193,18 +196,25 @@ func (f *paneModelFeed) close() {
 // from bytes if the application re-enables them. Recorded as a seed gap.
 const seedMetadataFormat = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}," +
 	"#{history_size},#{alternate_on},#{mouse_standard_flag},#{mouse_button_flag}," +
-	"#{mouse_all_flag},#{mouse_sgr_flag},#{client_discarded},#{pane_id}"
+	"#{mouse_all_flag},#{mouse_sgr_flag},#{client_discarded},#{pane_id}," +
+	"#{alternate_saved_x},#{alternate_saved_y}"
 
-func buildSeedCommands(pane string, scrollback int) (metadata, capture string, err error) {
+func buildSeedCommands(pane string, scrollback int) (metadata, mainCapture, capture string, err error) {
 	if !controlPanePattern.MatchString(pane) {
-		return "", "", fmt.Errorf("tmux control: invalid pane %q", pane)
+		return "", "", "", fmt.Errorf("tmux control: invalid pane %q", pane)
 	}
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
 	}
 	metadata = "display-message -p -t " + pane + " '" + seedMetadataFormat + "'"
+	// capture-pane -a returns the saved main grid while alternate_on=1. It
+	// intentionally errors on an ordinary main-screen pane; the ordered seed
+	// actor ignores that middle response unless the preceding metadata says the
+	// alternate screen is active. Keeping it unconditional gives SendTriple a
+	// fixed three-response transaction with no race between metadata and capture.
+	mainCapture = "capture-pane -p -e -a -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
-	return metadata, capture, nil
+	return metadata, mainCapture, capture, nil
 }
 
 // seedMetadata is the parsed metadata half of a seed transaction.
@@ -219,11 +229,13 @@ type seedMetadata struct {
 	Mouse         screenmodel.MouseState
 	Discarded     int64
 	PaneID        string
+	MainCursorCol int
+	MainCursorRow int
 }
 
 func parseSeedMetadata(line string) (seedMetadata, error) {
 	parts := strings.Split(strings.TrimSpace(line), ",")
-	if len(parts) != 13 {
+	if len(parts) != 15 {
 		return seedMetadata{}, fmt.Errorf("tmux control seed: invalid metadata %q", line)
 	}
 	number := func(index int) (int, error) { return strconv.Atoi(parts[index]) }
@@ -232,10 +244,13 @@ func parseSeedMetadata(line string) (seedMetadata, error) {
 	height, errHeight := number(3)
 	width, errWidth := number(4)
 	history, errHistory := number(5)
-	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil || errHistory != nil {
+	mainCol, errMainCol := number(13)
+	mainRow, errMainRow := number(14)
+	if errCol != nil || errRow != nil || errHeight != nil || errWidth != nil || errHistory != nil ||
+		errMainCol != nil || errMainRow != nil {
 		return seedMetadata{}, fmt.Errorf("tmux control seed: invalid metadata %q", line)
 	}
-	if width < 1 || height < 1 || history < 0 || col < 0 || row < 0 {
+	if width < 1 || height < 1 || history < 0 || col < 0 || row < 0 || mainCol < 0 || mainRow < 0 {
 		return seedMetadata{}, fmt.Errorf("tmux control seed: impossible metadata %q", line)
 	}
 	// client_discarded is empty when the command runs outside a control client.
@@ -263,8 +278,10 @@ func parseSeedMetadata(line string) (seedMetadata, error) {
 			AnyEvent:    flag(9),
 			SGR:         flag(10),
 		},
-		Discarded: discarded,
-		PaneID:    parts[12],
+		Discarded:     discarded,
+		PaneID:        parts[12],
+		MainCursorCol: mainCol,
+		MainCursorRow: mainRow,
 	}, nil
 }
 
@@ -364,7 +381,7 @@ func (c *sessionControlClient) beginSeed(feed *paneModelFeed, reason ResyncReaso
 		}
 		return
 	}
-	metadata, capture, err := buildSeedCommands(feed.pane, feed.scrollback)
+	metadata, mainCapture, capture, err := buildSeedCommands(feed.pane, feed.scrollback)
 	if err != nil {
 		c.faultFeed(feed, ResyncModelFault, err)
 		return
@@ -372,6 +389,9 @@ func (c *sessionControlClient) beginSeed(feed *paneModelFeed, reason ResyncReaso
 	feed.state = modelSeeding
 	feed.metaLines = nil
 	feed.metaSeen = false
+	feed.mainLines = nil
+	feed.mainErr = nil
+	feed.mainSeen = false
 	feed.rawDuringMeta = 0
 	feed.seedPending = false
 	feed.pendingWhy = 0
@@ -383,10 +403,27 @@ func (c *sessionControlClient) beginSeed(feed *paneModelFeed, reason ResyncReaso
 	onCapture := func(response controlResponse) {
 		c.seedCaptureResponse(id, generation, reason, response)
 	}
+	onMainCapture := func(response controlResponse) {
+		c.seedMainCaptureResponse(id, generation, response)
+	}
 	screenCompareStats.bump(&screenCompareStats.SeedCaptures, 1)
-	if err := c.channel.SendPair(metadata, capture, onMetadata, onCapture); err != nil {
+	if err := c.channel.SendTriple(metadata, mainCapture, capture, onMetadata, onMainCapture, onCapture); err != nil {
 		c.faultFeed(feed, ResyncModelFault, fmt.Errorf("tmux control seed write: %w", err))
 	}
+}
+
+func (c *sessionControlClient) seedMainCaptureResponse(id, generation uint64, response controlResponse) {
+	feed := c.liveFeed(id, generation)
+	if feed == nil || feed.state != modelSeeding {
+		return
+	}
+	if !feed.metaSeen {
+		c.faultFeed(feed, ResyncModelFault, errors.New("tmux control seed: main capture without metadata"))
+		return
+	}
+	feed.mainLines = response.Lines
+	feed.mainErr = response.Err
+	feed.mainSeen = true
 }
 
 func (c *sessionControlClient) liveFeed(id, generation uint64) *paneModelFeed {
@@ -424,6 +461,10 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 		c.faultFeed(feed, ResyncModelFault, errors.New("tmux control seed: capture without metadata"))
 		return
 	}
+	if !feed.mainSeen {
+		c.faultFeed(feed, ResyncModelFault, errors.New("tmux control seed: active capture without main capture response"))
+		return
+	}
 	if feed.rawDuringMeta > 0 {
 		// Pane bytes landed between the two halves of the transaction, so the
 		// metadata cursor describes an older screen than the capture. Those
@@ -437,9 +478,15 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 		return
 	}
 
-	seed, meta, err := seedFromResponses(feed.metaLines, response.Lines, feed.scrollback)
+	seed, meta, err := seedFromResponses(feed.metaLines, feed.mainLines, response.Lines, feed.scrollback)
+	if err == nil && meta.AltScreen && feed.mainErr != nil {
+		err = fmt.Errorf("tmux control seed: saved main capture: %w", feed.mainErr)
+	}
 	feed.metaLines = nil
 	feed.metaSeen = false
+	feed.mainLines = nil
+	feed.mainErr = nil
+	feed.mainSeen = false
 	if err != nil {
 		c.faultFeed(feed, ResyncModelFault, err)
 		return
@@ -674,7 +721,7 @@ func (c *sessionControlClient) discardResponse(response controlResponse) {
 }
 
 // seedFromResponses turns a completed seed transaction into a model seed.
-func seedFromResponses(metaLines, captureLines []string, scrollback int) (screenmodel.Seed, seedMetadata, error) {
+func seedFromResponses(metaLines, mainLines, captureLines []string, scrollback int) (screenmodel.Seed, seedMetadata, error) {
 	if len(metaLines) == 0 {
 		return screenmodel.Seed{}, seedMetadata{}, errors.New("tmux control seed: missing metadata response")
 	}
@@ -686,15 +733,34 @@ func seedFromResponses(metaLines, captureLines []string, scrollback int) (screen
 		scrollback = DefaultScrollbackLines
 	}
 	captureBase := max(meta.HistorySize-scrollback, 0)
+	activeLines := captureLines
+	mainOutput := mainLines
 	if meta.AltScreen {
-		// tmux freezes history while an application owns the alternate screen
-		// and capture returns the alternate grid only.
-		captureBase = meta.HistorySize
+		// Plain capture-pane -S returns the main screen's loaded history followed
+		// by the alternate grid. capture-pane -a returns only the saved main grid
+		// (it ignores -S). Reattach the shared history prefix to that saved grid,
+		// then seed only the final Height rows into the alternate screen.
+		historyRows := max(len(captureLines)-meta.Height, 0)
+		expectedHistory := min(meta.HistorySize, scrollback)
+		missingHistory := max(expectedHistory-historyRows, 0)
+		mainOutput = make([]string, 0, missingHistory+historyRows+len(mainLines))
+		// tmux can omit a leading all-blank history row from an alternate-screen
+		// capture immediately after a resize even though history_size already
+		// includes it. Preserve its absolute row as a blank placeholder; otherwise
+		// the viewport loses a line and the next ordinary capture grows by one.
+		mainOutput = append(mainOutput, make([]string, missingHistory)...)
+		mainOutput = append(mainOutput, captureLines[:historyRows]...)
+		mainOutput = append(mainOutput, mainLines...)
+		activeLines = captureLines[historyRows:]
 	}
 	return screenmodel.Seed{
-		Output:        strings.Join(captureLines, "\n"),
+		Output:        strings.Join(activeLines, "\n"),
+		MainOutput:    strings.Join(mainOutput, "\n"),
+		MainCursorRow: meta.MainCursorRow,
+		MainCursorCol: meta.MainCursorCol,
 		CaptureBase:   captureBase,
 		HistorySize:   meta.HistorySize,
+		HistoryLimit:  scrollback,
 		Width:         meta.Width,
 		Height:        meta.Height,
 		CursorRow:     meta.CursorRow,

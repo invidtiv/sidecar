@@ -572,7 +572,7 @@ func compareCaptureWithModel(in screenCompareInput, frame screenmodel.Frame) scr
 		add(screenmodel.Mismatch{Kind: "history", Field: "size", Row: -1, Col: -1}, class)
 	}
 	if len(history) > 0 {
-		modelLines := splitCaptureLines(frame.Output)
+		modelLines := splitCaptureLines(frame.CombinedOutput())
 		_, modelHistory := splitVisibleAndHistory(modelLines, frame.Height)
 		if len(modelHistory) < len(history) {
 			class := gapClassUnexplained

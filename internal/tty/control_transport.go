@@ -20,6 +20,9 @@ type controlChannel interface {
 	// the FIFO 1:1. This exists so a seed transaction's metadata and its
 	// rendered capture describe the same moment.
 	SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error
+	// SendTriple has the same atomic-write and FIFO-response contract as
+	// SendPair for transactions that require three distinct tmux responses.
+	SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error
 	Events() <-chan controlEvent
 	Done() <-chan error
 	Close() error
@@ -32,6 +35,7 @@ type processControlChannel struct {
 	stdin  io.WriteCloser
 	events chan controlEvent
 	done   chan error
+	dead   chan struct{}
 	ready  chan struct{}
 
 	parser controlParser
@@ -84,6 +88,7 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 		stdin:  stdin,
 		events: make(chan controlEvent, 128),
 		done:   make(chan error, 1),
+		dead:   make(chan struct{}),
 		ready:  make(chan struct{}),
 	}
 	if err := cmd.Start(); err != nil {
@@ -116,6 +121,13 @@ func (c *processControlChannel) Send(command string, callback func(controlRespon
 
 func (c *processControlChannel) SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error {
 	return c.write([]string{first, second}, []func(controlResponse){firstCallback, secondCallback})
+}
+
+func (c *processControlChannel) SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error {
+	return c.write(
+		[]string{first, second, third},
+		[]func(controlResponse){firstCallback, secondCallback, thirdCallback},
+	)
 }
 
 // write emits every command in one io.WriteString so tmux reads the whole group
@@ -227,7 +239,7 @@ func (c *processControlChannel) dispatch(event controlEvent) {
 	}
 	select {
 	case c.events <- event:
-	case <-c.done:
+	case <-c.dead:
 	}
 }
 
@@ -240,5 +252,6 @@ func (c *processControlChannel) finish(err error) {
 		case c.done <- err:
 		default:
 		}
+		close(c.dead)
 	})
 }

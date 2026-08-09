@@ -54,6 +54,11 @@ type ControlRequest struct {
 	Focused    bool
 	OnSnapshot func(ControlSnapshot)
 	OnFallback func(error)
+	// ModelAuthority explicitly permits a live byte-fed model to suppress the
+	// ordinary capture scheduled for each output burst. It is intentionally
+	// separate from OnModelFrame: shadow comparison requests model frames while
+	// capture remains authoritative.
+	ModelAuthority bool
 
 	// OnModelFrame opts this subscription into the byte-fed screen model
 	// (slice 1 of the td-64c916 spike). It is nil everywhere in production:
@@ -620,7 +625,9 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 			}
 		}
 		c.feedModels(event)
-		c.markDirty(event.Pane)
+		if !c.liveModelIsAuthoritative(event.Pane) {
+			c.markDirty(event.Pane)
+		}
 	case controlEventLayout:
 		if event.Pane != "" {
 			c.requestSeedForPane(event.Pane, ResyncLayout)
@@ -650,6 +657,46 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 		c.failAllModels(ResyncReconnect, err)
 		c.manager.clientFailed(c, err)
 	}
+}
+
+// liveModelIsAuthoritative runs only on the ordered actor. A request alone is
+// insufficient: capture remains the fallback until its model is fully seeded
+// and live, and resumes automatically during every reseed or terminal fault.
+func (c *sessionControlClient) liveModelIsAuthoritative(pane string) bool {
+	// Shadow mode deliberately retains capture as its independent oracle even
+	// when the product canary is enabled for this subscription.
+	if ScreenCompareEnabled() {
+		return false
+	}
+	authoritative := false
+	for id, feed := range c.models {
+		if feed.pane != pane || feed.state != modelLive {
+			continue
+		}
+		c.mu.Lock()
+		sub, ok := c.subs[id]
+		live := ok && !c.closed && sub.generation == feed.generation && sub.request.ModelAuthority
+		c.mu.Unlock()
+		if live {
+			authoritative = true
+			break
+		}
+	}
+	if !authoritative {
+		return false
+	}
+	// Capture is pane-scoped, not subscription-scoped. A visible primary
+	// agent/shell may observe the same pane as the focused canary panel; capture
+	// delivery includes that subscriber even when it is unfocused, so it still
+	// preserves capture authority while the panel ignores the shared snapshot.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, sub := range c.subs {
+		if sub.request.Pane == pane && sub.request.Visible && !sub.request.ModelAuthority {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *sessionControlClient) add(sub managerControlSubscription) {

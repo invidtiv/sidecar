@@ -180,10 +180,83 @@ func TestHistoryGrowsAsLinesScrollOff(t *testing.T) {
 	// Output is what becomes ControlSnapshot.Output, so its shape is a contract,
 	// not a smoke test: the loaded scrolled-off lines in order, then exactly
 	// Height live rows, newline separated and nothing else.
-	got := strings.Split(f.Output, "\n")
+	got := strings.Split(f.CombinedOutput(), "\n")
 	want := []string{"a", "b", "c", "d", "e"}
 	if !slices.Equal(got, want) {
 		t.Errorf("output lines = %#v, want %#v (2 scrolled-off then the 3 live rows)", got, want)
+	}
+}
+
+func TestAbsoluteHistoryOutgrowsRetainedScrollback(t *testing.T) {
+	m := New(8, 2)
+	defer m.Close()
+	if err := m.Seed(Seed{
+		Output: "seed-a\nseed-b", Width: 8, Height: 2,
+		HistorySize: 100, CaptureBase: 100, HistoryLimit: 3, CursorRow: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write([]byte("\r\n01\r\n02\r\n03\r\n04\r\n05\r\n06\r\n07\r\n08\r\n09\r\n10")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.HistorySize != 110 {
+		t.Fatalf("absolute history = %d, want 110 after ten rows scroll off", f.HistorySize)
+	}
+	if got := m.emu.ScrollbackLen(); got != 3 {
+		t.Fatalf("retained scrollback = %d, want configured window 3", got)
+	}
+	if f.CaptureBase != 107 {
+		t.Fatalf("capture base = %d, want oldest retained absolute row 107", f.CaptureBase)
+	}
+	if lines := strings.Split(f.CombinedOutput(), "\n"); len(lines) != 5 {
+		t.Fatalf("output rows = %d, want 3 retained + 2 live: %q", len(lines), f.CombinedOutput())
+	}
+}
+
+func TestED3ResetsAbsoluteAndLoadedHistoryCoordinates(t *testing.T) {
+	m := New(8, 2)
+	defer m.Close()
+	if err := m.Seed(Seed{
+		Output: "old-a\nold-b\nlive-a\nlive-b", Width: 8, Height: 2,
+		HistorySize: 100, CaptureBase: 98, HistoryLimit: 3, CursorRow: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.LoadedHistory.Rows() != 2 || before.HistorySize != 100 {
+		t.Fatalf("precondition loaded/absolute = %d/%d, want 2/100",
+			before.LoadedHistory.Rows(), before.HistorySize)
+	}
+
+	if err := m.Write([]byte("\x1b[3J")); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.HistorySize != 0 || cleared.CaptureBase != 0 || cleared.LoadedHistory.Rows() != 0 {
+		t.Fatalf("after ED3 history/base/loaded = %d/%d/%d, want 0/0/0",
+			cleared.HistorySize, cleared.CaptureBase, cleared.LoadedHistory.Rows())
+	}
+
+	if err := m.Write([]byte("\x1b[2;1Hafter\r\nnext")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.HistorySize != 1 || after.CaptureBase != 0 || after.LoadedHistory.Rows() != 1 {
+		t.Fatalf("post-clear push history/base/loaded = %d/%d/%d, want 1/0/1",
+			after.HistorySize, after.CaptureBase, after.LoadedHistory.Rows())
 	}
 }
 
@@ -201,6 +274,61 @@ func TestAltScreenFreezesHistory(t *testing.T) {
 	}
 	if strings.Contains(f.Output, "a") {
 		t.Errorf("alt-screen output must not include main-screen history: %q", f.Output)
+	}
+}
+
+func TestAltScreenFrameKeepsLoadedMainHistory(t *testing.T) {
+	m := New(10, 2)
+	defer m.Close()
+	if err := m.Seed(Seed{Output: "one\ntwo", Width: 10, Height: 2, CursorRow: 1, HistoryLimit: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write([]byte("\r\nthree\x1b[?1049h\x1b[Halt")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.AltScreen || f.LoadedHistory.Rows() != 1 {
+		t.Fatalf("alt/history = %v/%d, want true/1", f.AltScreen, f.LoadedHistory.Rows())
+	}
+	if got := f.CombinedOutput(); !strings.HasPrefix(got, "one\n") || !strings.Contains(got, "alt") {
+		t.Fatalf("alt frame omitted loaded history or grid: %q", got)
+	}
+}
+
+func TestLoadedHistorySnapshotRemainsImmutable(t *testing.T) {
+	m := New(8, 2)
+	defer m.Close()
+	_ = m.Seed(Seed{Output: "a\nb", Width: 8, Height: 2, CursorRow: 1, HistoryLimit: 2})
+	_ = m.Write([]byte("\r\nc"))
+	before, _ := m.Frame()
+	want := before.LoadedHistory.Output()
+	_ = m.Write([]byte("\r\nd\r\ne"))
+	if got := before.LoadedHistory.Output(); got != want {
+		t.Fatalf("published history mutated after later writes: got %q want %q", got, want)
+	}
+}
+
+func TestAltScreenSeedRestoresSavedMainGrid(t *testing.T) {
+	m := New(10, 3)
+	defer m.Close()
+	if err := m.Seed(Seed{
+		MainOutput: "main-a\nmain-b\nmain-c", Output: "alt-a\nalt-b\nalt-c",
+		Width: 10, Height: 3, AltScreen: true, CursorVisible: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Write([]byte("\x1b[?1049l")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.AltScreen || !strings.Contains(f.Output, "main-a") || strings.Contains(f.Output, "alt-a") {
+		t.Fatalf("leaving alt did not restore saved main grid: alt=%v output=%q", f.AltScreen, f.Output)
 	}
 }
 

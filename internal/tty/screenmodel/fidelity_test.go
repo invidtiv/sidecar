@@ -290,7 +290,7 @@ func TestFrameOutputRendersTheFrame(t *testing.T) {
 		t.Run(entry.Name, func(t *testing.T) {
 			f := replayFrame(t, entry)
 
-			lines := strings.Split(f.Output, "\n")
+			lines := strings.Split(f.CombinedOutput(), "\n")
 			wantLines := f.Height
 			if !f.AltScreen {
 				wantLines += f.HistorySize

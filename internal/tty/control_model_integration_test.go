@@ -216,7 +216,7 @@ func (h *modelHarness) waitForAdvance(t *testing.T, timeout time.Duration, what 
 		if !ok {
 			return false
 		}
-		numbers = numbersIn(frame.Frame.Output)
+		numbers = numbersIn(frame.Frame.CombinedOutput())
 		return len(numbers) > 1 && numbers[len(numbers)-1] > start
 	})
 	return numbers
@@ -248,7 +248,7 @@ func (h *modelHarness) assertStraddlesSeedCut(t *testing.T, label string, before
 		if !ok || frame.Seeds != seeds {
 			return false
 		}
-		numbers = numbersIn(frame.Frame.Output)
+		numbers = numbersIn(frame.Frame.CombinedOutput())
 		return len(numbers) > 1 && lastNumber(numbers) > afterSeed
 	})
 	if numbers[0] > before {
@@ -284,7 +284,7 @@ func (h *modelHarness) tailNumber() int {
 	if !ok {
 		return -1
 	}
-	numbers := numbersIn(frame.Frame.Output)
+	numbers := numbersIn(frame.Frame.CombinedOutput())
 	if len(numbers) == 0 {
 		return -1
 	}
@@ -317,7 +317,7 @@ func TestModelAttachMidStreamLosesNoBytes(t *testing.T) {
 		if !ok {
 			return false
 		}
-		modelTail = lastN(numbersIn(frame.Frame.Output), 10)
+		modelTail = lastN(numbersIn(frame.Frame.CombinedOutput()), 10)
 		tmuxTail = lastN(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)), 10)
 		return len(modelTail) == 10 && equalInts(modelTail, tmuxTail)
 	})
@@ -407,13 +407,15 @@ func (h *modelHarness) sawReason(reason ResyncReason) bool {
 func TestModelPauseContinueForcesReseedAndStaysContinuous(t *testing.T) {
 	h := newModelHarness(t)
 	h.mu.Lock()
-	h.slow = 150 * time.Millisecond
+	// Keep the actor behind long enough to cross tmux's pause-after threshold
+	// even now that incremental model frames are substantially cheaper to build.
+	h.slow = 500 * time.Millisecond
 	h.mu.Unlock()
 	h.tmux.startWriter("")
 	sub := h.subscribe(t)
 	defer sub.Close()
 
-	waitUntil(t, 30*time.Second, "tmux to pause the pane", func() bool {
+	waitUntil(t, 60*time.Second, "tmux to pause the pane", func() bool {
 		return h.sawReason(ResyncPause)
 	})
 	h.mu.Lock()
@@ -431,7 +433,7 @@ func TestModelPauseContinueForcesReseedAndStaysContinuous(t *testing.T) {
 		if !ok {
 			return false
 		}
-		modelTail = lastN(numbersIn(frame.Frame.Output), 10)
+		modelTail = lastN(numbersIn(frame.Frame.CombinedOutput()), 10)
 		tmuxTail = lastN(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)), 10)
 		return len(modelTail) == 10 && equalInts(modelTail, tmuxTail)
 	})
@@ -443,14 +445,14 @@ func TestModelPauseContinueForcesReseedAndStaysContinuous(t *testing.T) {
 	// can be provoked at a known point in the number stream; here the seed is
 	// provoked by tmux's own flow control at a moment the test does not choose.
 	frame, _ := h.recorder.lastFrame()
-	assertContinuous(t, "post-pause", numbersIn(frame.Frame.Output))
+	assertContinuous(t, "post-pause", numbersIn(frame.Frame.CombinedOutput()))
 
 	// And the stream is live again: bytes written after the continue arrive.
 	h.tmux.run("send-keys", "-t", h.tmux.pane, "-l", "echo AFTER_CONTINUE_MARKER")
 	h.tmux.run("send-keys", "-t", h.tmux.pane, "Enter")
 	waitUntil(t, 20*time.Second, "post-continue bytes to reach the model", func() bool {
 		frame, ok := h.recorder.lastFrame()
-		return ok && strings.Contains(frame.Frame.Output, "AFTER_CONTINUE_MARKER")
+		return ok && strings.Contains(frame.Frame.CombinedOutput(), "AFTER_CONTINUE_MARKER")
 	})
 }
 

@@ -3,13 +3,17 @@ package tty
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
-// seedCommands finds the nth seed transaction's two commands. The metadata half
+// seedCommands finds the nth seed transaction's outer commands. The metadata half
 // is identified by a format field only the seed asks for, so it can never be
-// confused with the capture path's own display-message.
+// confused with the capture path's own display-message. The saved-main capture
+// sits between these two and is acknowledged automatically by pushResponse.
 func (f *fakeControlChannel) seedCommands(index int) (metadata, capture fakeControlCommand, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -18,11 +22,12 @@ func (f *fakeControlChannel) seedCommands(index int) (metadata, capture fakeCont
 		if !strings.Contains(command.text, "#{alternate_on}") {
 			continue
 		}
-		if i+1 >= len(f.commands) || !strings.Contains(f.commands[i+1].text, "capture-pane") {
+		if i+2 >= len(f.commands) || !strings.Contains(f.commands[i+1].text, "capture-pane") ||
+			!strings.Contains(f.commands[i+2].text, "capture-pane") {
 			continue
 		}
 		if found == index {
-			return command, f.commands[i+1], true
+			return command, f.commands[i+2], true
 		}
 		found++
 	}
@@ -41,7 +46,7 @@ func (f *fakeControlChannel) seedCount() int {
 	return count
 }
 
-const testSeedMetadata = "0,2,1,6,20,0,0,0,0,0,0,0,%1"
+const testSeedMetadata = "0,2,1,6,20,0,0,0,0,0,0,0,%1,0,2"
 
 // pushResponse delivers a command response on the ordered event stream, which
 // is where the real transport delivers it. Calling the callback directly would
@@ -51,6 +56,18 @@ func pushResponse(channel *fakeControlChannel, command fakeControlCommand, lines
 		Kind:     controlEventResponse,
 		Callback: command.callback,
 		Response: controlResponse{Lines: lines},
+	}
+	if strings.Contains(command.text, "#{alternate_on}") {
+		channel.mu.Lock()
+		for i := len(channel.commands) - 1; i >= 0; i-- {
+			if channel.commands[i].text == command.text && i+1 < len(channel.commands) {
+				main := channel.commands[i+1]
+				channel.mu.Unlock()
+				channel.events <- controlEvent{Kind: controlEventResponse, Callback: main.callback}
+				return
+			}
+		}
+		channel.mu.Unlock()
 	}
 }
 
@@ -167,12 +184,12 @@ func TestControlModelSeedBarrierDiscardsCapturedBytesAndReplaysTheRest(t *testin
 
 	waitFor(t, func() bool {
 		frame, ok := recorder.lastFrame()
-		return ok && strings.Contains(frame.Frame.Output, "L000004")
+		return ok && strings.Contains(frame.Frame.CombinedOutput(), "L000004")
 	})
 	frame, _ := recorder.lastFrame()
-	numbers := extractNumbers(frame.Frame.Output)
+	numbers := extractNumbers(frame.Frame.CombinedOutput())
 	if got := strings.Join(numbers, ","); got != "000001,000002,000003,000004" {
-		t.Fatalf("model numbers = %q (frame %q)", got, frame.Frame.Output)
+		t.Fatalf("model numbers = %q (frame %q)", got, frame.Frame.CombinedOutput())
 	}
 	if frame.Pane != "%1" || frame.Session != "one" || frame.Generation != 1 || frame.Seeds != 1 {
 		t.Fatalf("frame identity = %#v", frame)
@@ -206,8 +223,8 @@ func TestControlModelPublishesNoFrameBeforeSeedCompletes(t *testing.T) {
 	pushOutput(channel, "%1", "after\r\n")
 	waitFor(t, func() bool { return recorder.frameCount() > 0 })
 	frame, _ := recorder.lastFrame()
-	if strings.Contains(frame.Frame.Output, "early") {
-		t.Fatalf("pre-seed bytes replayed: %q", frame.Frame.Output)
+	if strings.Contains(frame.Frame.CombinedOutput(), "early") {
+		t.Fatalf("pre-seed bytes replayed: %q", frame.Frame.CombinedOutput())
 	}
 }
 
@@ -312,7 +329,7 @@ func TestControlModelResyncTriggers(t *testing.T) {
 			pushResponse(channel, capture, []string{"reseeded"})
 			waitFor(t, func() bool {
 				frame, ok := recorder.lastFrame()
-				return ok && frame.Seeds == 2 && strings.Contains(frame.Frame.Output, "reseeded")
+				return ok && frame.Seeds == 2 && strings.Contains(frame.Frame.CombinedOutput(), "reseeded")
 			})
 			found := false
 			for _, reason := range recorder.reasons() {
@@ -333,7 +350,7 @@ func TestControlModelRejectsPaneIdentityChange(t *testing.T) {
 	recorder := &modelRecorder{}
 	_, _, channel := startModelSubscription(t, recorder)
 	metadata, capture, _ := channel.seedCommands(0)
-	pushResponse(channel, metadata, []string{"0,0,1,6,20,0,0,0,0,0,0,0,%9"})
+	pushResponse(channel, metadata, []string{"0,0,1,6,20,0,0,0,0,0,0,0,%9,0,0"})
 	pushResponse(channel, capture, []string{"stranger"})
 	waitFor(t, func() bool {
 		for _, reason := range recorder.reasons() {
@@ -422,8 +439,94 @@ func TestCaptureDeliveryUnchangedWhenModelPathOff(t *testing.T) {
 	}
 }
 
+func TestModelAuthoritySuppressesOnlySteadyStateOutputCaptures(t *testing.T) {
+	recorder := &modelRecorder{}
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, time.Millisecond)
+	defer manager.Stop()
+	sub, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: true, Scrollback: 100,
+		ModelAuthority: true,
+		OnModelFrame:   recorder.onFrame,
+		OnModelInvalid: recorder.onInvalid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.seedCount() == 1
+	})
+	metadata, capture, ok := channel.seedCommands(0)
+	if !ok {
+		t.Fatal("seed transaction not issued")
+	}
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushResponse(channel, capture, []string{"seeded"})
+	waitFor(t, func() bool { return recorder.frameCount() > 0 })
+
+	captures := channel.commandCountContaining("capture-pane")
+	metadataQueries := channel.commandCountContaining("display-message")
+	pushOutput(channel, "%1", "steady state\r\n")
+	waitFor(t, func() bool {
+		frame, ok := recorder.lastFrame()
+		return ok && strings.Contains(frame.Frame.CombinedOutput(), "steady state")
+	})
+	time.Sleep(10 * time.Millisecond)
+	if got := channel.commandCountContaining("capture-pane"); got != captures {
+		t.Fatalf("steady-state output issued capture-pane: %d -> %d", captures, got)
+	}
+	if got := channel.commandCountContaining("display-message"); got != metadataQueries {
+		t.Fatalf("steady-state output issued metadata query: %d -> %d", metadataQueries, got)
+	}
+}
+
+func TestModelAuthorityDoesNotSuppressSamePaneUnfocusedCaptureSubscriber(t *testing.T) {
+	recorder := &modelRecorder{}
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, time.Millisecond)
+	defer manager.Stop()
+	authority, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: true, Scrollback: 100,
+		ModelAuthority: true, OnModelFrame: recorder.onFrame,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Close()
+	var captureSnapshots atomic.Int32
+	capture, err := manager.Subscribe(ControlRequest{
+		Session: "one", Pane: "%1", Visible: true, Focused: false, Scrollback: 100,
+		OnSnapshot: func(ControlSnapshot) { captureSnapshots.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Close()
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.seedCount() == 1 && channel.commandCountContaining("capture-pane") >= 3
+	})
+	metadata, seedCapture, _ := channel.seedCommands(0)
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushResponse(channel, seedCapture, []string{"seeded"})
+	waitFor(t, func() bool { return recorder.frameCount() > 0 })
+	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,6,20,0", "initial"}})
+	waitFor(t, func() bool { return captureSnapshots.Load() > 0 })
+	captureSnapshots.Store(0)
+
+	before := channel.commandCountContaining("capture-pane")
+	pushOutput(channel, "%1", "shared pane\r\n")
+	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") > before })
+	channel.respondCapture(1, controlResponse{Lines: []string{"0,0,1,6,20,0", "shared pane"}})
+	waitFor(t, func() bool { return captureSnapshots.Load() > 0 })
+}
+
 func TestParseSeedMetadata(t *testing.T) {
-	meta, err := parseSeedMetadata("9,4,0,30,100,1250,1,1,0,1,1,64,%12")
+	meta, err := parseSeedMetadata("9,4,0,30,100,1250,1,1,0,1,1,64,%12,7,8")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,26 +545,56 @@ func TestParseSeedMetadata(t *testing.T) {
 		}
 	}
 	// client_discarded is empty outside a control client; that is not a fault.
-	if meta, err := parseSeedMetadata("0,0,1,24,80,0,0,0,0,0,0,,%1"); err != nil || meta.Discarded != 0 {
+	if meta, err := parseSeedMetadata("0,0,1,24,80,0,0,0,0,0,0,,%1,0,0"); err != nil || meta.Discarded != 0 {
 		t.Fatalf("empty client_discarded = %#v, %v", meta, err)
 	}
 }
 
-func TestBuildSeedCommandsRejectsUnsafeTarget(t *testing.T) {
-	if _, _, err := buildSeedCommands("name; kill-server", 100); err == nil {
-		t.Fatal("unsafe pane target accepted")
-	}
-	metadata, capture, err := buildSeedCommands("%3", 250)
+func TestAltSeedPreservesMetadataHistoryRowsOmittedByTmux(t *testing.T) {
+	seed, _, err := seedFromResponses(
+		[]string{"1,1,1,3,10,2,1,0,0,0,0,0,%1,0,2"},
+		[]string{"main-a", "main-b", "main-c"},
+		[]string{"alt-a", "alt-b", "alt-c"},
+		600,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"#{alternate_on}", "#{mouse_all_flag}", "#{client_discarded}", "#{pane_id}"} {
+	model := screenmodel.New(seed.Width, seed.Height)
+	defer model.Close()
+	if err := model.Seed(seed); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := model.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.LoadedHistory.Rows() != 2 || frame.HistorySize != 2 {
+		t.Fatalf("loaded/absolute history = %d/%d, want 2/2", frame.LoadedHistory.Rows(), frame.HistorySize)
+	}
+	if !strings.HasSuffix(frame.Output, "alt-c") {
+		t.Fatalf("active grid = %q", frame.Output)
+	}
+}
+
+func TestBuildSeedCommandsRejectsUnsafeTarget(t *testing.T) {
+	if _, _, _, err := buildSeedCommands("name; kill-server", 100); err == nil {
+		t.Fatal("unsafe pane target accepted")
+	}
+	metadata, mainCapture, capture, err := buildSeedCommands("%3", 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"#{alternate_on}", "#{mouse_all_flag}", "#{client_discarded}", "#{pane_id}", "#{alternate_saved_x}"} {
 		if !strings.Contains(metadata, field) {
 			t.Fatalf("seed metadata omits %s: %q", field, metadata)
 		}
 	}
 	if !strings.Contains(capture, "-S -250") || !strings.Contains(capture, "-e") {
 		t.Fatalf("seed capture = %q", capture)
+	}
+	if !strings.Contains(mainCapture, " -a ") || !strings.Contains(mainCapture, "-S -250") {
+		t.Fatalf("saved-main seed capture = %q", mainCapture)
 	}
 }
 
@@ -541,7 +674,7 @@ func TestControlModelFramesCarryDiscardObservationWindow(t *testing.T) {
 	// observation time: the window a consumer must discount is now bounded.
 	waitUntilCommand(t, 3*time.Second, func() bool { return channel.seedCount() == 2 })
 	metadata, capture, _ = channel.seedCommands(1)
-	pushResponse(channel, metadata, []string{"0,2,1,6,20,0,0,0,0,0,0,4096,%1"})
+	pushResponse(channel, metadata, []string{"0,2,1,6,20,0,0,0,0,0,0,4096,%1,0,2"})
 	pushResponse(channel, capture, []string{"reseeded"})
 	waitUntilCommand(t, 3*time.Second, func() bool {
 		frame, ok := recorder.lastFrame()
@@ -600,12 +733,12 @@ func TestControlModelSeedRaceIsDetectedAndReseeds(t *testing.T) {
 	pushResponse(channel, capture, []string{"fresh screen"})
 	waitUntilCommand(t, 3*time.Second, func() bool {
 		frame, ok := recorder.lastFrame()
-		return ok && strings.Contains(frame.Frame.Output, "fresh screen")
+		return ok && strings.Contains(frame.Frame.CombinedOutput(), "fresh screen")
 	})
 	// The stale capture must never have been seeded into the model.
 	frame, _ := recorder.lastFrame()
-	if strings.Contains(frame.Frame.Output, "stale screen") {
-		t.Fatalf("raced seed reached the model: %q", frame.Frame.Output)
+	if strings.Contains(frame.Frame.CombinedOutput(), "stale screen") {
+		t.Fatalf("raced seed reached the model: %q", frame.Frame.CombinedOutput())
 	}
 }
 

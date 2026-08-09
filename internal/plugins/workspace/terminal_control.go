@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -29,6 +30,8 @@ type workspaceControlEvent struct {
 	Session  string
 	Pane     string
 	Snapshot *tty.ControlSnapshot
+	Model    *tty.ModelFrame
+	Invalid  *tty.ModelInvalidation
 	Fallback error
 }
 
@@ -47,16 +50,16 @@ type workspaceControlAgentStatusMsg struct {
 // workspaceControlMailbox coalesces callback-thread notifications into the
 // Bubble Tea update loop without mutating plugin state from transport goroutines.
 type workspaceControlMailbox struct {
-	mu     sync.Mutex
-	latest map[workspaceControlRole]workspaceControlEvent
-	wake   chan struct{}
-	closed bool
+	mu      sync.Mutex
+	pending map[workspaceControlRole][]workspaceControlEvent
+	wake    chan struct{}
+	closed  bool
 }
 
 func newWorkspaceControlMailbox() *workspaceControlMailbox {
 	return &workspaceControlMailbox{
-		latest: make(map[workspaceControlRole]workspaceControlEvent),
-		wake:   make(chan struct{}, 1),
+		pending: make(map[workspaceControlRole][]workspaceControlEvent),
+		wake:    make(chan struct{}, 1),
 	}
 }
 
@@ -69,7 +72,23 @@ func (m *workspaceControlMailbox) publish(event workspaceControlEvent) {
 		m.mu.Unlock()
 		return
 	}
-	m.latest[event.Role] = event
+	queue := m.pending[event.Role]
+	isLifecycle := event.Fallback != nil || event.Invalid != nil
+	if !isLifecycle && len(queue) > 0 {
+		last := len(queue) - 1
+		previousLifecycle := queue[last].Fallback != nil || queue[last].Invalid != nil
+		if !previousLifecycle {
+			queue[last] = event
+			m.pending[event.Role] = queue
+			select {
+			case m.wake <- struct{}{}:
+			default:
+			}
+			m.mu.Unlock()
+			return
+		}
+	}
+	m.pending[event.Role] = append(queue, event)
 	select {
 	case m.wake <- struct{}{}:
 	default:
@@ -85,11 +104,11 @@ func (m *workspaceControlMailbox) next() tea.Msg {
 		return nil
 	}
 	m.mu.Lock()
-	events := make([]workspaceControlEvent, 0, len(m.latest))
-	for _, event := range m.latest {
-		events = append(events, event)
+	var events []workspaceControlEvent
+	for _, pending := range m.pending {
+		events = append(events, pending...)
 	}
-	m.latest = make(map[workspaceControlRole]workspaceControlEvent)
+	m.pending = make(map[workspaceControlRole][]workspaceControlEvent)
 	m.mu.Unlock()
 	return workspaceControlDeliveryMsg{Events: events}
 }
@@ -117,7 +136,10 @@ type workspaceControlConsumer struct {
 	Token    uint64
 	Using    bool
 	Degraded bool
-	Sub      *tty.ControlSubscription
+	// ModelAuthority is true only for the default-off terminal-panel canary.
+	// Using becomes true only after its first accepted seeded frame.
+	ModelAuthority bool
+	Sub            *tty.ControlSubscription
 }
 
 type workspaceControlDesired struct {
@@ -284,12 +306,14 @@ func (p *Plugin) reconcileTerminalControl(role workspaceControlRole, desired wor
 		Width: desired.Width, Height: desired.Height,
 		Source: desired.Source, SourceID: desired.SourceID, Token: p.controlNextToken,
 	}
+	consumer.ModelAuthority = role == workspaceControlPanel && features.IsEnabled(features.TmuxByteScreen.Name)
 	p.controlConsumers[role] = consumer
 	mailbox := p.controlMailbox
 	token := consumer.Token
-	sub, err := p.controlManager.Subscribe(tty.ControlRequest{
+	request := tty.ControlRequest{
 		Session: desired.Session, Pane: desired.Pane, Width: desired.Width, Height: desired.Height,
 		Scrollback: captureLineCount, Visible: true, Focused: true,
+		ModelAuthority: consumer.ModelAuthority,
 		OnSnapshot: func(snapshot tty.ControlSnapshot) {
 			copy := snapshot
 			mailbox.publish(workspaceControlEvent{
@@ -303,7 +327,24 @@ func (p *Plugin) reconcileTerminalControl(role workspaceControlRole, desired wor
 				Fallback: err,
 			})
 		},
-	})
+	}
+	if consumer.ModelAuthority {
+		request.OnModelFrame = func(frame tty.ModelFrame) {
+			copy := frame
+			mailbox.publish(workspaceControlEvent{
+				Role: role, Token: token, Session: desired.Session, Pane: desired.Pane,
+				Model: &copy,
+			})
+		}
+		request.OnModelInvalid = func(event tty.ModelInvalidation) {
+			copy := event
+			mailbox.publish(workspaceControlEvent{
+				Role: role, Token: token, Session: desired.Session, Pane: desired.Pane,
+				Invalid: &copy,
+			})
+		}
+	}
+	sub, err := p.controlManager.Subscribe(request)
 	if err != nil {
 		consumer.Degraded = true
 		return append(cmds, p.scheduleControlPoll(consumer))
@@ -346,7 +387,42 @@ func (p *Plugin) applyTerminalControlDelivery(msg workspaceControlDeliveryMsg) t
 			cmds = append(cmds, p.scheduleControlPoll(consumer))
 			continue
 		}
+		if event.Invalid != nil {
+			wasUsing := consumer.Using
+			consumer.Using = false
+			if event.Invalid.Terminal {
+				consumer.Degraded = true
+				if consumer.Sub != nil {
+					consumer.Sub.Close()
+					consumer.Sub = nil
+				}
+			}
+			if wasUsing {
+				cmds = append(cmds, p.scheduleControlPoll(consumer))
+			}
+			continue
+		}
+		if event.Model != nil {
+			if !consumer.ModelAuthority || consumer.Degraded || event.Model.Seeds < 1 {
+				continue
+			}
+			if !consumer.Using {
+				consumer.Using = true
+				p.invalidateControlPoll(consumer)
+			}
+			p.applyPanelModelFrame(*event.Model)
+			continue
+		}
 		if event.Snapshot == nil || consumer.Degraded {
+			continue
+		}
+		if consumer.ModelAuthority {
+			// Capture remains useful as provisional display data while the model
+			// seeds, but it never transfers ownership and cannot overwrite a live
+			// model frame if an in-flight response arrives late.
+			if !consumer.Using {
+				p.applyPanelControlSnapshot(*event.Snapshot)
+			}
 			continue
 		}
 		if !consumer.Using {
@@ -370,6 +446,33 @@ func (p *Plugin) applyTerminalControlDelivery(msg workspaceControlDeliveryMsg) t
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+func (p *Plugin) applyPanelModelFrame(model tty.ModelFrame) {
+	if p.termPanelOutput == nil {
+		return
+	}
+	frame := model.Frame
+	output, removedRows := trimCapturedOutputRows(frame.CombinedOutput(), p.tmuxCaptureMaxBytes)
+	if frame.HasHistory {
+		p.termPanelOutput.UpdateSnapshot(output, frame.CaptureBase+removedRows)
+		p.recordTerminalHistory("panel", model.Session, frame.HistorySize)
+	} else {
+		p.termPanelOutput.Update(output)
+	}
+	p.recordPaneGeometry("panel", model.Session, frame.Width, frame.Height)
+	if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
+		p.interactiveState.CursorRow = frame.CursorRow
+		p.interactiveState.CursorCol = frame.CursorCol
+		p.interactiveState.CursorVisible = frame.CursorVisible
+		p.interactiveState.PaneHeight = frame.Height
+		p.interactiveState.PaneWidth = frame.Width
+		p.interactiveState.CursorHistorySize = frame.HistorySize
+		p.interactiveState.HasCursorHistory = frame.HasHistory
+		p.interactiveState.BracketedPasteEnabled = frame.BracketedPaste
+		p.interactiveState.MouseReportingEnabled = frame.Mouse.Any()
+		p.setPaneMouseReporting(frame.Mouse.Any())
+	}
 }
 
 func (p *Plugin) scheduleControlAgentStatus(consumer *workspaceControlConsumer) tea.Cmd {

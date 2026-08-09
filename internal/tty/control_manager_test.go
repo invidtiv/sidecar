@@ -2,6 +2,7 @@ package tty
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,17 @@ func (f *fakeControlChannel) SendPair(first, second string, firstCallback, secon
 	return nil
 }
 
+func (f *fakeControlChannel) SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append(f.commands,
+		fakeControlCommand{text: first, callback: firstCallback},
+		fakeControlCommand{text: second, callback: secondCallback},
+		fakeControlCommand{text: third, callback: thirdCallback},
+	)
+	return nil
+}
+
 func (f *fakeControlChannel) Events() <-chan controlEvent { return f.events }
 func (f *fakeControlChannel) Done() <-chan error          { return f.done }
 func (f *fakeControlChannel) Close() error {
@@ -77,20 +89,20 @@ func (f *fakeControlChannel) respondCapture(index int, response controlResponse)
 	var metadata []fakeControlCommand
 	var captures []fakeControlCommand
 	// Seed transactions are the byte-fed model's, not the capture path's. They
-	// use the same two tmux commands, so they are excluded by the format field
+	// use the same tmux commands, so they are excluded by the format field
 	// only the seed asks for.
-	skipNextCapture := false
+	skipCaptures := 0
 	for _, command := range f.commands {
 		if strings.Contains(command.text, "#{alternate_on}") {
-			skipNextCapture = true
+			skipCaptures = 2 // saved main followed by the active grid
 			continue
 		}
 		if strings.Contains(command.text, "display-message") {
 			metadata = append(metadata, command)
 		}
 		if strings.Contains(command.text, "capture-pane") {
-			if skipNextCapture {
-				skipNextCapture = false
+			if skipCaptures > 0 {
+				skipCaptures--
 				continue
 			}
 			captures = append(captures, command)
@@ -337,6 +349,87 @@ func TestControlManagerFallbackOnStartAndClientFailure(t *testing.T) {
 	})
 	if good.UsingControl() {
 		t.Fatal("dead client still reported control active")
+	}
+}
+
+// A saturated transport must not consume the only client-death error while it
+// releases a blocked dispatcher. The manager needs that error to fire the
+// consumer's fallback callback, which is what makes workspace polling resume.
+func TestControlManagerFallbackWhenProcessEventsAreSaturated(t *testing.T) {
+	channel := &processControlChannel{
+		cmd:     &exec.Cmd{},
+		stdin:   &testWriteCloser{},
+		events:  make(chan controlEvent, 1),
+		done:    make(chan error, 1),
+		dead:    make(chan struct{}),
+		ready:   make(chan struct{}),
+		readyOK: true,
+	}
+	manager := newControlManager(func(string) (controlChannel, error) {
+		return channel, nil
+	}, 0)
+	defer manager.Stop()
+
+	fallback := make(chan error, 1)
+	sub, err := manager.Subscribe(ControlRequest{
+		Session: "saturated", Pane: "%1", Visible: true, Focused: true,
+		OnFallback: func(err error) { fallback <- err },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	waitFor(t, sub.UsingControl)
+
+	manager.mu.Lock()
+	client := manager.clients["saturated"]
+	manager.mu.Unlock()
+	if client == nil {
+		t.Fatal("control client did not start")
+	}
+
+	actorBlocked := make(chan struct{})
+	releaseActor := make(chan struct{})
+	client.post(func() {
+		close(actorBlocked)
+		<-releaseActor
+	})
+	<-actorBlocked
+
+	// Fill the only event slot, then prove a second dispatch cannot finish
+	// until the transport dies. This reproduces the production backpressure
+	// condition without touching the machine's default tmux server.
+	channel.events <- controlEvent{Kind: controlEventLayout, Pane: "%1"}
+	dispatchReturned := make(chan struct{})
+	go func() {
+		channel.dispatch(controlEvent{Kind: controlEventLayout, Pane: "%1"})
+		close(dispatchReturned)
+	}()
+	select {
+	case <-dispatchReturned:
+		t.Fatal("dispatch did not block on the saturated event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	want := errors.New("reader EOF under backpressure")
+	channel.finish(want)
+	select {
+	case <-dispatchReturned:
+	case <-time.After(time.Second):
+		t.Fatal("transport death did not release the saturated dispatcher")
+	}
+	close(releaseActor)
+
+	select {
+	case got := <-fallback:
+		if !errors.Is(got, want) {
+			t.Fatalf("fallback error = %v, want %v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("saturated transport consumed client death; fallback did not fire")
+	}
+	if sub.UsingControl() {
+		t.Fatal("dead saturated client still reported control active")
 	}
 }
 
