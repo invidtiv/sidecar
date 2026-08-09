@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -29,10 +28,6 @@ const (
 
 	// pollingDecaySlow is the polling interval after extended inactivity.
 	pollingDecaySlow = 500 * time.Millisecond
-
-	// keystrokeDebounce delays polling after keystrokes to batch rapid typing (td-8a0978).
-	// Allows typing bursts to coalesce into fewer polls, reducing CPU usage.
-	keystrokeDebounce = 20 * time.Millisecond
 
 	// inactivityMediumThreshold triggers medium polling.
 	inactivityMediumThreshold = 2 * time.Second
@@ -149,15 +144,6 @@ func sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
 	return awaitInteractiveSend(tty.SendKeysOrdered(sessionName, keys...))
 }
 
-// sendInteractivePasteInputCmd sends paste text to tmux asynchronously (td-c2961e).
-// Used for multi-character terminal input (not clipboard paste which is already async).
-// Shares the keystroke queue so pasted text cannot overtake surrounding keys.
-func sendInteractivePasteInputCmd(sessionName, text string) tea.Cmd {
-	return awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
-		return tty.SendPasteInput(sessionName, text)
-	}))
-}
-
 // awaitInteractiveSend turns a queued send's result channel into a tea.Cmd.
 func awaitInteractiveSend(done <-chan error) tea.Cmd {
 	return func() tea.Msg {
@@ -165,42 +151,6 @@ func awaitInteractiveSend(done <-chan error) tea.Cmd {
 			return InteractiveSessionDeadMsg{}
 		}
 		return nil
-	}
-}
-
-func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return nil
-	}
-
-	sessionName := p.interactiveState.TargetSession
-	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
-		sessionName = terminal.GetTarget()
-	}
-	if sessionName == "" {
-		return nil
-	}
-
-	return func() tea.Msg {
-		text, err := clipboard.ReadAll()
-		if err != nil {
-			return InteractivePasteResultMsg{Err: err}
-		}
-		if text == "" {
-			return InteractivePasteResultMsg{Empty: true}
-		}
-
-		// The clipboard read has to happen off the Update loop, so this enqueues
-		// later than a keystroke Cmd would. Going through the queue anyway keeps
-		// the paste from interleaving mid-write with concurrent keystrokes.
-		err = <-tty.SendOrdered(sessionName, func() error {
-			return tty.SendPasteInput(sessionName, text)
-		})
-		if err != nil {
-			return InteractivePasteResultMsg{Err: err, SessionDead: tty.IsSessionDeadError(err)}
-		}
-
-		return InteractivePasteResultMsg{}
 	}
 }
 
@@ -1473,37 +1423,6 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 	if wt := p.selectedWorktree(); wt != nil {
 		return p.scheduleInteractivePoll(wt.Name, interval)
 	}
-	return nil
-}
-
-// scheduleDebouncedPoll schedules a poll with debounce delay to batch rapid keystrokes (td-8a0978).
-// Uses generation tracking to cancel stale timers, reducing subprocess spam during typing.
-func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return nil
-	}
-	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
-		return nil
-	}
-
-	if p.interactiveState.TermPanel {
-		return nil
-	}
-
-	// Use shell or worktree polling mechanism based on current selection.
-	// Shells and agents use separate scheduler keys, so restarting one poll
-	// chain cannot invalidate another pane with the same display name.
-	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		shellName := p.shells[p.selectedShellIdx].TmuxName
-		if shellName != "" {
-			p.pollScheduler.Invalidate(shellPollKey(shellName))
-			return p.scheduleShellPollByName(shellName, delay)
-		}
-	} else if wt := p.selectedWorktree(); wt != nil {
-		p.pollScheduler.Invalidate(agentPollKey(wt.IdentityKey()))
-		return p.scheduleInteractivePoll(wt.Name, delay)
-	}
-
 	return nil
 }
 
