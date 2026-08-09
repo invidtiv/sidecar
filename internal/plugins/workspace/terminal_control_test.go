@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +101,118 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 
 	if wt.Agent.OutputBuf != model.State.OutputBuf || wt.Agent.OutputBuf.String() != "fallback visible" {
 		t.Fatalf("workspace did not render shared fallback buffer: %q", wt.Agent.OutputBuf.String())
+	}
+}
+
+func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T) {
+	for _, primaryKind := range []string{"worktree-agent", "project-shell"} {
+		t.Run(primaryKind, func(t *testing.T) {
+			logPath := installSuccessfulFakeTmux(t)
+			p := newTerminalEmbeddingTestPlugin()
+			p.width, p.height = 100, 30
+			p.sidebarVisible = false
+			p.activePane = PanePreview
+			p.termPanelVisible = true
+			p.termPanelFocused = true
+			p.termPanelLayout = TermPanelBottom
+			p.termPanelSession = "panel-session"
+			p.termPanelPaneID = "%2"
+
+			primaryTarget := workspaceTerminalTarget{
+				Session: "primary-session", Pane: "%1", Source: "agent", SourceID: "worktree-key",
+			}
+			if primaryKind == "project-shell" {
+				p.shellSelected = true
+				p.selectedShellIdx = 0
+				p.shells = []*ShellSession{{
+					TmuxName: "primary-session",
+					Agent:    &Agent{TmuxSession: "primary-session", TmuxPane: "%1"},
+				}}
+				primaryTarget.Source = "shell"
+				primaryTarget.SourceID = "primary-session"
+			} else {
+				p.worktrees = []*Worktree{{
+					Key: "worktree-key", Name: "worktree",
+					Agent: &Agent{TmuxSession: "primary-session", TmuxPane: "%1"},
+				}}
+			}
+
+			primary := openTestTerminal(t, p, workspaceTerminalPrimary, primaryTarget)
+			panel := openTestTerminal(t, p, workspaceTerminalPanel, workspaceTerminalTarget{
+				Session: "panel-session", Pane: "%2", Source: "panel", SourceID: "panel-session",
+			})
+
+			p.handleListKeys(keyPressFor("E"))
+			if p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
+				t.Fatalf("focused panel E entry chose primary interaction: %#v", p.interactiveState)
+			}
+			if p.interactiveState.TargetSession != "panel-session" || p.interactiveState.TargetPane != "%2" {
+				t.Fatalf("panel interaction target = %#v", p.interactiveState)
+			}
+			if got := p.activeInteractiveTerminal(); got != panel {
+				t.Fatalf("active terminal = %p, want panel %p", got, panel)
+			}
+			if !primary.IsActive() || primary.GetTarget() != "%1" {
+				t.Fatalf("primary model target changed: active=%v target=%q", primary.IsActive(), primary.GetTarget())
+			}
+
+			assertOnlyPanelTarget := func(kind string) {
+				t.Helper()
+				tty.WaitForPendingSends()
+				logged, err := os.ReadFile(logPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(logged), "-t %2") {
+					t.Fatalf("%s did not target panel pane: %s", kind, logged)
+				}
+				if strings.Contains(string(logged), "-t %1") {
+					t.Fatalf("%s reached primary pane: %s", kind, logged)
+				}
+			}
+			clearLog := func() {
+				t.Helper()
+				tty.WaitForPendingSends()
+				if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			clearLog()
+			runCommandTree(p.handleInteractiveKeys(keyPressForText("PANEL_KEY")))
+			assertOnlyPanelTarget("key")
+
+			clearLog()
+			runCommandTree(p.handleInteractivePaste("PANEL_PASTE"))
+			assertOnlyPanelTarget("paste")
+
+			clearLog()
+			p.interactiveState.MouseReportingEnabled = true
+			p.interactiveState.PaneWidth = 40
+			p.interactiveState.PaneHeight = 10
+			var mouseX, mouseY int
+			found := false
+			for y := 0; y < p.height && !found; y++ {
+				for x := 0; x < p.width; x++ {
+					if _, _, ok := p.interactiveMouseCoords(x, y); ok {
+						mouseX, mouseY, found = x, y, true
+						break
+					}
+				}
+			}
+			if !found {
+				t.Fatal("could not find a visible panel cell for mouse routing")
+			}
+			cmd := p.forwardClickToTmux(mouseX, mouseY)
+			if cmd == nil {
+				t.Fatal("panel mouse click produced no command")
+			}
+			result, ok := cmd().(interactiveClickSentMsg)
+			if !ok || result.Err != nil || result.SessionName != "%2" {
+				t.Fatalf("panel mouse result = %#v", result)
+			}
+			assertOnlyPanelTarget("mouse")
+		})
 	}
 }
 

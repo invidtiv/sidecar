@@ -982,6 +982,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// typed after it were read as workspace bindings (td-10c761).
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal.
 		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+			if p.termPanelFocused && p.termPanelVisible {
+				return p.enterTermPanelInteractiveMode()
+			}
 			return p.enterInteractiveMode()
 		}
 	case "v":
