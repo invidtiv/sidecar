@@ -17,9 +17,13 @@ Two caveats the slice 1 owner must carry forward:
 - **GAP-9 (grapheme clusters do not survive a `Write` boundary) is a blocker for
   authority, not for slice 1.** Pane bytes arrive from tmux in arbitrary chunks,
   so this defect is reachable in production the moment the model becomes
-  authoritative. It is a ~5-line upstream fix. It must be fixed upstream (or the
-  pin moved to a commit that contains the fix) before slice 3 enables any
-  surface.
+  authoritative, and it corrupts the **cursor position** as well as the cells.
+  It is *not* a mechanical fix like the others: buffering the pending cluster
+  across `Write` calls means a cluster that arrives as the last bytes of a burst
+  is invisible until more bytes arrive, so upstream has to choose a flush policy
+  and Sidecar's adapter has to honour it. That is a semantic design decision —
+  see GAP-9 below. It must be settled upstream (or the pin moved to a commit
+  that contains the fix) before slice 3 enables any surface.
 - **GAP-7 has no adapter-side answer at all.** `vt.Emulator` exposes cursor
   visibility only as a change callback and offers no getter, so any mirror
   desyncs on RIS. This needs an upstream accessor; it cannot be worked around
@@ -74,7 +78,16 @@ not break it, and it passes with the race detector on.
     journey needs no change.
   - **No dependency types leak.** Colors are canonical strings, attributes are
     Sidecar's own bitmask, modes are plain bools. No `vt.Emulator`, `uv.Cell`,
-    or `ansi.Mode` value crosses the package boundary.
+    or `ansi.Mode` value crosses the package boundary. "Only this package may
+    import `x/vt`" is enforced by a test (`TestOnlyThisPackageImportsVT`, a
+    `go list` sweep of every package's imports and test imports), not by the
+    package comment alone — slices 1–5 add consumers at exactly that boundary.
+  - **`Close` is release, not an operation.** It deliberately bypasses the
+    single-actor wrapper's sticky-error check: a fault is the state a consumer
+    closes *from*, so routing `Close` through the same guard as `Write` would
+    mean a faulted pane — the fallback path production actually takes — never
+    released its emulator's pipe or buffers. It is idempotent and terminal from
+    any state, faulted included.
 - `cell.go` — canonical `Cell`/`Grid` and colour normalization.
 - `compare.go` — the canonical cell comparator. It compares grapheme, cell
   width, fg/bg/underline colour, underline style, attributes, and hyperlink. It
@@ -120,7 +133,7 @@ tmux's capture format had to be discovered empirically and are encoded there:
 a literal TAB means "advance to the next 8-column stop", and the SGR pen
 **carries across line boundaries** rather than resetting per line.
 
-**Fixtures**: 22 generated JSON files in `testdata/corpus/`, 88 KB total, no
+**Fixtures**: 23 generated JSON files in `testdata/corpus/`, 92 KB total, no
 personal data (a test asserts no home directory, user name, or host name appears
 in any capture). Each fixture stores a SHA-256 fingerprint of its input; a
 corpus edit without a re-record fails the run instead of comparing against a
@@ -133,9 +146,23 @@ stale oracle.
    the whole-write result;
 3. byte-at-a-time — one `Write` per byte.
 
-Plus a fourth assertion the plan did not require but the attach story needs:
-**seed round trip** — feed each recorded capture back in as a `Seed` and require
-the model to reconstruct the same cells and cursor.
+Plus two assertions the plan did not require:
+
+4. **seed round trip** — feed each recorded capture back in as a `Seed` and
+   require the model to reconstruct the same cells and cursor. The attach story
+   depends on it.
+5. **`Frame.Output` fidelity** (`TestFrameOutputRendersTheFrame`) — `Output` is
+   the field that becomes `tty.ControlSnapshot.Output`, so it is the only part
+   of a frame today's viewport, search, and selection journey actually reads,
+   and it is held to its own claim rather than smoke-tested. Three parts: its
+   **shape** (one line per loaded scrolled-off row, then exactly `Height` live
+   rows; `Height` rows and no history on the alternate screen), its **spelling**
+   (decoding the visible rows with the independent capture decoder must
+   reproduce the frame's own canonical cells), and its **fixed-point** property
+   (re-seeding from those rows must give the same cells again, which is exactly
+   what reattach does). Shape and spelling are exact for all 23 fixtures. The
+   fixed point is exact for all but the three OSC 8 fixtures, where **GAP-3
+   reaches the `Output` path** — see GAP-3.
 
 Known gaps are declared per fixture as *signature sets* and asserted to match
 exactly. A new mismatch fails, and so does a gap that stops reproducing — an
@@ -158,13 +185,14 @@ below is exact except where a GAP is named.
 | IL/DL | `insert_delete_lines` | exact | exact | exact |
 | DECSTBM, SU/SD, DECOM | `scroll_region_and_origin` | exact | exact | exact |
 | Alt screen enter/exit ×2 | `alt_screen_transitions` | exact | exact | exact |
+| Alt screen **still active at capture** | `alt_screen_active` | exact | exact | exact |
 | SGR reset, 16 colour, bright | `sgr_basic_and_bright` | exact | exact | exact |
 | SGR 256 + truecolor | `sgr_256_and_truecolor` | exact | exact | exact |
 | Underline styles + underline colour | `sgr_underline_styles` | **GAP-2** | exact | exact |
 | Inverse, dim, hidden, italic, blink, strike | `sgr_attributes` | exact | exact | exact |
 | OSC 8 links, incl. `id=` | `osc8_links` | **GAP-3** | exact | **GAP-3** |
 | OSC 8 hostile/nested termination | `osc8_hostile_termination` | **GAP-3, GAP-4** | exact | GAP-3/4 |
-| OSC 8 raw C1 ST | `osc8_c1_st_terminator` | **GAP-5** | exact | exact |
+| OSC 8 raw C1 ST | `osc8_c1_st_terminator` | **GAP-5** | exact | exact² |
 | CJK, combining, emoji, VS, ZWJ | `unicode_wide_combining_emoji` | **GAP-6** | **GAP-9** | GAP-6 |
 | Mouse modes, cursor style, paste, sync | `modes_cursor_paste_sync_reset` | exact | exact | exact |
 | DECSTR soft reset | `soft_reset_decstr` | exact | exact | exact |
@@ -175,18 +203,45 @@ below is exact except where a GAP is named.
 
 ¹ Not a defect — see "Resize" below.
 
+² Exact against the tmux capture, which carries no link here; the `Frame.Output`
+fixed point still shows GAP-3 on this fixture because `x/vt` did store a
+(swapped) link of its own.
+
+`alt_screen_active` is the fixture that makes the alternate screen a tested
+state rather than a tested *transition*. Every other fixture, including
+`alt_screen_transitions`, is back on the main screen by the time the recorder
+captures, so `alternate_on` is `false` on both sides and the mode assertion
+never sees a true value. This one paints a full-screen TUI — clear, hidden
+cursor, mouse tracking on, a reverse-video status bar spanning the full width,
+256-colour and truecolour runs, an underline run, and a wide-CJK row — and
+**never leaves the alternate screen**, so tmux records `alternate_on=1`,
+`mouse_any_flag=1`, `cursor_flag=0`, a frozen `history_size`, and the alternate
+buffer's own cells. The comparator runs whole, at every split boundary,
+byte-at-a-time, through the seed round trip and through `Frame.Output` against
+it. All exact: **the alternate screen revealed no new emulator gap.** That
+matters because it is where every full-screen TUI in the slice 2 matrix lives.
+
 Split-boundary replay is exact for **every fixture except the Unicode one**.
 A targeted test (`TestSplitUTF8AndCSISurviveWriteBoundaries`) pins the safe
 classes down separately, since the fixture-level allowance is fixture-wide:
 splitting a multi-byte rune, a CSI sequence, an SGR run, an OSC 8 link, or a
 DECSET toggle at *every* byte offset is invisible. Only multi-rune grapheme
-clusters are not (GAP-9).
+clusters are not (GAP-9), and there the damage is cells **and cursor** — the
+Unicode fixture's final row is deliberately left unterminated so the cursor
+effect is observable at all.
 
 Seed round trip is exact for **every fixture except the two that hit an OSC 8
-defect and the NFD one** — including alternate screen, non-default scroll
-margins, hidden cursor, and post-resize geometry. That is the strongest single
-result in this slice: reconstructing a running pane from `capture-pane -e` plus
-tmux metadata works.
+defect and the NFD one**. Specifically, it reconstructs from `capture-pane -e`
+plus tmux metadata:
+
+- a pane **on the alternate screen**, with the alternate buffer's own cells,
+  hidden cursor and mouse tracking restored (`alt_screen_active`) — before this
+  fixture existed no seed test had ever been given `alternate_on=1`;
+- non-default scroll margins, a hidden cursor, and post-resize geometry.
+
+That is the strongest single result in this slice: reconstructing a running pane
+from a capture plus metadata works, including the state every full-screen TUI
+runs in.
 
 ### Not covered here, and why
 
@@ -253,6 +308,19 @@ x/vt:  url="id=xyz"                params="https://example.com/b"
 
 Fix: swap the two assignments. This is the defect most likely to matter to
 Sidecar users, since the terminal's link handling reads the URL.
+
+**It reaches `Frame.Output`, not just `Frame.Cells.`** `ultraviolet`'s renderer
+spells the link out *correctly* as `OSC 8;<Params>;<URL>` from whatever cell it
+is handed — so the swapped cell is rendered as a well-formed link with the two
+fields exchanged, and the harness's independent decoder reads `Output` back
+exactly as `Cells` holds it (the "spelling" assertion is exact everywhere,
+including here). The damage shows up on the **fixed point**: feeding `Output`
+back through `Seed` runs it through the same defective handler again, swapping a
+second time — 42 mismatched cells on `osc8_links` alone. Since `Frame.Output` is
+what becomes `ControlSnapshot.Output`, any consumer that round trips it sees the
+URL and the params exchanged. Declared per fixture as `KnownOutputGaps` and
+asserted as an exact signature set, so the upstream fix will fail the test and
+force this paragraph to be deleted.
 
 ### GAP-4 — OSC 8 payloads with extra `;` are dropped
 
@@ -345,9 +413,34 @@ write, split at byte 3: same bytes -> "❤" and the variation selector as
 The same happens to ZWJ emoji (`👩‍💻` becomes `👩` plus the rest) at every
 split offset inside the cluster, and under byte-at-a-time replay.
 
-Fix: keep the pending grapheme buffered across `Write` calls and flush it only
-when the parser leaves UTF-8 state (or on an explicit `Flush`). This is the one
-gap that must be closed before any surface becomes authoritative.
+**It corrupts the cursor, not only the cells.** The two wrongly-committed cells
+advance the cursor differently from the single cell they should have formed:
+splitting `"❤️ vs ❤"` at bytes 3–5 leaves the cursor at column **6** where a
+whole write leaves it at column **7**. This was invisible until now because
+every step of the `unicode_wide_combining_emoji` fixture ended in `\r\n`, which
+parks the cursor at column 0 and hides any column error. The fixture now ends
+with a deliberately unterminated row, and `TestCorpusSplitBoundaries` reports
+`cursor/position` as a declared GAP-9 signature alongside `cell/grapheme` and
+`cell/width`. For a model that is meant to place a *live cursor*, a column error
+from an arbitrary chunk boundary is at least as serious as the cell damage.
+
+**This is the one gap that is not a mechanical fix.** The others are a handler
+registration, a `case`, a swapped assignment, a `SplitN`. This one is a semantic
+design decision, because buffering the pending cluster across `Write` calls has
+a direct consequence: a cluster arriving as the *last* bytes of a burst is no
+longer displayed at all until more bytes arrive. Something has to decide when
+the buffer is released, and each option costs something:
+
+| Flush policy | Cost |
+| --- | --- |
+| Explicit `Flush()` | Correct and predictable, but a new API contract: every caller (Sidecar's adapter included) must call it before reading the screen, and one that forgets silently loses the last cluster. |
+| Flush on `Render`/`CellAt` | No caller change, but read methods mutate parser state, which is surprising and is a data race waiting to happen for anything reading concurrently. |
+| Timer | No API change and no dropped output, but it makes the emulator time-dependent — the same bytes no longer produce the same screen, which would end this harness's determinism. |
+
+Sidecar's adapter has to honour whichever is chosen — most likely by flushing
+immediately before building a `Frame`. So the upstream change is small in lines
+and non-trivial in contract, and it must be settled before slice 3 makes any
+surface authoritative. Treat "~5 lines" as wrong for this gap.
 
 ### Non-gap: DECSTR
 
@@ -378,11 +471,15 @@ reseed-on-resize design depends on.
 - **Dependency integration clean** — yes. Builds and passes its own suite under
   Sidecar's newer `ultraviolet`, under Go 1.26.5, with `-race`. MIT, matching
   the Charm modules already vendored. No other module version moved.
-- **Gaps bounded** — yes. Nine named defects, each a handler registration, a
-  `case`, a swapped assignment, a `SplitN`, or a buffering condition. Total
-  upstream surface is on the order of tens of lines across `x/vt` and
-  `ultraviolet`. No Sidecar-side escape repair was written, and none is needed
-  to proceed.
+- **Gaps bounded** — yes, but not uniformly. Eight of the nine are mechanical:
+  a handler registration (GAP-1), a `case` (GAP-2), a swapped assignment
+  (GAP-3), a `SplitN` (GAP-4), an accessor (GAP-7). Those are tens of lines
+  across `x/vt` and `ultraviolet`. **GAP-9 is in a different class**: the code
+  change is small but it forces a flush-policy decision that changes the
+  emulator's contract with its callers, and Sidecar's adapter has to be updated
+  to match (see GAP-9). It is bounded — it is one decision in one place, not an
+  open-ended patch layer — but it is a design question, not a diff. No
+  Sidecar-side escape repair was written, and none is needed to proceed.
 - **No broad or unstable patch layer** — confirmed. Zero lines of
   application-specific escape handling exist in `internal/tty/screenmodel`.
 

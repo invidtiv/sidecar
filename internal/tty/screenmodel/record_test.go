@@ -96,7 +96,10 @@ func startTmuxServer(t *testing.T) *tmuxServer {
 	}
 	s := &tmuxServer{t: t, sock: sock, root: root, conf: conf}
 	t.Cleanup(func() {
-		_ = exec.Command("tmux", "-S", sock, "kill-server").Run() //nolint:gosec
+		// Through s.cmd, so teardown carries the same explicit -S and the same
+		// scrubbed TMUX as every other command: a bare exec here would inherit
+		// the ambient TMUX of a developer running the suite from inside tmux.
+		_ = s.cmd("kill-server").Run()
 	})
 	return s
 }

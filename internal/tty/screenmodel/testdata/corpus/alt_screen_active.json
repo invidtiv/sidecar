@@ -1,0 +1,14 @@
+{
+  "name": "alt_screen_active",
+  "fingerprint": "8aa86bd3268180fa45117f98e8cadbf555c31af445a4fc647ac4fa18d26d099c",
+  "tmuxVersion": "tmux 3.6b",
+  "paneWidth": 24,
+  "paneHeight": 6,
+  "capture": "\u001b[7m STATUS BAR            \u001b[0m\n\u001b[34mblue row\u001b[39m plain\n日本語 wide\n\u001b[4munderlined\u001b[0m\n\u001b[38;5;208midx208\u001b[48;2;10;20;30mrgbbg\u001b[39m\u001b[49m\n\n",
+  "cursorX": 6,
+  "cursorY": 5,
+  "cursorFlag": false,
+  "alternateOn": true,
+  "mouseAnyFlag": true,
+  "historySize": 0
+}

@@ -264,6 +264,101 @@ func TestSeedFromCaptureReproducesOracle(t *testing.T) {
 	}
 }
 
+// TestFrameOutputRendersTheFrame is the fidelity assertion for [Frame.Output],
+// the field that becomes tty.ControlSnapshot.Output and is therefore the only
+// part of a frame today's viewport, search, and selection journey actually
+// reads. Cells are compared against tmux elsewhere; Output has to be held to
+// the claim its doc comment makes — "the ANSI-rendered loaded history followed
+// by the live pane rows, in the same shape capture-pane -p -e produces" — and
+// that claim has three testable parts:
+//
+//  1. Shape. Exactly one line per loaded scrolled-off row followed by exactly
+//     Height live rows, newline separated. On the alternate screen there is no
+//     history, so it is Height rows and nothing else.
+//  2. Spelling. Decoding the visible rows with the harness's independent
+//     capture decoder — the same hand-written one used against tmux, which
+//     shares no code with x/vt — must reproduce the frame's own canonical
+//     cells. This is what makes "Output means the same thing as Cells" a
+//     tested property rather than an assumption.
+//  3. Fixed point. Feeding those rows back in through [Model.Seed] must give
+//     the same cells again, because that is exactly what Sidecar does on
+//     reattach. This is where GAP-3 surfaces: ultraviolet renders the link
+//     correctly from the swapped cell x/vt parsed, so the swap is spelled into
+//     Output and re-reading applies it twice.
+func TestFrameOutputRendersTheFrame(t *testing.T) {
+	for _, entry := range corpus {
+		t.Run(entry.Name, func(t *testing.T) {
+			f := replayFrame(t, entry)
+
+			lines := strings.Split(f.Output, "\n")
+			wantLines := f.Height
+			if !f.AltScreen {
+				wantLines += f.HistorySize
+			}
+			if len(lines) != wantLines {
+				t.Fatalf("Output has %d lines, want %d (%d loaded history + %d live rows)",
+					len(lines), wantLines, wantLines-f.Height, f.Height)
+			}
+			visible := strings.Join(lines[len(lines)-f.Height:], "\n")
+
+			if ms := CompareGrids(decodeCapture(visible, f.Width, f.Height), f.Cells, f.Width, f.Height); len(ms) > 0 {
+				t.Fatalf("Output does not spell out the frame's own cells\n%s", FormatMismatches(ms, 30))
+			}
+
+			m := New(f.Width, f.Height)
+			defer m.Close()
+			if err := m.Seed(Seed{
+				Output: visible, Width: f.Width, Height: f.Height,
+				CursorRow: f.CursorRow, CursorCol: f.CursorCol,
+				CursorVisible: f.CursorVisible, AltScreen: f.AltScreen, Mouse: f.Mouse,
+			}); err != nil {
+				t.Fatalf("reseed from Output: %v", err)
+			}
+			again, err := m.Frame()
+			if err != nil {
+				t.Fatalf("frame: %v", err)
+			}
+			reseed := CompareGrids(f.Cells, again.Cells, f.Width, f.Height)
+			gaps := Signatures(reseed)
+			want := entry.KnownOutputGaps
+			if want == nil {
+				want = []string{}
+			}
+			if gaps == nil {
+				gaps = []string{}
+			}
+			if !reflect.DeepEqual(gaps, want) {
+				t.Fatalf("reseeding from Output: mismatch signatures = %v, documented known gaps = %v\n%s",
+					gaps, want, FormatMismatches(reseed, 30))
+			}
+		})
+	}
+}
+
+// replayFrame replays a whole entry and returns the resulting frame, including
+// the fields replayResult drops.
+func replayFrame(t *testing.T, entry corpusEntry) Frame {
+	t.Helper()
+	m := New(entry.Width, entry.Height)
+	defer m.Close()
+	for _, step := range entry.Steps {
+		if step.isResize() {
+			if err := m.Resize(step.ResizeW, step.ResizeH); err != nil {
+				t.Fatalf("resize: %v", err)
+			}
+			continue
+		}
+		if err := m.Write([]byte(step.Write)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	f, err := m.Frame()
+	if err != nil {
+		t.Fatalf("frame: %v", err)
+	}
+	return f
+}
+
 // seedInput is the fixture-shaped seed the round-trip test builds.
 type seedInput struct {
 	Output        string
@@ -348,6 +443,9 @@ func TestCorpusFixturesDeclareSkipReasons(t *testing.T) {
 		}
 		if len(entry.KnownSplitGaps) > 0 && entry.KnownSplitGapReason == "" {
 			t.Errorf("fixture %s declares known split gaps with no recorded reason", entry.Name)
+		}
+		if len(entry.KnownOutputGaps) > 0 && entry.KnownOutputGapReason == "" {
+			t.Errorf("fixture %s declares known Output gaps with no recorded reason", entry.Name)
 		}
 		if len(entry.KnownGaps) > 0 && entry.KnownGapReason == "" {
 			t.Errorf("fixture %s declares known gaps with no recorded reason", entry.Name)

@@ -58,9 +58,11 @@ const tabWidth = 8
 
 // pen is the decoder's SGR/link state.
 //
-// tmux renders each captured line starting from default state, so the pen is
-// reset per line. If that assumption were ever wrong the colored-line-followed-
-// by-plain-line fixture would fail loudly rather than silently bleed.
+// It is deliberately NOT reset per line: tmux emits `capture-pane -e` as one
+// continuous SGR stream and only writes the delta, so a line inherits whatever
+// its predecessor left active (see [decodeCapture]). If that assumption were
+// ever wrong the colored-line-followed-by-plain-line row in the
+// sgr_basic_and_bright fixture would fail loudly rather than silently bleed.
 type pen struct {
 	fg, bg, ul Color
 	underline  Underline

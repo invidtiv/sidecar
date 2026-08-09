@@ -43,6 +43,13 @@ type corpusEntry struct {
 	KnownSeedGaps      []string
 	KnownSeedGapReason string
 
+	// KnownOutputGaps are the mismatch signatures re-seeding from the frame's own
+	// [Frame.Output] is expected to produce, and KnownOutputGapReason explains
+	// them. Empty means Frame.Output is a fixed point: rendering the model and
+	// parsing the rendering back gives the same canonical cells.
+	KnownOutputGaps      []string
+	KnownOutputGapReason string
+
 	// KnownSplitGaps are the mismatch signatures a split replay is expected to
 	// produce relative to the single-write replay, and KnownSplitGapReason
 	// explains them. Empty means splitting must be invisible.
@@ -240,6 +247,34 @@ var corpus = []corpusEntry{
 		},
 	},
 	{
+		// Captured *while still on the alternate screen*, which is where every
+		// full-screen TUI lives. alt_screen_transitions ends back on the main
+		// screen, so it can only prove the exit path; without this fixture the
+		// alternate screen's cell content, its cursor, and the alternate_on mode
+		// assertion are never compared against tmux in a true state, and the seed
+		// round trip never reconstructs an alt-screen pane.
+		Name:       "alt_screen_active",
+		Categories: []string{"alt-screen"},
+		Width:      24, Height: 6,
+		Steps: []corpusStep{
+			// Main-screen content and history first: entering the alternate
+			// screen must not disturb either.
+			write("main one\r\nmain two\r\nmain three\r\n"),
+			write(csi("?1049h")),
+			// A TUI's opening moves: clear, hide the cursor, take the mouse.
+			write(csi("2J") + csi("?25l") + csi("?1000h") + csi("?1006h")),
+			// A reverse-video status bar filling the full pane width.
+			write(csi("1;1H") + csi("7m") + " STATUS BAR            " + csi("0m")),
+			write(csi("2;1H") + csi("34m") + "blue row" + csi("39m") + " plain"),
+			write(csi("3;1H") + "日本語 wide"),
+			write(csi("4;1H") + csi("4m") + "underlined" + csi("24m")),
+			write(csi("5;1H") + csi("38;5;208m") + "idx208" + csi("48;2;10;20;30m") + "rgbbg" + csi("0m")),
+			// Park the cursor mid-screen and stay on the alternate screen: no
+			// ?1049l, so the recorder captures the alternate buffer.
+			write(csi("6;7H")),
+		},
+	},
+	{
 		Name:       "sgr_basic_and_bright",
 		Categories: []string{"sgr-colors-attrs"},
 		Width:      40, Height: 6,
@@ -311,6 +346,13 @@ var corpus = []corpusEntry{
 			"are swapped.",
 		KnownSeedGaps:      []string{"cell/link_params", "cell/link_url"},
 		KnownSeedGapReason: "Same GAP-3: re-reading a capture goes through the same handler.",
+		KnownOutputGaps:    []string{"cell/link_params", "cell/link_url"},
+		KnownOutputGapReason: "GAP-3 reaches Frame.Output, the field that becomes " +
+			"ControlSnapshot.Output for real consumers. ultraviolet *renders* the link " +
+			"correctly as OSC 8;params;uri from the cell it was given, but x/vt *parsed* " +
+			"that cell with URL and Params swapped, so the rendering spells the swap out " +
+			"and re-reading it applies the swap a second time. Any consumer that round " +
+			"trips Output through the model sees the two fields exchanged.",
 	},
 	{
 		Name:       "osc8_hostile_termination",
@@ -331,8 +373,10 @@ var corpus = []corpusEntry{
 			"payload does not split into exactly three semicolon fields, so any URI " +
 			"containing a ';' loses its link, and it discards an OSC abandoned by CAN " +
 			"where tmux keeps the link it had already parsed.",
-		KnownSeedGaps:      []string{"cell/link_params", "cell/link_url"},
-		KnownSeedGapReason: "Same GAP-3/GAP-4 on the seed path.",
+		KnownSeedGaps:        []string{"cell/link_params", "cell/link_url"},
+		KnownSeedGapReason:   "Same GAP-3/GAP-4 on the seed path.",
+		KnownOutputGaps:      []string{"cell/link_params", "cell/link_url"},
+		KnownOutputGapReason: "Same GAP-3 swap reaching Frame.Output as in osc8_links.",
 	},
 	{
 		Name:       "osc8_c1_st_terminator",
@@ -350,6 +394,10 @@ var corpus = []corpusEntry{
 		KnownGapReason: "GAP-5 in the slice 0 evidence: x/vt accepts a raw 0x9c byte as " +
 			"a C1 string terminator inside a UTF-8 stream; tmux 3.6 in UTF-8 mode does " +
 			"not and keeps consuming the OSC.",
+		KnownOutputGaps: []string{"cell/link_params", "cell/link_url"},
+		KnownOutputGapReason: "Same GAP-3 swap reaching Frame.Output: x/vt does terminate " +
+			"this OSC 8 and stores the link with the two fields exchanged, so rendering " +
+			"and re-reading it exchanges them again.",
 		SkipHistoryAssert: true,
 		SkipHistoryReason: "the two emulators disagree about how much text was consumed " +
 			"by the unterminated OSC, so the scroll-off count diverges with it.",
@@ -365,6 +413,13 @@ var corpus = []corpusEntry{
 			write("你好，世界\r\n"),
 			write("❤️ vs ❤\r\n"),
 			write("\U0001f469‍\U0001f4bb zwj\r\n"),
+			// Deliberately not newline-terminated. Every other step parks the
+			// cursor back at column 0, which hides GAP-9's second effect: a
+			// cluster split across Write calls is committed as two cells, so the
+			// cursor ends one column further right than a whole-write replay
+			// leaves it. With the row left open, the split replay observes that
+			// as a cursor/position gap instead of only a cell difference.
+			write("❤️ vs ❤"),
 		},
 		KnownGaps: []string{"cell/grapheme"},
 		KnownGapReason: "GAP-6: x/vt's handlePrint emits every printable ASCII rune as " +
@@ -372,12 +427,15 @@ var corpus = []corpusEntry{
 			"character (NFD text, which is what macOS produces) never attaches to it.",
 		KnownSeedGaps:      []string{"cell/grapheme"},
 		KnownSeedGapReason: "Same GAP-6 on the seed path: the capture replays the same NFD bytes.",
-		KnownSplitGaps:     []string{"cell/grapheme", "cell/width"},
+		KnownSplitGaps:     []string{"cell/grapheme", "cell/width", "cursor/position"},
 		KnownSplitGapReason: "GAP-9, the most consequential finding: x/vt's Write flushes " +
 			"its pending grapheme buffer when it reaches the end of the byte slice, so a " +
 			"grapheme cluster split across two Write calls is committed as two separate " +
 			"cells. Pane bytes arrive from tmux in arbitrary chunks, so this is reachable " +
-			"in production.",
+			"in production. It corrupts the cursor as well as the cells: the final, " +
+			"deliberately unterminated row leaves the cursor at column 7 on a whole write " +
+			"and at column 6 when the cluster is split, because the two committed cells " +
+			"advance the cursor differently from the one they should have formed.",
 	},
 	{
 		Name:       "modes_cursor_paste_sync_reset",

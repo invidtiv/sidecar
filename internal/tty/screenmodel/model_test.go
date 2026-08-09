@@ -2,6 +2,8 @@ package screenmodel
 
 import (
 	"errors"
+	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -175,8 +177,13 @@ func TestHistoryGrowsAsLinesScrollOff(t *testing.T) {
 	if f.CaptureBase != 2 {
 		t.Fatalf("capture base = %d, want the seeded 2", f.CaptureBase)
 	}
-	if !strings.Contains(f.Output, "a") || !strings.Contains(f.Output, "e") {
-		t.Errorf("output should carry loaded history and live rows: %q", f.Output)
+	// Output is what becomes ControlSnapshot.Output, so its shape is a contract,
+	// not a smoke test: the loaded scrolled-off lines in order, then exactly
+	// Height live rows, newline separated and nothing else.
+	got := strings.Split(f.Output, "\n")
+	want := []string{"a", "b", "c", "d", "e"}
+	if !slices.Equal(got, want) {
+		t.Errorf("output lines = %#v, want %#v (2 scrolled-off then the 3 live rows)", got, want)
 	}
 }
 
@@ -248,6 +255,35 @@ func TestCloseIsIdempotentAndRefusesFurtherUse(t *testing.T) {
 	m.Close()
 	if err := m.Write([]byte("x")); !errors.Is(err, ErrClosed) {
 		t.Fatalf("err = %v, want ErrClosed", err)
+	}
+	if _, err := m.emu.Write([]byte("x")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("emulator still open after Close: %v", err)
+	}
+}
+
+// TestCloseReleasesAFaultedModel is the regression for the leak: a faulted
+// model is exactly the model a consumer closes, because taking ErrModelFault is
+// what sends it back to the capture fallback. Close must still release the
+// emulator's pipe and buffers instead of refusing on the sticky error.
+func TestCloseReleasesAFaultedModel(t *testing.T) {
+	m := New(10, 3)
+	if err := m.do(func() error { panic("boom") }); !errors.Is(err, ErrModelFault) {
+		t.Fatalf("err = %v, want ErrModelFault", err)
+	}
+
+	m.Close()
+
+	if !m.closed {
+		t.Error("Close on a faulted model did not mark it closed")
+	}
+	if _, err := m.emu.Write([]byte("x")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("faulted model leaked its emulator: write after Close = %v, want io.ErrClosedPipe", err)
+	}
+	// Terminal and idempotent: closing again is a no-op, and the model reports
+	// closed rather than faulted from here on.
+	m.Close()
+	if err := m.Write([]byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("err = %v, want ErrClosed after closing a faulted model", err)
 	}
 }
 

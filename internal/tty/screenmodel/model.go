@@ -488,11 +488,29 @@ func convertAttrs(a uint8) Attr {
 	return out
 }
 
-// Close releases the model. It is idempotent.
+// Close releases the model. It is idempotent and terminal.
+//
+// Close deliberately does not go through [Model.do]: do refuses a closed or
+// faulted model before it runs the closure, and a fault is precisely the state
+// a consumer closes from. Release therefore has to bypass the sticky-error
+// check, or a faulted pane would keep its emulator's pipe and buffers alive for
+// the lifetime of the process. The single-actor guard still applies — calling
+// Close concurrently with another operation is the same caller bug it always
+// was — and an emulator panic during release is swallowed rather than escaping
+// into the caller's goroutine.
 func (m *Model) Close() {
-	_ = m.do(func() error {
+	if !m.inUse.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.inUse.Store(false)
+	defer func() { _ = recover() }()
+	if m.closed {
+		return
+	}
+	// Marked closed first, so a panic inside the emulator's own teardown still
+	// leaves the model refusing further use.
+	m.closed = true
+	if m.emu != nil {
 		_ = m.emu.Close()
-		m.closed = true
-		return nil
-	})
+	}
 }
