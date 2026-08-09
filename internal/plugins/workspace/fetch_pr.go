@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -85,7 +86,7 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 					outStr2 := strings.TrimSpace(string(output2))
 					// Worktree already checked out — find and focus it
 					if strings.Contains(outStr2, "already") {
-						existingPath := findWorktreePathForBranch(workDir, branch)
+						existingPath := findWorktreePathForBranchContext(ctx, workDir, branch)
 						if existingPath != "" {
 							_ = savePRURL(projectRoot, existingPath, pr.URL)
 							_ = saveBaseBranch(projectRoot, existingPath, detectDefaultBranch(workDir))
@@ -144,7 +145,11 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 
 // findWorktreePathForBranch returns the worktree path for a branch, or "" if not found.
 func findWorktreePathForBranch(workDir, branch string) string {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	return findWorktreePathForBranchContext(context.Background(), workDir, branch)
+}
+
+func findWorktreePathForBranchContext(ctx context.Context, workDir, branch string) string {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = workDir
 	output, err := cmd.Output()
 	if err != nil {

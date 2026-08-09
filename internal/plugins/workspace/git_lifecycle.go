@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,7 +56,11 @@ type gitWorktreeState struct {
 }
 
 func readGitWorktrees(repoPath string) ([]gitWorktreeState, error) {
-	out, err := gitOutput(repoPath, "worktree", "list", "--porcelain")
+	return readGitWorktreesContext(context.Background(), repoPath)
+}
+
+func readGitWorktreesContext(ctx context.Context, repoPath string) ([]gitWorktreeState, error) {
+	out, err := gitOutputContext(ctx, repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +99,15 @@ func readGitWorktrees(repoPath string) ([]gitWorktreeState, error) {
 	return result, scanner.Err()
 }
 
+func cloneDirectMergeOperation(op *DirectMergeOperation) *DirectMergeOperation {
+	if op == nil {
+		return nil
+	}
+	clone := *op
+	clone.Completed = append([]string(nil), op.Completed...)
+	return &clone
+}
+
 // DirectMergeRecovery describes the safe actions available after a failed merge.
 type DirectMergeRecovery string
 
@@ -105,6 +119,7 @@ const (
 
 // DirectMergeOperation is the immutable context and accumulated result of a merge.
 type DirectMergeOperation struct {
+	runContext   context.Context
 	SourcePath   string
 	TargetPath   string
 	SourceBranch string
@@ -122,7 +137,11 @@ type DirectMergeOperation struct {
 }
 
 func preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch string) (*DirectMergeOperation, error) {
-	worktrees, err := readGitWorktrees(repoPath)
+	return preflightDirectMergeContext(context.Background(), repoPath, sourcePath, sourceBranch, targetBranch)
+}
+
+func preflightDirectMergeContext(ctx context.Context, repoPath, sourcePath, sourceBranch, targetBranch string) (*DirectMergeOperation, error) {
+	worktrees, err := readGitWorktreesContext(ctx, repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("inventory worktrees: %w", err)
 	}
@@ -156,34 +175,34 @@ func preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch strin
 		return nil, fmt.Errorf("target worktree is not safe to update")
 	}
 	for _, checkout := range []*gitWorktreeState{source, target} {
-		if err := requireClean(checkout.Path); err != nil {
+		if err := requireCleanContext(ctx, checkout.Path); err != nil {
 			return nil, err
 		}
-		if state := gitOperationState(checkout.Path); state != "clean" {
+		if state := gitOperationStateContext(ctx, checkout.Path); state != "clean" {
 			return nil, fmt.Errorf("worktree %q has a Git operation in progress: %s", checkout.Path, state)
 		}
 	}
-	sourceOID, err := gitOutput(source.Path, "rev-parse", "HEAD")
+	sourceOID, err := gitOutputContext(ctx, source.Path, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("resolve source HEAD: %w", err)
 	}
-	sourceRefOID, err := gitOutput(repoPath, "rev-parse", "refs/heads/"+sourceBranch)
+	sourceRefOID, err := gitOutputContext(ctx, repoPath, "rev-parse", "refs/heads/"+sourceBranch)
 	if err != nil || sourceRefOID != sourceOID {
 		return nil, fmt.Errorf("source branch moved or does not match its checkout")
 	}
-	targetOID, err := gitOutput(target.Path, "rev-parse", "HEAD")
+	targetOID, err := gitOutputContext(ctx, target.Path, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("resolve target HEAD: %w", err)
 	}
-	targetRefOID, err := gitOutput(repoPath, "rev-parse", "refs/heads/"+targetBranch)
+	targetRefOID, err := gitOutputContext(ctx, repoPath, "rev-parse", "refs/heads/"+targetBranch)
 	if err != nil || targetRefOID != targetOID {
 		return nil, fmt.Errorf("target branch moved or does not match its checkout")
 	}
-	remote, err := resolveBranchRemote(repoPath, targetBranch)
+	remote, err := resolveBranchRemoteContext(ctx, repoPath, targetBranch)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := gitOutput(repoPath, "ls-remote", "--exit-code", "--heads", remote, "refs/heads/"+targetBranch); err != nil {
+	if _, err := gitOutputContext(ctx, repoPath, "ls-remote", "--exit-code", "--heads", remote, "refs/heads/"+targetBranch); err != nil {
 		return nil, fmt.Errorf("remote %q does not expose target branch %q: %w", remote, targetBranch, err)
 	}
 	return &DirectMergeOperation{
@@ -195,45 +214,50 @@ func preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch strin
 }
 
 func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
-	return runDirectMergeWithHooks(op, nil, nil)
+	return runDirectMergeWithHooks(context.Background(), op, nil, nil)
+}
+
+func runDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
+	return runDirectMergeWithHooks(ctx, op, nil, nil)
 }
 
 func runDirectMergeWithBeforeMerge(op *DirectMergeOperation, beforeMerge func()) *DirectMergeOperation {
-	return runDirectMergeWithHooks(op, nil, beforeMerge)
+	return runDirectMergeWithHooks(context.Background(), op, nil, beforeMerge)
 }
 
 func runDirectMergeWithBeforePull(op *DirectMergeOperation, beforePull func()) *DirectMergeOperation {
-	return runDirectMergeWithHooks(op, beforePull, nil)
+	return runDirectMergeWithHooks(context.Background(), op, beforePull, nil)
 }
 
-func runDirectMergeWithHooks(op *DirectMergeOperation, beforePull, beforeMerge func()) *DirectMergeOperation {
+func runDirectMergeWithHooks(ctx context.Context, op *DirectMergeOperation, beforePull, beforeMerge func()) *DirectMergeOperation {
 	if op == nil {
 		return &DirectMergeOperation{Err: fmt.Errorf("missing direct merge operation")}
 	}
-	if err := revalidateDirectMerge(op); err != nil {
+	op.runContext = ctx
+	if err := revalidateDirectMergeContext(ctx, op); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryNone)
 	}
-	if _, err := gitOutput(op.TargetPath, "fetch", op.Remote, op.TargetBranch); err != nil {
+	if _, err := gitOutputContext(ctx, op.TargetPath, "fetch", op.Remote, op.TargetBranch); err != nil {
 		return failDirectMerge(op, fmt.Errorf("fetch %s: %w", op.Remote, err), DirectMergeRecoveryNone)
 	}
 	op.Completed = append(op.Completed, "fetch")
 	if beforePull != nil {
 		beforePull()
 	}
-	if err := requireClean(op.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, op.TargetPath); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target changed before fast-forward: %w", err), DirectMergeRecoveryNone)
 	}
-	if state := gitOperationState(op.TargetPath); state != "clean" {
+	if state := gitOperationStateContext(ctx, op.TargetPath); state != "clean" {
 		return failDirectMerge(op, fmt.Errorf("target started a Git operation before fast-forward: %s", state), DirectMergeRecoveryNone)
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.TargetOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.TargetPath, op.TargetBranch, op.TargetOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target checkout changed before fast-forward: %w", err), DirectMergeRecoveryNone)
 	}
-	if _, err := gitOutput(op.TargetPath, "pull", "--ff-only", op.Remote, op.TargetBranch); err != nil {
+	if _, err := gitOutputContext(ctx, op.TargetPath, "pull", "--ff-only", op.Remote, op.TargetBranch); err != nil {
 		return failDirectMerge(op, fmt.Errorf("fast-forward target: %w", err), DirectMergeRecoveryNone)
 	}
 	op.Completed = append(op.Completed, "fast-forward target")
-	postPullOID, err := gitOutput(op.TargetPath, "rev-parse", "HEAD")
+	postPullOID, err := gitOutputContext(ctx, op.TargetPath, "rev-parse", "HEAD")
 	if err != nil {
 		return failDirectMerge(op, fmt.Errorf("pin post-pull target HEAD: %w", err), DirectMergeRecoveryNone)
 	}
@@ -241,127 +265,154 @@ func runDirectMergeWithHooks(op *DirectMergeOperation, beforePull, beforeMerge f
 		return failDirectMerge(op, fmt.Errorf("pin post-pull target HEAD: empty OID"), DirectMergeRecoveryNone)
 	}
 	op.PreMergeOID = postPullOID
-	if err := requireClean(op.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, op.TargetPath); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryNone)
 	}
 	if beforeMerge != nil {
 		beforeMerge()
 	}
-	if err := requireClean(op.SourcePath); err != nil {
+	if err := requireCleanContext(ctx, op.SourcePath); err != nil {
 		return failDirectMerge(op, fmt.Errorf("source changed after review: %w", err), DirectMergeRecoveryNone)
 	}
-	if state := gitOperationState(op.SourcePath); state != "clean" {
+	if state := gitOperationStateContext(ctx, op.SourcePath); state != "clean" {
 		return failDirectMerge(op, fmt.Errorf("source started a Git operation after review: %s", state), DirectMergeRecoveryNone)
 	}
-	if err := requireCheckoutIdentity(op.SourcePath, op.SourceBranch, op.SourceOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.SourcePath, op.SourceBranch, op.SourceOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("source checkout changed before merge: %w", err), DirectMergeRecoveryNone)
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target checkout changed before merge: %w", err), DirectMergeRecoveryNone)
 	}
 	message := fmt.Sprintf("Merge branch '%s'", op.SourceBranch)
-	if _, err := gitOutput(op.TargetPath, "merge", "--no-ff", op.SourceOID, "-m", message); err != nil {
-		if gitOperationState(op.TargetPath) == "merge" {
+	if _, err := gitOutputContext(ctx, op.TargetPath, "merge", "--no-ff", op.SourceOID, "-m", message); err != nil {
+		if gitOperationStateContext(ctx, op.TargetPath) == "merge" {
 			return failDirectMerge(op, fmt.Errorf("merge conflict: %w", err), DirectMergeRecoveryConflict)
 		}
 		return failDirectMerge(op, fmt.Errorf("merge: %w", err), DirectMergeRecoveryNone)
 	}
 	op.Completed = append(op.Completed, "merge")
-	op.MergeOID, _ = gitOutput(op.TargetPath, "rev-parse", "HEAD")
-	return pushDirectMerge(op)
+	op.MergeOID, _ = gitOutputContext(ctx, op.TargetPath, "rev-parse", "HEAD")
+	return pushDirectMergeContext(ctx, op)
 }
 
 func continueDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
+	return continueDirectMergeContext(context.Background(), op)
+}
+
+func continueDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil || op.Recovery != DirectMergeRecoveryConflict {
 		return failDirectMerge(op, fmt.Errorf("no conflicted merge is available to continue"), DirectMergeRecoveryNone)
 	}
-	if err := revalidateConflictRecovery(op); err != nil {
+	op.runContext = ctx
+	if err := revalidateConflictRecoveryContext(ctx, op); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryConflict)
 	}
-	if unmerged, _ := gitOutput(op.TargetPath, "diff", "--name-only", "--diff-filter=U"); unmerged != "" {
+	if unmerged, _ := gitOutputContext(ctx, op.TargetPath, "diff", "--name-only", "--diff-filter=U"); unmerged != "" {
 		return failDirectMerge(op, fmt.Errorf("resolve all conflicts before continuing: %s", strings.ReplaceAll(unmerged, "\n", ", ")), DirectMergeRecoveryConflict)
 	}
-	cmd := exec.Command("git", "-c", "core.editor=true", "merge", "--continue")
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.editor=true", "merge", "--continue")
 	cmd.Dir = op.TargetPath
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return failDirectMerge(op, fmt.Errorf("continue merge: %s: %w", strings.TrimSpace(string(out)), err), DirectMergeRecoveryConflict)
 	}
 	op.Completed = appendUnique(op.Completed, "merge")
-	op.MergeOID, _ = gitOutput(op.TargetPath, "rev-parse", "HEAD")
+	op.MergeOID, _ = gitOutputContext(ctx, op.TargetPath, "rev-parse", "HEAD")
 	op.Recovery, op.Err = DirectMergeRecoveryNone, nil
-	return pushDirectMerge(op)
+	return pushDirectMergeContext(ctx, op)
 }
 
 func abortDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
+	return abortDirectMergeContext(context.Background(), op)
+}
+
+func abortDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil || op.Recovery != DirectMergeRecoveryConflict {
 		return failDirectMerge(op, fmt.Errorf("no conflicted merge is available to abort"), DirectMergeRecoveryNone)
 	}
-	if err := revalidateConflictRecovery(op); err != nil {
+	op.runContext = ctx
+	if err := revalidateConflictRecoveryContext(ctx, op); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryConflict)
 	}
-	if _, err := gitOutput(op.TargetPath, "merge", "--abort"); err != nil {
+	if _, err := gitOutputContext(ctx, op.TargetPath, "merge", "--abort"); err != nil {
 		return failDirectMerge(op, fmt.Errorf("abort merge: %w", err), DirectMergeRecoveryConflict)
 	}
-	head, _ := gitOutput(op.TargetPath, "rev-parse", "HEAD")
+	head, _ := gitOutputContext(ctx, op.TargetPath, "rev-parse", "HEAD")
 	if head != op.PreMergeOID {
 		return failDirectMerge(op, fmt.Errorf("merge aborted but target HEAD is %s, expected %s", head, op.PreMergeOID), DirectMergeRecoveryNone)
 	}
 	op.Recovery, op.Err = DirectMergeRecoveryNone, nil
 	op.Aborted = true
-	op.GitState = currentGitState(op.TargetPath)
+	op.GitState = currentGitStateContext(ctx, op.TargetPath)
 	return op
 }
 
 func retryDirectMergePush(op *DirectMergeOperation) *DirectMergeOperation {
+	return retryDirectMergePushContext(context.Background(), op)
+}
+
+func retryDirectMergePushContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil || op.Recovery != DirectMergeRecoveryPushFailure {
 		return failDirectMerge(op, fmt.Errorf("no failed push is available to retry"), DirectMergeRecoveryNone)
 	}
-	if state := gitOperationState(op.TargetPath); state != "clean" {
+	op.runContext = ctx
+	if state := gitOperationStateContext(ctx, op.TargetPath); state != "clean" {
 		return failDirectMerge(op, fmt.Errorf("cannot retry push during Git operation: %s", state), DirectMergeRecoveryPushFailure)
 	}
-	if err := requireClean(op.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, op.TargetPath); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryPushFailure)
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target checkout changed since the failed push: %w", err), DirectMergeRecoveryPushFailure)
 	}
-	return pushDirectMerge(op)
+	return pushDirectMergeContext(ctx, op)
 }
 
 func pushDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
+	return pushDirectMergeContext(context.Background(), op)
+}
+
+func pushDirectMergeContext(ctx context.Context, op *DirectMergeOperation) *DirectMergeOperation {
+	if op == nil {
+		return failDirectMerge(nil, fmt.Errorf("missing direct merge operation"), DirectMergeRecoveryNone)
+	}
+	op.runContext = ctx
 	if op.MergeOID == "" {
 		return failDirectMerge(op, fmt.Errorf("merge result OID is not pinned"), DirectMergeRecoveryPushFailure)
 	}
-	if state := gitOperationState(op.TargetPath); state != "clean" {
+	if state := gitOperationStateContext(ctx, op.TargetPath); state != "clean" {
 		return failDirectMerge(op, fmt.Errorf("cannot push during Git operation: %s", state), DirectMergeRecoveryPushFailure)
 	}
-	if err := requireClean(op.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, op.TargetPath); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryPushFailure)
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target checkout changed before push: %w", err), DirectMergeRecoveryPushFailure)
 	}
 	refspec := "HEAD:refs/heads/" + op.TargetBranch
-	if _, err := gitOutput(op.TargetPath, "push", op.Remote, refspec); err != nil {
+	if _, err := gitOutputContext(ctx, op.TargetPath, "push", op.Remote, refspec); err != nil {
 		return failDirectMerge(op, fmt.Errorf("push %s %s: %w", op.Remote, op.TargetBranch, err), DirectMergeRecoveryPushFailure)
 	}
 	op.Completed = appendUnique(op.Completed, "push")
 	op.Recovery, op.Err = DirectMergeRecoveryNone, nil
-	op.GitState = currentGitState(op.TargetPath)
+	op.GitState = currentGitStateContext(ctx, op.TargetPath)
 	return op
 }
 
 func revalidateConflictRecovery(op *DirectMergeOperation) error {
+	return revalidateConflictRecoveryContext(context.Background(), op)
+}
+
+func revalidateConflictRecoveryContext(ctx context.Context, op *DirectMergeOperation) error {
 	if op.SourceOID == "" || op.PreMergeOID == "" {
 		return fmt.Errorf("conflict recovery identity is incomplete")
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
 		return fmt.Errorf("refusing recovery because target checkout changed: %w", err)
 	}
-	if state := gitOperationState(op.TargetPath); state != "merge" {
+	if state := gitOperationStateContext(ctx, op.TargetPath); state != "merge" {
 		return fmt.Errorf("the target no longer has the expected merge in progress")
 	}
-	mergeHead, err := gitOutput(op.TargetPath, "rev-parse", "MERGE_HEAD")
+	mergeHead, err := gitOutputContext(ctx, op.TargetPath, "rev-parse", "MERGE_HEAD")
 	if err != nil || mergeHead != op.SourceOID {
 		return fmt.Errorf("refusing recovery because MERGE_HEAD changed: got %q, expected %q", mergeHead, op.SourceOID)
 	}
@@ -369,18 +420,22 @@ func revalidateConflictRecovery(op *DirectMergeOperation) error {
 }
 
 func revalidateDirectMerge(op *DirectMergeOperation) error {
+	return revalidateDirectMergeContext(context.Background(), op)
+}
+
+func revalidateDirectMergeContext(ctx context.Context, op *DirectMergeOperation) error {
 	checks := []struct{ path, branch, want string }{
 		{op.SourcePath, op.SourceBranch, op.SourceOID},
 		{op.TargetPath, op.TargetBranch, op.TargetOID},
 	}
 	for _, check := range checks {
-		if state := gitOperationState(check.path); state != "clean" {
+		if state := gitOperationStateContext(ctx, check.path); state != "clean" {
 			return fmt.Errorf("worktree %q has a Git operation in progress: %s", check.path, state)
 		}
-		if err := requireClean(check.path); err != nil {
+		if err := requireCleanContext(ctx, check.path); err != nil {
 			return err
 		}
-		if err := requireCheckoutIdentity(check.path, check.branch, check.want); err != nil {
+		if err := requireCheckoutIdentityContext(ctx, check.path, check.branch, check.want); err != nil {
 			return err
 		}
 	}
@@ -388,11 +443,15 @@ func revalidateDirectMerge(op *DirectMergeOperation) error {
 }
 
 func requireCheckoutIdentity(path, branch, oid string) error {
-	currentBranch, err := gitOutput(path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	return requireCheckoutIdentityContext(context.Background(), path, branch, oid)
+}
+
+func requireCheckoutIdentityContext(ctx context.Context, path, branch, oid string) error {
+	currentBranch, err := gitOutputContext(ctx, path, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil || currentBranch != branch {
 		return fmt.Errorf("worktree %q checks out %q, expected %q", path, currentBranch, branch)
 	}
-	worktrees, err := readGitWorktrees(path)
+	worktrees, err := readGitWorktreesContext(ctx, path)
 	if err != nil {
 		return fmt.Errorf("refresh worktree inventory: %w", err)
 	}
@@ -407,7 +466,7 @@ func requireCheckoutIdentity(path, branch, oid string) error {
 		return fmt.Errorf("worktree %q is no longer the safe checkout of %q", path, branch)
 	}
 	if oid != "" {
-		head, err := gitOutput(path, "rev-parse", "HEAD")
+		head, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
 		if err != nil || head != oid {
 			return fmt.Errorf("HEAD changed after review in %q", path)
 		}
@@ -421,16 +480,24 @@ func failDirectMerge(op *DirectMergeOperation, err error, recovery DirectMergeRe
 	}
 	op.Err, op.Recovery = err, recovery
 	if op.TargetPath != "" {
-		op.GitState = currentGitState(op.TargetPath)
+		ctx := op.runContext
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		op.GitState = currentGitStateContext(ctx, op.TargetPath)
 	}
 	return op
 }
 
 func resolveBranchRemote(repoPath, branch string) (string, error) {
-	if remote, err := gitOutput(repoPath, "config", "--get", "branch."+branch+".remote"); err == nil && remote != "" && remote != "." {
+	return resolveBranchRemoteContext(context.Background(), repoPath, branch)
+}
+
+func resolveBranchRemoteContext(ctx context.Context, repoPath, branch string) (string, error) {
+	if remote, err := gitOutputContext(ctx, repoPath, "config", "--get", "branch."+branch+".remote"); err == nil && remote != "" && remote != "." {
 		return remote, nil
 	}
-	remotes, err := gitOutput(repoPath, "remote")
+	remotes, err := gitOutputContext(ctx, repoPath, "remote")
 	if err != nil {
 		return "", fmt.Errorf("list remotes: %w", err)
 	}
@@ -445,7 +512,11 @@ func resolveBranchRemote(repoPath, branch string) (string, error) {
 }
 
 func requireClean(path string) error {
-	status, err := gitOutput(path, "status", "--porcelain=v1", "--untracked-files=normal")
+	return requireCleanContext(context.Background(), path)
+}
+
+func requireCleanContext(ctx context.Context, path string) error {
+	status, err := gitOutputContext(ctx, path, "status", "--porcelain=v1", "--untracked-files=normal")
 	if err != nil {
 		return fmt.Errorf("inspect %q: %w", path, err)
 	}
@@ -456,11 +527,15 @@ func requireClean(path string) error {
 }
 
 func gitOperationState(path string) string {
+	return gitOperationStateContext(context.Background(), path)
+}
+
+func gitOperationStateContext(ctx context.Context, path string) string {
 	states := []struct{ name, key string }{
 		{"merge", "MERGE_HEAD"}, {"rebase", "rebase-merge"}, {"rebase", "rebase-apply"}, {"cherry-pick", "CHERRY_PICK_HEAD"},
 	}
 	for _, state := range states {
-		gitPath, err := gitOutput(path, "rev-parse", "--git-path", state.key)
+		gitPath, err := gitOutputContext(ctx, path, "rev-parse", "--git-path", state.key)
 		if err != nil {
 			continue
 		}
@@ -475,10 +550,14 @@ func gitOperationState(path string) string {
 }
 
 func currentGitState(path string) string {
-	head, _ := gitOutput(path, "rev-parse", "--short", "HEAD")
-	branch, _ := gitOutput(path, "branch", "--show-current")
-	status, _ := gitOutput(path, "status", "--short")
-	state := fmt.Sprintf("target %s at %s; operation: %s", branch, head, gitOperationState(path))
+	return currentGitStateContext(context.Background(), path)
+}
+
+func currentGitStateContext(ctx context.Context, path string) string {
+	head, _ := gitOutputContext(ctx, path, "rev-parse", "--short", "HEAD")
+	branch, _ := gitOutputContext(ctx, path, "branch", "--show-current")
+	status, _ := gitOutputContext(ctx, path, "status", "--short")
+	state := fmt.Sprintf("target %s at %s; operation: %s", branch, head, gitOperationStateContext(ctx, path))
 	if status == "" {
 		return state + "; working tree clean"
 	}
@@ -486,17 +565,7 @@ func currentGitState(path string) string {
 }
 
 func gitOutput(path string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = path
-	out, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(out))
-	if err != nil {
-		if text == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%s: %w", text, err)
-	}
-	return text, nil
+	return gitOutputContext(context.Background(), path, args...)
 }
 
 func appendUnique(items []string, item string) []string {
@@ -520,25 +589,33 @@ type BaseUpdateResult struct {
 }
 
 func updateCheckedOutBase(repoPath, branch, remote string) BaseUpdateResult {
-	return updateCheckedOutBaseWithBeforePull(repoPath, branch, remote, nil)
+	return updateCheckedOutBaseContext(context.Background(), repoPath, branch, remote)
+}
+
+func updateCheckedOutBaseContext(ctx context.Context, repoPath, branch, remote string) BaseUpdateResult {
+	return updateCheckedOutBaseWithBeforePullContext(ctx, repoPath, branch, remote, nil)
 }
 
 func updateCheckedOutBaseWithBeforePull(repoPath, branch, remote string, beforePull func()) BaseUpdateResult {
+	return updateCheckedOutBaseWithBeforePullContext(context.Background(), repoPath, branch, remote, beforePull)
+}
+
+func updateCheckedOutBaseWithBeforePullContext(ctx context.Context, repoPath, branch, remote string, beforePull func()) BaseUpdateResult {
 	result := BaseUpdateResult{Branch: branch}
 	if remote == "" {
 		var err error
-		remote, err = resolveBranchRemote(repoPath, branch)
+		remote, err = resolveBranchRemoteContext(ctx, repoPath, branch)
 		if err != nil {
 			result.Err = err
 			return result
 		}
 	}
-	if _, err := gitOutput(repoPath, "fetch", remote, branch); err != nil {
+	if _, err := gitOutputContext(ctx, repoPath, "fetch", remote, branch); err != nil {
 		result.Err = fmt.Errorf("fetch %s %s: %w", remote, branch, err)
 		return result
 	}
 	result.Fetched = true
-	worktrees, err := readGitWorktrees(repoPath)
+	worktrees, err := readGitWorktreesContext(ctx, repoPath)
 	if err != nil {
 		result.Err = err
 		return result
@@ -556,13 +633,13 @@ func updateCheckedOutBaseWithBeforePull(repoPath, branch, remote string, beforeP
 		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged because it is not safely checked out", remote, branch, branch)
 		return result
 	}
-	if err := requireClean(result.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, result.TargetPath); err != nil {
 		result.LeftUnchanged = true
 		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged", remote, branch, branch)
 		result.Err = err
 		return result
 	}
-	if state := gitOperationState(result.TargetPath); state != "clean" {
+	if state := gitOperationStateContext(ctx, result.TargetPath); state != "clean" {
 		result.LeftUnchanged = true
 		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged", remote, branch, branch)
 		result.Err = fmt.Errorf("target has a Git operation in progress: %s", state)
@@ -576,23 +653,23 @@ func updateCheckedOutBaseWithBeforePull(repoPath, branch, remote string, beforeP
 	if beforePull != nil {
 		beforePull()
 	}
-	if err := requireClean(result.TargetPath); err != nil {
+	if err := requireCleanContext(ctx, result.TargetPath); err != nil {
 		result.LeftUnchanged = true
 		result.Err = fmt.Errorf("target changed before pull: %w", err)
 		return result
 	}
-	if state := gitOperationState(result.TargetPath); state != "clean" {
+	if state := gitOperationStateContext(ctx, result.TargetPath); state != "clean" {
 		result.LeftUnchanged = true
 		result.Err = fmt.Errorf("target started a Git operation before pull: %s", state)
 		return result
 	}
-	if err := requireCheckoutIdentity(result.TargetPath, branch, targetOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, result.TargetPath, branch, targetOID); err != nil {
 		result.LeftUnchanged = true
 		result.Message = fmt.Sprintf("Fetched %s/%s; local %s was intentionally left unchanged", remote, branch, branch)
 		result.Err = fmt.Errorf("target checkout changed before pull: %w", err)
 		return result
 	}
-	if _, err := gitOutput(result.TargetPath, "pull", "--ff-only", remote, branch); err != nil {
+	if _, err := gitOutputContext(ctx, result.TargetPath, "pull", "--ff-only", remote, branch); err != nil {
 		result.LeftUnchanged = true
 		result.Err = fmt.Errorf("fast-forward %s: %w", branch, err)
 		return result
@@ -619,9 +696,13 @@ type CleanupPlan struct {
 }
 
 func runCleanupPlan(plan CleanupPlan) *CleanupResults {
+	return runCleanupPlanContext(context.Background(), plan)
+}
+
+func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResults {
 	results := &CleanupResults{}
 	// Revalidate the selected identity before deleting anything.
-	worktrees, err := readGitWorktrees(plan.RepoPath)
+	worktrees, err := readGitWorktreesContext(ctx, plan.RepoPath)
 	if err != nil {
 		results.Errors = append(results.Errors, "Inventory: "+err.Error())
 		return results
@@ -642,7 +723,7 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 		return results
 	}
 	if plan.DeleteRemote {
-		remoteOID, err := remoteBranchOID(plan.RepoPath, plan.BranchRemote, plan.Branch)
+		remoteOID, err := remoteBranchOIDContext(ctx, plan.RepoPath, plan.BranchRemote, plan.Branch)
 		if err != nil {
 			results.Errors = append(results.Errors, "Remote branch: "+err.Error())
 			return results
@@ -658,7 +739,7 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 	}
 	// Every command below runs from RepoPath, which must be a surviving checkout.
 	if plan.DeleteWorktree {
-		if err := removeCleanLifecycleWorktree(plan.RepoPath, plan.WorktreePath, plan.Branch, plan.ExpectedOID); err != nil {
+		if err := removeCleanLifecycleWorktreeContext(ctx, plan.RepoPath, plan.WorktreePath, plan.Branch, plan.ExpectedOID); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Workspace: %v", err))
 			return results
 		} else {
@@ -668,21 +749,21 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 	if plan.DeleteBranch {
 		if !results.LocalWorktreeDeleted && plan.DeleteWorktree {
 			results.Errors = append(results.Errors, "Branch: skipped because worktree deletion failed")
-		} else if err := deleteBranchSafe(plan.RepoPath, plan.Branch); err != nil {
+		} else if err := deleteBranchSafeContext(ctx, plan.RepoPath, plan.Branch); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Branch: %v", err))
 		} else {
 			results.LocalBranchDeleted = true
 		}
 	}
 	if plan.DeleteRemote {
-		if err := deleteRemoteBranchFrom(plan.RepoPath, plan.BranchRemote, plan.Branch, plan.ExpectedRemoteOID); err != nil {
+		if err := deleteRemoteBranchFromContext(ctx, plan.RepoPath, plan.BranchRemote, plan.Branch, plan.ExpectedRemoteOID); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Remote branch: %v", err))
 		} else {
 			results.RemoteBranchDeleted = true
 		}
 	}
 	if plan.UpdateBase {
-		update := updateCheckedOutBase(plan.RepoPath, plan.BaseBranch, plan.BaseRemote)
+		update := updateCheckedOutBaseContext(ctx, plan.RepoPath, plan.BaseBranch, plan.BaseRemote)
 		results.PullAttempted = true
 		results.PullSuccess = update.Updated || (update.Fetched && update.LeftUnchanged && update.Err == nil)
 		results.PullError = update.Err
@@ -692,21 +773,25 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 }
 
 func removeCleanLifecycleWorktree(repoPath, worktreePath, branch, expectedOID string) error {
+	return removeCleanLifecycleWorktreeContext(context.Background(), repoPath, worktreePath, branch, expectedOID)
+}
+
+func removeCleanLifecycleWorktreeContext(ctx context.Context, repoPath, worktreePath, branch, expectedOID string) error {
 	if expectedOID == "" {
 		return fmt.Errorf("cleanup identity has no expected HEAD OID")
 	}
-	if state := gitOperationState(worktreePath); state != "clean" {
+	if state := gitOperationStateContext(ctx, worktreePath); state != "clean" {
 		return fmt.Errorf("worktree has a Git operation in progress: %s", state)
 	}
-	if err := requireCheckoutIdentity(worktreePath, branch, expectedOID); err != nil {
+	if err := requireCheckoutIdentityContext(ctx, worktreePath, branch, expectedOID); err != nil {
 		return err
 	}
-	if err := requireClean(worktreePath); err != nil {
+	if err := requireCleanContext(ctx, worktreePath); err != nil {
 		return err
 	}
 	// This lifecycle path deliberately has no --force fallback. The identity
 	// and clean checks are immediately adjacent to the destructive command.
-	cmd := exec.Command("git", "worktree", "remove", worktreePath)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", worktreePath)
 	cmd.Dir = repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
@@ -715,26 +800,34 @@ func removeCleanLifecycleWorktree(repoPath, worktreePath, branch, expectedOID st
 }
 
 func deleteBranchSafe(repoPath, branch string) error {
-	if isMainBranch(repoPath, branch) {
+	return deleteBranchSafeContext(context.Background(), repoPath, branch)
+}
+
+func deleteBranchSafeContext(ctx context.Context, repoPath, branch string) error {
+	if isMainBranchContext(ctx, repoPath, branch) {
 		return fmt.Errorf("refusing to delete main branch %q", branch)
 	}
-	_, err := gitOutput(repoPath, "branch", "-d", branch)
+	_, err := gitOutputContext(ctx, repoPath, "branch", "-d", branch)
 	return err
 }
 
 func deleteRemoteBranchFrom(repoPath, remote, branch, expectedOID string) error {
-	if isMainBranch(repoPath, branch) {
+	return deleteRemoteBranchFromContext(context.Background(), repoPath, remote, branch, expectedOID)
+}
+
+func deleteRemoteBranchFromContext(ctx context.Context, repoPath, remote, branch, expectedOID string) error {
+	if isMainBranchContext(ctx, repoPath, branch) {
 		return fmt.Errorf("refusing to delete remote main branch %q", branch)
 	}
 	if remote == "" {
 		var err error
-		remote, err = resolveBranchRemote(repoPath, branch)
+		remote, err = resolveBranchRemoteContext(ctx, repoPath, branch)
 		if err != nil {
 			return err
 		}
 	}
 	lease := "--force-with-lease=refs/heads/" + branch + ":" + expectedOID
-	_, err := gitOutput(repoPath, "push", lease, remote, "--delete", branch)
+	_, err := gitOutputContext(ctx, repoPath, "push", lease, remote, "--delete", branch)
 	if err != nil && (strings.Contains(err.Error(), "remote ref does not exist") || strings.Contains(err.Error(), "couldn't find remote ref")) {
 		return nil
 	}
@@ -742,10 +835,14 @@ func deleteRemoteBranchFrom(repoPath, remote, branch, expectedOID string) error 
 }
 
 func remoteBranchOID(repoPath, remote, branch string) (string, error) {
+	return remoteBranchOIDContext(context.Background(), repoPath, remote, branch)
+}
+
+func remoteBranchOIDContext(ctx context.Context, repoPath, remote, branch string) (string, error) {
 	if remote == "" {
 		return "", fmt.Errorf("remote is not resolved for branch %q", branch)
 	}
-	out, err := gitOutput(repoPath, "ls-remote", "--heads", remote, "refs/heads/"+branch)
+	out, err := gitOutputContext(ctx, repoPath, "ls-remote", "--heads", remote, "refs/heads/"+branch)
 	if err != nil {
 		return "", fmt.Errorf("inspect %s/%s: %w", remote, branch, err)
 	}

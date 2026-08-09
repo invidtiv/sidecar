@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -38,6 +39,10 @@ func DefaultSetupConfig() *SetupConfig {
 // setupWorktree performs post-creation setup for a new worktree.
 // This includes copying env files, creating symlinks, and running setup scripts.
 func (p *Plugin) setupWorktree(worktreePath, branchName string) error {
+	return p.setupWorktreeContext(context.Background(), worktreePath, branchName)
+}
+
+func (p *Plugin) setupWorktreeContext(ctx context.Context, worktreePath, branchName string) error {
 	config := DefaultSetupConfig()
 
 	// 1. Copy environment files
@@ -58,7 +63,7 @@ func (p *Plugin) setupWorktree(worktreePath, branchName string) error {
 
 	// 3. Run setup script (if exists)
 	if config.RunSetupScript {
-		if err := p.runSetupScript(worktreePath, branchName); err != nil {
+		if err := p.runSetupScriptContext(ctx, worktreePath, branchName); err != nil {
 			p.ctx.Logger.Warn("setup script failed", "path", worktreePath, "error", err)
 			// Don't fail creation for setup script errors
 		}
@@ -169,6 +174,10 @@ func (p *Plugin) symlinkDirs(worktreePath string, dirs []string) error {
 // The script runs with the new worktree as the working directory and receives
 // environment variables for the main worktree path, branch name, and worktree path.
 func (p *Plugin) runSetupScript(worktreePath, branchName string) error {
+	return p.runSetupScriptContext(context.Background(), worktreePath, branchName)
+}
+
+func (p *Plugin) runSetupScriptContext(ctx context.Context, worktreePath, branchName string) error {
 	scriptPath := filepath.Join(p.ctx.WorkDir, setupScriptName)
 
 	// Check if setup script exists
@@ -177,7 +186,7 @@ func (p *Plugin) runSetupScript(worktreePath, branchName string) error {
 	}
 
 	// Run the script with the worktree as working directory
-	cmd := exec.Command("bash", scriptPath)
+	cmd := exec.CommandContext(ctx, "bash", scriptPath)
 	cmd.Dir = worktreePath
 
 	// Build isolated environment with overrides applied

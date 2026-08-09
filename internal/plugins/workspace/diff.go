@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -154,12 +155,16 @@ func getUntrackedFileDiff(workdir, file string) (string, error) {
 
 // getDiffStatFromBase returns the --stat output compared to the base branch.
 func getDiffStatFromBase(workdir, baseBranch string) (string, error) {
+	return getDiffStatFromBaseContext(context.Background(), workdir, baseBranch)
+}
+
+func getDiffStatFromBaseContext(ctx context.Context, workdir, baseBranch string) (string, error) {
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
 	}
 
 	// Try to find merge-base first
-	mbCmd := exec.Command("git", "merge-base", baseBranch, "HEAD")
+	mbCmd := exec.CommandContext(ctx, "git", "merge-base", baseBranch, "HEAD")
 	mbCmd.Dir = workdir
 	mbOutput, err := mbCmd.Output()
 
@@ -175,7 +180,7 @@ func getDiffStatFromBase(workdir, baseBranch string) (string, error) {
 		args = []string{"diff", "--stat", baseBranch + "..HEAD"}
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -407,6 +412,10 @@ var (
 )
 
 func detectDefaultBranch(workdir string) string {
+	return detectDefaultBranchContext(context.Background(), workdir)
+}
+
+func detectDefaultBranchContext(ctx context.Context, workdir string) string {
 	defaultBranchCacheMu.RLock()
 	if branch, ok := defaultBranchCache[workdir]; ok {
 		defaultBranchCacheMu.RUnlock()
@@ -415,7 +424,7 @@ func detectDefaultBranch(workdir string) string {
 	defaultBranchCacheMu.RUnlock()
 
 	// Try to get the remote HEAD (most reliable)
-	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "refs/remotes/origin/HEAD")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err == nil {
@@ -429,7 +438,7 @@ func detectDefaultBranch(workdir string) string {
 
 	// Fallback: check which common branch exists
 	for _, branch := range []string{"main", "master"} {
-		cmd := exec.Command("git", "rev-parse", "--verify", branch)
+		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branch)
 		cmd.Dir = workdir
 		if err := cmd.Run(); err == nil {
 			setDefaultBranchCache(workdir, branch)

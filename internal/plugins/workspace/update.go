@@ -566,7 +566,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.Name) {
+				if p.outputVisibleFor(wt.IdentityKey()) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -588,7 +588,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
 				if msg.HasCursor {
@@ -610,7 +610,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		if p.viewMode == ViewModeList && !p.shellSelected {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName && wt.Agent != nil {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName && wt.Agent != nil {
 				target := wt.Agent.TmuxPane
 				if target == "" {
 					target = wt.Agent.TmuxSession
@@ -653,7 +653,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Use interactive polling in interactive mode for fast response
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
 			}
@@ -671,7 +671,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.Name) {
+				if p.outputVisibleFor(wt.IdentityKey()) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -697,7 +697,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// would keep scrolling local scrollback until the app next redraws.
 		if msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.setPaneMouseReporting(msg.MouseReporting)
 			}
 		}
@@ -729,7 +729,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				// Use cursor position captured atomically with output
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
@@ -1484,7 +1484,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				p.mergeState.DirectOperation = msg.Operation
 				p.clearMergeModal()
-				cmds = append(cmds, executeDirectMerge(msg.OperationScope, msg.WorkspaceName, msg.BaseBranch, msg.Operation))
+				cmds = append(cmds, p.executeDirectMerge(msg.OperationScope, msg.WorkspaceName, msg.BaseBranch, msg.Operation))
 			}
 		}
 

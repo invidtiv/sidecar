@@ -163,12 +163,14 @@ type PushDoneMsg struct {
 
 // TaskSearchResultsMsg delivers task search results.
 type TaskSearchResultsMsg struct {
+	OperationScope
 	Tasks []Task
 	Err   error
 }
 
 // BranchListMsg delivers available branches.
 type BranchListMsg struct {
+	OperationScope
 	Branches []string
 	Err      error
 }
@@ -205,6 +207,7 @@ type TaskDetails struct {
 
 // TaskDetailsLoadedMsg delivers task details for the preview pane.
 type TaskDetailsLoadedMsg struct {
+	OperationScope
 	TaskID  string
 	Details *TaskDetails
 	Err     error

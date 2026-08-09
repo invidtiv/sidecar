@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 func TestBuildRepoSnapshotCarriesStableIndependentIdentity(t *testing.T) {
@@ -150,6 +152,176 @@ func TestDelayedPROperationIsCancelledAndCannotMutateSwitchedProject(t *testing.
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancelled gh subprocess did not return promptly")
+	}
+}
+
+func TestLifecycleScopeWithoutExplicitWorktreeCarriesAllIdentity(t *testing.T) {
+	p := New()
+	workDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 2, WorkDir: workDir, ProjectRoot: workDir}); err != nil {
+		t.Fatal(err)
+	}
+	_, scope := p.newLifecycleScope(nil)
+	if scope.Epoch != 2 || scope.OperationID == "" || scope.RepoKey == "" || scope.WorktreeKey == "" {
+		t.Fatalf("incomplete lifecycle scope: %+v", scope)
+	}
+}
+
+func TestPushCommandCancelledByReinit(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "push-started")
+	git := filepath.Join(binDir, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	p := New()
+	oldDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 10, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
+		t.Fatal(err)
+	}
+	p.worktrees = []*Worktree{{Key: "old-key", RepoKey: "old-repo", Name: "feature", Path: oldDir, Branch: "feature"}}
+	p.selectedIdx = 0
+	cmd := p.pushSelected()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	waitForFile(t, marker)
+	newDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 11, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("git push subprocess survived reinit cancellation")
+	}
+}
+
+func TestTaskCommandCancelledByStop(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "td-started")
+	td := filepath.Join(binDir, "td")
+	if err := os.WriteFile(td, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	p := New()
+	workDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 12, WorkDir: workDir, ProjectRoot: workDir}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := p.loadOpenTasks()
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	waitForFile(t, marker)
+	p.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("td subprocess survived Stop cancellation")
+	}
+}
+
+func TestCleanupCommandCancelledByStop(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "cleanup-started")
+	git := filepath.Join(binDir, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	p := New()
+	mainDir, wtDir := t.TempDir(), t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 14, WorkDir: wtDir, ProjectRoot: mainDir}); err != nil {
+		t.Fatal(err)
+	}
+	wt := &Worktree{Key: "wt-key", RepoKey: "repo-key", Name: "feature", Path: wtDir, Branch: "feature"}
+	p.worktrees = []*Worktree{wt}
+	_, scope := p.newLifecycleScope(wt)
+	cmd := p.performSelectedCleanup(wt, &MergeWorkflowState{OperationScope: scope, Worktree: wt, TargetBranch: "main", DeleteLocalWorktree: true})
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	waitForFile(t, marker)
+	p.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup git subprocess survived Stop cancellation")
+	}
+}
+
+func TestDelayedTaskAndBranchResultsCannotMutateSwitchedProject(t *testing.T) {
+	binDir := t.TempDir()
+	markerDir := t.TempDir()
+	for name, body := range map[string]string{
+		"td":  "#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKERS/td\"\nexec sleep 30\n",
+		"git": "#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKERS/git\"\nexec sleep 30\n",
+	} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKERS", markerDir)
+	p := New()
+	oldDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 20, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
+		t.Fatal(err)
+	}
+	taskCmd, branchCmd := p.loadOpenTasks(), p.loadBranches()
+	results := make(chan tea.Msg, 2)
+	go func() { results <- taskCmd() }()
+	go func() { results <- branchCmd() }()
+	waitForFile(t, filepath.Join(markerDir, "td"))
+	waitForFile(t, filepath.Join(markerDir, "git"))
+	newDir := t.TempDir()
+	if err := p.Init(&plugin.Context{Epoch: 21, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
+		t.Fatal(err)
+	}
+	p.taskSearchAll = []Task{{ID: "new"}}
+	p.branchAll = []string{"new"}
+	for range 2 {
+		select {
+		case msg := <-results:
+			p.update(msg)
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancelled modal loader did not return")
+		}
+	}
+	if len(p.taskSearchAll) != 1 || p.taskSearchAll[0].ID != "new" || len(p.branchAll) != 1 || p.branchAll[0] != "new" {
+		t.Fatalf("stale modal result mutated new project: tasks=%v branches=%v", p.taskSearchAll, p.branchAll)
+	}
+}
+
+func TestAgentOutputRoutesInteractiveCursorByStableKey(t *testing.T) {
+	agent := &Agent{OutputBuf: tty.NewOutputBuffer(outputBufferCap)}
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1}
+	p.worktrees = []*Worktree{{Key: "stable-key", Name: "feature/auth", Agent: agent}}
+	p.selectedIdx = 0
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true}
+	gen := p.pollScheduler.Invalidate(agentPollKey("stable-key"))
+	p.update(AgentOutputMsg{WorkspaceName: "stable-key", Generation: gen, HasCursor: true, CursorRow: 7, CursorCol: 9, CursorVisible: true})
+	if p.interactiveState.CursorRow != 7 || p.interactiveState.CursorCol != 9 {
+		t.Fatalf("keyed cursor result not applied: %d,%d", p.interactiveState.CursorRow, p.interactiveState.CursorCol)
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("command marker %s not created", path)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

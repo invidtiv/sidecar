@@ -659,8 +659,27 @@ func (p *Plugin) newOperationScope(wt *Worktree) (context.Context, OperationScop
 	return ctx, scope
 }
 
-func (p *Plugin) newLifecycleScope(wt *Worktree) (context.Context, OperationScope) {
+func (p *Plugin) newContextScope(wt *Worktree) (context.Context, OperationScope) {
+	if wt == nil {
+		for _, candidate := range p.worktrees {
+			if p.ctx != nil && filepath.Clean(candidate.Path) == filepath.Clean(p.ctx.WorkDir) {
+				wt = candidate
+				break
+			}
+		}
+	}
 	ctx, scope := p.newOperationScope(wt)
+	if scope.RepoKey == "" && p.ctx != nil {
+		scope.RepoKey = stablePathKey(p.ctx.ProjectRoot)
+	}
+	if scope.WorktreeKey == "" && p.ctx != nil {
+		scope.WorktreeKey = stablePathKey(p.ctx.WorkDir)
+	}
+	return ctx, scope
+}
+
+func (p *Plugin) newLifecycleScope(wt *Worktree) (context.Context, OperationScope) {
+	ctx, scope := p.newContextScope(wt)
 	scope.Lifecycle = true
 	p.activeLifecycleOperationID = scope.OperationID
 	return ctx, scope
@@ -688,7 +707,9 @@ func (p *Plugin) scopeMatches(scope OperationScope) bool {
 		return false
 	}
 	if scope.WorktreeKey != "" && p.findWorktree(scope.WorktreeKey) == nil {
-		return false
+		if p.ctx == nil || scope.WorktreeKey != stablePathKey(p.ctx.WorkDir) {
+			return false
+		}
 	}
 	if scope.Lifecycle && scope.OperationID != p.activeLifecycleOperationID {
 		return false

@@ -74,6 +74,42 @@ func TestDirectMergeUsesCheckedOutTargetFromEitherContext(t *testing.T) {
 	}
 }
 
+func TestDirectMergeCommandDoesNotMutatePublishedOperation(t *testing.T) {
+	r := newLifecycleRepo(t)
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	if err := p.Init(&plugin.Context{Epoch: 4, WorkDir: r.feature, ProjectRoot: r.main}); err != nil {
+		t.Fatal(err)
+	}
+	p.worktrees = []*Worktree{{Key: "feature-key", RepoKey: "repo-key", Name: "feature", Path: r.feature, Branch: "feature"}}
+	p.activeLifecycleOperationID = "4-merge"
+	scope := OperationScope{Epoch: 4, OperationID: "4-merge", RepoKey: "repo-key", WorktreeKey: "feature-key", Lifecycle: true}
+	p.mergeState = &MergeWorkflowState{OperationScope: scope, Worktree: p.worktrees[0], DirectOperation: op}
+	originalCompleted := append([]string(nil), op.Completed...)
+	cmd := p.executeDirectMerge(scope, "feature", "main", op)
+	done := make(chan DirectMergeDoneMsg, 1)
+	go func() { done <- cmd().(DirectMergeDoneMsg) }()
+	for {
+		select {
+		case msg := <-done:
+			if msg.Operation == op {
+				t.Fatal("command returned the operation pointer published in merge state")
+			}
+			if strings.Join(op.Completed, ",") != strings.Join(originalCompleted, ",") || op.MergeOID != "" {
+				t.Fatalf("published operation mutated: %+v", op)
+			}
+			return
+		default:
+			_ = len(op.Completed)
+			_ = op.MergeOID
+			runtime.Gosched()
+		}
+	}
+}
+
 func TestDirectMergeDirtyTargetRefusesWithoutMutation(t *testing.T) {
 	r := newLifecycleRepo(t)
 	before := mustGit(t, r.main, "rev-parse", "HEAD")

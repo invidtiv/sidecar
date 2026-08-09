@@ -187,7 +187,7 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 
 // createWorktree returns a command to create a new worktree.
 func (p *Plugin) createWorktree() tea.Cmd {
-	_, scope := p.newLifecycleScope(nil)
+	ctx, scope := p.newLifecycleScope(nil)
 	name := p.createNameInput.Value()
 	baseBranch := p.createBaseBranchInput.Value()
 	taskID := p.createTaskID
@@ -211,13 +211,17 @@ func (p *Plugin) createWorktree() tea.Cmd {
 	runner.ctx = &ctxCopy
 
 	return func() tea.Msg {
-		wt, err := runner.doCreateWorktree(name, baseBranch, taskID, taskTitle, agentType)
+		wt, err := runner.doCreateWorktreeContext(ctx, name, baseBranch, taskID, taskTitle, agentType)
 		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
 	}
 }
 
 // doCreateWorktree performs the actual worktree creation.
 func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
+	return p.doCreateWorktreeContext(context.Background(), name, baseBranch, taskID, taskTitle, agentType)
+}
+
+func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
 	// Default base branch to current branch if not specified
 	if baseBranch == "" {
 		baseBranch = "HEAD"
@@ -253,7 +257,7 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 
 	// Create worktree with new branch (branch name stays simple, just the user-provided name)
 	args := []string{"worktree", "add", "-b", name, wtPath, baseBranch}
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = p.ctx.WorkDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
@@ -278,7 +282,7 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 		}
 
 		// Auto-start the task in td (if td is available)
-		startCmd := exec.Command("td", "start", taskID)
+		startCmd := exec.CommandContext(ctx, "td", "start", taskID)
 		startCmd.Dir = wtPath
 		if err := startCmd.Run(); err != nil {
 			p.ctx.Logger.Warn("failed to start td task", "task", taskID, "error", err)
@@ -288,7 +292,7 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 	// Determine actual base branch name
 	actualBase := baseBranch
 	if baseBranch == "HEAD" {
-		if b, err := getCurrentBranch(p.ctx.WorkDir); err == nil {
+		if b, err := getCurrentBranchContext(ctx, p.ctx.WorkDir); err == nil {
 			actualBase = b
 		}
 	}
@@ -321,7 +325,7 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 	}
 
 	// Run post-creation setup (env files, symlinks, setup script)
-	if err := p.setupWorktree(wtPath, name); err != nil {
+	if err := p.setupWorktreeContext(ctx, wtPath, name); err != nil {
 		p.ctx.Logger.Warn("workspace setup had errors", "path", wtPath, "error", err)
 		// Don't fail creation for setup errors
 	}
@@ -332,19 +336,23 @@ func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, ag
 // doDeleteWorktree removes a worktree. When isMissing is true, uses prune
 // instead of remove since the directory no longer exists on disk.
 func doDeleteWorktree(workDir, path string, isMissing bool) error {
+	return doDeleteWorktreeContext(context.Background(), workDir, path, isMissing)
+}
+
+func doDeleteWorktreeContext(ctx context.Context, workDir, path string, isMissing bool) error {
 	if isMissing {
-		return doWorktreePrune(workDir)
+		return doWorktreePruneContext(ctx, workDir)
 	}
 
 	// First try without force
-	cmd := exec.Command("git", "worktree", "remove", path)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", path)
 	cmd.Dir = workDir
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
 
 	// If that fails, try with force
-	cmd = exec.Command("git", "worktree", "remove", "--force", path)
+	cmd = exec.CommandContext(ctx, "git", "worktree", "remove", "--force", path)
 	cmd.Dir = workDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
@@ -359,19 +367,23 @@ func (p *Plugin) pushSelected() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
-	_, scope := p.newLifecycleScope(wt)
+	ctx, scope := p.newLifecycleScope(wt)
 	name := wt.Name
 	path := wt.Path
 	branch := wt.Branch
 
 	return func() tea.Msg {
-		err := doPush(path, branch, false, true)
+		err := doPushContext(ctx, path, branch, false, true)
 		return PushDoneMsg{OperationScope: scope, WorkspaceName: name, Err: err}
 	}
 }
 
 // doPush pushes a branch to remote.
 func doPush(workdir, branch string, force, setUpstream bool) error {
+	return doPushContext(context.Background(), workdir, branch, force, setUpstream)
+}
+
+func doPushContext(ctx context.Context, workdir, branch string, force, setUpstream bool) error {
 	args := []string{"push"}
 	if force {
 		args = append(args, "--force-with-lease")
@@ -380,7 +392,7 @@ func doPush(workdir, branch string, force, setUpstream bool) error {
 		args = append(args, "-u", "origin", branch)
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git push: %s: %w", strings.TrimSpace(string(output)), err)
@@ -390,7 +402,11 @@ func doPush(workdir, branch string, force, setUpstream bool) error {
 
 // getCurrentBranch returns the current branch name.
 func getCurrentBranch(workdir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	return getCurrentBranchContext(context.Background(), workdir)
+}
+
+func getCurrentBranchContext(ctx context.Context, workdir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -401,7 +417,11 @@ func getCurrentBranch(workdir string) (string, error) {
 
 // checkRemoteBranchExists checks if a remote branch exists for the given branch name.
 func checkRemoteBranchExists(workdir, branch string) bool {
-	cmd := exec.Command("git", "ls-remote", "--heads", "origin", branch)
+	return checkRemoteBranchExistsContext(context.Background(), workdir, branch)
+}
+
+func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -419,7 +439,11 @@ func branchExists(workdir, branch string) bool {
 
 // doWorktreePrune runs git worktree prune to clean up stale worktree references.
 func doWorktreePrune(workDir string) error {
-	cmd := exec.Command("git", "worktree", "prune")
+	return doWorktreePruneContext(context.Background(), workDir)
+}
+
+func doWorktreePruneContext(ctx context.Context, workDir string) error {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "prune")
 	cmd.Dir = workDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree prune: %s: %w", strings.TrimSpace(string(output)), err)
@@ -434,20 +458,28 @@ func isMainBranch(workdir, branch string) bool {
 	return branch == detectDefaultBranch(workdir)
 }
 
+func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
+	return branch == detectDefaultBranchContext(ctx, workdir)
+}
+
 // deleteBranch deletes a local branch, trying safe delete first then force.
 func deleteBranch(workdir, branch string) error {
-	if isMainBranch(workdir, branch) {
+	return deleteBranchContext(context.Background(), workdir, branch)
+}
+
+func deleteBranchContext(ctx context.Context, workdir, branch string) error {
+	if isMainBranchContext(ctx, workdir, branch) {
 		return fmt.Errorf("refusing to delete main branch %q", branch)
 	}
 	// Try safe delete first
-	cmd := exec.Command("git", "branch", "-d", branch)
+	cmd := exec.CommandContext(ctx, "git", "branch", "-d", branch)
 	cmd.Dir = workdir
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
 
 	// Try force delete
-	cmd = exec.Command("git", "branch", "-D", branch)
+	cmd = exec.CommandContext(ctx, "git", "branch", "-D", branch)
 	cmd.Dir = workdir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("delete branch: %s: %w", strings.TrimSpace(string(output)), err)
@@ -457,10 +489,14 @@ func deleteBranch(workdir, branch string) error {
 
 // deleteRemoteBranchCmd deletes the remote branch from origin.
 func deleteRemoteBranchCmd(workdir, branch string) error {
-	if isMainBranch(workdir, branch) {
+	return deleteRemoteBranchCmdContext(context.Background(), workdir, branch)
+}
+
+func deleteRemoteBranchCmdContext(ctx context.Context, workdir, branch string) error {
+	if isMainBranchContext(ctx, workdir, branch) {
 		return fmt.Errorf("refusing to delete remote main branch %q", branch)
 	}
-	cmd := exec.Command("git", "push", "origin", "--delete", branch)
+	cmd := exec.CommandContext(ctx, "git", "push", "origin", "--delete", branch)
 	cmd.Dir = workdir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -478,10 +514,10 @@ func deleteRemoteBranchCmd(workdir, branch string) error {
 
 // checkRemoteBranch returns a command to check if a remote branch exists.
 func (p *Plugin) checkRemoteBranch(wt *Worktree) tea.Cmd {
-	_, scope := p.newLifecycleScope(wt)
+	ctx, scope := p.newLifecycleScope(wt)
 	workDir, branch, name := p.ctx.WorkDir, wt.Branch, wt.Name
 	return func() tea.Msg {
-		exists := checkRemoteBranchExists(workDir, branch)
+		exists := checkRemoteBranchExistsContext(ctx, workDir, branch)
 		return RemoteCheckDoneMsg{
 			OperationScope: scope,
 			WorkspaceName:  name,
@@ -493,12 +529,14 @@ func (p *Plugin) checkRemoteBranch(wt *Worktree) tea.Cmd {
 
 // loadBranches returns a command to fetch all local branches.
 func (p *Plugin) loadBranches() tea.Cmd {
+	ctx, scope := p.newContextScope(nil)
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
-		cmd := exec.Command("git", "branch", "--format=%(refname:short)")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "git", "branch", "--format=%(refname:short)")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return BranchListMsg{Err: fmt.Errorf("git branch: %w", err)}
+			return BranchListMsg{OperationScope: scope, Err: fmt.Errorf("git branch: %w", err)}
 		}
 
 		var branches []string
@@ -507,7 +545,7 @@ func (p *Plugin) loadBranches() tea.Cmd {
 				branches = append(branches, line)
 			}
 		}
-		return BranchListMsg{Branches: branches}
+		return BranchListMsg{OperationScope: scope, Branches: branches}
 	}
 }
 
@@ -652,12 +690,12 @@ func loadPRURL(projectRoot, worktreePath string) string {
 
 // linkTask returns a command to link a td task to a worktree.
 func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
-	_, scope := p.newLifecycleScope(wt)
+	ctx, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
 	workDir, path, name := p.ctx.WorkDir, wt.Path, wt.Name
 	return func() tea.Msg {
 		// Validate task exists by running td show
-		cmd := exec.Command("td", "show", taskID)
+		cmd := exec.CommandContext(ctx, "td", "show", taskID)
 		cmd.Dir = workDir
 		if err := cmd.Run(); err != nil {
 			return TaskLinkedMsg{
@@ -726,18 +764,20 @@ func (p *Plugin) unlinkTask(wt *Worktree) tea.Cmd {
 
 // loadOpenTasks fetches all non-closed tasks from td.
 func (p *Plugin) loadOpenTasks() tea.Cmd {
+	ctx, scope := p.newContextScope(nil)
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
 		// Use --limit 500 to fetch more items (td defaults to 50)
 		// Include all statuses except closed so users can link tasks in_review, etc.
-		cmd := exec.Command("td", "list", "--json", "--status", "open,in_progress,in_review", "--limit", "500")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "td", "list", "--json", "--status", "open,in_progress,in_review", "--limit", "500")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return TaskSearchResultsMsg{Err: fmt.Errorf("td list: %w", err)}
+			return TaskSearchResultsMsg{OperationScope: scope, Err: fmt.Errorf("td list: %w", err)}
 		}
 
 		tasks, err := parseTDJSON(output)
-		return TaskSearchResultsMsg{Tasks: tasks, Err: err}
+		return TaskSearchResultsMsg{OperationScope: scope, Tasks: tasks, Err: err}
 	}
 }
 
@@ -972,12 +1012,14 @@ func SanitizeBranchName(name string) string {
 
 // loadTaskDetails fetches full task details from td.
 func (p *Plugin) loadTaskDetails(taskID string) tea.Cmd {
+	ctx, scope := p.newOperationScope(p.selectedWorktree())
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
-		cmd := exec.Command("td", "show", taskID, "--json")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "td", "show", taskID, "--json")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return TaskDetailsLoadedMsg{TaskID: taskID, Err: fmt.Errorf("td show: %w", err)}
+			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("td show: %w", err)}
 		}
 
 		var details struct {
@@ -993,11 +1035,12 @@ func (p *Plugin) loadTaskDetails(taskID string) tea.Cmd {
 		}
 
 		if err := json.Unmarshal(output, &details); err != nil {
-			return TaskDetailsLoadedMsg{TaskID: taskID, Err: fmt.Errorf("parse task json: %w", err)}
+			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("parse task json: %w", err)}
 		}
 
 		return TaskDetailsLoadedMsg{
-			TaskID: taskID,
+			OperationScope: scope,
+			TaskID:         taskID,
 			Details: &TaskDetails{
 				ID:          details.ID,
 				Title:       details.Title,

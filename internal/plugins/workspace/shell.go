@@ -997,6 +997,7 @@ type shellResumeErrorMsg struct {
 
 // worktreeResumeCreatedMsg signals that a worktree for resume was created (td-aa4136).
 type worktreeResumeCreatedMsg struct {
+	OperationScope
 	Worktree  *Worktree
 	ResumeCmd string
 	AgentType AgentType
@@ -1006,6 +1007,7 @@ type worktreeResumeCreatedMsg struct {
 
 // createWorktreeWithResume creates a new worktree and starts the agent with the resume command.
 func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
+	ctx, scope := p.newLifecycleScope(nil)
 	name := msg.WorktreeName
 	baseBranch := msg.BaseBranch
 	agentType := msg.AgentType
@@ -1014,22 +1016,26 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 
 	if name == "" {
 		return func() tea.Msg {
-			return worktreeResumeCreatedMsg{Err: fmt.Errorf("workspace name is required")}
+			return worktreeResumeCreatedMsg{OperationScope: scope, Err: fmt.Errorf("workspace name is required")}
 		}
 	}
+	ctxCopy := *p.ctx
+	runner := *p
+	runner.ctx = &ctxCopy
 
 	return func() tea.Msg {
 		// Create the worktree (reuse doCreateWorktree)
-		wt, err := p.doCreateWorktree(name, baseBranch, "", "", agentType)
+		wt, err := runner.doCreateWorktreeContext(ctx, name, baseBranch, "", "", agentType)
 		if err != nil {
-			return worktreeResumeCreatedMsg{Err: err}
+			return worktreeResumeCreatedMsg{OperationScope: scope, Err: err}
 		}
 
 		return worktreeResumeCreatedMsg{
-			Worktree:  wt,
-			ResumeCmd: resumeCmd,
-			AgentType: agentType,
-			SkipPerms: skipPerms,
+			OperationScope: scope,
+			Worktree:       wt,
+			ResumeCmd:      resumeCmd,
+			AgentType:      agentType,
+			SkipPerms:      skipPerms,
 		}
 	}
 }
@@ -1037,6 +1043,7 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 // startAgentWithResumeCmd starts an agent in a worktree with a resume command instead of normal startup.
 func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeCmd string) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
 		sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
 
@@ -1072,7 +1079,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 		_ = exec.Command("tmux", "send-keys", "-t", sessionName, tdEnvCmd, "Enter").Run()
 
 		// Apply environment isolation
-		envOverrides := BuildEnvOverrides(p.ctx.WorkDir)
+		envOverrides := BuildEnvOverrides(workDir)
 		if envCmd := GenerateSingleEnvCommand(envOverrides); envCmd != "" {
 			_ = exec.Command("tmux", "send-keys", "-t", sessionName, envCmd, "Enter").Run()
 		}

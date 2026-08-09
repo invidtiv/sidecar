@@ -438,7 +438,7 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	deleteLocal := p.deleteLocalBranchOpt
 	deleteRemote := p.deleteRemoteBranchOpt && p.deleteHasRemote
 	workDir := p.ctx.WorkDir
-	_, scope := p.newLifecycleScope(wt)
+	ctx, scope := p.newLifecycleScope(wt)
 
 	// Kill tmux session if it exists (before deleting worktree)
 	sessionName := tmuxSessionPrefix + sanitizeName(name)
@@ -462,21 +462,21 @@ func (p *Plugin) executeDelete() tea.Cmd {
 		var warnings []string
 
 		// Delete the worktree first
-		err := doDeleteWorktree(workDir, path, isMissing)
+		err := doDeleteWorktreeContext(ctx, workDir, path, isMissing)
 		if err != nil {
 			return DeleteDoneMsg{OperationScope: scope, Name: name, Err: err}
 		}
 
 		// Delete local branch if requested
 		if deleteLocal {
-			if branchErr := deleteBranch(workDir, branch); branchErr != nil {
+			if branchErr := deleteBranchContext(ctx, workDir, branch); branchErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Local branch: %v", branchErr))
 			}
 		}
 
 		// Delete remote branch if requested
 		if deleteRemote {
-			if remoteErr := deleteRemoteBranchCmd(workDir, branch); remoteErr != nil {
+			if remoteErr := deleteRemoteBranchCmdContext(ctx, workDir, branch); remoteErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", remoteErr))
 			}
 		}
