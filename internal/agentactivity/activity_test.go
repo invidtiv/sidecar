@@ -144,6 +144,7 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 	}{
 		{"claude", "idle.txt", "claude.screen.idle", StateIdle, false},
 		{"claude", "working.txt", "claude.title.working", StateWorking, false},
+		{"claude", "background-agents.txt", "claude.title.working", StateWorking, false},
 		{"claude", "blocked.txt", "claude.screen.blocked", StateBlocked, false},
 		{"claude", "interrupted.txt", "claude.screen.idle", StateIdle, false},
 		{"claude", "overlay.txt", "claude.overlay.retain", StateUnknown, true},

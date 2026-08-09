@@ -5,11 +5,16 @@ import (
 	"strings"
 )
 
+// Grok's configured title gains a braille frame and activity text during a
+// turn, cycling the whole Braille block rather than Codex's ten-frame set.
+// See the package note on provider-owned spinner sets.
+var grokTitleWorking = regexp.MustCompile(`[\x{2801}-\x{28FF}]`)
+
 var grokRules = []Rule{
 	{ID: "grok.title.blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Action Required"}},
 	{ID: "grok.screen.blocked", State: StateBlocked, Region: RegionLastLines, LastN: 22, Regexp: regexp.MustCompile(`(?im)(Action Required|Would you like to|Allow .*\?|Enter to confirm|↑/↓.*(?:select|navigate))`)},
 	{ID: "grok.overlay.retain", State: StateUnknown, Region: RegionLastLines, LastN: 24, Regexp: regexp.MustCompile(`(?im)(esc to close|resume session|transcript|conversation history)`), Skip: true},
-	{ID: "grok.title.working", State: StateWorking, Region: RegionTitle, Regexp: brailleSpinner},
+	{ID: "grok.title.working", State: StateWorking, Region: RegionTitle, Regexp: grokTitleWorking},
 	{ID: "grok.screen.working", State: StateWorking, Region: RegionLastLines, LastN: 16, Regexp: regexp.MustCompile(`(?im)(\[stop\]|esc to (?:interrupt|cancel)|background tasks?:\s*[1-9]|Thinking…)`)},
 	{ID: "grok.screen.idle", State: StateIdle, Region: RegionLastLines, LastN: 10, Regexp: regexp.MustCompile(`(?m)^\s*│ ❯\s+│|Ctrl\+x.*shortcuts`)},
 }

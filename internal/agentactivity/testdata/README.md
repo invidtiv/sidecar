@@ -46,3 +46,21 @@ Herdr compatibility provenance remains pinned in
 10974c822d607f03e20e9741ec027910f0c1f93a. Current Codex 0.147.0 agrees with
 the pinned title spinner, `Action Required`, working row, and composer rules;
 the current transcript viewer uses `/ T R A N S C R I P T /` plus `q to quit`.
+
+## Spinner frames are provider-specific (2026-08-09)
+
+`claude/background-agents.txt` was harvested from a live pane whose main loop
+had gone idle while background agents kept running. Claude Code drops
+`esc to interrupt` from the bottom bar the moment the main loop stops, so the
+prompt box alone reads as a finished turn; the title's braille frame and the
+`N/M agents done` line are the only evidence work is still in flight. Task and
+worktree names are redacted; the U+2810 title frame is verbatim, because that
+frame is the evidence.
+
+Measured the same day across every Claude pane on the machine: braille title
+prefix while busy, U+2733 (`✳`) once fully idle. That matches the Herdr
+`claude` manifest 2026.08.04.1, which matches the whole Braille block
+(U+2800-U+28FF) for working and `^✳ ` for idle, while its `codex`
+manifest keeps the narrow ten-frame dots set. Sidecar previously shared one
+eleven-glyph pattern across Claude, Codex and Grok; each provider now owns its
+own. See the package doc in `activity.go` before adding another.

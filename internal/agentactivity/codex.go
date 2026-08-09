@@ -2,13 +2,18 @@ package agentactivity
 
 import "regexp"
 
+// Codex animates the classic ten-frame dots spinner rather than the whole
+// Braille block, so its title pattern stays narrow and is bounded by spaces:
+// a wider class would let ordinary braille in a task name read as activity.
+// See the package note on provider-owned spinner sets before copying this.
+var codexTitleWorking = regexp.MustCompile(`(?:^| )[⠂⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)`)
+
 var (
-	brailleSpinner = regexp.MustCompile(`[⠂⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]`)
-	codexRules     = []Rule{
+	codexRules = []Rule{
 		{ID: "codex.title.blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Action Required"}},
 		{ID: "codex.screen.blocked", State: StateBlocked, Region: RegionLastLines, LastN: 18, Regexp: regexp.MustCompile(`(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)`)},
 		{ID: "codex.viewer.retain", State: StateUnknown, Region: RegionScreen, Regexp: regexp.MustCompile(`(?m)(/ T R A N S C R I P T /|q to quit\s+esc to edit prev)`), Skip: true},
-		{ID: "codex.title.working", State: StateWorking, Region: RegionTitle, Regexp: brailleSpinner},
+		{ID: "codex.title.working", State: StateWorking, Region: RegionTitle, Regexp: codexTitleWorking},
 		{ID: "codex.screen.working", State: StateWorking, Region: RegionLastLines, LastN: 12, Regexp: regexp.MustCompile(`Working \(.*esc to interrupt\)`)},
 		{ID: "codex.screen.idle", State: StateIdle, Region: RegionLastLines, LastN: 8, Regexp: regexp.MustCompile(`(?m)^\s*›(?:\s|$)`)},
 	}

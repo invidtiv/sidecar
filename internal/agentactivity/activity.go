@@ -1,5 +1,24 @@
 // Package agentactivity classifies live agent terminal observations without
 // depending on tmux, Bubble Tea, or persistent conversation storage.
+//
+// # Spinner glyph sets are provider-owned
+//
+// Every provider file declares its own spinner pattern, even where two of them
+// would look identical today. Sharing one is a standing bug: the sets are not
+// the same and they drift independently as each CLI ships. Codex animates the
+// classic ten braille dots frames; Claude, Grok and Cursor cycle the whole
+// Braille block (U+2800–U+28FF).
+//
+// A set that is too narrow does not merely miss activity, it inverts the
+// verdict. Claude shares one shared eleven-glyph pattern with Codex until this
+// was fixed, so the frames outside that set left the title rule unmatched;
+// evaluation fell through to the prompt-box idle rule while subagents were
+// still running, and the tracker turned that working→idle transition into a
+// completed turn. Sessions reported "done" with work in flight.
+//
+// When adding or revising a provider, harvest the real frames rather than
+// assuming a set, and prefer anchoring the pattern to where the glyph actually
+// appears — braille elsewhere in a title or task name is not a spinner.
 package agentactivity
 
 import (
