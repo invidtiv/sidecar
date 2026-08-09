@@ -35,6 +35,19 @@ resynchronization cases without a growing Sidecar patch layer, stop. Reopen the
 Herdr replacement decision rather than turning Sidecar into the owner of a
 terminal emulator.
 
+## Phasing
+
+The slices below group into two separately tracked phases:
+
+- **Phase 1 — spike (Slices 0–2 + decision gate).** Everything up to and
+  including the recorded go/no-go decision. No user-visible behavior changes;
+  the only shipped product change is the tmux-owned paste prerequisite in
+  Slice 1. Phase 1 ends when the decision gate outcome is written down and
+  independently reviewed, whichever way it goes.
+- **Phase 2 — guarded migration (Slices 3–5).** Exists only if the gate
+  passes. Tracked as its own epic, created after the gate decision is
+  recorded, so its scope can reflect what the spike actually learned.
+
 ## User journey and acceptance evidence
 
 For a visible Sidecar terminal, output should feel like a native terminal while
@@ -281,7 +294,9 @@ Initial bracketed-paste state is not available as a tmux format and cannot be
 reconstructed from `capture-pane -e`. Do not make correct paste depend on a
 mid-stream model knowing that hidden mode.
 
-As a small prerequisite, change the shared paste adapter to use a uniquely
+As a small prerequisite, change the shared paste adapter
+(`internal/tty/paste.go`, which today wraps bracket sequences manually around
+a `load-buffer`/`paste-buffer` pair on the unnamed buffer) to use a uniquely
 named tmux buffer and `paste-buffer -p -r -d -t <pane>`. Tmux already knows
 whether the pane requested bracketed paste and inserts the control codes only
 when appropriate. This also removes manual three-command bracket wrapping and
@@ -307,7 +322,8 @@ Do not make shadow mode a permanent public renderer. It exists to produce the
 decision evidence and may remain only as an opt-in diagnostic after rollout.
 
 The eventual authority flag is one normal default-off feature,
-`tmux_byte_screen`. The first enabled surface is the terminal panel. A model
+`tmux_byte_screen`, registered in the existing `internal/features` registry
+alongside `tmux_interactive_input` and `tmux_inline_edit`. The first enabled surface is the terminal panel. A model
 frame continues through `ControlSnapshot`, so the terminal panel canary tests
 the new transport/model without simultaneously replacing the workspace
 mailbox, output buffer, viewport, selection, or search.
