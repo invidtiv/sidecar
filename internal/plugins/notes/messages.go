@@ -99,8 +99,12 @@ type InlineAutoSaveTickMsg struct {
 
 // InlineAutoSaveResultMsg is sent after an inline auto-save completes.
 type InlineAutoSaveResultMsg struct {
-	Err   error
-	Epoch uint64
+	Err        error
+	Epoch      uint64
+	Activation uint64
+	Generation int
+	Content    string
+	Saved      bool
 }
 
 // GetEpoch returns the epoch for staleness detection.

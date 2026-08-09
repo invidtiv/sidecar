@@ -39,6 +39,36 @@ func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
 	}
 }
 
+func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
+	logPath := installFilebrowserFakeTmux(t)
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.inlineEditActivation = 9
+	p.inlineEditMode = true
+	p.inlineEditSession = "current-editor"
+	p.inlineEditFile = "current.md"
+	p.inlineEditEditor = "nvim"
+	p.inlineEditor.Open(tty.Target{Session: "current-editor"})
+
+	_, cmd := p.Update(InlineEditStartedMsg{
+		SessionName: "current-editor", FilePath: "old.md", Editor: "nvim",
+		Activation: 8, Epoch: 1,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "kill-session -t current-editor") {
+		t.Fatalf("stale start killed the current active editor; log:\n%s", data)
+	}
+	if !p.inlineEditor.IsActive() || p.inlineEditSession != "current-editor" {
+		t.Fatal("stale start disturbed current editor state")
+	}
+}
+
 func TestInlineEditorTabReentryUsesFreshModelScope(t *testing.T) {
 	installFilebrowserFakeTmux(t)
 	p := New()

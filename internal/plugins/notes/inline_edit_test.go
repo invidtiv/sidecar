@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -102,6 +103,197 @@ func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
 	if !strings.Contains(string(data), "kill-session -t old-note-editor") {
 		t.Fatalf("stale note editor session was not cleaned up; log:\n%s", data)
 	}
+}
+
+func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
+	logPath := installNotesFakeTmux(t)
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: t.TempDir(), ProjectRoot: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.inlineEditActivation = 9
+	p.inlineEditMode = true
+	p.inlineEditSession = "current-editor"
+	p.inlineEditNoteID = "current"
+	p.inlineEditPath = "/tmp/current"
+	p.inlineEditEditor = "nvim"
+	p.inlineEditor.Open(tty.Target{Session: "current-editor"})
+
+	_, cmd := p.Update(InlineEditStartedMsg{
+		SessionName: "current-editor", NoteID: "old", NotePath: "/tmp/old",
+		Editor: "nvim", Activation: 8, Epoch: 1,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "kill-session -t current-editor") {
+		t.Fatalf("stale start killed the current active editor; log:\n%s", data)
+	}
+}
+
+func TestInlineAutoSaveSnapshotsOwningStoreAndAppliesStateOnlyInUpdate(t *testing.T) {
+	installNotesFakeTmux(t)
+	oldStore, newStore, noteID := makeInlineSaveStores(t)
+	notePath := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(notePath, []byte("stale project content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.store = oldStore
+	p.inlineEditMode = true
+	p.inlineEditSession = "old-editor"
+	p.inlineEditNoteID = noteID
+	p.inlineEditPath = notePath
+	p.inlineEditActivation = 4
+	p.inlineAutoSaveGen = 6
+	p.inlineLastSavedContent = "old project content"
+	cmd := p.performInlineAutoSave()
+	if cmd == nil {
+		t.Fatal("performInlineAutoSave returned nil")
+	}
+
+	// Simulate project replacement before the queued command runs.
+	p.store = newStore
+	p.ctx = &plugin.Context{Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.inlineEditActivation = 5
+	p.inlineAutoSaveGen = 7
+	p.inlineLastSavedContent = "new project tracker"
+	result, ok := cmd().(InlineAutoSaveResultMsg)
+	if !ok {
+		t.Fatalf("autosave result = %T, want InlineAutoSaveResultMsg", result)
+	}
+
+	oldNote, err := oldStore.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newNote, err := newStore.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldNote.Content != "stale project content" {
+		t.Fatalf("owning store content = %q, want queued edit", oldNote.Content)
+	}
+	if newNote.Content != "new project content" {
+		t.Fatalf("replacement store was overwritten: %q", newNote.Content)
+	}
+	if p.inlineLastSavedContent != "new project tracker" {
+		t.Fatalf("tea.Cmd mutated plugin state: %q", p.inlineLastSavedContent)
+	}
+
+	p.inlineEditMode = true
+	p.inlineEditSession = "new-editor"
+	p.inlineEditor.Open(tty.Target{Session: "new-editor"})
+	_, next := p.Update(result)
+	if next != nil || p.inlineLastSavedContent != "new project tracker" {
+		t.Fatal("stale autosave result reached the replacement project")
+	}
+}
+
+func TestInlineAutoSaveUpdatesTrackerOnlyAfterScopedResult(t *testing.T) {
+	installNotesFakeTmux(t)
+	store, _, noteID := makeInlineSaveStores(t)
+	notePath := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(notePath, []byte("current edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.store = store
+	p.inlineEditMode = true
+	p.inlineEditSession = "editor"
+	p.inlineEditNoteID = noteID
+	p.inlineEditPath = notePath
+	p.inlineEditActivation = 8
+	p.inlineAutoSaveGen = 10
+	p.inlineLastSavedContent = "previous edit"
+	p.inlineEditor.Open(tty.Target{Session: "editor"})
+
+	result, ok := p.performInlineAutoSave()().(InlineAutoSaveResultMsg)
+	if !ok {
+		t.Fatalf("autosave result = %T, want InlineAutoSaveResultMsg", result)
+	}
+	if p.inlineLastSavedContent != "previous edit" {
+		t.Fatalf("tea.Cmd mutated tracker to %q", p.inlineLastSavedContent)
+	}
+	_, next := p.Update(result)
+	if p.inlineLastSavedContent != "current edit" {
+		t.Fatalf("Update left tracker at %q", p.inlineLastSavedContent)
+	}
+	if next == nil {
+		t.Fatal("accepted autosave result did not schedule the next tick")
+	}
+}
+
+func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
+	oldStore, newStore, noteID := makeInlineSaveStores(t)
+	notePath := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(notePath, []byte("old editor exit content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.store = oldStore
+	cmd := p.saveNoteAfterInlineExit(noteID, notePath)
+	p.store = newStore
+	p.ctx = &plugin.Context{Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_ = cmd()
+
+	oldNote, err := oldStore.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newNote, err := newStore.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldNote.Content != "old editor exit content" {
+		t.Fatalf("owning store content = %q, want exit edit", oldNote.Content)
+	}
+	if newNote.Content != "new project content" {
+		t.Fatalf("exit save overwrote replacement store: %q", newNote.Content)
+	}
+}
+
+func makeInlineSaveStores(t *testing.T) (*Store, *Store, string) {
+	t.Helper()
+	oldStore, err := NewStore(filepath.Join(t.TempDir(), "old.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newStore, err := NewStore(filepath.Join(t.TempDir(), "new.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = oldStore.Close()
+		_ = newStore.Close()
+	})
+	const actionLogSchema = `CREATE TABLE action_log (
+		id TEXT PRIMARY KEY, session_id TEXT, action_type TEXT, entity_type TEXT,
+		entity_id TEXT, previous_data TEXT, new_data TEXT, timestamp TEXT, undone INTEGER
+	)`
+	const noteID = "nt-shared"
+	for _, item := range []struct {
+		store   *Store
+		content string
+	}{{oldStore, "old project content"}, {newStore, "new project content"}} {
+		if _, err := item.store.db.Exec(actionLogSchema); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := item.store.db.Exec(`
+			INSERT INTO notes (id, title, content, created_at, updated_at, pinned, archived)
+			VALUES (?, ?, ?, ?, ?, 0, 0)
+		`, noteID, "note", item.content, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return oldStore, newStore, noteID
 }
 
 func TestCalculateInlineEditorHeight(t *testing.T) {

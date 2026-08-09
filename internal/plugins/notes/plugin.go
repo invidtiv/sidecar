@@ -370,7 +370,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	switch msg := msg.(type) {
 	case InlineEditStartedMsg:
 		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
-			return p, (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+			return p, p.cleanupStaleInlineEditStart(msg)
 		}
 		return p, p.handleInlineEditStarted(msg)
 
@@ -512,6 +512,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case InlineAutoSaveResultMsg:
+		if plugin.IsStale(p.ctx, msg) ||
+			!p.ownsInlineEditMessage(msg.Activation, msg.Epoch) ||
+			msg.Generation != p.inlineAutoSaveGen {
+			return p, nil
+		}
+		if msg.Err == nil && msg.Saved {
+			p.inlineLastSavedContent = msg.Content
+		}
 		// Auto-save completed silently (no toast) - schedule next tick
 		if p.inlineEditMode {
 			return p, p.scheduleInlineAutoSave()

@@ -96,7 +96,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 // handleInlineEditStarted processes the InlineEditStartedMsg and activates the tty model.
 func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
-		return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+		return p.cleanupStaleInlineEditStart(msg)
 	}
 	p.inlineEditMode = true
 	p.activePane = PaneEditor
@@ -136,6 +136,15 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 		p.inlineEditor.Open(tty.Target{Session: msg.SessionName}),
 		p.scheduleInlineAutoSave(),
 	)
+}
+
+func (p *Plugin) cleanupStaleInlineEditStart(msg InlineEditStartedMsg) tea.Cmd {
+	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		if p.inlineEditSession == msg.SessionName || p.inlineEditor.GetTarget() == msg.SessionName {
+			return nil
+		}
+	}
+	return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
 }
 
 // exitInlineEditMode cleans up inline edit state and kills the tmux session.
@@ -190,6 +199,7 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	p.pendingEditorSyncID = noteID
 
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
 		// Read back the edited content from temp file
@@ -202,7 +212,7 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 		_ = os.Remove(notePath)
 
 		// Update note content in database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 
@@ -514,10 +524,11 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 // processPendingClickActionWithSave handles the click and saves note content.
 func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Plugin, tea.Cmd) {
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	// Create save command
 	saveCmd := func() tea.Msg {
-		if noteID == "" || notePath == "" || p.store == nil {
+		if noteID == "" || notePath == "" || store == nil {
 			return nil
 		}
 
@@ -531,7 +542,7 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 		_ = os.Remove(notePath)
 
 		// Update note content in database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 
@@ -639,32 +650,36 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 	noteID := p.inlineEditNoteID
 	notePath := p.inlineEditPath
 	epoch := p.ctx.Epoch
+	activation := p.inlineEditActivation
+	generation := p.inlineAutoSaveGen
+	store := p.store
+	lastSavedContent := p.inlineLastSavedContent
 
 	return func() tea.Msg {
 		// Read current content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
 			// File not readable - schedule next tick without saving
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch}
+			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation}
 		}
 
 		contentStr := string(content)
 
 		// Check if content changed since last save
-		if contentStr == p.inlineLastSavedContent {
+		if contentStr == lastSavedContent {
 			// No changes - schedule next tick
-			return InlineAutoSaveResultMsg{Err: nil, Epoch: epoch}
+			return InlineAutoSaveResultMsg{Epoch: epoch, Activation: activation, Generation: generation}
 		}
 
 		// Content changed - save to database
-		if err := p.store.UpdateContent(noteID, contentStr); err != nil {
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch}
+		if err := store.UpdateContent(noteID, contentStr); err != nil {
+			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation}
 		}
 
-		// Update last saved content tracker
-		p.inlineLastSavedContent = contentStr
-
-		return InlineAutoSaveResultMsg{Err: nil, Epoch: epoch}
+		return InlineAutoSaveResultMsg{
+			Epoch: epoch, Activation: activation, Generation: generation,
+			Content: contentStr, Saved: true,
+		}
 	}
 }
 
@@ -679,6 +694,7 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 	p.pendingEditorSyncID = noteID
 
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
 		// Read back the edited content from temp file
@@ -691,7 +707,7 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 		_ = os.Remove(notePath)
 
 		// Update note content in database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 
@@ -705,11 +721,12 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 	noteID := p.inlineEditNoteID
 	notePath := p.inlineEditPath
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	// Exit inline edit mode (kills tmux session)
 	p.exitInlineEditMode()
 
-	if noteID == "" || notePath == "" || p.store == nil {
+	if noteID == "" || notePath == "" || store == nil {
 		return nil
 	}
 
@@ -727,7 +744,7 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 		_ = os.Remove(notePath)
 
 		// Save to database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch}
 		}
 

@@ -103,7 +103,7 @@ func (p *Plugin) enterInlineEditMode(path string, lineNo int) tea.Cmd {
 // handleInlineEditStarted processes the InlineEditStartedMsg and activates the tty model.
 func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	if msg.Activation != p.inlineEditActivation || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
-		return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+		return p.cleanupStaleInlineEditStart(msg)
 	}
 	p.inlineEditMode = true
 	p.activePane = PanePreview
@@ -143,6 +143,18 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 		return tea.Batch(enterCmd, hintCmd)
 	}
 	return enterCmd
+}
+
+func (p *Plugin) cleanupStaleInlineEditStart(msg InlineEditStartedMsg) tea.Cmd {
+	// A delayed start may refer to a name that tmux has since reused for the
+	// currently active editor. Never let stale-message cleanup kill the target
+	// that owns the live model activation.
+	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
+		if p.inlineEditSession == msg.SessionName || p.inlineEditor.GetTarget() == msg.SessionName {
+			return nil
+		}
+	}
+	return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
 }
 
 // getInlineEditCopyKey returns the configured copy key for inline edit mode.

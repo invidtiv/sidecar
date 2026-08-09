@@ -1195,7 +1195,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case InlineEditStartedMsg:
 		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
-			return p, (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+			return p, p.cleanupStaleInlineEditStart(msg)
 		}
 		return p, p.handleInlineEditStarted(msg)
 
