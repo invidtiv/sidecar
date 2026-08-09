@@ -113,15 +113,16 @@ func (ExecRunner) Output(ctx context.Context, name string, args ...string) ([]by
 }
 
 type Collector struct {
-	Runner           Runner
-	Capture          func(string, int) (string, error)
-	Now              func() time.Time
-	trackers         *trackerStore
-	captures         chan struct{}
-	metrics          *RefreshMetrics
-	reservedSessions map[string]bool
-	shellOwners      map[string]string
-	generation       uint64
+	Runner             Runner
+	Capture            func(string, int) (string, error)
+	Now                func() time.Time
+	trackers           *trackerStore
+	captures           chan struct{}
+	metrics            *RefreshMetrics
+	reservedSessions   map[string]bool
+	shellOwners        map[string]string
+	trackerBase        *trackerStore
+	beforeTrackerApply func()
 }
 
 // RefreshMetrics contains privacy-safe operation and concurrency counters for
@@ -131,16 +132,16 @@ type RefreshMetrics struct {
 	captures       atomic.Int64
 	activeCaptures atomic.Int64
 	maxCaptures    atomic.Int64
+	trackerCommits atomic.Int64
 }
 
 type MetricsSnapshot struct {
-	ProjectOps, Captures, MaxCaptures int64
+	ProjectOps, Captures, MaxCaptures, TrackerCommits int64
 }
 
 type trackerStore struct {
-	mu         sync.Mutex
-	values     map[string]agentactivity.Tracker
-	generation atomic.Uint64
+	mu     sync.Mutex
+	values map[string]agentactivity.Tracker
 }
 
 func (c Collector) defaults() Collector {
@@ -161,13 +162,6 @@ func (c Collector) defaults() Collector {
 
 func (c Collector) WithDefaults() Collector { return c.defaults() }
 
-// InvalidateObservations prevents any in-flight collector from applying
-// provider evidence after its owning Overview generation has been canceled.
-func (c Collector) InvalidateObservations() {
-	c = c.defaults()
-	c.trackers.generation.Add(1)
-}
-
 // ForRefresh returns a collector sharing provider history with its parent while
 // independently bounding pane captures for one refresh generation.
 func (c Collector) ForRefresh(maxCaptures int, claims ...ShellClaims) Collector {
@@ -177,12 +171,41 @@ func (c Collector) ForRefresh(maxCaptures int, claims ...ShellClaims) Collector 
 	}
 	c.captures = make(chan struct{}, maxCaptures)
 	c.metrics = &RefreshMetrics{}
-	c.generation = c.trackers.generation.Load()
+	c.trackerBase = c.trackers
+	c.trackers.mu.Lock()
+	localTrackers := make(map[string]agentactivity.Tracker, len(c.trackers.values))
+	for key, tracker := range c.trackers.values {
+		localTrackers[key] = tracker
+	}
+	c.trackers.mu.Unlock()
+	c.trackers = &trackerStore{values: localTrackers}
 	if len(claims) > 0 {
 		c.reservedSessions = claims[0].Sessions
 		c.shellOwners = claims[0].Owners
 	}
 	return c
+}
+
+// CommitTrackers promotes a completed refresh's generation-local activity
+// state. Canceled/stale refreshes are simply never committed.
+func (c Collector) CommitTrackers() {
+	if c.trackerBase == nil {
+		return
+	}
+	c.trackers.mu.Lock()
+	values := make(map[string]agentactivity.Tracker, len(c.trackers.values))
+	for key, tracker := range c.trackers.values {
+		values[key] = tracker
+	}
+	c.trackers.mu.Unlock()
+	c.trackerBase.mu.Lock()
+	for key, tracker := range values {
+		c.trackerBase.values[key] = tracker
+	}
+	c.trackerBase.mu.Unlock()
+	if c.metrics != nil {
+		c.metrics.trackerCommits.Add(1)
+	}
 }
 
 func (c Collector) WithShellClaims(claims ShellClaims) Collector {
@@ -195,7 +218,7 @@ func (c Collector) Metrics() MetricsSnapshot {
 	if c.metrics == nil {
 		return MetricsSnapshot{}
 	}
-	return MetricsSnapshot{ProjectOps: c.metrics.projectOps.Load(), Captures: c.metrics.captures.Load(), MaxCaptures: c.metrics.maxCaptures.Load()}
+	return MetricsSnapshot{ProjectOps: c.metrics.projectOps.Load(), Captures: c.metrics.captures.Load(), MaxCaptures: c.metrics.maxCaptures.Load(), TrackerCommits: c.metrics.trackerCommits.Load()}
 }
 
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
@@ -357,12 +380,6 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 				input.ProviderSupported = supported(identified)
 			}
 			c.trackers.mu.Lock()
-			if c.generation != c.trackers.generation.Load() {
-				c.trackers.mu.Unlock()
-				input.Unavailable = true
-				workspace.Presentation = agentstatus.Resolve(input)
-				return
-			}
 			select {
 			case <-ctx.Done():
 				c.trackers.mu.Unlock()
@@ -370,6 +387,9 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 				workspace.Presentation = agentstatus.Resolve(input)
 				return
 			default:
+			}
+			if c.beforeTrackerApply != nil {
+				c.beforeTrackerApply()
 			}
 			tracker := c.trackers.values[workspace.ID]
 			tracker.Apply(agentactivity.Detect(ob), now)

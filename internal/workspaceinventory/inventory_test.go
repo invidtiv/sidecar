@@ -411,10 +411,10 @@ func TestCanceledCaptureCannotMutateSharedTracker(t *testing.T) {
 	}()
 	<-started
 	cancel()
-	base.InvalidateObservations()
 	currentCollector := base.ForRefresh(1)
 	current := Workspace{ID: "same-agent", Provider: "codex"}
 	currentCollector.observeContext(context.Background(), &current, []Pane{{ID: "%1", Command: "codex"}}, time.Now().Add(time.Second))
+	currentCollector.CommitTrackers()
 	close(release)
 	<-done
 	base.trackers.mu.Lock()
@@ -422,6 +422,59 @@ func TestCanceledCaptureCannotMutateSharedTracker(t *testing.T) {
 	base.trackers.mu.Unlock()
 	if tracker.State != agentactivity.StateWorking {
 		t.Fatalf("canceled capture contaminated tracker: %#v", tracker)
+	}
+}
+
+func TestCanceledLocalTrackerApplyCannotReachCommittedState(t *testing.T) {
+	applyLocked := make(chan struct{})
+	releaseApply := make(chan struct{})
+	base := (Collector{
+		Capture: func(string, int) (string, error) { return "› Write tests for @filename", nil },
+		beforeTrackerApply: func() {
+			close(applyLocked)
+			<-releaseApply
+		},
+	}).WithDefaults()
+	refresh := base.ForRefresh(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		workspace := Workspace{ID: "same-agent", Provider: "codex"}
+		refresh.observeContext(ctx, &workspace, []Pane{{ID: "%1", Command: "codex"}}, time.Now())
+		close(done)
+	}()
+	<-applyLocked
+	cancel()
+	close(releaseApply)
+	<-done
+	base.trackers.mu.Lock()
+	_, committed := base.trackers.values["same-agent"]
+	base.trackers.mu.Unlock()
+	if committed || refresh.Metrics().TrackerCommits != 0 {
+		t.Fatalf("canceled local apply reached base: committed=%v metrics=%#v", committed, refresh.Metrics())
+	}
+}
+
+func TestSuccessfulRefreshCommitsTrackerContinuity(t *testing.T) {
+	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
+	base := (Collector{Capture: func(string, int) (string, error) {
+		output := outputs[0]
+		outputs = outputs[1:]
+		return output, nil
+	}}).WithDefaults()
+	first := base.ForRefresh(1)
+	working := Workspace{ID: "same-agent", Provider: "codex"}
+	first.observeContext(context.Background(), &working, []Pane{{ID: "%1", Command: "codex"}}, time.Now())
+	first.CommitTrackers()
+	second := base.ForRefresh(1)
+	idle := Workspace{ID: "same-agent", Provider: "codex"}
+	second.observeContext(context.Background(), &idle, []Pane{{ID: "%1", Command: "codex"}}, time.Now().Add(time.Second))
+	if idle.Presentation.Lane != agentstatus.LaneDone {
+		t.Fatalf("committed Working -> idle presentation = %#v", idle.Presentation)
+	}
+	second.CommitTrackers()
+	if second.Metrics().TrackerCommits != 1 {
+		t.Fatalf("successful commit metrics = %#v", second.Metrics())
 	}
 }
 

@@ -37,6 +37,7 @@ type Project struct {
 type refreshPhase string
 
 const (
+	phaseIdentity  refreshPhase = "identity"
 	phaseInventory refreshPhase = "inventory"
 	phaseStatus    refreshPhase = "status"
 )
@@ -92,6 +93,8 @@ type Model struct {
 	completed         map[int]bool
 	pending           []Project
 	phase             refreshPhase
+	identityProjects  map[int]Project
+	inventoryOrder    []Project
 	inventoryProjects map[int]Project
 	inventoryResults  map[int]workspaceinventory.ProjectResult
 	statusInputs      map[string]workspaceinventory.ProjectResult
@@ -128,7 +131,6 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
-	m.collector.InvalidateObservations()
 	if m.cancel != nil {
 		if m.pollScheduled {
 			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
@@ -228,8 +230,10 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			m.pending = indexedProjects(msg.Projects)
 			m.refreshCollector = m.collector.ForRefresh(maxCaptures, m.shellClaims)
 		} else {
-			m.phase = phaseInventory
+			m.phase = phaseIdentity
 			m.pending = indexedProjects(msg.Projects)
+			m.identityProjects = make(map[int]Project, len(msg.Projects))
+			m.inventoryOrder = nil
 			m.inventoryProjects = make(map[int]Project, len(msg.Projects))
 			m.inventoryResults = make(map[int]workspaceinventory.ProjectResult, len(msg.Projects))
 			m.refreshCollector = m.collector.ForRefresh(maxCaptures)
@@ -247,12 +251,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if m.active > 0 {
 			m.active--
 		}
-		if !m.firstResult {
+		if msg.Phase != phaseIdentity && !m.firstResult {
 			m.firstResult = true
 			m.tracef("cycle generation=%d first_result_ms=%d", m.generation, time.Since(m.cycleStart).Milliseconds())
 		}
 		m.completed[msg.Project.Index] = true
-		if msg.Phase == phaseInventory {
+		if msg.Phase == phaseIdentity {
+			m.identityProjects[msg.Project.Index] = msg.Project
+		} else if msg.Phase == phaseInventory {
 			m.inventoryProjects[msg.Project.Index] = msg.Project
 			m.inventoryResults[msg.Project.Index] = msg.Result
 			m.applyInventoryIncrement(msg.Project, msg.Result)
@@ -326,8 +332,11 @@ func (m *Model) dispatchProjects() tea.Cmd {
 			previous = m.statusInputs[projectKey(project)]
 		}
 		cmds = append(cmds, func() tea.Msg {
-			if phase == phaseInventory {
+			if phase == phaseIdentity {
 				project = normalizeProject(project)
+				return projectMsg{Generation: generation, Project: project, Phase: phase, Result: workspaceinventory.ProjectResult{ProjectKey: project.Key, ProjectName: project.Name, ProjectRoot: project.Path}}
+			}
+			if phase == phaseInventory {
 				return projectMsg{Generation: generation, Project: project, Phase: phase, Result: collector.CollectProjectInventory(ctx, project.Name, project.Path)}
 			}
 			return projectMsg{Generation: generation, Project: project, Phase: phase, Result: collector.RefreshProjectStatus(ctx, previous, roots, inventory)}
@@ -337,17 +346,38 @@ func (m *Model) dispatchProjects() tea.Cmd {
 }
 
 func (m *Model) finishPhase() tea.Cmd {
+	if m.phase == phaseIdentity {
+		seen := make(map[string]bool, len(m.identityProjects))
+		m.inventoryOrder = make([]Project, 0, len(m.identityProjects))
+		for index := 0; index < m.configured; index++ {
+			project, ok := m.identityProjects[index]
+			if !ok || seen[project.Key] {
+				continue
+			}
+			seen[project.Key] = true
+			project.Index = len(m.inventoryOrder)
+			m.inventoryOrder = append(m.inventoryOrder, project)
+		}
+		m.phase = phaseInventory
+		m.pending = append(m.pending[:0], m.inventoryOrder...)
+		m.completed = make(map[int]bool, len(m.inventoryOrder))
+		m.active = 0
+		m.tracef("cycle generation=%d identities=%d unique=%d phase=inventory", m.generation, m.configured, len(m.inventoryOrder))
+		if len(m.pending) > 0 {
+			return m.dispatchProjects()
+		}
+	}
 	if m.phase == phaseInventory {
 		seen := make(map[string]bool, len(m.inventoryResults))
 		projects := make([]Project, 0, len(m.inventoryResults))
 		claimResults := make([]workspaceinventory.ProjectResult, 0, len(m.inventoryResults))
 		m.statusInputs = make(map[string]workspaceinventory.ProjectResult, len(m.inventoryResults))
-		for index := 0; index < m.configured; index++ {
-			project, ok := m.inventoryProjects[index]
+		for _, ordered := range m.inventoryOrder {
+			project, ok := m.inventoryProjects[ordered.Index]
 			if !ok {
 				continue
 			}
-			result := m.inventoryResults[index]
+			result := m.inventoryResults[ordered.Index]
 			if seen[result.ProjectKey] {
 				continue
 			}
@@ -391,6 +421,7 @@ func (m *Model) finishPhase() tea.Cmd {
 	for key := range m.refreshing {
 		m.refreshing[key] = false
 	}
+	m.refreshCollector.CommitTrackers()
 	metrics := m.refreshCollector.Metrics()
 	m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
 	m.syncBoard()

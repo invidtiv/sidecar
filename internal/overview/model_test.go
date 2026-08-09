@@ -28,7 +28,7 @@ func (r *stageRunner) Output(_ context.Context, name string, _ ...string) ([]byt
 		return nil, nil
 	}
 	r.gitCalls.Add(1)
-	return nil, errors.New("not git")
+	return nil, nil
 }
 
 func TestOverviewIncrementalPartialErrorAndCompactStates(t *testing.T) {
@@ -80,18 +80,15 @@ func TestNormalizeProjectsPreservesFirstConfiguredIdentity(t *testing.T) {
 	configured := []Project{{Name: "first", Path: real, Index: 0}, {Name: "duplicate", Path: alias, Index: 1}, {Name: "missing", Path: filepath.Join(real, "missing"), Index: 2}}
 	m := New(workspaceinventory.Collector{})
 	m.ctx, m.cancel = context.WithCancel(context.Background())
-	m.phase, m.configured = phaseInventory, len(configured)
-	m.inventoryProjects = make(map[int]Project)
-	m.inventoryResults = make(map[int]workspaceinventory.ProjectResult)
+	m.phase, m.configured = phaseIdentity, len(configured)
+	m.identityProjects = make(map[int]Project)
 	for i, project := range configured {
-		project = normalizeProject(project)
-		m.inventoryProjects[i] = project
-		m.inventoryResults[i] = workspaceinventory.ProjectResult{ProjectKey: project.Key, ProjectRoot: project.Path}
+		m.identityProjects[i] = normalizeProject(project)
 	}
 	m.refreshCollector = m.collector.ForRefresh(maxCaptures)
 	_ = m.finishPhase()
-	if len(m.projects) != 2 || m.projects[0].Name != "first" || m.projects[0].Path != workspaceinventory.CanonicalPath(real) || m.projects[1].Name != "missing" {
-		t.Fatalf("normalized projects = %#v", m.projects)
+	if len(m.inventoryOrder) != 2 || m.inventoryOrder[0].Name != "first" || m.inventoryOrder[0].Path != workspaceinventory.CanonicalPath(real) || m.inventoryOrder[1].Name != "missing" {
+		t.Fatalf("normalized projects = %#v", m.inventoryOrder)
 	}
 }
 
@@ -136,8 +133,38 @@ func TestOverviewDispatchesBoundedInventoryWithoutAllProjectMetadataBarrier(t *t
 	}
 	first := batch[0]().(projectMsg)
 	_ = m.Update(first)
-	if len(m.inventoryResults) != 1 || !m.loading {
-		t.Fatalf("first incremental inventory results=%d loading=%v", len(m.inventoryResults), m.loading)
+	if len(m.identityProjects) != 1 || runner.gitCalls.Load() != 0 || !m.loading {
+		t.Fatalf("first bounded identity results=%d git=%d loading=%v", len(m.identityProjects), runner.gitCalls.Load(), m.loading)
+	}
+}
+
+func TestOverviewCanonicalAliasesRunOneFullInventory(t *testing.T) {
+	runner := &stageRunner{}
+	m := New(workspaceinventory.Collector{Runner: runner})
+	real := t.TempDir()
+	projects := []Project{{Name: "first", Path: real}}
+	for i := 1; i < 30; i++ {
+		alias := filepath.Join(t.TempDir(), "alias")
+		if err := os.Symlink(real, alias); err != nil {
+			t.Fatal(err)
+		}
+		projects = append(projects, Project{Name: "duplicate", Path: alias})
+	}
+	queue := []tea.Cmd{m.Start(projects)}
+	for len(queue) > 0 && m.loading {
+		cmd := queue[0]
+		queue = queue[1:]
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		if next := m.Update(msg); next != nil && m.loading {
+			queue = append(queue, next)
+		}
+	}
+	if m.loading || runner.gitCalls.Load() != 1 || len(m.projects) != 1 || m.projects[0].Name != "first" || m.refreshCollector.Metrics().ProjectOps != 1 {
+		t.Fatalf("alias refresh loading=%v git=%d projects=%#v metrics=%#v", m.loading, runner.gitCalls.Load(), m.projects, m.refreshCollector.Metrics())
 	}
 }
 
@@ -257,6 +284,30 @@ func TestOverviewCancellationStopsPollAndTraceIsPrivacySafe(t *testing.T) {
 	}
 	if first == nil || strings.Contains(trace.String(), "secret-name") || strings.Contains(trace.String(), "secret-path") || !strings.Contains(trace.String(), "configured=1") || !strings.Contains(trace.String(), "poll_cancel_requested") || !strings.Contains(trace.String(), "poll_drained") {
 		t.Fatalf("privacy-safe trace = %q", trace.String())
+	}
+}
+
+func TestOverviewStopDiscardsGenerationLocalTrackers(t *testing.T) {
+	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
+	collector := workspaceinventory.Collector{Capture: func(string, int) (string, error) {
+		output := outputs[0]
+		outputs = outputs[1:]
+		return output, nil
+	}}
+	m := New(collector)
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.refreshCollector = m.collector.ForRefresh(1)
+	root := t.TempDir()
+	previous := workspaceinventory.ProjectResult{ProjectKey: root, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{{ID: "agent", ProjectKey: root, ProjectRoot: root, Kind: workspaceinventory.KindWorktree, Path: root, Provider: "codex"}}}
+	_ = m.refreshCollector.RefreshProjectStatus(m.ctx, previous, []string{root}, []workspaceinventory.Pane{{ID: "%1", Path: root, Command: "codex"}})
+	m.Stop()
+	if m.refreshCollector.Metrics().TrackerCommits != 0 {
+		t.Fatalf("Stop committed tracker state: %#v", m.refreshCollector.Metrics())
+	}
+	next := m.collector.ForRefresh(1)
+	result := next.RefreshProjectStatus(context.Background(), previous, []string{root}, []workspaceinventory.Pane{{ID: "%1", Path: root, Command: "codex"}})
+	if got := result.Workspaces[0].Presentation.Lane; got != agentstatus.LaneIdle {
+		t.Fatalf("stopped Working contaminated next idle state: %s", got)
 	}
 }
 
