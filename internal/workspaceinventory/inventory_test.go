@@ -16,15 +16,16 @@ import (
 )
 
 type fakeRunner struct {
-	git  map[string]string
-	tmux string
-	list int
+	git     map[string]string
+	tmux    string
+	tmuxErr error
+	list    int
 }
 
 func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
 	if name == "tmux" {
 		r.list++
-		return []byte(r.tmux), nil
+		return []byte(r.tmux), r.tmuxErr
 	}
 	for i, arg := range args {
 		if arg == "-C" && i+1 < len(args) {
@@ -32,6 +33,14 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 		}
 	}
 	return nil, fmt.Errorf("unexpected command %s %v", name, args)
+}
+
+func TestMissingTmuxServerIsAnEmptyInventory(t *testing.T) {
+	runner := &fakeRunner{tmux: "error connecting to /tmp/private/default (No such file or directory)", tmuxErr: fmt.Errorf("exit status 1")}
+	panes, err := (Collector{Runner: runner}).ListPanes(context.Background())
+	if err != nil || len(panes) != 0 {
+		t.Fatalf("missing server panes=%v err=%v", panes, err)
+	}
 }
 
 func TestTwoProjectInventoryIsReadOnlyAndExcludesPlainShells(t *testing.T) {

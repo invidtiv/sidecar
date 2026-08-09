@@ -95,7 +95,8 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}")
 	if err != nil {
 		message := strings.ToLower(string(out))
-		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") {
+		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") ||
+			(strings.Contains(message, "error connecting to") && strings.Contains(message, "no such file")) {
 			return nil, nil
 		}
 		return nil, err
