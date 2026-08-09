@@ -2179,6 +2179,10 @@ func (p *Plugin) applyDiffScope() {
 	default:
 		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
 		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
+		// Commits are listed below the files so a clean worktree still shows the
+		// branch's work. Both come from the same pinned snapshot, so the two
+		// sections can never describe different revisions.
+		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
 	}
 }
 

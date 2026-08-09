@@ -239,3 +239,28 @@ Binary files /dev/null and b/image.png differ`
 		t.Error("binary new file should be marked as binary")
 	}
 }
+
+func TestParseMultiFileDiff_EmptyDiffHasNoPhantomFile(t *testing.T) {
+	for _, in := range []string{"", "\n", "   \n\n"} {
+		result := ParseMultiFileDiff(in)
+		if len(result.Files) != 0 {
+			t.Errorf("ParseMultiFileDiff(%q) = %d files, want 0 (got %q)",
+				in, len(result.Files), result.Files[0].FileName())
+		}
+	}
+}
+
+func TestParseMultiFileDiff_ModeOnlyChangeKeepsPath(t *testing.T) {
+	// A chmod carries no ---/+++ pair; the path must come from the git header.
+	diff := `diff --git a/scripts/run.sh b/scripts/run.sh
+old mode 100644
+new mode 100755`
+
+	result := ParseMultiFileDiff(diff)
+	if len(result.Files) != 1 {
+		t.Fatalf("expected 1 file diff, got %d", len(result.Files))
+	}
+	if got := result.Files[0].FileName(); got != "scripts/run.sh" {
+		t.Errorf("FileName() = %q, want scripts/run.sh", got)
+	}
+}

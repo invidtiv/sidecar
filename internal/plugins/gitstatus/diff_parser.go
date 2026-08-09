@@ -70,8 +70,20 @@ func ParseMultiFileDiff(diff string) *MultiFileDiff {
 	fileDiffs := splitIntoFileDiffs(diff)
 
 	for _, fileDiff := range fileDiffs {
+		if strings.TrimSpace(fileDiff) == "" {
+			continue
+		}
 		parsed, err := ParseUnifiedDiff(fileDiff)
 		if err != nil || parsed == nil {
+			continue
+		}
+		if parsed.OldFile == "" && parsed.NewFile == "" {
+			// Mode-only or rename-only chunks carry no ---/+++ pair; recover the
+			// path from the "diff --git" header rather than showing "unknown".
+			parsed.OldFile, parsed.NewFile = pathsFromGitHeader(fileDiff)
+		}
+		if parsed.OldFile == "" && parsed.NewFile == "" && len(parsed.Hunks) == 0 && !parsed.Binary {
+			// Nothing identifiable in this chunk — an empty diff, not a file.
 			continue
 		}
 
@@ -96,6 +108,24 @@ func ParseMultiFileDiff(diff string) *MultiFileDiff {
 	}
 
 	return result
+}
+
+// pathsFromGitHeader extracts the old and new paths from a "diff --git a/x b/y"
+// header line. Returns empty strings when the chunk has no usable header.
+func pathsFromGitHeader(fileDiff string) (oldPath, newPath string) {
+	for _, line := range strings.Split(fileDiff, "\n") {
+		rest, ok := strings.CutPrefix(line, "diff --git ")
+		if !ok {
+			continue
+		}
+		// Paths may contain spaces; anchor on the " b/" separator instead.
+		a, b, found := strings.Cut(rest, " b/")
+		if !found {
+			return "", ""
+		}
+		return strings.TrimPrefix(a, "a/"), b
+	}
+	return "", ""
 }
 
 // splitIntoFileDiffs splits a multi-file diff into individual file diffs.

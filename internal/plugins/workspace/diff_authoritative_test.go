@@ -453,3 +453,34 @@ func TestCellWidthSafeWorktreeName(t *testing.T) {
 		}
 	}
 }
+
+// A worktree whose tree is clean but whose branch carries commits must still
+// list those commits in the default Working Tree scope — otherwise the branch's
+// entire body of work is invisible until the user cycles the scope.
+func TestCleanWorktreeStillListsBranchCommitsInWorkingTreeScope(t *testing.T) {
+	dir := authoritativeRepo(t)
+	for _, f := range []string{"staged.txt", "untracked.txt", "binary.dat", "oversized.txt"} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitOutput(t, dir, "reset", "--hard", "HEAD")
+
+	s, err := loadDiffSnapshot(context.Background(), dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(s.WorkingTree) != "" {
+		t.Fatalf("working tree should be clean, got %q", s.WorkingTree)
+	}
+
+	p := &Plugin{diffSnapshot: s, diffScope: DiffScopeWorkingTree}
+	p.applyDiffScope()
+
+	if len(p.commitStatusList) != 2 {
+		t.Errorf("commits in working-tree scope = %d, want 2", len(p.commitStatusList))
+	}
+	if n := p.diffTabFileCount(); n != 0 {
+		t.Errorf("clean working tree produced %d phantom file entries, want 0", n)
+	}
+}

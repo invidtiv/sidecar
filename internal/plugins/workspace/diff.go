@@ -497,6 +497,11 @@ func splitLines(s string) []string {
 }
 
 // loadCommitStatus returns a command to load commit status for a worktree.
+//
+// The Diff tab no longer uses this: its commits come from the pinned
+// DiffSnapshot so the file and commit sections can never describe different
+// revisions. This ref-based loader resolves the base fresh and is therefore
+// unpinned — do not re-wire it into the Diff tab.
 func (p *Plugin) loadCommitStatus(wt *Worktree) tea.Cmd {
 	if wt == nil {
 		return nil
