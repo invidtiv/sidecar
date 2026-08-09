@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -373,5 +374,148 @@ func TestLooksLikeMouseFragment(t *testing.T) {
 		if got := LooksLikeMouseFragment(tt.input); got != tt.want {
 			t.Errorf("LooksLikeMouseFragment(%q) = %v, want %v (%s)", tt.input, got, tt.want, tt.desc)
 		}
+	}
+}
+
+// The pane split is the answer to "how many buffer lines sit above pane row 0",
+// and it has to survive the two things that move lines underneath it: the
+// capacity trim, which drops rows off the front, and a lazily loaded older
+// capture, which adds them.
+func TestOutputBufferPaneSplitTracksTheContentItDescribes(t *testing.T) {
+	rows := func(prefix string, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%s-%02d", prefix, i)
+		}
+		return out
+	}
+	history := rows("history", 4)
+	pane := rows("pane", 3)
+	content := strings.Join(append(append([]string{}, history...), pane...), "\n")
+
+	b := NewOutputBuffer(100)
+	if !b.ApplySnapshot(PaneSnapshot{
+		Output: content, BaseLine: 96, Absolute: true, HistoryRows: 4, PaneRows: 3,
+	}) {
+		t.Fatal("snapshot was not applied")
+	}
+	lineCount, paneTop, ok := b.PaneWindow()
+	if !ok || lineCount != 7 || paneTop != 4 {
+		t.Fatalf("pane window = (%d lines, top %d, ok %v), want (7, 4, true)", lineCount, paneTop, ok)
+	}
+	if got := b.Lines()[paneTop]; got != "pane-00" {
+		t.Fatalf("pane row 0 = %q, want %q", got, "pane-00")
+	}
+
+	// Older history merged in front moves pane row 0 down by exactly the rows
+	// it added.
+	if !b.PrependSnapshot(strings.Join(rows("older", 4), "\n")+"\n"+strings.Join(history, "\n"), 92) {
+		t.Fatal("older history was not prepended")
+	}
+	_, paneTop, ok = b.PaneWindow()
+	if !ok || paneTop != 8 {
+		t.Fatalf("pane top after prepend = (%d, ok %v), want 8", paneTop, ok)
+	}
+	if got := b.Lines()[paneTop]; got != "pane-00" {
+		t.Fatalf("pane row 0 after prepend = %q, want %q", got, "pane-00")
+	}
+
+	// And a relative buffer trimmed to capacity keeps pointing at the same row.
+	small := NewOutputBuffer(5)
+	small.ApplySnapshot(PaneSnapshot{Output: content, HistoryRows: 4, PaneRows: 3})
+	lineCount, paneTop, ok = small.PaneWindow()
+	if !ok || lineCount != 5 || paneTop != 2 {
+		t.Fatalf("trimmed pane window = (%d lines, top %d, ok %v), want (5, 2, true)", lineCount, paneTop, ok)
+	}
+	if got := small.Lines()[paneTop]; got != "pane-00" {
+		t.Fatalf("pane row 0 after trim = %q, want %q", got, "pane-00")
+	}
+}
+
+// td-d29821: capture-shaped output is row separated, so a blank final pane row
+// and a trailing terminator are the same bytes. Only the producer knows which,
+// and the difference is the row the cursor is on at the bottom of a screen.
+func TestOutputBufferKeepsABlankFinalPaneRow(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		output    string
+		snapshot  PaneSnapshot
+		wantLines int
+		wantTop   int
+	}{
+		{
+			name:      "blank final grid row is a row",
+			output:    "history\npane-0\n",
+			snapshot:  PaneSnapshot{HistoryRows: 1, PaneRows: 2},
+			wantLines: 3,
+			wantTop:   1,
+		},
+		{
+			name:      "trailing terminator is not",
+			output:    "history\npane-0\npane-1\n",
+			snapshot:  PaneSnapshot{HistoryRows: 1, PaneRows: 2},
+			wantLines: 3,
+			wantTop:   1,
+		},
+		{
+			name:      "no stated split falls back to the terminator rule",
+			output:    "history\npane-0\n",
+			snapshot:  PaneSnapshot{},
+			wantLines: 2,
+			wantTop:   0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewOutputBuffer(100)
+			snapshot := tc.snapshot
+			snapshot.Output = tc.output
+			b.ApplySnapshot(snapshot)
+			lineCount, paneTop, ok := b.PaneWindow()
+			if lineCount != tc.wantLines {
+				t.Fatalf("line count = %d, want %d (%#v)", lineCount, tc.wantLines, b.Lines())
+			}
+			if ok != (tc.snapshot.PaneRows > 0) {
+				t.Fatalf("split known = %v, want %v", ok, tc.snapshot.PaneRows > 0)
+			}
+			if ok && paneTop != tc.wantTop {
+				t.Fatalf("pane top = %d, want %d", paneTop, tc.wantTop)
+			}
+		})
+	}
+}
+
+// CaptureSnapshot is the one place capture-shaped producers derive their split,
+// so it has to agree with what tmux actually delivers: history followed by every
+// pane row, trailing blanks included.
+func TestCaptureSnapshotSplitsHistoryFromPane(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		output      string
+		paneHeight  int
+		rowsJoined  bool
+		wantHistory int
+		wantPane    int
+	}{
+		{"history and pane", "h0\nh1\np0\np1\n", 2, false, 2, 2},
+		{"pane only", "p0\np1\n", 2, false, 0, 2},
+		{"capture shorter than the pane", "p0\n", 4, false, 0, 1},
+		{"no geometry observed", "p0\np1\n", 0, false, 0, 0},
+		// -J collapses wrapped lines, so the capture's rows are not the grid's
+		// and no split may be stated at all.
+		{"joined rows", "h0\nh1\np0\np1\n", 2, true, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CaptureSnapshot(CaptureInput{
+				Output:     tc.output,
+				BaseLine:   7,
+				Absolute:   true,
+				PaneHeight: tc.paneHeight,
+				RowsJoined: tc.rowsJoined,
+			})
+			if got.HistoryRows != tc.wantHistory || got.PaneRows != tc.wantPane {
+				t.Fatalf("split = %d history + %d pane rows, want %d + %d",
+					got.HistoryRows, got.PaneRows, tc.wantHistory, tc.wantPane)
+			}
+		})
 	}
 }

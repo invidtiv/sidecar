@@ -402,33 +402,18 @@ type InteractiveState struct {
 	CursorVisible bool
 
 	// PaneHeight tracks the tmux pane height for cursor offset calculation.
-	// Used to adjust cursor_y when display height differs from pane height.
+	// Used to adjust cursor_y when display height differs from pane height, and
+	// to find pane row 0 in the buffer: a capture ends at the bottom of the
+	// pane, so its last PaneHeight rows are the pane.
 	PaneHeight int
 
 	// PaneWidth tracks the tmux pane width for display width alignment.
 	PaneWidth int
 
-	// CursorHistorySize is the tmux history_size captured atomically with the
-	// cursor. In tmux's absolute line space the scrollback occupies
-	// [0, history_size) and pane row j is history_size+j, so this converts the
-	// pane-relative CursorRow into a buffer coordinate. Without it the rendered
-	// cursor floats above the live row by however much scrollback the capture
-	// included (td-d29821).
-	CursorHistorySize int
-
-	// HasCursorHistory reports whether CursorHistorySize is meaningful. Captures
-	// that predate the metadata, or that failed to parse it, fall back to the
-	// pane-relative placement.
-	HasCursorHistory bool
-
 	// VisibleStart and VisibleEnd track the buffer line range currently visible.
 	// Used for interactive selection mapping.
 	VisibleStart int
 	VisibleEnd   int
-
-	// ContentRowOffset is the number of preview content rows before output lines.
-	// Used to map mouse coordinates to buffer lines.
-	ContentRowOffset int
 
 	// BracketedPasteEnabled tracks whether the target app has enabled
 	// bracketed paste mode (ESC[?2004h). Updated from captured output.

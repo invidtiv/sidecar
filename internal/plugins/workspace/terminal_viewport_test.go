@@ -128,12 +128,11 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	agentBuffer := testTerminalBuffer("0\n1\n2\n3\n4\n5")
 	panelBuffer := testTerminalBuffer("a\nb\nc\nd\ne")
 	state := &InteractiveState{
-		Active:           true,
-		VisibleStart:     91,
-		VisibleEnd:       99,
-		ContentRowOffset: 7,
-		PaneHeight:       3,
-		PaneWidth:        20,
+		Active:       true,
+		VisibleStart: 91,
+		VisibleEnd:   99,
+		PaneHeight:   3,
+		PaneWidth:    20,
 	}
 	p := &Plugin{
 		viewMode:         ViewModeInteractive,
@@ -319,7 +318,7 @@ func TestBottomSplitDimensionsMatchRenderedTerminalContent(t *testing.T) {
 			termBoxHeight := containerHeight * p.termPanelEffectiveSize() / 100
 			outputBoxHeight := containerHeight - termBoxHeight - 1
 
-			_, gotTermHeight := p.calculateTermPanelDimensions()
+			_, gotTermHeight, _ := p.calculateTermPanelDimensions()
 			_, gotOutputHeight := p.calculateAgentPaneDimensions()
 			if gotTermHeight != termBoxHeight-1 {
 				t.Fatalf("terminal content height = %d, rendered child content = %d", gotTermHeight, termBoxHeight-1)
@@ -496,44 +495,37 @@ func TestPadLinesToWidth(t *testing.T) {
 // not a display row. Placing it as if it were floats the cursor above the live
 // line by however much scrollback the capture carried.
 func TestTerminalViewportCursorAccountsForScrollback(t *testing.T) {
-	// One scrollback line, then three pane rows. The cursor sits on pane row 2
-	// (the live prompt), which is display row 3.
+	// One scrollback line, then the pane's three rows. The cursor sits on pane
+	// row 2 (the live prompt).
 	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
 
 	in := terminalViewportInput{
-		Buffer:            buffer,
-		Width:             80,
-		Height:            44,
-		Follow:            true,
-		Interactive:       true,
-		CursorRow:         2,
-		CursorCol:         8,
-		CursorVisible:     true,
-		PaneHeight:        44,
-		PaneWidth:         80,
-		CursorHistorySize: 1,
-		BufferBase:        0,
-		HasCursorHistory:  true,
+		Buffer:        buffer,
+		Width:         80,
+		Height:        44,
+		Follow:        true,
+		Interactive:   true,
+		CursorRow:     2,
+		CursorCol:     8,
+		CursorVisible: true,
+		PaneHeight:    3,
+		PaneWidth:     80,
 	}
 
 	_, y, ok := terminalViewportCursorPosition(in)
 	if !ok {
 		t.Fatal("expected the cursor to be visible")
 	}
-	if y != 3 {
-		t.Errorf("cursor row = %d, want 3 (pane row 2 + 1 scrollback line)", y)
-	}
-
-	// Without history metadata the old pane-relative placement still applies.
-	in.HasCursorHistory = false
-	if _, y, ok = terminalViewportCursorPosition(in); !ok || y != 2 {
-		t.Errorf("fallback cursor row = %d (ok=%v), want 2", y, ok)
+	// The window shows the pane, not the scrollback line above it, so the
+	// prompt is the third rendered row.
+	if got := renderedTerminalLine(t, in, y); got != "prompt>" {
+		t.Errorf("cursor row %d renders %q, want the pane's cursor row %q", y, got, "prompt>")
 	}
 }
 
 // A full-screen program fills the pane, so the buffer's tail *is* the pane and
-// the absolute mapping has to agree with the pane-relative one. This is the
-// case that already worked and must not regress.
+// every pane row maps to the display row of the same index. This is the case
+// that already worked and must not regress.
 func TestTerminalViewportCursorFullScreenPaneUnchanged(t *testing.T) {
 	const paneHeight = 10
 	const historySize = 25
@@ -546,57 +538,255 @@ func TestTerminalViewportCursorFullScreenPaneUnchanged(t *testing.T) {
 
 	for _, cursorRow := range []int{0, 4, paneHeight - 1} {
 		in := terminalViewportInput{
-			Buffer:            buffer,
-			Width:             80,
-			Height:            paneHeight,
-			Follow:            true,
-			Interactive:       true,
-			CursorRow:         cursorRow,
-			CursorVisible:     true,
-			PaneHeight:        paneHeight,
-			PaneWidth:         80,
-			CursorHistorySize: historySize,
-			BufferBase:        0,
-			HasCursorHistory:  true,
+			Buffer:        buffer,
+			Width:         80,
+			Height:        paneHeight,
+			Follow:        true,
+			Interactive:   true,
+			CursorRow:     cursorRow,
+			CursorVisible: true,
+			PaneHeight:    paneHeight,
+			PaneWidth:     80,
 		}
 
-		_, withHistory, ok := terminalViewportCursorPosition(in)
+		_, y, ok := terminalViewportCursorPosition(in)
 		if !ok {
 			t.Fatalf("cursorRow %d: expected the cursor to be visible", cursorRow)
 		}
-		in.HasCursorHistory = false
-		_, paneRelative, _ := terminalViewportCursorPosition(in)
-
-		if withHistory != cursorRow || paneRelative != cursorRow {
-			t.Errorf("cursorRow %d: absolute mapping gave %d, pane-relative gave %d; want %d for both",
-				cursorRow, withHistory, paneRelative, cursorRow)
+		if y != cursorRow {
+			t.Errorf("cursorRow %d: cursor y = %d, want %d", cursorRow, y, cursorRow)
+		}
+		want := fmt.Sprintf("line-%02d", historySize+cursorRow)
+		if got := renderedTerminalLine(t, in, y); got != want {
+			t.Errorf("cursorRow %d renders %q, want %q", cursorRow, got, want)
 		}
 	}
 }
 
-// The buffer's absolute base has to be subtracted: once tmux history exceeds
-// the capture window, the buffer no longer starts at absolute line 0.
-func TestTerminalViewportCursorHonoursBufferBase(t *testing.T) {
-	buffer := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+// Once tmux history exceeds the capture window the buffer no longer starts at
+// absolute line 0. Placement is geometric, so the absolute base — which search
+// and selection still need — must not move the cursor.
+func TestTerminalViewportCursorIgnoresAbsoluteBase(t *testing.T) {
+	relative := testTerminalBuffer("scrollback\ncmd\noutput\nprompt>")
+	absolute := tty.NewOutputBuffer(100)
+	absolute.UpdateSnapshot("scrollback\ncmd\noutput\nprompt>", 600)
 
-	_, y, ok := terminalViewportCursorPosition(terminalViewportInput{
-		Buffer:            buffer,
-		Width:             80,
-		Height:            44,
-		Follow:            true,
-		Interactive:       true,
-		CursorRow:         2,
-		CursorVisible:     true,
-		PaneHeight:        44,
-		PaneWidth:         80,
-		CursorHistorySize: 601, // 600 lines scrolled out of the capture window
-		BufferBase:        600,
-		HasCursorHistory:  true,
+	in := terminalViewportInput{
+		Width:         80,
+		Height:        44,
+		Follow:        true,
+		Interactive:   true,
+		CursorRow:     2,
+		CursorVisible: true,
+		PaneHeight:    3,
+		PaneWidth:     80,
+	}
+
+	in.Buffer = relative
+	_, want, ok := terminalViewportCursorPosition(in)
+	if !ok {
+		t.Fatal("expected the cursor to be visible on the relative buffer")
+	}
+	in.Buffer, in.AbsoluteBase = absolute, 600
+	_, got, ok := terminalViewportCursorPosition(in)
+	if !ok {
+		t.Fatal("expected the cursor to be visible on the absolute buffer")
+	}
+	if got != want {
+		t.Errorf("cursor row = %d on an absolute buffer, want %d", got, want)
+	}
+}
+
+// The user-visible defect (td-d29821): the capture path issues its
+// display-message and its capture-pane as two separate writes, so lines can
+// scroll into history between them and the buffer then holds more history rows
+// than the metadata knew about. Placing the cursor from history_size drew it
+// that many rows too high, and it stayed there until the pane was re-seeded.
+//
+// Both buffer shapes are exercised. A buffer whose producer stated its split
+// reads it back; one that never received a split falls back to its tail. Neither
+// consults history_size, so neither can drift with it.
+func TestTerminalViewportCursorSurvivesHistoryDrift(t *testing.T) {
+	const paneHeight = 6
+	const staleHistorySize = 12
+	const cursorRow = 4
+
+	for _, historyRows := range []int{staleHistorySize, staleHistorySize + 2, staleHistorySize - 2} {
+		lines := make([]string, 0, historyRows+paneHeight)
+		for i := range historyRows {
+			lines = append(lines, fmt.Sprintf("history-%02d", i))
+		}
+		for i := range paneHeight {
+			lines = append(lines, fmt.Sprintf("screen-%02d", i))
+		}
+		content := strings.Join(lines, "\n")
+
+		stated := tty.NewOutputBuffer(100)
+		// The absolute base is deliberately derived from the stale history_size,
+		// as the capture path's is: the split, not the base, is what places the
+		// cursor.
+		stated.ApplySnapshot(tty.PaneSnapshot{
+			Output: content, BaseLine: staleHistorySize - historyRows, Absolute: true,
+			HistoryRows: historyRows, PaneRows: paneHeight,
+		})
+
+		for _, buffer := range []struct {
+			name string
+			buf  *tty.OutputBuffer
+		}{
+			{"split stated by the producer", stated},
+			{"split never stated", testTerminalBuffer(content)},
+		} {
+			in := terminalViewportInput{
+				Buffer:        buffer.buf,
+				Width:         80,
+				Height:        paneHeight,
+				Follow:        true,
+				Interactive:   true,
+				CursorRow:     cursorRow,
+				CursorVisible: true,
+				PaneHeight:    paneHeight,
+				PaneWidth:     80,
+			}
+			_, y, ok := terminalViewportCursorPosition(in)
+			if !ok {
+				t.Fatalf("%s, historyRows %d: expected the cursor to be visible", buffer.name, historyRows)
+			}
+			want := fmt.Sprintf("screen-%02d", cursorRow)
+			if got := renderedTerminalLine(t, in, y); got != want {
+				t.Errorf("%s, historyRows %d (metadata said %d): cursor row %d renders %q, want %q",
+					buffer.name, historyRows, staleHistorySize, y, got, want)
+			}
+		}
+	}
+}
+
+// The regression the geometry inference introduced (td-d29821): a rendering
+// whose final pane rows are blank can reach the buffer one or more rows shorter
+// than the pane — a frame's row-separated grid loses its blank last row to the
+// terminator rule, and a plain capture-pane never emits those rows at all.
+// "The pane is the buffer's last PaneHeight rows" then names the wrong line and
+// the cursor is drawn above the line it belongs on. The split the producer
+// states does not move with the content's tail.
+func TestTerminalViewportCursorIgnoresAShortBufferTail(t *testing.T) {
+	const paneHeight = 6
+	const historyRows = 9
+	const deliveredPaneRows = 4
+	const cursorRow = 1
+
+	lines := make([]string, 0, historyRows+deliveredPaneRows)
+	for i := range historyRows {
+		lines = append(lines, fmt.Sprintf("history-%02d", i))
+	}
+	for i := range deliveredPaneRows {
+		lines = append(lines, fmt.Sprintf("screen-%02d", i))
+	}
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(lines, "\n"), Absolute: true,
+		HistoryRows: historyRows, PaneRows: paneHeight,
 	})
+
+	in := terminalViewportInput{
+		Buffer:        buffer,
+		Width:         80,
+		Height:        paneHeight,
+		Follow:        true,
+		Interactive:   true,
+		CursorRow:     cursorRow,
+		CursorVisible: true,
+		PaneHeight:    paneHeight,
+		PaneWidth:     80,
+	}
+	_, y, ok := terminalViewportCursorPosition(in)
 	if !ok {
 		t.Fatal("expected the cursor to be visible")
 	}
-	if y != 3 {
-		t.Errorf("cursor row = %d, want 3; buffer base was not subtracted", y)
+	want := fmt.Sprintf("screen-%02d", cursorRow)
+	if got := renderedTerminalLine(t, in, y); got != want {
+		t.Errorf("cursor row %d renders %q, want %q", y, got, want)
+	}
+}
+
+// renderedTerminalLine returns the plain text the viewport draws on row y, so a
+// cursor assertion can name the line the cursor must land on rather than a bare
+// index that says nothing about what the user sees.
+func renderedTerminalLine(t *testing.T, in terminalViewportInput, y int) string {
+	t.Helper()
+	// Render with the native cursor so the content is the pane's own text; the
+	// painted-cursor path would overwrite the very cell under assertion.
+	in.NativeCursor = true
+	result := renderTerminalViewport(in, ui.NewTruncateCache(64))
+	lines := strings.Split(result.Content, "\n")
+	if y < 0 || y >= len(lines) {
+		t.Fatalf("cursor row %d outside the %d rendered rows", y, len(lines))
+	}
+	return strings.TrimRight(ansi.Strip(lines[y]), " ")
+}
+
+// paneSplitBuffer builds a buffer whose producer stated the split: history
+// rows first, then paneRows live grid rows.
+func paneSplitBuffer(historyRows, paneRows int) *tty.OutputBuffer {
+	buffer := tty.NewOutputBuffer(100)
+	lines := make([]string, 0, historyRows+paneRows)
+	for i := 0; i < historyRows; i++ {
+		lines = append(lines, fmt.Sprintf("hist%d", i))
+	}
+	for i := 0; i < paneRows; i++ {
+		lines = append(lines, fmt.Sprintf("pane%d", i))
+	}
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:      strings.Join(lines, "\n"),
+		HistoryRows: historyRows,
+		PaneRows:    paneRows,
+	})
+	return buffer
+}
+
+// A pane taller than the viewport is clipped, and following then anchors the
+// window on the cursor row rather than the pane's tail (td-73fa86). That holds
+// whether or not the cursor is *drawn*: a full-screen app that hides it still
+// has a live row, and anchoring on the tail would show the padding below it.
+func TestClippedFollowAnchorsOnCursorRowEvenWhenCursorHidden(t *testing.T) {
+	for _, visible := range []bool{true, false} {
+		buffer := paneSplitBuffer(4, 6)
+		layout := calculateTerminalViewportLayout(terminalViewportInput{
+			Buffer: buffer, Width: 20, Height: 3, Follow: true,
+			Interactive: true, CursorVisible: visible, CursorRow: 1,
+			PaneWidth: 20, PaneHeight: 6,
+		})
+		if layout.PaneTop != 4 {
+			t.Fatalf("cursorVisible=%v: PaneTop = %d, want 4", visible, layout.PaneTop)
+		}
+		// Cursor line 5, three visible rows: the window starts at 3, not at the
+		// tail (7).
+		if layout.Start != 3 {
+			t.Fatalf("cursorVisible=%v: Start = %d, want 3 (cursor-anchored, not tail 7)",
+				visible, layout.Start)
+		}
+	}
+}
+
+// The cursor is hidden, not clamped, when it falls outside the rendered window:
+// drawing it on the nearest row would put it on a line it is not on.
+func TestTerminalViewportCursorHiddenOutsideWindow(t *testing.T) {
+	// Off the top: the split is known but no pane geometry has been observed, so
+	// the window follows the buffer's tail and pane row 0 is above it.
+	above := terminalViewportInput{
+		Buffer: paneSplitBuffer(5, 15), Width: 20, Height: 3, Follow: true,
+		Interactive: true, CursorVisible: true, CursorRow: 0, CursorCol: 2,
+	}
+	if x, y, ok := terminalViewportCursorPosition(above); ok {
+		t.Fatalf("cursor above the window = (%d,%d,true), want hidden", x, y)
+	}
+
+	// Past the bottom: a stale cursor row beyond the pane's last row.
+	below := terminalViewportInput{
+		Buffer: paneSplitBuffer(8, 2), Width: 20, Height: 5, Follow: true,
+		Interactive: true, CursorVisible: true, CursorRow: 4, CursorCol: 2,
+		PaneWidth: 20, PaneHeight: 2,
+	}
+	if x, y, ok := terminalViewportCursorPosition(below); ok {
+		t.Fatalf("cursor below the window = (%d,%d,true), want hidden", x, y)
 	}
 }

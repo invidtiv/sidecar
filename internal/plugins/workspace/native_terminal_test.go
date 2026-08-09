@@ -39,9 +39,10 @@ func nativeWorkspacePlugin() *Plugin {
 func TestWorkspaceNativeCursorFullPreviewAndSuppression(t *testing.T) {
 	p := nativeWorkspacePlugin()
 	cursor := p.Cursor()
-	if cursor == nil || cursor.X != 6 || cursor.Y != 6 ||
+	// Row 4: the panel border, the single header row, then cursor row 2.
+	if cursor == nil || cursor.X != 6 || cursor.Y != 4 ||
 		cursor.Shape != tea.CursorBlock || !cursor.Blink {
-		t.Fatalf("Cursor() = %#v, want plugin-local (6,6)", cursor)
+		t.Fatalf("Cursor() = %#v, want plugin-local (6,4)", cursor)
 	}
 	if mode := p.PreferredMouseMode(); mode != tea.MouseModeCellMotion {
 		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
@@ -96,7 +97,7 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	}
 
 	p.termPanelLayout = TermPanelRight
-	width, height := p.calculateTermPanelDimensions()
+	width, height, _ := p.calculateTermPanelDimensions()
 	p.interactiveState.PaneWidth = width
 	p.interactiveState.PaneHeight = height
 	if cursor := p.Cursor(); cursor == nil || cursor.X != 86 || cursor.Y != 3 {
@@ -104,7 +105,7 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	}
 
 	p.termPanelLayout = TermPanelBottom
-	width, height = p.calculateTermPanelDimensions()
+	width, height, _ = p.calculateTermPanelDimensions()
 	p.interactiveState.PaneWidth = width
 	p.interactiveState.PaneHeight = height
 	if cursor := p.Cursor(); cursor == nil || cursor.X != 52 || cursor.Y != 22 {
@@ -133,9 +134,13 @@ func TestTerminalViewportNativeCursorDoesNotMutateContent(t *testing.T) {
 		t.Fatalf("terminalViewportCursorPosition() = (%d,%d,%v)", x, y, ok)
 	}
 
+	// A pane taller than the viewport is clipped, and following anchors the
+	// window on the cursor rather than on the pane's tail (td-73fa86), so a
+	// cursor near the top of the pane stays visible on the first rendered row.
+	buffer.Write("one\ntwo\nthree\nfour\nfive")
 	in.CursorRow = 0
 	in.PaneHeight = 5
-	if x, y, ok := terminalViewportCursorPosition(in); ok {
-		t.Fatalf("offscreen terminalViewportCursorPosition() = (%d,%d,true), want hidden", x, y)
+	if x, y, ok := terminalViewportCursorPosition(in); !ok || x != 2 || y != 0 {
+		t.Fatalf("clipped-pane terminalViewportCursorPosition() = (%d,%d,%v), want (2,0,true)", x, y, ok)
 	}
 }
