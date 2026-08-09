@@ -15,6 +15,9 @@ type RefreshDoneMsg struct {
 	Worktrees []*Worktree
 	Snapshot  *RepoSnapshot
 	Err       error
+	Conflicts []Conflict
+	Duration  time.Duration
+	Processes int
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -79,6 +82,7 @@ type DiffLoadedMsg struct {
 	WorkspaceName string
 	Content       string
 	Raw           string
+	Snapshot      *DiffSnapshot
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -89,7 +93,11 @@ type DiffErrorMsg struct {
 	OperationScope
 	WorkspaceName string
 	Err           error
+	Command       string
+	BaseRef       string
 }
+
+func (m DiffErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // StatsLoadedMsg delivers git stats for a worktree.
 type StatsLoadedMsg struct {
@@ -106,7 +114,10 @@ type StatsErrorMsg struct {
 	OperationScope
 	WorkspaceName string
 	Err           error
+	Command       string
 }
+
+func (m StatsErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // CreateWorktreeMsg requests worktree creation.
 type CreateWorktreeMsg struct {

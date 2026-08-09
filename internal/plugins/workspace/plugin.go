@@ -198,6 +198,10 @@ type Plugin struct {
 	// Diff state
 	diffContent   string
 	diffRaw       string
+	diffSnapshot  *DiffSnapshot
+	diffState     LoadState
+	diffError     string
+	diffScope     DiffScope
 	diffViewMode  DiffViewMode             // Unified, side-by-side, or full-file
 	multiFileDiff *gitstatus.MultiFileDiff // Parsed multi-file diff with positions
 	fullFileDiff  *gitstatus.FullFileDiff  // Full-file diff for current file (loaded on demand)

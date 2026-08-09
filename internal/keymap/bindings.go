@@ -415,6 +415,7 @@ func DefaultBindings() []Binding {
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},
 		{Key: "N", Command: "reject", Context: "workspace-preview"},
 		{Key: "v", Command: "toggle-diff-view", Context: "workspace-preview"},
+		{Key: "z", Command: "toggle-diff-scope", Context: "workspace-preview"},
 		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},

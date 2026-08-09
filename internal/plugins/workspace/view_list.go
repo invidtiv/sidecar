@@ -247,8 +247,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 		for _, w := range p.deleteWarnings {
 			// Truncate warning to fit width
-			if len(w) > width-2 {
-				w = w[:width-5] + "..."
+			if lipgloss.Width(w) > width-2 {
+				w = ansi.Truncate(w, max(1, width-3), "…")
 			}
 			lines = append(lines, warningStyle.Render("⚠ "+w))
 		}
@@ -435,7 +435,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// Check for conflicts
-	hasConflict := p.hasConflict(wt.Name, p.conflicts)
+	hasConflict := p.hasConflict(wt.IdentityKey(), p.conflicts)
 	conflictIcon := ""
 	if hasConflict {
 		conflictIcon = " ⚠"
@@ -488,13 +488,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		maxNameWidth = 8 // Minimum name width
 	}
 	// Truncate name if too long (use runes for proper Unicode handling)
-	nameRunes := []rune(name)
-	if len(nameRunes) > maxNameWidth {
-		if maxNameWidth > 1 {
-			name = string(nameRunes[:maxNameWidth-1]) + "…"
-		} else {
-			name = "…"
-		}
+	if lipgloss.Width(name) > maxNameWidth {
+		name = ansi.Truncate(name, maxNameWidth, "…")
 	}
 
 	// Sidebar display settings
@@ -533,9 +528,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		parts = append(parts, statsStr)
 	}
 	if hasConflict {
-		conflictFiles := p.getConflictingFiles(wt.Name, p.conflicts)
+		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
 		if len(conflictFiles) > 0 {
-			parts = append(parts, fmt.Sprintf("⚠ %d conflicts", len(conflictFiles)))
+			parts = append(parts, fmt.Sprintf("⚠ %d overlapping dirty files", len(conflictFiles)))
 		}
 	}
 	if wt.IsOrphaned {
@@ -543,6 +538,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 	if wt.IsMissing {
 		parts = append(parts, "✗ folder missing")
+	} else if wt.Changes != nil && wt.Changes.State == LoadStateError {
+		parts = append(parts, "✗ status unavailable (git status --porcelain=v1)")
 	}
 
 	// When selected, use plain text to ensure consistent background
@@ -557,9 +554,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		// Truncate line2 to prevent wrapping
 		line2Width := lipgloss.Width(line2)
 		if line2Width > width {
-			line2Runes := []rune(line2)
 			if width > 1 {
-				line2 = string(line2Runes[:width-1]) + "…"
+				line2 = ansi.Truncate(line2, width, "…")
 			}
 			line2Width = width
 		}
@@ -646,9 +642,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		styledParts = append(styledParts, statsStr)
 	}
 	if hasConflict {
-		conflictFiles := p.getConflictingFiles(wt.Name, p.conflicts)
+		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
 		if len(conflictFiles) > 0 {
-			styledParts = append(styledParts, styles.StatusModified.Render(fmt.Sprintf("⚠ %d conflicts", len(conflictFiles))))
+			styledParts = append(styledParts, styles.StatusModified.Render(fmt.Sprintf("⚠ %d dirty overlaps", len(conflictFiles))))
 		}
 	}
 	if wt.IsOrphaned {
@@ -656,6 +652,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 	if wt.IsMissing {
 		styledParts = append(styledParts, styles.StatusModified.Render("✗ folder missing"))
+	} else if wt.Changes != nil && wt.Changes.State == LoadStateError {
+		styledParts = append(styledParts, styles.StatusDeleted.Render("✗ status unavailable (git status --porcelain=v1)"))
 	}
 
 	// Build lines with styled elements

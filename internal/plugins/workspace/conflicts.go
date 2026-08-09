@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 
@@ -9,7 +10,7 @@ import (
 
 // Conflict represents a file conflict between worktrees.
 type Conflict struct {
-	Worktrees []string // Names of worktrees with conflicting changes
+	Worktrees []string // Stable keys of worktrees with overlapping dirty files
 	Files     []string // List of conflicting files
 }
 
@@ -34,13 +35,13 @@ func detectConflicts(worktrees []conflictCandidate) []Conflict {
 	filesByWorktree := make(map[string][]string)
 	names := make(map[string]string, len(worktrees))
 	for _, wt := range worktrees {
-		files, err := getModifiedFiles(wt.Path)
-		if err != nil {
+		changes, _ := collectWorktreeChanges(context.Background(), wt.Path, nil)
+		if changes.Err != nil {
 			continue
 		}
 		names[wt.Key] = wt.Name
-		if len(files) > 0 {
-			filesByWorktree[wt.Key] = files
+		if len(changes.Dirty) > 0 {
+			filesByWorktree[wt.Key] = changes.Dirty
 		}
 	}
 
@@ -67,6 +68,28 @@ func detectConflicts(worktrees []conflictCandidate) []Conflict {
 	}
 
 	return conflicts
+}
+
+func detectConflictsFromChanges(worktrees []*Worktree) []Conflict {
+	candidates := make([]conflictCandidate, 0, len(worktrees))
+	filesByKey := make(map[string][]string, len(worktrees))
+	for _, wt := range worktrees {
+		key := wt.IdentityKey()
+		candidates = append(candidates, conflictCandidate{Key: key, Name: wt.Name, Path: wt.Path})
+		if wt.Changes != nil && wt.Changes.Err == nil {
+			filesByKey[key] = wt.Changes.Dirty
+		}
+	}
+	var result []Conflict
+	for i := 0; i < len(candidates); i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			overlap := intersection(filesByKey[candidates[i].Key], filesByKey[candidates[j].Key])
+			if len(overlap) > 0 {
+				result = append(result, Conflict{Worktrees: []string{candidates[i].Key, candidates[j].Key}, Files: overlap})
+			}
+		}
+	}
+	return result
 }
 
 // loadConflicts returns a command to detect conflicts across worktrees.
@@ -137,10 +160,10 @@ func intersection(a, b []string) []string {
 }
 
 // hasConflict checks if a worktree has any conflicts.
-func (p *Plugin) hasConflict(worktreeName string, conflicts []Conflict) bool {
+func (p *Plugin) hasConflict(worktreeKey string, conflicts []Conflict) bool {
 	for _, c := range conflicts {
 		for _, wt := range c.Worktrees {
-			if wt == worktreeName {
+			if wt == worktreeKey {
 				return true
 			}
 		}
@@ -149,13 +172,13 @@ func (p *Plugin) hasConflict(worktreeName string, conflicts []Conflict) bool {
 }
 
 // getConflictingFiles returns the files that conflict for a specific worktree.
-func (p *Plugin) getConflictingFiles(worktreeName string, conflicts []Conflict) []string {
+func (p *Plugin) getConflictingFiles(worktreeKey string, conflicts []Conflict) []string {
 	var files []string
 	fileSet := make(map[string]bool)
 
 	for _, c := range conflicts {
 		for _, wt := range c.Worktrees {
-			if wt == worktreeName {
+			if wt == worktreeKey {
 				for _, f := range c.Files {
 					if !fileSet[f] {
 						fileSet[f] = true
@@ -170,21 +193,21 @@ func (p *Plugin) getConflictingFiles(worktreeName string, conflicts []Conflict) 
 }
 
 // getConflictingWorktrees returns the names of other worktrees that conflict.
-func (p *Plugin) getConflictingWorktrees(worktreeName string, conflicts []Conflict) []string {
+func (p *Plugin) getConflictingWorktrees(worktreeKey string, conflicts []Conflict) []string {
 	var others []string
 	otherSet := make(map[string]bool)
 
 	for _, c := range conflicts {
 		hasThis := false
 		for _, wt := range c.Worktrees {
-			if wt == worktreeName {
+			if wt == worktreeKey {
 				hasThis = true
 				break
 			}
 		}
 		if hasThis {
 			for _, wt := range c.Worktrees {
-				if wt != worktreeName && !otherSet[wt] {
+				if wt != worktreeKey && !otherSet[wt] {
 					otherSet[wt] = true
 					others = append(others, wt)
 				}

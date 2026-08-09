@@ -1,8 +1,10 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +26,22 @@ const (
 	maxUntrackedFiles = 50
 )
 
+// DiffSnapshot contains all three explicit diff views resolved from the same
+// immutable worktree/base identity.
+type DiffSnapshot struct {
+	State                 LoadState
+	WorkingTree           string
+	Commits               []CommitStatusInfo
+	AggregateCommitted    string
+	AggregateUncommitted  string
+	BaseRef               string
+	MergeBase             string
+	UntrackedShown        int
+	UntrackedOmitted      int
+	UntrackedBytesOmitted int64
+	Truncated             bool
+}
+
 // loadSelectedDiff returns a command to load diff for the selected worktree.
 // Also loads task details if Task tab is active.
 func (p *Plugin) loadSelectedDiff() tea.Cmd {
@@ -31,6 +49,8 @@ func (p *Plugin) loadSelectedDiff() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
+	p.diffState = LoadStateLoading
+	p.diffError = ""
 
 	cmds := []tea.Cmd{p.loadDiff(wt)}
 
@@ -48,109 +68,230 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 		return nil
 	}
 	ctx, scope := p.newOperationScope(wt)
-	path, name := wt.Path, wt.Name
+	path, name, baseRef := wt.Path, wt.IdentityKey(), wt.BaseBranch
+	if baseRef == "" && p.repoSnapshot != nil {
+		for _, candidate := range p.repoSnapshot.Worktrees {
+			if candidate.Key == wt.IdentityKey() {
+				baseRef = candidate.BaseRef
+				break
+			}
+		}
+	}
 	return func() tea.Msg {
 		if err := ctx.Err(); err != nil {
-			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, BaseRef: baseRef,
+				Command: "load working tree, commits, and aggregate diff", Err: err}
 		}
-		content, raw, err := getDiff(path)
+		snapshot, err := loadDiffSnapshot(ctx, path, baseRef)
 		if err != nil {
-			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, BaseRef: baseRef,
+				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", Err: err}
 		}
-		return DiffLoadedMsg{OperationScope: scope, WorkspaceName: name, Content: content, Raw: raw}
+		return DiffLoadedMsg{OperationScope: scope, WorkspaceName: name,
+			Content: snapshot.WorkingTree, Raw: snapshot.WorkingTree, Snapshot: snapshot}
 	}
+}
+
+func loadDiffSnapshot(ctx context.Context, workdir, baseRef string) (*DiffSnapshot, error) {
+	if _, err := os.Lstat(workdir); err != nil {
+		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
+	}
+	if baseRef == "" {
+		baseRef = detectDefaultBranchContext(ctx, workdir)
+	}
+	if baseRef == "" {
+		return nil, fmt.Errorf("resolve base ref for git log and aggregate diff in %s", workdir)
+	}
+
+	tracked, err := gitOutputBytes(ctx, workdir, "diff", "--binary", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	untracked, meta, err := getUntrackedFileDiffsContext(ctx, workdir)
+	if err != nil {
+		return nil, err
+	}
+	working := joinDiffParts(string(tracked), untracked)
+
+	mergeBaseBytes, err := gitOutputBytes(ctx, workdir, "merge-base", baseRef, "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("resolve merge-base for base ref %q: %w", baseRef, err)
+	}
+	mergeBase := strings.TrimSpace(string(mergeBaseBytes))
+	committed, err := gitOutputBytes(ctx, workdir, "diff", "--binary", mergeBase+"..HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("aggregate committed diff for %q (%s..HEAD): %w", baseRef, mergeBase, err)
+	}
+	commits, err := getWorktreeCommitsContext(ctx, workdir, baseRef)
+	if err != nil {
+		return nil, fmt.Errorf("unique commits for base ref %q using git log %s..HEAD: %w", baseRef, baseRef, err)
+	}
+
+	state := LoadStateReady
+	if working == "" && len(commits) == 0 && len(committed) == 0 {
+		state = LoadStateClean
+	} else if meta.Truncated {
+		state = LoadStateTruncated
+	}
+	return &DiffSnapshot{State: state, WorkingTree: working, Commits: commits,
+		AggregateCommitted: string(committed), AggregateUncommitted: working,
+		BaseRef: baseRef, MergeBase: mergeBase, UntrackedShown: meta.Shown,
+		UntrackedOmitted: meta.Omitted, UntrackedBytesOmitted: meta.BytesOmitted,
+		Truncated: meta.Truncated}, nil
+}
+
+func gitOutputBytes(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git %s in %s: %s: %w", strings.Join(args, " "), dir, strings.TrimSpace(string(out)), err)
+	}
+	return out, nil
+}
+
+func joinDiffParts(parts ...string) string {
+	var nonempty []string
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			nonempty = append(nonempty, strings.TrimRight(part, "\n"))
+		}
+	}
+	return strings.Join(nonempty, "\n")
 }
 
 // getDiff returns the diff for a worktree, including untracked files.
 func getDiff(workdir string) (content, raw string, err error) {
-	// Get combined staged and unstaged diff for tracked files
-	cmd := exec.Command("git", "diff", "HEAD")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
+	tracked, err := gitOutputBytes(context.Background(), workdir, "diff", "--binary", "HEAD")
 	if err != nil {
-		// No HEAD yet, try just staged/unstaged
-		cmd = exec.Command("git", "diff")
-		cmd.Dir = workdir
-		output, _ = cmd.Output()
+		return "", "", err
 	}
-
-	raw = string(output)
-
-	// Also include untracked files as synthetic diffs (new file additions)
-	untrackedDiffs := getUntrackedFileDiffs(workdir)
-	if untrackedDiffs != "" {
-		if raw != "" && !strings.HasSuffix(raw, "\n") {
-			raw += "\n"
-		}
-		raw += untrackedDiffs
+	untracked, _, err := getUntrackedFileDiffsContext(context.Background(), workdir)
+	if err != nil {
+		return "", "", err
 	}
-
-	content = raw
-	return content, raw, nil
+	raw = joinDiffParts(string(tracked), untracked)
+	return raw, raw, nil
 }
 
 // getUntrackedFileDiffs returns synthetic diff output for untracked files in the worktree.
 // Each untracked file is shown as a new file with all lines as additions.
 // Respects maxUntrackedFiles and maxUntrackedFileSize limits to avoid performance issues.
 func getUntrackedFileDiffs(workdir string) string {
-	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
+	out, _, _ := getUntrackedFileDiffsContext(context.Background(), workdir)
+	return out
+}
+
+type untrackedDiffMeta struct {
+	Shown, Omitted int
+	BytesOmitted   int64
+	Truncated      bool
+}
+
+func getUntrackedFileDiffsContext(ctx context.Context, workdir string) (string, untrackedDiffMeta, error) {
+	output, err := gitOutputBytes(ctx, workdir, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
-		return ""
+		return "", untrackedDiffMeta{}, err
 	}
-
-	files := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(files) == 0 || (len(files) == 1 && files[0] == "") {
-		return ""
-	}
-
-	// Cap the number of untracked files to prevent performance issues
-	if len(files) > maxUntrackedFiles {
-		files = files[:maxUntrackedFiles]
-	}
-
+	fields := bytes.Split(output, []byte{0})
 	var sb strings.Builder
-	for _, file := range files {
-		if file == "" {
+	var meta untrackedDiffMeta
+	var total int64
+	included := 0
+	for _, field := range fields {
+		if len(field) == 0 {
 			continue
 		}
-
-		// Check file size before reading — skip files larger than the limit
-		diff, err := getUntrackedFileDiff(workdir, file)
-		if err != nil {
+		file := string(field)
+		if included >= maxUntrackedFiles {
+			meta.Omitted++
+			meta.Truncated = true
 			continue
 		}
+		full := filepath.Join(workdir, filepath.FromSlash(file))
+		info, statErr := os.Lstat(full)
+		if statErr != nil || !info.Mode().IsRegular() {
+			meta.Omitted++
+			meta.Truncated = true
+			continue
+		}
+		if info.Size() > maxUntrackedFileSize || total+info.Size() > maxUntrackedTotalBytes {
+			included++
+			meta.Omitted++
+			meta.BytesOmitted += info.Size()
+			meta.Truncated = true
+			diff := truncatedUntrackedDiff(file, info.Size())
+			if sb.Len() > 0 {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(diff)
+			continue
+		}
+		diff, read, readErr := getUntrackedFileDiffBounded(workdir, file)
+		if readErr != nil {
+			meta.Omitted++
+			meta.Truncated = true
+			continue
+		}
+		total += read
+		included++
+		meta.Shown++
 		if sb.Len() > 0 {
-			sb.WriteString("\n")
+			sb.WriteByte('\n')
 		}
 		sb.WriteString(diff)
 	}
-	return sb.String()
+	return sb.String(), meta, nil
 }
 
 // getUntrackedFileDiff returns a synthetic diff for a single untracked file.
 // Files exceeding maxUntrackedFileSize get a size warning instead of full content.
 func getUntrackedFileDiff(workdir, file string) (string, error) {
+	diff, _, err := getUntrackedFileDiffBounded(workdir, file)
+	return diff, err
+}
+
+func getUntrackedFileDiffBounded(workdir, file string) (string, int64, error) {
 	fullPath := filepath.Join(workdir, file)
-	info, err := os.Stat(fullPath)
+	info, err := os.Lstat(fullPath)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-
+	if !info.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("untracked path is not a regular file: %s", file)
+	}
 	if info.Size() > maxUntrackedFileSize {
-		// Generate a truncated diff with size warning
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", file, file)
-		sb.WriteString("new file mode 100644\n")
-		sb.WriteString("--- /dev/null\n")
-		fmt.Fprintf(&sb, "+++ b/%s\n", file)
-		sb.WriteString("@@ -0,0 +1,1 @@\n")
-		fmt.Fprintf(&sb, "+[File too large to display: %s (%d bytes)]\n", file, info.Size())
-		return sb.String(), nil
+		return truncatedUntrackedDiff(file, info.Size()), 0, nil
 	}
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxUntrackedFileSize+1))
+	if err != nil {
+		return "", 0, err
+	}
+	if len(data) > maxUntrackedFileSize {
+		return truncatedUntrackedDiff(file, info.Size()), 0, nil
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", file, file, file), int64(len(data)), nil
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n", file, file, file)
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	fmt.Fprintf(&sb, "@@ -0,0 +1,%d @@\n", len(lines))
+	for _, line := range lines {
+		sb.WriteByte('+')
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return sb.String(), int64(len(data)), nil
+}
 
-	return gitstatus.GetNewFileDiff(workdir, file)
+func truncatedUntrackedDiff(file string, size int64) string {
+	return fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,1 @@\n+[File too large to display: content omitted by %d-byte untracked file cap (%d bytes)]\n", file, file, file, maxUntrackedFileSize, size)
 }
 
 // getDiffStatFromBase returns the --stat output compared to the base branch.
@@ -225,7 +366,7 @@ func (p *Plugin) loadFullFileDiffForWorkspace() tea.Cmd {
 	filePath := file.FileName()
 	workdir := wt.Path
 	epoch := p.ctx.Epoch
-	name := wt.Name
+	name := wt.IdentityKey()
 
 	return func() tea.Msg {
 		// Get old content (HEAD version)
@@ -272,7 +413,7 @@ func (p *Plugin) loadFullFileDiffForCommit() tea.Cmd {
 	}
 	workdir := wt.Path
 	epoch := p.ctx.Epoch
-	name := wt.Name
+	name := wt.IdentityKey()
 
 	return func() tea.Msg {
 		parentRef := commitHash + "~1"
@@ -322,7 +463,7 @@ func (p *Plugin) loadCommitStatus(wt *Worktree) tea.Cmd {
 		return nil
 	}
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
-	name := wt.Name
+	name := wt.IdentityKey()
 	path := wt.Path
 	baseBranch := wt.BaseBranch
 
@@ -337,30 +478,36 @@ func (p *Plugin) loadCommitStatus(wt *Worktree) tea.Cmd {
 
 // getWorktreeCommits returns commits unique to this branch vs base branch with status.
 func getWorktreeCommits(workdir, baseBranch string) ([]CommitStatusInfo, error) {
+	return getWorktreeCommitsContext(context.Background(), workdir, baseBranch)
+}
+
+func getWorktreeCommitsContext(ctx context.Context, workdir, baseBranch string) ([]CommitStatusInfo, error) {
 	// If baseBranch is empty, detect the default branch
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
+	}
+	if baseBranch == "" {
+		return nil, fmt.Errorf("base ref is empty")
 	}
 
 	// Try to get commits comparing against base branch
-	output, err := tryGitLog(workdir, baseBranch)
+	output, err := tryGitLogContext(ctx, workdir, baseBranch)
 	if err != nil {
 		// Try origin/baseBranch
-		output, err = tryGitLog(workdir, "origin/"+baseBranch)
+		output, err = tryGitLogContext(ctx, workdir, "origin/"+baseBranch)
 	}
 	if err != nil {
 		// Last resort: detect default branch fresh (in case baseBranch was stale/wrong)
-		detected := detectDefaultBranch(workdir)
+		detected := detectDefaultBranchContext(ctx, workdir)
 		if detected != baseBranch {
-			output, err = tryGitLog(workdir, detected)
+			output, err = tryGitLogContext(ctx, workdir, detected)
 			if err != nil {
-				output, err = tryGitLog(workdir, "origin/"+detected)
+				output, err = tryGitLogContext(ctx, workdir, "origin/"+detected)
 			}
 		}
 	}
 	if err != nil {
-		// No commits or error - return empty list
-		return []CommitStatusInfo{}, nil
+		return nil, err
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -369,8 +516,8 @@ func getWorktreeCommits(workdir, baseBranch string) ([]CommitStatusInfo, error) 
 	}
 
 	// Get remote tracking branch and find unpushed commits in one batch call
-	remoteBranch := getRemoteTrackingBranch(workdir)
-	unpushed := getUnpushedCommits(workdir, remoteBranch)
+	remoteBranch := getRemoteTrackingBranchContext(ctx, workdir)
+	unpushed := getUnpushedCommitsContext(ctx, workdir, remoteBranch)
 
 	var commits []CommitStatusInfo
 	for _, line := range lines {
@@ -399,7 +546,11 @@ func getWorktreeCommits(workdir, baseBranch string) ([]CommitStatusInfo, error) 
 
 // tryGitLog attempts to get commit log comparing HEAD to a base ref.
 func tryGitLog(workdir, baseRef string) ([]byte, error) {
-	cmd := exec.Command("git", "log", baseRef+"..HEAD", "--oneline", "--format=%h|%s")
+	return tryGitLogContext(context.Background(), workdir, baseRef)
+}
+
+func tryGitLogContext(ctx context.Context, workdir, baseRef string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "log", baseRef+"..HEAD", "--oneline", "--format=%h|%s")
 	cmd.Dir = workdir
 	return cmd.Output()
 }
@@ -427,6 +578,7 @@ func detectDefaultBranchContext(ctx context.Context, workdir string) string {
 	defaultBranchCacheMu.RUnlock()
 
 	// Try to get the remote HEAD (most reliable)
+	recordGitProcess(ctx, nil)
 	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "refs/remotes/origin/HEAD")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
@@ -447,6 +599,7 @@ func detectDefaultBranchContext(ctx context.Context, workdir string) string {
 		if ctx.Err() != nil {
 			return ""
 		}
+		recordGitProcess(ctx, nil)
 		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branch)
 		cmd.Dir = workdir
 		if err := cmd.Run(); err == nil {
@@ -480,7 +633,11 @@ func resolveBaseBranch(wt *Worktree) string {
 
 // getRemoteTrackingBranch returns the remote tracking branch for HEAD.
 func getRemoteTrackingBranch(workdir string) string {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	return getRemoteTrackingBranchContext(context.Background(), workdir)
+}
+
+func getRemoteTrackingBranchContext(ctx context.Context, workdir string) string {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -492,10 +649,14 @@ func getRemoteTrackingBranch(workdir string) string {
 // getUnpushedCommits returns a set of short commit hashes that are in HEAD but not
 // in the remote tracking branch. Uses a single git call instead of per-commit checks.
 func getUnpushedCommits(workdir, remoteBranch string) map[string]bool {
+	return getUnpushedCommitsContext(context.Background(), workdir, remoteBranch)
+}
+
+func getUnpushedCommitsContext(ctx context.Context, workdir, remoteBranch string) map[string]bool {
 	if remoteBranch == "" || workdir == "" {
 		return nil
 	}
-	cmd := exec.Command("git", "log", remoteBranch+"..HEAD", "--format=%h")
+	cmd := exec.CommandContext(ctx, "git", "log", remoteBranch+"..HEAD", "--format=%h")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -529,7 +690,7 @@ func (p *Plugin) loadCommitDetail(hash string) tea.Cmd {
 		return nil
 	}
 	epoch := p.ctx.Epoch
-	name := wt.Name
+	name := wt.IdentityKey()
 	workdir := wt.Path
 	return func() tea.Msg {
 		commit, err := gitstatus.GetCommitDetail(workdir, hash)
@@ -563,7 +724,7 @@ func (p *Plugin) loadCommitFileDiff(hash, filePath, parentHash string) tea.Cmd {
 		return nil
 	}
 	epoch := p.ctx.Epoch
-	name := wt.Name
+	name := wt.IdentityKey()
 	workdir := wt.Path
 	return func() tea.Msg {
 		raw, err := gitstatus.GetCommitDiff(workdir, hash, filePath, parentHash)

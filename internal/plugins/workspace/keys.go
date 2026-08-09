@@ -1004,6 +1004,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
+	case "z":
+		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
+			p.cycleDiffScope()
+			return nil
+		}
 	case "ctrl+d":
 		// Page down in preview pane (unified: increase offset toward bottom)
 		if p.activePane == PanePreview {
@@ -2073,6 +2078,36 @@ func (p *Plugin) cycleDiffTabViewMode() tea.Cmd {
 	}
 	p.diffTabHorizScroll = 0
 	return nil
+}
+
+func (p *Plugin) cycleDiffScope() {
+	p.diffScope = (p.diffScope + 1) % 3
+	p.diffTabCursor, p.diffTabScroll, p.diffTabDiffScroll, p.diffTabHorizScroll = 0, 0, 0, 0
+	p.diffTabFocus = DiffTabFocusFileList
+	if p.diffScope == DiffScopeAggregate {
+		p.diffTabFocus = DiffTabFocusDiff
+	}
+	p.fullFileDiff, p.diffTabParsedDiff, p.commitDetail = nil, nil, nil
+	p.applyDiffScope()
+}
+
+func (p *Plugin) applyDiffScope() {
+	p.diffContent, p.diffRaw = "", ""
+	p.multiFileDiff = nil
+	p.commitStatusList = nil
+	if p.diffSnapshot == nil {
+		return
+	}
+	switch p.diffScope {
+	case DiffScopeCommits:
+		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
+	case DiffScopeAggregate:
+		// Aggregate is deliberately rendered as two labelled raw sections so
+		// committed and uncommitted changes cannot be mistaken for each other.
+	default:
+		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
+		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
+	}
 }
 
 // onDiffTabCursorChanged resets diff pane state when cursor changes in the file list.

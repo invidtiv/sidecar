@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -58,6 +59,15 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 	if wt == nil {
 		return dimText("No worktree selected")
 	}
+	switch p.diffState {
+	case LoadStateLoading:
+		return dimText("Loading diff…")
+	case LoadStateError:
+		return styles.StatusDeleted.Render("Error loading diff") + "\n" + p.truncateCache.Truncate(p.diffError, width, "…")
+	}
+	if p.diffScope == DiffScopeAggregate {
+		return p.renderAggregateDiff(width, height)
+	}
 
 	hasFiles := p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 0
 	hasCommits := len(p.commitStatusList) > 0
@@ -65,7 +75,10 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 	// Only show "No changes" if there are truly no files AND no commits to display
 	if !hasFiles && !hasCommits {
 		if p.diffRaw == "" {
-			return dimText("No changes")
+			if p.diffScope == DiffScopeCommits {
+				return dimText(fmt.Sprintf("Commits unique to %s: none", p.diffBaseRef()))
+			}
+			return dimText("Working Tree vs HEAD: clean")
 		}
 		// Have raw diff but no parsed multi-file diff — fall back to basic rendering
 		return p.renderDiffContentBasicWithHeight(width, height)
@@ -198,7 +211,13 @@ func (p *Plugin) renderDiffTabFileList(width, height, baseX, baseY int) string {
 	}
 
 	// Header
-	headerText := fmt.Sprintf("Files (%d)", len(files))
+	headerText := fmt.Sprintf("Working Tree vs HEAD (%d)", len(files))
+	if p.diffScope == DiffScopeCommits {
+		headerText = fmt.Sprintf("Commits vs %s (%d)", p.diffBaseRef(), len(commits))
+	} else if p.diffSnapshot != nil && p.diffSnapshot.Truncated {
+		headerText = fmt.Sprintf("Working Tree vs HEAD (%d) [untracked caps: %d files, %d B/file, %d B total; %d omitted]",
+			len(files), maxUntrackedFiles, maxUntrackedFileSize, maxUntrackedTotalBytes, p.diffSnapshot.UntrackedOmitted)
+	}
 	if fileListActive {
 		sb.WriteString(styles.Title.Render(headerText))
 	} else {
@@ -265,15 +284,14 @@ func (p *Plugin) renderDiffTabFileList(width, height, baseX, baseY int) string {
 		fileName := file.FileName()
 		statsStr := file.ChangeStats()
 		availableWidth := maxWidth - 4 // status + spaces
-		fileRunes := []rune(fileName)
-		if len(fileRunes)+len(statsStr)+1 > availableWidth {
+		if lipgloss.Width(fileName)+lipgloss.Width(statsStr)+1 > availableWidth {
 			keepWidth := availableWidth - len(statsStr) - 2 // -2 for "…" and space
 			if keepWidth > 3 {
-				fileName = "…" + string(fileRunes[len(fileRunes)-keepWidth:])
+				fileName = "…" + ansi.TruncateLeft(fileName, lipgloss.Width(fileName)-keepWidth, "")
 			} else if availableWidth > 5 {
 				keepWidth = availableWidth - 3
-				if keepWidth > 0 && keepWidth <= len(fileRunes) {
-					fileName = "…" + string(fileRunes[len(fileRunes)-keepWidth:])
+				if keepWidth > 0 && keepWidth <= lipgloss.Width(fileName) {
+					fileName = "…" + ansi.TruncateLeft(fileName, lipgloss.Width(fileName)-keepWidth, "")
 				}
 			}
 		}
@@ -351,9 +369,8 @@ func (p *Plugin) renderDiffTabFileList(width, height, baseX, baseY int) string {
 			if subjectWidth < 10 {
 				subjectWidth = 10
 			}
-			subjectRunes := []rune(subject)
-			if len(subjectRunes) > subjectWidth {
-				subject = string(subjectRunes[:subjectWidth-1]) + "…"
+			if lipgloss.Width(subject) > subjectWidth {
+				subject = ansi.Truncate(subject, subjectWidth, "…")
 			}
 
 			if selected && fileListActive {
@@ -387,6 +404,54 @@ func (p *Plugin) renderDiffTabFileList(width, height, baseX, baseY int) string {
 	}
 
 	return sb.String()
+}
+
+func (p *Plugin) diffBaseRef() string {
+	if p.diffSnapshot != nil && p.diffSnapshot.BaseRef != "" {
+		return p.diffSnapshot.BaseRef
+	}
+	if wt := p.selectedWorktree(); wt != nil && wt.BaseBranch != "" {
+		return wt.BaseBranch
+	}
+	return "resolved base"
+}
+
+func (p *Plugin) renderAggregateDiff(width, height int) string {
+	if p.diffSnapshot == nil {
+		return dimText("Loading aggregate diff…")
+	}
+	return p.renderDiffText(p.aggregateDiffText(), width, height)
+}
+
+func (p *Plugin) aggregateDiffText() string {
+	if p.diffSnapshot == nil {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Aggregate: %s..HEAD", p.diffSnapshot.MergeBase)
+	sb.WriteString("\nCommitted branch changes\n")
+	if strings.TrimSpace(p.diffSnapshot.AggregateCommitted) == "" {
+		sb.WriteString("(none)\n")
+	} else {
+		sb.WriteString(p.diffSnapshot.AggregateCommitted)
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("\nUncommitted working tree changes vs HEAD\n")
+	if strings.TrimSpace(p.diffSnapshot.AggregateUncommitted) == "" {
+		sb.WriteString("(none)\n")
+	} else {
+		sb.WriteString(p.diffSnapshot.AggregateUncommitted)
+	}
+	if p.diffSnapshot.Truncated {
+		fmt.Fprintf(&sb, "\n\nUntracked limits: %d files, %d bytes/file, %d bytes total; omitted %d files (%d bytes).",
+			maxUntrackedFiles, maxUntrackedFileSize, maxUntrackedTotalBytes,
+			p.diffSnapshot.UntrackedOmitted, p.diffSnapshot.UntrackedBytesOmitted)
+	}
+	return sb.String()
+}
+
+func (p *Plugin) renderDiffText(content string, width, height int) string {
+	return p.renderDiffTextWithHeight(content, width, height)
 }
 
 // renderDiffTabDivider renders the vertical divider between file list and diff pane.
@@ -844,6 +909,9 @@ func (p *Plugin) parsedDiffForCurrentFile() *gitstatus.ParsedDiff {
 
 // countDiffTabDiffLines returns the total line count for the current per-file diff.
 func (p *Plugin) countDiffTabDiffLines() int {
+	if p.diffScope == DiffScopeAggregate {
+		return len(splitLines(p.aggregateDiffText()))
+	}
 	if p.diffViewMode == DiffViewFullFile {
 		if p.fullFileDiff != nil {
 			return p.fullFileDiff.TotalLines()
@@ -862,7 +930,11 @@ func (p *Plugin) countDiffTabDiffLines() int {
 
 // renderDiffContentBasicWithHeight renders git diff with basic highlighting with explicit height.
 func (p *Plugin) renderDiffContentBasicWithHeight(width, height int) string {
-	lines := splitLines(p.diffContent)
+	return p.renderDiffTextWithHeight(p.diffContent, width, height)
+}
+
+func (p *Plugin) renderDiffTextWithHeight(content string, width, height int) string {
+	lines := splitLines(content)
 
 	// Apply scroll offset
 	start := p.diffTabDiffScroll

@@ -121,6 +121,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			p.repoSnapshot = msg.Snapshot
 			p.worktrees = msg.Worktrees
+			p.conflicts = msg.Conflicts
 			p.worktreesLoaded = true
 
 			// Restore selection by finding the worktree with the same name
@@ -149,12 +150,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					wt.Agent = agent
 				}
 			}
-			// Load stats, task links, and agent types for each worktree
+			// Status and stats already came from the same bounded refresh pass.
+			// Load only local metadata here; do not fan out more Git processes.
 			for _, wt := range p.worktrees {
 				if wt.IsMissing {
 					continue // Skip metadata for worktrees with missing directories
 				}
-				cmds = append(cmds, p.loadStats(wt))
 				// Load linked task ID from centralized worktree data directory
 				wt.TaskID = loadTaskLink(p.ctx.ProjectRoot, wt.Path)
 				// Load chosen agent type from centralized worktree data directory
@@ -165,10 +166,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				wt.BaseBranch = loadBaseBranch(p.ctx.ProjectRoot, wt.Path)
 			}
 			p.reconcilePendingCreation()
-			// Detect conflicts across worktrees
-			cmds = append(cmds, p.loadConflicts())
-
 			// Load diff for the selected worktree so diff tab shows content immediately
+			p.diffState = LoadStateLoading
+			p.diffError = ""
 			cmds = append(cmds, p.loadSelectedDiff())
 
 			// Reconnect to existing tmux sessions after initial worktree load
@@ -192,16 +192,29 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			wt.Stats = msg.Stats
 		}
 
+	case StatsErrorMsg:
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
+		if wt := p.findWorktree(msg.WorktreeKey); wt != nil {
+			wt.Stats = nil
+			wt.Changes = &WorktreeChanges{State: LoadStateError, Err: fmt.Errorf("%s: %w", msg.Command, msg.Err)}
+		}
+
 	case DiffLoadedMsg:
 		// Discard stale messages from previous project
 		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
 		if p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorktreeKey {
-			p.diffContent = msg.Content
-			p.diffRaw = msg.Raw
-			// Parse multi-file diff for file headers and navigation
-			p.multiFileDiff = gitstatus.ParseMultiFileDiff(msg.Raw)
+			p.diffSnapshot = msg.Snapshot
+			p.diffError = ""
+			p.diffState = LoadStateClean
+			if msg.Snapshot != nil {
+				p.diffState = msg.Snapshot.State
+				p.commitStatusWorktree = msg.WorktreeKey
+			}
+			p.applyDiffScope()
 			// Invalidate full-file diff since diff content changed
 			p.fullFileDiff = nil
 			// Clamp cursor if total items changed
@@ -217,11 +230,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
 				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
 			}
-			// Also load commit status for this worktree
-			// Reload if worktree changed OR if cached list is empty (stale/failed previous load)
-			if p.commitStatusWorktree != msg.WorkspaceName || len(p.commitStatusList) == 0 {
-				cmds = append(cmds, p.loadCommitStatus(p.selectedWorktree()))
-			}
+		}
+
+	case DiffErrorMsg:
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
+		if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorktreeKey {
+			p.diffSnapshot = nil
+			p.diffState = LoadStateError
+			p.diffContent, p.diffRaw, p.multiFileDiff = "", "", nil
+			p.commitStatusList = nil
+			p.diffError = fmt.Sprintf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err)
 		}
 
 	case FullFileDiffLoadedMsg:
@@ -229,7 +249,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		wt := p.selectedWorktree()
-		if wt == nil || wt.Name != msg.WorkspaceName {
+		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
 			return p, nil
 		}
 		if msg.CommitHash != "" {
@@ -251,7 +271,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().Name == msg.WorkspaceName {
+		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
 			p.commitStatusList = msg.Commits
 			p.commitStatusWorktree = msg.WorkspaceName
 			// Clamp diff tab cursor if total items changed
@@ -266,7 +286,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && msg.Commit != nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().Name == msg.WorkspaceName {
+			p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
 			p.commitDetail = msg.Commit
 			p.commitFileCursor = 0
 			p.commitFileScroll = 0
@@ -287,7 +307,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().Name == msg.WorkspaceName && p.commitDetail != nil &&
+			p.selectedWorktree().IdentityKey() == msg.WorkspaceName && p.commitDetail != nil &&
 			p.commitDetail.Hash == msg.CommitHash {
 			// Verify file path matches current selection
 			if p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&

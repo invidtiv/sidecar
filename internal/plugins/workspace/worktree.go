@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,8 +20,11 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/tdroot"
 )
+
+const maxRefreshConcurrency = 4
 
 // WorkDirDeletedMsg signals that the current working directory was deleted.
 // This happens when sidecar is running inside a worktree that gets deleted.
@@ -33,6 +38,10 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 	ctx, scope := p.newOperationScope(nil)
 	p.refreshOperationID = scope.OperationID
 	return func() tea.Msg {
+		started := time.Now()
+		defer startuptrace.Begin("workspace.refresh")()
+		var processes atomic.Int64
+		refreshCtx := context.WithValue(ctx, gitProcessCounterKey{}, &processes)
 		// Check if current WorkDir still exists (may have been a deleted worktree)
 		if _, err := os.Stat(workDir); os.IsNotExist(err) {
 			// WorkDir was deleted - find main worktree to switch to
@@ -43,9 +52,46 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 			}
 		}
 
-		snapshot, err := BuildRepoSnapshot(ctx, workDir)
-		return RefreshDoneMsg{OperationScope: scope, Worktrees: snapshotToWorktrees(snapshot), Snapshot: snapshot, Err: err}
+		snapshot, err := BuildRepoSnapshot(refreshCtx, workDir)
+		worktrees := snapshotToWorktrees(snapshot)
+		if err != nil {
+			return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot, Err: err,
+				Duration: time.Since(started), Processes: int(processes.Load())}
+		}
+		loadRefreshChanges(refreshCtx, worktrees, maxRefreshConcurrency, nil)
+		conflicts := detectConflictsFromChanges(worktrees)
+		return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot,
+			Conflicts: conflicts, Duration: time.Since(started), Processes: int(processes.Load())}
 	}
+}
+
+func loadRefreshChanges(ctx context.Context, worktrees []*Worktree, limit int, processes *atomic.Int64) {
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, wt := range worktrees {
+		if wt.IsMissing || wt.IsBare {
+			wt.Changes = &WorktreeChanges{State: LoadStateError, Err: fmt.Errorf("worktree path is unavailable: %s", wt.Path)}
+			continue
+		}
+		wt := wt
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				wt.Changes = &WorktreeChanges{State: LoadStateError, Err: ctx.Err()}
+				return
+			}
+			changes, stats := collectWorktreeChanges(ctx, wt.Path, processes)
+			wt.Changes, wt.Stats = changes, stats
+		}()
+	}
+	wg.Wait()
 }
 
 // findMainWorktreeFromDeleted finds the main worktree path when the current

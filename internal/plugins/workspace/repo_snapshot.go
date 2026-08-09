@@ -8,9 +8,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/startuptrace"
 )
+
+type gitProcessCounterKey struct{}
+
+func recordGitProcess(ctx context.Context, explicit *atomic.Int64) {
+	if explicit != nil {
+		startuptrace.Count("workspace.refresh.git.spawn")
+		explicit.Add(1)
+		return
+	}
+	if counter, ok := ctx.Value(gitProcessCounterKey{}).(*atomic.Int64); ok && counter != nil {
+		startuptrace.Count("workspace.refresh.git.spawn")
+		counter.Add(1)
+	}
+}
 
 // RepoSnapshot is one immutable inventory used to identify and validate all
 // worktree lifecycle operations. Callers replace the whole value after refresh;
@@ -215,6 +231,7 @@ func loadBranchInventory(ctx context.Context, repoPath string) (map[string]branc
 }
 
 func gitOutputContext(ctx context.Context, dir string, args ...string) (string, error) {
+	recordGitProcess(ctx, nil)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
