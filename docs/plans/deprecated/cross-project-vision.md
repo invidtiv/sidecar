@@ -1,5 +1,10 @@
 # Cross-Project Overview — Vision & Exploration
 
+> **DEPRECATED 2026-08-09:** Superseded by the current
+> [Cross-project agent overview plan](../active/cross-project-overview.md). This
+> snapshot is retained for historical context; its Git/PR/CI-centered scope and
+> proposed project mode no longer describe the intended first implementation.
+
 ## The Big Idea
 
 Sidecar currently operates in **single-project mode** — you switch between projects, but you only see one at a time. The vision is three layers:
