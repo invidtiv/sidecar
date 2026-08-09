@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
@@ -547,12 +548,17 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		return nil
 	default:
 		p.createButtonHover = 0
+		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
 		if action.Region != nil {
 			switch action.Region.ID {
+			case regionKanbanCard:
+				if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
+					p.kanban.HandlePointer(boardkanban.PointerHover, region)
+				}
 			case regionCreateWorktreeButton:
 				p.hoverNewButton = true
 			case regionShellsPlusButton:
@@ -742,24 +748,22 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionKanbanCard:
 		// Click on kanban card - select it
-		if data, ok := action.Region.Data.(kanbanCardData); ok {
-			oldShellSelected := p.shellSelected
-			oldShellIdx := p.selectedShellIdx
-			oldWorktreeIdx := p.selectedIdx
-			p.kanbanCol = data.col
-			p.kanbanRow = data.row
+		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
+			p.kanban.HandlePointer(boardkanban.PointerClick, region)
+			selection := p.kanban.Selection()
+			oldShellSelected, oldShellIdx, oldWorktreeIdx := p.shellSelected, p.selectedShellIdx, p.selectedIdx
+			p.kanbanCol, p.kanbanRow = selection.Column, selection.Row
 			p.syncKanbanToList()
 			p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
 			return p.loadSelectedContent()
 		}
 	case regionKanbanColumn:
 		// Click on column header - focus that column
-		if colIdx, ok := action.Region.Data.(int); ok {
-			oldShellSelected := p.shellSelected
-			oldShellIdx := p.selectedShellIdx
-			oldWorktreeIdx := p.selectedIdx
-			p.kanbanCol = colIdx
-			p.kanbanRow = 0
+		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
+			p.kanban.HandlePointer(boardkanban.PointerClick, region)
+			selection := p.kanban.Selection()
+			oldShellSelected, oldShellIdx, oldWorktreeIdx := p.shellSelected, p.selectedShellIdx, p.selectedIdx
+			p.kanbanCol, p.kanbanRow = selection.Column, selection.Row
 			p.syncKanbanToList()
 			if p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx) {
 				return p.loadSelectedContent()
@@ -1057,24 +1061,24 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionKanbanCard:
 		// Double-click on kanban card - attach to tmux session if agent running
-		if data, ok := action.Region.Data.(kanbanCardData); ok {
-			oldShellSelected := p.shellSelected
-			oldShellIdx := p.selectedShellIdx
-			oldWorktreeIdx := p.selectedIdx
-			p.kanbanCol = data.col
-			p.kanbanRow = data.row
+		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
+			event := p.kanban.HandlePointer(boardkanban.PointerDoubleClick, region)
+			if event.Kind != boardkanban.ActionActivated {
+				return nil
+			}
+			selection := p.kanban.Selection()
+			col, row := selection.Column, selection.Row
+			oldShellSelected, oldShellIdx, oldWorktreeIdx := p.shellSelected, p.selectedShellIdx, p.selectedIdx
+			p.kanbanCol, p.kanbanRow = col, row
 			p.syncKanbanToList()
 			p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
-			if data.col == kanbanShellColumnIndex {
-				if shell := p.kanbanShellAt(data.row); shell != nil {
-					return p.ensureShellAndAttachByIndex(data.row)
+			if col == kanbanShellColumnIndex {
+				if shell := p.kanbanShellAt(row); shell != nil {
+					return p.ensureShellAndAttachByIndex(row)
 				}
-			} else {
-				wt := p.getKanbanWorktree(data.col, data.row)
-				if wt != nil && wt.Agent != nil {
-					p.attachedSession = wt.Name
-					return p.AttachToSession(wt)
-				}
+			} else if wt := p.getKanbanWorktree(col, row); wt != nil && wt.Agent != nil {
+				p.attachedSession = wt.Name
+				return p.AttachToSession(wt)
 			}
 		}
 	}
@@ -1351,30 +1355,12 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 
 // scrollKanban scrolls within the current Kanban column.
 func (p *Plugin) scrollKanban(delta int) tea.Cmd {
-	columns := p.getKanbanColumns()
-	if p.kanbanCol < 0 || p.kanbanCol >= kanbanColumnCount() {
-		return nil
-	}
-	count := p.kanbanColumnItemCount(p.kanbanCol, columns)
-
-	if count == 0 {
-		return nil
-	}
-
-	newRow := p.kanbanRow + delta
-	if newRow < 0 {
-		newRow = 0
-	}
-	maxRow := count - 1
-	if newRow > maxRow {
-		newRow = maxRow
-	}
-
-	if newRow != p.kanbanRow {
+	oldRow := p.kanbanRow
+	p.moveKanbanRow(delta)
+	if p.kanbanRow != oldRow {
 		oldShellSelected := p.shellSelected
 		oldShellIdx := p.selectedShellIdx
 		oldWorktreeIdx := p.selectedIdx
-		p.kanbanRow = newRow
 		p.syncKanbanToList()
 		p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
 		return p.loadSelectedContent()

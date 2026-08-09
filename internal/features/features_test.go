@@ -161,6 +161,16 @@ func TestTmuxByteScreenIsKnownAndDefaultsOff(t *testing.T) {
 	}
 }
 
+func TestCrossProjectOverviewIsKnownAndDefaultsOff(t *testing.T) {
+	globalManager = nil
+	if !IsKnownFeature(CrossProjectOverview.Name) {
+		t.Fatalf("%s is not registered", CrossProjectOverview.Name)
+	}
+	if CrossProjectOverview.Default || IsEnabled(CrossProjectOverview.Name) {
+		t.Fatalf("%s must default off", CrossProjectOverview.Name)
+	}
+}
+
 func TestListAllReturnsCopy(t *testing.T) {
 	original := ListAll()
 	originalLen := len(original)

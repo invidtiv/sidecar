@@ -273,12 +273,6 @@ var ShellAgentOrder = []AgentType{
 	AgentGrok,
 }
 
-// kanbanCardData stores column and row for Kanban card hit regions.
-type kanbanCardData struct {
-	col int
-	row int
-}
-
 // dropdownItemData stores field ID and item index for dropdown hit regions.
 type dropdownItemData struct {
 	field int // 1=branch, 3=task

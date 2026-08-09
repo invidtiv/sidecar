@@ -52,6 +52,7 @@ Note: Using an unknown feature name in a CLI flag produces a warning but doesn't
 | `tmux_inline_edit` | true | Enable inline file editing via tmux in the files plugin |
 | `tmux_byte_screen` | false | Enable the byte-fed tmux screen renderer for the terminal panel canary |
 | `notes_plugin` | false | Enable the notes plugin for capturing quick notes |
+| `cross_project_overview` | false | Enable the experimental cross-project agent overview |
 
 ## For Developers
 

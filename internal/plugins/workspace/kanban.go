@@ -1,17 +1,25 @@
 package workspace
 
+import (
+	"image/color"
+
+	"github.com/marcus/sidecar/internal/agentstatus"
+	boardkanban "github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/styles"
+)
+
 // kanbanLane is a presentation grouping, deliberately separate from the
 // legacy WorktreeStatus transport. Supported agents are grouped from the same
 // semantic activity tracker used by List; unsupported agents retain the
 // legacy projection.
-type kanbanLane int
+type kanbanLane = agentstatus.LaneID
 
 const (
-	kanbanLaneWorking kanbanLane = iota
-	kanbanLaneBlocked
-	kanbanLaneDone
-	kanbanLaneIdle
-	kanbanLanePaused
+	kanbanLaneWorking = agentstatus.LaneWorking
+	kanbanLaneBlocked = agentstatus.LaneBlocked
+	kanbanLaneDone    = agentstatus.LaneDone
+	kanbanLaneIdle    = agentstatus.LaneIdle
+	kanbanLanePaused  = agentstatus.LanePaused
 )
 
 var kanbanLaneOrder = []kanbanLane{
@@ -40,26 +48,24 @@ func kanbanColumnCount() int { return len(kanbanLaneOrder) + 1 }
 
 func kanbanMinimumWidth() int {
 	numCols := kanbanColumnCount()
-	return (minKanbanColumnWidth * numCols) + (numCols - 1) + 4
+	return boardkanban.MinimumWidth(numCols, minKanbanColumnWidth, 4)
 }
 
-func kanbanUsesListFallback(width int) bool { return width < kanbanMinimumWidth() }
+func kanbanUsesListFallback(width int) bool {
+	return boardkanban.UsesCompact(width, kanbanColumnCount(), minKanbanColumnWidth, 4)
+}
 
 func kanbanVisibleCardCount(height int) int {
-	contentHeight := height - 6 // panel borders + header + separators + column headers
-	if contentHeight < kanbanCardHeight {
-		contentHeight = kanbanCardHeight
-	}
-	return contentHeight / kanbanCardHeight
+	return boardkanban.CalculateLayout(kanbanMinimumWidth(), height, kanbanColumnCount(), minKanbanColumnWidth, kanbanCardHeight).MaxCards
 }
 
 func kanbanLaneForColumn(col int) (kanbanLane, bool) {
 	if col <= kanbanShellColumnIndex {
-		return 0, false
+		return "", false
 	}
 	idx := col - 1
 	if idx < 0 || idx >= len(kanbanLaneOrder) {
-		return 0, false
+		return "", false
 	}
 	return kanbanLaneOrder[idx], true
 }
@@ -74,43 +80,43 @@ func kanbanPresentationForWorktree(wt *Worktree) kanbanWorktreePresentation {
 	if wt == nil {
 		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "?", statusText: "unavailable", health: true}
 	}
-	if wt.IsMissing {
-		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "✗", statusText: "folder missing", health: true}
+	p := agentStatusPresentation(wt)
+	return kanbanWorktreePresentation{lane: p.Lane, icon: p.Icon, statusText: p.Label, health: p.Health}
+}
+
+func agentStatusPresentation(wt *Worktree) agentstatus.Presentation {
+	if wt == nil {
+		return agentstatus.Resolve(agentstatus.Input{Err: true})
 	}
-	if wt.IsOrphaned {
-		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: "⚠", statusText: "session ended", health: true}
+	in := agentstatus.Input{
+		Missing:      wt.IsMissing,
+		Orphaned:     wt.IsOrphaned,
+		Paused:       wt.Status == StatusPaused,
+		Err:          wt.Status == StatusError,
+		LegacyStatus: wt.Status.String(),
+		LegacyIcon:   wt.Status.Icon(),
 	}
-	if wt.Status == StatusError {
-		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusError.Icon(), statusText: "error", health: true}
+	if wt.Agent != nil {
+		in.ProviderSupported = supportsAgentActivity(wt.Agent.Type)
+		in.Activity = wt.Agent.Activity
+		in.CapturedAt = wt.Agent.ActivityCapturedAt
 	}
-	if wt.Status == StatusPaused {
-		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: StatusPaused.Icon(), statusText: "paused", health: true}
+	return agentstatus.Resolve(in)
+}
+
+func shellAgentStatusPresentation(shell *ShellSession) agentstatus.Presentation {
+	if shell == nil {
+		return agentstatus.Resolve(agentstatus.Input{Unavailable: true})
 	}
-	if icon, text, _, ok := activityPresentation(wt.Agent); ok {
-		lane := kanbanLanePaused
-		switch text {
-		case "working":
-			lane = kanbanLaneWorking
-		case "blocked":
-			lane = kanbanLaneBlocked
-		case "done":
-			lane = kanbanLaneDone
-		case "idle":
-			lane = kanbanLaneIdle
-		}
-		return kanbanWorktreePresentation{lane: lane, icon: icon, statusText: text}
+	in := agentstatus.Input{Orphaned: shell.IsOrphaned, LegacyStatus: StatusPaused.String(), LegacyIcon: "○"}
+	if shell.Agent != nil {
+		in.LegacyStatus = StatusActive.String()
+		in.LegacyIcon = "●"
+		in.ProviderSupported = supportsAgentActivity(shell.Agent.Type)
+		in.Activity = shell.Agent.Activity
+		in.CapturedAt = shell.Agent.ActivityCapturedAt
 	}
-	// Legacy fallback for agents without semantic activity probes.
-	switch wt.Status {
-	case StatusActive, StatusThinking:
-		return kanbanWorktreePresentation{lane: kanbanLaneWorking, icon: wt.Status.Icon()}
-	case StatusWaiting:
-		return kanbanWorktreePresentation{lane: kanbanLaneBlocked, icon: wt.Status.Icon()}
-	case StatusDone:
-		return kanbanWorktreePresentation{lane: kanbanLaneDone, icon: wt.Status.Icon()}
-	default:
-		return kanbanWorktreePresentation{lane: kanbanLanePaused, icon: wt.Status.Icon()}
-	}
+	return agentstatus.Resolve(in)
 }
 
 func (p *Plugin) kanbanColumnItemCount(col int, columns map[kanbanLane][]*Worktree) int {
@@ -141,6 +147,56 @@ func (p *Plugin) getKanbanColumns() map[kanbanLane][]*Worktree {
 		columns[lane] = append(columns[lane], wt)
 	}
 	return columns
+}
+
+func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
+	lanes := make([]boardkanban.Lane, 0, kanbanColumnCount())
+	shells := boardkanban.Lane{ID: "shells", Label: "Shells", HeaderColor: styles.Muted.GetForeground()}
+	for _, shell := range p.shells {
+		id := shell.TmuxName
+		if id == "" {
+			id = shell.Name
+		}
+		shells.Cards = append(shells.Cards, boardkanban.Card{ID: "shell:" + id, Title: shell.Name})
+	}
+	lanes = append(lanes, shells)
+	columns := p.getKanbanColumns()
+	labels := map[kanbanLane]string{
+		kanbanLaneWorking: "● Working",
+		kanbanLaneBlocked: "◆ Blocked",
+		kanbanLaneDone:    "✓ Done",
+		kanbanLaneIdle:    "○ Idle",
+		kanbanLanePaused:  "⏸ Paused",
+	}
+	colors := map[kanbanLane]color.Color{
+		kanbanLaneWorking: styles.StatusCompleted.GetForeground(),
+		kanbanLaneBlocked: styles.StatusModified.GetForeground(),
+		kanbanLaneDone:    styles.Secondary,
+		kanbanLaneIdle:    styles.TextMuted,
+		kanbanLanePaused:  styles.TextMuted,
+	}
+	for _, laneID := range kanbanLaneOrder {
+		lane := boardkanban.Lane{ID: boardkanban.LaneID(laneID), Label: labels[laneID], HeaderColor: colors[laneID]}
+		for _, wt := range columns[laneID] {
+			lane.Cards = append(lane.Cards, boardkanban.Card{ID: "worktree:" + wt.IdentityKey(), Title: wt.Name, Detail: wt.TaskID})
+		}
+		lanes = append(lanes, lane)
+	}
+	return boardkanban.Board{Lanes: lanes}
+}
+
+func (p *Plugin) syncKanbanComponent() {
+	board := p.workspaceKanbanBoard()
+	requested := boardkanban.Selection{Column: p.kanbanCol, Row: p.kanbanRow}
+	if p.kanban.Board().ColumnCount() == 0 {
+		p.kanban.SetBoard(board)
+		p.kanban.Select(requested)
+	} else {
+		p.kanban.Select(requested)
+		p.kanban.SetBoard(board)
+	}
+	selection := p.kanban.Selection()
+	p.kanbanCol, p.kanbanRow = selection.Column, selection.Row
 }
 
 func (p *Plugin) selectedKanbanWorktree() *Worktree {
@@ -197,39 +253,17 @@ func (p *Plugin) applyKanbanSelectionChange(oldShellSelected bool, oldShellIdx, 
 }
 
 func (p *Plugin) moveKanbanColumn(delta int) {
-	columns := p.getKanbanColumns()
-	newCol := p.kanbanCol + delta
-	if newCol < 0 {
-		newCol = 0
-	}
-	if newCol >= kanbanColumnCount() {
-		newCol = kanbanColumnCount() - 1
-	}
-	if newCol != p.kanbanCol {
-		p.kanbanCol = newCol
-		count := p.kanbanColumnItemCount(p.kanbanCol, columns)
-		if count == 0 {
-			p.kanbanRow = 0
-		} else if p.kanbanRow >= count {
-			p.kanbanRow = count - 1
-		}
-	}
+	p.syncKanbanComponent()
+	p.kanban.MoveColumn(delta)
+	next := p.kanban.Selection()
+	p.kanbanCol, p.kanbanRow = next.Column, next.Row
 }
 
 func (p *Plugin) moveKanbanRow(delta int) {
-	columns := p.getKanbanColumns()
-	count := p.kanbanColumnItemCount(p.kanbanCol, columns)
-	if count == 0 {
-		return
-	}
-	newRow := p.kanbanRow + delta
-	if newRow < 0 {
-		newRow = 0
-	}
-	if newRow >= count {
-		newRow = count - 1
-	}
-	p.kanbanRow = newRow
+	p.syncKanbanComponent()
+	p.kanban.MoveRow(delta)
+	next := p.kanban.Selection()
+	p.kanbanCol, p.kanbanRow = next.Column, next.Row
 }
 
 func (p *Plugin) getKanbanWorktree(col, row int) *Worktree {

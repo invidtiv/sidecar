@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 )
 
@@ -148,6 +150,75 @@ func TestKanbanDeterministicSemanticFixture(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(proofDir, "kanban-semantic-fixture.txt"), []byte(got), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestKanbanRenderRegistersCardsAndConstrainsHeight(t *testing.T) {
+	p := &Plugin{
+		mouseHandler: mouse.NewHandler(),
+		worktrees: []*Worktree{
+			{Name: "active", Status: StatusActive},
+			{Name: "done", Status: StatusDone},
+		},
+		shells: []*ShellSession{{Name: "shell"}},
+	}
+	const width, height = 200, 18
+	got := p.renderKanbanView(width, height)
+	if renderedHeight := lipgloss.Height(got); renderedHeight != height {
+		t.Fatalf("rendered height = %d, want %d", renderedHeight, height)
+	}
+	var cards, columns int
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		switch region.ID {
+		case regionKanbanCard:
+			cards++
+			if region.Rect.Y < 5 || region.Rect.Y+region.Rect.H > height-1 {
+				t.Fatalf("card region escapes board: %#v", region.Rect)
+			}
+		case regionKanbanColumn:
+			columns++
+		}
+	}
+	if cards != 3 || columns != kanbanColumnCount() {
+		t.Fatalf("hit regions: cards=%d columns=%d", cards, columns)
+	}
+}
+
+func TestKanbanRefreshPreservesSelectionByStableID(t *testing.T) {
+	p := &Plugin{
+		mouseHandler: mouse.NewHandler(),
+		worktrees: []*Worktree{
+			{Key: "/repo/a", Name: "a", Status: StatusActive},
+			{Key: "/repo/b", Name: "b", Status: StatusActive},
+		},
+		kanbanCol: 1,
+		kanbanRow: 1,
+	}
+	p.renderKanbanView(200, 18)
+	p.worktrees[1].Status = StatusDone
+	p.renderKanbanView(200, 18)
+	if p.kanbanCol != 3 || p.kanbanRow != 0 {
+		t.Fatalf("selection moved to column=%d row=%d, want selected b in Done", p.kanbanCol, p.kanbanRow)
+	}
+}
+
+func TestKanbanDoubleClickActivatesExactWorktree(t *testing.T) {
+	p := &Plugin{
+		mouseHandler: mouse.NewHandler(),
+		worktrees: []*Worktree{
+			{Name: "first", Status: StatusActive, Agent: &Agent{TmuxSession: "first-session"}},
+			{Name: "target", Status: StatusWaiting, Agent: &Agent{TmuxSession: "target-session"}},
+		},
+	}
+	p.syncKanbanComponent()
+	action := mouse.MouseAction{Type: mouse.ActionDoubleClick, Region: &mouse.Region{
+		ID: regionKanbanCard, Data: boardkanban.HitRegion{Kind: boardkanban.RegionCard, Column: 2, Row: 0, CardID: "worktree:target"},
+	}}
+	if cmd := p.handleMouseDoubleClick(action); cmd == nil {
+		t.Fatal("double-click did not return activation command")
+	}
+	if p.attachedSession != "target" || p.selectedIdx != 1 {
+		t.Fatalf("activated session=%q selected=%d", p.attachedSession, p.selectedIdx)
 	}
 }
 

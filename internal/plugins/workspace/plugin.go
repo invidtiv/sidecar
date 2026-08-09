@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -186,6 +187,7 @@ type Plugin struct {
 	// Kanban view state
 	kanbanCol int // Current column index (0=Shells, 1=Active, 2=Thinking, 3=Waiting, 4=Done, 5=Paused)
 	kanbanRow int // Current row within the column
+	kanban    boardkanban.Component
 
 	// Agent state
 	attachedSession     string // Name of worktree we're attached to (pauses polling)
