@@ -29,6 +29,50 @@ func TestActivityTitleOnlyUnchangedPollUpdatesWorktree(t *testing.T) {
 	}
 }
 
+func TestUnchangedPollSwitchesLiveProviderBeforeApplyingActivity(t *testing.T) {
+	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
+	p := &Plugin{worktrees: []*Worktree{{Name: "FABLE", Agent: agent}}, selectedIdx: -1}
+	p.update(AgentPollUnchangedMsg{
+		WorkspaceName: "FABLE",
+		AgentType:     AgentClaude,
+		Activity:      agentactivity.Result{State: agentactivity.StateBlocked, Evidence: "claude.screen.blocked"},
+	})
+	if agent.Type != AgentClaude {
+		t.Fatalf("live agent type = %q, want Claude", agent.Type)
+	}
+	if agent.Activity.State != agentactivity.StateBlocked || agent.Activity.Evidence != "claude.screen.blocked" {
+		t.Fatalf("activity = %#v, want Claude blocked", agent.Activity)
+	}
+}
+
+func TestUnchangedPollReturningToShellClearsStaleProviderState(t *testing.T) {
+	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
+	wt := &Worktree{Name: "FABLE", Status: StatusActive, Agent: agent}
+	p := &Plugin{worktrees: []*Worktree{wt}, selectedIdx: -1}
+	p.update(AgentPollUnchangedMsg{WorkspaceName: "FABLE", AgentType: AgentShell, CurrentStatus: StatusActive})
+	if agent.Type != AgentShell || agent.Activity.State != agentactivity.StateUnknown || wt.Status != StatusPaused {
+		t.Fatalf("returned shell = type %q activity %q status %v", agent.Type, agent.Activity.State, wt.Status)
+	}
+}
+
+func TestShellOutputSwitchesLiveProviderWithoutChangingLaunchPreference(t *testing.T) {
+	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
+	shell := &ShellSession{Name: "FABLE", TmuxName: "sidecar-sh-fable", ChosenAgent: AgentCodex, Agent: agent}
+	p := &Plugin{shells: []*ShellSession{shell}, selectedShellIdx: -1}
+	p.update(ShellOutputMsg{
+		TmuxName:  shell.TmuxName,
+		AgentType: AgentClaude,
+		Activity:  agentactivity.Result{State: agentactivity.StateBlocked, Evidence: "claude.screen.blocked"},
+	})
+	if agent.Type != AgentClaude || shell.ChosenAgent != AgentCodex {
+		t.Fatalf("live type = %q, launch preference = %q", agent.Type, shell.ChosenAgent)
+	}
+	rendered := ansi.Strip(p.renderShellEntryForSession(shell, false, 40))
+	if !strings.Contains(rendered, "Claude") || strings.Contains(rendered, "Codex") {
+		t.Fatalf("shell row did not use live provider: %q", rendered)
+	}
+}
+
 func TestSupportedProviderPollStatusIsProjectedOnlyFromSemanticActivity(t *testing.T) {
 	for _, agentType := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp} {
 		t.Run(string(agentType), func(t *testing.T) {

@@ -454,6 +454,43 @@ func TestPrimaryControlSnapshotUsesSemanticAuthority(t *testing.T) {
 	}
 }
 
+func TestPrimaryControlMetadataSwitchesProviderWhenScreenIsUnchanged(t *testing.T) {
+	p := primaryControlPlugin(&fakeWorkspaceControlManager{})
+	agent := p.worktrees[0].Agent
+	agent.Type = AgentCodex
+	consumer := &workspaceControlConsumer{Source: "agent", SourceID: "agent-worktree", Session: "agent-session"}
+	snapshot := tty.ControlSnapshot{Output: "❯ \n", CurrentCommand: "codex"}
+	p.applyPrimaryControlSnapshot(consumer, snapshot)
+
+	snapshot.CurrentCommand = "2.1.220"
+	p.applyPrimaryControlSnapshot(consumer, snapshot)
+	if agent.Type != AgentClaude {
+		t.Fatalf("metadata-only provider switch left type %q", agent.Type)
+	}
+	if agent.Activity.State != agentactivity.StateIdle || agent.Activity.Evidence != "claude.screen.idle" {
+		t.Fatalf("Claude classifier did not own switched pane: %#v", agent.Activity)
+	}
+}
+
+func TestPrimaryControlWorkingThenIdleNeedsNoDebounceSnapshot(t *testing.T) {
+	p := primaryControlPlugin(&fakeWorkspaceControlManager{})
+	agent := p.worktrees[0].Agent
+	agent.Type = AgentCodex
+	consumer := &workspaceControlConsumer{Source: "agent", SourceID: "agent-worktree", Session: "agent-session"}
+	p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{
+		Output: "Working… esc to interrupt\n", CurrentCommand: "2.1.220",
+	})
+	if agent.Type != AgentClaude || agent.Activity.State != agentactivity.StateWorking {
+		t.Fatalf("working switch = type %q activity %#v", agent.Type, agent.Activity)
+	}
+	p.applyPrimaryControlSnapshot(consumer, tty.ControlSnapshot{
+		Output: "────────────────\n❯ \n────────────────\n", CurrentCommand: "2.1.220",
+	})
+	if agent.Activity.State != agentactivity.StateIdle {
+		t.Fatalf("final idle event left activity %#v", agent.Activity)
+	}
+}
+
 func TestPrimaryControlFreshProcessIdentityRejectsStaleSupportedState(t *testing.T) {
 	providers := []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp}
 	priorStates := []agentactivity.State{agentactivity.StateWorking, agentactivity.StateBlocked}

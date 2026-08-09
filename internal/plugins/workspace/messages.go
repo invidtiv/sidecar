@@ -36,6 +36,7 @@ type WatcherErrorMsg struct {
 type AgentOutputMsg struct {
 	WorkspaceName string
 	Generation    int
+	AgentType     AgentType // Live provider inferred from the captured pane
 	Output        string
 	Status        WorktreeStatus
 	WaitingFor    string

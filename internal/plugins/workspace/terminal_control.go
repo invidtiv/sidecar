@@ -535,40 +535,45 @@ func (p *Plugin) applyPrimaryControlSnapshot(consumer *workspaceControlConsumer,
 		geometryTarget = consumer.SourceID
 	}
 	p.recordPaneGeometry(consumer.Source, geometryTarget, snapshot.PaneWidth, snapshot.PaneHeight)
-	if changed {
-		switch consumer.Source {
-		case "agent":
-			if wt := p.findWorktree(consumer.SourceID); wt != nil && wt.Agent != nil {
+	switch consumer.Source {
+	case "agent":
+		if wt := p.findWorktree(consumer.SourceID); wt != nil && wt.Agent != nil {
+			if changed {
 				wt.Agent.LastOutput = time.Now()
-				if supportsAgentActivity(wt.Agent.Type) {
-					capturedAt := time.Now()
-					result := agentactivity.Detect(agentactivity.Observation{
-						Agent: string(wt.Agent.Type), Screen: output,
-						PaneTitle: snapshot.PaneTitle, CurrentCommand: snapshot.CurrentCommand,
-						CapturedAt: capturedAt,
-					})
-					applyAgentActivity(wt.Agent, result, capturedAt, capturedAt)
-					wt.Status = worktreeStatusForActivity(wt.Agent, wt.Status)
-				} else {
-					wt.Status = detectStatus(output)
-					wt.Agent.WaitingFor = ""
-					if wt.Status == StatusWaiting {
-						wt.Agent.WaitingFor = extractPrompt(output)
-					}
+			}
+			capturedAt := time.Now()
+			observation := agentactivity.Observation{
+				Screen: output, PaneTitle: snapshot.PaneTitle,
+				CurrentCommand: snapshot.CurrentCommand, CapturedAt: capturedAt,
+			}
+			applyObservedAgentType(wt.Agent, AgentType(agentactivity.Identify(observation)), capturedAt)
+			if supportsAgentActivity(wt.Agent.Type) {
+				observation.Agent = string(wt.Agent.Type)
+				applyAgentActivity(wt.Agent, agentactivity.Detect(observation), capturedAt, capturedAt)
+				wt.Status = worktreeStatusForActivity(wt.Agent, wt.Status)
+			} else if changed {
+				wt.Status = detectStatus(output)
+				wt.Agent.WaitingFor = ""
+				if wt.Status == StatusWaiting {
+					wt.Agent.WaitingFor = extractPrompt(output)
 				}
 			}
-		case "shell":
-			if shell := p.findShellByName(consumer.SourceID); shell != nil && shell.Agent != nil {
+			wt.Status = worktreeStatusForActivity(wt.Agent, wt.Status)
+		}
+	case "shell":
+		if shell := p.findShellByName(consumer.SourceID); shell != nil && shell.Agent != nil {
+			if changed {
 				shell.Agent.LastOutput = time.Now()
-				if supportsAgentActivity(shell.Agent.Type) {
-					capturedAt := time.Now()
-					result := agentactivity.Detect(agentactivity.Observation{
-						Agent: string(shell.Agent.Type), Screen: output,
-						PaneTitle: snapshot.PaneTitle, CurrentCommand: snapshot.CurrentCommand,
-						CapturedAt: capturedAt,
-					})
-					applyAgentActivity(shell.Agent, result, capturedAt, capturedAt)
-				}
+			}
+			capturedAt := time.Now()
+			observation := agentactivity.Observation{
+				Screen: output, PaneTitle: snapshot.PaneTitle,
+				CurrentCommand: snapshot.CurrentCommand, CapturedAt: capturedAt,
+			}
+			applyObservedAgentType(shell.Agent, AgentType(agentactivity.Identify(observation)), capturedAt)
+			if supportsAgentActivity(shell.Agent.Type) {
+				observation.Agent = string(shell.Agent.Type)
+				applyAgentActivity(shell.Agent, agentactivity.Detect(observation), capturedAt, capturedAt)
 			}
 		}
 	}

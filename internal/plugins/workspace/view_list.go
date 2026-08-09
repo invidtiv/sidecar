@@ -717,23 +717,27 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 		} else {
 			statusText = "shell · offline"
 		}
+	} else if shell.Agent != nil {
+		// Show the live pane owner; ChosenAgent is only the launch preference.
+		liveType := shell.Agent.Type
+		agentAbbrev := shellAgentAbbreviations[liveType]
+		if agentAbbrev == "" {
+			agentAbbrev = string(liveType)
+		}
+		if agentAbbrev == "" {
+			agentAbbrev = "shell"
+		}
+		if hasActivity {
+			statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
+		} else {
+			statusText = fmt.Sprintf("%s · running", agentAbbrev)
+		}
 	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-		// Show agent type abbreviation
 		agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]
 		if agentAbbrev == "" {
 			agentAbbrev = string(shell.ChosenAgent)
 		}
-		if shell.Agent != nil {
-			if hasActivity {
-				statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
-			} else {
-				statusText = fmt.Sprintf("%s · running", agentAbbrev)
-			}
-		} else {
-			statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
-		}
-	} else if shell.Agent != nil {
-		statusText = "shell · running"
+		statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
 	} else {
 		statusText = "shell · no session"
 	}

@@ -216,7 +216,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 		if shell.IsOrphaned {
 			statusText = "  shell · offline"
 		} else if _, text, _, ok := activityPresentation(shell.Agent); ok {
-			agentName := shellAgentAbbreviations[shell.ChosenAgent]
+			agentName := shellAgentAbbreviations[shell.Agent.Type]
 			if agentName == "" && shell.Agent != nil {
 				agentName = string(shell.Agent.Type)
 			}

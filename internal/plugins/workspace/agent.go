@@ -890,6 +890,7 @@ func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duratio
 type AgentPollUnchangedMsg struct {
 	WorkspaceName string
 	Generation    int
+	AgentType     AgentType // Live provider inferred from the captured pane
 	Output        string
 	CurrentStatus WorktreeStatus // Status including session file re-check
 	WaitingFor    string         // Prompt text if waiting
@@ -1027,12 +1028,18 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			(!capture.Valid && outputBuf.WouldChange(output))
 
 		capturedAt := time.Now()
+		observation := agentactivity.Observation{
+			Screen: output, PaneTitle: capture.PaneTitle,
+			CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+		}
+		observedAgentType := AgentType(agentactivity.Identify(observation))
+		if observedAgentType == "" {
+			observedAgentType = agentType
+		}
 		activity := agentactivity.Result{}
-		if supportsAgentActivity(agentType) {
-			activity = agentactivity.Detect(agentactivity.Observation{
-				Agent: string(agentType), Screen: output, PaneTitle: capture.PaneTitle,
-				CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
-			})
+		if supportsAgentActivity(observedAgentType) {
+			observation.Agent = string(observedAgentType)
+			activity = agentactivity.Detect(observation)
 		}
 
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):
@@ -1042,7 +1049,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		// may finish while tmux output stays the same (td-2fca7d v8).
 		status := currentStatus
 		waitingFor := ""
-		if !supportsAgentActivity(agentType) && outputChanged {
+		if !supportsAgentActivity(observedAgentType) && outputChanged {
 			// Tmux pattern detection only when output changes (same output = same patterns).
 			status = detectStatus(output)
 			if status == StatusWaiting {
@@ -1051,8 +1058,8 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		}
 		// Session file check runs every poll — mtime changes independently of tmux output.
 		// Only override active/waiting; preserve tmux-detected thinking/done/error.
-		if !supportsAgentActivity(agentType) && (status == StatusActive || status == StatusWaiting) {
-			if sessionStatus, ok := detectAgentSessionStatus(agentType, wtPath); ok {
+		if !supportsAgentActivity(observedAgentType) && (status == StatusActive || status == StatusWaiting) {
+			if sessionStatus, ok := detectAgentSessionStatus(observedAgentType, wtPath); ok {
 				prevStatus := status
 				status = sessionStatus
 				if status == StatusWaiting {
@@ -1065,7 +1072,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				}
 				slog.Debug("status: session file override", "worktree", worktreeName, "prev", prevStatus, "session", sessionStatus)
 			} else {
-				slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", agentType)
+				slog.Debug("status: no session file, using tmux", "worktree", worktreeName, "status", status, "agent", observedAgentType)
 			}
 		}
 
@@ -1073,6 +1080,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			return AgentPollUnchangedMsg{
 				WorkspaceName:  worktreeName,
 				Generation:     generation,
+				AgentType:      observedAgentType,
 				Output:         output,
 				CurrentStatus:  status,
 				WaitingFor:     waitingFor,
@@ -1096,6 +1104,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		return AgentOutputMsg{
 			WorkspaceName:  worktreeName,
 			Generation:     generation,
+			AgentType:      observedAgentType,
 			Output:         output,
 			Status:         status,
 			WaitingFor:     waitingFor,
