@@ -1479,11 +1479,20 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 		case "y":
 			return p.yankMergeErrorToClipboard()
 		case "c":
-			return p.recoverDirectMerge("continue")
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryConflict {
+				return p.recoverDirectMerge("continue")
+			}
+			return nil
 		case "a":
-			return p.recoverDirectMerge("abort")
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryConflict {
+				return p.recoverDirectMerge("abort")
+			}
+			return nil
 		case "r":
-			return p.recoverDirectMerge("retry-push")
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryPushFailure {
+				return p.recoverDirectMerge("retry-push")
+			}
+			return nil
 		case "esc", "q":
 			p.cancelMergeWorkflow()
 			p.clearMergeModal()

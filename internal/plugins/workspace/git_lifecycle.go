@@ -218,8 +218,11 @@ func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 	if state := gitOperationState(op.SourcePath); state != "clean" {
 		return failDirectMerge(op, fmt.Errorf("source started a Git operation after review: %s", state), DirectMergeRecoveryNone)
 	}
-	if current, _ := gitOutput(op.SourcePath, "rev-parse", "HEAD"); current != op.SourceOID {
-		return failDirectMerge(op, fmt.Errorf("source HEAD changed after review"), DirectMergeRecoveryNone)
+	if err := requireCheckoutIdentity(op.SourcePath, op.SourceBranch, op.SourceOID); err != nil {
+		return failDirectMerge(op, fmt.Errorf("source checkout changed before merge: %w", err), DirectMergeRecoveryNone)
+	}
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, ""); err != nil {
+		return failDirectMerge(op, fmt.Errorf("target checkout changed before merge: %w", err), DirectMergeRecoveryNone)
 	}
 	op.PreMergeOID, _ = gitOutput(op.TargetPath, "rev-parse", "HEAD")
 	message := fmt.Sprintf("Merge branch '%s'", op.SourceBranch)
@@ -301,7 +304,10 @@ func pushDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 }
 
 func revalidateDirectMerge(op *DirectMergeOperation) error {
-	checks := []struct{ path, want string }{{op.SourcePath, op.SourceOID}, {op.TargetPath, op.TargetOID}}
+	checks := []struct{ path, branch, want string }{
+		{op.SourcePath, op.SourceBranch, op.SourceOID},
+		{op.TargetPath, op.TargetBranch, op.TargetOID},
+	}
 	for _, check := range checks {
 		if state := gitOperationState(check.path); state != "clean" {
 			return fmt.Errorf("worktree %q has a Git operation in progress: %s", check.path, state)
@@ -309,9 +315,36 @@ func revalidateDirectMerge(op *DirectMergeOperation) error {
 		if err := requireClean(check.path); err != nil {
 			return err
 		}
-		head, err := gitOutput(check.path, "rev-parse", "HEAD")
-		if err != nil || head != check.want {
-			return fmt.Errorf("HEAD changed after review in %q", check.path)
+		if err := requireCheckoutIdentity(check.path, check.branch, check.want); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireCheckoutIdentity(path, branch, oid string) error {
+	currentBranch, err := gitOutput(path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil || currentBranch != branch {
+		return fmt.Errorf("worktree %q checks out %q, expected %q", path, currentBranch, branch)
+	}
+	worktrees, err := readGitWorktrees(path)
+	if err != nil {
+		return fmt.Errorf("refresh worktree inventory: %w", err)
+	}
+	found := false
+	for _, wt := range worktrees {
+		if wt.Path == canonicalGitPath(path) && wt.Branch == branch && !wt.Bare && !wt.Detached && !wt.Locked && !wt.Prunable {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("worktree %q is no longer the safe checkout of %q", path, branch)
+	}
+	if oid != "" {
+		head, err := gitOutput(path, "rev-parse", "HEAD")
+		if err != nil || head != oid {
+			return fmt.Errorf("HEAD changed after review in %q", path)
 		}
 	}
 	return nil
@@ -476,17 +509,18 @@ func updateCheckedOutBase(repoPath, branch, remote string) BaseUpdateResult {
 
 // CleanupPlan is captured before cleanup starts and executed in order.
 type CleanupPlan struct {
-	RepoPath       string
-	WorktreePath   string
-	Branch         string
-	ExpectedOID    string
-	BranchRemote   string
-	BaseRemote     string
-	BaseBranch     string
-	DeleteWorktree bool
-	DeleteBranch   bool
-	DeleteRemote   bool
-	UpdateBase     bool
+	RepoPath          string
+	WorktreePath      string
+	Branch            string
+	ExpectedOID       string
+	BranchRemote      string
+	ExpectedRemoteOID string
+	BaseRemote        string
+	BaseBranch        string
+	DeleteWorktree    bool
+	DeleteBranch      bool
+	DeleteRemote      bool
+	UpdateBase        bool
 }
 
 func runCleanupPlan(plan CleanupPlan) *CleanupResults {
@@ -512,6 +546,21 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 		results.Errors = append(results.Errors, "Workspace: selected worktree identity changed")
 		return results
 	}
+	if plan.DeleteRemote {
+		remoteOID, err := remoteBranchOID(plan.RepoPath, plan.BranchRemote, plan.Branch)
+		if err != nil {
+			results.Errors = append(results.Errors, "Remote branch: "+err.Error())
+			return results
+		}
+		if remoteOID != plan.ExpectedRemoteOID {
+			results.Errors = append(results.Errors, fmt.Sprintf("Remote branch: %s/%s changed since cleanup was confirmed", plan.BranchRemote, plan.Branch))
+			return results
+		}
+		if remoteOID == "" {
+			results.RemoteBranchDeleted = true
+			plan.DeleteRemote = false
+		}
+	}
 	// Every command below runs from RepoPath, which must be a surviving checkout.
 	if plan.DeleteWorktree {
 		if err := doDeleteWorktree(plan.RepoPath, plan.WorktreePath, false); err != nil {
@@ -530,7 +579,7 @@ func runCleanupPlan(plan CleanupPlan) *CleanupResults {
 		}
 	}
 	if plan.DeleteRemote {
-		if err := deleteRemoteBranchFrom(plan.RepoPath, plan.BranchRemote, plan.Branch); err != nil {
+		if err := deleteRemoteBranchFrom(plan.RepoPath, plan.BranchRemote, plan.Branch, plan.ExpectedRemoteOID); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Remote branch: %v", err))
 		} else {
 			results.RemoteBranchDeleted = true
@@ -554,7 +603,7 @@ func deleteBranchSafe(repoPath, branch string) error {
 	return err
 }
 
-func deleteRemoteBranchFrom(repoPath, remote, branch string) error {
+func deleteRemoteBranchFrom(repoPath, remote, branch, expectedOID string) error {
 	if isMainBranch(repoPath, branch) {
 		return fmt.Errorf("refusing to delete remote main branch %q", branch)
 	}
@@ -565,11 +614,30 @@ func deleteRemoteBranchFrom(repoPath, remote, branch string) error {
 			return err
 		}
 	}
-	_, err := gitOutput(repoPath, "push", remote, "--delete", branch)
+	lease := "--force-with-lease=refs/heads/" + branch + ":" + expectedOID
+	_, err := gitOutput(repoPath, "push", lease, remote, "--delete", branch)
 	if err != nil && (strings.Contains(err.Error(), "remote ref does not exist") || strings.Contains(err.Error(), "couldn't find remote ref")) {
 		return nil
 	}
 	return err
+}
+
+func remoteBranchOID(repoPath, remote, branch string) (string, error) {
+	if remote == "" {
+		return "", fmt.Errorf("remote is not resolved for branch %q", branch)
+	}
+	out, err := gitOutput(repoPath, "ls-remote", "--heads", remote, "refs/heads/"+branch)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s/%s: %w", remote, branch, err)
+	}
+	if out == "" {
+		return "", nil
+	}
+	fields := strings.Fields(out)
+	if len(fields) < 2 || fields[1] != "refs/heads/"+branch {
+		return "", fmt.Errorf("unexpected ls-remote result for %s/%s", remote, branch)
+	}
+	return fields[0], nil
 }
 
 func canonicalGitPath(path string) string {

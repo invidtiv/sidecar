@@ -800,6 +800,12 @@ func (p *Plugin) recoverDirectMerge(action string) tea.Cmd {
 		return nil
 	}
 	op := p.mergeState.DirectOperation
+	if (action == "continue" || action == "abort") && op.Recovery != DirectMergeRecoveryConflict {
+		return nil
+	}
+	if action == "retry-push" && op.Recovery != DirectMergeRecoveryPushFailure {
+		return nil
+	}
 	name, branch := p.mergeState.Worktree.Name, p.mergeState.TargetBranch
 	return func() tea.Msg {
 		switch action {
@@ -1040,9 +1046,24 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	if state.DirectOperation != nil {
 		baseRemote = state.DirectOperation.Remote
 	}
+	var expectedRemoteOID string
+	if state.DeleteRemoteBranch {
+		var err error
+		if branchRemote == "" {
+			err = fmt.Errorf("remote is not resolved for branch %q", wt.Branch)
+		} else {
+			expectedRemoteOID, err = remoteBranchOID(repoPath, branchRemote, wt.Branch)
+		}
+		if err != nil {
+			return func() tea.Msg {
+				return CleanupDoneMsg{WorkspaceName: wt.Name, Results: &CleanupResults{Errors: []string{"Remote branch: " + err.Error()}}}
+			}
+		}
+	}
 	plan := CleanupPlan{
 		RepoPath: repoPath, WorktreePath: wt.Path, Branch: wt.Branch, ExpectedOID: expectedOID,
-		BranchRemote: branchRemote, BaseRemote: baseRemote, BaseBranch: state.TargetBranch,
+		BranchRemote: branchRemote, ExpectedRemoteOID: expectedRemoteOID,
+		BaseRemote: baseRemote, BaseBranch: state.TargetBranch,
 		DeleteWorktree: state.DeleteLocalWorktree, DeleteBranch: state.DeleteLocalBranch,
 		DeleteRemote: state.DeleteRemoteBranch, UpdateBase: state.PullAfterMerge,
 	}

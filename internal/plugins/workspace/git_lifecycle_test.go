@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -89,6 +90,34 @@ func TestDirectMergeDirtyTargetRefusesWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestDirectMergeRefusesTargetSwitchedToBranchAtSameOID(t *testing.T) {
+	r := newLifecycleRepo(t)
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainBefore := mustGit(t, r.main, "rev-parse", "refs/heads/main")
+	remoteBefore := mustGit(t, r.main, "rev-parse", "origin/main")
+	mustGit(t, r.main, "switch", "-c", "parking")
+	if parking := mustGit(t, r.main, "rev-parse", "HEAD"); parking != op.TargetOID {
+		t.Fatalf("fixture parking OID = %s, want reviewed target %s", parking, op.TargetOID)
+	}
+
+	op = runDirectMerge(op)
+	if op.Err == nil || !strings.Contains(op.Err.Error(), "expected \"main\"") {
+		t.Fatalf("merge result = %+v, want target branch identity refusal", op)
+	}
+	if mainAfter := mustGit(t, r.main, "rev-parse", "refs/heads/main"); mainAfter != mainBefore {
+		t.Fatalf("local main mutated: %s -> %s", mainBefore, mainAfter)
+	}
+	if remoteAfter := mustGit(t, r.main, "rev-parse", "origin/main"); remoteAfter != remoteBefore {
+		t.Fatalf("remote main mutated: %s -> %s", remoteBefore, remoteAfter)
+	}
+	if _, err := os.Stat(filepath.Join(r.main, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("parking checkout was mutated by feature merge: %v", err)
+	}
+}
+
 func TestDirectMergeConflictCanAbortToPreMergeTarget(t *testing.T) {
 	r := newLifecycleRepo(t)
 	mustWrite(t, filepath.Join(r.main, "shared.txt"), "main change\n")
@@ -149,6 +178,62 @@ func TestDirectMergeConflictCanContinueAfterResolution(t *testing.T) {
 	}
 	if remote := mustGit(t, r.main, "rev-parse", "origin/main"); remote != op.MergeOID {
 		t.Fatalf("continued merge was not pushed: %s != %s", remote, op.MergeOID)
+	}
+}
+
+func TestMergeErrorWrongRecoveryKeyPreservesConflictControls(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mustWrite(t, filepath.Join(r.main, "shared.txt"), "main change\n")
+	mustGit(t, r.main, "add", "shared.txt")
+	mustGit(t, r.main, "commit", "-m", "main change")
+	mustGit(t, r.main, "push", "origin", "main")
+	mustWrite(t, filepath.Join(r.feature, "shared.txt"), "feature change\n")
+	mustGit(t, r.feature, "add", "shared.txt")
+	mustGit(t, r.feature, "commit", "-m", "feature conflict")
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op = runDirectMerge(op)
+	if op.Recovery != DirectMergeRecoveryConflict {
+		t.Fatalf("fixture recovery = %q", op.Recovery)
+	}
+	p := &Plugin{viewMode: ViewModeMerge, width: 100, height: 40, mergeState: &MergeWorkflowState{
+		Worktree: &Worktree{Name: "feature"}, Step: MergeStepError, TargetBranch: "main",
+		DirectOperation: op, StepStatus: map[MergeWorkflowStep]string{MergeStepDirectMerge: "error"},
+		ErrorTitle: "Direct Merge Failed", ErrorDetail: op.Err.Error(),
+	}}
+	if cmd := p.handleMergeKeys(tea.KeyPressMsg{Code: 'r', Text: "r"}); cmd != nil {
+		t.Fatal("wrong recovery key unexpectedly returned a command")
+	}
+	if op.Recovery != DirectMergeRecoveryConflict || gitOperationState(r.main) != "merge" {
+		t.Fatalf("wrong recovery key changed conflict state: recovery=%q git=%q", op.Recovery, gitOperationState(r.main))
+	}
+	ids := commandIDs(p.Commands())
+	if !ids["continue-merge"] || !ids["abort-merge"] {
+		t.Fatalf("wrong recovery key removed conflict controls: %v", ids)
+	}
+	if aborted := abortDirectMerge(op); aborted.Err != nil {
+		t.Fatalf("cleanup abort: %v", aborted.Err)
+	}
+}
+
+func TestMergeErrorWrongRecoveryKeysPreservePushRetry(t *testing.T) {
+	op := &DirectMergeOperation{Recovery: DirectMergeRecoveryPushFailure}
+	p := &Plugin{viewMode: ViewModeMerge, width: 100, height: 40, mergeState: &MergeWorkflowState{
+		Worktree: &Worktree{Name: "feature"}, Step: MergeStepError, DirectOperation: op,
+		StepStatus: map[MergeWorkflowStep]string{MergeStepDirectMerge: "error"}, ErrorTitle: "Push Failed", ErrorDetail: "rejected",
+	}}
+	for _, key := range []rune{'c', 'a'} {
+		if cmd := p.handleMergeKeys(tea.KeyPressMsg{Code: key, Text: string(key)}); cmd != nil {
+			t.Fatalf("wrong recovery key %q unexpectedly returned a command", key)
+		}
+		if op.Recovery != DirectMergeRecoveryPushFailure {
+			t.Fatalf("wrong recovery key %q changed recovery to %q", key, op.Recovery)
+		}
+	}
+	if !commandIDs(p.Commands())["retry-push"] {
+		t.Fatal("wrong recovery keys removed Retry Push")
 	}
 }
 
@@ -251,6 +336,69 @@ func TestCleanupRunsFromSurvivingCheckoutAndRevalidatesIdentity(t *testing.T) {
 	}
 	if branch := mustGit(t, r.main, "branch", "--list", "feature"); branch != "" {
 		t.Fatalf("feature branch still exists: %q", branch)
+	}
+}
+
+func TestCleanupRefusesRemoteDeleteWhenBranchAdvanced(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mustGit(t, r.feature, "push", "-u", "origin", "feature")
+	expectedRemoteOID, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localOID := mustGit(t, r.feature, "rev-parse", "HEAD")
+	plan := CleanupPlan{
+		RepoPath: r.main, WorktreePath: r.feature, Branch: "feature", ExpectedOID: localOID,
+		BranchRemote: "origin", ExpectedRemoteOID: expectedRemoteOID, DeleteRemote: true,
+	}
+
+	publisher := filepath.Join(r.root, "publisher-feature")
+	mustGit(t, r.root, "clone", r.remote, publisher)
+	mustGit(t, publisher, "config", "user.email", "sidecar-test@example.com")
+	mustGit(t, publisher, "config", "user.name", "Sidecar Test")
+	mustGit(t, publisher, "checkout", "feature")
+	mustWrite(t, filepath.Join(publisher, "remote-advance.txt"), "new remote work\n")
+	mustGit(t, publisher, "add", "remote-advance.txt")
+	mustGit(t, publisher, "commit", "-m", "advance remote feature")
+	mustGit(t, publisher, "push", "origin", "feature")
+	advancedOID := mustGit(t, publisher, "rev-parse", "HEAD")
+
+	results := runCleanupPlan(plan)
+	if len(results.Errors) == 0 || !strings.Contains(strings.Join(results.Errors, "\n"), "changed since cleanup was confirmed") {
+		t.Fatalf("cleanup result = %+v, want remote identity refusal", results)
+	}
+	if results.RemoteBranchDeleted {
+		t.Fatal("advanced remote branch reported deleted")
+	}
+	remoteAfter, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != advancedOID {
+		t.Fatalf("advanced remote branch was changed/deleted: got %s want %s", remoteAfter, advancedOID)
+	}
+}
+
+func TestCleanupDeletesUnchangedRemoteBranchWithLease(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mustGit(t, r.feature, "push", "-u", "origin", "feature")
+	expectedRemoteOID, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := runCleanupPlan(CleanupPlan{
+		RepoPath: r.main, WorktreePath: r.feature, Branch: "feature",
+		BranchRemote: "origin", ExpectedRemoteOID: expectedRemoteOID, DeleteRemote: true,
+	})
+	if len(results.Errors) > 0 || !results.RemoteBranchDeleted {
+		t.Fatalf("leased remote deletion result: %+v", results)
+	}
+	remoteAfter, err := remoteBranchOID(r.main, "origin", "feature")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != "" {
+		t.Fatalf("remote feature still exists at %s", remoteAfter)
 	}
 }
 
