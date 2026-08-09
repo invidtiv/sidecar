@@ -1995,83 +1995,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.SessionName == p.termPanelSession {
 			p.termPanelPaneID = msg.PaneID
-			// Session ready — resize to match split dimensions and start polling
+			// Session ready — resize to match split dimensions. The shared
+			// terminal model opens during reconciliation after this update.
 			return p, tea.Batch(
 				p.resizeTermPanelPaneCmd(),
 				p.resizeSelectedPaneCmd(),
-				p.scheduleTermPanelPoll(0),
 			)
 		}
-
-	case TermPanelCaptureMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
-			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
-			p.ctx.Logger.Debug("termPanel: CaptureMsg DROPPED", "session", msg.SessionName, "current", p.termPanelSession, "visible", p.termPanelVisible)
-			return p, nil
-		}
-		// A legacy capture may already be queued when reconciliation opens and
-		// binds the shared terminal model. From that point tty.Model owns both its
-		// healthy byte-fed presentation and provisional/fallback captures; this
-		// handler must not overwrite the aliased buffer/cursor/geometry or revive
-		// the legacy polling chain.
-		if p.panelTerminalOwns() {
-			return p, nil
-		}
-		contentChanged := false
-		if msg.Err == nil && p.termPanelOutput != nil {
-			if msg.HasHistory {
-				contentChanged = p.termPanelOutput.UpdateSnapshot(msg.Output, msg.CaptureBase)
-				p.recordTerminalHistory("panel", msg.SessionName, msg.HistorySize)
-			} else {
-				contentChanged = p.termPanelOutput.Update(msg.Output)
-			}
-			p.recordPaneGeometry("panel", msg.SessionName, msg.PaneWidth, msg.PaneHeight)
-			p.ctx.Logger.Debug("termPanel: CaptureMsg OK", "session", msg.SessionName, "outputLen", len(msg.Output), "lines", p.termPanelOutput.LineCount(), "changed", contentChanged)
-		} else if msg.Err != nil {
-			p.ctx.Logger.Debug("termPanel: CaptureMsg ERROR", "err", msg.Err)
-		}
-		// Update cursor position when interactive mode targets the terminal panel
-		if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			p.setPaneMouseReporting(msg.MouseReporting)
-			p.interactiveState.CursorRow = msg.CursorRow
-			p.interactiveState.CursorCol = msg.CursorCol
-			p.interactiveState.CursorVisible = msg.CursorVisible
-			p.interactiveState.PaneHeight = msg.PaneHeight
-			p.interactiveState.PaneWidth = msg.PaneWidth
-			p.interactiveState.CursorHistorySize = msg.HistorySize
-			p.interactiveState.HasCursorHistory = msg.HasHistory
-		}
-		// In interactive mode targeting terminal panel, use the same adaptive
-		// decay polling as agent/shell panes (pollingDecayFast=50ms) for
-		// responsive keystroke feedback.
-		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			return p, tea.Batch(
-				p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight),
-				p.pollInteractivePane(),
-			)
-		}
-		// Non-interactive: adaptive polling based on content changes
-		interval := termPanelPollIdle
-		if contentChanged {
-			interval = termPanelPollActive
-		}
-		// Slow down when plugin is not focused
-		if !p.applicationFocused {
-			interval = pollIntervalUnfocused
-		} else if !p.focused && interval < termPanelPollUnfocus {
-			interval = termPanelPollUnfocus
-		}
-		return p, tea.Batch(
-			p.maybeResizeVisiblePaneForScrollbar(msg.SessionName, msg.PaneWidth, msg.PaneHeight, true),
-			p.scheduleTermPanelPoll(interval),
-		)
-
-	case termPanelPollMsg:
-		if msg.SessionName != p.termPanelSession || !p.termPanelVisible ||
-			!p.pollScheduler.IsCurrent(termPanelPollKey(), msg.Generation) {
-			return p, nil // Stale timer or panel hidden
-		}
-		return p, p.handleTermPanelPoll(msg.SessionName, msg.Generation)
 
 	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)

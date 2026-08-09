@@ -12,23 +12,25 @@ Only visible terminal consumers keep a client attached. Client startup happens
 off the Bubble Tea update path, and the final subscriber leaving a session
 closes that session's client.
 
-`%output`, `%extended-output`, and layout notifications are change signals, not
-rendering input. Notifications are coalesced per pane and trigger an in-band
-`display-message` cursor query followed by `capture-pane -p -e`. The two
-commands have distinct tmux response frames and therefore use distinct FIFO
-callbacks. The existing subprocess polling path remains the fallback when
-control mode cannot start or its connection dies.
+`%output` and `%extended-output` bytes are ordered rendering input for the one
+shared `tty.Model`. A seeded `screenmodel` adapter owns the live grid, cursor,
+modes, and bounded history. Layout, pause/continue, discard, and reconnect
+events trigger an ordered reseed where necessary. `capture-pane` remains the
+bootstrap/resynchronization, lazy-history, diagnostic, and automatic-fallback
+adapter; it is not the healthy steady-state renderer.
 
 Control clients attach with `ignore-size`; a visible consumer supplies the
 intended size with `refresh-client -C`. Sidecar feature-detects tmux flow
 control by attempting `pause-after` and resumes `%pause` notifications. It does
 not version-sniff tmux.
 
-## Why not render `%output` with a VT parser now
+## Why the VT parser is behind an adapter
 
-The authoritative rendering source remains `capture-pane`. A newly attached
-control client receives only future bytes. Seeding a terminal emulator from a
-rendered capture cannot recover all state required for exact replay, including:
+The terminal model uses Charm's `x/vt` through Sidecar's narrow `screenmodel`
+adapter. A newly attached control client receives only future bytes, so the
+model is transactionally seeded from tmux's saved main grid, active grid, and
+metadata before queued output is released. The adapter keeps upstream parser
+changes replaceable and makes capture recovery explicit.
 
 - scroll regions and origin mode;
 - saved cursor and saved attributes;
@@ -36,12 +38,7 @@ rendered capture cannot recover all state required for exact replay, including:
 - DEC/private modes already enabled before subscription;
 - partial escape sequences and parser state at the subscription boundary.
 
-Adding a parser now would create two subtly different terminal models and make
-fallback behavior harder to reason about. Notification-driven capture removes
-the process-spawn and idle-polling costs without changing Sidecar's rendered
-screen semantics.
-
-A future parser evaluation should require:
+The implemented model was accepted only after:
 
 1. recorded, replayable control-mode byte fixtures;
 2. differential tests against tmux's cell grid after output, resize, and mode
@@ -49,8 +46,11 @@ A future parser evaluation should require:
 3. alternate-screen, scroll-region, saved-cursor, wide-character, grapheme, and
    split-escape coverage;
 4. a resynchronization strategy after attach, dropped data, and fallback;
-5. demonstrated removal of existing capture/escape heuristics rather than a
-   second permanent rendering path.
+5. removal of the plugin-private terminal-panel capture renderer rather than a
+   second permanent presentation path.
+
+Known upstream fidelity gaps remain tracked by `td-a04666`; Sidecar does not
+fork the parser or add plugin-specific escape repair around them.
 
 ## Bubble Tea terminal capabilities
 

@@ -795,6 +795,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	agentType := shell.Agent.Type
 	modelPresentation := p.primaryTerminalOwns("shell", tmuxName)
 	semanticScreen := shellSemanticNeedsScreen(agentType)
+	ctx := p.ctx
 	selectedShell := p.getSelectedShell()
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
@@ -836,6 +837,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	}
 
 	return func() tea.Msg {
+		if ctx != nil {
+			traceTerminalCapture(ctx.Logger, "workspace", "shell", "semantic_activity", generation)
+		}
 		if modelPresentation && !semanticScreen {
 			capture, err := capturePaneEvidence(tmuxName)
 			if err != nil {

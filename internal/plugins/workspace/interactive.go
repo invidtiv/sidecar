@@ -487,10 +487,6 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	p.selection.Clear()
 	p.viewMode = ViewModeInteractive
 
-	// Invalidate the background poll chain so only the interactive poll loop runs.
-	// The interactive chain captures the same pane and updates termPanelOutput,
-	// so background polling is redundant during interactive mode.
-	p.pollScheduler.Invalidate(termPanelPollKey())
 	return p.pollInteractivePane()
 }
 
@@ -1527,9 +1523,8 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		interval = remaining
 	}
 
-	// When interactive mode targets the terminal panel, use terminal panel polling
 	if p.interactiveState.TermPanel {
-		return p.scheduleTermPanelPoll(interval)
+		return nil
 	}
 
 	// Use existing shell or worktree polling mechanism
@@ -1553,12 +1548,8 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 		return nil
 	}
 
-	// When interactive mode targets the terminal panel, use terminal panel polling.
-	// Increment generation to invalidate stale timers from previous keystrokes,
-	// preventing poll chain accumulation during rapid typing.
 	if p.interactiveState.TermPanel {
-		p.pollScheduler.Invalidate(termPanelPollKey())
-		return p.scheduleTermPanelPoll(delay)
+		return nil
 	}
 
 	// Use shell or worktree polling mechanism based on current selection.
@@ -1594,9 +1585,8 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 		delay = remaining
 	}
 
-	// When interactive mode targets the terminal panel, use terminal panel polling
 	if p.interactiveState.TermPanel {
-		return p.scheduleTermPanelPoll(delay)
+		return nil
 	}
 
 	// Schedule with 0ms delay for immediate capture (td-8856c9: no stagger for worktrees)

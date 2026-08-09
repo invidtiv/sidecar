@@ -1,6 +1,9 @@
 package workspace
 
 import (
+	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -8,8 +11,29 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 )
 
+const terminalTraceEnv = "SIDECAR_TERMINAL_TRACE"
+
+// traceTerminalCapture records transport metadata only. It deliberately omits
+// terminal content, commands, paths, titles, and provider payloads.
+func traceTerminalCapture(logger *slog.Logger, surface, role, reason string, generation int) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(terminalTraceEnv))) {
+	case "1", "true", "yes", "on":
+	default:
+		return
+	}
+	if logger == nil {
+		return
+	}
+	logger.Info("terminal capture trace",
+		"surface", surface,
+		"role", role,
+		"reason", reason,
+		"generation", generation,
+	)
+}
+
 // workspaceTerminalRole names the two independently visible terminal surfaces
-// owned by Workspaces. Transport, model authority, capture fallback, and
+// owned by Workspaces. Transport, model presentation, capture fallback, and
 // delivery generations live in tty.Model; this package owns only which target
 // each surface projects and where it is laid out.
 type workspaceTerminalRole uint8

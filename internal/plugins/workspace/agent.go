@@ -945,6 +945,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	maxBytes := p.tmuxCaptureMaxBytes
 	outputBuf := wt.Agent.OutputBuf
 	currentStatus := wt.Status
+	ctx := p.ctx
 
 	// Use non-joined capture when interactive mode is active for this worktree
 	// to preserve tmux line wrapping for cursor positioning (td-c7dd1e).
@@ -997,6 +998,9 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 
 	// Return a tea.Cmd that spawns a goroutine for async capture
 	return func() tea.Msg {
+		if ctx != nil {
+			traceTerminalCapture(ctx.Logger, "workspace", "agent", "semantic_activity", generation)
+		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
 			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {

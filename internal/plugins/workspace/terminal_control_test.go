@@ -1,12 +1,37 @@
 package workspace
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
 )
+
+func TestTerminalCaptureTraceIsOptInAndMetadataOnly(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+
+	traceTerminalCapture(logger, "workspace", "agent", "semantic_activity", 4)
+	if output.Len() != 0 {
+		t.Fatalf("trace emitted without opt-in: %q", output.String())
+	}
+
+	t.Setenv(terminalTraceEnv, "1")
+	traceTerminalCapture(logger, "workspace", "agent", "semantic_activity", 4)
+	got := output.String()
+	for _, want := range []string{"surface=workspace", "role=agent", "reason=semantic_activity", "generation=4"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "session=") || strings.Contains(got, "pane=") {
+		t.Fatalf("trace exposed target identity: %q", got)
+	}
+}
 
 func newTerminalEmbeddingTestPlugin() *Plugin {
 	p := New()
@@ -78,16 +103,8 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 	}
 }
 
-func TestWorkspaceHealthyTerminalHasNoPresentationPoll(t *testing.T) {
+func TestWorkspaceHealthyTerminalKeepsMetadataObservation(t *testing.T) {
 	p := newTerminalEmbeddingTestPlugin()
-	p.termPanelSession = "panel"
-	openTestTerminal(t, p, workspaceTerminalPanel, workspaceTerminalTarget{
-		Session: "panel", Source: "panel", SourceID: "panel",
-	})
-	if cmd := p.scheduleTermPanelPoll(0); cmd != nil {
-		t.Fatal("model-owned panel scheduled legacy presentation capture")
-	}
-
 	shell := &ShellSession{TmuxName: "shell", Agent: &Agent{Type: AgentShell, TmuxSession: "shell"}}
 	p.shells = []*ShellSession{shell}
 	openTestTerminal(t, p, workspaceTerminalPrimary, workspaceTerminalTarget{
@@ -98,44 +115,6 @@ func TestWorkspaceHealthyTerminalHasNoPresentationPoll(t *testing.T) {
 	}
 	if cmd := p.scheduleShellPollByName("shell", 0); cmd == nil {
 		t.Fatal("plain shell lost metadata-only agent discovery cadence")
-	}
-}
-
-func TestWorkspacePanelCaptureCannotOverwriteSharedModel(t *testing.T) {
-	p := newTerminalEmbeddingTestPlugin()
-	p.termPanelVisible = true
-	p.termPanelSession = "panel"
-	p.interactiveState = &InteractiveState{Active: true, TermPanel: true}
-	model := openTestTerminal(t, p, workspaceTerminalPanel, workspaceTerminalTarget{
-		Session: "panel", Source: "panel", SourceID: "panel",
-	})
-	p.bindTerminalBuffer(workspaceTerminalPanel, p.panelTerminalTarget, model)
-	applyFallbackCapture(model, "model output")
-	p.syncTerminalModels()
-
-	beforeBuffer := model.State.OutputBuf.String()
-	beforeCursorRow, beforeCursorCol := p.interactiveState.CursorRow, p.interactiveState.CursorCol
-	beforeGeometry := p.paneGeometryFor(true)
-	generation := p.pollScheduler.Invalidate(termPanelPollKey())
-	_, cmd := p.update(TermPanelCaptureMsg{
-		SessionName: "panel", Generation: generation,
-		Output: "stale legacy capture", HasHistory: true, CaptureBase: 400, HistorySize: 500,
-		HasCursor: true, CursorRow: 9, CursorCol: 10, CursorVisible: false,
-		PaneHeight: 50, PaneWidth: 120, MouseReporting: true,
-	})
-
-	if cmd != nil {
-		t.Fatal("model-owned panel capture rescheduled legacy work")
-	}
-	if got := model.State.OutputBuf.String(); got != beforeBuffer {
-		t.Fatalf("legacy panel capture overwrote shared buffer: %q", got)
-	}
-	if p.interactiveState.CursorRow != beforeCursorRow || p.interactiveState.CursorCol != beforeCursorCol {
-		t.Fatalf("legacy panel capture overwrote cursor: got %d,%d want %d,%d",
-			p.interactiveState.CursorRow, p.interactiveState.CursorCol, beforeCursorRow, beforeCursorCol)
-	}
-	if got := p.paneGeometryFor(true); got != beforeGeometry {
-		t.Fatalf("legacy panel capture overwrote geometry: got %#v want %#v", got, beforeGeometry)
 	}
 }
 
@@ -169,7 +148,7 @@ func TestWorkspaceActivityCadenceDoesNotOverwriteModelPresentation(t *testing.T)
 		t.Fatalf("semantic activity not applied: activity=%s status=%s", wt.Agent.Activity.State, wt.Status)
 	}
 	if p.scheduleAgentPoll(wt.IdentityKey(), 0) == nil {
-		t.Fatal("model authority stopped independent semantic activity cadence")
+		t.Fatal("model presentation stopped independent semantic activity cadence")
 	}
 
 	// List and Kanban consume the same activity projection. Kanban owns no

@@ -13,13 +13,13 @@ import (
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
-// Shadow comparison (slice 2 of docs/plans/active/td-64c916-byte-fed-tmux-screen-model.md).
+// Diagnostic comparison retained from the byte-screen evaluation.
 //
 // With SIDECAR_TMUX_SCREEN_COMPARE=1 the control client additionally feeds a
 // byte-fed pane model for every subscription that has an OnSnapshot consumer,
 // and compares that model against tmux's own capture at the exact instant the
-// capture response is processed. capture-pane stays the delivered frame; the
-// model is never on the user path.
+// capture response is processed. This explicit diagnostic uses capture as an
+// independent oracle; normal presentation remains model-backed.
 //
 // The comparison point is not incidental. Both the capture response and the
 // %output notifications reach the client's single ordered actor on one stream,

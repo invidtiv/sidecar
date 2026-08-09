@@ -141,6 +141,7 @@ FIXTURE_ROOT=$(mktemp -d /tmp/sidecar-terminal-cutover.XXXXXX)
 export SIDECAR_DRIVE_RUN_DIR="$FIXTURE_ROOT"
 export SIDECAR_DRIVE_REPO="$FIXTURE_ROOT/main"
 export EDITOR="$FIXTURE_ROOT/editors/nvim-proof"
+export SIDECAR_TERMINAL_TRACE=1
 
 SIDECAR_DRIVE_ARGS='--enable-feature=notes_plugin' ./scripts/tmux-drive.sh start 200 50
 ./scripts/tmux-drive.sh panes
@@ -156,6 +157,14 @@ SIDECAR_DRIVE_ARGS='--enable-feature=notes_plugin' ./scripts/tmux-drive.sh start
 # Use only the exact PID printed above to exercise fallback/reseed.
 ./scripts/tmux-drive.sh control-kill PID
 ```
+
+Model-backed presentation is the normal path. In steady state the capture hook
+must remain empty for terminal panels and inline editors. Agent/shell activity
+may still produce intentional semantic-observation captures; with
+`SIDECAR_TERMINAL_TRACE=1`, the isolated Sidecar debug log records those as
+privacy-safe `terminal capture trace` entries with reason `semantic_activity`
+and no terminal content. Correlate those reason tags with hook entries instead
+of claiming that every agent-pane capture is presentation fallback.
 
 The fixture has committed proof files, two linked worktrees, deterministic
 `nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in

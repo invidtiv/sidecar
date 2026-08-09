@@ -136,7 +136,7 @@ type Plugin struct {
 
 	// Shared terminal components for the selected primary pane and its optional
 	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
-	// tty.Model owns transport, model authority, fallback, input, and delivery.
+	// tty.Model owns transport, model presentation, fallback, input, and delivery.
 	primaryTerminal       *tty.Model
 	panelTerminal         *tty.Model
 	primaryTerminalTarget workspaceTerminalTarget
@@ -522,7 +522,6 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()
-	p.pollScheduler.Invalidate(termPanelPollKey())
 
 	// Reset agent-related state for clean reinit (important for project switching)
 	// Without this, reconnectAgents() won't run again after switching projects

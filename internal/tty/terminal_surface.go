@@ -145,7 +145,7 @@ func enqueueTerminalControl(mailbox *terminalMailbox, event terminalControlEvent
 	case mailbox.events <- event:
 	default:
 		// Coalescing a frame is safe only while byte continuity is known. Treat
-		// any pressure as lost authority and let Update perform a clean reseed.
+		// any pressure as lost presentation and let Update perform a clean reseed.
 		mailbox.overflowGen.Store(event.gen)
 	}
 }
@@ -179,7 +179,7 @@ func (m *Model) startControl() {
 	request := ControlRequest{
 		Session: m.State.TargetSession, Pane: m.State.TargetPane,
 		Width: m.Width, Height: m.Height, Scrollback: m.Config.ScrollbackLines,
-		Visible: m.visible, Focused: m.focused, ModelAuthority: true,
+		Visible: m.visible, Focused: m.focused, ModelPresentation: true,
 	}
 	request.OnModelFrame = func(frame ModelFrame) {
 		enqueueTerminalControl(mailbox, terminalControlEvent{kind: terminalFrameEvent, frame: frame, gen: gen})
@@ -218,7 +218,7 @@ func (m *Model) retryControl() tea.Cmd {
 
 // restartControlForResize makes geometry a subscription-generation boundary.
 // A frame queued before the resize describes the old grid and must never
-// restore model authority. The replacement request carries the new dimensions
+// restore model-backed presentation. The replacement request carries the new dimensions
 // and seeds cleanly while capture polling remains provisional.
 func (m *Model) restartControlForResize() tea.Cmd {
 	m.modelLive = false

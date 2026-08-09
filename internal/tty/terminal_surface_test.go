@@ -121,7 +121,7 @@ func TestTerminalContractSeededModelOwnsHealthySteadyState(t *testing.T) {
 		t.Fatalf("subscriptions = %d, want 1", len(source.requests))
 	}
 	request := source.requests[0]
-	if !request.ModelAuthority || request.OnModelFrame == nil || request.OnFallback == nil {
+	if !request.ModelPresentation || request.OnModelFrame == nil || request.OnFallback == nil {
 		t.Fatal("shared terminal did not request the complete model/fallback contract")
 	}
 
@@ -129,7 +129,7 @@ func TestTerminalContractSeededModelOwnsHealthySteadyState(t *testing.T) {
 	request.OnModelFrame(seededFrame("editor", "%1", "seeded"))
 	deliverTerminalEvent(t, m)
 	if !m.modelLive || m.State.OutputBuf.String() != "seeded" {
-		t.Fatalf("seeded frame not authoritative: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
+		t.Fatalf("seeded frame did not own presentation: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
 	}
 	if m.State.PollGeneration <= pollGeneration {
 		t.Fatal("first seed did not invalidate provisional polling")
@@ -202,7 +202,7 @@ func TestTerminalContractProvisionalSnapshotRetainsHistoryMetadata(t *testing.T)
 	})
 	deliverTerminalEvent(t, m)
 	if m.modelLive {
-		t.Fatal("provisional capture incorrectly gained model authority")
+		t.Fatal("provisional capture incorrectly gained model presentation")
 	}
 	if got := m.History(); got != (HistoryInfo{
 		HistorySize: 50, CaptureBase: 10, LoadedStart: 10, LoadedEnd: 12, HasHistory: true,
@@ -277,7 +277,7 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 	m.SetFocused(false)
 	m.SetVisible(false)
 	if m.modelLive {
-		t.Fatal("hidden terminal retained model authority")
+		t.Fatal("hidden terminal retained model presentation")
 	}
 	m.SetVisible(true)
 	if h.closed != 1 || len(source.requests) != 2 {
@@ -287,11 +287,11 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 	source.requests[1].OnModelFrame(seededFrame("editor", "%3", "before resize"))
 	deliverTerminalEvent(t, m)
 	if !m.modelLive {
-		t.Fatal("seed did not establish model authority before resize")
+		t.Fatal("seed did not establish model presentation before resize")
 	}
 	m.Resize(100, 40)
 	if m.modelLive {
-		t.Fatal("resize did not restore provisional capture authority")
+		t.Fatal("resize did not restore provisional capture presentation")
 	}
 	if len(h.focused) != 1 || h.focused[0] {
 		t.Fatalf("focus forwarding mismatch: focused=%v", h.focused)
@@ -330,7 +330,7 @@ func TestTerminalContractQueuedPreResizeFrameIsRejectedUntilNewSeed(t *testing.T
 
 	deliverTerminalEvent(t, m)
 	if m.modelLive || m.State.OutputBuf.String() != "live 80x24" {
-		t.Fatalf("pre-resize frame restored authority: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
+		t.Fatalf("pre-resize frame restored presentation: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
 	}
 	second := source.requests[1]
 	if second.Width != 100 || second.Height != 40 {
@@ -512,7 +512,7 @@ func TestTerminalContractModelInvalidationResumesSingleCurrentPoll(t *testing.T)
 	request.OnModelInvalid(ModelInvalidation{Session: "editor", Pane: "%6", Reason: ResyncPause})
 	deliverTerminalEvent(t, m)
 	if m.modelLive {
-		t.Fatal("invalidated model retained authority")
+		t.Fatal("invalidated model retained presentation")
 	}
 	generation := m.State.PollGeneration
 	if generation == 0 || m.schedulePoll(0) == nil || m.State.PollGeneration != generation+1 {

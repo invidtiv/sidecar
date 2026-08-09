@@ -151,16 +151,6 @@ func TestIsKnownFeature(t *testing.T) {
 	}
 }
 
-func TestTmuxByteScreenIsKnownAndDefaultsOff(t *testing.T) {
-	globalManager = nil
-	if !IsKnownFeature(TmuxByteScreen.Name) {
-		t.Fatalf("%s is not registered", TmuxByteScreen.Name)
-	}
-	if TmuxByteScreen.Default || IsEnabled(TmuxByteScreen.Name) {
-		t.Fatalf("%s must default off", TmuxByteScreen.Name)
-	}
-}
-
 func TestListAllReturnsCopy(t *testing.T) {
 	original := ListAll()
 	originalLen := len(original)

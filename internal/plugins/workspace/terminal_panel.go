@@ -3,7 +3,6 @@ package workspace
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -27,11 +26,6 @@ const (
 
 	// termPanelMaxSize is the maximum percentage the terminal panel can occupy.
 	termPanelMaxSize = 85
-
-	// Terminal panel adaptive poll intervals — mirrors agent polling.
-	termPanelPollActive  = 200 * time.Millisecond
-	termPanelPollIdle    = 2 * time.Second
-	termPanelPollUnfocus = 500 * time.Millisecond
 )
 
 // TermPanelSessionCreatedMsg is sent when the terminal panel tmux session is created.
@@ -39,32 +33,6 @@ type TermPanelSessionCreatedMsg struct {
 	SessionName string
 	PaneID      string
 	Err         error
-}
-
-// TermPanelCaptureMsg delivers captured output from the terminal panel's tmux session.
-type TermPanelCaptureMsg struct {
-	SessionName   string
-	Generation    int
-	Output        string
-	Err           error
-	HasCursor     bool
-	CursorRow     int
-	CursorCol     int
-	CursorVisible bool
-	PaneHeight    int
-	PaneWidth     int
-	HistorySize   int
-	CaptureBase   int
-	HasHistory    bool
-	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
-	// when HasCursor is set.
-	MouseReporting bool
-}
-
-// termPanelPollMsg triggers the next poll cycle for the terminal panel.
-type termPanelPollMsg struct {
-	SessionName string
-	Generation  int
 }
 
 // termPanelSessionName returns the tmux session name for the current worktree/shell's terminal panel.
@@ -122,8 +90,6 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	} else {
 		p.termPanelLayout = TermPanelBottom
 	}
-	p.pollScheduler.Invalidate(termPanelPollKey())
-
 	sessionName := p.termPanelSessionName()
 	if sessionName == "" {
 		p.ctx.Logger.Debug("termPanel: no session name (no worktree/shell selected)")
@@ -132,7 +98,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return nil
 	}
 
-	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout, "gen", p.pollScheduler.Current(termPanelPollKey()))
+	p.ctx.Logger.Debug("termPanel: showing", "session", sessionName, "layout", p.termPanelLayout)
 
 	// If we already have an active session for this, just show it
 	if p.termPanelSession == sessionName && p.termPanelOutput != nil {
@@ -140,7 +106,6 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return tea.Batch(
 			p.resizeTermPanelPaneCmd(),
 			p.resizeSelectedPaneCmd(),
-			p.scheduleTermPanelPoll(0),
 		)
 	}
 
@@ -211,80 +176,6 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 
 		paneID := getPaneID(sessionName)
 		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
-	}
-}
-
-// scheduleTermPanelPoll schedules the next poll for the terminal panel output.
-func (p *Plugin) scheduleTermPanelPoll(delay time.Duration) tea.Cmd {
-	if p.panelTerminalOwns() {
-		return nil
-	}
-	sessionName := p.termPanelSession
-	if sessionName == "" {
-		return nil
-	}
-	return p.pollScheduler.Schedule(termPanelPollKey(), delay, func(gen int) tea.Msg {
-		return termPanelPollMsg{SessionName: sessionName, Generation: gen}
-	})
-}
-
-// handleTermPanelPoll captures output from the terminal panel's tmux session.
-// Uses the global capture cache/coordinator to avoid redundant subprocess calls.
-// When interactive mode targets the terminal panel, also captures cursor position.
-func (p *Plugin) handleTermPanelPoll(sessionName string, generation int) tea.Cmd {
-	if p.panelTerminalOwns() {
-		return nil
-	}
-	captureCursor := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel
-	if captureCursor {
-		if remaining, scrolling := p.interactiveScrollDelay(); scrolling {
-			return p.scheduleTermPanelPoll(remaining)
-		}
-	}
-	target := p.termPanelPaneID
-	if target == "" {
-		target = sessionName
-	}
-	return func() tea.Msg {
-		// Polling this pane is what makes this instance the one driving its
-		// geometry. Without a tick here the panel's only lease events are resize
-		// commands, so a peer's abandoned lease would take one panel toggle per
-		// tick of the staleness budget to reclaim (td-ee222a).
-		tty.TouchGeometryLease(target)
-
-		var output string
-		var cursor capturedCursor
-		var capture capturedPaneMetadata
-		var err error
-		if captureCursor {
-			// Interactive mode: bypass cache for fresh capture, same as agent pane.
-			// The global cache has 300ms TTL which causes stale reads during typing.
-			output, cursor, err = capturePaneDirectWithJoinAndCursor(sessionName, target, false)
-			capture = cursor.capturedPaneMetadata
-		} else {
-			// The visible panel uses a direct metadata capture so deep history
-			// can be addressed without loading it on the polling hot path.
-			output, capture, err = capturePaneDirectWithJoinMetadata(sessionName, false)
-		}
-		msg := TermPanelCaptureMsg{
-			SessionName: sessionName,
-			Generation:  generation,
-			Output:      output,
-			Err:         err,
-			HistorySize: capture.HistorySize,
-			CaptureBase: capture.CaptureBase,
-			HasHistory:  capture.Valid,
-			PaneWidth:   capture.PaneWidth,
-			PaneHeight:  capture.PaneHeight,
-		}
-		if cursor.Valid {
-			msg.HasCursor = true
-			msg.CursorRow = cursor.Row
-			msg.CursorCol = cursor.Col
-			msg.CursorVisible = cursor.Visible
-			msg.MouseReporting = cursor.MouseReporting
-		}
-		return msg
 	}
 }
 
@@ -619,7 +510,6 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		return nil
 	}
 	// Switch to new session (old session preserved for later reuse)
-	p.pollScheduler.Invalidate(termPanelPollKey())
 	p.termPanelSession = newSession
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0

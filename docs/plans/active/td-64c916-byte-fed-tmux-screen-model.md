@@ -4,6 +4,12 @@
 
 **Research snapshot:** 2026-08-08
 
+**Status (2026-08-09):** Implemented evaluation plan, superseded by
+[`td-94e749-byte-screen-cutover.md`](td-94e749-byte-screen-cutover.md). The
+current product contract is model-backed presentation for every integrated
+terminal, with capture retained only for seed, resync, lazy history,
+diagnostics, automatic fallback, and independent semantic activity evidence.
+
 **Source:** [Lessons from Herdr](../../research/active/lessons-from-herdr.md),
 suggested-sequencing item 3
 
@@ -23,7 +29,7 @@ provide cell storage/output rendering. Sidecar would still have to implement
 the VT state machine if it stopped there. The `x/vt` package appeared after the
 original embedded-terminal decision and changes the build-versus-adopt choice.
 
-Keep `capture-pane` authoritative throughout the spike. A shadow model consumes
+During the spike, keep `capture-pane` authoritative. A shadow model consumes
 the same `%output` bytes, and every resulting frame is compared with tmux's
 rendered cells and metadata. Only after the decision gate passes should the
 terminal panel become the first authoritative byte-fed surface. Workspace
@@ -67,7 +73,7 @@ retaining tmux's persistence and attach behavior:
 5. If the model cannot establish authority, the existing control-driven
    `capture-pane` path resumes automatically. The ordinary subprocess polling
    fallback still covers control-mode failure.
-6. The byte-fed path is default-off until the fidelity gate and independent
+6. The byte-fed path is opt-in until the fidelity gate and independent
    review pass. It can be disabled without changing or restarting tmux and never
    touches the default tmux server during tests.
 
@@ -112,7 +118,7 @@ Relevant current seams:
   buffer and cursor metadata. The first migration should continue producing its
   existing input rather than rewriting the viewport at the same time.
 - `internal/tty/tty.go` still polls for file-browser and notes inline editors.
-  It is a later consumer of the proven model, not part of the first canary.
+  It is a later consumer of the proven model, not part of the first rollout.
 
 The accepted decision in
 `docs/plans/implemented/embedded-terminal-transport-decisions.md` deliberately
@@ -321,10 +327,10 @@ such as `SIDECAR_TMUX_SCREEN_COMPARE=1`. In shadow mode:
 Do not make shadow mode a permanent public renderer. It exists to produce the
 decision evidence and may remain only as an opt-in diagnostic after rollout.
 
-The eventual authority flag is one normal default-off feature,
-`tmux_byte_screen`, registered in the existing `internal/features` registry
-alongside `tmux_interactive_input` and `tmux_inline_edit`. The first enabled surface is the terminal panel. A model
-frame continues through `ControlSnapshot`, so the terminal panel canary tests
+The evaluation temporarily used a local rollout switch registered beside the
+existing tmux feature flags. That switch has now been removed. The first
+enabled surface was the terminal panel. A model frame continued through
+`ControlSnapshot`, so the terminal-panel rollout tested
 the new transport/model without simultaneously replacing the workspace
 mailbox, output buffer, viewport, selection, or search.
 
@@ -575,19 +581,19 @@ Phase 2 must not start until all of these are closed:
    **unfixed**, is reachable whenever shadow mode is on, and would be reachable
    on the user path under authority. The epic depends on it.
 
-#### User-directed terminal-panel canary amendment (2026-08-08)
+#### User-directed terminal-panel rollout amendment (2026-08-08)
 
 The hold above remains the verdict for broad adoption, but it no longer means
 that no experimental renderer exists. Marcus explicitly authorized proceeding
-to a locally testable, default-off terminal-panel canary without treating the
+to a locally testable, opt-in terminal-panel rollout without treating the
 known upstream parser gaps, CPU evidence, or credentialed agent-TUI row as
 blocking that stopping point. The exception is tracked by `td-5f1575` and
 `td-c0d144`; it does not change the open acceptance criteria in `td-b7aa77`.
 
-The reviewed canary now has these boundaries:
+The reviewed historical rollout had these boundaries:
 
-- `tmux_byte_screen` is registered and defaults false. With it disabled, the
-  pre-canary capture path remains exact.
+- The temporary switch initially preserved the earlier capture path when not
+  selected; it no longer exists.
 - Only the workspace terminal panel opts into explicit model authority. Primary
   agents, shells, and inline editors remain capture-authoritative.
 - Ownership transfers only after the first accepted seeded model frame. Seed
@@ -608,15 +614,15 @@ inside one arbitrary `Write` until upstream exposes a clear/delta event; and
 agent-TUI evidence. Sidecar does not add a second escape/grapheme parser to hide
 those gaps.
 
-### Slice 3 — terminal-panel canary
+### Slice 3 — terminal-panel rollout (completed)
 
-- Register `tmux_byte_screen`, default false.
+- Register the temporary local rollout switch (since removed).
 - When enabled, make only the terminal panel accept model frames as authority.
 - Retain seed/resync capture and the current polling fallback.
 - Prove live input, paste, mouse, scroll/search/selection, attach, panel resize,
   hide/show, and control failure in the real isolated app.
 - Independently review the transport ordering, fallback, memory bounds, and
-  default-off behavior.
+  opt-in behavior.
 
 ### Slice 4 — workspace agents and shells
 
@@ -657,7 +663,7 @@ those gaps.
 | Input | Literal keys, enhanced keys, multiline paste via `paste-buffer -p`, mouse modes, shift-drag escape hatch, attach/detach |
 | Performance | Bytes/event, model write/render time, allocations, retained memory, captures/metadata queries, output-to-frame latency, sustained-output CPU |
 | Real UI | Terminal panel first, then agent and shell; native cursor; colors/Unicode; geometry lease owner/non-owner; app blurred; modal suppression |
-| Failure | Unsupported tmux/control start failure, malformed payload, model error/panic, killed control client, deleted pane/session, flag disabled |
+| Failure | Unsupported tmux/control start failure, malformed payload, model error/panic, killed control client, deleted pane/session, model unavailable |
 
 Run focused tests first, then `go test ./...`, `go build ./...`, race tests for the
 new adapter/control packages, and `git diff --check`. All tmux integration tests
@@ -667,9 +673,9 @@ documented in `AGENTS.md`.
 
 ## Rollback and observability
 
-- The public rollout control is `tmux_byte_screen`. Disabling it returns the
-  next subscription to current capture authority; it does not restart or alter
-  tmux.
+- There is no public renderer switch. A pane-local model/control failure
+  automatically transfers presentation to scoped capture fallback without
+  restarting or altering tmux.
 - A pane-local model fault falls back immediately and records one rate-limited
   diagnostic with pane identity, lifecycle state, byte count, and error class.
   Never log terminal contents or decoded OSC data.
