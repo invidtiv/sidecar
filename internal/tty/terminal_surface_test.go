@@ -89,10 +89,14 @@ func deliverTerminalEvent(t *testing.T, m *Model) terminalControlMsg {
 }
 
 func seededFrame(session, pane, output string) ModelFrame {
+	return seededFrameAt(session, pane, output, 80, 24)
+}
+
+func seededFrameAt(session, pane, output string, width, height int) ModelFrame {
 	return ModelFrame{
 		Session: session, Pane: pane, Seeds: 1,
 		Frame: screenmodel.Frame{
-			Output: output, Width: 80, Height: 24,
+			Output: output, Width: width, Height: height,
 			CursorRow: 2, CursorCol: 3, CursorVisible: true,
 			BracketedPaste: true,
 			Mouse:          screenmodel.MouseState{Normal: true},
@@ -224,8 +228,72 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 	if len(h.focused) != 1 || h.focused[0] {
 		t.Fatalf("focus forwarding mismatch: focused=%v", h.focused)
 	}
-	if len(active.resizes) != 1 || active.resizes[0] != [2]int{100, 40} {
-		t.Fatalf("resize forwarding = %v", active.resizes)
+	if active.closed != 1 || len(source.requests) != 3 {
+		t.Fatalf("resize did not replace subscription: closed=%d requests=%d", active.closed, len(source.requests))
+	}
+	if got := source.requests[2]; got.Width != 100 || got.Height != 40 {
+		t.Fatalf("replacement geometry = %dx%d", got.Width, got.Height)
+	}
+}
+
+func TestTerminalContractQueuedPreResizeFrameIsRejectedUntilNewSeed(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%12"})
+	first := source.requests[0]
+	first.OnModelFrame(seededFrameAt("editor", "%12", "live 80x24", 80, 24))
+	deliverTerminalEvent(t, m)
+	if !m.modelLive || m.State.PaneWidth != 80 || m.State.PaneHeight != 24 {
+		t.Fatalf("initial seed = live %v geometry %dx%d", m.modelLive, m.State.PaneWidth, m.State.PaneHeight)
+	}
+
+	first.OnModelFrame(seededFrameAt("editor", "%12", "queued old geometry", 80, 24))
+	pollGeneration := m.State.PollGeneration
+	resizeCmd := m.Resize(100, 40)
+	if m.modelLive || len(source.requests) != 2 || source.handles[0].closed != 1 {
+		t.Fatalf("resize boundary = live %v requests %d closed %d", m.modelLive, len(source.requests), source.handles[0].closed)
+	}
+	if m.State.PollGeneration != pollGeneration+1 {
+		t.Fatalf("resize poll generation = %d, want %d", m.State.PollGeneration, pollGeneration+1)
+	}
+	if resizeCmd == nil {
+		t.Fatal("resize did not retain a provisional capture command")
+	}
+
+	deliverTerminalEvent(t, m)
+	if m.modelLive || m.State.OutputBuf.String() != "live 80x24" {
+		t.Fatalf("pre-resize frame restored authority: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
+	}
+	second := source.requests[1]
+	if second.Width != 100 || second.Height != 40 {
+		t.Fatalf("post-resize request geometry = %dx%d", second.Width, second.Height)
+	}
+	second.OnModelFrame(seededFrameAt("editor", "%12", "live 100x40", 100, 40))
+	deliverTerminalEvent(t, m)
+	if !m.modelLive || m.State.OutputBuf.String() != "live 100x40" || m.State.PaneWidth != 100 || m.State.PaneHeight != 40 {
+		t.Fatalf("post-resize seed = live %v output %q geometry %dx%d", m.modelLive, m.State.OutputBuf.String(), m.State.PaneWidth, m.State.PaneHeight)
+	}
+}
+
+func TestTerminalContractImmediateResizeAlsoReplacesGeneration(t *testing.T) {
+	source := &fakeTerminalControlSource{}
+	m := newContractTerminal(source)
+	m.Open(Target{Session: "editor", Pane: "%13"})
+	first := source.requests[0]
+	first.OnModelFrame(seededFrameAt("editor", "%13", "initial", 80, 24))
+	deliverTerminalEvent(t, m)
+	first.OnModelFrame(seededFrameAt("editor", "%13", "stale", 80, 24))
+	pollGeneration := m.State.PollGeneration
+	cmd := m.ResizeAndPollImmediate(120, 50)
+	if cmd == nil || len(source.requests) != 2 || source.handles[0].closed != 1 || m.modelLive {
+		t.Fatalf("immediate resize boundary failed: cmd=%v requests=%d closed=%d live=%v", cmd != nil, len(source.requests), source.handles[0].closed, m.modelLive)
+	}
+	if m.State.PollGeneration != pollGeneration+1 {
+		t.Fatalf("immediate resize poll generation = %d, want %d", m.State.PollGeneration, pollGeneration+1)
+	}
+	deliverTerminalEvent(t, m)
+	if got := m.State.OutputBuf.String(); got != "initial" || m.modelLive {
+		t.Fatalf("immediate resize accepted stale frame: output=%q live=%v", got, m.modelLive)
 	}
 }
 

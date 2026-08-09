@@ -794,9 +794,7 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 		return nil
 	}
 	if m.subscription != nil {
-		m.subscription.Resize(width, height)
-		m.modelLive = false
-		return m.schedulePoll(0)
+		return m.restartControlForResize()
 	}
 
 	// Debounce resize
@@ -837,9 +835,7 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 		return nil
 	}
 	if m.subscription != nil {
-		m.subscription.Resize(width, height)
-		m.modelLive = false
-		return m.schedulePoll(0)
+		return m.restartControlForResize()
 	}
 
 	target := m.GetTarget()

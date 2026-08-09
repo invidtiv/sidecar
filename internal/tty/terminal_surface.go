@@ -216,6 +216,19 @@ func (m *Model) retryControl() tea.Cmd {
 	})
 }
 
+// restartControlForResize makes geometry a subscription-generation boundary.
+// A frame queued before the resize describes the old grid and must never
+// restore model authority. The replacement request carries the new dimensions
+// and seeds cleanly while capture polling remains provisional.
+func (m *Model) restartControlForResize() tea.Cmd {
+	m.modelLive = false
+	m.stopControl()
+	if m.visible {
+		m.startControl()
+	}
+	return m.schedulePoll(0)
+}
+
 func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	if !m.owns(msg.Scope) {
 		return nil
