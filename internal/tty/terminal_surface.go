@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The callback side of ControlManager is intentionally hidden here. The
@@ -33,6 +34,27 @@ type terminalInputSender interface {
 	SendEscapePaste(MessageScope, string, string) tea.Cmd
 	PasteClipboard(MessageScope, string) tea.Cmd
 	SendMouse(MessageScope, string, int, int) tea.Cmd
+}
+
+type terminalCaptureSource interface {
+	Capture(target string, scrollback int) (output string, row, col, height, width int, visible bool, err error)
+}
+
+type defaultTerminalCaptureSource struct{}
+
+// terminalRecoveryBlankLimit covers the short attach/geometry redraw window
+// observed during control replacement (about 400ms of fast captures, or 2s of
+// replacement seed attempts) while bounding how long a genuinely cleared pane
+// can retain its previous presentation.
+const terminalRecoveryBlankLimit = 8
+
+func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (string, int, int, int, int, bool, error) {
+	output, err := CapturePaneOutput(target, scrollback)
+	if err != nil {
+		return "", 0, 0, 0, 0, false, err
+	}
+	row, col, height, width, visible, _ := QueryCursorPositionSync(target)
+	return output, row, col, height, width, visible, nil
 }
 
 type defaultTerminalInputSender struct{}
@@ -243,6 +265,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.modelLive = false
 		m.stopControl()
 		m.recoveryPending = true
+		m.recoveryBlankCaptures = 0
 		return tea.Batch(m.schedulePoll(0), m.listenControl())
 	}
 
@@ -254,6 +277,17 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 			break
 		}
 		output := frame.Frame.CombinedOutput()
+		if m.fallbackEstablished && terminalOutputBlank(output) && !terminalOutputBlank(m.State.OutputBuf.String()) && m.recoveryBlankCaptures < terminalRecoveryBlankLimit {
+			// A replacement control client can capture the alternate screen during
+			// its attach/geometry redraw window. Keep the known-good subprocess
+			// fallback visible and ask for another clean seed rather than allowing
+			// a transient blank bootstrap to reclaim presentation authority. The
+			// bound lets a terminal that was genuinely cleared eventually win.
+			m.recoveryBlankCaptures++
+			m.stopControl()
+			cmd = m.retryControl()
+			break
+		}
 		if frame.Frame.HasHistory {
 			m.State.OutputBuf.UpdateSnapshot(output, frame.Frame.CaptureBase)
 			m.history = HistoryInfo{
@@ -274,10 +308,12 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.State.MouseReportingEnabled = frame.Frame.Mouse.Any()
 		if !m.modelLive {
 			m.modelLive = true
+			m.fallbackEstablished = false
+			m.recoveryBlankCaptures = 0
 			m.State.PollGeneration++ // reject every provisional capture/timer
 		}
 	case terminalSnapshotEvent:
-		if !m.modelLive {
+		if !m.modelLive && !m.fallbackEstablished {
 			s := msg.Event.snapshot
 			m.applyOutput(s.Output, s.CursorRow, s.CursorCol, s.CursorVisible, s.PaneHeight, s.PaneWidth, s.MouseReporting,
 				s.HasHistory, s.CaptureBase, s.HistorySize)
@@ -287,6 +323,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		if msg.Event.invalid.Terminal {
 			m.stopControl()
 			m.recoveryPending = true
+			m.recoveryBlankCaptures = 0
 			cmd = m.schedulePoll(0)
 			break
 		}
@@ -295,6 +332,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.modelLive = false
 		m.stopControl()
 		m.recoveryPending = true
+		m.recoveryBlankCaptures = 0
 		cmd = m.schedulePoll(0)
 	}
 	return tea.Batch(cmd, m.listenControl())
@@ -317,6 +355,10 @@ func (m *Model) applyOutput(output string, row, col int, visible bool, height, w
 	}
 }
 
+func terminalOutputBlank(output string) bool {
+	return strings.TrimSpace(ansi.Strip(output)) == ""
+}
+
 // SetVisible controls transport activity without destroying the target.
 func (m *Model) SetVisible(visible bool) tea.Cmd {
 	if m.visible == visible {
@@ -333,6 +375,8 @@ func (m *Model) SetVisible(visible bool) tea.Cmd {
 		}
 		m.modelLive = false
 		m.recoveryPending = false
+		m.fallbackEstablished = false
+		m.recoveryBlankCaptures = 0
 		m.stopControl()
 		return nil
 	}

@@ -110,20 +110,23 @@ type Model struct {
 	Config Config
 	State  *State
 
-	ownerID         uint64
-	runGeneration   uint64
-	scopeTarget     string
-	control         terminalControlSource
-	subscription    terminalControlSubscription
-	mailbox         *terminalMailbox
-	mailboxDone     chan struct{}
-	controlGen      uint64
-	modelLive       bool
-	visible         bool
-	focused         bool
-	input           terminalInputSender
-	history         HistoryInfo
-	recoveryPending bool
+	ownerID               uint64
+	runGeneration         uint64
+	scopeTarget           string
+	control               terminalControlSource
+	subscription          terminalControlSubscription
+	mailbox               *terminalMailbox
+	mailboxDone           chan struct{}
+	controlGen            uint64
+	modelLive             bool
+	visible               bool
+	focused               bool
+	input                 terminalInputSender
+	capture               terminalCaptureSource
+	history               HistoryInfo
+	recoveryPending       bool
+	fallbackEstablished   bool
+	recoveryBlankCaptures int
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -162,6 +165,7 @@ func New(config *Config) *Model {
 		visible: true,
 		focused: true,
 		input:   defaultTerminalInputSender{},
+		capture: defaultTerminalCaptureSource{},
 	}
 }
 
@@ -188,6 +192,8 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	m.visible = true
 	m.modelLive = false
 	m.recoveryPending = false
+	m.fallbackEstablished = false
+	m.recoveryBlankCaptures = 0
 	m.history = HistoryInfo{}
 	m.scopeTarget = paneID
 	if m.scopeTarget == "" {
@@ -750,10 +756,21 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if m.recoveryPending && terminalOutputBlank(msg.Output) && !terminalOutputBlank(m.State.OutputBuf.String()) && m.recoveryBlankCaptures < terminalRecoveryBlankLimit {
+		// tmux may briefly expose an empty alternate grid while a replacement
+		// client changes geometry. Preserve the last known-good model frame and
+		// retry capture before accepting blank as real terminal state.
+		m.recoveryBlankCaptures++
+		return m.schedulePoll(PollingDecayFast)
+	}
 
 	// Update output buffer
 	changed := m.State.OutputBuf.Update(msg.Output)
 	m.history = HistoryInfo{}
+	if m.recoveryPending {
+		m.fallbackEstablished = true
+		m.recoveryBlankCaptures = 0
+	}
 
 	// Update cursor state
 	m.State.CursorRow = msg.CursorRow
@@ -799,7 +816,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	scope := msg.Scope
 	pollGeneration := msg.Generation
 	return func() tea.Msg {
-		output, err := CapturePaneOutput(target, m.Config.ScrollbackLines)
+		output, row, col, paneHeight, paneWidth, visible, err := m.capture.Capture(target, m.Config.ScrollbackLines)
 		if err != nil {
 			return CaptureResultMsg{
 				Scope:          scope,
@@ -808,8 +825,6 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 				Err:            err,
 			}
 		}
-
-		row, col, paneHeight, paneWidth, visible, _ := QueryCursorPositionSync(target)
 
 		return CaptureResultMsg{
 			Scope:          scope,

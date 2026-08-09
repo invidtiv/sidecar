@@ -471,6 +471,13 @@ func TestTerminalContractControlDeathFallsBackAndRecovers(t *testing.T) {
 	}
 	m.Update(CaptureResultMsg{
 		Scope: m.Scope(), PollGeneration: m.State.PollGeneration, Target: "%4",
+		Output: "", CursorVisible: true, PaneWidth: 80, PaneHeight: 24,
+	})
+	if got := m.State.OutputBuf.String(); got != "live" || !m.recoveryPending {
+		t.Fatalf("transient blank fallback replaced live content: output=%q pending=%v", got, m.recoveryPending)
+	}
+	m.Update(CaptureResultMsg{
+		Scope: m.Scope(), PollGeneration: m.State.PollGeneration, Target: "%4",
 		Output: "fallback visible", CursorVisible: true, PaneWidth: 80, PaneHeight: 24,
 	})
 	if got := m.State.OutputBuf.String(); got != "fallback visible" || m.recoveryPending {
@@ -485,15 +492,76 @@ func TestTerminalContractControlDeathFallsBackAndRecovers(t *testing.T) {
 	}
 
 	second := source.requests[1]
+	second.OnSnapshot(ControlSnapshot{
+		Session: "editor", Pane: "%4", Output: "", PaneWidth: 80, PaneHeight: 24,
+	})
+	deliverTerminalEvent(t, m)
+	if got := m.View(); !strings.Contains(got, "fallback visible") {
+		t.Fatalf("blank replacement snapshot erased fallback: %q", got)
+	}
+	blank := seededFrame("editor", "%4", "")
+	blank.Frame.AltScreen = true
+	second.OnModelFrame(blank)
+	deliverTerminalEvent(t, m)
+	if source.handles[1].closed != 1 || m.modelLive {
+		t.Fatalf("blank replacement seed was accepted: closed=%d live=%v", source.handles[1].closed, m.modelLive)
+	}
+	if got := m.View(); !strings.Contains(got, "fallback visible") {
+		t.Fatalf("blank replacement seed erased fallback: %q", got)
+	}
+	m.Update(terminalControlRetryMsg{Scope: m.Scope(), Gen: m.controlGen})
+	if len(source.requests) != 3 {
+		t.Fatalf("second seed attempt subscriptions = %d, want 3", len(source.requests))
+	}
+
+	third := source.requests[2]
 	reseeded := seededFrame("editor", "%4", "fallback visible")
 	reseeded.Frame.AltScreen = true
-	second.OnModelFrame(reseeded)
+	third.OnModelFrame(reseeded)
 	deliverTerminalEvent(t, m)
 	if !m.modelLive || m.State.OutputBuf.String() != "fallback visible" {
 		t.Fatalf("fallback recovery failed: live=%v output=%q", m.modelLive, m.State.OutputBuf.String())
 	}
 	if got := m.View(); !strings.Contains(got, "fallback visible") {
 		t.Fatalf("reseeded alternate screen was not visible: %q", got)
+	}
+}
+
+func TestTerminalContractBlankReplacementSeedIsBounded(t *testing.T) {
+	m := New(nil)
+	m.visible = true
+	m.State = &State{
+		Active:        true,
+		TargetSession: "editor",
+		TargetPane:    "%4",
+		OutputBuf:     NewOutputBuffer(m.Config.ScrollbackLines),
+	}
+	m.scopeTarget = "%4"
+	m.controlGen = 1 // zero is reserved for "no mailbox overflow" in direct deliveries
+	m.State.OutputBuf.Update("known fallback")
+	m.fallbackEstablished = true
+
+	for i := 0; i < terminalRecoveryBlankLimit; i++ {
+		blank := seededFrame("editor", "%4", "")
+		blank.Frame.AltScreen = true
+		m.handleControlDelivery(terminalControlMsg{
+			Scope: m.Scope(),
+			Event: terminalControlEvent{kind: terminalFrameEvent, frame: blank, gen: m.controlGen},
+		})
+		if got := m.State.OutputBuf.String(); got != "known fallback" {
+			t.Fatalf("blank seed %d replaced fallback: %q", i+1, got)
+		}
+	}
+
+	blank := seededFrame("editor", "%4", "")
+	blank.Frame.AltScreen = true
+	m.handleControlDelivery(terminalControlMsg{
+		Scope: m.Scope(),
+		Event: terminalControlEvent{kind: terminalFrameEvent, frame: blank, gen: m.controlGen},
+	})
+	if !m.modelLive || m.fallbackEstablished || m.State.OutputBuf.String() != "" {
+		t.Fatalf("bounded blank seed did not become authoritative: live=%v fallback=%v output=%q",
+			m.modelLive, m.fallbackEstablished, m.State.OutputBuf.String())
 	}
 }
 
