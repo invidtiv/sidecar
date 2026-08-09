@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectdir"
 )
 
 func installFakeGH(t *testing.T, body string) string {
@@ -455,6 +456,9 @@ func TestClosedAndUnavailablePollingStopWithoutLosingURL(t *testing.T) {
 	if !p.mergeState.PRWatchStopped || p.mergeState.PRPollKind != PRPollClosed || p.mergeState.PRURL == "" {
 		t.Fatalf("closed state lost terminal identity: %+v", p.mergeState)
 	}
+	if wt.PRState != "closed" {
+		t.Fatalf("closed poll worktree state = %q", wt.PRState)
+	}
 	p.mergeState.PRWatchStopped = false
 	for range 5 {
 		p.update(CheckPRMergedMsg{WorkspaceName: "topic", Result: PRPollResult{Kind: PRPollNetwork, Err: context.DeadlineExceeded}})
@@ -462,6 +466,72 @@ func TestClosedAndUnavailablePollingStopWithoutLosingURL(t *testing.T) {
 	if !p.mergeState.PRWatchStopped || p.mergeState.PRURL == "" {
 		t.Fatalf("bounded network failure lost URL: %+v", p.mergeState)
 	}
+	if wt.PRState != "unavailable" {
+		t.Fatalf("network failure worktree state = %q", wt.PRState)
+	}
+}
+
+func TestWorktreePRMetadataHydratesAcrossRefreshAndRestart(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	config.SetTestStateDir(stateDir)
+	t.Cleanup(config.ResetTestStateDir)
+
+	for _, tc := range []struct {
+		name, stored, want string
+	}{
+		{name: "open", stored: "OPEN", want: "open"},
+		{name: "merged", stored: "MERGED", want: "merged"},
+		{name: "closed", stored: "CLOSED", want: "closed"},
+		{name: "unknown structured state", stored: "", want: "unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "repo")
+			worktree := filepath.Join(root, "worktrees", tc.name)
+			if err := os.MkdirAll(worktree, 0755); err != nil {
+				t.Fatal(err)
+			}
+			identity := PRIdentity{Number: 9, URL: "https://github.com/o/r/pull/9", Repository: "o/r", State: tc.stored}
+			if err := savePRIdentityContext(context.Background(), root, worktree, identity); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, phase := range []string{"refresh", "restart"} {
+				wt := &Worktree{Path: worktree}
+				hydrateWorktreePRMetadata(context.Background(), root, wt)
+				if wt.PRURL != identity.URL || wt.PRState != tc.want {
+					t.Fatalf("%s metadata = url %q state %q, want %q %q", phase, wt.PRURL, wt.PRState, identity.URL, tc.want)
+				}
+				labels := strings.Join((&Plugin{}).worktreeStateLabels(wt), " | ")
+				if !strings.Contains(labels, "PR "+tc.want) {
+					t.Fatalf("%s labels = %q, missing state %q", phase, labels, tc.want)
+				}
+			}
+		})
+	}
+
+	t.Run("legacy URL never defaults open", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "repo")
+		worktree := filepath.Join(root, "worktrees", "legacy")
+		if err := os.MkdirAll(worktree, 0755); err != nil {
+			t.Fatal(err)
+		}
+		wtDir, err := projectdir.WorktreeDir(root, worktree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wtDir, sidecarPRFile), []byte("https://github.com/o/r/pull/10\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		wt := &Worktree{Path: worktree}
+		hydrateWorktreePRMetadata(context.Background(), root, wt)
+		if wt.PRState != "unavailable" {
+			t.Fatalf("legacy URL state = %q, want unavailable", wt.PRState)
+		}
+		labels := strings.Join((&Plugin{}).worktreeStateLabels(wt), " | ")
+		if strings.Contains(labels, "PR open") || !strings.Contains(labels, "PR unavailable") {
+			t.Fatalf("legacy URL labels inferred stale state: %q", labels)
+		}
+	})
 }
 
 func TestMovedHEADResultReturnsWorkflowToReview(t *testing.T) {

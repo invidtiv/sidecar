@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMaxLineWidth(t *testing.T) {
@@ -158,7 +160,7 @@ func TestOverlayModal(t *testing.T) {
 func TestDimLine(t *testing.T) {
 	// dimLine should strip ANSI codes
 	input := "\x1b[31mred text\x1b[0m"
-	result := dimLine(input)
+	result := dimLine(input, 20)
 
 	// Should not contain original red ANSI code
 	if strings.Contains(result, "\x1b[31m") {
@@ -168,5 +170,49 @@ func TestDimLine(t *testing.T) {
 	// Should contain the plain text
 	if !strings.Contains(result, "red text") {
 		t.Errorf("dimLine should preserve text content")
+	}
+}
+
+func TestOverlayModalTabBackgroundRegression120x40(t *testing.T) {
+	// Retained shape from the workspace preview that exposed the bug: output
+	// rows contain literal tabs near pane borders while the modal is centered.
+	backgroundRows := []string{
+		"╭─────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────╮",
+		"│ Workspaces                            New   │││  Output   Diff   Task\t\t\t\t\t\t│",
+		"│                                             │││                                                                      │",
+		"│  ◉ main                                     │││ Working Tree vs HEAD (1)\t\t\t\t│",
+		"│    main  main                               │││ M internal/ui/overlay.go +1/-0\t\t\t│",
+	}
+	for len(backgroundRows) < 40 {
+		backgroundRows = append(backgroundRows, "│                                             │││\t\t\t\t\t\t\t\t\t│")
+	}
+	modalRows := []string{
+		"╭────────────────────────────────────────────────────────────────────╮",
+		"│ Link Task to feature                                               │",
+		"│ Search tasks:                                                      │",
+		"│ ┌────────────────────────────────────────────────────────────────┐ │",
+		"│ │keyboard navigation                                             │ │",
+		"│ └────────────────────────────────────────────────────────────────┘ │",
+		"╰────────────────────────────────────────────────────────────────────╯",
+	}
+
+	got := OverlayModal(strings.Join(backgroundRows, "\n"), strings.Join(modalRows, "\n"), 120, 40)
+	rows := strings.Split(got, "\n")
+	if len(rows) != 40 {
+		t.Fatalf("rows = %d, want 40", len(rows))
+	}
+	for i, row := range rows {
+		if strings.ContainsRune(row, '\t') {
+			t.Fatalf("row %d retained a terminal-dependent tab", i)
+		}
+		if gotWidth := ansi.StringWidth(row); gotWidth > 120 {
+			t.Fatalf("row %d width = %d, want <= 120", i, gotWidth)
+		}
+	}
+	plain := ansi.Strip(got)
+	for _, border := range []string{modalRows[0], modalRows[len(modalRows)-1]} {
+		if !strings.Contains(plain, border) {
+			t.Fatalf("modal border was fragmented or clipped; missing %q", border)
+		}
 	}
 }

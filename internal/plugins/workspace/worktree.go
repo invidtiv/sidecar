@@ -828,10 +828,12 @@ func savePRIdentityContext(ctx context.Context, projectRoot, worktreePath string
 
 // loadPRURL reads the PR URL from the centralized worktree data directory.
 func loadPRURL(projectRoot, worktreePath string) string {
-	if identity := loadPRIdentityContext(context.Background(), projectRoot, worktreePath); identity.URL != "" {
-		return identity.URL
-	}
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	identity, _ := loadPRMetadataContext(context.Background(), projectRoot, worktreePath)
+	return identity.URL
+}
+
+func loadLegacyPRURLContext(ctx context.Context, projectRoot, worktreePath string) string {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return ""
 	}
@@ -841,6 +843,56 @@ func loadPRURL(projectRoot, worktreePath string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(content))
+}
+
+func normalizeWorktreePRState(state string, hasURL bool) string {
+	if !hasURL {
+		return ""
+	}
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "OPEN":
+		return "open"
+	case "MERGED":
+		return "merged"
+	case "CLOSED":
+		return "closed"
+	default:
+		return "unavailable"
+	}
+}
+
+// loadPRMetadataContext hydrates list state from the stable structured
+// identity. Legacy URL-only state remains useful but is explicitly unknown;
+// it must never be inferred to mean that the PR is open.
+func loadPRMetadataContext(ctx context.Context, projectRoot, worktreePath string) (PRIdentity, string) {
+	identity := loadPRIdentityContext(ctx, projectRoot, worktreePath)
+	if identity.URL == "" {
+		identity.URL = loadLegacyPRURLContext(ctx, projectRoot, worktreePath)
+	}
+	return identity, normalizeWorktreePRState(identity.State, identity.URL != "")
+}
+
+func hydrateWorktreePRMetadata(ctx context.Context, projectRoot string, wt *Worktree) {
+	if wt == nil {
+		return
+	}
+	identity, prState := loadPRMetadataContext(ctx, projectRoot, wt.Path)
+	wt.PRURL = identity.URL
+	wt.PRState = prState
+}
+
+func worktreePRStateFromPoll(kind PRPollKind, identity PRIdentity, existingURL string) string {
+	hasURL := identity.URL != "" || existingURL != ""
+	switch kind {
+	case PRPollOpen:
+		return normalizeWorktreePRState("OPEN", hasURL)
+	case PRPollMerged:
+		return normalizeWorktreePRState("MERGED", hasURL)
+	case PRPollClosed:
+		return normalizeWorktreePRState("CLOSED", hasURL)
+	default:
+		return normalizeWorktreePRState("UNAVAILABLE", hasURL)
+	}
 }
 
 func loadPRIdentityContext(ctx context.Context, projectRoot, worktreePath string) PRIdentity {

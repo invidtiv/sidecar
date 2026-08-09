@@ -1267,7 +1267,7 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.createSkipPermissions = !p.createSkipPermissions
 			return nil
 		}
-	case "up":
+	case "up", "ctrl+p":
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx > 0 {
 				p.branchIdx--
@@ -1275,14 +1275,11 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		}
-		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
-			if p.taskSearchIdx > 0 {
-				p.taskSearchIdx--
-				p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, false), len(p.taskSearchFiltered))
-			}
+		if p.createFocus == 3 {
+			p.moveTaskPickerSelection(-1, false, false, createTaskItemPrefix)
 			return nil
 		}
-	case "down":
+	case "down", "ctrl+n":
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx < len(p.branchFiltered)-1 {
 				p.branchIdx++
@@ -1290,11 +1287,8 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		}
-		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
-			if p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
-				p.taskSearchIdx++
-				p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, false), len(p.taskSearchFiltered))
-			}
+		if p.createFocus == 3 {
+			p.moveTaskPickerSelection(1, false, false, createTaskItemPrefix)
 			return nil
 		}
 	case "enter":
@@ -1500,30 +1494,41 @@ func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.taskLinkModal == nil {
 		return nil
 	}
-	switch msg.String() {
+	key := msg.String()
+	focusID := p.taskLinkModal.FocusedID()
+	inputFocused := focusID == "" || focusID == taskLinkFieldID
+	switch key {
 	case "esc":
 		p.closeTaskLinkModal()
 		return nil
-	case "up", "k":
-		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx > 0 {
-			p.taskSearchIdx--
-			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, true), len(p.taskSearchFiltered))
-		}
-		return nil
-	case "down", "j":
-		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
-			p.taskSearchIdx++
-			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, true), len(p.taskSearchFiltered))
-		}
-		return nil
+	case "tab", "shift+tab":
+		_, cmd := p.taskLinkModal.HandleKey(msg)
+		return cmd
 	case "enter":
-		if len(p.taskSearchFiltered) > 0 && p.linkingWorktree != nil {
-			selectedTask := p.taskSearchFiltered[p.taskSearchIdx]
+		action, cmd := p.taskLinkModal.HandleKey(msg)
+		if action == "cancel" || action == createCancelID {
+			p.closeTaskLinkModal()
+			return cmd
+		}
+		idx := p.taskSearchIdx
+		if parsed, ok := parseIndexedID(taskLinkItemPrefix, action); ok {
+			idx = parsed
+		}
+		if idx >= 0 && idx < len(p.taskSearchFiltered) && p.linkingWorktree != nil {
+			selectedTask := p.taskSearchFiltered[idx]
 			wt := p.linkingWorktree
 			p.closeTaskLinkModal()
 			return p.linkTask(wt, selectedTask.ID)
 		}
+		return cmd
+	}
+	if delta, navigate := taskPickerNavigationDelta(key, inputFocused); navigate {
+		p.moveTaskPickerSelection(delta, true, !inputFocused, taskLinkItemPrefix)
 		return nil
+	}
+	if !inputFocused {
+		_, cmd := p.taskLinkModal.HandleKey(msg)
+		return cmd
 	}
 
 	// Delegate to textinput for all other keys (typing, backspace, paste, etc.)

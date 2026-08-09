@@ -118,7 +118,7 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 		newWorktree := func(baseBranch string) *Worktree {
 			wt := &Worktree{
 				Name: dirName, Path: wtPath, Branch: localBranch, BaseBranch: baseBranch,
-				PRURL: pr.URL, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				PRURL: pr.URL, PRState: normalizeWorktreePRState(pr.identity().State, pr.URL != ""), Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 			}
 			wt.Key, _ = projectdir.WorktreeKey(wtPath)
 			wt.RepoKey = scope.RepoKey

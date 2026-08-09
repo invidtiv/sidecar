@@ -26,10 +26,10 @@ func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected b
 		focusables := make([]modal.FocusableInfo, 0, maxVisible+1)
 		lineY := 1
 
-		focused := focusID == fieldID || strings.HasPrefix(focusID, itemPrefix)
+		inputFocused := focusID == fieldID || (focusID == "" && fieldID == taskLinkFieldID)
 		if selected {
 			p.taskSearchInput.Blur()
-		} else if focused {
+		} else if inputFocused {
 			p.taskSearchInput.Focus()
 		} else {
 			p.taskSearchInput.Blur()
@@ -43,7 +43,7 @@ func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected b
 		inputWidth := max(1, contentWidth-6)
 		p.taskSearchInput.SetWidth(inputWidth)
 		style := inputStyle()
-		if focused {
+		if inputFocused {
 			style = inputFocusedStyle()
 		}
 
@@ -146,4 +146,30 @@ func selectedTaskIndex(tasks []Task, id string) int {
 		}
 	}
 	return -1
+}
+
+func taskPickerNavigationDelta(key string, inputFocused bool) (int, bool) {
+	switch key {
+	case "up", "ctrl+p":
+		return -1, true
+	case "down", "ctrl+n":
+		return 1, true
+	case "k":
+		return -1, !inputFocused
+	case "j":
+		return 1, !inputFocused
+	default:
+		return 0, false
+	}
+}
+
+func (p *Plugin) moveTaskPickerSelection(delta int, standalone, focusList bool, itemPrefix string) {
+	if len(p.taskSearchFiltered) == 0 {
+		return
+	}
+	p.taskSearchIdx = max(0, min(p.taskSearchIdx+delta, len(p.taskSearchFiltered)-1))
+	p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, standalone), len(p.taskSearchFiltered))
+	if focusList && p.taskLinkModal != nil {
+		p.taskLinkModal.SetFocus(createIndexedID(itemPrefix, p.taskSearchIdx))
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 )
@@ -50,6 +51,86 @@ func TestTaskLinkModalStaysBoundedAndRegistersRenderedRows(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTaskPickerInputAndListNavigationParity(t *testing.T) {
+	tasks := []Task{{ID: "td-jump", Title: "Jump"}, {ID: "td-keep", Title: "Keep"}, {ID: "td-last", Title: "Last"}}
+
+	link := New()
+	link.width, link.height = 80, 42
+	link.viewMode = ViewModeTaskLink
+	link.linkingWorktree = &Worktree{Name: "feature"}
+	link.taskSearchInput = textinput.New()
+	link.taskSearchInput.Prompt = ""
+	link.taskSearchInput.Focus()
+	link.taskSearchAll = tasks
+	link.taskSearchFiltered = tasks
+	link.ensureTaskLinkModal()
+	link.taskLinkModal.Render(80, 42, link.mouseHandler)
+
+	for _, r := range []rune{'j', 'k'} {
+		link.handleTaskLinkKeys(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if got := link.taskSearchInput.Value(); got != "jk" {
+		t.Fatalf("link input swallowed printable j/k: %q", got)
+	}
+
+	link.taskSearchInput.SetValue("")
+	link.taskSearchFiltered = tasks
+	link.taskSearchIdx = 0
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: tea.KeyDown})
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if link.taskSearchIdx != 1 {
+		t.Fatalf("link arrow/ctrl navigation index = %d, want 1", link.taskSearchIdx)
+	}
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+	link.taskLinkModal.Render(80, 42, link.mouseHandler)
+	if link.taskSearchInput.Focused() {
+		t.Fatal("link input stayed focused after moving focus to the task list")
+	}
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if link.taskSearchIdx != 2 || link.taskSearchInput.Value() != "" {
+		t.Fatalf("list-focused j did not navigate: idx=%d query=%q", link.taskSearchIdx, link.taskSearchInput.Value())
+	}
+	link.handleTaskLinkKeys(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	if link.taskSearchIdx != 1 {
+		t.Fatalf("list-focused k index = %d, want 1", link.taskSearchIdx)
+	}
+
+	create := New()
+	create.width, create.height = 80, 42
+	create.viewMode = ViewModeCreate
+	create.createNameInput = textinput.New()
+	create.createBaseBranchInput = textinput.New()
+	create.taskSearchInput = textinput.New()
+	create.taskSearchInput.Prompt = ""
+	create.taskSearchInput.Focus()
+	create.createFocus = 3
+	create.taskSearchAll = tasks
+	create.taskSearchFiltered = tasks
+	create.ensureCreateModal()
+	create.createModal.Render(80, 42, create.mouseHandler)
+	create.syncCreateModalFocus()
+	create.createModal.Render(80, 42, create.mouseHandler)
+	for _, r := range []rune{'j', 'k'} {
+		create.handleCreateKeys(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if got := create.taskSearchInput.Value(); got != "jk" {
+		t.Fatalf("create input swallowed printable j/k: %q", got)
+	}
+	create.taskSearchInput.SetValue("")
+	create.taskSearchFiltered = tasks
+	create.taskSearchIdx = 0
+	create.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeyDown})
+	afterDown := create.taskSearchIdx
+	create.handleCreateKeys(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	afterNext := create.taskSearchIdx
+	create.handleCreateKeys(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if create.taskSearchIdx != 1 {
+		t.Fatalf("create arrow/ctrl navigation indexes = down:%d next:%d prev:%d, want 1,2,1 (focus=%d down=%q next=%q prev=%q)", afterDown, afterNext, create.taskSearchIdx, create.createFocus,
+			tea.KeyPressMsg{Code: tea.KeyDown}.String(), tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}.String(), tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}.String())
 	}
 }
 

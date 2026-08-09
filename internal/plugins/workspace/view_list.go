@@ -697,7 +697,7 @@ func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
 	if wt.PRState != "" {
 		labels = append(labels, "PR "+wt.PRState)
 	} else if wt.PRURL != "" {
-		labels = append(labels, "PR open")
+		labels = append(labels, "PR unavailable")
 	}
 	if wt.Changes != nil {
 		switch wt.Changes.State {

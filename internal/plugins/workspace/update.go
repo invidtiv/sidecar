@@ -162,8 +162,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				wt.TaskID = loadTaskLink(p.ctx.ProjectRoot, wt.Path)
 				// Load chosen agent type from centralized worktree data directory
 				wt.ChosenAgentType = loadAgentType(p.ctx.ProjectRoot, wt.Path)
-				// Load PR URL from centralized worktree data directory
-				wt.PRURL = loadPRURL(p.ctx.ProjectRoot, wt.Path)
+				// Load stable PR identity/state from centralized worktree data.
+				hydrateWorktreePRMetadata(p.operationCtx, p.ctx.ProjectRoot, wt)
 				// Load base branch from centralized worktree data directory
 				wt.BaseBranch = loadBaseBranch(p.ctx.ProjectRoot, wt.Path)
 			}
@@ -1588,6 +1588,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					// Save PR URL to worktree for indicator in list
 					if wt := p.mergeState.Worktree; wt != nil && msg.Data != "" {
 						wt.PRURL = msg.Data
+						wt.PRState = normalizeWorktreePRState(msg.PR.State, true)
 						_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, msg.PR)
 					}
 					if msg.PR.State == "CLOSED" {
@@ -1651,6 +1652,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if msg.Result.Identity.URL != "" {
 				p.mergeState.PR = msg.Result.Identity
 				p.mergeState.PRURL = msg.Result.Identity.URL
+			}
+			if wt := p.mergeState.Worktree; wt != nil {
+				wt.PRURL = p.mergeState.PRURL
+				wt.PRState = worktreePRStateFromPoll(msg.Result.Kind, msg.Result.Identity, wt.PRURL)
+				identity := p.mergeState.PR
+				identity.URL = wt.PRURL
+				identity.State = strings.ToUpper(wt.PRState)
+				p.mergeState.PR = identity
+				if identity.URL != "" && p.ctx != nil {
+					_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, identity)
+				}
 			}
 			switch msg.Result.Kind {
 			case PRPollMerged:
