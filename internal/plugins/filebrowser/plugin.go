@@ -305,6 +305,7 @@ type Plugin struct {
 	inlineEditFile       string     // Path of file being edited
 	inlineEditOrigMtime  time.Time  // Original file mtime (to detect changes)
 	inlineEditEditor     string     // Editor command used (vim, nano, emacs, etc.)
+	inlineEditActivation uint64     // Scopes async editor start/exit to the current project/tab activation
 	inlineEditorDragging bool       // True when mouse is being dragged in editor (for text selection)
 	lastDragForwardTime  time.Time  // Throttle: last time a drag event was forwarded to tmux
 
@@ -379,6 +380,11 @@ func (p *Plugin) Icon() string { return pluginIcon }
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	// Reject editor start/exit messages still queued from the previous project.
+	p.inlineEditActivation++
+	if p.inlineEditor != nil {
+		p.inlineEditor.Close()
+	}
 	p.ctx = ctx
 	p.tree = NewFileTree(ctx.WorkDir)
 
@@ -828,9 +834,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		case tea.WindowSizeMsg:
 			p.width = msg.Width
 			p.height = msg.Height
-			// Update inline editor dimensions - use ResizeAndPollImmediate
-			// to bypass debounce and trigger immediate poll for smooth resize
-			return p, p.inlineEditor.ResizeAndPollImmediate(p.calculateInlineEditorWidth(), p.calculateInlineEditorHeight())
+			return p, p.inlineEditor.Resize(p.calculateInlineEditorWidth(), p.calculateInlineEditorHeight())
 
 		case tea.MouseMsg:
 			// Route mouse through handleMouse for click-away detection
@@ -858,6 +862,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				return p, tea.Batch(cmd, p.refresh())
 			}
 			return p, cmd
+
+		default:
+			// The shared terminal component owns its model/control listener
+			// messages. Route unknown messages through it so plugins do not need
+			// transport-specific branches as that private protocol evolves.
+			if cmd := p.inlineEditor.Update(msg); cmd != nil {
+				return p, cmd
+			}
 		}
 	}
 
@@ -1182,9 +1194,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case InlineEditStartedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, p.cleanupStaleInlineEditStart(msg)
+		}
 		return p, p.handleInlineEditStarted(msg)
 
 	case InlineEditExitedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, nil
+		}
 		// Check if there was a pending click action (from Save & Exit)
 		if p.pendingClickRegion != "" {
 			return p.processPendingClickAction()
@@ -1223,6 +1241,9 @@ func (p *Plugin) SetFocused(f bool) {
 		p.clearDragState()
 	}
 	p.focused = f
+	if p.inlineEditor != nil {
+		p.inlineEditor.SetFocused(f)
+	}
 }
 
 // Commands returns the available commands.

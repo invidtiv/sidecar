@@ -1,11 +1,126 @@
 package filebrowser
 
 import (
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
+
+func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
+	logPath := installFilebrowserFakeTmux(t)
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 9, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.inlineEditActivation = 4
+
+	_, cmd := p.Update(InlineEditStartedMsg{
+		SessionName: "stale-editor", FilePath: "old.md", Editor: "nvim",
+		Activation: 3, Epoch: 8,
+	})
+	if cmd == nil {
+		t.Fatal("stale editor start did not schedule orphan cleanup")
+	}
+	_ = cmd()
+	if p.inlineEditMode || p.inlineEditor.IsActive() {
+		t.Fatal("stale editor start activated the current file browser")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "kill-session -t stale-editor") {
+		t.Fatalf("stale editor session was not cleaned up; log:\n%s", data)
+	}
+}
+
+func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
+	logPath := installFilebrowserFakeTmux(t)
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.inlineEditActivation = 9
+	p.inlineEditMode = true
+	p.inlineEditSession = "current-editor"
+	p.inlineEditFile = "current.md"
+	p.inlineEditEditor = "nvim"
+	p.inlineEditor.Open(tty.Target{Session: "current-editor"})
+
+	_, cmd := p.Update(InlineEditStartedMsg{
+		SessionName: "current-editor", FilePath: "old.md", Editor: "nvim",
+		Activation: 8, Epoch: 1,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "kill-session -t current-editor") {
+		t.Fatalf("stale start killed the current active editor; log:\n%s", data)
+	}
+	if !p.inlineEditor.IsActive() || p.inlineEditSession != "current-editor" {
+		t.Fatal("stale start disturbed current editor state")
+	}
+}
+
+func TestInlineEditorTabReentryUsesFreshModelScope(t *testing.T) {
+	installFilebrowserFakeTmux(t)
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.tabs = []FileTab{{Path: "note.md", EditSession: "editor", EditEditor: "nvim"}}
+	p.activeTab = 0
+	p.inlineEditMode = true
+	p.inlineEditSession = "editor"
+	p.inlineEditFile = "note.md"
+	p.inlineEditEditor = "nvim"
+	p.inlineEditor.Enter("editor", "")
+	oldScope := p.inlineEditor.Scope()
+
+	p.saveEditStateToTab()
+	p.clearPluginEditState()
+	if p.inlineEditor.IsActive() {
+		t.Fatal("inactive tab retained terminal authority")
+	}
+	if !p.restoreEditStateFromTab() {
+		t.Fatal("live editor session was not restored")
+	}
+	_ = p.reattachInlineEditSession()
+	newScope := p.inlineEditor.Scope()
+	if newScope.Generation == oldScope.Generation {
+		t.Fatalf("reattach reused model generation %d", newScope.Generation)
+	}
+
+	// A capture from the inactive activation must not seed the reattached view.
+	_, _ = p.Update(tty.CaptureResultMsg{
+		Scope: oldScope, Target: "editor", Output: "STALE FRAME",
+		PollGeneration: 1, PaneWidth: 80, PaneHeight: 20,
+	})
+	if got := p.inlineEditor.View(); strings.Contains(got, "STALE FRAME") {
+		t.Fatalf("stale inactive-tab frame reached reattached editor: %q", got)
+	}
+}
+
+func installFilebrowserFakeTmux(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TEST_LOG", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
 
 func TestNormalizeEditorName(t *testing.T) {
 	tests := []struct {

@@ -52,13 +52,16 @@ keypress ──► MapKeyToTmux ──► `tmux send-keys` (subprocess)
                       tea.Tick(50–500ms) ──► repeat
 ```
 
-Four independent implementations of this loop exist:
+At the time of this audit, four independent implementations of this loop
+existed. The byte-fed cutover subsequently removed the terminal-panel copy and
+made the shared terminal model the presentation source; the agent and shell
+capture cadences remain only for semantic activity evidence and fallback.
 
 | Consumer | Poll driver | Buffer | Cursor |
 |---|---|---|---|
 | Workspace agent pane | `scheduleInteractivePoll` / `pollGeneration` | `workspace.OutputBuffer` | `workspace.renderWithCursor` |
 | Workspace shell pane | `scheduleShellPollByName` / `shellPollGeneration` | `workspace.OutputBuffer` | `workspace.renderWithCursor` |
-| Workspace terminal panel | `scheduleTermPanelPoll` / `termPanelGeneration` | `workspace.OutputBuffer` | `workspace.renderWithCursor` |
+| Workspace terminal panel | Removed by the byte-fed cutover | Shared terminal model | Shared terminal viewport |
 | filebrowser + notes inline edit | `tty.Model.schedulePoll` | `tty.OutputBuffer` | `tty.RenderWithCursor` |
 
 `internal/tty` was extracted to unify this (commit `295daab`, "Initial
@@ -555,14 +558,10 @@ Additional duplication:
   render). filebrowser has `isSessionAlive`/`killSession` helpers; notes inlines
   the same tmux calls. All of it belongs in `internal/tty` as an
   `EditorSession` helper.
-- **Four poll schedulers over three generation counters.** `scheduleAgentPoll`
-  and `scheduleInteractivePoll` (sharing `pollGeneration`),
-  `scheduleShellPollByName` (`shellPollGeneration`), `scheduleTermPanelPoll`
-  (`termPanelGeneration`), with a documented "don't mix them" rule that has
-  already caused a 200% CPU bug (`td-97327e`, `interactive.go:477-486`,
-  `:1389-1391`). `tty.CalculatePollingInterval` is additionally re-implemented
-  inline at `interactive.go:1348-1355`. One `paneSource` interface with one
-  scheduler removes the whole class.
+- **Four poll schedulers over three generation counters.** This was the audit's
+  original finding. The byte-fed cutover removed the terminal-panel scheduler
+  and its steady-state capture renderer. The remaining agent/shell cadences are
+  scoped to semantic activity evidence or fallback rather than presentation.
 - **Scroll-burst detection is copy-pasted** in `forwardScrollToTmux`
   (`interactive.go:1136-1154`) and `scrollPreview` (`mouse.go:1197-1219`).
 

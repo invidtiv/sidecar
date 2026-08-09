@@ -167,7 +167,13 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 		p.terminalHistory[msg.Source.Key] = state
 		return nil
 	}
-	if !current.Buffer.PrependSnapshot(msg.Capture.Output, msg.Capture.StartLine) {
+	prepended := false
+	if model := p.terminalModelForHistorySource(current); model != nil {
+		prepended = model.PrependHistory(msg.Capture.Output, msg.Capture.StartLine)
+	} else {
+		prepended = current.Buffer.PrependSnapshot(msg.Capture.Output, msg.Capture.StartLine)
+	}
+	if !prepended {
 		p.terminalHistory[msg.Source.Key] = state
 		return nil
 	}
@@ -193,6 +199,21 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	p.autoScrollOutput = false
 	if scrollLines > added && !state.Exhausted {
 		return p.loadOlderTerminalHistory(false, scrollLines-added)
+	}
+	return nil
+}
+
+func (p *Plugin) terminalModelForHistorySource(source terminalHistorySource) *tty.Model {
+	if source.TermPanel {
+		if p.panelTerminalOwns() && p.panelTerminal != nil && p.panelTerminal.State != nil &&
+			p.panelTerminal.State.OutputBuf == source.Buffer {
+			return p.panelTerminal
+		}
+		return nil
+	}
+	if p.primaryTerminal != nil && p.primaryTerminal.IsActive() && p.primaryTerminal.State != nil &&
+		p.primaryTerminal.State.OutputBuf == source.Buffer {
+		return p.primaryTerminal
 	}
 	return nil
 }

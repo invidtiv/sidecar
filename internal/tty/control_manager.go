@@ -13,8 +13,9 @@ import (
 
 var controlPanePattern = regexp.MustCompile(`^%[0-9]+$`)
 
-// ControlSnapshot is an authoritative rendered screen captured in-band over a
-// tmux control connection after an output or layout notification.
+// ControlSnapshot is a rendered screen captured in-band over a tmux control
+// connection. It supplies bootstrap/recovery presentation and independent
+// semantic or diagnostic evidence after an output or layout notification.
 type ControlSnapshot struct {
 	Session       string
 	Pane          string
@@ -54,22 +55,14 @@ type ControlRequest struct {
 	Focused    bool
 	OnSnapshot func(ControlSnapshot)
 	OnFallback func(error)
-	// ModelAuthority explicitly permits a live byte-fed model to suppress the
-	// ordinary capture scheduled for each output burst. It is intentionally
-	// separate from OnModelFrame: shadow comparison requests model frames while
-	// capture remains authoritative.
-	ModelAuthority bool
+	// ModelPresentation permits a live byte-fed model to suppress capture for
+	// ordinary output bursts. It is separate from OnModelFrame because the
+	// diagnostic comparison oracle deliberately retains independent captures.
+	ModelPresentation bool
 
-	// OnModelFrame opts this subscription into the byte-fed screen model
-	// (slice 1 of the td-64c916 spike). It is nil everywhere in production:
-	// with it nil no model is built, no extra tmux command is issued, and the
-	// %output payload is never even decoded, so the *content* of every delivered
-	// ControlSnapshot is identical to the pre-slice-1 behavior — asserted as an
-	// exact struct value by TestCaptureDeliveryUnchangedWhenModelPathOff.
-	//
-	// Its *concurrency* did change, for every subscription including this one.
-	// Slice 1 moved every command-response callback — the capture path's
-	// included — off the control reader goroutine and onto the client's single
+	// OnModelFrame receives permanent model-backed presentation frames. Command
+	// response callbacks, including capture recovery callbacks, run on the
+	// client's single
 	// ordered actor, which is what makes the seed cut exact. A consequence: an
 	// OnSnapshot callback that blocks now backpressures the reader, so a slow
 	// consumer can make tmux pause the pane or discard bytes for this client,
@@ -625,7 +618,7 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 			}
 		}
 		c.feedModels(event)
-		if !c.liveModelIsAuthoritative(event.Pane) {
+		if !c.liveModelOwnsPresentation(event.Pane) {
 			c.markDirty(event.Pane)
 		}
 	case controlEventLayout:
@@ -659,40 +652,40 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 	}
 }
 
-// liveModelIsAuthoritative runs only on the ordered actor. A request alone is
+// liveModelOwnsPresentation runs only on the ordered actor. A request alone is
 // insufficient: capture remains the fallback until its model is fully seeded
 // and live, and resumes automatically during every reseed or terminal fault.
-func (c *sessionControlClient) liveModelIsAuthoritative(pane string) bool {
-	// Shadow mode deliberately retains capture as its independent oracle even
-	// when the product canary is enabled for this subscription.
+func (c *sessionControlClient) liveModelOwnsPresentation(pane string) bool {
+	// Diagnostic comparison deliberately retains capture as its independent
+	// oracle while enabled.
 	if ScreenCompareEnabled() {
 		return false
 	}
-	authoritative := false
+	modelOwns := false
 	for id, feed := range c.models {
 		if feed.pane != pane || feed.state != modelLive {
 			continue
 		}
 		c.mu.Lock()
 		sub, ok := c.subs[id]
-		live := ok && !c.closed && sub.generation == feed.generation && sub.request.ModelAuthority
+		live := ok && !c.closed && sub.generation == feed.generation && sub.request.ModelPresentation
 		c.mu.Unlock()
 		if live {
-			authoritative = true
+			modelOwns = true
 			break
 		}
 	}
-	if !authoritative {
+	if !modelOwns {
 		return false
 	}
 	// Capture is pane-scoped, not subscription-scoped. A visible primary
-	// agent/shell may observe the same pane as the focused canary panel; capture
+	// agent/shell may observe the same pane as the focused terminal surface; capture
 	// delivery includes that subscriber even when it is unfocused, so it still
-	// preserves capture authority while the panel ignores the shared snapshot.
+	// receives the capture it requested while the terminal ignores the snapshot.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, sub := range c.subs {
-		if sub.request.Pane == pane && sub.request.Visible && !sub.request.ModelAuthority {
+		if sub.request.Pane == pane && sub.request.Visible && !sub.request.ModelPresentation {
 			return false
 		}
 	}
@@ -719,10 +712,8 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 }
 
 // wantsModelFeed reports whether this subscription should run a byte-fed pane
-// model. A consumer that asked for frames always does; shadow comparison turns
-// it on for every subscription without any consumer opting in, which is what
-// keeps the workspace plugin — and therefore every user-visible code path —
-// completely untouched by slice 2.
+// model. A presentation consumer always does; diagnostic comparison also runs
+// an independent model for capture-only semantic subscribers.
 func wantsModelFeed(request ControlRequest) bool {
 	return request.OnModelFrame != nil || ScreenCompareEnabled()
 }

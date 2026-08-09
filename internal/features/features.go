@@ -33,14 +33,6 @@ var (
 		Description: "Enable inline file editing via tmux in the files plugin",
 	}
 
-	// TmuxByteScreen enables the default-off byte-fed renderer canary for the
-	// workspace terminal panel.
-	TmuxByteScreen = Feature{
-		Name:        "tmux_byte_screen",
-		Default:     false,
-		Description: "Enable the byte-fed tmux screen renderer for the terminal panel",
-	}
-
 	// FilesAutoRefresh enables watching expanded directories in the files
 	// plugin and refreshing the tree when they change on disk.
 	FilesAutoRefresh = Feature{
@@ -61,7 +53,6 @@ var (
 var allFeatures = []Feature{
 	TmuxInteractiveInput,
 	TmuxInlineEdit,
-	TmuxByteScreen,
 	FilesAutoRefresh,
 	NotesPlugin,
 }

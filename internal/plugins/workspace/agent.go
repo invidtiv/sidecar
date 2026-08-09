@@ -883,9 +883,9 @@ func staggerOffset(name string) time.Duration {
 // Adds stagger offset based on worktree name to prevent simultaneous polls.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when worktrees are removed.
 func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea.Cmd {
-	if p.primaryControlUsing("agent", worktreeName) {
-		return nil
-	}
+	// This is the semantic activity cadence even while tty.Model owns display.
+	// It intentionally continues to observe provider files and tmux evidence;
+	// Update keeps its capture from overwriting the model-owned buffer.
 	stagger := staggerOffset(worktreeName)
 	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay+stagger, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
@@ -896,9 +896,6 @@ func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea
 // Stagger exists to spread polls across multiple worktrees, but the selected interactive worktree
 // needs minimal latency. Uses the same generation tracking as scheduleAgentPoll.
 func (p *Plugin) scheduleInteractivePoll(worktreeName string, delay time.Duration) tea.Cmd {
-	if p.primaryControlUsing("agent", worktreeName) {
-		return nil
-	}
 	return p.pollScheduler.Schedule(agentPollKey(worktreeName), delay, func(gen int) tea.Msg {
 		return pollAgentMsg{WorkspaceName: worktreeName, Generation: gen}
 	})
@@ -948,6 +945,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	maxBytes := p.tmuxCaptureMaxBytes
 	outputBuf := wt.Agent.OutputBuf
 	currentStatus := wt.Status
+	ctx := p.ctx
 
 	// Use non-joined capture when interactive mode is active for this worktree
 	// to preserve tmux line wrapping for cursor positioning (td-c7dd1e).
@@ -1000,6 +998,9 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 
 	// Return a tea.Cmd that spawns a goroutine for async capture
 	return func() tea.Msg {
+		if ctx != nil {
+			traceTerminalCapture(ctx.Logger, "workspace", "agent", "semantic_activity", generation)
+		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
 			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
@@ -1227,6 +1228,35 @@ func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (st
 		metadata.PaneTitle = strings.Join(fields[4:], ",")
 	}
 	return paneOutput, metadata, nil
+}
+
+// capturePaneEvidence observes only semantic tmux metadata. Model-owned plain
+// shells use this cadence to notice a newly launched agent without reintroducing
+// capture-pane as their steady presentation renderer.
+func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "tmux", "display-message", "-t", target, "-p",
+		"#{pane_width},#{pane_height},#{pane_current_command},#{pane_title}").Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: timeout after %s", tmuxCaptureTimeout)
+	}
+	if err != nil {
+		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: %w", err)
+	}
+	fields := strings.Split(strings.TrimSpace(string(output)), ",")
+	if len(fields) < 4 {
+		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: invalid metadata %q", output)
+	}
+	width, errWidth := strconv.Atoi(strings.TrimSpace(fields[0]))
+	height, errHeight := strconv.Atoi(strings.TrimSpace(fields[1]))
+	if errWidth != nil || errHeight != nil {
+		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: invalid geometry %q", output)
+	}
+	return capturedPaneMetadata{
+		PaneWidth: width, PaneHeight: height,
+		CurrentCommand: strings.TrimSpace(fields[2]), PaneTitle: strings.Join(fields[3:], ","),
+	}, nil
 }
 
 func capturePaneArgs(sessionName string, joinWrapped bool) []string {

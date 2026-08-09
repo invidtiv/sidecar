@@ -93,14 +93,40 @@ type State struct {
 	PollGeneration int
 }
 
+// HistoryInfo is the transport-neutral absolute history state exposed to an
+// embedding viewport. It contains coordinates only; control frames and the
+// screen-model implementation remain private to Model.
+type HistoryInfo struct {
+	HistorySize int
+	CaptureBase int
+	LoadedStart int
+	LoadedEnd   int
+	HasHistory  bool
+}
+
 // Model is an embeddable component that provides interactive tmux functionality.
 // Plugins embed this Model and delegate Update/View when interactive mode is active.
 type Model struct {
 	Config Config
 	State  *State
 
-	ownerID       uint64
-	runGeneration uint64
+	ownerID                   uint64
+	runGeneration             uint64
+	scopeTarget               string
+	control                   terminalControlSource
+	subscription              terminalControlSubscription
+	mailbox                   *terminalMailbox
+	mailboxDone               chan struct{}
+	controlGen                uint64
+	modelLive                 bool
+	visible                   bool
+	focused                   bool
+	input                     terminalInputSender
+	capture                   terminalCaptureSource
+	history                   HistoryInfo
+	recoveryPending           bool
+	fallbackEstablished       bool
+	consecutiveRecoveryBlanks int
 
 	// Width and Height are set by the containing plugin
 	Width  int
@@ -135,6 +161,11 @@ func New(config *Config) *Model {
 	return &Model{
 		Config:  cfg,
 		ownerID: nextModelID.Add(1),
+		control: sharedTerminalControl,
+		visible: true,
+		focused: true,
+		input:   defaultTerminalInputSender{},
+		capture: defaultTerminalCaptureSource{},
 	}
 }
 
@@ -148,6 +179,7 @@ func (m *Model) IsActive() bool {
 // Enter enters interactive mode for the specified tmux session/pane.
 // Returns a tea.Cmd to start polling for output.
 func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
+	m.Exit()
 	m.runGeneration++
 	m.State = &State{
 		Active:        true,
@@ -157,6 +189,18 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		CursorVisible: true,
 		OutputBuf:     NewOutputBuffer(m.Config.ScrollbackLines),
 	}
+	m.visible = true
+	m.modelLive = false
+	m.recoveryPending = false
+	m.fallbackEstablished = false
+	m.consecutiveRecoveryBlanks = 0
+	m.history = HistoryInfo{}
+	m.scopeTarget = paneID
+	if m.scopeTarget == "" {
+		m.scopeTarget = sessionName
+	}
+	m.mailbox = &terminalMailbox{events: make(chan terminalControlEvent, terminalMailboxCapacity)}
+	m.mailboxDone = make(chan struct{})
 
 	// Resize pane to match view dimensions
 	target := paneID
@@ -167,16 +211,31 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		ResizeTmuxPane(target, m.Width, m.Height)
 	}
 
-	// Return command to trigger initial poll
-	return m.schedulePoll(0)
+	cmds := []tea.Cmd{m.schedulePoll(0), m.listenControl()}
+	if paneID != "" {
+		m.startControl()
+	} else {
+		cmds = append(cmds, resolvePaneCmd(m.Scope(), sessionName))
+	}
+	return tea.Batch(cmds...)
 }
+
+// Target identifies the tmux session and pane displayed by a Model.
+type Target struct {
+	Session string
+	Pane    string
+}
+
+// Open activates the terminal for target. Enter remains as the compatibility
+// spelling for existing embedders.
+func (m *Model) Open(target Target) tea.Cmd { return m.Enter(target.Session, target.Pane) }
 
 // Scope returns the identity of the current Model activation. Commands created
 // for this model should include this scope in their result messages.
 func (m *Model) Scope() MessageScope {
 	return MessageScope{
 		Owner:      m.ownerID,
-		Target:     m.GetTarget(),
+		Target:     m.scopeTarget,
 		Generation: m.runGeneration,
 	}
 }
@@ -191,11 +250,27 @@ func (m *Model) owns(scope MessageScope) bool {
 
 // Exit exits interactive mode.
 func (m *Model) Exit() {
+	if m.subscription != nil {
+		m.subscription.Close()
+		m.subscription = nil
+	}
+	if m.mailboxDone != nil {
+		close(m.mailboxDone)
+		m.mailboxDone = nil
+	}
+	m.controlGen++
+	m.modelLive = false
+	m.recoveryPending = false
+	m.fallbackEstablished = false
+	m.consecutiveRecoveryBlanks = 0
 	if m.State != nil {
 		m.State.Active = false
 	}
 	m.State = nil
 }
+
+// Close releases the current target and rejects all queued deliveries.
+func (m *Model) Close() { m.Exit() }
 
 // Update handles messages in interactive mode.
 // Returns the updated model and any commands to execute.
@@ -239,7 +314,28 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if !m.owns(msg.Scope) {
 			return nil
 		}
+		if m.modelLive {
+			return nil
+		}
 		return m.schedulePoll(0)
+
+	case paneResolvedMsg:
+		if !m.owns(msg.Scope) || msg.Err != nil || msg.Pane == "" {
+			return nil
+		}
+		m.State.TargetPane = msg.Pane
+		m.startControl()
+		return nil
+
+	case terminalControlMsg:
+		return m.handleControlDelivery(msg)
+
+	case terminalControlRetryMsg:
+		if !m.owns(msg.Scope) || msg.Gen != m.controlGen || !m.visible || m.subscription != nil {
+			return nil
+		}
+		m.startControl()
+		return nil
 
 	case SessionDeadMsg:
 		if !m.owns(msg.Scope) {
@@ -399,6 +495,45 @@ func (m *Model) GetTarget() string {
 	return m.State.TargetSession
 }
 
+// inputTarget is the single routing decision for embedded terminal input.
+// Rendering, capture, and input must all address the explicit pane when one is
+// known. Full-session attach remains a separate, deliberately session-scoped
+// capability owned by the embedding callback.
+func (m *Model) inputTarget() string { return m.GetTarget() }
+
+// History returns a read-only snapshot of absolute history metadata and the
+// currently loaded half-open range. HasHistory is false for legacy/provisional
+// captures that do not carry trustworthy absolute coordinates.
+func (m *Model) History() HistoryInfo {
+	info := m.history
+	if !m.IsActive() || m.State.OutputBuf == nil {
+		return HistoryInfo{}
+	}
+	if start, end, ok := m.State.OutputBuf.AbsoluteRange(); ok {
+		info.LoadedStart, info.LoadedEnd = start, end
+	} else {
+		info.LoadedStart, info.LoadedEnd = 0, 0
+	}
+	return info
+}
+
+// LinesAbsoluteRange returns loaded terminal rows in [start, end).
+func (m *Model) LinesAbsoluteRange(start, end int) []string {
+	if !m.IsActive() || m.State.OutputBuf == nil {
+		return nil
+	}
+	return m.State.OutputBuf.LinesAbsoluteRange(start, end)
+}
+
+// PrependHistory merges an older overlapping capture into the loaded absolute
+// buffer. Transport and scheduling remain owned by Model's embedding journey.
+func (m *Model) PrependHistory(content string, baseLine int) bool {
+	if !m.IsActive() || m.State.OutputBuf == nil || !m.history.HasHistory {
+		return false
+	}
+	return m.State.OutputBuf.PrependSnapshot(content, baseLine)
+}
+
 // handleKey processes key input in interactive mode.
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if !m.IsActive() {
@@ -487,30 +622,22 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Paste key
 	if msg.String() == m.Config.PasteKey {
 		m.State.LastKeyTime = time.Now()
-		return PasteClipboardToTmuxCmd(m.Scope(), m.State.TargetSession)
+		return m.input.PasteClipboard(m.Scope(), m.inputTarget())
 	}
 
 	// Update last key time
 	m.State.LastKeyTime = time.Now()
 
-	sessionName := m.State.TargetSession
+	target := m.inputTarget()
 
 	// Check for paste input
 	if IsPasteInput(msg) {
 		text := msg.Text
 		scope := m.Scope()
 		if pendingEscape {
-			cmds = append(cmds, func() tea.Msg {
-				if err := SendKeyToTmux(sessionName, "Escape"); err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{Scope: scope}
-				}
-				if err := SendPasteToTmux(sessionName, text); err != nil && IsSessionDeadError(err) {
-					return SessionDeadMsg{Scope: scope}
-				}
-				return nil
-			})
+			cmds = append(cmds, m.input.SendEscapePaste(scope, target, text))
 		} else {
-			cmds = append(cmds, SendPasteInputCmd(scope, sessionName, text))
+			cmds = append(cmds, m.input.SendPaste(scope, target, text))
 		}
 		cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		return tea.Batch(cmds...)
@@ -520,7 +647,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	key, useLiteral := MapKeyToTmux(msg)
 	if key == "" {
 		if pendingEscape {
-			cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{"Escape", false}))
+			cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{"Escape", false}))
 			cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		}
 		return tea.Batch(cmds...)
@@ -528,12 +655,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Send keys
 	if pendingEscape {
-		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName,
+		cmds = append(cmds, m.input.SendKeys(m.Scope(), target,
 			KeySpec{"Escape", false},
 			KeySpec{key, useLiteral},
 		))
 	} else {
-		cmds = append(cmds, SendKeysCmd(m.Scope(), sessionName, KeySpec{key, useLiteral}))
+		cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{key, useLiteral}))
 	}
 
 	cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
@@ -548,7 +675,7 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 	}
 	m.State.LastKeyTime = time.Now()
 	cmds := []tea.Cmd{
-		SendPasteInputCmd(m.Scope(), m.State.TargetSession, content),
+		m.input.SendPaste(m.Scope(), m.inputTarget(), content),
 		m.schedulePoll(KeystrokeDebounce),
 	}
 	return tea.Batch(cmds...)
@@ -579,22 +706,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	col := mouse.X + 1
 	row := mouse.Y + 1
 
-	sessionName := m.State.TargetSession
-	scope := m.Scope()
-	return func() tea.Msg {
-		if err := SendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			if IsSessionDeadError(err) {
-				return SessionDeadMsg{Scope: scope}
-			}
-			return nil
-		}
-		if err := SendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			if IsSessionDeadError(err) {
-				return SessionDeadMsg{Scope: scope}
-			}
-		}
-		return nil
-	}
+	return m.input.SendMouse(m.Scope(), m.inputTarget(), col, row)
 }
 
 // handleEscapeTimer processes the escape delay timer firing.
@@ -614,7 +726,7 @@ func (m *Model) handleEscapeTimer() tea.Cmd {
 	m.State.LastKeyTime = time.Now()
 
 	return tea.Batch(
-		SendKeysCmd(m.Scope(), m.State.TargetSession, KeySpec{"Escape", false}),
+		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{"Escape", false}),
 		m.schedulePoll(0),
 	)
 }
@@ -635,11 +747,31 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 				return m.OnExit()
 			}
 		}
+		// A transient capture failure must not strand a dead-control recovery.
+		// Keep fallback polling alive and allow a clean control retry; the next
+		// successful capture remains provisional until its replacement seed.
+		if m.recoveryPending {
+			m.recoveryPending = false
+			return tea.Batch(
+				m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime)),
+				m.retryControl(),
+			)
+		}
 		return nil
+	}
+	if m.preserveRecoveryBlank(msg.Output) {
+		// tmux may briefly expose an empty alternate grid while a replacement
+		// client changes geometry. Preserve the last known-good model frame and
+		// retry capture before accepting blank as real terminal state.
+		return m.schedulePoll(PollingDecayFast)
 	}
 
 	// Update output buffer
 	changed := m.State.OutputBuf.Update(msg.Output)
+	m.history = HistoryInfo{}
+	if m.recoveryPending {
+		m.fallbackEstablished = true
+	}
 
 	// Update cursor state
 	m.State.CursorRow = msg.CursorRow
@@ -654,8 +786,15 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 		m.State.MouseReportingEnabled = DetectMouseReportingMode(msg.Output)
 	}
 
-	// Schedule next poll with adaptive interval
-	return m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime))
+	// Control-death recovery is deliberately sequenced after this accepted
+	// capture. This guarantees the fallback screen becomes visible before a
+	// replacement seed can invalidate its poll generation.
+	nextPoll := m.schedulePoll(CalculatePollingInterval(m.State.LastKeyTime))
+	if m.recoveryPending {
+		m.recoveryPending = false
+		return tea.Batch(nextPoll, m.retryControl())
+	}
+	return nextPoll
 }
 
 // handlePollTick handles a poll tick message.
@@ -678,7 +817,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	scope := msg.Scope
 	pollGeneration := msg.Generation
 	return func() tea.Msg {
-		output, err := CapturePaneOutput(target, m.Config.ScrollbackLines)
+		output, row, col, paneHeight, paneWidth, visible, err := m.capture.Capture(target, m.Config.ScrollbackLines)
 		if err != nil {
 			return CaptureResultMsg{
 				Scope:          scope,
@@ -687,8 +826,6 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 				Err:            err,
 			}
 		}
-
-		row, col, paneHeight, paneWidth, visible, _ := QueryCursorPositionSync(target)
 
 		return CaptureResultMsg{
 			Scope:          scope,
@@ -706,7 +843,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 
 // schedulePoll schedules a poll with the given delay.
 func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
-	if !m.IsActive() {
+	if !m.IsActive() || !m.visible || m.modelLive {
 		return nil
 	}
 
@@ -737,6 +874,9 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 
 	if !m.IsActive() {
 		return nil
+	}
+	if m.subscription != nil {
+		return m.restartControlForResize()
 	}
 
 	// Debounce resize
@@ -775,6 +915,9 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 
 	if !m.IsActive() {
 		return nil
+	}
+	if m.subscription != nil {
+		return m.restartControlForResize()
 	}
 
 	target := m.GetTarget()

@@ -142,13 +142,14 @@ type Plugin struct {
 	pendingEditorSyncID   string // One-shot sync after out-of-band editor saves
 
 	// Inline tty editor state (for true inline editing)
-	inlineEditor      *tty.Model
-	inlineEditMode    bool
-	inlineEditSession string
-	inlineEditNoteID  string
-	inlineEditPath    string
-	inlineEditEditor  string
-	orphanEditSession string // Defensive re-init cleanup, executed asynchronously in Start
+	inlineEditor         *tty.Model
+	inlineEditMode       bool
+	inlineEditSession    string
+	inlineEditNoteID     string
+	inlineEditPath       string
+	inlineEditEditor     string
+	inlineEditActivation uint64 // Scopes async editor start/exit to the current project activation
+	orphanEditSession    string // Defensive re-init cleanup, executed asynchronously in Start
 
 	// Inline editor mouse drag state (for text selection forwarding)
 	inlineEditorDragging bool      // True when mouse is being dragged in editor (for text selection)
@@ -368,9 +369,15 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case InlineEditStartedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, p.cleanupStaleInlineEditStart(msg)
+		}
 		return p, p.handleInlineEditStarted(msg)
 
 	case InlineEditExitedMsg:
+		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
+			return p, nil
+		}
 		return p, p.handleInlineEditExited(msg)
 
 	case tea.WindowSizeMsg:
@@ -378,12 +385,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.height = msg.Height
 		// Update textarea dimensions
 		p.updateTextareaDimensions()
-		// Update inline editor dimensions if active - use ResizeAndPollImmediate
-		// to bypass debounce and trigger immediate poll for smooth resize
+		// Resize through the shared terminal lifecycle so control-backed targets
+		// invalidate their old grid and reseed before regaining authority.
 		if p.inlineEditMode && p.inlineEditor != nil {
 			width := p.calculateInlineEditorWidth()
 			height := p.calculateInlineEditorHeight()
-			if cmd := p.inlineEditor.ResizeAndPollImmediate(width, height); cmd != nil {
+			if cmd := p.inlineEditor.Resize(width, height); cmd != nil {
 				return p, cmd
 			}
 		}
@@ -440,6 +447,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case NoteSavedMsg:
+		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: save failed", "error", msg.Err)
 		} else {
@@ -472,6 +482,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case NoteContentSavedMsg:
+		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
 		} else {
@@ -505,6 +518,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case InlineAutoSaveResultMsg:
+		if plugin.IsStale(p.ctx, msg) ||
+			!p.ownsInlineEditMessage(msg.Activation, msg.Epoch) ||
+			msg.Generation != p.inlineAutoSaveGen {
+			return p, nil
+		}
+		if msg.Err == nil && msg.Saved {
+			p.inlineLastSavedContent = msg.Content
+		}
 		// Auto-save completed silently (no toast) - schedule next tick
 		if p.inlineEditMode {
 			return p, p.scheduleInlineAutoSave()
@@ -597,6 +618,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, nil
+}
+
+func (p *Plugin) isStaleNoteSaveResult(epoch, editorActivation uint64) bool {
+	if p.ctx == nil || epoch != p.ctx.Epoch {
+		return true
+	}
+	return editorActivation != 0 && editorActivation != p.inlineEditActivation
 }
 
 // handleKey processes keyboard input.
@@ -1111,9 +1139,10 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
 	noteID := p.editorNote.ID
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
-		err := p.store.UpdateContent(noteID, content)
+		err := store.UpdateContent(noteID, content)
 		if err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
@@ -1170,6 +1199,7 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 
 	// External editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
+	store := p.store
 
 	return func() tea.Msg {
 		// Read back the edited content from temp file
@@ -1183,7 +1213,7 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 		_ = os.Remove(notePath)
 
 		// Update note content in database
-		if err := p.store.UpdateContent(noteID, string(content)); err != nil {
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
 			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 
@@ -1396,14 +1426,15 @@ func (p *Plugin) createNoteWithTitle(title string) tea.Cmd {
 		return nil
 	}
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	// Use title as initial content (first line) so cursor can be positioned after it
 	content := title
 
 	return func() tea.Msg {
-		note, err := p.store.Create(title, content)
+		note, err := store.Create(title, content)
 		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err}
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
 		}
 		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
 	}
@@ -1505,7 +1536,12 @@ func (p *Plugin) copyEditorContent() tea.Cmd {
 func (p *Plugin) IsFocused() bool { return p.focused }
 
 // SetFocused sets the focus state.
-func (p *Plugin) SetFocused(f bool) { p.focused = f }
+func (p *Plugin) SetFocused(f bool) {
+	p.focused = f
+	if p.inlineEditor != nil {
+		p.inlineEditor.SetFocused(f)
+	}
+}
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {

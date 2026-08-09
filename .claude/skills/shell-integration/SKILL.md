@@ -11,7 +11,10 @@ user-invocable: false
 
 # Shell Integration
 
-Sidecar's interactive shell allows users to type directly into tmux sessions from within the TUI. It is NOT a terminal emulator -- tmux is the PTY backend, sidecar acts as an input/output relay.
+Sidecar's interactive shell allows users to type directly into tmux sessions
+from within the TUI. Tmux remains the PTY backend. Sidecar renders ordered
+control-mode bytes through the shared `tty.Model`, whose VT behavior is behind
+the `screenmodel` adapter rather than implemented in plugin code.
 
 ## Package Structure
 
@@ -26,7 +29,7 @@ internal/tty/                    # Shared tmux terminal abstraction
   capture_range.go               # Atomic bounded history capture
   cursor.go                      # Cursor positioning helpers
   paste.go                       # Paste handling (clipboard, bracketed paste)
-  terminal_mode.go               # Terminal mode detection (mouse, bracketed paste)
+  terminal_mode.go               # Capture-fallback mode recovery
   output_buffer.go               # Absolute, bounded live/history buffer
   editor_session.go              # Shared inline-editor tmux lifecycle
 
@@ -34,7 +37,7 @@ internal/plugins/workspace/
   interactive.go                 # Workspace-specific interactive mode logic
   interactive_selection.go       # Text selection in interactive mode
   terminal_viewport.go           # Pure shared terminal viewport renderer
-  terminal_control.go            # Control-mode subscription/fallback bridge
+  terminal_control.go            # Workspace target/layout policy for tty.Model
   terminal_history.go            # Lazy absolute scrollback loading
   terminal_search.go             # Loaded-history search
   terminal_links.go              # Safe URL/path detection and activation
@@ -53,14 +56,15 @@ internal/plugins/filebrowser/
 ```
 User Keypress -> handleInteractiveKeys() -> tty.MapKeyToTmux() -> tmux send-keys
 
-Pane output -> tmux -C %output notification
-            -> per-session coalescer
-            -> in-band cursor/history query + capture-pane
-            -> owner/role/generation-scoped Tea message
-            -> OutputBuffer.UpdateSnapshot()
+Pane output -> tmux -C ordered %output bytes
+            -> session-pooled control actor
+            -> seeded screenmodel adapter
+            -> owner/target/generation-scoped Tea message
+            -> OutputBuffer + cursor/modes/history
             -> pure terminal viewport + native Bubble Tea cursor
 
-Control unavailable/dead -> keyed adaptive polling fallback
+Open/resync/history -> bounded capture seed/range
+Control unavailable/dead -> one scoped capture-poll fallback + clean reseed
 ```
 
 ## Core Abstractions
@@ -94,14 +98,14 @@ type State struct {
     Active        bool
     TargetPane    string      // tmux pane ID (e.g., "%12")
     TargetSession string
-    LastKeyTime   time.Time   // For polling decay
+    LastKeyTime   time.Time   // Input timing and fallback polling decay
     CursorRow, CursorCol int
     CursorVisible        bool
     PaneHeight, PaneWidth int
     BracketedPasteEnabled bool
     MouseReportingEnabled bool
     OutputBuf      *OutputBuffer
-    PollGeneration int          // For invalidating stale polls
+    PollGeneration int          // For invalidating stale fallback polls
 }
 ```
 
@@ -150,7 +154,7 @@ case "shift+tab":  return "\x1b[Z", true
 
 For printable characters, `tmux send-keys -l` prevents interpretation.
 
-## Polling fallback
+## Capture fallback and semantic observation
 
 ```go
 const (
@@ -161,9 +165,17 @@ const (
 )
 ```
 
-Control mode is preferred for the visible terminal panel and selected agent or
-shell. Adaptive polling remains the fallback for old/unavailable/dead control
-clients and for background status work.
+Control-mode bytes are the ordinary presentation source for every visible
+terminal surface. Adaptive capture polling exists only until the first seeded
+frame and after control/model failure. Workspace agent and shell observation
+continues independently for provider activity evidence; those captures never
+overwrite a model-owned presentation buffer.
+
+Set `SIDECAR_TERMINAL_TRACE=1` only in an isolated proof run to log privacy-safe
+capture metadata (`surface`, `role`, `reason`, and `generation`). It never logs
+session or pane identity, terminal text, commands, paths, titles, or provider
+payloads. This distinguishes intentional semantic observation from presentation
+fallback.
 
 ### Visibility and focus
 
@@ -244,9 +256,11 @@ type Plugin struct {
 
 Paste wraps text with bracketed paste sequences (`\x1b[200~`...`\x1b[201~`) when the application has enabled bracketed paste mode.
 
-## Terminal Mode Detection (`terminal_mode.go`)
+## Fallback Terminal Mode Recovery (`terminal_mode.go`)
 
-Detects bracketed paste and mouse reporting modes by scanning output for enable/disable escape sequences. Latest enable > latest disable = mode active.
+When capture fallback owns presentation, detects bracketed paste and mouse
+reporting modes by scanning the fallback snapshot. Healthy model-backed
+presentation receives these modes from the shared screen model.
 
 ## Width Synchronization
 
@@ -323,7 +337,7 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 5. **Hash raw capture before cleaning/splitting**, but mode changes must still clear coordinate state.
 6. **Preserve newer live overlap** when delayed history ranges prepend.
 7. **Control clients are per tmux session** and close/stop must invalidate and drain deliveries.
-8. **Keep keyed polling fallback working** until the first accepted control snapshot and after control failure.
+8. **Keep keyed capture fallback working** until the first accepted model frame and after control failure; never run it as the healthy renderer.
 9. **Use native cursor only for the focused live viewport**; hide it offscreen, under modals, and in scrollback.
 10. **Treat source OSC as untrusted**; the sanitizer and independent fuzz oracle must cover nested 7-bit/C1 forms and removal-boundary synthesis.
 11. **Width sync matters**; resize panes/control clients when terminal geometry changes.

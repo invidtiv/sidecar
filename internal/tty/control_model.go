@@ -14,9 +14,9 @@ import (
 // the control client's single ordered event stream (slice 1 of
 // docs/plans/active/td-64c916-byte-fed-tmux-screen-model.md).
 //
-// Nothing here runs unless a subscriber sets ControlRequest.OnModelFrame. With
-// that hook nil the control client issues no extra tmux commands, builds no
-// model, and delivers exactly the ControlSnapshot sequence it always did.
+// Model-backed terminal surfaces set ControlRequest.OnModelFrame. Subscriptions
+// used only for semantic observation or diagnostics may omit it and do not
+// build a screen model.
 
 // ResyncReason says why a pane model needs a fresh seed, or why it stopped.
 type ResyncReason uint8
@@ -77,7 +77,7 @@ func (r ResyncReason) String() string {
 	}
 }
 
-// ModelFrame is one rendered byte-fed frame for a subscription that opted in.
+// ModelFrame is one rendered byte-fed frame for a model-backed subscription.
 // It is delivered only after a seed and its post-seed replay have completed.
 type ModelFrame struct {
 	Session    string
@@ -104,7 +104,7 @@ type ModelFrame struct {
 	DiscardCheckedAt time.Time
 }
 
-// ModelInvalidation reports that a pane model lost authority. Terminal
+// ModelInvalidation reports that a pane model lost presentation. Terminal
 // invalidations end the model for that subscription; the consumer stays on the
 // existing capture/polling path, which slice 1 never leaves in the first place.
 type ModelInvalidation struct {

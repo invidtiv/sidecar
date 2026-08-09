@@ -15,8 +15,8 @@ import (
 
 func TestInteractivePollContinuesDuringScrollBurst(t *testing.T) {
 	p := &Plugin{
-		interactiveState: &InteractiveState{Active: true, TermPanel: true},
-		termPanelSession: "sidecar-test",
+		interactiveState: &InteractiveState{Active: true},
+		worktrees:        []*Worktree{{Name: "sidecar-test"}},
 		lastScrollTime:   time.Now(),
 		scrollBurstCount: 1,
 	}

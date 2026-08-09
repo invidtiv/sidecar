@@ -67,7 +67,13 @@ $RUN_DIR/tmux/tmux-<uid>/default   the private tmux server (TMUX_TMPDIR)
 $RUN_DIR/state/sidecar/...         XDG_STATE_HOME, holds shells.json
 $RUN_DIR/cache/                    XDG_CACHE_HOME
 $RUN_DIR/config/config.json        passed as -config
+$RUN_DIR/out/                      text and PNG snapshots
 ```
+
+The run root is canonicalized before any of these paths are derived. It must
+have an existing parent, contain no `.`/`..` components or symlink traversal,
+and resolve beneath `/tmp` or `$TMPDIR`. A custom `SIDECAR_DRIVE_OUT` must also
+remain beneath that canonical run root.
 
 Check it before you trust it, and confirm nothing resolves under
 `~/.local/state/sidecar` or `~/.config/sidecar`:
@@ -118,10 +124,60 @@ sleep 3                                   # let the first frame paint
 ./scripts/tmux-drive.sh type 'echo hi'    # literal text
 ./scripts/tmux-drive.sh keys Enter
 
-./scripts/tmux-drive.sh snap my-check     # -> /tmp/sidecar-drive/my-check.{txt,png}
+./scripts/tmux-drive.sh snap my-check     # -> $SIDECAR_DRIVE_RUN_DIR/out/my-check.{txt,png}
 ./scripts/tmux-drive.sh panes             # inner pane sizes and commands
 ./scripts/tmux-drive.sh stop
 ```
+
+For terminal-cutover proof, the driver also exposes narrowly scoped helpers for
+the private inner server. `PANE` must resolve on that server; the process helper
+only reports exact `tmux -C attach-session -f ignore-size -t SESSION` clients
+that are descendants of the Sidecar host pane and whose session exists on the
+private server:
+
+```bash
+FIXTURE_ROOT=$(mktemp -d /tmp/sidecar-terminal-cutover.XXXXXX)
+./scripts/terminal-cutover-fixture.sh "$FIXTURE_ROOT"
+export SIDECAR_DRIVE_RUN_DIR="$FIXTURE_ROOT"
+export SIDECAR_DRIVE_REPO="$FIXTURE_ROOT/main"
+export EDITOR="$FIXTURE_ROOT/editors/nvim-proof"
+export SIDECAR_TERMINAL_TRACE=1
+
+SIDECAR_DRIVE_ARGS='--enable-feature=notes_plugin' ./scripts/tmux-drive.sh start 200 50
+./scripts/tmux-drive.sh panes
+./scripts/tmux-drive.sh inner-type %3 'printf "CUTOVER_MARKER\\n"'
+./scripts/tmux-drive.sh inner-keys %3 Enter
+
+./scripts/tmux-drive.sh capture-hook-install
+./scripts/tmux-drive.sh capture-hook-reset
+# Produce steady output, then require this to stay empty.
+./scripts/tmux-drive.sh capture-hook-show
+
+./scripts/tmux-drive.sh control-clients
+# Use only the exact PID printed above to exercise fallback/reseed.
+./scripts/tmux-drive.sh control-kill PID
+```
+
+Model-backed presentation is the normal path. In steady state the capture hook
+must remain empty for terminal panels and inline editors. Agent/shell activity
+may still produce intentional semantic-observation captures; with
+`SIDECAR_TERMINAL_TRACE=1`, the isolated Sidecar debug log records those as
+privacy-safe `terminal capture trace` entries with reason `semantic_activity`
+and no terminal content. Correlate those reason tags with hook entries instead
+of claiming that every agent-pane capture is presentation fallback.
+
+The fixture has committed proof files, two linked worktrees, deterministic
+`nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in
+the agent picker. It refuses a nonempty destination and any path under `$HOME`.
+
+`control-kill` rechecks ancestry, exact argv shape, inherited `TMUX_TMPDIR`, any
+nonempty `TMUX` socket identity, and private-session membership immediately
+before sending `TERM`; it refuses zero or ambiguous matches. There
+is intentionally no general process killer or inner `kill-server` command.
+The capture hook and its log live under `$SIDECAR_DRIVE_RUN_DIR/proof` and are
+installed only on the explicit inner socket. `SIDECAR_DRIVE_ARGS` is split on
+whitespace without shell evaluation, so use it only for flags whose individual
+values contain no spaces.
 
 `SIDECAR_BIN` defaults to whatever `sidecar` resolves to on `PATH`. Build to a
 temp path and point at it to compare a fix against its parent commit — that is
@@ -214,7 +270,7 @@ full-screen program had scrolled the pane.
 
 ## Reading the output
 
-`snap` writes `$SIDECAR_DRIVE_OUT` (default `/tmp/sidecar-drive`). The `.txt`
+`snap` writes `$SIDECAR_DRIVE_OUT` (default `$RUN_DIR/out`). The `.txt`
 keeps ANSI, which is what you want for grepping styles; strip it for width
 assertions, and measure display width rather than byte length:
 
