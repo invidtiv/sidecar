@@ -37,11 +37,13 @@ func (p *Plugin) Commands() []plugin.Command {
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel workspace creation", Context: "workspace-create", Priority: 1},
 			{ID: "confirm", Name: "Create", Description: "Create the workspace", Context: "workspace-create", Priority: 2},
+			{ID: "navigate-picker", Name: "Navigate", Description: "Move through branch or task results", Context: "workspace-create", Priority: 3},
 		}
 	case ViewModeTaskLink:
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel task linking", Context: "workspace-task-link", Priority: 1},
 			{ID: "select-task", Name: "Select", Description: "Link selected task", Context: "workspace-task-link", Priority: 2},
+			{ID: "navigate-picker", Name: "Navigate", Description: "Move through task results", Context: "workspace-task-link", Priority: 3},
 		}
 	case ViewModeMerge:
 		if p.mergeState != nil && p.mergeState.Step == MergeStepError {

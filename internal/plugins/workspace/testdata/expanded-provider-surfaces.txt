@@ -1,5 +1,5 @@
-pi | List: ◆ pi-proof pi blocked | Kanban: ◆ pi-proof pi · blocked
-copilot | List: ◆ copilot-proof copilot blocked | Kanban: ◆ copilot-proof copilot · blocked
-cursor | List: ◆ cursor-proof cursor blocked | Kanban: ◆ cursor-proof cursor · blocked
-opencode | List: ◆ opencode-proof opencode blocked | Kanban: ◆ opencode-proof opencode · blocked
-amp | List: ◆ amp-proof amp blocked | Kanban: ◆ amp-proof amp · blocked
+pi | List: ◆ pi-proof branch pi blocked | Kanban: ◆ pi-proof pi · blocked
+copilot | List: ◆ copilot-proof branch copilot blocked | Kanban: ◆ copilot-proof copilot · blocked
+cursor | List: ◆ cursor-proof branch cursor blocked | Kanban: ◆ cursor-proof cursor · blocked
+opencode | List: ◆ opencode-proof branch opencode blocked | Kanban: ◆ opencode-proof opencode · blocked
+amp | List: ◆ amp-proof branch amp blocked | Kanban: ◆ amp-proof amp · blocked

@@ -1136,10 +1136,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.linkingWorktree = wt
 			p.taskSearchInput = textinput.New()
 			p.taskSearchInput.Placeholder = "Search tasks..."
+			p.taskSearchInput.Prompt = ""
 			p.taskSearchInput.Focus()
 			p.taskSearchInput.CharLimit = 100
 			p.taskSearchIdx = 0
+			p.taskSearchScroll = 0
 			p.taskSearchLoading = true
+			p.taskLinkModal = nil
+			p.taskLinkModalWidth = 0
 			return p.loadOpenTasks()
 		}
 	case "F":
@@ -1267,12 +1271,14 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx > 0 {
 				p.branchIdx--
+				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 			}
 			return nil
 		}
 		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
 			if p.taskSearchIdx > 0 {
 				p.taskSearchIdx--
+				p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, false), len(p.taskSearchFiltered))
 			}
 			return nil
 		}
@@ -1280,12 +1286,14 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx < len(p.branchFiltered)-1 {
 				p.branchIdx++
+				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 			}
 			return nil
 		}
 		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
 			if p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
 				p.taskSearchIdx++
+				p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, false), len(p.taskSearchFiltered))
 			}
 			return nil
 		}
@@ -1380,11 +1388,13 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case 1:
 		p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
 		p.branchIdx = 0
+		p.branchScroll = 0
 	case 3:
 		if p.createTaskID == "" {
 			p.taskSearchInput, cmd = p.taskSearchInput.Update(msg)
 			p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
 			p.taskSearchIdx = 0
+			p.taskSearchScroll = 0
 		}
 	}
 
@@ -1486,35 +1496,31 @@ func (p *Plugin) focusCreateInput() {
 
 // handleTaskLinkKeys handles keys in task link modal.
 func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return nil
+	}
 	switch msg.String() {
 	case "esc":
-		p.viewMode = ViewModeList
-		p.linkingWorktree = nil
-		p.taskSearchInput = textinput.Model{}
-		p.taskSearchAll = nil
-		p.taskSearchFiltered = nil
-		p.taskSearchIdx = 0
+		p.closeTaskLinkModal()
 		return nil
-	case "up":
+	case "up", "k":
 		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx > 0 {
 			p.taskSearchIdx--
+			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, true), len(p.taskSearchFiltered))
 		}
 		return nil
-	case "down":
+	case "down", "j":
 		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
 			p.taskSearchIdx++
+			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, true), len(p.taskSearchFiltered))
 		}
 		return nil
 	case "enter":
 		if len(p.taskSearchFiltered) > 0 && p.linkingWorktree != nil {
 			selectedTask := p.taskSearchFiltered[p.taskSearchIdx]
 			wt := p.linkingWorktree
-			p.viewMode = ViewModeList
-			p.linkingWorktree = nil
-			p.taskSearchInput = textinput.Model{}
-			p.taskSearchAll = nil
-			p.taskSearchFiltered = nil
-			p.taskSearchIdx = 0
+			p.closeTaskLinkModal()
 			return p.linkTask(wt, selectedTask.ID)
 		}
 		return nil
@@ -1522,11 +1528,27 @@ func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Delegate to textinput for all other keys (typing, backspace, paste, etc.)
 	var cmd tea.Cmd
+	oldQuery := p.taskSearchInput.Value()
 	p.taskSearchInput, cmd = p.taskSearchInput.Update(msg)
 	// Update filtered results on input change
 	p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
-	p.taskSearchIdx = 0
+	if p.taskSearchInput.Value() != oldQuery {
+		p.taskSearchIdx = 0
+		p.taskSearchScroll = 0
+	}
 	return cmd
+}
+
+func (p *Plugin) closeTaskLinkModal() {
+	p.viewMode = ViewModeList
+	p.linkingWorktree = nil
+	p.taskSearchInput = textinput.Model{}
+	p.taskSearchAll = nil
+	p.taskSearchFiltered = nil
+	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
+	p.taskLinkModal = nil
+	p.taskLinkModalWidth = 0
 }
 
 // handleMergeKeys handles keys in merge workflow modal.

@@ -39,6 +39,9 @@ func WorktreeActionRefusal(wt *Worktree, action WorktreeAction) string {
 	if wt.IsMissing {
 		return fmt.Sprintf("%s is unavailable because the worktree path is missing", action)
 	}
+	if wt.IsPrunable {
+		return fmt.Sprintf("%s is unavailable because the worktree record is prunable", action)
+	}
 	if info, err := os.Stat(wt.Path); err != nil || !info.IsDir() {
 		return fmt.Sprintf("%s is unavailable because the worktree path is missing", action)
 	}

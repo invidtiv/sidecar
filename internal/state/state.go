@@ -15,14 +15,14 @@ type State struct {
 	LineWrapEnabled   bool   `json:"lineWrapEnabled,omitempty"`   // Wrap long lines instead of truncating
 
 	// Pane width preferences (percentage of total width, 0 = use default)
-	FileBrowserTreeWidth   int `json:"fileBrowserTreeWidth,omitempty"`
-	GitStatusSidebarWidth  int `json:"gitStatusSidebarWidth,omitempty"`
-	ConversationsSideWidth int `json:"conversationsSideWidth,omitempty"`
-	WorkspaceSidebarWidth  int `json:"workspaceSidebarWidth,omitempty"`
+	FileBrowserTreeWidth   int    `json:"fileBrowserTreeWidth,omitempty"`
+	GitStatusSidebarWidth  int    `json:"gitStatusSidebarWidth,omitempty"`
+	ConversationsSideWidth int    `json:"conversationsSideWidth,omitempty"`
+	WorkspaceSidebarWidth  int    `json:"workspaceSidebarWidth,omitempty"`
 	DiffTabFileListWidth   int    `json:"diffTabFileListWidth,omitempty"`
-	TermPanelSize          int    `json:"termPanelSize,omitempty"`          // Terminal panel split size (percentage, 0 = 50%)
-	TermPanelLayout        string `json:"termPanelLayout,omitempty"`        // "bottom" or "right"
-	TermPanelVisible       bool   `json:"termPanelVisible,omitempty"`       // Whether terminal panel was visible at exit
+	TermPanelSize          int    `json:"termPanelSize,omitempty"`    // Terminal panel split size (percentage, 0 = 50%)
+	TermPanelLayout        string `json:"termPanelLayout,omitempty"`  // "bottom" or "right"
+	TermPanelVisible       bool   `json:"termPanelVisible,omitempty"` // Whether terminal panel was visible at exit
 
 	// Plugin-specific state (keyed by working directory path)
 	FileBrowser  map[string]FileBrowserState `json:"fileBrowser,omitempty"`
@@ -400,6 +400,31 @@ func GetFileBrowserState(workdir string) FileBrowserState {
 	return current.FileBrowser[workdir]
 }
 
+// GetFileBrowserStateForWorkDir returns content state keyed by the concrete
+// worktree. Older Sidecar versions keyed this state by the repository root; on
+// first access, copy that legacy value forward only when the worktree has no
+// value of its own. The root entry is deliberately retained for rollback.
+func GetFileBrowserStateForWorkDir(workdir, projectRoot string) FileBrowserState {
+	mu.Lock()
+	if current == nil || current.FileBrowser == nil {
+		mu.Unlock()
+		return FileBrowserState{}
+	}
+	if value, ok := current.FileBrowser[workdir]; ok {
+		mu.Unlock()
+		return value
+	}
+	legacy, ok := current.FileBrowser[projectRoot]
+	if !ok || workdir == projectRoot {
+		mu.Unlock()
+		return FileBrowserState{}
+	}
+	current.FileBrowser[workdir] = legacy
+	mu.Unlock()
+	_ = Save()
+	return legacy
+}
+
 // SetFileBrowserState saves the file browser state for a given working directory.
 func SetFileBrowserState(workdir string, fbState FileBrowserState) error {
 	mu.Lock()
@@ -446,6 +471,30 @@ func GetActivePlugin(workdir string) string {
 		return ""
 	}
 	return current.ActivePlugin[workdir]
+}
+
+// GetActivePluginForWorkDir performs the additive migration from the former
+// repository-root key to a concrete worktree key. It never overwrites an
+// existing worktree choice and retains the legacy entry.
+func GetActivePluginForWorkDir(workdir, projectRoot string) string {
+	mu.Lock()
+	if current == nil || current.ActivePlugin == nil {
+		mu.Unlock()
+		return ""
+	}
+	if value, ok := current.ActivePlugin[workdir]; ok {
+		mu.Unlock()
+		return value
+	}
+	legacy, ok := current.ActivePlugin[projectRoot]
+	if !ok || workdir == projectRoot {
+		mu.Unlock()
+		return ""
+	}
+	current.ActivePlugin[workdir] = legacy
+	mu.Unlock()
+	_ = Save()
+	return legacy
 }
 
 // SetActivePlugin saves the active plugin ID for a given working directory.

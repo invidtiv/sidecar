@@ -34,148 +34,29 @@ func (p *Plugin) renderCreateModal(width, height int) string {
 
 // renderTaskLinkModal renders the task link modal for existing worktrees with dimmed background.
 func (p *Plugin) renderTaskLinkModal(width, height int) string {
-	// Render the background (list view)
 	background := p.renderListView(width, height)
-
-	// Modal dimensions - increased for better task display
-	modalW := 70
-	if modalW > width-4 {
-		modalW = width - 4
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return background
 	}
+	return ui.OverlayModal(background, p.taskLinkModal.Render(width, height, p.mouseHandler), width, height)
+}
 
-	// Calculate input field width
-	// - modalStyle has border (2) + padding (4) = 6 chars
-	// - inputStyle has border (2) + padding (2) = 4 chars
-	inputW := modalW - 10
-	if inputW < 20 {
-		inputW = 20
+func (p *Plugin) ensureTaskLinkModal() {
+	if p.linkingWorktree == nil {
+		return
 	}
-
-	// Set textinput width and remove default prompt
-	p.taskSearchInput.SetWidth(inputW)
-	p.taskSearchInput.Prompt = ""
-
-	var sb strings.Builder
-	title := "Link Task"
-	if p.linkingWorktree != nil {
-		title = fmt.Sprintf("Link Task to %s", p.linkingWorktree.Name)
+	modalW := min(70, max(1, p.width-4))
+	if p.taskLinkModal != nil && p.taskLinkModalWidth == modalW {
+		return
 	}
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(title))
-	sb.WriteString("\n\n")
-
-	// Search field - use textinput.View() for proper cursor rendering
-	searchLabel := "Search tasks:"
-	searchStyle := inputFocusedStyle()
-	sb.WriteString(searchLabel)
-	sb.WriteString("\n")
-	sb.WriteString(searchStyle.Render(p.taskSearchInput.View()))
-
-	// Task dropdown
-	if p.taskSearchLoading {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  Loading tasks..."))
-	} else if len(p.taskSearchFiltered) > 0 {
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(p.taskSearchFiltered))
-		for i := 0; i < dropdownCount; i++ {
-			task := p.taskSearchFiltered[i]
-			prefix := "  "
-			if i == p.taskSearchIdx {
-				prefix = "> "
-			}
-			// Truncate title based on available width
-			taskTitle := task.Title
-			idWidth := len(task.ID)
-			maxTitle := modalW - idWidth - 10
-			if maxTitle < 10 {
-				maxTitle = 10
-			}
-			if len(taskTitle) > maxTitle {
-				taskTitle = taskTitle[:maxTitle-3] + "..."
-			}
-			line := fmt.Sprintf("%s%s  %s", prefix, task.ID, taskTitle)
-			sb.WriteString("\n")
-			if i == p.taskSearchIdx {
-				sb.WriteString(lipgloss.NewStyle().Foreground(styles.Primary).Render(line))
-			} else {
-				sb.WriteString(dimText(line))
-			}
-		}
-		if len(p.taskSearchFiltered) > maxDropdown {
-			sb.WriteString("\n")
-			sb.WriteString(dimText(fmt.Sprintf("  ... and %d more", len(p.taskSearchFiltered)-maxDropdown)))
-		}
-	} else if p.taskSearchInput.Value() != "" {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  No matching tasks"))
-	} else if len(p.taskSearchAll) == 0 {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  No open tasks found"))
-	} else {
-		// Show all tasks when no query
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(p.taskSearchAll))
-		for i := 0; i < dropdownCount; i++ {
-			task := p.taskSearchAll[i]
-			prefix := "  "
-			if i == p.taskSearchIdx {
-				prefix = "> "
-			}
-			taskTitle := task.Title
-			idWidth := len(task.ID)
-			maxTitle := modalW - idWidth - 10
-			if maxTitle < 10 {
-				maxTitle = 10
-			}
-			if len(taskTitle) > maxTitle {
-				taskTitle = taskTitle[:maxTitle-3] + "..."
-			}
-			line := fmt.Sprintf("%s%s  %s", prefix, task.ID, taskTitle)
-			sb.WriteString("\n")
-			if i == p.taskSearchIdx {
-				sb.WriteString(lipgloss.NewStyle().Foreground(styles.Primary).Render(line))
-			} else {
-				sb.WriteString(dimText(line))
-			}
-		}
-		if len(p.taskSearchAll) > maxDropdown {
-			sb.WriteString("\n")
-			sb.WriteString(dimText(fmt.Sprintf("  ... and %d more", len(p.taskSearchAll)-maxDropdown)))
-		}
-	}
-
-	sb.WriteString("\n\n")
-	sb.WriteString(dimText("↑/↓ navigate  Enter select  Esc cancel"))
-
-	content := sb.String()
-	modal := modalStyle().Width(modalW).Render(content)
-
-	// Calculate modal position for hit regions
-	modalH := lipgloss.Height(modal)
-	modalX := (width - modalW) / 2
-	modalY := (height - modalH) / 2
-
-	// Register hit regions for task dropdown items
-	// Content: title(1) + blank(1) + label(1) + bordered-input(3) = 6 lines before dropdown
-	// Border offset is 2: border(1) + padding(1)
-	dropdownStartY := modalY + 2 + 6 // border(1) + padding(1) + content lines to dropdown
-
-	// Determine which list to use for hit regions
-	tasks := p.taskSearchFiltered
-	if len(tasks) == 0 && p.taskSearchInput.Value() == "" && len(p.taskSearchAll) > 0 {
-		tasks = p.taskSearchAll
-	}
-
-	if len(tasks) > 0 {
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(tasks))
-		for i := 0; i < dropdownCount; i++ {
-			p.mouseHandler.HitMap.AddRect(regionTaskLinkDropdown, modalX+2, dropdownStartY+i, modalW-6, 1, i)
-		}
-	}
-
-	// Use OverlayModal for dimmed background effect
-	return ui.OverlayModal(background, modal, width, height)
+	p.taskLinkModalWidth = modalW
+	title := "Link Task to " + ansi.Truncate(p.linkingWorktree.Name, max(1, modalW-16), "…")
+	p.taskLinkModal = modal.New(title, modal.WithWidth(modalW), modal.WithHints(false)).
+		AddSection(p.taskPickerSection(taskLinkFieldID, taskLinkItemPrefix, "Search tasks:", false, 8)).
+		AddSection(modal.Spacer()).
+		AddSection(modal.Buttons(modal.Btn(" Cancel ", createCancelID)))
+	p.taskLinkModal.SetFocus(taskLinkFieldID)
 }
 
 // renderConfirmDeleteModal renders the delete confirmation modal.

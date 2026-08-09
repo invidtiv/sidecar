@@ -291,15 +291,19 @@ type Plugin struct {
 	taskSearchAll      []Task // All available tasks
 	taskSearchFiltered []Task // Filtered based on query
 	taskSearchIdx      int    // Selected index in dropdown
+	taskSearchScroll   int    // First rendered task row
 	taskSearchLoading  bool
 
 	// Branch autocomplete state for create modal
 	branchAll      []string // All available branches
 	branchFiltered []string // Filtered based on query
 	branchIdx      int      // Selected index in dropdown
+	branchScroll   int      // First rendered branch row
 
 	// Task link modal state (for linking to existing worktrees)
-	linkingWorktree *Worktree
+	linkingWorktree    *Worktree
+	taskLinkModal      *modal.Modal
+	taskLinkModalWidth int
 
 	// Cached task details for preview pane
 	cachedTaskID      string
@@ -556,6 +560,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("enter", "confirm", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-field", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-field", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("up", "navigate-picker", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("down", "navigate-picker", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-create-confirm")
 		ctx.Keymap.RegisterPluginBinding("enter", createConfirmID, "workspace-create-confirm")
 		ctx.Keymap.RegisterPluginBinding("enter", createRetrySetupID, "workspace-create-recovery")
@@ -563,6 +569,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		// Task link modal context
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-task-link")
 		ctx.Keymap.RegisterPluginBinding("enter", "select-task", "workspace-task-link")
+		ctx.Keymap.RegisterPluginBinding("up", "navigate-picker", "workspace-task-link")
+		ctx.Keymap.RegisterPluginBinding("down", "navigate-picker", "workspace-task-link")
 
 		// Agent choice modal context
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-agent-choice")
@@ -1057,10 +1065,14 @@ func (p *Plugin) clearCreateModal() {
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
 	p.taskSearchLoading = false
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
+	p.branchScroll = 0
+	p.taskLinkModal = nil
+	p.taskLinkModalWidth = 0
 	// Clear prompt state
 	p.createPrompts = nil
 	p.createPromptIdx = -1
@@ -1116,6 +1128,7 @@ func (p *Plugin) initCreateModalBase() {
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
 	p.taskSearchLoading = true
 
 	// Load prompts from global and project config
@@ -1128,6 +1141,7 @@ func (p *Plugin) initCreateModalBase() {
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
+	p.branchScroll = 0
 }
 
 // openCreateModal opens the create worktree modal and initializes all inputs.

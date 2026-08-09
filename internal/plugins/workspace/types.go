@@ -296,6 +296,8 @@ type Worktree struct {
 	TaskID          string           // Linked td task (e.g., "td-a1b2")
 	TaskTitle       string           // Task title (used as fallback if td show fails)
 	PRURL           string           // URL of open PR (if any)
+	PRState         string           // open, merged, closed, or unavailable when known
+	SetupWarning    string           // Last visible setup warning for this worktree
 	ChosenAgentType AgentType        // Agent selected at creation (persists even when agent not running)
 	Agent           *Agent           // nil if no agent running
 	Status          WorktreeStatus   // Derived from agent state

@@ -195,7 +195,8 @@ type Model struct {
 	worktreeCheckCounter         int // Counter for periodic worktree existence check
 
 	// Worktree info cache (avoids git subprocess forks on every View render)
-	cachedWorktreeInfo *WorktreeInfo
+	cachedWorktreeInfo      *WorktreeInfo
+	cachedWorktreeInventory []WorktreeInfo
 
 	// Open In modal
 	showOpenIn         bool
@@ -754,6 +755,10 @@ func projectSwitcherEnsureCursorVisible(cursor, scroll, maxVisible int) int {
 
 // switchProject switches all plugins to a new project directory.
 func (m *Model) switchProject(projectPath string) tea.Cmd {
+	return m.switchProjectWithInventory(projectPath, nil)
+}
+
+func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
 	// Skip if already on this project
 	if projectPath == m.ui.WorkDir {
 		return func() tea.Msg {
@@ -763,9 +768,8 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 
 	// Save the active plugin state for the old project root
 	oldWorkDir := m.ui.WorkDir
-	oldProjectRoot := m.ui.ProjectRoot
 	if activePlugin := m.ActivePlugin(); activePlugin != nil {
-		_ = state.SetActivePlugin(oldProjectRoot, activePlugin.ID())
+		_ = state.SetActivePlugin(oldWorkDir, activePlugin.ID())
 	}
 
 	// Normalize old workdir for comparisons
@@ -775,7 +779,11 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 	// Only restore if projectPath is the main repo - if user explicitly chose a
 	// specific worktree path (via worktree switcher), respect that choice.
 	targetPath := projectPath
-	if targetMainRepo := GetMainWorktreePath(projectPath); targetMainRepo != "" {
+	targetMainRepo := mainWorktreePath(inventory)
+	if targetMainRepo == "" {
+		targetMainRepo = GetMainWorktreePath(projectPath)
+	}
+	if targetMainRepo != "" {
 		normalizedProject, _ := normalizePath(projectPath)
 		normalizedTargetMain, _ := normalizePath(targetMainRepo)
 
@@ -804,11 +812,17 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 	// Update the UI state
 	m.ui.WorkDir = targetPath
 	m.intro.RepoName = GetRepoName(targetPath)
-	// Eagerly refresh worktree cache (must happen in Update, not View, due to value receiver)
-	m.refreshWorktreeCache()
+	if len(inventory) > 0 {
+		m.setWorktreeInventory(inventory, targetPath)
+	} else {
+		m.refreshWorktreeCache()
+	}
 
 	// Resolve project root (main worktree for linked worktrees, same as targetPath otherwise)
-	newProjectRoot := GetMainWorktreePath(targetPath)
+	newProjectRoot := mainWorktreePath(inventory)
+	if newProjectRoot == "" {
+		newProjectRoot = GetMainWorktreePath(targetPath)
+	}
 	if newProjectRoot == "" {
 		newProjectRoot = targetPath
 	}
@@ -837,7 +851,7 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 	}
 
 	// Restore active plugin for the new project root if saved, otherwise keep current
-	newActivePluginID := state.GetActivePlugin(newProjectRoot)
+	newActivePluginID := state.GetActivePluginForWorkDir(targetPath, newProjectRoot)
 	if newActivePluginID != "" {
 		m.FocusPluginByID(newActivePluginID)
 	}
@@ -845,11 +859,16 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 	// Retitle the terminal now rather than waiting for the next tick, so the
 	// tab label changes at the same moment the UI does.
 	titleCmd := m.syncTerminalTitle(false)
+	var inventoryRefresh tea.Cmd
+	if len(inventory) > 0 {
+		inventoryRefresh = refreshWorktreeInventoryCmd(targetPath)
+	}
 
 	// Return batch of start commands plus a toast notification
 	return tea.Batch(
 		tea.Batch(startCmds...),
 		titleCmd,
+		inventoryRefresh,
 		func() tea.Msg {
 			return ToastMsg{
 				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),

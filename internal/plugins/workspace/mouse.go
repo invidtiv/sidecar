@@ -48,6 +48,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
 	}
+	if p.viewMode == ViewModeTaskLink {
+		return p.handleTaskLinkModalMouse(msg)
+	}
 
 	if p.viewMode == ViewModeRenameShell {
 		return p.handleRenameShellModalMouse(msg)
@@ -108,6 +111,28 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleMouseDragEnd()
 	case mouse.ActionHover:
 		return p.handleMouseHover(action)
+	}
+	return nil
+}
+
+func (p *Plugin) handleTaskLinkModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return nil
+	}
+	action := p.taskLinkModal.HandleMouse(msg, p.mouseHandler)
+	if action == "cancel" || action == createCancelID {
+		p.closeTaskLinkModal()
+		return nil
+	}
+	if idx, ok := parseIndexedID(taskLinkItemPrefix, action); ok && idx >= 0 && idx < len(p.taskSearchFiltered) && p.linkingWorktree != nil {
+		task := p.taskSearchFiltered[idx]
+		wt := p.linkingWorktree
+		p.closeTaskLinkModal()
+		return p.linkTask(wt, task.ID)
+	}
+	if action == taskLinkFieldID {
+		p.taskSearchInput.Focus()
 	}
 	return nil
 }

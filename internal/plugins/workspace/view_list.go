@@ -505,7 +505,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// Build second line parts (plain text)
-	var parts []string
+	parts := p.worktreeStateLabels(wt)
 	if wt.IsMain {
 		// For root workspace, show branch name instead of agent
 		parts = append(parts, wt.Branch)
@@ -535,11 +535,6 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 	if wt.IsOrphaned {
 		parts = append(parts, "⚠ session ended")
-	}
-	if wt.IsMissing {
-		parts = append(parts, "✗ folder missing")
-	} else if wt.Changes != nil && wt.Changes.State == LoadStateError {
-		parts = append(parts, "✗ status unavailable (git status --porcelain=v1)")
 	}
 
 	// When selected, use plain text to ensure consistent background
@@ -619,7 +614,10 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// For non-selected, style parts individually
-	var styledParts []string
+	styledParts := make([]string, 0, len(parts)+4)
+	for _, label := range p.worktreeStateLabels(wt) {
+		styledParts = append(styledParts, dimText(label))
+	}
 	if wt.IsMain {
 		// For root workspace, show branch name instead of agent
 		styledParts = append(styledParts, wt.Branch)
@@ -650,11 +648,6 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	if wt.IsOrphaned {
 		styledParts = append(styledParts, styles.StatusModified.Render("⚠ session ended"))
 	}
-	if wt.IsMissing {
-		styledParts = append(styledParts, styles.StatusModified.Render("✗ folder missing"))
-	} else if wt.Changes != nil && wt.Changes.State == LoadStateError {
-		styledParts = append(styledParts, styles.StatusDeleted.Render("✗ status unavailable (git status --porcelain=v1)"))
-	}
 
 	// Build lines with styled elements
 	line1 := fmt.Sprintf(" %s %s%s%s%s", icon, name, styledPRIcon, styledConflictIcon, styledOrphanedIcon)
@@ -670,6 +663,55 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	content := line1 + "\n" + line2
 	return styles.ListItemNormal.Width(width).Render(content)
+}
+
+func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
+	if wt == nil {
+		return nil
+	}
+	labels := make([]string, 0, 8)
+	switch {
+	case wt.IsMain:
+		labels = append(labels, "main")
+	case wt.IsBare:
+		labels = append(labels, "bare")
+	case wt.IsDetached || wt.Branch == "(detached)":
+		labels = append(labels, "detached")
+	default:
+		labels = append(labels, "branch "+wt.Branch)
+	}
+	if wt.IsLocked {
+		labels = append(labels, "locked · actions unavailable")
+	}
+	if wt.IsMissing {
+		labels = append(labels, "folder missing · actions unavailable")
+	} else if wt.IsPrunable {
+		labels = append(labels, "prunable · actions unavailable")
+	}
+	if p.activeLifecycleOperationID != "" && ((p.mergeState != nil && p.mergeState.Worktree != nil && p.mergeState.Worktree.IdentityKey() == wt.IdentityKey()) || (p.createPlan != nil && p.createPlan.Path == wt.Path)) {
+		labels = append(labels, "operation in progress")
+	}
+	if wt.SetupWarning != "" {
+		labels = append(labels, "setup warning: "+wt.SetupWarning)
+	}
+	if wt.PRState != "" {
+		labels = append(labels, "PR "+wt.PRState)
+	} else if wt.PRURL != "" {
+		labels = append(labels, "PR open")
+	}
+	if wt.Changes != nil {
+		switch wt.Changes.State {
+		case LoadStateError:
+			labels = append(labels, "diff error")
+		case LoadStateTruncated:
+			labels = append(labels, "diff truncated")
+		default:
+			if wt.Changes.Truncated {
+				labels = append(labels, "diff truncated")
+			}
+		}
+	}
+	return labels
 }
 
 // renderShellEntryForSession renders a shell entry for a specific shell session.

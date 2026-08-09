@@ -395,12 +395,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.createError = "setup returned no created worktree"
 			return p, nil
 		}
-		if len(msg.Result.Warnings()) > 0 {
+		warnings := msg.Result.Warnings()
+		if len(warnings) > 0 {
+			warningText := warnings[0].Action
+			if warnings[0].Err != nil {
+				warningText += ": " + warnings[0].Err.Error()
+			}
+			msg.Result.Worktree.SetupWarning = warningText
 			// A created worktree remains selected but no agent is started until
 			// the user explicitly chooses a recovery action.
 			p.selectCreatedWorktree(msg.Result.Worktree)
 			return p, nil
 		}
+		msg.Result.Worktree.SetupWarning = ""
 		if err := p.clearPendingCreation(msg.Plan); err != nil {
 			msg.Result.Outcomes = append(msg.Result.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal", Required: true, Err: err})
 			p.selectCreatedWorktree(msg.Result.Worktree)
@@ -476,6 +483,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		} else {
 			p.viewMode = ViewModeCreate
+			p.createModal = nil
 			if msg.Prompt != nil {
 				// Find index of selected prompt
 				for i, pr := range p.createPrompts {
@@ -1445,16 +1453,36 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case TaskSearchResultsMsg:
 		p.taskSearchLoading = false
 		if msg.Err == nil {
+			selectedID := ""
+			if p.taskSearchIdx >= 0 && p.taskSearchIdx < len(p.taskSearchFiltered) {
+				selectedID = p.taskSearchFiltered[p.taskSearchIdx].ID
+			}
 			p.taskSearchAll = msg.Tasks
 			p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
-			p.taskSearchIdx = 0
+			p.taskSearchIdx = selectedTaskIndex(p.taskSearchFiltered, selectedID)
+			if p.taskSearchIdx < 0 {
+				p.taskSearchIdx = 0
+			}
+			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, p.viewMode == ViewModeTaskLink), len(p.taskSearchFiltered))
+			p.taskLinkModal = nil
 		}
 
 	case BranchListMsg:
 		if msg.Err == nil {
+			selected := ""
+			if p.branchIdx >= 0 && p.branchIdx < len(p.branchFiltered) {
+				selected = p.branchFiltered[p.branchIdx]
+			}
 			p.branchAll = msg.Branches
 			p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
 			p.branchIdx = 0
+			for i := range p.branchFiltered {
+				if p.branchFiltered[i] == selected {
+					p.branchIdx = i
+					break
+				}
+			}
+			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 		}
 
 	case TaskDetailsLoadedMsg:

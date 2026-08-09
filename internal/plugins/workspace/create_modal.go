@@ -293,21 +293,13 @@ func (p *Plugin) createBranchDropdownSection() modal.Section {
 		lineY := 0
 
 		if len(p.branchFiltered) > 0 {
-			maxDropdown := 5
-			dropdownCount := len(p.branchFiltered)
-			if dropdownCount > maxDropdown {
-				dropdownCount = maxDropdown
-			}
+			maxDropdown := max(1, min(8, p.height-17))
+			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, maxDropdown, len(p.branchFiltered))
+			end := min(len(p.branchFiltered), p.branchScroll+maxDropdown)
 
-			for i := 0; i < dropdownCount; i++ {
+			for i := p.branchScroll; i < end; i++ {
 				branch := p.branchFiltered[i]
-				maxWidth := contentWidth - 4
-				if maxWidth < 8 {
-					maxWidth = 8
-				}
-				if len(branch) > maxWidth {
-					branch = branch[:maxWidth-3] + "..."
-				}
+				branch = ansi.Truncate(branch, max(0, contentWidth-2), "…")
 				prefix := "  "
 				if i == p.branchIdx {
 					prefix = "> "
@@ -328,8 +320,8 @@ func (p *Plugin) createBranchDropdownSection() modal.Section {
 				})
 				lineY++
 			}
-			if len(p.branchFiltered) > maxDropdown {
-				lines = append(lines, dimText(fmt.Sprintf("  ... and %d more", len(p.branchFiltered)-maxDropdown)))
+			if remaining := len(p.branchFiltered) - end; remaining > 0 {
+				lines = append(lines, dimText(fmt.Sprintf("  ↓ %d more", remaining)))
 			}
 		} else if len(p.branchAll) == 0 {
 			lines = append(lines, dimText("  Loading branches..."))
@@ -399,147 +391,15 @@ func (p *Plugin) createPromptSection() modal.Section {
 }
 
 func (p *Plugin) createTaskSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		selectedPrompt := p.getSelectedPrompt()
-		if selectedPrompt != nil && selectedPrompt.TicketMode == TicketNone {
-			return modal.RenderedSection{Content: dimText("Ticket: (not allowed by selected prompt)")}
-		}
-
-		lines := make([]string, 0, 6)
-		focusables := make([]modal.FocusableInfo, 0)
-		lineY := 0
-
-		taskLabel := "Link Task (optional):"
-		if selectedPrompt != nil {
-			switch selectedPrompt.TicketMode {
-			case TicketRequired:
-				taskLabel = "Link Task (required by selected prompt):"
-			case TicketOptional:
-				taskLabel = "Link Task (optional for selected prompt):"
-			}
-		}
-		lines = append(lines, taskLabel)
-		lineY++
-
-		isFocused := focusID == createTaskFieldID
-		if p.createTaskID != "" {
-			p.taskSearchInput.Blur()
-		} else if isFocused {
-			p.taskSearchInput.Focus()
-		} else {
-			p.taskSearchInput.Blur()
-		}
-		inputInnerWidth := contentWidth - 4
-		if inputInnerWidth < 1 {
-			inputInnerWidth = 1
-		}
-		p.taskSearchInput.SetWidth(inputInnerWidth)
-
-		taskStyle := inputStyle()
-		if isFocused {
-			taskStyle = inputFocusedStyle()
-		}
-
-		display := ""
-		if p.createTaskID != "" {
-			display = p.createTaskID
-			if p.createTaskTitle != "" {
-				title := p.createTaskTitle
-				maxTitle := inputInnerWidth - len(p.createTaskID) - 3
-				if maxTitle > 10 && len(title) > maxTitle {
-					title = title[:maxTitle-3] + "..."
-				}
-				if maxTitle > 10 {
-					display = fmt.Sprintf("%s: %s", p.createTaskID, title)
-				}
-			}
-		} else {
-			display = p.taskSearchInput.View()
-		}
-
-		rendered := taskStyle.Render(display)
-		renderedLines := strings.Split(rendered, "\n")
-		displayStartY := lineY
-		lines = append(lines, renderedLines...)
-		focusables = append(focusables, modal.FocusableInfo{
-			ID:      createTaskFieldID,
-			OffsetX: 0,
-			OffsetY: displayStartY,
-			Width:   ansi.StringWidth(rendered),
-			Height:  len(renderedLines),
-		})
-		lineY += len(renderedLines)
-
-		if isFocused && p.createTaskID != "" {
-			lines = append(lines, dimText("  Backspace to clear"))
-			lineY++
-		}
-		if selectedPrompt != nil && selectedPrompt.TicketMode == TicketOptional && p.createTaskID == "" {
-			fallback := ExtractFallback(selectedPrompt.Body)
-			if fallback != "" {
-				lines = append(lines, dimText(fmt.Sprintf("  Default if empty: \"%s\"", fallback)))
-				lineY++
-			}
-		}
-		if selectedPrompt != nil && selectedPrompt.TicketMode == TicketRequired {
-			lines = append(lines, dimText("  Tip: ticket is passed as an ID only. The agent fetches via td."))
-			lineY++
-		}
-
-		if p.taskDropdownVisible(focusID) && p.createTaskID == "" {
-			if p.taskSearchLoading {
-				lines = append(lines, dimText("  Loading tasks..."))
-			} else if len(p.taskSearchFiltered) > 0 {
-				maxDropdown := 5
-				dropdownCount := len(p.taskSearchFiltered)
-				if dropdownCount > maxDropdown {
-					dropdownCount = maxDropdown
-				}
-				for i := 0; i < dropdownCount; i++ {
-					task := p.taskSearchFiltered[i]
-					prefix := "  "
-					if i == p.taskSearchIdx {
-						prefix = "> "
-					}
-					title := task.Title
-					idWidth := len(task.ID)
-					maxTitle := contentWidth - idWidth - 10
-					if maxTitle < 10 {
-						maxTitle = 10
-					}
-					if len(title) > maxTitle {
-						title = title[:maxTitle-3] + "..."
-					}
-					line := fmt.Sprintf("%s%s  %s", prefix, task.ID, title)
-					if i == p.taskSearchIdx {
-						line = lipgloss.NewStyle().Foreground(styles.Primary).Render(line)
-					} else {
-						line = dimText(line)
-					}
-					lines = append(lines, line)
-					focusables = append(focusables, modal.FocusableInfo{
-						ID:      createIndexedID(createTaskItemPrefix, i),
-						OffsetX: 0,
-						OffsetY: lineY,
-						Width:   ansi.StringWidth(line),
-						Height:  1,
-					})
-					lineY++
-				}
-				if len(p.taskSearchFiltered) > maxDropdown {
-					lines = append(lines, dimText(fmt.Sprintf("  ... and %d more", len(p.taskSearchFiltered)-maxDropdown)))
-				}
-			} else if p.taskSearchInput.Value() != "" {
-				lines = append(lines, dimText("  No matching tasks"))
-			} else if len(p.taskSearchAll) == 0 {
-				lines = append(lines, dimText("  No open tasks found"))
-			} else {
-				lines = append(lines, dimText("  Type to search, \u2191/\u2193 to navigate"))
-			}
-		}
-
-		return modal.RenderedSection{Content: strings.Join(lines, "\n"), Focusables: focusables}
-	}, nil)
+	selectedPrompt := p.getSelectedPrompt()
+	if selectedPrompt != nil && selectedPrompt.TicketMode == TicketNone {
+		return modal.Text("Ticket: (not allowed by selected prompt)")
+	}
+	label := "Link Task (optional):"
+	if selectedPrompt != nil && selectedPrompt.TicketMode == TicketRequired {
+		label = "Link Task (required by selected prompt):"
+	}
+	return p.taskPickerSection(createTaskFieldID, createTaskItemPrefix, label, p.createTaskID != "", 8)
 }
 
 func (p *Plugin) taskDropdownVisible(focusID string) bool {
