@@ -297,7 +297,7 @@ mid-stream model knowing that hidden mode.
 As a small prerequisite, change the shared paste adapter
 (`internal/tty/paste.go`, which today wraps bracket sequences manually around
 a `load-buffer`/`paste-buffer` pair on the unnamed buffer) to use a uniquely
-named tmux buffer and `paste-buffer -p -r -d -t <pane>`. Tmux already knows
+named tmux buffer and `paste-buffer -p -d -t <pane>`. Tmux already knows
 whether the pane requested bracketed paste and inserts the control codes only
 when appropriate. This also removes manual three-command bracket wrapping and
 avoids using the server-global unnamed buffer. Keep mode reporting from the
@@ -406,7 +406,7 @@ or unstable patch layer is a no-go.
   reseed, discard detection, and fallback.
 - Add isolated integration tests for continuous numbered output around each
   boundary.
-- Move paste to pane-targeted `paste-buffer -p -r -d` with a unique buffer.
+- Move paste to pane-targeted `paste-buffer -p -d` with a unique buffer.
 
 **Exit:** no duplicated/missing bytes across attach, resize, pause, reconnect,
 unsubscribe, or generation replacement; existing capture delivery is unchanged.
@@ -501,7 +501,7 @@ fix exists.
 | Protocol | Ordered response/notification barrier; numbered continuous output; pause/continue; discard; reconnect; stale generation; close drains delivery |
 | Seed/resync | Existing shell/TUI/agent; main and alt screen; non-default margins; saved cursor; resize; Sidecar restart; pane switch |
 | History | Absolute base/history size; scroll-off append; byte trimming; lazy older range; delayed prepend overlap; search and selection coordinates |
-| Input | Literal keys, enhanced keys, multiline paste via `paste-buffer -p -r`, mouse modes, shift-drag escape hatch, attach/detach |
+| Input | Literal keys, enhanced keys, multiline paste via `paste-buffer -p`, mouse modes, shift-drag escape hatch, attach/detach |
 | Performance | Bytes/event, model write/render time, allocations, retained memory, captures/metadata queries, output-to-frame latency, sustained-output CPU |
 | Real UI | Terminal panel first, then agent and shell; native cursor; colors/Unicode; geometry lease owner/non-owner; app blurred; modal suppression |
 | Failure | Unsupported tmux/control start failure, malformed payload, model error/panic, killed control client, deleted pane/session, flag disabled |
