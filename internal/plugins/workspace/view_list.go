@@ -85,6 +85,41 @@ func (p *Plugin) View(width, height int) string {
 	}
 }
 
+// registerPreviewTabRegions puts click targets over the Output/Diff/Task chips,
+// taken from the same layout that drew them and registered only where they are
+// drawn: a state with no tab row (shell, welcome guide, main worktree) gets no
+// regions, and a chip the header dropped for want of columns gets none either.
+//
+// The row's width and its hint floor are read here rather than re-derived,
+// because a second budget that merely ought to agree is how a dropped chip kept
+// a region — one that sat on the interactive exit hint and exited interactive
+// mode when clicked.
+func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
+	if !p.previewTabsVisible() {
+		return
+	}
+	// On the Output tab the chips are the terminal's own header row, laid out at
+	// that surface's width and behind its hint floor; Diff and Task draw their
+	// standalone tab row across the whole preview on the same first content row.
+	row, width, hintFloor := p.previewContentY(), split.ContentWidth, 0
+	if p.previewTab == PreviewTabOutput {
+		if surface := p.terminalSurfaceGeometry(false); surface.OK {
+			row, width = surface.HeaderY, surface.Width
+		}
+		if p.interactiveDescribes(false) {
+			hintFloor = p.interactiveHintFloor()
+		}
+	}
+
+	for i, placement := range layoutHeaderChips(p.previewTabChips(), width, hintFloor) {
+		if !placement.Drawn {
+			continue
+		}
+		p.mouseHandler.HitMap.AddRect(regionPreviewTab,
+			split.ContentX+placement.Col, row, placement.Width, 1, i)
+	}
+}
+
 // renderListView renders the main split-pane list view.
 func (p *Plugin) renderListView(width, height int) string {
 	// Pane height for panels (outer dimensions including borders)
@@ -99,56 +134,30 @@ func (p *Plugin) renderListView(width, height int) string {
 		innerHeight = 1
 	}
 
+	// The sidebar/divider/preview column arithmetic lives in one place so the
+	// render path, the cursor path and the hit tests cannot drift (td-73fa86).
+	split := p.previewSplitFor(width)
+
 	// If sidebar is hidden, show only preview pane at full width
 	if !p.sidebarVisible {
-		// Full-width preview: outer width is the full width, content width subtracts panel overhead
-		previewW := width
-		contentW := previewW - panelOverhead
-
 		// Register hit region for full-width preview (uses outer dimensions)
-		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, previewW, paneHeight, nil)
+		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, split.PreviewWidth, paneHeight, nil)
 
-		// Register preview tab hit regions only when a worktree is selected (not shell)
-		// Shell has no tabs - it shows primer/output directly
-		if !p.shellSelected {
-			// X starts at panelOverhead/2 (1 for border + 1 for panel padding)
-			tabWidths := []int{10, 8, 8} // " Output " + padding, " Diff " + padding, " Task " + padding
-			tabX := panelOverhead / 2
-			for i, tabWidth := range tabWidths {
-				p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX, 1, tabWidth, 1, i)
-				tabX += tabWidth + 1
-			}
-		}
+		p.registerPreviewTabRegions(split)
 
 		// Render content using calculated content width (consistent with panel overhead)
-		previewContent := p.renderPreviewContent(contentW, innerHeight)
+		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
 
-		// Check if preview should flash (guard against zero-value time)
-		flashActive := !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration
-		if flashActive {
-			return styles.RenderPanelWithGradient(previewContent, previewW, paneHeight, styles.GetFlashGradient())
+		if p.previewFlashActive() {
+			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
 		}
-		return styles.RenderPanel(previewContent, previewW, paneHeight, true)
+		return styles.RenderPanel(previewContent, split.PreviewWidth, paneHeight, true)
 	}
 
-	// Calculate pane widths for split view
-	// RenderPanel handles borders internally, so only subtract divider from available space
-	available := width - dividerWidth
-	sidebarW := (available * p.sidebarWidth) / 100
-	if sidebarW < 15 {
-		sidebarW = 15
-	}
-	if sidebarW > available-40 {
-		sidebarW = available - 40
-	}
-	previewW := available - sidebarW
-	if previewW < 40 {
-		previewW = 40
-	}
-
-	// Calculate content widths (subtract panel overhead for borders + padding)
-	sidebarContentW := sidebarW - panelOverhead
-	previewContentW := previewW - panelOverhead
+	sidebarW := split.SidebarWidth
+	previewW := split.PreviewWidth
+	sidebarContentW := split.SidebarContentWidth
+	previewContentW := split.ContentWidth
 
 	// Determine pane focus state
 	sidebarActive := p.activePane == PaneSidebar
@@ -157,34 +166,19 @@ func (p *Plugin) renderListView(width, height int) string {
 	// Register hit regions (order matters: last = highest priority)
 	// 1. Pane regions (lowest priority - fallback for scroll)
 	p.mouseHandler.HitMap.AddRect(regionSidebar, 0, 0, sidebarW, paneHeight, nil)
-	p.mouseHandler.HitMap.AddRect(regionPreviewPane, sidebarW+dividerWidth, 0, previewW, paneHeight, nil)
+	p.mouseHandler.HitMap.AddRect(regionPreviewPane, split.PreviewX, 0, previewW, paneHeight, nil)
 
 	// 2. Divider region (high priority - for drag)
 	p.mouseHandler.HitMap.AddRect(regionPaneDivider, sidebarW, 0, dividerHitWidth, paneHeight, nil)
 
 	// 3. Preview tab hit regions (highest priority for tabs)
-	// Only register when a worktree is selected (not shell)
-	// Shell has no tabs - it shows primer/output directly
-	if !p.shellSelected {
-		// Tabs are rendered at Y=1 (first line inside panel border)
-		// X starts at sidebarW + dividerWidth + panelOverhead/2 (border + padding on left side)
-		previewPaneX := sidebarW + dividerWidth + panelOverhead/2
-		// Tab widths: text is " Output " (8), " Diff " (6), " Task " (6)
-		// Plus BarChip Padding(0,1) adds 2 chars = 10, 8, 8 visual width
-		tabWidths := []int{10, 8, 8}
-		tabX := previewPaneX
-		for i, tabWidth := range tabWidths {
-			p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX, 1, tabWidth, 1, i)
-			tabX += tabWidth + 1 // +1 for spacing between tabs
-		}
-	}
+	p.registerPreviewTabRegions(split)
 
 	// Render content for each pane using pre-calculated content widths
 	sidebarContent := p.renderSidebarContent(sidebarContentW, innerHeight)
 	previewContent := p.renderPreviewContent(previewContentW, innerHeight)
 
-	// Check if preview should flash (guard against zero-value time)
-	flashActive := !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration
+	flashActive := p.previewFlashActive()
 
 	// Apply gradient border styles
 	leftPane := styles.RenderPanel(sidebarContent, sidebarW, paneHeight, sidebarActive)

@@ -725,11 +725,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			modelOwns := p.primaryTerminalOwns("agent", wt.IdentityKey())
 			if wt.Agent.OutputBuf != nil && !modelOwns {
+				wt.Agent.OutputBuf.ApplySnapshot(
+					tty.CaptureSnapshot(tty.CaptureInput{
+						Output:     msg.Output,
+						BaseLine:   msg.CaptureBase,
+						Absolute:   msg.HasHistory,
+						PaneHeight: msg.PaneHeight,
+						RowsJoined: msg.RowsJoined,
+					}))
 				if msg.HasHistory {
-					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
-				} else {
-					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
 			if !modelOwns {
@@ -758,8 +763,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
-					p.interactiveState.CursorHistorySize = msg.HistorySize
-					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -841,11 +844,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			modelOwns := p.primaryTerminalOwns("agent", wt.IdentityKey())
 			if wt.Agent.OutputBuf != nil && !modelOwns {
+				wt.Agent.OutputBuf.ApplySnapshot(
+					tty.CaptureSnapshot(tty.CaptureInput{
+						Output:     msg.Output,
+						BaseLine:   msg.CaptureBase,
+						Absolute:   msg.HasHistory,
+						PaneHeight: msg.PaneHeight,
+						RowsJoined: msg.RowsJoined,
+					}))
 				if msg.HasHistory {
-					wt.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("agent", wt.Agent.TmuxSession, msg.HistorySize)
-				} else {
-					wt.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
 			if !modelOwns {
@@ -909,8 +917,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
-					p.interactiveState.CursorHistorySize = msg.HistorySize
-					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1288,11 +1294,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			modelOwns := p.primaryTerminalOwns("shell", shell.TmuxName)
 			if shell.Agent.OutputBuf != nil && !modelOwns {
+				changed = shell.Agent.OutputBuf.ApplySnapshot(
+					tty.CaptureSnapshot(tty.CaptureInput{
+						Output:     msg.Output,
+						BaseLine:   msg.CaptureBase,
+						Absolute:   msg.HasHistory,
+						PaneHeight: msg.PaneHeight,
+						RowsJoined: msg.RowsJoined,
+					}))
 				if msg.HasHistory {
-					changed = shell.Agent.OutputBuf.UpdateSnapshot(msg.Output, msg.CaptureBase)
 					p.recordTerminalHistory("shell", shell.TmuxName, msg.HistorySize)
-				} else {
-					changed = shell.Agent.OutputBuf.Update(msg.Output)
 				}
 			}
 			if !modelOwns {
@@ -1319,8 +1330,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.interactiveState.CursorVisible = msg.CursorVisible
 					p.interactiveState.PaneHeight = msg.PaneHeight
 					p.interactiveState.PaneWidth = msg.PaneWidth
-					p.interactiveState.CursorHistorySize = msg.HistorySize
-					p.interactiveState.HasCursorHistory = msg.HasHistory
 				}
 				if resizeCmd := p.maybeResizeInteractivePane(msg.PaneWidth, msg.PaneHeight); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)

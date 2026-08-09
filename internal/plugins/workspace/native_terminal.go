@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -19,48 +17,29 @@ func (p *Plugin) Cursor() *tea.Cursor {
 		return nil
 	}
 
-	follow := p.autoScrollOutput
-	offset := p.previewOffset
-	offsetFromBottom := false
-	if termPanel {
-		if p.selectionTermPanel && p.selection.Anchor.Valid() {
-			follow = false
-			offset = p.termPanelSelectionOffset
-		} else {
-			follow = p.termPanelScroll == 0
-			offset = p.termPanelScroll
-			offsetFromBottom = true
-		}
-	}
+	// Same buffer window and pane geometry the content render uses, or the
+	// cursor desyncs from the pixels it is supposed to sit on.
+	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
+		p.selectionTermPanel && p.selection.Anchor.Valid())
 	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
-	bufferBase, hasCursorHistory := cursorBufferBase(buffer, p.interactiveState)
-	// Same geometry the content render uses, or the cursor desyncs from it.
-	paneWidth, paneHeight := p.interactiveState.PaneWidth, p.interactiveState.PaneHeight
-	if paneWidth <= 0 || paneHeight <= 0 {
-		if geometry := p.paneGeometryFor(termPanel); geometry.known() {
-			paneWidth, paneHeight = geometry.Width, geometry.Height
-		}
-	}
+	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
 	cursorX, cursorY, visible := terminalViewportCursorPosition(terminalViewportInput{
-		Buffer:            buffer,
-		Width:             width,
-		Height:            height,
-		Offset:            offset,
-		OffsetFromBottom:  offsetFromBottom,
-		Follow:            follow,
-		Interactive:       true,
-		CursorRow:         p.interactiveState.CursorRow,
-		CursorCol:         p.interactiveState.CursorCol,
-		CursorVisible:     p.interactiveState.CursorVisible,
-		PaneHeight:        paneHeight,
-		PaneWidth:         paneWidth,
-		NativeCursor:      true,
-		AbsoluteBase:      absoluteBase,
-		TotalItems:        totalItems,
-		LoadingOlder:      loadingOlder,
-		CursorHistorySize: p.interactiveState.CursorHistorySize,
-		BufferBase:        bufferBase,
-		HasCursorHistory:  hasCursorHistory,
+		Buffer:           buffer,
+		Width:            width,
+		Height:           height,
+		Offset:           offset,
+		OffsetFromBottom: offsetFromBottom,
+		Follow:           follow,
+		Interactive:      true,
+		CursorRow:        p.interactiveState.CursorRow,
+		CursorCol:        p.interactiveState.CursorCol,
+		CursorVisible:    p.interactiveState.CursorVisible,
+		PaneHeight:       paneHeight,
+		PaneWidth:        paneWidth,
+		NativeCursor:     true,
+		AbsoluteBase:     absoluteBase,
+		TotalItems:       totalItems,
+		LoadingOlder:     loadingOlder,
 	})
 	if !visible {
 		return nil
@@ -90,49 +69,20 @@ func (p *Plugin) PreferredMouseMode() tea.MouseMode {
 	return tea.MouseModeAllMotion
 }
 
-// nativeTerminalGeometry returns the terminal viewport's buffer, dimensions,
-// and plugin-local origin. The origin is the first rendered terminal row after
-// the pane's hint line.
+// nativeTerminalGeometry returns the terminal viewport's buffer plus the
+// surface geometry it is drawn with. It is a thin buffer-resolving wrapper over
+// terminalSurfaceGeometry, which owns the arithmetic.
 func (p *Plugin) nativeTerminalGeometry(termPanel bool) (*tty.OutputBuffer, int, int, int, int, bool) {
-	if p.width <= 0 || p.height <= 0 {
+	surface := p.terminalSurfaceGeometry(termPanel)
+	if !surface.OK {
 		return nil, 0, 0, 0, 0, false
-	}
-	x := panelOverhead / 2
-	if p.sidebarVisible {
-		available := p.width - dividerWidth
-		sidebarWidth := available * p.sidebarWidth / 100
-		if sidebarWidth < 15 {
-			sidebarWidth = 15
-		}
-		if sidebarWidth > available-40 {
-			sidebarWidth = available - 40
-		}
-		x += sidebarWidth + dividerWidth
-	}
-
-	// Preview content begins after the panel border. Worktrees add the tab row
-	// and blank spacer; shells render their terminal immediately.
-	y := 1
-	if !p.shellSelected {
-		y += 2
-	}
-	if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-		y++
 	}
 
 	if termPanel {
-		if !p.termPanelVisible || p.termPanelOutput == nil {
+		if p.termPanelOutput == nil {
 			return nil, 0, 0, 0, 0, false
 		}
-		width, height := p.calculateTermPanelDimensions()
-		if p.termPanelLayout == TermPanelRight {
-			outputWidth, _ := p.calculateAgentPaneDimensions()
-			x += outputWidth + 1
-		} else {
-			_, outputHeight := p.calculateAgentPaneDimensions()
-			y += outputHeight + 2 // primary hint+rows, then divider
-		}
-		return p.termPanelOutput, width, height, x, y + 1, true
+		return p.termPanelOutput, surface.Width, surface.Height, surface.X, surface.Y, true
 	}
 
 	var buffer *tty.OutputBuffer
@@ -143,6 +93,5 @@ func (p *Plugin) nativeTerminalGeometry(termPanel bool) (*tty.OutputBuffer, int,
 	} else if wt := p.selectedWorktree(); wt != nil && wt.Agent != nil {
 		buffer = wt.Agent.OutputBuf
 	}
-	width, height := p.calculateAgentPaneDimensions()
-	return buffer, width, height, x, y + 1, buffer != nil
+	return buffer, surface.Width, surface.Height, surface.X, surface.Y, buffer != nil
 }

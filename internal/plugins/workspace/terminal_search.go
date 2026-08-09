@@ -288,7 +288,9 @@ func (p *Plugin) revealTerminalSearchMatch() {
 	localLine := match.Line - base
 	if search.TermPanel {
 		maxScroll := p.termPanelMaxScroll()
-		_, height := p.calculateTermPanelDimensions()
+		// No panel drawn means no viewport to centre the match in; the clamp
+		// below then pins the scroll to the top of the (empty) range.
+		_, height, _ := p.calculateTermPanelDimensions()
 		start := min(max(localLine-height/2, 0), maxScroll)
 		p.termPanelScroll = maxScroll - start
 		return

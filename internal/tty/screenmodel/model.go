@@ -72,7 +72,9 @@ type Seed struct {
 	MainOutput    string
 	MainCursorRow int
 	MainCursorCol int
-	CaptureBase   int
+	// HistorySize is tmux's history_size for the pane. The absolute base of the
+	// loaded history is not taken from the caller: it is derived from the rows
+	// Output actually carried, so the two can never disagree (see Seed).
 	HistorySize   int
 	HistoryLimit  int
 	Width, Height int
@@ -387,10 +389,20 @@ func (m *Model) Seed(s Seed) error {
 			return fmt.Errorf("%w: seed write: %w", ErrModelFault, err)
 		}
 
-		m.absoluteHistory = s.HistorySize
 		m.emu.SetScrollbackSize(m.historyLimit)
-		m.seedCaptureBase = s.CaptureBase
+		// Anchor the absolute coordinate system on the rows the capture actually
+		// carried. HistorySize and Output are observed at different instants — the
+		// capture path issues its display-message and its capture-pane as separate
+		// writes — so a capture can hold more history rows than the metadata that
+		// accompanies it knew about. Taking either number on its own would leave
+		// HistorySize - CaptureBase disagreeing with the loaded row count for the
+		// rest of the pane's life, because Seed freezes both and only Write's
+		// pushed-row accounting moves them afterwards. Deriving the base from the
+		// loaded rows makes the invariant true at the seed, and therefore true for
+		// every frame after it (td-d29821).
 		m.seedLoaded = m.emu.ScrollbackLen()
+		m.seedCaptureBase = max(s.HistorySize-m.seedLoaded, 0)
+		m.absoluteHistory = m.seedCaptureBase + m.seedLoaded
 		m.rebuildLoadedHistory()
 		return nil
 	})

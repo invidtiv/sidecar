@@ -235,7 +235,6 @@ func TestSeedFromCaptureReproducesOracle(t *testing.T) {
 				Output:        f.Capture,
 				Width:         f.PaneWidth,
 				Height:        f.PaneHeight,
-				CaptureBase:   0,
 				HistorySize:   f.HistorySize,
 				CursorRow:     f.CursorY,
 				CursorCol:     f.CursorX,
@@ -363,7 +362,6 @@ func replayFrame(t *testing.T, entry corpusEntry) Frame {
 type seedInput struct {
 	Output        string
 	Width, Height int
-	CaptureBase   int
 	HistorySize   int
 	CursorRow     int
 	CursorCol     int
@@ -382,7 +380,6 @@ func (s seedInput) toSeed() Seed {
 		Output:        strings.TrimSuffix(s.Output, "\n"),
 		Width:         s.Width,
 		Height:        s.Height,
-		CaptureBase:   s.CaptureBase,
 		HistorySize:   s.HistorySize,
 		CursorRow:     s.CursorRow,
 		CursorCol:     s.CursorCol,

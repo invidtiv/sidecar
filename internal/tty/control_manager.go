@@ -17,11 +17,19 @@ var controlPanePattern = regexp.MustCompile(`^%[0-9]+$`)
 // connection. It supplies bootstrap/recovery presentation and independent
 // semantic or diagnostic evidence after an output or layout notification.
 type ControlSnapshot struct {
-	Session       string
-	Pane          string
-	Output        string
-	HistorySize   int
-	CaptureBase   int
+	Session     string
+	Pane        string
+	Output      string
+	HistorySize int
+	CaptureBase int
+	// HistoryRows and PaneRows split Output into the scrolled-off rows above the
+	// pane and the pane's own grid. They are counted while the capture is still
+	// a line slice: once Output is joined, a blank final pane row is
+	// indistinguishable from a trailing terminator, and a consumer that
+	// re-derives the split loses that row and places the cursor one row too high
+	// (td-d29821).
+	HistoryRows   int
+	PaneRows      int
 	HasHistory    bool
 	CursorRow     int
 	CursorCol     int
@@ -1066,6 +1074,26 @@ func parseControlSnapshot(session, pane string, scrollback int, lines []string) 
 	return snapshot, err
 }
 
+// captureBaseFor is the absolute line number of the capture's first row.
+//
+// It is derived from the capture's own row count rather than from
+// history_size - scrollback. A capture is the pane's scrollback followed by all
+// paneHeight of its rows, trailing blanks included, so captureRows-paneHeight is
+// exactly how much history the capture carried. The metadata is read by a
+// separate write, so history_size can already be stale by the time the capture
+// lands; subtracting the *requested* scrollback instead of the delivered rows
+// makes the delivered base disagree with the delivered content, which is what
+// left the cursor stranded rows above its line (td-d29821).
+//
+// Degenerate captures — no pane height, or fewer rows than the pane — carry no
+// usable row count, so those fall back to the requested window.
+func captureBaseFor(historySize, scrollback, captureRows, paneHeight int) int {
+	if paneHeight <= 0 || captureRows < paneHeight {
+		return max(historySize-scrollback, 0)
+	}
+	return max(historySize-(captureRows-paneHeight), 0)
+}
+
 func parseControlSnapshotLayout(session, pane string, scrollback int, lines []string, extended bool) (ControlSnapshot, captureExtras, error) {
 	var extras captureExtras
 	if len(lines) == 0 {
@@ -1121,12 +1149,16 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 	if len(parts) > titleIndex {
 		paneTitle = parts[titleIndex]
 	}
+	captureRows := len(lines) - 1
+	paneRows := min(max(height, 0), captureRows)
 	return ControlSnapshot{
 		Session:        session,
 		Pane:           pane,
 		Output:         strings.Join(lines[1:], "\n"),
 		HistorySize:    historySize,
-		CaptureBase:    max(historySize-scrollback, 0),
+		CaptureBase:    captureBaseFor(historySize, scrollback, captureRows, height),
+		HistoryRows:    captureRows - paneRows,
+		PaneRows:       paneRows,
 		HasHistory:     true,
 		CursorRow:      row,
 		CursorCol:      col,

@@ -17,10 +17,9 @@ func newSelectionTestPlugin() *Plugin {
 		viewMode:     ViewModeInteractive,
 		mouseHandler: mouse.NewHandler(),
 		interactiveState: &InteractiveState{
-			Active:           true,
-			VisibleStart:     0,
-			VisibleEnd:       10,
-			ContentRowOffset: 1,
+			Active:       true,
+			VisibleStart: 0,
+			VisibleEnd:   10,
 		},
 	}
 	p.selection.Clear() // initialize sentinels
@@ -277,10 +276,9 @@ func TestPrepareInteractiveDrag_NilRegion(t *testing.T) {
 		viewMode:     ViewModeInteractive,
 		mouseHandler: mouse.NewHandler(),
 		interactiveState: &InteractiveState{
-			Active:           true,
-			VisibleStart:     0,
-			VisibleEnd:       10,
-			ContentRowOffset: 1,
+			Active:       true,
+			VisibleStart: 0,
+			VisibleEnd:   10,
 		},
 	}
 	p.selection.Clear()

@@ -17,7 +17,10 @@ import (
 // interactiveColAtX maps a viewport X coordinate to a visual column in the given line.
 // The returned column is in visual space (post-tab-expansion, accounting for multi-width chars).
 func (p *Plugin) interactiveColAtX(x, lineIdx int) (int, bool) {
-	contentInset := panelOverhead / 2
+	// The preview pane's ViewRect is the outer panel, so its content starts
+	// inside the border and padding. The term panel's ViewRect is already the
+	// child's content rect, so it needs no inset.
+	contentInset := previewContentInset
 	if p.effectiveSelectionTermPanel() {
 		contentInset = 0
 	}
@@ -77,23 +80,16 @@ func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
 	}
 
 	contentRow := y - p.selection.ViewRect.Y
-	contentRowOffset := 1 // terminal hint line
 	if !p.effectiveSelectionTermPanel() {
-		contentRow-- // preview panel top border
-		if !p.shellSelected {
-			contentRowOffset += 2 // worktree tabs and spacer
-		}
-		if !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration {
-			contentRowOffset++
-		}
+		// ViewRect is the outer preview panel, so step over its border first;
+		// the remaining rows are the same stack terminalSurfaceGeometry uses.
+		contentRow -= previewBorderRows
 	}
 	if contentRow < 0 {
 		return 0, false
 	}
-	if layout.EffectiveCount == 0 && p.interactiveState != nil && p.interactiveState.ContentRowOffset > 0 {
-		contentRowOffset = p.interactiveState.ContentRowOffset
-	}
-	outputRow := contentRow - contentRowOffset
+	// Every surface spends its first content row on its header.
+	outputRow := contentRow - terminalHeaderRows
 	if outputRow < 0 {
 		return 0, false
 	}
@@ -239,15 +235,16 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	// not any output has been captured yet.
 	buffer := p.interactiveOutputBuffer()
 
-	width, height := p.calculatePreviewDimensions()
 	termPanel := p.selectionTermPanel
 	if p.interactiveState != nil && p.interactiveState.Active {
 		termPanel = p.interactiveState.TermPanel
 	}
-	if termPanel && p.termPanelVisible {
-		width, height = p.calculateTermPanelDimensions()
-	} else if p.termPanelVisible {
-		width, height = p.calculateAgentPaneDimensions()
+	// One derivation of the surface's viewport size, shared with the render and
+	// cursor paths. The fallback covers the two cases the surface cannot place:
+	// an unsized plugin, and the term panel asked for while hidden.
+	width, height := p.calculatePreviewDimensions()
+	if surface := p.terminalSurfaceGeometry(termPanel); surface.OK {
+		width, height = surface.Width, surface.Height
 	}
 
 	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active
@@ -255,42 +252,25 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 		Buffer:      buffer,
 		Width:       width,
 		Height:      height,
-		Follow:      p.autoScrollOutput,
-		Offset:      p.previewOffset,
 		Interactive: interactive,
 	}
 	// Same geometry the render path uses, or hit-testing drifts from the pixels
 	// (td-73fa86).
-	if geometry := p.paneGeometryFor(termPanel); geometry.known() {
-		input.PaneWidth, input.PaneHeight = geometry.Width, geometry.Height
-	}
+	input.PaneWidth, input.PaneHeight = p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
 	if p.interactiveState != nil {
-		if p.interactiveState.PaneWidth > 0 && p.interactiveState.PaneHeight > 0 {
-			input.PaneHeight = p.interactiveState.PaneHeight
-			input.PaneWidth = p.interactiveState.PaneWidth
-		}
 		input.CursorCol = p.interactiveState.CursorCol
 		input.CursorRow = p.interactiveState.CursorRow
 		input.CursorVisible = p.interactiveState.CursorVisible
-		if interactive {
-			input.CursorHistorySize = p.interactiveState.CursorHistorySize
-			input.BufferBase, input.HasCursorHistory = cursorBufferBase(buffer, p.interactiveState)
-		}
 	}
 	// The scrollbar takes a column from the content, which moves every column
 	// the user can click on; hit testing has to see the same viewport the render
 	// does (td-73fa86).
 	_, input.TotalItems, _ = p.terminalHistorySummary(termPanel, buffer)
-	if termPanel {
-		if p.selection.Anchor.Valid() {
-			input.Follow = false
-			input.Offset = p.termPanelSelectionOffset
-		} else {
-			input.Follow = p.termPanelScroll == 0
-			input.Offset = p.termPanelScroll
-			input.OffsetFromBottom = true
-		}
-	}
+	// Exactly the condition the render and cursor paths use. Gating on the anchor
+	// alone froze the offset for a selection that belongs to the *other* surface,
+	// so hit testing read a different buffer window than the one drawn.
+	input.Follow, input.Offset, input.OffsetFromBottom =
+		p.terminalScrollState(termPanel, p.selectionTermPanel && p.selection.Anchor.Valid())
 	return calculateTerminalViewportLayout(input)
 }
 

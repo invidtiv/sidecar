@@ -118,7 +118,6 @@ func TestTerminalViewportClipsTallPaneAnchoredOnCursor(t *testing.T) {
 		Buffer: buffer, Width: 8, Height: 4, Follow: true,
 		Interactive: true, CursorVisible: true, CursorRow: 2, CursorCol: 0,
 		PaneWidth: 8, PaneHeight: 8,
-		CursorHistorySize: 4, BufferBase: 0, HasCursorHistory: true,
 	}
 	layout := calculateTerminalViewportLayout(in)
 	// Cursor sits on buffer line 6; without anchoring the window would start at
@@ -146,13 +145,13 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 	p.autoScrollOutput = true
 
 	// Without geometry the viewport is used as-is.
-	plain := ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if strings.Contains(plain, "showing") {
 		t.Fatalf("unknown geometry surfaced an indicator: %q", plain)
 	}
 
 	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
-	plain = ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "40x6, showing 30x2") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
 	}
@@ -184,14 +183,14 @@ func TestRenderCapturedTerminalScrollbarIsNotAMismatch(t *testing.T) {
 	// Viewport 30x3 renders 30x2 after the hint line, and the pane is exactly
 	// that — but 12 lines of scrollback put a scrollbar on screen.
 	p.recordPaneGeometry("shell", "sidecar-shell", 30, 2)
-	plain := ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if strings.Contains(plain, "showing") {
 		t.Fatalf("scrollbar column reported as a pane mismatch: %q", plain)
 	}
 
 	// A pane that genuinely overflows still says so.
 	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
-	plain = ansi.Strip(p.renderCapturedTerminal("hint", buffer, 30, 3, false, "empty"))
+	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "showing") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
 	}
@@ -221,15 +220,13 @@ func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
 	}}
 	p.selectedShellIdx = 0
 	p.interactiveState = &InteractiveState{
-		Active:            true,
-		TargetSession:     "sidecar-shell",
-		PaneWidth:         200,
-		PaneHeight:        35,
-		CursorRow:         34,
-		CursorCol:         190,
-		CursorVisible:     true,
-		CursorHistorySize: 4,
-		HasCursorHistory:  true,
+		Active:        true,
+		TargetSession: "sidecar-shell",
+		PaneWidth:     200,
+		PaneHeight:    35,
+		CursorRow:     34,
+		CursorCol:     190,
+		CursorVisible: true,
 	}
 
 	// Content origin: border+padding across, border+hint down.
