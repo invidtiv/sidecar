@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,11 +15,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"golang.org/x/sys/unix"
 )
 
 // CreateOperationPlan is the immutable contract shown to the user before any
 // repository mutation. It is also retained for retry and identity-checked undo.
 type CreateOperationPlan struct {
+	RepoKey        string
+	OperationID    string
 	SourceWorktree string
 	MainWorktree   string
 	SourceRef      string
@@ -36,6 +41,129 @@ type CreateOperationPlan struct {
 	RunHook        bool
 	HookPath       string
 	HookRequired   bool
+}
+
+type pendingCreationJournal struct {
+	Version     int                 `json:"version"`
+	RepoKey     string              `json:"repoKey"`
+	OperationID string              `json:"operationId"`
+	Plan        CreateOperationPlan `json:"plan"`
+	Worktree    Worktree            `json:"worktree"`
+}
+
+func pendingCreationPath(ctx context.Context, plan *CreateOperationPlan) (string, error) {
+	dir, err := projectdir.WorktreeDirContext(ctx, plan.MainWorktree, plan.Path)
+	if err != nil {
+		return "", err
+	}
+	key := stablePathKey(plan.OperationID)
+	return filepath.Join(dir, "pending-creation-"+key[:12]+".json"), nil
+}
+
+func persistPendingCreation(ctx context.Context, plan *CreateOperationPlan, wt *Worktree) error {
+	path, err := pendingCreationPath(ctx, plan)
+	if err != nil {
+		return fmt.Errorf("resolve pending creation journal: %w", err)
+	}
+	data, err := json.MarshalIndent(pendingCreationJournal{Version: 1, RepoKey: plan.RepoKey, OperationID: plan.OperationID, Plan: *plan, Worktree: *wt}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode pending creation journal: %w", err)
+	}
+	if err := writeDurableFile(path, append(data, '\n'), 0644); err != nil {
+		return fmt.Errorf("write pending creation journal: %w", err)
+	}
+	return nil
+}
+
+func removePendingCreation(plan *CreateOperationPlan) error {
+	path, err := pendingCreationPath(context.Background(), plan)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func loadPendingCreation(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
+	for _, wt := range worktrees {
+		dir, err := projectdir.WorktreeDirContext(ctx, projectRoot, wt.Path)
+		if err != nil {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "pending-creation-") || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if readErr != nil {
+				continue
+			}
+			var journal pendingCreationJournal
+			if json.Unmarshal(data, &journal) != nil || journal.Version != 1 || journal.RepoKey != repoKey {
+				continue
+			}
+			if journal.Worktree.IdentityKey() != wt.IdentityKey() || filepath.Clean(journal.Worktree.Path) != filepath.Clean(wt.Path) || journal.Worktree.HEADOID != wt.HEADOID {
+				continue
+			}
+			return &journal, nil
+		}
+	}
+	return nil, nil
+}
+
+func (p *Plugin) reconcilePendingCreation() bool {
+	if p.repoSnapshot == nil || p.ctx == nil {
+		return false
+	}
+	for i, msg := range p.deferredCreations {
+		if msg.RepoKey != p.repoSnapshot.Key {
+			continue
+		}
+		wt := p.findWorktree(msg.Worktree.IdentityKey())
+		if wt == nil || wt.HEADOID != msg.Worktree.HEADOID {
+			continue
+		}
+		p.deferredCreations = append(p.deferredCreations[:i], p.deferredCreations[i+1:]...)
+		reason := msg.Err
+		if reason == nil {
+			reason = fmt.Errorf("creation result arrived after its original UI context ended")
+		}
+		p.surfaceInterruptedCreation(msg.Plan, wt, reason)
+		return true
+	}
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	journal, _ := loadPendingCreation(ctx, p.repoSnapshot.CanonicalRoot, p.worktrees, p.repoSnapshot.Key)
+	if journal == nil {
+		return false
+	}
+	wt := p.findWorktree(journal.Worktree.IdentityKey())
+	if wt == nil {
+		return false
+	}
+	plan := journal.Plan
+	p.surfaceInterruptedCreation(&plan, wt, fmt.Errorf("creation was interrupted before setup completed"))
+	return true
+}
+
+func (p *Plugin) surfaceInterruptedCreation(plan *CreateOperationPlan, wt *Worktree, reason error) {
+	p.createPlan = plan
+	p.createSetupResult = &CreateSetupResult{Worktree: wt, Outcomes: []CreateSetupOutcome{{Kind: CreateOutcomeIdentity, Action: "resume pending creation", Required: true, Err: reason}}}
+	p.createBusyStep = ""
+	p.createDeleteResult = nil
+	p.createOperationModal = nil
+	p.createOperationWidth = 0
+	p.viewMode = ViewModeCreate
+	p.selectCreatedWorktree(wt)
+	p.newLifecycleScope(wt)
 }
 
 func (p *Plugin) selectCreatedWorktree(wt *Worktree) {
@@ -145,6 +273,9 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 		mainWorktree = sourceWorktree
 	}
 	mainWorktree, _ = filepath.Abs(mainWorktree)
+	if resolved, resolveErr := filepath.EvalSymlinks(mainWorktree); resolveErr == nil {
+		mainWorktree = resolved
+	}
 
 	requestedBase := strings.TrimSpace(base)
 	if requestedBase == "" {
@@ -166,6 +297,9 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 		}
 	}
 	destination := filepath.Join(filepath.Dir(mainWorktree), displayName)
+	if err := ensureRealDirectoryPath(filepath.Dir(mainWorktree), filepath.Dir(destination), false); err != nil {
+		return nil, fmt.Errorf("destination parent is unsafe: %w", err)
+	}
 	if _, err := os.Lstat(destination); err == nil {
 		return nil, fmt.Errorf("destination path already exists: %s", destination)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -178,8 +312,10 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 			if !safeSetupRelativePath(rel) {
 				return nil, fmt.Errorf("env file path must stay within the main worktree: %q", rel)
 			}
-			if info, err := os.Stat(filepath.Join(mainWorktree, rel)); err == nil && info.Mode().IsRegular() {
+			if _, err := containedRegularFile(mainWorktree, rel); err == nil {
 				envFiles = append(envFiles, rel)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("env file %q is unsafe: %w", rel, err)
 			}
 		}
 	}
@@ -191,8 +327,12 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 		return nil, fmt.Errorf("setup hook path must stay within the main worktree: %q", hookPath)
 	}
 	runHook := setup.RunHook
-	if info, err := os.Stat(filepath.Join(mainWorktree, hookPath)); err != nil || !info.Mode().IsRegular() {
-		runHook = false
+	if runHook {
+		if _, err := containedRegularFile(mainWorktree, hookPath); errors.Is(err, os.ErrNotExist) {
+			runHook = false
+		} else if err != nil {
+			return nil, fmt.Errorf("setup hook %q is unsafe: %w", hookPath, err)
+		}
 	}
 
 	return &CreateOperationPlan{
@@ -210,7 +350,122 @@ func safeSetupRelativePath(path string) bool {
 	return path != "" && clean != "." && clean != ".." && !filepath.IsAbs(path) && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
+func containedRegularFile(root, rel string) (string, error) {
+	if !safeSetupRelativePath(rel) {
+		return "", fmt.Errorf("path must remain relative")
+	}
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(rootReal, filepath.Clean(rel))
+	if err := ensureRealDirectoryPath(rootReal, filepath.Dir(target), true); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("symlink artifact is not allowed: %s", target)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("artifact is not a regular file: %s", target)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(resolved) != filepath.Clean(target) {
+		return "", fmt.Errorf("artifact resolves outside its confirmed path: %s", target)
+	}
+	return target, nil
+}
+
+func openContainedRegularFile(root, rel string) (*os.File, error) {
+	target, err := containedRegularFile(root, rel)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(target, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), target)
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("artifact is not a regular file: %s", target)
+	}
+	return file, nil
+}
+
+func copyOpenFile(source *os.File, dst string) error {
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	dest, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(dest, source)
+	if syncErr := dest.Sync(); copyErr == nil {
+		copyErr = syncErr
+	}
+	if closeErr := dest.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
+	return copyErr
+}
+
+// ensureRealDirectoryPath rejects symlink traversal for every existing path
+// component below root. Missing components are allowed only when requested;
+// callers re-run this after creation to narrow the remaining TOCTOU window.
+func ensureRealDirectoryPath(root, target string, requireExisting bool) error {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rootReal, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes allowed root")
+	}
+	current := rootReal
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			if requireExisting {
+				return statErr
+			}
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink path component is not allowed: %s", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("path component is not a directory: %s", current)
+		}
+	}
+	return nil
+}
+
 func addCreatedWorktree(ctx context.Context, repoKey string, plan *CreateOperationPlan) (*Worktree, error) {
+	return addCreatedWorktreeWithRunner(ctx, repoKey, plan, func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() })
+}
+
+func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *CreateOperationPlan, run func(*exec.Cmd) ([]byte, error)) (*Worktree, error) {
 	if _, err := gitOutputContext(ctx, plan.SourceWorktree, "check-ref-format", "--branch", plan.Branch); err != nil {
 		return nil, fmt.Errorf("branch is no longer valid: %w", err)
 	}
@@ -220,18 +475,34 @@ func addCreatedWorktree(ctx context.Context, repoKey string, plan *CreateOperati
 	if _, err := os.Lstat(plan.Path); err == nil {
 		return nil, fmt.Errorf("destination path now exists: %s", plan.Path)
 	}
+	allowedRoot := filepath.Dir(plan.MainWorktree)
+	if err := ensureRealDirectoryPath(allowedRoot, filepath.Dir(plan.Path), false); err != nil {
+		return nil, fmt.Errorf("destination parent changed: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(plan.Path), 0755); err != nil {
 		return nil, fmt.Errorf("create destination parent: %w", err)
 	}
+	if err := ensureRealDirectoryPath(allowedRoot, filepath.Dir(plan.Path), true); err != nil {
+		return nil, fmt.Errorf("destination parent changed: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", plan.Branch, plan.Path, plan.SourceOID)
 	cmd.Dir = plan.SourceWorktree
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
+	if output, err := run(cmd); err != nil {
+		addErr := fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
+		if head, verifyErr := gitOutputContext(context.Background(), plan.Path, "rev-parse", "HEAD"); verifyErr == nil && head == plan.SourceOID {
+			wt := createdWorktree(repoKey, plan, head)
+			return wt, addErr
+		}
+		return nil, addErr
 	}
 	head, err := gitOutputContext(ctx, plan.Path, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("verify created worktree: %w", err)
 	}
+	return createdWorktree(repoKey, plan, head), nil
+}
+
+func createdWorktree(repoKey string, plan *CreateOperationPlan, head string) *Worktree {
 	wt := &Worktree{Key: stablePathKey(plan.Path), RepoKey: repoKey, Name: plan.DisplayName, Path: plan.Path,
 		Branch: plan.Branch, BaseBranch: strings.TrimPrefix(plan.SourceRef, "refs/heads/"), TaskID: plan.TaskID,
 		TaskTitle: plan.TaskTitle, ChosenAgentType: plan.AgentType, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -240,7 +511,7 @@ func addCreatedWorktree(ctx context.Context, repoKey string, plan *CreateOperati
 	}
 	// Store the exact created identity for recovery even if subsequent metadata fails.
 	wt.HEADOID = head
-	return wt, nil
+	return wt
 }
 
 func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree) *CreateSetupResult {
@@ -274,7 +545,11 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 
 	if plan.CopyEnv {
 		for _, rel := range plan.EnvFiles {
-			err := copyFile(filepath.Join(plan.MainWorktree, rel), filepath.Join(plan.Path, rel))
+			source, err := openContainedRegularFile(plan.MainWorktree, rel)
+			if err == nil {
+				err = copyOpenFile(source, filepath.Join(plan.Path, rel))
+				_ = source.Close()
+			}
 			add(CreateOutcomeEnv, "copy "+rel, false, err)
 		}
 	}
@@ -316,7 +591,13 @@ func writeDurableFile(path string, data []byte, mode os.FileMode) (err error) {
 }
 
 func runSetupHookContext(ctx context.Context, plan *CreateOperationPlan) error {
-	cmd := exec.CommandContext(ctx, "bash", filepath.Join(plan.MainWorktree, plan.HookPath))
+	hook, err := openContainedRegularFile(plan.MainWorktree, plan.HookPath)
+	if err != nil {
+		return fmt.Errorf("validate setup hook: %w", err)
+	}
+	defer hook.Close()
+	cmd := exec.CommandContext(ctx, "bash", "/dev/fd/3")
+	cmd.ExtraFiles = []*os.File{hook}
 	cmd.Dir = plan.Path
 	isolated := ApplyEnvOverrides(os.Environ(), BuildEnvOverrides(plan.MainWorktree))
 	cmd.Env = append(isolated,

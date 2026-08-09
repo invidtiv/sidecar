@@ -23,6 +23,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if scoped, ok := msg.(interface{ GetOperationScope() OperationScope }); ok {
 		scope := scoped.GetOperationScope()
 		if scope.OperationID != "" && !p.scopeMatches(scope) {
+			if created, isCreated := msg.(CreateWorktreeAddedMsg); isCreated && created.Worktree != nil {
+				p.deferredCreations = append(p.deferredCreations, created)
+			}
 			return p, nil
 		}
 	}
@@ -160,6 +163,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				// Load base branch from centralized worktree data directory
 				wt.BaseBranch = loadBaseBranch(p.ctx.ProjectRoot, wt.Path)
 			}
+			p.reconcilePendingCreation()
 			// Detect conflicts across worktrees
 			cmds = append(cmds, p.loadConflicts())
 
@@ -344,9 +348,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createBusyStep = ""
 		p.createOperationModal = nil
 		p.createOperationWidth = 0
-		if msg.Err != nil {
+		if msg.Err != nil && msg.Worktree == nil {
 			p.createError = msg.Err.Error()
 			p.createPlan = nil
+			return p, nil
+		}
+		if msg.Worktree != nil && msg.Err != nil {
+			p.surfaceInterruptedCreation(msg.Plan, msg.Worktree, msg.Err)
 			return p, nil
 		}
 		p.createPlan = msg.Plan
@@ -370,10 +378,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.selectCreatedWorktree(msg.Result.Worktree)
 			return p, nil
 		}
+		if err := removePendingCreation(msg.Plan); err != nil {
+			msg.Result.Outcomes = append(msg.Result.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal", Required: true, Err: err})
+			p.selectCreatedWorktree(msg.Result.Worktree)
+			return p, nil
+		}
 		cmds = append(cmds, p.finishCreatedWorktree(msg.Plan, msg.Result.Worktree)...)
 
 	case CreateOpenAnywayMsg:
 		if p.createPlan != nil && p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+			_ = removePendingCreation(p.createPlan)
 			cmds = append(cmds, p.finishCreatedWorktree(p.createPlan, p.createSetupResult.Worktree)...)
 		}
 
@@ -381,25 +395,35 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createBusyStep = ""
 		p.createOperationModal = nil
 		p.createOperationWidth = 0
-		if msg.Err != nil {
-			if p.createSetupResult != nil {
-				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "delete newly created worktree", Required: true, Err: msg.Err})
-			}
-			return p, nil
-		}
-		if p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
-			key := p.createSetupResult.Worktree.IdentityKey()
-			for i, wt := range p.worktrees {
-				if wt.IdentityKey() == key {
-					p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
-					break
+		p.createDeleteResult = &msg.Result
+		if msg.Result.WorktreeRemoved {
+			if p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+				key := p.createSetupResult.Worktree.IdentityKey()
+				for i, wt := range p.worktrees {
+					if wt.IdentityKey() == key {
+						p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
+						break
+					}
 				}
 			}
+			if p.createPlan != nil {
+				_ = removePendingCreation(p.createPlan)
+			}
+			if p.selectedIdx >= len(p.worktrees) {
+				p.selectedIdx = len(p.worktrees) - 1
+			}
+			if msg.Result.Err != nil {
+				return p, nil
+			}
+			p.viewMode = ViewModeList
+			p.clearCreateModal()
+			return p, nil
 		}
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
-		if p.selectedIdx >= len(p.worktrees) {
-			p.selectedIdx = len(p.worktrees) - 1
+		if msg.Result.Err != nil {
+			if p.createSetupResult != nil {
+				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "delete newly created worktree", Required: true, Err: msg.Result.Err})
+			}
+			return p, nil
 		}
 
 	case PromptSelectedMsg:

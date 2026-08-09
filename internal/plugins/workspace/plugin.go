@@ -257,9 +257,11 @@ type Plugin struct {
 	createOperationWidth  int
 	createPlan            *CreateOperationPlan
 	createSetupResult     *CreateSetupResult
+	createDeleteResult    *CreateRecoveryDeleteResult
 	createBusyStep        string
 	createCopyEnv         bool
 	createRunHook         bool
+	deferredCreations     []CreateWorktreeAddedMsg // stale cross-project results retained until matching repo returns
 
 	// Branch name validation state
 	branchNameValid     bool     // Is current name valid?
@@ -1037,6 +1039,7 @@ func (p *Plugin) clearCreateModal() {
 	p.createOperationWidth = 0
 	p.createPlan = nil
 	p.createSetupResult = nil
+	p.createDeleteResult = nil
 	p.createBusyStep = ""
 	p.createCopyEnv = false
 	p.createRunHook = false
@@ -1096,6 +1099,7 @@ func (p *Plugin) initCreateModalBase() {
 	p.createOperationWidth = 0
 	p.createPlan = nil
 	p.createSetupResult = nil
+	p.createDeleteResult = nil
 	p.createBusyStep = ""
 	p.createCopyEnv = false
 	p.createRunHook = false

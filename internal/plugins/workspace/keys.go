@@ -1418,14 +1418,20 @@ func (p *Plugin) handleCreateOperationAction(action string) tea.Cmd {
 			return nil
 		}
 		p.createBusyStep = "Retrying setup"
+		p.createDeleteResult = nil
 		p.createOperationModal = nil
 		return p.runCreateSetupCmd(p.createPlan, p.createSetupResult.Worktree)
 	case createOpenAnywayID:
 		return func() tea.Msg { return CreateOpenAnywayMsg{OperationScope: p.currentCreateScope()} }
 	case createDeleteCreatedID:
 		p.createBusyStep = "Revalidating and deleting newly created worktree"
+		p.createDeleteResult = nil
 		p.createOperationModal = nil
 		return p.deleteNewlyCreatedCmd()
+	case createDismissID:
+		p.viewMode = ViewModeList
+		p.clearCreateModal()
+		return nil
 	}
 	return nil
 }

@@ -149,7 +149,14 @@ type CreateSetupDoneMsg struct {
 
 type CreateRecoveryDeleteDoneMsg struct {
 	OperationScope
-	Err error
+	Result CreateRecoveryDeleteResult
+}
+
+type CreateRecoveryDeleteResult struct {
+	WorktreeRemoved bool
+	BranchDeleted   bool
+	BranchRetained  bool
+	Err             error
 }
 
 type CreateOpenAnywayMsg struct{ OperationScope }

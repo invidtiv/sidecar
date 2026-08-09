@@ -29,6 +29,7 @@ const (
 	createDeleteCreatedID   = "create-delete-created"
 	createCopyEnvID         = "create-copy-env"
 	createRunHookID         = "create-run-hook"
+	createDismissID         = "create-dismiss"
 )
 
 func (p *Plugin) ensureCreateOperationModal() {
@@ -51,6 +52,19 @@ func (p *Plugin) ensureCreateOperationModal() {
 		p.createOperationModal = modal.New("Creating Worktree", modal.WithWidth(modalW), modal.WithHints(false), modal.WithCloseOnBackdropClick(false)).
 			AddSection(modal.Text("Current step: " + p.createBusyStep)).
 			AddSection(modal.Text("This operation cannot be cancelled after submission."))
+		return
+	}
+	if p.createDeleteResult != nil && p.createDeleteResult.WorktreeRemoved {
+		lines := []string{"The worktree directory was removed."}
+		if p.createDeleteResult.BranchRetained {
+			lines = append(lines, "Branch retained: "+p.createPlan.Branch, "Its identity changed, so Sidecar did not delete it.", "Inspect or delete the branch manually when safe.")
+		}
+		if p.createDeleteResult.Err != nil {
+			lines = append(lines, "", p.createDeleteResult.Err.Error())
+		}
+		p.createOperationModal = modal.New("Worktree Removed", modal.WithWidth(modalW), modal.WithVariant(modal.VariantWarning), modal.WithHints(false), modal.WithCloseOnBackdropClick(false)).
+			AddSection(modal.Text(strings.Join(lines, "\n"))).AddSection(modal.Spacer()).
+			AddSection(modal.Buttons(modal.Btn(" Dismiss ", createDismissID, modal.BtnPrimary())))
 		return
 	}
 	if p.createSetupResult != nil {

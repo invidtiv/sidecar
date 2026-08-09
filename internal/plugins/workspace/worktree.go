@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,6 +251,7 @@ func (p *Plugin) beginCreateWorktree() tea.Cmd {
 	plan.EnvFiles = append([]string(nil), p.createPlan.EnvFiles...)
 	plan.CopyEnv, plan.RunHook = p.createCopyEnv, p.createRunHook
 	scope := p.currentCreateScope()
+	plan.RepoKey, plan.OperationID = scope.RepoKey, scope.OperationID
 	ctx := p.operationCtx
 	if ctx == nil {
 		ctx = context.Background()
@@ -257,6 +259,11 @@ func (p *Plugin) beginCreateWorktree() tea.Cmd {
 	repoKey := scope.RepoKey
 	return func() tea.Msg {
 		wt, err := addCreatedWorktree(ctx, repoKey, &plan)
+		if wt != nil {
+			if journalErr := persistPendingCreation(context.Background(), &plan, wt); journalErr != nil {
+				err = errors.Join(err, journalErr)
+			}
+		}
 		return CreateWorktreeAddedMsg{OperationScope: scope, Plan: &plan, Worktree: wt, Err: err}
 	}
 }
@@ -273,17 +280,43 @@ func (p *Plugin) deleteNewlyCreatedCmd() tea.Cmd {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
-		err := removeCleanLifecycleWorktreeContext(ctx, plan.SourceWorktree, plan.Path, plan.Branch, expectedOID)
-		if err == nil {
-			current, verifyErr := gitOutputContext(ctx, plan.SourceWorktree, "rev-parse", "--verify", "refs/heads/"+plan.Branch)
-			if verifyErr != nil || current != expectedOID {
-				err = fmt.Errorf("branch identity changed after worktree removal; branch retained")
-			} else if _, deleteErr := gitOutputContext(ctx, plan.SourceWorktree, "update-ref", "-d", "refs/heads/"+plan.Branch, expectedOID); deleteErr != nil {
-				err = fmt.Errorf("delete newly created branch: %w", deleteErr)
-			}
-		}
-		return CreateRecoveryDeleteDoneMsg{OperationScope: scope, Err: err}
+		result := deleteNewlyCreated(ctx, &plan, expectedOID, nil)
+		return CreateRecoveryDeleteDoneMsg{OperationScope: scope, Result: result}
 	}
+}
+
+func deleteNewlyCreated(ctx context.Context, plan *CreateOperationPlan, expectedOID string, afterRemove func()) CreateRecoveryDeleteResult {
+	result := CreateRecoveryDeleteResult{}
+	if err := removeCleanLifecycleWorktreeContext(ctx, plan.SourceWorktree, plan.Path, plan.Branch, expectedOID); err != nil {
+		result.Err = err
+		return result
+	}
+	result.WorktreeRemoved = true
+	if afterRemove != nil {
+		afterRemove()
+	}
+	current, verifyErr := gitOutputContext(ctx, plan.SourceWorktree, "rev-parse", "--verify", "refs/heads/"+plan.Branch)
+	if verifyErr != nil {
+		if _, existsErr := gitOutputContext(ctx, plan.SourceWorktree, "show-ref", "--verify", "--quiet", "refs/heads/"+plan.Branch); existsErr != nil {
+			result.BranchDeleted = true
+			return result
+		}
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; could not verify retained branch identity: %w", verifyErr)
+		return result
+	}
+	if current != expectedOID {
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; branch retained because its identity changed")
+		return result
+	}
+	if _, deleteErr := gitOutputContext(ctx, plan.SourceWorktree, "update-ref", "-d", "refs/heads/"+plan.Branch, expectedOID); deleteErr != nil {
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; branch retained: %w", deleteErr)
+		return result
+	}
+	result.BranchDeleted = true
+	return result
 }
 
 func (p *Plugin) runCreateSetupCmd(plan *CreateOperationPlan, wt *Worktree) tea.Cmd {

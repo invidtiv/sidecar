@@ -19,6 +19,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			return []plugin.Command{{ID: "creation-busy", Name: "Working", Description: p.createBusyStep, Context: "workspace-create-busy", Priority: 1}}
 		}
 		if p.createSetupResult != nil {
+			if p.createDeleteResult != nil && p.createDeleteResult.WorktreeRemoved {
+				return []plugin.Command{{ID: createDismissID, Name: "Dismiss", Description: "Close cleanup result", Context: "workspace-create-recovery", Priority: 1}}
+			}
 			return []plugin.Command{
 				{ID: createRetrySetupID, Name: "Retry", Description: "Retry setup", Context: "workspace-create-recovery", Priority: 1},
 				{ID: createOpenAnywayID, Name: "Open", Description: "Open without successful setup", Context: "workspace-create-recovery", Priority: 2},
