@@ -25,6 +25,11 @@ import (
 // and every consumer that recovered pane row 0 as "line count minus pane height"
 // drew the cursor one row above the line it belonged on.
 
+func lookPathOK(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
 // liveTerminalPane is one pane on this package's private tmux server.
 type liveTerminalPane struct {
 	t       *testing.T
@@ -351,7 +356,18 @@ func TestLiveTerminalCursorSurvivesHistoryDisagreement(t *testing.T) {
 func TestLiveTerminalCursorTracksSoftWrappedRows(t *testing.T) {
 	const width, height = 20, 10
 	pane := startLiveTerminalPane(t, width, height)
-	pane.runCommand("exec zsh -f")
+	// Soft wrapping of live input needs a line-editing shell. The pane starts
+	// under plain sh (often dash on Linux), which does not wrap typed input
+	// across physical rows. Prefer bash (always on Ubuntu CI), then zsh.
+	// exec of a missing binary kills the pane ("no current target").
+	switch {
+	case lookPathOK("bash"):
+		pane.runCommand("exec bash --norc --noprofile")
+	case lookPathOK("zsh"):
+		pane.runCommand("exec zsh -f")
+	default:
+		t.Skip("neither bash nor zsh available for soft-wrap input test")
+	}
 	pane.fillHistory(height + 5)
 	input := "first-row" + strings.Repeat("a", width*2) + "last-row"
 	// Seed while the pane already contains a wrapped command. This is the

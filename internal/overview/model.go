@@ -261,17 +261,18 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			m.tracef("cycle generation=%d first_result_ms=%d", m.generation, time.Since(m.cycleStart).Milliseconds())
 		}
 		m.completed[msg.Project.Index] = true
-		if msg.Phase == phaseIdentity {
+		switch msg.Phase {
+		case phaseIdentity:
 			m.identityProjects[msg.Project.Index] = msg.Project
 			if !m.inventoryScheduled[msg.Project.Key] {
 				m.inventoryScheduled[msg.Project.Key] = true
 				m.pendingInventory = append(m.pendingInventory, msg.Project)
 			}
-		} else if msg.Phase == phaseInventory {
+		case phaseInventory:
 			m.inventoryProjects[msg.Project.Key] = msg.Project
 			m.inventoryResults[msg.Project.Key] = msg.Result
 			m.applyInventoryIncrement(msg.Project, msg.Result)
-		} else {
+		default:
 			m.applyStatusResult(msg.Result)
 		}
 		m.syncBoard()
@@ -383,11 +384,10 @@ func (m *Model) finishPhase() tea.Cmd {
 		claimResults := make([]workspaceinventory.ProjectResult, 0, len(m.inventoryResults))
 		m.statusInputs = make(map[string]workspaceinventory.ProjectResult, len(m.inventoryResults))
 		for _, ordered := range m.inventoryOrder {
-			project, ok := m.inventoryProjects[ordered.Key]
-			if !ok {
+			if _, ok := m.inventoryProjects[ordered.Key]; !ok {
 				continue
 			}
-			project = ordered
+			project := ordered
 			result := withProjectIdentity(m.inventoryResults[ordered.Key], project)
 			if seen[result.ProjectKey] {
 				continue
