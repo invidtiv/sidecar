@@ -616,8 +616,8 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		clock = styles.BarText.Render(m.ui.Clock.Format("15:04"))
 	}
 
-	totalWidth := func() int {
-		width := finalTitleWidth + lipgloss.Width(clock)
+	tabsWidth := func() int {
+		width := 0
 		for i, tab := range tabs {
 			width += lipgloss.Width(tab.text)
 			if i > 0 {
@@ -625,6 +625,9 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 			}
 		}
 		return width
+	}
+	totalWidth := func() int {
+		return finalTitleWidth + tabsWidth() + lipgloss.Width(clock)
 	}
 	if totalWidth() > m.width {
 		clock = ""
@@ -641,6 +644,23 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 			break
 		}
 		tabs = append(tabs[:remove], tabs[remove+1:]...)
+	}
+	if totalWidth() > m.width {
+		// Only protected tabs remain. Reserve their rendered and clickable
+		// width first, then fit the destination title into the prefix space.
+		// The explicit separator is part of title width, keeping render and
+		// getTabBounds on identical geometry.
+		reserved := tabsWidth()
+		if reserved >= m.width {
+			title = ""
+			if len(tabs) == 1 {
+				tabs[0].text = ansi.Truncate(tabs[0].text, m.width, "")
+			}
+		} else {
+			titleBudget := max(0, m.width-reserved-1)
+			title = ansi.Truncate(title, titleBudget, "…") + " "
+		}
+		finalTitleWidth = lipgloss.Width(title)
 	}
 	spacing = max(0, m.width-totalWidth())
 	return title, tabs, clock, spacing
@@ -675,6 +695,16 @@ func (m Model) getRepoNameBounds() (start, end int, ok bool) {
 
 	start = lipgloss.Width(titlePrefix) + lipgloss.Width(repoPrefix)
 	end = start + lipgloss.Width(repoName)
+	// headerLayout may truncate a long destination to reserve the active tab.
+	// Keep the project-switcher hit target inside the actually painted title so
+	// it cannot cover a fitted plugin tab to its right.
+	if m.width > 0 && m.registry != nil {
+		title, _, _, _ := m.headerLayout()
+		end = min(end, max(start, lipgloss.Width(title)-1))
+		if end <= start {
+			return 0, 0, false
+		}
+	}
 	return start, end, true
 }
 

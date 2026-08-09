@@ -114,14 +114,30 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	active := m
 	active.overviewActive = false
 	active.activePlugin = 4
-	active.intro.RepoName = "Project"
+	active.intro.RepoName = strings.Repeat("x", 50)
 	active.width = 60
+	var activeBounds TabBounds
 	foundActive := false
 	for _, bounds := range active.getTabBounds() {
-		foundActive = foundActive || bounds.Plugin == 4
+		if bounds.Plugin == 4 {
+			activeBounds, foundActive = bounds, true
+		}
 	}
-	if header := ansi.Strip(active.renderHeader()); !strings.Contains(header, "Project") || !strings.Contains(header, "workspaces") || !foundActive {
+	renderedHeader := active.renderHeader()
+	header := ansi.Strip(renderedHeader)
+	if !strings.Contains(header, "Sidecar / xxxxx") || !strings.Contains(header, "…") || !strings.Contains(header, "workspaces") || strings.Contains(header, strings.Repeat("x", 50)) || !foundActive {
 		t.Fatalf("narrow header lost active project/plugin: %q bounds=%#v", header, active.getTabBounds())
+	}
+	if got := lipgloss.Width(renderedHeader); got != active.width {
+		t.Fatalf("long-title header width = %d, want %d", got, active.width)
+	}
+	if activeBounds.Start < 0 || activeBounds.End > active.width || activeBounds.Start >= activeBounds.End {
+		t.Fatalf("active tab bounds outside fitted header: width=%d bounds=%#v", active.width, activeBounds)
+	}
+	clicked, _ := active.Update(tea.MouseClickMsg{X: (activeBounds.Start + activeBounds.End) / 2, Y: 0, Button: tea.MouseLeft})
+	clickedModel := clicked.(Model)
+	if clickedModel.showProjectSwitcher || clickedModel.activePlugin != 4 {
+		t.Fatalf("fitted active tab click misrouted: plugin=%d switcher=%v", clickedModel.activePlugin, clickedModel.showProjectSwitcher)
 	}
 	if !strings.Contains(ansi.Strip(lines[2]), "Agent Overview") {
 		t.Fatalf("content did not begin at global row 2: %q", lines[2])
