@@ -118,6 +118,32 @@ func TestDirectMergeRefusesTargetSwitchedToBranchAtSameOID(t *testing.T) {
 	}
 }
 
+func TestDirectMergeRefusesCleanTargetCommitAfterPostPullPin(t *testing.T) {
+	r := newLifecycleRepo(t)
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteBefore := mustGit(t, r.main, "rev-parse", "origin/main")
+	op = runDirectMergeWithBeforeMerge(op, func() {
+		mustWrite(t, filepath.Join(r.main, "concurrent.txt"), "concurrent target work\n")
+		mustGit(t, r.main, "add", "concurrent.txt")
+		mustGit(t, r.main, "commit", "-m", "concurrent target commit")
+	})
+	if op.Err == nil || !strings.Contains(op.Err.Error(), "HEAD changed after review") {
+		t.Fatalf("merge result = %+v, want post-pull target OID refusal", op)
+	}
+	if op.PreMergeOID == "" {
+		t.Fatal("post-pull target OID was not pinned")
+	}
+	if remoteAfter := mustGit(t, r.main, "rev-parse", "origin/main"); remoteAfter != remoteBefore {
+		t.Fatalf("remote main mutated: %s -> %s", remoteBefore, remoteAfter)
+	}
+	if _, err := os.Stat(filepath.Join(r.main, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("feature merge mutated target after concurrent commit: %v", err)
+	}
+}
+
 func TestDirectMergeConflictCanAbortToPreMergeTarget(t *testing.T) {
 	r := newLifecycleRepo(t)
 	mustWrite(t, filepath.Join(r.main, "shared.txt"), "main change\n")
@@ -234,6 +260,102 @@ func TestMergeErrorWrongRecoveryKeysPreservePushRetry(t *testing.T) {
 	}
 	if !commandIDs(p.Commands())["retry-push"] {
 		t.Fatal("wrong recovery keys removed Retry Push")
+	}
+}
+
+func TestAbortRefusesReplacementMergeAndPreservesResolution(t *testing.T) {
+	r, op := newSidecarConflict(t)
+	unrelatedOID, resolution, statusBefore := replaceWithUnrelatedConflict(t, r)
+	headBefore := mustGit(t, r.main, "rev-parse", "HEAD")
+
+	result := abortDirectMerge(op)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "MERGE_HEAD changed") {
+		t.Fatalf("abort result = %+v, want replacement merge refusal", result)
+	}
+	if result.Recovery != DirectMergeRecoveryConflict {
+		t.Fatalf("abort refusal removed conflict recovery: %q", result.Recovery)
+	}
+	assertReplacementConflictUnchanged(t, r, unrelatedOID, headBefore, resolution, statusBefore)
+}
+
+func TestContinueRefusesReplacementMergeAndPreservesResolution(t *testing.T) {
+	r, op := newSidecarConflict(t)
+	remoteBefore := mustGit(t, r.main, "rev-parse", "origin/main")
+	unrelatedOID, resolution, statusBefore := replaceWithUnrelatedConflict(t, r)
+	headBefore := mustGit(t, r.main, "rev-parse", "HEAD")
+
+	result := continueDirectMerge(op)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "MERGE_HEAD changed") {
+		t.Fatalf("continue result = %+v, want replacement merge refusal", result)
+	}
+	if result.Recovery != DirectMergeRecoveryConflict {
+		t.Fatalf("continue refusal removed conflict recovery: %q", result.Recovery)
+	}
+	assertReplacementConflictUnchanged(t, r, unrelatedOID, headBefore, resolution, statusBefore)
+	if remoteAfter := mustGit(t, r.main, "rev-parse", "origin/main"); remoteAfter != remoteBefore {
+		t.Fatalf("replacement merge was pushed: %s -> %s", remoteBefore, remoteAfter)
+	}
+}
+
+func newSidecarConflict(t *testing.T) (lifecycleRepo, *DirectMergeOperation) {
+	t.Helper()
+	r := newLifecycleRepo(t)
+	mustWrite(t, filepath.Join(r.main, "shared.txt"), "main change\n")
+	mustGit(t, r.main, "add", "shared.txt")
+	mustGit(t, r.main, "commit", "-m", "main change")
+	mustGit(t, r.main, "push", "origin", "main")
+	mustWrite(t, filepath.Join(r.feature, "shared.txt"), "feature change\n")
+	mustGit(t, r.feature, "add", "shared.txt")
+	mustGit(t, r.feature, "commit", "-m", "feature conflict")
+	op, err := preflightDirectMerge(r.feature, r.feature, "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op = runDirectMerge(op)
+	if op.Recovery != DirectMergeRecoveryConflict {
+		t.Fatalf("fixture recovery = %q, want conflict", op.Recovery)
+	}
+	return r, op
+}
+
+func replaceWithUnrelatedConflict(t *testing.T, r lifecycleRepo) (string, string, string) {
+	t.Helper()
+	mustGit(t, r.main, "merge", "--abort")
+	base := mustGit(t, r.main, "merge-base", "main", "feature")
+	mustGit(t, r.main, "branch", "unrelated", base)
+	unrelatedPath := filepath.Join(r.root, "unrelated")
+	mustGit(t, r.main, "worktree", "add", unrelatedPath, "unrelated")
+	mustWrite(t, filepath.Join(unrelatedPath, "shared.txt"), "unrelated change\n")
+	mustGit(t, unrelatedPath, "add", "shared.txt")
+	mustGit(t, unrelatedPath, "commit", "-m", "unrelated conflict")
+	unrelatedOID := mustGit(t, unrelatedPath, "rev-parse", "HEAD")
+	cmd := exec.Command("git", "merge", "--no-ff", "unrelated", "-m", "unrelated merge")
+	cmd.Dir = r.main
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("replacement merge unexpectedly succeeded: %s", out)
+	}
+	if mergeHead := mustGit(t, r.main, "rev-parse", "MERGE_HEAD"); mergeHead != unrelatedOID {
+		t.Fatalf("replacement MERGE_HEAD = %s, want %s", mergeHead, unrelatedOID)
+	}
+	resolution := "resolved unrelated work\n"
+	mustWrite(t, filepath.Join(r.main, "shared.txt"), resolution)
+	mustGit(t, r.main, "add", "shared.txt")
+	return unrelatedOID, resolution, mustGit(t, r.main, "status", "--porcelain=v1")
+}
+
+func assertReplacementConflictUnchanged(t *testing.T, r lifecycleRepo, mergeHead, head, resolution, status string) {
+	t.Helper()
+	if got := mustGit(t, r.main, "rev-parse", "MERGE_HEAD"); got != mergeHead {
+		t.Fatalf("MERGE_HEAD changed: got %s want %s", got, mergeHead)
+	}
+	if got := mustGit(t, r.main, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD changed: got %s want %s", got, head)
+	}
+	if got := mustRead(t, filepath.Join(r.main, "shared.txt")); got != resolution {
+		t.Fatalf("resolution changed: got %q want %q", got, resolution)
+	}
+	if got := mustGit(t, r.main, "status", "--porcelain=v1"); got != status {
+		t.Fatalf("index/worktree status changed: got %q want %q", got, status)
 	}
 }
 

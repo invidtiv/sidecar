@@ -195,6 +195,10 @@ func preflightDirectMerge(repoPath, sourcePath, sourceBranch, targetBranch strin
 }
 
 func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
+	return runDirectMergeWithBeforeMerge(op, nil)
+}
+
+func runDirectMergeWithBeforeMerge(op *DirectMergeOperation, beforeMerge func()) *DirectMergeOperation {
 	if op == nil {
 		return &DirectMergeOperation{Err: fmt.Errorf("missing direct merge operation")}
 	}
@@ -209,8 +213,19 @@ func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 		return failDirectMerge(op, fmt.Errorf("fast-forward target: %w", err), DirectMergeRecoveryNone)
 	}
 	op.Completed = append(op.Completed, "fast-forward target")
+	postPullOID, err := gitOutput(op.TargetPath, "rev-parse", "HEAD")
+	if err != nil {
+		return failDirectMerge(op, fmt.Errorf("pin post-pull target HEAD: %w", err), DirectMergeRecoveryNone)
+	}
+	if postPullOID == "" {
+		return failDirectMerge(op, fmt.Errorf("pin post-pull target HEAD: empty OID"), DirectMergeRecoveryNone)
+	}
+	op.PreMergeOID = postPullOID
 	if err := requireClean(op.TargetPath); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryNone)
+	}
+	if beforeMerge != nil {
+		beforeMerge()
 	}
 	if err := requireClean(op.SourcePath); err != nil {
 		return failDirectMerge(op, fmt.Errorf("source changed after review: %w", err), DirectMergeRecoveryNone)
@@ -221,10 +236,9 @@ func runDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 	if err := requireCheckoutIdentity(op.SourcePath, op.SourceBranch, op.SourceOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("source checkout changed before merge: %w", err), DirectMergeRecoveryNone)
 	}
-	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, ""); err != nil {
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
 		return failDirectMerge(op, fmt.Errorf("target checkout changed before merge: %w", err), DirectMergeRecoveryNone)
 	}
-	op.PreMergeOID, _ = gitOutput(op.TargetPath, "rev-parse", "HEAD")
 	message := fmt.Sprintf("Merge branch '%s'", op.SourceBranch)
 	if _, err := gitOutput(op.TargetPath, "merge", "--no-ff", op.SourceOID, "-m", message); err != nil {
 		if gitOperationState(op.TargetPath) == "merge" {
@@ -241,8 +255,8 @@ func continueDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil || op.Recovery != DirectMergeRecoveryConflict {
 		return failDirectMerge(op, fmt.Errorf("no conflicted merge is available to continue"), DirectMergeRecoveryNone)
 	}
-	if gitOperationState(op.TargetPath) != "merge" {
-		return failDirectMerge(op, fmt.Errorf("the target no longer has the expected merge in progress"), DirectMergeRecoveryNone)
+	if err := revalidateConflictRecovery(op); err != nil {
+		return failDirectMerge(op, err, DirectMergeRecoveryConflict)
 	}
 	if unmerged, _ := gitOutput(op.TargetPath, "diff", "--name-only", "--diff-filter=U"); unmerged != "" {
 		return failDirectMerge(op, fmt.Errorf("resolve all conflicts before continuing: %s", strings.ReplaceAll(unmerged, "\n", ", ")), DirectMergeRecoveryConflict)
@@ -261,6 +275,9 @@ func continueDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 func abortDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 	if op == nil || op.Recovery != DirectMergeRecoveryConflict {
 		return failDirectMerge(op, fmt.Errorf("no conflicted merge is available to abort"), DirectMergeRecoveryNone)
+	}
+	if err := revalidateConflictRecovery(op); err != nil {
+		return failDirectMerge(op, err, DirectMergeRecoveryConflict)
 	}
 	if _, err := gitOutput(op.TargetPath, "merge", "--abort"); err != nil {
 		return failDirectMerge(op, fmt.Errorf("abort merge: %w", err), DirectMergeRecoveryConflict)
@@ -285,14 +302,25 @@ func retryDirectMergePush(op *DirectMergeOperation) *DirectMergeOperation {
 	if err := requireClean(op.TargetPath); err != nil {
 		return failDirectMerge(op, err, DirectMergeRecoveryPushFailure)
 	}
-	head, _ := gitOutput(op.TargetPath, "rev-parse", "HEAD")
-	if head != op.MergeOID {
-		return failDirectMerge(op, fmt.Errorf("target HEAD changed since the failed push"), DirectMergeRecoveryPushFailure)
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
+		return failDirectMerge(op, fmt.Errorf("target checkout changed since the failed push: %w", err), DirectMergeRecoveryPushFailure)
 	}
 	return pushDirectMerge(op)
 }
 
 func pushDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
+	if op.MergeOID == "" {
+		return failDirectMerge(op, fmt.Errorf("merge result OID is not pinned"), DirectMergeRecoveryPushFailure)
+	}
+	if state := gitOperationState(op.TargetPath); state != "clean" {
+		return failDirectMerge(op, fmt.Errorf("cannot push during Git operation: %s", state), DirectMergeRecoveryPushFailure)
+	}
+	if err := requireClean(op.TargetPath); err != nil {
+		return failDirectMerge(op, err, DirectMergeRecoveryPushFailure)
+	}
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.MergeOID); err != nil {
+		return failDirectMerge(op, fmt.Errorf("target checkout changed before push: %w", err), DirectMergeRecoveryPushFailure)
+	}
 	refspec := "HEAD:refs/heads/" + op.TargetBranch
 	if _, err := gitOutput(op.TargetPath, "push", op.Remote, refspec); err != nil {
 		return failDirectMerge(op, fmt.Errorf("push %s %s: %w", op.Remote, op.TargetBranch, err), DirectMergeRecoveryPushFailure)
@@ -301,6 +329,23 @@ func pushDirectMerge(op *DirectMergeOperation) *DirectMergeOperation {
 	op.Recovery, op.Err = DirectMergeRecoveryNone, nil
 	op.GitState = currentGitState(op.TargetPath)
 	return op
+}
+
+func revalidateConflictRecovery(op *DirectMergeOperation) error {
+	if op.SourceOID == "" || op.PreMergeOID == "" {
+		return fmt.Errorf("conflict recovery identity is incomplete")
+	}
+	if err := requireCheckoutIdentity(op.TargetPath, op.TargetBranch, op.PreMergeOID); err != nil {
+		return fmt.Errorf("refusing recovery because target checkout changed: %w", err)
+	}
+	if state := gitOperationState(op.TargetPath); state != "merge" {
+		return fmt.Errorf("the target no longer has the expected merge in progress")
+	}
+	mergeHead, err := gitOutput(op.TargetPath, "rev-parse", "MERGE_HEAD")
+	if err != nil || mergeHead != op.SourceOID {
+		return fmt.Errorf("refusing recovery because MERGE_HEAD changed: got %q, expected %q", mergeHead, op.SourceOID)
+	}
+	return nil
 }
 
 func revalidateDirectMerge(op *DirectMergeOperation) error {
