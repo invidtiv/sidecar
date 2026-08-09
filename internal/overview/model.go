@@ -24,6 +24,10 @@ const (
 type Project struct{ Name, Path string }
 
 type NavigateMsg struct{ Workspace workspaceinventory.Workspace }
+type ValidationMsg struct {
+	Workspace workspaceinventory.Workspace
+	Err       error
+}
 type panesMsg struct {
 	Generation int
 	Panes      []workspaceinventory.Pane
@@ -81,6 +85,12 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 }
 
 func (m *Model) Stop() { m.generation++; m.loading = false }
+
+func (m *Model) Validate(workspace workspaceinventory.Workspace) tea.Cmd {
+	return func() tea.Msg {
+		return ValidationMsg{Workspace: workspace, Err: m.collector.ValidateWorkspace(context.Background(), workspace)}
+	}
+}
 
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {

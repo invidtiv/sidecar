@@ -134,6 +134,7 @@ type projectSwitcherDestination struct {
 const (
 	destinationProject  = "project"
 	destinationOverview = "overview"
+	workspacePluginID   = "workspace-manager"
 )
 
 // Model is the root Bubble Tea model for the sidecar application.
@@ -721,7 +722,11 @@ func (m *Model) initProjectSwitcher() {
 			m.projectSwitcherCursor = i
 			break
 		}
-		if !m.overviewActive && destination.Kind == destinationProject && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot) {
+		matchesCurrent := destination.Path == m.ui.WorkDir
+		if m.overview != nil {
+			matchesCurrent = matchesCurrent || destination.Path == m.ui.ProjectRoot
+		}
+		if !m.overviewActive && destination.Kind == destinationProject && matchesCurrent {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -924,7 +929,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	// This stops all plugins, updates the context, and starts them again
 	startCmds := m.registry.Reinit(targetPath, newProjectRoot)
 	if pending != nil {
-		if selector, ok := m.registry.Get("workspace").(plugin.PendingWorkspaceSelector); ok {
+		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(*pending)
 		}
 	}
@@ -948,6 +953,10 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	if newActivePluginID != "" {
 		m.FocusPluginByID(newActivePluginID)
 	}
+	var overviewFocusCmd tea.Cmd
+	if pending != nil {
+		overviewFocusCmd = m.FocusPluginByID(workspacePluginID)
+	}
 
 	// Retitle the terminal now rather than waiting for the next tick, so the
 	// tab label changes at the same moment the UI does.
@@ -962,6 +971,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		tea.Batch(startCmds...),
 		titleCmd,
 		inventoryRefresh,
+		overviewFocusCmd,
 		func() tea.Msg {
 			return ToastMsg{
 				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),
@@ -984,11 +994,11 @@ func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea
 	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path}
 	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) ||
 		(workspace.Kind == workspaceinventory.KindShell && workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.ProjectRoot)) {
-		if selector, ok := m.registry.Get("workspace").(plugin.PendingWorkspaceSelector); ok {
+		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(pending)
 		}
 		m.updateContext()
-		return m.FocusPluginByID("workspace")
+		return m.FocusPluginByID(workspacePluginID)
 	}
 	return m.switchProjectWithSelection(target, nil, &pending)
 }

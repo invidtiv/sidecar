@@ -49,6 +49,58 @@ type ProjectResult struct {
 	Err                                  error
 }
 
+// ValidateWorkspace rechecks a card's exact durable identity without creating,
+// migrating, reconciling, or mutating project state.
+func (c Collector) ValidateWorkspace(ctx context.Context, workspace Workspace) error {
+	c = c.defaults()
+	if canonical(workspace.ProjectRoot) != workspace.ProjectKey {
+		return fmt.Errorf("project identity changed")
+	}
+	info, err := os.Stat(workspace.ProjectRoot)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("project is no longer available")
+	}
+	switch workspace.Kind {
+	case KindWorktree:
+		out, err := c.Runner.Output(ctx, "git", "--no-optional-locks", "-C", workspace.ProjectRoot, "worktree", "list", "--porcelain")
+		if err != nil {
+			return fmt.Errorf("revalidate worktrees: %w", err)
+		}
+		found := false
+		for _, wt := range parseWorktrees(string(out)) {
+			if canonical(wt.Path) == workspace.Key && canonical(wt.Path) == canonical(workspace.Path) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("worktree is no longer available")
+		}
+		stateDir, ok := lookupWorktree(workspace.ProjectRoot, workspace.Path)
+		if !ok {
+			return fmt.Errorf("worktree agent identity is no longer available")
+		}
+		agent, err := os.ReadFile(filepath.Join(stateDir, "agent"))
+		if err != nil || strings.TrimSpace(string(agent)) == "" {
+			return fmt.Errorf("worktree agent identity changed")
+		}
+	case KindShell:
+		projectState, ok := lookupProject(workspace.ProjectRoot)
+		if !ok {
+			return fmt.Errorf("shell project identity is no longer available")
+		}
+		for _, shell := range readShells(filepath.Join(projectState, "shells.json")) {
+			if shell.TmuxName == workspace.Key && shell.TmuxName == workspace.TmuxName && shell.AgentType != "" {
+				return nil
+			}
+		}
+		return fmt.Errorf("shell identity is no longer available")
+	default:
+		return fmt.Errorf("unknown workspace identity")
+	}
+	return nil
+}
+
 type Runner interface {
 	Output(context.Context, string, ...string) ([]byte, error)
 }
@@ -121,7 +173,7 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 	now := c.Now()
 	result := ProjectResult{ProjectKey: canonical(root), ProjectName: name, ProjectRoot: canonical(root), ObservedAt: now}
 	var shells []shellDefinition
-	if projectState, ok := projectdir.Lookup(root); ok {
+	if projectState, ok := lookupProject(root); ok {
 		shells = readShells(filepath.Join(projectState, "shells.json"))
 	}
 	shellSessions := make(map[string]bool, len(shells))
@@ -134,7 +186,7 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 		return result
 	}
 	for _, wt := range parseWorktrees(string(out)) {
-		stateDir, ok := projectdir.LookupWorktree(root, wt.Path)
+		stateDir, ok := lookupWorktree(root, wt.Path)
 		if !ok {
 			continue
 		}
@@ -284,6 +336,20 @@ func canonical(path string) string {
 		abs = resolved
 	}
 	return filepath.Clean(abs)
+}
+
+func lookupProject(root string) (string, bool) {
+	if dir, ok := projectdir.Lookup(root); ok {
+		return dir, true
+	}
+	return projectdir.Lookup(canonical(root))
+}
+
+func lookupWorktree(root, path string) (string, bool) {
+	if dir, ok := projectdir.LookupWorktree(root, path); ok {
+		return dir, true
+	}
+	return projectdir.LookupWorktree(canonical(root), canonical(path))
 }
 
 func CanonicalPath(path string) string { return canonical(path) }

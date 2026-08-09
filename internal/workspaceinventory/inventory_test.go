@@ -159,6 +159,74 @@ func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 	}
 }
 
+func TestValidateWorkspaceRechecksExactWorktreeWithoutMutatingState(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	worktree := filepath.Join(t.TempDir(), "topic")
+	for _, path := range []string{root, worktree} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stateDir, err := projectdir.WorktreeDirWithBase(stateBase, root, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "agent"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := canonical(worktree)
+	workspace := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: key, Path: worktree}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + worktree + "\nbranch refs/heads/topic\n"}}
+	collector := Collector{Runner: runner}
+	before := snapshotTree(t, stateBase)
+	if err := collector.ValidateWorkspace(context.Background(), workspace); err != nil {
+		t.Fatalf("valid worktree rejected: %v", err)
+	}
+	if after := snapshotTree(t, stateBase); !reflect.DeepEqual(before, after) {
+		t.Fatalf("validation mutated Sidecar state\nbefore=%v\nafter=%v", before, after)
+	}
+	runner.git[root] = "worktree " + root + "\nbranch refs/heads/main\n"
+	if err := collector.ValidateWorkspace(context.Background(), workspace); err == nil || !strings.Contains(err.Error(), "no longer available") {
+		t.Fatalf("stale worktree validation = %v", err)
+	}
+}
+
+func TestValidateWorkspaceRejectsRemovedShellIdentityWithoutMutatingState(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(projectState, "shells.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"version":1,"shells":[{"tmuxName":"agent-shell","displayName":"Agent","agentType":"claude"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspace := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindShell, Key: "agent-shell", TmuxName: "agent-shell"}
+	collector := Collector{Runner: &fakeRunner{}}
+	if err := collector.ValidateWorkspace(context.Background(), workspace); err != nil {
+		t.Fatalf("valid shell rejected: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(`{"version":1,"shells":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, stateBase)
+	if err := collector.ValidateWorkspace(context.Background(), workspace); err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("stale shell validation = %v", err)
+	}
+	if after := snapshotTree(t, stateBase); !reflect.DeepEqual(before, after) {
+		t.Fatalf("shell validation mutated Sidecar state\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
 func snapshotTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
