@@ -131,6 +131,46 @@ func TestTwoProjectInventoryIsReadOnlyAndExcludesPlainShells(t *testing.T) {
 	}
 }
 
+func TestCollectorDiscoversAgentStartedInUntypedShell(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[` +
+		`{"tmuxName":"dynamic-agent","displayName":"Terminal cutover","namespace":"` + tmuxenv.Namespace() + `"},` +
+		`{"tmuxName":"plain-shell","displayName":"Shell 8","namespace":"` + tmuxenv.Namespace() + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+		if target == "%1" {
+			return "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", nil
+		}
+		return "$ ", nil
+	}}
+	panes := []Pane{
+		{ID: "%1", Session: "dynamic-agent", Path: root, Command: "node"},
+		{ID: "%2", Session: "plain-shell", Path: root, Command: "zsh"},
+	}
+	result := collector.CollectProject(context.Background(), "sidecar", root, []string{root}, panes)
+	if result.Err != nil || len(result.Workspaces) != 1 {
+		t.Fatalf("dynamic shell result = %#v", result)
+	}
+	got := result.Workspaces[0]
+	if got.Kind != KindShell || got.Name != "Terminal cutover" || got.Provider != "codex" || got.PaneID != "%1" || got.Presentation.Lane != agentstatus.LaneWorking {
+		t.Fatalf("dynamic agent = %#v", got)
+	}
+	got.ProjectRoot = root // Preserve the registered spelling used by projectdir metadata.
+	if err := collector.ValidateWorkspace(context.Background(), got); err != nil {
+		t.Fatalf("ValidateWorkspace(dynamic agent) = %v", err)
+	}
+}
+
 func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)

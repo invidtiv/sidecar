@@ -619,6 +619,11 @@ func (m *Model) syncBoard() {
 			continue
 		}
 		for _, workspace := range result.Workspaces {
+			// Untyped shell definitions are live-discovery candidates, not cards.
+			// RefreshProjectStatus retains them only after identifying an agent.
+			if workspace.Kind == workspaceinventory.KindShell && strings.TrimSpace(workspace.Provider) == "" {
+				continue
+			}
 			m.cards[workspace.ID] = workspace
 			freshness := string(workspace.Presentation.Freshness)
 			if m.refreshing[key] {

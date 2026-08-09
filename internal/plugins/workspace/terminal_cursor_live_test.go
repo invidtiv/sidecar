@@ -85,6 +85,15 @@ func (p *liveTerminalPane) sendEnter() {
 	p.run("send-keys", "-t", p.pane, "Enter")
 }
 
+func (p *liveTerminalPane) sendBackspaces(count int) {
+	p.t.Helper()
+	args := []string{"send-keys", "-t", p.pane}
+	for range count {
+		args = append(args, "BSpace")
+	}
+	p.run(args...)
+}
+
 // cursorPos and lineAt are tmux's own answers, and the oracle every assertion
 // below is made against: nothing in them shares an assumption with the code
 // under test.
@@ -214,7 +223,10 @@ func (d *terminalModelDriver) waitFor(timeout time.Duration, what string, condit
 			return
 		}
 		if time.Now().After(deadline) {
-			d.t.Fatalf("timed out waiting for %s", what)
+			d.t.Fatalf("timed out waiting for %s (model cursor=%d,%d pane=%dx%d output=%q)",
+				what, d.model.State.CursorRow, d.model.State.CursorCol,
+				d.model.State.PaneWidth, d.model.State.PaneHeight,
+				ansi.Strip(d.model.State.OutputBuf.String()))
 		}
 		select {
 		case msg := <-d.msgs:
@@ -238,7 +250,7 @@ func assertCursorOnItsLine(t *testing.T, d *terminalModelDriver, pane *liveTermi
 		wantRow, wantCol = pane.cursorPos()
 		return model.State.PaneHeight > 0 &&
 			model.State.CursorRow == wantRow && model.State.CursorCol == wantCol &&
-			strings.Contains(ansi.Strip(model.State.OutputBuf.String()), marker)
+			strings.Contains(strings.ReplaceAll(ansi.Strip(model.State.OutputBuf.String()), "\n", ""), marker)
 	})
 	wantLine := pane.lineAt(wantRow)
 
@@ -329,4 +341,47 @@ func TestLiveTerminalCursorSurvivesHistoryDisagreement(t *testing.T) {
 		t.Fatalf("loaded rows %d and history_size %d agree, so this case is not exercising a disagreement",
 			loadedRows, history.HistorySize)
 	}
+}
+
+// A soft-wrapped shell input occupies several physical pane rows even though
+// it is one logical command line. The model-backed OutputBuffer must preserve
+// that row-for-row correspondence: CursorRow is a physical grid coordinate,
+// so joining the wrapped rows in the published frame draws the native cursor
+// on the first display row of the command instead of the row tmux reports.
+func TestLiveTerminalCursorTracksSoftWrappedRows(t *testing.T) {
+	const width, height = 20, 10
+	pane := startLiveTerminalPane(t, width, height)
+	pane.runCommand("exec zsh -f")
+	pane.fillHistory(height + 5)
+	input := "first-row" + strings.Repeat("a", width*2) + "last-row"
+	// Seed while the pane already contains a wrapped command. This is the
+	// critical ordering: capture-pane supplies the initial physical grid, then
+	// control-mode bytes continue updating that same model.
+	pane.typeLiteral(input)
+
+	model := tty.New(&tty.Config{ScrollbackLines: 100})
+	model.Width, model.Height = width, height
+	driver := newTerminalModelDriver(t, model)
+	driver.run(model.Enter(pane.session, pane.pane))
+	t.Cleanup(model.Exit)
+
+	// The prompt consumes two columns. The seeded input ends on the last display
+	// row; editing it back crosses the middle and first rows through the stream.
+	assertCursorOnItsLine(t, driver, pane, input, width, height)
+	pane.sendBackspaces(width)
+	input = input[:len(input)-width]
+	assertCursorOnItsLine(t, driver, pane, input, width, height)
+	pane.sendBackspaces(width)
+	input = input[:len(input)-width]
+	assertCursorOnItsLine(t, driver, pane, input, width, height)
+	pane.typeLiteral(strings.Repeat("b", width*2))
+	input += strings.Repeat("b", width*2)
+	assertCursorOnItsLine(t, driver, pane, input, width, height)
+
+	// Put multiple wrapped physical rows above a fresh cursor row, then assert
+	// again. This catches fixes that only offset within the current logical line.
+	pane.sendEnter()
+	driver.waitFor(15*time.Second, "the shell to finish the wrapped command", pane.atPrompt)
+	pane.typeLiteral("after-wrapped-lines")
+	assertCursorOnItsLine(t, driver, pane, "after-wrapped-lines", width, height)
 }

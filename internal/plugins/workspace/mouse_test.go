@@ -301,3 +301,76 @@ func TestNonModalClickPassesThrough(t *testing.T) {
 		t.Error("sidebar click in List mode should set activePane to PaneSidebar")
 	}
 }
+
+type scrollFallbackPosition struct {
+	x           int
+	wantSidebar bool
+}
+
+func TestScrollFallbackUsesRenderedPreviewSplit(t *testing.T) {
+	tests := []struct {
+		name           string
+		width          int
+		sidebarWidth   int
+		sidebarVisible bool
+		positions      func(previewSplit) []scrollFallbackPosition
+	}{
+		{
+			name: "normal width", width: 120, sidebarWidth: 40, sidebarVisible: true,
+			positions: visibleSplitBoundaryPositions,
+		},
+		{
+			name: "sidebar minimum clamp", width: 120, sidebarWidth: 1, sidebarVisible: true,
+			positions: visibleSplitBoundaryPositions,
+		},
+		{
+			name: "preview minimum clamp", width: 120, sidebarWidth: 95, sidebarVisible: true,
+			positions: visibleSplitBoundaryPositions,
+		},
+		{
+			name: "sidebar hidden", width: 120, sidebarWidth: 40, sidebarVisible: false,
+			positions: func(split previewSplit) []scrollFallbackPosition {
+				return []scrollFallbackPosition{{x: 0}, {x: split.PreviewWidth - 1}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			geometry := surfacePlugin(true)
+			geometry.width = tt.width
+			geometry.sidebarWidth = tt.sidebarWidth
+			geometry.sidebarVisible = tt.sidebarVisible
+			split := geometry.previewSplit()
+
+			for _, pos := range tt.positions(split) {
+				p := surfacePlugin(true)
+				p.width = tt.width
+				p.sidebarWidth = tt.sidebarWidth
+				p.sidebarVisible = tt.sidebarVisible
+				p.shells = append(p.shells, &ShellSession{
+					Name: "Second shell", TmuxName: "shell-session-2",
+					Agent: &Agent{OutputBuf: markerBuffer("SECOND", 100)},
+				})
+				p.shells[0].Agent.OutputBuf = markerBuffer("FIRST", 100)
+				p.autoScrollOutput = false
+
+				p.handleMouseScroll(mouse.MouseAction{Delta: 1, X: pos.x})
+				gotSidebar := p.selectedShellIdx == 1
+				gotPreview := p.previewOffset > 0
+				if gotSidebar != pos.wantSidebar || gotPreview == pos.wantSidebar {
+					t.Fatalf("x=%d split=%+v: sidebar scrolled=%v preview scrolled=%v, want sidebar=%v",
+						pos.x, split, gotSidebar, gotPreview, pos.wantSidebar)
+				}
+			}
+		})
+	}
+}
+
+func visibleSplitBoundaryPositions(split previewSplit) []scrollFallbackPosition {
+	return []scrollFallbackPosition{
+		{x: split.SidebarWidth - 1, wantSidebar: true},
+		{x: split.SidebarWidth}, // divider belongs to the preview fallback
+		{x: split.PreviewX},
+	}
+}

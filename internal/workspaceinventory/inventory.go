@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,7 +92,7 @@ func (c Collector) ValidateWorkspace(ctx context.Context, workspace Workspace) e
 			return fmt.Errorf("shell project identity is no longer available")
 		}
 		for _, shell := range readShells(filepath.Join(projectState, "shells.json")) {
-			if shell.TmuxName == workspace.Key && shell.TmuxName == workspace.TmuxName && shell.AgentType != "" {
+			if shell.TmuxName == workspace.Key && shell.TmuxName == workspace.TmuxName {
 				return nil
 			}
 		}
@@ -307,9 +308,6 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 
 	if len(shells) > 0 {
 		for _, shell := range shells {
-			if shell.AgentType == "" {
-				continue
-			}
 			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, ObservedAt: now}
 			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
 			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
@@ -346,6 +344,13 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 		}
 		c.observeContext(ctx, workspace, matches, now)
 	}
+	// Shell manifests intentionally allow agentType to be absent: the workspace
+	// view can discover a provider from the live pane after a plain shell starts
+	// an agent. Retain those dynamically identified agents, while keeping truly
+	// plain terminals out of the agent-only Overview.
+	result.Workspaces = slices.DeleteFunc(result.Workspaces, func(workspace Workspace) bool {
+		return workspace.Kind == KindShell && strings.TrimSpace(workspace.Provider) == ""
+	})
 	return result
 }
 
@@ -610,7 +615,7 @@ func BuildShellClaims(results []ProjectResult) ShellClaims {
 	claims := ShellClaims{Sessions: make(map[string]bool), Owners: make(map[string]string)}
 	for _, result := range results {
 		for _, workspace := range result.Workspaces {
-			if workspace.Kind == KindShell && workspace.Provider != "" && workspace.TmuxName != "" {
+			if workspace.Kind == KindShell && workspace.TmuxName != "" {
 				claims.Sessions[workspace.TmuxName] = true
 				if owner, exists := claims.Owners[workspace.TmuxName]; exists && owner != result.ProjectKey {
 					claims.Owners[workspace.TmuxName] = ""

@@ -1182,8 +1182,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if p.viewMode == ViewModeKanban {
 			return p.scrollKanban(delta)
 		}
-		sidebarW := (p.width * p.sidebarWidth) / 100
-		if action.X < sidebarW {
+		split := p.previewSplit()
+		if p.sidebarVisible && action.X < split.SidebarWidth {
 			return p.scrollSidebar(delta)
 		}
 		return p.scrollPreview(delta)
