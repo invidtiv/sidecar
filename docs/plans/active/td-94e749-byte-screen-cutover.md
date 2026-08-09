@@ -4,9 +4,10 @@
 
 **Upstream follow-ups:** `td-a04666`
 
-**Status (2026-08-09):** Implementation slices and the focused/race/full/build
-gates are complete. Isolated real-app fallback/reseed proof, managed install
-proof, and final independent review remain before `td-94e749` closes.
+**Status (2026-08-09):** Implementation, isolated real-app fallback/reseed
+proof, focused/race/full/build gates, and managed worktree install proof are
+complete. Every implementation slice has independent approval; final
+integrated review is the remaining closure gate for `td-94e749`.
 
 **Decision:** Graduate the byte-fed renderer. Marcus has judged the live rollout
 materially better overall despite the known `x/vt` gaps. Those gaps remain
