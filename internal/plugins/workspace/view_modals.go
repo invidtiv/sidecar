@@ -14,6 +14,13 @@ import (
 // renderCreateModal renders the new worktree modal with dimmed background.
 func (p *Plugin) renderCreateModal(width, height int) string {
 	background := p.renderListView(width, height)
+	if p.createPlan != nil || p.createBusyStep != "" {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return background
+		}
+		return ui.OverlayModal(background, p.createOperationModal.Render(width, height, p.mouseHandler), width, height)
+	}
 
 	p.ensureCreateModal()
 	if p.createModal == nil {

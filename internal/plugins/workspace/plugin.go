@@ -253,6 +253,13 @@ type Plugin struct {
 	createError           string    // Error message to display in create modal
 	createModal           *modal.Modal
 	createModalWidth      int
+	createOperationModal  *modal.Modal
+	createOperationWidth  int
+	createPlan            *CreateOperationPlan
+	createSetupResult     *CreateSetupResult
+	createBusyStep        string
+	createCopyEnv         bool
+	createRunHook         bool
 
 	// Branch name validation state
 	branchNameValid     bool     // Is current name valid?
@@ -537,6 +544,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("enter", "confirm", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-field", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-field", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-create-confirm")
+		ctx.Keymap.RegisterPluginBinding("enter", createConfirmID, "workspace-create-confirm")
+		ctx.Keymap.RegisterPluginBinding("enter", createRetrySetupID, "workspace-create-recovery")
 
 		// Task link modal context
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-task-link")
@@ -633,6 +643,9 @@ func (p *Plugin) resetLifecycleState() {
 	p.fetchPRLoading = false
 	p.fetchPRError = ""
 	p.fetchPRModal = nil
+	if p.viewMode == ViewModeCreate {
+		p.clearCreateModal()
+	}
 	switch p.viewMode {
 	case ViewModeCreate, ViewModeTaskLink, ViewModeMerge, ViewModeCommitForMerge,
 		ViewModeConfirmDelete, ViewModeFetchPR:
@@ -1020,6 +1033,13 @@ func (p *Plugin) clearCreateModal() {
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createOperationModal = nil
+	p.createOperationWidth = 0
+	p.createPlan = nil
+	p.createSetupResult = nil
+	p.createBusyStep = ""
+	p.createCopyEnv = false
+	p.createRunHook = false
 	p.taskSearchInput = textinput.Model{}
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
@@ -1072,6 +1092,13 @@ func (p *Plugin) initCreateModalBase() {
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createOperationModal = nil
+	p.createOperationWidth = 0
+	p.createPlan = nil
+	p.createSetupResult = nil
+	p.createBusyStep = ""
+	p.createCopyEnv = false
+	p.createRunHook = false
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0

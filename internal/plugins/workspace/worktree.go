@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tdroot"
@@ -185,8 +186,9 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 	return worktrees, scanner.Err()
 }
 
-// createWorktree returns a command to create a new worktree.
-func (p *Plugin) createWorktree() tea.Cmd {
+// resolveCreatePlan performs the non-mutating Git-plumbing preflight. The
+// returned plan is shown verbatim before beginCreateWorktree can mutate Git.
+func (p *Plugin) resolveCreatePlan() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
 	name := p.createNameInput.Value()
 	baseBranch := p.createBaseBranchInput.Value()
@@ -196,24 +198,111 @@ func (p *Plugin) createWorktree() tea.Cmd {
 	skipPerms := p.createSkipPermissions
 	prompt := p.getSelectedPrompt()
 
-	// Debug log to trace taskID flow
-	if p.ctx != nil && p.ctx.Logger != nil {
-		p.ctx.Logger.Debug("createWorktree: captured modal state", "name", name, "taskID", taskID, "taskTitle", taskTitle, "agentType", agentType, "skipPerms", skipPerms, "hasPrompt", prompt != nil)
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
+	setupConfig := config.WorktreeSetupConfig{CopyEnvFiles: true, EnvFiles: append([]string(nil), defaultEnvFiles...), RunHook: true, HookPath: setupScriptName, HookRequired: true}
+	if p.ctx.Config != nil {
+		setupConfig = p.ctx.Config.WorktreeSetupForProject(projectRoot)
 	}
-
-	if name == "" {
-		return func() tea.Msg {
-			return CreateDoneMsg{OperationScope: scope, Err: fmt.Errorf("workspace name is required")}
-		}
-	}
-	ctxCopy := *p.ctx
-	runner := *p
-	runner.ctx = &ctxCopy
-
 	return func() tea.Msg {
-		wt, err := runner.doCreateWorktreeContext(ctx, name, baseBranch, taskID, taskTitle, agentType)
+		plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
+		if plan != nil {
+			plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
+			plan.SkipPerms, plan.Prompt = skipPerms, prompt
+		}
+		return CreatePlanResolvedMsg{OperationScope: scope, Plan: plan, Err: err}
+	}
+}
+
+// createWorktree is retained for internal callers that require the legacy
+// one-command result shape. The interactive creation journey uses the explicit
+// preflight/add/setup state machine above.
+func (p *Plugin) createWorktree() tea.Cmd {
+	ctx, scope := p.newLifecycleScope(nil)
+	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
+	taskID, taskTitle, agentType := p.createTaskID, p.createTaskTitle, p.createAgentType
+	skipPerms, prompt := p.createSkipPermissions, p.getSelectedPrompt()
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	if base == "" {
+		base = "HEAD"
+	}
+	return func() tea.Msg {
+		path := filepath.Join(filepath.Dir(projectRoot), name)
+		cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", name, path, base)
+		cmd.Dir = workDir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return CreateDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)}
+		}
+		wt := &Worktree{Key: stablePathKey(path), Name: name, Path: path, Branch: name, BaseBranch: base,
+			TaskID: taskID, TaskTitle: taskTitle, ChosenAgentType: agentType, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+		// Preserve Slice 2's contract: cancellation during post-add discovery
+		// returns the created identity instead of losing the partial result.
+		_, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
 		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
 	}
+}
+
+func (p *Plugin) beginCreateWorktree() tea.Cmd {
+	if p.createPlan == nil {
+		return nil
+	}
+	plan := *p.createPlan
+	plan.EnvFiles = append([]string(nil), p.createPlan.EnvFiles...)
+	plan.CopyEnv, plan.RunHook = p.createCopyEnv, p.createRunHook
+	scope := p.currentCreateScope()
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	repoKey := scope.RepoKey
+	return func() tea.Msg {
+		wt, err := addCreatedWorktree(ctx, repoKey, &plan)
+		return CreateWorktreeAddedMsg{OperationScope: scope, Plan: &plan, Worktree: wt, Err: err}
+	}
+}
+
+func (p *Plugin) deleteNewlyCreatedCmd() tea.Cmd {
+	if p.createPlan == nil || p.createSetupResult == nil || p.createSetupResult.Worktree == nil {
+		return nil
+	}
+	plan := *p.createPlan
+	expectedOID := p.createSetupResult.Worktree.HEADOID
+	scope := p.currentCreateScope()
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		err := removeCleanLifecycleWorktreeContext(ctx, plan.SourceWorktree, plan.Path, plan.Branch, expectedOID)
+		if err == nil {
+			current, verifyErr := gitOutputContext(ctx, plan.SourceWorktree, "rev-parse", "--verify", "refs/heads/"+plan.Branch)
+			if verifyErr != nil || current != expectedOID {
+				err = fmt.Errorf("branch identity changed after worktree removal; branch retained")
+			} else if _, deleteErr := gitOutputContext(ctx, plan.SourceWorktree, "update-ref", "-d", "refs/heads/"+plan.Branch, expectedOID); deleteErr != nil {
+				err = fmt.Errorf("delete newly created branch: %w", deleteErr)
+			}
+		}
+		return CreateRecoveryDeleteDoneMsg{OperationScope: scope, Err: err}
+	}
+}
+
+func (p *Plugin) runCreateSetupCmd(plan *CreateOperationPlan, wt *Worktree) tea.Cmd {
+	scope := p.currentCreateScope()
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		return CreateSetupDoneMsg{OperationScope: scope, Plan: plan, Result: runCreateSetup(ctx, plan, wt)}
+	}
+}
+
+func (p *Plugin) currentCreateScope() OperationScope {
+	scope := OperationScope{Epoch: p.ctx.Epoch, OperationID: p.activeLifecycleOperationID, Lifecycle: true}
+	if p.repoSnapshot != nil {
+		scope.RepoKey = p.repoSnapshot.Key
+	}
+	return scope
 }
 
 // doCreateWorktree performs the actual worktree creation.
@@ -228,144 +317,27 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	if p.repoSnapshot != nil {
 		repoKey = p.repoSnapshot.Key
 	}
-	// Default base branch to current branch if not specified
-	if baseBranch == "" {
-		baseBranch = "HEAD"
+	setupConfig := config.WorktreeSetupConfig{CopyEnvFiles: true, EnvFiles: append([]string(nil), defaultEnvFiles...), RunHook: true, HookPath: setupScriptName, HookRequired: true}
+	if p.ctx.Config != nil {
+		setupConfig = p.ctx.Config.WorktreeSetupForProject(projectRoot)
 	}
-
-	// Determine worktree directory name with optional repo prefix
-	// When enabled, prefixes directory with repo name (e.g., "myrepo-feature-auth")
-	// This helps conversation adapters discover related worktree conversations
-	// by matching the directory path pattern after worktree deletion
-	dirName := name
-	if dirPrefix {
-		repoName := repoNameContext(ctx, workDir)
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if repoName != "" {
-			dirName = repoName + "-" + name
-		}
+	plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
+	if err != nil {
+		return nil, err
 	}
-
-	// Determine worktree path (sibling to main repo).
-	// Use ProjectRoot (the main worktree path, resolved from git) rather than
-	// WorkDir so that starting sidecar from a subfolder doesn't place the new
-	// worktree inside the repository instead of beside it. Fixes #174.
-	mainRepoDir := projectRoot
-	if mainRepoDir == "" {
-		mainRepoDir = workDir
+	plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
+	wt, err := addCreatedWorktree(ctx, repoKey, plan)
+	if err != nil {
+		return wt, err
 	}
-	parentDir := filepath.Dir(mainRepoDir)
-	wtPath := filepath.Join(parentDir, dirName)
-
-	// Ensure parent directory exists for paths with slashes (e.g., feat/ui)
-	if err := os.MkdirAll(filepath.Dir(wtPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create parent directory: %w", err)
-	}
-
-	// Create worktree with new branch (branch name stays simple, just the user-provided name)
-	args := []string{"worktree", "add", "-b", name, wtPath, baseBranch}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = workDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-
-	partial := &Worktree{
-		Key:             stablePathKey(wtPath),
-		RepoKey:         repoKey,
-		Name:            dirName,
-		Path:            wtPath,
-		Branch:          name,
-		BaseBranch:      baseBranch,
-		TaskID:          taskID,
-		TaskTitle:       taskTitle,
-		ChosenAgentType: agentType,
-		Status:          StatusPaused,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-	}
-	if key, err := projectdir.WorktreeKey(wtPath); err == nil {
-		partial.Key = key
-	}
-
-	// Create .td-root file pointing to main repo for td database sharing.
-	if err := setupTDRootContext(ctx, workDir, projectRoot, wtPath); err != nil {
-		if ctx.Err() != nil {
-			return partial, ctx.Err()
-		}
-		// Log but don't fail - td integration is optional
-		p.ctx.Logger.Warn("failed to setup .td-root", "path", wtPath, "error", err)
-	}
-
-	// If task is linked, create task file in centralized dir and start the task
-	if taskID != "" {
-		wtDir, wtDirErr := projectdir.WorktreeDirContext(ctx, projectRoot, wtPath)
-		if wtDirErr != nil {
-			if ctx.Err() != nil {
-				return partial, ctx.Err()
-			}
-			p.ctx.Logger.Warn("failed to resolve worktree dir for task", "path", wtPath, "error", wtDirErr)
-		} else {
-			taskPath := filepath.Join(wtDir, sidecarTaskFile)
-			if err := ctx.Err(); err != nil {
-				return partial, err
-			}
-			if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
-				p.ctx.Logger.Warn("failed to write task file", "path", taskPath, "error", err)
+	result := runCreateSetup(ctx, plan, wt)
+	if result.HasRequiredFailure() {
+		for _, warning := range result.Warnings() {
+			if warning.Required {
+				return wt, fmt.Errorf("%s: %w", warning.Action, warning.Err)
 			}
 		}
-
-		// Auto-start the task in td (if td is available)
-		startCmd := exec.CommandContext(ctx, "td", "start", taskID)
-		startCmd.Dir = wtPath
-		if err := startCmd.Run(); err != nil {
-			if ctx.Err() != nil {
-				return partial, ctx.Err()
-			}
-			p.ctx.Logger.Warn("failed to start td task", "task", taskID, "error", err)
-		}
 	}
-
-	// Determine actual base branch name
-	actualBase := baseBranch
-	if baseBranch == "HEAD" {
-		if b, err := getCurrentBranchContext(ctx, workDir); err == nil {
-			actualBase = b
-		} else if ctx.Err() != nil {
-			return partial, ctx.Err()
-		}
-	}
-
-	wt := partial
-	wt.BaseBranch = actualBase
-
-	// Persist agent type to centralized worktree data directory
-	if err := saveAgentTypeContext(ctx, projectRoot, wtPath, agentType); err != nil {
-		if ctx.Err() != nil {
-			return partial, ctx.Err()
-		}
-		p.ctx.Logger.Warn("failed to save agent type", "path", wtPath, "error", err)
-	}
-
-	// Persist base branch to centralized worktree data directory
-	if err := saveBaseBranchContext(ctx, projectRoot, wtPath, actualBase); err != nil {
-		if ctx.Err() != nil {
-			return partial, ctx.Err()
-		}
-		p.ctx.Logger.Warn("failed to save base branch", "path", wtPath, "error", err)
-	}
-
-	// Run post-creation setup (env files, symlinks, setup script)
-	if err := p.setupWorktreeContext(ctx, wtPath, name); err != nil {
-		if ctx.Err() != nil {
-			return partial, ctx.Err()
-		}
-		p.ctx.Logger.Warn("workspace setup had errors", "path", wtPath, "error", err)
-		// Don't fail creation for setup errors
-	}
-
 	return wt, nil
 }
 

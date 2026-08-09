@@ -15,6 +15,22 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "paste", Name: "Paste", Description: "Paste clipboard (" + p.getInteractivePasteKey() + ")", Context: "workspace-interactive", Priority: 3},
 		}
 	case ViewModeCreate:
+		if p.createBusyStep != "" {
+			return []plugin.Command{{ID: "creation-busy", Name: "Working", Description: p.createBusyStep, Context: "workspace-create-busy", Priority: 1}}
+		}
+		if p.createSetupResult != nil {
+			return []plugin.Command{
+				{ID: createRetrySetupID, Name: "Retry", Description: "Retry setup", Context: "workspace-create-recovery", Priority: 1},
+				{ID: createOpenAnywayID, Name: "Open", Description: "Open without successful setup", Context: "workspace-create-recovery", Priority: 2},
+				{ID: createDeleteCreatedID, Name: "Delete", Description: "Delete newly created worktree", Context: "workspace-create-recovery", Priority: 3},
+			}
+		}
+		if p.createPlan != nil {
+			return []plugin.Command{
+				{ID: createConfirmID, Name: "Create", Description: "Create the confirmed worktree", Context: "workspace-create-confirm", Priority: 1},
+				{ID: "cancel", Name: "Back", Description: "Return to creation form", Context: "workspace-create-confirm", Priority: 2},
+			}
+		}
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel workspace creation", Context: "workspace-create", Priority: 1},
 			{ID: "confirm", Name: "Create", Description: "Create the workspace", Context: "workspace-create", Priority: 2},
@@ -299,6 +315,15 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeInteractive:
 		return "workspace-interactive"
 	case ViewModeCreate:
+		if p.createBusyStep != "" {
+			return "workspace-create-busy"
+		}
+		if p.createSetupResult != nil {
+			return "workspace-create-recovery"
+		}
+		if p.createPlan != nil {
+			return "workspace-create-confirm"
+		}
 		return "workspace-create"
 	case ViewModeTaskLink:
 		return "workspace-task-link"

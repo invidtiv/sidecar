@@ -23,7 +23,87 @@ const (
 	createBranchItemPrefix  = "create-branch-"
 	createTaskItemPrefix    = "create-task-item-"
 	createAgentItemPrefix   = "create-agent-"
+	createConfirmID         = "create-confirm"
+	createRetrySetupID      = "create-retry-setup"
+	createOpenAnywayID      = "create-open-anyway"
+	createDeleteCreatedID   = "create-delete-created"
+	createCopyEnvID         = "create-copy-env"
+	createRunHookID         = "create-run-hook"
 )
+
+func (p *Plugin) ensureCreateOperationModal() {
+	if p.createPlan == nil && p.createBusyStep == "" {
+		return
+	}
+	modalW := 72
+	if maxW := p.width - 4; modalW > maxW {
+		modalW = maxW
+	}
+	if modalW < 20 {
+		modalW = 20
+	}
+	if p.createOperationModal != nil && p.createOperationWidth == modalW {
+		return
+	}
+	p.createOperationWidth = modalW
+
+	if p.createBusyStep != "" {
+		p.createOperationModal = modal.New("Creating Worktree", modal.WithWidth(modalW), modal.WithHints(false), modal.WithCloseOnBackdropClick(false)).
+			AddSection(modal.Text("Current step: " + p.createBusyStep)).
+			AddSection(modal.Text("This operation cannot be cancelled after submission."))
+		return
+	}
+	if p.createSetupResult != nil {
+		lines := []string{"The worktree was created and kept:", "Path: " + p.createPlan.Path, "HEAD: " + shortOID(p.createSetupResult.Worktree.HEADOID), "", "Setup warnings:"}
+		for _, outcome := range p.createSetupResult.Warnings() {
+			label := "warning"
+			if outcome.Required {
+				label = "required"
+			}
+			lines = append(lines, fmt.Sprintf("- %s (%s): %v", outcome.Action, label, outcome.Err))
+		}
+		p.createOperationModal = modal.New("Setup Needs Attention", modal.WithWidth(modalW), modal.WithVariant(modal.VariantWarning), modal.WithHints(false), modal.WithCloseOnBackdropClick(false)).
+			AddSection(modal.Text(strings.Join(lines, "\n"))).
+			AddSection(modal.Spacer()).
+			AddSection(modal.Buttons(
+				modal.Btn(" Retry Setup ", createRetrySetupID, modal.BtnPrimary()),
+				modal.Btn(" Open Anyway ", createOpenAnywayID),
+				modal.Btn(" Delete Newly Created ", createDeleteCreatedID, modal.BtnDanger()),
+			))
+		return
+	}
+	plan := p.createPlan
+	lines := []string{
+		"Source: " + plan.SourceRef,
+		"Source OID: " + plan.SourceOID,
+		"Source worktree: " + plan.SourceWorktree,
+		"Destination: " + plan.Path,
+		"Branch: " + plan.Branch,
+		"Remote: " + plan.RemotePolicy,
+	}
+	if plan.TaskID == "" {
+		lines = append(lines, "Task: none")
+	} else {
+		lines = append(lines, "Task: "+plan.TaskID+"  "+plan.TaskTitle)
+	}
+	p.createOperationModal = modal.New("Confirm Worktree Creation", modal.WithWidth(modalW), modal.WithPrimaryAction(createConfirmID), modal.WithHints(false)).
+		AddSection(modal.Text(strings.Join(lines, "\n"))).
+		AddSection(modal.Spacer())
+	if len(plan.EnvFiles) > 0 {
+		p.createOperationModal.AddSection(modal.Checkbox(createCopyEnvID, "Copy env files: "+strings.Join(plan.EnvFiles, ", "), &p.createCopyEnv))
+	}
+	if plan.RunHook {
+		required := "optional"
+		if plan.HookRequired {
+			required = "required"
+		}
+		p.createOperationModal.AddSection(modal.Checkbox(createRunHookID, "Run "+plan.HookPath+" ("+required+")", &p.createRunHook))
+	}
+	p.createOperationModal.AddSection(modal.Spacer()).AddSection(modal.Buttons(
+		modal.Btn(" Create ", createConfirmID, modal.BtnPrimary()),
+		modal.Btn(" Back ", createCancelID),
+	))
+}
 
 func createIndexedID(prefix string, idx int) string {
 	return fmt.Sprintf("%s%d", prefix, idx)

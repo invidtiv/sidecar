@@ -381,7 +381,11 @@ func (a *Agent) CheckRunaway() bool {
 func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	key, name, path, taskID := wt.IdentityKey(), wt.Name, wt.Path, wt.TaskID
-	envOverrides := BuildEnvOverrides(p.ctx.WorkDir)
+	mainRoot := p.ctx.ProjectRoot
+	if mainRoot == "" {
+		mainRoot = p.ctx.WorkDir
+	}
+	envOverrides := BuildEnvOverrides(mainRoot)
 	agentCmd := p.getAgentCommandWithContext(agentType, wt)
 	return func() tea.Msg {
 		sessionName := tmuxSessionPrefix + sanitizeName(name)
@@ -691,7 +695,11 @@ func (p *Plugin) getAgentCommandWithContext(agentType AgentType, wt *Worktree) s
 func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPerms bool, prompt *Prompt) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	key, name, path, taskID := wt.IdentityKey(), wt.Name, wt.Path, wt.TaskID
-	envOverrides := BuildEnvOverrides(p.ctx.WorkDir)
+	mainRoot := p.ctx.ProjectRoot
+	if mainRoot == "" {
+		mainRoot = p.ctx.WorkDir
+	}
+	envOverrides := BuildEnvOverrides(mainRoot)
 	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms, prompt)
 	return func() tea.Msg {
 		sessionName := tmuxSessionPrefix + sanitizeName(name)

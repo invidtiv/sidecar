@@ -113,6 +113,25 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
+	if p.createBusyStep != "" {
+		return nil
+	}
+	if p.createPlan != nil {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return nil
+		}
+		action := p.createOperationModal.HandleMouse(msg, p.mouseHandler)
+		if action == "cancel" || action == createCancelID {
+			if p.createSetupResult != nil {
+				return nil
+			}
+			p.createPlan, p.createOperationModal, p.createSetupResult = nil, nil, nil
+			p.createOperationWidth = 0
+			return nil
+		}
+		return p.handleCreateOperationAction(action)
+	}
 	p.ensureCreateModal()
 	if p.createModal == nil {
 		return nil
@@ -867,7 +886,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if idx, ok := action.Region.Data.(int); ok {
 			switch idx {
 			case 6:
-				return p.createWorktree()
+				return p.validateAndCreateWorktree()
 			case 7:
 				p.viewMode = ViewModeList
 				p.clearCreateModal()

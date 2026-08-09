@@ -81,10 +81,11 @@ type rawProjectsConfig struct {
 }
 
 type rawProjectConfig struct {
-	Name          string       `json:"name"`
-	Path          string       `json:"path"`
-	Theme         *ThemeConfig `json:"theme,omitempty"`
-	LastOpenInApp string       `json:"lastOpenInApp,omitempty"`
+	Name          string               `json:"name"`
+	Path          string               `json:"path"`
+	Theme         *ThemeConfig         `json:"theme,omitempty"`
+	LastOpenInApp string               `json:"lastOpenInApp,omitempty"`
+	WorktreeSetup *WorktreeSetupConfig `json:"worktreeSetup,omitempty"`
 }
 
 type rawPluginsConfig struct {
@@ -109,6 +110,15 @@ type rawWorkspaceConfig struct {
 	InteractivePasteKey  string                   `json:"interactivePasteKey"`
 	CopyOnSelect         *bool                    `json:"copyOnSelect"`
 	SidebarDisplay       *rawSidebarDisplayConfig `json:"sidebarDisplay"`
+	WorktreeSetup        *rawWorktreeSetupConfig  `json:"worktreeSetup"`
+}
+
+type rawWorktreeSetupConfig struct {
+	CopyEnvFiles *bool    `json:"copyEnvFiles"`
+	EnvFiles     []string `json:"envFiles"`
+	RunHook      *bool    `json:"runHook"`
+	HookPath     string   `json:"hookPath"`
+	HookRequired *bool    `json:"hookRequired"`
 }
 
 type rawSidebarDisplayConfig struct {
@@ -257,6 +267,23 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	// Workspace
 	if raw.Plugins.Workspace.DirPrefix != nil {
 		cfg.Plugins.Workspace.DirPrefix = *raw.Plugins.Workspace.DirPrefix
+	}
+	if setup := raw.Plugins.Workspace.WorktreeSetup; setup != nil {
+		if setup.CopyEnvFiles != nil {
+			cfg.Plugins.Workspace.WorktreeSetup.CopyEnvFiles = *setup.CopyEnvFiles
+		}
+		if setup.EnvFiles != nil {
+			cfg.Plugins.Workspace.WorktreeSetup.EnvFiles = append([]string(nil), setup.EnvFiles...)
+		}
+		if setup.RunHook != nil {
+			cfg.Plugins.Workspace.WorktreeSetup.RunHook = *setup.RunHook
+		}
+		if setup.HookPath != "" {
+			cfg.Plugins.Workspace.WorktreeSetup.HookPath = setup.HookPath
+		}
+		if setup.HookRequired != nil {
+			cfg.Plugins.Workspace.WorktreeSetup.HookRequired = *setup.HookRequired
+		}
 	}
 	if raw.Plugins.Workspace.TmuxCaptureMaxBytes != nil {
 		cfg.Plugins.Workspace.TmuxCaptureMaxBytes = *raw.Plugins.Workspace.TmuxCaptureMaxBytes

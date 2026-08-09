@@ -125,6 +125,35 @@ type CreateDoneMsg struct {
 	Err       error
 }
 
+// CreatePlanResolvedMsg completes the non-mutating Git-plumbing preflight.
+type CreatePlanResolvedMsg struct {
+	OperationScope
+	Plan *CreateOperationPlan
+	Err  error
+}
+
+// CreateWorktreeAddedMsg means Git created the worktree. Setup is a separate,
+// recoverable phase and may still produce warnings or a required failure.
+type CreateWorktreeAddedMsg struct {
+	OperationScope
+	Plan     *CreateOperationPlan
+	Worktree *Worktree
+	Err      error
+}
+
+type CreateSetupDoneMsg struct {
+	OperationScope
+	Plan   *CreateOperationPlan
+	Result *CreateSetupResult
+}
+
+type CreateRecoveryDeleteDoneMsg struct {
+	OperationScope
+	Err error
+}
+
+type CreateOpenAnywayMsg struct{ OperationScope }
+
 // DeleteWorktreeMsg requests worktree deletion.
 type DeleteWorktreeMsg struct {
 	Name  string

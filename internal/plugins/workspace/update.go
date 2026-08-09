@@ -327,6 +327,81 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case CreatePlanResolvedMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		if msg.Err != nil {
+			p.createError = msg.Err.Error()
+			p.createPlan = nil
+		} else {
+			p.createPlan = msg.Plan
+			p.createCopyEnv = msg.Plan.CopyEnv
+			p.createRunHook = msg.Plan.RunHook
+		}
+
+	case CreateWorktreeAddedMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		if msg.Err != nil {
+			p.createError = msg.Err.Error()
+			p.createPlan = nil
+			return p, nil
+		}
+		p.createPlan = msg.Plan
+		p.selectCreatedWorktree(msg.Worktree)
+		p.createBusyStep = "Persisting identity and running selected setup"
+		return p, p.runCreateSetupCmd(msg.Plan, msg.Worktree)
+
+	case CreateSetupDoneMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		p.createPlan = msg.Plan
+		p.createSetupResult = msg.Result
+		if msg.Result == nil || msg.Result.Worktree == nil {
+			p.createError = "setup returned no created worktree"
+			return p, nil
+		}
+		if len(msg.Result.Warnings()) > 0 {
+			// A created worktree remains selected but no agent is started until
+			// the user explicitly chooses a recovery action.
+			p.selectCreatedWorktree(msg.Result.Worktree)
+			return p, nil
+		}
+		cmds = append(cmds, p.finishCreatedWorktree(msg.Plan, msg.Result.Worktree)...)
+
+	case CreateOpenAnywayMsg:
+		if p.createPlan != nil && p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+			cmds = append(cmds, p.finishCreatedWorktree(p.createPlan, p.createSetupResult.Worktree)...)
+		}
+
+	case CreateRecoveryDeleteDoneMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		if msg.Err != nil {
+			if p.createSetupResult != nil {
+				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "delete newly created worktree", Required: true, Err: msg.Err})
+			}
+			return p, nil
+		}
+		if p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+			key := p.createSetupResult.Worktree.IdentityKey()
+			for i, wt := range p.worktrees {
+				if wt.IdentityKey() == key {
+					p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
+					break
+				}
+			}
+		}
+		p.viewMode = ViewModeList
+		p.clearCreateModal()
+		if p.selectedIdx >= len(p.worktrees) {
+			p.selectedIdx = len(p.worktrees) - 1
+		}
+
 	case PromptSelectedMsg:
 		// Prompt selected from picker
 		returnMode := p.promptPickerReturnMode

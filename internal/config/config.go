@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"path/filepath"
+	"time"
+)
 
 // Config is the root configuration structure.
 type Config struct {
@@ -25,10 +28,25 @@ type ProjectsConfig struct {
 
 // ProjectConfig represents a single project in the project switcher.
 type ProjectConfig struct {
-	Name          string       `json:"name"`                    // display name for the project
-	Path          string       `json:"path"`                    // absolute path to project root (supports ~ expansion)
-	Theme         *ThemeConfig `json:"theme,omitempty"`         // per-project theme (nil = use global)
-	LastOpenInApp string       `json:"lastOpenInApp,omitempty"` // last app used to open this project (e.g. "vscode", "goland")
+	Name          string               `json:"name"`                    // display name for the project
+	Path          string               `json:"path"`                    // absolute path to project root (supports ~ expansion)
+	Theme         *ThemeConfig         `json:"theme,omitempty"`         // per-project theme (nil = use global)
+	LastOpenInApp string               `json:"lastOpenInApp,omitempty"` // last app used to open this project (e.g. "vscode", "goland")
+	WorktreeSetup *WorktreeSetupConfig `json:"worktreeSetup,omitempty"` // optional per-project setup policy
+}
+
+// WorktreeSetupForProject returns the project override when present, otherwise
+// the workspace-wide default.
+func (c *Config) WorktreeSetupForProject(projectPath string) WorktreeSetupConfig {
+	if c == nil {
+		return WorktreeSetupConfig{}
+	}
+	for _, project := range c.Projects.List {
+		if filepath.Clean(ExpandPath(project.Path)) == filepath.Clean(projectPath) && project.WorktreeSetup != nil {
+			return *project.WorktreeSetup
+		}
+	}
+	return c.Plugins.Workspace.WorktreeSetup
 }
 
 // PluginsConfig holds per-plugin configuration.
@@ -108,6 +126,20 @@ type WorkspacePluginConfig struct {
 	CopyOnSelect bool `json:"copyOnSelect,omitempty"`
 	// SidebarDisplay controls what information is shown in the workspace sidebar entries.
 	SidebarDisplay SidebarDisplayConfig `json:"sidebarDisplay"`
+	// WorktreeSetup controls repository artifacts Sidecar may copy or execute when
+	// creating a worktree. The creation confirmation always names the discovered
+	// files and hook and requires an explicit per-operation selection.
+	WorktreeSetup WorktreeSetupConfig `json:"worktreeSetup"`
+}
+
+// WorktreeSetupConfig configures the optional setup phase after git creates a
+// worktree. Paths are relative to the canonical main worktree.
+type WorktreeSetupConfig struct {
+	CopyEnvFiles bool     `json:"copyEnvFiles"`
+	EnvFiles     []string `json:"envFiles,omitempty"`
+	RunHook      bool     `json:"runHook"`
+	HookPath     string   `json:"hookPath,omitempty"`
+	HookRequired bool     `json:"hookRequired"`
 }
 
 // SidebarDisplayConfig controls visibility of workspace sidebar entry elements.
@@ -181,6 +213,11 @@ func Default() *Config {
 			Workspace: WorkspacePluginConfig{
 				DirPrefix:           true,
 				TmuxCaptureMaxBytes: 2 * 1024 * 1024,
+				WorktreeSetup: WorktreeSetupConfig{
+					CopyEnvFiles: true,
+					EnvFiles:     []string{".env", ".env.local", ".env.development", ".env.development.local"},
+					RunHook:      true, HookPath: ".worktree-setup.sh", HookRequired: true,
+				},
 			},
 		},
 		Keymap: KeymapConfig{

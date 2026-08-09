@@ -1193,6 +1193,29 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 // handleCreateKeys handles keys in create modal.
 // createFocus: 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create button, 7=cancel button
 func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
+	if p.createBusyStep != "" {
+		return nil
+	}
+	if p.createPlan != nil {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return nil
+		}
+		action, cmd := p.createOperationModal.HandleKey(msg)
+		if action == "cancel" || action == createCancelID {
+			if p.createSetupResult != nil {
+				return nil
+			}
+			p.createPlan = nil
+			p.createOperationModal = nil
+			p.createOperationWidth = 0
+			return nil
+		}
+		if action != "" {
+			return p.handleCreateOperationAction(action)
+		}
+		return cmd
+	}
 	p.ensureCreateModal()
 	if p.createModal == nil {
 		return nil
@@ -1364,6 +1387,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
+	if p.createBusyStep != "" || p.createPlan != nil {
+		return nil
+	}
 	name := p.createNameInput.Value()
 	if name == "" {
 		p.createError = "Name is required"
@@ -1373,7 +1399,35 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 		p.createError = "Invalid branch name: " + strings.Join(p.branchNameErrors, ", ")
 		return nil
 	}
-	return p.createWorktree()
+	p.createBusyStep = "Validating branch, source, and destination"
+	p.createOperationModal = nil
+	return p.resolveCreatePlan()
+}
+
+func (p *Plugin) handleCreateOperationAction(action string) tea.Cmd {
+	switch action {
+	case createConfirmID:
+		if p.createSetupResult != nil {
+			return nil
+		}
+		p.createBusyStep = "Creating Git worktree"
+		p.createOperationModal = nil
+		return p.beginCreateWorktree()
+	case createRetrySetupID:
+		if p.createSetupResult == nil || p.createSetupResult.Worktree == nil {
+			return nil
+		}
+		p.createBusyStep = "Retrying setup"
+		p.createOperationModal = nil
+		return p.runCreateSetupCmd(p.createPlan, p.createSetupResult.Worktree)
+	case createOpenAnywayID:
+		return func() tea.Msg { return CreateOpenAnywayMsg{OperationScope: p.currentCreateScope()} }
+	case createDeleteCreatedID:
+		p.createBusyStep = "Revalidating and deleting newly created worktree"
+		p.createOperationModal = nil
+		return p.deleteNewlyCreatedCmd()
+	}
+	return nil
 }
 
 // shouldShowSkipPermissions returns true if the current agent type supports skip permissions.
