@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -200,6 +201,33 @@ func TestActivityAnimationUsesListVisibilityForNarrowKanbanFallback(t *testing.T
 	p.sidebarVisible = false
 	if cmd := p.startActivityAnimation(); cmd != nil {
 		t.Fatal("hidden list-fallback sidebar scheduled animation")
+	}
+}
+
+func TestActivityAnimationUsesScrolledKanbanCardWindow(t *testing.T) {
+	plain := func(name string) *ShellSession { return &ShellSession{Name: name} }
+	working := func(name string) *ShellSession {
+		return &ShellSession{Name: name, Agent: &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}}
+	}
+	newPlugin := func(shells []*ShellSession, selected int) *Plugin {
+		return &Plugin{
+			focused: true, applicationFocused: true, viewMode: ViewModeKanban,
+			width: 200, height: 14, sidebarVisible: true,
+			shells: shells, kanbanCol: kanbanShellColumnIndex, kanbanRow: selected,
+			mouseHandler: mouse.NewHandler(),
+		}
+	}
+
+	visibleWorking := newPlugin([]*ShellSession{plain("one"), plain("two"), plain("three"), working("four")}, 3)
+	visibleWorking.renderKanbanView(200, 14)
+	if cmd := visibleWorking.startActivityAnimation(); cmd == nil {
+		t.Fatal("selected row-3 working Codex card was visible after scroll but did not animate")
+	}
+
+	hiddenWorking := newPlugin([]*ShellSession{working("one"), plain("two"), plain("three"), plain("four")}, 3)
+	hiddenWorking.renderKanbanView(200, 14)
+	if cmd := hiddenWorking.startActivityAnimation(); cmd != nil {
+		t.Fatal("offscreen row-0 working card kept animation running")
 	}
 }
 

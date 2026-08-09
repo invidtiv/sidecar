@@ -209,6 +209,7 @@ type Tracker struct {
 	Evidence        string
 	ChangedAt       time.Time
 	Seen            bool
+	VisibleBlocker  bool
 	idleCandidateAt time.Time
 }
 
@@ -227,6 +228,10 @@ func (t *Tracker) ResetForProcessChange(now time.Time) {
 }
 
 func (t *Tracker) Apply(result Result, now time.Time) bool {
+	// Visibility belongs to the current capture, not the retained semantic
+	// state. Overlay/viewer captures may deliberately retain StateBlocked, but
+	// they must not retain evidence that the blocker is still on screen.
+	t.VisibleBlocker = result.State == StateBlocked && result.VisibleBlocker && !result.SkipStateUpdate
 	if result.SkipStateUpdate {
 		return false
 	}

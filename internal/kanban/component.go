@@ -103,6 +103,25 @@ func (c *Component) ScrollLane(column, delta int) {
 
 func (c *Component) ClearHover() { c.hoverID = "" }
 
+// VisibleCards returns the actual per-lane card window used by Render. It also
+// scrolls the selected card into view, so background consumers such as the
+// animation scheduler cannot drift from the next painted frame.
+func (c *Component) VisibleCards(maxCards int) []Card {
+	if maxCards <= 0 {
+		return nil
+	}
+	c.ensureSelectedVisible(maxCards)
+	var cards []Card
+	for _, lane := range c.board.Lanes {
+		start := c.scroll[lane.ID]
+		end := min(len(lane.Cards), start+maxCards)
+		if start < end {
+			cards = append(cards, lane.Cards[start:end]...)
+		}
+	}
+	return cards
+}
+
 func (c *Component) Compact(width, minColumnWidth int) bool {
 	return UsesCompact(width, len(c.board.Lanes), minColumnWidth, 4)
 }

@@ -105,3 +105,13 @@ func TestComponentReturnsCompactSignal(t *testing.T) {
 		t.Fatalf("compact result = %#v", got)
 	}
 }
+
+func TestVisibleCardsUsesScrolledSelectionWindow(t *testing.T) {
+	var c Component
+	c.SetBoard(Board{Lanes: []Lane{{ID: "shells", Cards: []Card{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}}}})
+	c.Select(Selection{Row: 3})
+	got := c.VisibleCards(2)
+	if len(got) != 2 || got[0].ID != "c" || got[1].ID != "d" {
+		t.Fatalf("visible cards = %#v, want c,d", got)
+	}
+}

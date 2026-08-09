@@ -58,7 +58,7 @@ func TestResolveFreshnessGatesAttention(t *testing.T) {
 	now := time.Unix(100, 0)
 	input := Input{
 		ProviderSupported: true,
-		Activity:          agentactivity.Tracker{State: agentactivity.StateBlocked},
+		Activity:          agentactivity.Tracker{State: agentactivity.StateBlocked, VisibleBlocker: true},
 		CapturedAt:        now.Add(-time.Second),
 		Now:               now,
 		StaleAfter:        time.Minute,

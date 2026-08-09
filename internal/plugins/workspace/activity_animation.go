@@ -142,18 +142,16 @@ func (p *Plugin) activityAnimationNeeded() bool {
 		}
 	case ViewModeKanban:
 		limit := kanbanVisibleCardCount(p.height)
-		for i := 0; i < len(p.shells) && i < limit; i++ {
-			if shellNeedsAnimation(p.shells[i]) {
-				return true
-			}
-		}
-		columns := p.getKanbanColumns()
-		for _, lane := range kanbanLaneOrder {
-			items := columns[lane]
-			for i := 0; i < len(items) && i < limit; i++ {
-				if worktreeNeedsAnimation(items[i]) {
+		p.syncKanbanComponent()
+		for _, card := range p.kanban.VisibleCards(limit) {
+			if shell := p.kanbanShellByID(card.ID); shell != nil {
+				if shellNeedsAnimation(shell) {
 					return true
 				}
+				continue
+			}
+			if worktreeNeedsAnimation(p.kanbanWorktreeByID(card.ID)) {
+				return true
 			}
 		}
 	}

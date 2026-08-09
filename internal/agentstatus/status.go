@@ -87,7 +87,7 @@ func Resolve(in Input) Presentation {
 			p.Lane, p.Icon, p.Label = LaneWorking, "●", "working"
 		case string(agentactivity.StateBlocked):
 			p.Lane, p.Icon, p.Label = LaneBlocked, "◆", "blocked"
-			p.Attention = p.Freshness == FreshnessCurrent
+			p.Attention = p.Freshness == FreshnessCurrent && in.Activity.VisibleBlocker
 		case "done":
 			p.Lane, p.Icon, p.Label = LaneDone, "✓", "done"
 		case string(agentactivity.StateIdle):
