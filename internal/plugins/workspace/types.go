@@ -56,6 +56,28 @@ const (
 	DiffViewFullFile                       // Full-file side-by-side view (like VS Code diff)
 )
 
+// DiffScope names the three distinct questions answered by the Diff tab.
+// Keeping this separate from DiffViewMode avoids confusing data selection
+// (working tree/commits/aggregate) with presentation (unified/split/full-file).
+type DiffScope int
+
+const (
+	DiffScopeWorkingTree DiffScope = iota
+	DiffScopeCommits
+	DiffScopeAggregate
+)
+
+type LoadState int
+
+const (
+	LoadStateUnknown LoadState = iota
+	LoadStateLoading
+	LoadStateClean
+	LoadStateReady
+	LoadStateTruncated
+	LoadStateError
+)
+
 // DiffTabFocus represents which sub-pane is focused within the diff tab.
 type DiffTabFocus int
 
@@ -265,22 +287,47 @@ type dropdownItemData struct {
 
 // Worktree represents a git worktree with optional agent.
 type Worktree struct {
-	Name            string         // e.g., "auth-oauth-flow"
-	Path            string         // Absolute path
-	Branch          string         // Git branch name
-	BaseBranch      string         // Branch worktree was created from
-	TaskID          string         // Linked td task (e.g., "td-a1b2")
-	TaskTitle       string         // Task title (used as fallback if td show fails)
-	PRURL           string         // URL of open PR (if any)
-	ChosenAgentType AgentType      // Agent selected at creation (persists even when agent not running)
-	Agent           *Agent         // nil if no agent running
-	Status          WorktreeStatus // Derived from agent state
-	Stats           *GitStats      // +/- line counts
+	Key             string           // Stable normalized-path identity; never presentation
+	RepoKey         string           // Stable canonical common-dir identity
+	Name            string           // e.g., "auth-oauth-flow"
+	Path            string           // Absolute path
+	Branch          string           // Git branch name
+	BaseBranch      string           // Branch worktree was created from
+	TaskID          string           // Linked td task (e.g., "td-a1b2")
+	TaskTitle       string           // Task title (used as fallback if td show fails)
+	PRURL           string           // URL of open PR (if any)
+	PRState         string           // open, merged, closed, or unavailable when known
+	SetupWarning    string           // Last visible setup warning for this worktree
+	ChosenAgentType AgentType        // Agent selected at creation (persists even when agent not running)
+	Agent           *Agent           // nil if no agent running
+	Status          WorktreeStatus   // Derived from agent state
+	Stats           *GitStats        // +/- line counts
+	Changes         *WorktreeChanges // One refresh result shared by badges/stats/overlap/gating
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	IsOrphaned      bool // True if agent file exists but tmux session is gone
 	IsMain          bool // True if this is the primary/main worktree (project root)
 	IsMissing       bool // True if worktree directory no longer exists (detected via os.Stat or git prunable)
+	IsBare          bool // True if Git reports a bare worktree entry
+	IsDetached      bool // True if HEAD is detached
+	IsLocked        bool // True if Git reports the worktree as locked
+	IsPrunable      bool // True if Git reports the worktree record as prunable
+	HEADOID         string
+	BaseOID         string
+	Remote          string
+	Upstream        string
+}
+
+func (w *Worktree) IdentityKey() string {
+	if w == nil {
+		return ""
+	}
+	if w.Key != "" {
+		return w.Key
+	}
+	// Compatibility for synthetic tests and pre-inventory callers. Real Git
+	// worktrees are assigned Key before entering plugin state.
+	return w.Name
 }
 
 // ShellSession represents a tmux shell session (not tied to a git worktree).
@@ -417,6 +464,21 @@ type GitStats struct {
 	FilesChanged int
 	Ahead        int // Commits ahead of base branch
 	Behind       int // Commits behind base branch
+}
+
+// WorktreeChanges is the bounded, immutable status result for one refresh.
+// Paths are repository-relative and originate from a single porcelain status
+// invocation. Stats and dirty overlap are derived from this same value.
+type WorktreeChanges struct {
+	State          LoadState
+	Staged         []string
+	Unstaged       []string
+	Untracked      []string
+	Dirty          []string
+	Truncated      bool
+	TruncatedFiles int
+	TruncatedBytes int64
+	Err            error
 }
 
 // CommitStatusInfo holds commit information with merge/push status.

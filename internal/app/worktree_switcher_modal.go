@@ -20,6 +20,8 @@ const (
 	worktreeSwitcherItemPrefix = "worktree-switcher-item-"
 )
 
+var listWorktreesForSwitcher = GetWorktrees
+
 // worktreeSwitcherItemID returns the ID for a worktree item at the given index.
 func worktreeSwitcherItemID(idx int) string {
 	return fmt.Sprintf("%s%d", worktreeSwitcherItemPrefix, idx)
@@ -36,8 +38,9 @@ func (m *Model) initWorktreeSwitcher() {
 	ti.SetWidth(40)
 	m.worktreeSwitcherInput = ti
 
-	// Load all worktrees
-	m.worktreeSwitcherAll = GetWorktrees(m.ui.WorkDir)
+	// Reuse the immutable inventory already captured for the current repository.
+	// Opening the switcher must not synchronously list worktrees a second time.
+	m.worktreeSwitcherAll = m.worktreeInventory()
 	m.worktreeSwitcherFiltered = m.worktreeSwitcherAll
 	m.worktreeSwitcherCursor = 0
 	m.worktreeSwitcherScroll = 0
@@ -407,20 +410,52 @@ func (m *Model) switchWorktree(worktreePath string) tea.Cmd {
 	}
 
 	// Use the same switchProject mechanism - it handles reinit, state save/restore
-	return m.switchProject(worktreePath)
+	return m.switchProjectWithInventory(worktreePath, append([]WorktreeInfo(nil), m.cachedWorktreeInventory...))
 }
 
 // refreshWorktreeCache calls GetWorktrees and caches the result for the current WorkDir.
 func (m *Model) refreshWorktreeCache() {
-	worktrees := GetWorktrees(m.ui.WorkDir)
-	normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
+	worktrees := listWorktreesForSwitcher(m.ui.WorkDir)
+	m.setWorktreeInventory(worktrees, m.ui.WorkDir)
+}
+
+func (m *Model) setWorktreeInventory(worktrees []WorktreeInfo, workDir string) {
+	m.cachedWorktreeInventory = append([]WorktreeInfo(nil), worktrees...)
+	normalizedWorkDir, _ := normalizePath(workDir)
 	m.cachedWorktreeInfo = nil
-	for i, wt := range worktrees {
+	for i, wt := range m.cachedWorktreeInventory {
 		normalizedPath, _ := normalizePath(wt.Path)
 		if normalizedPath == normalizedWorkDir {
-			m.cachedWorktreeInfo = &worktrees[i]
+			m.cachedWorktreeInfo = &m.cachedWorktreeInventory[i]
 			return
 		}
+	}
+}
+
+func (m *Model) worktreeInventory() []WorktreeInfo {
+	if len(m.cachedWorktreeInventory) == 0 {
+		m.refreshWorktreeCache()
+	}
+	return append([]WorktreeInfo(nil), m.cachedWorktreeInventory...)
+}
+
+func mainWorktreePath(inventory []WorktreeInfo) string {
+	for _, wt := range inventory {
+		if wt.IsMain {
+			return wt.Path
+		}
+	}
+	return ""
+}
+
+type worktreeInventoryRefreshedMsg struct {
+	WorkDir   string
+	Inventory []WorktreeInfo
+}
+
+func refreshWorktreeInventoryCmd(workDir string) tea.Cmd {
+	return func() tea.Msg {
+		return worktreeInventoryRefreshedMsg{WorkDir: workDir, Inventory: listWorktreesForSwitcher(workDir)}
 	}
 }
 

@@ -2,6 +2,7 @@ package gitstatus
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,7 +62,13 @@ func NewFileTree(workDir string) *FileTree {
 // LoadFileTree builds a complete status snapshot without mutating a tree that
 // may be visible to the Bubble Tea event loop.
 func LoadFileTree(workDir string) (*FileTree, error) {
-	cmd := gitReadOnly("status", "--porcelain=v2", "-z", "--untracked-files=all")
+	return LoadFileTreeContext(context.Background(), workDir)
+}
+
+// LoadFileTreeContext builds a complete status snapshot and cancels all Git
+// subprocesses when ctx is cancelled.
+func LoadFileTreeContext(ctx context.Context, workDir string) (*FileTree, error) {
+	cmd := gitReadOnlyContext(ctx, "status", "--porcelain=v2", "-z", "--untracked-files=all")
 	cmd.Dir = workDir
 	output, err := cmd.Output()
 	if err != nil {
@@ -72,14 +79,19 @@ func LoadFileTree(workDir string) (*FileTree, error) {
 	if err := tree.parseStatus(output); err != nil {
 		return nil, err
 	}
-	_ = tree.loadDiffStats()
+	_ = tree.loadDiffStatsContext(ctx)
 	tree.groupUntrackedFolders()
 	return tree, nil
 }
 
 // Refresh reloads the git status from disk.
 func (t *FileTree) Refresh() error {
-	snapshot, err := LoadFileTree(t.workDir)
+	return t.RefreshContext(context.Background())
+}
+
+// RefreshContext reloads Git status and observes ctx for every subprocess.
+func (t *FileTree) RefreshContext(ctx context.Context) error {
+	snapshot, err := LoadFileTreeContext(ctx, t.workDir)
 	if err != nil {
 		return err
 	}
@@ -251,23 +263,31 @@ func (t *FileTree) addEntry(entry *FileEntry) {
 
 // loadDiffStats loads +/- counts for all files.
 func (t *FileTree) loadDiffStats() error {
+	return t.loadDiffStatsContext(context.Background())
+}
+
+func (t *FileTree) loadDiffStatsContext(ctx context.Context) error {
 	// Get stats for staged changes
-	if err := t.loadDiffStatsFor(true); err != nil {
+	if err := t.loadDiffStatsForContext(ctx, true); err != nil {
 		return err
 	}
 
 	// Get stats for unstaged changes
-	return t.loadDiffStatsFor(false)
+	return t.loadDiffStatsForContext(ctx, false)
 }
 
 // loadDiffStatsFor loads diff stats for staged or unstaged changes.
 func (t *FileTree) loadDiffStatsFor(staged bool) error {
+	return t.loadDiffStatsForContext(context.Background(), staged)
+}
+
+func (t *FileTree) loadDiffStatsForContext(ctx context.Context, staged bool) error {
 	args := []string{"diff", "--numstat", "-z"}
 	if staged {
 		args = append(args, "--cached")
 	}
 
-	cmd := gitReadOnly(args...)
+	cmd := gitReadOnlyContext(ctx, args...)
 	cmd.Dir = t.workDir
 	output, err := cmd.Output()
 	if err != nil {
@@ -453,7 +473,12 @@ func (t *FileTree) UnstageFile(path string) error {
 
 // StageAll stages all modified and untracked files.
 func (t *FileTree) StageAll() error {
-	cmd := exec.Command("git", "add", "-A")
+	return t.StageAllContext(context.Background())
+}
+
+// StageAllContext stages all changes and observes ctx while Git runs.
+func (t *FileTree) StageAllContext(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "git", "add", "-A")
 	cmd.Dir = t.workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -504,7 +529,12 @@ func parseCommitHash(output string) string {
 // ExecuteCommit executes a git commit with the given message.
 // Returns the commit hash on success or an error with git output on failure.
 func ExecuteCommit(workDir, message string) (string, error) {
-	cmd := exec.Command("git", "commit", "-m", message)
+	return ExecuteCommitContext(context.Background(), workDir, message)
+}
+
+// ExecuteCommitContext executes a commit and observes ctx while Git runs.
+func ExecuteCommitContext(ctx context.Context, workDir, message string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

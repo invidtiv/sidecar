@@ -17,9 +17,31 @@ var DimStyle = lipgloss.NewStyle().Foreground(styles.TextMuted)
 // DimSequence and ResetSequence are the raw ANSI codes used by DimStyle.
 // Exported for testing.
 const (
-	DimSequence   = "\x1b[2m"
-	ResetSequence = "\x1b[0m"
+	DimSequence     = "\x1b[2m"
+	ResetSequence   = "\x1b[0m"
+	overlayTabWidth = 4
 )
+
+// normalizeOverlayLine removes terminal-dependent tab expansion before any
+// cell geometry is calculated, then clips and pads using ANSI-aware cell
+// widths. Overlay callers commonly pass plugin views containing literal tabs;
+// leaving them intact makes capture width disagree with the terminal and can
+// split a modal border onto the following row.
+func clipOverlayLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	line = strings.ReplaceAll(line, "\t", strings.Repeat(" ", overlayTabWidth))
+	return ansi.Truncate(line, width, "")
+}
+
+func normalizeOverlayLine(line string, width int) string {
+	line = clipOverlayLine(line, width)
+	if lineWidth := ansi.StringWidth(line); lineWidth < width {
+		line += strings.Repeat(" ", width-lineWidth)
+	}
+	return line
+}
 
 // maxLineWidth returns the maximum visual width of the given lines.
 func maxLineWidth(lines []string) int {
@@ -34,8 +56,8 @@ func maxLineWidth(lines []string) int {
 }
 
 // dimLine strips ANSI codes and applies dim gray styling.
-func dimLine(s string) string {
-	return DimStyle.Render(ansi.Strip(s))
+func dimLine(s string, width int) string {
+	return DimStyle.Render(normalizeOverlayLine(ansi.Strip(s), width))
 }
 
 // compositeRow overlays modalLine onto bgLine at position modalStartX.
@@ -43,8 +65,10 @@ func dimLine(s string) string {
 func compositeRow(bgLine, modalLine string, modalStartX, modalWidth, totalWidth int) string {
 	var result strings.Builder
 
-	// Strip ANSI from background for consistent dimming
-	stripped := ansi.Strip(bgLine)
+	// Expand tabs before measuring or slicing. Background styling is stripped
+	// for consistent dimming; modal styling is retained.
+	stripped := normalizeOverlayLine(ansi.Strip(bgLine), totalWidth)
+	modalLine = normalizeOverlayLine(modalLine, modalWidth)
 	bgWidth := ansi.StringWidth(stripped)
 
 	// Left segment: dimmed background from 0 to modalStartX
@@ -70,14 +94,23 @@ func compositeRow(bgLine, modalLine string, modalStartX, modalWidth, totalWidth 
 		result.WriteString(DimStyle.Render(rightSeg))
 	}
 
-	return result.String()
+	return normalizeOverlayLine(result.String(), totalWidth)
 }
 
 // OverlayModal composites a modal on top of a dimmed background.
 // The modal is centered, with dimmed background visible on all sides.
 func OverlayModal(background, modal string, width, height int) string {
+	if width < 0 {
+		width = 0
+	}
+	if height < 0 {
+		height = 0
+	}
 	bgLines := strings.Split(background, "\n")
 	modalLines := strings.Split(modal, "\n")
+	for i := range modalLines {
+		modalLines[i] = clipOverlayLine(modalLines[i], width)
+	}
 
 	// Calculate modal dimensions and position
 	modalWidth := maxLineWidth(modalLines)
@@ -110,7 +143,7 @@ func OverlayModal(background, modal string, width, height int) string {
 			result = append(result, compositeRow(bgLine, modalLines[modalRowIdx], startX, modalWidth, width))
 		} else {
 			// Pure dimmed background (above or below modal)
-			result = append(result, dimLine(bgLine))
+			result = append(result, dimLine(bgLine, width))
 		}
 	}
 

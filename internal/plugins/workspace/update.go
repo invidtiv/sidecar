@@ -1,11 +1,14 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
@@ -20,6 +23,15 @@ import (
 // reconciles persistent terminal subscriptions after every state transition.
 func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
+	if scoped, ok := msg.(interface{ GetOperationScope() OperationScope }); ok {
+		scope := scoped.GetOperationScope()
+		if scope.OperationID != "" && !p.scopeMatches(scope) {
+			if created, isCreated := msg.(CreateWorktreeAddedMsg); isCreated && created.Worktree != nil {
+				p.deferredCreations = append(p.deferredCreations, created)
+			}
+			return p, nil
+		}
+	}
 
 	switch msg := msg.(type) {
 	case activityAnimationTickMsg:
@@ -112,25 +124,27 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case RefreshDoneMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.OperationID != p.refreshOperationID || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
 		p.refreshing = false
 		p.lastRefresh = time.Now()
 		if msg.Err == nil {
-			// Preserve selection by name (not index) across refresh
-			var selectedName string
+			// Preserve selection by stable identity (not display name) across refresh.
+			var selectedKey string
 			if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-				selectedName = p.worktrees[p.selectedIdx].Name
+				selectedKey = p.worktrees[p.selectedIdx].IdentityKey()
 			}
 
+			p.repoSnapshot = msg.Snapshot
 			p.worktrees = msg.Worktrees
+			p.conflicts = msg.Conflicts
 			p.worktreesLoaded = true
 
 			// Restore selection by finding the worktree with the same name
-			if selectedName != "" {
+			if selectedKey != "" {
 				for i, wt := range p.worktrees {
-					if wt.Name == selectedName {
+					if wt.IdentityKey() == selectedKey {
 						p.selectedIdx = i
 						break
 					}
@@ -149,29 +163,29 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			// Preserve agent pointers from existing agents map
 			for _, wt := range p.worktrees {
-				if agent, ok := p.agents[wt.Name]; ok {
+				if agent, ok := p.agents[wt.IdentityKey()]; ok {
 					wt.Agent = agent
 				}
 			}
-			// Load stats, task links, and agent types for each worktree
+			// Status and stats already came from the same bounded refresh pass.
+			// Load only local metadata here; do not fan out more Git processes.
 			for _, wt := range p.worktrees {
 				if wt.IsMissing {
 					continue // Skip metadata for worktrees with missing directories
 				}
-				cmds = append(cmds, p.loadStats(wt.Path))
 				// Load linked task ID from centralized worktree data directory
 				wt.TaskID = loadTaskLink(p.ctx.ProjectRoot, wt.Path)
 				// Load chosen agent type from centralized worktree data directory
 				wt.ChosenAgentType = loadAgentType(p.ctx.ProjectRoot, wt.Path)
-				// Load PR URL from centralized worktree data directory
-				wt.PRURL = loadPRURL(p.ctx.ProjectRoot, wt.Path)
+				// Load stable PR identity/state from centralized worktree data.
+				hydrateWorktreePRMetadata(p.operationCtx, p.ctx.ProjectRoot, wt)
 				// Load base branch from centralized worktree data directory
 				wt.BaseBranch = loadBaseBranch(p.ctx.ProjectRoot, wt.Path)
 			}
-			// Detect conflicts across worktrees
-			cmds = append(cmds, p.loadConflicts())
-
+			p.reconcilePendingCreation()
 			// Load diff for the selected worktree so diff tab shows content immediately
+			p.diffState = LoadStateLoading
+			p.diffError = ""
 			cmds = append(cmds, p.loadSelectedDiff())
 
 			// Reconnect to existing tmux sessions after initial worktree load
@@ -188,26 +202,36 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case StatsLoadedMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
-		for _, wt := range p.worktrees {
-			if wt.Name == msg.WorkspaceName {
-				wt.Stats = msg.Stats
-				break
-			}
+		if wt := p.findWorktree(msg.WorktreeKey); wt != nil {
+			wt.Stats = msg.Stats
+		}
+
+	case StatsErrorMsg:
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
+		if wt := p.findWorktree(msg.WorktreeKey); wt != nil {
+			wt.Stats = nil
+			wt.Changes = &WorktreeChanges{State: LoadStateError, Err: fmt.Errorf("%s: %w", msg.Command, msg.Err)}
 		}
 
 	case DiffLoadedMsg:
 		// Discard stale messages from previous project
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
 			return p, nil
 		}
-		if p.selectedWorktree() != nil && p.selectedWorktree().Name == msg.WorkspaceName {
-			p.diffContent = msg.Content
-			p.diffRaw = msg.Raw
-			// Parse multi-file diff for file headers and navigation
-			p.multiFileDiff = gitstatus.ParseMultiFileDiff(msg.Raw)
+		if p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorktreeKey {
+			p.diffSnapshot = msg.Snapshot
+			p.diffError = ""
+			p.diffState = LoadStateClean
+			if msg.Snapshot != nil {
+				p.diffState = msg.Snapshot.State
+				p.commitStatusWorktree = msg.WorktreeKey
+			}
+			p.applyDiffScope()
 			// Invalidate full-file diff since diff content changed
 			p.fullFileDiff = nil
 			// Clamp cursor if total items changed
@@ -223,11 +247,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
 				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
 			}
-			// Also load commit status for this worktree
-			// Reload if worktree changed OR if cached list is empty (stale/failed previous load)
-			if p.commitStatusWorktree != msg.WorkspaceName || len(p.commitStatusList) == 0 {
-				cmds = append(cmds, p.loadCommitStatus(p.selectedWorktree()))
-			}
+		}
+
+	case DiffErrorMsg:
+		if plugin.IsStale(p.ctx, msg) || !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
+		if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorktreeKey {
+			p.diffSnapshot = nil
+			p.diffState = LoadStateError
+			p.diffContent, p.diffRaw, p.multiFileDiff = "", "", nil
+			p.commitStatusList = nil
+			p.diffError = fmt.Sprintf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err)
 		}
 
 	case FullFileDiffLoadedMsg:
@@ -235,7 +266,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		wt := p.selectedWorktree()
-		if wt == nil || wt.Name != msg.WorkspaceName {
+		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
 			return p, nil
 		}
 		if msg.CommitHash != "" {
@@ -257,7 +288,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().Name == msg.WorkspaceName {
+		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
 			p.commitStatusList = msg.Commits
 			p.commitStatusWorktree = msg.WorkspaceName
 			// Clamp diff tab cursor if total items changed
@@ -272,7 +303,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && msg.Commit != nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().Name == msg.WorkspaceName {
+			p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
 			p.commitDetail = msg.Commit
 			p.commitFileCursor = 0
 			p.commitFileScroll = 0
@@ -293,7 +324,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().Name == msg.WorkspaceName && p.commitDetail != nil &&
+			p.selectedWorktree().IdentityKey() == msg.WorkspaceName && p.commitDetail != nil &&
 			p.commitDetail.Hash == msg.CommitHash {
 			// Verify file path matches current selection
 			if p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&
@@ -338,6 +369,115 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case CreatePlanResolvedMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		if msg.Err != nil {
+			p.createError = msg.Err.Error()
+			p.createPlan = nil
+		} else {
+			p.createPlan = msg.Plan
+			p.createCopyEnv = msg.Plan.CopyEnv
+			p.createRunHook = msg.Plan.RunHook
+		}
+
+	case CreateWorktreeAddedMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		if msg.Err != nil && msg.Worktree == nil {
+			p.createError = msg.Err.Error()
+			p.createPlan = nil
+			return p, nil
+		}
+		if msg.Worktree != nil && msg.Err != nil {
+			p.surfaceInterruptedCreation(msg.Plan, msg.Worktree, msg.Err)
+			return p, nil
+		}
+		p.createPlan = msg.Plan
+		p.selectCreatedWorktree(msg.Worktree)
+		p.createBusyStep = "Persisting identity and running selected setup"
+		return p, p.runCreateSetupCmd(msg.Plan, msg.Worktree)
+
+	case CreateSetupDoneMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		p.createPlan = msg.Plan
+		p.createSetupResult = msg.Result
+		if msg.Result == nil || msg.Result.Worktree == nil {
+			p.createError = "setup returned no created worktree"
+			return p, nil
+		}
+		warnings := msg.Result.Warnings()
+		if len(warnings) > 0 {
+			warningText := warnings[0].Action
+			if warnings[0].Err != nil {
+				warningText += ": " + warnings[0].Err.Error()
+			}
+			msg.Result.Worktree.SetupWarning = warningText
+			// A created worktree remains selected but no agent is started until
+			// the user explicitly chooses a recovery action.
+			p.selectCreatedWorktree(msg.Result.Worktree)
+			return p, nil
+		}
+		msg.Result.Worktree.SetupWarning = ""
+		if err := p.clearPendingCreation(msg.Plan); err != nil {
+			msg.Result.Outcomes = append(msg.Result.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal", Required: true, Err: err})
+			p.selectCreatedWorktree(msg.Result.Worktree)
+			return p, nil
+		}
+		cmds = append(cmds, p.finishCreatedWorktree(msg.Plan, msg.Result.Worktree)...)
+
+	case CreateOpenAnywayMsg:
+		if p.createPlan != nil && p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+			if err := p.clearPendingCreation(p.createPlan); err != nil {
+				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "finalize pending creation journal before opening", Required: true, Err: err})
+				p.createOperationModal = nil
+				p.createOperationWidth = 0
+				return p, nil
+			}
+			cmds = append(cmds, p.finishCreatedWorktree(p.createPlan, p.createSetupResult.Worktree)...)
+		}
+
+	case CreateRecoveryDeleteDoneMsg:
+		p.createBusyStep = ""
+		p.createOperationModal = nil
+		p.createOperationWidth = 0
+		p.createDeleteResult = &msg.Result
+		if msg.Result.WorktreeRemoved {
+			if p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
+				key := p.createSetupResult.Worktree.IdentityKey()
+				for i, wt := range p.worktrees {
+					if wt.IdentityKey() == key {
+						p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
+						break
+					}
+				}
+			}
+			if p.createPlan != nil {
+				if err := p.clearPendingCreation(p.createPlan); err != nil {
+					msg.Result.Err = errors.Join(msg.Result.Err, fmt.Errorf("finalize pending creation journal: %w", err))
+				}
+			}
+			if p.selectedIdx >= len(p.worktrees) {
+				p.selectedIdx = len(p.worktrees) - 1
+			}
+			if msg.Result.Err != nil {
+				return p, nil
+			}
+			p.viewMode = ViewModeList
+			p.clearCreateModal()
+			return p, nil
+		}
+		if msg.Result.Err != nil {
+			if p.createSetupResult != nil {
+				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "delete newly created worktree", Required: true, Err: msg.Result.Err})
+			}
+			return p, nil
+		}
+
 	case PromptSelectedMsg:
 		// Prompt selected from picker
 		returnMode := p.promptPickerReturnMode
@@ -358,6 +498,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		} else {
 			p.viewMode = ViewModeCreate
+			p.createModal = nil
 			if msg.Prompt != nil {
 				// Find index of selected prompt
 				for i, pr := range p.createPrompts {
@@ -414,6 +555,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case FetchPRListMsg:
+		if !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
 		p.fetchPRLoading = false
 		if msg.Err != nil {
 			p.fetchPRError = msg.Err.Error()
@@ -424,6 +568,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.clearFetchPRModal() // Invalidate cache: async content arrived
 
 	case FetchPRDoneMsg:
+		if !p.scopeMatches(msg.OperationScope) {
+			return p, nil
+		}
 		p.fetchPRLoading = false
 		if msg.Err != nil {
 			p.fetchPRError = msg.Err.Error()
@@ -516,12 +663,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
-			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
+			key := msg.WorktreeKey
+			if key == "" {
+				key = msg.WorkspaceName
+			}
+			if wt := p.findWorktree(key); wt != nil {
 				wt.Agent = agent
 				wt.Status = StatusActive
 				wt.IsOrphaned = false
+				p.agents[wt.IdentityKey()] = agent
 			}
-			p.agents[msg.WorkspaceName] = agent
 			p.managedSessions[msg.SessionName] = true
 
 			// Resize pane to match preview width immediately
@@ -529,7 +680,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			// Start polling for output
-			cmds = append(cmds, p.scheduleAgentPoll(msg.WorkspaceName, pollIntervalInitial))
+			pollKey := msg.WorktreeKey
+			if pollKey == "" {
+				pollKey = msg.WorkspaceName
+			}
+			cmds = append(cmds, p.scheduleAgentPoll(pollKey, pollIntervalInitial))
 
 			// If this is a resume operation, enter interactive mode (td-aa4136)
 			if p.pendingResumeWorktree == msg.WorkspaceName {
@@ -563,7 +718,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.Name) {
+				if p.outputVisibleFor(wt.IdentityKey()) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -586,7 +741,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				p.updateMouseReportingMode(msg.Output)
 				if msg.HasCursor {
@@ -608,7 +763,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		if p.viewMode == ViewModeList && !p.shellSelected {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName && wt.Agent != nil {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName && wt.Agent != nil {
 				target := wt.Agent.TmuxPane
 				if target == "" {
 					target = wt.Agent.TmuxSession
@@ -651,7 +806,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Use interactive polling in interactive mode for fast response
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
 			}
@@ -669,7 +824,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.Name) {
+				if p.outputVisibleFor(wt.IdentityKey()) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -696,7 +851,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// would keep scrolling local scrollback until the app next redraws.
 		if msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.setPaneMouseReporting(msg.MouseReporting)
 			}
 		}
@@ -728,7 +883,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
 		if p.viewMode == ViewModeInteractive && !p.shellSelected &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.Name == msg.WorkspaceName {
+			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				// Use cursor position captured atomically with output
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
@@ -1244,8 +1399,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			globalPaneCache.remove(sessionName)
 			globalActiveRegistry.remove(sessionName)
 			delete(p.managedSessions, sessionName)
+			delete(p.agents, wt.IdentityKey())
 		}
-		delete(p.agents, msg.WorkspaceName)
 		return p, nil
 
 	case restartAgentMsg:
@@ -1316,16 +1471,36 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case TaskSearchResultsMsg:
 		p.taskSearchLoading = false
 		if msg.Err == nil {
+			selectedID := ""
+			if p.taskSearchIdx >= 0 && p.taskSearchIdx < len(p.taskSearchFiltered) {
+				selectedID = p.taskSearchFiltered[p.taskSearchIdx].ID
+			}
 			p.taskSearchAll = msg.Tasks
 			p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
-			p.taskSearchIdx = 0
+			p.taskSearchIdx = selectedTaskIndex(p.taskSearchFiltered, selectedID)
+			if p.taskSearchIdx < 0 {
+				p.taskSearchIdx = 0
+			}
+			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, p.viewMode == ViewModeTaskLink), len(p.taskSearchFiltered))
+			p.taskLinkModal = nil
 		}
 
 	case BranchListMsg:
 		if msg.Err == nil {
+			selected := ""
+			if p.branchIdx >= 0 && p.branchIdx < len(p.branchFiltered) {
+				selected = p.branchFiltered[p.branchIdx]
+			}
 			p.branchAll = msg.Branches
 			p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
 			p.branchIdx = 0
+			for i := range p.branchFiltered {
+				if p.branchFiltered[i] == selected {
+					p.branchIdx = i
+					break
+				}
+			}
+			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 		}
 
 	case TaskDetailsLoadedMsg:
@@ -1396,6 +1571,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case MergeStepCompleteMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
 			if msg.Err != nil {
+				if errors.Is(msg.Err, errReviewedSourceChanged) || (msg.Step == MergeStepPush && strings.Contains(msg.Err.Error(), "HEAD changed")) {
+					p.mergeState.Step = MergeStepReviewDiff
+					p.mergeState.StepStatus[MergeStepPush] = "pending"
+					p.mergeState.StepStatus[MergeStepReviewDiff] = "running"
+					p.mergeState.ReviewedOID = ""
+					p.clearMergeModal()
+					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.ShowToast("Reviewed source changed; review the updated diff before pushing", 4*time.Second))
+					break
+				}
 				title := fmt.Sprintf("%s Failed", msg.Step.String())
 				p.transitionToMergeError(msg.Step, title, msg.Err)
 			} else {
@@ -1404,19 +1588,40 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					// ReviewDiff: User manually advances, so mark done here
 					p.mergeState.StepStatus[msg.Step] = "done"
 					p.mergeState.DiffSummary = msg.Data
+					p.mergeState.ReviewedOID = msg.ReviewedOID
 				case MergeStepPush:
+					p.mergeState.PushRemote = msg.Data
+					p.mergeState.BaseRemote = msg.BaseRemote
+					p.mergeState.PR.Repository = msg.PR.Repository
+					p.mergeState.PR.HeadRef = msg.PR.HeadRef
+					p.mergeState.PR.HeadOwner = msg.PR.HeadOwner
+					p.mergeState.PR.HeadRepo = msg.PR.HeadRepo
+					p.mergeState.PR.HeadOID = msg.PR.HeadOID
 					// Push complete - advanceMergeStep handles status transition
 					cmds = append(cmds, p.advanceMergeStep())
 				case MergeStepCreatePR:
 					p.mergeState.PRURL = msg.Data
+					p.mergeState.PR = msg.PR
 					p.mergeState.ExistingPR = msg.ExistingPRFound
 					// Save PR URL to worktree for indicator in list
 					if wt := p.mergeState.Worktree; wt != nil && msg.Data != "" {
 						wt.PRURL = msg.Data
-						_ = savePRURL(p.ctx.ProjectRoot, wt.Path, msg.Data)
+						wt.PRState = normalizeWorktreePRState(msg.PR.State, true)
+						_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, msg.PR)
 					}
-					// PR created (or existing found) - advanceMergeStep handles status transition
-					cmds = append(cmds, p.advanceMergeStep())
+					if msg.PR.State == "CLOSED" {
+						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
+						p.mergeState.Step = MergeStepWaitingMerge
+						p.mergeState.PRPollKind = PRPollClosed
+						p.mergeState.PRWatchStopped = true
+						p.clearMergeModal()
+					} else if msg.PR.State == "MERGED" {
+						p.mergeState.StepStatus[MergeStepCreatePR] = "done"
+						p.mergeState.Step = MergeStepWaitingMerge
+						cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
+					} else {
+						cmds = append(cmds, p.advanceMergeStep())
+					}
 				case MergeStepCleanup:
 					// Cleanup done, mark done and remove from worktree list
 					p.mergeState.StepStatus[msg.Step] = "done"
@@ -1431,20 +1636,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case PRGenerationDoneMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
-			// Store generated title and body, then advance to CreatePR.
-			// Even if the agent failed (msg.Err != nil), we still have a fallback
-			// title/body from commit messages, so we proceed with a toast notification.
+			// Always stop at an editable form before creating anything on GitHub.
 			p.mergeState.PRTitle = msg.Title
 			p.mergeState.PRBody = msg.Body
+			p.mergeState.PRGenerationActive = false
+			p.mergeState.StepStatus[MergeStepGeneratePR] = "done"
+			p.mergeState.Step = MergeStepEditPR
+			p.mergeState.StepStatus[MergeStepEditPR] = "running"
+			p.mergeState.PRTitleInput = textinput.New()
+			p.mergeState.PRTitleInput.SetValue(msg.Title)
+			p.mergeState.PRBodyInput = textarea.New()
+			p.mergeState.PRBodyInput.SetValue(msg.Body)
 			p.clearMergeModal()
-			advanceCmd := p.advanceMergeStep()
 			if msg.Err != nil {
 				cmds = append(cmds,
-					advanceCmd,
 					appmsg.ShowToast("Agent failed, using commit summary", 3*time.Second),
 				)
-			} else {
-				cmds = append(cmds, advanceCmd)
 			}
 		}
 
@@ -1459,30 +1666,81 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case CheckPRMergedMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
-			if msg.Err != nil {
-				// Silently ignore check errors, will retry
-				cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, 30*time.Second))
-			} else if msg.Merged {
-				// PR was merged! Move to cleanup step
+			p.mergeState.PRPollKind = msg.Result.Kind
+			if msg.Result.Identity.URL != "" {
+				p.mergeState.PR = msg.Result.Identity
+				p.mergeState.PRURL = msg.Result.Identity.URL
+			}
+			if wt := p.mergeState.Worktree; wt != nil {
+				wt.PRURL = p.mergeState.PRURL
+				wt.PRState = worktreePRStateFromPoll(msg.Result.Kind, msg.Result.Identity, wt.PRURL)
+				identity := p.mergeState.PR
+				identity.URL = wt.PRURL
+				identity.State = strings.ToUpper(wt.PRState)
+				p.mergeState.PR = identity
+				if identity.URL != "" && p.ctx != nil {
+					_ = savePRIdentityContext(p.operationCtx, p.ctx.ProjectRoot, wt.Path, identity)
+				}
+			}
+			switch msg.Result.Kind {
+			case PRPollMerged:
+				p.mergeState.PRPollAttempt = 0
+				p.mergeState.ForceDeleteRequired = msg.Result.ForceDeleteRequired
+				p.mergeState.ForceDeleteLocalBranch = false
 				p.mergeState.StepStatus[MergeStepWaitingMerge] = "done"
 				cmds = append(cmds, p.advanceMergeStep())
-			} else {
-				// Not merged yet, check again later
-				cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, 30*time.Second))
+			case PRPollClosed:
+				p.mergeState.PRWatchStopped = true
+				p.clearMergeModal()
+			case PRPollOpen:
+				p.mergeState.PRPollAttempt = 0
+				if !p.mergeState.PRWatchStopped {
+					cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, nextPRPollDelay(0)))
+				}
+			default:
+				p.mergeState.PRPollAttempt++
+				if p.mergeState.PRPollAttempt >= 5 {
+					p.mergeState.PRWatchStopped = true
+				}
+				if !p.mergeState.PRWatchStopped {
+					cmds = append(cmds, p.schedulePRCheck(msg.WorkspaceName, nextPRPollDelay(p.mergeState.PRPollAttempt)))
+				}
+				p.clearMergeModal()
 			}
 		}
 
 	case checkPRMergeMsg:
-		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
+		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName && !p.mergeState.PRWatchStopped {
 			cmds = append(cmds, p.checkPRMerged(p.mergeState.Worktree))
+		}
+
+	case DirectMergePreflightMsg:
+		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
+			if msg.Err != nil {
+				p.transitionToMergeError(MergeStepDirectMerge, "Direct Merge Preflight Failed", msg.Err)
+			} else {
+				p.mergeState.DirectOperation = msg.Operation
+				p.clearMergeModal()
+				cmds = append(cmds, p.executeDirectMerge(msg.OperationScope, msg.WorkspaceName, msg.BaseBranch, msg.Operation))
+			}
 		}
 
 	case DirectMergeDoneMsg:
 		if p.mergeState != nil && p.mergeState.Worktree.Name == msg.WorkspaceName {
+			if msg.Operation != nil {
+				p.mergeState.DirectOperation = msg.Operation
+			}
 			if msg.Err != nil {
 				p.transitionToMergeError(MergeStepDirectMerge, "Direct Merge Failed", msg.Err)
+			} else if msg.Operation != nil && msg.Operation.Aborted {
+				p.cancelMergeWorkflow()
+				p.clearMergeModal()
+				cmds = append(cmds, appmsg.ShowToast("Merge aborted; target restored", 3*time.Second))
 			} else {
 				// Direct merge succeeded, advance to confirmation
+				p.mergeState.Step = MergeStepDirectMerge
+				p.mergeState.StepStatus[MergeStepDirectMerge] = "running"
+				p.clearMergeModal()
 				cmds = append(cmds, p.advanceMergeStep())
 			}
 		}
@@ -1497,10 +1755,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeState.CleanupResults.LocalBranchDeleted = msg.Results.LocalBranchDeleted
 				p.mergeState.CleanupResults.Errors = append(
 					p.mergeState.CleanupResults.Errors, msg.Results.Errors...)
+				p.mergeState.CleanupResults.RemoteBranchDeleted = msg.Results.RemoteBranchDeleted
+				p.mergeState.CleanupResults.PullAttempted = msg.Results.PullAttempted
+				p.mergeState.CleanupResults.PullSuccess = msg.Results.PullSuccess
+				p.mergeState.CleanupResults.PullError = msg.Results.PullError
+				p.mergeState.CleanupResults.PullMessage = msg.Results.PullMessage
 			}
 
 			// Remove worktree from list if deleted
 			if msg.Results.LocalWorktreeDeleted {
+				sessionName := tmuxSessionPrefix + sanitizeName(msg.WorkspaceName)
+				delete(p.managedSessions, sessionName)
+				globalPaneCache.remove(sessionName)
 				p.removeWorktreeByName(msg.WorkspaceName)
 				if p.selectedIdx >= len(p.worktrees) && p.selectedIdx > 0 {
 					p.selectedIdx--
@@ -1589,11 +1855,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case reconnectedAgentsMsg:
+		var pollingCmds []tea.Cmd
+		for _, result := range msg.Agents {
+			wt := p.findWorktree(result.WorktreeKey)
+			if wt == nil || result.Agent == nil {
+				continue
+			}
+			wt.Agent = result.Agent
+			p.agents[wt.IdentityKey()] = result.Agent
+			p.managedSessions[result.Agent.TmuxSession] = true
+			pollingCmds = append(pollingCmds, p.scheduleAgentPoll(wt.IdentityKey(), 0))
+		}
 		// After reconnecting to existing sessions, detect orphaned worktrees
 		// (worktrees with .sidecar-agent file but no tmux session)
 		p.detectOrphanedWorktrees()
 		// Start periodic session validation to prevent memory leaks (td-41695b)
-		pollingCmds := append(msg.Cmds, p.scheduleSessionValidation(60*time.Second))
+		pollingCmds = append(pollingCmds, p.scheduleSessionValidation(60*time.Second))
 		return p, tea.Batch(pollingCmds...)
 
 	case validateManagedSessionsMsg:

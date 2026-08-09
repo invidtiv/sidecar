@@ -247,8 +247,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 		for _, w := range p.deleteWarnings {
 			// Truncate warning to fit width
-			if len(w) > width-2 {
-				w = w[:width-5] + "..."
+			if lipgloss.Width(w) > width-2 {
+				w = ansi.Truncate(w, max(1, width-3), "…")
 			}
 			lines = append(lines, warningStyle.Render("⚠ "+w))
 		}
@@ -435,7 +435,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// Check for conflicts
-	hasConflict := p.hasConflict(wt.Name, p.conflicts)
+	hasConflict := p.hasConflict(wt.IdentityKey(), p.conflicts)
 	conflictIcon := ""
 	if hasConflict {
 		conflictIcon = " ⚠"
@@ -488,13 +488,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		maxNameWidth = 8 // Minimum name width
 	}
 	// Truncate name if too long (use runes for proper Unicode handling)
-	nameRunes := []rune(name)
-	if len(nameRunes) > maxNameWidth {
-		if maxNameWidth > 1 {
-			name = string(nameRunes[:maxNameWidth-1]) + "…"
-		} else {
-			name = "…"
-		}
+	if lipgloss.Width(name) > maxNameWidth {
+		name = ansi.Truncate(name, maxNameWidth, "…")
 	}
 
 	// Sidebar display settings
@@ -510,7 +505,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// Build second line parts (plain text)
-	var parts []string
+	parts := p.worktreeStateLabels(wt)
 	if wt.IsMain {
 		// For root workspace, show branch name instead of agent
 		parts = append(parts, wt.Branch)
@@ -533,16 +528,13 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		parts = append(parts, statsStr)
 	}
 	if hasConflict {
-		conflictFiles := p.getConflictingFiles(wt.Name, p.conflicts)
+		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
 		if len(conflictFiles) > 0 {
-			parts = append(parts, fmt.Sprintf("⚠ %d conflicts", len(conflictFiles)))
+			parts = append(parts, fmt.Sprintf("⚠ %d overlapping dirty files", len(conflictFiles)))
 		}
 	}
 	if wt.IsOrphaned {
 		parts = append(parts, "⚠ session ended")
-	}
-	if wt.IsMissing {
-		parts = append(parts, "✗ folder missing")
 	}
 
 	// When selected, use plain text to ensure consistent background
@@ -557,9 +549,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		// Truncate line2 to prevent wrapping
 		line2Width := lipgloss.Width(line2)
 		if line2Width > width {
-			line2Runes := []rune(line2)
 			if width > 1 {
-				line2 = string(line2Runes[:width-1]) + "…"
+				line2 = ansi.Truncate(line2, width, "…")
 			}
 			line2Width = width
 		}
@@ -623,7 +614,10 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 	}
 
 	// For non-selected, style parts individually
-	var styledParts []string
+	styledParts := make([]string, 0, len(parts)+4)
+	for _, label := range p.worktreeStateLabels(wt) {
+		styledParts = append(styledParts, dimText(label))
+	}
 	if wt.IsMain {
 		// For root workspace, show branch name instead of agent
 		styledParts = append(styledParts, wt.Branch)
@@ -646,16 +640,13 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		styledParts = append(styledParts, statsStr)
 	}
 	if hasConflict {
-		conflictFiles := p.getConflictingFiles(wt.Name, p.conflicts)
+		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
 		if len(conflictFiles) > 0 {
-			styledParts = append(styledParts, styles.StatusModified.Render(fmt.Sprintf("⚠ %d conflicts", len(conflictFiles))))
+			styledParts = append(styledParts, styles.StatusModified.Render(fmt.Sprintf("⚠ %d dirty overlaps", len(conflictFiles))))
 		}
 	}
 	if wt.IsOrphaned {
 		styledParts = append(styledParts, styles.StatusModified.Render("⚠ session ended"))
-	}
-	if wt.IsMissing {
-		styledParts = append(styledParts, styles.StatusModified.Render("✗ folder missing"))
 	}
 
 	// Build lines with styled elements
@@ -672,6 +663,55 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 
 	content := line1 + "\n" + line2
 	return styles.ListItemNormal.Width(width).Render(content)
+}
+
+func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
+	if wt == nil {
+		return nil
+	}
+	labels := make([]string, 0, 8)
+	switch {
+	case wt.IsMain:
+		labels = append(labels, "main")
+	case wt.IsBare:
+		labels = append(labels, "bare")
+	case wt.IsDetached || wt.Branch == "(detached)":
+		labels = append(labels, "detached")
+	default:
+		labels = append(labels, "branch "+wt.Branch)
+	}
+	if wt.IsLocked {
+		labels = append(labels, "locked · actions unavailable")
+	}
+	if wt.IsMissing {
+		labels = append(labels, "folder missing · actions unavailable")
+	} else if wt.IsPrunable {
+		labels = append(labels, "prunable · actions unavailable")
+	}
+	if p.activeLifecycleOperationID != "" && ((p.mergeState != nil && p.mergeState.Worktree != nil && p.mergeState.Worktree.IdentityKey() == wt.IdentityKey()) || (p.createPlan != nil && p.createPlan.Path == wt.Path)) {
+		labels = append(labels, "operation in progress")
+	}
+	if wt.SetupWarning != "" {
+		labels = append(labels, "setup warning: "+wt.SetupWarning)
+	}
+	if wt.PRState != "" {
+		labels = append(labels, "PR "+wt.PRState)
+	} else if wt.PRURL != "" {
+		labels = append(labels, "PR unavailable")
+	}
+	if wt.Changes != nil {
+		switch wt.Changes.State {
+		case LoadStateError:
+			labels = append(labels, "diff error")
+		case LoadStateTruncated:
+			labels = append(labels, "diff truncated")
+		default:
+			if wt.Changes.Truncated {
+				labels = append(labels, "diff truncated")
+			}
+		}
+	}
+	return labels
 }
 
 // renderShellEntryForSession renders a shell entry for a specific shell session.

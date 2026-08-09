@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -79,6 +81,11 @@ const (
 	mergeCleanUpButtonID   = "merge-cleanup-btn"
 	mergeSkipButtonID      = "merge-skip-btn"
 	mergePRURLID           = "merge-pr-url"
+	mergeFallbackDraftID   = "merge-fallback-draft"
+	mergeAgentDraftID      = "merge-agent-draft"
+	mergeCreatePRID        = "merge-create-pr"
+	mergeStopWatchingID    = "merge-stop-watching"
+	mergeForceBranchID     = "merge-force-branch"
 
 	// Prompt Picker modal regions
 	regionPromptItem   = "prompt-item"
@@ -135,8 +142,14 @@ type Plugin struct {
 	applicationFocused bool
 
 	// Worktree state
-	worktrees []*Worktree
-	agents    map[string]*Agent
+	worktrees                  []*Worktree
+	agents                     map[string]*Agent
+	repoSnapshot               *RepoSnapshot
+	operationCtx               context.Context
+	operationCancel            context.CancelFunc
+	operationSeq               uint64
+	refreshOperationID         string
+	activeLifecycleOperationID string
 
 	// Session tracking for safe cleanup
 	managedSessions map[string]bool
@@ -196,6 +209,10 @@ type Plugin struct {
 	// Diff state
 	diffContent   string
 	diffRaw       string
+	diffSnapshot  *DiffSnapshot
+	diffState     LoadState
+	diffError     string
+	diffScope     DiffScope
 	diffViewMode  DiffViewMode             // Unified, side-by-side, or full-file
 	multiFileDiff *gitstatus.MultiFileDiff // Parsed multi-file diff with positions
 	fullFileDiff  *gitstatus.FullFileDiff  // Full-file diff for current file (loaded on demand)
@@ -239,18 +256,28 @@ type Plugin struct {
 	conflicts []Conflict
 
 	// Create modal state
-	createNameInput       textinput.Model
-	createBaseBranchInput textinput.Model
-	createTaskID          string
-	createTaskTitle       string    // Title of selected task for display
-	createAgentType       AgentType // Selected agent type (default: AgentClaude)
-	createAgentIdx        int       // Selected agent index in selectableAgentTypes()
-	createSkipPermissions bool      // Skip permissions checkbox
-	createFocus           int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
-	createButtonHover     int       // 0=none, 1=create, 2=cancel
-	createError           string    // Error message to display in create modal
-	createModal           *modal.Modal
-	createModalWidth      int
+	createNameInput         textinput.Model
+	createBaseBranchInput   textinput.Model
+	createTaskID            string
+	createTaskTitle         string    // Title of selected task for display
+	createAgentType         AgentType // Selected agent type (default: AgentClaude)
+	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
+	createSkipPermissions   bool      // Skip permissions checkbox
+	createFocus             int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
+	createButtonHover       int       // 0=none, 1=create, 2=cancel
+	createError             string    // Error message to display in create modal
+	createModal             *modal.Modal
+	createModalWidth        int
+	createOperationModal    *modal.Modal
+	createOperationWidth    int
+	createPlan              *CreateOperationPlan
+	createSetupResult       *CreateSetupResult
+	createDeleteResult      *CreateRecoveryDeleteResult
+	createBusyStep          string
+	createCopyEnv           bool
+	createRunHook           bool
+	deferredCreations       []CreateWorktreeAddedMsg         // stale cross-project results retained until matching repo returns
+	removePendingCreationFn func(*CreateOperationPlan) error // test seam for durable journal completion failures
 
 	// Branch name validation state
 	branchNameValid     bool     // Is current name valid?
@@ -270,15 +297,19 @@ type Plugin struct {
 	taskSearchAll      []Task // All available tasks
 	taskSearchFiltered []Task // Filtered based on query
 	taskSearchIdx      int    // Selected index in dropdown
+	taskSearchScroll   int    // First rendered task row
 	taskSearchLoading  bool
 
 	// Branch autocomplete state for create modal
 	branchAll      []string // All available branches
 	branchFiltered []string // Filtered based on query
 	branchIdx      int      // Selected index in dropdown
+	branchScroll   int      // First rendered branch row
 
 	// Task link modal state (for linking to existing worktrees)
-	linkingWorktree *Worktree
+	linkingWorktree    *Worktree
+	taskLinkModal      *modal.Modal
+	taskLinkModalWidth int
 
 	// Cached task details for preview pane
 	cachedTaskID      string
@@ -467,12 +498,20 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
+	if p.operationCancel != nil {
+		p.operationCancel()
+	}
 	p.activityAnimationGeneration++
 	p.activityAnimationFrame = 0
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	p.ctx = ctx
+	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
+	p.repoSnapshot = nil
+	p.refreshOperationID = ""
+	p.activeLifecycleOperationID = ""
+	p.resetLifecycleState()
 	p.controlManager = tty.NewControlManager()
 	p.controlMailbox = newWorkspaceControlMailbox()
 	p.controlConsumers = make(map[workspaceControlRole]*workspaceControlConsumer)
@@ -530,10 +569,17 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("enter", "confirm", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-field", "workspace-create")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-field", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("up", "navigate-picker", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("down", "navigate-picker", "workspace-create")
+		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-create-confirm")
+		ctx.Keymap.RegisterPluginBinding("enter", createConfirmID, "workspace-create-confirm")
+		ctx.Keymap.RegisterPluginBinding("enter", createRetrySetupID, "workspace-create-recovery")
 
 		// Task link modal context
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-task-link")
 		ctx.Keymap.RegisterPluginBinding("enter", "select-task", "workspace-task-link")
+		ctx.Keymap.RegisterPluginBinding("up", "navigate-picker", "workspace-task-link")
+		ctx.Keymap.RegisterPluginBinding("down", "navigate-picker", "workspace-task-link")
 
 		// Agent choice modal context
 		ctx.Keymap.RegisterPluginBinding("esc", "cancel", "workspace-agent-choice")
@@ -600,10 +646,117 @@ func (p *Plugin) Start() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	if p.operationCancel != nil {
+		p.operationCancel()
+		p.operationCancel = nil
+	}
 	p.invalidateShellStartup()
 	p.stopTerminalControls()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
+}
+
+func (p *Plugin) resetLifecycleState() {
+	if p.mergeState != nil && p.mergeState.PRGenerationCancel != nil {
+		p.mergeState.PRGenerationCancel()
+	}
+	p.activeLifecycleOperationID = ""
+	p.mergeState = nil
+	p.mergeModal = nil
+	p.mergeCommitState = nil
+	p.commitForMergeModal = nil
+	p.linkingWorktree = nil
+	p.deleteConfirmWorktree = nil
+	p.deleteConfirmModal = nil
+	p.fetchPRItems = nil
+	p.fetchPRLoading = false
+	p.fetchPRError = ""
+	p.fetchPRModal = nil
+	if p.viewMode == ViewModeCreate {
+		p.clearCreateModal()
+	}
+	switch p.viewMode {
+	case ViewModeCreate, ViewModeTaskLink, ViewModeMerge, ViewModeCommitForMerge,
+		ViewModeConfirmDelete, ViewModeFetchPR:
+		p.viewMode = ViewModeList
+	}
+}
+
+func (p *Plugin) newOperationScope(wt *Worktree) (context.Context, OperationScope) {
+	p.operationSeq++
+	scope := OperationScope{Epoch: p.ctx.Epoch, OperationID: fmt.Sprintf("%d-%d", p.ctx.Epoch, p.operationSeq)}
+	if p.repoSnapshot != nil {
+		scope.RepoKey = p.repoSnapshot.Key
+	}
+	if wt != nil {
+		scope.WorktreeKey = wt.IdentityKey()
+		if scope.RepoKey == "" {
+			scope.RepoKey = wt.RepoKey
+		}
+	}
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ctx, scope
+}
+
+func (p *Plugin) newContextScope(wt *Worktree) (context.Context, OperationScope) {
+	if wt == nil {
+		for _, candidate := range p.worktrees {
+			if p.ctx != nil && filepath.Clean(candidate.Path) == filepath.Clean(p.ctx.WorkDir) {
+				wt = candidate
+				break
+			}
+		}
+	}
+	ctx, scope := p.newOperationScope(wt)
+	if scope.RepoKey == "" && p.ctx != nil {
+		scope.RepoKey = stablePathKey(p.ctx.ProjectRoot)
+	}
+	if scope.WorktreeKey == "" && p.ctx != nil {
+		scope.WorktreeKey = stablePathKey(p.ctx.WorkDir)
+	}
+	return ctx, scope
+}
+
+func (p *Plugin) newLifecycleScope(wt *Worktree) (context.Context, OperationScope) {
+	ctx, scope := p.newContextScope(wt)
+	scope.Lifecycle = true
+	p.activeLifecycleOperationID = scope.OperationID
+	return ctx, scope
+}
+
+func (p *Plugin) lifecycleScope(wt *Worktree) OperationScope {
+	if p.mergeState != nil && p.mergeState.Worktree != nil && wt != nil &&
+		p.mergeState.Worktree.IdentityKey() == wt.IdentityKey() {
+		return p.mergeState.OperationScope
+	}
+	_, scope := p.newLifecycleScope(wt)
+	return scope
+}
+
+func (p *Plugin) scopeMatches(scope OperationScope) bool {
+	// Zero scope is accepted only for old internal/test-only messages. New
+	// lifecycle command constructors always stamp a non-empty operation ID.
+	if scope.OperationID == "" {
+		return true
+	}
+	if p.ctx == nil || scope.Epoch != p.ctx.Epoch {
+		return false
+	}
+	if scope.RepoKey != "" && p.repoSnapshot != nil && scope.RepoKey != p.repoSnapshot.Key {
+		return false
+	}
+	if scope.WorktreeKey != "" && p.findWorktree(scope.WorktreeKey) == nil {
+		if p.ctx == nil || scope.WorktreeKey != stablePathKey(p.ctx.WorkDir) {
+			return false
+		}
+	}
+	if scope.Lifecycle && scope.OperationID != p.activeLifecycleOperationID {
+		return false
+	}
+	return true
 }
 
 // saveSelectionState persists the current selection to disk.
@@ -714,7 +867,7 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 		return false
 	}
 	wt := p.selectedWorktree()
-	if wt == nil || wt.Name != worktreeName {
+	if wt == nil || wt.IdentityKey() != worktreeName {
 		return false
 	}
 	return true
@@ -809,10 +962,10 @@ func (p *Plugin) pollSelectedAgentNowIfVisible() tea.Cmd {
 	if wt == nil || wt.Agent == nil {
 		return nil
 	}
-	if !p.outputVisibleFor(wt.Name) {
+	if !p.outputVisibleFor(wt.IdentityKey()) {
 		return nil
 	}
-	return p.scheduleAgentPoll(wt.Name, 0)
+	return p.scheduleAgentPoll(wt.IdentityKey(), 0)
 }
 
 // pollAllAgentStatusesNow triggers an immediate poll for every worktree that has
@@ -823,7 +976,7 @@ func (p *Plugin) pollAllAgentStatusesNow() tea.Cmd {
 		if wt.Agent == nil || p.attachedSession == wt.Name {
 			continue
 		}
-		cmds = append(cmds, p.scheduleAgentPoll(wt.Name, 0))
+		cmds = append(cmds, p.scheduleAgentPoll(wt.IdentityKey(), 0))
 	}
 	if len(cmds) == 0 {
 		return nil
@@ -909,14 +1062,26 @@ func (p *Plugin) clearCreateModal() {
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createOperationModal = nil
+	p.createOperationWidth = 0
+	p.createPlan = nil
+	p.createSetupResult = nil
+	p.createDeleteResult = nil
+	p.createBusyStep = ""
+	p.createCopyEnv = false
+	p.createRunHook = false
 	p.taskSearchInput = textinput.Model{}
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
 	p.taskSearchLoading = false
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
+	p.branchScroll = 0
+	p.taskLinkModal = nil
+	p.taskLinkModalWidth = 0
 	// Clear prompt state
 	p.createPrompts = nil
 	p.createPromptIdx = -1
@@ -961,9 +1126,18 @@ func (p *Plugin) initCreateModalBase() {
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createOperationModal = nil
+	p.createOperationWidth = 0
+	p.createPlan = nil
+	p.createSetupResult = nil
+	p.createDeleteResult = nil
+	p.createBusyStep = ""
+	p.createCopyEnv = false
+	p.createRunHook = false
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
 	p.taskSearchLoading = true
 
 	// Load prompts from global and project config
@@ -976,6 +1150,7 @@ func (p *Plugin) initCreateModalBase() {
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
+	p.branchScroll = 0
 }
 
 // openCreateModal opens the create worktree modal and initializes all inputs.

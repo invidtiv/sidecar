@@ -15,21 +15,54 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "paste", Name: "Paste", Description: "Paste clipboard (" + p.getInteractivePasteKey() + ")", Context: "workspace-interactive", Priority: 3},
 		}
 	case ViewModeCreate:
+		if p.createBusyStep != "" {
+			return []plugin.Command{{ID: "creation-busy", Name: "Working", Description: p.createBusyStep, Context: "workspace-create-busy", Priority: 1}}
+		}
+		if p.createSetupResult != nil {
+			if p.createDeleteResult != nil && p.createDeleteResult.WorktreeRemoved {
+				return []plugin.Command{{ID: createDismissID, Name: "Dismiss", Description: "Close cleanup result", Context: "workspace-create-recovery", Priority: 1}}
+			}
+			return []plugin.Command{
+				{ID: createRetrySetupID, Name: "Retry", Description: "Retry setup", Context: "workspace-create-recovery", Priority: 1},
+				{ID: createOpenAnywayID, Name: "Open", Description: "Open without successful setup", Context: "workspace-create-recovery", Priority: 2},
+				{ID: createDeleteCreatedID, Name: "Delete", Description: "Delete newly created worktree", Context: "workspace-create-recovery", Priority: 3},
+			}
+		}
+		if p.createPlan != nil {
+			return []plugin.Command{
+				{ID: createConfirmID, Name: "Create", Description: "Create the confirmed worktree", Context: "workspace-create-confirm", Priority: 1},
+				{ID: "cancel", Name: "Back", Description: "Return to creation form", Context: "workspace-create-confirm", Priority: 2},
+			}
+		}
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel workspace creation", Context: "workspace-create", Priority: 1},
 			{ID: "confirm", Name: "Create", Description: "Create the workspace", Context: "workspace-create", Priority: 2},
+			{ID: "navigate-picker", Name: "Navigate", Description: "Move through branch or task results", Context: "workspace-create", Priority: 3},
 		}
 	case ViewModeTaskLink:
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel task linking", Context: "workspace-task-link", Priority: 1},
 			{ID: "select-task", Name: "Select", Description: "Link selected task", Context: "workspace-task-link", Priority: 2},
+			{ID: "navigate-picker", Name: "Navigate", Description: "Move through task results", Context: "workspace-task-link", Priority: 3},
 		}
 	case ViewModeMerge:
 		if p.mergeState != nil && p.mergeState.Step == MergeStepError {
-			return []plugin.Command{
+			cmds := []plugin.Command{
 				{ID: "dismiss-merge-error", Name: "Dismiss", Description: "Dismiss error", Context: "workspace-merge-error", Priority: 1},
 				{ID: "yank-merge-error", Name: "Yank", Description: "Copy error to clipboard", Context: "workspace-merge-error", Priority: 2},
 			}
+			if op := p.mergeState.DirectOperation; op != nil {
+				switch op.Recovery {
+				case DirectMergeRecoveryConflict:
+					cmds = append([]plugin.Command{
+						{ID: "continue-merge", Name: "Continue", Description: "Continue after resolving conflicts", Context: "workspace-merge-error", Priority: 1},
+						{ID: "abort-merge", Name: "Abort", Description: "Abort and restore target", Context: "workspace-merge-error", Priority: 2},
+					}, cmds...)
+				case DirectMergeRecoveryPushFailure:
+					cmds = append([]plugin.Command{{ID: "retry-push", Name: "Retry", Description: "Retry push", Context: "workspace-merge-error", Priority: 1}}, cmds...)
+				}
+			}
+			return cmds
 		}
 		cmds := []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel merge workflow", Context: "workspace-merge", Priority: 1},
@@ -40,6 +73,16 @@ func (p *Plugin) Commands() []plugin.Command {
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Push", Description: "Push branch", Context: "workspace-merge", Priority: 2})
 			case MergeStepWaitingMerge:
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Check", Description: "Check merge status", Context: "workspace-merge", Priority: 2})
+				cmds = append(cmds, plugin.Command{ID: mergeStopWatchingID, Name: "Stop", Description: "Stop watching and keep PR URL", Context: "workspace-merge", Priority: 3})
+				cmds = append(cmds, plugin.Command{ID: "open-pr", Name: "Open", Description: "Open PR in browser", Context: "workspace-merge", Priority: 4})
+				cmds = append(cmds, plugin.Command{ID: "copy-pr", Name: "Copy", Description: "Copy PR URL", Context: "workspace-merge", Priority: 5})
+			case MergeStepGeneratePR:
+				cmds = append(cmds,
+					plugin.Command{ID: mergeFallbackDraftID, Name: "Draft", Description: "Use local commit summary", Context: "workspace-merge", Priority: 2},
+					plugin.Command{ID: mergeAgentDraftID, Name: "Agent", Description: "Send capped diff to configured agent provider", Context: "workspace-merge", Priority: 3},
+				)
+			case MergeStepEditPR:
+				cmds = append(cmds, plugin.Command{ID: mergeCreatePRID, Name: "Create", Description: "Create PR with edited title and body (Ctrl+S)", Context: "workspace-merge", Priority: 2})
 			case MergeStepDone:
 				cmds = append(cmds, plugin.Command{ID: "continue", Name: "Done", Description: "Close modal", Context: "workspace-merge", Priority: 2})
 			}
@@ -108,6 +151,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				)
 				// Add diff view toggle when on Diff tab
 				if p.previewTab == PreviewTabDiff {
+					cmds = append(cmds, plugin.Command{ID: "toggle-diff-scope", Name: "Scope", Description: "Cycle working tree, commits, and aggregate", Context: "workspace-preview", Priority: 5})
 					diffViewName := "Split"
 					switch p.diffViewMode {
 					case DiffViewSideBySide:
@@ -115,7 +159,7 @@ func (p *Plugin) Commands() []plugin.Command {
 					case DiffViewFullFile:
 						diffViewName = "Unified"
 					}
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-view", Name: diffViewName, Description: "Cycle diff view mode", Context: "workspace-preview", Priority: 5})
+					cmds = append(cmds, plugin.Command{ID: "toggle-diff-view", Name: diffViewName, Description: "Cycle diff view mode", Context: "workspace-preview", Priority: 6})
 					// Add file navigation commands when viewing diff with multiple files
 					if p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 1 {
 						cmds = append(cmds,
@@ -238,13 +282,17 @@ func (p *Plugin) Commands() []plugin.Command {
 					)
 				}
 			}
-			// Workspace commands
-			cmds = append(cmds,
-				plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected workspace", Context: "workspace-list", Priority: 5},
-				plugin.Command{ID: "push", Name: "Push", Description: "Push branch to remote", Context: "workspace-list", Priority: 6},
-				plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7},
-				plugin.Command{ID: "open-in-git", Name: "Git", Description: "Open in Git tab", Context: "workspace-list", Priority: 16},
-			)
+			// Only advertise mutating actions that are safe for this worktree.
+			if WorktreeActionRefusal(wt, WorktreeActionDelete) == "" {
+				cmds = append(cmds, plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected workspace", Context: "workspace-list", Priority: 5})
+			}
+			if WorktreeActionRefusal(wt, WorktreeActionPush) == "" {
+				cmds = append(cmds, plugin.Command{ID: "push", Name: "Push", Description: "Push branch to remote", Context: "workspace-list", Priority: 6})
+			}
+			if WorktreeActionRefusal(wt, WorktreeActionMerge) == "" {
+				cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7})
+			}
+			cmds = append(cmds, plugin.Command{ID: "open-in-git", Name: "Git", Description: "Open in Git tab", Context: "workspace-list", Priority: 16})
 			// Task linking
 			if wt.TaskID != "" {
 				cmds = append(cmds,
@@ -283,6 +331,15 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeInteractive:
 		return "workspace-interactive"
 	case ViewModeCreate:
+		if p.createBusyStep != "" {
+			return "workspace-create-busy"
+		}
+		if p.createSetupResult != nil {
+			return "workspace-create-recovery"
+		}
+		if p.createPlan != nil {
+			return "workspace-create-confirm"
+		}
 		return "workspace-create"
 	case ViewModeTaskLink:
 		return "workspace-task-link"
@@ -332,6 +389,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 		ViewModeTypeSelector,
 		ViewModeFetchPR:
 		return true
+	case ViewModeMerge:
+		return p.mergeState != nil && p.mergeState.Step == MergeStepEditPR
 	default:
 		return false
 	}

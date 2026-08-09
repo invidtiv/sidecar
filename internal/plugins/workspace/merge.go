@@ -3,15 +3,16 @@ package workspace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	"github.com/marcus/sidecar/internal/app"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 )
@@ -24,7 +25,8 @@ const (
 	MergeStepTargetBranch                   // Choose target branch for merge/PR
 	MergeStepMergeMethod                    // Choose: PR workflow or direct merge
 	MergeStepPush
-	MergeStepGeneratePR // Agent generates PR title/body
+	MergeStepGeneratePR // User chooses deterministic or disclosed agent assistance
+	MergeStepEditPR     // User edits title/body before creation
 	MergeStepCreatePR
 	MergeStepWaitingMerge
 	MergeStepDirectMerge           // Performing direct merge (no PR)
@@ -46,7 +48,9 @@ func (s MergeWorkflowStep) String() string {
 	case MergeStepPush:
 		return "Push Branch"
 	case MergeStepGeneratePR:
-		return "Generate PR"
+		return "Draft PR"
+	case MergeStepEditPR:
+		return "Edit PR"
 	case MergeStepCreatePR:
 		return "Create PR"
 	case MergeStepWaitingMerge:
@@ -68,13 +72,18 @@ func (s MergeWorkflowStep) String() string {
 
 // MergeWorkflowState holds the state for the merge workflow modal.
 type MergeWorkflowState struct {
+	OperationScope
 	Worktree         *Worktree
 	Step             MergeWorkflowStep
 	DiffSummary      string
 	PRTitle          string
 	PRBody           string
 	PRURL            string
+	PR               PRIdentity
 	ExistingPR       bool // True if using an existing PR (vs newly created)
+	ReviewedOID      string
+	PushRemote       string
+	BaseRemote       string
 	Error            error
 	ErrorTitle       string                       // Short title for error display (e.g. "Direct Merge Failed")
 	ErrorDetail      string                       // Full error text for display and clipboard copy
@@ -101,12 +110,21 @@ type MergeWorkflowState struct {
 	ConfirmationHover   int    // Mouse hover state
 
 	// PR generation state
-	PRGenerationDots   int                // Animation counter for progress dots (0-3)
-	PRGenerationCancel context.CancelFunc // Cancel func for in-flight agent process
+	PRGenerationDots       int                // Animation counter for progress dots (0-3)
+	PRGenerationCancel     context.CancelFunc // Cancel func for in-flight agent process
+	PRGenerationActive     bool
+	PRTitleInput           textinput.Model
+	PRBodyInput            textarea.Model
+	PRPollAttempt          int
+	PRWatchStopped         bool
+	PRPollKind             PRPollKind
+	ForceDeleteRequired    bool // squash/rebase means ordinary branch -d cannot prove safety
+	ForceDeleteLocalBranch bool // explicit user choice after the explanation is shown
 
 	// Cleanup results for summary display
 	CleanupResults    *CleanupResults
-	PendingCleanupOps int // Counter for parallel cleanup operations in flight
+	PendingCleanupOps int // Counter for cleanup result messages in flight
+	DirectOperation   *DirectMergeOperation
 }
 
 // CleanupResults holds the results of cleanup operations for display in summary.
@@ -123,28 +141,34 @@ type CleanupResults struct {
 	ShowErrorDetails bool   // Toggle for expanded error view
 	PullErrorSummary string // Concise 1-line summary
 	PullErrorFull    string // Full git output for details view
+	PullMessage      string // Explicit update/intentional-no-update result
 	BranchDiverged   bool   // Enables rebase/merge resolution actions
 	BaseBranch       string // Branch name for resolution commands
 }
 
 // MergeStepCompleteMsg signals a merge workflow step completed.
 type MergeStepCompleteMsg struct {
+	OperationScope
 	WorkspaceName   string
 	Step            MergeWorkflowStep
 	Data            string // Step-specific data (e.g., PR URL)
 	Err             error
 	ExistingPRFound bool // True if PR already existed (vs newly created)
+	PR              PRIdentity
+	ReviewedOID     string
+	BaseRemote      string
 }
 
 // CheckPRMergedMsg signals the result of checking if a PR was merged.
 type CheckPRMergedMsg struct {
+	OperationScope
 	WorkspaceName string
-	Merged        bool
-	Err           error
+	Result        PRPollResult
 }
 
 // UncommittedChangesCheckMsg signals the result of checking for uncommitted changes.
 type UncommittedChangesCheckMsg struct {
+	OperationScope
 	WorkspaceName  string
 	HasChanges     bool
 	StagedCount    int
@@ -155,6 +179,7 @@ type UncommittedChangesCheckMsg struct {
 
 // MergeCommitDoneMsg signals that the commit before merge completed.
 type MergeCommitDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	CommitHash    string
 	Err           error
@@ -162,6 +187,7 @@ type MergeCommitDoneMsg struct {
 
 // PRGenerationDoneMsg signals that agent-powered PR description generation completed.
 type PRGenerationDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Title         string
 	Body          string
@@ -170,6 +196,7 @@ type PRGenerationDoneMsg struct {
 
 // prGenerationTickMsg triggers an animation tick during PR generation.
 type prGenerationTickMsg struct {
+	OperationScope
 	WorkspaceName string
 }
 
@@ -185,6 +212,7 @@ type MergeCommitState struct {
 
 // RemoteBranchDeleteMsg signals the result of deleting a remote branch.
 type RemoteBranchDeleteMsg struct {
+	OperationScope
 	WorkspaceName string
 	BranchName    string
 	Err           error
@@ -192,19 +220,31 @@ type RemoteBranchDeleteMsg struct {
 
 // CleanupDoneMsg signals that cleanup operations completed.
 type CleanupDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Results       *CleanupResults
 }
 
 // DirectMergeDoneMsg signals that direct merge completed.
 type DirectMergeDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	BaseBranch    string
+	Operation     *DirectMergeOperation
+	Err           error
+}
+
+type DirectMergePreflightMsg struct {
+	OperationScope
+	WorkspaceName string
+	BaseBranch    string
+	Operation     *DirectMergeOperation
 	Err           error
 }
 
 // PullAfterMergeMsg signals that pull after merge completed.
 type PullAfterMergeMsg struct {
+	OperationScope
 	WorkspaceName string
 	Branch        string
 	Success       bool
@@ -213,23 +253,36 @@ type PullAfterMergeMsg struct {
 
 // checkUncommittedChanges checks if a worktree has uncommitted changes.
 func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	name := wt.Name
+	var stagedCount, modifiedCount, untrackedCount int
+	var statusErr error
+	if wt.Changes == nil || wt.Changes.State == LoadStateLoading || wt.Changes.State == LoadStateUnknown {
+		statusErr = fmt.Errorf("shared git status is not loaded; refresh the workspace and retry")
+	} else if wt.Changes.Err != nil || wt.Changes.State == LoadStateError {
+		statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry")
+		if wt.Changes.Err != nil {
+			statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry: %w", wt.Changes.Err)
+		}
+	} else {
+		stagedCount = len(wt.Changes.Staged)
+		modifiedCount = len(wt.Changes.Unstaged)
+		untrackedCount = len(wt.Changes.Untracked)
+	}
 	return func() tea.Msg {
-		tree := gitstatus.NewFileTree(wt.Path)
-		if err := tree.Refresh(); err != nil {
+		if statusErr != nil {
 			return UncommittedChangesCheckMsg{
-				WorkspaceName: wt.Name,
-				HasChanges:    false,
-				Err:           err,
+				OperationScope: scope,
+				WorkspaceName:  name,
+				HasChanges:     false,
+				Err:            statusErr,
 			}
 		}
-
-		stagedCount := len(tree.Staged)
-		modifiedCount := len(tree.Modified)
-		untrackedCount := len(tree.Untracked)
 		hasChanges := stagedCount > 0 || modifiedCount > 0 || untrackedCount > 0
 
 		return UncommittedChangesCheckMsg{
-			WorkspaceName:  wt.Name,
+			OperationScope: scope,
+			WorkspaceName:  name,
 			HasChanges:     hasChanges,
 			StagedCount:    stagedCount,
 			ModifiedCount:  modifiedCount,
@@ -240,35 +293,42 @@ func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 
 // stageAllAndCommit stages all changes and commits with the given message.
 func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		tree := gitstatus.NewFileTree(wt.Path)
+		tree := gitstatus.NewFileTree(path)
 		if tree == nil {
 			return MergeCommitDoneMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("failed to initialize git tree for %s", wt.Path),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("failed to initialize git tree for %s", path),
 			}
 		}
 
 		// Stage all changes
-		if err := tree.StageAll(); err != nil {
+		if err := tree.StageAllContext(ctx); err != nil {
 			return MergeCommitDoneMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("failed to stage: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("failed to stage: %w", err),
 			}
 		}
 
 		// Execute commit
-		hash, err := gitstatus.ExecuteCommit(wt.Path, message)
+		hash, err := gitstatus.ExecuteCommitContext(ctx, path, message)
 		if err != nil {
 			return MergeCommitDoneMsg{
-				WorkspaceName: wt.Name,
-				Err:           err,
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            err,
 			}
 		}
 
 		return MergeCommitDoneMsg{
-			WorkspaceName: wt.Name,
-			CommitHash:    hash,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			CommitHash:     hash,
 		}
 	}
 }
@@ -280,17 +340,20 @@ func (p *Plugin) startMergeWorkflow(wt *Worktree) tea.Cmd {
 		return nil
 	}
 
+	p.newLifecycleScope(wt)
 	// Check for uncommitted changes before proceeding
 	return p.checkUncommittedChanges(wt)
 }
 
 // proceedToMergeWorkflow initializes the actual merge workflow (after commit check passes).
 func (p *Plugin) proceedToMergeWorkflow(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
 	// Capture current branch in main repo for pull option later
 	currentBranch, _ := getCurrentBranch(p.ctx.WorkDir)
 
 	// Initialize merge state
 	p.mergeState = &MergeWorkflowState{
+		OperationScope:   scope,
 		Worktree:         wt,
 		Step:             MergeStepReviewDiff,
 		PRTitle:          wt.Branch, // Default title to branch name
@@ -310,23 +373,31 @@ func (p *Plugin) proceedToMergeWorkflow(wt *Worktree) tea.Cmd {
 
 // loadMergeDiff loads the diff file summary for the merge workflow.
 func (p *Plugin) loadMergeDiff(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, name, baseBranch := wt.Path, wt.Name, resolveBaseBranch(wt)
 	return func() tea.Msg {
-		baseBranch := resolveBaseBranch(wt)
-
-		stat, err := getDiffStatFromBase(wt.Path, baseBranch)
+		reviewedOID, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepReviewDiff, Err: fmt.Errorf("resolve reviewed HEAD: %w", err)}
+		}
+		stat, err := getDiffStatFromBaseContext(ctx, path, baseBranch)
 		if err != nil {
 			return MergeStepCompleteMsg{
-				WorkspaceName: wt.Name,
-				Step:          MergeStepReviewDiff,
-				Data:          "",
-				Err:           err,
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Step:           MergeStepReviewDiff,
+				Data:           "",
+				Err:            err,
 			}
 		}
 
 		return MergeStepCompleteMsg{
-			WorkspaceName: wt.Name,
-			Step:          MergeStepReviewDiff,
-			Data:          stat,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			Step:           MergeStepReviewDiff,
+			Data:           stat,
+			ReviewedOID:    reviewedOID,
 		}
 	}
 }
@@ -343,90 +414,128 @@ func truncateDiff(diff string, maxLines int) string {
 
 // pushForMerge pushes the branch for the merge workflow.
 func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, branch, name := wt.Path, wt.Branch, wt.Name
+	reviewedOID, targetBranch := "", ""
+	if p.mergeState != nil {
+		reviewedOID = p.mergeState.ReviewedOID
+		targetBranch = p.mergeState.TargetBranch
+	}
 	return func() tea.Msg {
-		err := doPush(wt.Path, wt.Branch, false, true)
+		if reviewedOID == "" {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("reviewed source OID is missing; return to review")}
+		}
+		head, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
+		if err != nil || head != reviewedOID {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("HEAD changed after review; return to review")}
+		}
+		baseRemote, repository, topologyErr := resolveBaseTopologyContext(ctx, path, targetBranch)
+		if topologyErr != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: topologyErr}
+		}
+		configuredHeadRemote, configuredHeadErr := gitOutputContext(ctx, path, "config", "--get", "branch."+branch+".remote")
+		if configuredHeadErr == nil && configuredHeadRemote == "." {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("head branch %q uses local remote '.'; configure a GitHub push remote", branch)}
+		}
+		remote, err := resolveBranchRemoteContext(ctx, path, branch)
+		if err != nil {
+			remote, err = resolveRemoteForRepositoryContext(ctx, path, repository)
+		}
+		pr := PRIdentity{Repository: repository, HeadRef: branch, HeadOID: reviewedOID, BaseRef: targetBranch}
+		if err == nil {
+			remoteURL, urlErr := configuredRemoteURLContext(ctx, path, remote)
+			if urlErr == nil {
+				pr.HeadRepo, urlErr = parseGitHubRepositoryURL(remoteURL)
+			}
+			if urlErr != nil {
+				err = fmt.Errorf("resolve head repository from %s: %w", remote, urlErr)
+			} else if owner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok {
+				pr.HeadOwner = owner
+			}
+		}
+		if err == nil {
+			_, err = gitOutputContext(ctx, path, "push", "-u", remote, reviewedOID+":refs/heads/"+branch)
+		}
+		if err == nil {
+			head, err = gitOutputContext(ctx, path, "rev-parse", "HEAD")
+			if err == nil && head != reviewedOID {
+				err = fmt.Errorf("HEAD changed while pushing; return to review")
+			}
+		}
 		return MergeStepCompleteMsg{
-			WorkspaceName: wt.Name,
-			Step:          MergeStepPush,
-			Err:           err,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			Step:           MergeStepPush,
+			Data:           remote,
+			BaseRemote:     baseRemote,
+			Err:            err,
+			PR:             pr,
 		}
 	}
-}
-
-// parseExistingPRURL extracts the PR URL from a "PR already exists" error message.
-// Returns the URL and true if found, empty string and false otherwise.
-func parseExistingPRURL(output string) (string, bool) {
-	// Error format: "a pull request for branch X into branch Y already exists: <URL>: exit status 1"
-	const marker = "already exists:"
-	idx := strings.Index(output, marker)
-	if idx == -1 {
-		return "", false
-	}
-
-	// Extract URL after marker
-	rest := strings.TrimSpace(output[idx+len(marker):])
-
-	// Find the URL - it starts with http and ends before ": exit" or end of string
-	if !strings.HasPrefix(rest, "http") {
-		return "", false
-	}
-
-	// Find where URL ends - look for ": exit" pattern which follows the URL
-	endIdx := strings.Index(rest, ": exit")
-	if endIdx == -1 {
-		// No ": exit" suffix, URL goes to end (trim whitespace)
-		endIdx = strings.IndexAny(rest, " \t\n")
-		if endIdx == -1 {
-			endIdx = len(rest)
-		}
-	}
-
-	url := strings.TrimSpace(rest[:endIdx])
-	if url == "" {
-		return "", false
-	}
-	return url, true
 }
 
 // createPR creates a pull request using gh CLI.
 func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, name := wt.Path, wt.Name
+	pr := PRIdentity{HeadRef: wt.Branch, BaseRef: targetBranch}
+	reviewedOID, pushRemote, expectedBaseRemote := "", "", ""
+	if p.mergeState != nil {
+		pr = p.mergeState.PR
+		pr.BaseRef = targetBranch
+		reviewedOID, pushRemote, expectedBaseRemote = p.mergeState.ReviewedOID, p.mergeState.PushRemote, p.mergeState.BaseRemote
+	}
 	return func() tea.Msg {
-		// Build gh pr create command
-		args := []string{"pr", "create",
-			"--title", title,
-			"--body", body,
-			"--base", targetBranch,
-		}
-
-		cmd := exec.Command("gh", args...)
-		cmd.Dir = wt.Path
-		output, err := cmd.CombinedOutput()
-
+		baseRemote, repository, err := resolveBaseTopologyContext(ctx, path, targetBranch)
 		if err != nil {
-			// Check if PR already exists
-			outputStr := string(output)
-			if existingURL, found := parseExistingPRURL(outputStr); found {
-				return MergeStepCompleteMsg{
-					WorkspaceName:   wt.Name,
-					Step:            MergeStepCreatePR,
-					Data:            existingURL,
-					ExistingPRFound: true,
-				}
-			}
-			return MergeStepCompleteMsg{
-				WorkspaceName: wt.Name,
-				Step:          MergeStepCreatePR,
-				Err:           fmt.Errorf("gh pr create: %s: %w", strings.TrimSpace(outputStr), err),
-			}
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
 		}
-
-		// Output should contain the PR URL
+		if expectedBaseRemote != "" && baseRemote != expectedBaseRemote {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("base remote changed from %s to %s; return to review", expectedBaseRemote, baseRemote)}
+		}
+		if pr.Repository != "" && repository != pr.Repository {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("base repository changed from %s to %s; return to review", pr.Repository, repository)}
+		}
+		pr.Repository = repository
+		if err := revalidateReviewedPushContext(ctx, path, pushRemote, pr.HeadRef, reviewedOID); err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
+		existing, err := queryExistingPRContext(ctx, path, repository, pr.HeadOwner, pr.HeadRef, targetBranch)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
+		if existing != nil {
+			if existing.HeadOID != reviewedOID {
+				return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("%w: existing PR head is %s, expected %s", errReviewedSourceChanged, existing.HeadOID, reviewedOID)}
+			}
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Data: existing.URL, PR: *existing, ExistingPRFound: true}
+		}
+		if err := revalidateReviewedPushContext(ctx, path, pushRemote, pr.HeadRef, reviewedOID); err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
+		head := pr.HeadRef
+		if pr.HeadOwner != "" {
+			head = pr.HeadOwner + ":" + pr.HeadRef
+		}
+		args := []string{"pr", "create", "--repo", repository, "--title", title, "--body", body, "--base", targetBranch, "--head", head}
+		output, err := ghOutputContext(ctx, path, args...)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
 		prURL := strings.TrimSpace(string(output))
+		created, err := viewPRIdentityContext(ctx, path, prURL, repository)
+		if err != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
 
 		return MergeStepCompleteMsg{
-			WorkspaceName: wt.Name,
-			Step:          MergeStepCreatePR,
-			Data:          prURL,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			Step:           MergeStepCreatePR,
+			Data:           prURL,
+			PR:             created,
 		}
 	}
 }
@@ -435,7 +544,8 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 // Runs the agent CLI in print/non-interactive mode with git context piped via stdin.
 // Falls back to a basic commit-based description if the agent doesn't support print mode
 // or if generation fails.
-func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cmd {
+func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string, useAgent bool) tea.Cmd {
+	scope := p.lifecycleScope(wt)
 	agentType := wt.ChosenAgentType
 	wtName := wt.Name
 	wtPath := wt.Path
@@ -443,7 +553,11 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 
 	// Create context with cancel outside the closure so we can store the cancel func
 	// in mergeState. This allows cancelMergeWorkflow to kill the agent subprocess.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	parentCtx := p.operationCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 3*time.Minute)
 	if p.mergeState != nil {
 		p.mergeState.PRGenerationCancel = cancel
 	}
@@ -452,9 +566,13 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 		defer cancel()
 
 		// Gather git context
-		commitLog := getCommitLogForPR(wtPath, targetBranch)
-		diffStat := getDiffStatForPR(wtPath, targetBranch)
-		diff := getDiffForPR(wtPath, targetBranch)
+		commitLog := getCommitLogForPRContext(ctx, wtPath, targetBranch)
+		diffStat := getDiffStatForPRContext(ctx, wtPath, targetBranch)
+		if !useAgent {
+			title, body := buildFallbackPRDescription(branch, commitLog, diffStat)
+			return PRGenerationDoneMsg{OperationScope: scope, WorkspaceName: wtName, Title: title, Body: body}
+		}
+		diff := getDiffForPRContext(ctx, wtPath, targetBranch)
 
 		// Check if agent supports print mode
 		printArgs, supported := PrintModeArgs[agentType]
@@ -462,9 +580,10 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 			// Fall back to commit-based description
 			title, body := buildFallbackPRDescription(branch, commitLog, diffStat)
 			return PRGenerationDoneMsg{
-				WorkspaceName: wtName,
-				Title:         title,
-				Body:          body,
+				OperationScope: scope,
+				WorkspaceName:  wtName,
+				Title:          title,
+				Body:           body,
 			}
 		}
 
@@ -476,9 +595,10 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 		if agentCmd == "" {
 			title, body := buildFallbackPRDescription(branch, commitLog, diffStat)
 			return PRGenerationDoneMsg{
-				WorkspaceName: wtName,
-				Title:         title,
-				Body:          body,
+				OperationScope: scope,
+				WorkspaceName:  wtName,
+				Title:          title,
+				Body:           body,
 			}
 		}
 
@@ -498,10 +618,11 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 			// Agent failed — fall back to commit-based description
 			title, body := buildFallbackPRDescription(branch, commitLog, diffStat)
 			return PRGenerationDoneMsg{
-				WorkspaceName: wtName,
-				Title:         title,
-				Body:          body,
-				Err:           fmt.Errorf("agent %s failed: %w", agentCmd, err),
+				OperationScope: scope,
+				WorkspaceName:  wtName,
+				Title:          title,
+				Body:           body,
+				Err:            fmt.Errorf("agent %s failed: %w", agentCmd, err),
 			}
 		}
 
@@ -518,9 +639,10 @@ func (p *Plugin) generatePRDescription(wt *Worktree, targetBranch string) tea.Cm
 		}
 
 		return PRGenerationDoneMsg{
-			WorkspaceName: wtName,
-			Title:         title,
-			Body:          body,
+			OperationScope: scope,
+			WorkspaceName:  wtName,
+			Title:          title,
+			Body:           body,
 		}
 	}
 }
@@ -663,10 +785,14 @@ func buildFallbackPRDescription(branch, commitLog, diffStat string) (title, body
 
 // getCommitLogForPR returns the commit log for PR description generation.
 func getCommitLogForPR(workdir, baseBranch string) string {
+	return getCommitLogForPRContext(context.Background(), workdir, baseBranch)
+}
+
+func getCommitLogForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
 	}
-	cmd := exec.Command("git", "log", baseBranch+"..HEAD", "--oneline", "--no-merges")
+	cmd := exec.CommandContext(ctx, "git", "log", baseBranch+"..HEAD", "--oneline", "--no-merges")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -677,7 +803,11 @@ func getCommitLogForPR(workdir, baseBranch string) string {
 
 // getDiffStatForPR returns the diff stat for PR description generation.
 func getDiffStatForPR(workdir, baseBranch string) string {
-	stat, err := getDiffStatFromBase(workdir, baseBranch)
+	return getDiffStatForPRContext(context.Background(), workdir, baseBranch)
+}
+
+func getDiffStatForPRContext(ctx context.Context, workdir, baseBranch string) string {
+	stat, err := getDiffStatFromBaseContext(ctx, workdir, baseBranch)
 	if err != nil {
 		return ""
 	}
@@ -686,12 +816,16 @@ func getDiffStatForPR(workdir, baseBranch string) string {
 
 // getDiffForPR returns the full diff for PR description generation.
 func getDiffForPR(workdir, baseBranch string) string {
+	return getDiffForPRContext(context.Background(), workdir, baseBranch)
+}
+
+func getDiffForPRContext(ctx context.Context, workdir, baseBranch string) string {
 	if baseBranch == "" {
-		baseBranch = detectDefaultBranch(workdir)
+		baseBranch = detectDefaultBranchContext(ctx, workdir)
 	}
 
 	// Try merge-base for accurate diff
-	mbCmd := exec.Command("git", "merge-base", baseBranch, "HEAD")
+	mbCmd := exec.CommandContext(ctx, "git", "merge-base", baseBranch, "HEAD")
 	mbCmd.Dir = workdir
 	mbOutput, err := mbCmd.Output()
 
@@ -707,7 +841,7 @@ func getDiffForPR(workdir, baseBranch string) string {
 		args = []string{"diff", baseBranch + "..HEAD"}
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -722,173 +856,119 @@ func getDiffForPR(workdir, baseBranch string) string {
 // completes (step advances) or the workflow is cancelled (mergeState set to nil),
 // the tick message is silently dropped and the chain stops.
 func (p *Plugin) schedulePRGenerationTick(wtName string) tea.Cmd {
+	scope := OperationScope{}
+	if p.mergeState != nil {
+		scope = p.mergeState.OperationScope
+	}
 	return tea.Tick(400*time.Millisecond, func(t time.Time) tea.Msg {
-		return prGenerationTickMsg{WorkspaceName: wtName}
+		return prGenerationTickMsg{OperationScope: scope, WorkspaceName: wtName}
 	})
 }
 
 // checkPRMerged checks if a PR has been merged using gh CLI.
 func (p *Plugin) checkPRMerged(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, name := wt.Path, wt.Name
+	identity := PRIdentity{}
+	reviewedOID, targetBranch := "", ""
+	if p.mergeState != nil {
+		identity = p.mergeState.PR
+		reviewedOID, targetBranch = p.mergeState.ReviewedOID, p.mergeState.TargetBranch
+	}
 	return func() tea.Msg {
-		// Use gh pr view to check status
-		cmd := exec.Command("gh", "pr", "view", "--json", "state,mergedAt")
-		cmd.Dir = wt.Path
-		output, err := cmd.Output()
-
-		if err != nil {
-			return CheckPRMergedMsg{
-				WorkspaceName: wt.Name,
-				Merged:        false,
-				Err:           err,
+		result := pollPRContext(ctx, path, identity)
+		if result.Kind == PRPollMerged {
+			force, err := validateMergedPRForCleanupContext(ctx, path, reviewedOID, targetBranch, result.Identity)
+			if err != nil {
+				result.Kind, result.Err = PRPollRepository, err
+			} else {
+				result.ForceDeleteRequired = force
 			}
 		}
-
-		// Parse JSON response
-		var prStatus struct {
-			State    string `json:"state"`
-			MergedAt string `json:"mergedAt"`
-		}
-
-		merged := false
-		if err := json.Unmarshal(output, &prStatus); err == nil {
-			merged = prStatus.MergedAt != "" || prStatus.State == "MERGED"
-		}
-
-		return CheckPRMergedMsg{
-			WorkspaceName: wt.Name,
-			Merged:        merged,
-		}
+		return CheckPRMergedMsg{OperationScope: scope, WorkspaceName: name, Result: result}
 	}
 }
 
 // performDirectMerge merges the branch directly to base without creating a PR.
 func (p *Plugin) performDirectMerge(wt *Worktree, targetBranch string) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	repoPath := p.ctx.ProjectRoot
+	if p.repoSnapshot != nil {
+		repoPath = p.repoSnapshot.CanonicalRoot
+	}
+	if repoPath == "" {
+		repoPath = p.ctx.WorkDir
+	}
+	sourcePath, sourceBranch, name := wt.Path, wt.Branch, wt.Name
 	return func() tea.Msg {
-		baseBranch := targetBranch
-		workDir := p.ctx.WorkDir
-		branch := wt.Branch
-
-		// 1. Fetch latest from origin
-		fetchCmd := exec.Command("git", "fetch", "origin", baseBranch)
-		fetchCmd.Dir = workDir
-		if output, err := fetchCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("fetch origin: %s: %w", strings.TrimSpace(string(output)), err),
-			}
+		op, err := preflightDirectMergeContext(ctx, repoPath, sourcePath, sourceBranch, targetBranch)
+		if err != nil {
+			return DirectMergePreflightMsg{OperationScope: scope, WorkspaceName: name, BaseBranch: targetBranch, Err: fmt.Errorf("preflight: %w", err)}
 		}
-
-		// 2. Checkout base branch
-		checkoutCmd := exec.Command("git", "checkout", baseBranch)
-		checkoutCmd.Dir = workDir
-		if output, err := checkoutCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 3. Pull latest
-		pullCmd := exec.Command("git", "pull", "origin", baseBranch)
-		pullCmd.Dir = workDir
-		if output, err := pullCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("pull origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 4. Merge the worktree branch
-		mergeMsg := fmt.Sprintf("Merge branch '%s'", branch)
-		mergeCmd := exec.Command("git", "merge", branch, "--no-ff", "-m", mergeMsg)
-		mergeCmd.Dir = workDir
-		if output, err := mergeCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("merge %s: %s: %w", branch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		// 5. Push the merge
-		pushCmd := exec.Command("git", "push", "origin", baseBranch)
-		pushCmd.Dir = workDir
-		if output, err := pushCmd.CombinedOutput(); err != nil {
-			return DirectMergeDoneMsg{
-				WorkspaceName: wt.Name,
-				BaseBranch:    baseBranch,
-				Err:           fmt.Errorf("push origin %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err),
-			}
-		}
-
-		return DirectMergeDoneMsg{
-			WorkspaceName: wt.Name,
-			BaseBranch:    baseBranch,
-		}
+		return DirectMergePreflightMsg{OperationScope: scope, WorkspaceName: name, BaseBranch: targetBranch, Operation: op}
 	}
 }
 
-// pullAfterMerge updates the local base branch to match remote after merge.
-// If currently on the base branch, uses git pull --ff-only to safely update.
-// Otherwise uses git fetch + update-ref to update the branch without checkout.
-func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch string) tea.Cmd {
-	// Get main worktree path now, before potential worktree deletion.
-	// This is critical when sidecar is running inside the worktree being deleted -
-	// p.ctx.WorkDir would point to a directory that no longer exists after deletion.
-	mainPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainPath == "" {
-		mainPath = p.ctx.WorkDir // fallback if not in worktree context
-	}
-
+func (p *Plugin) executeDirectMerge(scope OperationScope, name, branch string, op *DirectMergeOperation) tea.Cmd {
+	ctx := p.operationCtx
+	private := cloneDirectMergeOperation(op)
 	return func() tea.Msg {
-		workDir := mainPath
+		result := runDirectMergeContext(ctx, private)
+		result.runContext = nil
+		return DirectMergeDoneMsg{OperationScope: scope, WorkspaceName: name, BaseBranch: branch, Operation: result, Err: result.Err}
+	}
+}
 
-		if currentBranch == branch {
-			// Currently on the base branch - use pull --ff-only for safety
-			// This will fail if there are local changes or divergent commits
-			pullCmd := exec.Command("git", "pull", "--ff-only", "origin", branch)
-			pullCmd.Dir = workDir
-			if output, err := pullCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("pull: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
-		} else {
-			// Not on base branch - fetch then update-ref (won't affect working tree)
-			fetchCmd := exec.Command("git", "fetch", "origin", branch)
-			fetchCmd.Dir = workDir
-			if output, err := fetchCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("fetch: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
-
-			updateCmd := exec.Command("git", "update-ref", "refs/heads/"+branch, "origin/"+branch)
-			updateCmd.Dir = workDir
-			if output, err := updateCmd.CombinedOutput(); err != nil {
-				return PullAfterMergeMsg{
-					WorkspaceName: wt.Name,
-					Branch:        branch,
-					Success:       false,
-					Err:           fmt.Errorf("update-ref: %s: %w", strings.TrimSpace(string(output)), err),
-				}
-			}
+func (p *Plugin) recoverDirectMerge(action string) tea.Cmd {
+	if p.mergeState == nil || p.mergeState.DirectOperation == nil {
+		return nil
+	}
+	op := cloneDirectMergeOperation(p.mergeState.DirectOperation)
+	if (action == "continue" || action == "abort") && op.Recovery != DirectMergeRecoveryConflict {
+		return nil
+	}
+	if action == "retry-push" && op.Recovery != DirectMergeRecoveryPushFailure {
+		return nil
+	}
+	name, branch := p.mergeState.Worktree.Name, p.mergeState.TargetBranch
+	scope := p.mergeState.OperationScope
+	ctx := p.operationCtx
+	return func() tea.Msg {
+		switch action {
+		case "continue":
+			op = continueDirectMergeContext(ctx, op)
+		case "abort":
+			op = abortDirectMergeContext(ctx, op)
+		case "retry-push":
+			op = retryDirectMergePushContext(ctx, op)
 		}
+		op.runContext = nil
+		return DirectMergeDoneMsg{OperationScope: scope, WorkspaceName: name, BaseBranch: branch, Operation: op, Err: op.Err}
+	}
+}
 
-		return PullAfterMergeMsg{
-			WorkspaceName: wt.Name,
-			Branch:        branch,
-			Success:       true,
+// pullAfterMerge updates the checkout that actually owns the base branch.
+// It never moves a checked-out ref behind its index and working tree.
+func (p *Plugin) pullAfterMerge(wt *Worktree, branch string, currentBranch string) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	repoPath := ""
+	workDir := p.ctx.WorkDir
+	if p.repoSnapshot != nil {
+		repoPath = p.repoSnapshot.CanonicalRoot
+	}
+	name := wt.Name
+	return func() tea.Msg {
+		if repoPath == "" {
+			repoPath = mainWorktreePathContext(ctx, workDir)
 		}
+		if repoPath == "" {
+			repoPath = workDir
+		}
+		result := updateCheckedOutBaseContext(ctx, repoPath, branch, "")
+		return PullAfterMergeMsg{OperationScope: scope, WorkspaceName: name, Branch: branch, Success: result.Updated || (result.Fetched && result.LeftUnchanged && result.Err == nil), Err: result.Err}
 	}
 }
 
@@ -969,6 +1049,7 @@ func summarizeGitError(err error) (string, string, bool) {
 
 // RebaseResolutionMsg signals result of rebase resolution attempt.
 type RebaseResolutionMsg struct {
+	OperationScope
 	WorkspaceName string
 	Branch        string
 	Success       bool
@@ -977,6 +1058,7 @@ type RebaseResolutionMsg struct {
 
 // MergeResolutionMsg signals result of merge resolution attempt.
 type MergeResolutionMsg struct {
+	OperationScope
 	WorkspaceName string
 	Branch        string
 	Success       bool
@@ -992,25 +1074,29 @@ func (p *Plugin) executeRebaseResolution() tea.Cmd {
 	branch := p.mergeState.CleanupResults.BaseBranch
 	workDir := p.ctx.WorkDir
 	wtName := p.mergeState.Worktree.Name
+	scope := p.mergeState.OperationScope
+	ctx := p.operationCtx
 
 	return func() tea.Msg {
-		cmd := exec.Command("git", "pull", "--rebase", "origin", branch)
+		cmd := exec.CommandContext(ctx, "git", "pull", "--rebase", "origin", branch)
 		cmd.Dir = workDir
 		output, err := cmd.CombinedOutput()
 
 		if err != nil {
 			return RebaseResolutionMsg{
-				WorkspaceName: wtName,
-				Branch:        branch,
-				Success:       false,
-				Err:           fmt.Errorf("rebase failed: %s", strings.TrimSpace(string(output))),
+				OperationScope: scope,
+				WorkspaceName:  wtName,
+				Branch:         branch,
+				Success:        false,
+				Err:            fmt.Errorf("rebase failed: %s", strings.TrimSpace(string(output))),
 			}
 		}
 
 		return RebaseResolutionMsg{
-			WorkspaceName: wtName,
-			Branch:        branch,
-			Success:       true,
+			OperationScope: scope,
+			WorkspaceName:  wtName,
+			Branch:         branch,
+			Success:        true,
 		}
 	}
 }
@@ -1024,38 +1110,42 @@ func (p *Plugin) executeMergeResolution() tea.Cmd {
 	branch := p.mergeState.CleanupResults.BaseBranch
 	workDir := p.ctx.WorkDir
 	wtName := p.mergeState.Worktree.Name
+	scope := p.mergeState.OperationScope
+	ctx := p.operationCtx
 
 	return func() tea.Msg {
-		cmd := exec.Command("git", "pull", "origin", branch)
+		cmd := exec.CommandContext(ctx, "git", "pull", "origin", branch)
 		cmd.Dir = workDir
 		output, err := cmd.CombinedOutput()
 
 		if err != nil {
 			return MergeResolutionMsg{
-				WorkspaceName: wtName,
-				Branch:        branch,
-				Success:       false,
-				Err:           fmt.Errorf("merge failed: %s", strings.TrimSpace(string(output))),
+				OperationScope: scope,
+				WorkspaceName:  wtName,
+				Branch:         branch,
+				Success:        false,
+				Err:            fmt.Errorf("merge failed: %s", strings.TrimSpace(string(output))),
 			}
 		}
 
 		return MergeResolutionMsg{
-			WorkspaceName: wtName,
-			Branch:        branch,
-			Success:       true,
+			OperationScope: scope,
+			WorkspaceName:  wtName,
+			Branch:         branch,
+			Success:        true,
 		}
 	}
 }
 
 // deleteRemoteBranch deletes the remote branch from origin.
 func (p *Plugin) deleteRemoteBranch(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	branch, name, repoPath := wt.Branch, wt.Name, p.ctx.WorkDir
 	return func() tea.Msg {
-		branch := wt.Branch
-		name := wt.Name
-
 		// Delete remote branch: git push origin --delete <branch>
-		cmd := exec.Command("git", "push", "origin", "--delete", branch)
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "git", "push", "origin", "--delete", branch)
+		cmd.Dir = repoPath
 		output, err := cmd.CombinedOutput()
 
 		if err != nil {
@@ -1066,107 +1156,138 @@ func (p *Plugin) deleteRemoteBranch(wt *Worktree) tea.Cmd {
 				strings.Contains(outputStr, "couldn't find remote ref") {
 				// Not an error - branch already gone
 				return RemoteBranchDeleteMsg{
-					WorkspaceName: name,
-					BranchName:    branch,
+					OperationScope: scope,
+					WorkspaceName:  name,
+					BranchName:     branch,
 				}
 			}
 			return RemoteBranchDeleteMsg{
-				WorkspaceName: name,
-				BranchName:    branch,
-				Err:           fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr)),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				BranchName:     branch,
+				Err:            fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr)),
 			}
 		}
 
 		return RemoteBranchDeleteMsg{
-			WorkspaceName: name,
-			BranchName:    branch,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			BranchName:     branch,
 		}
 	}
 }
 
 // performSelectedCleanup executes only the user-selected cleanup actions.
 func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState) tea.Cmd {
+	scope := state.OperationScope
+	ctx := p.operationCtx
+	name, path, branch := wt.Name, wt.Path, wt.Branch
 	// Compute session name before entering closure (consistent with executeDelete)
-	sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+	sessionName := tmuxSessionPrefix + sanitizeName(name)
 
+	repoPath := p.ctx.ProjectRoot
+	if p.repoSnapshot != nil {
+		repoPath = p.repoSnapshot.CanonicalRoot
+	}
+	if state.DirectOperation != nil && state.DirectOperation.TargetPath != "" {
+		repoPath = state.DirectOperation.TargetPath
+	}
+	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(path) {
+		return func() tea.Msg {
+			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
+		}
+	}
+	targetBranch := state.TargetBranch
+	deleteWorktree, deleteBranch := state.DeleteLocalWorktree, state.DeleteLocalBranch
+	deleteRemote, updateBase := state.DeleteRemoteBranch, state.PullAfterMerge
+	directRemote := ""
+	if state.DirectOperation != nil {
+		directRemote = state.DirectOperation.Remote
+	}
 	return func() tea.Msg {
-		results := &CleanupResults{}
-		name := wt.Name
-		path := wt.Path
-		branch := wt.Branch
-
-		// Stop agent if running and clean up tracking (always do this)
-		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-		delete(p.managedSessions, sessionName)
-		globalPaneCache.remove(sessionName)
-
-		// Delete local worktree if selected
-		if state.DeleteLocalWorktree {
-			if err := doDeleteWorktree(p.ctx.WorkDir, path, false); err != nil {
-				results.Errors = append(results.Errors, fmt.Sprintf("Workspace: %v", err))
-			} else {
-				results.LocalWorktreeDeleted = true
+		expectedOID, err := gitOutputContext(ctx, path, "rev-parse", "HEAD")
+		if err != nil {
+			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Workspace: " + err.Error()}}}
+		}
+		branchRemote, _ := resolveBranchRemoteContext(ctx, repoPath, branch)
+		baseRemote, _ := resolveBranchRemoteContext(ctx, repoPath, targetBranch)
+		if directRemote != "" {
+			baseRemote = directRemote
+		}
+		var expectedRemoteOID string
+		if deleteRemote {
+			if branchRemote == "" {
+				return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{fmt.Sprintf("Remote branch: remote is not resolved for branch %q", branch)}}}
+			}
+			expectedRemoteOID, err = remoteBranchOIDContext(ctx, repoPath, branchRemote, branch)
+			if err != nil {
+				return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Remote branch: " + err.Error()}}}
 			}
 		}
-
-		// Delete local branch if selected
-		if state.DeleteLocalBranch {
-			cmd := exec.Command("git", "branch", "-d", branch)
-			cmd.Dir = p.ctx.WorkDir
-			if _, err := cmd.CombinedOutput(); err != nil {
-				// Try force delete if safe delete fails
-				cmd = exec.Command("git", "branch", "-D", branch)
-				cmd.Dir = p.ctx.WorkDir
-				if output, err := cmd.CombinedOutput(); err != nil {
-					results.Errors = append(results.Errors,
-						fmt.Sprintf("Branch: %s", strings.TrimSpace(string(output))))
-				} else {
-					results.LocalBranchDeleted = true
-				}
-			} else {
-				results.LocalBranchDeleted = true
-			}
+		plan := CleanupPlan{
+			RepoPath: repoPath, WorktreePath: path, Branch: branch, ExpectedOID: expectedOID,
+			BranchRemote: branchRemote, ExpectedRemoteOID: expectedRemoteOID,
+			BaseRemote: baseRemote, BaseBranch: targetBranch,
+			DeleteWorktree: deleteWorktree, DeleteBranch: deleteBranch,
+			DeleteRemote: deleteRemote, UpdateBase: updateBase,
+			ReviewedOID: state.ReviewedOID, ForceDeleteBranch: state.ForceDeleteLocalBranch,
 		}
-
-		return CleanupDoneMsg{WorkspaceName: name, Results: results}
+		if state.PR.Number > 0 {
+			identity := state.PR
+			plan.PRIdentity = &identity
+		}
+		results := runCleanupPlanContext(ctx, plan)
+		if results.LocalWorktreeDeleted {
+			_ = exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName).Run()
+		}
+		return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: results}
 	}
 }
 
 // schedulePRCheck schedules a periodic check for PR merge status.
 func (p *Plugin) schedulePRCheck(worktreeName string, delay time.Duration) tea.Cmd {
+	scope := OperationScope{}
+	if p.mergeState != nil {
+		scope = p.mergeState.OperationScope
+	}
 	return tea.Tick(delay, func(t time.Time) tea.Msg {
-		return checkPRMergeMsg{WorkspaceName: worktreeName}
+		return checkPRMergeMsg{OperationScope: scope, WorkspaceName: worktreeName}
 	})
 }
 
 // checkPRMergeMsg triggers a PR merge status check.
 type checkPRMergeMsg struct {
+	OperationScope
 	WorkspaceName string
 }
 
 // LocalBranchesMsg returns available local branches for target selection.
 type LocalBranchesMsg struct {
+	OperationScope
 	Branches []string
 	Err      error
 }
 
 // loadLocalBranches fetches local branch names for the target branch picker.
 func (p *Plugin) loadLocalBranches(wt *Worktree) tea.Cmd {
+	scope := p.lifecycleScope(wt)
+	ctx := p.operationCtx
+	path, branch := wt.Path, wt.Branch
 	return func() tea.Msg {
-		cmd := exec.Command("git", "branch", "--list", "--format=%(refname:short)")
-		cmd.Dir = wt.Path
+		cmd := exec.CommandContext(ctx, "git", "branch", "--list", "--format=%(refname:short)")
+		cmd.Dir = path
 		output, err := cmd.Output()
 		if err != nil {
-			return LocalBranchesMsg{Err: err}
+			return LocalBranchesMsg{OperationScope: scope, Err: err}
 		}
 		var branches []string
 		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 			line = strings.TrimSpace(line)
-			if line != "" && line != wt.Branch {
+			if line != "" && line != branch {
 				branches = append(branches, line)
 			}
 		}
-		return LocalBranchesMsg{Branches: branches}
+		return LocalBranchesMsg{OperationScope: scope, Branches: branches}
 	}
 }
 
@@ -1234,31 +1355,24 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 		return nil
 
 	case MergeStepPush:
-		// Mark Push as done, move to PR generation step
+		// Mark Push as done, then let the user explicitly choose whether an
+		// external agent may receive the capped diff.
 		p.mergeState.StepStatus[MergeStepPush] = "done"
 		p.mergeState.Step = MergeStepGeneratePR
 		p.mergeState.StepStatus[MergeStepGeneratePR] = "running"
-		p.mergeState.PRGenerationDots = 0
-		// Launch agent-powered PR description generation + animation tick
-		return tea.Batch(
-			p.generatePRDescription(p.mergeState.Worktree, p.mergeState.TargetBranch),
-			p.schedulePRGenerationTick(p.mergeState.Worktree.Name),
-		)
+		p.mergeState.PRGenerationActive = false
+		return nil
 
-	case MergeStepGeneratePR:
-		// PR description generated, now create the PR
-		p.mergeState.StepStatus[MergeStepGeneratePR] = "done"
+	case MergeStepEditPR:
+		p.mergeState.PRTitle = strings.TrimSpace(p.mergeState.PRTitleInput.Value())
+		p.mergeState.PRBody = p.mergeState.PRBodyInput.Value()
+		if p.mergeState.PRTitle == "" {
+			return nil
+		}
+		p.mergeState.StepStatus[MergeStepEditPR] = "done"
 		p.mergeState.Step = MergeStepCreatePR
 		p.mergeState.StepStatus[MergeStepCreatePR] = "running"
-		title := p.mergeState.PRTitle
-		if title == "" {
-			title, _ = buildFallbackPRDescription(p.mergeState.Worktree.Branch, "", "")
-		}
-		body := p.mergeState.PRBody
-		if body == "" {
-			body = "Created from worktree manager"
-		}
-		return p.createPR(p.mergeState.Worktree, title, body, p.mergeState.TargetBranch)
+		return p.createPR(p.mergeState.Worktree, p.mergeState.PRTitle, p.mergeState.PRBody, p.mergeState.TargetBranch)
 
 	case MergeStepCreatePR:
 		// Mark CreatePR as done, move to waiting for merge
@@ -1305,33 +1419,10 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 		p.mergeState.Step = MergeStepCleanup
 		p.mergeState.StepStatus[MergeStepCleanup] = "running"
 
-		var cmds []tea.Cmd
-
-		// Count pending operations for completion tracking
-		pendingOps := 0
-
-		// Local cleanup (worktree + branch)
-		if p.mergeState.DeleteLocalWorktree || p.mergeState.DeleteLocalBranch {
-			cmds = append(cmds, p.performSelectedCleanup(p.mergeState.Worktree, p.mergeState))
-			pendingOps++
-		}
-
-		// Remote cleanup (in parallel)
-		if p.mergeState.DeleteRemoteBranch {
-			cmds = append(cmds, p.deleteRemoteBranch(p.mergeState.Worktree))
-			pendingOps++
-		}
-
-		// Pull changes to current branch (in parallel)
-		if p.mergeState.PullAfterMerge {
-			baseBranch := p.mergeState.TargetBranch
-			cmds = append(cmds, p.pullAfterMerge(p.mergeState.Worktree, baseBranch, p.mergeState.CurrentBranch))
-			pendingOps++
-		}
-
-		p.mergeState.PendingCleanupOps = pendingOps
-
-		return tea.Batch(cmds...)
+		// One command owns the ordered cleanup transaction. It always runs from a
+		// captured checkout that survives deletion of the feature worktree.
+		p.mergeState.PendingCleanupOps = 1
+		return p.performSelectedCleanup(p.mergeState.Worktree, p.mergeState)
 
 	case MergeStepCleanup:
 		// Done
@@ -1341,6 +1432,17 @@ func (p *Plugin) advanceMergeStep() tea.Cmd {
 	}
 
 	return nil
+}
+
+func (p *Plugin) startPRDraft(useAgent bool) tea.Cmd {
+	if p.mergeState == nil || p.mergeState.Step != MergeStepGeneratePR || p.mergeState.PRGenerationActive {
+		return nil
+	}
+	p.mergeState.PRGenerationActive = true
+	p.mergeState.PRGenerationDots = 0
+	p.clearMergeModal()
+	cmd := p.generatePRDescription(p.mergeState.Worktree, p.mergeState.TargetBranch, useAgent)
+	return tea.Batch(cmd, p.schedulePRGenerationTick(p.mergeState.Worktree.Name))
 }
 
 // cancelMergeWorkflow cancels the merge workflow and returns to list view.
@@ -1357,6 +1459,14 @@ func (p *Plugin) transitionToMergeError(fromStep MergeWorkflowStep, title string
 	p.mergeState.Error = err
 	p.mergeState.ErrorTitle = title
 	p.mergeState.ErrorDetail = err.Error()
+	if op := p.mergeState.DirectOperation; op != nil {
+		if len(op.Completed) > 0 {
+			p.mergeState.ErrorDetail += "\n\nCompleted: " + strings.Join(op.Completed, ", ")
+		}
+		if op.GitState != "" {
+			p.mergeState.ErrorDetail += "\n\nCurrent Git state:\n" + op.GitState
+		}
+	}
 	p.mergeState.ErrorFromStep = fromStep
 	p.mergeState.StepStatus[fromStep] = "error"
 	p.mergeState.Step = MergeStepError

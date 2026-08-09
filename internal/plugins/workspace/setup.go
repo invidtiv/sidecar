@@ -1,9 +1,10 @@
 package workspace
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 )
 
@@ -38,11 +39,19 @@ func DefaultSetupConfig() *SetupConfig {
 // setupWorktree performs post-creation setup for a new worktree.
 // This includes copying env files, creating symlinks, and running setup scripts.
 func (p *Plugin) setupWorktree(worktreePath, branchName string) error {
+	return p.setupWorktreeContext(context.Background(), worktreePath, branchName)
+}
+
+func (p *Plugin) setupWorktreeContext(ctx context.Context, worktreePath, branchName string) error {
 	config := DefaultSetupConfig()
+	mainRoot := p.ctx.ProjectRoot
+	if mainRoot == "" {
+		mainRoot = p.ctx.WorkDir
+	}
 
 	// 1. Copy environment files
 	if config.CopyEnv {
-		if err := p.copyEnvFiles(worktreePath, config.EnvFiles); err != nil {
+		if err := copyEnvFilesFrom(mainRoot, worktreePath, config.EnvFiles); err != nil {
 			p.ctx.Logger.Warn("failed to copy env files", "path", worktreePath, "error", err)
 			// Don't fail creation for env file errors
 		}
@@ -58,7 +67,8 @@ func (p *Plugin) setupWorktree(worktreePath, branchName string) error {
 
 	// 3. Run setup script (if exists)
 	if config.RunSetupScript {
-		if err := p.runSetupScript(worktreePath, branchName); err != nil {
+		plan := &CreateOperationPlan{MainWorktree: mainRoot, SourceWorktree: p.ctx.WorkDir, Path: worktreePath, Branch: branchName, HookPath: setupScriptName}
+		if err := runSetupHookContext(ctx, plan); err != nil {
 			p.ctx.Logger.Warn("setup script failed", "path", worktreePath, "error", err)
 			// Don't fail creation for setup script errors
 		}
@@ -69,8 +79,16 @@ func (p *Plugin) setupWorktree(worktreePath, branchName string) error {
 
 // copyEnvFiles copies environment files from the main worktree to the new worktree.
 func (p *Plugin) copyEnvFiles(worktreePath string, envFiles []string) error {
+	mainRoot := p.ctx.ProjectRoot
+	if mainRoot == "" {
+		mainRoot = p.ctx.WorkDir
+	}
+	return copyEnvFilesFrom(mainRoot, worktreePath, envFiles)
+}
+
+func copyEnvFilesFrom(mainRoot, worktreePath string, envFiles []string) error {
 	for _, envFile := range envFiles {
-		src := filepath.Join(p.ctx.WorkDir, envFile)
+		src := filepath.Join(mainRoot, envFile)
 
 		// Check if source file exists
 		if _, err := os.Stat(src); os.IsNotExist(err) {
@@ -81,12 +99,8 @@ func (p *Plugin) copyEnvFiles(worktreePath string, envFiles []string) error {
 
 		// Copy the file
 		if err := copyFile(src, dst); err != nil {
-			p.ctx.Logger.Warn("failed to copy env file",
-				"file", envFile, "src", src, "dst", dst, "error", err)
-			continue // Continue with other files even if one fails
+			return fmt.Errorf("copy %s: %w", envFile, err)
 		}
-
-		p.ctx.Logger.Debug("copied env file", "file", envFile, "dst", dst)
 	}
 
 	return nil
@@ -169,7 +183,15 @@ func (p *Plugin) symlinkDirs(worktreePath string, dirs []string) error {
 // The script runs with the new worktree as the working directory and receives
 // environment variables for the main worktree path, branch name, and worktree path.
 func (p *Plugin) runSetupScript(worktreePath, branchName string) error {
-	scriptPath := filepath.Join(p.ctx.WorkDir, setupScriptName)
+	return p.runSetupScriptContext(context.Background(), worktreePath, branchName)
+}
+
+func (p *Plugin) runSetupScriptContext(ctx context.Context, worktreePath, branchName string) error {
+	mainRoot := p.ctx.ProjectRoot
+	if mainRoot == "" {
+		mainRoot = p.ctx.WorkDir
+	}
+	scriptPath := filepath.Join(mainRoot, setupScriptName)
 
 	// Check if setup script exists
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
@@ -177,32 +199,5 @@ func (p *Plugin) runSetupScript(worktreePath, branchName string) error {
 	}
 
 	// Run the script with the worktree as working directory
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Dir = worktreePath
-
-	// Build isolated environment with overrides applied
-	isolatedEnv := ApplyEnvOverrides(os.Environ(), BuildEnvOverrides(p.ctx.WorkDir))
-
-	// Add worktree-specific variables
-	cmd.Env = append(isolatedEnv,
-		"MAIN_WORKTREE="+p.ctx.WorkDir,
-		"WORKTREE_BRANCH="+branchName,
-		"WORKTREE_PATH="+worktreePath,
-	)
-
-	// Capture output for logging
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		p.ctx.Logger.Warn("setup script failed",
-			"script", scriptPath,
-			"output", string(output),
-			"error", err)
-		return err
-	}
-
-	p.ctx.Logger.Debug("setup script completed",
-		"script", scriptPath,
-		"output", string(output))
-
-	return nil
+	return runSetupHookContext(ctx, &CreateOperationPlan{MainWorktree: mainRoot, SourceWorktree: p.ctx.WorkDir, Path: worktreePath, Branch: branchName, HookPath: setupScriptName})
 }

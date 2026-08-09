@@ -407,6 +407,67 @@ func TestGetWorkspaceState_Default(t *testing.T) {
 	}
 }
 
+func TestWorktreeContentStateMigratesAdditivelyFromProjectRoot(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+	path = filepath.Join(t.TempDir(), "state.json")
+	root, worktree := "/repos/sidecar", "/repos/sidecar-feature"
+	current = &State{
+		FileBrowser:  map[string]FileBrowserState{root: {SelectedFile: "root.go"}},
+		ActivePlugin: map[string]string{root: "git-status"},
+	}
+
+	if got := GetFileBrowserStateForWorkDir(worktree, root); got.SelectedFile != "root.go" {
+		t.Fatalf("migrated file = %q, want root.go", got.SelectedFile)
+	}
+	if got := GetActivePluginForWorkDir(worktree, root); got != "git-status" {
+		t.Fatalf("migrated active plugin = %q, want git-status", got)
+	}
+	if _, ok := current.FileBrowser[root]; !ok {
+		t.Fatal("migration removed legacy file-browser root entry")
+	}
+	if _, ok := current.ActivePlugin[root]; !ok {
+		t.Fatal("migration removed legacy active-plugin root entry")
+	}
+
+	current.FileBrowser[worktree] = FileBrowserState{SelectedFile: "feature.go"}
+	current.ActivePlugin[worktree] = "file-browser"
+	if got := GetFileBrowserStateForWorkDir(worktree, root); got.SelectedFile != "feature.go" {
+		t.Fatalf("existing worktree file = %q, want feature.go", got.SelectedFile)
+	}
+	if got := GetActivePluginForWorkDir(worktree, root); got != "file-browser" {
+		t.Fatalf("existing worktree plugin = %q, want file-browser", got)
+	}
+}
+
+func TestWorktreeContentStateRestoresAToBToA(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+	path = filepath.Join(t.TempDir(), "state.json")
+	current = &State{}
+	root, a, b := "/repo", "/repo-a", "/repo-b"
+
+	if err := SetFileBrowserState(a, FileBrowserState{SelectedFile: "file-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActivePlugin(a, "git-status"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetFileBrowserState(b, FileBrowserState{SelectedFile: "file-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActivePlugin(b, "file-browser"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := GetFileBrowserStateForWorkDir(a, root).SelectedFile; got != "file-a" {
+		t.Fatalf("A after A to B to A = %q, want file-a", got)
+	}
+	if got := GetActivePluginForWorkDir(a, root); got != "git-status" {
+		t.Fatalf("A plugin after A to B to A = %q, want git-status", got)
+	}
+}
+
 func TestGetWorkspaceState_EmptyMap(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()
@@ -425,7 +486,7 @@ func TestGetWorkspaceState_Found(t *testing.T) {
 	current = &State{
 		Workspace: map[string]WorkspaceState{
 			"/path/to/project": {
-				WorkspaceName:  "feature-branch",
+				WorkspaceName: "feature-branch",
 				ShellTmuxName: "sidecar-sh-project-1",
 				ShellDisplayNames: map[string]string{
 					"sidecar-sh-project-1": "Backend",
@@ -459,7 +520,7 @@ func TestSetWorkspaceState(t *testing.T) {
 	current = &State{}
 
 	wtState := WorkspaceState{
-		WorkspaceName:  "my-workspace",
+		WorkspaceName: "my-workspace",
 		ShellTmuxName: "",
 		ShellDisplayNames: map[string]string{
 			"sidecar-sh-project-1": "Backend",
@@ -506,7 +567,7 @@ func TestSetWorkspaceState_ShellSelection(t *testing.T) {
 
 	// Save shell selection
 	wtState := WorkspaceState{
-		WorkspaceName:  "",
+		WorkspaceName: "",
 		ShellTmuxName: "sidecar-sh-project-2",
 	}
 

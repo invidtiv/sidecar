@@ -64,6 +64,7 @@ type saveWorkspaceConfig struct {
 	InteractivePasteKey  string                `json:"interactivePasteKey,omitempty"`
 	CopyOnSelect         *bool                 `json:"copyOnSelect,omitempty"`
 	SidebarDisplay       *SidebarDisplayConfig `json:"sidebarDisplay,omitempty"`
+	WorktreeSetup        WorktreeSetupConfig   `json:"worktreeSetup"`
 }
 
 // toSaveConfig converts Config to the JSON-serializable format.
@@ -103,6 +104,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 				InteractiveCopyKey:   cfg.Plugins.Workspace.InteractiveCopyKey,
 				InteractivePasteKey:  cfg.Plugins.Workspace.InteractivePasteKey,
 				CopyOnSelect:         &cfg.Plugins.Workspace.CopyOnSelect,
+				WorktreeSetup:        cfg.Plugins.Workspace.WorktreeSetup,
 				SidebarDisplay:       &cfg.Plugins.Workspace.SidebarDisplay,
 			},
 		},

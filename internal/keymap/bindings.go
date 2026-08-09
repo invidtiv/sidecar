@@ -404,6 +404,16 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "workspace-fetch-pr"},
 		{Key: "enter", Command: "fetch", Context: "workspace-fetch-pr"},
 
+		// Workspace merge/PR lifecycle
+		{Key: "esc", Command: "cancel", Context: "workspace-merge"},
+		{Key: "enter", Command: "continue", Context: "workspace-merge"},
+		{Key: "d", Command: "merge-fallback-draft", Context: "workspace-merge"},
+		{Key: "a", Command: "merge-agent-draft", Context: "workspace-merge"},
+		{Key: "ctrl+s", Command: "merge-create-pr", Context: "workspace-merge"},
+		{Key: "s", Command: "merge-stop-watching", Context: "workspace-merge"},
+		{Key: "o", Command: "open-pr", Context: "workspace-merge"},
+		{Key: "y", Command: "copy-pr", Context: "workspace-merge"},
+
 		// Workspace preview context
 		{Key: "h", Command: "focus-left", Context: "workspace-preview"},
 		{Key: "left", Command: "focus-left", Context: "workspace-preview"},
@@ -415,6 +425,7 @@ func DefaultBindings() []Binding {
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},
 		{Key: "N", Command: "reject", Context: "workspace-preview"},
 		{Key: "v", Command: "toggle-diff-view", Context: "workspace-preview"},
+		{Key: "z", Command: "toggle-diff-scope", Context: "workspace-preview"},
 		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
@@ -433,6 +444,9 @@ func DefaultBindings() []Binding {
 		// Workspace merge error context
 		{Key: "esc", Command: "dismiss-merge-error", Context: "workspace-merge-error"},
 		{Key: "y", Command: "yank-merge-error", Context: "workspace-merge-error"},
+		{Key: "c", Command: "continue-merge", Context: "workspace-merge-error"},
+		{Key: "a", Command: "abort-merge", Context: "workspace-merge-error"},
+		{Key: "r", Command: "retry-push", Context: "workspace-merge-error"},
 
 		// Workspace interactive context bindings are registered dynamically
 		// by the workspace plugin Init() to reflect configured keys.

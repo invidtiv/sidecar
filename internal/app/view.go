@@ -20,7 +20,7 @@ import (
 const (
 	headerHeight = 2 // header line + spacing
 	footerHeight = 1
-	minWidth     = 80
+	minWidth     = 60
 	minHeight    = 24
 
 	projectSwitcherItemPrefix = "project-switcher-item-"

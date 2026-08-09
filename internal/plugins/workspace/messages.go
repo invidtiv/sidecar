@@ -11,13 +11,18 @@ type RefreshMsg struct{}
 
 // RefreshDoneMsg signals that refresh has completed.
 type RefreshDoneMsg struct {
-	Epoch     uint64 // Epoch when request was issued (for stale detection)
-	Worktrees []*Worktree
-	Err       error
+	OperationScope
+	Worktrees      []*Worktree
+	Snapshot       *RepoSnapshot
+	Err            error
+	Conflicts      []Conflict
+	Duration       time.Duration
+	Processes      int
+	MaxConcurrency int
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m RefreshDoneMsg) GetEpoch() uint64 { return m.Epoch }
+func (m RefreshDoneMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // WatchEventMsg signals a filesystem change was detected.
 type WatchEventMsg struct {
@@ -74,36 +79,46 @@ type TmuxAttachFinishedMsg struct {
 
 // DiffLoadedMsg delivers diff content for a worktree.
 type DiffLoadedMsg struct {
-	Epoch         uint64 // Epoch when request was issued (for stale detection)
+	OperationScope
 	WorkspaceName string
 	Content       string
 	Raw           string
+	Snapshot      *DiffSnapshot
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m DiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+func (m DiffLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // DiffErrorMsg signals diff loading failed.
 type DiffErrorMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
+	Command       string
+	BaseRef       string
 }
+
+func (m DiffErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // StatsLoadedMsg delivers git stats for a worktree.
 type StatsLoadedMsg struct {
-	Epoch         uint64 // Epoch when request was issued (for stale detection)
+	OperationScope
 	WorkspaceName string
 	Stats         *GitStats
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m StatsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+func (m StatsLoadedMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // StatsErrorMsg signals stats loading failed.
 type StatsErrorMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
+	Command       string
 }
+
+func (m StatsErrorMsg) GetEpoch() uint64 { return m.OperationScope.Epoch }
 
 // CreateWorktreeMsg requests worktree creation.
 type CreateWorktreeMsg struct {
@@ -114,12 +129,49 @@ type CreateWorktreeMsg struct {
 
 // CreateDoneMsg signals worktree creation completed.
 type CreateDoneMsg struct {
+	OperationScope
 	Worktree  *Worktree
 	AgentType AgentType // Agent selected at creation
 	SkipPerms bool      // Whether to skip permissions
 	Prompt    *Prompt   // Selected prompt template (nil if none)
 	Err       error
 }
+
+// CreatePlanResolvedMsg completes the non-mutating Git-plumbing preflight.
+type CreatePlanResolvedMsg struct {
+	OperationScope
+	Plan *CreateOperationPlan
+	Err  error
+}
+
+// CreateWorktreeAddedMsg means Git created the worktree. Setup is a separate,
+// recoverable phase and may still produce warnings or a required failure.
+type CreateWorktreeAddedMsg struct {
+	OperationScope
+	Plan     *CreateOperationPlan
+	Worktree *Worktree
+	Err      error
+}
+
+type CreateSetupDoneMsg struct {
+	OperationScope
+	Plan   *CreateOperationPlan
+	Result *CreateSetupResult
+}
+
+type CreateRecoveryDeleteDoneMsg struct {
+	OperationScope
+	Result CreateRecoveryDeleteResult
+}
+
+type CreateRecoveryDeleteResult struct {
+	WorktreeRemoved bool
+	BranchDeleted   bool
+	BranchRetained  bool
+	Err             error
+}
+
+type CreateOpenAnywayMsg struct{ OperationScope }
 
 // DeleteWorktreeMsg requests worktree deletion.
 type DeleteWorktreeMsg struct {
@@ -129,6 +181,7 @@ type DeleteWorktreeMsg struct {
 
 // DeleteDoneMsg signals worktree deletion completed.
 type DeleteDoneMsg struct {
+	OperationScope
 	Name     string
 	Err      error
 	Warnings []string // Non-fatal warnings (e.g., branch deletion failures)
@@ -136,6 +189,7 @@ type DeleteDoneMsg struct {
 
 // RemoteCheckDoneMsg signals remote branch existence check completed.
 type RemoteCheckDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Branch        string
 	Exists        bool
@@ -150,24 +204,28 @@ type PushMsg struct {
 
 // PushDoneMsg signals push operation completed.
 type PushDoneMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
 
 // TaskSearchResultsMsg delivers task search results.
 type TaskSearchResultsMsg struct {
+	OperationScope
 	Tasks []Task
 	Err   error
 }
 
 // BranchListMsg delivers available branches.
 type BranchListMsg struct {
+	OperationScope
 	Branches []string
 	Err      error
 }
 
 // TaskLinkedMsg signals a task was linked to a worktree.
 type TaskLinkedMsg struct {
+	OperationScope
 	WorkspaceName string
 	TaskID        string
 	Err           error
@@ -197,6 +255,7 @@ type TaskDetails struct {
 
 // TaskDetailsLoadedMsg delivers task details for the preview pane.
 type TaskDetailsLoadedMsg struct {
+	OperationScope
 	TaskID  string
 	Details *TaskDetails
 	Err     error
@@ -269,12 +328,14 @@ type interactiveClickSentMsg struct {
 
 // FetchPRListMsg delivers the list of open PRs from gh CLI.
 type FetchPRListMsg struct {
+	OperationScope
 	PRs []PRListItem
 	Err error
 }
 
 // FetchPRDoneMsg signals that a PR branch was fetched and worktree created.
 type FetchPRDoneMsg struct {
+	OperationScope
 	Worktree     *Worktree
 	AlreadyLocal bool   // branch already existed locally
 	Branch       string // for finding existing worktree when Worktree is nil
@@ -283,13 +344,25 @@ type FetchPRDoneMsg struct {
 
 // PRListItem represents an open pull request for the fetch modal.
 type PRListItem struct {
-	Number    int      `json:"number"`
-	Title     string   `json:"title"`
-	Branch    string   `json:"headRefName"`
-	Author    prAuthor `json:"author"`
-	URL       string   `json:"url"`
-	CreatedAt string   `json:"createdAt"`
-	IsDraft   bool     `json:"isDraft"`
+	Number     int          `json:"number"`
+	NodeID     string       `json:"id"`
+	Title      string       `json:"title"`
+	Branch     string       `json:"headRefName"`
+	HeadOID    string       `json:"headRefOid"`
+	BaseBranch string       `json:"baseRefName"`
+	HeadRepo   ghRepository `json:"headRepository"`
+	HeadOwner  ghOwner      `json:"headRepositoryOwner"`
+	Repository string       `json:"-"`
+	Author     prAuthor     `json:"author"`
+	URL        string       `json:"url"`
+	CreatedAt  string       `json:"createdAt"`
+	IsDraft    bool         `json:"isDraft"`
+}
+
+func (p PRListItem) identity() PRIdentity {
+	return PRIdentity{Number: p.Number, URL: p.URL, NodeID: p.NodeID, Repository: p.Repository,
+		HeadRef: p.Branch, HeadOwner: p.HeadOwner.Login, HeadRepo: p.HeadRepo.NameWithOwner,
+		HeadOID: p.HeadOID, BaseRef: p.BaseBranch, State: "OPEN"}
 }
 
 // prAuthor represents the author field from gh pr list --json.

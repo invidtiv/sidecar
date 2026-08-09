@@ -14,6 +14,13 @@ import (
 // renderCreateModal renders the new worktree modal with dimmed background.
 func (p *Plugin) renderCreateModal(width, height int) string {
 	background := p.renderListView(width, height)
+	if p.createPlan != nil || p.createBusyStep != "" {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return background
+		}
+		return ui.OverlayModal(background, p.createOperationModal.Render(width, height, p.mouseHandler), width, height)
+	}
 
 	p.ensureCreateModal()
 	if p.createModal == nil {
@@ -27,148 +34,29 @@ func (p *Plugin) renderCreateModal(width, height int) string {
 
 // renderTaskLinkModal renders the task link modal for existing worktrees with dimmed background.
 func (p *Plugin) renderTaskLinkModal(width, height int) string {
-	// Render the background (list view)
 	background := p.renderListView(width, height)
-
-	// Modal dimensions - increased for better task display
-	modalW := 70
-	if modalW > width-4 {
-		modalW = width - 4
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return background
 	}
+	return ui.OverlayModal(background, p.taskLinkModal.Render(width, height, p.mouseHandler), width, height)
+}
 
-	// Calculate input field width
-	// - modalStyle has border (2) + padding (4) = 6 chars
-	// - inputStyle has border (2) + padding (2) = 4 chars
-	inputW := modalW - 10
-	if inputW < 20 {
-		inputW = 20
+func (p *Plugin) ensureTaskLinkModal() {
+	if p.linkingWorktree == nil {
+		return
 	}
-
-	// Set textinput width and remove default prompt
-	p.taskSearchInput.SetWidth(inputW)
-	p.taskSearchInput.Prompt = ""
-
-	var sb strings.Builder
-	title := "Link Task"
-	if p.linkingWorktree != nil {
-		title = fmt.Sprintf("Link Task to %s", p.linkingWorktree.Name)
+	modalW := min(70, max(1, p.width-4))
+	if p.taskLinkModal != nil && p.taskLinkModalWidth == modalW {
+		return
 	}
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(title))
-	sb.WriteString("\n\n")
-
-	// Search field - use textinput.View() for proper cursor rendering
-	searchLabel := "Search tasks:"
-	searchStyle := inputFocusedStyle()
-	sb.WriteString(searchLabel)
-	sb.WriteString("\n")
-	sb.WriteString(searchStyle.Render(p.taskSearchInput.View()))
-
-	// Task dropdown
-	if p.taskSearchLoading {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  Loading tasks..."))
-	} else if len(p.taskSearchFiltered) > 0 {
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(p.taskSearchFiltered))
-		for i := 0; i < dropdownCount; i++ {
-			task := p.taskSearchFiltered[i]
-			prefix := "  "
-			if i == p.taskSearchIdx {
-				prefix = "> "
-			}
-			// Truncate title based on available width
-			taskTitle := task.Title
-			idWidth := len(task.ID)
-			maxTitle := modalW - idWidth - 10
-			if maxTitle < 10 {
-				maxTitle = 10
-			}
-			if len(taskTitle) > maxTitle {
-				taskTitle = taskTitle[:maxTitle-3] + "..."
-			}
-			line := fmt.Sprintf("%s%s  %s", prefix, task.ID, taskTitle)
-			sb.WriteString("\n")
-			if i == p.taskSearchIdx {
-				sb.WriteString(lipgloss.NewStyle().Foreground(styles.Primary).Render(line))
-			} else {
-				sb.WriteString(dimText(line))
-			}
-		}
-		if len(p.taskSearchFiltered) > maxDropdown {
-			sb.WriteString("\n")
-			sb.WriteString(dimText(fmt.Sprintf("  ... and %d more", len(p.taskSearchFiltered)-maxDropdown)))
-		}
-	} else if p.taskSearchInput.Value() != "" {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  No matching tasks"))
-	} else if len(p.taskSearchAll) == 0 {
-		sb.WriteString("\n")
-		sb.WriteString(dimText("  No open tasks found"))
-	} else {
-		// Show all tasks when no query
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(p.taskSearchAll))
-		for i := 0; i < dropdownCount; i++ {
-			task := p.taskSearchAll[i]
-			prefix := "  "
-			if i == p.taskSearchIdx {
-				prefix = "> "
-			}
-			taskTitle := task.Title
-			idWidth := len(task.ID)
-			maxTitle := modalW - idWidth - 10
-			if maxTitle < 10 {
-				maxTitle = 10
-			}
-			if len(taskTitle) > maxTitle {
-				taskTitle = taskTitle[:maxTitle-3] + "..."
-			}
-			line := fmt.Sprintf("%s%s  %s", prefix, task.ID, taskTitle)
-			sb.WriteString("\n")
-			if i == p.taskSearchIdx {
-				sb.WriteString(lipgloss.NewStyle().Foreground(styles.Primary).Render(line))
-			} else {
-				sb.WriteString(dimText(line))
-			}
-		}
-		if len(p.taskSearchAll) > maxDropdown {
-			sb.WriteString("\n")
-			sb.WriteString(dimText(fmt.Sprintf("  ... and %d more", len(p.taskSearchAll)-maxDropdown)))
-		}
-	}
-
-	sb.WriteString("\n\n")
-	sb.WriteString(dimText("↑/↓ navigate  Enter select  Esc cancel"))
-
-	content := sb.String()
-	modal := modalStyle().Width(modalW).Render(content)
-
-	// Calculate modal position for hit regions
-	modalH := lipgloss.Height(modal)
-	modalX := (width - modalW) / 2
-	modalY := (height - modalH) / 2
-
-	// Register hit regions for task dropdown items
-	// Content: title(1) + blank(1) + label(1) + bordered-input(3) = 6 lines before dropdown
-	// Border offset is 2: border(1) + padding(1)
-	dropdownStartY := modalY + 2 + 6 // border(1) + padding(1) + content lines to dropdown
-
-	// Determine which list to use for hit regions
-	tasks := p.taskSearchFiltered
-	if len(tasks) == 0 && p.taskSearchInput.Value() == "" && len(p.taskSearchAll) > 0 {
-		tasks = p.taskSearchAll
-	}
-
-	if len(tasks) > 0 {
-		maxDropdown := 8
-		dropdownCount := min(maxDropdown, len(tasks))
-		for i := 0; i < dropdownCount; i++ {
-			p.mouseHandler.HitMap.AddRect(regionTaskLinkDropdown, modalX+2, dropdownStartY+i, modalW-6, 1, i)
-		}
-	}
-
-	// Use OverlayModal for dimmed background effect
-	return ui.OverlayModal(background, modal, width, height)
+	p.taskLinkModalWidth = modalW
+	title := "Link Task to " + ansi.Truncate(p.linkingWorktree.Name, max(1, modalW-16), "…")
+	p.taskLinkModal = modal.New(title, modal.WithWidth(modalW), modal.WithHints(false)).
+		AddSection(p.taskPickerSection(taskLinkFieldID, taskLinkItemPrefix, "Search tasks:", false, 8)).
+		AddSection(modal.Spacer()).
+		AddSection(modal.Buttons(modal.Btn(" Cancel ", createCancelID)))
+	p.taskLinkModal.SetFocus(taskLinkFieldID)
 }
 
 // renderConfirmDeleteModal renders the delete confirmation modal.
@@ -602,8 +490,13 @@ func (p *Plugin) ensureMergeModal() {
 	}
 	m := modal.New(title, opts...)
 
-	// Add progress indicator section (always shown)
-	m.AddSection(p.mergeProgressSection())
+	// Keep the active action visible on compact terminals; the full progress
+	// list would otherwise consume most of a 60x24 viewport.
+	if p.height > 0 && p.height < 30 {
+		m.AddSection(modal.Text(dimText("Step: " + p.mergeState.Step.String())))
+	} else {
+		m.AddSection(p.mergeProgressSection())
+	}
 	m.AddSection(modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		return modal.RenderedSection{Content: strings.Repeat("─", min(contentWidth, 60))}
 	}, nil))
@@ -653,23 +546,59 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text(dimText("↑/↓: select   Enter: continue   Esc: cancel")))
 
 	case MergeStepDirectMerge:
-		m.AddSection(modal.Text("Merging directly to base branch..."))
-		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText(fmt.Sprintf("Merging '%s' into '%s'...", p.mergeState.Worktree.Branch, p.mergeState.TargetBranch))))
+		if op := p.mergeState.DirectOperation; op != nil {
+			m.AddSection(modal.Text(lipgloss.NewStyle().Foreground(styles.Success).Render("Preflight passed")))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(fmt.Sprintf("Source: %s at %s", op.SourceBranch, shortOID(op.SourceOID))))
+			m.AddSection(modal.Text(fmt.Sprintf("Target: %s at %s", op.TargetBranch, shortOID(op.TargetOID))))
+			m.AddSection(modal.Text(fmt.Sprintf("Checkout: %s", op.TargetPath)))
+			m.AddSection(modal.Text(fmt.Sprintf("Remote: %s", op.Remote)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(dimText("Fast-forwarding target, merging the reviewed source OID, then pushing...")))
+		} else {
+			m.AddSection(modal.Text("Running direct-merge preflight..."))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text(dimText(fmt.Sprintf("Resolving a safe checkout for '%s'...", p.mergeState.TargetBranch))))
+		}
 
 	case MergeStepPush:
 		m.AddSection(modal.Text("Pushing branch to remote..."))
 
 	case MergeStepGeneratePR:
-		agentName := AgentDisplayNames[p.mergeState.Worktree.ChosenAgentType]
-		if agentName == "" {
-			agentName = "Agent"
+		if p.mergeState.PRGenerationActive {
+			dots := strings.Repeat(".", p.mergeState.PRGenerationDots)
+			m.AddSection(modal.Text("Preparing editable PR draft" + dots))
+		} else {
+			agentName := AgentDisplayNames[p.mergeState.Worktree.ChosenAgentType]
+			if agentName == "" {
+				agentName = "Selected agent"
+			}
+			m.AddSection(modal.Text("Choose how to prepare the editable title and body."))
+			m.AddSection(modal.Text(fmt.Sprintf("Remote: %s   Base: %s:%s", p.mergeState.PushRemote, p.mergeState.PR.Repository, p.mergeState.TargetBranch)))
+			head := p.mergeState.PR.HeadRef
+			if p.mergeState.PR.HeadOwner != "" {
+				head = p.mergeState.PR.HeadOwner + ":" + head
+			}
+			m.AddSection(modal.Text("Head: " + head + " at " + shortOID(p.mergeState.ReviewedOID)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Text("Commit summary stays local and is deterministic."))
+			m.AddSection(modal.Text(fmt.Sprintf("%s may send a capped code diff to its configured external provider.", agentName)))
+			m.AddSection(modal.Spacer())
+			m.AddSection(modal.Buttons(
+				modal.Btn(" Commit Summary ", mergeFallbackDraftID, modal.BtnPrimary()),
+				modal.Btn(" Use Agent ", mergeAgentDraftID),
+				modal.Btn(" Cancel ", "cancel"),
+			))
 		}
-		dots := strings.Repeat(".", p.mergeState.PRGenerationDots)
-		padding := strings.Repeat(" ", 3-p.mergeState.PRGenerationDots)
-		m.AddSection(modal.Text(fmt.Sprintf("%s is generating PR description%s%s", agentName, dots, padding)))
+
+	case MergeStepEditPR:
+		m.AddSection(modal.Text("Review and edit everything GitHub will receive."))
+		m.AddSection(modal.Text(fmt.Sprintf("%s → %s:%s", p.mergeState.PR.HeadRef, p.mergeState.PR.Repository, p.mergeState.TargetBranch)))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("Analyzing commits and code changes...")))
+		m.AddSection(modal.InputWithLabel("merge-pr-title", "Title", &p.mergeState.PRTitleInput))
+		m.AddSection(modal.TextareaWithLabel("merge-pr-body", "Body", &p.mergeState.PRBodyInput, 8))
+		m.AddSection(modal.Spacer())
+		m.AddSection(modal.Buttons(modal.Btn(" Create PR ", mergeCreatePRID, modal.BtnPrimary()), modal.Btn(" Cancel ", "cancel")))
 
 	case MergeStepCreatePR:
 		m.AddSection(modal.Text("Creating pull request..."))
@@ -677,7 +606,8 @@ func (p *Plugin) ensureMergeModal() {
 	case MergeStepWaitingMerge:
 		m.AddSection(p.mergeWaitingSection())
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("Enter: check now   o: open PR   y: copy URL   Esc: exit   ↑/↓: change option")))
+		m.AddSection(modal.Buttons(modal.Btn(" Check Now ", "check-pr"), modal.Btn(" Stop Watching ", mergeStopWatchingID)))
+		m.AddSection(modal.Text(dimText("o: open PR   y: copy URL   Esc: exit")))
 
 	case MergeStepPostMergeConfirmation:
 		m.AddSection(p.mergePostMergeHeaderSection())
@@ -689,6 +619,10 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Text(dimText("  Removes " + p.mergeState.Worktree.Path)))
 		m.AddSection(modal.Checkbox(mergeConfirmBranchID, "Delete local branch", &p.mergeState.DeleteLocalBranch))
 		m.AddSection(modal.Text(dimText("  Removes '" + p.mergeState.Worktree.Branch + "' locally")))
+		if p.mergeState.ForceDeleteRequired {
+			m.AddSection(modal.Checkbox(mergeForceBranchID, "Force-delete local branch", &p.mergeState.ForceDeleteLocalBranch))
+			m.AddSection(modal.Text(dimText("  Required after squash/rebase: Git cannot prove the reviewed head is an ancestor.")))
+		}
 		m.AddSection(modal.Checkbox(mergeConfirmRemoteID, "Delete remote branch", &p.mergeState.DeleteRemoteBranch))
 		m.AddSection(modal.Text(dimText("  Removes from GitHub (often auto-deleted)")))
 		m.AddSection(modal.Spacer())
@@ -734,9 +668,25 @@ func (p *Plugin) ensureMergeModal() {
 		m.AddSection(modal.Spacer())
 		m.AddSection(modal.Text(p.mergeState.ErrorDetail))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Buttons(modal.Btn(" Dismiss ", "dismiss")))
+		buttons := []modal.ButtonDef{modal.Btn(" Dismiss ", "dismiss")}
+		if op := p.mergeState.DirectOperation; op != nil {
+			switch op.Recovery {
+			case DirectMergeRecoveryConflict:
+				buttons = []modal.ButtonDef{
+					modal.Btn(" Continue ", "continue"),
+					modal.Btn(" Abort ", "abort", modal.BtnDanger()),
+					modal.Btn(" Dismiss ", "dismiss"),
+				}
+			case DirectMergeRecoveryPushFailure:
+				buttons = []modal.ButtonDef{
+					modal.Btn(" Retry Push ", "retry-push"),
+					modal.Btn(" Dismiss ", "dismiss"),
+				}
+			}
+		}
+		m.AddSection(modal.Buttons(buttons...))
 		m.AddSection(modal.Spacer())
-		m.AddSection(modal.Text(dimText("y: copy error   Esc: dismiss")))
+		m.AddSection(modal.Text(dimText("Use the recovery action above, or y: copy error")))
 	}
 
 	p.mergeModal = m
@@ -768,6 +718,7 @@ func (p *Plugin) mergeProgressSection() modal.Section {
 				MergeStepMergeMethod,
 				MergeStepPush,
 				MergeStepGeneratePR,
+				MergeStepEditPR,
 				MergeStepCreatePR,
 				MergeStepWaitingMerge,
 				MergeStepPostMergeConfirmation,
@@ -856,7 +807,7 @@ func (p *Plugin) mergeMethodHintsSection() modal.Section {
 		var sb strings.Builder
 
 		if p.mergeState.MergeMethodOption == 0 {
-			sb.WriteString(dimText("Push to origin and create a GitHub PR for review"))
+			sb.WriteString(dimText("Push the reviewed commit to the resolved remote and create a GitHub PR"))
 		} else {
 			sb.WriteString(dimText(fmt.Sprintf("Merge directly to '%s' without PR", p.mergeState.TargetBranch)))
 			sb.WriteString("\n")
@@ -881,6 +832,12 @@ func (p *Plugin) mergeWaitingSection() modal.Section {
 			sb.WriteString(lipgloss.NewStyle().Bold(true).Render("Pull Request Created"))
 		}
 		sb.WriteString("\n\n")
+		if p.mergeState.PRPollKind != "" {
+			fmt.Fprintf(&sb, "Status: %s\n", p.mergeState.PRPollKind)
+			if p.mergeState.PRWatchStopped {
+				sb.WriteString(dimText("Watching stopped; the PR URL is preserved.") + "\n")
+			}
+		}
 
 		var focusables []modal.FocusableInfo
 		urlLineY := 2 // header (line 0), blank (line 1), URL (line 2)
@@ -901,7 +858,9 @@ func (p *Plugin) mergeWaitingSection() modal.Section {
 		}
 
 		sb.WriteString("\n")
-		sb.WriteString("Checking merge status every 30 seconds...")
+		if !p.mergeState.PRWatchStopped {
+			sb.WriteString("Watching pull request by repository and number...")
+		}
 		sb.WriteString("\n\n")
 		sb.WriteString(strings.Repeat("─", min(contentWidth, 60)))
 		sb.WriteString("\n\n")
@@ -971,7 +930,11 @@ func (p *Plugin) mergeDoneSection() modal.Section {
 			}
 			if results.PullAttempted {
 				if results.PullSuccess {
-					sb.WriteString(successStyle.Render("  ✓ Pulled latest changes"))
+					message := results.PullMessage
+					if message == "" {
+						message = "Pulled latest changes"
+					}
+					sb.WriteString(successStyle.Render("  ✓ " + message))
 					sb.WriteString("\n")
 				} else if results.PullError != nil {
 					warnStyle := lipgloss.NewStyle().Foreground(styles.Warning)

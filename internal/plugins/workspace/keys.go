@@ -438,6 +438,7 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	deleteLocal := p.deleteLocalBranchOpt
 	deleteRemote := p.deleteRemoteBranchOpt && p.deleteHasRemote
 	workDir := p.ctx.WorkDir
+	ctx, scope := p.newLifecycleScope(wt)
 
 	// Kill tmux session if it exists (before deleting worktree)
 	sessionName := tmuxSessionPrefix + sanitizeName(name)
@@ -461,26 +462,26 @@ func (p *Plugin) executeDelete() tea.Cmd {
 		var warnings []string
 
 		// Delete the worktree first
-		err := doDeleteWorktree(workDir, path, isMissing)
+		err := doDeleteWorktreeContext(ctx, workDir, path, isMissing)
 		if err != nil {
-			return DeleteDoneMsg{Name: name, Err: err}
+			return DeleteDoneMsg{OperationScope: scope, Name: name, Err: err}
 		}
 
 		// Delete local branch if requested
 		if deleteLocal {
-			if branchErr := deleteBranch(workDir, branch); branchErr != nil {
+			if branchErr := deleteBranchContext(ctx, workDir, branch); branchErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Local branch: %v", branchErr))
 			}
 		}
 
 		// Delete remote branch if requested
 		if deleteRemote {
-			if remoteErr := deleteRemoteBranchCmd(workDir, branch); remoteErr != nil {
+			if remoteErr := deleteRemoteBranchCmdContext(ctx, workDir, branch); remoteErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", remoteErr))
 			}
 		}
 
-		return DeleteDoneMsg{Name: name, Err: nil, Warnings: warnings}
+		return DeleteDoneMsg{OperationScope: scope, Name: name, Err: nil, Warnings: warnings}
 	}
 }
 
@@ -761,6 +762,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if wt == nil {
 			return nil
 		}
+		if reason := WorktreeActionRefusal(wt, WorktreeActionDelete); reason != "" {
+			return appmsg.ShowToast(reason, 3*time.Second)
+		}
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
 		p.deleteLocalBranchOpt = wt.IsMissing // Default ON when folder already gone
@@ -776,6 +780,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Check for remote branch existence asynchronously
 		return p.checkRemoteBranch(wt)
 	case "p":
+		if wt := p.selectedWorktree(); wt != nil {
+			if reason := WorktreeActionRefusal(wt, WorktreeActionPush); reason != "" {
+				return appmsg.ShowToast(reason, 3*time.Second)
+			}
+		}
 		return p.pushSelected()
 	case "l", "right":
 		if p.viewMode == ViewModeKanban {
@@ -995,6 +1004,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
+	case "z":
+		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
+			p.cycleDiffScope()
+			return nil
+		}
 	case "ctrl+d":
 		// Page down in preview pane (unified: increase offset toward bottom)
 		if p.activePane == PanePreview {
@@ -1122,10 +1136,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.linkingWorktree = wt
 			p.taskSearchInput = textinput.New()
 			p.taskSearchInput.Placeholder = "Search tasks..."
+			p.taskSearchInput.Prompt = ""
 			p.taskSearchInput.Focus()
 			p.taskSearchInput.CharLimit = 100
 			p.taskSearchIdx = 0
+			p.taskSearchScroll = 0
 			p.taskSearchLoading = true
+			p.taskLinkModal = nil
+			p.taskLinkModalWidth = 0
 			return p.loadOpenTasks()
 		}
 	case "F":
@@ -1148,6 +1166,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Start merge workflow
 		wt := p.selectedWorktree()
 		if wt != nil {
+			if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
+				return appmsg.ShowToast(reason, 3*time.Second)
+			}
 			return p.startMergeWorkflow(wt)
 		}
 	case "O":
@@ -1181,6 +1202,29 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 // handleCreateKeys handles keys in create modal.
 // createFocus: 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create button, 7=cancel button
 func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
+	if p.createBusyStep != "" {
+		return nil
+	}
+	if p.createPlan != nil {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return nil
+		}
+		action, cmd := p.createOperationModal.HandleKey(msg)
+		if action == "cancel" || action == createCancelID {
+			if p.createSetupResult != nil {
+				return nil
+			}
+			p.createPlan = nil
+			p.createOperationModal = nil
+			p.createOperationWidth = 0
+			return nil
+		}
+		if action != "" {
+			return p.handleCreateOperationAction(action)
+		}
+		return cmd
+	}
 	p.ensureCreateModal()
 	if p.createModal == nil {
 		return nil
@@ -1223,30 +1267,28 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.createSkipPermissions = !p.createSkipPermissions
 			return nil
 		}
-	case "up":
+	case "up", "ctrl+p":
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx > 0 {
 				p.branchIdx--
+				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 			}
 			return nil
 		}
-		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
-			if p.taskSearchIdx > 0 {
-				p.taskSearchIdx--
-			}
+		if p.createFocus == 3 {
+			p.moveTaskPickerSelection(-1, false, false, createTaskItemPrefix)
 			return nil
 		}
-	case "down":
+	case "down", "ctrl+n":
 		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
 			if p.branchIdx < len(p.branchFiltered)-1 {
 				p.branchIdx++
+				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 			}
 			return nil
 		}
-		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
-			if p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
-				p.taskSearchIdx++
-			}
+		if p.createFocus == 3 {
+			p.moveTaskPickerSelection(1, false, false, createTaskItemPrefix)
 			return nil
 		}
 	case "enter":
@@ -1340,11 +1382,13 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case 1:
 		p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
 		p.branchIdx = 0
+		p.branchScroll = 0
 	case 3:
 		if p.createTaskID == "" {
 			p.taskSearchInput, cmd = p.taskSearchInput.Update(msg)
 			p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
 			p.taskSearchIdx = 0
+			p.taskSearchScroll = 0
 		}
 	}
 
@@ -1352,6 +1396,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
+	if p.createBusyStep != "" || p.createPlan != nil {
+		return nil
+	}
 	name := p.createNameInput.Value()
 	if name == "" {
 		p.createError = "Name is required"
@@ -1361,7 +1408,41 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 		p.createError = "Invalid branch name: " + strings.Join(p.branchNameErrors, ", ")
 		return nil
 	}
-	return p.createWorktree()
+	p.createBusyStep = "Validating branch, source, and destination"
+	p.createOperationModal = nil
+	return p.resolveCreatePlan()
+}
+
+func (p *Plugin) handleCreateOperationAction(action string) tea.Cmd {
+	switch action {
+	case createConfirmID:
+		if p.createSetupResult != nil {
+			return nil
+		}
+		p.createBusyStep = "Creating Git worktree"
+		p.createOperationModal = nil
+		return p.beginCreateWorktree()
+	case createRetrySetupID:
+		if p.createSetupResult == nil || p.createSetupResult.Worktree == nil {
+			return nil
+		}
+		p.createBusyStep = "Retrying setup"
+		p.createDeleteResult = nil
+		p.createOperationModal = nil
+		return p.runCreateSetupCmd(p.createPlan, p.createSetupResult.Worktree)
+	case createOpenAnywayID:
+		return func() tea.Msg { return CreateOpenAnywayMsg{OperationScope: p.currentCreateScope()} }
+	case createDeleteCreatedID:
+		p.createBusyStep = "Revalidating and deleting newly created worktree"
+		p.createDeleteResult = nil
+		p.createOperationModal = nil
+		return p.deleteNewlyCreatedCmd()
+	case createDismissID:
+		p.viewMode = ViewModeList
+		p.clearCreateModal()
+		return nil
+	}
+	return nil
 }
 
 // shouldShowSkipPermissions returns true if the current agent type supports skip permissions.
@@ -1409,47 +1490,70 @@ func (p *Plugin) focusCreateInput() {
 
 // handleTaskLinkKeys handles keys in task link modal.
 func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
-	switch msg.String() {
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return nil
+	}
+	key := msg.String()
+	focusID := p.taskLinkModal.FocusedID()
+	inputFocused := focusID == "" || focusID == taskLinkFieldID
+	switch key {
 	case "esc":
-		p.viewMode = ViewModeList
-		p.linkingWorktree = nil
-		p.taskSearchInput = textinput.Model{}
-		p.taskSearchAll = nil
-		p.taskSearchFiltered = nil
-		p.taskSearchIdx = 0
+		p.closeTaskLinkModal()
 		return nil
-	case "up":
-		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx > 0 {
-			p.taskSearchIdx--
-		}
-		return nil
-	case "down":
-		if len(p.taskSearchFiltered) > 0 && p.taskSearchIdx < len(p.taskSearchFiltered)-1 {
-			p.taskSearchIdx++
-		}
-		return nil
+	case "tab", "shift+tab":
+		_, cmd := p.taskLinkModal.HandleKey(msg)
+		return cmd
 	case "enter":
-		if len(p.taskSearchFiltered) > 0 && p.linkingWorktree != nil {
-			selectedTask := p.taskSearchFiltered[p.taskSearchIdx]
+		action, cmd := p.taskLinkModal.HandleKey(msg)
+		if action == "cancel" || action == createCancelID {
+			p.closeTaskLinkModal()
+			return cmd
+		}
+		idx := p.taskSearchIdx
+		if parsed, ok := parseIndexedID(taskLinkItemPrefix, action); ok {
+			idx = parsed
+		}
+		if idx >= 0 && idx < len(p.taskSearchFiltered) && p.linkingWorktree != nil {
+			selectedTask := p.taskSearchFiltered[idx]
 			wt := p.linkingWorktree
-			p.viewMode = ViewModeList
-			p.linkingWorktree = nil
-			p.taskSearchInput = textinput.Model{}
-			p.taskSearchAll = nil
-			p.taskSearchFiltered = nil
-			p.taskSearchIdx = 0
+			p.closeTaskLinkModal()
 			return p.linkTask(wt, selectedTask.ID)
 		}
+		return cmd
+	}
+	if delta, navigate := taskPickerNavigationDelta(key, inputFocused); navigate {
+		p.moveTaskPickerSelection(delta, true, !inputFocused, taskLinkItemPrefix)
 		return nil
+	}
+	if !inputFocused {
+		_, cmd := p.taskLinkModal.HandleKey(msg)
+		return cmd
 	}
 
 	// Delegate to textinput for all other keys (typing, backspace, paste, etc.)
 	var cmd tea.Cmd
+	oldQuery := p.taskSearchInput.Value()
 	p.taskSearchInput, cmd = p.taskSearchInput.Update(msg)
 	// Update filtered results on input change
 	p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
-	p.taskSearchIdx = 0
+	if p.taskSearchInput.Value() != oldQuery {
+		p.taskSearchIdx = 0
+		p.taskSearchScroll = 0
+	}
 	return cmd
+}
+
+func (p *Plugin) closeTaskLinkModal() {
+	p.viewMode = ViewModeList
+	p.linkingWorktree = nil
+	p.taskSearchInput = textinput.Model{}
+	p.taskSearchAll = nil
+	p.taskSearchFiltered = nil
+	p.taskSearchIdx = 0
+	p.taskSearchScroll = 0
+	p.taskLinkModal = nil
+	p.taskLinkModalWidth = 0
 }
 
 // handleMergeKeys handles keys in merge workflow modal.
@@ -1461,20 +1565,54 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Ensure modal is built for key handling
 	p.ensureMergeModal()
+	if p.mergeState.Step == MergeStepGeneratePR && !p.mergeState.PRGenerationActive {
+		switch msg.String() {
+		case "d":
+			return p.startPRDraft(false)
+		case "a":
+			return p.startPRDraft(true)
+		}
+	}
+	if p.mergeState.Step == MergeStepEditPR && msg.String() == "ctrl+s" {
+		return p.advanceMergeStep()
+	}
+	if p.mergeState.Step == MergeStepWaitingMerge && msg.String() == "s" {
+		p.mergeState.PRWatchStopped = true
+		p.clearMergeModal()
+		return nil
+	}
 
 	// Handle error step — yank, dismiss
 	if p.mergeState.Step == MergeStepError {
 		switch msg.String() {
 		case "y":
 			return p.yankMergeErrorToClipboard()
-		case "esc", "q", "enter":
+		case "c":
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryConflict {
+				return p.recoverDirectMerge("continue")
+			}
+			return nil
+		case "a":
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryConflict {
+				return p.recoverDirectMerge("abort")
+			}
+			return nil
+		case "r":
+			if p.mergeState.DirectOperation != nil && p.mergeState.DirectOperation.Recovery == DirectMergeRecoveryPushFailure {
+				return p.recoverDirectMerge("retry-push")
+			}
+			return nil
+		case "esc", "q":
 			p.cancelMergeWorkflow()
 			p.clearMergeModal()
 			return nil
 		}
 		if p.mergeModal != nil {
 			action, cmd := p.mergeModal.HandleKey(msg)
-			if action == "dismiss" || action == "cancel" {
+			switch action {
+			case "continue", "abort", "retry-push":
+				return p.recoverDirectMerge(action)
+			case "dismiss", "cancel":
 				p.cancelMergeWorkflow()
 				p.clearMergeModal()
 				return nil
@@ -1482,6 +1620,35 @@ func (p *Plugin) handleMergeKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 		return nil
+	}
+
+	// For PostMergeConfirmation step, delegate to modal library for Tab/Enter/Space
+	if (p.mergeState.Step == MergeStepGeneratePR || p.mergeState.Step == MergeStepEditPR || p.mergeState.Step == MergeStepWaitingMerge) && p.mergeModal != nil {
+		action, cmd := p.mergeModal.HandleKey(msg)
+		switch action {
+		case mergeFallbackDraftID:
+			return p.startPRDraft(false)
+		case mergeAgentDraftID:
+			return p.startPRDraft(true)
+		case mergeCreatePRID:
+			return p.advanceMergeStep()
+		case "check-pr":
+			return p.checkPRMerged(p.mergeState.Worktree)
+		case mergeStopWatchingID:
+			p.mergeState.PRWatchStopped = true
+			p.clearMergeModal()
+			return nil
+		case "cancel":
+			p.cancelMergeWorkflow()
+			p.clearMergeModal()
+			return nil
+		case "":
+			if cmd != nil {
+				return cmd
+			}
+		default:
+			return cmd
+		}
 	}
 
 	// For PostMergeConfirmation step, delegate to modal library for Tab/Enter/Space
@@ -1983,6 +2150,36 @@ func (p *Plugin) cycleDiffTabViewMode() tea.Cmd {
 	}
 	p.diffTabHorizScroll = 0
 	return nil
+}
+
+func (p *Plugin) cycleDiffScope() {
+	p.diffScope = (p.diffScope + 1) % 3
+	p.diffTabCursor, p.diffTabScroll, p.diffTabDiffScroll, p.diffTabHorizScroll = 0, 0, 0, 0
+	p.diffTabFocus = DiffTabFocusFileList
+	if p.diffScope == DiffScopeAggregate {
+		p.diffTabFocus = DiffTabFocusDiff
+	}
+	p.fullFileDiff, p.diffTabParsedDiff, p.commitDetail = nil, nil, nil
+	p.applyDiffScope()
+}
+
+func (p *Plugin) applyDiffScope() {
+	p.diffContent, p.diffRaw = "", ""
+	p.multiFileDiff = nil
+	p.commitStatusList = nil
+	if p.diffSnapshot == nil {
+		return
+	}
+	switch p.diffScope {
+	case DiffScopeCommits:
+		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
+	case DiffScopeAggregate:
+		// Aggregate is deliberately rendered as two labelled raw sections so
+		// committed and uncommitted changes cannot be mistaken for each other.
+	default:
+		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
+		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
+	}
 }
 
 // onDiffTabCursorChanged resets diff pane state when cursor changes in the file list.

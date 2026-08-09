@@ -48,6 +48,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
 	}
+	if p.viewMode == ViewModeTaskLink {
+		return p.handleTaskLinkModalMouse(msg)
+	}
 
 	if p.viewMode == ViewModeRenameShell {
 		return p.handleRenameShellModalMouse(msg)
@@ -112,7 +115,48 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
+func (p *Plugin) handleTaskLinkModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureTaskLinkModal()
+	if p.taskLinkModal == nil {
+		return nil
+	}
+	action := p.taskLinkModal.HandleMouse(msg, p.mouseHandler)
+	if action == "cancel" || action == createCancelID {
+		p.closeTaskLinkModal()
+		return nil
+	}
+	if idx, ok := parseIndexedID(taskLinkItemPrefix, action); ok && idx >= 0 && idx < len(p.taskSearchFiltered) && p.linkingWorktree != nil {
+		task := p.taskSearchFiltered[idx]
+		wt := p.linkingWorktree
+		p.closeTaskLinkModal()
+		return p.linkTask(wt, task.ID)
+	}
+	if action == taskLinkFieldID {
+		p.taskSearchInput.Focus()
+	}
+	return nil
+}
+
 func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
+	if p.createBusyStep != "" {
+		return nil
+	}
+	if p.createPlan != nil {
+		p.ensureCreateOperationModal()
+		if p.createOperationModal == nil {
+			return nil
+		}
+		action := p.createOperationModal.HandleMouse(msg, p.mouseHandler)
+		if action == "cancel" || action == createCancelID {
+			if p.createSetupResult != nil {
+				return nil
+			}
+			p.createPlan, p.createOperationModal, p.createSetupResult = nil, nil, nil
+			p.createOperationWidth = 0
+			return nil
+		}
+		return p.handleCreateOperationAction(action)
+	}
 	p.ensureCreateModal()
 	if p.createModal == nil {
 		return nil
@@ -389,9 +433,27 @@ func (p *Plugin) handleMergeModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.cancelMergeWorkflow()
 		p.clearMergeModal()
 		return nil
+	case "continue", "abort", "retry-push":
+		return p.recoverDirectMerge(action)
 	case mergePRURLID:
 		if p.mergeState != nil && p.mergeState.PRURL != "" {
 			return openInBrowser(p.mergeState.PRURL)
+		}
+		return nil
+	case mergeFallbackDraftID:
+		return p.startPRDraft(false)
+	case mergeAgentDraftID:
+		return p.startPRDraft(true)
+	case mergeCreatePRID:
+		return p.advanceMergeStep()
+	case "check-pr":
+		if p.mergeState != nil {
+			return p.checkPRMerged(p.mergeState.Worktree)
+		}
+	case mergeStopWatchingID:
+		if p.mergeState != nil {
+			p.mergeState.PRWatchStopped = true
+			p.clearMergeModal()
 		}
 		return nil
 	case mergeMethodActionID, mergeTargetActionID, mergeCleanUpButtonID:
@@ -865,7 +927,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if idx, ok := action.Region.Data.(int); ok {
 			switch idx {
 			case 6:
-				return p.createWorktree()
+				return p.validateAndCreateWorktree()
 			case 7:
 				p.viewMode = ViewModeList
 				p.clearCreateModal()

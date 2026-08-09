@@ -236,7 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Check if click is on worktree indicator
 			if start, end, ok := m.getWorktreeIndicatorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				worktrees := GetWorktrees(m.ui.WorkDir)
+				worktrees := m.worktreeInventory()
 				if len(worktrees) > 1 {
 					m.showWorktreeSwitcher = true
 					m.activeContext = "worktree-switcher"
@@ -304,6 +304,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd)
 		}
 		return m, tea.Batch(tickCmd(), titleCmd)
+
+	case worktreeInventoryRefreshedMsg:
+		current, _ := normalizePath(m.ui.WorkDir)
+		requested, _ := normalizePath(msg.WorkDir)
+		if current == requested {
+			m.setWorktreeInventory(msg.Inventory, m.ui.WorkDir)
+		}
+		return m, nil
 
 	case UpdateSpinnerTickMsg:
 		if m.updateInProgress {
@@ -657,7 +665,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "quit":
 			// Save active plugin before quitting
 			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.ProjectRoot, activePlugin.ID())
+				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 			}
 			m.registry.Stop()
 			return m, tea.Quit
@@ -1365,7 +1373,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "W":
 		// Toggle worktree switcher modal (capital W)
 		// Only enable if we're in a git repo with worktrees
-		worktrees := GetWorktrees(m.ui.WorkDir)
+		worktrees := m.worktreeInventory()
 		if len(worktrees) <= 1 {
 			// No worktrees or only main repo - show toast
 			return m, func() tea.Msg {
@@ -1759,7 +1767,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Handle 'q' specially for quit
 		if key == "q" {
 			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.ProjectRoot, activePlugin.ID())
+				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 			}
 			m.registry.Stop()
 			return m, tea.Quit
@@ -1771,7 +1779,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			switch action {
 			case "quit":
 				if activePlugin := m.ActivePlugin(); activePlugin != nil {
-					_ = state.SetActivePlugin(m.ui.ProjectRoot, activePlugin.ID())
+					_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 				}
 				m.registry.Stop()
 				return m, tea.Quit
@@ -1898,7 +1906,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		switch action {
 		case "quit":
 			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.ProjectRoot, activePlugin.ID())
+				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 			}
 			m.registry.Stop()
 			return m, tea.Quit
@@ -1940,7 +1948,7 @@ func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "quit":
 		// Save active plugin before quitting
 		if activePlugin := m.ActivePlugin(); activePlugin != nil {
-			_ = state.SetActivePlugin(m.ui.ProjectRoot, activePlugin.ID())
+			_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 		}
 		m.registry.Stop()
 		return m, tea.Quit

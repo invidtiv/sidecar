@@ -2,21 +2,29 @@ package workspace
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/tdroot"
 )
+
+const maxRefreshConcurrency = 4
 
 // WorkDirDeletedMsg signals that the current working directory was deleted.
 // This happens when sidecar is running inside a worktree that gets deleted.
@@ -27,9 +35,13 @@ type WorkDirDeletedMsg struct {
 // refreshWorktrees returns a command to refresh the worktree list.
 func (p *Plugin) refreshWorktrees() tea.Cmd {
 	workDir := p.ctx.WorkDir
-	// Capture epoch for stale detection on project switch
-	epoch := p.ctx.Epoch
+	ctx, scope := p.newOperationScope(nil)
+	p.refreshOperationID = scope.OperationID
 	return func() tea.Msg {
+		started := time.Now()
+		defer startuptrace.Begin("workspace.refresh")()
+		var processes atomic.Int64
+		refreshCtx := context.WithValue(ctx, gitProcessCounterKey{}, &processes)
 		// Check if current WorkDir still exists (may have been a deleted worktree)
 		if _, err := os.Stat(workDir); os.IsNotExist(err) {
 			// WorkDir was deleted - find main worktree to switch to
@@ -40,9 +52,60 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 			}
 		}
 
-		worktrees, err := p.listWorktrees()
-		return RefreshDoneMsg{Epoch: epoch, Worktrees: worktrees, Err: err}
+		snapshot, err := BuildRepoSnapshot(refreshCtx, workDir)
+		worktrees := snapshotToWorktrees(snapshot)
+		if err != nil {
+			return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot, Err: err,
+				Duration: time.Since(started), Processes: int(processes.Load())}
+		}
+		maxConcurrent := loadRefreshChanges(refreshCtx, worktrees, maxRefreshConcurrency, nil)
+		conflicts := detectConflictsFromChanges(worktrees)
+		return RefreshDoneMsg{OperationScope: scope, Worktrees: worktrees, Snapshot: snapshot,
+			Conflicts: conflicts, Duration: time.Since(started), Processes: int(processes.Load()), MaxConcurrency: maxConcurrent}
 	}
+}
+
+func loadRefreshChanges(ctx context.Context, worktrees []*Worktree, limit int, processes *atomic.Int64) int {
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	var active, maximum atomic.Int64
+	for _, wt := range worktrees {
+		if wt.IsMissing || wt.IsBare {
+			wt.Changes = &WorktreeChanges{State: LoadStateError, Err: fmt.Errorf("worktree path is unavailable: %s", wt.Path)}
+			continue
+		}
+		wt := wt
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				wt.Changes = &WorktreeChanges{State: LoadStateError, Err: ctx.Err()}
+				return
+			}
+			if err := ctx.Err(); err != nil {
+				wt.Changes = &WorktreeChanges{State: LoadStateError, Err: err}
+				return
+			}
+			current := active.Add(1)
+			for {
+				observed := maximum.Load()
+				if current <= observed || maximum.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			changes, stats := collectWorktreeChanges(ctx, wt.Path, processes)
+			wt.Changes, wt.Stats = changes, stats
+		}()
+	}
+	wg.Wait()
+	return int(maximum.Load())
 }
 
 // findMainWorktreeFromDeleted finds the main worktree path when the current
@@ -105,55 +168,8 @@ func findMainWorktreeFromDeleted(deletedPath string) string {
 
 // listWorktrees parses git worktree list --porcelain output.
 func (p *Plugin) listWorktrees() ([]*Worktree, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	cmd.Dir = p.ctx.WorkDir
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git worktree list: %w", err)
-	}
-
-	// Get the actual main worktree path (the original repo), not the current workdir
-	// This ensures IsMain is set correctly regardless of which worktree we're in
-	mainRepoPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainRepoPath == "" {
-		mainRepoPath = p.ctx.WorkDir // Fallback if detection fails
-	}
-
-	worktrees, err := parseWorktreeList(string(output), mainRepoPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Detect missing worktrees and auto-prune fully-gone ones
-	needsPrune := false
-	filtered := make([]*Worktree, 0, len(worktrees))
-	for _, wt := range worktrees {
-		if wt.IsMain {
-			filtered = append(filtered, wt)
-			continue
-		}
-
-		if _, statErr := os.Stat(wt.Path); os.IsNotExist(statErr) {
-			wt.IsMissing = true
-		}
-
-		if wt.IsMissing {
-			// If branch is also gone, auto-prune and exclude from list
-			if !branchExists(p.ctx.WorkDir, wt.Branch) {
-				needsPrune = true
-				continue // exclude from returned list
-			}
-			// Branch still exists but folder gone — keep with IsMissing=true
-		}
-
-		filtered = append(filtered, wt)
-	}
-
-	if needsPrune {
-		_ = doWorktreePrune(p.ctx.WorkDir)
-	}
-
-	return filtered, nil
+	snapshot, err := BuildRepoSnapshot(context.Background(), p.ctx.WorkDir)
+	return snapshotToWorktrees(snapshot), err
 }
 
 // parseWorktreeList parses porcelain format output.
@@ -203,9 +219,12 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 				branch := strings.TrimPrefix(line, "branch refs/heads/")
 				current.Branch = branch
 			} else if line == "bare" {
-				// Bare worktree
+				current.IsBare = true
 			} else if line == "detached" {
 				current.Branch = "(detached)"
+				current.IsDetached = true
+			} else if line == "locked" || strings.HasPrefix(line, "locked ") {
+				current.IsLocked = true
 			} else if strings.HasPrefix(line, "prunable ") {
 				current.IsMissing = true
 			}
@@ -228,8 +247,10 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 	return worktrees, scanner.Err()
 }
 
-// createWorktree returns a command to create a new worktree.
-func (p *Plugin) createWorktree() tea.Cmd {
+// resolveCreatePlan performs the non-mutating Git-plumbing preflight. The
+// returned plan is shown verbatim before beginCreateWorktree can mutate Git.
+func (p *Plugin) resolveCreatePlan() tea.Cmd {
+	ctx, scope := p.newLifecycleScope(nil)
 	name := p.createNameInput.Value()
 	baseBranch := p.createBaseBranchInput.Value()
 	taskID := p.createTaskID
@@ -238,148 +259,201 @@ func (p *Plugin) createWorktree() tea.Cmd {
 	skipPerms := p.createSkipPermissions
 	prompt := p.getSelectedPrompt()
 
-	// Debug log to trace taskID flow
-	if p.ctx != nil && p.ctx.Logger != nil {
-		p.ctx.Logger.Debug("createWorktree: captured modal state", "name", name, "taskID", taskID, "taskTitle", taskTitle, "agentType", agentType, "skipPerms", skipPerms, "hasPrompt", prompt != nil)
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
+	setupConfig := config.WorktreeSetupConfig{CopyEnvFiles: true, EnvFiles: append([]string(nil), defaultEnvFiles...), RunHook: true, HookPath: setupScriptName, HookRequired: true}
+	if p.ctx.Config != nil {
+		setupConfig = p.ctx.Config.WorktreeSetupForProject(projectRoot)
 	}
-
-	if name == "" {
-		return func() tea.Msg {
-			return CreateDoneMsg{Err: fmt.Errorf("workspace name is required")}
-		}
-	}
-
 	return func() tea.Msg {
-		wt, err := p.doCreateWorktree(name, baseBranch, taskID, taskTitle, agentType)
-		return CreateDoneMsg{Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
+		plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
+		if plan != nil {
+			plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
+			plan.SkipPerms, plan.Prompt = skipPerms, prompt
+		}
+		return CreatePlanResolvedMsg{OperationScope: scope, Plan: plan, Err: err}
 	}
+}
+
+// createWorktree is retained for internal callers that require the legacy
+// one-command result shape. The interactive creation journey uses the explicit
+// preflight/add/setup state machine above.
+func (p *Plugin) createWorktree() tea.Cmd {
+	ctx, scope := p.newLifecycleScope(nil)
+	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
+	taskID, taskTitle, agentType := p.createTaskID, p.createTaskTitle, p.createAgentType
+	skipPerms, prompt := p.createSkipPermissions, p.getSelectedPrompt()
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	if base == "" {
+		base = "HEAD"
+	}
+	return func() tea.Msg {
+		path := filepath.Join(filepath.Dir(projectRoot), name)
+		cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", name, path, base)
+		cmd.Dir = workDir
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return CreateDoneMsg{OperationScope: scope, Err: fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)}
+		}
+		wt := &Worktree{Key: stablePathKey(path), Name: name, Path: path, Branch: name, BaseBranch: base,
+			TaskID: taskID, TaskTitle: taskTitle, ChosenAgentType: agentType, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+		// Preserve Slice 2's contract: cancellation during post-add discovery
+		// returns the created identity instead of losing the partial result.
+		_, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
+		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
+	}
+}
+
+func (p *Plugin) beginCreateWorktree() tea.Cmd {
+	if p.createPlan == nil {
+		return nil
+	}
+	plan := *p.createPlan
+	plan.EnvFiles = append([]string(nil), p.createPlan.EnvFiles...)
+	plan.CopyEnv, plan.RunHook = p.createCopyEnv, p.createRunHook
+	scope := p.currentCreateScope()
+	plan.RepoKey, plan.OperationID = scope.RepoKey, scope.OperationID
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	repoKey := scope.RepoKey
+	return func() tea.Msg {
+		wt, err := addCreatedWorktree(ctx, repoKey, &plan)
+		if wt != nil {
+			if journalErr := persistPendingCreation(context.Background(), &plan, wt); journalErr != nil {
+				err = errors.Join(err, journalErr)
+			}
+		}
+		return CreateWorktreeAddedMsg{OperationScope: scope, Plan: &plan, Worktree: wt, Err: err}
+	}
+}
+
+func (p *Plugin) deleteNewlyCreatedCmd() tea.Cmd {
+	if p.createPlan == nil || p.createSetupResult == nil || p.createSetupResult.Worktree == nil {
+		return nil
+	}
+	plan := *p.createPlan
+	expectedOID := p.createSetupResult.Worktree.HEADOID
+	scope := p.currentCreateScope()
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		result := deleteNewlyCreated(ctx, &plan, expectedOID, nil)
+		return CreateRecoveryDeleteDoneMsg{OperationScope: scope, Result: result}
+	}
+}
+
+func deleteNewlyCreated(ctx context.Context, plan *CreateOperationPlan, expectedOID string, afterRemove func()) CreateRecoveryDeleteResult {
+	result := CreateRecoveryDeleteResult{}
+	if err := removeCleanLifecycleWorktreeContext(ctx, plan.SourceWorktree, plan.Path, plan.Branch, expectedOID); err != nil {
+		result.Err = err
+		return result
+	}
+	result.WorktreeRemoved = true
+	if afterRemove != nil {
+		afterRemove()
+	}
+	current, verifyErr := gitOutputContext(ctx, plan.SourceWorktree, "rev-parse", "--verify", "refs/heads/"+plan.Branch)
+	if verifyErr != nil {
+		if _, existsErr := gitOutputContext(ctx, plan.SourceWorktree, "show-ref", "--verify", "--quiet", "refs/heads/"+plan.Branch); existsErr != nil {
+			result.BranchDeleted = true
+			return result
+		}
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; could not verify retained branch identity: %w", verifyErr)
+		return result
+	}
+	if current != expectedOID {
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; branch retained because its identity changed")
+		return result
+	}
+	if _, deleteErr := gitOutputContext(ctx, plan.SourceWorktree, "update-ref", "-d", "refs/heads/"+plan.Branch, expectedOID); deleteErr != nil {
+		result.BranchRetained = true
+		result.Err = fmt.Errorf("worktree removed; branch retained: %w", deleteErr)
+		return result
+	}
+	result.BranchDeleted = true
+	return result
+}
+
+func (p *Plugin) runCreateSetupCmd(plan *CreateOperationPlan, wt *Worktree) tea.Cmd {
+	scope := p.currentCreateScope()
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		return CreateSetupDoneMsg{OperationScope: scope, Plan: plan, Result: runCreateSetup(ctx, plan, wt)}
+	}
+}
+
+func (p *Plugin) currentCreateScope() OperationScope {
+	scope := OperationScope{Epoch: p.ctx.Epoch, OperationID: p.activeLifecycleOperationID, Lifecycle: true}
+	if p.repoSnapshot != nil {
+		scope.RepoKey = p.repoSnapshot.Key
+	}
+	return scope
 }
 
 // doCreateWorktree performs the actual worktree creation.
 func (p *Plugin) doCreateWorktree(name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
-	// Default base branch to current branch if not specified
-	if baseBranch == "" {
-		baseBranch = "HEAD"
-	}
+	return p.doCreateWorktreeContext(context.Background(), name, baseBranch, taskID, taskTitle, agentType)
+}
 
-	// Determine worktree directory name with optional repo prefix
-	// When enabled, prefixes directory with repo name (e.g., "myrepo-feature-auth")
-	// This helps conversation adapters discover related worktree conversations
-	// by matching the directory path pattern after worktree deletion
-	dirName := name
-	if p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix {
-		repoName := app.GetRepoName(p.ctx.WorkDir)
-		if repoName != "" {
-			dirName = repoName + "-" + name
-		}
+func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, taskID, taskTitle string, agentType AgentType) (*Worktree, error) {
+	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
+	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
+	repoKey := ""
+	if p.repoSnapshot != nil {
+		repoKey = p.repoSnapshot.Key
 	}
-
-	// Determine worktree path (sibling to main repo).
-	// Use ProjectRoot (the main worktree path, resolved from git) rather than
-	// WorkDir so that starting sidecar from a subfolder doesn't place the new
-	// worktree inside the repository instead of beside it. Fixes #174.
-	mainRepoDir := p.ctx.ProjectRoot
-	if mainRepoDir == "" {
-		mainRepoDir = p.ctx.WorkDir
+	setupConfig := config.WorktreeSetupConfig{CopyEnvFiles: true, EnvFiles: append([]string(nil), defaultEnvFiles...), RunHook: true, HookPath: setupScriptName, HookRequired: true}
+	if p.ctx.Config != nil {
+		setupConfig = p.ctx.Config.WorktreeSetupForProject(projectRoot)
 	}
-	parentDir := filepath.Dir(mainRepoDir)
-	wtPath := filepath.Join(parentDir, dirName)
-
-	// Ensure parent directory exists for paths with slashes (e.g., feat/ui)
-	if err := os.MkdirAll(filepath.Dir(wtPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create parent directory: %w", err)
+	plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
+	if err != nil {
+		return nil, err
 	}
-
-	// Create worktree with new branch (branch name stays simple, just the user-provided name)
-	args := []string{"worktree", "add", "-b", name, wtPath, baseBranch}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = p.ctx.WorkDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
+	plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
+	wt, err := addCreatedWorktree(ctx, repoKey, plan)
+	if err != nil {
+		return wt, err
 	}
-
-	// Create .td-root file pointing to main repo for td database sharing
-	if err := p.setupTDRoot(wtPath); err != nil {
-		// Log but don't fail - td integration is optional
-		p.ctx.Logger.Warn("failed to setup .td-root", "path", wtPath, "error", err)
-	}
-
-	// If task is linked, create task file in centralized dir and start the task
-	if taskID != "" {
-		wtDir, wtDirErr := projectdir.WorktreeDir(p.ctx.ProjectRoot, wtPath)
-		if wtDirErr != nil {
-			p.ctx.Logger.Warn("failed to resolve worktree dir for task", "path", wtPath, "error", wtDirErr)
-		} else {
-			taskPath := filepath.Join(wtDir, sidecarTaskFile)
-			if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
-				p.ctx.Logger.Warn("failed to write task file", "path", taskPath, "error", err)
+	result := runCreateSetup(ctx, plan, wt)
+	if result.HasRequiredFailure() {
+		for _, warning := range result.Warnings() {
+			if warning.Required {
+				return wt, fmt.Errorf("%s: %w", warning.Action, warning.Err)
 			}
 		}
-
-		// Auto-start the task in td (if td is available)
-		startCmd := exec.Command("td", "start", taskID)
-		startCmd.Dir = wtPath
-		if err := startCmd.Run(); err != nil {
-			p.ctx.Logger.Warn("failed to start td task", "task", taskID, "error", err)
-		}
 	}
-
-	// Determine actual base branch name
-	actualBase := baseBranch
-	if baseBranch == "HEAD" {
-		if b, err := getCurrentBranch(p.ctx.WorkDir); err == nil {
-			actualBase = b
-		}
-	}
-
-	wt := &Worktree{
-		Name:            dirName,
-		Path:            wtPath,
-		Branch:          name,
-		BaseBranch:      actualBase,
-		TaskID:          taskID,
-		TaskTitle:       taskTitle,
-		ChosenAgentType: agentType,
-		Status:          StatusPaused,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-	}
-
-	// Persist agent type to centralized worktree data directory
-	if err := saveAgentType(p.ctx.ProjectRoot, wtPath, agentType); err != nil {
-		p.ctx.Logger.Warn("failed to save agent type", "path", wtPath, "error", err)
-	}
-
-	// Persist base branch to centralized worktree data directory
-	if err := saveBaseBranch(p.ctx.ProjectRoot, wtPath, actualBase); err != nil {
-		p.ctx.Logger.Warn("failed to save base branch", "path", wtPath, "error", err)
-	}
-
-	// Run post-creation setup (env files, symlinks, setup script)
-	if err := p.setupWorktree(wtPath, name); err != nil {
-		p.ctx.Logger.Warn("workspace setup had errors", "path", wtPath, "error", err)
-		// Don't fail creation for setup errors
-	}
-
 	return wt, nil
 }
 
 // doDeleteWorktree removes a worktree. When isMissing is true, uses prune
 // instead of remove since the directory no longer exists on disk.
 func doDeleteWorktree(workDir, path string, isMissing bool) error {
+	return doDeleteWorktreeContext(context.Background(), workDir, path, isMissing)
+}
+
+func doDeleteWorktreeContext(ctx context.Context, workDir, path string, isMissing bool) error {
 	if isMissing {
-		return doWorktreePrune(workDir)
+		return doWorktreePruneContext(ctx, workDir)
 	}
 
 	// First try without force
-	cmd := exec.Command("git", "worktree", "remove", path)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", path)
 	cmd.Dir = workDir
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
 
 	// If that fails, try with force
-	cmd = exec.Command("git", "worktree", "remove", "--force", path)
+	cmd = exec.CommandContext(ctx, "git", "worktree", "remove", "--force", path)
 	cmd.Dir = workDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
@@ -394,18 +468,23 @@ func (p *Plugin) pushSelected() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
+	ctx, scope := p.newLifecycleScope(wt)
 	name := wt.Name
 	path := wt.Path
 	branch := wt.Branch
 
 	return func() tea.Msg {
-		err := doPush(path, branch, false, true)
-		return PushDoneMsg{WorkspaceName: name, Err: err}
+		err := doPushContext(ctx, path, branch, false, true)
+		return PushDoneMsg{OperationScope: scope, WorkspaceName: name, Err: err}
 	}
 }
 
 // doPush pushes a branch to remote.
 func doPush(workdir, branch string, force, setUpstream bool) error {
+	return doPushContext(context.Background(), workdir, branch, force, setUpstream)
+}
+
+func doPushContext(ctx context.Context, workdir, branch string, force, setUpstream bool) error {
 	args := []string{"push"}
 	if force {
 		args = append(args, "--force-with-lease")
@@ -414,7 +493,7 @@ func doPush(workdir, branch string, force, setUpstream bool) error {
 		args = append(args, "-u", "origin", branch)
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git push: %s: %w", strings.TrimSpace(string(output)), err)
@@ -424,7 +503,11 @@ func doPush(workdir, branch string, force, setUpstream bool) error {
 
 // getCurrentBranch returns the current branch name.
 func getCurrentBranch(workdir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	return getCurrentBranchContext(context.Background(), workdir)
+}
+
+func getCurrentBranchContext(ctx context.Context, workdir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -435,7 +518,11 @@ func getCurrentBranch(workdir string) (string, error) {
 
 // checkRemoteBranchExists checks if a remote branch exists for the given branch name.
 func checkRemoteBranchExists(workdir, branch string) bool {
-	cmd := exec.Command("git", "ls-remote", "--heads", "origin", branch)
+	return checkRemoteBranchExistsContext(context.Background(), workdir, branch)
+}
+
+func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
@@ -453,7 +540,11 @@ func branchExists(workdir, branch string) bool {
 
 // doWorktreePrune runs git worktree prune to clean up stale worktree references.
 func doWorktreePrune(workDir string) error {
-	cmd := exec.Command("git", "worktree", "prune")
+	return doWorktreePruneContext(context.Background(), workDir)
+}
+
+func doWorktreePruneContext(ctx context.Context, workDir string) error {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "prune")
 	cmd.Dir = workDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree prune: %s: %w", strings.TrimSpace(string(output)), err)
@@ -468,20 +559,28 @@ func isMainBranch(workdir, branch string) bool {
 	return branch == detectDefaultBranch(workdir)
 }
 
+func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
+	return branch == detectDefaultBranchContext(ctx, workdir)
+}
+
 // deleteBranch deletes a local branch, trying safe delete first then force.
 func deleteBranch(workdir, branch string) error {
-	if isMainBranch(workdir, branch) {
+	return deleteBranchContext(context.Background(), workdir, branch)
+}
+
+func deleteBranchContext(ctx context.Context, workdir, branch string) error {
+	if isMainBranchContext(ctx, workdir, branch) {
 		return fmt.Errorf("refusing to delete main branch %q", branch)
 	}
 	// Try safe delete first
-	cmd := exec.Command("git", "branch", "-d", branch)
+	cmd := exec.CommandContext(ctx, "git", "branch", "-d", branch)
 	cmd.Dir = workdir
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
 
 	// Try force delete
-	cmd = exec.Command("git", "branch", "-D", branch)
+	cmd = exec.CommandContext(ctx, "git", "branch", "-D", branch)
 	cmd.Dir = workdir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("delete branch: %s: %w", strings.TrimSpace(string(output)), err)
@@ -491,10 +590,14 @@ func deleteBranch(workdir, branch string) error {
 
 // deleteRemoteBranchCmd deletes the remote branch from origin.
 func deleteRemoteBranchCmd(workdir, branch string) error {
-	if isMainBranch(workdir, branch) {
+	return deleteRemoteBranchCmdContext(context.Background(), workdir, branch)
+}
+
+func deleteRemoteBranchCmdContext(ctx context.Context, workdir, branch string) error {
+	if isMainBranchContext(ctx, workdir, branch) {
 		return fmt.Errorf("refusing to delete remote main branch %q", branch)
 	}
-	cmd := exec.Command("git", "push", "origin", "--delete", branch)
+	cmd := exec.CommandContext(ctx, "git", "push", "origin", "--delete", branch)
 	cmd.Dir = workdir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -512,24 +615,29 @@ func deleteRemoteBranchCmd(workdir, branch string) error {
 
 // checkRemoteBranch returns a command to check if a remote branch exists.
 func (p *Plugin) checkRemoteBranch(wt *Worktree) tea.Cmd {
+	ctx, scope := p.newLifecycleScope(wt)
+	workDir, branch, name := p.ctx.WorkDir, wt.Branch, wt.Name
 	return func() tea.Msg {
-		exists := checkRemoteBranchExists(p.ctx.WorkDir, wt.Branch)
+		exists := checkRemoteBranchExistsContext(ctx, workDir, branch)
 		return RemoteCheckDoneMsg{
-			WorkspaceName: wt.Name,
-			Branch:        wt.Branch,
-			Exists:        exists,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			Branch:         branch,
+			Exists:         exists,
 		}
 	}
 }
 
 // loadBranches returns a command to fetch all local branches.
 func (p *Plugin) loadBranches() tea.Cmd {
+	ctx, scope := p.newContextScope(nil)
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
-		cmd := exec.Command("git", "branch", "--format=%(refname:short)")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "git", "branch", "--format=%(refname:short)")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return BranchListMsg{Err: fmt.Errorf("git branch: %w", err)}
+			return BranchListMsg{OperationScope: scope, Err: fmt.Errorf("git branch: %w", err)}
 		}
 
 		var branches []string
@@ -538,7 +646,7 @@ func (p *Plugin) loadBranches() tea.Cmd {
 				branches = append(branches, line)
 			}
 		}
-		return BranchListMsg{Branches: branches}
+		return BranchListMsg{OperationScope: scope, Branches: branches}
 	}
 }
 
@@ -561,11 +669,18 @@ func filterBranches(query string, allBranches []string) []string {
 // setupTDRoot creates a .td-root file in the worktree pointing to the main repo.
 // This allows td commands in the worktree to use the main repo's database.
 func (p *Plugin) setupTDRoot(worktreePath string) error {
-	mainPath := app.GetMainWorktreePath(p.ctx.WorkDir)
-	if mainPath == "" {
-		mainPath = p.ctx.WorkDir
+	return setupTDRootContext(context.Background(), p.ctx.WorkDir, p.ctx.ProjectRoot, worktreePath)
+}
+
+func setupTDRootContext(ctx context.Context, workDir, projectRoot, worktreePath string) error {
+	mainPath := mainWorktreePathContext(ctx, workDir)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return tdroot.CreateTDRoot(p.ctx.ProjectRoot, worktreePath, mainPath)
+	if mainPath == "" {
+		mainPath = workDir
+	}
+	return tdroot.CreateTDRoot(projectRoot, worktreePath, mainPath)
 }
 
 const sidecarTaskFile = "task"
@@ -576,13 +691,21 @@ const sidecarAgentFile = "agent"
 // for that specific worktree/branch.
 const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
+const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
 
 // saveBaseBranch persists the base branch to the centralized worktree data directory.
 func saveBaseBranch(projectRoot, worktreePath string, branch string) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return saveBaseBranchContext(context.Background(), projectRoot, worktreePath, branch)
+}
+
+func saveBaseBranchContext(ctx context.Context, projectRoot, worktreePath string, branch string) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if branch == "" {
 		basePath := filepath.Join(wtDir, sidecarBaseFile)
@@ -595,7 +718,11 @@ func saveBaseBranch(projectRoot, worktreePath string, branch string) error {
 
 // loadBaseBranch reads the base branch from the centralized worktree data directory.
 func loadBaseBranch(projectRoot, worktreePath string) string {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return loadBaseBranchContext(context.Background(), projectRoot, worktreePath)
+}
+
+func loadBaseBranchContext(ctx context.Context, projectRoot, worktreePath string) string {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return ""
 	}
@@ -623,9 +750,16 @@ func loadTaskLink(projectRoot, worktreePath string) string {
 
 // saveAgentType persists the chosen agent type to the centralized worktree data directory.
 func saveAgentType(projectRoot, worktreePath string, agentType AgentType) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return saveAgentTypeContext(context.Background(), projectRoot, worktreePath, agentType)
+}
+
+func saveAgentTypeContext(ctx context.Context, projectRoot, worktreePath string, agentType AgentType) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if agentType == AgentNone || agentType == "" {
 		// Remove file if None selected
@@ -653,23 +787,53 @@ func loadAgentType(projectRoot, worktreePath string) AgentType {
 
 // savePRURL persists the PR URL to the centralized worktree data directory.
 func savePRURL(projectRoot, worktreePath string, prURL string) error {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	return savePRURLContext(context.Background(), projectRoot, worktreePath, prURL)
+}
+
+func savePRURLContext(ctx context.Context, projectRoot, worktreePath string, prURL string) error {
+	identity := loadPRIdentityContext(ctx, projectRoot, worktreePath)
+	identity.URL = prURL
+	return savePRIdentityContext(ctx, projectRoot, worktreePath, identity)
+}
+
+// savePRIdentityContext persists stable PR identity as inspectable JSON. The
+// legacy URL file is also maintained so existing Sidecar versions degrade to
+// the PR link instead of losing it.
+func savePRIdentityContext(ctx context.Context, projectRoot, worktreePath string, identity PRIdentity) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return fmt.Errorf("resolve worktree dir: %w", err)
 	}
-	if prURL == "" {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if identity.URL == "" {
 		// Remove file if empty
 		prPath := filepath.Join(wtDir, sidecarPRFile)
 		_ = os.Remove(prPath)
+		_ = os.Remove(filepath.Join(wtDir, sidecarPRIdentityFile))
 		return nil
 	}
 	prPath := filepath.Join(wtDir, sidecarPRFile)
-	return os.WriteFile(prPath, []byte(prURL+"\n"), 0644)
+	if err := os.WriteFile(prPath, []byte(identity.URL+"\n"), 0644); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(identity, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode PR identity: %w", err)
+	}
+	data = append(data, '\n')
+	return os.WriteFile(filepath.Join(wtDir, sidecarPRIdentityFile), data, 0644)
 }
 
 // loadPRURL reads the PR URL from the centralized worktree data directory.
 func loadPRURL(projectRoot, worktreePath string) string {
-	wtDir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	identity, _ := loadPRMetadataContext(context.Background(), projectRoot, worktreePath)
+	return identity.URL
+}
+
+func loadLegacyPRURLContext(ctx context.Context, projectRoot, worktreePath string) string {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {
 		return ""
 	}
@@ -681,83 +845,168 @@ func loadPRURL(projectRoot, worktreePath string) string {
 	return strings.TrimSpace(string(content))
 }
 
+func normalizeWorktreePRState(state string, hasURL bool) string {
+	if !hasURL {
+		return ""
+	}
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "OPEN":
+		return "open"
+	case "MERGED":
+		return "merged"
+	case "CLOSED":
+		return "closed"
+	default:
+		return "unavailable"
+	}
+}
+
+// loadPRMetadataContext hydrates list state from the stable structured
+// identity. Legacy URL-only state remains useful but is explicitly unknown;
+// it must never be inferred to mean that the PR is open.
+func loadPRMetadataContext(ctx context.Context, projectRoot, worktreePath string) (PRIdentity, string) {
+	identity := loadPRIdentityContext(ctx, projectRoot, worktreePath)
+	if identity.URL == "" {
+		identity.URL = loadLegacyPRURLContext(ctx, projectRoot, worktreePath)
+	}
+	return identity, normalizeWorktreePRState(identity.State, identity.URL != "")
+}
+
+func hydrateWorktreePRMetadata(ctx context.Context, projectRoot string, wt *Worktree) {
+	if wt == nil {
+		return
+	}
+	identity, prState := loadPRMetadataContext(ctx, projectRoot, wt.Path)
+	wt.PRURL = identity.URL
+	wt.PRState = prState
+}
+
+func worktreePRStateFromPoll(kind PRPollKind, identity PRIdentity, existingURL string) string {
+	hasURL := identity.URL != "" || existingURL != ""
+	switch kind {
+	case PRPollOpen:
+		return normalizeWorktreePRState("OPEN", hasURL)
+	case PRPollMerged:
+		return normalizeWorktreePRState("MERGED", hasURL)
+	case PRPollClosed:
+		return normalizeWorktreePRState("CLOSED", hasURL)
+	default:
+		return normalizeWorktreePRState("UNAVAILABLE", hasURL)
+	}
+}
+
+func loadPRIdentityContext(ctx context.Context, projectRoot, worktreePath string) PRIdentity {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
+	if err != nil {
+		return PRIdentity{}
+	}
+	content, err := os.ReadFile(filepath.Join(wtDir, sidecarPRIdentityFile))
+	if err != nil {
+		return PRIdentity{}
+	}
+	var identity PRIdentity
+	if json.Unmarshal(content, &identity) != nil {
+		return PRIdentity{}
+	}
+	return identity
+}
+
 // linkTask returns a command to link a td task to a worktree.
 func (p *Plugin) linkTask(wt *Worktree, taskID string) tea.Cmd {
+	ctx, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
+	workDir, path, name := p.ctx.WorkDir, wt.Path, wt.Name
 	return func() tea.Msg {
 		// Validate task exists by running td show
-		cmd := exec.Command("td", "show", taskID)
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "td", "show", taskID)
+		cmd.Dir = workDir
 		if err := cmd.Run(); err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("task not found: %s", taskID),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("task not found: %s", taskID),
 			}
 		}
 
 		// Write task link file to centralized worktree data directory
-		wtDir, err := projectdir.WorktreeDir(projectRoot, wt.Path)
+		wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("resolve worktree dir: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("resolve worktree dir: %w", err),
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
+		if err := ctx.Err(); err != nil {
+			return TaskLinkedMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		if err := os.WriteFile(taskPath, []byte(taskID+"\n"), 0644); err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("write task file: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("write task file: %w", err),
 			}
 		}
 
 		return TaskLinkedMsg{
-			WorkspaceName: wt.Name,
-			TaskID:        taskID,
+			OperationScope: scope,
+			WorkspaceName:  name,
+			TaskID:         taskID,
 		}
 	}
 }
 
 // unlinkTask returns a command to unlink a td task from a worktree.
 func (p *Plugin) unlinkTask(wt *Worktree) tea.Cmd {
+	ctx, scope := p.newLifecycleScope(wt)
 	projectRoot := p.ctx.ProjectRoot
+	path, name := wt.Path, wt.Name
 	return func() tea.Msg {
-		wtDir, err := projectdir.WorktreeDir(projectRoot, wt.Path)
+		wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, path)
 		if err != nil {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("resolve worktree dir: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("resolve worktree dir: %w", err),
 			}
 		}
 		taskPath := filepath.Join(wtDir, sidecarTaskFile)
+		if err := ctx.Err(); err != nil {
+			return TaskLinkedMsg{OperationScope: scope, WorkspaceName: name, Err: err}
+		}
 		if err := os.Remove(taskPath); err != nil && !os.IsNotExist(err) {
 			return TaskLinkedMsg{
-				WorkspaceName: wt.Name,
-				Err:           fmt.Errorf("remove task file: %w", err),
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Err:            fmt.Errorf("remove task file: %w", err),
 			}
 		}
 
 		return TaskLinkedMsg{
-			WorkspaceName: wt.Name,
-			TaskID:        "", // Empty means unlinked
+			OperationScope: scope,
+			WorkspaceName:  name,
+			TaskID:         "", // Empty means unlinked
 		}
 	}
 }
 
 // loadOpenTasks fetches all non-closed tasks from td.
 func (p *Plugin) loadOpenTasks() tea.Cmd {
+	ctx, scope := p.newContextScope(nil)
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
 		// Use --limit 500 to fetch more items (td defaults to 50)
 		// Include all statuses except closed so users can link tasks in_review, etc.
-		cmd := exec.Command("td", "list", "--json", "--status", "open,in_progress,in_review", "--limit", "500")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "td", "list", "--json", "--status", "open,in_progress,in_review", "--limit", "500")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return TaskSearchResultsMsg{Err: fmt.Errorf("td list: %w", err)}
+			return TaskSearchResultsMsg{OperationScope: scope, Err: fmt.Errorf("td list: %w", err)}
 		}
 
 		tasks, err := parseTDJSON(output)
-		return TaskSearchResultsMsg{Tasks: tasks, Err: err}
+		return TaskSearchResultsMsg{OperationScope: scope, Tasks: tasks, Err: err}
 	}
 }
 
@@ -992,12 +1241,14 @@ func SanitizeBranchName(name string) string {
 
 // loadTaskDetails fetches full task details from td.
 func (p *Plugin) loadTaskDetails(taskID string) tea.Cmd {
+	ctx, scope := p.newOperationScope(p.selectedWorktree())
+	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
-		cmd := exec.Command("td", "show", taskID, "--json")
-		cmd.Dir = p.ctx.WorkDir
+		cmd := exec.CommandContext(ctx, "td", "show", taskID, "--json")
+		cmd.Dir = workDir
 		output, err := cmd.Output()
 		if err != nil {
-			return TaskDetailsLoadedMsg{TaskID: taskID, Err: fmt.Errorf("td show: %w", err)}
+			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("td show: %w", err)}
 		}
 
 		var details struct {
@@ -1013,11 +1264,12 @@ func (p *Plugin) loadTaskDetails(taskID string) tea.Cmd {
 		}
 
 		if err := json.Unmarshal(output, &details); err != nil {
-			return TaskDetailsLoadedMsg{TaskID: taskID, Err: fmt.Errorf("parse task json: %w", err)}
+			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("parse task json: %w", err)}
 		}
 
 		return TaskDetailsLoadedMsg{
-			TaskID: taskID,
+			OperationScope: scope,
+			TaskID:         taskID,
 			Details: &TaskDetails{
 				ID:          details.ID,
 				Title:       details.Title,

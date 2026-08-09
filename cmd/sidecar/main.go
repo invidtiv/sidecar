@@ -245,7 +245,7 @@ func main() {
 
 	// Create and run application
 	currentVersion := effectiveVersion(Version)
-	initialPluginID := state.GetActivePlugin(projectRootPath)
+	initialPluginID := initialPluginForWorkDir(workDir, projectRootPath)
 	var model app.Model
 	startuptrace.Track("app.New", func() {
 		model = app.New(registry, km, cfg, currentVersion, workDir, projectRootPath, initialPluginID)
@@ -290,6 +290,13 @@ func main() {
 	// another machine — is not waiting out a lease nobody holds (td-ee222a).
 	tty.ReleaseGeometryLeases()
 	restoreTitle()
+}
+
+// initialPluginForWorkDir keeps process startup on the same per-worktree state
+// path as in-app switching. The accessor also performs the additive migration
+// from legacy repository-root keys without deleting the rollback entry.
+func initialPluginForWorkDir(workDir, projectRootPath string) string {
+	return state.GetActivePluginForWorkDir(workDir, projectRootPath)
 }
 
 func loadConfig(path string) (*config.Config, error) {

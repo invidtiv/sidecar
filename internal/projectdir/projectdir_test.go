@@ -2,8 +2,11 @@ package projectdir
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +43,73 @@ func TestResolveWithBase_NewProject(t *testing.T) {
 	}
 	if meta.Path != projectRoot {
 		t.Errorf("meta.Path = %q, want %q", meta.Path, projectRoot)
+	}
+}
+
+func TestWorktreeDirWithBase_LegacyMigrationIsAdditiveAndAmbiguousCollisionRefused(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", "-b", "main", repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README")
+	runGit(t, repo, "commit", "-m", "init")
+	wt := filepath.Join(t.TempDir(), "feature", "auth")
+	runGit(t, repo, "worktree", "add", "-b", "feature/auth", wt)
+
+	projectDir, err := resolveWithBase(base, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(projectDir, "worktrees", "auth")
+	if err := os.MkdirAll(legacy, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "task"), []byte("td-legacy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := worktreeDirWithBase(base, repo, wt)
+	if err != nil {
+		t.Fatalf("unambiguous migration: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(migrated, "task")); err != nil || string(got) != "td-legacy" {
+		t.Fatalf("migrated task = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "task")); err != nil {
+		t.Fatalf("legacy source was modified: %v", err)
+	}
+
+	other := filepath.Join(t.TempDir(), "fix", "auth")
+	runGit(t, repo, "worktree", "add", "-b", "fix/auth", other)
+	base2 := t.TempDir()
+	projectDir2, err := resolveWithBase(base2, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy2 := filepath.Join(projectDir2, "worktrees", "auth")
+	if err := os.MkdirAll(legacy2, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy2, "pr"), []byte("legacy"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktreeDirWithBase(base2, repo, wt); err == nil || !strings.Contains(err.Error(), "ambiguous legacy") {
+		t.Fatalf("ambiguous migration error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(legacy2, "pr")); err != nil || string(got) != "legacy" {
+		t.Fatalf("ambiguous legacy state changed: %q, %v", got, err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %s: %v", args, out, err)
 	}
 }
 
@@ -145,14 +215,51 @@ func TestWorktreeDirWithBase(t *testing.T) {
 		t.Fatalf("Rel: %v", err)
 	}
 
-	expected := filepath.Join("worktrees", "repo-feature")
-	if rel != expected {
-		t.Errorf("worktree relative path = %q, want %q", rel, expected)
+	if !strings.HasPrefix(rel, filepath.Join("worktrees", "repo-feature-")) {
+		t.Errorf("worktree relative path = %q, want collision-safe repo-feature slug", rel)
 	}
 
 	// Directory should exist.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Fatalf("expected worktree directory to exist: %s", dir)
+	}
+	meta, err := readWorktreeMeta(dir)
+	if err != nil {
+		t.Fatalf("read worktree meta: %v", err)
+	}
+	if meta.Path != filepath.Clean(worktreePath) {
+		t.Fatalf("meta path = %q, want %q", meta.Path, filepath.Clean(worktreePath))
+	}
+}
+
+func TestWorktreeDirWithBase_SameBasenameIndependentAcrossRestart(t *testing.T) {
+	base := t.TempDir()
+	projectRoot := filepath.Join(t.TempDir(), "repo")
+	paths := []string{filepath.Join(t.TempDir(), "feature", "auth"), filepath.Join(t.TempDir(), "fix", "auth")}
+
+	dirs := make([]string, len(paths))
+	for i, path := range paths {
+		dir, err := worktreeDirWithBase(base, projectRoot, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dirs[i] = dir
+		if err := os.WriteFile(filepath.Join(dir, "task"), []byte(fmt.Sprintf("td-%d", i)), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dirs[0] == dirs[1] {
+		t.Fatalf("same-basename worktrees collided at %s", dirs[0])
+	}
+	for i, path := range paths {
+		dir, err := worktreeDirWithBase(base, projectRoot, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "task"))
+		if err != nil || string(got) != fmt.Sprintf("td-%d", i) {
+			t.Fatalf("restart metadata for %q = %q, %v", path, got, err)
+		}
 	}
 }
 
