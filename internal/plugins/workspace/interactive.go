@@ -174,6 +174,9 @@ func (p *Plugin) pasteClipboardToTmuxCmd() tea.Cmd {
 	}
 
 	sessionName := p.interactiveState.TargetSession
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
+		sessionName = terminal.GetTarget()
+	}
 	if sessionName == "" {
 		return nil
 	}
@@ -823,11 +826,11 @@ func (p *Plugin) handleInteractivePaste(content string) tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active || content == "" {
 		return nil
 	}
-	sessionName := p.interactiveState.TargetSession
-	return tea.Batch(
-		sendInteractivePasteInputCmd(sessionName, content),
-		p.pollInteractivePane(),
-	)
+	terminal := p.activeInteractiveTerminal()
+	if terminal == nil || !terminal.IsActive() {
+		return nil
+	}
+	return terminal.Update(tea.PasteMsg{Content: content})
 }
 
 // handleInteractiveKeys processes key input in interactive mode.
@@ -980,7 +983,6 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	// Non-escape key: check if we have a pending Escape to forward first
-	var cmds []tea.Cmd
 	pendingEscape := false
 	if p.interactiveState.EscapePressed {
 		p.interactiveState.EscapePressed = false
@@ -1003,8 +1005,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.autoScrollOutput = true
 			p.scrollToBottom()
 		}
-		cmds = append(cmds, p.pasteClipboardToTmuxCmd())
-		return tea.Batch(cmds...)
+		if terminal := p.activeInteractiveTerminal(); terminal != nil {
+			return terminal.Update(msg)
+		}
+		return nil
 	}
 
 	// Update last key time for polling decay
@@ -1020,50 +1024,35 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.scrollToBottom()
 	}
 
-	sessionName := p.interactiveState.TargetSession
-
-	// Check for paste (multi-character input with newlines or long text)
-	if tty.IsPasteInput(msg) {
-		text := msg.Text
-		// Send paste async (td-c2961e): escape + paste in order if pending
-		if pendingEscape {
-			cmds = append(cmds, awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
-				if err := tty.SendKeyToTmux(sessionName, "Escape"); err != nil {
-					return err
-				}
-				return tty.SendPasteToTmux(sessionName, text)
-			})))
-		} else {
-			cmds = append(cmds, sendInteractivePasteInputCmd(sessionName, text))
+	terminal := p.activeInteractiveTerminal()
+	if terminal == nil || !terminal.IsActive() || terminal.State == nil {
+		// A mode-entry message can precede the wrapper's reconciliation by one
+		// update. Preserve that narrow provisional input path; once present, the
+		// shared component is the only sender.
+		target := p.interactiveState.TargetPane
+		if target == "" {
+			target = p.interactiveState.TargetSession
 		}
-		cmds = append(cmds, p.pollInteractivePane())
-		return tea.Batch(cmds...)
-	}
-
-	// Map key to tmux format and send
-	key, useLiteral := tty.MapKeyToTmux(msg)
-	if key == "" {
-		// Still send pending escape if nothing else to send
-		if pendingEscape {
-			cmds = append(cmds, sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: "Escape"}))
-			cmds = append(cmds, p.scheduleDebouncedPoll(keystrokeDebounce))
+		key, literal := tty.MapKeyToTmux(msg)
+		if key == "" && !pendingEscape {
+			return nil
 		}
-		return tea.Batch(cmds...)
+		var keys []tty.KeySpec
+		if pendingEscape {
+			keys = append(keys, tty.KeySpec{Value: "Escape"})
+		}
+		if key != "" {
+			keys = append(keys, tty.KeySpec{Value: key, Literal: literal})
+		}
+		return sendInteractiveKeysCmd(target, keys...)
 	}
-
-	// Send keys async (td-c2961e): pending escape + key in order within single goroutine
+	// Preserve workspace's double-Escape UX while handing ordered input and
+	// fallback scheduling to the shared terminal component.
 	if pendingEscape {
-		cmds = append(cmds, sendInteractiveKeysCmd(sessionName,
-			tty.KeySpec{Value: "Escape"},
-			tty.KeySpec{Value: key, Literal: useLiteral},
-		))
-	} else {
-		cmds = append(cmds, sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: key, Literal: useLiteral}))
+		terminal.State.EscapePressed = true
+		terminal.State.EscapeTime = p.interactiveState.EscapeTime
 	}
-
-	// Schedule debounced poll to batch rapid keystrokes (td-8a0978)
-	cmds = append(cmds, p.scheduleDebouncedPoll(keystrokeDebounce))
-	return tea.Batch(cmds...)
+	return terminal.Update(msg)
 }
 
 // handleUnknownSequence forwards unrecognized CSI sequences to tmux in
@@ -1089,6 +1078,9 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	}
 
 	sessionName := p.interactiveState.TargetSession
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
+		sessionName = terminal.GetTarget()
+	}
 	return sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: csiu, Literal: true})
 }
 
@@ -1110,12 +1102,16 @@ func (p *Plugin) handleEscapeTimer() tea.Cmd {
 	// Timer fired with pending Escape: forward the single Escape to tmux async (td-c2961e)
 	p.interactiveState.EscapePressed = false
 
-	// Update last key time and poll immediately for better responsiveness (td-babfd9)
+	// Update last key time and let the shared terminal own ordered delivery and
+	// provisional fallback scheduling.
 	p.interactiveState.LastKeyTime = time.Now()
-	return tea.Batch(
-		sendInteractiveKeysCmd(p.interactiveState.TargetSession, tty.KeySpec{Value: "Escape"}),
-		p.pollInteractivePaneImmediate(),
-	)
+	terminal := p.activeInteractiveTerminal()
+	if terminal == nil || terminal.State == nil {
+		return nil
+	}
+	terminal.State.EscapePressed = true
+	terminal.State.EscapeTimerPending = true
+	return terminal.Update(tty.EscapeTimerMsg{Scope: terminal.Scope()})
 }
 
 // maxWheelNotchesPerFlush caps how many wheel reports one debounced burst can
@@ -1233,6 +1229,9 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 		return nil, false
 	}
 	sessionName := state.TargetSession
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
+		sessionName = terminal.GetTarget()
+	}
 	if sessionName == "" {
 		return nil, false
 	}
@@ -1387,6 +1386,9 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 	}
 	interaction := p.interactiveState
 	sessionName := interaction.TargetSession
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
+		sessionName = terminal.GetTarget()
+	}
 	col, row, ok := p.interactiveMouseCoords(x, y)
 	if !ok {
 		return nil
@@ -1508,6 +1510,9 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return nil
 	}
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
+		return nil
+	}
 
 	// Determine polling interval based on activity
 	interval := pollingDecayFast
@@ -1544,6 +1549,9 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return nil
 	}
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
+		return nil
+	}
 
 	// When interactive mode targets the terminal panel, use terminal panel polling.
 	// Increment generation to invalidate stale timers from previous keystrokes,
@@ -1575,6 +1583,9 @@ func (p *Plugin) scheduleDebouncedPoll(delay time.Duration) tea.Cmd {
 // waiting for the next poll cycle.
 func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
+		return nil
+	}
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
 		return nil
 	}
 
