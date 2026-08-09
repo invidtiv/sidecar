@@ -20,7 +20,8 @@ func (p *Plugin) fetchPRList() tea.Cmd {
 	workDir := p.ctx.WorkDir
 	ctx, scope := p.newLifecycleScope(nil)
 	return func() tea.Msg {
-		repository, err := currentGitHubRepositoryContext(ctx, workDir)
+		baseBranch := detectDefaultBranchContext(ctx, workDir)
+		_, repository, err := resolveBaseTopologyContext(ctx, workDir, baseBranch)
 		if err != nil {
 			return FetchPRListMsg{OperationScope: scope, Err: err}
 		}
@@ -72,9 +73,12 @@ func (p *Plugin) fetchAndCreateWorktree(pr PRListItem) tea.Cmd {
 		if err != nil {
 			return FetchPRDoneMsg{OperationScope: scope, Err: err}
 		}
-		operationRefKey := stablePathKey(scope.OperationID + "|" + pr.NodeID)
-		tempRef := fmt.Sprintf("refs/sidecar/pr/%d/%s/head", pr.Number, operationRefKey)
-		tempBaseRef := fmt.Sprintf("refs/sidecar/pr/%d/%s/base", pr.Number, operationRefKey)
+		tempPrefix, err := newTemporaryPRRefPrefix(pr.Number)
+		if err != nil {
+			return FetchPRDoneMsg{OperationScope: scope, Err: err}
+		}
+		tempRef := tempPrefix + "/head"
+		tempBaseRef := tempPrefix + "/base"
 		refspec := fmt.Sprintf("+refs/pull/%d/head:%s", pr.Number, tempRef)
 		baseRefspec := fmt.Sprintf("+refs/heads/%s:%s", pr.BaseBranch, tempBaseRef)
 		fetchCmd := exec.CommandContext(ctx, "git", "fetch", baseRemote, refspec, baseRefspec)

@@ -83,6 +83,7 @@ type MergeWorkflowState struct {
 	ExistingPR       bool // True if using an existing PR (vs newly created)
 	ReviewedOID      string
 	PushRemote       string
+	BaseRemote       string
 	Error            error
 	ErrorTitle       string                       // Short title for error display (e.g. "Direct Merge Failed")
 	ErrorDetail      string                       // Full error text for display and clipboard copy
@@ -155,6 +156,7 @@ type MergeStepCompleteMsg struct {
 	ExistingPRFound bool // True if PR already existed (vs newly created)
 	PR              PRIdentity
 	ReviewedOID     string
+	BaseRemote      string
 }
 
 // CheckPRMergedMsg signals the result of checking if a PR was merged.
@@ -415,9 +417,10 @@ func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
 	ctx := p.operationCtx
 	path, branch, name := wt.Path, wt.Branch, wt.Name
-	reviewedOID := ""
+	reviewedOID, targetBranch := "", ""
 	if p.mergeState != nil {
 		reviewedOID = p.mergeState.ReviewedOID
+		targetBranch = p.mergeState.TargetBranch
 	}
 	return func() tea.Msg {
 		if reviewedOID == "" {
@@ -427,13 +430,29 @@ func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
 		if err != nil || head != reviewedOID {
 			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("HEAD changed after review; return to review")}
 		}
-		repository, repoErr := currentGitHubRepositoryContext(ctx, path)
-		if repoErr != nil {
-			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: repoErr}
+		baseRemote, repository, topologyErr := resolveBaseTopologyContext(ctx, path, targetBranch)
+		if topologyErr != nil {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: topologyErr}
+		}
+		configuredHeadRemote, configuredHeadErr := gitOutputContext(ctx, path, "config", "--get", "branch."+branch+".remote")
+		if configuredHeadErr == nil && configuredHeadRemote == "." {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepPush, Err: fmt.Errorf("head branch %q uses local remote '.'; configure a GitHub push remote", branch)}
 		}
 		remote, err := resolveBranchRemoteContext(ctx, path, branch)
 		if err != nil {
 			remote, err = resolveRemoteForRepositoryContext(ctx, path, repository)
+		}
+		pr := PRIdentity{Repository: repository, HeadRef: branch, HeadOID: reviewedOID, BaseRef: targetBranch}
+		if err == nil {
+			remoteURL, urlErr := configuredRemoteURLContext(ctx, path, remote)
+			if urlErr == nil {
+				pr.HeadRepo, urlErr = parseGitHubRepositoryURL(remoteURL)
+			}
+			if urlErr != nil {
+				err = fmt.Errorf("resolve head repository from %s: %w", remote, urlErr)
+			} else if owner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok {
+				pr.HeadOwner = owner
+			}
 		}
 		if err == nil {
 			_, err = gitOutputContext(ctx, path, "push", "-u", remote, reviewedOID+":refs/heads/"+branch)
@@ -444,37 +463,16 @@ func (p *Plugin) pushForMerge(wt *Worktree) tea.Cmd {
 				err = fmt.Errorf("HEAD changed while pushing; return to review")
 			}
 		}
-		pr := PRIdentity{Repository: repository, HeadRef: branch, HeadOID: reviewedOID}
-		if remote != "" {
-			pr.HeadRepo = repositoryFromRemoteContext(ctx, path, remote)
-			if owner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok {
-				pr.HeadOwner = owner
-			}
-		}
 		return MergeStepCompleteMsg{
 			OperationScope: scope,
 			WorkspaceName:  name,
 			Step:           MergeStepPush,
 			Data:           remote,
+			BaseRemote:     baseRemote,
 			Err:            err,
 			PR:             pr,
 		}
 	}
-}
-
-func repositoryFromRemoteContext(ctx context.Context, path, remote string) string {
-	url, err := gitOutputContext(ctx, path, "remote", "get-url", remote)
-	if err != nil {
-		return ""
-	}
-	url = strings.TrimSuffix(strings.TrimSuffix(url, ".git"), "/")
-	for _, prefix := range []string{"git@github.com:", "ssh://git@github.com/", "https://github.com/"} {
-		url = strings.TrimPrefix(url, prefix)
-	}
-	if strings.Count(url, "/") == 1 {
-		return url
-	}
-	return ""
 }
 
 // createPR creates a pull request using gh CLI.
@@ -483,16 +481,22 @@ func (p *Plugin) createPR(wt *Worktree, title, body, targetBranch string) tea.Cm
 	ctx := p.operationCtx
 	path, name := wt.Path, wt.Name
 	pr := PRIdentity{HeadRef: wt.Branch, BaseRef: targetBranch}
-	reviewedOID, pushRemote := "", ""
+	reviewedOID, pushRemote, expectedBaseRemote := "", "", ""
 	if p.mergeState != nil {
 		pr = p.mergeState.PR
 		pr.BaseRef = targetBranch
-		reviewedOID, pushRemote = p.mergeState.ReviewedOID, p.mergeState.PushRemote
+		reviewedOID, pushRemote, expectedBaseRemote = p.mergeState.ReviewedOID, p.mergeState.PushRemote, p.mergeState.BaseRemote
 	}
 	return func() tea.Msg {
-		repository, err := currentGitHubRepositoryContext(ctx, path)
+		baseRemote, repository, err := resolveBaseTopologyContext(ctx, path, targetBranch)
 		if err != nil {
 			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: err}
+		}
+		if expectedBaseRemote != "" && baseRemote != expectedBaseRemote {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("base remote changed from %s to %s; return to review", expectedBaseRemote, baseRemote)}
+		}
+		if pr.Repository != "" && repository != pr.Repository {
+			return MergeStepCompleteMsg{OperationScope: scope, WorkspaceName: name, Step: MergeStepCreatePR, Err: fmt.Errorf("base repository changed from %s to %s; return to review", pr.Repository, repository)}
 		}
 		pr.Repository = repository
 		if err := revalidateReviewedPushContext(ctx, path, pushRemote, pr.HeadRef, reviewedOID); err != nil {

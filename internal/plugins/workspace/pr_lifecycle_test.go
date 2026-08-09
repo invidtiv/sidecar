@@ -31,6 +31,13 @@ func installFakeGH(t *testing.T, body string) string {
 	return path
 }
 
+func configureGitHubRemoteAlias(t *testing.T, repo, remote, repository, actualURL string) {
+	t.Helper()
+	githubURL := "https://github.com/" + repository + ".git"
+	mustGit(t, repo, "config", "url."+actualURL+".insteadOf", githubURL)
+	mustGit(t, repo, "remote", "set-url", remote, githubURL)
+}
+
 func TestExistingPRQueryUsesStructuredForkAndBaseIdentity(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "args")
 	t.Setenv("FAKE_GH_LOG", log)
@@ -153,8 +160,8 @@ func TestPollPRStableIdentityAndTerminalStates(t *testing.T) {
 }
 
 func TestPushForMergePinsReviewedOIDAndRejectsMovedHEAD(t *testing.T) {
-	installFakeGH(t, `printf '%s\n' '{"nameWithOwner":"base/repo"}'`)
 	r := newLifecycleRepo(t)
+	configureGitHubRemoteAlias(t, r.feature, "origin", "base/repo", r.remote)
 	wt := &Worktree{Key: "feature", RepoKey: "repo", Name: "feature", Path: r.feature, Branch: "feature"}
 	p := New()
 	if err := p.Init(&plugin.Context{Epoch: 1, WorkDir: r.feature, ProjectRoot: r.main}); err != nil {
@@ -163,7 +170,7 @@ func TestPushForMergePinsReviewedOIDAndRejectsMovedHEAD(t *testing.T) {
 	p.worktrees = []*Worktree{wt}
 	p.newLifecycleScope(wt)
 	reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
-	p.mergeState = &MergeWorkflowState{OperationScope: p.lifecycleScope(wt), Worktree: wt, ReviewedOID: reviewed}
+	p.mergeState = &MergeWorkflowState{OperationScope: p.lifecycleScope(wt), Worktree: wt, ReviewedOID: reviewed, TargetBranch: "main"}
 	msg := p.pushForMerge(wt)().(MergeStepCompleteMsg)
 	if msg.Err != nil {
 		t.Fatal(msg.Err)
@@ -184,6 +191,8 @@ func TestCreatePRUsesEditedFieldsAndStructuralExistingQuery(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "args")
 	t.Setenv("FAKE_GH_LOG", log)
 	r := newLifecycleRepo(t)
+	configureGitHubRemoteAlias(t, r.feature, "origin", "base/repo", r.remote)
+	mustGit(t, r.feature, "config", "branch.release.remote", "origin")
 	mustGit(t, r.feature, "push", "-u", "origin", "feature")
 	reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
 	t.Setenv("FAKE_REVIEWED_OID", reviewed)
@@ -225,6 +234,7 @@ case "$*" in
   'pr create '*) echo 'SHOULD_NOT_CREATE' ;;
 esac`)
 			r := newLifecycleRepo(t)
+			configureGitHubRemoteAlias(t, r.feature, "origin", "base/repo", r.remote)
 			mustGit(t, r.feature, "push", "-u", "origin", "feature")
 			reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
 			if change == "local" {
@@ -249,6 +259,108 @@ esac`)
 			calls, _ := os.ReadFile(log)
 			if strings.Contains(string(calls), "pr create") {
 				t.Fatalf("gh pr create ran after %s change:\n%s", change, calls)
+			}
+		})
+	}
+}
+
+func TestForkTopologyUsesBaseRemoteRepositoryAndHeadRemoteOwner(t *testing.T) {
+	r := newLifecycleRepo(t)
+	mustGit(t, r.feature, "remote", "rename", "origin", "upstream")
+	configureGitHubRemoteAlias(t, r.feature, "upstream", "upstream/repo", r.remote)
+	forkRemote := filepath.Join(r.root, "fork.git")
+	mustGit(t, r.root, "init", "--bare", forkRemote)
+	mustGit(t, r.feature, "remote", "add", "origin", "https://github.com/me/repo.git")
+	mustGit(t, r.feature, "config", "url."+forkRemote+".insteadOf", "https://github.com/me/repo.git")
+	mustGit(t, r.feature, "config", "branch.feature.remote", "origin")
+	mustGit(t, r.feature, "config", "branch.main.remote", "upstream")
+	reviewed := mustGit(t, r.feature, "rev-parse", "HEAD")
+	log := filepath.Join(t.TempDir(), "gh-args")
+	t.Setenv("FAKE_GH_LOG", log)
+	t.Setenv("FAKE_REVIEWED_OID", reviewed)
+	installFakeGH(t, `
+printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+case "$*" in
+  'repo view '*) echo 'bare repo inference forbidden' >&2; exit 9 ;;
+  'pr list '*) echo '[]' ;;
+  'pr create '*) echo 'https://github.com/upstream/repo/pull/17' ;;
+  'pr view '*) printf '{"number":17,"url":"https://github.com/upstream/repo/pull/17","id":"node17","headRefName":"feature","headRefOid":"%s","baseRefName":"main","state":"OPEN","mergedAt":"","headRepository":{"nameWithOwner":"me/repo"},"headRepositoryOwner":{"login":"me"},"mergeCommit":null}\n' "$FAKE_REVIEWED_OID" ;;
+  *) echo "unexpected gh args: $*" >&2; exit 8 ;;
+esac`)
+	wt := &Worktree{Key: "feature", RepoKey: "repo", Name: "feature", Path: r.feature, Branch: "feature"}
+	p := New()
+	if err := p.Init(&plugin.Context{Epoch: 3, WorkDir: r.feature, ProjectRoot: r.main}); err != nil {
+		t.Fatal(err)
+	}
+	p.worktrees = []*Worktree{wt}
+	p.newLifecycleScope(wt)
+	p.mergeState = &MergeWorkflowState{OperationScope: p.lifecycleScope(wt), Worktree: wt, Step: MergeStepPush, ReviewedOID: reviewed, TargetBranch: "main", StepStatus: map[MergeWorkflowStep]string{}}
+	push := p.pushForMerge(wt)().(MergeStepCompleteMsg)
+	if push.Err != nil {
+		t.Fatal(push.Err)
+	}
+	if push.Data != "origin" || push.BaseRemote != "upstream" || push.PR.Repository != "upstream/repo" || push.PR.HeadRepo != "me/repo" || push.PR.HeadOwner != "me" {
+		t.Fatalf("resolved topology = %+v push=%q base=%q", push.PR, push.Data, push.BaseRemote)
+	}
+	p.mergeState.PushRemote, p.mergeState.BaseRemote, p.mergeState.PR = push.Data, push.BaseRemote, push.PR
+	created := p.createPR(wt, "fork title", "fork body", "main")().(MergeStepCompleteMsg)
+	if created.Err != nil || created.PR.Repository != "upstream/repo" {
+		t.Fatalf("create = %+v", created)
+	}
+	calls, _ := os.ReadFile(log)
+	for _, want := range []string{"pr list --state all --head feature --base main", "--repo upstream/repo", "pr create --repo upstream/repo", "--head me:feature", "--base main"} {
+		if !strings.Contains(string(calls), want) {
+			t.Fatalf("fork gh calls missing %q:\n%s", want, calls)
+		}
+	}
+	if strings.Contains(string(calls), "repo view") {
+		t.Fatalf("used current-directory repository inference:\n%s", calls)
+	}
+}
+
+func TestGitHubRemoteParsingAndTemporaryRefs(t *testing.T) {
+	for input, want := range map[string]string{
+		"git@github.com:owner/repo.git":       "owner/repo",
+		"ssh://git@github.com/owner/repo.git": "owner/repo",
+		"https://github.com/owner/repo.git":   "owner/repo",
+	} {
+		got, err := parseGitHubRepositoryURL(input)
+		if err != nil || got != want {
+			t.Fatalf("parse %q = %q, %v", input, got, err)
+		}
+	}
+	if _, err := parseGitHubRepositoryURL("/tmp/repo.git"); err == nil {
+		t.Fatal("local non-GitHub remote was accepted")
+	}
+	a, err := newTemporaryPRRefPrefix(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := newTemporaryPRRefPrefix(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b || !strings.HasPrefix(a, "refs/sidecar/pr/9/") || !strings.HasPrefix(b, "refs/sidecar/pr/9/") {
+		t.Fatalf("temporary refs are not independently unique: %q %q", a, b)
+	}
+}
+
+func TestBaseTopologyRejectsLocalOrNonGitHubRemote(t *testing.T) {
+	repo := t.TempDir()
+	mustGit(t, repo, "init", "-b", "main")
+	for _, tc := range []struct {
+		name, remote, remoteURL string
+	}{
+		{name: "local-dot", remote: "."},
+		{name: "non-github", remote: "origin", remoteURL: "/tmp/local.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mustGit(t, repo, "config", "branch.main.remote", tc.remote)
+			if tc.remoteURL != "" {
+				mustGit(t, repo, "config", "remote."+tc.remote+".url", tc.remoteURL)
+			}
+			if _, _, err := resolveBaseTopologyContext(context.Background(), repo, "main"); err == nil {
+				t.Fatalf("base remote %q (%q) was accepted", tc.remote, tc.remoteURL)
 			}
 		})
 	}

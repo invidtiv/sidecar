@@ -1545,6 +1545,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.mergeState.ReviewedOID = msg.ReviewedOID
 				case MergeStepPush:
 					p.mergeState.PushRemote = msg.Data
+					p.mergeState.BaseRemote = msg.BaseRemote
 					p.mergeState.PR.Repository = msg.PR.Repository
 					p.mergeState.PR.HeadRef = msg.PR.HeadRef
 					p.mergeState.PR.HeadOwner = msg.PR.HeadOwner

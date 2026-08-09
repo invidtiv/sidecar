@@ -3,10 +3,13 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 )
@@ -172,19 +175,72 @@ func ghOutputContext(ctx context.Context, dir string, args ...string) ([]byte, e
 	return out, nil
 }
 
-func currentGitHubRepositoryContext(ctx context.Context, dir string) (string, error) {
-	out, err := ghOutputContext(ctx, dir, "repo", "view", "--json", "nameWithOwner")
-	if err != nil {
-		return "", err
+func parseGitHubRepositoryURL(remoteURL string) (string, error) {
+	raw := strings.TrimSpace(remoteURL)
+	if raw == "" {
+		return "", errors.New("remote URL is empty")
 	}
-	var repo ghRepository
-	if err := json.Unmarshal(out, &repo); err != nil || repo.NameWithOwner == "" {
-		if err == nil {
-			err = errors.New("missing nameWithOwner")
+	var host, repoPath string
+	if before, after, ok := strings.Cut(raw, ":"); ok && strings.Contains(before, "@") && !strings.Contains(before, "/") {
+		host = strings.TrimPrefix(before[strings.LastIndex(before, "@")+1:], "//")
+		repoPath = after
+	} else {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			return "", fmt.Errorf("remote URL %q is not a GitHub URL", remoteURL)
 		}
-		return "", fmt.Errorf("parse GitHub repository: %w", err)
+		host, repoPath = u.Hostname(), u.Path
 	}
-	return repo.NameWithOwner, nil
+	if !strings.EqualFold(host, "github.com") {
+		return "", fmt.Errorf("remote URL %q is not hosted on github.com", remoteURL)
+	}
+	repoPath = strings.TrimSuffix(strings.Trim(path.Clean("/"+repoPath), "/"), ".git")
+	parts := strings.Split(repoPath, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("remote URL %q has no owner/repository identity", remoteURL)
+	}
+	return parts[0] + "/" + parts[1], nil
+}
+
+func configuredRemoteURLContext(ctx context.Context, dir, remote string) (string, error) {
+	if remote == "" || remote == "." {
+		return "", fmt.Errorf("remote %q is not a GitHub transport remote", remote)
+	}
+	remoteURL, err := gitOutputContext(ctx, dir, "config", "--get", "remote."+remote+".url")
+	if err != nil || remoteURL == "" {
+		return "", fmt.Errorf("remote %q has no configured URL", remote)
+	}
+	return remoteURL, nil
+}
+
+func resolveBaseTopologyContext(ctx context.Context, dir, baseBranch string) (remote, repository string, err error) {
+	if baseBranch == "" {
+		return "", "", errors.New("base branch is empty")
+	}
+	remote, err = gitOutputContext(ctx, dir, "config", "--get", "branch."+baseBranch+".remote")
+	if err != nil || remote == "" {
+		remote, err = gitOutputContext(ctx, dir, "for-each-ref", "--format=%(upstream:remotename)", "refs/heads/"+baseBranch)
+	}
+	if err != nil || remote == "" || remote == "." {
+		return "", "", fmt.Errorf("base branch %q has no GitHub remote/upstream; configure branch.%s.remote", baseBranch, baseBranch)
+	}
+	remoteURL, err := configuredRemoteURLContext(ctx, dir, remote)
+	if err != nil {
+		return "", "", err
+	}
+	repository, err = parseGitHubRepositoryURL(remoteURL)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve base repository from %s: %w", remote, err)
+	}
+	return remote, repository, nil
+}
+
+func newTemporaryPRRefPrefix(number int) (string, error) {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", fmt.Errorf("create temporary PR ref identity: %w", err)
+	}
+	return fmt.Sprintf("refs/sidecar/pr/%d/%x", number, token[:]), nil
 }
 
 func queryExistingPRContext(ctx context.Context, dir, repository, headOwner, headRef, baseRef string) (*PRIdentity, error) {

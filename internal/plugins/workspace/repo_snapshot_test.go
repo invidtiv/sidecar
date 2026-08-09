@@ -120,6 +120,18 @@ func TestDelayedPROperationIsCancelledAndCannotMutateSwitchedProject(t *testing.
 	if err := os.WriteFile(gh, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexec sleep 30\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	git := filepath.Join(binDir, "git")
+	gitScript := `#!/bin/sh
+case "$*" in
+  "symbolic-ref refs/remotes/origin/HEAD") echo refs/remotes/origin/main ;;
+  "config --get branch.main.remote") echo origin ;;
+  "config --get remote.origin.url") echo https://github.com/base/repo.git ;;
+  *) echo "unexpected git args: $*" >&2; exit 8 ;;
+esac
+`
+	if err := os.WriteFile(git, []byte(gitScript), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SIDECAR_TEST_MARKER", marker)
 
