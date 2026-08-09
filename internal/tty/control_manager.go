@@ -58,8 +58,18 @@ type ControlRequest struct {
 	// OnModelFrame opts this subscription into the byte-fed screen model
 	// (slice 1 of the td-64c916 spike). It is nil everywhere in production:
 	// with it nil no model is built, no extra tmux command is issued, and the
-	// %output payload is never even decoded, so ControlSnapshot delivery is
-	// bit-identical to the pre-slice-1 behavior.
+	// %output payload is never even decoded, so the *content* of every delivered
+	// ControlSnapshot is identical to the pre-slice-1 behavior — asserted as an
+	// exact struct value by TestCaptureDeliveryUnchangedWhenModelPathOff.
+	//
+	// Its *concurrency* did change, for every subscription including this one.
+	// Slice 1 moved every command-response callback — the capture path's
+	// included — off the control reader goroutine and onto the client's single
+	// ordered actor, which is what makes the seed cut exact. A consequence: an
+	// OnSnapshot callback that blocks now backpressures the reader, so a slow
+	// consumer can make tmux pause the pane or discard bytes for this client,
+	// which was not possible before. No Sidecar consumer blocks in OnSnapshot,
+	// but a future one must not.
 	//
 	// A frame is published only after a seed transaction and its post-seed
 	// replay have both completed. Until then — and forever, in this slice —

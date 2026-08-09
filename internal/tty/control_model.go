@@ -87,6 +87,21 @@ type ModelFrame struct {
 	// whose Seeds differs from the previous frame's follows a resynchronization.
 	Seeds int
 	Frame screenmodel.Frame
+
+	// Discarded is the last client_discarded value observed for this control
+	// client, and DiscardCheckedAt is when it was observed. tmux offers no
+	// notification for the counter, so it is only known at a seed and on the
+	// discardProbeInterval cadence: between the last check and now, tmux may have
+	// dropped bytes for this client and this frame would be built from an
+	// incomplete stream with nothing in the frame to say so.
+	//
+	// These two fields are what makes that window discriminable rather than
+	// invisible. Any consumer comparing this frame against another source (the
+	// slice-2 shadow comparison) must treat a mismatch observed later than
+	// DiscardCheckedAt as unattributable until the next check confirms the
+	// counter did not move. See §6 of the slice-1 evidence.
+	Discarded        int64
+	DiscardCheckedAt time.Time
 }
 
 // ModelInvalidation reports that a pane model lost authority. Terminal
@@ -142,10 +157,15 @@ type paneModelFeed struct {
 	rawDuringMeta int
 	seedRaces     int
 
-	seeds       int
-	frameDirty  bool
-	discarded   int64
-	discardSeen bool
+	seeds      int
+	frameDirty bool
+	// discarded is the last client_discarded value seen for this client, and
+	// discardCheckedAt is when it was seen. Published on every frame so a
+	// consumer can tell a frame whose byte stream is confirmed complete from one
+	// published inside the unobserved window between checks.
+	discarded        int64
+	discardSeen      bool
+	discardCheckedAt time.Time
 }
 
 func (f *paneModelFeed) close() {
@@ -422,6 +442,7 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 	}
 	feed.discarded = meta.Discarded
 	feed.discardSeen = true
+	feed.discardCheckedAt = time.Now()
 
 	if feed.model == nil {
 		feed.model = screenmodel.New(seed.Width, seed.Height)
@@ -509,11 +530,13 @@ func (c *sessionControlClient) publishModelFrames() {
 		}
 		feed.frameDirty = false
 		payload := ModelFrame{
-			Session:    feed.session,
-			Pane:       feed.pane,
-			Generation: feed.generation,
-			Seeds:      feed.seeds,
-			Frame:      frame,
+			Session:          feed.session,
+			Pane:             feed.pane,
+			Generation:       feed.generation,
+			Seeds:            feed.seeds,
+			Frame:            frame,
+			Discarded:        feed.discarded,
+			DiscardCheckedAt: feed.discardCheckedAt,
 		}
 		c.mu.Lock()
 		sub, ok := c.subs[feed.id]
@@ -590,7 +613,12 @@ func (c *sessionControlClient) discardResponse(response controlResponse) {
 	if err != nil || value < 0 {
 		return
 	}
+	checked := time.Now()
 	for _, feed := range c.models {
+		// Every feed's window closes on a successful probe, whether or not the
+		// counter moved: a consumer needs to know the stream was confirmed
+		// complete up to this instant, not only that a loss was found.
+		feed.discardCheckedAt = checked
 		if !feed.discardSeen || value <= feed.discarded {
 			continue
 		}

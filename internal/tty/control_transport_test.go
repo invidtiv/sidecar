@@ -102,6 +102,57 @@ func TestProcessControlChannelWriteFailureSignalsDone(t *testing.T) {
 	}
 }
 
+// A short write can still have delivered a whole command line, so tmux may
+// answer commands the writer reported as failed. Unregistering their callbacks
+// would shift every later response one slot down the FIFO. Nothing may be
+// unregistered unless the write delivered nothing at all.
+type partialWriteCloser struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (w *partialWriteCloser) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.n > len(p) {
+		w.n = len(p)
+	}
+	return w.n, errors.New("broken pipe")
+}
+
+func (w *partialWriteCloser) Close() error { return nil }
+
+func TestProcessControlChannelPartialWriteKeepsTheFIFOAligned(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		written     int
+		wantPending int
+	}{
+		{name: "nothing reached tmux", written: 0, wantPending: 0},
+		{name: "one command line reached tmux", written: len("first\n"), wantPending: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &processControlChannel{
+				stdin:   &partialWriteCloser{n: tc.written},
+				events:  make(chan controlEvent, 4),
+				done:    make(chan error, 1),
+				ready:   make(chan struct{}),
+				readyOK: true,
+			}
+			noop := func(controlResponse) {}
+			if err := channel.SendPair("first", "second", noop, noop); err == nil {
+				t.Fatal("write error not returned")
+			}
+			channel.mu.Lock()
+			pending := len(channel.pending)
+			channel.mu.Unlock()
+			if pending != tc.wantPending {
+				t.Fatalf("pending callbacks = %d, want %d", pending, tc.wantPending)
+			}
+		})
+	}
+}
+
 func TestProcessControlChannelReadLoopHandlesHandshakeAndEOF(t *testing.T) {
 	channel := &processControlChannel{
 		stdin:  &testWriteCloser{},

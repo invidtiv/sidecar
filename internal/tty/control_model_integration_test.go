@@ -222,6 +222,63 @@ func (h *modelHarness) waitForAdvance(t *testing.T, timeout time.Duration, what 
 	return numbers
 }
 
+// assertStraddlesSeedCut is the slice-1 acceptance criterion stated exactly:
+// the window the model retains must contain lines tmux had already rendered
+// before the seed *and* lines that could only have reached the model as bytes
+// replayed after the seed's capture response — with no duplicate and no gap
+// across the boundary between them.
+//
+// This is deliberately stronger than "the frame is continuous". A frame whose
+// whole window came out of the seed capture is continuous by construction and
+// proves nothing about replay, which is the property under test.
+//
+// before must be a number tmux had already emitted before the reseed was
+// provoked. The function first waits for reseeding to settle (a resize provokes
+// a second reseed from tmux's own %layout-change, and the assertion has to be
+// made against a generation that is not about to be replaced), then re-reads
+// tmux's tail: every line past that point is provably later than the settled
+// seed's capture, so its presence in the frame can only be replay.
+func (h *modelHarness) assertStraddlesSeedCut(t *testing.T, label string, before int) {
+	t.Helper()
+	seeds := h.settledSeeds(t)
+	afterSeed := lastNumber(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)))
+	var numbers []int
+	waitUntil(t, 30*time.Second, label+": a frame carrying bytes replayed past the seed cut", func() bool {
+		frame, ok := h.recorder.lastFrame()
+		if !ok || frame.Seeds != seeds {
+			return false
+		}
+		numbers = numbersIn(frame.Frame.Output)
+		return len(numbers) > 1 && lastNumber(numbers) > afterSeed
+	})
+	if numbers[0] > before {
+		t.Fatalf("%s: model window [%d,%d] starts after the pre-seed line %d, so it does not straddle the cut",
+			label, numbers[0], lastNumber(numbers), before)
+	}
+	assertContinuous(t, label, numbers)
+}
+
+// settledSeeds waits for a short quiet period with no new seed and returns the
+// resulting seed count.
+func (h *modelHarness) settledSeeds(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		seeds := h.seeds()
+		time.Sleep(400 * time.Millisecond)
+		if seeds > 0 && h.seeds() == seeds {
+			return seeds
+		}
+	}
+	t.Fatal("seeding never settled")
+	return 0
+}
+
+// tmuxTail is the highest number tmux itself currently shows on the pane.
+func (h *modelHarness) tmuxTail() int {
+	return lastNumber(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)))
+}
+
 func (h *modelHarness) tailNumber() int {
 	frame, ok := h.recorder.lastFrame()
 	if !ok {
@@ -243,18 +300,12 @@ func TestModelAttachMidStreamLosesNoBytes(t *testing.T) {
 	waitUntil(t, 15*time.Second, "the pane to start writing", func() bool {
 		return len(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane))) > 10
 	})
-	beforeAttach := lastNumber(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)))
+	beforeAttach := h.tmuxTail()
 	sub := h.subscribe(t)
 	defer sub.Close()
 
-	numbers := h.waitForAdvance(t, 15*time.Second, "first model frames after attach")
-	assertContinuous(t, "attach", numbers)
-	// The retained window must straddle the seed cut: lines tmux had already
-	// rendered before the seed, and lines that only arrived as replayed bytes.
-	if numbers[0] > beforeAttach || lastNumber(numbers) <= beforeAttach {
-		t.Fatalf("model window [%d,%d] does not straddle the attach point %d",
-			numbers[0], lastNumber(numbers), beforeAttach)
-	}
+	h.waitForAdvance(t, 15*time.Second, "first model frames after attach")
+	h.assertStraddlesSeedCut(t, "attach", beforeAttach)
 
 	// Independent oracle: with the pane quiescent, tmux's own capture and the
 	// model must agree on the tail.
@@ -301,11 +352,14 @@ func TestModelResizeReseedsAndLosesNoBytes(t *testing.T) {
 	numbers := h.waitForAdvance(t, 15*time.Second, "frames before resize")
 	assertContinuous(t, "pre-resize", numbers)
 	seedsBefore := h.seeds()
+	beforeResize := h.tmuxTail()
 
 	sub.Resize(100, 30)
 	waitUntil(t, 15*time.Second, "a reseed after resize", func() bool { return h.seeds() > seedsBefore })
-	numbers = h.waitForAdvance(t, 15*time.Second, "frames after resize")
-	assertContinuous(t, "post-resize", numbers)
+	// The reseeded window must straddle the new seed's cut, not merely be
+	// continuous: a window sourced entirely from the reseed capture would be
+	// continuous while proving nothing about post-seed replay.
+	h.assertStraddlesSeedCut(t, "post-resize", beforeResize)
 
 	frame, _ := h.recorder.lastFrame()
 	width, height := h.paneSize()
@@ -381,6 +435,13 @@ func TestModelPauseContinueForcesReseedAndStaysContinuous(t *testing.T) {
 		tmuxTail = lastN(numbersIn(h.tmux.run("capture-pane", "-p", "-t", h.tmux.pane)), 10)
 		return len(modelTail) == 10 && equalInts(modelTail, tmuxTail)
 	})
+	// The oracle above is this test's real proof: the model's tail equals tmux's
+	// own after the reseed. The continuity check below is a weaker companion —
+	// this frame's 600-line window can be entirely capture-sourced, so it does
+	// not by itself say anything about post-seed replay. The straddle assertions
+	// live in the attach, resize, reconnect and generation tests, where the seed
+	// can be provoked at a known point in the number stream; here the seed is
+	// provoked by tmux's own flow control at a moment the test does not choose.
 	frame, _ := h.recorder.lastFrame()
 	assertContinuous(t, "post-pause", numbersIn(frame.Frame.Output))
 
@@ -420,10 +481,11 @@ func TestModelReconnectFallsBackThenReseeds(t *testing.T) {
 	h.recorder.mu.Lock()
 	h.recorder.frames = nil
 	h.recorder.mu.Unlock()
+	beforeResubscribe := h.tmuxTail()
 	second := h.subscribe(t)
 	defer second.Close()
-	numbers = h.waitForAdvance(t, 20*time.Second, "frames after reconnect")
-	assertContinuous(t, "post-reconnect", numbers)
+	h.waitForAdvance(t, 20*time.Second, "frames after reconnect")
+	h.assertStraddlesSeedCut(t, "post-reconnect", beforeResubscribe)
 	h.tmux.stopWriter()
 }
 
@@ -455,6 +517,7 @@ func TestModelGenerationReplacementReseeds(t *testing.T) {
 
 	sub.SetVisible(false)
 	time.Sleep(200 * time.Millisecond)
+	beforeShow := h.tmuxTail()
 	sub.SetVisible(true)
 
 	var second ModelFrame
@@ -469,7 +532,10 @@ func TestModelGenerationReplacementReseeds(t *testing.T) {
 	if second.Seeds != 1 {
 		t.Fatalf("a replaced generation reused a model: seeds = %d", second.Seeds)
 	}
-	assertContinuous(t, "post-generation", numbersIn(second.Frame.Output))
+	// The first frame of a new generation is the seed capture itself, continuous
+	// by construction; it says nothing about replay. Require the new generation's
+	// window to straddle its own seed cut.
+	h.assertStraddlesSeedCut(t, "post-generation", beforeShow)
 	h.tmux.stopWriter()
 }
 

@@ -165,11 +165,20 @@ func (s *pasteTmux) buffers() string {
 // TestSendPasteToTmuxBracketedAndPlain is the acceptance criterion: one paste
 // path serves both a bracketed-paste-aware application and a plain one, and
 // which brackets appear is tmux's decision, not Sidecar's.
+//
+// It also pins line endings in both directions, because that is a separate
+// decision from bracketing and one that is easy to change by accident. Sidecar
+// does not pass `paste-buffer -r`, so tmux's default LF→CR translation applies:
+// a raw-mode program reads CR as "submit this line", and a multi-line paste into
+// an app that never asked for bracketed paste must keep submitting its lines.
+// The bracketed pane must still get the tmux-inserted ESC[200~ / ESC[201~
+// wrapper. Both assertions are made for both panes.
 func TestSendPasteToTmuxBracketedAndPlain(t *testing.T) {
 	srv := startPasteTmux(t)
 
-	// Embedded LF (not CR) proves paste-buffer -r left line endings alone.
+	// Sent with an embedded LF; tmux delivers it as CR because -r is not passed.
 	const text = "line one\nline two"
+	const translated = "line one\rline two"
 
 	cases := []struct {
 		name      string
@@ -178,15 +187,15 @@ func TestSendPasteToTmuxBracketedAndPlain(t *testing.T) {
 		want      string
 	}{
 		{
-			name:    "plain shell receives the bytes untouched",
+			name:    "plain app receives CR-terminated lines",
 			session: "plain",
-			want:    text,
+			want:    translated,
 		},
 		{
 			name:      "bracketed app receives tmux-inserted brackets",
 			session:   "brack",
 			bracketed: true,
-			want:      BracketedPasteStart + text + BracketedPasteEnd,
+			want:      BracketedPasteStart + translated + BracketedPasteEnd,
 		},
 	}
 	for _, tc := range cases {
@@ -196,11 +205,18 @@ func TestSendPasteToTmuxBracketedAndPlain(t *testing.T) {
 				t.Fatalf("paste: %v", err)
 			}
 			got := waitForPasteContent(t, out, tc.want)
-			if !tc.bracketed && strings.Contains(got, BracketedPasteStart) {
+			if tc.bracketed {
+				if !strings.HasPrefix(got, BracketedPasteStart) || !strings.HasSuffix(got, BracketedPasteEnd) {
+					t.Errorf("bracketed pane lost the tmux-inserted wrapper: %q", got)
+				}
+			} else if strings.Contains(got, BracketedPasteStart) {
 				t.Errorf("plain pane got bracketed-paste codes: %q", got)
 			}
-			if strings.Contains(got, "\r") {
-				t.Errorf("line endings were translated: %q", got)
+			// The direction that matters for raw-mode submission. Passing
+			// paste-buffer -r would turn this CR back into an LF and multi-line
+			// pastes into non-bracketed raw-mode apps would stop submitting.
+			if strings.Contains(got, "\n") || !strings.Contains(got, "\r") {
+				t.Errorf("line endings are not tmux's default LF->CR: %q", got)
 			}
 			if b := srv.buffers(); strings.Contains(b, "sidecar-paste-") {
 				t.Errorf("paste buffer was not deleted: %q", b)

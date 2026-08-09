@@ -49,8 +49,17 @@ func newPasteBufferName() string {
 // emits the bracketed-paste control codes only when the pane's application has
 // actually requested that mode. That state is not exposed as a tmux format and
 // cannot be reconstructed from a capture, so any bracketing Sidecar did itself
-// would be a guess. `-r` stops tmux rewriting line endings, `-d` drops the
-// buffer once it has been pasted, and `-t` names the pane explicitly.
+// would be a guess. `-d` drops the buffer once it has been pasted, and `-t`
+// names the pane explicitly.
+//
+// `-r` is deliberately NOT passed, although the plan for this work specified it.
+// It disables tmux's default LF→CR translation, and a raw-mode program that has
+// not requested bracketed paste reads CR — not LF — as "submit this line". With
+// `-r` a multi-line paste into such a program (measured: the pane received
+// `41 0a 42` instead of `41 0d 42`) stops submitting its lines. Line-ending
+// behavior therefore stays exactly as it has always been; `-p` is the part that
+// actually matters. Pinned in both directions by
+// TestSendPasteToTmuxBracketedAndPlain.
 func SendPasteToTmux(sessionName, text string) error {
 	return sendPasteToTmuxSocket("", sessionName, text)
 }
@@ -64,7 +73,15 @@ func sendPasteToTmuxSocket(socket, sessionName, text string) error {
 		if socket != "" {
 			args = append([]string{"-S", socket}, args...)
 		}
-		return exec.Command("tmux", args...) //nolint:gosec
+		cmd := exec.Command("tmux", args...) //nolint:gosec
+		if socket != "" {
+			// An explicit socket already overrides server selection, but TMUX is
+			// scrubbed anyway so a suite running inside tmux can never resolve any
+			// part of the command against the developer's live default server.
+			// Matches newProcessControlChannelForSocket.
+			cmd.Env = append(os.Environ(), "TMUX=")
+		}
+		return cmd
 	}
 
 	loadCmd := tmux("load-buffer", "-b", buffer, "-")
@@ -76,7 +93,7 @@ func sendPasteToTmuxSocket(socket, sessionName, text string) error {
 		return err
 	}
 
-	output, err := tmux("paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", sessionName).CombinedOutput()
+	output, err := tmux("paste-buffer", "-p", "-d", "-b", buffer, "-t", sessionName).CombinedOutput()
 	if err != nil {
 		// -d only deletes on the success path. A pane that died between the two
 		// commands would otherwise leave the named buffer on the user's server

@@ -502,6 +502,134 @@ func TestControlModelDiscardGrowthForcesReseed(t *testing.T) {
 	}
 }
 
+// tmux gives no notification for client_discarded, so between checks a frame can
+// be built from a stream tmux silently truncated. Slice 2's shadow comparison
+// cannot attribute a mismatch without knowing that, so every frame carries the
+// last observed counter and when it was observed.
+func TestControlModelFramesCarryDiscardObservationWindow(t *testing.T) {
+	recorder := &modelRecorder{}
+	_, _, channel := startModelSubscription(t, recorder)
+	metadata, capture, _ := channel.seedCommands(0)
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushResponse(channel, capture, []string{"seeded"})
+	waitUntilCommand(t, 3*time.Second, func() bool { return recorder.frameCount() > 0 })
+
+	seeded, _ := recorder.lastFrame()
+	if seeded.DiscardCheckedAt.IsZero() {
+		t.Fatal("a seeded frame reports no discard observation time")
+	}
+	if seeded.Discarded != 0 {
+		t.Fatalf("seed metadata reported client_discarded 0, frame says %d", seeded.Discarded)
+	}
+
+	var probe fakeControlCommand
+	waitUntilCommand(t, 3*time.Second, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "#{client_discarded}") &&
+				!strings.Contains(command.text, "cursor_x") {
+				probe = command
+				return true
+			}
+		}
+		return false
+	})
+	pushResponse(channel, probe, []string{"4096"})
+
+	// The reseed the growth forces republishes with the new counter and a fresh
+	// observation time: the window a consumer must discount is now bounded.
+	waitUntilCommand(t, 3*time.Second, func() bool { return channel.seedCount() == 2 })
+	metadata, capture, _ = channel.seedCommands(1)
+	pushResponse(channel, metadata, []string{"0,2,1,6,20,0,0,0,0,0,0,4096,%1"})
+	pushResponse(channel, capture, []string{"reseeded"})
+	waitUntilCommand(t, 3*time.Second, func() bool {
+		frame, ok := recorder.lastFrame()
+		return ok && frame.Discarded == 4096 && frame.DiscardCheckedAt.After(seeded.DiscardCheckedAt)
+	})
+}
+
+// The seed-race detector is the standing guard on the one thing this slice's
+// barrier assumes and tmux does not document: that no pane byte ever lands
+// between a seed transaction's metadata response and its capture response. If it
+// ever did, the metadata cursor would describe an older screen than the capture
+// and every subsequently replayed byte would be written at the wrong coordinate
+// — silently.
+//
+// The integration test can only observe that the detector does not fire against
+// tmux 3.6b, which is equally true of a detector that is dead code. This forces
+// the interleaving directly on the ordered event stream (no real tmux can be
+// made to do it on demand) and requires the detector to fire: the raced seed must
+// be discarded, reported, and replaced by a fresh one, and no frame may be built
+// from the stale metadata.
+func TestControlModelSeedRaceIsDetectedAndReseeds(t *testing.T) {
+	recorder := &modelRecorder{}
+	_, _, channel := startModelSubscription(t, recorder)
+	metadata, capture, ok := channel.seedCommands(0)
+	if !ok {
+		t.Fatal("seed transaction not issued")
+	}
+
+	// Exactly the forbidden interleaving: metadata, then pane bytes, then the
+	// capture that those bytes are already rendered into.
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushOutput(channel, "%1", "RACED\r\n")
+	pushResponse(channel, capture, []string{"stale screen"})
+
+	waitUntilCommand(t, 3*time.Second, func() bool {
+		for _, reason := range recorder.reasons() {
+			if reason == ResyncSeedRace {
+				return true
+			}
+		}
+		return false
+	})
+	// The raced seed is discarded, not accepted: no frame may exist yet, and a
+	// replacement transaction must have been issued.
+	if recorder.frameCount() != 0 {
+		t.Fatalf("published %d frames from a raced seed", recorder.frameCount())
+	}
+	waitUntilCommand(t, 3*time.Second, func() bool { return channel.seedCount() == 2 })
+
+	// The replacement seed is uncontended and does produce a model.
+	metadata, capture, ok = channel.seedCommands(1)
+	if !ok {
+		t.Fatal("replacement seed transaction not issued")
+	}
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushResponse(channel, capture, []string{"fresh screen"})
+	waitUntilCommand(t, 3*time.Second, func() bool {
+		frame, ok := recorder.lastFrame()
+		return ok && strings.Contains(frame.Frame.Output, "fresh screen")
+	})
+	// The stale capture must never have been seeded into the model.
+	frame, _ := recorder.lastFrame()
+	if strings.Contains(frame.Frame.Output, "stale screen") {
+		t.Fatalf("raced seed reached the model: %q", frame.Frame.Output)
+	}
+}
+
+// Bytes arriving before the metadata response are not a race: they are provably
+// already in the capture that follows, which is the ordinary mid-stream attach.
+// The detector must not fire on them, or every busy pane would reseed forever.
+func TestControlModelBytesBeforeMetadataAreNotASeedRace(t *testing.T) {
+	recorder := &modelRecorder{}
+	_, _, channel := startModelSubscription(t, recorder)
+	metadata, capture, _ := channel.seedCommands(0)
+	pushOutput(channel, "%1", "before metadata\r\n")
+	pushResponse(channel, metadata, []string{testSeedMetadata})
+	pushResponse(channel, capture, []string{"seeded"})
+	waitUntilCommand(t, 3*time.Second, func() bool { return recorder.frameCount() > 0 })
+	for _, reason := range recorder.reasons() {
+		if reason == ResyncSeedRace {
+			t.Fatalf("pre-metadata bytes were mistaken for a seed race: %v", recorder.reasons())
+		}
+	}
+	if channel.seedCount() != 1 {
+		t.Fatalf("an uncontended seed was reissued: %d seeds", channel.seedCount())
+	}
+}
+
 func waitUntilCommand(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

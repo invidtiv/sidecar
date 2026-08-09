@@ -141,12 +141,20 @@ func (c *processControlChannel) write(commands []string, callbacks []func(contro
 	c.mu.Lock()
 	c.pending = append(c.pending, callbacks...)
 	c.mu.Unlock()
-	if _, err := io.WriteString(c.stdin, payload.String()); err != nil {
-		c.mu.Lock()
-		if drop := min(len(callbacks), len(c.pending)); drop > 0 {
-			c.pending = c.pending[:len(c.pending)-drop]
+	if written, err := io.WriteString(c.stdin, payload.String()); err != nil {
+		// Unregistering the callbacks is only sound when nothing reached tmux: a
+		// short write can still have delivered a whole command line, and tmux will
+		// answer it with a response block that the remaining FIFO must still line
+		// up against. On a partial write the callbacks are therefore left in place
+		// — the write error kills the channel anyway, so they are dropped with it,
+		// but they are never removed while a response for them may still arrive.
+		if written == 0 {
+			c.mu.Lock()
+			if drop := min(len(callbacks), len(c.pending)); drop > 0 {
+				c.pending = c.pending[:len(c.pending)-drop]
+			}
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 		c.finish(fmt.Errorf("tmux control write: %w", err))
 		return err
 	}
