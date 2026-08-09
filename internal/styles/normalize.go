@@ -90,6 +90,9 @@ func NormalizePalette(c ColorPalette) ColorPalette {
 	if c.Primary != "" {
 		c.OnPrimary = onColor(c.OnPrimary, c.Primary)
 	}
+	if c.Warning != "" {
+		c.OnWarning = onColor(c.OnWarning, c.Warning)
+	}
 
 	return c
 }
@@ -256,6 +259,9 @@ var paletteRequirements = []contrastRequirement{
 	{"onPrimary on primary", targetBodyText,
 		func(p ColorPalette) string { return p.OnPrimary },
 		func(p ColorPalette) string { return p.Primary }},
+	{"onWarning on warning", targetBodyText,
+		func(p ColorPalette) string { return p.OnWarning },
+		func(p ColorPalette) string { return p.Warning }},
 	{"diffAddFg on diffAddBg", targetBodyText,
 		func(p ColorPalette) string { return p.DiffAddFg },
 		func(p ColorPalette) string { return p.DiffAddBg }},

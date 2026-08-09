@@ -36,6 +36,7 @@ var (
 	SurfaceRaised  = lipgloss.Color("#2B3544") // Chrome for key hints/chips
 	KeyHintFgColor = lipgloss.Color("#F9FAFB") // Shortcut key text on SurfaceRaised
 	OnPrimaryColor = lipgloss.Color("#FFFFFF") // Text on a Primary-coloured fill
+	OnWarningColor = lipgloss.Color("#000000") // Text on a Warning-coloured fill
 
 	// Border colors
 	BorderNormal = lipgloss.Color("#374151")
@@ -312,7 +313,8 @@ var (
 
 	// Content search match highlighting
 	SearchMatch = lipgloss.NewStyle().
-			Background(Warning) // Yellow background for all matches
+			Background(Warning).
+			Foreground(OnWarningColor) // Yellow background for all matches
 
 	SearchMatchCurrent = lipgloss.NewStyle().
 				Background(Primary). // Purple background for current match

@@ -73,6 +73,7 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 		SurfaceRaised: surfaceRaised,
 		KeyHintFg:     EnsureContrastOn(textPrimary, []string{surfaceRaised}, 4.5),
 		OnPrimary:     onColor(scheme.Blue),
+		OnWarning:     onColor(scheme.Yellow),
 
 		BorderNormal: scheme.BrightBlack,
 		BorderActive: scheme.Blue,
@@ -124,6 +125,7 @@ func PaletteToOverrides(p styles.ColorPalette) map[string]interface{} {
 		"surfaceRaised":    p.SurfaceRaised,
 		"keyHintFg":        p.KeyHintFg,
 		"onPrimary":        p.OnPrimary,
+		"onWarning":        p.OnWarning,
 		"borderNormal":     p.BorderNormal,
 		"borderActive":     p.BorderActive,
 		"borderMuted":      p.BorderMuted,

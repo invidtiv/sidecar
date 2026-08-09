@@ -53,6 +53,10 @@ type ColorPalette struct {
 	// (focused rows, active chips, the current search match).
 	OnPrimary string `json:"onPrimary"`
 
+	// OnWarning is foreground text drawn on a Warning-coloured fill
+	// (search match highlights).
+	OnWarning string `json:"onWarning"`
+
 	// Border colors
 	BorderNormal string `json:"borderNormal"`
 	BorderActive string `json:"borderActive"`
@@ -728,6 +732,8 @@ func applySingleOverride(palette *ColorPalette, key, value string) {
 		palette.KeyHintFg = value
 	case "onPrimary":
 		palette.OnPrimary = value
+	case "onWarning":
+		palette.OnWarning = value
 	case "borderNormal":
 		palette.BorderNormal = value
 	case "borderActive":
@@ -855,6 +861,7 @@ func ApplyThemeColors(theme Theme) {
 	SurfaceRaised = lipgloss.Color(c.SurfaceRaised)
 	KeyHintFgColor = lipgloss.Color(c.KeyHintFg)
 	OnPrimaryColor = lipgloss.Color(c.OnPrimary)
+	OnWarningColor = lipgloss.Color(c.OnWarning)
 
 	BorderNormal = lipgloss.Color(c.BorderNormal)
 	BorderActive = lipgloss.Color(c.BorderActive)
@@ -1127,7 +1134,8 @@ func rebuildStyles() {
 		Italic(true)
 
 	SearchMatch = lipgloss.NewStyle().
-		Background(Warning)
+		Background(Warning).
+		Foreground(OnWarningColor)
 
 	SearchMatchCurrent = lipgloss.NewStyle().
 		Background(Primary).
