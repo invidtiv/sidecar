@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -108,6 +109,78 @@ func TestPinnedDiffSnapshotIgnoresMovingBaseRef(t *testing.T) {
 	}
 	if s.MergeBase != baseOID {
 		t.Fatalf("merge base = %s, want pinned %s", s.MergeBase, baseOID)
+	}
+}
+
+func TestLoadDiffCapturesPinnedStrategyAcrossRefresh(t *testing.T) {
+	dir := authoritativeRepo(t)
+	baseOID := strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "main"))
+	headOID := strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	marker, release := filepath.Join(t.TempDir(), "git-started"), filepath.Join(t.TempDir(), "git-release")
+	wrapper := filepath.Join(binDir, "git")
+	script := fmt.Sprintf("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nwhile [ ! -f \"$SIDECAR_TEST_RELEASE\" ]; do sleep 0.01; done\nexec %q \"$@\"\n", realGit)
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	t.Setenv("SIDECAR_TEST_RELEASE", release)
+
+	wt := &Worktree{Key: "feature", RepoKey: "old-repo", Name: "feature", Path: dir,
+		Branch: "feature", BaseBranch: "main", BaseOID: baseOID, HEADOID: headOID}
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 17, WorkDir: dir, ProjectRoot: dir}
+	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
+	p.repoSnapshot = &RepoSnapshot{Key: "old-repo", Worktrees: []WorktreeSnapshot{{Key: wt.Key, BaseRef: "main", BaseOID: baseOID, HEADOID: headOID}}}
+	p.worktrees, p.selectedIdx = []*Worktree{wt}, 0
+	cmd := p.loadDiff(wt)
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	waitForFile(t, marker)
+
+	// Clear the plugin snapshot through the real Update path and move the
+	// display ref while the command is delayed. The command must retain its
+	// already-captured pinned strategy and OIDs.
+	p.refreshOperationID = "refresh-clear"
+	p.update(RefreshDoneMsg{OperationScope: OperationScope{Epoch: 17, OperationID: "refresh-clear"}, Worktrees: []*Worktree{wt}})
+	realCmd := exec.Command(realGit, "branch", "-f", "main", headOID+"~1")
+	realCmd.Dir = dir
+	if out, err := realCmd.CombinedOutput(); err != nil {
+		t.Fatalf("move base: %s: %v", out, err)
+	}
+	if err := os.WriteFile(release, []byte("go"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var result tea.Msg
+	select {
+	case result = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("delayed diff did not finish")
+	}
+	loaded, ok := result.(DiffLoadedMsg)
+	if !ok {
+		t.Fatalf("result = %T: %+v", result, result)
+	}
+	if len(loaded.Snapshot.Commits) != 2 {
+		t.Fatalf("captured strategy returned %d commits, want 2", len(loaded.Snapshot.Commits))
+	}
+
+	// A subsequent repository swap makes the old operation scope stale; its
+	// otherwise-valid result must not replace current diff state.
+	p.refreshOperationID = "refresh-new"
+	p.update(RefreshDoneMsg{OperationScope: OperationScope{Epoch: 17, OperationID: "refresh-new"},
+		Snapshot: &RepoSnapshot{Key: "new-repo"}, Worktrees: []*Worktree{{Key: "new", RepoKey: "new-repo", Path: dir}}})
+	p.diffError = "current"
+	p.update(loaded)
+	if p.diffError != "current" {
+		t.Fatal("stale delayed diff result was applied after repository swap")
 	}
 }
 

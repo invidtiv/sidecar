@@ -78,6 +78,10 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 			}
 		}
 	}
+	// The command closure must never consult mutable plugin state. Capture the
+	// strategy along with its inputs before returning; RefreshDone/Init may
+	// replace or clear repoSnapshot while this command is running.
+	usePinnedOIDs := baseOID != "" && headOID != ""
 	return func() tea.Msg {
 		if err := ctx.Err(); err != nil {
 			return DiffErrorMsg{OperationScope: scope, WorkspaceName: name, BaseRef: baseRef,
@@ -85,7 +89,7 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 		}
 		var snapshot *DiffSnapshot
 		var err error
-		if p.repoSnapshot != nil {
+		if usePinnedOIDs {
 			snapshot, err = loadDiffSnapshotPinned(ctx, path, baseRef, baseOID, headOID)
 		} else {
 			// Compatibility for isolated callers without repository inventory:
