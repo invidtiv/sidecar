@@ -14,10 +14,12 @@ type RawRecord struct {
 
 // SessionMetaPayload holds metadata about a Codex session.
 type SessionMetaPayload struct {
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
-	CWD       string    `json:"cwd"`
-	Source    string    `json:"source"`
+	ID           string          `json:"id"`
+	SessionID    string          `json:"session_id"`
+	Timestamp    time.Time       `json:"timestamp"`
+	CWD          string          `json:"cwd"`
+	Source       json.RawMessage `json:"source"`
+	ThreadSource string          `json:"thread_source"`
 }
 
 // ResponseItemBase holds the response item type.
@@ -28,7 +30,9 @@ type ResponseItemBase struct {
 // ResponseMessagePayload represents a user or assistant message.
 type ResponseMessagePayload struct {
 	Type    string         `json:"type"`
+	ID      string         `json:"id"`
 	Role    string         `json:"role"`
+	Phase   string         `json:"phase,omitempty"`
 	Content []ContentBlock `json:"content"`
 }
 
@@ -41,6 +45,7 @@ type ContentBlock struct {
 // ResponseToolCallPayload represents a tool call request.
 type ResponseToolCallPayload struct {
 	Type      string          `json:"type"`
+	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -50,6 +55,7 @@ type ResponseToolCallPayload struct {
 // ResponseToolOutputPayload represents a tool call response.
 type ResponseToolOutputPayload struct {
 	Type   string          `json:"type"`
+	ID     string          `json:"id"`
 	CallID string          `json:"call_id"`
 	Output json.RawMessage `json:"output,omitempty"`
 }
@@ -57,6 +63,7 @@ type ResponseToolOutputPayload struct {
 // ResponseReasoningPayload represents reasoning metadata.
 type ResponseReasoningPayload struct {
 	Type    string             `json:"type"`
+	ID      string             `json:"id"`
 	Summary []ReasoningSummary `json:"summary"`
 }
 
@@ -85,6 +92,7 @@ type TokenUsage struct {
 	CachedInputTokens     int `json:"cached_input_tokens"`
 	OutputTokens          int `json:"output_tokens"`
 	ReasoningOutputTokens int `json:"reasoning_output_tokens"`
+	CacheWriteInputTokens int `json:"cache_write_input_tokens"`
 	TotalTokens           int `json:"total_tokens"`
 }
 
@@ -103,4 +111,5 @@ type SessionMetadata struct {
 	MsgCount         int
 	TotalTokens      int
 	FirstUserMessage string // Content of the first user message (for title)
+	IsSubAgent       bool
 }
