@@ -142,6 +142,10 @@ func (p *Plugin) buildModel() tea.Cmd {
 		// preserved.
 		SuppressFooter:   false,
 		SuppressKeyHints: true,
+		// Sidecar owns the number row for tab switching, so Tasks' view bar
+		// must stop offering `1 Agenda 2 Next …`. Advertisement only: `1`-`6`
+		// still jump views inside Tasks, they just never reach it from here.
+		SuppressViewKeyHints: true,
 		// Tasks must never terminate the host. Quit requests are surfaced
 		// through QuitRequested() instead of tea.Quit.
 		SuppressQuit: true,
