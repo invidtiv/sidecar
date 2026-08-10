@@ -104,7 +104,7 @@
     SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   --ifm-code-font-size: 92%;
-  --sc-radius: 14px;
+  --sc-radius: 4px;
   --sc-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 }
 
@@ -796,7 +796,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.55);
 }
@@ -825,16 +825,16 @@ a:hover {
 
 .sc-tabs {
   display: flex;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--sc-border);
   background: rgba(23, 26, 31, 0.55);
 }
 
 .sc-tab {
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
   border: 1px solid var(--sc-border);
   color: rgba(232,232,227,0.78);
   background: rgba(0,0,0,0.15);
@@ -852,7 +852,7 @@ a:hover {
   color: rgba(232,232,227,0.92);
   border-color: rgba(102, 217, 239, 0.35);
   background: rgba(102, 217, 239, 0.08);
-  box-shadow: 0 0 0 3px rgba(102, 217, 239, 0.06);
+  box-shadow: 0 0 0 2px rgba(102, 217, 239, 0.06);
 }
 
 .sc-tabActive:hover {
@@ -864,7 +864,7 @@ a:hover {
 .sc-frameBody {
   display: grid;
   grid-template-columns: 28% 72%;
-  min-height: 450px;
+  min-height: 420px;
 }
 
 @media (max-width: 996px) {
@@ -877,16 +877,16 @@ a:hover {
 .sc-frameBodyStacked {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  min-height: 450px;
+  gap: 4px;
+  padding: 6px;
+  min-height: 420px;
 }
 
 .sc-frameBodyStacked .sc-tdSection {
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px solid var(--sc-border);
   background: rgba(0, 0, 0, 0.2);
-  padding: 8px 10px;
+  padding: 6px 8px;
   flex: 1;
 }
 
@@ -898,13 +898,13 @@ a:hover {
 .sc-paneSidebar {
   border-right: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.30);
-  padding: 10px;
+  padding: 6px 8px;
   overflow: hidden;
 }
 
 /* Pane main (right side) */
 .sc-paneMain {
-  padding: 10px;
+  padding: 6px 8px;
   overflow: hidden;
 }
 
@@ -926,10 +926,10 @@ a:hover {
 }
 
 .sc-frameFooter {
-  padding: 8px 12px;
+  padding: 5px 10px;
   border-top: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.55);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .sc-sidebar {
@@ -1386,6 +1386,137 @@ a:hover {
   border-color: rgba(230, 219, 116, 0.35);
 }
 
+.sc-gradientOrange {
+  background: linear-gradient(30deg,
+    rgba(253, 151, 31, 0.22) 0%,
+    rgba(23, 26, 31, 0.95) 40%,
+    rgba(23, 26, 31, 0.95) 100%);
+  border-color: rgba(253, 151, 31, 0.35);
+}
+
+.sc-gradientTeal {
+  background: linear-gradient(30deg,
+    rgba(32, 201, 151, 0.22) 0%,
+    rgba(23, 26, 31, 0.95) 40%,
+    rgba(23, 26, 31, 0.95) 100%);
+  border-color: rgba(32, 201, 151, 0.35);
+}
+
+.sc-chipBeta {
+  font-size: 10px;
+  border-radius: 3px;
+  padding: 2px 6px;
+  border: 1px solid rgba(253, 151, 31, 0.5);
+  color: #fd971f;
+  background: rgba(253, 151, 31, 0.12);
+  margin-left: 6px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+/* ---------- Kanban Board Mockup Styles ---------- */
+.sc-mockupKanbanBody {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  padding: 6px;
+  min-height: 230px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+@media (max-width: 900px) {
+  .sc-mockupKanbanBody {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .sc-mockupKanbanBody {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sc-kanbanColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(18, 20, 23, 0.4);
+  border-radius: 3px;
+  border: 1px solid var(--sc-border);
+  padding: 4px;
+}
+
+.sc-kanbanLaneHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid var(--sc-border);
+}
+
+.sc-laneCount {
+  margin-left: auto;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.sc-laneDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.sc-laneGreen { color: #a6e22e; }
+.sc-lanePink { color: #f92672; }
+.sc-laneBlue { color: #66d9ef; }
+
+.sc-kanbanCard {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--sc-border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 9px;
+}
+
+.sc-kanbanCard.sc-cardActive {
+  border-color: rgba(166, 226, 46, 0.4);
+  background: rgba(166, 226, 46, 0.08);
+}
+
+.sc-kanbanCard.sc-cardIdle {
+  opacity: 0.75;
+}
+
+.sc-cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9px;
+}
+
+.sc-cardBranch {
+  font-weight: 600;
+  color: rgba(232, 232, 227, 0.95);
+  font-size: 9px;
+}
+
+.sc-cardMeta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 8px;
+  margin-top: 1px;
+}
+
 .sc-componentContent {
   display: grid;
   grid-template-columns: 1fr 2fr;
@@ -1447,7 +1578,7 @@ a:hover {
 /* ---------- Mockup styles ---------- */
 
 .sc-mockup {
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--sc-border);
   background: rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -1459,14 +1590,14 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.6);
 }
 
 .sc-mockupTitle {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
   color: rgba(232,232,227,0.9);
 }
 
@@ -1474,7 +1605,7 @@ a:hover {
 .sc-mockupBody {
   display: grid;
   grid-template-columns: 30% 70%;
-  min-height: 260px;
+  min-height: 250px;
 }
 
 @media (max-width: 768px) {
@@ -1487,37 +1618,37 @@ a:hover {
 .sc-mockupBodyStacked {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  min-height: 260px;
+  gap: 4px;
+  padding: 6px;
+  min-height: 250px;
 }
 
 .sc-mockupBodyStacked .sc-mockupSection {
-  border-radius: 6px;
+  border-radius: 3px;
   border: 1px solid var(--sc-border);
   background: rgba(0, 0, 0, 0.2);
-  padding: 8px;
+  padding: 5px 6px;
 }
 
 .sc-mockupSidebar {
-  padding: 10px;
+  padding: 6px 8px;
   border-right: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.3);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .sc-mockupMain {
-  padding: 10px;
+  padding: 6px 8px;
 }
 
 .sc-mockupItem {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 3px;
   background: rgba(0,0,0,0.2);
   border: 1px solid transparent;
   font-size: 10px;
@@ -1530,7 +1661,7 @@ a:hover {
 }
 
 .sc-mockupFooter {
-  padding: 6px 12px;
+  padding: 4px 8px;
   border-top: 1px solid var(--sc-border);
   background: rgba(18, 20, 23, 0.6);
   font-size: 10px;
@@ -1542,9 +1673,9 @@ a:hover {
 .sc-mockupConvo,
 .sc-mockupWorkspace {
   background: rgba(0, 0, 0, 0.25);
-  border-radius: 6px;
+  border-radius: 3px;
   border: 1px solid var(--sc-border);
-  padding: 10px;
+  padding: 6px 8px;
 }
 
 .sc-bulletYellow { background: rgba(230, 219, 116, 0.45); }

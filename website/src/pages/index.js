@@ -3,12 +3,14 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 
-const TABS = ['td', 'git', 'files', 'conversations', 'workspaces'];
+const TABS = ['overview', 'td', 'git', 'files', 'notes*', 'conversations', 'workspaces'];
 
 const MINI_FEATURES = [
+  { icon: 'kanban', title: 'Agent Overview', description: 'Cross-project dashboard tracking agents, tasks, and running tmux workspaces across repositories.' },
+  { icon: 'sticky-note', title: 'Developer Notes*', description: 'In-TUI scratchpads with task links and vim editing. *Beta: requires notes_plugin feature flag.' },
   { icon: 'command', title: 'Command Palette', description: 'Quick access to all commands with fuzzy search. Press Ctrl+P to open.' },
   { icon: 'folder-kanban', title: 'Project Switcher', description: 'Switch back and forth between projects instantly. State persists per-project—cursor, plugin, and preferences restore automatically.' },
-  { icon: 'columns-2', title: 'Split Panes', description: 'View two plugins side by side. Great for watching diffs while reviewing tasks.' },
+  { icon: 'columns-2', title: 'Drag-to-Resize Panes', description: 'View two plugins side by side with interactive mouse drag pane resizing.' },
   { icon: 'activity', title: 'Diagnostics Overlay', description: 'Real-time metrics on memory, goroutines, and render performance. Toggle with F12.' },
   { icon: 'search', title: 'Fuzzy File Finder', description: 'Find any file by typing part of its name. Respects .gitignore patterns.' },
   { icon: 'file-search', title: 'Ripgrep Search', description: 'Search file contents across your entire codebase. Results update as you type.' },
@@ -21,9 +23,9 @@ const MINI_FEATURES = [
   { icon: 'git-merge', title: 'Merge Workflow', description: 'Merge PRs, delete branches, and clean up workspaces with guided prompts.' },
   { icon: 'git-fork', title: 'Worktree Switcher', description: 'Switch back and forth between git worktrees instantly. Per-worktree state restores automatically.' },
   { icon: 'refresh-cw', title: 'Global Refresh', description: 'Press R to refresh all plugins at once. Git status, files, and tasks update together.' },
-  { icon: 'sun', title: 'Theme Switching', description: 'Cycle through themes or browse the community gallery. Changes apply instantly.' },
-  { icon: 'gauge', title: 'Lightweight', description: 'Minimal CPU and memory footprint. Runs in the background without slowing down your machine like heavy editors.' },
-  { icon: 'square-pen', title: 'Inline Editor', description: 'Edit files with vim or nvim directly in the preview pane. File tree stays visible for context.' },
+  { icon: 'sun', title: 'High-Contrast Themes', description: 'Built-in WCAG contrast engine and community theme gallery with live previews.' },
+  { icon: 'terminal', title: 'Live PTY Streaming', description: 'Passive terminal follow grid and interactive PTY backend for tmux sessions.' },
+  { icon: 'square-pen', title: 'Inline Preview Editor', description: 'Edit files with vim or nvim directly in the preview pane. File tree stays visible for context.' },
 ];
 
 // For a cleaner install command, consider setting up a custom domain:
@@ -97,6 +99,92 @@ function CopyButton({ text }) {
         <i className={copied ? 'icon-check' : 'icon-copy'} />
       </button>
     </div>
+  );
+}
+
+function OverviewPane() {
+  return (
+    <>
+      <div className="sc-paneSidebar">
+        <p className="sc-sectionTitle">Projects</p>
+        <div className="sc-list">
+          <div className="sc-item sc-itemActive">
+            <span className="sc-bullet sc-bulletGreen" />
+            <span>sidecar <span className="sc-lineYellow" style={{ fontSize: 9 }}>2 agents</span></span>
+          </div>
+          <div className="sc-item">
+            <span className="sc-bullet sc-bulletBlue" />
+            <span>betamax <span className="sc-linePink" style={{ fontSize: 9 }}>1 agent</span></span>
+          </div>
+          <div className="sc-item">
+            <span className="sc-bullet sc-bulletPink" />
+            <span>td <span className="sc-lineGreen" style={{ fontSize: 9 }}>active</span></span>
+          </div>
+        </div>
+      </div>
+      <div className="sc-paneMain">
+        <div className="sc-codeBlock" role="img" aria-label="Cross-project Agent Overview Board">
+          <div className="sc-lineDim">Agent Overview Board | <span className="sc-lineGreen">3 Projects · 4 Agents</span></div>
+          <div style={{ height: 4 }} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, fontSize: 10 }}>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: 6, borderRadius: 4, border: '1px solid var(--sc-border)' }}>
+              <div className="sc-lineGreen" style={{ fontSize: 9, fontWeight: 700, marginBottom: 4 }}>● WORKING</div>
+              <div className="sc-lineYellow">sidecar / feature/auth</div>
+              <div className="sc-lineDim" style={{ fontSize: 8 }}>Claude Code | td-a1b2c3</div>
+            </div>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: 6, borderRadius: 4, border: '1px solid var(--sc-border)' }}>
+              <div className="sc-linePink" style={{ fontSize: 9, fontWeight: 700, marginBottom: 4 }}>● NEEDS ATTENTION</div>
+              <div className="sc-lineYellow">sidecar / fix/leak</div>
+              <div className="sc-lineDim" style={{ fontSize: 8 }}>Cursor | blocked</div>
+            </div>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: 6, borderRadius: 4, border: '1px solid var(--sc-border)' }}>
+              <div className="sc-lineBlue" style={{ fontSize: 9, fontWeight: 700, marginBottom: 4 }}>● DONE</div>
+              <div className="sc-lineYellow">td / refactor/cli</div>
+              <div className="sc-lineDim" style={{ fontSize: 8 }}>Grok | PR #42 ready</div>
+            </div>
+          </div>
+          <div style={{ height: 4 }} />
+          <div className="sc-lineDim">Press @ to switch between projects instantly</div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function NotesPane() {
+  return (
+    <>
+      <div className="sc-paneSidebar">
+        <p className="sc-sectionTitle">Notes <span className="sc-chipBeta">notes_plugin</span></p>
+        <div className="sc-list">
+          <div className="sc-item sc-itemActive">
+            <span className="sc-bullet sc-bulletYellow" />
+            <span>auth-architecture.md</span>
+          </div>
+          <div className="sc-item">
+            <span className="sc-bullet sc-bulletBlue" />
+            <span>migration-steps.md</span>
+          </div>
+          <div className="sc-item">
+            <span className="sc-bullet sc-bulletDim" />
+            <span>prompt-ideas.md</span>
+          </div>
+        </div>
+      </div>
+      <div className="sc-paneMain">
+        <div className="sc-codeBlock">
+          <div className="sc-lineDim">auth-architecture.md | <span className="sc-lineYellow">Linked to td-a1b2c3</span></div>
+          <div style={{ height: 4 }} />
+          <div><span className="sc-linePink"># Auth Refactor Notes</span></div>
+          <div><span className="sc-lineDim">Token validation middleware specs:</span></div>
+          <div style={{ height: 2 }} />
+          <div><span className="sc-lineBlue">- [x]</span> JWT validation function</div>
+          <div><span className="sc-lineBlue">- [ ]</span> Refresh token rotation logic</div>
+          <div style={{ height: 4 }} />
+          <div className="sc-lineDim" style={{ fontSize: 9 }}>* Beta feature — enable with SIDECAR_FEATURE_NOTES_PLUGIN=1</div>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -380,12 +468,14 @@ function Frame({ activeTab, onTabChange }) {
 
   const renderPane = () => {
     switch (activeTab) {
+      case 'overview': return <OverviewPane />;
       case 'td': return <TdPane />;
       case 'git': return <GitPane />;
       case 'files': return <FilesPane />;
+      case 'notes*': return <NotesPane />;
       case 'conversations': return <ConversationsPane />;
       case 'workspaces': return <WorkspacesPane />;
-      default: return <WorkspacesPane />;
+      default: return <OverviewPane />;
     }
   };
 
@@ -739,6 +829,160 @@ function WorkspacesMockup() {
   );
 }
 
+function OverviewMockup() {
+  return (
+    <div className="sc-mockup sc-mockupOverview">
+      <div className="sc-mockupHeader">
+        <span className="sc-mockupTitle">Agent Overview Board</span>
+        <span className="sc-lineDim">3 projects · 4 agents active</span>
+      </div>
+      <div className="sc-mockupKanbanBody">
+        {/* Column 1: WORKING */}
+        <div className="sc-kanbanColumn">
+          <div className="sc-kanbanLaneHeader sc-laneGreen">
+            <span className="sc-laneDot sc-bulletGreen" />
+            <span>WORKING</span>
+            <span className="sc-laneCount">2</span>
+          </div>
+          <div className="sc-kanbanCard sc-cardActive">
+            <div className="sc-cardTop">
+              <span className="sc-lineYellow">sidecar</span>
+              <span className="sc-lineGreen">Claude</span>
+            </div>
+            <div className="sc-cardBranch">feature/auth</div>
+            <div className="sc-cardMeta">
+              <span className="sc-lineDim">td-a1b2c3</span>
+              <span className="sc-lineGreen">24m</span>
+            </div>
+          </div>
+          <div className="sc-kanbanCard">
+            <div className="sc-cardTop">
+              <span className="sc-lineYellow">betamax</span>
+              <span className="sc-linePink">AGY</span>
+            </div>
+            <div className="sc-cardBranch">fix/recorder</div>
+            <div className="sc-cardMeta">
+              <span className="sc-lineDim">td-99ff22</span>
+              <span className="sc-linePink">12m</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Column 2: NEEDS ATTENTION */}
+        <div className="sc-kanbanColumn">
+          <div className="sc-kanbanLaneHeader sc-lanePink">
+            <span className="sc-laneDot sc-bulletPink" />
+            <span>ATTENTION</span>
+            <span className="sc-laneCount">1</span>
+          </div>
+          <div className="sc-kanbanCard">
+            <div className="sc-cardTop">
+              <span className="sc-lineYellow">sidecar</span>
+              <span className="sc-lineBlue">Cursor</span>
+            </div>
+            <div className="sc-cardBranch">fix/memory-leak</div>
+            <div className="sc-cardMeta">
+              <span className="sc-linePink">blocked</span>
+              <span className="sc-lineDim">td-g7h8i9</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Column 3: DONE */}
+        <div className="sc-kanbanColumn">
+          <div className="sc-kanbanLaneHeader sc-laneBlue">
+            <span className="sc-laneDot sc-bulletBlue" />
+            <span>DONE</span>
+            <span className="sc-laneCount">1</span>
+          </div>
+          <div className="sc-kanbanCard">
+            <div className="sc-cardTop">
+              <span className="sc-lineYellow">td</span>
+              <span className="sc-lineBlue">Grok</span>
+            </div>
+            <div className="sc-cardBranch">refactor/cli</div>
+            <div className="sc-cardMeta">
+              <span className="sc-lineGreen">PR #42</span>
+              <span className="sc-lineDim">td-33aa11</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Column 4: IDLE */}
+        <div className="sc-kanbanColumn">
+          <div className="sc-kanbanLaneHeader sc-laneDim">
+            <span className="sc-laneDot sc-bulletDim" />
+            <span>IDLE</span>
+            <span className="sc-laneCount">1</span>
+          </div>
+          <div className="sc-kanbanCard sc-cardIdle">
+            <div className="sc-cardTop">
+              <span className="sc-lineYellow">sidecar</span>
+              <span className="sc-lineDim">main</span>
+            </div>
+            <div className="sc-cardBranch">main branch</div>
+            <div className="sc-cardMeta">
+              <span className="sc-lineDim">idle</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="sc-mockupFooter">
+        <span className="sc-lineYellow">@</span><span className="sc-lineDim"> switch project | </span>
+        <span className="sc-lineYellow">h/l</span><span className="sc-lineDim"> lanes | </span>
+        <span className="sc-lineYellow">j/k</span><span className="sc-lineDim"> cards | </span>
+        <span className="sc-lineYellow">enter</span><span className="sc-lineDim"> open workspace</span>
+      </div>
+    </div>
+  );
+}
+
+function NotesMockup() {
+  return (
+    <div className="sc-mockup sc-mockupNotes">
+      <div className="sc-mockupHeader">
+        <span className="sc-mockupTitle">In-TUI Developer Notes</span>
+        <span className="sc-chipBeta">notes_plugin</span>
+      </div>
+      <div className="sc-mockupBody">
+        <div className="sc-mockupSidebar">
+          <div className="sc-lineDim" style={{ fontSize: 9, marginBottom: 4, textTransform: 'uppercase' }}>Notes</div>
+          <div className="sc-mockupItem sc-mockupItemActive">
+            <span className="sc-bullet sc-bulletYellow" />
+            <span>auth-notes.md</span>
+          </div>
+          <div className="sc-mockupItem">
+            <span className="sc-bullet sc-bulletBlue" />
+            <span>prompt-ideas.md</span>
+          </div>
+          <div className="sc-mockupItem">
+            <span className="sc-bullet sc-bulletDim" />
+            <span>todo.md</span>
+          </div>
+        </div>
+        <div className="sc-mockupMain">
+          <div className="sc-mockupPreview">
+            <div className="sc-lineDim" style={{ marginBottom: 6 }}>auth-notes.md | Linked to <span className="sc-lineYellow">td-a1b2c3</span></div>
+            <div style={{ fontSize: 10, lineHeight: 1.4 }}>
+              <div><span className="sc-linePink"># Auth Migration Strategy</span></div>
+              <div style={{ height: 2 }} />
+              <div><span className="sc-lineDim">Key items to double check before PR review:</span></div>
+              <div><span className="sc-lineBlue">- [x]</span> Validate JWT header injection</div>
+              <div><span className="sc-lineBlue">- [ ]</span> Unit tests for expired tokens</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="sc-mockupFooter">
+        <span className="sc-lineYellow">e</span><span className="sc-lineDim"> edit | </span>
+        <span className="sc-lineYellow">/</span><span className="sc-lineDim"> search | </span>
+        <span className="sc-lineYellow">t</span><span className="sc-lineDim"> link task | </span>
+        <span className="sc-lineDim">* Beta (behind notes_plugin flag)</span>
+      </div>
+    </div>
+  );
+}
+
 function ComponentSection({ id, title, features, gradient, MockupComponent }) {
   return (
     <div className={`sc-componentSection ${gradient}`} id={id}>
@@ -978,21 +1222,40 @@ export default function Home() {
         <section className="sc-grid">
           <div className="container">
             <div className="sc-gridInner sc-gridFeatures">
-              {/* TD Hero Card - double wide */}
+              {/* Overview Hero Card - double wide */}
+              <FeatureCard
+                id="overview"
+                title="Cross-project Agent Overview"
+                chip="overview"
+                isHero={true}
+                isHighlighted={activeTab === 'overview'}
+                onClick={() => handleCardClick('overview')}
+              >
+                Monitor active agents, tasks, and tmux workspaces across all your repositories in a single real-time grid.
+                Color-encoded matrix shows agent status, task progress, and running processes across your entire dev environment.
+              </FeatureCard>
+
               <FeatureCard
                 id="td"
                 title={<>Plan with <a href="https://td.haplab.com/" className="sc-inlineLink">td</a></>}
                 chip="td"
-                isHero={true}
                 isHighlighted={activeTab === 'td'}
                 onClick={() => handleCardClick('td')}
               >
                 Give agents structured work so they can operate autonomously for longer. Tasks persist across
-                context windows, keeping agents on track with clear objectives. Built-in review workflow
-                lets you verify work before moving to the next task.
+                context resets with built-in review workflows.
               </FeatureCard>
 
-              {/* Regular feature cards */}
+              <FeatureCard
+                id="notes"
+                title={<>Developer Notes <span className="sc-chipBeta">notes_plugin</span></>}
+                chip="notes*"
+                isHighlighted={activeTab === 'notes*'}
+                onClick={() => handleCardClick('notes*')}
+              >
+                Jot down specs, agent prompts, and debug scratchpads directly in Sidecar with vim inline editing and task linking. (*Beta)
+              </FeatureCard>
+
               <FeatureCard
                 id="git"
                 title="See what the agent changed"
@@ -1020,7 +1283,7 @@ export default function Home() {
                 isHighlighted={activeTab === 'conversations'}
                 onClick={() => handleCardClick('conversations')}
               >
-                All your agents in one timeline—Claude, Cursor, Gemini, Amp, Kiro, Pi, and more. Search across sessions, pick up where any agent left off.
+                All your agents in one timeline—Claude, Cursor, Gemini, Antigravity, Grok, Copilot, Amp, Kiro, Pi, and more.
               </FeatureCard>
 
               <FeatureCard
@@ -1045,6 +1308,36 @@ export default function Home() {
           </div>
 
           <div className="sc-showcaseFullWidth">
+            <ComponentSection
+              id="showcase-overview"
+              title="Cross-Project Agent Overview"
+              gradient="sc-gradientOrange"
+              MockupComponent={OverviewMockup}
+              features={[
+                'Unified multi-project matrix across all repositories',
+                'Color-encoded status cards for active AI agents',
+                'Real-time workspace inventory and running process follow',
+                'Switch active project context instantly with @ key',
+                'Aggregated task progress and PR state across repositories',
+                'Automatic polling and status synchronization',
+              ]}
+            />
+
+            <ComponentSection
+              id="showcase-notes"
+              title={<>In-TUI Developer Notes <span className="sc-chipBeta">notes_plugin</span></>}
+              gradient="sc-gradientTeal"
+              MockupComponent={NotesMockup}
+              features={[
+                'In-TUI markdown scratchpad for specs, prompts, and notes',
+                'Inline vim/nvim editor directly within the note preview pane',
+                'Direct task linking between notes and td tasks',
+                'Fuzzy title and content search across all notes',
+                'Per-project note persistence in workspace state',
+                'Beta feature: enable with SIDECAR_FEATURE_NOTES_PLUGIN=1',
+              ]}
+            />
+
             <ComponentSection
               id="showcase-td"
               title={<>Plan with <a href="https://td.haplab.com/" className="sc-inlineLink">td</a></>}
@@ -1167,7 +1460,7 @@ export default function Home() {
                 icon="layers"
                 title="Multi-Agent Support"
                 color="orange"
-                description="Works with Claude Code, Codex, Gemini CLI, Opencode, Cursor, Amp Code, Kiro, Pi, and Warp."
+                description="Works with Claude Code, Antigravity, Grok, Copilot, Codex, Gemini CLI, Opencode, Cursor, Amp Code, Kiro, Pi, and Warp."
               />
               <FeatureListItem
                 icon="git-branch"
@@ -1179,7 +1472,7 @@ export default function Home() {
                 icon="palette"
                 title="Custom Themes"
                 color="green"
-                description="Built-in themes plus a community theme browser with live previews. Customize colors to match your terminal aesthetic."
+                description="Built-in themes plus a community theme browser with live previews and contrast enforcement."
               />
               <FeatureListItem
                 icon="folder-kanban"
@@ -1189,9 +1482,9 @@ export default function Home() {
               />
               <FeatureListItem
                 icon="monitor"
-                title="tmux Integration"
+                title="Live PTY & tmux"
                 color="green"
-                description="Designed to run in a tmux pane beside your agent. Attach and detach seamlessly."
+                description="Embedded PTY backend and tmux follow grid for seamless background agent execution."
               />
               <FeatureListItem
                 icon="keyboard"
@@ -1251,6 +1544,47 @@ export default function Home() {
                 <div className="sc-agentInfo">
                   <h3 className="sc-agentName">Claude Code</h3>
                   <p className="sc-agentDesc">Anthropic's official CLI for Claude</p>
+                </div>
+              </div>
+
+              <div className="sc-agentCard">
+                <div className="sc-agentLogo">
+                  <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="32" height="32" rx="6" fill="#1A73E8" />
+                    <path d="M16 7L24 21H8L16 7z" fill="#4285F4" />
+                    <path d="M16 11L21 20H11L16 11z" fill="#34A853" />
+                    <circle cx="16" cy="17" r="2.5" fill="#FBBC04" />
+                  </svg>
+                </div>
+                <div className="sc-agentInfo">
+                  <h3 className="sc-agentName">Antigravity</h3>
+                  <p className="sc-agentDesc">Google DeepMind's agentic AI coding assistant</p>
+                </div>
+              </div>
+
+              <div className="sc-agentCard">
+                <div className="sc-agentLogo">
+                  <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="32" height="32" rx="6" fill="#000000" />
+                    <path d="M9 9l14 14M23 9L9 23" stroke="white" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <div className="sc-agentInfo">
+                  <h3 className="sc-agentName">xAI Grok</h3>
+                  <p className="sc-agentDesc">xAI's developer CLI & coding agent</p>
+                </div>
+              </div>
+
+              <div className="sc-agentCard">
+                <div className="sc-agentLogo">
+                  <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="32" height="32" rx="6" fill="#24292F" />
+                    <path d="M16 8a8 8 0 00-8 8c0 3.5 2.3 6.5 5.5 7.5.4.1.5-.2.5-.4v-1.4c-2.2.5-2.7-1.1-2.7-1.1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.4.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8.7-.2 1.4-.3 2.1-.3.7 0 1.4.1 2.1.3 1.5-1 2.2-.8 2.2-.8.5 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3.1-1.9 3.8-3.7 4 .3.3.6.8.6 1.6v2.4c0 .2.1.5.6.4A8 8 0 0024 16a8 8 0 00-8-8z" fill="white" />
+                  </svg>
+                </div>
+                <div className="sc-agentInfo">
+                  <h3 className="sc-agentName">GitHub Copilot</h3>
+                  <p className="sc-agentDesc">GitHub's AI pair programmer CLI</p>
                 </div>
               </div>
 
