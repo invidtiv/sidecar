@@ -1,11 +1,13 @@
 package tasks
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/plugin"
 	tasksui "github.com/marcus/tasks/pkg/tui"
 )
@@ -120,9 +122,10 @@ func TestRoutingTableIsDerivedFromTheTasksRegistry(t *testing.T) {
 		t.Errorf("root contexts = %v, want %v", roots, want)
 	}
 
-	// A context that binds q to something of its own is an overlay, not a root.
+	// Anything not on the root allow-list is an overlay, and the host must not
+	// quit out from under one.
 	if IsRootContext("tasks-modal") {
-		t.Error("tasks-modal binds q to its own dismissal; sidecar must not quit there")
+		t.Error("tasks-modal is an overlay; sidecar must not quit there")
 	}
 	if IsTasksContext("git-status") {
 		t.Error("git-status must not be mistaken for a tasks context")
@@ -473,39 +476,205 @@ func TestFooterStatusIsSilentWhenHealthy(t *testing.T) {
 	}
 }
 
-// TestSuppressFooterStillHidesThePrompt pins the Tasks-side gap that keeps
-// EmbeddedOptions.SuppressFooter false in buildModel.
+// TestTheTabPaintsNoSecondKeyHintRow pins the end state Packet 1.3 asked for:
+// sidecar owns the key-hint row, so the embedded Tasks model must not paint one
+// of its own — and must still paint everything else in its footer stack.
 //
-// Packet 1.3 wants Tasks to stop painting its key-hint row now that sidecar
-// renders one. Tasks' switch is all-or-nothing: the same Footer() call renders
-// the prompt input, the agent transcript, the store-read banner, and the filter
-// lines. Suppressing it makes `tab` focus an invisible caret. When Tasks grows a
-// finer control, this test fails, and that is the signal to flip the option.
-func TestSuppressFooterStillHidesThePrompt(t *testing.T) {
-	_, env := configuredEnv(t)
+// This is the counterpart to Tasks' own SuppressKeyHints contract test: it
+// asserts that sidecar actually asks for it, from the plugin's rendered tab
+// rather than from a hand-built EmbeddedOptions.
+func TestTheTabPaintsNoSecondKeyHintRow(t *testing.T) {
+	p, _ := liveModel(t)
 
-	build := func(suppress bool) *tasksui.Model {
-		t.Helper()
-		model, err := tasksui.NewEmbedded(tasksui.EmbeddedOptions{
-			SessionNamespace: "sidecar-test",
-			SuppressFooter:   suppress,
-			SuppressQuit:     true,
-			Environment:      env,
-		})
-		if err != nil {
-			t.Fatalf("NewEmbedded(suppress=%v): %v", suppress, err)
+	frame := p.View(100, 30)
+	if strings.Contains(frame, "j/k") {
+		t.Fatalf("Tasks painted its own key hint row under sidecar's footer:\n%s", frame)
+	}
+	// The rest of the footer stack is not sidecar's to erase: the prompt is
+	// what `tab` focuses, and suppressing the whole footer made it an
+	// invisible caret.
+	if !strings.Contains(frame, "tab to ask the agent") {
+		t.Fatalf("the prompt row is gone from the tab:\n%s", frame)
+	}
+
+	press(t, p, tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := p.FocusContext(); got != string(tasksui.FocusPrompt) {
+		t.Fatalf("tab left focus at %q, want the prompt", got)
+	}
+	press(t, p, tea.KeyPressMsg{Code: 'x', Text: "unified footer"})
+
+	frame = p.View(100, 30)
+	if !strings.Contains(frame, "unified footer") {
+		t.Fatalf("the focused prompt does not show what was typed into it:\n%s", frame)
+	}
+	if strings.Contains(frame, "j/k") {
+		t.Fatalf("the key hint row came back once the prompt was focused:\n%s", frame)
+	}
+}
+
+// claimedGlobals lists, in order, every key sidecar binds globally that Tasks
+// claims in its current context.
+func claimedGlobals(p *Plugin) []string {
+	var claimed []string
+	for key := range keymap.GlobalKeys {
+		if p.ClaimsKey(key) {
+			claimed = append(claimed, key)
 		}
-		t.Cleanup(func() { _ = model.Discard() })
-		return model
+	}
+	sort.Strings(claimed)
+	return claimed
+}
+
+// TestTheClaimedGlobalsDoNotDependOnTheSelection is the W2 fix.
+//
+// ClaimsKey used to be availability-aware for every key, so in the SAME
+// tasks-list view it claimed [1 2 3 4 5 6 @] with nothing selected and
+// [1 2 3 4 5 6 @ K W #] with something selected. `K`, `W` and `#` therefore
+// meant sidecar's Overview, worktree switcher and theme switcher until you
+// selected a task, at which point the same keys became raise-priority,
+// set-work-ref and delete-selected. A key whose meaning depends on the
+// selection is not a mapping anyone chose, and one of those meanings is
+// destructive.
+func TestTheClaimedGlobalsDoNotDependOnTheSelection(t *testing.T) {
+	p, _ := liveModel(t)
+
+	before := p.FocusContext()
+	empty := claimedGlobals(p)
+
+	// The fixture task is NEXT, so this view has a row to select.
+	p.invoke("view-next")
+	if got := p.FocusContext(); got != before {
+		t.Fatalf("the context changed from %q to %q; this test compares one context", before, got)
+	}
+	if !p.available("delete-selected") {
+		t.Fatal("test premise: nothing is selected, so there is no shadowing to test")
+	}
+	selected := claimedGlobals(p)
+
+	if strings.Join(empty, " ") != strings.Join(selected, " ") {
+		t.Errorf("the claimed sidecar globals in %s change with the selection:\n"+
+			"  nothing selected: %v\n  task selected:    %v", before, empty, selected)
 	}
 
-	const promptAffordance = "tab to ask the agent"
-
-	if view := build(false).View(100, 30); !strings.Contains(view, promptAffordance) {
-		t.Fatalf("test premise: Tasks' own footer no longer carries the prompt:\n%s", view)
+	// And the set is the one the plan's conflict table decided.
+	want := []string{"1", "2", "3", "4", "5", "6", "@"}
+	if strings.Join(selected, " ") != strings.Join(want, " ") {
+		t.Errorf("claimed globals = %v, want the conflict table's %v", selected, want)
 	}
-	if view := build(true).View(100, 30); strings.Contains(view, promptAffordance) {
-		t.Fatal("Tasks now keeps the prompt under SuppressFooter: flip " +
-			"EmbeddedOptions.SuppressFooter to true in buildModel and delete this test")
+}
+
+// TestSidecarKeepsTheGlobalsTheConflictTableNeverGaveAway states the rule: a
+// Tasks binding may shadow a sidecar global only if the plan's conflict table
+// decided that collision. `K`, `W` and `#` were never in it — they collide by
+// accident — so sidecar wins them and the Tasks commands stay reachable through
+// `?` and the palette.
+func TestSidecarKeepsTheGlobalsTheConflictTableNeverGaveAway(t *testing.T) {
+	p, _ := liveModel(t)
+	p.invoke("view-next")
+
+	for _, key := range []string{"K", "W", "#"} {
+		commands := commandsForKey("tasks-list", key)
+		if len(commands) == 0 {
+			t.Fatalf("test premise: Tasks no longer binds %q in the list context", key)
+		}
+		if p.ClaimsKey(key) {
+			t.Errorf("Tasks claimed %q (%v); that collision was never decided, so sidecar keeps it",
+				key, commands)
+		}
+		// The command is not lost, only unbound from that key.
+		if !slices.ContainsFunc(p.Commands(), func(c plugin.Command) bool { return c.ID == commands[0] }) {
+			t.Errorf("%q is unreachable: sidecar keeps the key and the palette does not offer %q",
+				commands[0], commands[0])
+		}
+	}
+}
+
+// The specific accident worth its own test: `#` is sidecar's theme switcher and
+// Tasks' delete-selected. A user reaching for the theme switcher must not get a
+// task deleted.
+func TestHashNeverDeletesATask(t *testing.T) {
+	p, _ := liveModel(t)
+	p.invoke("view-next")
+
+	if got := commandsForKey("tasks-list", "#"); len(got) != 1 || got[0] != "delete-selected" {
+		t.Fatalf("test premise: # in the list context now binds %v", got)
+	}
+	if !p.available("delete-selected") {
+		t.Fatal("test premise: delete-selected cannot run, so nothing could be deleted anyway")
+	}
+	if !keymap.GlobalKeys["#"] {
+		t.Fatal("test premise: sidecar no longer binds # globally")
+	}
+	if p.ClaimsKey("#") {
+		t.Fatal("# is claimed by Tasks; sidecar's theme switcher would delete the selected task")
+	}
+}
+
+// TestRootContextsAreAnAllowListThatFailsSafe is the W5 fix.
+//
+// Root-ness used to be inferred from "does not bind `q`", which classified any
+// future non-text-input overlay that dismisses with `esc` (a preview, a diff
+// viewer, a y/n confirm) as a root context — so sidecar's globals would fire
+// underneath it and `q` would pop the quit confirmation on top of it. It is an
+// allow-list now, so anything unknown is an overlay.
+func TestRootContextsAreAnAllowListThatFailsSafe(t *testing.T) {
+	if missing := contextsAreKnown(rootContexts); len(missing) != 0 {
+		t.Fatalf("rootContexts names contexts Tasks no longer exports: %v; "+
+			"they are being treated as overlays, which is safe but wrong", missing)
+	}
+
+	// The context Tasks might add tomorrow.
+	for _, unknown := range []string{"tasks-diff-preview", "tasks-confirm", "tasks", ""} {
+		if IsRootContext(unknown) {
+			t.Errorf("unknown context %q was classified as root; sidecar globals would "+
+				"fire underneath it", unknown)
+		}
+	}
+
+	// And a plugin sitting in one blocks global keys, which is the behaviour
+	// the classification exists to drive.
+	p, _ := liveModel(t)
+	if p.BlocksGlobalKeys() {
+		t.Fatal("test premise: the list context should not block global keys")
+	}
+	p.model = nil
+	if p.BlocksGlobalKeys() {
+		t.Fatal("a plugin with no model blocks nothing")
+	}
+}
+
+// TestRegisteringBindingsTwiceIsANoOp is the W4 fix. registerBindings runs from
+// adoptModel, which runs on every project switch, while the host keymap lives
+// for the process lifetime.
+func TestRegisteringBindingsTwiceIsANoOp(t *testing.T) {
+	p, _ := liveModel(t)
+
+	registry := keymap.NewRegistry()
+	p.ctx.Keymap = registry
+	p.registerBindings()
+
+	total := func() int {
+		count := 0
+		for _, context := range []string{
+			"tasks-list", "tasks-detail", "tasks-modal", "tasks-prompt", "tasks-filter",
+			"tasks-form", "tasks-picker", "tasks-context-picker", "tasks-task-edit",
+			"tasks-modal-filter", "tasks-response", "tasks-response-detail",
+			"tasks-agent-activity", "tasks-agent-activity-filter",
+		} {
+			count += len(registry.BindingsForContext(context))
+		}
+		return count
+	}
+
+	first := total()
+	if first == 0 {
+		t.Fatal("no bindings were registered")
+	}
+
+	p.registerBindings()
+	p.registerBindings()
+
+	if again := total(); again != first {
+		t.Fatalf("bindings accumulated across re-registration: %d then %d", first, again)
 	}
 }

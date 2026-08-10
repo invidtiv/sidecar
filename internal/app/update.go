@@ -14,6 +14,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
@@ -775,9 +776,22 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Precedence level 3: an active plugin contextual binding beats sidecar's
 	// global bindings. Only plugins that implement plugin.KeyRouter take part,
-	// and a router is never asked about the host's reserved keys, so this
-	// cannot capture ctrl+c or the quit flow.
+	// and pluginClaimsKey refuses the host's reserved keys (keymap.HostReservedKeys),
+	// so this cannot capture ctrl+c, the quit flow, or merged help.
 	if m.pluginClaimsKey(msg.String()) {
+		// A user keymap override outranks a plugin claim. Plan §1.4 offers the
+		// override as the way to change a claimed mapping ("through Sidecar's
+		// keymap override rather than forking the Tasks registry"), and level 3
+		// runs before keymap.Handle, so without this the documented escape
+		// hatch would be unreachable for exactly the keys that need it.
+		//
+		// Deliberately scoped to keys a plugin actually claims: consulting
+		// overrides for every key here would move them ahead of sidecar's own
+		// global switch too, which is a different change to a different level
+		// of the ladder.
+		if cmd, ok := m.keymap.UserOverride(msg); ok {
+			return m, cmd
+		}
 		return m.forwardKeyToPlugin(msg)
 	}
 
@@ -1593,8 +1607,12 @@ func (m *Model) pluginBlocksGlobalKeys() bool {
 
 // pluginClaimsKey reports that the active plugin has a live contextual binding
 // for a key (precedence level 3).
+//
+// The host refuses keymap.HostReservedKeys here, whatever the router says. A
+// plugin filtering them on its own side is welcome defence in depth, but that
+// is the plugin's goodwill; this is the guarantee.
 func (m *Model) pluginClaimsKey(key string) bool {
-	if key == "ctrl+c" {
+	if keymap.HostReservedKeys[key] {
 		return false
 	}
 	router := m.activeKeyRouter()

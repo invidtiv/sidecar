@@ -777,20 +777,29 @@ func (m Model) renderContent(width, height int) string {
 
 // renderFooter renders the bottom bar with key hints and status.
 func (m Model) renderFooter() string {
-	// Toast/status message. A plugin condition that must not go dark outranks
-	// both: a toast expires and a status message is about the last action,
-	// while "this plugin cannot read its data" is true until it is fixed. The
-	// Tasks tab relies on this — it suppresses its own footer, which is where
-	// it used to paint its store-read banner.
+	// Toast/status message, in order of who would lose most by being silent.
+	//
+	// A toast wins. It is the only surface sidecar has for something that just
+	// happened and will not be repeated — "Update installed — restart
+	// required", a failed action, a copied path — and it times itself out, so
+	// it borrows the slot rather than taking it. Ranking it below the plugin
+	// meant that while the Tasks store was unreadable (a condition that can
+	// last for days) every sidecar toast on that tab was dropped silently.
+	//
+	// A plugin condition still outranks statusMsg: statusMsg describes the last
+	// action, while "this plugin cannot read its data" stays true until someone
+	// fixes it, and the Tasks tab has no other always-on surface for it — it
+	// suppresses its own hint row, and its store-read banner is inside a pane
+	// the user may not be looking at. It reappears the moment the toast expires.
 	var status string
-	if text, isError := m.pluginFooterStatus(); text != "" {
+	if m.ui.HasToast() {
+		status = styles.StatusModified.Render(m.ui.ToastMessage)
+	} else if text, isError := m.pluginFooterStatus(); text != "" {
 		style := styles.ToastSuccess
 		if isError {
 			style = styles.ToastError
 		}
 		status = style.Render(text)
-	} else if m.ui.HasToast() {
-		status = styles.StatusModified.Render(m.ui.ToastMessage)
 	} else if m.statusMsg != "" {
 		toastStyle := styles.ToastSuccess
 		if m.statusIsError {

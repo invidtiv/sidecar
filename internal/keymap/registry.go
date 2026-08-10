@@ -51,10 +51,22 @@ func (r *Registry) RegisterCommand(cmd Command) {
 	r.commands[cmd.ID] = cmd
 }
 
-// RegisterBinding adds a key binding.
+// RegisterBinding adds a key binding. Registering the same binding again is a
+// no-op.
+//
+// Idempotence matters because the registry lives for the process lifetime while
+// plugins are re-initialized on every project switch: a plugin that publishes
+// its table on adoption would otherwise grow the context's slice without bound.
+// Nothing downstream wants duplicates either — the palette already has to
+// de-duplicate, and lookup takes the first match.
 func (r *Registry) RegisterBinding(b Binding) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.bindings[b.Context] {
+		if existing == b {
+			return
+		}
+	}
 	r.bindings[b.Context] = append(r.bindings[b.Context], b)
 }
 
@@ -69,6 +81,30 @@ func (r *Registry) SetUserOverride(key, commandID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.userOverrides[key] = commandID
+}
+
+// UserOverride returns the command a user override binds to this key, if any.
+//
+// It exists so a caller that runs *before* Handle in the key ladder can still
+// honour the user's mapping. Handle consults the same overrides first
+// (findCommand step 1); this exposes only that step.
+//
+// The bool reports that an override exists and resolved to a runnable command.
+// An override naming an unknown command is not a claim on the key: the caller
+// should carry on rather than swallow the keystroke.
+func (r *Registry) UserOverride(key tea.KeyMsg) (tea.Cmd, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	cmdID, ok := r.userOverrides[keyToString(key)]
+	if !ok {
+		return nil, false
+	}
+	cmd, ok := r.commands[cmdID]
+	if !ok || cmd.Handler == nil {
+		return nil, false
+	}
+	return cmd.Handler(), true
 }
 
 // Handle dispatches a key event to the appropriate command handler.

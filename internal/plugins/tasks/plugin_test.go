@@ -1157,26 +1157,12 @@ func TestStopPreservesTheDiagnostic(t *testing.T) {
 	}
 }
 
-// TestFooterIsNotSuppressedYet pins the Packet 1.1 scope correction (S9):
-// suppressing Tasks' footer belongs with sidecar's unified footer in 1.3, and
-// shipping it early leaves the tab with no key hints at all.
-func TestFooterIsNotSuppressedYet(t *testing.T) {
-	p, _, _ := newConfigured(t)
-	startAndSettle(t, p)
-	defer p.Stop()
-	if p.model == nil {
-		t.Fatalf("model should exist (%s)", p.unavailable)
-	}
-
-	view := p.View(100, 30)
-	for _, hint := range []string{"j/k move", "search"} {
-		if !strings.Contains(view, hint) {
-			t.Errorf("tasks tab has no key hints (missing %q); with sidecar's "+
-				"unified footer still unbuilt, suppressing Tasks' own footer "+
-				"leaves the tab with no footer at all", hint)
-		}
-	}
-}
+// The Packet 1.1 guard that lived here (TestFooterIsNotSuppressedYet) required
+// Tasks to keep painting its own key hints until sidecar had a unified footer.
+// Sidecar has one now, and Tasks v1.3.0 has SuppressKeyHints, so the hint row
+// belongs to the host: TestTheTabPaintsNoSecondKeyHintRow in routing_test.go
+// asserts the opposite end state, including the parts of Tasks' footer stack
+// (the prompt, the transcript, the banner) that must survive.
 
 func TestDiagnosticsBeforeStart(t *testing.T) {
 	diags := New().Diagnostics()

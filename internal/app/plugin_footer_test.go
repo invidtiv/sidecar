@@ -122,9 +122,15 @@ func TestPluginFooterStatusIsRendered(t *testing.T) {
 	}
 }
 
-// A transient toast must not hide a standing plugin error: the toast expires,
-// the broken store does not.
-func TestPluginFooterStatusOutranksAToast(t *testing.T) {
+// A transient toast outranks a standing plugin condition, and gets the slot
+// back when it expires.
+//
+// The plugin condition is true until someone fixes it, so it can wait a couple
+// of seconds. A toast cannot: it is sidecar's only surface for something that
+// just happened ("Update installed — restart required"), and ranking it below
+// the plugin meant every toast raised on the Tasks tab was dropped silently for
+// as long as the Tasks store stayed unreadable.
+func TestAToastOutranksAPluginFooterStatus(t *testing.T) {
 	p := &footerStatusPlugin{status: "tasks: cannot read the task store", isError: true}
 	p.context = "tasks-list"
 	p.claims = map[string]bool{}
@@ -136,8 +142,15 @@ func TestPluginFooterStatusOutranksAToast(t *testing.T) {
 	}
 
 	footer := ansi.Strip(m.renderFooter())
+	if !strings.Contains(footer, "saved") {
+		t.Fatalf("the plugin's standing condition swallowed a live toast:\n%s", footer)
+	}
+
+	// And the standing condition comes back the moment the toast expires.
+	m.ui.ToastExpiry = time.Now().Add(-time.Minute)
+	footer = ansi.Strip(m.renderFooter())
 	if !strings.Contains(footer, "cannot read the task store") {
-		t.Fatalf("a toast hid the plugin's standing error:\n%s", footer)
+		t.Fatalf("the plugin's condition did not return after the toast expired:\n%s", footer)
 	}
 }
 

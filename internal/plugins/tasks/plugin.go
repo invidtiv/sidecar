@@ -130,25 +130,18 @@ func (p *Plugin) Start() tea.Cmd {
 func (p *Plugin) buildModel() tea.Cmd {
 	options := tasksui.EmbeddedOptions{
 		SessionNamespace: sessionNamespace,
-		// Packet 1.3 asks for this to be true so Tasks stops painting a key-hint
-		// row under sidecar's unified footer. It stays false, and the tab shows
-		// both hint rows, because Tasks' SuppressFooter is all-or-nothing:
-		// internal/tui/render.go Footer() returns nil for the WHOLE footer
-		// stack, which is also where Tasks renders the agent transcript, the
-		// store-read banner, the filter and context-filter lines, and — the
-		// blocker — the prompt input itself. Suppressing it today makes `tab`
-		// focus an invisible caret and hides all agent activity, which the same
-		// packet requires be preserved.
+		// Sidecar renders the unified key-hint row (Packet 1.3), so Tasks must
+		// not paint a second one. SuppressKeyHints (Tasks v1.3.0) removes
+		// exactly that line.
 		//
-		// Closing this needs a Tasks-side change (a finer switch that drops only
-		// the key-hint line, or a footer policy), not a host-side workaround.
-		// TestSuppressFooterStillHidesThePrompt pins the current behaviour so
-		// this flips the moment Tasks offers the finer control.
-		//
-		// Everything else 1.3 needs for the unified footer is already in place:
-		// bindings are registered, commands are projected with priorities, and
-		// the store-read error is carried by FooterStatus.
-		SuppressFooter: false,
+		// SuppressFooter stays false deliberately: it is the blunt switch, and
+		// the rest of Tasks' footer stack is not sidecar's to erase. It carries
+		// the prompt input itself (suppressing it makes `tab` focus an invisible
+		// caret), the agent transcript, the store-read banner, and the filter
+		// and context-filter lines — all of which Packet 1.3 requires be
+		// preserved.
+		SuppressFooter:   false,
+		SuppressKeyHints: true,
 		// Tasks must never terminate the host. Quit requests are surfaced
 		// through QuitRequested() instead of tea.Quit.
 		SuppressQuit: true,
@@ -547,9 +540,10 @@ func (p *Plugin) available(commandID string) bool {
 // the keyboard while they are open, so sidecar's global keys must not fire
 // underneath them.
 //
-// It is derived, not listed: any Tasks context that is neither a root context
-// nor unknown is an overlay, so a new Tasks overlay routes correctly without a
-// change here.
+// Root contexts are listed (see rootContexts); everything else, INCLUDING an
+// unknown context, is an overlay. A new Tasks overlay therefore routes safely
+// without a change here, and the cost of the conservative default is a sidecar
+// global that does not fire, never a quit out from under an open layer.
 func (p *Plugin) BlocksGlobalKeys() bool {
 	if p.model == nil {
 		return false
@@ -562,15 +556,28 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 // the current context, so Tasks wins it over sidecar's global binding.
 //
 // This is what makes `@`, `1`-`6`, `tab`, `M`, and `A` mean what they mean in
-// Tasks while the tab is focused. It is availability-aware: a key whose only
-// Tasks commands are unavailable right now is not claimed, and falls through to
-// sidecar (that is how `r` still refreshes when there is no proposal to reject
-// and no recurrence to edit).
+// Tasks while the tab is focused. Three rules decide it, in order:
+//
+//  1. Host-reserved keys are never claimed (see hostReservedKeys; sidecar
+//     enforces the same set, this is defence in depth).
+//  2. A key sidecar binds globally is claimed only if the plan's conflict table
+//     decided that collision (mayShadowGlobal), and then unconditionally for
+//     the whole context (claimIsUnconditional) — so `K`, `W` and `#` keep their
+//     sidecar meanings, and `@` and `1`-`6` keep their Tasks meanings no matter
+//     what is selected.
+//  3. Every other key is availability-aware: one whose only Tasks commands are
+//     unavailable right now is not claimed and falls through to sidecar. That
+//     is how `r` still refreshes when there is no proposal to reject and no
+//     recurrence to edit.
 func (p *Plugin) ClaimsKey(key string) bool {
-	if p.model == nil || hostReservedKeys[key] {
+	if p.model == nil || hostReservedKeys[key] || !mayShadowGlobal(key) {
 		return false
 	}
-	for _, commandID := range commandsForKey(p.FocusContext(), key) {
+	commands := commandsForKey(p.FocusContext(), key)
+	if claimIsUnconditional(key) {
+		return len(commands) > 0
+	}
+	for _, commandID := range commands {
 		if p.available(commandID) {
 			return true
 		}
@@ -590,11 +597,15 @@ func (p *Plugin) QuitKeyExits() bool {
 
 // FooterStatus implements plugin.FooterStatusProvider.
 //
-// Tasks used to paint its store-read failure in its own footer. Sidecar
-// suppresses that footer, so without this the single condition that says "what
-// you are looking at is not your task list" would go dark in the tab. It is
-// reported here as well as in Diagnostics because the diagnostics modal is a
-// place you have to think to look.
+// Tasks still paints its own store-read banner — sidecar suppresses only the
+// key-hint row — but that banner lives inside the tab, which is not where a
+// user looks when they are on another tab or reading the chrome. Restating it
+// in the host footer is what keeps "what you are looking at is not your task
+// list" visible at a glance. It is reported here as well as in Diagnostics
+// because the diagnostics modal is a place you have to think to look.
+//
+// A live sidecar toast outranks it (see renderFooter): the toast expires and
+// this condition does not, so it comes straight back.
 func (p *Plugin) FooterStatus() (string, bool) {
 	if p.model == nil || p.loadError == nil {
 		return "", false

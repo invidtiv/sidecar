@@ -526,3 +526,185 @@ func TestPaletteIgnoresUnknownCommands(t *testing.T) {
 		t.Fatal("palette stayed open")
 	}
 }
+
+// TestTheHostRefusesItsReservedKeysWhateverARouterClaims is the guarantee the
+// precedence comment used to only assert.
+//
+// The plan's non-negotiables — "Sidecar quit flow wins; embedded Tasks never
+// exits the app" and "`?` → sidecar merged help" — were being kept by the Tasks
+// plugin filtering those keys on its own side. That is defence in the wrong
+// layer: a plugin is exactly the thing that cannot be trusted to decide whether
+// the user can quit. This drives a deliberately misbehaving router that claims
+// all three.
+func TestTheHostRefusesItsReservedKeysWhateverARouterClaims(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   tea.KeyPressMsg
+		check func(t *testing.T, m *Model)
+	}{
+		{
+			name: "ctrl+c",
+			key:  tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl},
+			check: func(t *testing.T, m *Model) {
+				if !m.showQuitConfirm {
+					t.Fatal("a claiming plugin swallowed ctrl+c")
+				}
+			},
+		},
+		{
+			name: "q",
+			key:  tea.KeyPressMsg{Code: 'q', Text: "q"},
+			check: func(t *testing.T, m *Model) {
+				if !m.showQuitConfirm {
+					t.Fatal("a claiming plugin swallowed sidecar's quit flow")
+				}
+			},
+		},
+		{
+			name: "question mark",
+			key:  tea.KeyPressMsg{Code: '?', Text: "?"},
+			check: func(t *testing.T, m *Model) {
+				if !m.showPalette {
+					t.Fatal("a claiming plugin swallowed the merged help")
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// A router that claims every key the host reserves, from an
+			// ordinary (non-overlay) context where it has no business doing so.
+			p := newRouterPlugin("ctrl+c", "q", "?")
+			m := routerTestModel(t, p)
+
+			m.handleKeyMsg(test.key)
+
+			test.check(t, &m)
+			if len(p.keys) != 0 {
+				t.Fatalf("plugin received %v; the host's reserved keys are not claimable", p.keys)
+			}
+		})
+	}
+}
+
+// Every key the host reserves must actually be one the host handles. A reserved
+// key nothing acts on would be a key silently dropped instead of forwarded.
+func TestEveryReservedKeyIsAKeyTheHostHandles(t *testing.T) {
+	for key := range keymap.HostReservedKeys {
+		if !keymap.GlobalKeys[key] {
+			t.Errorf("%q is reserved from plugins but is not a sidecar global key", key)
+		}
+	}
+}
+
+// TestGlobalKeysAreTheOnesTheHostActuallyHandles pins keymap.GlobalKeys against
+// the real key handler, so the list a plugin reasons about cannot drift from
+// the switch statement it describes.
+func TestGlobalKeysAreTheOnesTheHostActuallyHandles(t *testing.T) {
+	press := func(t *testing.T, key tea.KeyPressMsg) *nativeTestPlugin {
+		t.Helper()
+		p := &nativeTestPlugin{}
+		m := routerTestModel(t, p)
+		m.handleKeyMsg(key)
+		return p
+	}
+
+	for key := range keymap.GlobalKeys {
+		if key == "q" {
+			// `q` is the one global whose handling is context-dependent by
+			// design: it opens the quit flow from a root context and is
+			// forwarded from a sub-view, which is what quitKeyExits decides.
+			// The reserved-keys test above covers it directly.
+			continue
+		}
+		t.Run("global/"+key, func(t *testing.T) {
+			msg := tea.KeyPressMsg{Code: rune(key[0]), Text: key}
+			if key == "ctrl+c" {
+				msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+			}
+			if p := press(t, msg); len(p.seen) != 0 {
+				t.Fatalf("%q is listed as a sidecar global but was forwarded to the plugin", key)
+			}
+		})
+	}
+
+	// The other half of the claim: keys not on the list reach the plugin. `r`
+	// is the interesting one — it is a sidecar binding, but it yields to any
+	// plugin context isGlobalRefreshContext does not name, so a plugin may take
+	// it without contradicting the host.
+	for _, key := range []string{"r", "j", "y", "M", "A", "z"} {
+		t.Run("forwarded/"+key, func(t *testing.T) {
+			if keymap.GlobalKeys[key] {
+				t.Fatalf("test premise: %q is on the global list", key)
+			}
+			p := press(t, tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			if len(p.seen) == 0 {
+				t.Fatalf("%q is not a sidecar global but never reached the plugin", key)
+			}
+		})
+	}
+}
+
+// TestAUserOverrideOutranksAPluginClaim makes the escape hatch plan § 1.4
+// documents actually exist: "change the mapping through Sidecar's keymap
+// override rather than forking the Tasks registry".
+//
+// Level 3 runs before keymap.Handle, and user overrides were only consulted
+// inside it, so for precisely the keys a plugin claims — the keys anyone would
+// want to remap — the override was unreachable.
+func TestAUserOverrideOutranksAPluginClaim(t *testing.T) {
+	p := newRouterPlugin("1")
+	m := routerTestModel(t, p)
+
+	var ran int
+	m.keymap.RegisterCommand(keymap.Command{
+		ID:      "switch-tab-1",
+		Handler: func() tea.Cmd { ran++; return nil },
+	})
+	m.keymap.SetUserOverride("1", "switch-tab-1")
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '1', Text: "1"})
+
+	if ran != 1 {
+		t.Fatalf("the user override ran %d times, want 1", ran)
+	}
+	if len(p.keys) != 0 {
+		t.Fatalf("plugin received %v despite a user override for the key", p.keys)
+	}
+}
+
+// An override naming a command nothing registered is not a claim on the key:
+// the plugin still gets it, rather than the keystroke vanishing.
+func TestAnUnresolvableOverrideLeavesThePluginClaimAlone(t *testing.T) {
+	p := newRouterPlugin("1")
+	m := routerTestModel(t, p)
+	m.keymap.SetUserOverride("1", "no-such-command")
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '1', Text: "1"})
+
+	wantOnlyPluginKey(t, p, "1")
+}
+
+// Consulting overrides at level 3 must not reorder the ladder for anyone else:
+// a plugin with no key router still meets sidecar's global switch first.
+func TestAUserOverrideDoesNotJumpAheadOfTheGlobalSwitch(t *testing.T) {
+	p := &nativeTestPlugin{}
+	m := routerTestModel(t, p)
+
+	var ran int
+	m.keymap.RegisterCommand(keymap.Command{
+		ID:      "surprise",
+		Handler: func() tea.Cmd { ran++; return nil },
+	})
+	m.keymap.SetUserOverride("@", "surprise")
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '@', Text: "@"})
+
+	if ran != 0 {
+		t.Fatal("an override displaced a sidecar global for a plugin that claims nothing")
+	}
+	if !m.showProjectSwitcher {
+		t.Fatal("@ no longer opens the project switcher")
+	}
+}
