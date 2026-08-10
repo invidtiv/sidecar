@@ -224,6 +224,21 @@ func (r *Registry) BindingsForContext(context string) []Binding {
 	return r.bindings[context]
 }
 
+// CommandForContextKey returns the command a key is bound to in exactly this
+// context. It does not fall back to the global context and does not consult
+// user overrides: callers use it to ask "did this context opt in to this key?",
+// which a global binding or an override would answer for a different question.
+func (r *Registry) CommandForContextKey(context, key string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, b := range r.bindings[context] {
+		if b.Key == key {
+			return b.Command, true
+		}
+	}
+	return "", false
+}
+
 // AllContexts returns all contexts that have bindings.
 func (r *Registry) AllContexts() []string {
 	r.mu.RLock()

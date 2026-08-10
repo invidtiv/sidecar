@@ -55,11 +55,18 @@ var hostOwnedCommands = map[string]bool{
 var hostReservedKeys = keymap.HostReservedKeys
 
 // shadowableGlobals are the sidecar globals a Tasks binding is allowed to take
-// over. They are exactly the keys the plan's conflict table decided
-// (docs/plans/active/tasks-in-sidecar.md § 1.4): `?`, `@`, `1`-`6`, `q`, `tab`,
-// `M`, `A` — of which `?`, `@`, `1`-`6` and `q` are the ones sidecar also binds.
-// `?` and `q` are resolved the other way in that table (and are host-reserved
-// besides), so what is left for Tasks is `@` and the view keys.
+// over. After live use this is exactly one key: `@`.
+//
+// The plan's conflict table (docs/plans/active/tasks-in-sidecar.md § 1.4)
+// originally also allowed `1`-`6`, so the number row selected a Tasks view
+// inside the Tasks tab. That shipped, and then lost: switching sidecar tabs by
+// number is muscle memory across every other tab, and one tab where `3` means
+// something else is a key whose meaning depends on where you happen to be.
+// Tab switching won, so `1`-`6` are no longer shadowable and reach sidecar.
+//
+// Tasks views keep `←`/`→` (prev-view/next-view in Tasks' own registry, which
+// sidecar does not bind), and the `view-*` commands stay in the palette and the
+// merged help, so nothing became unreachable.
 //
 // The rule, and the reason for it: a Tasks binding may shadow a sidecar global
 // only if that collision was decided. Every other collision is an accident of
@@ -73,7 +80,6 @@ var hostReservedKeys = keymap.HostReservedKeys
 // palette, which is what the merged help is for.
 var shadowableGlobals = map[string]bool{
 	"@": true,
-	"1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
 }
 
 // rootContexts are the Tasks contexts where sidecar's global keys may fire and
@@ -206,6 +212,35 @@ func IsRootContext(context string) bool {
 // its business, so they are always claimable.
 func mayShadowGlobal(key string) bool {
 	return !keymap.GlobalKeys[key] || shadowableGlobals[key]
+}
+
+// registerableKey reports whether a Tasks binding on this key, in this context,
+// may be published to sidecar's keymap — that is, whether the key can actually
+// reach Tasks there.
+//
+// It mirrors the host's key ladder, which is why it takes the context:
+//
+//   - In an overlay or text-input context, sidecar forwards everything except
+//     ctrl+c (precedence level 2), so every binding but ctrl+c is real. `q` in
+//     a Tasks modal genuinely cancels the modal, and the footer should say so.
+//   - In a root context, level 3 applies: the host refuses
+//     keymap.HostReservedKeys outright, and a sidecar global is only reachable
+//     if Tasks is allowed to shadow it (mayShadowGlobal).
+//
+// A binding sidecar will not route is a hint that lies — the footer and the
+// merged help are both built from registered bindings — so it is withheld. The
+// command itself stays in Commands() and therefore in the palette, keyless.
+func registerableKey(context, key string) bool {
+	if key == "ctrl+c" {
+		return false
+	}
+	if !IsRootContext(context) {
+		return true
+	}
+	if hostReservedKeys[key] {
+		return false
+	}
+	return mayShadowGlobal(key)
 }
 
 // claimIsUnconditional reports whether a claimed key's availability must not be

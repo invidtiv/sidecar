@@ -533,7 +533,40 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "notes-task-modal"},
 		{Key: "tab", Command: "next-field", Context: "notes-task-modal"},
 		{Key: "shift+tab", Command: "prev-field", Context: "notes-task-modal"},
+
+		// Tasks root contexts. `[`/`]` cycle sidecar tabs here, which is the
+		// opt-in described on BracketTabCycleCommands: the embedded Tasks tab
+		// gives up `1`-`6` to sidecar's tab switcher, and these are the keys it
+		// gets in exchange for stepping between tabs without leaving the home
+		// row twice. They are only bound in the non-overlay, non-text-input
+		// Tasks contexts, so a literal bracket typed into a Tasks prompt,
+		// filter or form still reaches Tasks.
+		{Key: "[", Command: "prev-plugin", Context: "tasks-list"},
+		{Key: "]", Command: "next-plugin", Context: "tasks-list"},
+		{Key: "[", Command: "prev-plugin", Context: "tasks-detail"},
+		{Key: "]", Command: "next-plugin", Context: "tasks-detail"},
+		{Key: "[", Command: "prev-plugin", Context: "tasks-response"},
+		{Key: "]", Command: "next-plugin", Context: "tasks-response"},
+		{Key: "[", Command: "prev-plugin", Context: "tasks-response-detail"},
+		{Key: "]", Command: "next-plugin", Context: "tasks-response-detail"},
 	}
+}
+
+// BracketTabCycleKeys are the keys a context may bind to prev-plugin or
+// next-plugin to opt in to sidecar tab cycling.
+//
+// Brackets are not a global. Several tabs already give them a local meaning
+// (`[`/`]` step between file-browser tabs, workspace preview tabs, and files in
+// a diff), and taking those away would trade one broken habit for another. So
+// the host cycles tabs on a bracket only where the keymap says this context
+// asked for it, which keeps the decision in the binding table next to every
+// other key instead of in a context name hard-coded into the host.
+//
+// internal/app's handleKeyMsg is the only consumer; the commands are the same
+// ones backtick and tilde run.
+var BracketTabCycleKeys = map[string]bool{
+	"[": true,
+	"]": true,
 }
 
 // Category represents a command category.

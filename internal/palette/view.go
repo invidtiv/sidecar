@@ -249,8 +249,14 @@ func (m Model) renderLayerHeader(layer Layer, count int) string {
 
 // renderEntry renders a single palette entry.
 func (m Model) renderEntry(entry PaletteEntry, selected bool, maxWidth int) string {
-	// Key column - render as pill/chip using KeyHint style
-	keyStr := styles.KeyHint.Render(entry.Key)
+	// Key column - render as pill/chip using KeyHint style. A keyless entry
+	// (a command sidecar's key ladder refused a binding for) leaves the column
+	// blank rather than painting an empty chip: the chip's padding and
+	// background would read as a key that renders as two spaces.
+	keyStr := ""
+	if entry.Key != "" {
+		keyStr = styles.KeyHint.Render(entry.Key)
+	}
 	keyWidth := lipgloss.Width(keyStr)
 
 	// Pad key to fixed column width for alignment

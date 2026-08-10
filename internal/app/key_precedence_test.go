@@ -199,7 +199,11 @@ func TestKeyPrecedence(t *testing.T) {
 			},
 		},
 		{
-			name:  "level 3: number keys select plugin views, not sidecar tabs",
+			// The mechanism, not the Tasks mapping: Tasks gave the number row
+			// back to sidecar's tab switcher (see
+			// TestNumberKeysSwitchSidecarTabsFromTheTasksTab), but a plugin
+			// that does claim a number must still win it.
+			name:  "level 3: a claimed number key beats sidecar's tab switcher",
 			level: 3,
 			key:   tea.KeyPressMsg{Code: '3', Text: "3"},
 			setup: func(m *Model, p *routerTestPlugin) { p.claims["3"] = true },
@@ -706,5 +710,152 @@ func TestAUserOverrideDoesNotJumpAheadOfTheGlobalSwitch(t *testing.T) {
 	}
 	if !m.showProjectSwitcher {
 		t.Fatal("@ no longer opens the project switcher")
+	}
+}
+
+// tabCycleTestModel builds a two-tab model whose first tab is the key-routing
+// plugin, with sidecar's real default bindings loaded. Bracket tab cycling is
+// driven by those bindings, so a registry without them proves nothing.
+func tabCycleTestModel(t *testing.T, p *routerTestPlugin) Model {
+	t.Helper()
+	m := routerTestModel(t, p)
+	if err := m.registry.Register(&nativeTestPlugin{}); err != nil {
+		t.Fatal(err)
+	}
+	keymap.RegisterDefaults(m.keymap)
+	m.updateContext()
+	return m
+}
+
+// TestNumberKeysSwitchSidecarTabsFromTheTasksTab is the revision the owner made
+// after living with the shipped mapping: `1`-`6` selected a Tasks view inside
+// the Tasks tab, and switching tabs by number is muscle memory everywhere else.
+// Tasks no longer claims them (shadowableGlobals is `@` alone), so they reach
+// sidecar's global switch like they do in every other tab.
+func TestNumberKeysSwitchSidecarTabsFromTheTasksTab(t *testing.T) {
+	// Claims exactly what the revised conflict table leaves to Tasks.
+	p := newRouterPlugin("@", "tab", "M", "A", "left", "right")
+	m := tabCycleTestModel(t, p)
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '2', Text: "2"})
+
+	if m.activePlugin != 1 {
+		t.Fatalf("activePlugin = %d after `2`, want 1: the number row switches sidecar tabs", m.activePlugin)
+	}
+	if len(p.keys) != 0 {
+		t.Fatalf("plugin saw %v; the number row is sidecar's", p.keys)
+	}
+}
+
+// `←`/`→` are what Tasks keeps for stepping between its own views, so sidecar
+// must not intercept them in a Tasks context.
+func TestArrowKeysReachTheTasksTab(t *testing.T) {
+	p := newRouterPlugin("left", "right")
+	m := tabCycleTestModel(t, p)
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyRight})
+	m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyLeft})
+
+	if m.activePlugin != 0 {
+		t.Fatalf("activePlugin = %d; arrows must not move sidecar", m.activePlugin)
+	}
+	if len(p.keys) != 2 || p.keys[0] != "right" || p.keys[1] != "left" {
+		t.Fatalf("plugin saw %v, want [right left]", p.keys)
+	}
+}
+
+// `[`/`]` cycle sidecar tabs from a Tasks root context — the keys Tasks gets in
+// exchange for the number row.
+func TestBracketsCycleSidecarTabsFromATasksRootContext(t *testing.T) {
+	for _, context := range []string{"tasks-list", "tasks-detail", "tasks-response", "tasks-response-detail"} {
+		t.Run(context, func(t *testing.T) {
+			p := newRouterPlugin()
+			p.context = context
+			m := tabCycleTestModel(t, p)
+
+			m.handleKeyMsg(tea.KeyPressMsg{Code: ']', Text: "]"})
+			if m.activePlugin != 1 {
+				t.Fatalf("activePlugin = %d after `]`, want 1", m.activePlugin)
+			}
+			if len(p.keys) != 0 {
+				t.Fatalf("plugin saw %v; brackets cycle sidecar tabs in %s", p.keys, context)
+			}
+
+			// `[` steps the other way, from a fresh model: the tab `]` landed
+			// on is a different plugin with a context of its own.
+			back := newRouterPlugin()
+			back.context = context
+			bm := tabCycleTestModel(t, back)
+			bm.handleKeyMsg(tea.KeyPressMsg{Code: '[', Text: "["})
+			if bm.activePlugin != 1 {
+				t.Fatalf("activePlugin = %d after `[`, want 1 (wrapped to the previous tab)", bm.activePlugin)
+			}
+			if len(back.keys) != 0 {
+				t.Fatalf("plugin saw %v; brackets cycle sidecar tabs in %s", back.keys, context)
+			}
+		})
+	}
+}
+
+// A bracket typed into a Tasks text input is a bracket. Level 2 forwards it
+// before the global switch is reached, and the binding table does not name the
+// text-input contexts either, so both layers agree.
+func TestBracketsTypedIntoATasksTextInputReachTheTab(t *testing.T) {
+	for _, context := range []string{"tasks-prompt", "tasks-filter", "tasks-form", "tasks-context-picker"} {
+		t.Run(context, func(t *testing.T) {
+			p := newRouterPlugin()
+			p.context = context
+			p.textInput = true
+			m := tabCycleTestModel(t, p)
+
+			m.handleKeyMsg(tea.KeyPressMsg{Code: '[', Text: "["})
+			m.handleKeyMsg(tea.KeyPressMsg{Code: ']', Text: "]"})
+
+			if m.activePlugin != 0 {
+				t.Fatalf("activePlugin = %d; a typed bracket switched tabs in %s", m.activePlugin, context)
+			}
+			if len(p.keys) != 2 || p.keys[0] != "[" || p.keys[1] != "]" {
+				t.Fatalf("plugin saw %v, want [\"[\" \"]\"] in %s", p.keys, context)
+			}
+		})
+	}
+}
+
+// The same holds under a Tasks overlay (level 2's other half): a modal that
+// blocks globals keeps the bracket.
+func TestBracketsUnderATasksOverlayReachTheTab(t *testing.T) {
+	p := newRouterPlugin()
+	p.context = "tasks-modal"
+	p.blocks = true
+	m := tabCycleTestModel(t, p)
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '[', Text: "["})
+
+	if m.activePlugin != 0 {
+		t.Fatal("a bracket switched tabs from under a Tasks overlay")
+	}
+	wantOnlyPluginKey(t, p, "[")
+}
+
+// Bracket cycling is opt-in per context. Contexts that bind brackets to
+// something of their own — file-browser tabs, workspace preview tabs, next/prev
+// file in a diff — must be untouched by it.
+func TestBracketsKeepTheirLocalMeaningInOtherContexts(t *testing.T) {
+	for _, context := range []string{"file-browser-tree", "file-browser-preview", "workspace-preview", "git-diff", "conversations-main"} {
+		t.Run(context, func(t *testing.T) {
+			p := newRouterPlugin()
+			p.context = context
+			m := tabCycleTestModel(t, p)
+
+			m.handleKeyMsg(tea.KeyPressMsg{Code: '[', Text: "["})
+			m.handleKeyMsg(tea.KeyPressMsg{Code: ']', Text: "]"})
+
+			if m.activePlugin != 0 {
+				t.Fatalf("brackets switched sidecar tabs from %s, which binds them itself", context)
+			}
+			if len(p.keys) != 2 {
+				t.Fatalf("plugin saw %v in %s, want both brackets", p.keys, context)
+			}
+		})
 	}
 }

@@ -1415,6 +1415,24 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.SetActivePlugin(idx)
 	}
 
+	// Bracket tab cycling, opted into per context by binding `[`/`]` to
+	// prev-plugin/next-plugin (see keymap.BracketTabCycleKeys). Contexts that
+	// bind brackets to something of their own — file-browser tabs, workspace
+	// preview tabs, next/prev file in a diff — are untouched and keep handling
+	// the key themselves.
+	if key := msg.String(); keymap.BracketTabCycleKeys[key] && !m.consumesTextInput() {
+		if command, bound := m.keymap.CommandForContextKey(m.activeContext, key); bound {
+			switch command {
+			case "prev-plugin":
+				m.exitOverview()
+				return m, m.PrevPlugin()
+			case "next-plugin":
+				m.exitOverview()
+				return m, m.NextPlugin()
+			}
+		}
+	}
+
 	// Toggles
 	switch msg.String() {
 	case "?":

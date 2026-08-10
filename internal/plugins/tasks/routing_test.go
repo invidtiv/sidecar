@@ -74,8 +74,6 @@ func TestBindingsAreRegisteredWithTheHostKeymap(t *testing.T) {
 		{"tasks-list", "tab", "focus-prompt"},
 		{"tasks-list", "M", "toggle-model"},
 		{"tasks-list", "A", "open-agent-activity"},
-		{"tasks-list", "1", "view-agenda"},
-		{"tasks-list", "6", "view-inbox"},
 		{"tasks-detail", "e", "start-task-edit"},
 		{"tasks-modal", "enter", "modal-confirm-default"},
 	} {
@@ -89,6 +87,92 @@ func TestBindingsAreRegisteredWithTheHostKeymap(t *testing.T) {
 	for _, b := range km.bindings {
 		if hostOwnedCommands[b.Command] {
 			t.Errorf("host-owned command %q was registered as a tasks binding (%+v)", b.Command, b)
+		}
+	}
+
+	// Keys the host structurally refuses must not be advertised at all. The
+	// footer and the merged help are built from registered bindings, so a
+	// binding here is a hint that lies: `1`-`6` switch sidecar tabs, `#` opens
+	// the theme switcher, `q` quits.
+	for _, b := range km.bindings {
+		if registerableKey(b.Context, b.Key) {
+			continue
+		}
+		t.Errorf("key %q reaches sidecar, not tasks, yet was registered for %q in %q",
+			b.Key, b.Command, b.Context)
+	}
+}
+
+// TestRefusedKeysAreNotRegisteredButStayReachable pins the two halves of the
+// rule together: the keys sidecar keeps do not appear as Tasks bindings, and
+// the commands behind them are still exported as commands (and so still reach
+// the palette).
+func TestRefusedKeysAreNotRegisteredButStayReachable(t *testing.T) {
+	_, km := liveModel(t)
+
+	// The keys sidecar keeps for itself, and the Tasks commands that used to
+	// hide behind them in a root context.
+	refused := []struct{ key, command string }{
+		{"1", "view-agenda"},
+		{"2", "view-next"},
+		{"3", "view-quadrants"},
+		{"4", "view-projects"},
+		{"5", "view-outline"},
+		{"6", "view-inbox"},
+		{"K", "raise-priority"},
+		{"W", "set-work-ref-selected"},
+		{"#", "delete-selected"},
+		{"q", "quit"},
+		{"?", "open-help"},
+	}
+
+	for _, b := range km.bindings {
+		if !IsRootContext(b.Context) {
+			continue
+		}
+		for _, r := range refused {
+			if b.Key == r.key {
+				t.Errorf("refused key %q registered for %q in root context %q", b.Key, b.Command, b.Context)
+			}
+		}
+	}
+
+	// ...and the commands are still exported, so the palette can carry them
+	// keyless. quit/open-help are excluded: those are hostOwnedCommands, which
+	// sidecar deliberately does not adopt at all.
+	exported := map[string]bool{}
+	for _, cmd := range tasksui.ExportCommands() {
+		exported[cmd.ID] = true
+	}
+	for _, r := range refused {
+		if hostOwnedCommands[r.command] {
+			continue
+		}
+		if !exported[r.command] {
+			t.Errorf("command %q lost its key AND its palette entry", r.command)
+		}
+	}
+}
+
+// TestOverlayContextsKeepEveryBinding pins the other half of registerableKey:
+// an overlay owns the keyboard (precedence level 2 forwards all but ctrl+c), so
+// `q` in a Tasks modal really does cancel it and must stay advertised.
+func TestOverlayContextsKeepEveryBinding(t *testing.T) {
+	_, km := liveModel(t)
+
+	want := map[string]bool{"modal-cancel-q": true, "close-modal": true}
+	found := map[string]bool{}
+	for _, b := range km.bindings {
+		if b.Context == "tasks-modal" && b.Key == "q" {
+			found[b.Command] = true
+		}
+		if b.Key == "ctrl+c" {
+			t.Errorf("ctrl+c is never routable to a plugin, yet was registered for %q in %q", b.Command, b.Context)
+		}
+	}
+	for command := range want {
+		if !found[command] {
+			t.Errorf("overlay binding q -> %q was dropped from tasks-modal", command)
 		}
 	}
 }
@@ -135,10 +219,19 @@ func TestRoutingTableIsDerivedFromTheTasksRegistry(t *testing.T) {
 func TestClaimsKeyFollowsTheConflictTable(t *testing.T) {
 	p, _ := liveModel(t)
 
-	claimed := []string{"@", "tab", "M", "1", "2", "3", "4", "5", "6", "/"}
+	claimed := []string{"@", "tab", "M", "/", "left", "right"}
 	for _, key := range claimed {
 		if !p.ClaimsKey(key) {
 			t.Errorf("Tasks should win %q in %s", key, p.FocusContext())
+		}
+	}
+
+	// The number row is sidecar's, revised after live use: tab switching by
+	// number is muscle memory everywhere else, so it may not mean "switch Tasks
+	// view" here. `←`/`→` above are what Tasks keeps for that.
+	for _, key := range []string{"1", "2", "3", "4", "5", "6"} {
+		if p.ClaimsKey(key) {
+			t.Errorf("Tasks must not claim %q: it switches sidecar tabs", key)
 		}
 	}
 
@@ -556,8 +649,8 @@ func TestTheClaimedGlobalsDoNotDependOnTheSelection(t *testing.T) {
 			"  nothing selected: %v\n  task selected:    %v", before, empty, selected)
 	}
 
-	// And the set is the one the plan's conflict table decided.
-	want := []string{"1", "2", "3", "4", "5", "6", "@"}
+	// And the set is the one the conflict table decided, as revised: `@` alone.
+	want := []string{"@"}
 	if strings.Join(selected, " ") != strings.Join(want, " ") {
 		t.Errorf("claimed globals = %v, want the conflict table's %v", selected, want)
 	}
@@ -676,5 +769,54 @@ func TestRegisteringBindingsTwiceIsANoOp(t *testing.T) {
 
 	if again := total(); again != first {
 		t.Fatalf("bindings accumulated across re-registration: %d then %d", first, again)
+	}
+}
+
+// TestTheViewCommandsSurviveLosingTheNumberRow is the other half of the
+// revision that gave `1`-`6` back to sidecar's tab switcher: giving up the keys
+// must not cost the commands. Every Tasks view stays in the palette projection
+// with a handler that runs it, and `←`/`→` still step between them.
+func TestTheViewCommandsSurviveLosingTheNumberRow(t *testing.T) {
+	p, _ := liveModel(t)
+
+	views := []string{"view-agenda", "view-next", "view-quadrants", "view-projects", "view-outline", "view-inbox"}
+	for _, id := range views {
+		var found *plugin.Command
+		for i, cmd := range p.Commands() {
+			if cmd.ID == id && cmd.Context == string(tasksui.FocusList) {
+				found = &p.Commands()[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Errorf("%q is missing from the palette projection", id)
+			continue
+		}
+		if found.Handler == nil {
+			t.Errorf("%q has no handler, so the palette cannot run it", id)
+		}
+	}
+
+	// The keys Tasks keeps for its views. `←`/`→` are not sidecar globals, so
+	// nothing upstream can take them.
+	for _, key := range []string{"left", "right"} {
+		if keymap.GlobalKeys[key] {
+			t.Fatalf("test premise: sidecar now binds %q globally", key)
+		}
+		if commands := commandsForKey(string(tasksui.FocusList), key); len(commands) == 0 {
+			t.Errorf("Tasks no longer binds %q in the list context", key)
+		}
+		if !p.ClaimsKey(key) {
+			t.Errorf("Tasks does not claim %q, so its views lost their last key", key)
+		}
+	}
+
+	// And the numbers are sidecar's again, in every root context.
+	for context := range rootContexts {
+		for _, key := range []string{"1", "2", "3", "4", "5", "6"} {
+			if mayShadowGlobal(key) {
+				t.Errorf("%q may still shadow sidecar's tab switcher (context %s)", key, context)
+			}
+		}
 	}
 }

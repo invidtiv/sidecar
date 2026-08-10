@@ -456,12 +456,32 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 // Host-owned commands (quit, help) are withheld: sidecar owns those keys, and
 // advertising Tasks' versions in the palette and footer would promise a
 // behaviour the router does not deliver.
+//
+// So are bindings on keys the host structurally refuses to route here:
+// keymap.HostReservedKeys, and sidecar globals outside shadowableGlobals. The
+// footer and the merged help are both built from registered bindings, so
+// registering those keys makes sidecar advertise a key that does something
+// else — `1`-`6` switch tabs, `#` opens the theme switcher — on the most
+// visible surface in the app. The rule here is deliberately the same predicate
+// the router uses (registerableKey → mayShadowGlobal), so what is advertised
+// and what fires cannot disagree.
+//
+// Withholding the binding does not withhold the command: Commands() still
+// exports it, and palette.BuildEntries turns a command with no binding into a
+// keyless palette entry, invocable by selection through Model.Invoke.
+//
+// This is only about keys the host refuses structurally. A key a plugin
+// declines situationally — `r` claims nothing when there is no proposal — is
+// still registered, and rightly: it does fire, just not right now.
 func (p *Plugin) registerBindings() {
 	if p.ctx == nil || p.ctx.Keymap == nil {
 		return
 	}
 	for _, binding := range tasksui.ExportBindings() {
 		if hostOwnedCommands[binding.CommandID] || binding.Key == "" {
+			continue
+		}
+		if !registerableKey(string(binding.Context), binding.Key) {
 			continue
 		}
 		p.ctx.Keymap.RegisterPluginBinding(binding.Key, binding.CommandID, string(binding.Context))
@@ -555,16 +575,16 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 // ClaimsKey implements plugin.KeyRouter: the key has a live Tasks binding in
 // the current context, so Tasks wins it over sidecar's global binding.
 //
-// This is what makes `@`, `1`-`6`, `tab`, `M`, and `A` mean what they mean in
-// Tasks while the tab is focused. Three rules decide it, in order:
+// This is what makes `@`, `tab`, `M`, and `A` mean what they mean in Tasks
+// while the tab is focused. Three rules decide it, in order:
 //
 //  1. Host-reserved keys are never claimed (see hostReservedKeys; sidecar
 //     enforces the same set, this is defence in depth).
 //  2. A key sidecar binds globally is claimed only if the plan's conflict table
 //     decided that collision (mayShadowGlobal), and then unconditionally for
-//     the whole context (claimIsUnconditional) — so `K`, `W` and `#` keep their
-//     sidecar meanings, and `@` and `1`-`6` keep their Tasks meanings no matter
-//     what is selected.
+//     the whole context (claimIsUnconditional) — so `K`, `W`, `#` and the
+//     number row keep their sidecar meanings, and `@` keeps its Tasks meaning
+//     no matter what is selected. Tasks' views step with `←`/`→` instead.
 //  3. Every other key is availability-aware: one whose only Tasks commands are
 //     unavailable right now is not claimed and falls through to sidecar. That
 //     is how `r` still refreshes when there is no proposal to reject and no

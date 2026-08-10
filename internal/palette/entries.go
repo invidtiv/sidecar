@@ -47,13 +47,26 @@ type PaletteEntry struct {
 // BuildEntries aggregates commands from keymap bindings and plugin commands.
 // activeContext is the current focus context (e.g., "git-diff").
 // pluginContext is the base plugin context (e.g., "git-status").
+//
+// A plugin command with no registered binding still becomes an entry, with an
+// empty Key. That is what makes the palette a complete index of what a plugin
+// can do rather than an index of what it managed to bind: sidecar's key ladder
+// deliberately refuses some plugin bindings (host-reserved keys, and globals
+// the plugin may not shadow), and the command behind a refused key has to stay
+// reachable somewhere. Here is that somewhere.
 func BuildEntries(km *keymap.Registry, plugins []plugin.Plugin, activeContext, pluginContext string) []PaletteEntry {
 	// Build a map of command metadata from plugins, keyed by "commandID:context"
 	// This allows the same command ID to have different metadata in different contexts
 	cmdMeta := make(map[string]plugin.Command)
+	// pluginCommands preserves plugin and declaration order, so the keyless
+	// entries below are emitted deterministically.
+	var pluginCommands []plugin.Command
 	for _, p := range plugins {
 		for _, cmd := range p.Commands() {
 			key := cmd.ID + ":" + cmd.Context
+			if _, ok := cmdMeta[key]; !ok {
+				pluginCommands = append(pluginCommands, cmd)
+			}
 			cmdMeta[key] = cmd
 		}
 	}
@@ -79,7 +92,69 @@ func BuildEntries(km *keymap.Registry, plugins []plugin.Plugin, activeContext, p
 		}
 	}
 
+	// Plugin commands that no binding covers. The same "commandID:context"
+	// dedup key is used, so a command that does have a binding is never listed
+	// a second time here.
+	//
+	// Only commands the palette can actually run are added. A command with no
+	// binding and no way to invoke it — no Handler on the command, no command
+	// of that ID registered with the keymap — would be an entry that does
+	// nothing when selected, which is the same class of lie as a footer hint
+	// for a key the host keeps. Several plugins publish Commands() purely as
+	// documentation for keys they handle inside their own Update; those keep
+	// behaving exactly as before.
+	for _, cmd := range pluginCommands {
+		key := cmd.ID + ":" + cmd.Context
+		if seen[key] {
+			continue
+		}
+		if !invocable(km, cmd) {
+			continue
+		}
+		seen[key] = true
+		entries = append(entries, commandToEntry(cmd, activeContext, pluginContext))
+	}
+
 	return entries
+}
+
+// invocable reports whether selecting this command in the palette would run
+// anything. It mirrors the two lookups internal/app performs on
+// CommandSelectedMsg: a keymap command registered under the ID, or a handler
+// carried on the plugin command itself.
+func invocable(km *keymap.Registry, cmd plugin.Command) bool {
+	if cmd.Handler != nil {
+		return true
+	}
+	if km == nil {
+		return false
+	}
+	registered, ok := km.GetCommand(cmd.ID)
+	return ok && registered.Handler != nil
+}
+
+// commandToEntry converts a plugin command with no registered binding into a
+// keyless palette entry.
+func commandToEntry(cmd plugin.Command, activeContext, pluginContext string) PaletteEntry {
+	entry := PaletteEntry{
+		Key:         "",
+		CommandID:   cmd.ID,
+		Name:        cmd.Name,
+		Description: cmd.Description,
+		Category:    cmd.Category,
+		Context:     cmd.Context,
+		Layer:       determineLayer(cmd.Context, activeContext, pluginContext),
+	}
+	if entry.Name == "" {
+		entry.Name = formatCommandID(cmd.ID)
+	}
+	if entry.Description == "" {
+		entry.Description = formatCommandID(cmd.ID)
+	}
+	if entry.Category == "" {
+		entry.Category = inferCategory(cmd.ID)
+	}
+	return entry
 }
 
 // bindingToEntry converts a keymap binding to a palette entry.

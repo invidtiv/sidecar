@@ -19,8 +19,9 @@ picker and Sidecar's project switcher. `q` quits both. `?` is help in both.
 
 The cross-repo plan of record is
 `docs/plans/active/tasks-in-sidecar.md` in the tasks repo, § 1.4. This ADR
-records what shipped, which differs from that plan in one respect — see
-"Only conflict-table keys may shadow" below.
+records what shipped, which differs from that plan in two respects — see "Only
+conflict-table keys may shadow" and "Revision: the number row went back to
+Sidecar" below.
 
 ## Decision
 
@@ -80,10 +81,10 @@ in depth.
 ### Only conflict-table keys may shadow a global
 
 A plugin binding may shadow a Sidecar global **only if that key appears in the
-plan's § 1.4 conflict table** — for Tasks, `@` and `1`-`6`. Any other collision
-goes to Sidecar, and the plugin's command stays reachable through `?` and the
-command palette. Keys that collide with nothing are unaffected and reach the
-plugin by level-5 forwarding.
+plan's § 1.4 conflict table** — for Tasks, as revised, `@` alone. Any other
+collision goes to Sidecar, and the plugin's command stays reachable through `?`
+and the command palette. Keys that collide with nothing are unaffected and reach
+the plugin by level-5 forwarding.
 
 A claim on a global is also **unconditional per context**: availability is not
 consulted. Availability-awareness is kept for keys Sidecar does not bind
@@ -97,6 +98,37 @@ task selected. A user reaching for the theme switcher could delete a task. Those
 three keys were never in the conflict table — they collided by accident, and
 nobody had decided they should be given away. Predictable-per-context routing is
 worth more than squeezing every plugin binding through.
+
+### Revision: the number row went back to Sidecar
+
+The conflict table originally gave Tasks `1`-`6` as well, so inside the Tasks tab
+the number row selected a Tasks view instead of switching Sidecar tabs. That
+shipped, was used, and lost. Switching tabs by number is muscle memory across
+every other tab, and a key that means one thing in six tabs and another in the
+seventh is a key you have to think about. Tab switching won: `shadowableGlobals`
+is now `@` alone, and `1`-`6` reach Sidecar from every Tasks context.
+
+Tasks keeps `←`/`→` for stepping between its views — its own `prev-view` /
+`next-view`, which Sidecar does not bind — and the `view-*` commands are still in
+the palette and merged help, so nothing became unreachable.
+
+In exchange the Tasks root contexts (`tasks-list`, `tasks-detail`,
+`tasks-response`, `tasks-response-detail`) bind `[` and `]` to the previous and
+next Sidecar tab. Brackets are not a Sidecar global and could not become one:
+file-browser tabs, workspace preview tabs, and next/prev file in a diff already
+own them. So bracket tab cycling is **opt-in per context** — the host cycles on a
+bracket only where the keymap binds it to `prev-plugin` / `next-plugin`
+(`keymap.BracketTabCycleKeys`), which keeps the decision in the binding table
+next to every other key rather than in a context name hard-coded into the host.
+They are bound only in the non-overlay, non-text-input Tasks contexts, so a
+literal bracket typed into a Tasks prompt, filter, or form still reaches Tasks —
+level 2 forwards it before the host's switch is reached, and the binding table
+does not name those contexts either.
+
+This revision was made in the host's claim set rather than through a user
+keymap override, which is what the plan offered for a mapping that turns out
+wrong. The override is the right tool for one user's preference; this is the
+default every user gets, and defaults belong in the shipped table.
 
 ### User overrides outrank plugin claims
 
@@ -138,8 +170,18 @@ Sidecar toast for that tab, including update-and-restart notices.
   are unaffected, and nothing forces them to adopt it.
 - A plugin cannot capture `ctrl+c`, `q`, or `?`. A plugin that needs its own
   quit-like affordance surfaces it as a command and binds a different key.
-- `K`, `W`, and `#` belong to Sidecar inside the Tasks tab. Their Tasks
-  equivalents are reachable through `?` and the palette.
+- `K`, `W`, `#`, and `1`-`6` belong to Sidecar inside the Tasks tab. Their Tasks
+  equivalents are reachable through `?` and the palette, and the views also keep
+  `←`/`→`.
+- `[` and `]` cycle Sidecar tabs from the Tasks root contexts, and only from
+  contexts that bind them that way. Any future tab wanting the same affordance
+  adds two bindings; nothing in `internal/app` names a context to get it.
+- The footer and palette still label the `view-*` commands with `1`-`6`, because
+  both are built from registered bindings and Tasks registers its whole table.
+  That is the same pre-existing inaccuracy as `K`/`W`/`#`, now on more visible
+  keys: a binding the host wins is still advertised by the plugin that lost it.
+  Fixing it properly means letting a plugin publish a command without a key, so
+  the palette entry survives while the key hint does not.
 - The Tasks routing table is derived at runtime from the Tasks registry rather
   than hardcoded in `internal/app`, so `internal/app` does not import a plugin
   and the table cannot drift as Tasks adds contexts. A Tasks-side context rename
