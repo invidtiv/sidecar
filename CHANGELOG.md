@@ -2,6 +2,15 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.94.2] - 2026-08-10
+
+### Features
+- **Copy terminal selections with `cmd+c`.** On terminals that deliver the macOS shortcut to Sidecar, `cmd+c` now copies selected text in both read and interactive modes; `alt+c` remains the portable and configurable alternative. Copying with no selection leaves the clipboard untouched and points to select-all. Super, Meta, and Hyper chords that tmux cannot faithfully encode are swallowed instead of typing stray characters into the pane.
+
+### Bug Fixes
+- **Terminal selection behaves like a native terminal.** A drag that begins on a passive terminal now selects immediately without activating, reframing, or jumping to the top of scrollback; a motionless click still activates on release. Double-click-and-drag extends by words, triple-click-and-drag extends by lines, shift-click extends to padding and chrome, and dragging beyond an edge continues through scrollback with bounded auto-scroll. Selection remains local even when the program inside the pane enables mouse tracking, while motionless clicks still reach that program.
+- **Selection highlighting remains visible over application-painted backgrounds.** Multi-line selections no longer disappear on rows whose own ANSI styling sets or resets the background, including pinned-panel layouts, and the original row background is restored after the selected span.
+
 ## [v0.94.1] - 2026-08-09
 
 ### Bug Fixes
