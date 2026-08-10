@@ -720,10 +720,10 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 		statusIcon = activityIcon
 		statusStyle = activityStyle
 	} else if shell.Agent != nil {
-		// A live session with no semantic activity signal: agent-backed shells
-		// whose provider has no activity detector (aider and friends) and plain
-		// shells both render simply as running.
-		statusIcon = "●"
+		// Live session with no semantic activity: process is up but not busy.
+		// ◎ + green = "live" (quieter than working's filled ● / activity glyphs).
+		// Reserve "running" for a future real workload signal (e.g. dev servers).
+		statusIcon = "◎"
 		statusStyle = styles.StatusCompleted // Green
 	} else {
 		statusIcon = "○"
@@ -759,7 +759,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 		if hasActivity {
 			statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
 		} else {
-			statusText = fmt.Sprintf("%s · running", agentAbbrev)
+			statusText = fmt.Sprintf("%s · live", agentAbbrev)
 		}
 	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
 		agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]

@@ -81,15 +81,18 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 	case 0:
 		statusIcon := "○"
 		var statusStyle lipgloss.Style
-		hasAnimatedActivity := false
+		styledIcon := false
 		if resolvedStatus.Health {
 			statusIcon = "◌"
 		} else if icon, _, style, ok := p.animatedActivityPresentation(shell.Agent); ok {
-			statusIcon, statusStyle, hasAnimatedActivity = icon, style, true
+			statusIcon, statusStyle, styledIcon = icon, style, true
 		} else if shell.Agent != nil {
-			statusIcon = "●"
+			// Live but quiet: same ◎ + green as the list view.
+			statusIcon = "◎"
+			statusStyle = styles.StatusCompleted
+			styledIcon = true
 		}
-		if hasAnimatedActivity && !isSelected {
+		if styledIcon && !isSelected {
 			statusIcon = statusStyle.Render(statusIcon)
 		}
 		name := shell.Name
@@ -113,7 +116,19 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 				statusText = fmt.Sprintf("  %s · %s", agentName, text)
 			}
 		} else if shell.Agent != nil {
-			statusText = "  shell · running"
+			// Mirror list: agent abbrev · live (not "running").
+			agentName := shellAgentAbbreviations[shell.Agent.Type]
+			if agentName == "" {
+				agentName = string(shell.Agent.Type)
+			}
+			if agentName == "" {
+				agentName = "shell"
+			}
+			if icon := styles.AgentIcon(string(shell.Agent.Type)); icon != "" {
+				statusText = fmt.Sprintf("  %s %s · live", icon, agentName)
+			} else {
+				statusText = fmt.Sprintf("  %s · live", agentName)
+			}
 		}
 		content = statusText
 	}

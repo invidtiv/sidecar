@@ -72,7 +72,7 @@ func TestOrdinaryRunningShellDoesNotAnimate(t *testing.T) {
 	first := ansi.Strip(p.renderShellEntryForSession(shell, false, 40))
 	p.activityAnimationFrame = 7
 	second := ansi.Strip(p.renderShellEntryForSession(shell, false, 40))
-	if first != second || !strings.Contains(first, "●") || !strings.Contains(first, "running") {
+	if first != second || !strings.Contains(first, "◎") || !strings.Contains(first, "live") {
 		t.Fatalf("ordinary shell changed across animation frames:\n%q\n%q", first, second)
 	}
 }
