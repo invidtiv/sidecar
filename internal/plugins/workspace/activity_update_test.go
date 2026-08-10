@@ -68,7 +68,9 @@ func TestShellOutputSwitchesLiveProviderWithoutChangingLaunchPreference(t *testi
 		t.Fatalf("live type = %q, launch preference = %q", agent.Type, shell.ChosenAgent)
 	}
 	rendered := ansi.Strip(p.renderShellEntryForSession(shell, false, 40))
-	if !strings.Contains(rendered, "Claude") || strings.Contains(rendered, "Codex") {
+	// Agent chip uses lowercased styles.AgentLabel ("◆ claude"), not the
+	// title-case abbreviation.
+	if !strings.Contains(rendered, "claude") || strings.Contains(rendered, "codex") {
 		t.Fatalf("shell row did not use live provider: %q", rendered)
 	}
 }

@@ -42,9 +42,29 @@ func TestActivityRenderingParityForWorktreeAndAgentShell(t *testing.T) {
 		"worktree": p.renderWorktreeItem(wt, true, 40),
 		"shell":    p.renderShellEntryForSession(shell, true, 40),
 	} {
+		// ◆ is the blocked status glyph; selected rows use plain AgentLabel
+		// (▶ codex) so the selection background stays uniform.
 		if !strings.Contains(output, "◆") || !strings.Contains(output, "blocked") {
 			t.Fatalf("%s rendering lacks glyph/text parity: %q", name, output)
 		}
+		if !strings.Contains(output, "▶") || !strings.Contains(ansi.Strip(output), "codex") {
+			t.Fatalf("%s rendering lacks agent chip label: %q", name, output)
+		}
+	}
+}
+
+func TestUnselectedShellUsesAgentChip(t *testing.T) {
+	p := &Plugin{activePane: PaneSidebar, ctx: &plugin.Context{}}
+	agent := &Agent{Type: AgentGrok, Activity: agentactivity.Tracker{State: agentactivity.StateIdle}}
+	agent.Activity.Acknowledge() // seen idle → ○ + "idle"
+	shell := &ShellSession{Name: "GROK", ChosenAgent: AgentGrok, Agent: agent}
+	got := p.renderShellEntryForSession(shell, false, 40)
+	stripped := ansi.Strip(got)
+	if !strings.Contains(stripped, "✦") || !strings.Contains(stripped, "grok") {
+		t.Fatalf("unselected shell missing agent chip: %q", stripped)
+	}
+	if !strings.Contains(stripped, "idle") {
+		t.Fatalf("unselected shell missing status: %q", stripped)
 	}
 }
 

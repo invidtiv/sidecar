@@ -116,6 +116,25 @@ func TestCardLinesAgentChipUsesConversationsIcon(t *testing.T) {
 	}
 }
 
+func TestCardLinesShellDetailIsSessionNameOnly(t *testing.T) {
+	shell := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindShell, ProjectKey: "p", ProjectName: "one", Name: "agent",
+		Provider: "codex", TmuxName: "sidecar-sh-sidecar-8",
+		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Label: "idle"},
+	}
+	lines := cardLines(shell, false, time.Now())
+	if len(lines) < 3 || len(lines[2].Spans) < 2 {
+		t.Fatalf("expected detail span on line 3, got %#v", lines)
+	}
+	detail := lines[2].Spans[1].Text
+	if strings.Contains(detail, "tmux") {
+		t.Fatalf("shell detail = %q, must not repeat the 'tmux' label", detail)
+	}
+	if !strings.Contains(detail, "sidecar-sh-sidecar-8") {
+		t.Fatalf("shell detail = %q, want session name", detail)
+	}
+}
+
 func TestSyncBoardOrdersByProjectGroupThenRecency(t *testing.T) {
 	now := time.Now()
 	m := New(workspaceinventory.Collector{})

@@ -1,6 +1,9 @@
 package styles
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProjectHueIsStableForFixedKeyAndRamp(t *testing.T) {
 	ApplyThemeColors(Theme{Colors: ColorPalette{
@@ -61,11 +64,43 @@ func TestAgentIconMatchesConversationsAdapters(t *testing.T) {
 	if got := AgentLabel("codex"); got != "▶ codex" {
 		t.Errorf("AgentLabel(codex) = %q, want %q", got, "▶ codex")
 	}
+	if got := AgentLabel("CODEX"); got != "▶ codex" {
+		t.Errorf("AgentLabel(CODEX) = %q, want lowercased label", got)
+	}
 	if got := AgentLabel("mystery"); got != "mystery" {
 		t.Errorf("AgentLabel(unknown) = %q, want bare name", got)
 	}
 	if got := AgentLabel(""); got != "" {
 		t.Errorf("AgentLabel(empty) = %q, want empty", got)
+	}
+}
+
+func TestRenderAgentChipUsesThemeColours(t *testing.T) {
+	ApplyTheme("default")
+	defer ApplyTheme("default")
+
+	if got := RenderAgentChip(""); got != "" {
+		t.Errorf("RenderAgentChip(empty) = %q, want empty", got)
+	}
+	chip := RenderAgentChip("codex")
+	if chip == "" {
+		t.Fatal("RenderAgentChip(codex) returned empty")
+	}
+	// Must carry the label text even after ANSI — the rendered string embeds
+	// the icon and name as runes among SGR codes.
+	if !strings.Contains(chip, "codex") || !strings.Contains(chip, "▶") {
+		t.Errorf("RenderAgentChip(codex) = %q, want icon + name", chip)
+	}
+	// Chip should differ from bare label: it has colour SGR sequences.
+	if chip == AgentLabel("codex") {
+		t.Errorf("RenderAgentChip should wrap the label in theme styles, got bare %q", chip)
+	}
+	label := RenderAgentLabel("grok")
+	if !strings.Contains(label, "grok") || !strings.Contains(label, "✦") {
+		t.Errorf("RenderAgentLabel(grok) = %q, want icon + name", label)
+	}
+	if label == RenderAgentChip("grok") {
+		t.Error("RenderAgentLabel and RenderAgentChip should differ (fill vs no fill)")
 	}
 }
 

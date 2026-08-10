@@ -76,6 +76,10 @@ func (p *Plugin) kanbanWorktreeByID(id string) *Worktree {
 // lineIdx: 0=name, 1=status, 2-3=empty
 func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width int, isSelected bool) string {
 	var content string
+	// Pre-styled content (agent chip) must not be re-wrapped in Muted /
+	// CardSelected or the chip colours are wiped. finishKanbanCardLine
+	// pads and applies selection background only.
+	preStyled := false
 	resolvedStatus := shellAgentStatusPresentation(shell)
 	switch lineIdx {
 	case 0:
@@ -94,6 +98,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 		}
 		if styledIcon && !isSelected {
 			statusIcon = statusStyle.Render(statusIcon)
+			preStyled = true
 		}
 		name := shell.Name
 		maxNameLen := width - 3
@@ -102,55 +107,32 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 		}
 		content = fmt.Sprintf(" %s %s", statusIcon, name)
 	case 1:
-		statusText := "  shell · no session"
 		if resolvedStatus.Health {
-			statusText = "  shell · offline"
-		} else if _, text, _, ok := activityPresentation(shell.Agent); ok {
-			agentName := shellAgentAbbreviations[shell.Agent.Type]
-			if agentName == "" && shell.Agent != nil {
-				agentName = string(shell.Agent.Type)
-			}
-			if icon := styles.AgentIcon(string(shell.Agent.Type)); icon != "" {
-				statusText = fmt.Sprintf("  %s %s · %s", icon, agentName, text)
-			} else {
-				statusText = fmt.Sprintf("  %s · %s", agentName, text)
-			}
+			content = "  shell · offline"
+		} else if _, text, _, ok := activityPresentation(shell.Agent); ok && shell.Agent != nil {
+			content = "  " + kanbanAgentStatus(string(shell.Agent.Type), text, isSelected)
+			preStyled = !isSelected
 		} else if shell.Agent != nil {
-			// Mirror list: agent abbrev · live (not "running").
-			agentName := shellAgentAbbreviations[shell.Agent.Type]
-			if agentName == "" {
-				agentName = string(shell.Agent.Type)
-			}
-			if agentName == "" {
-				agentName = "shell"
-			}
-			if icon := styles.AgentIcon(string(shell.Agent.Type)); icon != "" {
-				statusText = fmt.Sprintf("  %s %s · live", icon, agentName)
+			// Live but quiet: mirror the list view's "live", not "running".
+			provider := string(shell.Agent.Type)
+			if provider != "" && provider != string(AgentNone) {
+				content = "  " + kanbanAgentStatus(provider, "live", isSelected)
+				preStyled = !isSelected
 			} else {
-				statusText = fmt.Sprintf("  %s · live", agentName)
+				content = "  shell · live"
 			}
+		} else {
+			content = "  shell · no session"
 		}
-		content = statusText
 	}
-	if lipgloss.Width(content) > width {
-		content = ansi.Truncate(content, width, "")
-	}
-	if contentWidth := lipgloss.Width(content); contentWidth < width {
-		content += strings.Repeat(" ", width-contentWidth)
-	}
-	if isSelected {
-		return styles.CardSelected.Width(width).Render(content)
-	}
-	if lineIdx > 0 {
-		return styles.Muted.Width(width).Render(content)
-	}
-	return lipgloss.NewStyle().Width(width).Render(content)
+	return finishKanbanCardLine(content, width, isSelected, preStyled, lineIdx > 0)
 }
 
 // renderKanbanCardLine renders a single line of a kanban card.
 // lineIdx: 0=name, 1=agent, 2=task, 3=stats
 func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelected bool) string {
 	var content string
+	preStyled := false
 	presentation := kanbanPresentationForWorktree(wt)
 	var activityStyle lipgloss.Style
 	hasAnimatedActivity := false
@@ -164,6 +146,7 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 		icon := presentation.icon
 		if hasAnimatedActivity && !isSelected {
 			icon = activityStyle.Render(icon)
+			preStyled = true
 		}
 		name := wt.Name
 		maxNameLen := width - 3
@@ -172,18 +155,22 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 		}
 		content = fmt.Sprintf(" %s %s", icon, name)
 	case 1:
-		agentStr := ""
-		if wt.Agent != nil {
-			agentStr = "  " + styles.AgentLabel(string(wt.Agent.Type))
-		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			agentStr = "  " + styles.AgentLabel(string(wt.ChosenAgentType))
-		}
 		if presentation.health {
-			agentStr = "  " + presentation.statusText
-		} else if presentation.statusText != "" {
-			agentStr += " · " + presentation.statusText
+			content = "  " + presentation.statusText
+		} else {
+			provider := ""
+			if wt.Agent != nil {
+				provider = string(wt.Agent.Type)
+			} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
+				provider = string(wt.ChosenAgentType)
+			}
+			if provider != "" {
+				content = "  " + kanbanAgentStatus(provider, presentation.statusText, isSelected)
+				preStyled = !isSelected
+			} else if presentation.statusText != "" {
+				content = "  " + presentation.statusText
+			}
 		}
-		content = agentStr
 	case 2:
 		if wt.TaskID != "" {
 			taskStr := wt.TaskID
@@ -198,18 +185,57 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 			content = fmt.Sprintf("  +%d -%d", wt.Stats.Additions, wt.Stats.Deletions)
 		}
 	}
-	// Bound width the same way as shell cards: icons + status can exceed a
-	// narrow column after provider glyphs were added to the agent line.
+	return finishKanbanCardLine(content, width, isSelected, preStyled, lineIdx > 0)
+}
+
+// kanbanAgentStatus composes the agent chip + optional status text for a
+// kanban card line. Unselected rows use the themed chip (colour + raised
+// fill); selected rows use plain AgentLabel so CardSelected can paint the row.
+func kanbanAgentStatus(provider, status string, selected bool) string {
+	var agent string
+	if selected {
+		agent = styles.AgentLabel(provider)
+	} else {
+		agent = styles.RenderAgentChip(provider)
+	}
+	if agent == "" {
+		return status
+	}
+	if status == "" {
+		return agent
+	}
+	if selected {
+		return agent + " · " + status
+	}
+	return agent + styles.Muted.Render(" · "+status)
+}
+
+// finishKanbanCardLine pads a card line to width and applies selection or
+// muted styling. When preStyled is true the content already carries ANSI
+// colour (agent chips, activity icons) so we must not re-wrap it in a
+// Foreground style that would wipe those colours — only pad, and for
+// selection apply a background-only style.
+func finishKanbanCardLine(content string, width int, selected, preStyled, mute bool) string {
 	if lipgloss.Width(content) > width {
 		content = ansi.Truncate(content, width, "")
 	}
 	if contentWidth := lipgloss.Width(content); contentWidth < width {
 		content += strings.Repeat(" ", width-contentWidth)
 	}
-	if isSelected {
+	if selected {
+		if preStyled {
+			// Background only — preserve chip / activity foregrounds.
+			return lipgloss.NewStyle().
+				Background(styles.CardSelected.GetBackground()).
+				Width(width).
+				Render(content)
+		}
 		return styles.CardSelected.Width(width).Render(content)
 	}
-	if lineIdx > 0 {
+	if preStyled {
+		return content
+	}
+	if mute {
 		return styles.Muted.Width(width).Render(content)
 	}
 	return lipgloss.NewStyle().Width(width).Render(content)

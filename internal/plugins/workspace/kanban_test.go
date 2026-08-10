@@ -138,11 +138,9 @@ func TestKanbanDeterministicSemanticFixture(t *testing.T) {
 		"Working 1", "Blocked 1", "Done 1", "Idle 1", "Paused 1",
 		"working-wt", "blocked-wt", "done-wt", "idle-wt", "error-wt",
 		"working-shell", "blocked-shell", "done-shell", "idle-shell",
-		// Worktree agent lines use the lowercase provider id; shell lines use
-		// the short display name. Assert both so a single-path icon regression
-		// cannot hide behind the other surface.
-		"▶ codex · working", "◆ Claude · blocked", "✦ Grok · done", "★ Antigravity · idle",
-		"▶ Codex · working", "◆ Claude · blocked", "✦ Grok · done", "★ Antigravity · idle",
+		// Worktree and shell agent lines share styles.AgentLabel (icon +
+		// lowercased provider), matching the Agent Overview board chips.
+		"▶ codex · working", "◆ claude · blocked", "✦ grok · done", "★ antigravity · idle",
 		"error",
 	} {
 		if !strings.Contains(got, want) {
