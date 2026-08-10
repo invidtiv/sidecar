@@ -494,10 +494,15 @@ func TestVisualSubstring_MultiWidth(t *testing.T) {
 
 func TestInjectCharacterRangeBackground_FullLine(t *testing.T) {
 	input := "hello world"
-	result := InjectCharacterRangeBackground(input, 0, -1)
-	expected := InjectSelectionBackground(input)
-	if result != expected {
-		t.Errorf("full line: got %q, want %q", result, expected)
+	selBg := GetSelectionBgANSI()
+
+	// A rendered row hands its own background back at the end of the line; a
+	// standalone fragment resets fully, since something else follows it.
+	if got, want := InjectCharacterRangeBackground(input, 0, -1), selBg+input+"\x1b[49m"; got != want {
+		t.Errorf("full line: got %q, want %q", got, want)
+	}
+	if got, want := InjectSelectionBackground(input), selBg+input+"\x1b[0m"; got != want {
+		t.Errorf("fragment: got %q, want %q", got, want)
 	}
 }
 

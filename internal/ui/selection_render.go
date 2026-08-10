@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -24,13 +25,11 @@ func GetSelectionBgANSI() string {
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
 }
 
-// InjectSelectionBackground adds a selection background while preserving ANSI resets.
-// It prepends the background at the start and re-injects after any reset sequences.
+// InjectSelectionBackground adds a selection background to a whole fragment,
+// surviving any background the fragment sets for itself, and fully resets at the
+// end so the highlight cannot leak into whatever is appended after it.
 func InjectSelectionBackground(s string) string {
-	selectionBg := GetSelectionBgANSI()
-	result := selectionBg + s
-	result = AnsiResetRe.ReplaceAllString(result, "${0}"+selectionBg)
-	return result + "\x1b[0m"
+	return injectRangeBackground(s, 0, -1, "\x1b[0m")
 }
 
 // ExpandTabs replaces tabs with spaces, preserving ANSI sequences and column widths.
@@ -120,10 +119,22 @@ func VisualSubstring(s string, startCol, endCol int) string {
 // absolute visual space (post-tab-expansion). Handles ANSI codes correctly.
 // If endCol is -1, highlights to end of line.
 func InjectCharacterRangeBackground(line string, startCol, endCol int) string {
-	if startCol == 0 && endCol == -1 {
-		return InjectSelectionBackground(line)
-	}
+	return injectRangeBackground(line, startCol, endCol, "")
+}
 
+// injectRangeBackground walks the line once, holding the selection background
+// against anything the line does to its own background.
+//
+// Whole-line ranges used to take a shortcut that prepended the highlight and
+// only re-applied it after a bare reset. Apps that paint each row with their own
+// background (grok's panel styling) overrode it with their first SGR, so the
+// middle lines of a multi-line selection lost their highlight entirely while the
+// first and last — which took this walk — kept theirs.
+//
+// closeAtEOL is what to emit if the line ends inside the selection: callers
+// highlighting a fragment that will be concatenated with other text need a full
+// reset, while a rendered row restores its own background instead.
+func injectRangeBackground(line string, startCol, endCol int, closeAtEOL string) string {
 	selBg := GetSelectionBgANSI()
 	var sb strings.Builder
 	sb.Grow(len(line) + 64)
@@ -131,6 +142,10 @@ func InjectCharacterRangeBackground(line string, startCol, endCol int) string {
 	state := ansi.NormalState
 	cumWidth := 0
 	inSelection := false
+	// The background the line itself is carrying, to hand back when the
+	// selection ends. Blanket \x1b[49m would drop a styled row's own background
+	// for the text after the selection.
+	lineBg := "\x1b[49m"
 
 	remaining := line
 	for len(remaining) > 0 {
@@ -153,7 +168,7 @@ func InjectCharacterRangeBackground(line string, startCol, endCol int) string {
 				sb.WriteString(selBg)
 				inSelection = true
 			} else if !charInRange && inSelection {
-				sb.WriteString("\x1b[49m") // reset background only, preserve foreground
+				sb.WriteString(lineBg)
 				inSelection = false
 			}
 
@@ -162,15 +177,19 @@ func InjectCharacterRangeBackground(line string, startCol, endCol int) string {
 
 			// Check if we've passed the end of selection
 			if endCol >= 0 && cumWidth > endCol && inSelection {
-				sb.WriteString("\x1b[49m") // reset background only, preserve foreground
+				sb.WriteString(lineBg)
 				inSelection = false
 			}
 		} else {
 			// ANSI sequence or control character
 			sb.WriteString(seq)
-			// If there's a reset within the selection, re-inject background
-			if inSelection && AnsiResetRe.MatchString(seq) {
-				sb.WriteString(selBg)
+			if bg, touches := sgrBackground(seq); touches {
+				lineBg = bg
+				// The line just set its own background, which would paint over the
+				// highlight for the rest of the span.
+				if inSelection {
+					sb.WriteString(selBg)
+				}
 			}
 		}
 
@@ -179,10 +198,80 @@ func InjectCharacterRangeBackground(line string, startCol, endCol int) string {
 	}
 
 	if inSelection {
-		sb.WriteString("\x1b[49m") // reset background only at end of line
+		if closeAtEOL != "" {
+			sb.WriteString(closeAtEOL)
+		} else {
+			sb.WriteString(lineBg)
+		}
 	}
 
 	return sb.String()
+}
+
+// sgrBackground reports whether an escape sequence changes the background and,
+// if so, the minimal sequence that reproduces the background it leaves behind.
+// Colour parameters consume their own arguments, so an SGR like 38;2;49;0;0
+// (a foreground colour that happens to contain 49) is not read as a background
+// reset.
+func sgrBackground(seq string) (string, bool) {
+	if !strings.HasPrefix(seq, "\x1b[") || !strings.HasSuffix(seq, "m") {
+		return "", false
+	}
+	params := strings.Split(seq[2:len(seq)-1], ";")
+
+	bg, touches := "", false
+	for i := 0; i < len(params); i++ {
+		param := params[i]
+		// Colon-subparameter colours (48:2:…) arrive as one parameter.
+		if base, _, ok := strings.Cut(param, ":"); ok {
+			switch base {
+			case "48":
+				bg, touches = "\x1b["+param+"m", true
+			case "38":
+			}
+			continue
+		}
+		switch param {
+		case "", "0", "49":
+			// A reset — bare, or compound as in \x1b[0;38;2;200;200;200m — puts the
+			// background back to the terminal default.
+			bg, touches = "\x1b[49m", true
+		case "38", "48", "58":
+			value, consumed := sgrColorParam(params, i)
+			i += consumed
+			if param == "48" {
+				bg, touches = value, true
+			}
+		default:
+			if code, err := strconv.Atoi(param); err == nil &&
+				(code >= 40 && code <= 47 || code >= 100 && code <= 107) {
+				bg, touches = "\x1b["+param+"m", true
+			}
+		}
+	}
+	return bg, touches
+}
+
+// sgrColorParam rebuilds an extended colour parameter starting at params[i] (38
+// or 48) and reports how many extra parameters it consumed, so the caller's walk
+// skips its arguments rather than reading them as codes of their own.
+func sgrColorParam(params []string, i int) (string, int) {
+	if i+1 >= len(params) {
+		return "\x1b[49m", 0
+	}
+	switch params[i+1] {
+	case "5":
+		if i+2 < len(params) {
+			return "\x1b[" + strings.Join(params[i:i+3], ";") + "m", 2
+		}
+		return "\x1b[49m", len(params) - i - 1
+	case "2":
+		if i+4 < len(params) {
+			return "\x1b[" + strings.Join(params[i:i+5], ";") + "m", 4
+		}
+		return "\x1b[49m", len(params) - i - 1
+	}
+	return "\x1b[49m", 1
 }
 
 // VisualColAtRelativeX takes an already-expanded line and a relative X offset,

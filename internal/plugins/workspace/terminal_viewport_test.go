@@ -957,3 +957,50 @@ func TestTerminalViewportCursorHiddenOutsideWindow(t *testing.T) {
 		t.Fatalf("cursor below the window = (%d,%d,true), want hidden", x, y)
 	}
 }
+
+// Every row of a multi-line selection must carry the highlight, including the
+// middle rows an app has painted with its own background (grok).
+func TestTerminalViewportHighlightsEveryRowOfAStyledSelection(t *testing.T) {
+	rowBg := "\x1b[48;2;30;30;40m"
+	buffer := testTerminalBuffer(
+		rowBg + "first row\n" +
+			rowBg + "second row\n" +
+			rowBg + "third row\n" +
+			rowBg + "fourth row\n")
+	selection := &ui.SelectionState{}
+	selection.Clear()
+	selection.SelectRange(
+		ui.SelectionPoint{Line: 0, Col: 2},
+		ui.SelectionPoint{Line: 2, Col: 4},
+		false,
+	)
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:    buffer,
+		Width:     40,
+		Height:    6,
+		Follow:    true,
+		Selection: selection,
+	}, ui.NewTruncateCache(32))
+
+	selBg := ui.GetSelectionBgANSI()
+	rendered := strings.Split(result.Content, "\n")
+	if len(rendered) < 4 {
+		t.Fatalf("rendered %d rows, want at least 4", len(rendered))
+	}
+	for i, line := range rendered[:3] {
+		highlight := strings.Index(line, selBg)
+		if highlight < 0 {
+			t.Errorf("selected row %d carries no highlight: %q", i, line)
+			continue
+		}
+		// The row paints its own background first; a highlight emitted before it
+		// is painted straight over — the middle-row symptom.
+		if own := strings.Index(line, rowBg); own >= 0 && own > highlight {
+			t.Errorf("selected row %d applies its own background over the highlight: %q", i, line)
+		}
+	}
+	if strings.Contains(rendered[3], selBg) {
+		t.Errorf("row past the selection was highlighted: %q", rendered[3])
+	}
+}
