@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugin"
+	tasksui "github.com/marcus/tasks/pkg/tui"
 )
 
 // fixture is a minimal but valid Tasks store: the plugin never needs a large
@@ -42,6 +43,34 @@ func configuredEnv(t *testing.T) (root string, env map[string]string) {
 		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
 		"XDG_STATE_HOME":  filepath.Join(root, "state"),
 	}
+}
+
+// writeTasksConfig drops a Tasks config file into an isolated environment, so a
+// test can assert against colours (or any other setting) the *user* configured
+// rather than only the ones sidecar supplies.
+func writeTasksConfig(t *testing.T, root, text string) {
+	t.Helper()
+
+	dir := filepath.Join(root, "config", "tasks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// brokenStoreEnv is a configured Tasks whose store exists but is not valid
+// Tasks JSONL. The model builds fine; it just cannot read anything.
+func brokenStoreEnv(t *testing.T) map[string]string {
+	t.Helper()
+
+	root, env := configuredEnv(t)
+	store := filepath.Join(root, "data", "tasks.jsonl")
+	if err := os.WriteFile(store, []byte("{{{ not json at all\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return env
 }
 
 // unconfiguredEnv points Tasks at an empty home with no config file and no
@@ -238,11 +267,12 @@ func equalPaths(a, b []string) bool {
 	return true
 }
 
-// TestStaleReadyIsClosedAndDiscarded covers a project switch landing while the
-// build is in flight. Dropping the model without closing it would leak its
-// agent queue, so the test asserts closure by its observable effect: Close
-// writes the embedded session file.
-func TestStaleReadyIsClosedAndDiscarded(t *testing.T) {
+// TestStaleReadyIsDiscarded covers a project switch landing while the build is
+// in flight. The model must be released — dropping it would leak its agent
+// queue — but released via Discard, not Close: it was never presented, so its
+// state must not reach the shared session file. The observable difference is
+// exactly that no session is written.
+func TestStaleReadyIsDiscarded(t *testing.T) {
 	p, root, ctx := newConfigured(t)
 
 	cmd := p.Start()
@@ -271,14 +301,14 @@ func TestStaleReadyIsClosedAndDiscarded(t *testing.T) {
 	if !p.loading {
 		t.Error("a stale message should not clear the loading state")
 	}
-	if _, err := os.Stat(session); err != nil {
-		t.Errorf("discarded model was not closed: %v", err)
+	if _, err := os.Stat(session); !os.IsNotExist(err) {
+		t.Errorf("a never-presented model wrote the shared session file: %v", err)
 	}
 }
 
-// TestReadyAfterStopIsClosedAndDiscarded is the same race, but where Stop()
-// already tore the plugin down.
-func TestReadyAfterStopIsClosedAndDiscarded(t *testing.T) {
+// TestReadyAfterStopIsDiscarded is the same race, but where Stop() already tore
+// the plugin down.
+func TestReadyAfterStopIsDiscarded(t *testing.T) {
 	p, root, _ := newConfigured(t)
 
 	cmd := p.Start()
@@ -294,8 +324,208 @@ func TestReadyAfterStopIsClosedAndDiscarded(t *testing.T) {
 		t.Error("a model built for a stopped plugin should be dropped")
 	}
 	session := filepath.Join(root, "state", "tasks", "hosts", sessionNamespace, "tui.json")
-	if _, err := os.Stat(session); err != nil {
-		t.Errorf("discarded model was not closed: %v", err)
+	if _, err := os.Stat(session); !os.IsNotExist(err) {
+		t.Errorf("a never-presented model wrote the shared session file: %v", err)
+	}
+}
+
+// TestLateModelDiscardDoesNotOverwriteTheLiveSession is the exact confirmed
+// repro for the HIGH bug this packet closes.
+//
+// Every model built for the sidecar namespace shares one session file. A model
+// that lands after the user has moved on carries the session state as it was
+// when that model was *constructed*. Releasing it with Close wrote that stale
+// state over the session the live model had just saved: the user left the tab
+// on Quadrants and came back to Agenda.
+func TestLateModelDiscardDoesNotOverwriteTheLiveSession(t *testing.T) {
+	p, root, _ := newConfigured(t)
+	startAndSettle(t, p)
+	if p.model == nil {
+		t.Fatalf("model should exist (%s)", p.unavailable)
+	}
+
+	// The live model, A, is moved off its default view so its saved state is
+	// distinguishable from any other model's.
+	p.Update(tea.KeyPressMsg{Code: '3', Text: "3"})
+	if got := p.model.CurrentView(); got != tasksui.ViewQuadrants {
+		t.Fatalf("test invalid: live model is on the %q view, want quadrants", got)
+	}
+
+	// B is built now — before A saves — so it holds the pre-Quadrants session,
+	// exactly like an in-flight build the user has already moved past. p.loading
+	// is false, so delivering B later takes the stale path.
+	build := p.buildModel()
+	if build == nil {
+		t.Fatal("buildModel returned no command")
+	}
+	late, ok := build().(TasksReadyMsg)
+	if !ok || late.Err != nil || late.Model == nil {
+		t.Fatalf("late build failed: %+v", late)
+	}
+	if late.Model.CurrentView() == tasksui.ViewQuadrants {
+		t.Fatal("test invalid: the late model already shares the live model's view")
+	}
+
+	// A is presented, so A saves.
+	p.Stop()
+	session := filepath.Join(root, "state", "tasks", "hosts", sessionNamespace, "tui.json")
+	saved, err := os.ReadFile(session)
+	if err != nil {
+		t.Fatalf("the live model did not save its session: %v", err)
+	}
+	if !strings.Contains(string(saved), "quadrants") {
+		t.Fatalf("the live model saved the wrong view:\n%s", saved)
+	}
+
+	// B lands late and is dropped. Byte-for-byte, the live session must survive.
+	p.Update(late)
+	if p.model != nil {
+		t.Fatal("a late model must not be adopted after Stop")
+	}
+	after, err := os.ReadFile(session)
+	if err != nil {
+		t.Fatalf("reading the session after the late drop: %v", err)
+	}
+	if string(after) != string(saved) {
+		t.Errorf("the discarded model rewrote the live session:\nbefore %s\nafter  %s", saved, after)
+	}
+}
+
+// TestInitDiscardsALiveModelWithoutSaving is the same rule on the defensive
+// path in Init: reaching there means Stop did not complete, so this model's
+// state is not what the user last saw and must not become the session its
+// replacement loads.
+func TestInitDiscardsALiveModelWithoutSaving(t *testing.T) {
+	p, root, ctx := newConfigured(t)
+	startAndSettle(t, p)
+	if p.model == nil {
+		t.Fatalf("model should exist (%s)", p.unavailable)
+	}
+
+	session := filepath.Join(root, "state", "tasks", "hosts", sessionNamespace, "tui.json")
+	if _, err := os.Stat(session); err == nil {
+		t.Fatal("session existed before any release")
+	}
+
+	// Init without a preceding Stop, the shape safeStop's panic recovery leaves.
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if p.model != nil {
+		t.Error("Init should not leave the old model installed")
+	}
+	if _, err := os.Stat(session); !os.IsNotExist(err) {
+		t.Errorf("Init saved a doomed model's session: %v", err)
+	}
+}
+
+// TestBrokenStoreIsReportedAsADiagnostic covers a store that exists but cannot
+// be read. The model builds and renders, so this is not the `unavailable` path;
+// without consulting LoadError the tab would report "ok" while showing what
+// looks like an authoritative empty list.
+//
+// Sidecar deliberately does NOT repaint the tab here: Tasks owns its own frame
+// and already paints a read-error banner in its footer, so replacing the frame
+// (or adding a second banner) would say the same thing twice and throw away a
+// still-usable Tasks UI. Sidecar's job is to carry the condition to the surface
+// Tasks cannot reach — Diagnostics and the log.
+func TestBrokenStoreIsReportedAsADiagnostic(t *testing.T) {
+	p := New()
+	p.environment = brokenStoreEnv(t)
+	if err := p.Init(testContext(t)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer p.Stop()
+
+	ready := startAndSettle(t, p)
+	if ready.Err != nil || p.model == nil {
+		t.Fatalf("a broken store must still build a model, got %v", ready.Err)
+	}
+	if p.loadError == nil {
+		t.Fatal("a corrupt store reported no load error")
+	}
+	if p.unavailable != "" {
+		t.Errorf("a broken store is not a build failure, got unavailable = %q", p.unavailable)
+	}
+
+	diags := p.Diagnostics()
+	if len(diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %d", len(diags))
+	}
+	if diags[0].Status != "error" {
+		t.Errorf("diagnostic status = %q, want \"error\"", diags[0].Status)
+	}
+	if !strings.Contains(diags[0].Detail, "cannot read the task store") {
+		t.Errorf("diagnostic should name the read failure, got %q", diags[0].Detail)
+	}
+	if !strings.Contains(diags[0].Detail, storeReadHint) {
+		t.Errorf("diagnostic should carry the repair hint, got %q", diags[0].Detail)
+	}
+	// The unconfigured hint is the wrong advice here: nothing needs configuring.
+	if strings.Contains(diags[0].Detail, setupHint) {
+		t.Errorf("a broken store must not be told to configure Tasks: %q", diags[0].Detail)
+	}
+
+	// Tasks' own banner is what the user sees, and it appears exactly once.
+	view := p.View(100, 30)
+	if !strings.Contains(view, "cannot read the task store") {
+		t.Errorf("Tasks' read-error banner is missing from the tab:\n%s", view)
+	}
+	if n := strings.Count(view, "cannot read the task store"); n != 1 {
+		t.Errorf("the read error is shown %d times; sidecar must not duplicate Tasks' banner", n)
+	}
+	if strings.Contains(view, "Tasks is unavailable") {
+		t.Error("a readable-but-broken store must not replace the Tasks frame")
+	}
+}
+
+// TestHealthyStoreReportsNoLoadError is the other half: an ordinary store must
+// not trip the diagnostic.
+func TestHealthyStoreReportsNoLoadError(t *testing.T) {
+	p, _, _ := newConfigured(t)
+	startAndSettle(t, p)
+	defer p.Stop()
+	if p.model == nil {
+		t.Fatalf("model should exist (%s)", p.unavailable)
+	}
+
+	if p.loadError != nil {
+		t.Fatalf("a healthy store reported %v", p.loadError)
+	}
+	if diags := p.Diagnostics(); diags[0].Status != "ok" {
+		t.Errorf("diagnostic = %+v, want ok", diags[0])
+	}
+}
+
+// TestUserColorsSurviveUnderSidecarsOverlay covers the overlay contract: sidecar
+// overrides the handful of slots that must agree with its chrome, and every slot
+// it does not name keeps whatever the user configured for their own Tasks.
+// buildTheme must never set ReplaceColors.
+func TestUserColorsSurviveUnderSidecarsOverlay(t *testing.T) {
+	root, env := configuredEnv(t)
+	// accent IS one of sidecar's slots; tab_active is not.
+	writeTasksConfig(t, root, "color.tab_active = #ff00ff\ncolor.accent = #ffaa00\n")
+
+	p := New()
+	p.environment = env
+	if err := p.Init(testContext(t)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	startAndSettle(t, p)
+	defer p.Stop()
+	if p.model == nil {
+		t.Fatalf("model should exist (%s)", p.unavailable)
+	}
+
+	view := p.View(100, 30)
+	if !strings.Contains(view, "255;0;255") {
+		t.Errorf("sidecar's palette destroyed the user's own tab_active colour:\n%q", view)
+	}
+	if strings.Contains(view, "255;170;0") {
+		t.Errorf("sidecar's override of accent did not win:\n%q", view)
+	}
+	if buildTheme().ReplaceColors {
+		t.Error("buildTheme must not opt into wholesale colour replacement")
 	}
 }
 
@@ -408,17 +638,27 @@ func TestNestedQuitDoesNotQuitSidecar(t *testing.T) {
 		t.Fatalf("model should exist (%s)", p.unavailable)
 	}
 
-	_, cmd := p.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
-	if cmd != nil {
-		if _, isQuit := cmd().(tea.QuitMsg); isQuit {
-			t.Error("nested quit escaped to the host")
+	// Tasks now genuinely latches under SuppressQuit, so pressing `q` twice
+	// exercises latch → clear → latch → clear rather than a single refusal.
+	for press := range 2 {
+		_, cmd := p.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+		if quitEscapes(cmd) {
+			t.Errorf("press %d: nested quit escaped to the host", press+1)
+		}
+		if p.model == nil {
+			t.Fatalf("press %d: a nested quit closed the embedded model", press+1)
+		}
+		if p.model.QuitRequested() {
+			t.Errorf("press %d: quit request should be cleared, not left latched", press+1)
 		}
 	}
-	if p.model.QuitRequested() {
-		t.Error("quit request should be cleared, not left latched")
+
+	// And the tab is still usable afterwards.
+	if _, cmd := p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}); quitEscapes(cmd) {
+		t.Error("an ordinary key after a nested quit produced tea.Quit")
 	}
-	if p.model == nil {
-		t.Error("a nested quit must not close the embedded model")
+	if got := p.FocusContext(); !strings.HasPrefix(got, "tasks-") {
+		t.Errorf("Tasks left a non-Tasks focus context after quit: %q", got)
 	}
 }
 
@@ -583,33 +823,6 @@ func TestStaleReadyAfterStopInitWithoutEpochBump(t *testing.T) {
 	p.Update(ready)
 	if p.model == nil {
 		t.Errorf("the current lifecycle's model was not adopted (%s)", p.unavailable)
-	}
-}
-
-// TestInitClosesALiveModel covers S3. Registry.Reinit normally stops first, but
-// safeStop recovers panics, so a Close() that panicked leaves a live model in
-// place and the next Init would drop it — agent queue still running.
-func TestInitClosesALiveModel(t *testing.T) {
-	p, root, ctx := newConfigured(t)
-	startAndSettle(t, p)
-	if p.model == nil {
-		t.Fatalf("model should exist (%s)", p.unavailable)
-	}
-
-	session := filepath.Join(root, "state", "tasks", "hosts", sessionNamespace, "tui.json")
-	if _, err := os.Stat(session); err == nil {
-		t.Fatal("session existed before any close")
-	}
-
-	// Init without a preceding Stop, the shape safeStop's panic recovery leaves.
-	if err := p.Init(ctx); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	if p.model != nil {
-		t.Error("Init should not leave the old model installed")
-	}
-	if _, err := os.Stat(session); err != nil {
-		t.Errorf("Init dropped a live model without closing it: %v", err)
 	}
 }
 

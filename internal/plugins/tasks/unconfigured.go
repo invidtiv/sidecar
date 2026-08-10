@@ -12,6 +12,18 @@ import (
 // reported. Tasks owns the diagnosis; sidecar only says what to do next.
 const setupHint = "Configure Tasks, then restart sidecar to load the tab."
 
+// storeReadHint is the sidecar-side instruction for the other failure: Tasks is
+// configured and the tab renders, but the store behind it could not be read, so
+// what the list shows is not the user's task data. It is deliberately different
+// advice from setupHint — nothing here needs configuring, something needs
+// repairing — and it deliberately points at Tasks' own banner rather than
+// duplicating it in sidecar's chrome.
+//
+// Packet 1.3 note: this text assumes Tasks' footer is still visible. When 1.3
+// sets SuppressFooter and sidecar owns the footer, sidecar must carry the
+// read-error banner itself, or this condition becomes invisible in the tab.
+const storeReadHint = "Repair or restore the store; Tasks shows the details in its own footer banner."
+
 // panelInset is the horizontal padding of the diagnostic panel, applied on both
 // sides so the text is actually inset rather than merely wrapped short.
 const panelInset = 2

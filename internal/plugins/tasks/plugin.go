@@ -36,6 +36,13 @@ type Plugin struct {
 	// Tasks' own configuration-required message.
 	unavailable string
 
+	// loadError is Tasks' most recent store-read failure, as reported by
+	// Model.LoadError(). It is a different condition from `unavailable`: the
+	// model exists and renders, but what it renders cannot be trusted as a
+	// complete picture of the user's tasks. See Diagnostics for why sidecar
+	// reports it rather than repainting the tab.
+	loadError error
+
 	// View dimensions, replayed into the model when it arrives late.
 	width  int
 	height int
@@ -80,17 +87,19 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Clear state from a previous initialization (project switching). Normally
 	// Registry.Reinit has already called Stop(), but safeStop recovers panics,
-	// so a Close() that panicked leaves a live model here. Close it rather than
-	// dropping it: its agent queue and provider processes would outlive us.
+	// so a Close() that panicked leaves a live model here. Release it rather
+	// than dropping it: its agent queue and provider processes would outlive us.
 	//
-	// TODO(tasks): Close() saves the session. Once Tasks exposes a
-	// discard-without-save path, use it here so a doomed model cannot clobber
-	// the session of the one that replaces it.
+	// Discard, not Close: reaching here means the ordinary Stop path did not
+	// complete, so this model's view state is not the state the user last saw.
+	// Saving it would write a doomed model's session over the one its
+	// replacement is about to load.
 	if p.model != nil {
-		_ = p.model.Close()
+		_ = p.model.Discard()
 		p.model = nil
 	}
 	p.unavailable = ""
+	p.loadError = nil
 	p.loading = true
 	p.generation++
 
@@ -192,7 +201,25 @@ func (p *Plugin) adoptModel(msg TasksReadyMsg) tea.Cmd {
 		}
 	}
 
-	return combine(p.model.Init(), seed)
+	init := p.model.Init()
+	p.refreshLoadError()
+
+	return combine(init, seed)
+}
+
+// refreshLoadError samples Tasks' store-read health. LoadError is only
+// meaningful after a read, so this is called after every model interaction
+// rather than once at adoption: a store can break — or be repaired — while the
+// tab is open, and Tasks re-reads on its own file-watch tick.
+func (p *Plugin) refreshLoadError() {
+	if p.model == nil {
+		return
+	}
+	previous := p.loadError
+	p.loadError = p.model.LoadError()
+	if p.loadError != nil && previous == nil && p.ctx != nil && p.ctx.Logger != nil {
+		p.ctx.Logger.Warn("tasks: cannot read the task store", "error", p.loadError)
+	}
 }
 
 // combine batches two commands, either of which may be nil. It exists so the
@@ -208,12 +235,10 @@ func combine(a, b tea.Cmd) tea.Cmd {
 	}
 }
 
-// unavailableReason renders the failure the plugin will show and report.
-//
-// TODO(tasks): this only sees errors from NewEmbedded. A store that exists but
-// is corrupt or unreadable builds a model fine and renders an authoritative
-// empty list. Once Tasks exposes a load-error accessor, consult it here so the
-// tab says "your store is broken" instead of "you have nothing to do".
+// unavailableReason renders the build failure the plugin will show and report.
+// A store that exists but cannot be read is a different condition: it builds a
+// model fine, so it is carried by p.loadError and reported by Diagnostics
+// rather than replacing the Tasks frame.
 func unavailableReason(err error) string {
 	if err == nil {
 		return "tasks returned no model"
@@ -223,6 +248,10 @@ func unavailableReason(err error) string {
 
 // Stop closes the embedded model, which saves the sidecar session and shuts
 // down the Tasks agent queue.
+//
+// Close, not Discard: this is the model the host actually presented, so the
+// view and filters the user left it on are exactly the state the next lifecycle
+// should reload.
 func (p *Plugin) Stop() {
 	if p.model != nil {
 		_ = p.model.Close()
@@ -246,10 +275,15 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if ready, ok := msg.(TasksReadyMsg); ok {
 		if plugin.IsStale(p.ctx, ready) || ready.Generation != p.generation || !p.loading {
 			// Stale project switch, or Stop() already tore this plugin
-			// down. Close the orphan: dropping it on the floor would leak
+			// down. Release the orphan: dropping it on the floor would leak
 			// its agent queue and the provider processes behind it.
+			//
+			// Discard, not Close. Every model built for this namespace shares
+			// one session file, and this one was never presented to anyone, so
+			// Close would write its untouched default state over the session
+			// the model the user actually used just saved.
 			if ready.Model != nil {
-				_ = ready.Model.Close()
+				_ = ready.Model.Discard()
 			}
 			return p, nil
 		}
@@ -280,10 +314,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// through here; Tasks ignores anything it doesn't recognise.
 
 	_, cmd := p.model.Update(msg)
+	p.refreshLoadError()
 
-	// A nested quit never terminates sidecar. Tasks is built with SuppressQuit
-	// so it latches the request instead of returning tea.Quit; clear the latch
-	// so Tasks stays usable, and let sidecar's own quit flow own the decision.
+	// A nested quit never terminates sidecar. Tasks is built with SuppressQuit,
+	// so `q` latches a request instead of returning tea.Quit. Clear the latch so
+	// Tasks stays usable and a second `q` latches again.
+	//
+	// Sidecar has no exported "request quit" command to forward the latched
+	// request into, so today the request is acknowledged and dropped: `q` in the
+	// Tasks tab is a no-op rather than a host quit. Translating it into
+	// sidecar's own quit flow needs a host-side affordance that does not exist
+	// yet; it belongs with the unified footer/command work in Packet 1.3/1.4.
 	if p.model.QuitRequested() {
 		p.model.ClearQuitRequest()
 	}
@@ -293,11 +334,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 // suppressQuit wraps a command so no tea.Quit it produces can reach sidecar's
 // runtime, including one buried in a tea.Batch or tea.Sequence.
 //
-// TODO(tasks): Tasks' SuppressQuit does not currently latch QuitRequested(),
-// so in practice Tasks still returns tea.Quit and this is the only thing
-// standing between `q` in the Tasks tab and sidecar exiting. Once Tasks
-// latches, this becomes belt-and-braces — keep it either way; the cost is one
-// closure and the failure mode is killing the host.
+// Tasks now latches its own quit rather than returning tea.Quit, so this is no
+// longer the only thing standing between `q` and sidecar exiting — but it
+// stays. Sidecar forwards every message it receives into Tasks, Tasks composes
+// commands from widgets it does not fully own, and the cost of the guard is one
+// closure against a failure mode of killing the host.
 func suppressQuit(cmd tea.Cmd) tea.Cmd {
 	if cmd == nil {
 		return nil
@@ -438,9 +479,17 @@ func (p *Plugin) ConsumesTextInput() bool {
 }
 
 // Diagnostics returns plugin health info.
+//
+// A live model whose store cannot be read reports as an error even though the
+// tab still renders. Tasks paints the user-facing banner (see storeReadHint);
+// Diagnostics is where sidecar records the same condition for `sidecar doctor`
+// and the logs, which is the surface Tasks' banner cannot reach.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	status, detail := "ok", ""
 	switch {
+	case p.model != nil && p.loadError != nil:
+		status = "error"
+		detail = "cannot read the task store: " + p.loadError.Error() + "; " + storeReadHint
 	case p.model != nil:
 		detail = string(p.model.CurrentView()) + " view"
 	case p.unavailable != "":

@@ -13,10 +13,11 @@ import (
 // has a real opinion about are overridden. Tasks ignores unknown slots, so this
 // map can lag behind Tasks' slot table without breaking the embed.
 //
-// TODO(tasks): ThemeOptions.Colors currently replaces the user's configured
-// Tasks colours wholesale rather than overlaying on them. When Tasks grows an
-// overlay/merge semantic, this map becomes the override layer it was meant to
-// be and the user's own slots survive underneath.
+// ThemeOptions.Colors is an overlay: the slots named below win, and every slot
+// sidecar does not name keeps whatever the user configured for their own Tasks.
+// ReplaceColors is deliberately left unset — sidecar has an opinion about the
+// handful of slots that must agree with its chrome, not about the user's whole
+// palette.
 func buildTheme() tasksui.ThemeOptions {
 	c := styles.GetCurrentTheme().Colors
 
