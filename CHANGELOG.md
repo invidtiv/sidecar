@@ -2,6 +2,19 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.94.1] - 2026-08-09
+
+### Bug Fixes
+- **The Agent Overview owns the keyboard while it is open.** Opening the board over a workspace left in interactive mode no longer routes your keys into the hidden tmux pane: `esc`, `q`, and `K` close the board (`q` closes it rather than quitting sidecar), global shortcuts (`@`, `#`, `W`, `?`, `!`, `` ` ``, `~`, `1-9`) keep working over an embedded shell, and unhandled keys — including bracketed paste and unparsed CSI u sequences, which previously typed straight into the covered pane and could run on newline — stop at the Overview instead of reaching a plugin you cannot see. The `overview` context bindings are registered so `?` lists them, and the footer shows the board's own hints.
+- **Option/Alt keys reach the pane as real terminal input.** Bubble Tea decodes a terminal's ESC prefix into ModAlt, so alt-modified keys arrived as a bare character and common bindings did nothing; the prefix is restored, making Option+Left/Right word motion (alt+b / alt+f) and Option+Backspace word deletion behave as they do in any terminal. Ctrl is preserved as the meta-control byte, and alt+shift+f stays `F` instead of collapsing to the base rune.
+- **The terminal scrollbar column is reserved unconditionally**, so crossing the scrollback threshold no longer changes the width tmux wraps at — a frame published mid-resize rendered the pane one column too wide, clipping its final column and reflowing it as a blank wrapped line. (td-0818ef)
+- **The commit-for-merge modal no longer dead-ends on a clean tree.** When an agent had just committed in the workspace, the lagging status snapshot let you press Commit against a clean index and hit git's "nothing to commit" as an unrecoverable modal error; the merge/PR workflow now proceeds with a toast explaining that nothing needed recording.
+- **Quiet live shells read as `◎ live` rather than `● running`**, so a plain shell with a process but no agent activity no longer looks like busy work.
+
+### Features
+- **Agent chips match across surfaces.** The workspaces list and kanban reuse the Overview's themed agent presentation — icon, colour, raised fill — and Overview shell cards drop the redundant `tmux` prefix in favour of the session name.
+- The marketing front page was updated to cover recent features.
+
 ## [v0.94.0] - 2026-08-09
 
 ### Features
