@@ -2,6 +2,45 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.95.0] - 2026-08-10
+
+### Features
+- **Tasks tab (Beta), off by default.** Sidecar can now embed the [Tasks](https://github.com/marcus/tasks) TUI as a tab, sharing one application rather than reimplementing a second task tool. Tasks keeps ownership of its storage, rendering, overlays, and agent queue; Sidecar owns placement, lifecycle, keys, help, and the footer. Sidecar never reads or writes `tasks.jsonl` directly. Requires a configured Tasks install — an unconfigured or unreadable store shows a diagnostic and a setup hint rather than an empty list that looks authoritative.
+
+  Enable it by adding the feature flag to `~/.config/sidecar/config.json`:
+
+  ```json
+  {
+    "features": { "flags": { "tasks_plugin": true } }
+  }
+  ```
+
+  The tab appears after Workspaces by default. To place it after Notes instead:
+
+  ```json
+  {
+    "plugins": { "tasks": { "position": "after-notes" } }
+  }
+  ```
+
+  Beta: the tab is usable day to day, but per-project context following, work search across td and Tasks, and workspace/capture links are still to come.
+
+- **Contextual plugin keys take precedence over global keys.** Key input now resolves through a documented ladder — Sidecar modal, plugin text-input or blocking overlay, plugin contextual binding, Sidecar global, then unbound forwarding — so a plugin showing its own list decides what a key means while it is focused. Driven by two opt-in interfaces, `KeyRouter` and `FooterStatusProvider`; plugins that do not implement them behave exactly as before. `ctrl+c`, `q`, and `?` are host-reserved and can never be captured by a plugin. Recorded in `docs/adr/0001-contextual-plugin-keys-take-precedence.md`.
+
+- **Tab order is data, not statement order.** Plugin registration moved out of `main.go` into `internal/plugins/assembly`, whose `Plan` is a pure function of config plus feature flags. Tab shortcut numbers are derived from the resulting order; nothing assumes a fixed number when preceding plugins are disabled.
+
+- **The command palette carries commands that have no key.** A plugin can publish an invocable command without binding a key, and it still appears in `?` and the merged help. This is what lets Sidecar decline a key without making the underlying command unreachable.
+
+### Bug Fixes
+- **The footer no longer advertises keys that do something else.** Only bindings Sidecar will actually honour are registered, so a plugin key the host reserves or refuses cannot appear in the footer or merged help labelled as if it worked.
+- **Registering a plugin binding twice is a no-op.** Binding tables grew on every project switch, since plugins re-register on model adoption while the keymap lives for the process.
+- **A transient toast is no longer hidden by a persistent plugin status.** A plugin reporting a long-lived condition previously masked every toast for that tab, including update-and-restart notices.
+
+### Dependencies
+- Adds `github.com/marcus/tasks v1.5.0`, the embeddable Tasks TUI.
+- Raises the `go` directive to 1.26.0 to match that module.
+- `github.com/marcus/td` stays at v0.56.0 (already latest).
+
 ## [v0.94.2] - 2026-08-10
 
 ### Features
