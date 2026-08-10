@@ -251,7 +251,10 @@ type Plugin struct {
 
 ## Copy/Paste
 
-- Copy: `alt+c` (configurable via `interactiveCopyKey`)
+- Copy: `alt+c` (configurable via `interactiveCopyKey`), or `super+c` (Cmd+C) as a
+  built-in that a configured key does not replace. Cmd+C only arrives when the
+  emulator passes it through — terminals that keep it for themselves (iTerm2)
+  never deliver it, so `alt+c` stays the portable chord.
 - Paste: `alt+v` (configurable via `interactivePasteKey`)
 
 Paste wraps text with bracketed paste sequences (`\x1b[200~`...`\x1b[201~`) when the application has enabled bracketed paste mode.

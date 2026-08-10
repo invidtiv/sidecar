@@ -572,24 +572,6 @@ func (p *Plugin) interactiveSelectionLines() []string {
 	return p.selection.SelectedText(lines, startLine, tabStopWidth)
 }
 
-func (p *Plugin) interactiveVisibleLines() []string {
-	buf := p.interactiveOutputBuffer()
-	if buf == nil {
-		return nil
-	}
-	layout := p.terminalSelectionViewportLayout()
-	start := layout.Start
-	end := layout.End
-	if end <= start {
-		start = p.interactiveState.VisibleStart
-		end = p.interactiveState.VisibleEnd
-	}
-	if end <= start {
-		return nil
-	}
-	return buf.LinesRange(start, end)
-}
-
 func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
 	return p.terminalSelectionViewportLayout()
 }
@@ -889,12 +871,12 @@ func (p *Plugin) copyOnSelectEnabled() bool {
 
 func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
 	lines := p.interactiveSelectionLines()
-	if len(lines) == 0 {
-		lines = p.interactiveVisibleLines()
-	}
 	return func() tea.Msg {
 		if len(lines) == 0 {
-			return app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
+			// A copy chord with nothing selected must not replace the clipboard
+			// with a screen dump — cmd+c is reflex, and the clipboard may hold
+			// something the user still needs. Select-all is the explicit path.
+			return app.ToastMsg{Message: "Nothing selected — ctrl+a selects all output", Duration: 2 * time.Second}
 		}
 
 		stripped := make([]string, 0, len(lines))

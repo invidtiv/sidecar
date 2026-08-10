@@ -251,6 +251,7 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `1-9`, `@`, `#`, `W`, 
 | `ctrl+\` | exit |
 | `ctrl+]` | attach |
 | `alt+c` | copy |
+| `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |
 
 ## TD Monitor Plugin

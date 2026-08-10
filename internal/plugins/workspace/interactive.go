@@ -44,6 +44,14 @@ const (
 	// defaultCopyKey is the default keybinding to copy selection in interactive mode.
 	defaultCopyKey = "alt+c"
 
+	// superCopyKey is the platform copy chord — Cmd+C on macOS, Super+C
+	// elsewhere. It copies alongside the configured key rather than replacing it,
+	// because it is a platform convention rather than a sidecar binding: the
+	// terminal owns the selection, so the emulator's own copy has nothing to act
+	// on and passes the chord through to us. Terminals that intercept it first
+	// (iTerm2) never deliver it, which is why the configurable chord stays.
+	superCopyKey = "super+c"
+
 	// defaultPasteKey is the default keybinding to paste clipboard in interactive mode.
 	defaultPasteKey = "alt+v"
 )
@@ -120,6 +128,13 @@ func (p *Plugin) getInteractiveCopyKey() string {
 		}
 	}
 	return defaultCopyKey
+}
+
+// isTerminalCopyChord reports whether a key press asks to copy the terminal
+// selection: the configured (or default) copy key, or the platform copy chord.
+func (p *Plugin) isTerminalCopyChord(msg tea.KeyPressMsg) bool {
+	key := msg.String()
+	return key == p.getInteractiveCopyKey() || key == superCopyKey
 }
 
 // getInteractivePasteKey returns the configured paste keybinding for interactive mode.
@@ -386,7 +401,8 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		p.interactiveCopyPasteHintShown = true
 		cmds = append(cmds, func() tea.Msg {
 			return app.ToastMsg{
-				Message:  fmt.Sprintf("Interactive copy/paste: %s / %s (configurable)", p.getInteractiveCopyKey(), p.getInteractivePasteKey()),
+				Message: fmt.Sprintf("Interactive copy/paste: %s or %s / %s (configurable)",
+					p.getInteractiveCopyKey(), superCopyKey, p.getInteractivePasteKey()),
 				Duration: 3 * time.Second,
 			}
 		})
@@ -920,7 +936,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		pendingEscape = true
 	}
 
-	if msg.String() == p.getInteractiveCopyKey() {
+	if p.isTerminalCopyChord(msg) {
 		return p.copyInteractiveSelectionCmd()
 	}
 	if msg.String() == "ctrl+a" && p.interactiveState != nil {

@@ -44,6 +44,17 @@ func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
 		return "\x1b[13;2u", true // CSI u: shift+return
 	}
 
+	// Command/Super has no send-keys encoding — tmux has no notion of the
+	// modifier, and terminals that report it (Kitty protocol) send nothing a pane
+	// could interpret. The fallback at the bottom of this function used to strip
+	// the modifier and forward the bare rune, so cmd+c typed a literal "c" into
+	// the pane instead of copying. An unbound super chord does nothing; bound
+	// ones are handled by the app before they ever reach here. Meta and Hyper
+	// share the no-encoding fate, so they take the same exit.
+	if msg.Mod.Contains(tea.ModSuper) || msg.Mod.Contains(tea.ModMeta) || msg.Mod.Contains(tea.ModHyper) {
+		return "", false
+	}
+
 	// Terminals conventionally encode Alt/Option as an ESC prefix. Bubble Tea
 	// decodes that prefix into ModAlt, so put it back before forwarding input to
 	// the pane. This is what makes common macOS bindings such as Option+Left /

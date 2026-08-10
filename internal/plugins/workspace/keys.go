@@ -575,7 +575,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
 			return nil
 		default:
-			if msg.String() == p.getInteractiveCopyKey() {
+			if p.isTerminalCopyChord(msg) {
 				return p.copyInteractiveSelectionCmd()
 			}
 		}

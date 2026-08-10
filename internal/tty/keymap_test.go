@@ -198,3 +198,39 @@ func TestMapKeyToTmux_Modifiers(t *testing.T) {
 		})
 	}
 }
+
+// Super/Command has no tmux encoding. The old fallback dropped the modifier and
+// forwarded the bare rune, so cmd+c typed a literal "c" into the pane.
+func TestMapKeyToTmux_SuperIsSwallowed(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{"super+c", tea.KeyPressMsg{Code: 'c', Mod: tea.ModSuper}},
+		{"super+x", tea.KeyPressMsg{Code: 'x', Mod: tea.ModSuper}},
+		{"super+shift+z", tea.KeyPressMsg{Code: 'z', Mod: tea.ModSuper | tea.ModShift}},
+		// A terminal that reports text alongside the modifier must not slip past.
+		{"super+c with text", tea.KeyPressMsg{Code: 'c', Text: "c", Mod: tea.ModSuper}},
+		{"super+left", tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if key, _ := MapKeyToTmux(tt.msg); key != "" {
+				t.Errorf("MapKeyToTmux(%s) = %q, want it swallowed", tt.name, key)
+			}
+		})
+	}
+}
+
+// Swallowing super must not touch the modifiers tmux does understand.
+func TestMapKeyToTmux_OtherModifiersUnchanged(t *testing.T) {
+	if key, literal := MapKeyToTmux(tea.KeyPressMsg{Code: 'c', Text: "c", Mod: tea.ModAlt}); key != "\x1bc" || !literal {
+		t.Errorf("alt+c = %q (literal=%v), want ESC-prefixed", key, literal)
+	}
+	if key, _ := MapKeyToTmux(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); key != "C-c" {
+		t.Errorf("ctrl+c = %q, want C-c", key)
+	}
+	if key, _ := MapKeyToTmux(tea.KeyPressMsg{Code: 'c', Text: "c"}); key != "c" {
+		t.Errorf("plain c = %q, want c", key)
+	}
+}

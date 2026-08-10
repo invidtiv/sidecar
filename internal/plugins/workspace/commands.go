@@ -11,7 +11,7 @@ func (p *Plugin) Commands() []plugin.Command {
 	case ViewModeInteractive:
 		return []plugin.Command{
 			{ID: "exit-interactive", Name: "Exit", Description: "Exit interactive mode (" + p.getInteractiveExitKey() + ")", Context: "workspace-interactive", Priority: 1},
-			{ID: "copy", Name: "Copy", Description: "Copy selection (" + p.getInteractiveCopyKey() + ")", Context: "workspace-interactive", Priority: 2},
+			{ID: "copy", Name: "Copy", Description: "Copy selection (" + p.getInteractiveCopyKey() + " or " + superCopyKey + ")", Context: "workspace-interactive", Priority: 2},
 			{ID: "paste", Name: "Paste", Description: "Paste clipboard (" + p.getInteractivePasteKey() + ")", Context: "workspace-interactive", Priority: 3},
 		}
 	case ViewModeCreate:

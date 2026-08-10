@@ -650,6 +650,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		// Interactive mode context - uses configured keys (td-18098d)
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveExitKey(), "exit-interactive", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveCopyKey(), "copy", "workspace-interactive")
+		ctx.Keymap.RegisterPluginBinding(superCopyKey, "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractivePasteKey(), "paste", "workspace-interactive")
 	}
 

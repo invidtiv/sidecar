@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -1239,5 +1240,129 @@ func TestCalculatePreviewDimensionsIgnoresSelectionKind(t *testing.T) {
 	}
 	if want := p.height - panelBorderWidth - terminalHeaderRows; worktreeH != want {
 		t.Errorf("preview height = %d, want %d (borders + one header row)", worktreeH, want)
+	}
+}
+
+// copyChordTestPlugin is a live interactive terminal with no shared terminal
+// model attached, so forwarding takes the provisional path and returns nil for
+// anything with no tmux encoding — which is what distinguishes a swallowed key
+// from a forwarded one.
+func copyChordTestPlugin(configuredCopyKey string) *Plugin {
+	p := &Plugin{
+		viewMode: ViewModeInteractive,
+		interactiveState: &InteractiveState{
+			Active:        true,
+			TargetSession: "test-session",
+			TargetPane:    "%1",
+		},
+	}
+	if configuredCopyKey != "" {
+		cfg := &config.Config{}
+		cfg.Plugins.Workspace.InteractiveCopyKey = configuredCopyKey
+		p.ctx = &plugin.Context{Config: cfg}
+	}
+	return p
+}
+
+// Cmd+C reaches the app as super+c when the emulator has nothing of its own to
+// copy (sidecar owns the selection), so it has to copy here.
+func TestInteractiveCopyChords(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		msg        tea.KeyPressMsg
+		wantCopy   bool
+	}{
+		{name: "super+c", msg: tea.KeyPressMsg{Code: 'c', Mod: tea.ModSuper}, wantCopy: true},
+		{name: "default alt+c", msg: tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt}, wantCopy: true},
+		{
+			name: "configured key", configured: "ctrl+y",
+			msg: tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}, wantCopy: true,
+		},
+		{
+			// A custom copy key does not take the platform chord away.
+			name: "super+c alongside a configured key", configured: "ctrl+y",
+			msg: tea.KeyPressMsg{Code: 'c', Mod: tea.ModSuper}, wantCopy: true,
+		},
+		{
+			// Replaced by the config, so the old default is no longer a copy chord;
+			// alt+c forwards to the pane as ESC-c.
+			name: "displaced default", configured: "ctrl+y",
+			msg: tea.KeyPressMsg{Code: 'c', Text: "c", Mod: tea.ModAlt},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := copyChordTestPlugin(tt.configured)
+			if got := p.isTerminalCopyChord(tt.msg); got != tt.wantCopy {
+				t.Fatalf("isTerminalCopyChord(%s) = %v, want %v", tt.msg.String(), got, tt.wantCopy)
+			}
+			cmd := p.handleInteractiveKeys(tt.msg)
+			if tt.wantCopy && cmd == nil {
+				t.Errorf("%s did not copy", tt.msg.String())
+			}
+		})
+	}
+}
+
+// An unbound super chord has no faithful tmux encoding; forwarding the bare rune
+// is what typed a literal "c" into the pane for cmd+c.
+func TestInteractiveUnboundSuperKeyIsSwallowed(t *testing.T) {
+	p := copyChordTestPlugin("")
+
+	if cmd := p.handleInteractiveKeys(tea.KeyPressMsg{Code: 'x', Mod: tea.ModSuper}); cmd != nil {
+		t.Error("an unbound super chord was forwarded to the pane")
+	}
+	// The same key without the modifier still reaches the pane.
+	if cmd := p.handleInteractiveKeys(tea.KeyPressMsg{Code: 'x', Text: "x"}); cmd == nil {
+		t.Error("a plain key stopped reaching the pane")
+	}
+}
+
+// Read mode selects and copies without entering the terminal, and gets the same
+// chord.
+func TestPassiveModeCopyChords(t *testing.T) {
+	for _, msg := range []tea.KeyPressMsg{
+		{Code: 'c', Mod: tea.ModSuper},
+		{Code: 'c', Mod: tea.ModAlt},
+	} {
+		p := &Plugin{
+			viewMode:      ViewModeList,
+			activePane:    PanePreview,
+			previewTab:    PreviewTabOutput,
+			shellSelected: true,
+			shells:        []*ShellSession{{Agent: &Agent{OutputBuf: testTerminalBuffer("copy me\n")}}},
+		}
+		p.selection.Clear()
+		if cmd := p.handleListKeys(msg); cmd == nil {
+			t.Errorf("read mode did not copy on %s", msg.String())
+		}
+	}
+}
+
+// A copy chord with nothing selected must not replace the clipboard with a
+// screen dump — cmd+c is reflex, and the clipboard may hold something the user
+// still needs.
+func TestCopyChordWithoutSelectionLeavesClipboardAlone(t *testing.T) {
+	p := &Plugin{
+		viewMode:      ViewModeList,
+		activePane:    PanePreview,
+		previewTab:    PreviewTabOutput,
+		shellSelected: true,
+		shells:        []*ShellSession{{Agent: &Agent{OutputBuf: testTerminalBuffer("visible output\n")}}},
+	}
+	p.selection.Clear()
+
+	cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'c', Mod: tea.ModSuper})
+	if cmd == nil {
+		t.Fatal("copy chord returned no cmd")
+	}
+	toast, ok := cmd().(app.ToastMsg)
+	if !ok {
+		t.Fatalf("copy chord without selection returned %T, want a toast", cmd())
+	}
+	if !strings.Contains(toast.Message, "Nothing selected") {
+		t.Errorf("toast = %q, want a nothing-selected hint, not a copy", toast.Message)
 	}
 }
