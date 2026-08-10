@@ -777,9 +777,19 @@ func (m Model) renderContent(width, height int) string {
 
 // renderFooter renders the bottom bar with key hints and status.
 func (m Model) renderFooter() string {
-	// Toast/status message
+	// Toast/status message. A plugin condition that must not go dark outranks
+	// both: a toast expires and a status message is about the last action,
+	// while "this plugin cannot read its data" is true until it is fixed. The
+	// Tasks tab relies on this — it suppresses its own footer, which is where
+	// it used to paint its store-read banner.
 	var status string
-	if m.ui.HasToast() {
+	if text, isError := m.pluginFooterStatus(); text != "" {
+		style := styles.ToastSuccess
+		if isError {
+			style = styles.ToastError
+		}
+		status = style.Render(text)
+	} else if m.ui.HasToast() {
 		status = styles.StatusModified.Render(m.ui.ToastMessage)
 	} else if m.statusMsg != "" {
 		toastStyle := styles.ToastSuccess
@@ -813,6 +823,20 @@ func (m Model) renderFooter() string {
 
 	// Use MaxWidth to prevent wrapping and ensure single line
 	return styles.Footer.Width(m.width).MaxWidth(m.width).Render(footer)
+}
+
+// pluginFooterStatus asks the active plugin for a condition that must stay
+// visible in the host footer.
+func (m Model) pluginFooterStatus() (string, bool) {
+	p := m.ActivePlugin()
+	if p == nil {
+		return "", false
+	}
+	provider, ok := p.(plugin.FooterStatusProvider)
+	if !ok {
+		return "", false
+	}
+	return provider.FooterStatus()
 }
 
 type footerHint struct {

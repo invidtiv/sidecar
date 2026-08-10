@@ -25,6 +25,44 @@ type TextInputConsumer interface {
 	ConsumesTextInput() bool
 }
 
+// KeyRouter is an optional capability for plugins that own keys the host also
+// binds globally. It makes sidecar's key precedence explicit instead of
+// implicit in the order of a switch statement:
+//
+//  1. an open sidecar application modal;
+//  2. the active plugin's text-input or blocking-overlay context
+//     (TextInputConsumer, or BlocksGlobalKeys here);
+//  3. an active plugin contextual binding (ClaimsKey here);
+//  4. sidecar global bindings;
+//  5. unbound input forwarded to the plugin.
+//
+// Only plugins that implement it participate in levels 2 (overlay) and 3; every
+// other plugin keeps the level-4-then-5 behaviour it has always had.
+type KeyRouter interface {
+	// BlocksGlobalKeys reports that the plugin is showing an overlay that owns
+	// the keyboard. Every key except the host's interrupt is forwarded.
+	BlocksGlobalKeys() bool
+
+	// ClaimsKey reports that the plugin has a live contextual binding for a
+	// key. It is asked only for keys sidecar would otherwise handle globally,
+	// and only when no overlay is blocking.
+	ClaimsKey(key string) bool
+
+	// QuitKeyExits reports whether `q` in the plugin's current context should
+	// reach sidecar's quit flow. It replaces the host's isRootContext guess for
+	// plugins that can answer for themselves.
+	QuitKeyExits() bool
+}
+
+// FooterStatusProvider is an optional capability for plugins with a condition
+// that must stay visible even though the host owns the footer. A plugin that
+// suppresses its own status line has no other always-on surface.
+type FooterStatusProvider interface {
+	// FooterStatus returns text for the host footer and whether it is an error.
+	// An empty string means "nothing to say".
+	FooterStatus() (string, bool)
+}
+
 type WorkspaceSelectionKind string
 
 const (

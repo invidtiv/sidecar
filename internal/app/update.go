@@ -530,6 +530,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd, ok := m.keymap.GetCommand(msg.CommandID); ok && cmd.Handler != nil {
 			return m, cmd.Handler()
 		}
+		// Plugins may carry the handler on the command itself rather than
+		// registering a keymap command. Prefer an exact context match: one
+		// command ID can mean different things in different plugin contexts.
+		if handler := m.pluginCommandHandler(msg.CommandID, msg.Context); handler != nil {
+			return m, handler()
+		}
 		return m, nil
 
 	case version.UpdateAvailableMsg:
@@ -747,22 +753,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.hasModal() && !m.overviewActive &&
 		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
 		// Forward ALL keys to plugin (exit keys and ctrl+c handled by plugin)
-		if p := m.ActivePlugin(); p != nil {
-			newPlugin, cmd := p.Update(msg)
-			plugins := m.registry.Plugins()
-			if m.activePlugin < len(plugins) {
-				plugins[m.activePlugin] = newPlugin
-			}
-			m.updateContext()
-			return m, cmd
-		}
-		return m, nil
+		return m.forwardKeyToPlugin(msg)
 	}
 
-	// Text input contexts: forward all keys to plugin except ctrl+c.
+	// Precedence level 2: the active plugin's text-input or blocking-overlay
+	// context. Forward all keys to the plugin except ctrl+c.
 	// Uses plugin runtime capability first, then app-level fallback contexts.
 	// Skipped while a modal is open so the modal's own input gets the keys.
-	if !m.hasModal() && !m.overviewActive && m.consumesTextInput() {
+	if !m.hasModal() && !m.overviewActive && (m.consumesTextInput() || m.pluginBlocksGlobalKeys()) {
 		// ctrl+c shows quit confirmation
 		if msg.String() == "ctrl+c" {
 			if !m.hasModal() {
@@ -772,19 +770,19 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Forward everything else to plugin (esc, alt+enter handled by plugin)
-		if p := m.ActivePlugin(); p != nil {
-			newPlugin, cmd := p.Update(msg)
-			plugins := m.registry.Plugins()
-			if m.activePlugin < len(plugins) {
-				plugins[m.activePlugin] = newPlugin
-			}
-			m.updateContext()
-			return m, cmd
-		}
-		return m, nil
+		return m.forwardKeyToPlugin(msg)
 	}
 
-	// Global quit - ctrl+c always takes precedence, 'q' in root plugin contexts
+	// Precedence level 3: an active plugin contextual binding beats sidecar's
+	// global bindings. Only plugins that implement plugin.KeyRouter take part,
+	// and a router is never asked about the host's reserved keys, so this
+	// cannot capture ctrl+c or the quit flow.
+	if m.pluginClaimsKey(msg.String()) {
+		return m.forwardKeyToPlugin(msg)
+	}
+
+	// Precedence level 4: sidecar global bindings, starting with quit. ctrl+c
+	// always takes precedence; 'q' quits from root plugin contexts.
 	switch msg.String() {
 	case "ctrl+c":
 		if !m.hasModal() {
@@ -799,7 +797,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, nil
 		}
-		if !m.hasModal() && isRootContext(m.activeContext) {
+		if !m.hasModal() && m.quitKeyExits() {
 			m.initQuitModal()
 			m.showQuitConfirm = true
 			return m, nil
@@ -1518,18 +1516,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Forward to active plugin
-	if p := m.ActivePlugin(); p != nil {
-		newPlugin, cmd := p.Update(msg)
-		plugins := m.registry.Plugins()
-		if m.activePlugin < len(plugins) {
-			plugins[m.activePlugin] = newPlugin
-		}
-		m.updateContext()
-		return m, cmd
-	}
-
-	return m, nil
+	// Precedence level 5: unbound input is forwarded to the active plugin.
+	return m.forwardKeyToPlugin(msg)
 }
 
 // updateContext sets activeContext based on current state.
@@ -1551,6 +1539,92 @@ func (m *Model) updateContext() {
 	} else {
 		m.activeContext = "global"
 	}
+}
+
+// pluginCommandHandler finds a plugin command handler for a palette selection.
+// A handler declared for the selected context wins over one declared elsewhere.
+func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
+	var fallback func() tea.Cmd
+	for _, p := range m.registry.Plugins() {
+		for _, cmd := range p.Commands() {
+			if cmd.ID != commandID || cmd.Handler == nil {
+				continue
+			}
+			if cmd.Context == context {
+				return cmd.Handler
+			}
+			if fallback == nil {
+				fallback = cmd.Handler
+			}
+		}
+	}
+	return fallback
+}
+
+// activeKeyRouter returns the active plugin's explicit key-routing capability,
+// or nil when it has none.
+//
+// Nil is the answer for six of the seven plugins today, and that is the point:
+// levels 2 (overlay) and 3 (contextual binding) of the precedence order are
+// opt-in, so adding them changed nothing for git-status, file-browser,
+// conversations, workspace, notes, or td-monitor. Their keys still reach the
+// global switch first and fall through to the plugin exactly as before.
+func (m *Model) activeKeyRouter() plugin.KeyRouter {
+	if m.hasModal() || m.overviewActive {
+		return nil
+	}
+	p := m.ActivePlugin()
+	if p == nil {
+		return nil
+	}
+	router, ok := p.(plugin.KeyRouter)
+	if !ok {
+		return nil
+	}
+	return router
+}
+
+// pluginBlocksGlobalKeys reports that the active plugin has an overlay owning
+// the keyboard (precedence level 2).
+func (m *Model) pluginBlocksGlobalKeys() bool {
+	router := m.activeKeyRouter()
+	return router != nil && router.BlocksGlobalKeys()
+}
+
+// pluginClaimsKey reports that the active plugin has a live contextual binding
+// for a key (precedence level 3).
+func (m *Model) pluginClaimsKey(key string) bool {
+	if key == "ctrl+c" {
+		return false
+	}
+	router := m.activeKeyRouter()
+	return router != nil && router.ClaimsKey(key)
+}
+
+// quitKeyExits reports whether `q` should open sidecar's quit flow. A plugin
+// that routes its own keys answers for itself; everything else keeps the
+// host's context list.
+func (m *Model) quitKeyExits() bool {
+	if router := m.activeKeyRouter(); router != nil {
+		return router.QuitKeyExits()
+	}
+	return isRootContext(m.activeContext)
+}
+
+// forwardKeyToPlugin hands a key to the active plugin (precedence level 5, and
+// the delivery mechanism for levels 2 and 3).
+func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
+	p := m.ActivePlugin()
+	if p == nil {
+		return m, nil
+	}
+	newPlugin, cmd := p.Update(msg)
+	plugins := m.registry.Plugins()
+	if m.activePlugin < len(plugins) {
+		plugins[m.activePlugin] = newPlugin
+	}
+	m.updateContext()
+	return m, cmd
 }
 
 // consumesTextInput returns true when the active context should treat printable

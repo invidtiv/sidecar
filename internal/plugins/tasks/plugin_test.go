@@ -91,8 +91,12 @@ func unconfiguredEnv(t *testing.T) map[string]string {
 func testContext(t *testing.T) *plugin.Context {
 	t.Helper()
 
+	// A non-zero epoch is the realistic case: sidecar bumps it on every project
+	// switch, and a test that only ever runs at zero cannot tell "carries the
+	// host's epoch" from "hard-codes nothing".
 	return &plugin.Context{
 		WorkDir: t.TempDir(),
+		Epoch:   7,
 		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	}
 }
@@ -125,6 +129,9 @@ func startAndSettle(t *testing.T, p *Plugin) TasksReadyMsg {
 	ready, ok := cmd().(TasksReadyMsg)
 	if !ok {
 		t.Fatalf("Start() command produced something other than TasksReadyMsg")
+	}
+	if p.ctx != nil && ready.Epoch != p.ctx.Epoch {
+		t.Fatalf("ready message carries epoch %d, want the host's %d", ready.Epoch, p.ctx.Epoch)
 	}
 	p.Update(ready)
 	return ready

@@ -130,10 +130,24 @@ func (p *Plugin) Start() tea.Cmd {
 func (p *Plugin) buildModel() tea.Cmd {
 	options := tasksui.EmbeddedOptions{
 		SessionNamespace: sessionNamespace,
-		// Packet 1.3 introduces sidecar's unified footer and flips this to
-		// true so Tasks' own footer stops duplicating it. Until that footer
-		// exists, suppressing Tasks' would leave the tab with no key hints at
-		// all, so keep Tasks' footer for now.
+		// Packet 1.3 asks for this to be true so Tasks stops painting a key-hint
+		// row under sidecar's unified footer. It stays false, and the tab shows
+		// both hint rows, because Tasks' SuppressFooter is all-or-nothing:
+		// internal/tui/render.go Footer() returns nil for the WHOLE footer
+		// stack, which is also where Tasks renders the agent transcript, the
+		// store-read banner, the filter and context-filter lines, and — the
+		// blocker — the prompt input itself. Suppressing it today makes `tab`
+		// focus an invisible caret and hides all agent activity, which the same
+		// packet requires be preserved.
+		//
+		// Closing this needs a Tasks-side change (a finer switch that drops only
+		// the key-hint line, or a footer policy), not a host-side workaround.
+		// TestSuppressFooterStillHidesThePrompt pins the current behaviour so
+		// this flips the moment Tasks offers the finer control.
+		//
+		// Everything else 1.3 needs for the unified footer is already in place:
+		// bindings are registered, commands are projected with priorities, and
+		// the store-read error is carried by FooterStatus.
 		SuppressFooter: false,
 		// Tasks must never terminate the host. Quit requests are surfaced
 		// through QuitRequested() instead of tea.Quit.
@@ -195,6 +209,12 @@ func (p *Plugin) adoptModel(msg TasksReadyMsg) tea.Cmd {
 	}
 
 	p.model = msg.Model
+
+	// Register Tasks' shortcut registry with sidecar's keymap, the way the td
+	// monitor does on adoption. These bindings carry no handler: sidecar uses
+	// them as the metadata behind the merged palette and the unified footer,
+	// while the keys themselves are routed by KeyRouter and executed by Tasks.
+	p.registerBindings()
 
 	// Seed the model with the size the plugin already knows about. The app's
 	// WindowSizeMsg arrived before this model existed, and Tasks lays out
@@ -438,12 +458,43 @@ func (p *Plugin) IsFocused() bool { return p.focused }
 // SetFocused sets the focus state.
 func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
+// registerBindings publishes Tasks' exported key bindings to sidecar's keymap.
+//
+// Host-owned commands (quit, help) are withheld: sidecar owns those keys, and
+// advertising Tasks' versions in the palette and footer would promise a
+// behaviour the router does not deliver.
+func (p *Plugin) registerBindings() {
+	if p.ctx == nil || p.ctx.Keymap == nil {
+		return
+	}
+	for _, binding := range tasksui.ExportBindings() {
+		if hostOwnedCommands[binding.CommandID] || binding.Key == "" {
+			continue
+		}
+		p.ctx.Keymap.RegisterPluginBinding(binding.Key, binding.CommandID, string(binding.Context))
+	}
+}
+
 // Commands projects Tasks' exported command registry into sidecar commands.
-// Tasks is the single source of truth; sidecar adds only categorization.
+// Tasks is the single source of truth; sidecar adds categorization and the
+// handler that runs the command by its stable ID.
+//
+// Commands belonging to the context Tasks is in right now are filtered by
+// CommandAvailable, so the conditional pairs that share a key (`r` is either
+// reject-proposal or open-recur-popup, never both) do not both appear in the
+// palette. Commands for other contexts are kept: CommandAvailable answers for
+// the live focus only, and the palette's other layers are still real help.
 func (p *Plugin) Commands() []plugin.Command {
 	exported := tasksui.ExportCommands()
+	current := p.FocusContext()
 	commands := make([]plugin.Command, 0, len(exported))
 	for _, cmd := range exported {
+		if hostOwnedCommands[cmd.ID] {
+			continue
+		}
+		if p.model != nil && string(cmd.Context) == current && !p.available(cmd.ID) {
+			continue
+		}
 		commands = append(commands, plugin.Command{
 			ID:          cmd.ID,
 			Name:        cmd.FooterLabel,
@@ -451,9 +502,104 @@ func (p *Plugin) Commands() []plugin.Command {
 			Context:     string(cmd.Context),
 			Priority:    cmd.FooterPriority,
 			Category:    categorize(cmd.Context),
+			Handler:     p.handlerFor(cmd.ID),
 		})
 	}
 	return commands
+}
+
+// handlerFor builds the palette action for a Tasks command. It runs the command
+// by ID through Model.Invoke rather than replaying its default key, which is
+// exactly why that entry point exists: several Tasks keys are ambiguous, and a
+// palette entry must run the command the user picked.
+func (p *Plugin) handlerFor(commandID string) func() tea.Cmd {
+	return func() tea.Cmd {
+		return p.invoke(commandID)
+	}
+}
+
+func (p *Plugin) invoke(commandID string) tea.Cmd {
+	if p.model == nil {
+		return nil
+	}
+	cmd, err := p.model.Invoke(commandID)
+	if err != nil {
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Debug("tasks: command not invoked", "command", commandID, "error", err)
+		}
+		return nil
+	}
+	p.refreshLoadError()
+	return suppressQuit(cmd)
+}
+
+// available asks Tasks whether a command can run against the current selection.
+func (p *Plugin) available(commandID string) bool {
+	if p.model == nil {
+		return false
+	}
+	ok, err := p.model.CommandAvailable(commandID)
+	return err == nil && ok
+}
+
+// BlocksGlobalKeys implements plugin.KeyRouter. Tasks' own overlays — modals,
+// pickers, prompts, the agent activity list, and every text-input layer — own
+// the keyboard while they are open, so sidecar's global keys must not fire
+// underneath them.
+//
+// It is derived, not listed: any Tasks context that is neither a root context
+// nor unknown is an overlay, so a new Tasks overlay routes correctly without a
+// change here.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	if p.model == nil {
+		return false
+	}
+	context := p.FocusContext()
+	return IsTasksContext(context) && !IsRootContext(context)
+}
+
+// ClaimsKey implements plugin.KeyRouter: the key has a live Tasks binding in
+// the current context, so Tasks wins it over sidecar's global binding.
+//
+// This is what makes `@`, `1`-`6`, `tab`, `M`, and `A` mean what they mean in
+// Tasks while the tab is focused. It is availability-aware: a key whose only
+// Tasks commands are unavailable right now is not claimed, and falls through to
+// sidecar (that is how `r` still refreshes when there is no proposal to reject
+// and no recurrence to edit).
+func (p *Plugin) ClaimsKey(key string) bool {
+	if p.model == nil || hostReservedKeys[key] {
+		return false
+	}
+	for _, commandID := range commandsForKey(p.FocusContext(), key) {
+		if p.available(commandID) {
+			return true
+		}
+	}
+	return false
+}
+
+// QuitKeyExits implements plugin.KeyRouter. In a Tasks root context `q` is
+// sidecar's quit; inside a Tasks overlay it is the overlay's own dismissal, and
+// BlocksGlobalKeys has already routed it there.
+func (p *Plugin) QuitKeyExits() bool {
+	if p.model == nil {
+		return true
+	}
+	return IsRootContext(p.FocusContext())
+}
+
+// FooterStatus implements plugin.FooterStatusProvider.
+//
+// Tasks used to paint its store-read failure in its own footer. Sidecar
+// suppresses that footer, so without this the single condition that says "what
+// you are looking at is not your task list" would go dark in the tab. It is
+// reported here as well as in Diagnostics because the diagnostics modal is a
+// place you have to think to look.
+func (p *Plugin) FooterStatus() (string, bool) {
+	if p.model == nil || p.loadError == nil {
+		return "", false
+	}
+	return "tasks: cannot read the task store", true
 }
 
 // categorize maps a Tasks focus context onto a sidecar palette grouping. Tasks
