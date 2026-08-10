@@ -114,6 +114,12 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// The Overview owns keyboard focus while it is open, so a paste must not
+	// reach a hidden plugin (an interactive tmux pane would run it).
+	if m.overviewActive {
+		return m, nil
+	}
+
 	// No app-level text-input modal active: forward to all plugins so the
 	// focused plugin (e.g. the notes editor textarea) receives the paste.
 	var cmds []tea.Cmd
@@ -576,6 +582,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.issueSearchScrollOffset = 0
 		m.issueInputModal = nil
 		m.issueInputModalWidth = 0
+		return m, nil
+	}
+
+	// Unparsed terminal input (CSI u / modifyOtherKeys sequences) is keyboard
+	// input in disguise: while the Overview holds focus it must not reach a
+	// hidden interactive pane, same as a regular key press.
+	if m.overviewActive && tty.ExtractUnknownCSIBytes(msg) != nil {
 		return m, nil
 	}
 

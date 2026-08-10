@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
@@ -542,12 +543,19 @@ func overviewValidation(navigation overview.NavigateMsg, err error) overview.Val
 // (an embedded shell, an inline editor) underneath the Overview.
 type textInputPlugin struct {
 	navigationPlugin
+	pastes int
+	others int
 }
 
 func (p *textInputPlugin) ConsumesTextInput() bool { return true }
 func (p *textInputPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	if _, ok := msg.(tea.KeyPressMsg); ok {
+	switch msg.(type) {
+	case tea.KeyPressMsg:
 		p.keyInputs++
+	case tea.PasteMsg:
+		p.pastes++
+	case uv.UnknownCsiEvent, uv.UnknownEvent:
+		p.others++
 	}
 	return p, nil
 }
@@ -649,5 +657,41 @@ func TestOverviewSwallowsUnhandledKeys(t *testing.T) {
 	}
 	if !m.overviewActive {
 		t.Fatal("unhandled keys should not close the overview")
+	}
+}
+
+func TestOverviewSwallowsPasteAndUnknownSequences(t *testing.T) {
+	m, shell := overviewModelOverTextInput(t)
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "rm -rf /\n"})
+	m = asAppModel(t, updated)
+	updated, _ = m.Update(uv.UnknownCsiEvent("\x1b[13;2u"))
+	m = asAppModel(t, updated)
+
+	if shell.pastes != 0 {
+		t.Fatalf("paste leaked to the covered plugin (%d pastes)", shell.pastes)
+	}
+	if shell.others != 0 {
+		t.Fatalf("unknown CSI sequence leaked to the covered plugin (%d messages)", shell.others)
+	}
+	if !m.overviewActive {
+		t.Fatal("paste/sequence handling should not close the overview")
+	}
+}
+
+func TestExitOverviewRestoresPluginContext(t *testing.T) {
+	m, _ := overviewModelOverTextInput(t)
+	if m.activeContext != "overview" {
+		t.Fatalf("activeContext = %q, want overview", m.activeContext)
+	}
+	// Out-of-range plugin index: SetActivePlugin returns early without
+	// recomputing the context, so exitOverview must restore it itself.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
+	m = asAppModel(t, updated)
+	if m.overviewActive {
+		t.Fatal("plugin switch should close the overview")
+	}
+	if m.activeContext == "overview" {
+		t.Fatal("activeContext still overview after the board closed")
 	}
 }

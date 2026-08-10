@@ -828,11 +828,18 @@ func (m *Model) overviewProjects() []overview.Project {
 	return selected
 }
 
+// exitOverview closes the Overview and hands keyboard focus back to the plugin
+// underneath. It restores the context itself so no caller can leave the app
+// stuck on "overview" after the board is gone.
 func (m *Model) exitOverview() {
 	if m.overviewActive && m.overview != nil {
 		m.overview.Stop()
 	}
+	wasActive := m.overviewActive
 	m.overviewActive = false
+	if wasActive {
+		m.updateContext()
+	}
 }
 
 // toggleOverview opens or closes the cross-project agent overview. No-op when
