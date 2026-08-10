@@ -691,6 +691,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resetThemeSwitcher()
 			m.updateContext()
 			return m, nil
+		case ModalNone:
+			// No modal: Esc closes the Overview and returns to the plugin.
+			if m.overviewActive {
+				m.exitOverview()
+				m.updateContext()
+				return m, nil
+			}
 		}
 	}
 
@@ -722,7 +729,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// User can exit interactive mode with Ctrl+\ first, then quit normally
 	// An open modal takes keyboard focus away from the pane; the plugin keeps its
 	// mode, so focus returns to it when the modal closes.
-	if !m.hasModal() && (m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
+	// The Overview covers the plugin pane and owns keyboard focus, so a plugin
+	// left in interactive/text-input mode underneath it must not swallow keys.
+	if !m.hasModal() && !m.overviewActive &&
+		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
 		// Forward ALL keys to plugin (exit keys and ctrl+c handled by plugin)
 		if p := m.ActivePlugin(); p != nil {
 			newPlugin, cmd := p.Update(msg)
@@ -739,7 +749,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Text input contexts: forward all keys to plugin except ctrl+c.
 	// Uses plugin runtime capability first, then app-level fallback contexts.
 	// Skipped while a modal is open so the modal's own input gets the keys.
-	if !m.hasModal() && m.consumesTextInput() {
+	if !m.hasModal() && !m.overviewActive && m.consumesTextInput() {
 		// ctrl+c shows quit confirmation
 		if msg.String() == "ctrl+c" {
 			if !m.hasModal() {
@@ -770,6 +780,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "q":
+		// In the Overview, q closes the overlay rather than quitting the app.
+		if !m.hasModal() && m.overviewActive {
+			m.exitOverview()
+			m.updateContext()
+			return m, nil
+		}
 		if !m.hasModal() && isRootContext(m.activeContext) {
 			m.initQuitModal()
 			m.showQuitConfirm = true
@@ -1341,6 +1357,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "left", "h", "right", "l", "up", "k", "down", "j", "enter", "r":
 			return m, m.overview.Update(msg)
+		case "K":
+			// Same key that opened it closes it.
+			return m, m.toggleOverview()
 		}
 	}
 
@@ -1480,6 +1499,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// The Overview covers the plugin pane: unhandled keys stop here instead of
+	// reaching a plugin the user cannot see.
+	if m.overviewActive {
+		return m, nil
+	}
+
 	// Forward to active plugin
 	if p := m.ActivePlugin(); p != nil {
 		newPlugin, cmd := p.Update(msg)
@@ -1518,6 +1543,11 @@ func (m *Model) updateContext() {
 // consumesTextInput returns true when the active context should treat printable
 // keys as text input (block app-level navigation shortcuts).
 func (m *Model) consumesTextInput() bool {
+	// The Overview overlays the plugin pane and takes keyboard focus, so a
+	// plugin sitting in a text-input mode underneath it does not consume keys.
+	if m.overviewActive {
+		return false
+	}
 	if p := m.ActivePlugin(); p != nil {
 		if c, ok := p.(plugin.TextInputConsumer); ok && c.ConsumesTextInput() {
 			return true

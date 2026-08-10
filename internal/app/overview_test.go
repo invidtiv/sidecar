@@ -537,3 +537,117 @@ func overviewValidation(navigation overview.NavigateMsg, err error) overview.Val
 		Err:        err,
 	}
 }
+
+// textInputPlugin mimics a plugin sitting in an interactive/text-input mode
+// (an embedded shell, an inline editor) underneath the Overview.
+type textInputPlugin struct {
+	navigationPlugin
+}
+
+func (p *textInputPlugin) ConsumesTextInput() bool { return true }
+func (p *textInputPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		p.keyInputs++
+	}
+	return p, nil
+}
+
+func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
+	t.Helper()
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+	shell := &textInputPlugin{navigationPlugin: navigationPlugin{id: "workspaces"}}
+	registry := plugin.NewRegistry(nil)
+	if err := registry.Register(shell); err != nil {
+		t.Fatal(err)
+	}
+	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "workspaces")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	m.intro.Active, m.intro.Done = false, true
+	m.width, m.height, m.ready = 120, 40, true
+	m.overviewActive = true
+	m.updateContext()
+	return m, shell
+}
+
+func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
+	keys := map[string]tea.KeyPressMsg{
+		"esc": {Code: tea.KeyEsc},
+		"q":   {Code: 'q', Text: "q"},
+		"K":   {Code: 'k', Text: "K", Mod: tea.ModShift},
+	}
+	for name, key := range keys {
+		t.Run(name, func(t *testing.T) {
+			m, shell := overviewModelOverTextInput(t)
+			updated, _ := m.Update(key)
+			m = asAppModel(t, updated)
+			if m.overviewActive {
+				t.Fatalf("%s did not close the overview", name)
+			}
+			if m.showQuitConfirm {
+				t.Fatalf("%s opened the quit dialog instead of closing the overview", name)
+			}
+			if shell.keyInputs != 0 {
+				t.Fatalf("%s leaked to the covered plugin (%d key inputs)", name, shell.keyInputs)
+			}
+		})
+	}
+}
+
+func TestOverviewGlobalShortcutsWorkOverInteractivePlugin(t *testing.T) {
+	t.Run("project-switcher", func(t *testing.T) {
+		m, shell := overviewModelOverTextInput(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '@', Text: "@", Mod: tea.ModShift})
+		m = asAppModel(t, updated)
+		if !m.showProjectSwitcher {
+			t.Fatal("@ did not open the project switcher")
+		}
+		if shell.keyInputs != 0 {
+			t.Fatalf("@ leaked to the covered plugin (%d key inputs)", shell.keyInputs)
+		}
+	})
+	t.Run("theme-switcher", func(t *testing.T) {
+		m, _ := overviewModelOverTextInput(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '#', Text: "#", Mod: tea.ModShift})
+		m = asAppModel(t, updated)
+		if !m.showThemeSwitcher {
+			t.Fatal("# did not open the theme switcher")
+		}
+	})
+	t.Run("palette", func(t *testing.T) {
+		m, _ := overviewModelOverTextInput(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '?', Text: "?", Mod: tea.ModShift})
+		m = asAppModel(t, updated)
+		if !m.showPalette {
+			t.Fatal("? did not open the command palette")
+		}
+	})
+	t.Run("plugin-switch-exits-overview", func(t *testing.T) {
+		m, _ := overviewModelOverTextInput(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+		m = asAppModel(t, updated)
+		if m.overviewActive {
+			t.Fatal("focusing a plugin should leave the overview")
+		}
+	})
+}
+
+func TestOverviewSwallowsUnhandledKeys(t *testing.T) {
+	m, shell := overviewModelOverTextInput(t)
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'x', Text: "x"},
+		{Code: 's', Text: "s"},
+		{Code: tea.KeyTab},
+	} {
+		updated, _ := m.Update(key)
+		m = asAppModel(t, updated)
+	}
+	if shell.keyInputs != 0 {
+		t.Fatalf("overview leaked %d keys to the covered plugin", shell.keyInputs)
+	}
+	if !m.overviewActive {
+		t.Fatal("unhandled keys should not close the overview")
+	}
+}

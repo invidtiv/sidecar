@@ -40,6 +40,23 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "select", Context: "global"},
 		{Key: "esc", Command: "back", Context: "global"},
 
+		// Overview context (cross-project agent board). These keys are handled
+		// by the app before keymap dispatch; they are registered so the command
+		// palette and footer can discover them.
+		{Key: "h", Command: "cursor-left", Context: "overview"},
+		{Key: "l", Command: "cursor-right", Context: "overview"},
+		{Key: "left", Command: "cursor-left", Context: "overview"},
+		{Key: "right", Command: "cursor-right", Context: "overview"},
+		{Key: "j", Command: "cursor-down", Context: "overview"},
+		{Key: "k", Command: "cursor-up", Context: "overview"},
+		{Key: "down", Command: "cursor-down", Context: "overview"},
+		{Key: "up", Command: "cursor-up", Context: "overview"},
+		{Key: "enter", Command: "select", Context: "overview"},
+		{Key: "r", Command: "refresh", Context: "overview"},
+		{Key: "esc", Command: "close-overview", Context: "overview"},
+		{Key: "q", Command: "close-overview", Context: "overview"},
+		{Key: "K", Command: "toggle-overview", Context: "overview"},
+
 		// Project switcher context
 		{Key: "@", Command: "toggle", Context: "project-switcher"},
 		{Key: "esc", Command: "close", Context: "project-switcher"},

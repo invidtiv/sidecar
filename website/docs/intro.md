@@ -205,8 +205,25 @@ These shortcuts work across all plugins:
 | `?` | Toggle help overlay |
 | `r` | Refresh current plugin |
 | `!` | Open diagnostics modal |
+| `K` | Open/close the cross-project agent Overview |
 
 Each plugin adds its own context-specific shortcuts shown in the footer bar.
+
+### Agent Overview
+
+Press `K` (or click the Sidecar logo) for the cross-project agent board. While it is open it
+owns the keyboard, so shortcuts work even if an embedded shell was focused underneath:
+
+| Key | Action |
+|-----|--------|
+| `h/l`, `←/→` | Move between lanes |
+| `j/k`, `↓/↑` | Move within a lane |
+| `enter` | Open the selected workspace |
+| `r` | Refresh the board |
+| `esc`, `q`, `K` | Close the Overview |
+
+Global shortcuts (`@`, `#`, `W`, `?`, `!`, `` ` ``, `1-9`) keep working; switching plugins
+closes the Overview. In the Overview, `q` closes the board rather than quitting sidecar.
 
 ### Project Switching
 

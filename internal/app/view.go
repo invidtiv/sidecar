@@ -824,7 +824,12 @@ func (m Model) footerHints() []footerHint {
 	// Plugin-specific hints first - they're more contextually relevant
 	var hints []footerHint
 	if m.overviewActive && m.overview != nil {
-		hints = append(hints, footerHint{keys: "enter", label: "Open"}, footerHint{keys: "r", label: "Refresh"})
+		hints = append(hints,
+			footerHint{keys: "hjkl", label: "Move"},
+			footerHint{keys: "enter", label: "Open"},
+			footerHint{keys: "r", label: "Refresh"},
+			footerHint{keys: "esc", label: "Close"},
+		)
 	} else if p := m.ActivePlugin(); p != nil {
 		hints = m.pluginFooterHints(p, m.activeContext)
 	}
@@ -859,6 +864,10 @@ func (m Model) globalFooterHints() []footerHint {
 	hints = append(hints, footerHint{keys: "1-5", label: "plugins"})
 
 	for _, spec := range specs {
+		// In the Overview, q closes the overlay rather than quitting.
+		if spec.id == "quit" && m.overviewActive {
+			continue
+		}
 		keys := keysByCmd[spec.id]
 		if len(keys) == 0 {
 			continue

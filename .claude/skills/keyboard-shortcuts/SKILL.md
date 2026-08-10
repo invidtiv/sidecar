@@ -61,6 +61,25 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `q` | quit | Quit (root contexts only) |
 | `ctrl+c` | quit | Force quit |
 
+## Agent Overview (`overview` context)
+
+Opened with `K` or by clicking the Sidecar logo. The Overview covers the plugin pane and
+owns keyboard focus: a plugin left in interactive/text-input mode underneath it (embedded
+shell, inline editor) does not receive keys while it is open, and unhandled keys are
+swallowed rather than leaking to the hidden plugin.
+
+| Key | Action |
+|-----|--------|
+| `h` / `l` / `left` / `right` | Move between lanes |
+| `j` / `k` / `up` / `down` | Move within a lane |
+| `enter` | Open the selected workspace (switches project) |
+| `r` | Refresh the board |
+| `esc` / `q` / `K` | Close the Overview |
+
+Global shortcuts stay live while it is open: `` ` ``/`~`, `1-9`, `@`, `#`, `W`, `?`, `!`,
+`^`, `i`, `ctrl+c`. Plugin-switching keys (`` ` ``, `~`, `1-9`) close the Overview first.
+`q` closes the Overview instead of quitting the app.
+
 ## Sidebar Controls (All Two-Pane Plugins)
 
 | Key | Action |
