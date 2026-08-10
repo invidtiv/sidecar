@@ -1447,9 +1447,10 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			p.termPanelSize = newSize
 		}
 	case regionPreviewPane, regionTermPanelContent:
-		if p.selection.Anchor.Valid() {
-			return p.handleInteractiveSelectionDrag(action)
+		if !p.selection.Anchor.Valid() && !p.anchorDragFromOrigin(action) {
+			return nil
 		}
+		return p.handleInteractiveSelectionDrag(action)
 	}
 	return nil
 }

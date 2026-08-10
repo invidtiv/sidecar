@@ -65,9 +65,11 @@ func (p *Plugin) interactiveCharAtXY(x, y int) (int, int, bool) {
 	return lineIdx, col, ok
 }
 
-func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
+// selectionHitLayout returns the buffer window hit testing must map against, or
+// false when no window is on screen to map onto.
+func (p *Plugin) selectionHitLayout() (terminalViewportLayout, bool) {
 	if p.selection.ViewRect.W == 0 || p.selection.ViewRect.H == 0 {
-		return 0, false
+		return terminalViewportLayout{}, false
 	}
 	layout := p.terminalSelectionViewportLayout()
 	if layout.End <= layout.Start && p.interactiveState != nil {
@@ -76,34 +78,125 @@ func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
 		layout.End = p.interactiveState.VisibleEnd
 	}
 	if layout.End <= layout.Start {
-		return 0, false
+		return terminalViewportLayout{}, false
 	}
+	return layout, true
+}
 
+// interactiveOutputRowAtY converts a screen row to a 0-indexed output row of the
+// surface being selected. The result is deliberately unbounded: a click needs to
+// reject rows outside the output area, while a drag clamps them.
+func (p *Plugin) interactiveOutputRowAtY(y int) int {
 	contentRow := y - p.selection.ViewRect.Y
 	if !p.effectiveSelectionTermPanel() {
 		// ViewRect is the outer preview panel, so step over its border first;
 		// the remaining rows are the same stack terminalSurfaceGeometry uses.
 		contentRow -= previewBorderRows
 	}
-	if contentRow < 0 {
+	// Every surface spends its first content row on its header.
+	return contentRow - terminalHeaderRows
+}
+
+// interactiveContentLeft is the screen column of the surface's first content
+// cell. The preview pane's ViewRect is the outer panel, so its content starts
+// inside the border and padding; the term panel's is already a content rect.
+func (p *Plugin) interactiveContentLeft() int {
+	if p.effectiveSelectionTermPanel() {
+		return p.selection.ViewRect.X
+	}
+	return p.selection.ViewRect.X + previewContentInset
+}
+
+// absoluteBufferLine lifts a window-relative line index into the buffer's
+// absolute coordinates when it keeps any.
+func (p *Plugin) absoluteBufferLine(lineIdx int) int {
+	buf := p.interactiveOutputBuffer()
+	if buf == nil {
+		return lineIdx
+	}
+	if base, _, absolute := buf.AbsoluteRange(); absolute {
+		return lineIdx + base
+	}
+	return lineIdx
+}
+
+func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
+	layout, ok := p.selectionHitLayout()
+	if !ok {
 		return 0, false
 	}
-	// Every surface spends its first content row on its header.
-	outputRow := contentRow - terminalHeaderRows
+	outputRow := p.interactiveOutputRowAtY(y)
 	if outputRow < 0 {
 		return 0, false
 	}
 	lineIdx := layout.Start + outputRow
-	if lineIdx < layout.Start || lineIdx >= layout.End {
+	if lineIdx >= layout.End {
 		return 0, false
 	}
-	buf := p.interactiveOutputBuffer()
-	if buf != nil {
-		if base, _, absolute := buf.AbsoluteRange(); absolute {
-			lineIdx += base
-		}
+	return p.absoluteBufferLine(lineIdx), true
+}
+
+// interactiveClampedPoint maps a pointer position onto the nearest visible cell
+// instead of refusing positions outside the output area. A held pointer
+// routinely leaves the pane mid-gesture — below the last row, left of the
+// content, out over the sidebar — and a selection that stops tracking there
+// reads as broken. Anchoring clicks keep using the strict hit test, because a
+// click on the header or the padding is not a click on text.
+func (p *Plugin) interactiveClampedPoint(x, y int) (int, int, bool) {
+	layout, ok := p.selectionHitLayout()
+	if !ok {
+		return 0, 0, false
 	}
-	return lineIdx, true
+	outputRow := min(max(p.interactiveOutputRowAtY(y), 0), layout.End-layout.Start-1)
+	lineIdx := p.absoluteBufferLine(layout.Start + outputRow)
+	// Past the right edge, VisualColAtRelativeX already lands on the end of the
+	// line, which is what dragging off the right of a row should select.
+	col, ok := p.interactiveColAtX(max(x, p.interactiveContentLeft()), lineIdx)
+	if !ok {
+		return 0, 0, false
+	}
+	return lineIdx, col, true
+}
+
+// selectionDragScrollStep bounds how far one motion event past an edge walks the
+// window through scrollback. Unbounded, a pointer flicked to the top of the
+// screen would skip hundreds of lines the user never saw.
+const selectionDragScrollStep = 3
+
+// interactiveDragPoint maps an in-progress drag position onto the buffer,
+// scrolling the surface first when the pointer has run past an edge so a
+// selection can reach content that is not on screen.
+func (p *Plugin) interactiveDragPoint(x, y int) (int, int, bool) {
+	layout, ok := p.selectionHitLayout()
+	if !ok {
+		return 0, 0, false
+	}
+	outputRow := p.interactiveOutputRowAtY(y)
+	rows := layout.End - layout.Start
+	switch {
+	case outputRow < 0:
+		p.scrollTerminalSelectionViewport(-min(-outputRow, selectionDragScrollStep))
+	case outputRow >= rows:
+		p.scrollTerminalSelectionViewport(min(outputRow-rows+1, selectionDragScrollStep))
+	}
+	return p.interactiveClampedPoint(x, y)
+}
+
+// scrollTerminalSelectionViewport moves the surface the selection is anchored in
+// by delta rows, clamped to the buffer. Both surfaces browse scrollback by an
+// absolute top offset while selecting, so one derivation covers each of them.
+func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
+	if delta == 0 {
+		return
+	}
+	layout := p.terminalSelectionViewportLayout()
+	target := min(max(layout.Start+delta, 0), layout.MaxOffset)
+	if p.selectionTermPanel {
+		p.termPanelSelectionOffset = target
+		return
+	}
+	p.previewOffset = target
+	p.autoScrollOutput = false
 }
 
 // prepareInteractiveDrag stores the click position and starts drag tracking
@@ -125,7 +218,16 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 
 	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
 	if !ok {
+		if canExtend {
+			// Shift-clicking the header or the padding below the output is a miss,
+			// not an instruction to throw away the selection being extended.
+			return nil
+		}
 		p.selection.Clear()
+		// Clear drops ViewRect, but the gesture is still live: a drag that starts
+		// on chrome or on empty padding must still be able to anchor itself once
+		// it reaches a row (see anchorDragFromOrigin).
+		p.selection.ViewRect = action.Region.Rect
 		return nil
 	}
 
@@ -165,27 +267,55 @@ func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
 }
 
 func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cmd {
-	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
+	// Freeze before anything reads or moves the window: previewOffset is ignored
+	// while follow mode is active and is commonly still zero, so leaving it that
+	// way lets the next render interpret zero as the top of the buffer and a drag
+	// from the live edge jumps through all of scrollback.
+	p.freezeTerminalSelectionViewport()
+	lineIdx, col, ok := p.interactiveDragPoint(action.X, action.Y)
 	if !ok {
 		return nil
 	}
-
-	// previewOffset is ignored while follow mode is active and is commonly still
-	// zero. Freeze the window the user can actually see before selection turns
-	// follow off; otherwise the next render interprets zero as the top of the
-	// buffer and a drag from the live edge can jump through all of scrollback.
-	if !p.selectionTermPanel && p.autoScrollOutput {
-		p.previewOffset = p.terminalSelectionViewportLayout().Start
-	}
 	p.selection.HandleDrag(lineIdx, col)
-	if !p.selectionTermPanel {
-		p.autoScrollOutput = false
-	}
 	return nil
+}
+
+// freezeTerminalSelectionViewport pins the preview pane to the window the user
+// can currently see. The term panel is frozen earlier, when its selection source
+// is prepared, because its offset is only consulted once an anchor exists.
+func (p *Plugin) freezeTerminalSelectionViewport() {
+	if p.selectionTermPanel || !p.autoScrollOutput {
+		return
+	}
+	p.previewOffset = p.terminalSelectionViewportLayout().Start
+	p.autoScrollOutput = false
+}
+
+// anchorDragFromOrigin starts a selection for a drag whose mouse-down landed off
+// the text — on the header, on the padding below the last row, in the border.
+// The gesture is unambiguously a selection by the time it is moving, so anchor
+// it at the nearest cell to where the button actually went down rather than
+// letting the whole drag do nothing.
+func (p *Plugin) anchorDragFromOrigin(action mouse.MouseAction) bool {
+	originX := action.X - action.DragDX
+	originY := action.Y - action.DragDY
+	lineIdx, col, ok := p.interactiveClampedPoint(originX, originY)
+	if !ok {
+		return false
+	}
+	p.selection.PrepareDragMode(lineIdx, col, p.selection.ViewRect, action.Alt)
+	return true
 }
 
 func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	p.selection.FinishDrag()
+	// A gesture that never left its anchor cell is a click that jittered, not a
+	// selection. Without this, a twitch during a click leaves a one-cell
+	// selection, silently copies it under copy-on-select, and swallows the
+	// activation the user was asking for.
+	if p.selection.HasSelection() && p.selection.Start == p.selection.End {
+		p.selection.Clear()
+	}
 	if p.selection.HasSelection() {
 		p.activateTerminalAfterClick = false
 		if p.copyOnSelectEnabled() {

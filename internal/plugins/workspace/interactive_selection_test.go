@@ -856,3 +856,137 @@ func TestWordSelectionMapsVisualColumnAfterWideGlyph(t *testing.T) {
 		t.Fatalf("wide-glyph word selection = %#v, want foo", got)
 	}
 }
+
+// newTerminalDragTestPlugin builds a passive preview pane over enough scrollback
+// for a drag to run off both edges.
+func newTerminalDragTestPlugin() *Plugin {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 200))
+	return p
+}
+
+func terminalDragTo(p *Plugin, x, y int) {
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: x, Y: y, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+}
+
+// The pointer leaves the pane constantly while the button is held. A drag that
+// stops tracking there reads as selection simply not working.
+func TestDragOutsideContentClampsInsteadOfStalling(t *testing.T) {
+	tests := []struct {
+		name    string
+		x, y    int
+		wantCol int
+		wantRow func(layout terminalViewportLayout) int
+	}{
+		{
+			name: "below the last row", x: 66, y: 40, wantCol: 24,
+			wantRow: func(l terminalViewportLayout) int { return l.End - 1 },
+		},
+		{
+			name: "left of the content", x: 0, y: 8, wantCol: 0,
+			wantRow: func(l terminalViewportLayout) int { return l.Start + 4 },
+		},
+		{
+			name: "right of the content", x: 200, y: 8, wantCol: 27,
+			wantRow: func(l terminalViewportLayout) int { return l.Start + 4 },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTerminalDragTestPlugin()
+			p.handleMouseClick(previewClickAction(false, false))
+			terminalDragTo(p, 66, 8)
+			stalled := p.selection.End
+
+			terminalDragTo(p, tt.x, tt.y)
+			if p.selection.End == stalled && tt.y != 8 {
+				t.Fatalf("drag %s did not move the selection (still %+v)", tt.name, stalled)
+			}
+			layout := p.terminalSelectionViewportLayout()
+			want := ui.SelectionPoint{Line: tt.wantRow(layout), Col: tt.wantCol}
+			if p.selection.End != want {
+				t.Errorf("selection end = %+v, want %+v", p.selection.End, want)
+			}
+		})
+	}
+}
+
+// Dragging past an edge is how a selection reaches text that is not on screen.
+func TestDragPastEdgeScrollsSelectionThroughScrollback(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.previewOffset = 50
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	start := p.terminalSelectionViewportLayout().Start
+
+	terminalDragTo(p, 66, 0)
+	up := p.terminalSelectionViewportLayout().Start
+	if up >= start {
+		t.Fatalf("drag above the top edge left the window at %d (was %d)", up, start)
+	}
+	if p.selection.Start.Line != up {
+		t.Errorf("selection start = %d, want the newly revealed top row %d", p.selection.Start.Line, up)
+	}
+	// One motion event must not skip a screenful the user never had a chance to see.
+	if start-up > selectionDragScrollStep {
+		t.Errorf("one motion event scrolled %d rows, want at most %d", start-up, selectionDragScrollStep)
+	}
+
+	for range 4 {
+		terminalDragTo(p, 66, 40)
+	}
+	down := p.terminalSelectionViewportLayout().Start
+	if down <= up {
+		t.Fatalf("drag below the bottom edge left the window at %d (was %d)", down, up)
+	}
+	if p.selection.End.Line != down+p.selection.ViewRect.H-previewBorderRows-terminalHeaderRows-1 &&
+		p.selection.End.Line != p.terminalSelectionViewportLayout().End-1 {
+		t.Errorf("selection end %d did not follow the scrolled window ending at %d",
+			p.selection.End.Line, p.terminalSelectionViewportLayout().End-1)
+	}
+}
+
+// A drag whose button-down landed on chrome is still unambiguously a selection
+// by the time it is moving.
+func TestDragFromChromeAnchorsAtNearestCell(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	header := previewClickAction(false, false)
+	header.Y = header.Region.Rect.Y // border row, above the header and the output
+	p.handleMouseClick(header)
+	if p.selection.Anchor.Valid() {
+		t.Fatal("a click on chrome should not anchor a selection")
+	}
+
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 66, Y: 9, DragStartID: regionPreviewPane,
+		DragDX: 6, DragDY: 9 - header.Y,
+		Region: header.Region,
+	})
+	if !p.selection.HasSelection() {
+		t.Fatal("drag starting on chrome never anchored a selection")
+	}
+	layout := p.terminalSelectionViewportLayout()
+	if p.selection.Start.Line != layout.Start {
+		t.Errorf("anchor line = %d, want the first visible row %d", p.selection.Start.Line, layout.Start)
+	}
+}
+
+// Shift-clicking chrome is a miss, not an instruction to discard the selection.
+func TestShiftClickMissKeepsExistingSelection(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+	want := p.selection
+
+	miss := previewClickAction(true, false)
+	miss.Y = miss.Region.Rect.Y
+	p.handleMouseClick(miss)
+	if p.selection.Start != want.Start || p.selection.End != want.End {
+		t.Errorf("shift-click on chrome changed the selection to %+v..%+v, want %+v..%+v",
+			p.selection.Start, p.selection.End, want.Start, want.End)
+	}
+}

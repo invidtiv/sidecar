@@ -485,3 +485,45 @@ func visibleSplitBoundaryPositions(split previewSplit) []scrollFallbackPosition 
 		{x: split.PreviewX},
 	}
 }
+
+// Trackpads twitch. A gesture that never leaves its anchor cell is the click the
+// user meant, not a one-cell selection that silently lands on the clipboard and
+// swallows the activation.
+func TestClickJitterWithinOneCellStillActivatesTerminal(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 60, Y: 6, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+	cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+
+	if p.selection.HasSelection() {
+		t.Errorf("jittered click left a %+v..%+v selection", p.selection.Start, p.selection.End)
+	}
+	if cmd == nil || p.viewMode != ViewModeInteractive {
+		t.Fatalf("jittered click did not activate the terminal (viewMode=%v)", p.viewMode)
+	}
+}
+
+// One cell of real movement is still a selection, and must not activate.
+func TestOneCellDragSelectsWithoutActivating(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 61, Y: 6, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+
+	if !p.selection.HasSelection() {
+		t.Fatal("a one-cell drag produced no selection")
+	}
+	if p.viewMode == ViewModeInteractive {
+		t.Error("a one-cell drag selection activated the terminal")
+	}
+}
