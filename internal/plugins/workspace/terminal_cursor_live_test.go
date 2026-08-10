@@ -171,7 +171,11 @@ func (p *liveTerminalPane) runCommand(command string) {
 func (p *liveTerminalPane) atPrompt() bool {
 	p.t.Helper()
 	lines := strings.Split(strings.TrimRight(p.run("capture-pane", "-p", "-t", p.pane), "\n"), "\n")
-	return len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "$"
+	if len(lines) == 0 {
+		return false
+	}
+	last := strings.TrimSpace(lines[len(lines)-1])
+	return last == "$" || strings.HasSuffix(last, "$") || strings.HasSuffix(last, "%") || strings.HasSuffix(last, "#")
 }
 
 func (p *liveTerminalPane) historySize() int {
@@ -363,8 +367,10 @@ func TestLiveTerminalCursorTracksSoftWrappedRows(t *testing.T) {
 	switch {
 	case lookPathOK("bash"):
 		pane.runCommand("exec bash --norc --noprofile")
+		pane.runCommand("export PS1='$ '")
 	case lookPathOK("zsh"):
 		pane.runCommand("exec zsh -f")
+		pane.runCommand("export PS1='$ '")
 	default:
 		t.Skip("neither bash nor zsh available for soft-wrap input test")
 	}

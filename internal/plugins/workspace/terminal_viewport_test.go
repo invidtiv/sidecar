@@ -67,6 +67,8 @@ func TestCalculateTerminalViewportLayout(t *testing.T) {
 }
 
 func TestTerminalViewportTrimsTrailingEmptyWithoutCopyingState(t *testing.T) {
+	// No pane geometry: sparse shell scrollback still trims trailing blanks so
+	// follow shows content rather than a sea of empty rows.
 	buffer := testTerminalBuffer("prompt\n\n\n")
 	input := terminalViewportInput{
 		Buffer:       buffer,
@@ -86,6 +88,130 @@ func TestTerminalViewportTrimsTrailingEmptyWithoutCopyingState(t *testing.T) {
 	}
 	if result.Layout.EffectiveCount != 1 {
 		t.Fatalf("effective count = %d, want 1", result.Layout.EffectiveCount)
+	}
+}
+
+// Passive follow of a known live grid must not let TrimTrailing walk Start up
+// into history. That off-by-one painted the previous bottom chrome under the
+// header until interactive mode (which never trims) re-aligned it.
+func TestPassiveFollowKeepsLiveGridDespiteTrailingBlanks(t *testing.T) {
+	buffer := tty.NewOutputBuffer(100)
+	// One history row that looks like "bottom chrome", then a 4-row pane whose
+	// final row is blank — the shape full-screen TUIs leave at the prompt.
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:      "old-bottom-chrome\nrow0\nrow1\nrow2\n",
+		HistoryRows: 1,
+		PaneRows:    4,
+	})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:       buffer,
+		Width:        40,
+		Height:       4,
+		Follow:       true,
+		TrimTrailing: true, // passive auto-scroll sets this
+		PaneHeight:   4,
+		PaneWidth:    40,
+	}, ui.NewTruncateCache(32))
+
+	if result.Layout.Start != 1 {
+		t.Fatalf("Start = %d, want PaneTop 1", result.Layout.Start)
+	}
+	if result.Layout.PaneTop != 1 {
+		t.Fatalf("PaneTop = %d, want 1", result.Layout.PaneTop)
+	}
+	// EffectiveCount stays the full buffer while following the live grid so
+	// blank final rows remain addressable.
+	if result.Layout.EffectiveCount != 5 {
+		t.Fatalf("EffectiveCount = %d, want 5 (history + full pane)", result.Layout.EffectiveCount)
+	}
+
+	lines := strings.Split(ansi.Strip(result.Content), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("rendered %d lines, want 4: %#v", len(lines), lines)
+	}
+	if lines[0] != "row0" {
+		t.Fatalf("first visible = %q, want row0 (history must not leak under the header)", lines[0])
+	}
+	if lines[1] != "row1" || lines[2] != "row2" {
+		t.Fatalf("pane body = %#v, want row1/row2", lines[1:3])
+	}
+	if lines[3] != "" {
+		t.Fatalf("final pane row = %q, want blank (TUI bottom spacing)", lines[3])
+	}
+}
+
+// Without pane geometry, scrolled-back sparse output still trims so MaxOffset
+// does not include a trailing blank sea.
+func TestScrolledBackSparseOutputStillTrimsTrailing(t *testing.T) {
+	buffer := testTerminalBuffer("a\nb\nc\n\n\n")
+	layout := calculateTerminalViewportLayout(terminalViewportInput{
+		Buffer:       buffer,
+		Width:        40,
+		Height:       2,
+		Offset:       0,
+		TrimTrailing: true,
+		// Follow false, no PaneHeight: pure scrollback browse.
+	})
+	if layout.EffectiveCount != 3 {
+		t.Fatalf("EffectiveCount = %d, want 3 after trim", layout.EffectiveCount)
+	}
+	if layout.MaxOffset != 1 {
+		t.Fatalf("MaxOffset = %d, want 1", layout.MaxOffset)
+	}
+}
+
+// A capture that lost trailing blanks (tmux strips them) still fills the
+// viewport when following a known pane height, so chrome does not jump.
+func TestPassiveFollowPadsShortLiveGridToViewport(t *testing.T) {
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:      "row0\nrow1\nrow2",
+		HistoryRows: 0,
+		PaneRows:    3,
+	})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer:     buffer,
+		Width:      20,
+		Height:     4,
+		Follow:     true,
+		PaneHeight: 4,
+		PaneWidth:  20,
+	}, ui.NewTruncateCache(32))
+
+	lines := strings.Split(ansi.Strip(result.Content), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("rendered %d lines, want 4 padded: %#v", len(lines), lines)
+	}
+	if lines[0] != "row0" || lines[3] != "" {
+		t.Fatalf("padded grid = %#v, want row0..blank", lines)
+	}
+}
+
+// Interactive follow of the same full-screen grid must agree with passive on
+// the window start so entering interactive mode cannot "jump" chrome.
+func TestPassiveAndInteractiveFollowShareLiveGridWindow(t *testing.T) {
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:      "hist\na\nb\nc\n",
+		HistoryRows: 1,
+		PaneRows:    4,
+	})
+	passive := calculateTerminalViewportLayout(terminalViewportInput{
+		Buffer: buffer, Width: 40, Height: 4, Follow: true,
+		TrimTrailing: true, PaneHeight: 4, PaneWidth: 40,
+	})
+	interactive := calculateTerminalViewportLayout(terminalViewportInput{
+		Buffer: buffer, Width: 40, Height: 4, Follow: true,
+		Interactive: true, PaneHeight: 4, PaneWidth: 40,
+	})
+	if passive.Start != interactive.Start || passive.End != interactive.End {
+		t.Fatalf("passive window [%d,%d) != interactive [%d,%d)",
+			passive.Start, passive.End, interactive.Start, interactive.End)
+	}
+	if passive.Start != 1 {
+		t.Fatalf("shared Start = %d, want PaneTop 1", passive.Start)
 	}
 }
 

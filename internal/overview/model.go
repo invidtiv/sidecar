@@ -811,7 +811,9 @@ func (m *Model) renderCompact(width, height int) string {
 		item := items[index]
 		line := fitCompactLine(compactCardText(item.lane, item.card, m.cards[item.card.ID]), width)
 		if index == selectedIndex {
-			line = styles.ListItemSelected.Render(line)
+			// Same darker fill as the board kanban: multi-coloured card text
+			// washes out on ListItemSelected's BgTertiary lift.
+			line = styles.CardSelected.Render(line)
 		}
 		lines = append(lines, line)
 		y := len(lines) - 1

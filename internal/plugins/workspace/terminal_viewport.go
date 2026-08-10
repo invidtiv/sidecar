@@ -147,16 +147,9 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	}
 
 	lineCount, paneTop, paneKnown := in.Buffer.PaneWindow()
-	layout.EffectiveCount = lineCount
-	if in.TrimTrailing {
-		layout.EffectiveCount = in.Buffer.LastNonEmptyLine() + 1
-	}
-	layout.MaxOffset = max(layout.EffectiveCount-layout.DisplayHeight, 0)
-	// Pane row 0, in buffer coordinates. Settled before the scroll window so the
-	// clipped-follow anchor below and the cursor placement agree with it by
-	// construction. A buffer that has never been told its split falls back to
-	// its tail; PaneHeight of 0 means no geometry has been observed either, and
-	// the visible window is treated as the pane once Start is known.
+	// Pane row 0, in buffer coordinates. Settled against the full line count
+	// before any trailing-blank trim: the producer split describes the live
+	// grid including blank final rows (td-d29821).
 	//
 	// Between a resize and the capture that follows it, paneTop still describes
 	// the old pane height while in.PaneHeight is already the new one, so the
@@ -167,12 +160,38 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	// screen rather than the instant after a drag (td-d29821).
 	switch {
 	case paneKnown:
-		layout.PaneTop = min(paneTop, layout.EffectiveCount)
+		layout.PaneTop = min(paneTop, lineCount)
 	case in.PaneHeight > 0:
-		layout.PaneTop = max(layout.EffectiveCount-in.PaneHeight, 0)
+		layout.PaneTop = max(lineCount-in.PaneHeight, 0)
 	}
 
+	// Live-grid follow: geometry is known and we are pinned to the live edge.
+	// Full-screen programs (Grok, Claude, …) keep intentional blank rows in the
+	// pane. Trimming them shrinks EffectiveCount so MaxOffset walks Start up
+	// into history — painting the previous bottom chrome under the header until
+	// interactive mode (which never trims) re-aligns it.
+	liveGridFollow := in.Follow && (paneKnown || in.PaneHeight > 0)
+
+	layout.EffectiveCount = lineCount
+	if in.TrimTrailing && !liveGridFollow {
+		layout.EffectiveCount = max(in.Buffer.LastNonEmptyLine()+1, 0)
+		if layout.PaneTop > layout.EffectiveCount {
+			layout.PaneTop = layout.EffectiveCount
+		}
+	}
+	layout.MaxOffset = max(layout.EffectiveCount-layout.DisplayHeight, 0)
+
 	switch {
+	case liveGridFollow:
+		// Pin to the live grid rather than MaxOffset of a (possibly trimmed)
+		// effective count. When the pane is taller than the viewport, show its
+		// bottom; when shorter, show from PaneTop and let render pad.
+		paneRows := lineCount - layout.PaneTop
+		if paneRows <= layout.DisplayHeight {
+			layout.Start = layout.PaneTop
+		} else {
+			layout.Start = max(lineCount-layout.DisplayHeight, layout.PaneTop)
+		}
 	case in.Follow:
 		layout.Start = layout.MaxOffset
 	case in.OffsetFromBottom:
@@ -192,7 +211,13 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 		cursorLine := layout.PaneTop + in.CursorRow
 		layout.Start = min(layout.Start, max(cursorLine-layout.DisplayHeight+1, 0))
 	}
-	layout.End = min(layout.Start+layout.DisplayHeight, layout.EffectiveCount)
+	// Live-grid follow reads from the full buffer so blank final pane rows stay
+	// addressable; scrollback browsing still ends at EffectiveCount after trim.
+	endBound := layout.EffectiveCount
+	if liveGridFollow {
+		endBound = lineCount
+	}
+	layout.End = min(layout.Start+layout.DisplayHeight, endBound)
 	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
 	if !paneKnown && in.PaneHeight <= 0 {
 		layout.PaneTop = layout.Start
@@ -231,9 +256,10 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		displayLines = append(displayLines, cache.Truncate(line, layout.DisplayWidth, ""))
 	}
 
-	// Letterboxing pads the pane out to its own height rather than stretching
-	// it; a clipped pane already fills the viewport.
-	if in.Interactive && in.PaneHeight > 0 {
+	// Letterboxing pads the live grid out to the viewport rather than leaving
+	// a short capture (tmux strips trailing blank rows) to shift chrome. Same
+	// rule for passive follow and interactive: both show the live pane.
+	if in.PaneHeight > 0 && (in.Interactive || in.Follow) {
 		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
 	}
 
@@ -277,7 +303,7 @@ func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool
 		return 0, 0, false
 	}
 	visibleRows := layout.End - layout.Start
-	if in.Interactive && in.PaneHeight > 0 {
+	if in.PaneHeight > 0 && (in.Interactive || in.Follow) {
 		visibleRows = layout.DisplayHeight
 	}
 	if visibleRows <= 0 {

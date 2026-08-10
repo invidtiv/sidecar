@@ -294,6 +294,9 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 
 	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
 		p.selectionTermPanel && p.selection.Anchor.Valid())
+	// Trim trailing blanks for scrollback browsing of sparse shell output.
+	// calculateTerminalViewportLayout ignores this while following a known live
+	// grid so full-screen TUI chrome stays aligned (blank final pane rows).
 	trimTrailing := p.autoScrollOutput && !interactive
 	if termPanel {
 		trimTrailing = !interactive
