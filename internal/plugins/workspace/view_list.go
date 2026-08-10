@@ -492,16 +492,17 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		statsStr = fmt.Sprintf("+%d -%d", wt.Stats.Additions, wt.Stats.Deletions)
 	}
 
-	// Build second line parts (plain text)
+	// Build second line parts. Selected rows stay plain so ListItemSelected
+	// can paint a uniform background; unselected rows use the themed agent chip.
 	parts := p.worktreeStateLabels(wt)
 	if wt.IsMain {
 		// For root workspace, show branch name instead of agent
 		parts = append(parts, wt.Branch)
 	} else if !sdCfg.HideAgent {
 		if wt.Agent != nil {
-			parts = append(parts, string(wt.Agent.Type))
+			parts = append(parts, styles.AgentLabel(string(wt.Agent.Type)))
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			parts = append(parts, string(wt.ChosenAgentType))
+			parts = append(parts, styles.AgentLabel(string(wt.ChosenAgentType)))
 		} else {
 			parts = append(parts, "—")
 		}
@@ -601,7 +602,8 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		styledPRIcon = lipgloss.NewStyle().Foreground(styles.Secondary).Render(" PR")
 	}
 
-	// For non-selected, style parts individually
+	// For non-selected, style parts individually — agent chip matches the
+	// Agent Overview board (colour + raised fill via styles.RenderAgentChip).
 	styledParts := make([]string, 0, len(parts)+4)
 	for _, label := range p.worktreeStateLabels(wt) {
 		styledParts = append(styledParts, dimText(label))
@@ -611,9 +613,9 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		styledParts = append(styledParts, wt.Branch)
 	} else if !sdCfg.HideAgent {
 		if wt.Agent != nil {
-			styledParts = append(styledParts, string(wt.Agent.Type))
+			styledParts = append(styledParts, styles.RenderAgentChip(string(wt.Agent.Type)))
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			styledParts = append(styledParts, dimText(string(wt.ChosenAgentType)))
+			styledParts = append(styledParts, styles.RenderAgentChip(string(wt.ChosenAgentType)))
 		} else {
 			styledParts = append(styledParts, "—")
 		}
@@ -733,43 +735,10 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	// Use shell display name
 	displayName := shell.Name
 
-	// td-a29b76: Build second line with agent type if present
-	var statusText string
-	if resolvedStatus.Health {
-		// td-f88fdd: Orphaned shell - show "offline" status
-		if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-			agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]
-			if agentAbbrev == "" {
-				agentAbbrev = string(shell.ChosenAgent)
-			}
-			statusText = fmt.Sprintf("%s · offline", agentAbbrev)
-		} else {
-			statusText = "shell · offline"
-		}
-	} else if shell.Agent != nil {
-		// Show the live pane owner; ChosenAgent is only the launch preference.
-		liveType := shell.Agent.Type
-		agentAbbrev := shellAgentAbbreviations[liveType]
-		if agentAbbrev == "" {
-			agentAbbrev = string(liveType)
-		}
-		if agentAbbrev == "" {
-			agentAbbrev = "shell"
-		}
-		if hasActivity {
-			statusText = fmt.Sprintf("%s · %s", agentAbbrev, activityText)
-		} else {
-			statusText = fmt.Sprintf("%s · running", agentAbbrev)
-		}
-	} else if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-		agentAbbrev := shellAgentAbbreviations[shell.ChosenAgent]
-		if agentAbbrev == "" {
-			agentAbbrev = string(shell.ChosenAgent)
-		}
-		statusText = fmt.Sprintf("%s · stopped", agentAbbrev)
-	} else {
-		statusText = "shell · no session"
-	}
+	// Second line: agent chip (overview style) + status. Plain text when
+	// selected so the full-row selection background stays uniform; themed
+	// chip when not selected.
+	statusText := shellStatusLine(shell, resolvedStatus, hasActivity, activityText, selected)
 
 	// Calculate layout
 	maxNameWidth := width - 4 - 2 // icon + padding
@@ -814,13 +783,73 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	// Not selected - use styled icon
 	icon := statusStyle.Render(statusIcon)
 	line1 := fmt.Sprintf(" %s %s", icon, displayName)
-	line2 := "   " + dimText(statusText)
+	line2 := "   " + statusText
 	// Truncate line2 to prevent wrapping
 	if ansi.StringWidth(line2) > width {
 		line2 = ansi.Truncate(line2, width-1, "…")
 	}
 	content := line1 + "\n" + line2
 	return styles.ListItemNormal.Width(width).Render(content)
+}
+
+// shellStatusLine builds the agent + status second line for a shell entry.
+// When selected is true the agent is plain AgentLabel text (selection paints
+// the row). When false it uses the themed RenderAgentChip fill + colour.
+func shellStatusLine(shell *ShellSession, resolvedStatus agentstatus.Presentation, hasActivity bool, activityText string, selected bool) string {
+	agentChip := func(provider AgentType) string {
+		if provider == AgentNone || provider == "" {
+			return ""
+		}
+		if selected {
+			// Icon + name only — ListItemSelected supplies the row fill.
+			label := styles.AgentLabel(string(provider))
+			if label == "" {
+				return string(provider)
+			}
+			return label
+		}
+		if chip := styles.RenderAgentChip(string(provider)); chip != "" {
+			return chip
+		}
+		return string(provider)
+	}
+	suffix := func(chip, status string) string {
+		if chip == "" {
+			if selected {
+				return "shell · " + status
+			}
+			return dimText("shell · " + status)
+		}
+		if selected {
+			return chip + " · " + status
+		}
+		return chip + dimText(" · "+status)
+	}
+
+	if resolvedStatus.Health {
+		if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
+			return suffix(agentChip(shell.ChosenAgent), "offline")
+		}
+		return suffix("", "offline")
+	}
+	if shell.Agent != nil {
+		chip := agentChip(shell.Agent.Type)
+		if chip == "" {
+			// Live session with no identifiable agent type.
+			if hasActivity {
+				return suffix("", activityText)
+			}
+			return suffix("", "running")
+		}
+		if hasActivity {
+			return suffix(chip, activityText)
+		}
+		return suffix(chip, "running")
+	}
+	if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
+		return suffix(agentChip(shell.ChosenAgent), "stopped")
+	}
+	return suffix("", "no session")
 }
 
 func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {

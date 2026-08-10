@@ -123,8 +123,10 @@ func AgentIcon(provider string) string {
 
 // AgentLabel is icon + space + provider name when an icon is known, otherwise
 // just the provider name. Used for chips and compact agent labels.
+// Provider names are lowercased so every surface shows the same token
+// (matching conversations adapters and the Agent Overview board).
 func AgentLabel(provider string) string {
-	provider = strings.TrimSpace(provider)
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
 		return ""
 	}
@@ -137,6 +139,34 @@ func AgentLabel(provider string) string {
 // AgentChipFill is the background behind an agent chip.
 func AgentChipFill() color.Color {
 	return SurfaceRaised
+}
+
+// RenderAgentChip returns the themed agent chip: AgentLabel on AgentColor
+// with AgentChipFill behind it. Empty providers return "".
+// This is the reusable presentation for workspaces, overview, and any other
+// surface that should match the Agent Overview board.
+func RenderAgentChip(provider string) string {
+	label := AgentLabel(provider)
+	if label == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().
+		Foreground(AgentColor(provider)).
+		Background(AgentChipFill()).
+		Render(label)
+}
+
+// RenderAgentLabel returns AgentLabel in AgentColor without the raised fill.
+// Use on selected rows that already paint a full-width selection background,
+// where a second fill would fight the selection.
+func RenderAgentLabel(provider string) string {
+	label := AgentLabel(provider)
+	if label == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().
+		Foreground(AgentColor(provider)).
+		Render(label)
 }
 
 // LaneColor maps an agentstatus lane id ("working", "blocked", "done",

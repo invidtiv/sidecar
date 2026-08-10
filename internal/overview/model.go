@@ -721,7 +721,9 @@ func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time
 
 	detail := choose(workspace.TaskID, workspace.Branch)
 	if workspace.Kind == workspaceinventory.KindShell {
-		detail = "tmux " + workspace.TmuxName
+		// Session name only — the "tmux" qualifier was repeated on every shell
+		// card and added no information beyond the name itself.
+		detail = workspace.TmuxName
 	}
 	switch {
 	case stale:

@@ -210,20 +210,6 @@ var AgentDisplayNames = map[AgentType]string{
 	AgentShell:       "Project Shell",
 }
 
-// shellAgentAbbreviations provides short labels for agent types in shell entries.
-// td-a29b76: Used to show agent type in sidebar without taking too much space.
-var shellAgentAbbreviations = map[AgentType]string{
-	AgentClaude:      "Claude",
-	AgentCodex:       "Codex",
-	AgentCopilot:     "Copilot",
-	AgentAntigravity: "Antigravity",
-	AgentCursor:      "Cursor",
-	AgentOpenCode:    "OpenCode",
-	AgentPi:          "Pi",
-	AgentAmp:         "Amp",
-	AgentGrok:        "Grok",
-}
-
 // AgentCommands maps agent types to their CLI commands.
 var AgentCommands = map[AgentType]string{
 	AgentClaude:      "claude",
