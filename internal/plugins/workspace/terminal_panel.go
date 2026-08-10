@@ -330,7 +330,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 		// No panel is drawn at this size, so there is no pane geometry to assert.
 		return nil
 	}
-	w = p.terminalContentWidth(w, h, true)
+	w = p.terminalContentWidth(w)
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, w, h)
 		return nil

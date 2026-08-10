@@ -264,8 +264,13 @@ func assertCursorOnItsLine(t *testing.T, d *terminalModelDriver, pane *liveTermi
 	wantLine := pane.lineAt(wantRow)
 
 	in := terminalViewportInput{
-		Buffer:        model.State.OutputBuf,
-		Width:         width,
+		Buffer: model.State.OutputBuf,
+		// The viewport is one column wider than the pane: the scrollbar owns its
+		// final column unconditionally (td-0818ef), which is exactly why the app
+		// sizes a pane to viewport width minus one. Rendering the pane at the raw
+		// viewport width would clip its last column and drop the final character
+		// of a soft-wrapped row.
+		Width:         width + 1,
 		Height:        height,
 		Follow:        true,
 		Interactive:   true,

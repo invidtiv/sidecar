@@ -18,6 +18,20 @@ func testTerminalBuffer(content string) *tty.OutputBuffer {
 	return buffer
 }
 
+// terminalTextLines returns the rendered rows with viewport chrome removed: the
+// scrollbar owns the final column unconditionally (td-0818ef), and lines are
+// padded out to it, so tests asserting on pane text strip both.
+func terminalTextLines(result terminalViewportResult) []string {
+	lines := strings.Split(ansi.Strip(result.Content), "\n")
+	for i, line := range lines {
+		if result.Layout.ShowScrollbar {
+			line = ansi.Truncate(line, max(ansi.StringWidth(line)-1, 0), "")
+		}
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return lines
+}
+
 func TestCalculateTerminalViewportLayout(t *testing.T) {
 	buffer := testTerminalBuffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9")
 
@@ -80,8 +94,16 @@ func TestTerminalViewportTrimsTrailingEmptyWithoutCopyingState(t *testing.T) {
 	before := input
 	result := renderTerminalViewport(input, ui.NewTruncateCache(32))
 
-	if result.Content != "prompt" {
-		t.Fatalf("content = %q, want prompt", result.Content)
+	// The scrollbar column pads the block out to the viewport, so assert on the
+	// pane text: one content row followed by blank rows.
+	lines := terminalTextLines(result)
+	if lines[0] != "prompt" {
+		t.Fatalf("content = %q, want prompt", lines[0])
+	}
+	for i, line := range lines[1:] {
+		if line != "" {
+			t.Fatalf("row %d = %q, want blank padding", i+1, line)
+		}
 	}
 	if input != before {
 		t.Fatal("renderTerminalViewport mutated its input")
@@ -126,7 +148,7 @@ func TestPassiveFollowKeepsLiveGridDespiteTrailingBlanks(t *testing.T) {
 		t.Fatalf("EffectiveCount = %d, want 5 (history + full pane)", result.Layout.EffectiveCount)
 	}
 
-	lines := strings.Split(ansi.Strip(result.Content), "\n")
+	lines := terminalTextLines(result)
 	if len(lines) != 4 {
 		t.Fatalf("rendered %d lines, want 4: %#v", len(lines), lines)
 	}
@@ -180,7 +202,7 @@ func TestPassiveFollowPadsShortLiveGridToViewport(t *testing.T) {
 		PaneWidth:  20,
 	}, ui.NewTruncateCache(32))
 
-	lines := strings.Split(ansi.Strip(result.Content), "\n")
+	lines := terminalTextLines(result)
 	if len(lines) != 4 {
 		t.Fatalf("rendered %d lines, want 4 padded: %#v", len(lines), lines)
 	}
@@ -560,18 +582,17 @@ func TestRenderTerminalViewportPinsScrollbarToRightEdge(t *testing.T) {
 	}
 }
 
-func TestTerminalContentWidthReservesVisibleScrollbar(t *testing.T) {
+func TestTerminalContentWidthReservesStableScrollbarColumn(t *testing.T) {
 	buffer := testTerminalBuffer("123456789\nabcdefghi\nABCDEFGHI")
 	p := &Plugin{
 		shellSelected: true,
 		shells:        []*ShellSession{{Agent: &Agent{OutputBuf: buffer}}},
 	}
 
-	if got := p.terminalContentWidth(10, 2, false); got != 9 {
-		t.Fatalf("content width with scrollbar = %d, want 9", got)
-	}
-	if got := p.terminalContentWidth(10, 3, false); got != 10 {
-		t.Fatalf("content width without scrollbar = %d, want 10", got)
+	for _, height := range []int{2, 3} {
+		if got := p.terminalContentWidth(10); got != 9 {
+			t.Fatalf("content width at height %d = %d, want stable width 9", height, got)
+		}
 	}
 
 	// Once tmux has wrapped to the reserved width, the last pane cell remains
@@ -588,6 +609,26 @@ func TestTerminalContentWidthReservesVisibleScrollbar(t *testing.T) {
 	for i, line := range strings.Split(ansi.Strip(result.Content), "\n") {
 		if !strings.HasPrefix(line, []string{"abcdefghi", "ABCDEFGHI"}[i]) {
 			t.Fatalf("line %d lost its rightmost pane cell: %q", i, line)
+		}
+	}
+}
+
+func TestRenderTerminalViewportKeepsScrollbarColumnAcrossHistoryThreshold(t *testing.T) {
+	cache := ui.NewTruncateCache(32)
+	for _, total := range []int{2, 3} {
+		buffer := testTerminalBuffer("123456789\nabcdefghi")
+		result := renderTerminalViewport(terminalViewportInput{
+			Buffer: buffer, Width: 10, Height: 2, Follow: true,
+			PaneWidth: 9, PaneHeight: 2, TotalItems: total,
+		}, cache)
+		if !result.Layout.ShowScrollbar || result.Layout.DisplayWidth != 9 {
+			t.Fatalf("total %d: scrollbar=%v display width=%d, want reserved column and width 9",
+				total, result.Layout.ShowScrollbar, result.Layout.DisplayWidth)
+		}
+		for i, line := range strings.Split(ansi.Strip(result.Content), "\n") {
+			if got := ansi.StringWidth(line); got != 10 {
+				t.Fatalf("total %d line %d width = %d, want 10: %q", total, i, got, line)
+			}
 		}
 	}
 }
@@ -843,11 +884,11 @@ func renderedTerminalLine(t *testing.T, in terminalViewportInput, y int) string 
 	// painted-cursor path would overwrite the very cell under assertion.
 	in.NativeCursor = true
 	result := renderTerminalViewport(in, ui.NewTruncateCache(64))
-	lines := strings.Split(result.Content, "\n")
+	lines := terminalTextLines(result)
 	if y < 0 || y >= len(lines) {
 		t.Fatalf("cursor row %d outside the %d rendered rows", y, len(lines))
 	}
-	return strings.TrimRight(ansi.Strip(lines[y]), " ")
+	return lines[y]
 }
 
 // paneSplitBuffer builds a buffer whose producer stated the split: history

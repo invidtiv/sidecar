@@ -24,11 +24,14 @@ func TestTerminalViewportActualPaneGeometry(t *testing.T) {
 		wantIndicator string
 	}{
 		{
+			// The scrollbar reserves the viewport's final column unconditionally
+			// (td-0818ef), so a pane sized to the viewport shows one column less
+			// — chrome, not a mismatch, hence no indicator.
 			name:       "equal size",
 			paneWidth:  10,
 			paneHeight: 4,
-			wantLines:  []string{"0000000000", "1111111111", "2222222222", "3333333333"},
-			wantWidth:  10,
+			wantLines:  []string{"000000000", "111111111", "222222222", "333333333"},
+			wantWidth:  9,
 			wantHeight: 4,
 		},
 		{
@@ -43,10 +46,10 @@ func TestTerminalViewportActualPaneGeometry(t *testing.T) {
 			name:          "pane larger clips to the viewport",
 			paneWidth:     20,
 			paneHeight:    8,
-			wantLines:     []string{"0000000000", "1111111111", "2222222222", "3333333333"},
-			wantWidth:     10,
+			wantLines:     []string{"000000000", "111111111", "222222222", "333333333"},
+			wantWidth:     9,
 			wantHeight:    4,
-			wantIndicator: "20x8, showing 10x4",
+			wantIndicator: "20x8, showing 9x4",
 		},
 	}
 
@@ -61,7 +64,7 @@ func TestTerminalViewportActualPaneGeometry(t *testing.T) {
 				t.Fatalf("display = %dx%d, want %dx%d",
 					result.Layout.DisplayWidth, result.Layout.DisplayHeight, tt.wantWidth, tt.wantHeight)
 			}
-			got := strings.Split(result.Content, "\n")
+			got := terminalTextLines(result)
 			if len(got) != len(tt.wantLines) {
 				t.Fatalf("rendered %d lines %q, want %d", len(got), got, len(tt.wantLines))
 			}
@@ -70,8 +73,13 @@ func TestTerminalViewportActualPaneGeometry(t *testing.T) {
 					t.Fatalf("line %d = %q, want %q", i, got[i], want)
 				}
 			}
-			indicator := tty.PaneSizeIndicator(tt.paneWidth, tt.paneHeight,
-				result.Layout.DisplayWidth, result.Layout.DisplayHeight)
+			// Mirror the view: the banner is gated on the pane's own fit so the
+			// scrollbar column never reads as a mismatch.
+			var indicator string
+			if result.Layout.PaneClipped {
+				indicator = tty.PaneSizeIndicator(tt.paneWidth, tt.paneHeight,
+					result.Layout.DisplayWidth, result.Layout.DisplayHeight)
+			}
 			if indicator != tt.wantIndicator {
 				t.Fatalf("indicator = %q, want %q", indicator, tt.wantIndicator)
 			}
@@ -88,19 +96,20 @@ func TestTerminalViewportClipsWidePaneAnchoredOnCursor(t *testing.T) {
 		Interactive: true, CursorVisible: true, CursorRow: 1, CursorCol: 13,
 		PaneWidth: 16, PaneHeight: 2,
 	}
+	// Seven content columns: the scrollbar owns the eighth (td-0818ef).
 	layout := calculateTerminalViewportLayout(in)
-	if layout.Fit.ColOffset != 6 {
-		t.Fatalf("ColOffset = %d, want 6", layout.Fit.ColOffset)
+	if layout.Fit.ColOffset != 7 {
+		t.Fatalf("ColOffset = %d, want 7", layout.Fit.ColOffset)
 	}
 	result := renderTerminalViewport(in, ui.NewTruncateCache(20))
-	for i, line := range strings.Split(result.Content, "\n") {
-		if plain := ansi.Strip(line); plain != "6789abcd" {
-			t.Fatalf("line %d = %q, want %q", i, plain, "6789abcd")
+	for i, line := range terminalTextLines(result) {
+		if line != "789abcd" {
+			t.Fatalf("line %d = %q, want %q", i, line, "789abcd")
 		}
 	}
 	x, y, ok := terminalViewportCursorPosition(in)
-	if !ok || x != 7 || y != 1 {
-		t.Fatalf("cursor = (%d,%d,%v), want (7,1,true)", x, y, ok)
+	if !ok || x != 6 || y != 1 {
+		t.Fatalf("cursor = (%d,%d,%v), want (6,1,true)", x, y, ok)
 	}
 }
 
@@ -152,7 +161,7 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 
 	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
 	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
-	if !strings.Contains(plain, "40x6, showing 30x2") {
+	if !strings.Contains(plain, "40x6, showing 29x2") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
 	}
 	for _, line := range strings.Split(plain, "\n")[1:] {

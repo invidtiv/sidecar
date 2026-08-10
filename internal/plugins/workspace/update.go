@@ -775,7 +775,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				if target == "" {
 					target = wt.Agent.TmuxSession
 				}
-				if resizeCmd := p.maybeResizeVisiblePaneForScrollbar(target, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
+				if resizeCmd := p.maybeResizeVisiblePane(target, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
 				}
 			}
@@ -1338,7 +1338,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.shellSelected {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
-				if resizeCmd := p.maybeResizeVisiblePaneForScrollbar(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
+				if resizeCmd := p.maybeResizeVisiblePane(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
 				}
 			}

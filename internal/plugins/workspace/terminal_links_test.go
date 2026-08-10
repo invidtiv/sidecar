@@ -346,7 +346,7 @@ func TestLinkDecorationPreservesSearchAndSelectionRendering(t *testing.T) {
 			EndCol:   17,
 		}}},
 	}, ui.NewTruncateCache(16))
-	if got := ansi.Strip(result.Content); got != "go https://example.com" {
+	if got := terminalTextLines(result)[0]; got != "go https://example.com" {
 		t.Fatalf("combined rendering corrupted text: %q", got)
 	}
 	if !strings.Contains(result.Content, "\x1b]8;;https://example.com\x1b\\") ||

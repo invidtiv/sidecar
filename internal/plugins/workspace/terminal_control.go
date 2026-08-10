@@ -158,7 +158,7 @@ func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
 	if !ok {
 		return workspaceTerminalTarget{}, false
 	}
-	width = p.terminalContentWidth(width, height, true)
+	width = p.terminalContentWidth(width)
 	return workspaceTerminalTarget{
 		Session: p.termPanelSession, Pane: p.termPanelPaneID,
 		Width: width, Height: height, Source: "panel", SourceID: p.termPanelSession,
@@ -170,7 +170,7 @@ func (p *Plugin) desiredPrimaryTerminal() (workspaceTerminalTarget, bool) {
 		return workspaceTerminalTarget{}, false
 	}
 	width, height := p.calculateAgentPaneDimensions()
-	width = p.terminalContentWidth(width, height, false)
+	width = p.terminalContentWidth(width)
 	if p.shellSelected {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.IsOrphaned || shell.Agent == nil ||

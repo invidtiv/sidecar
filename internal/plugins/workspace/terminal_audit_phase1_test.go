@@ -222,7 +222,10 @@ func TestMaybeResizeInteractivePaneTicksLeaseWhenSizeAlreadyMatches(t *testing.T
 	p.width = 100
 	p.height = 30
 	p.interactiveState.TargetPane = "%42"
+	// A settled pane is sized to the content width — the scrollbar owns the
+	// viewport's last column (td-0818ef).
 	w, h := p.calculatePreviewDimensions()
+	w = p.terminalContentWidth(w)
 
 	cmd := p.maybeResizeInteractivePane(w, h)
 	if cmd == nil {

@@ -127,10 +127,13 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	// losing a column to chrome is not a geometry mismatch and must not read as
 	// one (td-73fa86).
 	layout.PaneClipped = fit.Clipped()
-	if in.TotalItems > layout.DisplayHeight && layout.DisplayWidth > 1 {
-		// The scrollbar owns the viewport's final column. A pane already sized
-		// to the remaining content area fits as-is; subtracting again would clip
-		// its own final column (td-e8bdcf).
+	if layout.DisplayWidth > 1 {
+		// The scrollbar owns the viewport's final column even when all content
+		// fits; RenderScrollbar draws a spacer in that state. Keeping the chrome
+		// stable prevents a newly published frame from clipping the application's
+		// last column while the corresponding tmux resize is still in flight
+		// (td-0818ef). A pane already sized to the remaining content area fits
+		// as-is; subtracting again would clip its own final column (td-e8bdcf).
 		contentWidth := max(in.Width, 0) - 1
 		layout.DisplayWidth = min(layout.DisplayWidth, contentWidth)
 		fit = fit.WithWidth(layout.DisplayWidth, in.PaneWidth, in.CursorCol, in.Interactive && in.CursorVisible)
