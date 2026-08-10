@@ -163,6 +163,41 @@ func (p *Plugin) interactiveClampedPoint(x, y int) (int, int, bool) {
 // screen would skip hundreds of lines the user never saw.
 const selectionDragScrollStep = 3
 
+// A held pointer past an edge keeps scrolling on a timer, the way every real
+// terminal does; motion events alone stop arriving the moment the hand stops.
+const (
+	selectionAutoScrollInterval = 70 * time.Millisecond
+	selectionAutoScrollStep     = 5
+	// A release lost off-window is only noticed when the pointer comes back, so
+	// an unbounded chain would keep dragging the selection through all of
+	// scrollback (and onto the clipboard under copy-on-select) in the meantime.
+	// Roughly 1.5s of holding still without any fresh motion pauses the chain;
+	// real motion re-arms it, so a user genuinely parked at the edge only has to
+	// twitch to keep going.
+	selectionAutoScrollMaxRun = 20
+)
+
+// selectionAutoScrollTickMsg drives one step of that timer. The generation
+// pins it to the gesture that scheduled it, so a tick in flight when the button
+// comes up (or when a release is lost off-window) is discarded.
+type selectionAutoScrollTickMsg struct {
+	generation uint64
+}
+
+// selectionEdgeScrollRows turns a pointer row that has run past the content into
+// the rows to scroll, negative above the top. Speed scales with the overshoot so
+// a pointer parked just past the edge crawls while one thrown to the window edge
+// moves quickly, bounded so no single step skips a screenful.
+func selectionEdgeScrollRows(outputRow, rows, limit int) int {
+	switch {
+	case outputRow < 0:
+		return -min(-outputRow, limit)
+	case outputRow >= rows:
+		return min(outputRow-rows+1, limit)
+	}
+	return 0
+}
+
 // interactiveDragPoint maps an in-progress drag position onto the buffer,
 // scrolling the surface first when the pointer has run past an edge so a
 // selection can reach content that is not on screen.
@@ -171,15 +206,89 @@ func (p *Plugin) interactiveDragPoint(x, y int) (int, int, bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	outputRow := p.interactiveOutputRowAtY(y)
 	rows := layout.End - layout.Start
-	switch {
-	case outputRow < 0:
-		p.scrollTerminalSelectionViewport(-min(-outputRow, selectionDragScrollStep))
-	case outputRow >= rows:
-		p.scrollTerminalSelectionViewport(min(outputRow-rows+1, selectionDragScrollStep))
-	}
+	p.scrollTerminalSelectionViewport(
+		selectionEdgeScrollRows(p.interactiveOutputRowAtY(y), rows, selectionDragScrollStep))
 	return p.interactiveClampedPoint(x, y)
+}
+
+// selectionAutoScrollHoldExpired reports when a run of ticks with no fresh drag
+// motion behind it has gone on long enough to be treated as a lost release
+// rather than a pointer deliberately parked past the edge.
+func selectionAutoScrollHoldExpired(ticks int) bool {
+	return ticks > selectionAutoScrollMaxRun
+}
+
+// selectionAutoScrollDelta reports how far one tick should move the window for a
+// pointer held at y, and zero once the pointer is back inside the content.
+func (p *Plugin) selectionAutoScrollDelta(y int) int {
+	layout, ok := p.selectionHitLayout()
+	if !ok {
+		return 0
+	}
+	return selectionEdgeScrollRows(
+		p.interactiveOutputRowAtY(y), layout.End-layout.Start, selectionAutoScrollStep)
+}
+
+// scheduleSelectionAutoScroll queues the next step of the held-pointer scroll,
+// at most one tick in flight at a time.
+func (p *Plugin) scheduleSelectionAutoScroll() tea.Cmd {
+	if p.selectionAutoScrollPending {
+		return nil
+	}
+	p.selectionAutoScrollPending = true
+	generation := p.selectionGeneration
+	return tea.Tick(selectionAutoScrollInterval, func(time.Time) tea.Msg {
+		return selectionAutoScrollTickMsg{generation: generation}
+	})
+}
+
+// advanceSelectionAutoScroll scrolls one step for a pointer still held past an
+// edge and re-arms itself. It stops when the gesture ended, the pointer came
+// back inside the content, or the buffer has no more rows in that direction.
+func (p *Plugin) advanceSelectionAutoScroll(msg selectionAutoScrollTickMsg) tea.Cmd {
+	if msg.generation != p.selectionGeneration {
+		return nil
+	}
+	p.selectionAutoScrollPending = false
+	if p.isModalViewMode() {
+		// A modal swallows the release (handleMouseDragEnd refuses it), so the
+		// gesture can never finish itself. End it here or the pane keeps scrolling
+		// underneath the modal.
+		p.beginSelectionGesture()
+		return nil
+	}
+	if !p.selection.Anchor.Valid() {
+		return nil
+	}
+	p.selectionAutoScrollTicks++
+	if selectionAutoScrollHoldExpired(p.selectionAutoScrollTicks) {
+		return nil
+	}
+	delta := p.selectionAutoScrollDelta(p.selectionDragY)
+	if delta == 0 {
+		return nil
+	}
+	before := p.terminalSelectionViewportLayout().Start
+	p.scrollTerminalSelectionViewport(delta)
+	if p.terminalSelectionViewportLayout().Start == before {
+		return nil
+	}
+	p.extendSelectionDragTo(p.selectionDragX, p.selectionDragY)
+	return p.scheduleSelectionAutoScroll()
+}
+
+// extendSelectionDragTo moves the live selection to the cell nearest the pointer,
+// snapped to the gesture's unit.
+func (p *Plugin) extendSelectionDragTo(x, y int) bool {
+	lineIdx, col, ok := p.interactiveClampedPoint(x, y)
+	if !ok {
+		return false
+	}
+	if !p.extendSelectionToUnit(lineIdx, col) {
+		p.selection.HandleDrag(lineIdx, col)
+	}
+	return true
 }
 
 // scrollTerminalSelectionViewport moves the surface the selection is anchored in
@@ -208,6 +317,12 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	targetTermPanel := action.Region.ID == regionTermPanelContent
 	sameSource := p.selectionTermPanel == targetTermPanel
 	canExtend := action.Shift && p.selection.HasSelection() && sameSource
+	p.beginSelectionGesture()
+	if !canExtend {
+		// A plain click is a character gesture. A shift-click keeps whatever
+		// granularity it is extending, the way xterm does.
+		p.resetSelectionUnit()
+	}
 	p.prepareTerminalSelectionSource(targetTermPanel)
 	// Set ViewRect before charAtXY so interactiveLineIndexAtY can use it.
 	p.selection.ViewRect = action.Region.Rect
@@ -219,8 +334,11 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
 	if !ok {
 		if canExtend {
-			// Shift-clicking the header or the padding below the output is a miss,
-			// not an instruction to throw away the selection being extended.
+			// Shift-clicking the header or the padding is a reach for the nearest
+			// text, as in xterm — never an instruction to drop the selection.
+			if clampedLine, clampedCol, clamped := p.interactiveClampedPoint(action.X, action.Y); clamped {
+				p.extendSelectionTo(clampedLine, clampedCol)
+			}
 			return nil
 		}
 		p.selection.Clear()
@@ -232,7 +350,7 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	}
 
 	if canExtend {
-		p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
+		p.extendSelectionTo(lineIdx, col)
 		return nil
 	}
 	// The term panel needs nothing further here: freezing termPanelSelectionOffset
@@ -249,6 +367,8 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 	if p.selectionTermPanel != termPanel {
 		p.selection.Clear()
+		// The anchor unit's span is in the old surface's coordinates.
+		p.resetSelectionUnit()
 	}
 	p.selectionTermPanel = termPanel
 	if termPanel && !p.selection.Anchor.Valid() {
@@ -256,14 +376,62 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 	}
 }
 
+// clickResolution is what a mouse-down over a terminal surface will mean if the
+// gesture ends without motion. The two outcomes are mutually exclusive for one
+// gesture and every abort path (lost release, double-click, a click elsewhere)
+// has to drop whichever is pending, so one enum beats a flag per outcome: it
+// makes "activate and forward" unrepresentable and each reset a single write.
+type clickResolution uint8
+
+const (
+	clickResolutionNone clickResolution = iota
+	// clickResolutionActivate makes a passive terminal live.
+	clickResolutionActivate
+	// clickResolutionForward hands the click to the app running in a live
+	// terminal that has asked for mouse reports.
+	clickResolutionForward
+)
+
 // prepareTerminalClickOrDrag keeps a passive terminal's viewport stable until
 // the pointer gesture has declared itself. A drag selects the rows that were
 // actually under the pointer; a release without motion activates the terminal.
 // Entering interactive mode on mouse-down used to resize/reframe the pane and
 // clear the anchor before the first motion event arrived.
 func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
-	p.activateTerminalAfterClick = !action.Shift && !action.Alt
+	p.pendingClickResolution = clickResolutionNone
+	if !action.Shift && !action.Alt {
+		p.armPendingClick(clickResolutionActivate, action)
+	}
 	return p.prepareInteractiveDrag(action)
+}
+
+// prepareInteractiveTerminalGesture arms a click over a live terminal without
+// deciding yet whether it belongs to the app or to a selection. Forwarding the
+// button press on mouse-down, as this used to do whenever the app had mouse
+// tracking on, meant apps like Claude Code and grok swallowed every drag after
+// the first — the pane only ever selected during the window before the first
+// frame reported mouse reporting at all. Motion now always selects locally;
+// only a release without motion reaches the app.
+func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea.Cmd {
+	p.pendingClickResolution = clickResolutionNone
+	modified := action.Shift || action.Alt
+	forwards := !modified && p.interactiveState != nil && p.interactiveState.MouseReportingEnabled
+	if !modified && !forwards {
+		// Link activation stays on the local path exactly where it was: an app
+		// that asked for mouse reports owns the clicks inside its own output.
+		if cmd, ok := p.activateTerminalLink(action); ok {
+			return cmd
+		}
+	}
+	if forwards {
+		p.armPendingClick(clickResolutionForward, action)
+	}
+	return p.prepareInteractiveDrag(action)
+}
+
+func (p *Plugin) armPendingClick(resolution clickResolution, action mouse.MouseAction) {
+	p.pendingClickResolution = resolution
+	p.pendingClickX, p.pendingClickY = action.X, action.Y
 }
 
 func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cmd {
@@ -272,12 +440,22 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 	// way lets the next render interpret zero as the top of the buffer and a drag
 	// from the live edge jumps through all of scrollback.
 	p.freezeTerminalSelectionViewport()
+	// The tick re-reads this position, so a pointer held still past an edge keeps
+	// scrolling after motion events stop arriving. Real motion also restarts the
+	// hold budget that bounds a chain running on a lost release.
+	p.selectionDragX, p.selectionDragY = action.X, action.Y
+	p.selectionAutoScrollTicks = 0
 	lineIdx, col, ok := p.interactiveDragPoint(action.X, action.Y)
 	if !ok {
 		return nil
 	}
-	p.selection.HandleDrag(lineIdx, col)
-	return nil
+	if !p.extendSelectionToUnit(lineIdx, col) {
+		p.selection.HandleDrag(lineIdx, col)
+	}
+	if p.selectionAutoScrollDelta(action.Y) == 0 {
+		return nil
+	}
+	return p.scheduleSelectionAutoScroll()
 }
 
 // freezeTerminalSelectionViewport pins the preview pane to the window the user
@@ -309,30 +487,43 @@ func (p *Plugin) anchorDragFromOrigin(action mouse.MouseAction) bool {
 
 func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	p.selection.FinishDrag()
-	// A gesture that never left its anchor cell is a click that jittered, not a
-	// selection. Without this, a twitch during a click leaves a one-cell
-	// selection, silently copies it under copy-on-select, and swallows the
-	// activation the user was asking for.
-	if p.selection.HasSelection() && p.selection.Start == p.selection.End {
+	// End the gesture before anything else: a scroll tick still in flight must not
+	// keep dragging the window after the button is up.
+	unit := p.selectionUnit
+	p.beginSelectionGesture()
+	// A character gesture that never left its anchor cell is a click that
+	// jittered, not a selection. Without this, a twitch during a click leaves a
+	// one-cell selection, silently copies it under copy-on-select, and swallows
+	// the activation the user was asking for. A word gesture on a one-character
+	// word legitimately ends here, so it is exempt.
+	if unit == selectionUnitChar && p.selection.HasSelection() && p.selection.Start == p.selection.End {
 		p.selection.Clear()
 	}
 	if p.selection.HasSelection() {
-		p.activateTerminalAfterClick = false
+		p.pendingClickResolution = clickResolutionNone
 		if p.copyOnSelectEnabled() {
 			return p.copyInteractiveSelectionCmd()
 		}
 		return nil
 	}
 
-	activate := p.activateTerminalAfterClick
-	p.activateTerminalAfterClick = false
-	if !activate {
-		return nil
+	resolution := p.pendingClickResolution
+	p.pendingClickResolution = clickResolutionNone
+	switch resolution {
+	case clickResolutionActivate:
+		if p.selectionTermPanel {
+			return p.enterTermPanelInteractiveMode()
+		}
+		return p.enterInteractiveMode()
+	case clickResolutionForward:
+		// The press position, not the release: a click that resolves here never
+		// moved, and forwardClickToTmux sends press and release together.
+		return tea.Batch(
+			p.forwardClickToTmux(p.pendingClickX, p.pendingClickY),
+			p.pollInteractivePaneImmediate(),
+		)
 	}
-	if p.selectionTermPanel {
-		return p.enterTermPanelInteractiveMode()
-	}
-	return p.enterInteractiveMode()
+	return nil
 }
 
 func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
@@ -448,12 +639,139 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	return calculateTerminalViewportLayout(input)
 }
 
+// selectionUnit is the granularity a gesture extends by. Double- and
+// triple-clicks keep dragging in whole words and whole lines, as xterm and
+// iTerm2 do, until the next plain click.
+type selectionUnit uint8
+
+const (
+	selectionUnitChar selectionUnit = iota
+	selectionUnitWord
+	selectionUnitLine
+)
+
 func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
+	return p.selectTerminalUnit(action, selectionUnitWord)
+}
+
+func (p *Plugin) selectTerminalLine(action mouse.MouseAction) tea.Cmd {
+	return p.selectTerminalUnit(action, selectionUnitLine)
+}
+
+// selectTerminalUnit installs the word or line under the pointer and records it
+// as the gesture's anchor unit, so a button still held extends by that unit and
+// never eats into the unit the gesture started on.
+func (p *Plugin) selectTerminalUnit(action mouse.MouseAction, unit selectionUnit) tea.Cmd {
 	point, line, ok := p.terminalPointAndLine(action)
 	if !ok {
 		return nil
 	}
-	plain := ansi.Strip(ui.ExpandTabs(line, tabStopWidth))
+	start, end, ok := selectionSpanAt(unit, line, point.Line, point.Col)
+	if !ok {
+		return nil
+	}
+	p.beginSelectionGesture()
+	// Arm drag tracking exactly as a plain mouse-down does, so the button still
+	// held after a double or triple click keeps delivering motion to this gesture
+	// and its release arrives as a drag end rather than a fresh click.
+	p.mouseHandler.StartDrag(action.X, action.Y, action.Region.ID, 0)
+	p.selectionDragX, p.selectionDragY = action.X, action.Y
+	p.selectionUnit = unit
+	p.selectionUnitStart, p.selectionUnitEnd = start, end
+	// The mouse-down that opened this gesture asked for the terminal, or for the
+	// app's click; a double or triple click withdraws that, or the release would
+	// fire it under the selection the user just made.
+	p.pendingClickResolution = clickResolutionNone
+	p.selection.SelectRange(start, end, false)
+	if p.copyOnSelectEnabled() {
+		return p.copyInteractiveSelectionCmd()
+	}
+	return nil
+}
+
+// extendSelectionTo grows an existing selection to a point, snapped to the
+// gesture's unit when one is in flight.
+func (p *Plugin) extendSelectionTo(lineIdx, col int) {
+	if p.extendSelectionToUnit(lineIdx, col) {
+		return
+	}
+	p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
+}
+
+// extendSelectionToUnit extends a word or line gesture to the unit under the
+// pointer. The anchor unit stays whole in either direction: dragging backwards
+// pins the far edge of the anchor, which is what makes word-drag feel like a
+// terminal rather than a character drag that happens to start on a word.
+func (p *Plugin) extendSelectionToUnit(lineIdx, col int) bool {
+	if p.selectionUnit == selectionUnitChar ||
+		!p.selectionUnitStart.Valid() || !p.selectionUnitEnd.Valid() {
+		return false
+	}
+	line, ok := p.terminalLineText(lineIdx)
+	if !ok {
+		return false
+	}
+	start, end, ok := selectionSpanAt(p.selectionUnit, line, lineIdx, col)
+	if !ok {
+		return false
+	}
+	if start.Before(p.selectionUnitStart) {
+		p.selection.SelectRange(p.selectionUnitEnd, start, false)
+	} else {
+		p.selection.SelectRange(p.selectionUnitStart, end, false)
+	}
+	p.selection.Active = true
+	return true
+}
+
+// beginSelectionGesture closes whatever gesture was running: any auto-scroll
+// tick still in flight belongs to the old generation and is dropped.
+func (p *Plugin) beginSelectionGesture() {
+	p.selectionGeneration++
+	p.selectionAutoScrollPending = false
+	p.selectionAutoScrollTicks = 0
+}
+
+// clearTerminalSelection drops a selection made outside a pointer gesture —
+// scrolling away from it, leaving interactive mode, opening a link. The unit
+// goes with it: a word span left over from an old double-click would otherwise
+// redefine where the next shift-click extends from.
+func (p *Plugin) clearTerminalSelection() {
+	p.selection.Clear()
+	p.resetSelectionUnit()
+}
+
+func (p *Plugin) resetSelectionUnit() {
+	p.selectionUnit = selectionUnitChar
+	p.selectionUnitStart = ui.SelectionPoint{Line: -1, Col: -1}
+	p.selectionUnitEnd = ui.SelectionPoint{Line: -1, Col: -1}
+}
+
+// selectionSpanAt returns the inclusive visual span of the unit covering col in
+// line. Character gestures have no span to snap to.
+func selectionSpanAt(unit selectionUnit, line string, lineIdx, col int) (ui.SelectionPoint, ui.SelectionPoint, bool) {
+	expanded := ui.ExpandTabs(line, tabStopWidth)
+	switch unit {
+	case selectionUnitWord:
+		startCol, endCol, ok := terminalWordSpan(expanded, col)
+		if !ok {
+			return ui.SelectionPoint{}, ui.SelectionPoint{}, false
+		}
+		return ui.SelectionPoint{Line: lineIdx, Col: startCol},
+			ui.SelectionPoint{Line: lineIdx, Col: endCol}, true
+	case selectionUnitLine:
+		width := ansi.StringWidth(expanded)
+		return ui.SelectionPoint{Line: lineIdx, Col: 0},
+			ui.SelectionPoint{Line: lineIdx, Col: max(width-1, 0)}, true
+	}
+	return ui.SelectionPoint{}, ui.SelectionPoint{}, false
+}
+
+// terminalWordSpan returns the inclusive visual column span of the word covering
+// col in a tab-expanded line. A run of word runes selects whole; anything else
+// selects the single cell under the pointer, matching xterm.
+func terminalWordSpan(line string, col int) (int, int, bool) {
+	plain := ansi.Strip(line)
 	isWord := func(r rune) bool {
 		return r == '_' || r == '-' || r == '.' || r == '/' || r == ':' ||
 			r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
@@ -464,7 +782,7 @@ func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
 	}
 	var tokens []visualToken
 	state := ansi.NormalState
-	col := 0
+	at := 0
 	remaining := plain
 	for len(remaining) > 0 {
 		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
@@ -472,18 +790,18 @@ func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
 			break
 		}
 		if width > 0 {
-			tokens = append(tokens, visualToken{text: seq, start: col, end: col + width})
-			col += width
+			tokens = append(tokens, visualToken{text: seq, start: at, end: at + width})
+			at += width
 		}
 		state = newState
 		remaining = remaining[n:]
 	}
 	if len(tokens) == 0 {
-		return nil
+		return 0, 0, false
 	}
 	index := len(tokens) - 1
 	for i, token := range tokens {
-		if point.Col < token.end {
+		if col < token.end {
 			index = i
 			break
 		}
@@ -501,32 +819,7 @@ func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
 			right++
 		}
 	}
-	p.selection.SelectRange(
-		ui.SelectionPoint{Line: point.Line, Col: tokens[left].start},
-		ui.SelectionPoint{Line: point.Line, Col: tokens[right].end - 1},
-		false,
-	)
-	if p.copyOnSelectEnabled() {
-		return p.copyInteractiveSelectionCmd()
-	}
-	return nil
-}
-
-func (p *Plugin) selectTerminalLine(action mouse.MouseAction) tea.Cmd {
-	point, line, ok := p.terminalPointAndLine(action)
-	if !ok {
-		return nil
-	}
-	width := ansi.StringWidth(ui.ExpandTabs(line, tabStopWidth))
-	p.selection.SelectRange(
-		ui.SelectionPoint{Line: point.Line, Col: 0},
-		ui.SelectionPoint{Line: point.Line, Col: max(width-1, 0)},
-		false,
-	)
-	if p.copyOnSelectEnabled() {
-		return p.copyInteractiveSelectionCmd()
-	}
-	return nil
+	return tokens[left].start, tokens[right].end - 1, true
 }
 
 func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoint, string, bool) {
@@ -539,9 +832,19 @@ func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoi
 	if !ok {
 		return ui.SelectionPoint{}, "", false
 	}
+	line, ok := p.terminalLineText(lineIdx)
+	if !ok {
+		return ui.SelectionPoint{}, "", false
+	}
+	return ui.SelectionPoint{Line: lineIdx, Col: col}, line, true
+}
+
+// terminalLineText reads one line of the selected surface, in whichever
+// coordinate space its buffer keeps.
+func (p *Plugin) terminalLineText(lineIdx int) (string, bool) {
 	buf := p.interactiveOutputBuffer()
 	if buf == nil {
-		return ui.SelectionPoint{}, "", false
+		return "", false
 	}
 	var lines []string
 	if _, _, absolute := buf.AbsoluteRange(); absolute {
@@ -550,12 +853,15 @@ func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoi
 		lines = buf.LinesRange(lineIdx, lineIdx+1)
 	}
 	if len(lines) == 0 {
-		return ui.SelectionPoint{}, "", false
+		return "", false
 	}
-	return ui.SelectionPoint{Line: lineIdx, Col: col}, lines[0], true
+	return lines[0], true
 }
 
 func (p *Plugin) selectAllTerminalOutput(termPanel bool) {
+	// Select-all is its own anchor, at character granularity: a word span from an
+	// earlier double-click must not survive to redefine the next shift-click.
+	p.resetSelectionUnit()
 	p.prepareTerminalSelectionSource(termPanel)
 	buf := p.interactiveOutputBuffer()
 	if buf == nil || buf.LineCount() == 0 {

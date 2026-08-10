@@ -182,7 +182,17 @@ type Plugin struct {
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	selectionTermPanel            bool
-	activateTerminalAfterClick    bool
+	pendingClickResolution        clickResolution // what a release without motion means
+	pendingClickX                 int             // ... and where the button went down
+	pendingClickY                 int
+	selectionUnit                 selectionUnit     // granularity the live gesture extends by
+	selectionUnitStart            ui.SelectionPoint // anchor unit's far edges, kept whole in both directions
+	selectionUnitEnd              ui.SelectionPoint
+	selectionDragX                int    // last pointer position of the live selection drag
+	selectionDragY                int    // ... which the edge auto-scroll tick re-reads
+	selectionGeneration           uint64 // invalidates auto-scroll ticks once a gesture ends
+	selectionAutoScrollPending    bool
+	selectionAutoScrollTicks      int // ticks since the last real drag motion
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
 	paneGeometry                  map[string]paneGeometry
@@ -1384,7 +1394,7 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 	p.autoScrollOutput = true  // Reset auto-scroll when switching tabs
 
 	if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-		p.selection.Clear()
+		p.clearTerminalSelection()
 	}
 
 	// Load content for the active tab

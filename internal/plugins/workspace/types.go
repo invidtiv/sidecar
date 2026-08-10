@@ -396,10 +396,11 @@ type InteractiveState struct {
 	// MouseReportingEnabled tracks whether the target app has enabled
 	// mouse reporting (1000/1002/1003/1006/1015). Updated from captured output.
 	//
-	// Note: captures come from `capture-pane -e`, which emits rendering escapes
-	// only, so DECSET mode sequences never appear in them and this stays false in
-	// practice. Click handling still reads it, deliberately: flipping clicks from
-	// local selection to app forwarding is a separate behaviour change. Wheel
+	// Note: the capture path (`capture-pane -e`) emits rendering escapes only, so
+	// DECSET mode sequences never reach it and this stays false there; the
+	// emulator path does see them and sets it. Click handling reads it only to
+	// resolve a release that never moved — motion always selects locally, or an
+	// app with mouse tracking on (Claude Code, grok) would eat every drag. Wheel
 	// routing uses PaneMouseReporting instead.
 	MouseReportingEnabled bool
 

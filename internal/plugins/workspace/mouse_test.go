@@ -527,3 +527,153 @@ func TestOneCellDragSelectsWithoutActivating(t *testing.T) {
 		t.Error("a one-cell drag selection activated the terminal")
 	}
 }
+
+// The whole double-click-drag gesture, driven through the shared mouse handler:
+// the word gesture has to arm drag tracking itself, or the motion that follows
+// arrives as hover and the release as a fresh click on a live terminal.
+func TestDoubleClickDragRoundTripSelectsWords(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 200))
+	p.mouseHandler.HitMap.Add(regionPreviewPane, mouse.Rect{X: 40, Y: 2, W: 60, H: 20}, nil)
+
+	p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 53, Y: 6, Button: tea.MouseLeft}))
+	p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 53, Y: 6, Button: tea.MouseLeft}))
+	line := p.selection.Start.Line
+	if p.selection.Start.Col != 11 || p.selection.End.Col != 18 {
+		t.Fatalf("double-click selected %+v..%+v, want the whole word terminal",
+			p.selection.Start, p.selection.End)
+	}
+	if !p.mouseHandler.IsDragging() {
+		t.Fatal("double-click did not arm drag tracking")
+	}
+
+	p.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: 67, Y: 6, Button: tea.MouseLeft}))
+	if p.selection.End != (ui.SelectionPoint{Line: line, Col: 27}) {
+		t.Errorf("held motion after a double-click ended at %+v, want col 27", p.selection.End)
+	}
+
+	p.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 67, Y: 6, Button: tea.MouseLeft}))
+	if !p.selection.HasSelection() || p.selection.Active {
+		t.Errorf("release left the word selection at %+v..%+v (active=%v)",
+			p.selection.Start, p.selection.End, p.selection.Active)
+	}
+	if p.viewMode == ViewModeInteractive {
+		t.Error("finishing a word drag activated the terminal")
+	}
+}
+
+// newMouseReportingTestPlugin puts a live terminal on screen whose app has
+// enabled mouse tracking — Claude Code, grok — as the first synced frame does.
+func newMouseReportingTestPlugin() *Plugin {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 50))
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{
+		Active:                true,
+		TargetSession:         "shell-1",
+		TargetPane:            "%1",
+		MouseReportingEnabled: true,
+	}
+	return p
+}
+
+// Forwarding the press on mouse-down meant a mouse-reporting app swallowed the
+// gesture and the pane could never be selected again. Motion selects locally.
+func TestMouseReportingPaneDragSelectsLocallyAndForwardsNothing(t *testing.T) {
+	p := newMouseReportingTestPlugin()
+
+	if cmd := p.handleMouseClick(previewClickAction(false, false)); cmd != nil {
+		t.Fatal("mouse-down over a mouse-reporting pane forwarded before the gesture resolved")
+	}
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 66, Y: 8, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+	cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+
+	if !p.selection.HasSelection() {
+		t.Fatal("drag over a mouse-reporting pane produced no selection")
+	}
+	if cmd != nil {
+		t.Error("a completed selection still forwarded the click to the app")
+	}
+	if p.pendingClickResolution != clickResolutionNone {
+		t.Errorf("pendingClickResolution = %v after a drag, want none", p.pendingClickResolution)
+	}
+}
+
+// A click that never moves still belongs to the app.
+func TestMouseReportingPaneClickWithoutMotionForwards(t *testing.T) {
+	p := newMouseReportingTestPlugin()
+
+	p.handleMouseClick(previewClickAction(false, false))
+	if p.pendingClickResolution != clickResolutionForward {
+		t.Fatalf("pendingClickResolution = %v, want forward", p.pendingClickResolution)
+	}
+	if cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane}); cmd == nil {
+		t.Fatal("a click without motion did not forward to the app")
+	}
+	if p.selection.HasSelection() {
+		t.Error("a forwarded click left a selection behind")
+	}
+	if p.pendingClickResolution != clickResolutionNone {
+		t.Error("the forwarded click stayed pending")
+	}
+}
+
+// The reported symptom: the first selection worked (the flag was still false
+// before the first frame synced), every later one did nothing.
+func TestSecondSelectionWorksOverMouseReportingPane(t *testing.T) {
+	p := newMouseReportingTestPlugin()
+	p.interactiveState.MouseReportingEnabled = false // pre-sync, as a fresh state is
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 66, Y: 8, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+	if !p.selection.HasSelection() {
+		t.Fatal("the first selection did not work")
+	}
+	first := p.selection.End
+
+	// syncTerminalModel copies the app's mouse tracking in from the frame.
+	p.interactiveState.MouseReportingEnabled = true
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 70, Y: 9, DragStartID: regionPreviewPane,
+		Region: previewClickAction(false, false).Region,
+	})
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+	if !p.selection.HasSelection() {
+		t.Fatal("the second selection over a mouse-reporting pane did nothing")
+	}
+	if p.selection.End == first {
+		t.Errorf("the second selection did not move: still %+v", p.selection.End)
+	}
+}
+
+func TestMouseReportingPaneDoubleClickStillSelectsWords(t *testing.T) {
+	p := newMouseReportingTestPlugin()
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDoubleClick(terminalMultiClickAt(mouse.ActionDoubleClick, 11, 6))
+	line := p.selection.Start.Line
+	if p.selection.Start.Col != 11 || p.selection.End.Col != 18 {
+		t.Fatalf("double-click over a mouse-reporting pane selected %+v..%+v, want the word terminal",
+			p.selection.Start, p.selection.End)
+	}
+	if p.pendingClickResolution != clickResolutionNone {
+		t.Error("the double-click left the app's click pending")
+	}
+
+	terminalDragTo(p, 25+42, 6)
+	if p.selection.End != (ui.SelectionPoint{Line: line, Col: 27}) {
+		t.Errorf("word drag over a mouse-reporting pane ended at %+v, want col 27", p.selection.End)
+	}
+	if cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane}); cmd != nil {
+		t.Error("finishing a word drag forwarded the click to the app")
+	}
+}

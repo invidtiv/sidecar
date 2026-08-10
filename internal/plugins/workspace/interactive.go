@@ -365,7 +365,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// interactive mode with no visible cursor at all (td-62b8ab).
 	p.activePane = PanePreview
 	p.selectionTermPanel = false
-	p.selection.Clear()
+	p.clearTerminalSelection()
 
 	p.viewMode = ViewModeInteractive
 
@@ -438,7 +438,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	}
 	p.activePane = PanePreview
 	p.selectionTermPanel = true
-	p.selection.Clear()
+	p.clearTerminalSelection()
 	p.viewMode = ViewModeInteractive
 
 	return p.pollInteractivePane()
@@ -745,7 +745,7 @@ func (p *Plugin) exitInteractiveMode() {
 	p.mouseFragment = ""
 	p.pendingScrollDelta = 0
 	p.scrollBurstCount = 0
-	p.selection.Clear()
+	p.clearTerminalSelection()
 	p.viewMode = ViewModeList
 }
 
@@ -1096,7 +1096,7 @@ func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cm
 
 	// When interactive mode targets the terminal panel, scroll terminal panel output
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		p.selection.Clear()
+		p.clearTerminalSelection()
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
@@ -1212,7 +1212,7 @@ func wheelNotchesForDelta(delta int) int {
 func (p *Plugin) pinInteractiveViewportToLive() {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		if p.termPanelScroll != 0 {
-			p.selection.Clear()
+			p.clearTerminalSelection()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		}
@@ -1222,7 +1222,7 @@ func (p *Plugin) pinInteractiveViewportToLive() {
 	if p.autoScrollOutput && p.previewOffset >= maxOffset {
 		return
 	}
-	p.selection.Clear()
+	p.clearTerminalSelection()
 	p.previewOffset = maxOffset
 	p.autoScrollOutput = true
 	p.cancelTerminalHistoryIntent(false)
@@ -1252,7 +1252,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		return true, p.scrollInteractiveViewport(pageSize)
 	case tea.KeyHome:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
-			p.selection.Clear()
+			p.clearTerminalSelection()
 			p.termPanelScroll = p.termPanelMaxScroll()
 			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
 		} else {
@@ -1262,7 +1262,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		}
 	case tea.KeyEnd:
 		if p.interactiveState != nil && p.interactiveState.TermPanel {
-			p.selection.Clear()
+			p.clearTerminalSelection()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		} else {
@@ -1278,7 +1278,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 
 func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		p.selection.Clear()
+		p.clearTerminalSelection()
 		p.termPanelScroll -= delta
 		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
 		if delta > 0 && p.termPanelScroll == 0 {

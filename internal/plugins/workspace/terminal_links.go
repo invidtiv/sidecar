@@ -247,12 +247,12 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 			continue
 		}
 		if link.Kind == terminalURLLink {
-			p.selection.Clear()
+			p.clearTerminalSelection()
 			return openInBrowser(link.Value), true
 		}
 		cmd := p.openTerminalPath(link.Value, link.Line)
 		if cmd != nil {
-			p.selection.Clear()
+			p.clearTerminalSelection()
 		}
 		return cmd, cmd != nil
 	}

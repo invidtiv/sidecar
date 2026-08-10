@@ -100,15 +100,21 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// The mouse handler cancels that stale drag on the next button-less motion;
 	// cancel the paired click-to-activate intent at the same boundary.
 	lostRelease := action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging()
-	if lostRelease && p.activateTerminalAfterClick {
-		p.activateTerminalAfterClick = false
+	if lostRelease {
+		// Neither activation nor a forwarded click survives a release the app
+		// never saw.
+		p.pendingClickResolution = clickResolutionNone
 	}
 	lostTerminalRelease := lostRelease &&
 		(dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent)
-	if lostTerminalRelease && p.selection.Anchor.Valid() {
-		// A release outside the window never reaches Bubble Tea. Close the local
-		// selection gesture at the same point the shared handler abandons its drag.
-		return p.finishInteractiveSelection()
+	if lostTerminalRelease {
+		if p.selection.Anchor.Valid() {
+			// A release outside the window never reaches Bubble Tea. Close the local
+			// selection gesture at the same point the shared handler abandons its drag.
+			return p.finishInteractiveSelection()
+		}
+		// No anchor to finish, but the gesture is over: stop any edge auto-scroll.
+		p.beginSelectionGesture()
 	}
 
 	switch action.Type {
@@ -600,7 +606,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	if action.Region.ID != regionPreviewPane && action.Region.ID != regionTermPanelContent {
-		p.activateTerminalAfterClick = false
+		p.pendingClickResolution = clickResolutionNone
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -613,15 +619,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.exitInteractiveMode()
 				return p.enterTermPanelInteractiveMode()
 			}
-			// Already targeting terminal panel — forward click
-			if p.interactiveState != nil && p.interactiveState.Active &&
-				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
-				if !action.Shift && !action.Alt {
-					if cmd, ok := p.activateTerminalLink(action); ok {
-						return cmd
-					}
-				}
-				return p.prepareInteractiveDrag(action)
+			// Already targeting terminal panel — arm the gesture and let the
+			// release decide between the app's click and a local selection.
+			if p.interactiveState != nil && p.interactiveState.Active {
+				return p.prepareInteractiveTerminalGesture(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
 		case regionPreviewPane:
@@ -631,15 +632,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.exitInteractiveMode()
 				return p.enterInteractiveMode()
 			}
-			// Already targeting agent pane — forward click
-			if p.interactiveState != nil && p.interactiveState.Active &&
-				(!p.interactiveState.MouseReportingEnabled || action.Shift || action.Alt) {
-				if !action.Shift && !action.Alt {
-					if cmd, ok := p.activateTerminalLink(action); ok {
-						return cmd
-					}
-				}
-				return p.prepareInteractiveDrag(action)
+			// Already targeting agent pane — arm the gesture and let the release
+			// decide between the app's click and a local selection.
+			if p.interactiveState != nil && p.interactiveState.Active {
+				return p.prepareInteractiveTerminalGesture(action)
 			}
 			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
 		default:
@@ -748,7 +744,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			p.termPanelFocused = false // Reset terminal panel focus when switching tabs
 			p.autoScrollOutput = true
 			if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-				p.selection.Clear()
+				p.clearTerminalSelection()
 			}
 
 			// Load content for the selected tab
@@ -1457,8 +1453,11 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 
 // handleMouseDragEnd handles the end of a drag operation.
 func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
-	// Guard: ignore drag-end when a modal is open (td-f63097).
+	// Guard: ignore drag-end when a modal is open (td-f63097). The release is
+	// swallowed, so drop the click resolution it would have carried out too —
+	// the same boundary where the auto-scroll tick abandons its gesture.
 	if p.isModalViewMode() {
+		p.pendingClickResolution = clickResolutionNone
 		return nil
 	}
 
@@ -1467,7 +1466,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		dragSource = p.lastDragRegion
 	}
 	terminalGesture := dragSource == regionPreviewPane || dragSource == regionTermPanelContent
-	if terminalGesture && (p.selection.Anchor.Valid() || p.activateTerminalAfterClick) {
+	if terminalGesture && (p.selection.Anchor.Valid() || p.pendingClickResolution != clickResolutionNone) {
 		return p.finishInteractiveSelection()
 	}
 

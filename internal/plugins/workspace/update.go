@@ -46,6 +46,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.activityAnimationFrame++
 		return p, p.startActivityAnimation()
 
+	case selectionAutoScrollTickMsg:
+		return p, p.advanceSelectionAutoScroll(msg)
+
 	case tea.FocusMsg:
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 

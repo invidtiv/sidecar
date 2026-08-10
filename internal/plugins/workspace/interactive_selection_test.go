@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -865,8 +866,8 @@ func newTerminalDragTestPlugin() *Plugin {
 	return p
 }
 
-func terminalDragTo(p *Plugin, x, y int) {
-	p.handleMouseDrag(mouse.MouseAction{
+func terminalDragTo(p *Plugin, x, y int) tea.Cmd {
+	return p.handleMouseDrag(mouse.MouseAction{
 		Type: mouse.ActionDrag, X: x, Y: y, DragStartID: regionPreviewPane,
 		Region: previewClickAction(false, false).Region,
 	})
@@ -974,19 +975,331 @@ func TestDragFromChromeAnchorsAtNearestCell(t *testing.T) {
 	}
 }
 
-// Shift-clicking chrome is a miss, not an instruction to discard the selection.
-func TestShiftClickMissKeepsExistingSelection(t *testing.T) {
+// Shift-clicking chrome reaches for the nearest cell, as xterm does — never for
+// the delete key.
+func TestShiftClickMissExtendsToClampedPoint(t *testing.T) {
 	p := newTerminalDragTestPlugin()
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
-	want := p.selection
+	anchor := p.selection.Anchor
+
+	if anchor != (ui.SelectionPoint{Line: 2, Col: 18}) {
+		t.Fatalf("test setup anchored at %+v, want line 2 col 18", anchor)
+	}
 
 	miss := previewClickAction(true, false)
-	miss.Y = miss.Region.Rect.Y
+	miss.Y = miss.Region.Rect.Y // border row, above the header and the output
 	p.handleMouseClick(miss)
-	if p.selection.Start != want.Start || p.selection.End != want.End {
-		t.Errorf("shift-click on chrome changed the selection to %+v..%+v, want %+v..%+v",
-			p.selection.Start, p.selection.End, want.Start, want.End)
+	// The border row clamps to the first visible row, x=60 to col 18.
+	want := ui.SelectionPoint{Line: 0, Col: 18}
+	if p.selection.Start != want || p.selection.End != anchor {
+		t.Errorf("shift-click on chrome gave %+v..%+v, want %+v..%+v",
+			p.selection.Start, p.selection.End, want, anchor)
+	}
+}
+
+// terminalMultiClickAt builds a double/triple click on the preview pane at a
+// content column of "selectable terminal row here" (col 0 sits at x=42).
+func terminalMultiClickAt(action mouse.ActionType, col, y int) mouse.MouseAction {
+	a := previewClickAction(false, false)
+	a.Type = action
+	a.X, a.Y = col+42, y
+	return a
+}
+
+// After a double-click, the held button drags in whole words: the word under the
+// pointer comes along entire, and the word the gesture started on is never eaten
+// into, in either direction.
+func TestDoubleClickDragExtendsByWords(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.handleMouseDoubleClick(terminalMultiClickAt(mouse.ActionDoubleClick, 11, 6))
+	line := p.selection.Start.Line
+	if p.selection.Start != (ui.SelectionPoint{Line: line, Col: 11}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line, Col: 18}) {
+		t.Fatalf("double-click selected %+v..%+v, want the whole word terminal",
+			p.selection.Start, p.selection.End)
+	}
+
+	terminalDragTo(p, 25+42, 6) // into "here"
+	if p.selection.Start != (ui.SelectionPoint{Line: line, Col: 11}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line, Col: 27}) {
+		t.Errorf("forward word drag = %+v..%+v, want cols 11..27",
+			p.selection.Start, p.selection.End)
+	}
+
+	terminalDragTo(p, 2+42, 6) // back into "selectable"
+	if p.selection.Start != (ui.SelectionPoint{Line: line, Col: 0}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line, Col: 18}) {
+		t.Errorf("backward word drag = %+v..%+v, want cols 0..18 (anchor word kept whole)",
+			p.selection.Start, p.selection.End)
+	}
+}
+
+func TestTripleClickDragExtendsByLines(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.handleMouseTripleClick(terminalMultiClickAt(mouse.ActionTripleClick, 11, 6))
+	line := p.selection.Start.Line
+	if p.selection.Start != (ui.SelectionPoint{Line: line, Col: 0}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line, Col: 27}) {
+		t.Fatalf("triple-click selected %+v..%+v, want the whole line",
+			p.selection.Start, p.selection.End)
+	}
+
+	terminalDragTo(p, 50, 8)
+	if p.selection.Start != (ui.SelectionPoint{Line: line, Col: 0}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line + 2, Col: 27}) {
+		t.Errorf("downward line drag = %+v..%+v, want whole lines %d..%d",
+			p.selection.Start, p.selection.End, line, line+2)
+	}
+
+	terminalDragTo(p, 50, 4)
+	if p.selection.Start != (ui.SelectionPoint{Line: line - 2, Col: 0}) ||
+		p.selection.End != (ui.SelectionPoint{Line: line, Col: 27}) {
+		t.Errorf("upward line drag = %+v..%+v, want whole lines %d..%d",
+			p.selection.Start, p.selection.End, line-2, line)
+	}
+}
+
+// A one-character word is a legitimate selection whose start and end coincide,
+// so the jitter collapse must not treat its release as a click.
+func TestSingleCharWordSurvivesDragEnd(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("a bb ccc\n", 50))
+
+	p.handleMouseDoubleClick(terminalMultiClickAt(mouse.ActionDoubleClick, 0, 6))
+	if !p.selection.HasSelection() || p.selection.Start != p.selection.End {
+		t.Fatalf("double-click on a one-character word selected %+v..%+v",
+			p.selection.Start, p.selection.End)
+	}
+	want := p.selection.Start
+
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+	if !p.selection.HasSelection() || p.selection.Start != want {
+		t.Errorf("drag end discarded the one-character word selection (%+v..%+v)",
+			p.selection.Start, p.selection.End)
+	}
+	if p.viewMode == ViewModeInteractive {
+		t.Error("a word selection activated the terminal on release")
+	}
+}
+
+// Motion events stop the moment the hand does. A pointer parked past an edge has
+// to keep scrolling on its own, and has to stop at the buffer edge.
+func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.previewOffset = 60
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
+		t.Fatal("a drag past the top edge scheduled no auto-scroll tick")
+	}
+	generation := p.selectionGeneration
+	start := p.terminalSelectionViewportLayout().Start
+
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: generation}); cmd == nil {
+		t.Fatal("the first tick did not re-arm while the pointer was still past the edge")
+	}
+	scrolled := p.terminalSelectionViewportLayout().Start
+	if scrolled >= start {
+		t.Fatalf("held pointer did not scroll: window still at %d (was %d)", scrolled, start)
+	}
+	if p.selection.Start.Line != scrolled {
+		t.Errorf("selection start = %d, want the newly revealed top row %d",
+			p.selection.Start.Line, scrolled)
+	}
+
+	for range 100 {
+		_, cmd := p.update(selectionAutoScrollTickMsg{generation: generation})
+		if cmd == nil {
+			break
+		}
+	}
+	if top := p.terminalSelectionViewportLayout().Start; top != 0 {
+		t.Fatalf("auto-scroll stopped at %d, want the top of the buffer", top)
+	}
+}
+
+func TestSelectionAutoScrollStopsWhenGestureEnds(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.previewOffset = 60
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	terminalDragTo(p, 66, 0)
+	generation := p.selectionGeneration
+
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+	before := p.terminalSelectionViewportLayout().Start
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: generation}); cmd != nil {
+		t.Error("a tick from the finished gesture re-armed itself")
+	}
+	if after := p.terminalSelectionViewportLayout().Start; after != before {
+		t.Errorf("a tick from the finished gesture scrolled the window to %d (was %d)", after, before)
+	}
+}
+
+func TestSelectionEdgeScrollRows(t *testing.T) {
+	tests := []struct {
+		name      string
+		outputRow int
+		want      int
+	}{
+		{"inside the content", 5, 0},
+		{"one row above", -1, -1},
+		{"far above, capped", -40, -5},
+		{"one row below", 10, 1},
+		{"far below, capped", 60, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectionEdgeScrollRows(tt.outputRow, 10, 5); got != tt.want {
+				t.Errorf("selectionEdgeScrollRows(%d, 10, 5) = %d, want %d", tt.outputRow, got, tt.want)
+			}
+		})
+	}
+}
+
+// The terminal panel browses its own frozen offset, so the held-pointer scroll
+// has to reach it too.
+func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
+	p := New()
+	p.width = 80
+	p.height = 20
+	p.viewMode = ViewModeList
+	p.termPanelVisible = true
+	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 200))
+	panelRegion := &mouse.Region{ID: regionTermPanelContent, Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8}}
+
+	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, X: 12, Y: 8, Region: panelRegion})
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 14, Y: 9, DragStartID: regionTermPanelContent, Region: panelRegion,
+	})
+	cmd := p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 14, Y: 0, DragStartID: regionTermPanelContent, Region: panelRegion,
+	})
+	if cmd == nil {
+		t.Fatal("a panel drag past the top edge scheduled no auto-scroll tick")
+	}
+	before := p.termPanelSelectionOffset
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+		t.Fatal("the panel tick did not re-arm while the pointer was still past the edge")
+	}
+	if p.termPanelSelectionOffset >= before {
+		t.Errorf("panel offset = %d, want less than %d", p.termPanelSelectionOffset, before)
+	}
+	if p.selection.Start.Line != p.termPanelSelectionOffset {
+		t.Errorf("panel selection start = %d, want the newly revealed top row %d",
+			p.selection.Start.Line, p.termPanelSelectionOffset)
+	}
+
+	for range selectionAutoScrollMaxRun {
+		// Fresh motion at the same position keeps the hold budget alive; the run
+		// under test is the buffer edge, not the lost-release bound.
+		p.handleMouseDrag(mouse.MouseAction{
+			Type: mouse.ActionDrag, X: 14, Y: 0, DragStartID: regionTermPanelContent, Region: panelRegion,
+		})
+		if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+			break
+		}
+	}
+	if p.termPanelSelectionOffset != 0 {
+		t.Fatalf("panel auto-scroll stopped at %d, want the top of the panel buffer",
+			p.termPanelSelectionOffset)
+	}
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd != nil {
+		t.Error("panel auto-scroll re-armed at the buffer edge")
+	}
+}
+
+// A modal swallows the release, so the tick chain has to notice on its own or it
+// scrolls the pane under the modal all the way to line zero.
+func TestSelectionAutoScrollStopsUnderAModal(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.previewOffset = 60
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	terminalDragTo(p, 66, 0)
+	generation := p.selectionGeneration
+
+	p.viewMode = ViewModeConfirmDelete
+	before := p.terminalSelectionViewportLayout().Start
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: generation}); cmd != nil {
+		t.Error("a tick under a modal re-armed itself")
+	}
+	if after := p.terminalSelectionViewportLayout().Start; after != before {
+		t.Errorf("a tick under a modal scrolled the window to %d (was %d)", after, before)
+	}
+	p.viewMode = ViewModeList
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: generation}); cmd != nil {
+		t.Error("the modal did not end the gesture: a stale tick came back to life")
+	}
+}
+
+// A release lost off-window is only noticed when the pointer returns. Until then
+// the chain must not keep dragging the selection through all of scrollback.
+func TestSelectionAutoScrollSelfLimitsWithoutMotion(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	// Deep enough scrollback that an unbounded chain would keep going.
+	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(1000)
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 900))
+	p.previewOffset = p.terminalSelectionViewportLayout().MaxOffset
+	p.handleMouseClick(previewClickAction(false, false))
+	terminalDragTo(p, 66, 8)
+	terminalDragTo(p, 66, 0)
+	generation := p.selectionGeneration
+
+	ticks := 0
+	for range selectionAutoScrollMaxRun * 4 {
+		_, cmd := p.update(selectionAutoScrollTickMsg{generation: generation})
+		if cmd == nil {
+			break
+		}
+		ticks++
+	}
+	if ticks > selectionAutoScrollMaxRun {
+		t.Fatalf("auto-scroll ran %d ticks with no fresh motion, want at most %d",
+			ticks, selectionAutoScrollMaxRun)
+	}
+	if p.terminalSelectionViewportLayout().Start == 0 {
+		t.Fatal("the unbounded chain reached the top of the buffer")
+	}
+
+	// Real motion re-arms the run.
+	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
+		t.Fatal("fresh motion past the edge did not restart the auto-scroll chain")
+	}
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+		t.Error("the restarted chain gave up immediately")
+	}
+}
+
+func TestSelectionAutoScrollHoldExpired(t *testing.T) {
+	if selectionAutoScrollHoldExpired(selectionAutoScrollMaxRun) {
+		t.Error("the run expired one tick early")
+	}
+	if !selectionAutoScrollHoldExpired(selectionAutoScrollMaxRun + 1) {
+		t.Error("the run never expired")
+	}
+}
+
+// Select-all is its own anchor: a word span left over from an earlier
+// double-click must not redefine where a later shift-click extends from.
+func TestSelectAllResetsWordGestureBeforeShiftClick(t *testing.T) {
+	p := newTerminalDragTestPlugin()
+	p.handleMouseDoubleClick(terminalMultiClickAt(mouse.ActionDoubleClick, 11, 6))
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+
+	p.selectAllTerminalOutput(false)
+	anchor := p.selection.Anchor
+
+	extend := previewClickAction(true, false)
+	extend.Y = 8
+	p.handleMouseClick(extend)
+	if p.selection.Anchor != anchor {
+		t.Fatalf("shift-click extended from %+v, want the select-all anchor %+v",
+			p.selection.Anchor, anchor)
+	}
+	if p.selection.End != (ui.SelectionPoint{Line: 4, Col: 18}) {
+		t.Errorf("shift-click ended at %+v, want the clicked cell (line 4, col 18)", p.selection.End)
 	}
 }
