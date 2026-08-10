@@ -417,7 +417,7 @@ Press `D` to delete a shell session. This terminates the underlying tmux session
 | Delete shell | `D` | Terminate tmux session |
 | Interactive mode | `enter` | Enter interactive mode for typing |
 | Attach to shell | `t` | Full-screen tmux access |
-| Kill shell | `K` | Force-terminate session |
+| Kill shell | `ctrl+k` | Force-terminate session |
 
 ## Workspace Operations
 

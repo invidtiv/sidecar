@@ -59,6 +59,10 @@ func (r *countingOverviewRunner) Output(context.Context, string, ...string) ([]b
 
 func TestCrossProjectOverviewFlagOffPreservesSwitcherAndDoesNoWork(t *testing.T) {
 	cfg := config.Default()
+	if cfg.Features.Flags == nil {
+		cfg.Features.Flags = map[string]bool{}
+	}
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = false
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
 	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
@@ -69,6 +73,69 @@ func TestCrossProjectOverviewFlagOffPreservesSwitcherAndDoesNoWork(t *testing.T)
 	m.initProjectSwitcher()
 	if len(m.projectSwitcherFiltered) != 1 || m.projectSwitcherFiltered[0].Kind != destinationProject {
 		t.Fatalf("flag-off destinations = %#v", m.projectSwitcherFiltered)
+	}
+}
+
+func asAppModel(t *testing.T, model tea.Model) Model {
+	t.Helper()
+	switch m := model.(type) {
+	case Model:
+		return m
+	case *Model:
+		return *m
+	default:
+		t.Fatalf("unexpected model type %T", model)
+		return Model{}
+	}
+}
+
+func TestLogoClickAndKToggleOverview(t *testing.T) {
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	if m.overview == nil {
+		t.Fatal("overview should be constructed when feature defaults on")
+	}
+	m.intro.Active = false
+	m.intro.Done = true
+	m.width, m.height, m.ready = 120, 40, true
+
+	start, end, ok := m.getLogoBounds()
+	if !ok || end <= start {
+		t.Fatalf("logo bounds = %d-%d ok=%v", start, end, ok)
+	}
+	// Click in the middle of "Sidecar"
+	x := (start + end) / 2
+	updated, cmd := m.Update(tea.MouseClickMsg{X: x, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if !m.overviewActive {
+		t.Fatal("logo click did not open overview")
+	}
+	if cmd == nil {
+		t.Fatal("logo click should start overview load")
+	}
+
+	// K toggles closed (handleKeyMsg returns *Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if m.overviewActive {
+		t.Fatal("K did not close overview")
+	}
+
+	// K opens again
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if !m.overviewActive || cmd == nil {
+		t.Fatal("K did not reopen overview")
+	}
+
+	// Clicking logo while open toggles closed
+	updated, _ = m.Update(tea.MouseClickMsg{X: x, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if m.overviewActive {
+		t.Fatal("logo click while open should close overview")
 	}
 }
 

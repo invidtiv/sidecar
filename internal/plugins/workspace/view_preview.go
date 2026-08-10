@@ -545,7 +545,7 @@ func (p *Plugin) renderShellPrimer(width, height int) string {
 	prefix := getTmuxPrefix()
 	lines = append(lines, sectionStyle.Render("Quick Start"))
 	lines = append(lines, dimText("  Enter         Create and attach to shell"))
-	lines = append(lines, dimText("  K             Kill shell session"))
+	lines = append(lines, dimText("  ctrl+k        Kill shell session"))
 	lines = append(lines, dimText(fmt.Sprintf("  %s d      Detach (return to sidecar)", prefix)))
 	lines = append(lines, "")
 	lines = append(lines, strings.Repeat("─", min(width-4, 50)))

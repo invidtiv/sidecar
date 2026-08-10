@@ -1086,8 +1086,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if wt != nil && wt.Agent != nil {
 			return p.StopAgent(wt)
 		}
-	case "K":
-		// Kill selected shell session
+	case "ctrl+k":
+		// Kill selected shell session (K is global Overview / Kanban)
 		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
 			shell := p.shells[p.selectedShellIdx]
 			if shell.Agent != nil {

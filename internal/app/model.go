@@ -835,6 +835,22 @@ func (m *Model) exitOverview() {
 	m.overviewActive = false
 }
 
+// toggleOverview opens or closes the cross-project agent overview. No-op when
+// the feature is disabled (m.overview is nil).
+func (m *Model) toggleOverview() tea.Cmd {
+	if m.overview == nil {
+		return nil
+	}
+	if m.overviewActive {
+		m.exitOverview()
+		m.updateContext()
+		return nil
+	}
+	m.overviewActive = true
+	m.updateContext()
+	return m.overview.Start(m.overviewProjects())
+}
+
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
 	return m.switchProjectWithSelection(projectPath, inventory, nil)
 }

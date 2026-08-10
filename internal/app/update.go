@@ -231,6 +231,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mi := msg.Mouse()
 		_, isClickPress := msg.(tea.MouseClickMsg)
 		if mi.Y < headerHeight && isClickPress && mi.Button == tea.MouseLeft {
+			// Brand logo opens the Overview (when the feature is enabled).
+			if start, end, ok := m.getLogoBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+				return m, m.toggleOverview()
+			}
+
 			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				m.showProjectSwitcher = true
 				m.activeContext = "project-switcher"
@@ -1407,6 +1412,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 		}
 		return m, nil
+	case "K":
+		// Toggle cross-project Overview (Kanban). Blocked in text-input contexts
+		// above. Workspace kill-shell moved to ctrl+k so this can be global.
+		if m.consumesTextInput() {
+			break
+		}
+		return m, m.toggleOverview()
 	case "W":
 		// Toggle worktree switcher modal (capital W)
 		// Only enable if we're in a git repo with worktrees

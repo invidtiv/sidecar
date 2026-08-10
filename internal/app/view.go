@@ -682,6 +682,23 @@ func (m Model) getTabBounds() []TabBounds {
 	return bounds
 }
 
+// getLogoBounds returns the X bounds for the "Sidecar" brand in the header.
+// Clicking it opens the cross-project overview when that feature is enabled.
+func (m Model) getLogoBounds() (start, end int, ok bool) {
+	if m.overview == nil {
+		return 0, 0, false
+	}
+	// Leading space is part of the painted brand (" Sidecar").
+	end = lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
+	if end <= 0 {
+		return 0, 0, false
+	}
+	if m.width > 0 {
+		end = min(end, m.width)
+	}
+	return 0, end, true
+}
+
 // getRepoNameBounds returns the X bounds for the repo name in the header.
 func (m Model) getRepoNameBounds() (start, end int, ok bool) {
 	name := m.activeDestinationName()

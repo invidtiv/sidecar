@@ -48,12 +48,11 @@ var (
 		Description: "Enable the notes plugin for capturing quick notes",
 	}
 
-	// CrossProjectOverview gates the cross-project agent overview while its
-	// steel thread is developed and proven.
+	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
-		Default:     false,
-		Description: "Enable the experimental cross-project agent overview",
+		Default:     true,
+		Description: "Enable the cross-project agent overview",
 	}
 )
 

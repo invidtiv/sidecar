@@ -232,6 +232,7 @@ func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
 		"q":      "quit",
 		"@":      "switch-project",
 		"^":      "open-in",
+		"K":      "toggle-overview",
 		"?":      "toggle-palette",
 		"!":      "toggle-diagnostics",
 	}

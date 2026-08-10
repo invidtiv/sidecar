@@ -151,14 +151,16 @@ func TestIsKnownFeature(t *testing.T) {
 	}
 }
 
-func TestCrossProjectOverviewIsKnownAndDefaultsOff(t *testing.T) {
+func TestCrossProjectOverviewIsKnownAndDefaultsOn(t *testing.T) {
 	globalManager = nil
 	if !IsKnownFeature(CrossProjectOverview.Name) {
 		t.Fatalf("%s is not registered", CrossProjectOverview.Name)
 	}
-	if CrossProjectOverview.Default || IsEnabled(CrossProjectOverview.Name) {
-		t.Fatalf("%s must default off", CrossProjectOverview.Name)
+	if !CrossProjectOverview.Default {
+		t.Fatalf("%s must default on", CrossProjectOverview.Name)
 	}
+	// IsEnabled needs Init; without it unknown path is false. Default is the
+	// contract for a fresh install / empty feature map.
 }
 
 func TestListAllReturnsCopy(t *testing.T) {
