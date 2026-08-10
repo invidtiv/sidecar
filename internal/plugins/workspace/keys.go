@@ -954,9 +954,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		} else if p.activePane == PanePreview && p.sidebarVisible {
 			p.activePane = PaneSidebar
 		}
-	case "[":
+	case ",":
 		return p.cyclePreviewTab(-1)
-	case "]":
+	case ".":
 		return p.cyclePreviewTab(1)
 	case "{":
 		// Jump to previous file in diff tab

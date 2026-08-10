@@ -186,6 +186,7 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 				p.diffReturnMode = p.viewMode
 				p.viewMode = ViewModeDiff
 				p.diffFile = entry.Path
+				p.diffStaged = entry.Staged
 				p.diffCommit = ""
 				p.diffCommitSubject = ""
 				p.diffCommitShortHash = ""
@@ -207,6 +208,7 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 				p.diffReturnMode = p.viewMode
 				p.viewMode = ViewModeDiff
 				p.diffFile = file.Path
+				p.diffStaged = false
 				p.diffCommit = p.previewCommit.Hash
 				p.diffCommitSubject = p.previewCommit.Subject
 				p.diffCommitShortHash = p.previewCommit.ShortHash

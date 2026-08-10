@@ -235,6 +235,8 @@ func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
 		"K":      "toggle-overview",
 		"?":      "toggle-palette",
 		"!":      "toggle-diagnostics",
+		"[":      "prev-plugin",
+		"]":      "next-plugin",
 	}
 
 	found := make(map[string]string)

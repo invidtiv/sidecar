@@ -515,6 +515,11 @@ func (p *Plugin) ConsumesTextInput() bool {
 	}
 }
 
+// BlocksGlobalKeys reports whether TD's generic modal owns the keyboard.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	return p.model != nil && p.model.CurrentContextString() == "td-modal"
+}
+
 // Diagnostics returns plugin health info.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	status := "ok"

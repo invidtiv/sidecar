@@ -140,15 +140,17 @@ The first level that handles a key wins:
 
 1. an open sidecar application modal;
 2. the active plugin's text-input or blocking-overlay context
-   (`ConsumesTextInput`, `KeyRouter.BlocksGlobalKeys`);
+   (`ConsumesTextInput`, `GlobalKeyBlocker.BlocksGlobalKeys`);
 3. an active plugin **contextual** binding (`KeyRouter.ClaimsKey`);
 4. sidecar global bindings;
 5. unbound input forwarded to the plugin.
 
 Level 3 above level 4 is the substance of ADR-0001. Only the Tasks plugin
-implements `KeyRouter`; for every other plugin `pluginBlocksGlobalKeys()` and
-`pluginClaimsKey()` are constant false and behaviour is unchanged, pinned by
-`TestPluginsWithoutAKeyRouterAreUnaffected`. A user override
+implements the full `KeyRouter`; other plugins may implement the narrower
+`GlobalKeyBlocker` so their own overlays retain keyboard focus, but their
+`pluginClaimsKey()` remains false. This is pinned by
+`TestPluginsWithoutAKeyRouterAreUnaffected` and
+`TestBracketsUnderAPluginOverlayWithoutKeyRouterReachThePlugin`. A user override
 (`keymap.Registry.UserOverride`) is consulted **before** a plugin claim.
 
 `internal/app/key_precedence_test.go` (`TestKeyPrecedence`) is the table-driven
@@ -173,7 +175,7 @@ correctly cancels the modal.)
 | --- | --- | --- |
 | `@` | **Tasks** (`open-context-palette`) | The only entry in `shadowableGlobals`. Our project switcher stays in `?`/palette |
 | `1`-`6` | **Sidecar** tab switching | Revised after live use; see below |
-| `[` / `]` | **Sidecar** tab cycling from Tasks **root** contexts; **Tasks** in text-input/overlay contexts | Opt-in per context, not a global |
+| `[` / `]` | **Sidecar** tab cycling from Tasks **root** contexts; **Tasks** in text-input/overlay contexts | Global outside typing and overlays |
 | `←` / `→` | **Tasks** (`prev-view` / `next-view`) | We do not bind them; how Tasks views are stepped now |
 | `tab` | **Tasks** (`focus-prompt`) | No root sidecar action |
 | `M` / `A` | **Tasks** (`toggle-model`, `open-agent-activity`) | Not sidecar globals |
@@ -195,18 +197,14 @@ tab, which is the one surface still naming keys we took.
 `TestNumberKeysSwitchSidecarTabsFromTheTasksTab` and `TestArrowKeysReachTheTasksTab`
 pin the exchange.
 
-**Brackets.** `[`/`]` are not and cannot become globals — file-browser tabs,
-workspace preview tabs, and next/prev file in a diff already own them. So bracket
-tab cycling is opt-in per context: `internal/app/update.go` cycles only when
-`keymap.BracketTabCycleKeys[key]` and the keymap binds that key to
-`prev-plugin`/`next-plugin` in the active context. Those bindings exist only for
-the four Tasks root contexts (`internal/keymap/bindings.go`), so a literal
-bracket typed into a Tasks prompt, filter, or form still reaches Tasks — level 2
-forwards it before the host's switch is reached. Pinned by
-`TestBracketsCycleSidecarTabsFromATasksRootContext`,
+**Brackets.** `[`/`]` are global Sidecar tab navigation in every ordinary plugin
+context. Local navigation moved to `{`/`}` for File Browser tabs and Git diff
+files, and to `,`/`.` for Workspace preview tabs. A literal bracket typed into a
+Tasks prompt, filter, or form still reaches Tasks because level 2 forwards it
+before the host's switch is reached. Pinned by
+`TestBracketsCycleSidecarTabsAcrossPluginContexts`,
 `TestBracketsTypedIntoATasksTextInputReachTheTab`,
-`TestBracketsUnderATasksOverlayReachTheTab`, and
-`TestBracketsKeepTheirLocalMeaningInOtherContexts`.
+and `TestBracketsUnderATasksOverlayReachTheTab`.
 
 **Why shadowing is opt-in.** Claims were originally availability-aware for every
 key, so in the same `tasks-list` context `#` opened the theme switcher with

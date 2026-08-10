@@ -25,6 +25,13 @@ type TextInputConsumer interface {
 	ConsumesTextInput() bool
 }
 
+// GlobalKeyBlocker is an optional capability for plugins with overlays that
+// own the keyboard. While it reports true, Sidecar forwards every key except
+// its interrupt instead of running host-level shortcuts.
+type GlobalKeyBlocker interface {
+	BlocksGlobalKeys() bool
+}
+
 // KeyRouter is an optional capability for plugins that own keys the host also
 // binds globally. It makes sidecar's key precedence explicit instead of
 // implicit in the order of a switch statement:
@@ -39,10 +46,10 @@ type TextInputConsumer interface {
 // Only plugins that implement it participate in levels 2 (overlay) and 3; every
 // other plugin keeps the level-4-then-5 behaviour it has always had.
 type KeyRouter interface {
+	GlobalKeyBlocker
+
 	// BlocksGlobalKeys reports that the plugin is showing an overlay that owns
 	// the keyboard. Every key except the host's interrupt is forwarded.
-	BlocksGlobalKeys() bool
-
 	// ClaimsKey reports that the plugin has a live contextual binding for a
 	// key. It is asked only for keys sidecar would otherwise handle globally,
 	// and only when no overlay is blocking.

@@ -10,6 +10,8 @@ func DefaultBindings() []Binding {
 		{Key: "!", Command: "toggle-diagnostics", Context: "global"},
 		{Key: "`", Command: "next-plugin", Context: "global"},
 		{Key: "~", Command: "prev-plugin", Context: "global"},
+		{Key: "[", Command: "prev-plugin", Context: "global"},
+		{Key: "]", Command: "next-plugin", Context: "global"},
 		{Key: "@", Command: "switch-project", Context: "global"},
 		{Key: "W", Command: "switch-worktree", Context: "global"},
 		{Key: "#", Command: "switch-theme", Context: "global"},
@@ -177,8 +179,8 @@ func DefaultBindings() []Binding {
 		{Key: "ctrl+u", Command: "page-up", Context: "git-diff"},
 		{Key: "s", Command: "stage-file", Context: "git-diff"},
 		{Key: "u", Command: "unstage-file", Context: "git-diff"},
-		{Key: "[", Command: "prev-file", Context: "git-diff"},
-		{Key: "]", Command: "next-file", Context: "git-diff"},
+		{Key: "{", Command: "prev-file", Context: "git-diff"},
+		{Key: "}", Command: "next-file", Context: "git-diff"},
 		{Key: "y", Command: "yank-diff", Context: "git-diff"},
 		{Key: "c", Command: "commit", Context: "git-diff"},
 		{Key: "v", Command: "toggle-diff-view", Context: "git-diff"},
@@ -288,8 +290,8 @@ func DefaultBindings() []Binding {
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-tree"},
 		{Key: "f", Command: "project-search", Context: "file-browser-tree"},
 		{Key: "t", Command: "new-tab", Context: "file-browser-tree"},
-		{Key: "[", Command: "prev-tab", Context: "file-browser-tree"},
-		{Key: "]", Command: "next-tab", Context: "file-browser-tree"},
+		{Key: "{", Command: "prev-tab", Context: "file-browser-tree"},
+		{Key: "}", Command: "next-tab", Context: "file-browser-tree"},
 		{Key: "x", Command: "close-tab", Context: "file-browser-tree"},
 		{Key: "a", Command: "create-file", Context: "file-browser-tree"},
 		{Key: "A", Command: "create-dir", Context: "file-browser-tree"},
@@ -317,8 +319,8 @@ func DefaultBindings() []Binding {
 		{Key: "/", Command: "search-content", Context: "file-browser-preview"},
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-preview"},
 		{Key: "f", Command: "project-search", Context: "file-browser-preview"},
-		{Key: "[", Command: "prev-tab", Context: "file-browser-preview"},
-		{Key: "]", Command: "next-tab", Context: "file-browser-preview"},
+		{Key: "{", Command: "prev-tab", Context: "file-browser-preview"},
+		{Key: "}", Command: "next-tab", Context: "file-browser-preview"},
 		{Key: "x", Command: "close-tab", Context: "file-browser-preview"},
 		{Key: "r", Command: "refresh", Context: "file-browser-preview"},
 		{Key: "R", Command: "rename", Context: "file-browser-preview"},
@@ -411,8 +413,8 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
-		{Key: "[", Command: "prev-tab", Context: "workspace-list"},
-		{Key: "]", Command: "next-tab", Context: "workspace-list"},
+		{Key: ",", Command: "prev-tab", Context: "workspace-list"},
+		{Key: ".", Command: "next-tab", Context: "workspace-list"},
 		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "workspace-list"},
@@ -449,8 +451,8 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-preview"},
-		{Key: "[", Command: "prev-tab", Context: "workspace-preview"},
-		{Key: "]", Command: "next-tab", Context: "workspace-preview"},
+		{Key: ",", Command: "prev-tab", Context: "workspace-preview"},
+		{Key: ".", Command: "next-tab", Context: "workspace-preview"},
 		{Key: "j", Command: "scroll-down", Context: "workspace-preview"},
 		{Key: "k", Command: "scroll-up", Context: "workspace-preview"},
 		{Key: "ctrl+d", Command: "page-down", Context: "workspace-preview"},
@@ -533,40 +535,7 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "notes-task-modal"},
 		{Key: "tab", Command: "next-field", Context: "notes-task-modal"},
 		{Key: "shift+tab", Command: "prev-field", Context: "notes-task-modal"},
-
-		// Tasks root contexts. `[`/`]` cycle sidecar tabs here, which is the
-		// opt-in described on BracketTabCycleCommands: the embedded Tasks tab
-		// gives up `1`-`6` to sidecar's tab switcher, and these are the keys it
-		// gets in exchange for stepping between tabs without leaving the home
-		// row twice. They are only bound in the non-overlay, non-text-input
-		// Tasks contexts, so a literal bracket typed into a Tasks prompt,
-		// filter or form still reaches Tasks.
-		{Key: "[", Command: "prev-plugin", Context: "tasks-list"},
-		{Key: "]", Command: "next-plugin", Context: "tasks-list"},
-		{Key: "[", Command: "prev-plugin", Context: "tasks-detail"},
-		{Key: "]", Command: "next-plugin", Context: "tasks-detail"},
-		{Key: "[", Command: "prev-plugin", Context: "tasks-response"},
-		{Key: "]", Command: "next-plugin", Context: "tasks-response"},
-		{Key: "[", Command: "prev-plugin", Context: "tasks-response-detail"},
-		{Key: "]", Command: "next-plugin", Context: "tasks-response-detail"},
 	}
-}
-
-// BracketTabCycleKeys are the keys a context may bind to prev-plugin or
-// next-plugin to opt in to sidecar tab cycling.
-//
-// Brackets are not a global. Several tabs already give them a local meaning
-// (`[`/`]` step between file-browser tabs, workspace preview tabs, and files in
-// a diff), and taking those away would trade one broken habit for another. So
-// the host cycles tabs on a bracket only where the keymap says this context
-// asked for it, which keeps the decision in the binding table next to every
-// other key instead of in a context name hard-coded into the host.
-//
-// internal/app's handleKeyMsg is the only consumer; the commands are the same
-// ones backtick and tilde run.
-var BracketTabCycleKeys = map[string]bool{
-	"[": true,
-	"]": true,
 }
 
 // Category represents a command category.

@@ -98,6 +98,7 @@ type Plugin struct {
 	// Diff state (for full-screen diff view)
 	diffContent         string
 	diffFile            string
+	diffStaged          bool // Distinguishes staged/unstaged rows with the same path
 	diffScroll          int
 	diffRaw             string        // Raw diff before delta processing
 	diffCommit          string        // Commit hash if viewing commit diff
@@ -554,11 +555,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Auto-load full-file content when in full-file view mode
 		if p.diffViewMode == DiffViewFullFile && p.diffFile != "" {
 			p.fullFileDiff = nil // Invalidate stale data
-			entries := p.tree.AllEntries()
-			for _, entry := range entries {
-				if entry.Path == p.diffFile {
-					return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
-				}
+			if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
+				return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
 			}
 			if p.diffCommit != "" {
 				return p, p.loadFullFileDiff(p.diffFile, false, "", p.diffCommit, false)
@@ -1203,6 +1201,8 @@ func (p *Plugin) Commands() []plugin.Command {
 		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-diff", Priority: 2},
 		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
 		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
+		{ID: "prev-file", Name: "Prev", Description: "Previous changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
+		{ID: "next-file", Name: "Next", Description: "Next changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
 		{ID: "open-in-file-browser", Name: "Browse", Description: "Open file in file browser", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
 		// git-commit context
 		{ID: "execute-commit", Name: "Commit", Description: "Create commit with message", Category: plugin.CategoryGit, Context: "git-commit", Priority: 1},
@@ -1288,6 +1288,14 @@ func (p *Plugin) FocusContext() string {
 // printable keys should be treated as text input.
 func (p *Plugin) ConsumesTextInput() bool {
 	return p.viewMode == ViewModeCommit || p.historySearchMode || p.pathFilterMode
+}
+
+// BlocksGlobalKeys reports whether a plugin-owned overlay has keyboard focus.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	if p.historySearchMode || p.pathFilterMode {
+		return true
+	}
+	return p.viewMode != ViewModeStatus && p.viewMode != ViewModeDiff
 }
 
 // Diagnostics returns plugin health info.

@@ -1390,14 +1390,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Plugin switching
 	switch msg.String() {
-	case "`":
+	case "`", "]":
 		// Backtick cycles to next plugin (except in text input contexts)
 		if m.consumesTextInput() {
 			break
 		}
 		m.exitOverview()
 		return m, m.NextPlugin()
-	case "~":
+	case "~", "[":
 		// Tilde cycles to previous plugin (except in text input contexts)
 		if m.consumesTextInput() {
 			break
@@ -1413,24 +1413,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		idx := int([]rune(msg.Text)[0] - '1')
 		m.exitOverview()
 		return m, m.SetActivePlugin(idx)
-	}
-
-	// Bracket tab cycling, opted into per context by binding `[`/`]` to
-	// prev-plugin/next-plugin (see keymap.BracketTabCycleKeys). Contexts that
-	// bind brackets to something of their own — file-browser tabs, workspace
-	// preview tabs, next/prev file in a diff — are untouched and keep handling
-	// the key themselves.
-	if key := msg.String(); keymap.BracketTabCycleKeys[key] && !m.consumesTextInput() {
-		if command, bound := m.keymap.CommandForContextKey(m.activeContext, key); bound {
-			switch command {
-			case "prev-plugin":
-				m.exitOverview()
-				return m, m.PrevPlugin()
-			case "next-plugin":
-				m.exitOverview()
-				return m, m.NextPlugin()
-			}
-		}
 	}
 
 	// Toggles
@@ -1619,8 +1601,12 @@ func (m *Model) activeKeyRouter() plugin.KeyRouter {
 // pluginBlocksGlobalKeys reports that the active plugin has an overlay owning
 // the keyboard (precedence level 2).
 func (m *Model) pluginBlocksGlobalKeys() bool {
-	router := m.activeKeyRouter()
-	return router != nil && router.BlocksGlobalKeys()
+	if m.hasModal() || m.overviewActive {
+		return false
+	}
+	p := m.ActivePlugin()
+	blocker, ok := p.(plugin.GlobalKeyBlocker)
+	return ok && blocker.BlocksGlobalKeys()
 }
 
 // pluginClaimsKey reports that the active plugin has a live contextual binding

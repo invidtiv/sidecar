@@ -50,6 +50,8 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `esc` | back | Go back / close |
 | `` ` `` | next-plugin | Next plugin |
 | `~` | prev-plugin | Previous plugin |
+| `]` | next-plugin | Next plugin |
+| `[` | prev-plugin | Previous plugin |
 | `1-5` | focus-plugin-N | Focus plugin by number |
 | `?` | toggle-palette | Command palette |
 | `!` | toggle-diagnostics | Diagnostics overlay |
@@ -76,7 +78,7 @@ swallowed rather than leaking to the hidden plugin.
 | `r` | Refresh the board |
 | `esc` / `q` / `K` | Close the Overview |
 
-Global shortcuts stay live while it is open: `` ` ``/`~`, `1-9`, `@`, `#`, `W`, `?`, `!`,
+Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `#`, `W`, `?`, `!`,
 `^`, `i`, `ctrl+c`. Plugin-switching keys (`` ` ``, `~`, `1-9`) close the Overview first.
 `q` closes the Overview instead of quitting the app.
 
@@ -186,8 +188,8 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `1-9`, `@`, `#`, `W`, 
 | `A` | create-dir | Create new directory |
 | `d` | delete | Delete (with confirmation) |
 | `t` | new-tab | Open in new tab |
-| `[` | prev-tab | Previous tab |
-| `]` | next-tab | Next tab |
+| `{` | prev-tab | Previous tab |
+| `}` | next-tab | Next tab |
 | `x` | close-tab | Close active tab |
 | `y` | yank | Copy to clipboard |
 | `p` | paste | Paste from clipboard |
@@ -241,8 +243,8 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `1-9`, `@`, `#`, `W`, 
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |
-| `[` | prev-tab | Previous preview tab |
-| `]` | next-tab | Next preview tab |
+| `,` | prev-tab | Previous preview tab |
+| `.` | next-tab | Next preview tab |
 
 ### Interactive Mode
 

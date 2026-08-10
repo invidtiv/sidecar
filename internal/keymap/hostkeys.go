@@ -39,7 +39,7 @@ var HostReservedKeys = map[string]bool{
 // internal/app's TestGlobalKeysAreTheOnesTheHostActuallyHandles pins this
 // against the real handler, so it cannot drift from the switch it describes.
 var GlobalKeys = map[string]bool{
-	"`": true, "~": true,
+	"`": true, "~": true, "[": true, "]": true,
 	"1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
 	"7": true, "8": true, "9": true,
 	"?": true, "!": true, "@": true, "K": true, "W": true, "#": true,

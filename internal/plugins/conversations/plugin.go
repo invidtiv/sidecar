@@ -1365,6 +1365,11 @@ func (p *Plugin) ConsumesTextInput() bool {
 	return p.searchMode || p.filterMode || p.contentSearchMode
 }
 
+// BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	return p.showResumeModal
+}
+
 // Diagnostics returns plugin health info.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	status := "ok"

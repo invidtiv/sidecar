@@ -41,13 +41,17 @@ better than the shell does what `j` means at that moment.
 
 ### Opt-in interfaces, so existing plugins are untouched
 
-Levels 2 and 3 are driven by two optional interfaces in `internal/plugin`:
+Levels 2 and 3 are driven by optional interfaces in `internal/plugin`:
 
 ```go
-type KeyRouter interface {
+type GlobalKeyBlocker interface {
     BlocksGlobalKeys() bool
-    ClaimsKey(key string) bool
-    QuitKeyExits() bool
+}
+
+type KeyRouter interface {
+	GlobalKeyBlocker
+	ClaimsKey(key string) bool
+	QuitKeyExits() bool
 }
 
 type FooterStatusProvider interface {
@@ -55,15 +59,16 @@ type FooterStatusProvider interface {
 }
 ```
 
-Only the Tasks plugin implements them. For every other plugin
-`pluginBlocksGlobalKeys()` and `pluginClaimsKey()` are constant false, and quit
-falls back to the original `isRootContext(activeContext)`, so git-status,
-file-browser, conversations, workspace, notes, and td-monitor behave exactly as
-they did. No global `case` was reordered or removed. This was the alternative to
-rewriting the global switch, which would have put all seven plugins at risk to
-serve one.
+Only the Tasks plugin implements the full `KeyRouter` and may claim contextual
+keys ahead of globals. Other plugins implement the narrower
+`GlobalKeyBlocker` where they own menus or overlays, so those surfaces retain
+keyboard focus without participating in contextual-key conflict resolution.
+Quit still falls back to the original `isRootContext(activeContext)` for those
+plugins.
 
-`TestPluginsWithoutAKeyRouterAreUnaffected` pins this property.
+`TestPluginsWithoutAKeyRouterAreUnaffected` pins contextual-key behavior;
+`TestBracketsUnderAPluginOverlayWithoutKeyRouterReachThePlugin` pins the
+independent overlay capability.
 
 ### The host enforces its own reserved keys
 
@@ -112,18 +117,11 @@ Tasks keeps `←`/`→` for stepping between its views — its own `prev-view` /
 `next-view`, which Sidecar does not bind — and the `view-*` commands are still in
 the palette and merged help, so nothing became unreachable.
 
-In exchange the Tasks root contexts (`tasks-list`, `tasks-detail`,
-`tasks-response`, `tasks-response-detail`) bind `[` and `]` to the previous and
-next Sidecar tab. Brackets are not a Sidecar global and could not become one:
-file-browser tabs, workspace preview tabs, and next/prev file in a diff already
-own them. So bracket tab cycling is **opt-in per context** — the host cycles on a
-bracket only where the keymap binds it to `prev-plugin` / `next-plugin`
-(`keymap.BracketTabCycleKeys`), which keeps the decision in the binding table
-next to every other key rather than in a context name hard-coded into the host.
-They are bound only in the non-overlay, non-text-input Tasks contexts, so a
-literal bracket typed into a Tasks prompt, filter, or form still reaches Tasks —
-level 2 forwards it before the host's switch is reached, and the binding table
-does not name those contexts either.
+Brackets later became global Sidecar tab navigation in every ordinary plugin
+context. The local shortcuts that had occupied them moved to `{`/`}` for File
+Browser tabs and Git diff files, and to `,`/`.` for Workspace preview tabs. A
+literal bracket typed into a Tasks prompt, filter, or form still reaches Tasks:
+level 2 forwards typing and overlay contexts before the host's global switch.
 
 This revision was made in the host's claim set rather than through a user
 keymap override, which is what the plan offered for a mapping that turns out

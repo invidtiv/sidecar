@@ -395,3 +395,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 		return false
 	}
 }
+
+// BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive
+}

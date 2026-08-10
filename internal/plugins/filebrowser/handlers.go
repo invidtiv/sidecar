@@ -441,10 +441,10 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
-	case "[":
+	case "{":
 		return p, p.cycleTab(-1)
 
-	case "]":
+	case "}":
 		return p, p.cycleTab(1)
 
 	case "x":
@@ -638,10 +638,10 @@ func (p *Plugin) handlePreviewKey(key string) (plugin.Plugin, tea.Cmd) {
 			return p.openBlameView(p.previewFile)
 		}
 
-	case "[":
+	case "{":
 		return p, p.cycleTab(-1)
 
-	case "]":
+	case "}":
 		return p, p.cycleTab(1)
 
 	case "x":

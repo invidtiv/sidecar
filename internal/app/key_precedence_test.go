@@ -27,6 +27,13 @@ type routerTestPlugin struct {
 	commands []plugin.Command
 }
 
+type blockerOnlyTestPlugin struct {
+	nativeTestPlugin
+	blocks bool
+}
+
+func (p *blockerOnlyTestPlugin) BlocksGlobalKeys() bool { return p.blocks }
+
 func newRouterPlugin(claimed ...string) *routerTestPlugin {
 	p := &routerTestPlugin{
 		context:  "tasks-list",
@@ -764,10 +771,9 @@ func TestArrowKeysReachTheTasksTab(t *testing.T) {
 	}
 }
 
-// `[`/`]` cycle sidecar tabs from a Tasks root context — the keys Tasks gets in
-// exchange for the number row.
-func TestBracketsCycleSidecarTabsFromATasksRootContext(t *testing.T) {
-	for _, context := range []string{"tasks-list", "tasks-detail", "tasks-response", "tasks-response-detail"} {
+// `[`/`]` cycle sidecar tabs from every ordinary plugin context.
+func TestBracketsCycleSidecarTabsAcrossPluginContexts(t *testing.T) {
+	for _, context := range []string{"tasks-list", "file-browser-tree", "file-browser-preview", "workspace-preview", "git-diff", "conversations-main"} {
 		t.Run(context, func(t *testing.T) {
 			p := newRouterPlugin()
 			p.context = context
@@ -797,9 +803,8 @@ func TestBracketsCycleSidecarTabsFromATasksRootContext(t *testing.T) {
 	}
 }
 
-// A bracket typed into a Tasks text input is a bracket. Level 2 forwards it
-// before the global switch is reached, and the binding table does not name the
-// text-input contexts either, so both layers agree.
+// A bracket typed into a text input is a bracket. Level 2 forwards it before
+// the global switch is reached.
 func TestBracketsTypedIntoATasksTextInputReachTheTab(t *testing.T) {
 	for _, context := range []string{"tasks-prompt", "tasks-filter", "tasks-form", "tasks-context-picker"} {
 		t.Run(context, func(t *testing.T) {
@@ -837,25 +842,16 @@ func TestBracketsUnderATasksOverlayReachTheTab(t *testing.T) {
 	wantOnlyPluginKey(t, p, "[")
 }
 
-// Bracket cycling is opt-in per context. Contexts that bind brackets to
-// something of their own — file-browser tabs, workspace preview tabs, next/prev
-// file in a diff — must be untouched by it.
-func TestBracketsKeepTheirLocalMeaningInOtherContexts(t *testing.T) {
-	for _, context := range []string{"file-browser-tree", "file-browser-preview", "workspace-preview", "git-diff", "conversations-main"} {
-		t.Run(context, func(t *testing.T) {
-			p := newRouterPlugin()
-			p.context = context
-			m := tabCycleTestModel(t, p)
+func TestBracketsUnderAPluginOverlayWithoutKeyRouterReachThePlugin(t *testing.T) {
+	p := &blockerOnlyTestPlugin{blocks: true}
+	m := routerTestModel(t, p)
 
-			m.handleKeyMsg(tea.KeyPressMsg{Code: '[', Text: "["})
-			m.handleKeyMsg(tea.KeyPressMsg{Code: ']', Text: "]"})
+	m.handleKeyMsg(tea.KeyPressMsg{Code: ']', Text: "]"})
 
-			if m.activePlugin != 0 {
-				t.Fatalf("brackets switched sidecar tabs from %s, which binds them itself", context)
-			}
-			if len(p.keys) != 2 {
-				t.Fatalf("plugin saw %v in %s, want both brackets", p.keys, context)
-			}
-		})
+	if m.activePlugin != 0 {
+		t.Fatal("a bracket switched tabs from under a plugin-owned overlay")
+	}
+	if len(p.seen) != 1 {
+		t.Fatalf("plugin saw %d messages, want the bracket", len(p.seen))
 	}
 }

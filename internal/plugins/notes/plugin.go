@@ -1681,6 +1681,11 @@ func (p *Plugin) ConsumesTextInput() bool {
 	return p.activePane == PaneEditor && p.editorNote != nil && !p.previewMode
 }
 
+// BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	return p.showInfoModal || p.showDeleteModal || p.showTaskModal
+}
+
 // loadNotes returns a command that loads notes from the store.
 func (p *Plugin) loadNotes() tea.Cmd {
 	if p.store == nil {

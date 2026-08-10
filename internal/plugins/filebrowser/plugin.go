@@ -1369,3 +1369,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 		p.lineJumpMode ||
 		p.inlineEditMode
 }
+
+// BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
+func (p *Plugin) BlocksGlobalKeys() bool {
+	return p.infoMode || p.blameMode || p.fileOpMode != FileOpNone
+}

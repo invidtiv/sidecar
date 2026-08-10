@@ -190,6 +190,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			p.diffReturnMode = p.viewMode
 			p.viewMode = ViewModeDiff
 			p.diffFile = entry.Path
+			p.diffStaged = entry.Staged
 			p.diffCommit = ""
 			p.diffCommitSubject = ""
 			p.diffCommitShortHash = ""
@@ -609,6 +610,7 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 			p.diffReturnMode = p.viewMode
 			p.viewMode = ViewModeDiff
 			p.diffFile = entry.Path
+			p.diffStaged = entry.Staged
 			p.diffCommit = ""
 			p.diffCommitSubject = ""
 			p.diffCommitShortHash = ""
@@ -672,6 +674,7 @@ func (p *Plugin) updateCommitPreviewPane(msg tea.KeyPressMsg) (plugin.Plugin, te
 			p.diffReturnMode = p.viewMode
 			p.viewMode = ViewModeDiff
 			p.diffFile = file.Path
+			p.diffStaged = false
 			p.diffCommit = c.Hash
 			p.diffCommitSubject = c.Subject
 			p.diffCommitShortHash = c.ShortHash
@@ -799,6 +802,7 @@ func (p *Plugin) closeDiffView() {
 	p.diffCommitSubject = ""
 	p.diffCommitShortHash = ""
 	p.diffFile = ""
+	p.diffStaged = false
 	p.diffBackWidth = 0
 	p.viewMode = p.diffReturnMode
 	if p.diffReturnMode == ViewModeStatus && p.previewCommit != nil {
@@ -845,11 +849,8 @@ func (p *Plugin) updateDiff(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			_ = state.SetGitDiffMode("full-file")
 			// Load full-file content if not already loaded
 			if p.fullFileDiff == nil && p.diffFile != "" {
-				entries := p.tree.AllEntries()
-				for _, entry := range entries {
-					if entry.Path == p.diffFile {
-						return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
-					}
+				if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
+					return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
 				}
 				// For commit diffs where file isn't in tree
 				if p.diffCommit != "" {
@@ -884,6 +885,12 @@ func (p *Plugin) updateDiff(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.diffScroll = prev
 			}
 		}
+
+	case "{":
+		return p, p.cycleDiffFile(-1)
+
+	case "}":
+		return p, p.cycleDiffFile(1)
 
 	case "w":
 		// Toggle line wrapping
@@ -941,6 +948,75 @@ func (p *Plugin) updateDiff(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, nil
+}
+
+// cycleDiffFile moves to the adjacent file represented by the current diff.
+// It wraps so repeated presses can traverse the whole working tree or commit.
+func (p *Plugin) cycleDiffFile(delta int) tea.Cmd {
+	if p.diffCommit != "" && p.previewCommit != nil && p.previewCommit.Hash == p.diffCommit {
+		files := p.previewCommit.Files
+		if len(files) < 2 {
+			return nil
+		}
+		current := 0
+		for i, file := range files {
+			if file.Path == p.diffFile {
+				current = i
+				break
+			}
+		}
+		next := (current + delta + len(files)) % len(files)
+		file := files[next]
+		p.diffFile = file.Path
+		p.diffScroll = 0
+		p.diffHorizOff = 0
+		p.diffLoaded = false
+		p.fullFileDiff = nil
+		parentHash := ""
+		if p.previewCommit.IsMerge && len(p.previewCommit.ParentHashes) > 0 {
+			parentHash = p.previewCommit.ParentHashes[0]
+		}
+		return p.loadCommitFileDiff(p.diffCommit, file.Path, parentHash)
+	}
+
+	entries := p.tree.AllEntries()
+	files := make([]*FileEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsFolder {
+			files = append(files, entry)
+		}
+	}
+	if len(files) < 2 {
+		return nil
+	}
+	current := 0
+	for i, entry := range files {
+		if entry.Path == p.diffFile && entry.Staged == p.diffStaged {
+			current = i
+			break
+		}
+	}
+	next := (current + delta + len(files)) % len(files)
+	entry := files[next]
+	p.diffFile = entry.Path
+	p.diffStaged = entry.Staged
+	p.diffScroll = 0
+	p.diffHorizOff = 0
+	p.diffLoaded = false
+	p.fullFileDiff = nil
+	return p.loadDiff(entry.Path, entry.Staged, entry.Status)
+}
+
+func (p *Plugin) currentWorkingTreeDiffEntry() *FileEntry {
+	if p.diffCommit != "" || p.tree == nil {
+		return nil
+	}
+	for _, entry := range p.tree.AllEntries() {
+		if entry.Path == p.diffFile && entry.Staged == p.diffStaged {
+			return entry
+		}
+	}
+	return nil
 }
 
 // updateCommit handles key events in the commit view.
