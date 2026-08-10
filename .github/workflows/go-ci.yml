@@ -21,6 +21,11 @@ on:
       - ".golangci.yml"
       - "Makefile"
       - ".github/workflows/go-ci.yml"
+  # Releases gate on a Go CI run for the exact commit being tagged
+  # (scripts/check-release-state.sh). A release head is often a docs-only
+  # commit — a changelog entry — which the path filters above skip, leaving
+  # the gate with nothing to check. Allow dispatching a run for such a commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
