@@ -44,6 +44,33 @@ func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
 		return "\x1b[13;2u", true // CSI u: shift+return
 	}
 
+	// Terminals conventionally encode Alt/Option as an ESC prefix. Bubble Tea
+	// decodes that prefix into ModAlt, so put it back before forwarding input to
+	// the pane. This is what makes common macOS bindings such as Option+Left /
+	// Option+Right (often reported as alt+b / alt+f) and Option+Backspace behave
+	// like they do in a regular terminal.
+	if msg.Mod.Contains(tea.ModAlt) {
+		if msg.Code == tea.KeyBackspace {
+			return "\x1b\x7f", true
+		}
+		// Preserve both modifiers for meta-control letters: ESC followed by the
+		// corresponding control byte, as an ordinary terminal would emit.
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code >= 'a' && msg.Code <= 'z' {
+			return "\x1b" + string(rune(msg.Code-'a'+1)), true
+		}
+		if !msg.Mod.Contains(tea.ModCtrl) {
+			// Prefer Text when the terminal produced one: it already carries the
+			// other modifiers' effect, so alt+shift+f stays "F" rather than
+			// collapsing to the base rune.
+			if base := []rune(msg.Text); len(base) == 1 && unicode.IsPrint(base[0]) {
+				return "\x1b" + msg.Text, true
+			}
+			if unicode.IsPrint(msg.Code) {
+				return "\x1b" + string(msg.Code), true
+			}
+		}
+	}
+
 	// Ctrl combinations. In v2 the KeyCtrl* constants are gone; a ctrl combo
 	// arrives as the base rune with ModCtrl set (e.g. ctrl+a -> Code=='a',
 	// ModCtrl; ctrl+space -> Code==KeySpace, ModCtrl). Handle these BEFORE the
@@ -125,10 +152,9 @@ func MapKeyToTmux(msg tea.KeyPressMsg) (key string, useLiteral bool) {
 		return msg.Text, true
 	}
 
-	// Modified printable key that carries no Text (e.g. alt+a arrives as
-	// Code=='a', ModAlt, Text==""). Send the bare base character, matching v1
-	// which returned string(Runes) for alt+rune. This avoids emitting a
-	// modifier-prefixed name like "alt+a" as literal text into the pane.
+	// Modified printable key that carries no Text. Alt/Option was handled above;
+	// preserve the base character for any other modifier combination rather than
+	// emitting a modifier-prefixed key name as pane text.
 	if unicode.IsPrint(msg.Code) {
 		return string(msg.Code), true
 	}

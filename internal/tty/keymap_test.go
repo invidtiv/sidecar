@@ -165,8 +165,8 @@ func TestMapKeyToTmux_Tab(t *testing.T) {
 	}
 }
 
-// TestMapKeyToTmux_Modifiers locks in v1→v2 parity for modified keys (regression
-// guard for the v2 migration review findings).
+// TestMapKeyToTmux_Modifiers locks in the terminal byte contract for modified
+// keys, including restoring the ESC prefix Bubble Tea decodes into ModAlt.
 func TestMapKeyToTmux_Modifiers(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -178,7 +178,12 @@ func TestMapKeyToTmux_Modifiers(t *testing.T) {
 		{"ctrl+z", tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}, "C-z", false},
 		{"ctrl+space", tea.KeyPressMsg{Code: tea.KeySpace, Mod: tea.ModCtrl}, "C-Space", false},
 		{"plain space", tea.KeyPressMsg{Code: tea.KeySpace}, "Space", false},
-		{"alt+a sends base char (not literal 'alt+a')", tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt}, "a", true},
+		{"alt+a sends meta sequence", tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt}, "\x1ba", true},
+		{"alt+b supports terminal word-left binding", tea.KeyPressMsg{Code: 'b', Mod: tea.ModAlt}, "\x1bb", true},
+		{"alt+f supports terminal word-right binding", tea.KeyPressMsg{Code: 'f', Mod: tea.ModAlt}, "\x1bf", true},
+		{"alt+backspace supports terminal word deletion", tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt}, "\x1b\x7f", true},
+		{"ctrl+alt+a preserves both modifiers", tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl | tea.ModAlt}, "\x1b\x01", true},
+		{"alt+shift+f keeps the shifted character", tea.KeyPressMsg{Code: 'f', Mod: tea.ModAlt | tea.ModShift, Text: "F"}, "\x1bF", true},
 		{"plain rune a", tea.KeyPressMsg{Code: 'a', Text: "a"}, "a", true},
 	}
 	for _, tc := range cases {
