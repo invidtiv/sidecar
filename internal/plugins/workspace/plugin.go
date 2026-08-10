@@ -182,6 +182,7 @@ type Plugin struct {
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	selectionTermPanel            bool
+	activateTerminalAfterClick    bool
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
 	paneGeometry                  map[string]paneGeometry

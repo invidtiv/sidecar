@@ -113,10 +113,15 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	targetTermPanel := action.Region.ID == regionTermPanelContent
-	canExtend := action.Shift && p.selection.HasSelection() && p.selectionTermPanel == targetTermPanel
-	p.selectionTermPanel = targetTermPanel
+	sameSource := p.selectionTermPanel == targetTermPanel
+	canExtend := action.Shift && p.selection.HasSelection() && sameSource
+	p.prepareTerminalSelectionSource(targetTermPanel)
 	// Set ViewRect before charAtXY so interactiveLineIndexAtY can use it.
 	p.selection.ViewRect = action.Region.Rect
+	// Track the pointer gesture even when the buffer is empty or the click lands
+	// on terminal padding. A plain click still needs a release event to activate
+	// the terminal, while motion can become selectable once it reaches a row.
+	p.mouseHandler.StartDrag(action.X, action.Y, action.Region.ID, 0)
 
 	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
 	if !ok {
@@ -124,9 +129,6 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
-	if p.selectionTermPanel {
-		p.termPanelSelectionOffset = p.terminalSelectionViewportLayout().Start
-	}
 	if canExtend {
 		p.selection.ExtendTo(ui.SelectionPoint{Line: lineIdx, Col: col})
 		return nil
@@ -136,8 +138,30 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction) tea.Cmd {
 	// independent and must not be disturbed.
 	p.selection.PrepareDragMode(lineIdx, col, action.Region.Rect, action.Alt)
 
-	p.mouseHandler.StartDrag(action.X, action.Y, regionPreviewPane, lineIdx)
 	return nil
+}
+
+// prepareTerminalSelectionSource moves all selection gestures onto one terminal
+// surface. Coordinates and a terminal panel's frozen viewport are source-local,
+// so every selection entry point must cross this boundary before hit-testing.
+func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
+	if p.selectionTermPanel != termPanel {
+		p.selection.Clear()
+	}
+	p.selectionTermPanel = termPanel
+	if termPanel && !p.selection.Anchor.Valid() {
+		p.termPanelSelectionOffset = p.terminalSelectionViewportLayout().Start
+	}
+}
+
+// prepareTerminalClickOrDrag keeps a passive terminal's viewport stable until
+// the pointer gesture has declared itself. A drag selects the rows that were
+// actually under the pointer; a release without motion activates the terminal.
+// Entering interactive mode on mouse-down used to resize/reframe the pane and
+// clear the anchor before the first motion event arrived.
+func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
+	p.activateTerminalAfterClick = !action.Shift && !action.Alt
+	return p.prepareInteractiveDrag(action)
 }
 
 func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cmd {
@@ -146,6 +170,13 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 		return nil
 	}
 
+	// previewOffset is ignored while follow mode is active and is commonly still
+	// zero. Freeze the window the user can actually see before selection turns
+	// follow off; otherwise the next render interprets zero as the top of the
+	// buffer and a drag from the live edge can jump through all of scrollback.
+	if !p.selectionTermPanel && p.autoScrollOutput {
+		p.previewOffset = p.terminalSelectionViewportLayout().Start
+	}
 	p.selection.HandleDrag(lineIdx, col)
 	if !p.selectionTermPanel {
 		p.autoScrollOutput = false
@@ -155,10 +186,23 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 
 func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	p.selection.FinishDrag()
-	if p.selection.HasSelection() && p.copyOnSelectEnabled() {
-		return p.copyInteractiveSelectionCmd()
+	if p.selection.HasSelection() {
+		p.activateTerminalAfterClick = false
+		if p.copyOnSelectEnabled() {
+			return p.copyInteractiveSelectionCmd()
+		}
+		return nil
 	}
-	return nil
+
+	activate := p.activateTerminalAfterClick
+	p.activateTerminalAfterClick = false
+	if !activate {
+		return nil
+	}
+	if p.selectionTermPanel {
+		return p.enterTermPanelInteractiveMode()
+	}
+	return p.enterInteractiveMode()
 }
 
 func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
@@ -359,7 +403,7 @@ func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoi
 	if action.Region == nil {
 		return ui.SelectionPoint{}, "", false
 	}
-	p.selectionTermPanel = action.Region.ID == regionTermPanelContent
+	p.prepareTerminalSelectionSource(action.Region.ID == regionTermPanelContent)
 	p.selection.ViewRect = action.Region.Rect
 	lineIdx, col, ok := p.interactiveCharAtXY(action.X, action.Y)
 	if !ok {
@@ -382,7 +426,7 @@ func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoi
 }
 
 func (p *Plugin) selectAllTerminalOutput(termPanel bool) {
-	p.selectionTermPanel = termPanel
+	p.prepareTerminalSelectionSource(termPanel)
 	buf := p.interactiveOutputBuffer()
 	if buf == nil || buf.LineCount() == 0 {
 		return

@@ -774,7 +774,7 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 	p.height = 20
 	p.viewMode = ViewModeList
 	p.termPanelVisible = true
-	p.termPanelOutput = testTerminalBuffer("panel zero\npanel one")
+	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 50))
 	p.selectionTermPanel = false
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 10, Col: 1},
@@ -799,6 +799,47 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 	if !p.selectionTermPanel || !p.selection.Anchor.Valid() {
 		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
 			p.selectionTermPanel, p.selection.Anchor)
+	}
+	if p.termPanelSelectionOffset == 0 {
+		t.Fatal("panel selection reused the stale zero offset instead of freezing its live viewport")
+	}
+	if p.selection.Anchor.Line < p.termPanelSelectionOffset {
+		t.Fatalf("panel anchor line %d precedes frozen viewport %d",
+			p.selection.Anchor.Line, p.termPanelSelectionOffset)
+	}
+}
+
+func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
+	p := New()
+	p.width = 80
+	p.height = 20
+	p.viewMode = ViewModeList
+	p.termPanelVisible = true
+	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panelword tail\n", 50))
+	p.selectionTermPanel = false
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 10, Col: 1},
+		ui.SelectionPoint{Line: 10, Col: 3},
+		false,
+	)
+	action := mouse.MouseAction{
+		Type: mouse.ActionDoubleClick, X: 12, Y: 6,
+		Region: &mouse.Region{
+			ID:   regionTermPanelContent,
+			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
+		},
+	}
+
+	p.selectTerminalWord(action)
+	if !p.selectionTermPanel || !p.selection.HasSelection() {
+		t.Fatal("double-click did not create a terminal-panel selection")
+	}
+	if p.termPanelSelectionOffset == 0 {
+		t.Fatal("double-click reused stale panel offset zero")
+	}
+	if p.selection.Start.Line < p.termPanelSelectionOffset {
+		t.Fatalf("selected line %d precedes panel viewport %d",
+			p.selection.Start.Line, p.termPanelSelectionOffset)
 	}
 }
 

@@ -1,10 +1,13 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 func TestIsModalViewMode(t *testing.T) {
@@ -230,13 +233,19 @@ func previewClickAction(shift, alt bool) mouse.MouseAction {
 	}
 }
 
-// A plain click on the terminal should make it live, so typing and wheel events
-// reach the running app instead of scrolling sidecar's own capture buffer.
+// A plain click makes the terminal live on release. Deferring activation keeps
+// the viewport stable long enough for the same gesture to become a selection.
 func TestPreviewPaneClickEntersInteractiveMode(t *testing.T) {
 	p := newPreviewClickTestPlugin()
 
-	if cmd := p.handleMouseClick(previewClickAction(false, false)); cmd == nil {
-		t.Fatal("preview pane click should return a cmd from entering interactive mode")
+	if cmd := p.handleMouseClick(previewClickAction(false, false)); cmd != nil {
+		t.Fatal("mouse-down should only prepare the terminal gesture")
+	}
+	if p.viewMode == ViewModeInteractive {
+		t.Fatal("terminal entered interactive mode before the click was released")
+	}
+	if cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane}); cmd == nil {
+		t.Fatal("click release should return a cmd from entering interactive mode")
 	}
 	if p.viewMode != ViewModeInteractive {
 		t.Errorf("viewMode = %v, want ViewModeInteractive", p.viewMode)
@@ -246,6 +255,108 @@ func TestPreviewPaneClickEntersInteractiveMode(t *testing.T) {
 	}
 	if p.activePane != PanePreview {
 		t.Errorf("activePane = %v, want PanePreview", p.activePane)
+	}
+}
+
+func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.previewOffset = 0 // stale/ignored while following, as in the real app
+	p.autoScrollOutput = true
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
+	renderedStart := p.terminalSelectionViewportLayout().Start
+	if renderedStart == 0 {
+		t.Fatal("test needs enough scrollback for the live viewport to start after row zero")
+	}
+
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type:        mouse.ActionDrag,
+		DragStartID: regionPreviewPane,
+		X:           66,
+		Y:           8,
+		Region:      previewClickAction(false, false).Region,
+	})
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
+
+	if p.viewMode == ViewModeInteractive || p.interactiveState != nil {
+		t.Fatal("a click-drag selection should not activate the terminal")
+	}
+	if !p.selection.HasSelection() {
+		t.Fatal("immediate click-drag did not create a selection")
+	}
+	if p.previewOffset != renderedStart {
+		t.Fatalf("selection froze viewport at %d, want rendered live start %d", p.previewOffset, renderedStart)
+	}
+}
+
+func TestLostReleaseFinishesTerminalSelection(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
+	p.handleMouseClick(previewClickAction(false, false))
+	p.handleMouseDrag(mouse.MouseAction{
+		Type: mouse.ActionDrag, X: 66, Y: 8,
+		Region: previewClickAction(false, false).Region,
+	})
+	if !p.selection.Active {
+		t.Fatal("test setup did not start a selection")
+	}
+
+	p.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: 66, Y: 8, Button: tea.MouseNone}))
+	if p.selection.Active {
+		t.Fatal("lost release left the selection gesture active")
+	}
+	if !p.selection.HasSelection() {
+		t.Fatal("lost release discarded the completed selection")
+	}
+}
+
+func TestLostReleaseBeforeMotionClearsAnchorWithoutActivating(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
+	p.handleMouseClick(previewClickAction(false, false))
+	if !p.selection.Anchor.Valid() {
+		t.Fatal("test setup did not prepare a selection anchor")
+	}
+
+	p.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: 60, Y: 6, Button: tea.MouseNone}))
+	if p.selection.Anchor.Valid() || p.selection.Active {
+		t.Fatal("lost release before motion left stale selection state")
+	}
+	if p.viewMode == ViewModeInteractive || p.interactiveState != nil {
+		t.Fatal("lost release activated the terminal")
+	}
+}
+
+func TestDividerDragEndIsNotHijackedByOldTerminalSelection(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 1, Col: 0},
+		ui.SelectionPoint{Line: 2, Col: 4},
+		false,
+	)
+	p.lastDragRegion = regionPaneDivider
+
+	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPaneDivider})
+	if !p.selection.HasSelection() {
+		t.Fatal("unrelated divider release consumed the terminal selection")
+	}
+	if p.viewMode == ViewModeInteractive {
+		t.Fatal("unrelated divider release activated the terminal")
+	}
+}
+
+func TestLostDividerReleaseDoesNotFinishTerminalSelection(t *testing.T) {
+	p := newPreviewClickTestPlugin()
+	p.selection.PrepareDragMode(1, 0, mouse.Rect{X: 40, Y: 2, W: 60, H: 20}, false)
+	p.selection.HandleDrag(2, 4)
+	if !p.selection.Active {
+		t.Fatal("test setup did not create an active terminal selection")
+	}
+	p.mouseHandler.StartDrag(40, 2, regionPaneDivider, 40)
+
+	p.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: 45, Y: 2, Button: tea.MouseNone}))
+	if !p.selection.Active {
+		t.Fatal("lost divider release finished an unrelated terminal selection")
 	}
 }
 

@@ -93,7 +93,23 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleCommitForMergeModalMouse(msg)
 	}
 
+	wasDragging := p.mouseHandler.IsDragging()
+	dragSourceBefore := p.mouseHandler.DragRegion()
 	action := p.mouseHandler.HandleMouse(msg)
+	// A release can be lost when the pointer leaves the window or focus changes.
+	// The mouse handler cancels that stale drag on the next button-less motion;
+	// cancel the paired click-to-activate intent at the same boundary.
+	lostRelease := action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging()
+	if lostRelease && p.activateTerminalAfterClick {
+		p.activateTerminalAfterClick = false
+	}
+	lostTerminalRelease := lostRelease &&
+		(dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent)
+	if lostTerminalRelease && p.selection.Anchor.Valid() {
+		// A release outside the window never reaches Bubble Tea. Close the local
+		// selection gesture at the same point the shared handler abandons its drag.
+		return p.finishInteractiveSelection()
+	}
 
 	switch action.Type {
 	case mouse.ActionClick:
@@ -109,7 +125,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case mouse.ActionDrag:
 		return p.handleMouseDrag(action)
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd()
+		return p.handleMouseDragEnd(action)
 	case mouse.ActionHover:
 		return p.handleMouseHover(action)
 	}
@@ -583,6 +599,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() && isBackgroundRegion(action.Region.ID) {
 		return nil
 	}
+	if action.Region.ID != regionPreviewPane && action.Region.ID != regionTermPanelContent {
+		p.activateTerminalAfterClick = false
+	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
 	if p.viewMode == ViewModeInteractive {
@@ -647,20 +666,17 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if p.termPanelVisible {
 			p.termPanelFocused = false
 		}
-		// A plain click on the terminal makes it live, the same as pressing
-		// enter: typing and wheel events reach the app instead of scrolling
-		// sidecar's own capture buffer. Shift/alt clicks stay in read mode so
-		// drag-selection still works over mouse-reporting apps.
+		// Keep the passive viewport stable through the whole pointer gesture.
+		// A release without motion makes the terminal live; motion selects text.
+		// Entering here used to resize/reframe the terminal before drag tracking
+		// was armed, which made immediate click-drag selection jump or disappear.
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			if !action.Shift && !action.Alt {
 				if cmd, ok := p.activateTerminalLink(action); ok {
 					return cmd
 				}
-				if cmd := p.enterInteractiveMode(); cmd != nil {
-					return cmd
-				}
 			}
-			return p.prepareInteractiveDrag(action)
+			return p.prepareTerminalClickOrDrag(action)
 		}
 	case regionPaneDivider:
 		// Start drag for pane resizing
@@ -680,11 +696,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if cmd, ok := p.activateTerminalLink(action); ok {
 				return cmd
 			}
-			if cmd := p.enterTermPanelInteractiveMode(); cmd != nil {
-				return cmd
-			}
 		}
-		return p.prepareInteractiveDrag(action)
+		return p.prepareTerminalClickOrDrag(action)
 	case regionTermPanelDivider:
 		// Start drag for terminal panel resizing (percentage-based).
 		startSize := p.termPanelEffectiveSize()
@@ -1433,7 +1446,7 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			}
 			p.termPanelSize = newSize
 		}
-	case regionPreviewPane:
+	case regionPreviewPane, regionTermPanelContent:
 		if p.selection.Anchor.Valid() {
 			return p.handleInteractiveSelectionDrag(action)
 		}
@@ -1442,18 +1455,23 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 }
 
 // handleMouseDragEnd handles the end of a drag operation.
-func (p *Plugin) handleMouseDragEnd() tea.Cmd {
+func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// Guard: ignore drag-end when a modal is open (td-f63097).
 	if p.isModalViewMode() {
 		return nil
 	}
 
-	if p.selection.Anchor.Valid() {
+	dragSource := action.DragStartID
+	if dragSource == "" {
+		dragSource = p.lastDragRegion
+	}
+	terminalGesture := dragSource == regionPreviewPane || dragSource == regionTermPanelContent
+	if terminalGesture && (p.selection.Anchor.Valid() || p.activateTerminalAfterClick) {
 		return p.finishInteractiveSelection()
 	}
 
 	// Persist widths based on what was being dragged
-	switch p.lastDragRegion {
+	switch dragSource {
 	case regionDiffTabDivider:
 		_ = state.SetDiffTabFileListWidth(p.diffTabListWidth)
 	case regionTermPanelDivider:
