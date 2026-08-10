@@ -385,18 +385,28 @@ func TestOverviewTmuxFailurePreservesLastGoodButEmptyInventoryDoesNot(t *testing
 	}
 }
 
-func TestOverviewExplicitRefreshImmediatelyProjectsLastGoodAsRefreshing(t *testing.T) {
+func TestOverviewExplicitRefreshKeepsLastGoodWithoutRefreshingFlash(t *testing.T) {
 	root := t.TempDir()
 	key := clean(root)
 	m := New(workspaceinventory.Collector{})
 	m.projects = []Project{{Name: "repo", Path: root, Key: key}}
 	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{{
-		ID: "agent", ProjectKey: key, ProjectName: "repo", Name: "agent", Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Freshness: agentstatus.FreshnessCurrent},
+		ID: "agent", ProjectKey: key, ProjectName: "repo", Name: "agent", Provider: "codex",
+		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Label: "idle", Freshness: agentstatus.FreshnessCurrent},
 	}}}
 	m.syncBoard()
+	before := m.View(150, 24)
 	cmd := m.Start(m.projects)
-	if cmd == nil || !strings.Contains(m.View(150, 24), "refreshing") || len(m.completed) != 0 {
-		t.Fatalf("immediate refreshing view = %q completed=%v", m.View(150, 24), m.completed)
+	after := m.View(150, 24)
+	if cmd == nil || len(m.completed) != 0 {
+		t.Fatalf("start cmd=%v completed=%v", cmd == nil, m.completed)
+	}
+	if strings.Contains(after, "refreshing") {
+		t.Fatalf("refresh must not flash refreshing on cards: %q", after)
+	}
+	// Last-good agent content stays on screen (no blank/refresh rewrite).
+	if !strings.Contains(after, "agent") || !strings.Contains(after, "▶") {
+		t.Fatalf("last-good card lost after refresh start: before=%q after=%q", before, after)
 	}
 }
 
@@ -489,9 +499,28 @@ func TestOverviewAdaptivePollCadence(t *testing.T) {
 	if got := m.pollInterval(); got != idlePollEvery {
 		t.Fatalf("empty cadence = %s", got)
 	}
+	// An idle agent is not inert: it sits at a prompt and can start a turn at
+	// any moment, so an all-idle board must not wait out the quiet cadence
+	// before noticing work began.
+	for _, lane := range []agentstatus.LaneID{agentstatus.LaneIdle, agentstatus.LaneDone} {
+		m.results["one"] = workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{{Presentation: agentstatus.Presentation{Lane: lane}}}}
+		if got := m.pollInterval(); got != readyPollEvery {
+			t.Fatalf("%s cadence = %s, want %s", lane, got, readyPollEvery)
+		}
+	}
+	// A paused pane has no live agent behind it and earns the quiet cadence.
+	m.results["one"] = workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{{Presentation: agentstatus.Presentation{Lane: agentstatus.LanePaused}}}}
+	if got := m.pollInterval(); got != idlePollEvery {
+		t.Fatalf("paused cadence = %s", got)
+	}
 	m.results["one"] = workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{{Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking}}}}
 	if got := m.pollInterval(); got != livePollEvery {
 		t.Fatalf("live cadence = %s", got)
+	}
+	// Working anywhere on the board wins over quieter lanes regardless of order.
+	m.results["two"] = workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{{Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle}}}}
+	if got := m.pollInterval(); got != livePollEvery {
+		t.Fatalf("mixed board cadence = %s", got)
 	}
 }
 

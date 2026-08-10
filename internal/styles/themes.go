@@ -921,6 +921,7 @@ func ApplyThemeColors(theme Theme) {
 	BgSecondary = lipgloss.Color(c.BgSecondary)
 	BgTertiary = lipgloss.Color(c.BgTertiary)
 	BgOverlay = lipgloss.Color(c.BgOverlay)
+	CardSelectedBg = lipgloss.Color(cardSelectedBgHex(c.BgPrimary, c.BgSecondary))
 
 	SurfaceRaised = lipgloss.Color(c.SurfaceRaised)
 	KeyHintFgColor = lipgloss.Color(c.KeyHintFg)
@@ -1117,6 +1118,11 @@ func rebuildStyles() {
 	ListItemSelected = lipgloss.NewStyle().
 		Foreground(TextSelectionColor).
 		Background(BgTertiary)
+
+	// Multi-coloured kanban/overview cards: darker fill so coloured spans stay readable.
+	CardSelected = lipgloss.NewStyle().
+		Foreground(TextSelectionColor).
+		Background(CardSelectedBg)
 
 	ListItemFocused = lipgloss.NewStyle().
 		Foreground(OnPrimaryColor).

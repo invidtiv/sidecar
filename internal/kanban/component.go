@@ -295,7 +295,7 @@ func defaultCardLine(card Card, line, width int, selected bool) string {
 	}
 	value := " " + values[line]
 	if selected {
-		return styles.ListItemSelected.Width(width).Render(fit(value, width))
+		return styles.CardSelected.Width(width).Render(fit(value, width))
 	}
 	if line > 0 {
 		return styles.Muted.Width(width).Render(fit(value, width))
@@ -310,7 +310,7 @@ func blankCardCell(width int, selected bool) string {
 	if !selected {
 		return pad
 	}
-	return lipgloss.NewStyle().Background(styles.ListItemSelected.GetBackground()).Render(pad)
+	return lipgloss.NewStyle().Background(styles.CardSelected.GetBackground()).Render(pad)
 }
 
 // renderSpans lays spans left to right against a running width budget,
@@ -319,7 +319,7 @@ func blankCardCell(width int, selected bool) string {
 func renderSpans(spans []Span, width int, selected bool) string {
 	var b strings.Builder
 	remaining := width
-	selectionBg := styles.ListItemSelected.GetBackground()
+	selectionBg := styles.CardSelected.GetBackground()
 	for _, span := range spans {
 		if remaining <= 0 {
 			break

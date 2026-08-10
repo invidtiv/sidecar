@@ -91,6 +91,49 @@ func AgentColor(provider string) color.Color {
 	return TextMuted
 }
 
+// defaultAgentIcons maps workspace/overview provider names to the same glyphs
+// conversations adapters show (Adapter.Icon). Keys are lowercase provider IDs
+// as used by workspace.AgentType / workspaceinventory.Workspace.Provider.
+// Keep in sync with each adapter's Icon() — this is the presentation seam for
+// surfaces that only know the short provider name, not a loaded Adapter.
+var defaultAgentIcons = map[string]string{
+	"claude":      "◆",
+	"codex":       "▶",
+	"antigravity": "★",
+	"gemini":      "★",
+	"cursor":      "▌",
+	"amp":         "\u26a1", // ⚡
+	"opencode":    "◇",
+	"pi":          "\U0001F43E", // 🐾
+	"copilot":     "⋮⋮",
+	"kiro":        "\u03ba", // κ
+	"warp":        "»",
+	"grok":        "✦",
+}
+
+// AgentIcon returns the conversations-style glyph for a provider, case-
+// insensitively. Unknown providers return "" so callers can fall back to the
+// bare name.
+func AgentIcon(provider string) string {
+	if icon, ok := defaultAgentIcons[strings.ToLower(strings.TrimSpace(provider))]; ok {
+		return icon
+	}
+	return ""
+}
+
+// AgentLabel is icon + space + provider name when an icon is known, otherwise
+// just the provider name. Used for chips and compact agent labels.
+func AgentLabel(provider string) string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return ""
+	}
+	if icon := AgentIcon(provider); icon != "" {
+		return icon + " " + provider
+	}
+	return provider
+}
+
 // AgentChipFill is the background behind an agent chip.
 func AgentChipFill() color.Color {
 	return SurfaceRaised

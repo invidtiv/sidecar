@@ -32,6 +32,11 @@ var (
 	BgTertiary  = lipgloss.Color("#374151")
 	BgOverlay   = lipgloss.Color("#00000080")
 
+	// CardSelectedBg fills selected multi-coloured kanban/overview cards.
+	// Darker than the board (not the lighter BgTertiary lift of ListItemSelected)
+	// so project hues, agent chips, and lane colours stay readable.
+	CardSelectedBg = lipgloss.Color("#090D14")
+
 	// Derived contrast-guaranteed roles (see NormalizePalette)
 	SurfaceRaised  = lipgloss.Color("#2B3544") // Chrome for key hints/chips
 	KeyHintFgColor = lipgloss.Color("#F9FAFB") // Shortcut key text on SurfaceRaised
@@ -211,6 +216,12 @@ var (
 	ListItemSelected = lipgloss.NewStyle().
 				Foreground(TextSelectionColor).
 				Background(BgTertiary)
+
+	// CardSelected is ListItemSelected's counterpart for multi-coloured cards
+	// (kanban / overview). Uses CardSelectedBg instead of BgTertiary.
+	CardSelected = lipgloss.NewStyle().
+			Foreground(TextSelectionColor).
+			Background(CardSelectedBg)
 
 	ListItemFocused = lipgloss.NewStyle().
 			Foreground(OnPrimaryColor).

@@ -107,7 +107,11 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 			if agentName == "" && shell.Agent != nil {
 				agentName = string(shell.Agent.Type)
 			}
-			statusText = fmt.Sprintf("  %s · %s", agentName, text)
+			if icon := styles.AgentIcon(string(shell.Agent.Type)); icon != "" {
+				statusText = fmt.Sprintf("  %s %s · %s", icon, agentName, text)
+			} else {
+				statusText = fmt.Sprintf("  %s · %s", agentName, text)
+			}
 		} else if shell.Agent != nil {
 			statusText = "  shell · running"
 		}
@@ -120,7 +124,7 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 		content += strings.Repeat(" ", width-contentWidth)
 	}
 	if isSelected {
-		return styles.ListItemSelected.Width(width).Render(content)
+		return styles.CardSelected.Width(width).Render(content)
 	}
 	if lineIdx > 0 {
 		return styles.Muted.Width(width).Render(content)
@@ -155,9 +159,9 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 	case 1:
 		agentStr := ""
 		if wt.Agent != nil {
-			agentStr = "  " + string(wt.Agent.Type)
+			agentStr = "  " + styles.AgentLabel(string(wt.Agent.Type))
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			agentStr = "  " + string(wt.ChosenAgentType)
+			agentStr = "  " + styles.AgentLabel(string(wt.ChosenAgentType))
 		}
 		if presentation.health {
 			agentStr = "  " + presentation.statusText
@@ -179,11 +183,16 @@ func (p *Plugin) renderKanbanCardLine(wt *Worktree, lineIdx, width int, isSelect
 			content = fmt.Sprintf("  +%d -%d", wt.Stats.Additions, wt.Stats.Deletions)
 		}
 	}
+	// Bound width the same way as shell cards: icons + status can exceed a
+	// narrow column after provider glyphs were added to the agent line.
+	if lipgloss.Width(content) > width {
+		content = ansi.Truncate(content, width, "")
+	}
 	if contentWidth := lipgloss.Width(content); contentWidth < width {
 		content += strings.Repeat(" ", width-contentWidth)
 	}
 	if isSelected {
-		return styles.ListItemSelected.Width(width).Render(content)
+		return styles.CardSelected.Width(width).Render(content)
 	}
 	if lineIdx > 0 {
 		return styles.Muted.Width(width).Render(content)

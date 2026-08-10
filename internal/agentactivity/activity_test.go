@@ -148,10 +148,12 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		{"claude", "blocked.txt", "claude.screen.blocked", StateBlocked, false},
 		{"claude", "interrupted.txt", "claude.screen.idle", StateIdle, false},
 		{"claude", "overlay.txt", "claude.overlay.retain", StateUnknown, true},
-		{"grok", "idle.txt", "grok.screen.idle", StateIdle, false},
-		{"grok", "working.txt", "grok.title.working", StateWorking, false},
-		{"grok", "interrupted.txt", "grok.screen.idle", StateIdle, false},
+		{"grok", "idle.txt", "grok.title.idle", StateIdle, false},
+		{"grok", "working.txt", "grok.screen.working", StateWorking, false},
+		{"grok", "interrupted.txt", "grok.title.idle", StateIdle, false},
 		{"grok", "overlay.txt", "grok.overlay.retain", StateUnknown, true},
+		{"grok", "stale_working_scrollback.txt", "grok.footer.idle", StateIdle, false},
+		{"grok", "background_subagent.txt", "grok.screen.background-running", StateWorking, false},
 		{"antigravity", "blocked.txt", "antigravity.screen.blocked", StateBlocked, false},
 		{"antigravity", "working.txt", "antigravity.screen.working", StateWorking, false},
 		{"antigravity", "idle_fallback.txt", "antigravity.known-live-fallback", StateIdle, false},
@@ -256,13 +258,121 @@ func TestExpandedPerProviderFixtures(t *testing.T) {
 	}
 }
 
+// Captures are taken with `capture-pane -e`, so styled chrome arrives with SGR
+// escapes inline. ESC is not \s, so before regionText stripped them every
+// column-anchored rule silently failed against a coloured prompt marker — the
+// pane read as no-match and fell through to the known-live fallback.
+func TestStyledChromeStillMatchesColumnAnchoredRules(t *testing.T) {
+	tests := []struct {
+		name         string
+		ob           Observation
+		wantState    State
+		wantEvidence string
+	}{
+		{
+			name:         "claude coloured prompt marker is idle",
+			ob:           Observation{Agent: "claude", CurrentCommand: "2.1.220", Screen: "some output\n\x1b[38;5;153m❯\x1b[0m "},
+			wantState:    StateIdle,
+			wantEvidence: "claude.screen.idle",
+		},
+		{
+			name:         "codex coloured prompt marker is idle",
+			ob:           Observation{Agent: "codex", CurrentCommand: "codex", Screen: "some output\n\x1b[36m›\x1b[0m "},
+			wantState:    StateIdle,
+			wantEvidence: "codex.screen.idle",
+		},
+		{
+			name:         "claude styled spinner title is working",
+			ob:           Observation{Agent: "claude", CurrentCommand: "2.1.220", PaneTitle: "\x1b[33m⠹\x1b[0m Claude Code", Screen: "output"},
+			wantState:    StateWorking,
+			wantEvidence: "claude.title.working",
+		},
+		{
+			name:         "rows of pure escapes count as trailing padding",
+			ob:           Observation{Agent: "claude", CurrentCommand: "2.1.220", Screen: "Which option?\nEnter to select · ↑/↓ to navigate · Esc to cancel" + strings.Repeat("\n\x1b[0m", 30)},
+			wantState:    StateBlocked,
+			wantEvidence: "claude.screen.blocked",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Detect(tt.ob)
+			if got.State != tt.wantState || got.Evidence != tt.wantEvidence {
+				t.Fatalf("got %+v, want %s/%s", got, tt.wantState, tt.wantEvidence)
+			}
+		})
+	}
+}
+
+// Retain rules keyed on a bare word froze the badge whenever a turn merely
+// discussed one. Viewer chrome must corroborate the word.
+func TestViewerWordsWithoutChromeDoNotRetain(t *testing.T) {
+	tests := []Observation{
+		{Agent: "claude", CurrentCommand: "2.1.220", Screen: "I read the transcript and found the bug\n❯ "},
+		{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", Screen: "let me check the conversation history for that\n│ ❯ "},
+	}
+	for _, ob := range tests {
+		t.Run(ob.Agent, func(t *testing.T) {
+			if got := Detect(ob); got.SkipStateUpdate {
+				t.Fatalf("discussion retained state: %+v", got)
+			}
+		})
+	}
+	// The real viewer, chrome and all, still retains.
+	viewer := Detect(Observation{
+		Agent: "claude", CurrentCommand: "2.1.220",
+		Screen: "showing detailed transcript · ctrl+o to toggle",
+	})
+	if !viewer.SkipStateUpdate || viewer.Evidence != "claude.overlay.transcript" {
+		t.Fatalf("real transcript viewer not retained: %+v", viewer)
+	}
+}
+
+// Retention has no natural end: an overlay left open, or chrome that never
+// clears, would otherwise assert a confident badge forever.
+func TestSkipRetentionExpiresIntoUnknown(t *testing.T) {
+	now := time.Unix(500, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "claude.title.working"}
+	retain := Result{State: StateUnknown, Evidence: "claude.overlay.transcript", SkipStateUpdate: true}
+
+	if tracker.Apply(retain, now) || tracker.State != StateWorking {
+		t.Fatalf("retention did not hold prior state: %+v", tracker)
+	}
+	if tracker.Apply(retain, now.Add(SkipRetentionCap-time.Second)) || tracker.State != StateWorking {
+		t.Fatalf("retention expired early: %+v", tracker)
+	}
+	if !tracker.Apply(retain, now.Add(SkipRetentionCap+time.Second)) {
+		t.Fatal("retention never expired")
+	}
+	if tracker.State != StateUnknown {
+		t.Fatalf("expired retention should admit unknown, got %+v", tracker)
+	}
+	if tracker.DisplayState() == "done" {
+		t.Fatal("expired retention manufactured done")
+	}
+
+	// A live observation in between clears the retention clock.
+	tracker = Tracker{State: StateWorking, Evidence: "claude.title.working"}
+	tracker.Apply(retain, now)
+	tracker.Apply(Result{State: StateWorking, Evidence: "claude.title.working"}, now.Add(time.Second))
+	if tracker.Apply(retain, now.Add(SkipRetentionCap)); tracker.State != StateWorking {
+		t.Fatalf("clock not reset by live observation: %+v", tracker)
+	}
+}
+
 func TestKnownLiveFallbackIdleNeverCreatesUnseenDone(t *testing.T) {
 	tests := []Observation{
+		// Claude and Codex both own explicit idle rules, so reaching the
+		// fallback means the chrome went unrecognised — not that a turn ended.
+		{Agent: "claude", CurrentCommand: "2.1.220", Screen: "unmatched"},
+		{Agent: "codex", CurrentCommand: "codex", Screen: "unmatched"},
 		{Agent: "pi", CurrentCommand: "pi", Screen: "unmatched"},
 		{Agent: "copilot", CurrentCommand: "copilot", Screen: "unmatched"},
 		{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "unmatched"},
 		{Agent: "opencode", CurrentCommand: "opencode", Screen: "unmatched"},
 		{Agent: "amp", CurrentCommand: "amp", Screen: "unmatched"},
+		// Grok live process with no strong chrome must not manufacture "done".
+		{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", Screen: "unmatched"},
 	}
 	for _, ob := range tests {
 		for _, prior := range []State{StateWorking, StateBlocked} {
@@ -300,12 +410,105 @@ func TestExplicitIdleEvidenceStillCreatesDone(t *testing.T) {
 
 func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
 	got := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "repo - grok"})
-	if got.State != StateIdle || got.Evidence != "grok.title.idle" {
+	if got.State != StateIdle || got.Evidence != "grok.title.idle" || !got.VisibleIdle {
 		t.Fatalf("got %+v", got)
 	}
+	// Busy title alone (no idle footer) still means working — OSC 9;4 is unavailable via tmux.
 	got = DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "⠼ Working - grok"})
 	if got.State != StateWorking || got.Evidence != "grok.title.working" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestGrokIdleFooterBeatsStickyBrailleTitle(t *testing.T) {
+	// Observed false-working: title still has a braille frame after the turn
+	// ends while the footer is clearly idle (Ctrl+x:shortcuts, no Esc:cancel).
+	got := DetectGrok(Observation{
+		Agent: "grok", CurrentCommand: "grok",
+		PaneTitle: "⠼ session title - grok",
+		Screen:    "Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
+	})
+	if got.State != StateIdle || got.Evidence != "grok.footer.idle" {
+		t.Fatalf("sticky title should lose to idle footer: %+v", got)
+	}
+}
+
+func TestGrokBackgroundSubagentBeatsIdleTitleAndFooter(t *testing.T) {
+	// Live repro: main turn parked, "1 subagent still running", footer idle —
+	// must not classify idle/done while background work is live.
+	got := DetectGrok(Observation{
+		Agent: "grok", CurrentCommand: "grok",
+		PaneTitle: "repo - grok",
+		Screen: "" +
+			"○ 1 subagent still running · send a message to interrupt\n" +
+			"│ ❯ │\n" +
+			"Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
+	})
+	if got.State != StateWorking || got.Evidence != "grok.screen.background-running" {
+		t.Fatalf("background subagent got %+v", got)
+	}
+}
+
+func TestGrokBusyChromeBeatsIdleTitleForm(t *testing.T) {
+	// Title already cleared to idle form while Esc:cancel + status still show.
+	got := DetectGrok(Observation{
+		Agent: "grok", CurrentCommand: "grok",
+		PaneTitle: "repo - grok",
+		Screen: "" +
+			"⠧ Waiting on subagent… 2.8s [stop]\n" +
+			"Esc:cancel  │  Ctrl+x:shortcuts\n",
+	})
+	if got.State != StateWorking {
+		t.Fatalf("busy chrome under idle title got %+v", got)
+	}
+}
+
+func TestGrokIdleFooterBeatsResidualThinkingInViewport(t *testing.T) {
+	got := DetectGrok(Observation{
+		Agent: "grok", CurrentCommand: "grok",
+		PaneTitle: "⠼ leftover - grok",
+		Screen: "" +
+			"Thinking… [stop]\n" +
+			"Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
+	})
+	if got.State != StateIdle || got.Evidence != "grok.footer.idle" {
+		t.Fatalf("residual Thinking with idle footer got %+v", got)
+	}
+}
+
+func TestGrokExplicitIdleAfterWorkingCreatesDone(t *testing.T) {
+	now := time.Unix(600, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "grok.screen.working"}
+	idle := DetectGrok(Observation{
+		Agent: "grok", CurrentCommand: "grok",
+		PaneTitle: "session - grok",
+		Screen:    "│ ❯ │\nCtrl+x:shortcuts\n",
+	})
+	if idle.State != StateIdle || idle.FallbackIdle {
+		t.Fatalf("want explicit idle, got %+v", idle)
+	}
+	// Explicit idle is VisibleIdle, so it may publish on the first Apply; the
+	// second tick covers the debounce path without assuming which one landed.
+	tracker.Apply(idle, now)
+	if tracker.State != StateIdle {
+		tracker.Apply(idle, now.Add(IdleDebounce))
+	}
+	if tracker.DisplayState() != "done" {
+		t.Fatalf("explicit idle after working display=%q tracker=%+v evidence=%s", tracker.DisplayState(), tracker, idle.Evidence)
+	}
+}
+
+func TestGrokFallbackIdleAfterWorkingStaysQuiet(t *testing.T) {
+	now := time.Unix(700, 0)
+	tracker := Tracker{State: StateWorking, Evidence: "grok.screen.working"}
+	fallback := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok", Screen: "no chrome"})
+	if !fallback.FallbackIdle {
+		t.Fatalf("want FallbackIdle, got %+v", fallback)
+	}
+	tracker.Apply(fallback, now)
+	tracker.Apply(fallback, now.Add(IdleDebounce))
+	if tracker.DisplayState() != "idle" || !tracker.Seen {
+		t.Fatalf("fallback manufactured done: display=%q tracker=%+v", tracker.DisplayState(), tracker)
 	}
 }
 

@@ -1,9 +1,9 @@
-source: Herdr-aligned busy chrome (Grok Build status line + title); spinner+[stop]
-pane_title: ⠼ Working - grok
-pane_current_command: grok-1.0.0-maco
+source: live Grok 1.0 parked main turn with background subagent; title/footer look idle
+pane_title: session title - grok
+pane_current_command: grok
 screen:
-  ⠧ Waiting on subagent… 2.8s   13s ⇣29.7k [stop]
+  ○ 1 subagent still running · send a message to interrupt
   ╭──────────────────────────────────────────────────────╮
   │ ❯                                                    │
   ╰──────────────────────────────────── Grok 4.5 (high) ─╯
-  Esc:cancel  │  Ctrl+x:shortcuts
+  Shift+Tab:mode  │  Ctrl+x:shortcuts

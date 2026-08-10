@@ -38,6 +38,37 @@ func TestAgentColorFallsBackToTextMutedForUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestAgentIconMatchesConversationsAdapters(t *testing.T) {
+	cases := map[string]string{
+		"claude":      "◆",
+		"CLAUDE":      "◆",
+		"codex":       "▶",
+		"antigravity": "★",
+		"cursor":      "▌",
+		"amp":         "\u26a1",
+		"opencode":    "◇",
+		"pi":          "\U0001F43E",
+		"copilot":     "⋮⋮",
+		"grok":        "✦",
+		"unknown":     "",
+		"":            "",
+	}
+	for provider, want := range cases {
+		if got := AgentIcon(provider); got != want {
+			t.Errorf("AgentIcon(%q) = %q, want %q", provider, got, want)
+		}
+	}
+	if got := AgentLabel("codex"); got != "▶ codex" {
+		t.Errorf("AgentLabel(codex) = %q, want %q", got, "▶ codex")
+	}
+	if got := AgentLabel("mystery"); got != "mystery" {
+		t.Errorf("AgentLabel(unknown) = %q, want bare name", got)
+	}
+	if got := AgentLabel(""); got != "" {
+		t.Errorf("AgentLabel(empty) = %q, want empty", got)
+	}
+}
+
 func TestLaneColorFallsBackToTextMutedForUnknownLane(t *testing.T) {
 	ApplyTheme("default")
 	defer ApplyTheme("default")

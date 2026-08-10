@@ -98,7 +98,7 @@ func Identify(ob Observation) string {
 	if command != "node" && command != "bun" {
 		return ""
 	}
-	current := ansi.Strip(regionText(ob, Rule{Region: RegionCurrent, LastN: 24}))
+	current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
 	if claudeScreenIdentity.MatchString(current) {
 		return "claude"
 	}
@@ -122,10 +122,16 @@ type Rule struct {
 	State    State
 	Region   Region
 	Contains []string
-	Regexp   *regexp.Regexp
-	Not      []string
-	LastN    int
-	Skip     bool
+	// Any holds alternative corroborating groups: the rule matches when at
+	// least one group has all of its literals present. It exists so a retain
+	// rule can demand a distinctive phrase *and* surrounding chrome, rather
+	// than firing on a word the agent might merely be discussing. Compared
+	// case-insensitively, since these are rendered UI hints.
+	Any    [][]string
+	Regexp *regexp.Regexp
+	Not    []string
+	LastN  int
+	Skip   bool
 }
 
 // Detect dispatches an observation to the expected provider probe. Keeping
@@ -183,12 +189,17 @@ func Evaluate(ob Observation, rules []Rule) Result {
 	return Result{State: StateUnknown, Evidence: "no-match"}
 }
 
+// regionText strips SGR escapes before any rule sees the text. Captures are
+// taken with `capture-pane -e`, so styled chrome carries escape bytes inline —
+// and ESC is not \s, so a coloured prompt marker defeats every column-anchored
+// rule (`^❯`, `^\s*›`, `^[⠀-⣿] `). Stripping here keeps the provider tables
+// written against what a human sees rather than against tmux's byte stream.
 func regionText(ob Observation, rule Rule) string {
 	switch rule.Region {
 	case RegionTitle:
-		return ob.PaneTitle
+		return ansi.Strip(ob.PaneTitle)
 	case RegionLastLines:
-		lines := strings.Split(ob.Screen, "\n")
+		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
 		n := rule.LastN
 		if n <= 0 {
 			n = 12
@@ -201,7 +212,9 @@ func regionText(ob Observation, rule Rule) string {
 		// capture-pane includes historical scrollback and preserves a tall
 		// pane's trailing blank rows. Drop only that padding, then inspect a
 		// bounded current-bottom window so resolved historical UI cannot win.
-		lines := strings.Split(ob.Screen, "\n")
+		// Stripping precedes the trim so a row holding nothing but escapes
+		// counts as the padding it renders as.
+		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
 		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 			lines = lines[:len(lines)-1]
 		}
@@ -214,7 +227,7 @@ func regionText(ob Observation, rule Rule) string {
 		}
 		return strings.Join(lines, "\n")
 	default:
-		return ob.Screen
+		return ansi.Strip(ob.Screen)
 	}
 }
 
@@ -229,7 +242,29 @@ func matches(text string, rule Rule) bool {
 			return false
 		}
 	}
+	if len(rule.Any) > 0 {
+		folded := strings.ToLower(text)
+		satisfied := false
+		for _, group := range rule.Any {
+			if containsAll(folded, group) {
+				satisfied = true
+				break
+			}
+		}
+		if !satisfied {
+			return false
+		}
+	}
 	return rule.Regexp == nil || rule.Regexp.MatchString(text)
+}
+
+func containsAll(folded string, literals []string) bool {
+	for _, literal := range literals {
+		if !strings.Contains(folded, strings.ToLower(literal)) {
+			return false
+		}
+	}
+	return true
 }
 
 // Tracker owns transition policy while Evaluate remains state-free.
@@ -240,9 +275,17 @@ type Tracker struct {
 	Seen            bool
 	VisibleBlocker  bool
 	idleCandidateAt time.Time
+	skipSince       time.Time
 }
 
 const IdleDebounce = 400 * time.Millisecond
+
+// SkipRetentionCap bounds how long an overlay rule may retain the prior state.
+// Retention exists so a transcript or model picker does not erase a live turn,
+// but an overlay left open — or a rule matching chrome that never clears —
+// would otherwise hold a confident badge forever. Past the cap the tracker
+// admits it no longer knows rather than continuing to assert stale evidence.
+const SkipRetentionCap = 2 * time.Minute
 
 // ResetForProcessChange clears semantic state from the prior pane owner while
 // allowing a confirmed new process's first explicit idle observation to land
@@ -262,7 +305,16 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 	// they must not retain evidence that the blocker is still on screen.
 	t.VisibleBlocker = result.State == StateBlocked && result.VisibleBlocker && !result.SkipStateUpdate
 	if result.SkipStateUpdate {
-		return false
+		if t.skipSince.IsZero() {
+			t.skipSince = now
+		}
+		if now.Sub(t.skipSince) < SkipRetentionCap {
+			return false
+		}
+		// Cap exceeded: stop retaining and let the overlay's own StateUnknown
+		// land, so the badge reads unknown instead of a stale certainty.
+	} else {
+		t.skipSince = time.Time{}
 	}
 	if result.State == StateIdle {
 		if t.State == StateIdle {

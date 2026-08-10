@@ -26,6 +26,7 @@ const (
 	maxProjects    = 4
 	maxCaptures    = 4
 	livePollEvery  = 5 * time.Second
+	readyPollEvery = 10 * time.Second
 	idlePollEvery  = 30 * time.Second
 )
 
@@ -89,7 +90,6 @@ type Model struct {
 	results            map[string]workspaceinventory.ProjectResult
 	projectErrors      map[string]error
 	stale              map[string]bool
-	refreshing         map[string]bool
 	completed          map[int]bool
 	pending            []Project
 	pendingInventory   []Project
@@ -123,7 +123,7 @@ type Model struct {
 
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), refreshing: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -150,9 +150,9 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.loading, m.tmuxErr = true, nil
 	m.completed = make(map[int]bool)
-	for key := range m.results {
-		m.refreshing[key] = true
-	}
+	// Keep last-good cards on screen during a poll/refresh cycle. Relative age
+	// already communicates freshness; a full-board "refreshing…" rewrite was
+	// too noisy on the 5s live poll.
 	if len(m.projects) > 0 {
 		m.syncBoard()
 	}
@@ -417,7 +417,6 @@ func (m *Model) finishPhase() tea.Cmd {
 				delete(m.results, key)
 				delete(m.projectErrors, key)
 				delete(m.stale, key)
-				delete(m.refreshing, key)
 			}
 		}
 		m.shellClaims = workspaceinventory.BuildShellClaims(claimResults)
@@ -433,9 +432,6 @@ func (m *Model) finishPhase() tea.Cmd {
 		}
 	}
 	m.loading = false
-	for key := range m.refreshing {
-		m.refreshing[key] = false
-	}
 	m.refreshCollector.CommitTrackers()
 	metrics := m.refreshCollector.Metrics()
 	m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
@@ -448,7 +444,6 @@ func (m *Model) applyInventoryIncrement(project Project, result workspaceinvento
 	if !containsProject(m.projects, key) {
 		m.projects = append(m.projects, project)
 	}
-	m.refreshing[key] = true
 	if result.Err != nil {
 		m.applyFailure(key, result, result.Err)
 		return
@@ -474,7 +469,6 @@ func withProjectIdentity(result workspaceinventory.ProjectResult, project Projec
 
 func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
 	key := result.ProjectKey
-	m.refreshing[key] = false
 	if m.tmuxErr != nil {
 		m.applyFailure(key, result, m.tmuxErr)
 		return
@@ -549,15 +543,25 @@ func (m *Model) pollCmd() tea.Cmd {
 	}
 }
 
+// pollInterval trades refresh cost against how long a stale badge can persist.
+// Working and blocked panes change often enough to want the live cadence. An
+// idle or done pane is not inert, though: it is an agent sitting at a prompt
+// that can start a turn at any moment, and polling those at the quiet cadence
+// meant an all-idle board could take a full idlePollEvery to notice work had
+// begun. Only a board with nothing live at all earns the quiet cadence.
 func (m *Model) pollInterval() time.Duration {
+	interval := idlePollEvery
 	for _, result := range m.results {
 		for _, workspace := range result.Workspaces {
-			if workspace.Presentation.Lane == agentstatus.LaneWorking || workspace.Presentation.Lane == agentstatus.LaneBlocked {
+			switch workspace.Presentation.Lane {
+			case agentstatus.LaneWorking, agentstatus.LaneBlocked:
 				return livePollEvery
+			case agentstatus.LaneIdle, agentstatus.LaneDone:
+				interval = readyPollEvery
 			}
 		}
 	}
-	return idlePollEvery
+	return interval
 }
 
 func (m *Model) activate() tea.Cmd {
@@ -643,7 +647,7 @@ func (m *Model) syncBoard() {
 			}
 			m.cards[workspace.ID] = workspace
 			order[workspace.ID] = cardOrder{project: i, changedAt: workspace.Presentation.ChangedAt}
-			card := kanban.Card{ID: workspace.ID, Lines: cardLines(workspace, m.refreshing[key], m.stale[key], now)}
+			card := kanban.Card{ID: workspace.ID, Lines: cardLines(workspace, m.stale[key], now)}
 			for i := range lanes {
 				if lanes[i].ID == kanban.LaneID(workspace.Presentation.Lane) {
 					lanes[i].Cards = append(lanes[i].Cards, card)
@@ -688,10 +692,11 @@ func kindGlyph(kind workspaceinventory.Kind) string {
 }
 
 // cardLines builds the three styled content rows for a live workspace card.
-// refreshing and stale reflect the owning project's freshness trackers;
-// abnormal Presentation.Freshness (e.g. "unavailable") falls through to a
-// plain word when neither tracker applies.
-func cardLines(workspace workspaceinventory.Workspace, refreshing, stale bool, now time.Time) []kanban.Line {
+// stale reflects the owning project's freshness tracker; abnormal
+// Presentation.Freshness (e.g. "unavailable") falls through to a plain word
+// when the tracker does not apply. Mid-cycle polls no longer rewrite cards
+// with a "refreshing…" flash — relative age already communicates freshness.
+func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time) []kanban.Line {
 	hue := styles.ProjectHue(workspace.ProjectKey)
 	spine := spineGlyph(workspace.Kind)
 	line1 := kanban.Line{Spans: []kanban.Span{
@@ -710,7 +715,7 @@ func cardLines(workspace workspaceinventory.Workspace, refreshing, stale bool, n
 	}
 	line2 := kanban.Line{Spans: []kanban.Span{
 		{Text: spine, Foreground: hue},
-		{Text: " " + workspace.Provider, Foreground: styles.AgentColor(workspace.Provider), Background: styles.AgentChipFill()},
+		{Text: " " + styles.AgentLabel(workspace.Provider), Foreground: styles.AgentColor(workspace.Provider), Background: styles.AgentChipFill()},
 		{Text: " " + status, Foreground: styles.LaneColor(string(workspace.Presentation.Lane))},
 	}}
 
@@ -719,8 +724,6 @@ func cardLines(workspace workspaceinventory.Workspace, refreshing, stale bool, n
 		detail = "tmux " + workspace.TmuxName
 	}
 	switch {
-	case refreshing:
-		detail += " · refreshing…"
 	case stale:
 		detail += " · stale"
 	case workspace.Presentation.Freshness != "" && workspace.Presentation.Freshness != agentstatus.FreshnessCurrent:
@@ -832,7 +835,7 @@ func compactCardText(lane string, card kanban.Card, workspace workspaceinventory
 		return fmt.Sprintf(" %-15s %s  %s", lane, card.Title, card.Subtitle)
 	}
 	project := lipgloss.NewStyle().Foreground(styles.ProjectHue(workspace.ProjectKey)).Render(workspace.ProjectName + " / " + workspace.Name)
-	agent := lipgloss.NewStyle().Foreground(styles.AgentColor(workspace.Provider)).Render(workspace.Provider)
+	agent := lipgloss.NewStyle().Foreground(styles.AgentColor(workspace.Provider)).Render(styles.AgentLabel(workspace.Provider))
 	return fmt.Sprintf(" %-15s %s  %s · %s", lane, project, agent, workspace.Presentation.Label)
 }
 

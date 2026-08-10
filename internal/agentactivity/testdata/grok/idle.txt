@@ -1,8 +1,8 @@
-source: real Grok 1.0.0 3cd0d0cbcebe stable, isolated tmux socket
+source: real Grok idle composer (Ctrl+x:shortcuts, no Esc:cancel); title bare session - grok
 pane_title: Count from 1 to 20 Slowly - grok
 pane_current_command: grok-1.0.0-maco
 screen:
   ╭──────────────────────────────────────────────────────╮
   │ ❯                                                    │
-  ╰──────────────────────────────────── Grok 4.5 (high) ─╯
-  Shift+Tab:mode  │  Ctrl+x:shortcuts
+  ╰──────────────────────────────────── Grok 4.5 (high) · always-approve ─╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts

@@ -16,6 +16,35 @@ func TestBuiltInThemesMeetContrastTargets(t *testing.T) {
 }
 
 // The shortcut row was the worst offender before normalization: it drew
+func TestCardSelectedBgIsDarkerThanBoard(t *testing.T) {
+	// Default primary: selection should move toward black.
+	got := cardSelectedBgHex("#111827", "#1F2937")
+	if !IsDarkBackground(got) {
+		t.Fatalf("card selection %s is not dark", got)
+	}
+	// Luminance of selection must be strictly below primary (darker).
+	_, _, lPrimary := HexToHSL("#111827")
+	_, _, lSel := HexToHSL(got)
+	if lSel >= lPrimary {
+		t.Fatalf("card selection %s lightness %.3f is not darker than primary %.3f", got, lSel, lPrimary)
+	}
+	// And well below the old tertiary lift that washed colours out.
+	_, _, lTertiary := HexToHSL("#374151")
+	if lSel >= lTertiary {
+		t.Fatalf("card selection %s is not darker than BgTertiary", got)
+	}
+}
+
+func TestCardSelectedBgNearBlackPrimaryStillResolves(t *testing.T) {
+	got := cardSelectedBgHex("#000000", "#1F2937")
+	if got == "" {
+		t.Fatal("empty card selection bg")
+	}
+	if !IsValidHexColor(got) {
+		t.Fatalf("invalid hex %s", got)
+	}
+}
+
 // TextMuted (validated only against BgPrimary) on BgTertiary (an arbitrary
 // terminal selection colour). Both halves of that bug are covered here.
 func TestKeyHintIsLegibleOnEveryBuiltInTheme(t *testing.T) {

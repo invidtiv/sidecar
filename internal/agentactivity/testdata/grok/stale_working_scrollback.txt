@@ -1,0 +1,36 @@
+source: historical busy chrome scrolled above a live idle footer — must not stick working
+pane_title: ⠼ sticky title - grok
+pane_current_command: grok-1.0.0-maco
+screen:
+  ⠼ old tool row Thinking… [stop]
+  resolved output from a finished turn
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  more scrollback
+  ╭──────────────────────────────────────────────────────╮
+  │ ❯                                                    │
+  ╰──────────────────────────────────── Grok 4.5 (high) ─╯
+  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts

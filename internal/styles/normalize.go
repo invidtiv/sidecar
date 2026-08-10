@@ -220,6 +220,24 @@ func deriveSurfaceRaised(bgPrimary, bgSecondary string) string {
 // surface and the rest of the chrome at once.
 const surfaceTextHeadroom = 4.6
 
+// cardSelectedBgHex returns a selection fill darker than the board so multi-
+// coloured kanban/overview card text stays readable. ListItemSelected uses
+// BgTertiary (a lighter lift), which washes out project hues, agent chips, and
+// lane colours.
+//
+// When BgPrimary is already near black and cannot darken further, fall back to
+// a darkened BgSecondary so selection still separates from the board.
+func cardSelectedBgHex(bgPrimary, bgSecondary string) string {
+	darker := Blend(bgPrimary, "#000000", 0.45)
+	if ColorDistance(darker, bgPrimary) >= 10 {
+		return darker
+	}
+	if bgSecondary != "" {
+		return Darken(bgSecondary, 0.2)
+	}
+	return darker
+}
+
 // AdjustSurface derives a chrome surface `amount` away from a background.
 //
 // The conventional move is to lighten dark backgrounds and darken light ones.

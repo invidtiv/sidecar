@@ -41,8 +41,8 @@ func TestSpineAndKindGlyphDifferByWorkspaceKind(t *testing.T) {
 	worktree := workspaceinventory.Workspace{Kind: workspaceinventory.KindWorktree, ProjectKey: "p", ProjectName: "one", Name: "agent", Provider: "codex"}
 	shell := workspaceinventory.Workspace{Kind: workspaceinventory.KindShell, ProjectKey: "p", ProjectName: "one", Name: "agent", Provider: "codex", TmuxName: "sess"}
 
-	worktreeLines := cardLines(worktree, false, false, time.Now())
-	shellLines := cardLines(shell, false, false, time.Now())
+	worktreeLines := cardLines(worktree, false, time.Now())
+	shellLines := cardLines(shell, false, time.Now())
 
 	if worktreeLines[0].Spans[0].Text != "▌" {
 		t.Fatalf("worktree spine = %q, want ▌", worktreeLines[0].Spans[0].Text)
@@ -69,40 +69,50 @@ func TestSpineAndKindGlyphDifferByWorkspaceKind(t *testing.T) {
 	}
 }
 
-func TestCardLinesRefreshingAndStaleLandOnLineThree(t *testing.T) {
+func TestCardLinesStaleLandsOnLineThree(t *testing.T) {
 	base := workspaceinventory.Workspace{
 		Kind: workspaceinventory.KindWorktree, ProjectKey: "p", ProjectName: "one", Name: "agent", Branch: "main", Provider: "codex",
 		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Label: "working", Freshness: agentstatus.FreshnessCurrent},
 	}
-	cases := []struct {
-		name             string
-		refreshing       bool
-		stale            bool
-		wantLine3Suffix  string
-		wantNotLine3Text string
-	}{
-		{"refreshing", true, false, "· refreshing…", "· stale"},
-		{"stale", false, true, "· stale", "· refreshing…"},
+
+	// Mid-cycle refresh no longer rewrites cards — keep last-good content stable.
+	fresh := cardLines(base, false, time.Now())
+	line3Fresh := fresh[2].Spans[len(fresh[2].Spans)-1].Text
+	if strings.Contains(line3Fresh, "refreshing") {
+		t.Fatalf("line 3 = %q, must not contain refreshing", line3Fresh)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			lines := cardLines(base, tc.refreshing, tc.stale, time.Now())
-			line3 := lines[2].Spans[len(lines[2].Spans)-1].Text
-			if !strings.Contains(line3, tc.wantLine3Suffix) {
-				t.Fatalf("line 3 = %q, want to contain %q", line3, tc.wantLine3Suffix)
+
+	stale := cardLines(base, true, time.Now())
+	line3Stale := stale[2].Spans[len(stale[2].Spans)-1].Text
+	if !strings.Contains(line3Stale, "· stale") {
+		t.Fatalf("line 3 = %q, want to contain %q", line3Stale, "· stale")
+	}
+	// Stale never leaks onto line 1 or line 2.
+	for i, line := range stale[:2] {
+		for _, span := range line.Spans {
+			if strings.Contains(span.Text, "stale") || strings.Contains(span.Text, "refreshing") {
+				t.Fatalf("freshness word leaked onto line %d: %q", i, span.Text)
 			}
-			if strings.Contains(line3, tc.wantNotLine3Text) {
-				t.Fatalf("line 3 = %q, unexpectedly contains %q", line3, tc.wantNotLine3Text)
-			}
-			// Freshness abnormalities never leak onto line 1 or line 2.
-			for i, line := range lines[:2] {
-				for _, span := range line.Spans {
-					if strings.Contains(span.Text, "refreshing") || strings.Contains(span.Text, "stale") {
-						t.Fatalf("freshness word leaked onto line %d: %q", i, span.Text)
-					}
-				}
-			}
-		})
+		}
+	}
+}
+
+func TestCardLinesAgentChipUsesConversationsIcon(t *testing.T) {
+	ws := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindWorktree, ProjectKey: "p", ProjectName: "one", Name: "agent", Provider: "codex",
+		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Label: "working"},
+	}
+	lines := cardLines(ws, false, time.Now())
+	// Line 2 agent chip: spine, then " ▶ codex" (icon before name).
+	if len(lines) < 2 || len(lines[1].Spans) < 2 {
+		t.Fatalf("expected agent chip span on line 2, got %#v", lines)
+	}
+	chip := lines[1].Spans[1].Text
+	if !strings.Contains(chip, "▶") || !strings.Contains(chip, "codex") {
+		t.Fatalf("agent chip = %q, want conversations icon ▶ before provider name", chip)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(chip), "▶") {
+		t.Fatalf("agent chip = %q, want icon before name", chip)
 	}
 }
 
