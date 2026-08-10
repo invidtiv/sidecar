@@ -48,6 +48,13 @@ var (
 		Description: "Enable the notes plugin for capturing quick notes",
 	}
 
+	// TasksPlugin enables the embedded Tasks plugin tab.
+	TasksPlugin = Feature{
+		Name:        "tasks_plugin",
+		Default:     false,
+		Description: "Enable the embedded Tasks plugin tab",
+	}
+
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
@@ -62,6 +69,7 @@ var allFeatures = []Feature{
 	TmuxInlineEdit,
 	FilesAutoRefresh,
 	NotesPlugin,
+	TasksPlugin,
 	CrossProjectOverview,
 }
 

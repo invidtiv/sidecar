@@ -29,6 +29,11 @@ type savePluginsConfig struct {
 	FileBrowser   saveFileBrowserConfig   `json:"file-browser,omitempty"`
 	Conversations saveConversationsConfig `json:"conversations,omitempty"`
 	Workspace     saveWorkspaceConfig     `json:"workspace,omitempty"`
+	Tasks         saveTasksConfig         `json:"tasks,omitempty"`
+}
+
+type saveTasksConfig struct {
+	Position string `json:"position,omitempty"`
 }
 
 type saveFileBrowserConfig struct {
@@ -91,6 +96,9 @@ func toSaveConfig(cfg *Config) saveConfig {
 			Conversations: saveConversationsConfig{
 				Enabled:       &cfg.Plugins.Conversations.Enabled,
 				ClaudeDataDir: cfg.Plugins.Conversations.ClaudeDataDir,
+			},
+			Tasks: saveTasksConfig{
+				Position: cfg.Plugins.Tasks.Position,
 			},
 			Workspace: saveWorkspaceConfig{
 				DirPrefix:            &cfg.Plugins.Workspace.DirPrefix,

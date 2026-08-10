@@ -57,6 +57,35 @@ type PluginsConfig struct {
 	Conversations ConversationsPluginConfig `json:"conversations"`
 	Workspace     WorkspacePluginConfig     `json:"workspace"`
 	Notes         NotesPluginConfig         `json:"notes"`
+	Tasks         TasksPluginConfig         `json:"tasks"`
+}
+
+// Tab positions for the Tasks plugin.
+const (
+	// TasksPositionAfterWorkspaces places the Tasks tab immediately after the
+	// workspaces tab. This is the default.
+	TasksPositionAfterWorkspaces = "after-workspaces"
+	// TasksPositionAfterNotes places the Tasks tab immediately after the notes
+	// tab.
+	TasksPositionAfterNotes = "after-notes"
+)
+
+// TasksPluginConfig configures the embedded Tasks plugin.
+//
+// Whether the plugin loads at all is governed by the "tasks_plugin" feature
+// flag (default off), not by a field here — that keeps enablement on the same
+// lever as the other opt-in surfaces (see internal/features).
+//
+// There is deliberately no store/JSONL path: the embedded Tasks package uses
+// Tasks' own configuration resolution.
+type TasksPluginConfig struct {
+	// Position is the anchor the Tasks tab is inserted after. One of
+	// TasksPositionAfterWorkspaces (default) or TasksPositionAfterNotes.
+	// Unknown values are coerced back to the default by Validate.
+	//
+	// The resulting tab *number* is derived state: it depends on which
+	// preceding plugins are enabled, so no fixed shortcut number is promised.
+	Position string `json:"position,omitempty"`
 }
 
 // GitStatusPluginConfig configures the git status plugin.
@@ -210,6 +239,9 @@ func Default() *Config {
 				Enabled:       true,
 				ClaudeDataDir: "~/.claude",
 			},
+			Tasks: TasksPluginConfig{
+				Position: TasksPositionAfterWorkspaces,
+			},
 			Workspace: WorkspacePluginConfig{
 				DirPrefix:           true,
 				TmuxCaptureMaxBytes: 2 * 1024 * 1024,
@@ -247,6 +279,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Plugins.Workspace.TmuxCaptureMaxBytes <= 0 {
 		c.Plugins.Workspace.TmuxCaptureMaxBytes = 2 * 1024 * 1024
+	}
+	// An unrecognized (or empty) tasks position falls back to the default
+	// anchor rather than failing the whole config, which is how the rest of
+	// Validate treats out-of-range values.
+	switch c.Plugins.Tasks.Position {
+	case TasksPositionAfterWorkspaces, TasksPositionAfterNotes:
+	default:
+		c.Plugins.Tasks.Position = TasksPositionAfterWorkspaces
 	}
 	return nil
 }

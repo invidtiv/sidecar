@@ -94,6 +94,11 @@ type rawPluginsConfig struct {
 	FileBrowser   rawFileBrowserConfig   `json:"file-browser"`
 	Conversations rawConversationsConfig `json:"conversations"`
 	Workspace     rawWorkspaceConfig     `json:"workspace"`
+	Tasks         rawTasksConfig         `json:"tasks"`
+}
+
+type rawTasksConfig struct {
+	Position string `json:"position"`
 }
 
 type rawWorkspaceConfig struct {
@@ -262,6 +267,11 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Plugins.Conversations.ClaudeDataDir != "" {
 		cfg.Plugins.Conversations.ClaudeDataDir = raw.Plugins.Conversations.ClaudeDataDir
+	}
+
+	// Tasks
+	if raw.Plugins.Tasks.Position != "" {
+		cfg.Plugins.Tasks.Position = raw.Plugins.Tasks.Position
 	}
 
 	// Workspace
