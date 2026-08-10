@@ -1602,6 +1602,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeCommitState = nil
 				p.mergeCommitMessageInput = textinput.Model{}
 				p.clearCommitForMergeModal()
+				if msg.NothingToCommit {
+					cmds = append(cmds, appmsg.ShowToast("Nothing to commit — workspace was already clean", 3*time.Second))
+				}
 				cmds = append(cmds, p.proceedToMergeWorkflow(wt))
 			}
 		}

@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -182,7 +183,10 @@ type MergeCommitDoneMsg struct {
 	OperationScope
 	WorkspaceName string
 	CommitHash    string
-	Err           error
+	// NothingToCommit reports that the worktree was already clean by the time
+	// the commit ran (the modal's counts came from a cached status snapshot).
+	NothingToCommit bool
+	Err             error
 }
 
 // PRGenerationDoneMsg signals that agent-powered PR description generation completed.
@@ -291,6 +295,36 @@ func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 	}
 }
 
+// indexMatchesHEAD reports whether the index is identical to HEAD, i.e. there
+// is nothing for `git commit` to record. A repository without any commits yet
+// is treated as "has changes" whenever the index is non-empty.
+func indexMatchesHEAD(ctx context.Context, path string) (bool, error) {
+	rev := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD")
+	rev.Dir = path
+	if err := rev.Run(); err != nil {
+		// Unborn HEAD: anything staged is committable.
+		ls := exec.CommandContext(ctx, "git", "diff", "--cached", "--name-only")
+		ls.Dir = path
+		out, lerr := ls.Output()
+		if lerr != nil {
+			return false, lerr
+		}
+		return len(bytes.TrimSpace(out)) == 0, nil
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet", "HEAD")
+	cmd.Dir = path
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
 // stageAllAndCommit stages all changes and commits with the given message.
 func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 	scope := p.lifecycleScope(wt)
@@ -312,6 +346,19 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 				OperationScope: scope,
 				WorkspaceName:  name,
 				Err:            fmt.Errorf("failed to stage: %w", err),
+			}
+		}
+
+		// The modal's counts come from the shared status snapshot, which can be
+		// stale (an agent may have committed since the last refresh). If nothing
+		// is staged after `git add -A`, there is genuinely nothing to commit;
+		// treat that as success so the merge/PR workflow can continue instead of
+		// dead-ending on git's "nothing to commit" error.
+		if clean, cerr := indexMatchesHEAD(ctx, path); cerr == nil && clean {
+			return MergeCommitDoneMsg{
+				OperationScope:  scope,
+				WorkspaceName:   name,
+				NothingToCommit: true,
 			}
 		}
 
