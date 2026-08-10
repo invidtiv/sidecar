@@ -63,6 +63,13 @@ type Plugin struct {
 	// configuration from. Production leaves it nil (Tasks snapshots os.Environ);
 	// tests set it so they never touch the developer's real task data.
 	environment map[string]string
+
+	// newEmbedded builds the Tasks model. Production leaves it nil and gets
+	// tasksui.NewEmbedded. It exists so a test can prove *when* the build
+	// happens: the no-I/O-before-the-first-frame guarantee is about the call
+	// never being made until Start's command runs, which no amount of
+	// after-the-fact filesystem inspection can establish.
+	newEmbedded func(tasksui.EmbeddedOptions) (*tasksui.Model, error)
 }
 
 // New creates a new Tasks plugin.
@@ -150,7 +157,11 @@ func (p *Plugin) buildModel() tea.Cmd {
 				msg = TasksReadyMsg{Epoch: epoch, Generation: generation, Err: fmt.Errorf("panic building tasks: %v", rec)}
 			}
 		}()
-		model, err := tasksui.NewEmbedded(options)
+		build := p.newEmbedded
+		if build == nil {
+			build = tasksui.NewEmbedded
+		}
+		model, err := build(options)
 		return TasksReadyMsg{Epoch: epoch, Generation: generation, Model: model, Err: err}
 	}
 }

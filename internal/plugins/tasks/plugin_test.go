@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -13,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/styles"
 	tasksui "github.com/marcus/tasks/pkg/tui"
 )
 
@@ -252,7 +254,51 @@ func TestInitDoesNoIO(t *testing.T) {
 	if ready.Err != nil || ready.Model == nil {
 		t.Fatalf("build failed: %v", ready.Err)
 	}
-	_ = ready.Model.Close()
+	_ = ready.Model.Discard()
+}
+
+// TestModelIsBuiltOnlyByTheStartCommand pins the acceptance criterion directly:
+// no store open and no agent queue before sidecar's first frame. Comparing the
+// filesystem before and after Init cannot establish this — a read-only open, a
+// stat walk, or a spawned process leaves no new paths behind — so this counts
+// the builder calls instead.
+func TestModelIsBuiltOnlyByTheStartCommand(t *testing.T) {
+	_, env := configuredEnv(t)
+
+	calls := 0
+	p := New()
+	p.environment = env
+	p.newEmbedded = func(options tasksui.EmbeddedOptions) (*tasksui.Model, error) {
+		calls++
+		return tasksui.NewEmbedded(options)
+	}
+
+	if err := p.Init(testContext(t)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("Init built the tasks model (%d calls); it must not run before the first frame", calls)
+	}
+
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned no command")
+	}
+	if calls != 0 {
+		t.Fatalf("Start() itself built the model (%d calls); only its command may", calls)
+	}
+
+	ready, ok := cmd().(TasksReadyMsg)
+	if !ok {
+		t.Fatal("Start() command produced something other than TasksReadyMsg")
+	}
+	if calls != 1 {
+		t.Fatalf("builder called %d times, want exactly 1", calls)
+	}
+	if ready.Err != nil || ready.Model == nil {
+		t.Fatalf("build failed: %v", ready.Err)
+	}
+	_ = ready.Model.Discard()
 }
 
 func equalPaths(a, b []string) bool {
@@ -521,12 +567,105 @@ func TestUserColorsSurviveUnderSidecarsOverlay(t *testing.T) {
 	if !strings.Contains(view, "255;0;255") {
 		t.Errorf("sidecar's palette destroyed the user's own tab_active colour:\n%q", view)
 	}
+	// The user's accent must lose, but asserting only its absence is vacuous:
+	// it is absent under an empty overlay too. Assert sidecar's value is the
+	// one actually rendered.
+	if want := rgbTriple(t, styles.GetCurrentTheme().Colors.Primary); !strings.Contains(view, want) {
+		t.Errorf("sidecar's accent %q (%s) is not in the rendered frame:\n%q",
+			styles.GetCurrentTheme().Colors.Primary, want, view)
+	}
 	if strings.Contains(view, "255;170;0") {
 		t.Errorf("sidecar's override of accent did not win:\n%q", view)
 	}
 	if buildTheme().ReplaceColors {
 		t.Error("buildTheme must not opt into wholesale colour replacement")
 	}
+}
+
+// TestBuildThemeOverlaysSidecarSlots pins the adapter itself. The rendered-frame
+// test above only exercises whichever slots that frame happens to paint, so it
+// cannot see a slot that is dropped, misrouted, or a base theme that clobbers
+// the user's.
+func TestBuildThemeOverlaysSidecarSlots(t *testing.T) {
+	c := styles.GetCurrentTheme().Colors
+	theme := buildTheme()
+
+	if theme.Name != "" {
+		t.Errorf("Name = %q, want empty so the user's own base theme survives", theme.Name)
+	}
+	if theme.ReplaceColors {
+		t.Error("ReplaceColors must stay false; sidecar overlays a few slots, it does not own the palette")
+	}
+
+	for slot, want := range map[string]string{
+		"accent":      c.Primary,
+		"prompt":      "bold " + c.Primary,
+		"error":       c.Error,
+		"warning":     c.Warning,
+		"muted":       c.TextMuted,
+		"border":      c.BorderNormal,
+		"context":     "bold " + c.Secondary,
+		"project":     c.Accent,
+		"state_next":  c.Info,
+		"due_overdue": c.Error,
+	} {
+		if got := theme.Colors[slot]; got != want {
+			t.Errorf("slot %q = %q, want %q", slot, got, want)
+		}
+	}
+	if _, ok := theme.Colors["tab_active"]; ok {
+		t.Error("sidecar must not name tab_active; unnamed slots belong to the user")
+	}
+}
+
+// TestNewEmbeddedIsCalledFromOneSiteOnly backs the call-counting test above.
+// That test can only see construction that goes through p.newEmbedded, so this
+// one pins the other half: the plugin constructs Tasks in exactly one place,
+// inside the command Start() returns. Without it, moving the build into Init
+// as a direct tasksui.NewEmbedded call would bypass the seam unnoticed.
+//
+// A build has no observable footprint to assert instead — measured: it starts
+// no goroutines (the agent queue is lazy) and leaves no descriptors open (it
+// closes what it reads) — so the structure is what there is to check.
+func TestNewEmbeddedIsCalledFromOneSiteOnly(t *testing.T) {
+	source, err := os.ReadFile("plugin.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const call = "tasksui.NewEmbedded"
+
+	var sites []int
+	for line, text := range strings.Split(string(source), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(text), "//") {
+			continue
+		}
+		if strings.Contains(text, call) {
+			sites = append(sites, line+1)
+		}
+	}
+	if len(sites) != 1 {
+		t.Fatalf("%s appears at lines %v, want exactly one site; every build must go through p.newEmbedded so it stays off the startup path",
+			call, sites)
+	}
+
+	// The one site must be the fallback inside buildModel's returned command,
+	// not the body of Init, Start, or buildModel itself.
+	body := string(source)
+	buildModel := body[strings.Index(body, "func (p *Plugin) buildModel()"):]
+	if !strings.Contains(buildModel[:strings.Index(buildModel, "\n}\n")], call) {
+		t.Errorf("%s is called outside buildModel; construction must not run before the first frame", call)
+	}
+}
+
+// rgbTriple converts a #rrggbb colour into the "r;g;b" form that appears in a
+// rendered SGR sequence.
+func rgbTriple(t *testing.T, hex string) string {
+	t.Helper()
+	var r, g, b uint8
+	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
+		t.Fatalf("theme colour %q is not #rrggbb: %v", hex, err)
+	}
+	return fmt.Sprintf("%d;%d;%d", r, g, b)
 }
 
 // TestSessionNamespaceIsSidecarSpecific proves the embedded model can never
