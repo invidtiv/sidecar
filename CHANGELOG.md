@@ -2,6 +2,29 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.94.0] - 2026-08-09
+
+### Features
+- **The cross-project Agent Overview is on by default.** A single board shows every agent workspace across all your projects, not just the one you have open — click the logo or press `K` to reach it. Rows interleave workspace identity (project, branch, agent) with live inventory (activity state, diff size, PR status), and the board is colour-encoded by state so a glance tells you what is working, blocked, or waiting on you. Refreshes are request-ID'd and per-project trackers are isolated, so one slow project can no longer stall or corrupt another's row, stale navigation results are rejected instead of jumping you to the wrong pane, and sibling worktrees are matched to their real panes. The compact/narrow layouts keep the app header and active tab on one row. (td-1983cb, td-d2e415, td-5feb84, td-a2b217, td-2fb16f, td-a2ec37, td-897e31, td-47321d, td-20f583, td-7e8d0d, td-6b4657)
+- **Terminals across the app share one model-first component.** Workspace panes, shell panes, and the files-plugin inline editor all run on the same terminal model instead of three divergent capture paths: absolute scrollback history is preserved, terminal generation is invalidated on resize, a blank pane falls back to a rendered snapshot rather than flickering empty during reseed, and pane input routing is consistent everywhere. The inline editor inherits all of it, and rejects stale async save results instead of applying them over newer edits. (td-b49d63, td-14a1df, td-d5df75, td-76f993, td-d267fe)
+- **Workspace creation, merge, and PR lifecycles are recoverable and safe to interrupt.** A creation that fails partway preserves its partial state and can be resumed rather than leaving an orphaned worktree; merge preflight, post-create discovery, and other long git operations are cancelled cleanly when you move on, instead of landing their results on a workspace you have already left. Cleanup refuses unsafe targets, merge recovery is bound to the identity it started with, pull revalidates its target first, fork base topology resolves correctly, and containment refusals say plainly why they refused. (td-24d130, td-75360a, td-9ce7db, td-c90334, td-9ce314)
+- **Diff status is authoritative.** The changed-file counts and diff strategy shown on a workspace card come from a captured strategy rather than being recomputed against whatever the tree looks like at render time, so branch commits show correctly and a phantom diff entry no longer appears.
+- **Agent activity states animate**, and each provider gets its own spinner set, so a working agent reads as working at a glance instead of as a frozen frame.
+- **Grok detection**, plus a round of general agent-detection accuracy fixes.
+
+### Bug Fixes
+- **Theme contrast is enforced on every surface text is drawn on**, so no theme can produce unreadable text on a coloured background; search match highlights are guaranteed a legible foreground.
+- **Passive terminal follow is preserved on the live grid** — the Overview grid no longer steals follow from a terminal you are watching.
+- The workspace terminal cursor is placed from a carried pane split, and the preview header collapses to a single row.
+- Panel shortcut input is routed to the right panel; model-owned panel capture is guarded. (td-14a1df)
+- Visible terminals are kept current rather than going stale behind the active pane.
+
+### Developer
+- **Releases fail closed on red Go CI** instead of relying on a manual checklist item.
+- A byte-fed screen-model adapter, tmux fidelity harness, and shadow-comparison canary were built and evaluated against the tmux-owned path; the gate outcome is recorded as HOLD, and tmux retains ownership of bracketed paste at the input seam. (td-b7aa77, td-d7a24f)
+- Isolated terminal proof harness hardened: bare control-client socket identity is verified, and the proof driver refuses to run against a shared server. (td-d7a24f)
+- A Codex adapter, plus harness-change detection per terminal/workspace.
+
 ## [v0.93.0] - 2026-08-08
 
 ### Features
