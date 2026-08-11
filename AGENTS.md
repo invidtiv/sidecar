@@ -22,7 +22,8 @@ Run `td usage` or `td <command> --help`.
 ## Keep the current shell name useful
 
 When working inside a Sidecar project shell, keep its display name aligned with
-your current task. Run `sidecar shell rename "short context"` when you begin a
+your current task. `$SIDECAR_SHELL_NAME` holds the current name — a value like
+`Shell 3` is Sidecar's unset default and is worth replacing. Run `sidecar shell rename "short context"` when you begin a
 materially different task or the existing name is stale. Update it at meaningful
 context boundaries, not for every sub-step or status change. Prefer the outcome
 (`shell rename implementation`) over the model or transient action

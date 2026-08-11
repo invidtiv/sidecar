@@ -1402,6 +1402,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				break
 			}
 		}
+		// Keep the environment cue in step with the manifest so anything
+		// started in this shell from now on reads the current name.
+		setShellEnv(msg.TmuxName, msg.NewName)
 		p.viewMode = ViewModeList
 		p.clearRenameShellModal()
 		// Persist the selection state

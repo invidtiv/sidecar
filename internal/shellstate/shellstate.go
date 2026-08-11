@@ -19,6 +19,26 @@ import (
 
 const MaxNameBytes = 50
 
+// NameEnv carries the current display name into the shell's environment, and
+// SessionEnv the tmux session that owns it. An agent that can read its own
+// shell name can tell a default ("Shell 9") from a real one, which is what
+// makes the rename instruction actionable rather than a rule to remember.
+const (
+	NameEnv    = "SIDECAR_SHELL_NAME"
+	SessionEnv = "SIDECAR_SHELL"
+)
+
+// NamingInstruction is the canonical guidance for keeping a shell's display
+// name useful. It lives here, next to the rules it describes, so every
+// delivery channel — AGENTS.md, a harness system-prompt append, help text —
+// quotes one source instead of drifting copies.
+const NamingInstruction = "This terminal is a Sidecar project shell. Its display name is in $" + NameEnv +
+	"; a name like \"Shell 3\" is an unset default. Run `sidecar shell rename \"short context\"` when you begin a " +
+	"materially different task or the current name is stale — at meaningful context boundaries, not for every " +
+	"sub-step. Prefer the outcome (\"shell rename implementation\") over the model or a transient action " +
+	"(\"Codex running tests\"). This renames only the current Sidecar shell; never edit shells.json or rename tmux " +
+	"sessions directly."
+
 type ErrorKind string
 
 const (

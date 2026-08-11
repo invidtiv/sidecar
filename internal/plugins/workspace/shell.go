@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -500,7 +501,7 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		if previewWidth > 0 && previewHeight > 0 {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
-		if err := tty.NewSession(args...); err != nil {
+		if err := newShellSession(args, sessionName, displayName); err != nil {
 			created.Err = fmt.Errorf("create shell session: %w", err)
 			return created
 		}
@@ -598,7 +599,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 		if previewWidth > 0 && previewHeight > 0 {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
-		if err := tty.NewSession(args...); err != nil {
+		if err := newShellSession(args, sessionName, shell.Name); err != nil {
 			return ShellCreatedMsg{
 				SessionName: sessionName,
 				DisplayName: shell.Name,
@@ -649,6 +650,7 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 				baseCmd = baseCmd + " " + flag
 			}
 		}
+		baseCmd = withShellNamingInstruction(baseCmd, agentType)
 
 		// Send the command to the shell's tmux session
 		cmd := exec.Command("tmux", "send-keys", "-t", tmuxName, baseCmd, "Enter")
@@ -665,6 +667,57 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 			SkipPerms: skipPerms,
 		}
 	}
+}
+
+// shellEnvArgs are the new-session flags that publish a shell's identity into
+// its own environment. An agent can then read $SIDECAR_SHELL_NAME to tell a
+// default name from a deliberate one without asking anybody.
+func shellEnvArgs(sessionName, displayName string) []string {
+	return []string{
+		"-e", shellstate.SessionEnv + "=" + sessionName,
+		"-e", shellstate.NameEnv + "=" + displayName,
+	}
+}
+
+// newShellSession creates a shell session with its identity environment,
+// falling back to a plain create if this tmux rejects new-session -e (added in
+// tmux 3.2). Losing the environment cue is a degraded shell; failing to create
+// the session is a broken one, and the fallback still publishes the values to
+// the session environment for any pane opened later.
+func newShellSession(args []string, sessionName, displayName string) error {
+	withEnv := append(append([]string(nil), args...), shellEnvArgs(sessionName, displayName)...)
+	if err := tty.NewSession(withEnv...); err == nil {
+		return nil
+	}
+	if err := tty.NewSession(args...); err != nil {
+		return err
+	}
+	setShellEnv(sessionName, displayName)
+	return nil
+}
+
+// setShellEnv publishes the display name to the tmux session environment.
+// Panes already running keep the value they were created with — the manifest
+// and `sidecar shell rename` remain the authority, this is only the cue.
+func setShellEnv(sessionName, displayName string) {
+	if sessionName == "" {
+		return
+	}
+	_ = tty.SetSessionEnv(sessionName, shellstate.SessionEnv, sessionName)
+	_ = tty.SetSessionEnv(sessionName, shellstate.NameEnv, displayName)
+}
+
+// withShellNamingInstruction appends the shell-naming guidance to an agent
+// launch as a session-scoped system prompt. Documentation only reaches the
+// harness that reads that particular file; the launch command reaches every
+// agent Sidecar starts itself. Harnesses with no append flag are returned
+// unchanged and rely on the SIDECAR_SHELL_NAME environment cue.
+func withShellNamingInstruction(baseCmd string, agentType AgentType) string {
+	flag := SystemPromptAppendFlags[agentType]
+	if flag == "" {
+		return baseCmd
+	}
+	return baseCmd + " " + flag + " " + shellQuote(shellstate.NamingInstruction)
 }
 
 // attachToShellByIndex attaches to a specific shell session by index.
@@ -713,7 +766,7 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 			if previewWidth > 0 && previewHeight > 0 {
 				args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 			}
-			if err := tty.NewSession(args...); err != nil {
+			if err := newShellSession(args, sessionName, shell.Name); err != nil {
 				return ShellCreatedMsg{
 					SessionName: sessionName,
 					DisplayName: shell.Name,

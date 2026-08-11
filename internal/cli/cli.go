@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // Run dispatches a non-interactive command. handled=false leaves legacy TUI
@@ -76,6 +77,10 @@ func runShellRename(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	// Refresh the environment cue for anything started in this shell later.
+	// The calling process keeps the value it inherited; the manifest, not the
+	// environment, is the authority.
+	_ = tty.SetSessionEnv(identity.session, shellstate.NameEnv, result.Name)
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(result); err != nil {
 			cliErrln(stderr, err)
@@ -147,6 +152,9 @@ const renameHelp = `Usage: sidecar shell rename [--json] <display-name>
 
 Rename only the Sidecar project shell containing this command. This changes
 Sidecar's display name; it does not rename the tmux session.
+
+The current display name is also published as $SIDECAR_SHELL_NAME. A name
+like "Shell 3" is Sidecar's unset default.
 
 Example:
   sidecar shell rename "shell rename implementation"

@@ -64,6 +64,16 @@ func NewSession(args ...string) error {
 	return exec.Command("tmux", args...).Run()
 }
 
+// SetSessionEnv sets one variable in a tmux session's environment. Panes
+// already running keep the value they started with, so this is a cue for
+// anything opened later, never the authority on a session's identity.
+func SetSessionEnv(sessionName, key, value string) error {
+	if sessionName == "" || key == "" {
+		return nil
+	}
+	return exec.Command("tmux", "set-environment", "-t", sessionName, key, value).Run()
+}
+
 // IsSessionDeadError checks if an error indicates the tmux session/pane is gone.
 func IsSessionDeadError(err error) bool {
 	if err == nil {

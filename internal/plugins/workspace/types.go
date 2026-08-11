@@ -185,6 +185,15 @@ var SkipPermissionsFlags = map[AgentType]string{
 	AgentGrok:        "--always-approve",
 }
 
+// SystemPromptAppendFlags maps agent types to the flag that appends text to
+// their system prompt for one session. Only harnesses with a documented flag
+// appear here: guidance an agent never sees is worse than none, and a guessed
+// flag would break the launch outright. Harnesses without one rely on the
+// SIDECAR_SHELL_NAME environment cue instead.
+var SystemPromptAppendFlags = map[AgentType]string{
+	AgentClaude: "--append-system-prompt",
+}
+
 // PrintModeArgs maps agent types to their non-interactive/print mode CLI arguments.
 // Agents with print mode can generate output to stdout without an interactive session.
 // Only agents that support true non-interactive one-shot output are included.
