@@ -15,11 +15,28 @@ func TestWithShellNamingInstructionOnlyForSupportedHarnesses(t *testing.T) {
 	if !strings.Contains(got, "sidecar shell rename") {
 		t.Fatalf("command = %q, want the rename instruction", got)
 	}
+	// Trigger is task mismatch, not only the generated default name.
+	if !strings.Contains(got, "previous task") {
+		t.Fatalf("command = %q, want stale previous-task guidance", got)
+	}
+	if !strings.Contains(got, "sidecar shell name") {
+		t.Fatalf("command = %q, want shell name lookup fallback", got)
+	}
 	// A single-quoted argument keeps the instruction's backticks and quotes
 	// from reaching the shell that runs the launch command.
 	if strings.Contains(got, "$(") || strings.Contains(got, "\n") {
 		t.Fatalf("command = %q, want a fully quoted instruction", got)
 	}
+
+	// Grok documents --rules (alias --append-system-prompt) for session rules.
+	grok := withShellNamingInstruction("grok", AgentGrok)
+	if !strings.HasPrefix(grok, "grok --rules ") {
+		t.Fatalf("grok command = %q, want --rules append", grok)
+	}
+	if !strings.Contains(grok, "sidecar shell rename") {
+		t.Fatalf("grok command = %q, want the rename instruction", grok)
+	}
+
 	// A harness with no documented append flag is launched unchanged rather
 	// than with a guessed flag that would break the launch.
 	if got := withShellNamingInstruction("codex", AgentCodex); got != "codex" {

@@ -111,6 +111,61 @@ func TestRenameCurrentRequiresUniqueRegisteredManifest(t *testing.T) {
 	}
 }
 
+func TestLookupCurrentReadsDisplayNameWithoutMutation(t *testing.T) {
+	state := t.TempDir()
+	dir := filepath.Join(state, "projects", "sidecar")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "shells.json")
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{{
+		TmuxName: "sidecar-sh-one", DisplayName: "prior task", Namespace: "/tmp/socket",
+	}}})
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LookupCurrent(state, Identity{TmuxName: "sidecar-sh-one", Namespace: "/tmp/socket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Shell != "sidecar-sh-one" || got.Name != "prior task" {
+		t.Fatalf("LookupCurrent() = %+v", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("LookupCurrent rewrote the manifest")
+	}
+	_, err = LookupCurrent(state, Identity{TmuxName: "sidecar-sh-missing", Namespace: "/tmp/socket"})
+	if err == nil {
+		t.Fatal("expected not found for unknown shell")
+	}
+	var kind *Error
+	if !errors.As(err, &kind) || kind.Kind != KindNotFound {
+		t.Fatalf("error = %v, want KindNotFound", err)
+	}
+}
+
+func TestLookupCurrentAmbiguousAcrossProjects(t *testing.T) {
+	state := t.TempDir()
+	for _, project := range []string{"one", "two"} {
+		dir := filepath.Join(state, "projects", project)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeTestManifest(t, filepath.Join(dir, "shells.json"), manifest{Version: 1, Shells: []Definition{{
+			TmuxName: "sidecar-sh-one", DisplayName: "shared", Namespace: "/tmp/socket",
+		}}})
+	}
+	_, err := LookupCurrent(state, Identity{TmuxName: "sidecar-sh-one", Namespace: "/tmp/socket"})
+	if err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("expected ambiguity, got %v", err)
+	}
+}
+
 func TestRenameCurrentMalformedRegisteredManifestFailsClosed(t *testing.T) {
 	state := t.TempDir()
 	validDir := filepath.Join(state, "projects", "valid")

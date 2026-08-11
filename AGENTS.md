@@ -22,12 +22,15 @@ Run `td usage` or `td <command> --help`.
 ## Keep the current shell name useful
 
 When working inside a Sidecar project shell, keep its display name aligned with
-your current task. `$SIDECAR_SHELL_NAME` holds the current name — a value like
-`Shell 3` is Sidecar's unset default and is worth replacing. Run `sidecar shell rename "short context"` when you begin a
-materially different task or the existing name is stale. Update it at meaningful
-context boundaries, not for every sub-step or status change. Prefer the outcome
+your current task. `$SIDECAR_SHELL_NAME` is a cue (it may be empty on older
+shells, or lag after a rename in this process); run `sidecar shell name` for the
+authoritative name from Sidecar's manifest. `Shell 3` is the unset default; a
+previous task's name is equally stale. At the start of work and whenever context
+changes materially, if the name does not describe what you are doing now, run
+`sidecar shell rename "short context"`. Update at meaningful context boundaries,
+not for every sub-step or status change. Prefer the outcome
 (`shell rename implementation`) over the model or transient action
-(`Codex running tests`). This command can rename only the current Sidecar shell;
+(`Codex running tests`). These commands act only on the current Sidecar shell;
 do not edit `shells.json` or rename tmux sessions directly.
 
 ## Build & Versioning

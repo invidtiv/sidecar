@@ -28,11 +28,61 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 		}
 		return true, 0
 	}
-	if args[1] != "rename" {
+	switch args[1] {
+	case "name":
+		return true, runShellName(args[2:], stdout, stderr)
+	case "rename":
+		return true, runShellRename(args[2:], stdout, stderr)
+	default:
 		cliErrf(stderr, "unknown shell command %q\n\n%s", args[1], shellHelp)
 		return true, 2
 	}
-	return true, runShellRename(args[2:], stdout, stderr)
+}
+
+func runShellName(args []string, stdout, stderr io.Writer) int {
+	jsonOutput := false
+	for _, arg := range args {
+		switch arg {
+		case "-h", "--help":
+			if _, err := fmt.Fprint(stdout, nameHelp); err != nil {
+				return 1
+			}
+			return 0
+		case "--json":
+			jsonOutput = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				cliErrf(stderr, "unknown option %q\n\n%s", arg, nameHelp)
+				return 2
+			}
+			cliErrf(stderr, "shell name takes no positional arguments\n\n%s", nameHelp)
+			return 2
+		}
+	}
+	identity, err := currentShellIdentity(context.Background())
+	if err != nil {
+		cliErrln(stderr, err)
+		return 1
+	}
+	result, err := shellstate.LookupCurrent(config.StateDir(), shellstate.Identity{
+		TmuxName:  identity.session,
+		Namespace: identity.socket,
+	})
+	if err != nil {
+		cliErrln(stderr, err)
+		return 1
+	}
+	if jsonOutput {
+		if err := json.NewEncoder(stdout).Encode(result); err != nil {
+			cliErrln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if _, err := fmt.Fprintln(stdout, result.Name); err != nil {
+		return 1
+	}
+	return 0
 }
 
 func runShellRename(args []string, stdout, stderr io.Writer) int {
@@ -143,9 +193,31 @@ const shellHelp = `Usage: sidecar shell <command>
 Manage the current Sidecar project shell.
 
 Commands:
+  name      Print the current shell's display name
   rename    Rename the current shell's display name
 
-Run "sidecar shell rename --help" for command details.
+Run "sidecar shell <command> --help" for command details.
+`
+
+const nameHelp = `Usage: sidecar shell name [--json]
+
+Print the Sidecar display name of the project shell containing this command.
+Reads the registered manifest (authoritative), not $SIDECAR_SHELL_NAME, so it
+works for shells created before that environment cue existed.
+
+Human output is the display name alone, one line, for easy scripting.
+JSON includes the stable tmux session id and display name.
+
+Example:
+  sidecar shell name
+  sidecar shell name --json
+
+Options:
+  --json    Write one structured result object to stdout
+  -h, --help
+            Show this help
+
+Exit codes: 0 success, 1 identity or state failure, 2 usage error.
 `
 
 const renameHelp = `Usage: sidecar shell rename [--json] <display-name>
@@ -153,8 +225,9 @@ const renameHelp = `Usage: sidecar shell rename [--json] <display-name>
 Rename only the Sidecar project shell containing this command. This changes
 Sidecar's display name; it does not rename the tmux session.
 
-The current display name is also published as $SIDECAR_SHELL_NAME. A name
-like "Shell 3" is Sidecar's unset default.
+The current display name is also published as $SIDECAR_SHELL_NAME. "Shell 3"
+is the unset default; a previous task's name is equally stale — rename when
+the name no longer describes the work in this shell.
 
 Example:
   sidecar shell rename "shell rename implementation"

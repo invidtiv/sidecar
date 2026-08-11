@@ -189,9 +189,13 @@ var SkipPermissionsFlags = map[AgentType]string{
 // their system prompt for one session. Only harnesses with a documented flag
 // appear here: guidance an agent never sees is worse than none, and a guessed
 // flag would break the launch outright. Harnesses without one rely on the
-// SIDECAR_SHELL_NAME environment cue instead.
+// SIDECAR_SHELL_NAME environment cue (and project docs such as AGENTS.md).
+//
+// Grok: --rules appends session rules (documented alias: --append-system-prompt).
+// Claude: --append-system-prompt.
 var SystemPromptAppendFlags = map[AgentType]string{
 	AgentClaude: "--append-system-prompt",
+	AgentGrok:   "--rules",
 }
 
 // PrintModeArgs maps agent types to their non-interactive/print mode CLI arguments.

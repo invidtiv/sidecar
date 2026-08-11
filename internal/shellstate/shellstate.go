@@ -32,12 +32,17 @@ const (
 // name useful. It lives here, next to the rules it describes, so every
 // delivery channel — AGENTS.md, a harness system-prompt append, help text —
 // quotes one source instead of drifting copies.
-const NamingInstruction = "This terminal is a Sidecar project shell. Its display name is in $" + NameEnv +
-	"; a name like \"Shell 3\" is an unset default. Run `sidecar shell rename \"short context\"` when you begin a " +
-	"materially different task or the current name is stale — at meaningful context boundaries, not for every " +
-	"sub-step. Prefer the outcome (\"shell rename implementation\") over the model or a transient action " +
-	"(\"Codex running tests\"). This renames only the current Sidecar shell; never edit shells.json or rename tmux " +
-	"sessions directly."
+//
+// The trigger is "name does not describe current work," not only the generated
+// "Shell N" default — a leftover previous-task name is equally stale.
+const NamingInstruction = "This terminal is a Sidecar project shell. Learn its display name from $" + NameEnv +
+	" as a cue (it may be empty on older shells, or lag after a rename in this process), or run " +
+	"`sidecar shell name` for the authoritative name from Sidecar's manifest. \"Shell 3\" is the unset default; " +
+	"a previous task's name is equally stale. Keep the name aligned with your current task: at the start of work " +
+	"and whenever context changes materially, if the name does not describe what you are doing now, run " +
+	"`sidecar shell rename \"short context\"`. Update at meaningful boundaries, not every sub-step. Prefer the " +
+	"outcome (\"shell rename implementation\") over the model or a transient action (\"Codex running tests\"). " +
+	"These commands act only on the current Sidecar shell; never edit shells.json or rename tmux sessions directly."
 
 type ErrorKind string
 
@@ -65,6 +70,16 @@ func (e *Error) Unwrap() error { return e.Err }
 func IsValidation(err error) bool {
 	var target *Error
 	return errors.As(err, &target) && target.Kind == KindValidation
+}
+
+type Identity struct {
+	TmuxName  string
+	Namespace string
+}
+
+type LookupResult struct {
+	Shell string `json:"shell"`
+	Name  string `json:"name"`
 }
 
 type RenameRequest struct {
@@ -116,6 +131,34 @@ func NormalizeName(name string) (string, error) {
 	return name, nil
 }
 
+// LookupCurrent returns the display name of the current Sidecar project shell
+// from the registered manifest. It does not create state or depend on process
+// environment cues, so it works for shells created before SIDECAR_SHELL_NAME
+// injection existed.
+func LookupCurrent(stateDir string, id Identity) (LookupResult, error) {
+	path, err := locateCurrentManifest(stateDir, id)
+	if err != nil {
+		return LookupResult{}, err
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		return LookupResult{}, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
+	}
+	match := -1
+	for i, shell := range m.Shells {
+		if shell.TmuxName == id.TmuxName && sameNamespace(shell.Namespace, id.Namespace) {
+			if match >= 0 {
+				return LookupResult{}, &Error{Kind: KindAmbiguous, Msg: "current shell appears more than once in its manifest; refusing ambiguous match"}
+			}
+			match = i
+		}
+	}
+	if match < 0 {
+		return LookupResult{}, notFound()
+	}
+	return LookupResult{Shell: id.TmuxName, Name: m.Shells[match].DisplayName}, nil
+}
+
 // RenameCurrent searches registered project manifests without creating state.
 func RenameCurrent(stateDir string, req RenameRequest) (RenameResult, error) {
 	name, err := NormalizeName(req.Name)
@@ -123,12 +166,22 @@ func RenameCurrent(stateDir string, req RenameRequest) (RenameResult, error) {
 		return RenameResult{}, err
 	}
 	req.Name = name
+	path, err := locateCurrentManifest(stateDir, Identity{TmuxName: req.TmuxName, Namespace: req.Namespace})
+	if err != nil {
+		return RenameResult{}, err
+	}
+	return RenameAtPath(path, req)
+}
+
+// locateCurrentManifest finds the single registered shells.json that owns the
+// caller's tmux session. It fails closed on ambiguity or unreadable inventory.
+func locateCurrentManifest(stateDir string, id Identity) (string, error) {
 	entries, err := os.ReadDir(filepath.Join(stateDir, "projects"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return RenameResult{}, notFound()
+			return "", notFound()
 		}
-		return RenameResult{}, &Error{Kind: KindState, Msg: "read registered Sidecar projects", Err: err}
+		return "", &Error{Kind: KindState, Msg: "read registered Sidecar projects", Err: err}
 	}
 	var paths []string
 	for _, entry := range entries {
@@ -141,25 +194,26 @@ func RenameCurrent(stateDir string, req RenameRequest) (RenameResult, error) {
 			if os.IsNotExist(readErr) {
 				continue
 			}
-			return RenameResult{}, &Error{Kind: KindState, Msg: "read registered shell manifest", Err: readErr}
+			return "", &Error{Kind: KindState, Msg: "read registered shell manifest", Err: readErr}
 		}
 		for _, shell := range m.Shells {
-			if shell.TmuxName == req.TmuxName && sameNamespace(shell.Namespace, req.Namespace) {
+			if shell.TmuxName == id.TmuxName && sameNamespace(shell.Namespace, id.Namespace) {
 				paths = append(paths, path)
+				break
 			}
 		}
 	}
 	if len(paths) == 0 {
-		return RenameResult{}, notFound()
+		return "", notFound()
 	}
 	if len(paths) > 1 {
-		return RenameResult{}, &Error{Kind: KindAmbiguous, Msg: "current shell matches multiple Sidecar project manifests; refusing ambiguous rename"}
+		return "", &Error{Kind: KindAmbiguous, Msg: "current shell matches multiple Sidecar project manifests; refusing ambiguous match"}
 	}
-	return RenameAtPath(paths[0], req)
+	return paths[0], nil
 }
 
 func notFound() error {
-	return &Error{Kind: KindNotFound, Msg: "current tmux session is not a registered Sidecar project shell; run this command from the shell you want to rename"}
+	return &Error{Kind: KindNotFound, Msg: "current tmux session is not a registered Sidecar project shell; run this command from a Sidecar project shell"}
 }
 
 // RenameAtPath performs a locked read-before-write mutation of one manifest.
