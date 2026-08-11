@@ -5,6 +5,7 @@ All notable changes to sidecar are documented here.
 ## [v0.96.0] - 2026-08-11
 
 ### Features
+- **Conversations is opt-in via the `conversations_plugin` feature flag (default off).** The multi-agent session history tab no longer ships enabled. When the flag is off (the default), Sidecar does not register the plugin, does not construct history adapters, and does not read agent session stores — so there is no Detect/watch/load cost for users who do not need the tab. Re-enable with `"features": { "flags": { "conversations_plugin": true } }` in `~/.config/sidecar/config.json`, or `sidecar --enable-feature=conversations_plugin`. With the flag on, `plugins.conversations.enabled: false` remains a hard off-switch. Tab shortcut numbers for plugins after Conversations shift left when it is off.
 - **The embedded Tasks tab adopts Tasks v1.6.0's refreshed visual system.** Every
   list now shares aligned priority and metadata columns, section rules and
   counts; Agenda uses calendar groups; and the detail rail adds clearer state,

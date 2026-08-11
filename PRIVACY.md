@@ -8,9 +8,11 @@ Sidecar is a local-first terminal application. This document describes what data
 
 Runs `git` CLI commands (status, diff, log, show, branch, worktree, stash, rev-parse, rev-list, fetch, tag, blame, check-ignore) in the current project directory. Read-only except when you explicitly stage, commit, push, merge, fetch, or create worktrees.
 
-### AI agent sessions (read-only)
+### AI agent sessions (read-only; Conversations plugin only)
 
-Reads conversation history from local agent data directories to display in the Conversations plugin:
+**Only when the Conversations plugin is enabled.** The plugin is gated by the `conversations_plugin` feature flag (default **off**). With the flag off — the default for a normal install — Sidecar does **not** construct history adapters and does **not** read these paths for session history.
+
+When `conversations_plugin` is enabled (and `plugins.conversations.enabled` is not set to false), Sidecar reads conversation history from local agent data directories to display in the Conversations tab:
 
 - **Amp** — `~/.local/share/amp/threads/` (or `$AMP_DATA_HOME`) — JSONL thread files
 - **Claude Code** — `~/.claude/projects/` and `~/.config/claude/projects/` (JSONL session files), `~/.claude/stats-cache.json` (token usage stats)
@@ -23,6 +25,8 @@ Reads conversation history from local agent data directories to display in the C
 - **Warp** — `~/Library/Group Containers/2BBY89MBSN.dev.warp/...` (macOS), `$XDG_STATE_HOME/warp-terminal/warp.sqlite` (Linux), `%LOCALAPPDATA%\warp\Warp\data\warp.sqlite` (Windows) — read via `go-sqlite3`
 
 Parsed data includes session metadata (IDs, names, timestamps, duration), messages (text, tool calls, thinking blocks), token counts, model names, and estimated costs. These files are **read-only**. Sidecar never writes to agent data directories.
+
+Separately, the Workspaces plugin may inspect **live terminal pane output** to detect agent activity status. That path does not read harness session history stores.
 
 ### File browser
 

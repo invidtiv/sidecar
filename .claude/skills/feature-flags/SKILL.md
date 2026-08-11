@@ -85,6 +85,8 @@ Feature state resolves in this order (first match wins):
 | `tmux_interactive_input` | true | Write support for tmux panes |
 | `tmux_inline_edit` | true | Inline file editing via tmux in files plugin |
 | `notes_plugin` | false | Notes plugin for capturing quick notes |
+| `tasks_plugin` | false | Embedded Tasks plugin tab |
+| `conversations_plugin` | false | Conversations multi-agent history tab (off = no adapters / session I/O) |
 
 ## API Reference
 

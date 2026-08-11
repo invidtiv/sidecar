@@ -51,7 +51,9 @@ Note: Using an unknown feature name in a CLI flag produces a warning but doesn't
 | `tmux_interactive_input` | true | Enable write support for tmux panes |
 | `tmux_inline_edit` | true | Enable inline file editing via tmux in the files plugin |
 | `notes_plugin` | false | Enable the notes plugin for capturing quick notes |
-| `cross_project_overview` | false | Enable the experimental cross-project agent overview |
+| `tasks_plugin` | false | Enable the embedded Tasks plugin tab |
+| `conversations_plugin` | false | Enable the Conversations multi-agent session history tab (when off: no adapters, no session-store I/O) |
+| `cross_project_overview` | true | Enable the cross-project agent overview |
 
 ## For Developers
 

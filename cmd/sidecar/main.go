@@ -199,11 +199,16 @@ func main() {
 		Keymap:      km,
 	}
 
-	// Create all adapter instances upfront so they survive project switches.
-	// Per-project filtering happens in each plugin's Init() via Detect().
-	startuptrace.Track("adapter.AllAdapters", func() {
-		pluginCtx.Adapters = adapter.AllAdapters()
-	})
+	// History adapters exist only for the Conversations plugin. Skip
+	// construction entirely when the plugin is unwanted so Detect/session I/O
+	// and adapter state never run (conversations_plugin feature flag, default off).
+	if assembly.ConversationsWanted(cfg) {
+		// Create all adapter instances upfront so they survive project switches.
+		// Per-project filtering happens in each plugin's Init() via Detect().
+		startuptrace.Track("adapter.AllAdapters", func() {
+			pluginCtx.Adapters = adapter.AllAdapters()
+		})
+	}
 
 	// Create plugin registry
 	registry := plugin.NewRegistry(pluginCtx)

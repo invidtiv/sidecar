@@ -120,10 +120,93 @@ func TestInsertTasks_DoesNotMutateBase(t *testing.T) {
 	}
 }
 
+func TestConversationsWanted(t *testing.T) {
+	tests := []struct {
+		name           string
+		flags          map[string]bool
+		configEnabled  bool
+		want           bool
+	}{
+		{
+			name:          "default flag off, config enabled",
+			flags:         nil,
+			configEnabled: true,
+			want:          false,
+		},
+		{
+			name:          "flag on, config enabled",
+			flags:         map[string]bool{features.ConversationsPlugin.Name: true},
+			configEnabled: true,
+			want:          true,
+		},
+		{
+			name:          "flag on, config disabled",
+			flags:         map[string]bool{features.ConversationsPlugin.Name: true},
+			configEnabled: false,
+			want:          false,
+		},
+		{
+			name:          "flag off, config enabled",
+			flags:         map[string]bool{features.ConversationsPlugin.Name: false},
+			configEnabled: true,
+			want:          false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			initFeatures(t, tc.flags)
+			cfg := config.Default()
+			cfg.Plugins.Conversations.Enabled = tc.configEnabled
+			if got := ConversationsWanted(cfg); got != tc.want {
+				t.Errorf("ConversationsWanted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("nil config uses defaults (flag off)", func(t *testing.T) {
+		initFeatures(t, nil)
+		if ConversationsWanted(nil) {
+			t.Error("nil config should not want conversations with default flag off")
+		}
+	})
+}
+
+func TestPlan_DefaultOmitsConversations(t *testing.T) {
+	initFeatures(t, nil)
+	got := join(Plan(config.Default()))
+	want := "td-monitor,git-status,file-browser,workspace-manager"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if ConversationsWanted(config.Default()) {
+		t.Error("default config must not want conversations")
+	}
+}
+
+func TestPlan_ConversationsWhenFlagOn(t *testing.T) {
+	initFeatures(t, map[string]bool{features.ConversationsPlugin.Name: true})
+	got := join(Plan(config.Default()))
+	want := "td-monitor,git-status,file-browser,conversations,workspace-manager"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPlan_ConversationsFlagOnConfigOff(t *testing.T) {
+	initFeatures(t, map[string]bool{features.ConversationsPlugin.Name: true})
+	cfg := config.Default()
+	cfg.Plugins.Conversations.Enabled = false
+	got := join(Plan(cfg))
+	want := "td-monitor,git-status,file-browser,workspace-manager"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestPlan_TasksFlagOff(t *testing.T) {
 	initFeatures(t, nil)
 	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,conversations,workspace-manager"
+	want := "td-monitor,git-status,file-browser,workspace-manager"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -132,7 +215,7 @@ func TestPlan_TasksFlagOff(t *testing.T) {
 func TestPlan_TasksAfterWorkspacesByDefault(t *testing.T) {
 	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
 	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,conversations,workspace-manager,tasks"
+	want := "td-monitor,git-status,file-browser,workspace-manager,tasks"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -146,7 +229,7 @@ func TestPlan_TasksAfterNotesWhenConfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.Plugins.Tasks.Position = config.TasksPositionAfterNotes
 	got := join(Plan(cfg))
-	want := "td-monitor,git-status,file-browser,conversations,workspace-manager,notes,tasks"
+	want := "td-monitor,git-status,file-browser,workspace-manager,notes,tasks"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -158,7 +241,7 @@ func TestPlan_TasksBeforeNotesByDefault(t *testing.T) {
 		features.NotesPlugin.Name: true,
 	})
 	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,conversations,workspace-manager,tasks,notes"
+	want := "td-monitor,git-status,file-browser,workspace-manager,tasks,notes"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -170,10 +253,22 @@ func TestPlan_TabIndexIsDerived(t *testing.T) {
 	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
 
 	full := Plan(config.Default())
-	if got := indexOf(full, IDTasks); got != 5 {
-		t.Fatalf("tasks index with all plugins = %d, want 5", got)
+	// Default: td, git, files, workspace, tasks — conversations off by flag.
+	if got := indexOf(full, IDTasks); got != 4 {
+		t.Fatalf("tasks index with default plugins = %d, want 4", got)
 	}
 
+	// With conversations enabled, tasks shifts right by one.
+	initFeatures(t, map[string]bool{
+		features.TasksPlugin.Name:         true,
+		features.ConversationsPlugin.Name: true,
+	})
+	withConv := Plan(config.Default())
+	if got := indexOf(withConv, IDTasks); got != 5 {
+		t.Fatalf("tasks index with conversations = %d, want 5", got)
+	}
+
+	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
 	cfg := config.Default()
 	cfg.Plugins.TDMonitor.Enabled = false
 	cfg.Plugins.GitStatus.Enabled = false
@@ -199,8 +294,9 @@ func TestPlan_NilConfigUsesDefaults(t *testing.T) {
 // promised, or tab order would diverge from what the registry sees.
 func TestPlan_EntryIDsMatchPluginIDs(t *testing.T) {
 	initFeatures(t, map[string]bool{
-		features.TasksPlugin.Name: true,
-		features.NotesPlugin.Name: true,
+		features.TasksPlugin.Name:         true,
+		features.NotesPlugin.Name:         true,
+		features.ConversationsPlugin.Name: true,
 	})
 	for _, e := range Plan(config.Default()) {
 		p := e.New()

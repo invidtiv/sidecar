@@ -7,7 +7,7 @@ title: Getting Started
 
 **A terminal dashboard for monitoring AI coding agents.**
 
-Watch your agents work in real-time: see git changes, browse session history, track tasks, and manage parallel workspaces—all from a split-screen terminal UI that complements your agent workflow.
+Watch your agents work in real-time: see git changes, track tasks, and manage parallel workspaces—all from a split-screen terminal UI that complements your agent workflow.
 
 ![Sidecar Git Status](/img/sidecar-git.png)
 
@@ -18,7 +18,7 @@ AI coding agents are powerful but opaque. When Claude Code or Cursor makes chang
 **Key capabilities:**
 
 - **Real-time git monitoring** - Stage files, review diffs, commit changes while your agent works
-- **Multi-agent support** - Browse session history from Claude Code, Cursor, Gemini CLI, and more
+- **Multi-agent support** - Run Claude Code, Cursor, Gemini CLI, and more in workspaces; optional Conversations tab for session history
 - **Parallel development** - Run multiple agents across git worktrees with live output streaming
 - **Instant project switching** - Jump between repos with `@`. State, cursor, and preferences restore per-project
 - **Task integration** - Connect workspaces to TD tasks for context tracking across sessions
@@ -134,9 +134,11 @@ Create isolated branches, launch agents with custom prompts, and watch their pro
 
 [Full Workspaces Plugin documentation →](./workspaces-plugin)
 
-### Conversations
+### Conversations (opt-in)
 
 **Browse session history from all your AI agents with search and token tracking.**
+
+Off by default — enable the `conversations_plugin` feature flag (config or `--enable-feature=conversations_plugin`). When disabled, Sidecar does not read agent session stores.
 
 Unified view of sessions across Claude Code, Cursor, Gemini CLI, OpenCode, Codex, Pi, and Warp. Search by message content, expand to see full conversations, and track token usage per session. Useful for reviewing what your agents accomplished or resuming previous work.
 
@@ -275,6 +277,11 @@ Sidecar runs with sensible defaults. Create `~/.config/sidecar/config.json` only
     "file-browser": { "enabled": true },
     "workspaces": { "enabled": true }
   },
+  "features": {
+    "flags": {
+      "conversations_plugin": false
+    }
+  },
   "ui": {
     "showClock": true,
     "nerdFontsEnabled": false,
@@ -282,6 +289,8 @@ Sidecar runs with sensible defaults. Create `~/.config/sidecar/config.json` only
   }
 }
 ```
+
+Set `conversations_plugin` to `true` to show the Conversations tab (off by default).
 
 ### UI Options
 

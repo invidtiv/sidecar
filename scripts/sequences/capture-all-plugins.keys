@@ -38,20 +38,23 @@ Escape
 @sleep:200
 @capture:sidecar-files.png
 
-# 4. Conversations plugin - wait for unique footer hint
+# 4. Conversations plugin — only present when conversations_plugin is enabled.
+# Default installs omit this tab (feature flag off). Capture with:
+#   sidecar --enable-feature=conversations_plugin
+# Escape
+# Escape
+# @sleep:100
+# 4
+# @wait:Resume
+# @sleep:200
+# @capture:sidecar-conversations.png
+
+# 4. Workspaces plugin - wait for unique footer hint
+# (tab index shifts left when conversations is off; with defaults this is 4)
 Escape
 Escape
 @sleep:100
 4
-@wait:Resume
-@sleep:200
-@capture:sidecar-conversations.png
-
-# 5. Workspaces plugin - wait for unique footer hint
-Escape
-Escape
-@sleep:100
-5
 @wait:Kanban
 @sleep:200
 @capture:sidecar-workspaces.png

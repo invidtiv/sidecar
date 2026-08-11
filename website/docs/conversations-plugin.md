@@ -7,6 +7,26 @@ title: Conversations Plugin
 
 Browse and search your AI coding sessions with turn-based organization, message expansion, and session analytics—see what your agents have been doing across multiple tools.
 
+:::caution Opt-in (default off)
+The Conversations plugin is **disabled by default**. When off, Sidecar does not construct history adapters or read agent session stores.
+
+**Enable** in `~/.config/sidecar/config.json`:
+
+```json
+{
+  "features": {
+    "flags": {
+      "conversations_plugin": true
+    }
+  }
+}
+```
+
+Or run: `sidecar --enable-feature=conversations_plugin`
+
+With the flag on, set `plugins.conversations.enabled` to `false` for a hard off-switch without clearing the feature flag.
+:::
+
 ![Conversations Plugin](/img/sidecar-conversations.png)
 
 ## Supported Agents

@@ -10,7 +10,7 @@ You might never open your editor again.
 
 ## Overview
 
-Sidecar puts your entire development workflow in one shell: plan tasks with [td](https://github.com/marcus/td), chat with AI agents, review diffs, stage commits, review past conversations, and manage workspaces—all without leaving Sidecar.
+Sidecar puts your entire development workflow in one shell: plan tasks with [td](https://github.com/marcus/td), chat with AI agents, review diffs, stage commits, and manage workspaces—all without leaving Sidecar. (Optional: multi-agent session history via the Conversations plugin.)
 
 ## Quick Install
 
@@ -65,7 +65,7 @@ As the agent works, you can:
 - Watch tasks move through the workflow in TD Monitor
 - See files change in real-time in the Git plugin
 - Browse and edit code yourself in the File Browser
-- View and resume conversations across all supported agent adapters
+- Optionally browse multi-agent session history (Conversations plugin; opt-in feature flag)
 - Switch between built-in and community themes with live previews
 
 This setup gives you visibility into what the agent is doing without interrupting your workflow. The entire dev loop—planning, monitoring, reviewing, committing—happens in the terminal while agents write the code.
@@ -106,9 +106,23 @@ View staged, modified, and untracked files with a split-pane interface. The side
 - Browse commit history and view commit diffs
 - Auto-refresh on file system changes
 
-### Conversations
+### Conversations (opt-in)
 
 Browse session history from multiple AI coding agents with message content, token usage, and search. Supports Amp Code, Claude Code, Codex, Cursor CLI, Gemini CLI, GitHub Copilot CLI, Kiro, OpenCode, Pi Agent, and Warp. [Full documentation →](https://marcus.github.io/sidecar/docs/conversations-plugin)
+
+**Off by default.** Enable the `conversations_plugin` feature flag:
+
+```json
+{
+  "features": {
+    "flags": {
+      "conversations_plugin": true
+    }
+  }
+}
+```
+
+Or: `sidecar --enable-feature=conversations_plugin`. When disabled, Sidecar does not load history adapters or read agent session stores.
 
 ![Conversations](docs/screenshots/sidecar-conversations.png)
 
@@ -251,6 +265,11 @@ Config file: `~/.config/sidecar/config.json`
     "conversations": { "enabled": true },
     "file-browser": { "enabled": true },
     "workspaces": { "enabled": true }
+  },
+  "features": {
+    "flags": {
+      "conversations_plugin": false
+    }
   },
   "ui": {
     "showClock": true,

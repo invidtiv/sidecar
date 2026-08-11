@@ -45,6 +45,22 @@ type Entry struct {
 	New func() plugin.Plugin
 }
 
+// ConversationsWanted reports whether the Conversations plugin should be
+// registered and whether history adapters should be constructed.
+//
+// Both the conversations_plugin feature flag and plugins.conversations.enabled
+// must be true. When false, Sidecar must not construct adapters, run Detect,
+// open session-store watchers, or show the Conversations tab.
+func ConversationsWanted(cfg *config.Config) bool {
+	if cfg == nil {
+		cfg = config.Default()
+	}
+	if !features.IsEnabled(features.ConversationsPlugin.Name) {
+		return false
+	}
+	return cfg.Plugins.Conversations.Enabled
+}
+
 // Plan returns the plugins to register, in tab order.
 //
 // Tab shortcut numbers are derived from this list. Nothing may assume a plugin
@@ -65,7 +81,7 @@ func Plan(cfg *config.Config) []Entry {
 	if cfg.Plugins.FileBrowser.Enabled {
 		base = append(base, Entry{IDFileBrowser, func() plugin.Plugin { return filebrowser.New() }})
 	}
-	if cfg.Plugins.Conversations.Enabled {
+	if ConversationsWanted(cfg) {
 		base = append(base, Entry{IDConversations, func() plugin.Plugin { return conversations.New() }})
 	}
 	// The workspace plugin has no enable switch; it is sidecar's core tab.

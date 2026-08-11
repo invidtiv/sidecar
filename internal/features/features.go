@@ -55,6 +55,16 @@ var (
 		Description: "Enable the embedded Tasks plugin tab",
 	}
 
+	// ConversationsPlugin enables the multi-agent session history tab.
+	// Off by default: history lives in each harness; this is an opt-in viewer.
+	// When disabled, Sidecar does not construct history adapters or read
+	// agent session stores (see assembly.ConversationsWanted).
+	ConversationsPlugin = Feature{
+		Name:        "conversations_plugin",
+		Default:     false,
+		Description: "Enable the Conversations plugin (multi-agent session history)",
+	}
+
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
@@ -70,6 +80,7 @@ var allFeatures = []Feature{
 	FilesAutoRefresh,
 	NotesPlugin,
 	TasksPlugin,
+	ConversationsPlugin,
 	CrossProjectOverview,
 }
 

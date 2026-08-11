@@ -49,6 +49,8 @@ Sidecar puts your entire software engineering workflow into a single, unified te
 
 ## 3. Conversations Plugin & Agent Adapters
 
+**Opt-in (default off).** Gated by feature flag `conversations_plugin`. When disabled, Sidecar does not register the tab, construct history adapters, or read agent session stores. Enable via `features.flags.conversations_plugin` or `--enable-feature=conversations_plugin`. With the flag on, `plugins.conversations.enabled: false` remains a hard off-switch.
+
 - **Multi-Agent Session Browser:** Centralized history viewer for sessions logged across **10+ AI coding agent tools**:
   1. **Amp Code** (`amp`)
   2. **Antigravity** (`antigravity`)
