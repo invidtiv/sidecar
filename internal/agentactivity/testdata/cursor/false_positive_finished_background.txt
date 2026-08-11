@@ -1,0 +1,8 @@
+kind: package-harvest
+note: "N background tasks" is the Finished completion group title, not live work
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Finished
+3 background tasks
+→ Plan, search, build anything

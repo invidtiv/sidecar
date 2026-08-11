@@ -5,3 +5,5 @@ screen:
 Write to this file?
 Proceed (y)
 reject & propose changes
+ctrl+c to stop
+Waiting for decision (y/n/p)...

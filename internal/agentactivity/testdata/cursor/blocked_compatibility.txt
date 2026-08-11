@@ -1,5 +1,6 @@
 kind: herdr-compatibility
 manifest: cursor 2026.08.03.1
+source: herdr write_file_approval + static harvest cursor-cli 2026.08.04
 pane_current_command: cursor-agent
 pane_title: unavailable
 screen:

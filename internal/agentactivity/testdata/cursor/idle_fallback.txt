@@ -1,0 +1,8 @@
+kind: package-harvest
+source: cursor-cli 2026.08.04 idle composer placeholder
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Cursor Agent
+~/proj · main
+→ Plan, search, build anything

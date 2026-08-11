@@ -1,0 +1,6 @@
+kind: package-harvest
+source: cursor-cli 2026.08.04 status line suffix " (background)"
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Running command 12s (background)

@@ -295,13 +295,17 @@ func detectOpenCodeSessionStatus(worktreePath string) (WorktreeStatus, bool) {
 	return getOpenCodeLastMessageStatus(storageDir, sessionID)
 }
 
-// detectCursorSessionStatus checks Cursor session files.
-// Cursor stores in ~/.cursor/chats/{md5-hash}/{sessionID}/store.db (SQLite).
-// For simplicity, we skip SQLite parsing and return false.
+// detectCursorSessionStatus is intentionally a no-op.
+//
+// Cursor stores conversation history in ~/.cursor/chats/{md5}/{id}/store.db
+// (SQLite). That store is identity/history for the conversations plugin, not a
+// status authority: mtime and last-role cannot distinguish a live permission
+// prompt from an idle composer, and Sidecar already classifies Cursor through
+// agentactivity screen rules when the pane is live. Herdr's Cursor integration
+// follows the same split (hooks/session = identity; screen manifest = state).
+// Returning false keeps the unsupported-provider session fallback path from
+// inventing active/waiting for Cursor.
 func detectCursorSessionStatus(worktreePath string) (WorktreeStatus, bool) {
-	// Cursor uses SQLite which requires database/sql and a driver.
-	// For now, skip Cursor session detection to avoid adding dependencies.
-	// Tmux pattern detection should still work for Cursor.
 	return 0, false
 }
 

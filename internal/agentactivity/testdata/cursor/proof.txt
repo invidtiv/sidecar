@@ -1,8 +1,9 @@
 kind: isolated-compatibility-proof
-date: 2026-08-08
+date: 2026-08-11
 provider: cursor-agent-cli
-real_cli: unavailable; Cursor desktop is not CLI proof; no text or PNG capture claimed
+real_cli: unavailable for live turns (no subscription); cursor-cli 2026.08.04 package harvested statically only
 journey: sourced fixture -> DetectCursor -> fallback-safe Tracker -> worktree/shell semantic projection -> List/Kanban
 inspectable_artifacts: ../proof/isolated-paths.txt; ../proof/before-after-invariants.txt; ../../../plugins/workspace/testdata/expanded-provider-surfaces.txt
-tests: TestExpandedPerProviderFixtures; TestKnownLiveFallbackIdleNeverCreatesUnseenDone; TestExpandedProviderListKanbanGolden
-unavailable: real viewer, interruption, completion, text, title, and PNG proof
+tests: TestExpandedPerProviderFixtures; TestKnownLiveFallbackIdleNeverCreatesUnseenDone; TestExpandedProviderListKanbanGolden; TestIdentifyLivePaneOwner
+unavailable: real viewer, interruption, completion, live text, title, and PNG proof
+provenance: Herdr cursor.toml 2026.08.03.1; cursor-cli package 2026.08.04-aaa8809 string harvest

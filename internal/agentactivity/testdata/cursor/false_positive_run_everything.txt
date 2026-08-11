@@ -1,0 +1,9 @@
+kind: herdr-compatibility
+manifest: cursor 2026.08.03.1 (fae0b236 ignore Run Everything status)
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Permissions
+Approval mode
+Run Everything - All commands run unsandboxed without approval
+(shift+tab)

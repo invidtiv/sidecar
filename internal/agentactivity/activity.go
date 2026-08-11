@@ -85,7 +85,7 @@ func Identify(ob Observation) string {
 		return "pi"
 	case oneOf(command, "copilot", "github-copilot", "ghcs"):
 		return "copilot"
-	case oneOf(command, "cursor-agent", "cursor"):
+	case oneOf(command, "cursor-agent", "cursor", "cursor-agent.cmd"):
 		return "cursor"
 	case oneOf(command, "opencode", "open-code"):
 		return "opencode"
@@ -95,15 +95,24 @@ func Identify(ob Observation) string {
 		return "shell"
 	}
 
-	if command != "node" && command != "bun" {
-		return ""
-	}
-	current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
-	if claudeScreenIdentity.MatchString(current) {
-		return "claude"
-	}
-	if codexScreenIdentity.MatchString(current) {
-		return "codex"
+	// Shared process names need live UI chrome. Cursor's official install is
+	// often `agent` (and the launcher re-execs bundled node with argv0
+	// preserved or not depending on host/tmux). Bare `agent` is also other
+	// tools (e.g. Grok), so only claim cursor when the bottom buffer is its
+	// TUI. Empty Identify lets callers retain a prior positive identity.
+	if command == "agent" || command == "node" || command == "bun" {
+		current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
+		if command != "agent" {
+			if claudeScreenIdentity.MatchString(current) {
+				return "claude"
+			}
+			if codexScreenIdentity.MatchString(current) {
+				return "codex"
+			}
+		}
+		if cursorScreenIdentity.MatchString(current) {
+			return "cursor"
+		}
 	}
 	return ""
 }

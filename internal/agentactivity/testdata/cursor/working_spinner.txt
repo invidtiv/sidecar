@@ -1,0 +1,8 @@
+kind: package-harvest + marketing demo chrome
+source: cursor.com/cli demo + spinner rule from herdr 2026.08.03.1
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+⬢ Thought 3s
+⬢ Read 3 files, 1 search 1s
+⬢ Reading 2 files, 1 directory

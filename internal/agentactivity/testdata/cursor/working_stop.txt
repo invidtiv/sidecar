@@ -1,0 +1,9 @@
+kind: package-harvest
+source: cursor-cli 2026.08.04-aaa8809 (rightPlaceholder while isGenerating)
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Cursor Agent
+~/proj · main
+→ Add a follow-up
+ctrl+c to stop

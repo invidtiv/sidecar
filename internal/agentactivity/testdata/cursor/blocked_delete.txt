@@ -1,0 +1,8 @@
+kind: package-harvest
+source: cursor-cli 2026.08.04-aaa8809 static strings (not a live capture)
+pane_current_command: cursor-agent
+pane_title: unavailable
+screen:
+Delete this file?
+Delete (y)
+Keep (n)
