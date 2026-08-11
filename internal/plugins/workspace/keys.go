@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -1858,40 +1859,24 @@ func (p *Plugin) handleRenameShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 // executeRenameShell performs the rename operation.
 func (p *Plugin) executeRenameShell() tea.Cmd {
-	newName := strings.TrimSpace(p.renameShellInput.Value())
-
-	// Validation
-	if newName == "" {
-		p.renameShellError = "Name cannot be empty"
+	newName, err := shellstate.NormalizeName(p.renameShellInput.Value())
+	if err != nil {
+		p.renameShellError = err.Error()
 		return nil
-	}
-
-	if len(newName) > 50 {
-		p.renameShellError = "Name too long (max 50 characters)"
-		return nil
-	}
-
-	// Check for duplicates
-	for _, shell := range p.shells {
-		if shell.Name == newName && shell.TmuxName != p.renameShellSession.TmuxName {
-			p.renameShellError = "Name already in use"
-			return nil
-		}
 	}
 
 	shell := p.renameShellSession
 	tmuxName := shell.TmuxName
 
-	// Clear modal state
-	p.viewMode = ViewModeList
-	p.clearRenameShellModal()
-
 	return func() tea.Msg {
-		// Rename is just a local state change - no tmux operation needed
+		if p.shellManifest == nil {
+			return RenameShellDoneMsg{TmuxName: tmuxName, NewName: newName, Err: fmt.Errorf("shell manifest is unavailable")}
+		}
+		result, err := p.shellManifest.RenameShell(tmuxName, shellToDefinition(shell).Namespace, newName)
 		return RenameShellDoneMsg{
 			TmuxName: tmuxName,
-			NewName:  newName,
-			Err:      nil,
+			NewName:  result.Name,
+			Err:      err,
 		}
 	}
 }

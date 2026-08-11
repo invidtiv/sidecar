@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 )
 
@@ -247,6 +248,65 @@ func TestForeignManifestCannotRemoveLiveShellsFromMemory(t *testing.T) {
 	healed := manifestNames(t, manifestPath)
 	if len(healed) != 4 {
 		t.Fatalf("manifest after sync = %v, want 4 entries (healed by EnsureShells)", healed)
+	}
+}
+
+func TestAgentRenamePropagatesThroughLiveManifestWatcher(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "shells.json")
+	workDir := filepath.Join(root, "sidecar")
+	name := "sidecar-sh-sidecar-1"
+	hooks := fakeInstance(t, manifestPath, workDir, namespaceA, []string{name})
+	writer := &ShellManifest{Version: manifestVersion, path: manifestPath, Shells: []ShellDefinition{{
+		TmuxName: name, DisplayName: "stale context", Namespace: namespaceA,
+	}}}
+	if err := writer.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newInstancePlugin(t, hooks, workDir)
+	installLiveShells(p, []string{name}, hooks.getPaneID)
+	p.shells[0].Name = "stale context"
+	loaded, err := LoadShellManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.shellManifest = loaded
+
+	watcher, err := NewShellWatcher(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+	messages := watcher.Start()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := shellstate.RenameAtPath(manifestPath, shellstate.RenameRequest{
+		TmuxName: name, Namespace: namespaceA, Name: "current context",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	watchCmd := listenForShellManifestChanges(p.currentShellStartupScope(), messages)
+	changed := make(chan tea.Msg, 1)
+	go func() { changed <- watchCmd() }()
+	var watcherMsg tea.Msg
+	select {
+	case watcherMsg = <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not observe atomic agent rename")
+	}
+	_, command := p.update(watcherMsg)
+	syncMsg := command()
+	if batch, ok := syncMsg.(tea.BatchMsg); ok && len(batch) > 0 {
+		syncMsg = batch[0]()
+	}
+	if _, ok := syncMsg.(shellManifestSyncMsg); !ok {
+		t.Fatalf("sync command returned %T", syncMsg)
+	}
+	_, apply := p.update(syncMsg)
+	runCommandTree(apply)
+	if got := p.shells[0].Name; got != "current context" {
+		t.Fatalf("running instance shell name = %q, want live propagated rename", got)
 	}
 }
 

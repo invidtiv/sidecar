@@ -134,6 +134,37 @@ func TestShellManifest_UpdateShell(t *testing.T) {
 	}
 }
 
+func TestShellManifest_RenameShellUsesSharedAtomicOperation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".sidecar", "shells.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	m := &ShellManifest{Version: manifestVersion, path: path, Shells: []ShellDefinition{
+		{TmuxName: "sidecar-sh-one", DisplayName: "old", Namespace: "/tmp/socket"},
+		{TmuxName: "sidecar-sh-two", DisplayName: "taken", Namespace: "/tmp/socket"},
+	}}
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RenameShell("sidecar-sh-one", "/tmp/socket", "taken"); err == nil {
+		t.Fatal("duplicate rename succeeded")
+	}
+	if got := m.FindShell("sidecar-sh-one").DisplayName; got != "old" {
+		t.Fatalf("failed persistence changed memory to %q", got)
+	}
+	result, err := m.RenameShell("sidecar-sh-one", "/tmp/socket", "new")
+	if err != nil || !result.Changed {
+		t.Fatalf("RenameShell() = %+v, %v", result, err)
+	}
+	if got := m.FindShell("sidecar-sh-one").DisplayName; got != "new" {
+		t.Fatalf("successful persistence left memory at %q", got)
+	}
+	reloaded, err := LoadShellManifest(path)
+	if err != nil || reloaded.FindShell("sidecar-sh-one").DisplayName != "new" {
+		t.Fatalf("persisted rename missing: %+v, %v", reloaded, err)
+	}
+}
+
 func TestShellManifest_CorruptedFile(t *testing.T) {
 	dir := t.TempDir()
 	sidecarDir := filepath.Join(dir, ".sidecar")

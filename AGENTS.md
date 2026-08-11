@@ -19,6 +19,16 @@ Run `td usage` or `td <command> --help`.
 
 <!-- td-agent-instructions:end -->
 
+## Keep the current shell name useful
+
+When working inside a Sidecar project shell, keep its display name aligned with
+your current task. Run `sidecar shell rename "short context"` when you begin a
+materially different task or the existing name is stale. Update it at meaningful
+context boundaries, not for every sub-step or status change. Prefer the outcome
+(`shell rename implementation`) over the model or transient action
+(`Codex running tests`). This command can rename only the current Sidecar shell;
+do not edit `shells.json` or rename tmux sessions directly.
+
 ## Build & Versioning
 
 ```bash

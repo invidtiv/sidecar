@@ -12,11 +12,12 @@ import (
 	"log/slog"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
 // ShellManifest stores persistent shell definitions for cross-instance sync
-// and reboot survival. Stored in ~/.config/sidecar/projects/<slug>/shells.json.
+// and reboot survival. Stored in $XDG_STATE_HOME/sidecar/projects/<slug>/shells.json.
 type ShellManifest struct {
 	Version int               `json:"version"`
 	Shells  []ShellDefinition `json:"shells"`
@@ -40,27 +41,10 @@ func (m *ShellManifest) Revision() uint64 {
 	return m.revision
 }
 
-// ShellDefinition contains all info needed to recreate a shell session.
-type ShellDefinition struct {
-	TmuxName    string `json:"tmuxName"`
-	DisplayName string `json:"displayName"`
-	// Namespace identifies the tmux server that owns this session
-	// (tmuxenv.Namespace — the resolved socket path). Empty means a
-	// pre-td-8d18de entry: reconciliation claims it if its name matches this
-	// working directory's own discovery pattern (only this machine's default
-	// server could have produced that name, so it stays prunable), and
-	// otherwise leaves it alone, because absence is not proof of death.
-	//
-	// The deliberate consequence: an entry belonging to a working directory
-	// that no longer exists — a deleted worktree — is retained in the shared
-	// file indefinitely. It is not displayed by any instance (visibility is
-	// per-workDir), so it costs a few bytes rather than a sidebar row, and an
-	// explicit kill still removes it.
-	Namespace string    `json:"namespace,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	AgentType string    `json:"agentType,omitempty"`
-	SkipPerms bool      `json:"skipPerms,omitempty"`
-}
+// ShellDefinition is retained as the workspace-facing name for the shared
+// persisted model. New non-interactive surfaces use shellstate.Definition
+// directly rather than defining another manifest shape.
+type ShellDefinition = shellstate.Definition
 
 // manifestVersion is the current manifest format version.
 const manifestVersion = 1
@@ -306,6 +290,29 @@ func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 		// Not found - add it
 		return append(shells, def), true
 	})
+}
+
+// RenameShell routes display-name validation and persistence through the same
+// application boundary as the agent-facing CLI.
+func (m *ShellManifest) RenameShell(tmuxName, namespace, name string) (shellstate.RenameResult, error) {
+	result, err := shellstate.RenameAtPath(m.path, shellstate.RenameRequest{
+		TmuxName: tmuxName, Namespace: namespace, Name: name,
+	})
+	if err != nil {
+		return shellstate.RenameResult{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.Shells {
+		if m.Shells[i].TmuxName == tmuxName && m.Shells[i].Namespace == namespace {
+			m.Shells[i].DisplayName = result.Name
+			break
+		}
+	}
+	if result.Changed {
+		m.revision++
+	}
+	return result, nil
 }
 
 // Path returns the manifest file path.

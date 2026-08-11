@@ -1391,17 +1391,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case RenameShellDoneMsg:
+		if msg.Err != nil {
+			p.renameShellError = msg.Err.Error()
+			return p, nil
+		}
 		// Find shell and update its display name
 		for _, shell := range p.shells {
 			if shell.TmuxName == msg.TmuxName {
 				shell.Name = msg.NewName
-				// Update manifest (td-f88fdd)
-				if p.shellManifest != nil {
-					_ = p.shellManifest.UpdateShell(shellToDefinition(shell))
-				}
 				break
 			}
 		}
+		p.viewMode = ViewModeList
+		p.clearRenameShellModal()
 		// Persist the selection state
 		p.saveSelectionState()
 
