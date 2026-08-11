@@ -79,6 +79,9 @@ type Plugin struct {
 	moreCommitsAvailable bool      // Whether more commits are available to load
 	totalCommitCount     int       // Total commits in repo (from rev-list --count)
 	totalCommitCountOK   bool      // True once a successful count has been loaded
+	nextCountRequestID   uint64    // Monotonic ID for commit-count loads
+	activeCountRequestID uint64    // In-flight count request (0 = idle)
+	countRefreshDirty    bool      // Coalesce count reloads while one is in flight
 
 	// Inline diff state (for three-pane view)
 	selectedDiffFile     string        // File being previewed in diff pane
@@ -717,14 +720,20 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
 
 	case CommitCountLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeCountRequestID {
 			return p, nil
 		}
+		p.activeCountRequestID = 0
 		if msg.OK {
 			p.totalCommitCount = msg.Count
 			p.totalCommitCountOK = true
 		}
-		return p, nil
+		var countFollowUp tea.Cmd
+		if p.countRefreshDirty {
+			p.countRefreshDirty = false
+			countFollowUp = p.loadCommitCount()
+		}
+		return p, countFollowUp
 
 	case MoreCommitsLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1586,11 +1595,13 @@ func (m RecentCommitsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // CommitCountLoadedMsg is sent when total repo commit count is available.
 // Loaded independently of the commit page so a slow rev-list never delays
-// the infinite-scroll list.
+// the infinite-scroll list. RequestID matches history single-flight so an
+// older in-flight count cannot overwrite a newer one.
 type CommitCountLoadedMsg struct {
-	Epoch uint64
-	Count int
-	OK    bool
+	Epoch     uint64
+	RequestID uint64
+	Count     int
+	OK        bool
 }
 
 // GetEpoch implements plugin.EpochMessage.

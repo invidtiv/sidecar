@@ -358,7 +358,8 @@ func renderRightAlignedPair(left, right string, width int) string {
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
 	gap := width - leftW - rightW
-	if gap >= 1 {
+	if gap >= 0 {
+		// Fits exactly (gap==0) or with padding — no truncation.
 		return left + strings.Repeat(" ", gap) + right
 	}
 	// Prefer keeping the stats visible when space is tight.
