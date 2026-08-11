@@ -392,8 +392,13 @@ func (m *Model) ensureUpdateCompleteModal() {
 	}
 	m.updateCompleteModalWidth = modalW
 
+	// Render from the whole settled set, not just this batch: after retrying one
+	// product, an upgrade that succeeded earlier is still part of the outcome —
+	// including whether Sidecar changed.
+	settled := m.settledResults()
+
 	var rows []string
-	for _, r := range m.updateResults {
+	for _, r := range settled {
 		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
 			styles.Muted.Render(resultLabel(r)))
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
@@ -405,7 +410,7 @@ func (m *Model) ensureUpdateCompleteModal() {
 		rows = append(rows, styles.Muted.Render("  Nothing to update."))
 	}
 
-	restartRequired := version.RestartRequired(m.updateResults)
+	restartRequired := version.RestartRequired(settled)
 	primary := "cancel"
 	if restartRequired {
 		primary = "quit"
@@ -463,7 +468,7 @@ func (m *Model) ensureUpdateErrorModal() {
 	errorStyle := lipgloss.NewStyle().Foreground(styles.Error)
 
 	var rows []string
-	for _, r := range m.updateResults {
+	for _, r := range m.settledResults() {
 		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
 			styles.Muted.Render(resultLabel(r)))
 		if r.Status == version.StatusFailed {

@@ -397,6 +397,18 @@ func TestRetry_PreservesEarlierSuccess(t *testing.T) {
 	if m.updateModalState != UpdateModalComplete {
 		t.Errorf("a fully successful retry should complete, got %v", m.updateModalState)
 	}
+
+	// The surface the user is actually looking at must say the same thing.
+	out := m.renderUpdateCompleteModal()
+	if !strings.Contains(out, "Sidecar") || !strings.Contains(out, "Tasks") {
+		t.Errorf("completion should list both products:\n%s", out)
+	}
+	if strings.Contains(out, "no restart needed") {
+		t.Errorf("completion must not deny the restart Sidecar's upgrade requires:\n%s", out)
+	}
+	if !strings.Contains(out, "Quit & Restart") {
+		t.Errorf("completion should offer the restart:\n%s", out)
+	}
 }
 
 // Enter confirms the plan even when the modal was built since the last frame

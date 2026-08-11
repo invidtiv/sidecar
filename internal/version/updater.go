@@ -328,7 +328,7 @@ func Apply(ctx context.Context, env *Environment, t Target) Result {
 		}
 	}
 
-	if err := verifySuite(ctx, env, d, t.LatestVersion); err != nil {
+	if err := verifySuite(ctx, env, d, t.LatestVersion, t.Install.ManualCommand); err != nil {
 		return Result{Target: t, Status: StatusFailed, Output: output.String(), Err: err}
 	}
 
@@ -342,7 +342,7 @@ func brewReportsNoop(out string) bool {
 
 // verifySuite checks that every binary in the release resolves and reports the
 // expected version. A partially updated suite is a failure, not a success.
-func verifySuite(ctx context.Context, env *Environment, d Descriptor, want string) error {
+func verifySuite(ctx context.Context, env *Environment, d Descriptor, want, manualCommand string) error {
 	for _, bin := range d.SuiteBinaries {
 		path, err := env.LookPath(bin.Name)
 		if err != nil {
@@ -357,8 +357,14 @@ func verifySuite(ctx context.Context, env *Environment, d Descriptor, want strin
 			if got == "" {
 				got = strings.TrimSpace(out)
 			}
+			// The recovery command is this install's own update command, never
+			// `brew install`: that would add a second, shadowing copy.
+			recovery := manualCommand
+			if recovery == "" {
+				recovery = d.UnmanagedHint()
+			}
 			return fmt.Errorf("%s reports %s after update, expected %s — update it manually with: %s",
-				bin.Name, got, NormalizeVersion(want), d.InstallHint())
+				bin.Name, got, NormalizeVersion(want), recovery)
 		}
 	}
 	return nil
