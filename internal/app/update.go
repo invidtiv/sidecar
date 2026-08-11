@@ -365,51 +365,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ShowToast("Error: "+msg.Err.Error(), 5*time.Second)
 		return m, nil
 
-	case UpdateSuccessMsg:
-		m.updateInProgress = false
-		m.needsRestart = true
-		// Set all phases to done
-		m.updatePhaseStatus[PhaseCheckPrereqs] = "done"
-		m.updatePhaseStatus[PhaseInstalling] = "done"
-		m.updatePhaseStatus[PhaseVerifying] = "done"
-		// Update modal state if modal is open
-		if m.updateModalState == UpdateModalProgress {
-			m.updateModalState = UpdateModalComplete
-		}
-		if msg.SidecarUpdated {
-			m.updateAvailable = nil
-		}
-		if msg.TdUpdated && m.tdVersionInfo != nil {
-			m.tdVersionInfo.HasUpdate = false
-		}
-		// Only show toast if modal is not open
-		if m.updateModalState == UpdateModalClosed {
-			m.ShowToast("Update complete! Restart sidecar to use new version", 10*time.Second)
-		}
-		return m, nil
+	case UpdateBatchReadyMsg:
+		return m, m.handleUpdateBatchReady(msg)
 
-	case UpdateErrorMsg:
-		m.updateInProgress = false
-		m.updateError = fmt.Sprintf("Failed to update %s: %s", msg.Step, msg.Err)
-		// Mark current phase as error
-		m.updatePhaseStatus[m.updatePhase] = "error"
-		// Update modal state if modal is open
-		if m.updateModalState == UpdateModalProgress {
-			m.updateModalState = UpdateModalError
-		}
-		// Only show toast if modal is not open
-		if m.updateModalState == UpdateModalClosed {
-			m.ShowToast("Update failed: "+msg.Err.Error(), 5*time.Second)
-		}
-		m.statusIsError = true
-		return m, nil
-
-	case UpdatePhaseChangeMsg:
-		m.updatePhaseStatus[msg.Phase] = msg.Status
-		if msg.Status == "running" {
-			m.updatePhase = msg.Phase
-		}
-		return m, nil
+	case UpdateTargetResultMsg:
+		return m, m.handleUpdateTargetResult(msg)
 
 	case UpdateElapsedTickMsg:
 		// Continue timer if update is in progress
@@ -419,20 +379,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, nil
-
-	case UpdatePrereqsPassedMsg:
-		// Prerequisites passed - transition to install phase
-		m.updatePhaseStatus[PhaseCheckPrereqs] = "done"
-		m.updatePhase = PhaseInstalling
-		m.updatePhaseStatus[PhaseInstalling] = "running"
-		return m, m.runInstallPhase()
-
-	case UpdateInstallDoneMsg:
-		// Install completed - transition to verify phase
-		m.updatePhaseStatus[PhaseInstalling] = "done"
-		m.updatePhase = PhaseVerifying
-		m.updatePhaseStatus[PhaseVerifying] = "running"
-		return m, m.runVerifyPhase(msg)
 
 	case ChangelogLoadedMsg:
 		if msg.Err != nil {
@@ -539,25 +485,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case version.UpdateAvailableMsg:
-		m.updateAvailable = &msg
-		m.updateInstallMethod = msg.InstallMethod
-		m.clearDiagnosticsModal() // Force rebuild so modal picks up new update state
-		m.ShowToast(
-			fmt.Sprintf("Update %s available! Press ! for details", msg.LatestVersion),
-			15*time.Second,
-		)
-		return m, nil
-
-	case version.TdVersionMsg:
-		m.tdVersionInfo = &msg
-		m.clearDiagnosticsModal() // Force rebuild so modal picks up new version state
-		// Show toast if td has an update (only if sidecar doesn't also have one)
-		if msg.HasUpdate && m.updateAvailable == nil {
-			m.ShowToast(
-				fmt.Sprintf("td update %s available! Press ! for details", msg.LatestVersion),
-				15*time.Second,
-			)
+	case version.ProductStatusMsg:
+		m.setProductStatus(msg)
+		m.clearDiagnosticsModal() // rebuild so the modal picks up new state
+		// Never rebuild the preview underneath an open confirmation: the user
+		// is deciding about the plan they were shown, and a rebuilt modal has
+		// no focus until the next frame.
+		if m.updateModalState == UpdateModalClosed {
+			m.clearUpdatePreviewModal()
+		}
+		// Summarize rather than emitting one toast per product: the checks are
+		// asynchronous, so per-product toasts would overwrite one another.
+		if summary := m.updateToastSummary(); summary != "" && !m.updateInProgress && !m.needsRestart {
+			m.ShowToast(summary, 15*time.Second)
 		}
 		return m, nil
 
@@ -838,24 +778,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case "update":
 				// Open update modal instead of starting update directly
 				if m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
-					m.updateReleaseNotes = ""
-					if m.updateAvailable != nil {
-						m.updateReleaseNotes = m.updateAvailable.ReleaseNotes
-					}
-					m.updateModalState = UpdateModalPreview
-					m.showDiagnostics = false
+					m.openUpdatePreview()
 					return m, nil
 				}
 			}
 		}
 		// Handle 'u' shortcut for update - open update modal
 		if msg.String() == "u" && m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
-			m.updateReleaseNotes = ""
-			if m.updateAvailable != nil {
-				m.updateReleaseNotes = m.updateAvailable.ReleaseNotes
-			}
-			m.updateModalState = UpdateModalPreview
-			m.showDiagnostics = false
+			m.openUpdatePreview()
 			return m, nil
 		}
 		return m, nil
@@ -1437,10 +1367,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.showDiagnostics {
 			m.activeContext = "diagnostics"
 			// Force version check in background (bypasses cache)
-			return m, tea.Batch(
-				version.ForceCheckAsync(m.currentVersion),
-				version.ForceCheckTdAsync(),
-			)
+			return m, tea.Batch(m.productCheckCmds(true)...)
 		}
 		m.clearDiagnosticsModal()
 		m.updateContext()
@@ -1929,13 +1856,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			action, cmd := m.updatePreviewModal.HandleKey(msg)
 			switch action {
 			case "update":
-				m.updateModalState = UpdateModalProgress
-				m.updateInProgress = true
-				m.updateStartTime = time.Now()
-				m.initPhaseStatus()
-				m.updatePhase = PhaseCheckPrereqs
-				m.updatePhaseStatus[PhaseCheckPrereqs] = "running"
-				return m, m.startUpdateWithPhases()
+				return m, m.startUpdateBatch(version.SelectPlan(m.products))
 			case "cancel":
 				m.updateModalState = UpdateModalClosed
 				return m, nil
@@ -1982,13 +1903,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Handle 'r' for retry and 'q' for close
 		switch key {
 		case "r":
-			m.updateModalState = UpdateModalProgress
-			m.updateError = ""
-			m.updateStartTime = time.Now()
-			m.initPhaseStatus()
-			m.updatePhase = PhaseCheckPrereqs
-			m.updatePhaseStatus[PhaseCheckPrereqs] = "running"
-			return m, m.startUpdateWithPhases()
+			return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
 		case "q":
 			m.updateModalState = UpdateModalClosed
 			return m, nil
@@ -1999,13 +1914,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			action, cmd := m.updateErrorModal.HandleKey(msg)
 			switch action {
 			case "retry":
-				m.updateModalState = UpdateModalProgress
-				m.updateError = ""
-				m.updateStartTime = time.Now()
-				m.initPhaseStatus()
-				m.updatePhase = PhaseCheckPrereqs
-				m.updatePhaseStatus[PhaseCheckPrereqs] = "running"
-				return m, m.startUpdateWithPhases()
+				return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
 			case "cancel":
 				m.updateModalState = UpdateModalClosed
 				return m, nil
@@ -2068,13 +1977,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		action := m.updatePreviewModal.HandleMouse(msg, m.updatePreviewMouseHandler)
 		switch action {
 		case "update":
-			m.updateModalState = UpdateModalProgress
-			m.updateInProgress = true
-			m.updateStartTime = time.Now()
-			m.initPhaseStatus()
-			m.updatePhase = PhaseCheckPrereqs
-			m.updatePhaseStatus[PhaseCheckPrereqs] = "running"
-			return m, m.startUpdateWithPhases()
+			return m, m.startUpdateBatch(version.SelectPlan(m.products))
 		case "cancel":
 			m.updateModalState = UpdateModalClosed
 			return m, nil
@@ -2112,13 +2015,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		action := m.updateErrorModal.HandleMouse(msg, m.updateErrorMouseHandler)
 		switch action {
 		case "retry":
-			m.updateModalState = UpdateModalProgress
-			m.updateError = ""
-			m.updateStartTime = time.Now()
-			m.initPhaseStatus()
-			m.updatePhase = PhaseCheckPrereqs
-			m.updatePhaseStatus[PhaseCheckPrereqs] = "running"
-			return m, m.startUpdateWithPhases()
+			return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
 		case "cancel":
 			m.updateModalState = UpdateModalClosed
 			return m, nil

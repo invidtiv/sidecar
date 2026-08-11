@@ -94,6 +94,12 @@ func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 			}
 			return focusID, cmd
 		}
+		// A modal that has not been rendered yet has no focus list, but its
+		// primary action is still well defined. Without this, a modal rebuilt
+		// between the last frame and this key press would swallow Enter.
+		if m.primaryAction != "" {
+			return m.primaryAction, nil
+		}
 		return "", nil
 
 	default:

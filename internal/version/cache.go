@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	cacheFile   = "version_cache.json"
-	tdCacheFile = "td_version_cache.json"
-	cacheTTL    = 3 * time.Hour
+	cacheFile      = "version_cache.json"
+	tdCacheFile    = "td_version_cache.json"
+	tasksCacheFile = "tasks_version_cache.json"
+	cacheTTL       = 3 * time.Hour
 )
 
 // CacheEntry stores cached version check result.
@@ -48,6 +49,39 @@ func isolatedConfigFile(name string) string {
 		return ""
 	}
 	return path
+}
+
+// LoadCacheFile reads a cached version check result for a named cache file.
+func LoadCacheFile(name string) (*CacheEntry, error) {
+	path := isolatedConfigFile(name)
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var entry CacheEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+// SaveCacheFile writes a version check result to a named cache file.
+func SaveCacheFile(name string, entry *CacheEntry) error {
+	path := isolatedConfigFile(name)
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 // LoadCache reads cached version check result from disk.

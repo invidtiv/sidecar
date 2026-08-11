@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -275,24 +274,31 @@ type Model struct {
 	ready              bool
 	applicationFocused bool
 
-	// Version info
-	currentVersion  string
-	updateAvailable *version.UpdateAvailableMsg
-	tdVersionInfo   *version.TdVersionMsg
+	// Version info. One discovered target per product (Sidecar, td, and — only
+	// when the tasks_plugin feature is effectively enabled — Tasks), rather
+	// than parallel per-product fields.
+	currentVersion string
+	products       []version.Target
+	updateNotes    string // Sidecar release notes; they describe Sidecar only
 
 	// Update feature state
-	updateInProgress    bool
-	updateError         string
-	needsRestart        bool
-	updateSpinnerFrame  int
-	updateInstallMethod version.InstallMethod
+	updateInProgress   bool
+	updateError        string
+	needsRestart       bool
+	updateSpinnerFrame int
+
+	// Confirmed batch. updatePlan is immutable once confirmed; updateResults
+	// records the settled outcome of every attempted target so a later failure
+	// cannot erase an earlier success. updatePlanID rejects stale async
+	// messages from an abandoned or superseded batch.
+	updatePlan      []version.Target
+	updateResults   []version.Result
+	updatePlanID    int
+	updateActiveIdx int
 
 	// Update modal state
 	updateModalState      UpdateModalState
-	updatePhase           UpdatePhase
-	updatePhaseStatus     map[UpdatePhase]string
 	updateStartTime       time.Time
-	updateReleaseNotes    string // Release notes for current update
 	updateChangelog       string // Full changelog content
 	changelogVisible      bool
 	changelogScrollOffset int
@@ -356,7 +362,6 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		applicationFocused: true,
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
-		updatePhaseStatus:  make(map[UpdatePhase]string),
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
@@ -369,9 +374,8 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tickCmd(),
 		IntroTick(),
-		version.CheckAsync(m.currentVersion),
-		version.CheckTdAsync(),
 	}
+	cmds = append(cmds, m.productCheckCmds(false)...)
 
 	// Mark the startup plugin focused. SetActivePlugin only runs when the user
 	// switches tabs, so without this the initial tab reports itself unfocused —
@@ -485,202 +489,6 @@ func (m *Model) ClearToast() {
 	if m.statusMsg != "" && time.Now().After(m.statusExpiry) {
 		m.statusMsg = ""
 		m.statusIsError = false
-	}
-}
-
-// hasUpdatesAvailable returns true if either sidecar or td has an update available.
-func (m *Model) hasUpdatesAvailable() bool {
-	if m.updateAvailable != nil {
-		return true
-	}
-	if m.tdVersionInfo != nil && m.tdVersionInfo.HasUpdate && m.tdVersionInfo.Installed {
-		return true
-	}
-	return false
-}
-
-// initPhaseStatus initializes all update phases to pending status.
-func (m *Model) initPhaseStatus() {
-	m.updatePhaseStatus = map[UpdatePhase]string{
-		PhaseCheckPrereqs: "pending",
-		PhaseInstalling:   "pending",
-		PhaseVerifying:    "pending",
-	}
-}
-
-// startUpdateWithPhases starts the update process with phase tracking.
-// This replaces the old doUpdate for the new modal-based update flow.
-func (m *Model) startUpdateWithPhases() tea.Cmd {
-	return tea.Batch(
-		// Start elapsed timer
-		m.startElapsedTimer(),
-		// Start spinner animation
-		updateSpinnerTick(),
-		// Start the first phase (check prerequisites)
-		m.runCheckPrerequisites(),
-	)
-}
-
-// startElapsedTimer starts the elapsed time ticker.
-func (m *Model) startElapsedTimer() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return UpdateElapsedTickMsg{}
-	})
-}
-
-// UpdatePrereqsPassedMsg signals prerequisites check passed, triggers install phase.
-type UpdatePrereqsPassedMsg struct{}
-
-// UpdateInstallDoneMsg signals install completed, triggers verify phase.
-type UpdateInstallDoneMsg struct {
-	SidecarUpdated    bool
-	TdUpdated         bool
-	NewSidecarVersion string
-	NewTdVersion      string
-}
-
-// runCheckPrerequisites runs the prerequisites check phase.
-func (m *Model) runCheckPrerequisites() tea.Cmd {
-	method := m.updateInstallMethod
-	return func() tea.Msg {
-		switch method {
-		case version.InstallMethodHomebrew:
-			if _, err := exec.LookPath("brew"); err != nil {
-				return UpdateErrorMsg{Step: "check", Err: fmt.Errorf("brew not found in PATH")}
-			}
-		case version.InstallMethodBinary:
-			// No prerequisites for binary download — just show the URL
-		default:
-			if _, err := exec.LookPath("go"); err != nil {
-				return UpdateErrorMsg{Step: "check", Err: fmt.Errorf("go not found in PATH")}
-			}
-		}
-		return UpdatePrereqsPassedMsg{}
-	}
-}
-
-// runInstallPhase runs the install phase using the detected install method.
-func (m *Model) runInstallPhase() tea.Cmd {
-	sidecarUpdate := m.updateAvailable
-	tdUpdate := m.tdVersionInfo
-	method := m.updateInstallMethod
-
-	return func() tea.Msg {
-		var sidecarUpdated, tdUpdated bool
-		var newSidecarVersion, newTdVersion string
-
-		// Refresh Homebrew tap so brew knows about new versions
-		if method == version.InstallMethodHomebrew {
-			_ = exec.Command("brew", "update").Run() // best-effort
-		}
-
-		// Update sidecar
-		if sidecarUpdate != nil {
-			switch method {
-			case version.InstallMethodHomebrew:
-				cmd := exec.Command("brew", "upgrade", "sidecar")
-				output, err := cmd.CombinedOutput()
-				if err != nil {
-					return UpdateErrorMsg{Step: "sidecar", Err: fmt.Errorf("%v: %s", err, output)}
-				}
-				outLower := strings.ToLower(string(output))
-				if strings.Contains(outLower, "already installed") || strings.Contains(outLower, "already up-to-date") {
-					return UpdateErrorMsg{Step: "sidecar", Err: fmt.Errorf("brew reports sidecar is already at latest version — tap may be out of date. Try: brew update && brew upgrade sidecar")}
-				}
-				sidecarUpdated = true
-				newSidecarVersion = sidecarUpdate.LatestVersion
-			case version.InstallMethodBinary:
-				// Binary installs cannot be auto-updated; the preview modal
-				// shows the download URL instead. The user must download manually.
-			default: // Go install
-				args := []string{
-					"install",
-					"-ldflags", fmt.Sprintf("-X main.Version=%s", sidecarUpdate.LatestVersion),
-					fmt.Sprintf("github.com/marcus/sidecar/cmd/sidecar@%s", sidecarUpdate.LatestVersion),
-				}
-				cmd := exec.Command("go", args...)
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return UpdateErrorMsg{Step: "sidecar", Err: fmt.Errorf("%v: %s", err, output)}
-				}
-				sidecarUpdated = true
-				newSidecarVersion = sidecarUpdate.LatestVersion
-			}
-		}
-
-		// Update td
-		if tdUpdate != nil && tdUpdate.HasUpdate && tdUpdate.Installed {
-			switch method {
-			case version.InstallMethodHomebrew:
-				cmd := exec.Command("brew", "upgrade", "td")
-				output, err := cmd.CombinedOutput()
-				if err != nil {
-					return UpdateErrorMsg{Step: "td", Err: fmt.Errorf("%v: %s", err, output)}
-				}
-				outLower := strings.ToLower(string(output))
-				if strings.Contains(outLower, "already installed") || strings.Contains(outLower, "already up-to-date") {
-					return UpdateErrorMsg{Step: "td", Err: fmt.Errorf("brew reports td is already at latest version — tap may be out of date. Try: brew update && brew upgrade td")}
-				}
-			default: // Go install (binary users of td still use go install)
-				cmd := exec.Command("go", "install",
-					fmt.Sprintf("github.com/marcus/td@%s", tdUpdate.LatestVersion))
-				if output, err := cmd.CombinedOutput(); err != nil {
-					return UpdateErrorMsg{Step: "td", Err: fmt.Errorf("%v: %s", err, output)}
-				}
-			}
-			tdUpdated = true
-			newTdVersion = tdUpdate.LatestVersion
-		}
-
-		return UpdateInstallDoneMsg{
-			SidecarUpdated:    sidecarUpdated,
-			TdUpdated:         tdUpdated,
-			NewSidecarVersion: newSidecarVersion,
-			NewTdVersion:      newTdVersion,
-		}
-	}
-}
-
-// runVerifyPhase runs the verification phase (check installed binaries).
-func (m *Model) runVerifyPhase(installResult UpdateInstallDoneMsg) tea.Cmd {
-	return func() tea.Msg {
-		// Verify sidecar binary if it was updated
-		if installResult.SidecarUpdated {
-			sidecarPath, err := exec.LookPath("sidecar")
-			if err != nil {
-				return UpdateErrorMsg{Step: "verify", Err: fmt.Errorf("sidecar not found in PATH after install")}
-			}
-			// Verify the binary is executable by running --version
-			cmd := exec.Command(sidecarPath, "--version")
-			output, err := cmd.Output()
-			if err != nil {
-				return UpdateErrorMsg{Step: "verify", Err: fmt.Errorf("sidecar binary not executable: %v", err)}
-			}
-			// Compare installed version against expected version
-			if installResult.NewSidecarVersion != "" {
-				got := strings.TrimSpace(string(output))
-				expected := strings.TrimPrefix(installResult.NewSidecarVersion, "v")
-				if !strings.Contains(got, expected) {
-					return UpdateErrorMsg{Step: "verify", Err: fmt.Errorf(
-						"version mismatch after update: expected %s, got %s — the update may not have taken effect, try updating manually",
-						installResult.NewSidecarVersion, got)}
-				}
-			}
-		}
-
-		// Verify td binary if it was updated
-		if installResult.TdUpdated {
-			tdPath, err := exec.LookPath("td")
-			if err != nil {
-				return UpdateErrorMsg{Step: "verify", Err: fmt.Errorf("td not found in PATH after install")}
-			}
-			// Verify the binary is executable
-			cmd := exec.Command(tdPath, "version", "--short")
-			if err := cmd.Run(); err != nil {
-				return UpdateErrorMsg{Step: "verify", Err: fmt.Errorf("td binary not executable: %v", err)}
-			}
-		}
-
-		return UpdateSuccessMsg(installResult)
 	}
 }
 

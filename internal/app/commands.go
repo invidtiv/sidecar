@@ -120,20 +120,6 @@ func FocusPlugin(pluginID string) tea.Cmd {
 	}
 }
 
-// UpdateSuccessMsg signals that an update completed successfully.
-type UpdateSuccessMsg struct {
-	SidecarUpdated    bool
-	TdUpdated         bool
-	NewSidecarVersion string
-	NewTdVersion      string
-}
-
-// UpdateErrorMsg signals that an update failed.
-type UpdateErrorMsg struct {
-	Step string // "sidecar", "td", or "check"
-	Err  error
-}
-
 // UpdateSpinnerTickMsg triggers spinner animation during update.
 type UpdateSpinnerTickMsg struct{}
 
@@ -147,48 +133,6 @@ const (
 	UpdateModalComplete                         // Show completion message
 	UpdateModalError                            // Show error details
 )
-
-// UpdatePhase represents a phase of the update process.
-type UpdatePhase int
-
-const (
-	PhaseCheckPrereqs UpdatePhase = iota // Checking prerequisites (go installed)
-	PhaseInstalling                      // Installing via go install
-	PhaseVerifying                       // Verifying installation
-)
-
-// String returns the display name for an update phase.
-func (p UpdatePhase) String() string {
-	return p.StringForMethod("")
-}
-
-// StringForMethod returns the display name for an update phase,
-// customized for the install method.
-func (p UpdatePhase) StringForMethod(method string) string {
-	switch p {
-	case PhaseCheckPrereqs:
-		return "Checking prerequisites"
-	case PhaseInstalling:
-		switch method {
-		case "homebrew":
-			return "Upgrading via Homebrew"
-		case "binary":
-			return "Manual download required"
-		default:
-			return "Installing via go install"
-		}
-	case PhaseVerifying:
-		return "Verifying"
-	default:
-		return "Unknown"
-	}
-}
-
-// UpdatePhaseChangeMsg signals a change in update phase status.
-type UpdatePhaseChangeMsg struct {
-	Phase  UpdatePhase
-	Status string // "pending", "running", "done", "error"
-}
 
 // UpdateElapsedTickMsg triggers elapsed time update during update.
 type UpdateElapsedTickMsg struct{}

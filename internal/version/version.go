@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -13,7 +14,18 @@ const (
 	repoName    = "sidecar"
 	tdRepoOwner = "marcus"
 	tdRepoName  = "td"
-	apiURL      = "https://api.github.com/repos/%s/%s/releases/latest"
+
+	tasksRepoOwner = "marcus"
+	tasksRepoName  = "tasks"
+
+	defaultAPIBase = "https://api.github.com"
+	apiPath        = "%s/repos/%s/%s/releases/latest"
+
+	// apiBaseEnv overrides the release API host. It exists so the update
+	// journey can be proved end to end against a local fixture instead of
+	// GitHub — no network, no rate limits, and a deterministic "latest"
+	// version. Unset in normal use.
+	apiBaseEnv = "SIDECAR_RELEASE_API_BASE"
 )
 
 // Release represents a GitHub release response.
@@ -40,11 +52,6 @@ func Check(currentVersion string) CheckResult {
 	return CheckRepo(repoOwner, repoName, currentVersion)
 }
 
-// CheckTd fetches the latest td release from GitHub and compares versions.
-func CheckTd(currentVersion string) CheckResult {
-	return CheckRepo(tdRepoOwner, tdRepoName, currentVersion)
-}
-
 // CheckRepo fetches the latest release for a repo and compares versions.
 func CheckRepo(owner, repo, currentVersion string) CheckResult {
 	result := CheckResult{CurrentVersion: currentVersion}
@@ -54,7 +61,7 @@ func CheckRepo(owner, repo, currentVersion string) CheckResult {
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	url := fmt.Sprintf(apiURL, owner, repo)
+	url := releaseAPIURL(owner, repo)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -80,6 +87,15 @@ func CheckRepo(owner, repo, currentVersion string) CheckResult {
 	result.HasUpdate = isNewer(release.TagName, currentVersion)
 
 	return result
+}
+
+// releaseAPIURL builds the latest-release endpoint for a repository.
+func releaseAPIURL(owner, repo string) string {
+	base := os.Getenv(apiBaseEnv)
+	if base == "" {
+		base = defaultAPIBase
+	}
+	return fmt.Sprintf(apiPath, strings.TrimSuffix(base, "/"), owner, repo)
 }
 
 // isDevelopmentVersion returns true for non-release versions.

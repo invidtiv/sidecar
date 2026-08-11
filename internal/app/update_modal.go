@@ -70,9 +70,50 @@ func (m *Model) renderUpdateModalOverlay(background string) string {
 	return ui.OverlayModal(background, modalContent, m.width, m.height)
 }
 
-// ensureUpdatePreviewModal creates/updates the preview modal with caching.
+// clearUpdatePreviewModal drops the cached preview modal so it rebuilds from
+// the current target list.
+func (m *Model) clearUpdatePreviewModal() {
+	m.updatePreviewModal = nil
+	m.updatePreviewModalWidth = 0
+}
+
+// clearUpdateResultModals drops the cached completion/error modals. They render
+// from immutable results, so they must be rebuilt when a batch settles.
+func (m *Model) clearUpdateResultModals() {
+	m.updateCompleteModal = nil
+	m.updateCompleteModalWidth = 0
+	m.updateErrorModal = nil
+	m.updateErrorModalWidth = 0
+}
+
+// targetRow renders one product row for the preview: what changes, from which
+// version to which, and how Sidecar would do it.
+func targetRow(t version.Target) string {
+	arrow := lipgloss.NewStyle().Foreground(styles.Success).Render(" → ")
+	line := fmt.Sprintf("  %s %s%s%s", t.DisplayName, t.CurrentVersion, arrow, t.LatestVersion)
+	if t.Install.Managed {
+		return line + styles.Muted.Render("  · "+t.Install.Method.String())
+	}
+	return line + styles.Muted.Render("  · manual") +
+		"\n" + styles.Muted.Render("      run: "+t.Install.ManualCommand)
+}
+
+// previewChromeLines estimates everything in the preview other than the
+// release notes: borders, padding, the intro line, one or two lines per target
+// row, the Tasks explanation, the section headers, and the button row.
+func previewChromeLines(targets int, includesTasks bool) int {
+	chrome := 16 + targets*2
+	if includesTasks {
+		chrome += 5
+	}
+	return chrome
+}
+
+// ensureUpdatePreviewModal builds the preview from the plan the confirmation
+// would run, so the user sees every product that will change before choosing.
 func (m *Model) ensureUpdatePreviewModal() {
-	if m.updateAvailable == nil && (m.tdVersionInfo == nil || !m.tdVersionInfo.HasUpdate) {
+	plan := version.SelectPlan(m.products)
+	if len(plan) == 0 {
 		return
 	}
 	modalW := m.updateModalWidth()
@@ -82,109 +123,81 @@ func (m *Model) ensureUpdatePreviewModal() {
 	m.updatePreviewModalWidth = modalW
 	contentW := modalW - 6 // borders + padding
 
-	// TD-only update: build a simpler modal
-	if m.updateAvailable == nil {
-		arrow := lipgloss.NewStyle().Foreground(styles.Success).Render(" → ")
-		versionLine := fmt.Sprintf("%s%s%s", m.tdVersionInfo.CurrentVersion, arrow, m.tdVersionInfo.LatestVersion)
-
-		var methodHint string
-		switch m.updateInstallMethod {
-		case version.InstallMethodHomebrew:
-			methodHint = styles.Muted.Render("Method: brew upgrade td")
-		default:
-			methodHint = styles.Muted.Render("Method: go install")
+	var rows []string
+	includesSidecar, includesTasks, anyManaged := false, false, false
+	for _, t := range plan {
+		rows = append(rows, targetRow(t))
+		switch t.Product {
+		case version.ProductSidecar:
+			includesSidecar = true
+		case version.ProductTasks:
+			includesTasks = true
 		}
-
-		m.updatePreviewModal = modal.New("td Update",
-			modal.WithWidth(modalW),
-			modal.WithVariant(modal.VariantDefault),
-			modal.WithPrimaryAction("update"),
-		).
-			AddSection(modal.Text(versionLine)).
-			AddSection(modal.Spacer()).
-			AddSection(modal.Text(methodHint)).
-			AddSection(modal.Spacer()).
-			AddSection(modal.Buttons(
-				modal.Btn(" Update Now ", "update"),
-				modal.Btn(" Later ", "cancel"),
-			))
-		return
-	}
-
-	// Sidecar update (possibly with td update bundled)
-	// Version line
-	currentV := m.updateAvailable.CurrentVersion
-	latestV := m.updateAvailable.LatestVersion
-	arrow := lipgloss.NewStyle().Foreground(styles.Success).Render(" → ")
-	versionLine := fmt.Sprintf("%s%s%s", currentV, arrow, latestV)
-
-	// Release notes
-	releaseNotes := m.updateReleaseNotes
-	if releaseNotes == "" {
-		releaseNotes = m.updateAvailable.ReleaseNotes
-	}
-	if releaseNotes == "" {
-		releaseNotes = "No release notes available."
-	}
-	releaseNotes = parseReleaseNotes(releaseNotes)
-	renderedNotes := m.renderReleaseNotes(releaseNotes, contentW)
-
-	// Limit height
-	lines := strings.Split(renderedNotes, "\n")
-	maxLines := 15
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		lines = append(lines, styles.Muted.Render("... (truncated)"))
-	}
-	notesContent := strings.Join(lines, "\n")
-
-	changelogHint := styles.Muted.Render("[c] View Full Changelog")
-
-	// Build method-specific install hint and buttons
-	var methodHint string
-	var buttons []modal.ButtonDef
-
-	switch m.updateInstallMethod {
-	case version.InstallMethodHomebrew:
-		methodHint = styles.Muted.Render("Method: brew upgrade sidecar")
-		buttons = []modal.ButtonDef{
-			modal.Btn(" Update Now ", "update"),
-			modal.Btn(" Later ", "cancel"),
-		}
-	case version.InstallMethodBinary:
-		downloadURL := fmt.Sprintf("https://github.com/marcus/sidecar/releases/tag/%s",
-			m.updateAvailable.LatestVersion)
-		methodHint = styles.Muted.Render("Download: " + downloadURL)
-		buttons = []modal.ButtonDef{
-			modal.Btn(" Close ", "cancel"),
-		}
-	default:
-		methodHint = styles.Muted.Render("Method: go install")
-		buttons = []modal.ButtonDef{
-			modal.Btn(" Update Now ", "update"),
-			modal.Btn(" Later ", "cancel"),
+		if t.Install.Managed {
+			anyManaged = true
 		}
 	}
 
-	m.updatePreviewModal = modal.New("Sidecar Update",
+	intro := "Updating will change:"
+
+	mdl := modal.New("Update available",
 		modal.WithWidth(modalW),
 		modal.WithVariant(modal.VariantDefault),
 		modal.WithPrimaryAction("update"),
 	).
-		AddSection(modal.Text(versionLine)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(lipgloss.NewStyle().Bold(true).Render("What's New"))).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(notesContent)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(changelogHint)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(methodHint)).
+		AddSection(modal.Text(styles.Muted.Render(intro))).
+		AddSection(modal.Text(strings.Join(rows, "\n")))
+
+	if includesTasks {
+		// Updating Sidecar refreshes its embedded Tasks plugin; updating Tasks
+		// refreshes the standalone commands. They are different artifacts.
+		mdl = mdl.AddSection(modal.Spacer()).
+			AddSection(modal.Text(styles.Muted.Render(
+				"Tasks here is the standalone tasks/tasks-tui/tasks-api commands.\nSidecar's embedded Tasks tab updates with Sidecar itself.")))
+	}
+
+	if includesSidecar {
+		notes := m.updateNotes
+		if notes == "" {
+			notes = "No release notes available."
+		}
+		rendered := m.renderReleaseNotes(parseReleaseNotes(notes), contentW)
+		lines := strings.Split(rendered, "\n")
+		// Budget the notes against the terminal, not a fixed number: the rows
+		// and the confirm buttons must stay on screen at any height.
+		maxLines := m.height - previewChromeLines(len(plan), includesTasks)
+		if maxLines > 12 {
+			maxLines = 12
+		}
+		if maxLines < 2 {
+			maxLines = 2
+		}
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+			lines = append(lines, styles.Muted.Render("... (truncated)"))
+		}
+		mdl = mdl.AddSection(modal.Spacer()).
+			AddSection(modal.Text(lipgloss.NewStyle().Bold(true).Render("What's New in Sidecar"))).
+			AddSection(modal.Spacer()).
+			AddSection(modal.Text(strings.Join(lines, "\n"))).
+			AddSection(modal.Spacer()).
+			AddSection(modal.Text(styles.Muted.Render("[c] View Full Changelog (Sidecar only)")))
+	}
+
+	buttons := []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
+	if anyManaged {
+		buttons = []modal.ButtonDef{
+			modal.Btn(" Update Now ", "update"),
+			modal.Btn(" Later ", "cancel"),
+		}
+	}
+
+	m.updatePreviewModal = mdl.
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(buttons...))
 }
 
-// renderUpdatePreviewModal renders the preview state showing release notes before update.
+// renderUpdatePreviewModal renders the preview state shown before confirming.
 func (m *Model) renderUpdatePreviewModal() string {
 	m.ensureUpdatePreviewModal()
 	if m.updatePreviewModal == nil {
@@ -259,77 +272,89 @@ func centerText(text string, width int) string {
 	return strings.Repeat(" ", padding) + text
 }
 
-// renderUpdateProgressModal renders the progress state during update.
+// dividerWidth keeps a full-width rule inside the modal's padded content box.
+func dividerWidth(contentW int) int {
+	if contentW <= 2 {
+		return 1
+	}
+	return contentW - 2
+}
+
+// resultIcon renders the settled status of one target.
+func resultIcon(status version.ResultStatus) string {
+	switch status {
+	case version.StatusUpdated:
+		return lipgloss.NewStyle().Foreground(styles.Success).Render("✓")
+	case version.StatusFailed:
+		return lipgloss.NewStyle().Foreground(styles.Error).Render("✗")
+	default:
+		return lipgloss.NewStyle().Foreground(styles.TextMuted).Render("•")
+	}
+}
+
+// resultLabel words a settled outcome for the user.
+func resultLabel(r version.Result) string {
+	switch r.Status {
+	case version.StatusUpdated:
+		return "updated to " + r.Version
+	case version.StatusUpToDate:
+		return "already current"
+	case version.StatusManual:
+		return "needs a manual update"
+	default:
+		return "failed"
+	}
+}
+
+// renderUpdateProgressModal shows which product is being changed right now,
+// plus the settled rows for targets that already finished.
 func (m *Model) renderUpdateProgressModal() string {
 	modalW := m.updateModalWidth()
 	contentW := modalW - 4
 
 	var sb strings.Builder
 
-	// Title
-	title := lipgloss.NewStyle().Bold(true).Foreground(styles.Warning).Render("Updating Sidecar")
+	title := lipgloss.NewStyle().Bold(true).Foreground(styles.Warning).Render("Updating")
 	sb.WriteString(centerText(title, contentW))
 	sb.WriteString("\n\n")
 
-	// Version being installed
-	if m.updateAvailable != nil {
-		version := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-			fmt.Sprintf("Installing %s", m.updateAvailable.LatestVersion))
-		sb.WriteString(centerText(version, contentW))
-		sb.WriteString("\n\n")
-	}
-
-	// Phase indicators - 3 real, observable phases
-	phases := []UpdatePhase{PhaseCheckPrereqs, PhaseInstalling, PhaseVerifying}
-	methodStr := string(m.updateInstallMethod)
-	for _, phase := range phases {
-		status := m.updatePhaseStatus[phase]
-		icon := "○" // pending
-		color := styles.TextMuted
-
-		switch status {
-		case "running":
-			icon = "●"
-			color = styles.Warning
-		case "done":
-			icon = "✓"
-			color = styles.Success
-		case "error":
-			icon = "✗"
-			color = styles.Error
+	for i, t := range m.updatePlan {
+		switch {
+		case i < len(m.updateResults):
+			r := m.updateResults[i]
+			fmt.Fprintf(&sb, "  %s %s %s\n", resultIcon(r.Status), t.DisplayName,
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(resultLabel(r)))
+		case i == m.updateActiveIdx:
+			action := "installing " + t.LatestVersion
+			if t.Install.Managed {
+				action += " via " + t.Install.Method.String()
+			}
+			fmt.Fprintf(&sb, "  %s %s %s\n",
+				lipgloss.NewStyle().Foreground(styles.Warning).Render("●"),
+				lipgloss.NewStyle().Bold(true).Render(t.DisplayName),
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(action))
+		default:
+			fmt.Fprintf(&sb, "  %s %s\n",
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render("○"),
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(t.DisplayName))
 		}
-
-		phaseName := phase.StringForMethod(methodStr)
-		if phase == m.updatePhase && status == "running" {
-			phaseName = lipgloss.NewStyle().Bold(true).Render(phaseName)
-		}
-
-		phaseLine := fmt.Sprintf("  %s %s",
-			lipgloss.NewStyle().Foreground(color).Render(icon),
-			phaseName,
-		)
-		sb.WriteString(phaseLine)
-		sb.WriteString("\n")
 	}
 
 	sb.WriteString("\n")
 
-	// Elapsed time
-	elapsed := m.getUpdateElapsed()
-	elapsedStr := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-		fmt.Sprintf("Elapsed: %s", formatElapsed(elapsed)))
-	sb.WriteString(centerText(elapsedStr, contentW))
+	elapsed := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+		fmt.Sprintf("Elapsed: %s", formatElapsed(m.getUpdateElapsed())))
+	sb.WriteString(centerText(elapsed, contentW))
 	sb.WriteString("\n\n")
 
-	// Divider
-	sb.WriteString(lipgloss.NewStyle().Foreground(styles.TextMuted).Render(strings.Repeat("─", contentW)))
+	sb.WriteString(lipgloss.NewStyle().Foreground(styles.TextMuted).Render(strings.Repeat("─", dividerWidth(contentW))))
 	sb.WriteString("\n\n")
 
-	// Cancel hint
-	cancelHint := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Esc: cancel")
-	sb.WriteString(centerText(cancelHint, contentW))
+	// The running package-manager subprocess is not cancellable, so do not
+	// offer a cancel that would not stop it.
+	hint := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Update in progress")
+	sb.WriteString(centerText(hint, contentW))
 
-	// Constrain modal height to available space per AGENTS.md
 	maxHeight := m.height - 4
 	if maxHeight < 10 {
 		maxHeight = 10
@@ -360,7 +385,8 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
-// ensureUpdateCompleteModal creates/updates the complete modal with caching.
+// ensureUpdateCompleteModal renders the settled results. It reads only the
+// immutable result list, so its copy cannot be invalidated by later discovery.
 func (m *Model) ensureUpdateCompleteModal() {
 	modalW := m.updateModalWidth()
 	if m.updateCompleteModal != nil && m.updateCompleteModalWidth == modalW {
@@ -368,35 +394,51 @@ func (m *Model) ensureUpdateCompleteModal() {
 	}
 	m.updateCompleteModalWidth = modalW
 
-	checkmark := lipgloss.NewStyle().Foreground(styles.Success).Render("✓")
-
-	var updatesText string
-	if m.updateAvailable != nil {
-		updatesText = fmt.Sprintf("  %s Sidecar updated to %s", checkmark, m.updateAvailable.LatestVersion)
-	} else {
-		updatesText = fmt.Sprintf("  %s Sidecar updated", checkmark)
+	var rows []string
+	for _, r := range m.updateResults {
+		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)))
+		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
+			row += "\n" + styles.Muted.Render("      run: "+r.Target.Install.ManualCommand)
+		}
+		rows = append(rows, row)
 	}
-	if m.tdVersionInfo != nil && m.tdVersionInfo.HasUpdate {
-		updatesText += fmt.Sprintf("\n  %s td updated to %s", checkmark, m.tdVersionInfo.LatestVersion)
+	if len(rows) == 0 {
+		rows = append(rows, styles.Muted.Render("  Nothing to update."))
 	}
 
-	restartMsg := styles.Muted.Render("Restart sidecar to use the new version.")
-	tip := styles.Muted.Render("Tip: Press q to quit, then run 'sidecar' again.")
+	restartRequired := version.RestartRequired(m.updateResults)
+	primary := "cancel"
+	if restartRequired {
+		primary = "quit"
+	}
 
-	m.updateCompleteModal = modal.New("Update Complete!",
+	mdl := modal.New("Update Complete",
 		modal.WithWidth(modalW),
 		modal.WithVariant(modal.VariantInfo),
-		modal.WithPrimaryAction("quit"),
+		modal.WithPrimaryAction(primary),
 	).
-		AddSection(modal.Text(updatesText)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(restartMsg)).
-		AddSection(modal.Text(tip)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Buttons(
+		AddSection(modal.Text(strings.Join(rows, "\n"))).
+		AddSection(modal.Spacer())
+
+	var buttons []modal.ButtonDef
+	if restartRequired {
+		mdl = mdl.
+			AddSection(modal.Text(styles.Muted.Render("Restart sidecar to use the new version."))).
+			AddSection(modal.Text(styles.Muted.Render("Tip: Press q to quit, then run 'sidecar' again."))).
+			AddSection(modal.Spacer())
+		buttons = []modal.ButtonDef{
 			modal.Btn(" Quit & Restart ", "quit"),
 			modal.Btn(" Later ", "cancel"),
-		))
+		}
+	} else {
+		mdl = mdl.
+			AddSection(modal.Text(styles.Muted.Render("Sidecar itself did not change; no restart needed."))).
+			AddSection(modal.Spacer())
+		buttons = []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
+	}
+
+	m.updateCompleteModal = mdl.AddSection(modal.Buttons(buttons...))
 }
 
 // renderUpdateCompleteModal renders the completion state.
@@ -411,7 +453,8 @@ func (m *Model) renderUpdateCompleteModal() string {
 	return m.updateCompleteModal.Render(m.width, m.height, m.updateCompleteMouseHandler)
 }
 
-// ensureUpdateErrorModal creates/updates the error modal with caching.
+// ensureUpdateErrorModal renders a batch that settled with failures. Earlier
+// successes are retained and each failed target gets its own manual command.
 func (m *Model) ensureUpdateErrorModal() {
 	modalW := m.updateModalWidth()
 	if m.updateErrorModal != nil && m.updateErrorModalWidth == modalW {
@@ -419,67 +462,56 @@ func (m *Model) ensureUpdateErrorModal() {
 	}
 	m.updateErrorModalWidth = modalW
 
-	errorIcon := lipgloss.NewStyle().Foreground(styles.Error).Render("✗")
-	phaseName := m.updatePhase.String()
-	errorLine := fmt.Sprintf("  %s Error during: %s", errorIcon, phaseName)
-
-	errorMsg := m.updateError
-	if errorMsg == "" {
-		errorMsg = "An unknown error occurred."
-	}
-
-	// Detect install method and version for actionable info
-	method := m.updateInstallMethod
-	if method == "" {
-		method = version.DetectInstallMethod()
-	}
-
-	currentV := m.currentVersion
-	if currentV == "" {
-		currentV = "unknown"
-	}
-
-	var methodName string
-	var manualFix string
-	switch method {
-	case version.InstallMethodHomebrew:
-		methodName = "Homebrew"
-		manualFix = "brew update && brew upgrade sidecar"
-	case version.InstallMethodGo:
-		methodName = "go install"
-		manualFix = "go install github.com/marcus/sidecar/cmd/sidecar@latest"
-	default:
-		methodName = "binary"
-		manualFix = "github.com/marcus/sidecar/releases"
-	}
-
-	infoLine := styles.Muted.Render(fmt.Sprintf(
-		"Version: %s  Method: %s", currentV, methodName))
-
-	// Render error prominently (not muted)
 	errorStyle := lipgloss.NewStyle().Foreground(styles.Error)
-	errorText := errorStyle.Render("  " + errorMsg)
 
-	fixHint := styles.Muted.Render("Manual fix: " + manualFix)
-	reportHint := styles.Muted.Render("Report: github.com/marcus/sidecar/issues")
+	var rows []string
+	for _, r := range m.updateResults {
+		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)))
+		if r.Status == version.StatusFailed {
+			if r.Err != nil {
+				row += "\n" + errorStyle.Render("      "+truncateLine(r.Err.Error(), modalW-12))
+			}
+			if cmd := r.Target.Install.ManualCommand; cmd != "" {
+				row += "\n" + styles.Muted.Render("      manual fix: "+cmd)
+			}
+		}
+		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
+			row += "\n" + styles.Muted.Render("      run: "+r.Target.Install.ManualCommand)
+		}
+		rows = append(rows, row)
+	}
 
-	m.updateErrorModal = modal.New("Update Failed",
+	m.updateErrorModal = modal.New("Update Incomplete",
 		modal.WithWidth(modalW),
 		modal.WithVariant(modal.VariantDanger),
 		modal.WithPrimaryAction("retry"),
 	).
-		AddSection(modal.Text(errorLine)).
-		AddSection(modal.Text(infoLine)).
+		AddSection(modal.Text(strings.Join(rows, "\n"))).
 		AddSection(modal.Spacer()).
-		AddSection(modal.Text(errorText)).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(fixHint)).
-		AddSection(modal.Text(reportHint)).
+		AddSection(modal.Text(styles.Muted.Render("Retry runs only the failed products."))).
+		AddSection(modal.Text(styles.Muted.Render("Report: github.com/marcus/sidecar/issues"))).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(
 			modal.Btn(" Retry ", "retry"),
 			modal.Btn(" Close ", "cancel"),
 		))
+}
+
+// truncateLine keeps long package-manager errors inside the modal width.
+func truncateLine(s string, width int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	if width < 10 {
+		width = 10
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) > width-1 {
+		runes = runes[:width-1]
+	}
+	return string(runes) + "…"
 }
 
 // renderUpdateErrorModal renders the error state.

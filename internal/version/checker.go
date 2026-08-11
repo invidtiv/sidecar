@@ -1,207 +1,95 @@
 package version
 
 import (
-	"fmt"
-	"os/exec"
-	"strings"
+	"context"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// UpdateAvailableMsg is sent when a new sidecar version is available.
-type UpdateAvailableMsg struct {
-	CurrentVersion string
-	LatestVersion  string
-	UpdateCommand  string
-	ReleaseNotes   string
-	ReleaseURL     string
-	InstallMethod  InstallMethod
+// ProductStatusMsg reports the discovered state of one product. It is the
+// single product-neutral result of a release check; the app stores one per
+// product instead of parallel per-product fields.
+type ProductStatusMsg struct {
+	Target       Target
+	ReleaseNotes string
+	ReleaseURL   string
 }
 
-// TdVersionMsg is sent with td version info (installed or not).
-type TdVersionMsg struct {
-	Installed      bool
-	CurrentVersion string
-	LatestVersion  string
-	HasUpdate      bool
-}
-
-// updateCommand generates the update command based on install method.
-func updateCommand(version string, method InstallMethod) string {
-	switch method {
-	case InstallMethodHomebrew:
-		return "brew upgrade sidecar"
-	case InstallMethodBinary:
-		return fmt.Sprintf("https://github.com/marcus/sidecar/releases/tag/%s", version)
-	default:
-		return fmt.Sprintf(
-			"go install -ldflags \"-X main.Version=%s\" github.com/marcus/sidecar/cmd/sidecar@%s",
-			version, version,
-		)
-	}
-}
-
-// CheckAsync returns a Bubble Tea command that checks for updates in background.
-func CheckAsync(currentVersion string) tea.Cmd {
+// CheckProductAsync returns a Bubble Tea command that discovers one product's
+// installed version, release status, and install provenance in the background.
+//
+// currentVersion is the in-process version for Sidecar; pass "" for products
+// whose version must be read from the installed executable. Callers only
+// schedule this for products that are effectively enabled, so a disabled
+// feature adds no startup process or network work.
+func CheckProductAsync(d Descriptor, currentVersion string, force bool) tea.Cmd {
 	return func() tea.Msg {
-		method := DetectInstallMethod()
-
-		// Check cache first
-		if cached, err := LoadCache(); err == nil && IsCacheValid(cached, currentVersion) {
-			if cached.HasUpdate {
-				return UpdateAvailableMsg{
-					CurrentVersion: currentVersion,
-					LatestVersion:  cached.LatestVersion,
-					UpdateCommand:  updateCommand(cached.LatestVersion, method),
-					InstallMethod:  method,
-				}
-			}
-			return nil // up-to-date, cached
-		}
-
-		// Cache miss or invalid, fetch from GitHub
-		result := Check(currentVersion)
-
-		// Only cache successful checks (don't cache network errors)
-		if result.Error == nil {
-			_ = SaveCache(&CacheEntry{
-				LatestVersion:  result.LatestVersion,
-				CurrentVersion: currentVersion,
-				CheckedAt:      time.Now(),
-				HasUpdate:      result.HasUpdate,
-			})
-		}
-
-		if result.HasUpdate {
-			return UpdateAvailableMsg{
-				CurrentVersion: currentVersion,
-				LatestVersion:  result.LatestVersion,
-				UpdateCommand:  updateCommand(result.LatestVersion, method),
-				ReleaseNotes:   result.ReleaseNotes,
-				ReleaseURL:     result.UpdateURL,
-				InstallMethod:  method,
-			}
-		}
-
-		return nil
+		return checkProduct(context.Background(), DefaultEnvironment(), d, currentVersion, force)
 	}
 }
 
-// ForceCheckAsync checks for updates, ignoring the cache.
-func ForceCheckAsync(currentVersion string) tea.Cmd {
-	return func() tea.Msg {
-		method := DetectInstallMethod()
-		result := Check(currentVersion)
-		if result.Error == nil {
-			_ = SaveCache(&CacheEntry{
-				LatestVersion:  result.LatestVersion,
-				CurrentVersion: currentVersion,
-				CheckedAt:      time.Now(),
-				HasUpdate:      result.HasUpdate,
-			})
-		}
-		if result.HasUpdate {
-			return UpdateAvailableMsg{
-				CurrentVersion: currentVersion,
-				LatestVersion:  result.LatestVersion,
-				UpdateCommand:  updateCommand(result.LatestVersion, method),
-				ReleaseNotes:   result.ReleaseNotes,
-				ReleaseURL:     result.UpdateURL,
-				InstallMethod:  method,
-			}
-		}
-		return nil
+func checkProduct(ctx context.Context, env *Environment, d Descriptor, currentVersion string, force bool) ProductStatusMsg {
+	target := Target{
+		Product:     d.Product,
+		DisplayName: d.DisplayName,
+		Enabled:     true,
 	}
-}
 
-// tdUpdateCommand generates the update command for td based on install method.
-func tdUpdateCommand(version string, method InstallMethod) string {
-	switch method {
-	case InstallMethodHomebrew:
-		return "brew upgrade td"
-	default:
-		return fmt.Sprintf(
-			"go install github.com/marcus/td@%s",
-			version,
-		)
+	current := currentVersion
+	if d.Product == ProductSidecar {
+		target.Installed = true
+	} else {
+		if _, err := env.LookPath(d.Executable); err != nil {
+			return ProductStatusMsg{Target: target}
+		}
+		target.Installed = true
+		current = InstalledVersion(ctx, env, d)
 	}
-}
+	target.CurrentVersion = current
 
-// GetTdVersion returns the installed td version by running `td version --short`.
-// Returns empty string if td is not installed or command fails.
-func GetTdVersion() string {
-	out, err := exec.Command("td", "version", "--short").Output()
-	if err != nil {
-		return ""
+	// A development build has no release to compare against; leave it as
+	// "no update", never as a failed check.
+	if isDevelopmentVersion(current) || NormalizeVersion(current) == "" {
+		target.Install = DetectInstallation(ctx, env, d, "")
+		if target.CurrentVersion == "" {
+			target.CurrentVersion = "development build"
+		}
+		return ProductStatusMsg{Target: target}
 	}
-	return strings.TrimSpace(string(out))
-}
 
-// CheckTdAsync returns a Bubble Tea command that checks td version in background.
-// Returns TdVersionMsg with installation status and version info.
-func CheckTdAsync() tea.Cmd {
-	return func() tea.Msg {
-		tdVersion := GetTdVersion()
-
-		// td not installed
-		if tdVersion == "" {
-			return TdVersionMsg{Installed: false}
-		}
-
-		// Check cache first
-		if cached, err := LoadTdCache(); err == nil && IsCacheValid(cached, tdVersion) {
-			return TdVersionMsg{
-				Installed:      true,
-				CurrentVersion: tdVersion,
-				LatestVersion:  cached.LatestVersion,
-				HasUpdate:      cached.HasUpdate,
-			}
-		}
-
-		// Cache miss or invalid, fetch from GitHub
-		result := CheckTd(tdVersion)
-
-		// Only cache successful checks
-		if result.Error == nil {
-			_ = SaveTdCache(&CacheEntry{
-				LatestVersion:  result.LatestVersion,
-				CurrentVersion: tdVersion,
-				CheckedAt:      time.Now(),
-				HasUpdate:      result.HasUpdate,
-			})
-		}
-
-		return TdVersionMsg{
-			Installed:      true,
-			CurrentVersion: tdVersion,
-			LatestVersion:  result.LatestVersion,
-			HasUpdate:      result.HasUpdate,
+	msg := ProductStatusMsg{}
+	if !force {
+		if cached, err := LoadCacheFile(d.CacheFile); err == nil && IsCacheValid(cached, current) {
+			target.LatestVersion = cached.LatestVersion
+			target.HasUpdate = cached.HasUpdate
+			target.Install = DetectInstallation(ctx, env, d, cached.LatestVersion)
+			msg.Target = target
+			return msg
 		}
 	}
-}
 
-// ForceCheckTdAsync checks for td updates, ignoring the cache.
-func ForceCheckTdAsync() tea.Cmd {
-	return func() tea.Msg {
-		tdVersion := GetTdVersion()
-		if tdVersion == "" {
-			return TdVersionMsg{Installed: false}
-		}
-		result := CheckTd(tdVersion)
-		if result.Error == nil {
-			_ = SaveTdCache(&CacheEntry{
-				LatestVersion:  result.LatestVersion,
-				CurrentVersion: tdVersion,
-				CheckedAt:      time.Now(),
-				HasUpdate:      result.HasUpdate,
-			})
-		}
-		return TdVersionMsg{
-			Installed:      true,
-			CurrentVersion: tdVersion,
-			LatestVersion:  result.LatestVersion,
-			HasUpdate:      result.HasUpdate,
-		}
+	result := CheckRepo(d.RepoOwner, d.RepoName, current)
+	if result.Error != nil {
+		target.CheckFailed = true
+		target.Install = DetectInstallation(ctx, env, d, "")
+		msg.Target = target
+		return msg
 	}
+
+	_ = SaveCacheFile(d.CacheFile, &CacheEntry{
+		LatestVersion:  result.LatestVersion,
+		CurrentVersion: current,
+		CheckedAt:      time.Now(),
+		HasUpdate:      result.HasUpdate,
+	})
+
+	target.LatestVersion = result.LatestVersion
+	target.HasUpdate = result.HasUpdate
+	target.Install = DetectInstallation(ctx, env, d, result.LatestVersion)
+
+	msg.Target = target
+	msg.ReleaseNotes = result.ReleaseNotes
+	msg.ReleaseURL = result.UpdateURL
+	return msg
 }

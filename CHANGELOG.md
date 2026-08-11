@@ -2,6 +2,20 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+- **The update journey now covers every product Sidecar knows about, and tells the truth about each one.** Pressing `u` from diagnostics shows one confirmation naming every product that will change, with its current and target version and the install method Sidecar will use — `Sidecar 0.95.0 → 0.96.0 · Homebrew`. When the `tasks_plugin` feature is effectively enabled (config or CLI override, exactly as plugin assembly resolves it) and the standalone `tasks` command is installed, the Tasks suite joins Sidecar and td in that list. With the feature disabled, no Tasks check, process, or network request happens at all.
+
+  Sidecar never installs Tasks just because the plugin is enabled: if the standalone commands are missing, diagnostics show `embedded only · standalone not installed` with the supported `brew install marcus/tap/tasks` command, and updating Sidecar refreshes only its embedded Tasks tab. A confirmation updates; it does not install a new product.
+
+### Fixes
+- **Each product now uses its own install provenance.** Sidecar previously reused its own detected install method to update td, which could run the wrong command on a mixed installation. Provenance is now resolved per product by checking whether the executable you actually run belongs to the formula (`brew --cellar`) or to your active Go bin directory — so a Homebrew Sidecar alongside a `go install`ed td, or an active local Tasks development selector, is handled correctly. An unrecognised install is reported with a manual command rather than overwritten.
+- **A failure no longer erases earlier successes.** Targets run sequentially and each one's outcome is retained, so completion distinguishes `updated`, `already current`, `needs a manual update`, and `failed`, with a per-target manual command for anything that failed. Retry runs only the failed products.
+- **Restart is only claimed when Sidecar itself changed.** A td- or Tasks-only update no longer asks you to quit Sidecar.
+- **Verification compares exact versions.** Every binary a release ships must report the released version afterward — for Tasks that means `tasks`, `tasks-tui`, and `tasks-api` together, so a partially updated suite is a failure rather than a silent success. Success is never inferred from exit status or Homebrew wording alone.
+- **The progress modal no longer offers a cancel it cannot honour.** It now shows which product is being changed and what already settled, and says `Update in progress`; the running package manager was never cancellable.
+
 ## [v0.95.0] - 2026-08-10
 
 ### Features

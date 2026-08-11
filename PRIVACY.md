@@ -100,7 +100,7 @@ The Conversations plugin can export a session to a markdown file in the current 
 
 ### Executable detection
 
-On startup and when needed, sidecar checks `PATH` for: `tmux`, `brew`, `git`, `td`, `go`. It also reads `os.Executable()` to detect its own installation method (Homebrew vs `go install`).
+On startup and when needed, sidecar checks `PATH` for: `tmux`, `brew`, `git`, `td`, `go`, and — only when the `tasks_plugin` feature is enabled — `tasks`, `tasks-tui`, `tasks-api`. It reads `os.Executable()` and resolves each product's executable (following symlinks) to determine how that specific binary was installed. Determining Homebrew ownership runs `brew --cellar <formula>` / `brew --prefix <formula>`; this reads local Homebrew metadata and makes no network request.
 
 ## Network Requests
 
@@ -112,8 +112,9 @@ On startup, sidecar checks for updates by fetching the latest release tag from:
 
 - `api.github.com/repos/marcus/sidecar/releases/latest`
 - `api.github.com/repos/marcus/td/releases/latest`
+- `api.github.com/repos/marcus/tasks/releases/latest` — only when the `tasks_plugin` feature is effectively enabled *and* the standalone `tasks` command is installed. With the feature disabled, no Tasks check, process, or network request happens at all.
 
-These requests use a 5-second timeout, send no authentication, and are cached locally for 3 hours (`version_cache.json`, `td_version_cache.json`). After the first successful check, no network call occurs until the cache expires. Development builds (untagged or `devel` versions) skip these checks entirely.
+These requests use a 5-second timeout, send no authentication, and are cached locally for 3 hours in a separate file per product (`version_cache.json`, `td_version_cache.json`, `tasks_version_cache.json`). After the first successful check, no network call occurs until the cache expires. Development builds (untagged, `devel`, or any version output without a release number — including a local Tasks development selector) skip these checks entirely.
 
 ### Changelog fetch (user-initiated)
 
@@ -121,7 +122,14 @@ When you open the changelog from the update modal, sidecar fetches `raw.githubus
 
 ### Self-update (user-initiated)
 
-When you confirm an update from the update modal, sidecar runs `brew upgrade sidecar` or `go install ...` depending on your install method. These commands make their own network requests to Homebrew or the Go module proxy.
+When you confirm an update from the update modal, sidecar updates the products named in that modal — Sidecar, td, and (when enabled and installed) the standalone Tasks suite — one at a time, using each product's own detected install method:
+
+- Homebrew: one `brew update` for the batch, then `brew upgrade marcus/tap/sidecar`, `brew upgrade marcus/tap/td`, and/or `brew upgrade marcus/tap/tasks`.
+- `go install`: `go install github.com/marcus/sidecar/cmd/sidecar@<version>`, `go install github.com/marcus/td@<version>`, and/or `go install github.com/marcus/tasks/cmd/{tasks,tasks-tui,tasks-api}@<version>`.
+
+These commands make their own network requests to Homebrew or the Go module proxy. After each product, sidecar runs the updated binaries with their version flag to verify the exact installed version.
+
+Sidecar never installs a product you do not already have, and never overwrites an executable it does not recognise as Homebrew- or `go install`-managed (for example an active local development build). Those are reported with a manual command instead. No update runs until you choose **Update**.
 
 ### External CLI tools
 

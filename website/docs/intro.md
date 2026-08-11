@@ -345,11 +345,39 @@ sidecar --version            # Print version and exit
 
 ## Updates
 
-Sidecar checks for new versions on startup and shows a notification when updates are available. Press `!` to view the diagnostics modal with the update command.
+Sidecar checks for new versions on startup and shows a notification when updates are available. Press `!` for diagnostics, then `u` to review and confirm.
+
+### What one confirmation updates
+
+Diagnostics lists every product Sidecar knows how to update, with its version and how it was installed:
+
+- **Sidecar** itself
+- **td**
+- **Tasks** — the standalone `tasks`, `tasks-tui`, and `tasks-api` commands, listed only when the `tasks_plugin` feature is enabled
+
+The preview names each product that will change, from which version to which, and the method Sidecar will use, for example `Sidecar 0.95.0 → 0.96.0 · Homebrew`. Nothing is installed until you choose **Update**. Products are then updated one at a time and each is verified against the exact released version afterward.
+
+Sidecar's embedded Tasks tab and the standalone Tasks commands are different artifacts: updating Sidecar refreshes the embedded tab, updating Tasks refreshes the standalone commands.
+
+### Per-product install methods
+
+Provenance is detected per product, so a Homebrew Sidecar can sit alongside a `go install`ed td. Sidecar only updates an executable it recognises as Homebrew- or `go install`-managed. Anything else — a downloaded binary, or an active local development build — is listed as **manual** with the command to run yourself, and is never overwritten.
+
+### When something goes wrong
+
+If a product fails, earlier successful updates are kept. The result screen shows the outcome per product with a manual command for each failure, and **Retry** runs only the failed products. A restart is requested only when Sidecar itself changed; a td- or Tasks-only update needs no restart.
+
+### If Tasks is enabled but not installed
+
+Sidecar will not install it for you. Diagnostics shows `embedded only · standalone not installed` alongside the supported install command:
+
+```bash
+brew install marcus/tap/tasks
+```
 
 **Update methods:**
 - **Setup script:** `curl -fsSL https://raw.githubusercontent.com/marcus/sidecar/main/scripts/setup.sh | bash`
-- **Homebrew:** `brew upgrade sidecar`
+- **Homebrew:** `brew upgrade marcus/tap/sidecar`
 - **Binary:** Download the latest from [GitHub Releases](https://github.com/marcus/sidecar/releases)
 
 ## What's Next?
