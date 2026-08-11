@@ -43,11 +43,6 @@ type ControlSnapshot struct {
 	// rather than scanned out of the capture because `capture-pane -e` emits
 	// rendering escapes only — DECSET mode sequences never survive it.
 	MouseReporting bool
-	// AltScreen mirrors tmux's #{alternate_on}: the pane is showing a
-	// fullscreen application's alternate grid rather than the scrollback. Asked
-	// of tmux for the same reason as MouseReporting — the smcup/rmcup sequences
-	// that switch it never survive `capture-pane -e`.
-	AltScreen bool
 	// PaneTitle and CurrentCommand are captured in the same control-mode
 	// metadata response as the screen. Semantic agent probes must never reuse
 	// identity from an older ordinary poll while that polling path is suspended.
@@ -1025,15 +1020,10 @@ func (c *sessionControlClient) close() {
 	})
 }
 
-// captureMetadataFields is the ordinary capture metadata, and what every
-// default (compare-off) run uses.
-//
-// alternate_on sits at the same index as in captureCompareMetadataFields so one
-// parse serves both layouts. It is queried unconditionally because the renderer
-// uses it to decide whether a repeated background is a fullscreen application's
-// canvas or ordinary scrollback highlighting — see terminalCanvasBackground.
+// captureMetadataFields is the ordinary capture metadata. It is unchanged from
+// the pre-shadow behavior and is what every default (compare-off) run uses.
 const captureMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}," +
-	"#{history_size},#{mouse_any_flag},#{alternate_on},#{pane_current_command},#{pane_title}"
+	"#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}"
 
 // captureCompareMetadataFields adds the three fields the shadow comparison
 // needs — alternate-screen state, the SGR mouse encoding flag, and the client's
@@ -1112,7 +1102,7 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 	// SplitN preserves commas in pane titles. pane_current_command is a tmux
 	// command name rather than arbitrary terminal content and cannot contain a
 	// comma in ordinary tmux output.
-	limit := 10
+	limit := 9
 	if extended {
 		limit = 12
 	}
@@ -1135,9 +1125,7 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 		scrollback = DefaultScrollbackLines
 	}
 	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
-	// Both layouts carry alternate_on at index 7, so this parse is layout-neutral.
-	altScreen := len(parts) >= 8 && parts[7] != "0" && parts[7] != ""
-	commandIndex, titleIndex := 8, 9
+	commandIndex, titleIndex := 7, 8
 	if extended {
 		commandIndex, titleIndex = 10, 11
 		if len(parts) >= 10 {
@@ -1178,7 +1166,6 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 		PaneHeight:     height,
 		PaneWidth:      width,
 		MouseReporting: mouseReporting,
-		AltScreen:      altScreen,
 		PaneTitle:      paneTitle,
 		CurrentCommand: currentCommand,
 	}, extras, nil

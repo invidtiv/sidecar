@@ -741,7 +741,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			if !modelOwns {
-				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight, msg.AltScreen)
+				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
@@ -860,7 +860,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			if !modelOwns {
-				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight, msg.AltScreen)
+				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
 			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
@@ -1310,7 +1310,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			if !modelOwns {
-				p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight, msg.AltScreen)
+				p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
 			}
 			if changed {
 				shell.Agent.LastOutput = time.Now()

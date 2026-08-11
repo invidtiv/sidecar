@@ -604,7 +604,6 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	// Same geometry the render path uses, or hit-testing drifts from the pixels
 	// (td-73fa86).
 	input.PaneWidth, input.PaneHeight = p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
-	input.AltScreen = p.paneGeometryFor(termPanel).AltScreen
 	if p.interactiveState != nil {
 		input.CursorCol = p.interactiveState.CursorCol
 		input.CursorRow = p.interactiveState.CursorRow

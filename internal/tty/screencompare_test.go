@@ -32,7 +32,7 @@ func TestCaptureCommandsUnchangedWhenCompareOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantMeta := "display-message -p -t %3 '#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height}," +
-		"#{pane_width},#{history_size},#{mouse_any_flag},#{alternate_on},#{pane_current_command},#{pane_title}'"
+		"#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}'"
 	if metadata != wantMeta {
 		t.Errorf("metadata command changed:\n got %q\nwant %q", metadata, wantMeta)
 	}
@@ -70,7 +70,7 @@ func TestCompareOnAddsOnlyMetadataFieldsAndNoExtraCommand(t *testing.T) {
 // underlying pane, or shadow mode would change the delivered frame.
 func TestBothMetadataLayoutsProduceTheSameSnapshot(t *testing.T) {
 	body := []string{"row one", "row two"}
-	standard := append([]string{"7,3,1,24,80,120,1,0,zsh,my,title"}, body...)
+	standard := append([]string{"7,3,1,24,80,120,1,zsh,my,title"}, body...)
 	extended := append([]string{"7,3,1,24,80,120,1,0,1,64,zsh,my,title"}, body...)
 
 	got, _, err := parseControlSnapshotLayout("sess", "%1", 600, standard, false)

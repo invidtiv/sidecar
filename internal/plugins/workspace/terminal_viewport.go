@@ -31,7 +31,6 @@ type terminalViewportInput struct {
 	PaneHeight    int
 	PaneWidth     int
 	NativeCursor  bool
-	AltScreen     bool
 	AbsoluteBase  int
 	TotalItems    int
 	LoadingOlder  bool
@@ -236,7 +235,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
-	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight, in.AltScreen)
+	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
 	inheritedBg := inheritedRowBackground(in.Buffer, layout.Start)
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
@@ -320,19 +319,16 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 // default-background cells correctly in a real terminal because that terminal's
 // default matches the canvas. Inside Sidecar those cells otherwise fall through
 // to the surrounding plugin surface and form rectangular seams.
-func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int, altScreen bool) string {
-	// Only a fullscreen application has a canvas. Restricting the search to the
-	// alternate screen is what keeps ordinary scrollback out of it: a long diff
-	// puts a highlight background on most visible rows and would otherwise win
-	// the vote below, repainting the whole pane in the diff's added-line green.
-	if !altScreen {
-		return ""
-	}
+func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
 	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
 		return ""
 	}
 	rows := buffer.LinesRange(paneTop, paneTop+paneHeight)
+	if len(rows) == 0 {
+		return ""
+	}
 	counts := make(map[string]int)
+	blankRows := make(map[string]int)
 	inherited := inheritedRowBackground(buffer, paneTop)
 	for _, row := range rows {
 		// Counting the row as tmux would render it, not as it was captured: a
@@ -340,14 +336,14 @@ func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int,
 		// inherited background only the first row of the canvas would vote.
 		resolved, next, _ := ui.CarryRowBackground(row, inherited)
 		inherited = next
+		blank := strings.TrimSpace(ansi.Strip(resolved)) == ""
 		for bg := range rowBackgrounds(resolved) {
 			counts[bg]++
+			if blank {
+				blankRows[bg]++
+			}
 		}
 	}
-	// Requiring both repetition and one third of the observed grid rejects an
-	// isolated coloured separator in ordinary shell output. Grok's canvas, for
-	// example, is carried on 42 of the 50 rows in the reported pane.
-	threshold := max(2, (len(rows)+2)/3)
 	canvas, best := "", 0
 	for bg, count := range counts {
 		if count > best {
@@ -356,10 +352,23 @@ func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int,
 			canvas = ""
 		}
 	}
-	if best < threshold {
+	if canvas == "" || best < canvasRowShare(len(rows)) || blankRows[canvas] == 0 {
 		return ""
 	}
 	return canvas
+}
+
+// canvasRowShare is how many of the observed rows a background must cover to be
+// the pane's canvas rather than highlighting drawn on top of one.
+//
+// A canvas is on every row by definition — it is the surface the application
+// paints onto — so this is deliberately near-total rather than a simple
+// majority. Measured against live panes: Grok's canvas covers 43 of 43 and 56
+// of 56 rows, while a Claude Code diff's added-line green covers 19 of 55. An
+// earlier one-third rule sat directly between those two, so scrolling a long
+// diff by a single row flipped it and repainted the whole pane green.
+func canvasRowShare(rows int) int {
+	return max(2, rows*9/10)
 }
 
 // rowBackgroundLookback bounds how far back the inherited background is

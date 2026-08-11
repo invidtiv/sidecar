@@ -7,10 +7,6 @@ package workspace
 type paneGeometry struct {
 	Width  int
 	Height int
-	// AltScreen rides along with the geometry because it shares the same source
-	// and the same key: it is read by preview panes, which never populate
-	// interactiveState, so it cannot live there.
-	AltScreen bool
 }
 
 func (g paneGeometry) known() bool { return g.Width > 0 && g.Height > 0 }
@@ -18,16 +14,14 @@ func (g paneGeometry) known() bool { return g.Width > 0 && g.Height > 0 }
 // recordPaneGeometry stores the geometry reported by a capture. The key space is
 // the one terminal history already uses ("agent"/"shell"/"panel" + target), so a
 // pane has one identity across both caches.
-func (p *Plugin) recordPaneGeometry(kind, target string, width, height int, altScreen bool) {
+func (p *Plugin) recordPaneGeometry(kind, target string, width, height int) {
 	if target == "" || width <= 0 || height <= 0 {
 		return
 	}
 	if p.paneGeometry == nil {
 		p.paneGeometry = make(map[string]paneGeometry)
 	}
-	p.paneGeometry[terminalHistoryKey(kind, target)] = paneGeometry{
-		Width: width, Height: height, AltScreen: altScreen,
-	}
+	p.paneGeometry[terminalHistoryKey(kind, target)] = paneGeometry{Width: width, Height: height}
 }
 
 // paneGeometryFor returns the observed geometry of the pane currently rendered

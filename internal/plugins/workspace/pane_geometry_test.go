@@ -159,7 +159,7 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 		t.Fatalf("unknown geometry surfaced an indicator: %q", plain)
 	}
 
-	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6, false)
+	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
 	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "40x6, showing 29x2") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
@@ -191,14 +191,14 @@ func TestRenderCapturedTerminalScrollbarIsNotAMismatch(t *testing.T) {
 
 	// Viewport 30x3 renders 30x2 after the hint line, and the pane is exactly
 	// that — but 12 lines of scrollback put a scrollbar on screen.
-	p.recordPaneGeometry("shell", "sidecar-shell", 30, 2, false)
+	p.recordPaneGeometry("shell", "sidecar-shell", 30, 2)
 	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if strings.Contains(plain, "showing") {
 		t.Fatalf("scrollbar column reported as a pane mismatch: %q", plain)
 	}
 
 	// A pane that genuinely overflows still says so.
-	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6, false)
+	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
 	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "showing") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
@@ -259,12 +259,12 @@ func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
 
 func TestPaneGeometryCache(t *testing.T) {
 	p := &Plugin{}
-	p.recordPaneGeometry("agent", "sidecar-main", 200, 50, false)
+	p.recordPaneGeometry("agent", "sidecar-main", 200, 50)
 	if got := p.paneGeometry[terminalHistoryKey("agent", "sidecar-main")]; got.Width != 200 || got.Height != 50 {
 		t.Fatalf("geometry = %+v, want 200x50", got)
 	}
 	// Unknown geometry never overwrites a good reading.
-	p.recordPaneGeometry("agent", "sidecar-main", 0, 0, false)
+	p.recordPaneGeometry("agent", "sidecar-main", 0, 0)
 	if got := p.paneGeometry[terminalHistoryKey("agent", "sidecar-main")]; got.Width != 200 || got.Height != 50 {
 		t.Fatalf("geometry = %+v after zero update, want 200x50", got)
 	}

@@ -414,7 +414,7 @@ func TestCaptureDeliveryUnchangedWhenModelPathOff(t *testing.T) {
 		return channel != nil && channel.commandCountContaining("capture-pane") == 1
 	})
 	channel.respondCapture(0, controlResponse{
-		Lines: []string{"9,4,0,30,100,1250,1,0,node,Action Required", "line one", "line two"},
+		Lines: []string{"9,4,0,30,100,1250,1,node,Action Required", "line one", "line two"},
 	})
 	waitFor(t, func() bool {
 		mu.Lock()

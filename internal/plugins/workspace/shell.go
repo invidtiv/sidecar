@@ -197,9 +197,6 @@ type (
 		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
 		// meaningful when HasCursor is set.
 		MouseReporting bool
-		// AltScreen is tmux's #{alternate_on} for the pane. Only meaningful
-		// when HasCursor is set.
-		AltScreen bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -999,7 +996,6 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
 			MouseReporting: cursor.MouseReporting,
-			AltScreen:      cursor.AltScreen,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,

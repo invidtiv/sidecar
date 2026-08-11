@@ -61,9 +61,6 @@ type AgentOutputMsg struct {
 	// MouseReporting is tmux's #{mouse_any_flag} for the pane, captured with the
 	// cursor metadata. Only meaningful when HasCursor is set.
 	MouseReporting bool
-	// AltScreen is tmux's #{alternate_on} for the pane. Only meaningful when
-	// HasCursor is set.
-	AltScreen bool
 	Activity       agentactivity.Result
 	CapturedAt     time.Time
 	PaneTitle      string

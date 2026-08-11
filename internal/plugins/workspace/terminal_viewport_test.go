@@ -1017,7 +1017,7 @@ func TestTerminalViewportUsesFullscreenCanvasForDefaultCells(t *testing.T) {
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer: buffer, Width: 30, Height: 4, Follow: true,
-		Interactive: true, PaneWidth: 30, PaneHeight: 4, AltScreen: true,
+		Interactive: true, PaneWidth: 30, PaneHeight: 4,
 	}, ui.NewTruncateCache(32))
 	rows := strings.Split(result.Content, "\n")
 	if len(rows) != 4 {
@@ -1064,7 +1064,7 @@ func TestTerminalViewportDoesNotTreatScrollbackDiffAsCanvas(t *testing.T) {
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer: buffer, Width: 40, Height: len(rows), Follow: true,
-		Interactive: true, PaneWidth: 40, PaneHeight: len(rows), AltScreen: false,
+		Interactive: true, PaneWidth: 40, PaneHeight: len(rows),
 	}, ui.NewTruncateCache(32))
 
 	rendered := strings.Split(result.Content, "\n")
@@ -1110,19 +1110,52 @@ func TestTerminalViewportClosesBackgroundAtEndOfRow(t *testing.T) {
 func TestTerminalViewportDetectsCanvasCarriedAcrossRows(t *testing.T) {
 	canvas := "\x1b[48;2;20;20;20m"
 	buffer := tty.NewOutputBuffer(100)
+	// The blank row is painted too — a canvas covers cells that have no content,
+	// which is what separates it from highlighting.
 	buffer.ApplySnapshot(tty.PaneSnapshot{
-		Output:   canvas + "header\nbody\nfooter\nstatus",
+		Output:   canvas + "header\nbody\n\nstatus",
 		PaneRows: 4,
 	})
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer: buffer, Width: 20, Height: 4, Follow: true,
-		Interactive: true, PaneWidth: 20, PaneHeight: 4, AltScreen: true,
+		Interactive: true, PaneWidth: 20, PaneHeight: 4,
 	}, ui.NewTruncateCache(32))
 
 	for i, row := range strings.Split(result.Content, "\n") {
 		if !strings.HasPrefix(row, canvas) {
 			t.Errorf("row %d lost the carried canvas: %q", i, row)
 		}
+	}
+}
+
+// The one-third rule sat between the two cases it had to separate, so scrolling
+// a long diff by a single row flipped the verdict and washed the pane green.
+// The row counts here are the ones measured off live panes: a Grok canvas
+// covers every row, a Claude Code diff covered 19 of 55.
+func TestCanvasRowShareSeparatesCanvasFromDiffHighlighting(t *testing.T) {
+	if got := canvasRowShare(55); got <= 19 {
+		t.Errorf("a 19-of-55 diff still reaches the canvas threshold (%d)", got)
+	}
+	for _, rows := range []int{43, 56} {
+		if got := canvasRowShare(rows); got > rows {
+			t.Errorf("a canvas covering all %d rows cannot reach the threshold (%d)", rows, got)
+		}
+	}
+}
+
+// A diff can fill the whole pane while scrolled through a large hunk, so row
+// share alone is not enough: highlighting never paints a row that has no text.
+func TestTerminalViewportDoesNotTreatFullPaneDiffAsCanvas(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+	var rows []string
+	for i := range 10 {
+		rows = append(rows, fmt.Sprintf("%s+ added line %d\x1b[49m", green, i))
+	}
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
+
+	if bg := terminalCanvasBackground(buffer, 0, len(rows)); bg != "" {
+		t.Errorf("a fully green diff was promoted to canvas %q", bg)
 	}
 }

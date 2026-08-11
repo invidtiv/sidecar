@@ -59,9 +59,6 @@ type capturedCursor struct {
 	// See tty.ControlSnapshot.MouseReporting for why it comes from tmux instead
 	// of the capture text.
 	MouseReporting bool
-	// AltScreen mirrors tmux's #{alternate_on}: the pane is on a fullscreen
-	// application's alternate grid.
-	AltScreen bool
 	capturedPaneMetadata
 }
 
@@ -933,9 +930,6 @@ type AgentPollUnchangedMsg struct {
 	// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only meaningful
 	// when HasCursor is set.
 	MouseReporting bool
-	// AltScreen is tmux's #{alternate_on} for the pane. Only meaningful when
-	// HasCursor is set.
-	AltScreen bool
 	Activity       agentactivity.Result
 	CapturedAt     time.Time
 	PaneTitle      string
@@ -1128,7 +1122,6 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				HasHistory:     capture.Valid,
 				RowsJoined:     capture.RowsJoined,
 				MouseReporting: cursor.MouseReporting,
-				AltScreen:      cursor.AltScreen,
 				Activity:       activity,
 				CapturedAt:     capturedAt,
 				PaneTitle:      capture.PaneTitle,
@@ -1154,7 +1147,6 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
 			MouseReporting: cursor.MouseReporting,
-			AltScreen:      cursor.AltScreen,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
@@ -1317,7 +1309,7 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
 	args := []string{
 		"display-message", "-t", cursorTarget, "-p",
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{alternate_on},#{pane_current_command},#{pane_title}",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}",
 		";",
 	}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
@@ -1354,12 +1346,9 @@ func parseCapturedCursor(header string) capturedCursor {
 	if len(parts) >= 7 {
 		cursor.MouseReporting = parts[6] != "0" && parts[6] != ""
 	}
-	if len(parts) >= 8 {
-		cursor.AltScreen = parts[7] != "0" && parts[7] != ""
-	}
-	if len(parts) >= 10 {
-		cursor.CurrentCommand = strings.TrimSpace(parts[8])
-		cursor.PaneTitle = strings.Join(parts[9:], ",")
+	if len(parts) >= 9 {
+		cursor.CurrentCommand = strings.TrimSpace(parts[7])
+		cursor.PaneTitle = strings.Join(parts[8:], ",")
 	}
 	return cursor
 }

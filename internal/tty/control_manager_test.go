@@ -624,7 +624,7 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 		t.Fatal("unsafe pane target accepted")
 	}
 	snapshot, err := parseControlSnapshot("session", "%12", 900, []string{
-		"9,4,0,30,100,1250,1,0,node,Action Required, repo", "line one", "%output %12 pane content",
+		"9,4,0,30,100,1250,1,node,Action Required, repo", "line one", "%output %12 pane content",
 	})
 	if err != nil {
 		t.Fatal(err)
