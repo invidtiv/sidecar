@@ -252,6 +252,50 @@ func sgrBackground(seq string) (string, bool) {
 	return bg, touches
 }
 
+// SGRBackground reports whether an SGR sequence changes the background and
+// returns the minimal sequence that reproduces the resulting background.
+// Callers rendering ANSI owned by another terminal application use this to
+// distinguish an explicit colour from the terminal default without duplicating
+// the colour-parameter parser.
+func SGRBackground(seq string) (string, bool) {
+	return sgrBackground(seq)
+}
+
+// ApplyTerminalDefaultBackground renders default-background cells with bg.
+// Explicit application backgrounds still win; resets to the terminal default
+// are followed by bg so embedding the row inside another styled surface cannot
+// expose that surface's background.
+func ApplyTerminalDefaultBackground(line, bg string, width int) string {
+	if bg == "" {
+		return line
+	}
+	var out strings.Builder
+	out.Grow(len(line) + len(bg)*2)
+	out.WriteString(bg)
+
+	state := ansi.NormalState
+	remaining := line
+	for len(remaining) > 0 {
+		seq, _, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
+		if n <= 0 {
+			out.WriteString(remaining)
+			break
+		}
+		out.WriteString(seq)
+		if next, touches := sgrBackground(seq); touches && next == "\x1b[49m" {
+			out.WriteString(bg)
+		}
+		state = newState
+		remaining = remaining[n:]
+	}
+	if gap := width - ansi.StringWidth(line); gap > 0 {
+		out.WriteString(bg)
+		out.WriteString(strings.Repeat(" ", gap))
+	}
+	out.WriteString("\x1b[49m")
+	return out.String()
+}
+
 // sgrColorParam rebuilds an extended colour parameter starting at params[i] (38
 // or 48) and reports how many extra parameters it consumed, so the caller's walk
 // skips its arguments rather than reading them as codes of their own.
