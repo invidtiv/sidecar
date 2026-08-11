@@ -1004,3 +1004,47 @@ func TestTerminalViewportHighlightsEveryRowOfAStyledSelection(t *testing.T) {
 		t.Errorf("row past the selection was highlighted: %q", rendered[3])
 	}
 }
+
+func TestTerminalViewportUsesFullscreenCanvasForDefaultCells(t *testing.T) {
+	canvas := "\x1b[48;2;20;20;20m"
+	panel := "\x1b[48;2;36;36;36m"
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:      canvas + "Output  Diff  Task   INTERACTIVE\x1b[0m\n" + canvas + "   \x1b[0m\n" + panel + "panel\x1b[49m default\n" + canvas + "status\x1b[0m",
+		HistoryRows: 0,
+		PaneRows:    4,
+	})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: 30, Height: 4, Follow: true,
+		Interactive: true, PaneWidth: 30, PaneHeight: 4,
+	}, ui.NewTruncateCache(32))
+	rows := strings.Split(result.Content, "\n")
+	if len(rows) != 4 {
+		t.Fatalf("rendered %d rows, want 4", len(rows))
+	}
+	for i, row := range rows {
+		if !strings.HasPrefix(row, canvas) {
+			t.Errorf("row %d does not establish canvas background: %q", i, row)
+		}
+	}
+	if !strings.Contains(rows[2], panel+"panel\x1b[49m"+canvas+" default") {
+		t.Errorf("explicit panel/default transition = %q", rows[2])
+	}
+}
+
+func TestTerminalViewportDoesNotInferCanvasFromIsolatedColoredRow(t *testing.T) {
+	rowBg := "\x1b[48;2;20;20;20m"
+	buffer := tty.NewOutputBuffer(10)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: "prompt\n" + rowBg + "   \x1b[0m\nplain\nmore", PaneRows: 4,
+	})
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: 20, Height: 4, Follow: true,
+		Interactive: true, PaneWidth: 20, PaneHeight: 4,
+	}, ui.NewTruncateCache(16))
+	rows := strings.Split(result.Content, "\n")
+	if strings.HasPrefix(rows[0], rowBg) || strings.HasPrefix(rows[2], rowBg) {
+		t.Fatalf("isolated coloured row became a canvas: %q", rows)
+	}
+}

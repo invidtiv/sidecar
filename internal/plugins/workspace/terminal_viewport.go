@@ -235,6 +235,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
+	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
 		line = ui.ExpandTabs(line, tabStopWidth)
@@ -264,6 +265,11 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	// rule for passive follow and interactive: both show the live pane.
 	if in.PaneHeight > 0 && (in.Interactive || in.Follow) {
 		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
+	}
+	if canvasBg != "" {
+		for i, line := range displayLines {
+			displayLines[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, layout.DisplayWidth)
+		}
 	}
 
 	if !in.NativeCursor {
@@ -296,6 +302,58 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		Content: content,
 		Layout:  layout,
 	}
+}
+
+// terminalCanvasBackground recognizes the background carried across a
+// substantial share of a fullscreen TUI's live rows. tmux renders later
+// default-background cells correctly in a real terminal because that terminal's
+// default matches the canvas. Inside Sidecar those cells otherwise fall through
+// to the surrounding plugin surface and form rectangular seams.
+func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
+	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
+		return ""
+	}
+	rows := buffer.LinesRange(paneTop, paneTop+paneHeight)
+	counts := make(map[string]int)
+	for _, row := range rows {
+		for bg := range rowBackgrounds(row) {
+			counts[bg]++
+		}
+	}
+	// Requiring both repetition and one third of the observed grid rejects an
+	// isolated coloured separator in ordinary shell output. Grok's canvas, for
+	// example, is carried on 42 of the 50 rows in the reported pane.
+	threshold := max(2, (len(rows)+2)/3)
+	canvas, best := "", 0
+	for bg, count := range counts {
+		if count > best {
+			canvas, best = bg, count
+		} else if count == best {
+			canvas = ""
+		}
+	}
+	if best < threshold {
+		return ""
+	}
+	return canvas
+}
+
+func rowBackgrounds(row string) map[string]struct{} {
+	backgrounds := make(map[string]struct{})
+	state := ansi.NormalState
+	remaining := row
+	for len(remaining) > 0 {
+		seq, _, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
+		if n <= 0 {
+			break
+		}
+		if next, touches := ui.SGRBackground(seq); touches && next != "\x1b[49m" {
+			backgrounds[next] = struct{}{}
+		}
+		state = newState
+		remaining = remaining[n:]
+	}
+	return backgrounds
 }
 
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {

@@ -144,3 +144,19 @@ func TestSgrBackground(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyTerminalDefaultBackgroundPreservesExplicitBackgrounds(t *testing.T) {
+	canvas := "\x1b[48;2;20;20;20m"
+	panel := "\x1b[48;2;36;36;36m"
+	got := ApplyTerminalDefaultBackground("plain\x1b[0m default "+panel+"panel\x1b[49m tail", canvas, 80)
+
+	if !strings.HasPrefix(got, canvas+"plain") {
+		t.Fatalf("canvas background not established: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[0m"+canvas+" default ") {
+		t.Errorf("reset did not restore canvas background: %q", got)
+	}
+	if !strings.Contains(got, panel+"panel\x1b[49m"+canvas+" tail") {
+		t.Errorf("explicit panel or following default background was lost: %q", got)
+	}
+}
