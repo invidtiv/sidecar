@@ -15,6 +15,7 @@ var (
 		{ID: "codex.viewer.retain", State: StateUnknown, Region: RegionScreen, Regexp: regexp.MustCompile(`(?m)(/ T R A N S C R I P T /|q to quit\s+esc to edit prev)`), Skip: true},
 		{ID: "codex.title.working", State: StateWorking, Region: RegionTitle, Regexp: codexTitleWorking},
 		{ID: "codex.screen.working", State: StateWorking, Region: RegionLastLines, LastN: 12, Regexp: regexp.MustCompile(`Working \(.*esc to interrupt\)`)},
+		{ID: "codex.screen.background-terminal-working", State: StateWorking, Region: RegionCurrent, LastN: 12, Regexp: regexp.MustCompile(`(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)`)},
 		{ID: "codex.screen.idle", State: StateIdle, Region: RegionLastLines, LastN: 8, Regexp: regexp.MustCompile(`(?m)^\s*›(?:\s|$)`)},
 	}
 )

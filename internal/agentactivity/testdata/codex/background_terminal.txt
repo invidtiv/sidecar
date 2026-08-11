@@ -1,0 +1,11 @@
+pane_title: tasks
+pane_current_command: codex
+state: working
+screen:
+• The CI remediation passed, and Sidecar v0.96.0 is now tagged.
+
+• Waiting for background terminal (2m 16s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+  └ RELEASE_VERSION=v0.96.0 make release
+
+› Improve documentation in @filename
+  gpt-5.6-sol low · ~/code/tasks

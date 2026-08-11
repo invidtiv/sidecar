@@ -82,6 +82,7 @@ func TestRealCodexFixtures(t *testing.T) {
 		{"startup_idle.txt", StateIdle, false},
 		{"working.txt", StateWorking, false},
 		{"tool_execution.txt", StateWorking, false},
+		{"background_terminal.txt", StateWorking, false},
 		{"blocked.txt", StateBlocked, false},
 		{"interrupted.txt", StateIdle, false},
 		{"completed.txt", StateIdle, false},
@@ -109,6 +110,38 @@ func TestRealCodexFixtures(t *testing.T) {
 			got := DetectCodex(Observation{Agent: "codex", Screen: fields[1], PaneTitle: title, CurrentCommand: command})
 			if got.State != tt.want || got.SkipStateUpdate != tt.skip {
 				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestCodexBackgroundTerminalRequiresCurrentRunningChrome(t *testing.T) {
+	tests := []struct {
+		name   string
+		screen string
+		want   State
+	}{
+		{
+			name:   "plural background terminals",
+			screen: "• Waiting for background terminal (10s • esc to interrupt)\n  └ 2 background terminals running · /ps to view · /stop to close\n\n› next prompt",
+			want:   StateWorking,
+		},
+		{
+			name:   "historical completed wait",
+			screen: "• Waited for background terminal · make release\n\n› next prompt",
+			want:   StateIdle,
+		},
+		{
+			name:   "generic long lived helper",
+			screen: "background terminal running · /ps to view · /stop to close\n\n› next prompt",
+			want:   StateIdle,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DetectCodex(Observation{Agent: "codex", CurrentCommand: "codex", PaneTitle: "tasks", Screen: tt.screen})
+			if got.State != tt.want {
+				t.Fatalf("got %+v, want %s", got, tt.want)
 			}
 		})
 	}
