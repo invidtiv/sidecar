@@ -1173,3 +1173,69 @@ func TestDiagnosticsBeforeStart(t *testing.T) {
 		t.Errorf("status = %q, want \"disabled\"", diags[0].Status)
 	}
 }
+
+// TestTasksIsFramedLikeEveryOtherTab covers the border sidecar draws around the
+// tab. Tasks stopped painting its own frame — correct when it owns the screen,
+// wrong inside sidecar, where every other plugin sits in the gradient panel.
+func TestTasksIsFramedLikeEveryOtherTab(t *testing.T) {
+	p, _, _ := newConfigured(t)
+	startAndSettle(t, p)
+	if p.model == nil {
+		t.Fatal("no model to render")
+	}
+
+	lines := strings.Split(p.View(80, 24), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("view is %d rows, want 24", len(lines))
+	}
+	if !strings.Contains(lines[0], "╭") || !strings.Contains(lines[0], "╮") {
+		t.Errorf("top border missing: %q", lines[0])
+	}
+	if !strings.Contains(lines[23], "╰") || !strings.Contains(lines[23], "╯") {
+		t.Errorf("bottom border missing: %q", lines[23])
+	}
+	for i, line := range lines[1:23] {
+		if !strings.Contains(line, "│") {
+			t.Errorf("row %d has no side border: %q", i+1, line)
+		}
+	}
+}
+
+// TestMouseIsTranslatedIntoTheFrame covers the other half of the border: Tasks
+// answers clicks from the geometry it was rendered at, so a host coordinate
+// that is not shifted past the frame selects the wrong row.
+func TestMouseIsTranslatedIntoTheFrame(t *testing.T) {
+	p, _, _ := newConfigured(t)
+	startAndSettle(t, p)
+	p.View(80, 24)
+
+	shifted, inside := p.offsetMouse(tea.MouseClickMsg{X: 10, Y: 5, Button: tea.MouseLeft})
+	if !inside {
+		t.Fatal("a click in the interior was dropped")
+	}
+	if got := shifted.Mouse(); got.X != 8 || got.Y != 4 {
+		t.Errorf("translated to (%d,%d), want (8,4)", got.X, got.Y)
+	}
+	if _, ok := shifted.(tea.MouseClickMsg); !ok {
+		t.Errorf("concrete type lost: %T", shifted)
+	}
+
+	// The frame itself belongs to no row: a press there is reported outside,
+	// and Update drops it rather than folding it onto the nearest task.
+	for _, pt := range []struct{ x, y int }{{0, 5}, {5, 0}, {79, 5}, {10, 23}} {
+		if _, inside := p.offsetMouse(tea.MouseClickMsg{X: pt.x, Y: pt.y}); inside {
+			t.Errorf("press on the frame at (%d,%d) reported inside", pt.x, pt.y)
+		}
+	}
+
+	// A release at the far edge of a drag is still clamped into the interior:
+	// Tasks clears its rail drag only on release, so swallowing one strands the
+	// pane on the pointer for every gesture after it.
+	release, _ := p.offsetMouse(tea.MouseReleaseMsg{X: 0, Y: 23})
+	if got := release.Mouse(); got.X != 0 || got.Y != 21 {
+		t.Errorf("release clamped to (%d,%d), want (0,21)", got.X, got.Y)
+	}
+	if _, ok := release.(tea.MouseReleaseMsg); !ok {
+		t.Errorf("release type lost: %T", release)
+	}
+}

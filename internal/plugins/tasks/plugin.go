@@ -341,6 +341,24 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Window, key, mouse, tick, paste, and Tasks' own queue messages all go
 	// through here; Tasks ignores anything it doesn't recognise.
 
+	// Tasks answers clicks from the geometry it was last rendered at, which is
+	// the panel interior. The host's coordinates are relative to the plugin box,
+	// so shift them past the frame.
+	//
+	// Only a press is dropped when it lands on the frame: a press there belongs
+	// to no row, and folding it onto the nearest one acts on a task the user
+	// never pointed at. Motion, release, and wheel are clamped and forwarded
+	// instead. Tasks clears its rail drag only on release, so a release
+	// swallowed at the edge of a horizontal drag would leave the pane stuck to
+	// the pointer for every gesture after it.
+	if mm, ok := msg.(tea.MouseMsg); ok {
+		shifted, inside := p.offsetMouse(mm)
+		if _, isPress := msg.(tea.MouseClickMsg); isPress && !inside {
+			return p, nil
+		}
+		msg = shifted
+	}
+
 	_, cmd := p.model.Update(msg)
 	p.refreshLoadError()
 
@@ -427,16 +445,24 @@ func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
 
-	var content string
+	// Tasks stopped drawing its own frame, which is right when it runs solo on
+	// the alternate screen. Inside sidecar every other plugin sits in the shared
+	// gradient panel, so the frame is drawn here instead and Tasks is rendered
+	// at the panel's interior size.
+	// Only Tasks itself is framed. The unavailable and loading states are
+	// sidecar's own copy, already inset and sized against the plugin box, and a
+	// second frame around them would only steal rows from the diagnosis.
+	var framed string
 	switch {
 	case p.model != nil:
-		content = p.model.View(width, height)
+		innerWidth, innerHeight := innerSize(width, height)
+		framed = styles.RenderPanel(p.model.View(innerWidth, innerHeight), width, height, true)
 	case p.unavailable != "":
-		content = renderUnavailable(p.unavailable, width, height)
+		framed = renderUnavailable(p.unavailable, width, height)
 	case p.loading:
-		content = styles.Muted.Render("Loading tasks…")
+		framed = styles.Muted.Render("Loading tasks…")
 	default:
-		content = renderUnavailable("tasks has not been started", width, height)
+		framed = renderUnavailable("tasks has not been started", width, height)
 	}
 
 	// Constrain the output to the allocated box so the sidecar header and
@@ -446,7 +472,54 @@ func (p *Plugin) View(width, height int) string {
 		Height(height).
 		MaxWidth(width).
 		MaxHeight(height).
-		Render(content)
+		Render(framed)
+}
+
+// Panel chrome: one border cell plus one padding cell on the left and right,
+// one border row top and bottom. RenderPanel refuses to draw below 3x3 and
+// returns the content bare, so the interior is the full box at those sizes.
+const (
+	panelBorderX = 2 // border + padding, each side
+	panelBorderY = 1 // border, top and bottom
+)
+
+// offsetMouse translates a host mouse event into the panel interior Tasks was
+// rendered at, reporting whether the pointer was inside that interior at all.
+// Bubble Tea v2 mouse messages are interfaces, so the concrete type is rebuilt
+// around the shifted Mouse value.
+func (p *Plugin) offsetMouse(msg tea.MouseMsg) (tea.MouseMsg, bool) {
+	innerWidth, innerHeight := innerSize(p.width, p.height)
+	if innerWidth == p.width && innerHeight == p.height {
+		// Panel too small to be drawn: no frame, no shift.
+		return msg, true
+	}
+
+	mm := msg.Mouse()
+	mm.X -= panelBorderX
+	mm.Y -= panelBorderY
+	inside := mm.X >= 0 && mm.Y >= 0 && mm.X < innerWidth && mm.Y < innerHeight
+	mm.X = min(max(mm.X, 0), max(innerWidth-1, 0))
+	mm.Y = min(max(mm.Y, 0), max(innerHeight-1, 0))
+
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(mm), inside
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(mm), inside
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(mm), inside
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(mm), inside
+	}
+	return msg, inside
+}
+
+// innerSize is the content box inside the gradient panel.
+func innerSize(width, height int) (int, int) {
+	if width < 3 || height < 3 {
+		return width, height
+	}
+	return max(width-2*panelBorderX, 1), max(height-2*panelBorderY, 1)
 }
 
 // IsFocused returns whether the plugin is focused.
