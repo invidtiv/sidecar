@@ -13,6 +13,37 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 )
 
+func TestShellKanbanActivityLaneUsesLiveAgentType(t *testing.T) {
+	// Cursor (or any supported agent) running in a shell must leave the plain
+	// Shells column and sit in the activity lane — otherwise kanban only shows
+	// "shell · live" and Overview-style status lanes never see the session.
+	shell := &ShellSession{
+		Name: "cursor-session", TmuxName: "sidecar-sh-cursor",
+		ChosenAgent: AgentCursor,
+		Agent:       &Agent{Type: AgentCursor, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}},
+	}
+	lane, ok := shellKanbanActivityLane(shell)
+	if !ok || lane != kanbanLaneWorking {
+		t.Fatalf("cursor shell lane = %q ok=%v, want working", lane, ok)
+	}
+	plain := &ShellSession{Name: "zsh", Agent: &Agent{Type: AgentShell}}
+	if _, ok := shellKanbanActivityLane(plain); ok {
+		t.Fatal("plain shell should stay in Shells column")
+	}
+	p := &Plugin{
+		mouseHandler: mouse.NewHandler(),
+		shells:       []*ShellSession{shell, plain},
+	}
+	board := p.workspaceKanbanBoard()
+	if len(board.Lanes[0].Cards) != 1 || board.Lanes[0].Cards[0].Title != "zsh" {
+		t.Fatalf("Shells column = %#v, want only plain zsh", board.Lanes[0].Cards)
+	}
+	working := board.Lanes[1] // col 0 shells, col 1 working
+	if working.ID != "working" || len(working.Cards) != 1 || working.Cards[0].Title != "cursor-session" {
+		t.Fatalf("Working column = %#v, want cursor-session", working)
+	}
+}
+
 func TestKanbanSemanticParityMatrix(t *testing.T) {
 	supported := func(state agentactivity.State, seen bool) *Agent {
 		return &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: state, Seen: seen}}
@@ -135,7 +166,8 @@ func TestKanbanDeterministicSemanticFixture(t *testing.T) {
 	}
 	got := ansi.Strip(p.renderKanbanView(200, 50))
 	for _, want := range []string{
-		"Working 1", "Blocked 1", "Done 1", "Idle 1", "Paused 1",
+		// Agent shells share activity lanes with worktrees (one each).
+		"Working 2", "Blocked 2", "Done 2", "Idle 2", "Paused 1",
 		"working-wt", "blocked-wt", "done-wt", "idle-wt", "error-wt",
 		"working-shell", "blocked-shell", "done-shell", "idle-shell",
 		// Worktree and shell agent lines share styles.AgentLabel (icon +
@@ -144,7 +176,7 @@ func TestKanbanDeterministicSemanticFixture(t *testing.T) {
 		"error",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("fixture lacks %q", want)
+			t.Fatalf("fixture lacks %q\n%s", want, got)
 		}
 	}
 	if proofDir := os.Getenv("SIDECAR_KANBAN_PROOF_DIR"); proofDir != "" {

@@ -160,3 +160,31 @@ func TestApplyTerminalDefaultBackgroundPreservesExplicitBackgrounds(t *testing.T
 		t.Errorf("explicit panel or following default background was lost: %q", got)
 	}
 }
+
+func TestCarryRowBackgroundReopensInheritedBackground(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+
+	// Row one opens the background and never closes it — what capture-pane -e
+	// delivers when the trailing filled cells are trimmed.
+	out, trailing, touched := CarryRowBackground(green+"first", "")
+	if out != green+"first" || trailing != green || !touched {
+		t.Fatalf("row one = %q, trailing %q, touched %v", out, trailing, touched)
+	}
+
+	// Row two carries it with no sequence of its own, so it has to be re-opened.
+	out, trailing, touched = CarryRowBackground("second", trailing)
+	if out != green+"second" || trailing != green || !touched {
+		t.Fatalf("row two = %q, trailing %q, touched %v", out, trailing, touched)
+	}
+
+	// An explicit reset ends the run; the next row inherits nothing.
+	out, trailing, touched = CarryRowBackground("third\x1b[49m", trailing)
+	if out != green+"third\x1b[49m" || trailing != "" || !touched {
+		t.Fatalf("row three = %q, trailing %q, touched %v", out, trailing, touched)
+	}
+
+	out, trailing, touched = CarryRowBackground("plain", trailing)
+	if out != "plain" || trailing != "" || touched {
+		t.Fatalf("row four = %q, trailing %q, touched %v", out, trailing, touched)
+	}
+}

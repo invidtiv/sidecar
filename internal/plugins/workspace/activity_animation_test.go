@@ -205,29 +205,43 @@ func TestActivityAnimationUsesListVisibilityForNarrowKanbanFallback(t *testing.T
 }
 
 func TestActivityAnimationUsesScrolledKanbanCardWindow(t *testing.T) {
-	plain := func(name string) *ShellSession { return &ShellSession{Name: name} }
-	working := func(name string) *ShellSession {
-		return &ShellSession{Name: name, Agent: &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}}
+	// Agent shells live in activity lanes with worktrees, so scroll-window
+	// coverage is exercised on the Working column (many working worktrees).
+	working := func(name string) *Worktree {
+		return &Worktree{Name: name, Status: StatusActive, Agent: &Agent{
+			Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking},
+		}}
 	}
-	newPlugin := func(shells []*ShellSession, selected int) *Plugin {
+	newPlugin := func(worktrees []*Worktree, selectedRow int) *Plugin {
 		return &Plugin{
 			focused: true, applicationFocused: true, viewMode: ViewModeKanban,
 			width: 200, height: 14, sidebarVisible: true,
-			shells: shells, kanbanCol: kanbanShellColumnIndex, kanbanRow: selected,
+			worktrees: worktrees, kanbanCol: 1, kanbanRow: selectedRow,
 			mouseHandler: mouse.NewHandler(),
 		}
 	}
 
-	visibleWorking := newPlugin([]*ShellSession{plain("one"), plain("two"), plain("three"), working("four")}, 3)
+	many := []*Worktree{working("one"), working("two"), working("three"), working("four")}
+	visibleWorking := newPlugin(many, 3)
 	visibleWorking.renderKanbanView(200, 14)
 	if cmd := visibleWorking.startActivityAnimation(); cmd == nil {
 		t.Fatal("selected row-3 working Codex card was visible after scroll but did not animate")
 	}
 
-	hiddenWorking := newPlugin([]*ShellSession{working("one"), plain("two"), plain("three"), plain("four")}, 3)
+	// Height 14 leaves room for only a couple of cards; selecting the last
+	// scrolls the first working card out of the visible window.
+	hiddenWorking := newPlugin(many, 3)
 	hiddenWorking.renderKanbanView(200, 14)
-	if cmd := hiddenWorking.startActivityAnimation(); cmd != nil {
-		t.Fatal("offscreen row-0 working card kept animation running")
+	// VisibleCards follows the scrolled selection; row 0 must not keep the clock.
+	visible := hiddenWorking.kanban.VisibleCards(kanbanVisibleCardCount(14))
+	for _, card := range visible {
+		if card.Title == "one" {
+			t.Fatal("row-0 working card still in visible window; test cannot prove offscreen gating")
+		}
+	}
+	// Animation is still needed because later working cards remain visible.
+	if cmd := hiddenWorking.startActivityAnimation(); cmd == nil {
+		t.Fatal("visible working cards after scroll should still animate")
 	}
 }
 

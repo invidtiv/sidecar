@@ -31,6 +31,7 @@ type terminalViewportInput struct {
 	PaneHeight    int
 	PaneWidth     int
 	NativeCursor  bool
+	AltScreen     bool
 	AbsoluteBase  int
 	TotalItems    int
 	LoadingOlder  bool
@@ -235,9 +236,12 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
-	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight, in.AltScreen)
+	inheritedBg := inheritedRowBackground(in.Buffer, layout.Start)
 	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
+		var openBg bool
+		line, inheritedBg, openBg = ui.CarryRowBackground(line, inheritedBg)
 		line = ui.ExpandTabs(line, tabStopWidth)
 		line = decorateTerminalLinks(line)
 		absoluteLine := in.AbsoluteBase + layout.Start + i
@@ -257,7 +261,14 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		if layout.Fit.ColOffset > 0 {
 			line = ansi.TruncateLeft(line, layout.Fit.ColOffset, "")
 		}
-		displayLines = append(displayLines, cache.Truncate(line, layout.DisplayWidth, ""))
+		line = cache.Truncate(line, layout.DisplayWidth, "")
+		// Truncation can cut inside a background span, and the padding that
+		// follows appends unstyled cells, so a row that touches the background
+		// closes it here rather than letting it run into the next row.
+		if openBg {
+			line += ui.RowBackgroundDefault
+		}
+		displayLines = append(displayLines, line)
 	}
 
 	// Letterboxing pads the live grid out to the viewport rather than leaving
@@ -309,14 +320,27 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 // default-background cells correctly in a real terminal because that terminal's
 // default matches the canvas. Inside Sidecar those cells otherwise fall through
 // to the surrounding plugin surface and form rectangular seams.
-func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
+func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int, altScreen bool) string {
+	// Only a fullscreen application has a canvas. Restricting the search to the
+	// alternate screen is what keeps ordinary scrollback out of it: a long diff
+	// puts a highlight background on most visible rows and would otherwise win
+	// the vote below, repainting the whole pane in the diff's added-line green.
+	if !altScreen {
+		return ""
+	}
 	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
 		return ""
 	}
 	rows := buffer.LinesRange(paneTop, paneTop+paneHeight)
 	counts := make(map[string]int)
+	inherited := inheritedRowBackground(buffer, paneTop)
 	for _, row := range rows {
-		for bg := range rowBackgrounds(row) {
+		// Counting the row as tmux would render it, not as it was captured: a
+		// canvas is emitted once and then carried, so without re-opening the
+		// inherited background only the first row of the canvas would vote.
+		resolved, next, _ := ui.CarryRowBackground(row, inherited)
+		inherited = next
+		for bg := range rowBackgrounds(resolved) {
 			counts[bg]++
 		}
 	}
@@ -336,6 +360,27 @@ func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int)
 		return ""
 	}
 	return canvas
+}
+
+// rowBackgroundLookback bounds how far back the inherited background is
+// resolved. tmux only ever re-emits a background when it changes, so in
+// principle the search runs to the top of the scrollback; bounding it keeps
+// render cost independent of history size, and a background that has survived
+// this many rows unchanged is a canvas whose first row is off-screen anyway.
+const rowBackgroundLookback = 300
+
+// inheritedRowBackground resolves the background left active by the rows above
+// start, which is what start's first cell is actually drawn in.
+func inheritedRowBackground(buffer *tty.OutputBuffer, start int) string {
+	if buffer == nil || start <= 0 {
+		return ""
+	}
+	from := max(start-rowBackgroundLookback, 0)
+	bg := ""
+	for _, row := range buffer.LinesRange(from, start) {
+		_, bg, _ = ui.CarryRowBackground(row, bg)
+	}
+	return bg
 }
 
 func rowBackgrounds(row string) map[string]struct{} {

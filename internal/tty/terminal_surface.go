@@ -316,6 +316,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		m.State.PaneWidth = frame.Frame.Width
 		m.State.BracketedPasteEnabled = frame.Frame.BracketedPaste
 		m.State.MouseReportingEnabled = frame.Frame.Mouse.Any()
+		m.State.AltScreenActive = frame.Frame.AltScreen
 		wasModelLive := m.modelLive
 		m.modelLive = true
 		m.fallbackEstablished = false
@@ -370,6 +371,7 @@ func (m *Model) applySnapshot(s ControlSnapshot) {
 	m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible = s.CursorRow, s.CursorCol, s.CursorVisible
 	m.State.PaneHeight, m.State.PaneWidth = s.PaneHeight, s.PaneWidth
 	m.State.MouseReportingEnabled = s.MouseReporting
+	m.State.AltScreenActive = s.AltScreen
 	if changed {
 		m.State.BracketedPasteEnabled = DetectBracketedPasteMode(s.Output)
 	}

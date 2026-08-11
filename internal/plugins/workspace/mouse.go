@@ -1081,11 +1081,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			p.kanbanCol, p.kanbanRow = col, row
 			p.syncKanbanToList()
 			p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
-			if col == kanbanShellColumnIndex {
-				if shell := p.kanbanShellAt(row); shell != nil {
-					return p.ensureShellAndAttachByIndex(row)
-				}
-			} else if wt := p.getKanbanWorktree(col, row); wt != nil && wt.Agent != nil {
+			if shell := p.selectedKanbanShell(); shell != nil {
+				return p.ensureShellAndAttachByIndex(p.selectedShellIdx)
+			}
+			if wt := p.selectedKanbanWorktree(); wt != nil && wt.Agent != nil {
 				p.attachedSession = wt.Name
 				return p.AttachToSession(wt)
 			}

@@ -261,6 +261,52 @@ func SGRBackground(seq string) (string, bool) {
 	return sgrBackground(seq)
 }
 
+// RowBackgroundDefault is the sequence that restores the terminal's default
+// background. Rows are terminated with it so a background opened on one row
+// cannot bleed into whatever is drawn after it.
+const RowBackgroundDefault = "\x1b[49m"
+
+// CarryRowBackground makes one captured row self-contained.
+//
+// tmux emits `capture-pane -e` as a single continuous SGR stream and writes
+// only the delta, so a row whose predecessor left a background active begins
+// with that background still open and never repeats it. Sidecar renders rows
+// independently — it slices them apart, truncates them, pads them and joins
+// them into a styled surface — which loses that carried state and lets a
+// background smear across cells that should not have it.
+//
+// It returns the row with the inherited background re-opened at its front, the
+// background left active at its end (the caller's inherited value for the next
+// row), and whether the row touches the background at all. A row that reports
+// touched must be terminated with [RowBackgroundDefault] once the caller has
+// finished truncating and padding it.
+func CarryRowBackground(line, inherited string) (out, trailing string, touched bool) {
+	trailing = inherited
+	touched = inherited != ""
+	state := ansi.NormalState
+	remaining := line
+	for len(remaining) > 0 {
+		seq, _, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
+		if n <= 0 {
+			break
+		}
+		if next, touches := sgrBackground(seq); touches {
+			touched = true
+			if next == RowBackgroundDefault {
+				trailing = ""
+			} else {
+				trailing = next
+			}
+		}
+		state = newState
+		remaining = remaining[n:]
+	}
+	if inherited == "" {
+		return line, trailing, touched
+	}
+	return inherited + line, trailing, touched
+}
+
 // ApplyTerminalDefaultBackground renders default-background cells with bg.
 // Explicit application backgrounds still win; resets to the terminal default
 // are followed by bg so embedding the row inside another styled surface cannot

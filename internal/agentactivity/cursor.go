@@ -77,8 +77,10 @@ var cursorRules = []Rule{
 }
 
 // cursorScreenIdentity is distinctive live chrome, not session-file residue.
-// Used only when the process name is a shared runtime (node/agent).
-var cursorScreenIdentity = regexp.MustCompile(`(?is)(Cursor Agent|Plan, search, build anything|Reject & propose changes|Write to this file\?|ctrl\+c to stop|Waiting for decision \(y/n/p\)|Run this command\?|Allow this web (?:search|fetch)\?)`)
+// Used only when the process name is a shared runtime (node/agent). Keep this
+// stricter than activity rules: a false identity steals the pane from another
+// tool that also uses `agent` or `node`.
+var cursorScreenIdentity = regexp.MustCompile(`(?is)(Cursor Agent|Plan, search, build anything|Add a follow-up|Reject & propose changes|Write to this file\?|Delete this file\?|ctrl\+c to stop|Waiting for decision \(y/n/p\)|Waiting for approval|Run this command\?|Run this MCP tool\?|Allow this web (?:search|fetch)\?|Proceed with this edit\?)`)
 
 func DetectCursor(ob Observation) Result {
 	if ob.Agent != "cursor" || !cursorProcess(ob.CurrentCommand) {

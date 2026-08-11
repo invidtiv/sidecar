@@ -109,14 +109,16 @@ func (p *Plugin) renderKanbanShellCardLine(shell *ShellSession, lineIdx, width i
 	case 1:
 		if resolvedStatus.Health {
 			content = "  shell · offline"
-		} else if _, text, _, ok := activityPresentation(shell.Agent); ok && shell.Agent != nil {
-			content = "  " + kanbanAgentStatus(string(shell.Agent.Type), text, isSelected)
-			preStyled = !isSelected
 		} else if shell.Agent != nil {
-			// Live but quiet: mirror the list view's "live", not "running".
-			provider := string(shell.Agent.Type)
-			if provider != "" && provider != string(AgentNone) {
-				content = "  " + kanbanAgentStatus(provider, "live", isSelected)
+			provider := shell.Agent.Type
+			if provider == AgentShell || provider == AgentNone || provider == "" {
+				provider = shell.ChosenAgent
+			}
+			if _, text, _, ok := activityPresentation(shell.Agent); ok && supportsAgentActivity(shell.Agent.Type) {
+				content = "  " + kanbanAgentStatus(string(shell.Agent.Type), text, isSelected)
+				preStyled = !isSelected
+			} else if provider != "" && provider != AgentNone && provider != AgentShell {
+				content = "  " + kanbanAgentStatus(string(provider), "live", isSelected)
 				preStyled = !isSelected
 			} else {
 				content = "  shell · live"

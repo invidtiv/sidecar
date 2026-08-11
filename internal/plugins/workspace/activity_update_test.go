@@ -55,6 +55,19 @@ func TestUnchangedPollReturningToShellClearsStaleProviderState(t *testing.T) {
 	}
 }
 
+func TestShellNeedsIdentityScreenForSharedRuntimes(t *testing.T) {
+	for _, cmd := range []string{"agent", "node", "bun", "Node"} {
+		if !shellNeedsIdentityScreen(cmd) {
+			t.Fatalf("command %q should force a bottom-buffer identity capture", cmd)
+		}
+	}
+	for _, cmd := range []string{"zsh", "cursor-agent", "claude", ""} {
+		if shellNeedsIdentityScreen(cmd) {
+			t.Fatalf("command %q should stay metadata-only when Type is plain shell", cmd)
+		}
+	}
+}
+
 func TestShellOutputSwitchesLiveProviderWithoutChangingLaunchPreference(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 	shell := &ShellSession{Name: "FABLE", TmuxName: "sidecar-sh-fable", ChosenAgent: AgentCodex, Agent: agent}

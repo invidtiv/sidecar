@@ -19,7 +19,7 @@ func (f *fakeControlChannel) seedCommands(index int) (metadata, capture fakeCont
 	defer f.mu.Unlock()
 	found := 0
 	for i, command := range f.commands {
-		if !strings.Contains(command.text, "#{alternate_on}") {
+		if !strings.Contains(command.text, seedMetadataMarker) {
 			continue
 		}
 		if i+2 >= len(f.commands) || !strings.Contains(f.commands[i+1].text, "capture-pane") ||
@@ -39,12 +39,18 @@ func (f *fakeControlChannel) seedCount() int {
 	defer f.mu.Unlock()
 	count := 0
 	for _, command := range f.commands {
-		if strings.Contains(command.text, "#{alternate_on}") {
+		if strings.Contains(command.text, seedMetadataMarker) {
 			count++
 		}
 	}
 	return count
 }
+
+// seedMetadataMarker identifies the byte-fed model's seed transaction in the
+// fake channel's command log. It must be a field only the seed asks for:
+// alternate_on is also in the ordinary capture metadata, which the renderer
+// reads to tell a TUI canvas from scrollback highlighting.
+const seedMetadataMarker = "#{alternate_saved_x}"
 
 const testSeedMetadata = "0,2,1,6,20,0,0,0,0,0,0,0,%1,0,2"
 
@@ -57,7 +63,7 @@ func pushResponse(channel *fakeControlChannel, command fakeControlCommand, lines
 		Callback: command.callback,
 		Response: controlResponse{Lines: lines},
 	}
-	if strings.Contains(command.text, "#{alternate_on}") {
+	if strings.Contains(command.text, seedMetadataMarker) {
 		channel.mu.Lock()
 		for i := len(channel.commands) - 1; i >= 0; i-- {
 			if channel.commands[i].text == command.text && i+1 < len(channel.commands) {
@@ -408,7 +414,7 @@ func TestCaptureDeliveryUnchangedWhenModelPathOff(t *testing.T) {
 		return channel != nil && channel.commandCountContaining("capture-pane") == 1
 	})
 	channel.respondCapture(0, controlResponse{
-		Lines: []string{"9,4,0,30,100,1250,1,node,Action Required", "line one", "line two"},
+		Lines: []string{"9,4,0,30,100,1250,1,0,node,Action Required", "line one", "line two"},
 	})
 	waitFor(t, func() bool {
 		mu.Lock()

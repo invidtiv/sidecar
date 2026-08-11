@@ -77,6 +77,10 @@ type State struct {
 	// Terminal mode state (updated from captured output)
 	BracketedPasteEnabled bool
 	MouseReportingEnabled bool
+	// AltScreenActive reports that the pane is on a fullscreen application's
+	// alternate grid. Renderers use it to tell a painted TUI canvas apart from
+	// ordinary scrollback that merely happens to contain coloured rows.
+	AltScreenActive bool
 
 	// Visible buffer range for selection mapping
 	VisibleStart int

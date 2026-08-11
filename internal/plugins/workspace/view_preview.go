@@ -322,6 +322,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		PaneHeight:       paneHeight,
 		PaneWidth:        paneWidth,
 		NativeCursor:     interactive,
+		AltScreen:        p.paneGeometryFor(termPanel).AltScreen,
 		AbsoluteBase:     absoluteBase,
 		TotalItems:       totalItems,
 		LoadingOlder:     loadingOlder,

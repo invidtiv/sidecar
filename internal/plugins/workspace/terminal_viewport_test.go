@@ -1017,7 +1017,7 @@ func TestTerminalViewportUsesFullscreenCanvasForDefaultCells(t *testing.T) {
 
 	result := renderTerminalViewport(terminalViewportInput{
 		Buffer: buffer, Width: 30, Height: 4, Follow: true,
-		Interactive: true, PaneWidth: 30, PaneHeight: 4,
+		Interactive: true, PaneWidth: 30, PaneHeight: 4, AltScreen: true,
 	}, ui.NewTruncateCache(32))
 	rows := strings.Split(result.Content, "\n")
 	if len(rows) != 4 {
@@ -1046,5 +1046,83 @@ func TestTerminalViewportDoesNotInferCanvasFromIsolatedColoredRow(t *testing.T) 
 	rows := strings.Split(result.Content, "\n")
 	if strings.HasPrefix(rows[0], rowBg) || strings.HasPrefix(rows[2], rowBg) {
 		t.Fatalf("isolated coloured row became a canvas: %q", rows)
+	}
+}
+
+// A diff in ordinary scrollback puts an added-line background on most visible
+// rows. That is highlighting, not a canvas: promoting it repainted the whole
+// pane — prose, blank rows and all — in the diff's green.
+func TestTerminalViewportDoesNotTreatScrollbackDiffAsCanvas(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+	var rows []string
+	for range 8 {
+		rows = append(rows, green+"+ added line\x1b[49m")
+	}
+	rows = append(rows, "Ran 3 shell commands", "Found and fixed it.")
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: 40, Height: len(rows), Follow: true,
+		Interactive: true, PaneWidth: 40, PaneHeight: len(rows), AltScreen: false,
+	}, ui.NewTruncateCache(32))
+
+	rendered := strings.Split(result.Content, "\n")
+	for _, row := range rendered[8:] {
+		if strings.Contains(row, green) {
+			t.Errorf("prose row inherited the diff background: %q", row)
+		}
+	}
+}
+
+// tmux writes only the SGR delta, so a background opened on one row stays open
+// on every row after it. Rows are rendered independently — sliced, truncated,
+// padded — so each has to close what it opened or the colour smears.
+func TestTerminalViewportClosesBackgroundAtEndOfRow(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+	buffer := tty.NewOutputBuffer(100)
+	// Exactly what `capture-pane -e` delivers for a background erased to end of
+	// line: the trailing filled cells are trimmed and the reset goes with them.
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:   green + "+ added",
+		PaneRows: 1,
+	})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: 20, Height: 1, Follow: true,
+		Interactive: true, PaneWidth: 20, PaneHeight: 1,
+	}, ui.NewTruncateCache(32))
+
+	row := strings.Split(result.Content, "\n")[0]
+	// The reset closes the text, so the padding that follows is default-background
+	// rather than a green bar running to the pane edge.
+	if !strings.Contains(row, "+ added"+ui.RowBackgroundDefault) {
+		t.Errorf("row does not close its background: %q", row)
+	}
+	if tail := row[strings.LastIndex(row, ui.RowBackgroundDefault):]; strings.Contains(tail, green) {
+		t.Errorf("row re-opens the background after closing it: %q", row)
+	}
+}
+
+// The canvas is emitted once and then carried by the pen, so a fullscreen TUI's
+// later rows contain no background sequence of their own. Detection has to
+// resolve that inheritance or only the first row would vote.
+func TestTerminalViewportDetectsCanvasCarriedAcrossRows(t *testing.T) {
+	canvas := "\x1b[48;2;20;20;20m"
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output:   canvas + "header\nbody\nfooter\nstatus",
+		PaneRows: 4,
+	})
+
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: 20, Height: 4, Follow: true,
+		Interactive: true, PaneWidth: 20, PaneHeight: 4, AltScreen: true,
+	}, ui.NewTruncateCache(32))
+
+	for i, row := range strings.Split(result.Content, "\n") {
+		if !strings.HasPrefix(row, canvas) {
+			t.Errorf("row %d lost the carried canvas: %q", i, row)
+		}
 	}
 }

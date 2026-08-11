@@ -297,7 +297,8 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 	if history.HasHistory {
 		p.recordTerminalHistory(target.Source, historyID, history.HistorySize)
 	}
-	p.recordPaneGeometry(target.Source, historyID, model.State.PaneWidth, model.State.PaneHeight)
+	p.recordPaneGeometry(target.Source, historyID,
+		model.State.PaneWidth, model.State.PaneHeight, model.State.AltScreenActive)
 	if p.interactiveState == nil || !p.interactiveState.Active ||
 		(p.interactiveState.TermPanel != (role == workspaceTerminalPanel)) {
 		return

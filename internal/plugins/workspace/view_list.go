@@ -833,7 +833,15 @@ func shellStatusLine(shell *ShellSession, resolvedStatus agentstatus.Presentatio
 		return suffix("", "offline")
 	}
 	if shell.Agent != nil {
-		chip := agentChip(shell.Agent.Type)
+		// Prefer the live type when Identify has a real provider. "shell" is a
+		// demotion / discovery miss — fall back to ChosenAgent so a Cursor
+		// session that launched as `agent`/`node` does not permanently read as
+		// "shell · live" before the next screen-backed poll upgrades it.
+		provider := shell.Agent.Type
+		if provider == AgentShell || provider == AgentNone || provider == "" {
+			provider = shell.ChosenAgent
+		}
+		chip := agentChip(provider)
 		if chip == "" {
 			// Live session with no identifiable agent type.
 			if hasActivity {

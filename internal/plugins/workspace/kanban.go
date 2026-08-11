@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"image/color"
+	"strings"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
@@ -124,20 +125,50 @@ func shellAgentStatusPresentation(shell *ShellSession) agentstatus.Presentation 
 
 func (p *Plugin) kanbanColumnItemCount(col int, columns map[kanbanLane][]*Worktree) int {
 	if col == kanbanShellColumnIndex {
-		return len(p.shells)
+		return len(p.plainKanbanShells())
 	}
 	lane, ok := kanbanLaneForColumn(col)
 	if !ok {
 		return 0
 	}
-	return len(columns[lane])
+	n := len(columns[lane])
+	for _, shell := range p.shells {
+		if shellLane, ok := shellKanbanActivityLane(shell); ok && shellLane == lane {
+			n++
+		}
+	}
+	return n
 }
 
 func (p *Plugin) kanbanShellAt(row int) *ShellSession {
-	if row < 0 || row >= len(p.shells) {
+	shells := p.plainKanbanShells()
+	if row < 0 || row >= len(shells) {
 		return nil
 	}
-	return p.shells[row]
+	return shells[row]
+}
+
+// plainKanbanShells are shells without a supported live agent identity. Agent
+// shells live in the activity lanes with worktrees (same model as Overview).
+func (p *Plugin) plainKanbanShells() []*ShellSession {
+	out := make([]*ShellSession, 0, len(p.shells))
+	for _, shell := range p.shells {
+		if _, ok := shellKanbanActivityLane(shell); ok {
+			continue
+		}
+		out = append(out, shell)
+	}
+	return out
+}
+
+// shellKanbanActivityLane returns the activity lane for a shell that has a
+// supported live agent type. Plain shells and unknown types return false so
+// they stay in the Shells column.
+func shellKanbanActivityLane(shell *ShellSession) (kanbanLane, bool) {
+	if shell == nil || shell.Agent == nil || !supportsAgentActivity(shell.Agent.Type) {
+		return "", false
+	}
+	return shellAgentStatusPresentation(shell).Lane, true
 }
 
 func (p *Plugin) getKanbanColumns() map[kanbanLane][]*Worktree {
@@ -152,15 +183,19 @@ func (p *Plugin) getKanbanColumns() map[kanbanLane][]*Worktree {
 	return columns
 }
 
+func shellKanbanCardID(shell *ShellSession) string {
+	id := shell.TmuxName
+	if id == "" {
+		id = shell.Name
+	}
+	return "shell:" + id
+}
+
 func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 	lanes := make([]boardkanban.Lane, 0, kanbanColumnCount())
 	shells := boardkanban.Lane{ID: "shells", Label: "Shells", HeaderColor: styles.Muted.GetForeground()}
-	for _, shell := range p.shells {
-		id := shell.TmuxName
-		if id == "" {
-			id = shell.Name
-		}
-		shells.Cards = append(shells.Cards, boardkanban.Card{ID: "shell:" + id, Title: shell.Name})
+	for _, shell := range p.plainKanbanShells() {
+		shells.Cards = append(shells.Cards, boardkanban.Card{ID: shellKanbanCardID(shell), Title: shell.Name})
 	}
 	lanes = append(lanes, shells)
 	columns := p.getKanbanColumns()
@@ -178,10 +213,19 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 		kanbanLaneIdle:    styles.TextMuted,
 		kanbanLanePaused:  styles.TextMuted,
 	}
+	agentShellsByLane := make(map[kanbanLane][]*ShellSession, len(kanbanLaneOrder))
+	for _, shell := range p.shells {
+		if lane, ok := shellKanbanActivityLane(shell); ok {
+			agentShellsByLane[lane] = append(agentShellsByLane[lane], shell)
+		}
+	}
 	for _, laneID := range kanbanLaneOrder {
 		lane := boardkanban.Lane{ID: boardkanban.LaneID(laneID), Label: labels[laneID], HeaderColor: colors[laneID]}
 		for _, wt := range columns[laneID] {
 			lane.Cards = append(lane.Cards, boardkanban.Card{ID: "worktree:" + wt.IdentityKey(), Title: wt.Name, Detail: wt.TaskID})
+		}
+		for _, shell := range agentShellsByLane[laneID] {
+			lane.Cards = append(lane.Cards, boardkanban.Card{ID: shellKanbanCardID(shell), Title: shell.Name})
 		}
 		lanes = append(lanes, lane)
 	}
@@ -203,29 +247,30 @@ func (p *Plugin) syncKanbanComponent() {
 }
 
 func (p *Plugin) selectedKanbanWorktree() *Worktree {
-	columns := p.getKanbanColumns()
-	if p.kanbanCol == kanbanShellColumnIndex {
+	card, ok := p.workspaceKanbanBoard().CardAt(boardkanban.Selection{Column: p.kanbanCol, Row: p.kanbanRow})
+	if !ok || !strings.HasPrefix(card.ID, "worktree:") {
 		return nil
 	}
-	lane, ok := kanbanLaneForColumn(p.kanbanCol)
-	if !ok {
+	return p.kanbanWorktreeByID(card.ID)
+}
+
+func (p *Plugin) selectedKanbanShell() *ShellSession {
+	card, ok := p.workspaceKanbanBoard().CardAt(boardkanban.Selection{Column: p.kanbanCol, Row: p.kanbanRow})
+	if !ok || !strings.HasPrefix(card.ID, "shell:") {
 		return nil
 	}
-	items := columns[lane]
-	if p.kanbanRow < 0 || p.kanbanRow >= len(items) {
-		return nil
-	}
-	return items[p.kanbanRow]
+	return p.kanbanShellByID(card.ID)
 }
 
 func (p *Plugin) syncKanbanToList() {
-	if p.kanbanCol == kanbanShellColumnIndex {
-		shell := p.kanbanShellAt(p.kanbanRow)
-		if shell == nil {
-			return
+	if shell := p.selectedKanbanShell(); shell != nil {
+		for i, s := range p.shells {
+			if s == shell || (s.TmuxName != "" && s.TmuxName == shell.TmuxName) || s.Name == shell.Name {
+				p.shellSelected = true
+				p.selectedShellIdx = i
+				return
+			}
 		}
-		p.shellSelected = true
-		p.selectedShellIdx = p.kanbanRow
 		return
 	}
 	wt := p.selectedKanbanWorktree()
@@ -233,7 +278,7 @@ func (p *Plugin) syncKanbanToList() {
 		return
 	}
 	for i, w := range p.worktrees {
-		if w.Name == wt.Name {
+		if w.IdentityKey() == wt.IdentityKey() {
 			p.shellSelected = false
 			p.selectedIdx = i
 			return
@@ -270,29 +315,25 @@ func (p *Plugin) moveKanbanRow(delta int) {
 }
 
 func (p *Plugin) getKanbanWorktree(col, row int) *Worktree {
-	columns := p.getKanbanColumns()
-	if col == kanbanShellColumnIndex {
+	card, ok := p.workspaceKanbanBoard().CardAt(boardkanban.Selection{Column: col, Row: row})
+	if !ok || !strings.HasPrefix(card.ID, "worktree:") {
 		return nil
 	}
-	lane, ok := kanbanLaneForColumn(col)
-	if !ok {
-		return nil
-	}
-	items := columns[lane]
-	if row >= 0 && row < len(items) {
-		return items[row]
-	}
-	return nil
+	return p.kanbanWorktreeByID(card.ID)
 }
 
 func (p *Plugin) syncListToKanban() {
 	if p.shellSelected {
-		p.kanbanCol = kanbanShellColumnIndex
-		if p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			p.kanbanRow = p.selectedShellIdx
-		} else {
-			p.kanbanRow = 0
+		shell := p.getSelectedShell()
+		if shell == nil {
+			p.kanbanCol, p.kanbanRow = 0, 0
+			return
 		}
+		if pos, ok := p.workspaceKanbanBoard().PositionOf(shellKanbanCardID(shell)); ok {
+			p.kanbanCol, p.kanbanRow = pos.Column, pos.Row
+			return
+		}
+		p.kanbanCol, p.kanbanRow = 0, 0
 		return
 	}
 	wt := p.selectedWorktree()
@@ -300,14 +341,9 @@ func (p *Plugin) syncListToKanban() {
 		p.kanbanCol, p.kanbanRow = 0, 0
 		return
 	}
-	columns := p.getKanbanColumns()
-	for colIdx, lane := range kanbanLaneOrder {
-		for rowIdx, item := range columns[lane] {
-			if item.IdentityKey() == wt.IdentityKey() {
-				p.kanbanCol, p.kanbanRow = colIdx+1, rowIdx
-				return
-			}
-		}
+	if pos, ok := p.workspaceKanbanBoard().PositionOf("worktree:" + wt.IdentityKey()); ok {
+		p.kanbanCol, p.kanbanRow = pos.Column, pos.Row
+		return
 	}
 	p.kanbanCol, p.kanbanRow = 0, 0
 }

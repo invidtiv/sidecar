@@ -94,7 +94,7 @@ func (f *fakeControlChannel) respondCapture(index int, response controlResponse)
 	// only the seed asks for.
 	skipCaptures := 0
 	for _, command := range f.commands {
-		if strings.Contains(command.text, "#{alternate_on}") {
+		if strings.Contains(command.text, seedMetadataMarker) {
 			skipCaptures = 2 // saved main followed by the active grid
 			continue
 		}
@@ -624,7 +624,7 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 		t.Fatal("unsafe pane target accepted")
 	}
 	snapshot, err := parseControlSnapshot("session", "%12", 900, []string{
-		"9,4,0,30,100,1250,1,node,Action Required, repo", "line one", "%output %12 pane content",
+		"9,4,0,30,100,1250,1,0,node,Action Required, repo", "line one", "%output %12 pane content",
 	})
 	if err != nil {
 		t.Fatal(err)

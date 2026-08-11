@@ -197,6 +197,9 @@ type (
 		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
 		// meaningful when HasCursor is set.
 		MouseReporting bool
+		// AltScreen is tmux's #{alternate_on} for the pane. Only meaningful
+		// when HasCursor is set.
+		AltScreen bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -902,18 +905,23 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			if err != nil {
 				return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
 			}
-			capturedAt := time.Now()
-			observation := agentactivity.Observation{
-				PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
-			}
-			observedAgentType := AgentType(agentactivity.Identify(observation))
-			if observedAgentType == "" {
-				observedAgentType = agentType
-			}
-			return ShellOutputMsg{
-				TmuxName: tmuxName, Generation: generation, AgentType: observedAgentType,
-				CapturedAt: capturedAt, PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand,
-				PaneHeight: capture.PaneHeight, PaneWidth: capture.PaneWidth,
+			// Shared runtimes (agent/node) cannot be identified from the
+			// process name alone. Fall through to a full bottom-buffer capture
+			// so Cursor launched as `agent` upgrades off Type=shell.
+			if !shellNeedsIdentityScreen(capture.CurrentCommand) {
+				capturedAt := time.Now()
+				observation := agentactivity.Observation{
+					PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+				}
+				observedAgentType := AgentType(agentactivity.Identify(observation))
+				if observedAgentType == "" {
+					observedAgentType = agentType
+				}
+				return ShellOutputMsg{
+					TmuxName: tmuxName, Generation: generation, AgentType: observedAgentType,
+					CapturedAt: capturedAt, PaneTitle: capture.PaneTitle, CurrentCommand: capture.CurrentCommand,
+					PaneHeight: capture.PaneHeight, PaneWidth: capture.PaneWidth,
+				}
 			}
 		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
@@ -991,6 +999,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
 			MouseReporting: cursor.MouseReporting,
+			AltScreen:      cursor.AltScreen,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
@@ -1007,8 +1016,23 @@ func (p *Plugin) scheduleShellPollByName(tmuxName string, delay time.Duration) t
 	})
 }
 
+// shellSemanticNeedsScreen reports whether a known live agent needs the bottom
+// buffer for activity rules. Plain shells stay on metadata until the process
+// name alone cannot identify the program (see shellNeedsIdentityScreen).
 func shellSemanticNeedsScreen(agentType AgentType) bool {
 	return supportsAgentActivity(agentType)
+}
+
+// shellNeedsIdentityScreen is true when pane_current_command is a shared
+// runtime whose provider can only be recovered from live UI chrome. Cursor's
+// official CLI is often installed as `agent` and re-execs bundled node.
+func shellNeedsIdentityScreen(currentCommand string) bool {
+	switch strings.ToLower(strings.TrimSpace(currentCommand)) {
+	case "agent", "node", "bun":
+		return true
+	default:
+		return false
+	}
 }
 
 // findShellByName returns the shell with the given TmuxName, or nil if not found.
