@@ -16,6 +16,6 @@ func TestMain(m *testing.M) {
 	}
 	ActivityStorePath = func() string { return filepath.Join(dir, "agent-activity.json") }
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
