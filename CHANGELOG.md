@@ -2,10 +2,40 @@
 
 All notable changes to sidecar are documented here.
 
-## [v0.96.0] - 2026-08-11
+## [v0.97.0] - 2026-08-11
 
 ### Features
 - **Conversations is opt-in via the `conversations_plugin` feature flag (default off).** The multi-agent session history tab no longer ships enabled. When the flag is off (the default), Sidecar does not register the plugin, does not construct history adapters, and does not read agent session stores — so there is no Detect/watch/load cost for users who do not need the tab. Re-enable with `"features": { "flags": { "conversations_plugin": true } }` in `~/.config/sidecar/config.json`, or `sidecar --enable-feature=conversations_plugin`. With the flag on, `plugins.conversations.enabled: false` remains a hard off-switch. Tab shortcut numbers for plugins after Conversations shift left when it is off.
+- **The embedded Tasks tab is framed like every other plugin.** Sidecar draws
+  the shared gradient panel around Tasks and renders the embedded model at the
+  panel's interior size, shifting mouse coordinates past the frame so clicks,
+  drags, and wheel events land where Tasks expects them. Unavailable and
+  loading states stay unframed.
+- **`sidecar shell name` reports the current shell's name from the manifest**,
+  so an agent can check whether a stale name still describes its work. Naming
+  guidance now asks agents to rename whenever a previous task's name no longer
+  fits, and Grok launches receive the same rules.
+- **Codex status detection is more accurate.**
+
+### Performance
+- **Git diff rendering cost no longer scales with file size.** Line truncation
+  scanned a line rune-by-rune from the end and re-measured the whole candidate
+  at each step, so a single 10KB minified JSON line took 577ms to truncate and a
+  100KB line took about a minute — repeated for every visible line, every frame.
+  Truncation now scans forward against a width budget (577ms → 1.4µs for a 10KB
+  line; 2.5µs at 100KB, output unchanged across widths, CJK, emoji, and
+  combining marks), truncation happens before syntax highlighting so chroma no
+  longer tokenizes discarded bytes, max line number and side-by-side content
+  width are memoized on the parsed diff, and side-by-side pair grouping is cached
+  per hunk with above-viewport hunks skipped.
+
+### Dependencies
+- Tasks embedding updated to v1.7.0, adding ordered labelled task links and the
+  multi-link picker.
+
+## [v0.96.0] - 2026-08-11
+
+### Features
 - **The embedded Tasks tab adopts Tasks v1.6.0's refreshed visual system.** Every
   list now shares aligned priority and metadata columns, section rules and
   counts; Agenda uses calendar groups; and the detail rail adds clearer state,
