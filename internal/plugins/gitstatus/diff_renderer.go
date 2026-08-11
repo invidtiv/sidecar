@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/mattn/go-runewidth"
 )
 
 // DiffViewMode specifies the diff rendering mode.
@@ -200,7 +202,8 @@ func RenderSideBySide(diff *ParsedDiff, width, startLine, maxLines, horizontalOf
 		Align(lipgloss.Right)
 
 	isFirstHunk := true
-	for _, hunk := range diff.Hunks {
+	for hi := range diff.Hunks {
+		hunk := &diff.Hunks[hi]
 		if rendered >= maxLines {
 			break
 		}
@@ -221,8 +224,16 @@ func RenderSideBySide(diff *ParsedDiff, width, startLine, maxLines, horizontalOf
 		}
 		lineNum++
 
-		// Group lines into pairs (remove/add or context)
-		pairs := groupLinesForSideBySide(hunk.Lines)
+		// Group lines into pairs (remove/add or context). Cached on the hunk:
+		// scrolling re-renders the same diff many times and this allocated a
+		// full pair slice per hunk per frame.
+		pairs := hunk.sideBySidePairs()
+
+		// Hunks entirely above the viewport contribute only to line accounting.
+		if lineNum+len(pairs) <= startLine {
+			lineNum += len(pairs)
+			continue
+		}
 
 		for _, pair := range pairs {
 			if rendered >= maxLines {
@@ -576,6 +587,17 @@ type linePair struct {
 	right *DiffLine
 }
 
+// sideBySidePairs returns the hunk's side-by-side pairing, computing it once.
+func (h *Hunk) sideBySidePairs() []linePair {
+	if h.pairs == nil {
+		h.pairs = groupLinesForSideBySide(h.Lines)
+		if h.pairs == nil {
+			h.pairs = []linePair{}
+		}
+	}
+	return h.pairs
+}
+
 // groupLinesForSideBySide groups diff lines into pairs for side-by-side display.
 func groupLinesForSideBySide(lines []DiffLine) []linePair {
 	var pairs []linePair
@@ -674,6 +696,14 @@ func renderDiffContent(line DiffLine, maxWidth int, highlighter *SyntaxHighlight
 
 	// If we have word diff data, use it (word diff takes priority over syntax)
 	if len(line.WordDiff) > 0 {
+		// Check the width budget before styling: an over-long line is rendered
+		// from a truncated copy anyway, so styling every segment of a 100KB
+		// minified JSON line would be pure waste.
+		if maxWidth > 3 {
+			if truncated := truncateLine(line.Content, maxWidth); truncated != line.Content {
+				return baseStyle.Render(truncated)
+			}
+		}
 		var sb strings.Builder
 		for _, segment := range line.WordDiff {
 			if segment.IsChange {
@@ -686,19 +716,17 @@ func renderDiffContent(line DiffLine, maxWidth int, highlighter *SyntaxHighlight
 				sb.WriteString(baseStyle.Render(segment.Text))
 			}
 		}
-		content := sb.String()
-		// Truncate if needed (accounting for ANSI codes is complex, so just truncate raw)
-		if lipgloss.Width(line.Content) > maxWidth && maxWidth > 3 {
-			// Re-render truncated
-			truncated := truncateLine(line.Content, maxWidth)
-			return baseStyle.Render(truncated)
-		}
-		return content
+		return sb.String()
 	}
 
-	// Apply syntax highlighting if available
+	// Apply syntax highlighting if available. Truncate first so the lexer only
+	// ever sees what can actually be displayed.
+	content := line.Content
+	if maxWidth > 3 {
+		content = truncateLine(content, maxWidth)
+	}
 	if highlighter != nil {
-		segments := highlighter.HighlightLine(line.Content)
+		segments := highlighter.HighlightLine(content)
 		if len(segments) > 0 {
 			var sb strings.Builder
 			for _, seg := range segments {
@@ -706,20 +734,10 @@ func renderDiffContent(line DiffLine, maxWidth int, highlighter *SyntaxHighlight
 				style := blendSyntaxWithDiff(seg.Style, line.Type)
 				sb.WriteString(style.Render(seg.Text))
 			}
-			result := sb.String()
-			// Truncate if needed
-			if lipgloss.Width(line.Content) > maxWidth && maxWidth > 3 {
-				truncated := truncateLine(line.Content, maxWidth)
-				return renderSyntaxHighlighted(truncated, line.Type, highlighter)
-			}
-			return result
+			return sb.String()
 		}
 	}
 
-	content := line.Content
-	if lipgloss.Width(content) > maxWidth && maxWidth > 3 {
-		content = truncateLine(content, maxWidth)
-	}
 	// Add background for add/remove lines even without syntax highlighting
 	style := baseStyle
 	switch line.Type {
@@ -832,27 +850,55 @@ func blendSyntaxWithDiff(syntaxStyle lipgloss.Style, lineType LineType) lipgloss
 }
 
 // truncateLine truncates a line to fit within maxWidth using visual width.
+//
+// Cost is proportional to maxWidth, not to len(s). That matters: minified JSON
+// and JSONL diffs routinely carry lines hundreds of KB long, and this is called
+// for every visible line on every frame.
 func truncateLine(s string, maxWidth int) string {
-	if lipgloss.Width(s) <= maxWidth {
+	if maxWidth <= 0 {
+		return ""
+	}
+	// Every rune occupies at least one byte, so a string shorter than maxWidth
+	// bytes can never be wider than maxWidth cells.
+	if len(s) <= maxWidth {
+		return s
+	}
+
+	prefix, exceeds := clipToWidth(s, maxWidth)
+	if !exceeds {
 		return s
 	}
 	if maxWidth <= 3 {
-		// Just take first few runes
-		runes := []rune(s)
-		if len(runes) > maxWidth {
-			return string(runes[:maxWidth])
+		// Too narrow for an ellipsis: take the first maxWidth runes.
+		n := 0
+		for i := range s {
+			if n == maxWidth {
+				return s[:i]
+			}
+			n++
 		}
 		return s
 	}
-	// Truncate rune by rune until we fit
-	runes := []rune(s)
-	for i := len(runes); i > 0; i-- {
-		candidate := string(runes[:i]) + "..."
-		if lipgloss.Width(candidate) <= maxWidth {
-			return candidate
-		}
+	return ansi.Truncate(prefix, maxWidth, "...")
+}
+
+// clipToWidth returns a prefix of s guaranteed to be at least maxWidth cells
+// wide (or all of s), plus whether s is wider than maxWidth. It stops scanning
+// as soon as the width budget is met so callers never walk a huge line.
+func clipToWidth(s string, maxWidth int) (string, bool) {
+	// Escape sequences make byte-wise width accounting unreliable; these are
+	// plain diff payloads in practice, so just fall back on the rare case.
+	if strings.IndexByte(s, 0x1b) >= 0 {
+		return s, lipgloss.Width(s) > maxWidth
 	}
-	return "..."
+	width := 0
+	for i, r := range s {
+		if width > maxWidth {
+			return s[:i], true
+		}
+		width += runewidth.RuneWidth(r)
+	}
+	return s, width > maxWidth
 }
 
 // padRight pads a string with spaces to reach the desired visual width.
@@ -887,16 +933,7 @@ func GetSideBySideClipInfo(diff *ParsedDiff, contentWidth, horizontalOffset int)
 		return SideBySideClipInfo{}
 	}
 
-	// Calculate max content width across all lines
-	maxWidth := 0
-	for _, hunk := range diff.Hunks {
-		for _, line := range hunk.Lines {
-			lineWidth := lipgloss.Width(line.Content)
-			if lineWidth > maxWidth {
-				maxWidth = lineWidth
-			}
-		}
-	}
+	maxWidth := diff.MaxContentWidth()
 
 	return SideBySideClipInfo{
 		HasMoreLeft:     horizontalOffset > 0,

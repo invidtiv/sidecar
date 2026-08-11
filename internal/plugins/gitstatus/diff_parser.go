@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // LineType represents the type of a diff line.
@@ -38,6 +40,9 @@ type Hunk struct {
 	NewCount int
 	Header   string
 	Lines    []DiffLine
+
+	// pairs memoizes the side-by-side grouping of Lines (see sideBySidePairs).
+	pairs []linePair
 }
 
 // ParsedDiff represents a fully parsed diff.
@@ -46,15 +51,23 @@ type ParsedDiff struct {
 	NewFile string
 	Binary  bool
 	Hunks   []Hunk
+
+	// Memoized whole-diff scans. Both are pure functions of Hunks, and both are
+	// called on every frame, so computing them once keeps redraw cost
+	// independent of file size.
+	maxLineNo   int
+	maxLineNoOK bool
+	maxWidth    int
+	maxWidthOK  bool
 }
 
 // FileDiffInfo holds a parsed diff with rendering position info.
 type FileDiffInfo struct {
-	Diff       *ParsedDiff
-	StartLine  int // Line position where this file starts in rendered output
-	EndLine    int // Line position where this file ends
-	Additions  int // Number of added lines
-	Deletions  int // Number of deleted lines
+	Diff      *ParsedDiff
+	StartLine int // Line position where this file starts in rendered output
+	EndLine   int // Line position where this file ends
+	Additions int // Number of added lines
+	Deletions int // Number of deleted lines
 }
 
 // MultiFileDiff holds multiple file diffs with navigation info.
@@ -557,6 +570,9 @@ func (p *ParsedDiff) TotalLines() int {
 
 // MaxLineNumber returns the maximum line number in the diff.
 func (p *ParsedDiff) MaxLineNumber() int {
+	if p.maxLineNoOK {
+		return p.maxLineNo
+	}
 	max := 0
 	for _, hunk := range p.Hunks {
 		for _, line := range hunk.Lines {
@@ -568,5 +584,23 @@ func (p *ParsedDiff) MaxLineNumber() int {
 			}
 		}
 	}
+	p.maxLineNo, p.maxLineNoOK = max, true
+	return max
+}
+
+// MaxContentWidth returns the widest line content in the diff, memoized.
+func (p *ParsedDiff) MaxContentWidth() int {
+	if p.maxWidthOK {
+		return p.maxWidth
+	}
+	max := 0
+	for _, hunk := range p.Hunks {
+		for _, line := range hunk.Lines {
+			if w := lipgloss.Width(line.Content); w > max {
+				max = w
+			}
+		}
+	}
+	p.maxWidth, p.maxWidthOK = max, true
 	return max
 }
