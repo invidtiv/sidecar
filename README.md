@@ -4,7 +4,7 @@ You might never open your editor again.
 
 **Status: Ready for daily use.** Please [report any issues](https://github.com/marcus/sidecar/issues) you encounter.
 
-[Documentation](https://marcus.github.io/sidecar/) · [Getting Started](https://marcus.github.io/sidecar/docs/intro)
+[Documentation](https://marcus.github.io/sidecar/) · [Getting Started](https://marcus.github.io/sidecar/docs/intro) · [Comprehensive List of Features](docs/features.md)
 
 ![Git Status](docs/screenshots/sidecar-git.png)
 
