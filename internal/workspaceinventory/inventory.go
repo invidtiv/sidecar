@@ -117,6 +117,7 @@ type Collector struct {
 	Runner             Runner
 	Capture            func(string, int) (string, error)
 	Now                func() time.Time
+	DoneTTL            time.Duration
 	trackers           *trackerStore
 	captures           chan struct{}
 	metrics            *RefreshMetrics
@@ -158,7 +159,37 @@ func (c Collector) defaults() Collector {
 	if c.trackers == nil {
 		c.trackers = &trackerStore{values: make(map[string]agentactivity.Tracker)}
 	}
+	if c.DoneTTL == 0 {
+		c.DoneTTL = agentstatus.DefaultDoneTTL
+	}
 	return c
+}
+
+// SeedTrackers installs persisted activity as the collector's starting state.
+// Entries already observed in this process win: a live reading is always
+// better evidence than a restored one.
+func (c Collector) SeedTrackers(seed map[string]agentactivity.Tracker) Collector {
+	c = c.defaults()
+	c.trackers.mu.Lock()
+	defer c.trackers.mu.Unlock()
+	for key, tracker := range seed {
+		if _, exists := c.trackers.values[key]; !exists {
+			c.trackers.values[key] = tracker
+		}
+	}
+	return c
+}
+
+// TrackerSnapshot copies committed activity for persistence.
+func (c Collector) TrackerSnapshot() map[string]agentactivity.Tracker {
+	c = c.defaults()
+	c.trackers.mu.Lock()
+	defer c.trackers.mu.Unlock()
+	values := make(map[string]agentactivity.Tracker, len(c.trackers.values))
+	for key, tracker := range c.trackers.values {
+		values[key] = tracker
+	}
+	return values
 }
 
 func (c Collector) WithDefaults() Collector { return c.defaults() }
@@ -361,7 +392,7 @@ func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) 
 }
 
 func (c Collector) observeContext(ctx context.Context, workspace *Workspace, matches []Pane, now time.Time) {
-	input := agentstatus.Input{ProviderSupported: supported(workspace.Provider), CapturedAt: now, Now: now, StaleAfter: time.Minute}
+	input := agentstatus.Input{ProviderSupported: supported(workspace.Provider), CapturedAt: now, Now: now, StaleAfter: time.Minute, DoneTTL: c.DoneTTL}
 	if len(matches) == 0 {
 		input.Orphaned = true
 	} else if len(matches) > 1 {

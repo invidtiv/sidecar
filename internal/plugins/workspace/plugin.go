@@ -132,6 +132,9 @@ type Plugin struct {
 	// Required by plugin.Plugin interface
 	ctx     *plugin.Context
 	focused bool
+	// selectionSince timestamps the current selection so acknowledgement can
+	// require dwell. Arrowing past a shell is not reading it.
+	selectionSince time.Time
 	width   int
 	height  int
 
@@ -901,6 +904,20 @@ func (p *Plugin) selectedWorktree() *Worktree {
 	return p.worktrees[p.selectedIdx]
 }
 
+// AckDwell is how long a session's output must stay selected before its
+// completion is treated as read. Short enough to feel immediate when you stop
+// on a card, long enough that scrolling through the list clears nothing.
+const AckDwell = 2 * time.Second
+
+// dwellSatisfied reports whether the current selection has been held long
+// enough to count as having looked at it.
+func (p *Plugin) dwellSatisfied(now time.Time) bool {
+	if p.selectionSince.IsZero() {
+		return true
+	}
+	return now.Sub(p.selectionSince) >= AckDwell
+}
+
 // outputVisibleFor returns true when a worktree's output is on-screen AND plugin is focused.
 func (p *Plugin) outputVisibleFor(worktreeName string) bool {
 	if !p.focused {
@@ -1328,15 +1345,9 @@ func (p *Plugin) moveCursor(delta int) {
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
 		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
 	if selectionChanged {
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			if agent := p.shells[p.selectedShellIdx].Agent; agent != nil {
-				agent.Activity.Acknowledge()
-			}
-		} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-			if agent := p.worktrees[p.selectedIdx].Agent; agent != nil {
-				agent.Activity.Acknowledge()
-			}
-		}
+		// Selection alone no longer acknowledges: the poll handlers clear the
+		// done marker once the selection has been held long enough to read.
+		p.selectionSince = time.Now()
 		p.previewOffset = 0
 		p.autoScrollOutput = true
 		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)

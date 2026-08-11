@@ -75,3 +75,38 @@ func TestResolveFreshnessGatesAttention(t *testing.T) {
 		t.Fatalf("unavailable = %#v", got)
 	}
 }
+
+func TestDoneDecaysToIdleAfterTTL(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	unseenIdle := func(age time.Duration) Input {
+		return Input{
+			ProviderSupported: true,
+			Now:               now,
+			DoneTTL:           DefaultDoneTTL,
+			Activity:          agentactivity.Tracker{State: agentactivity.StateIdle, ChangedAt: now.Add(-age)},
+		}
+	}
+	if got := Resolve(unseenIdle(time.Minute)); got.Lane != LaneDone {
+		t.Fatalf("recent completion lane = %q, want done", got.Lane)
+	}
+	if got := Resolve(unseenIdle(DefaultDoneTTL + time.Minute)); got.Lane != LaneIdle || got.Label != "idle" {
+		t.Fatalf("expired completion = %#v, want idle", got)
+	}
+	// A zero TTL keeps the pre-decay behaviour for callers that opt out.
+	noTTL := unseenIdle(24 * time.Hour)
+	noTTL.DoneTTL = 0
+	if got := Resolve(noTTL); got.Lane != LaneDone {
+		t.Fatalf("zero TTL lane = %q, want done", got.Lane)
+	}
+}
+
+func TestInferredIdleIsMarked(t *testing.T) {
+	in := Input{
+		ProviderSupported: true,
+		Activity:          agentactivity.Tracker{State: agentactivity.StateIdle, Seen: true, IdleInferred: true},
+	}
+	got := Resolve(in)
+	if got.Lane != LaneIdle || !got.Inferred {
+		t.Fatalf("Resolve() = %#v, want inferred idle", got)
+	}
+}

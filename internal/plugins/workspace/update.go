@@ -722,7 +722,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.IdentityKey()) {
+				if p.outputVisibleFor(wt.IdentityKey()) && p.dwellSatisfied(now) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -841,7 +841,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(wt.Agent, msg.AgentType, now)
 			if supportsAgentActivity(wt.Agent.Type) {
 				applyAgentActivity(wt.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.outputVisibleFor(wt.IdentityKey()) {
+				if p.outputVisibleFor(wt.IdentityKey()) && p.dwellSatisfied(now) {
 					wt.Agent.Activity.Acknowledge()
 				}
 			}
@@ -1291,7 +1291,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			applyObservedAgentType(shell.Agent, msg.AgentType, now)
 			if supportsAgentActivity(shell.Agent.Type) {
 				applyAgentActivity(shell.Agent, msg.Activity, msg.CapturedAt, now)
-				if p.shellOutputVisibleFor(shell.TmuxName) {
+				if p.shellOutputVisibleFor(shell.TmuxName) && p.dwellSatisfied(now) {
 					shell.Agent.Activity.Acknowledge()
 				}
 			}

@@ -274,6 +274,11 @@ type Tracker struct {
 	ChangedAt       time.Time
 	Seen            bool
 	VisibleBlocker  bool
+	// IdleInferred records that the current idle state came from the absence
+	// of activity rather than an explicit completion marker. Providers without
+	// a completion signal can never assert "done", and views use this to say so
+	// instead of letting their absence from the done lane read as a bug.
+	IdleInferred    bool
 	idleCandidateAt time.Time
 	skipSince       time.Time
 }
@@ -348,8 +353,34 @@ func (t *Tracker) Apply(result Result, now time.Time) bool {
 	case StateIdle:
 		// Initial/restart idle is quiet; only a transition from live work creates done.
 		t.Seen = result.FallbackIdle || previous == StateUnknown || previous == ""
+		t.IdleInferred = result.FallbackIdle
+	}
+	if result.State != StateIdle {
+		t.IdleInferred = false
 	}
 	return true
+}
+
+// Snapshot is the persistable projection of a tracker. It carries only the
+// fields that survive a restart meaningfully: transition policy timers are
+// in-process concerns and are deliberately dropped.
+type Snapshot struct {
+	State        string    `json:"state"`
+	Evidence     string    `json:"evidence,omitempty"`
+	ChangedAt    time.Time `json:"changedAt"`
+	Seen         bool      `json:"seen"`
+	IdleInferred bool      `json:"idleInferred,omitempty"`
+}
+
+func (t Tracker) Snapshot() Snapshot {
+	return Snapshot{State: string(t.State), Evidence: t.Evidence, ChangedAt: t.ChangedAt, Seen: t.Seen, IdleInferred: t.IdleInferred}
+}
+
+// Restore rebuilds a tracker from persisted state. A restored idle keeps its
+// original ChangedAt, so a turn that finished before the restart still reads
+// as recently finished rather than as "just observed".
+func Restore(s Snapshot) Tracker {
+	return Tracker{State: State(s.State), Evidence: s.Evidence, ChangedAt: s.ChangedAt, Seen: s.Seen, IdleInferred: s.IdleInferred}
 }
 
 func (t *Tracker) Acknowledge() { t.Seen = true }

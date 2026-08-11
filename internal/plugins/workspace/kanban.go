@@ -95,11 +95,13 @@ func agentStatusPresentation(wt *Worktree) agentstatus.Presentation {
 		Err:          wt.Status == StatusError,
 		LegacyStatus: wt.Status.String(),
 		LegacyIcon:   wt.Status.Icon(),
+		DoneTTL:      agentstatus.DefaultDoneTTL,
 	}
 	if wt.Agent != nil {
 		in.ProviderSupported = supportsAgentActivity(wt.Agent.Type)
 		in.Activity = wt.Agent.Activity
 		in.CapturedAt = wt.Agent.ActivityCapturedAt
+		in.Now = wt.Agent.ActivityCapturedAt
 	}
 	return agentstatus.Resolve(in)
 }
@@ -108,13 +110,14 @@ func shellAgentStatusPresentation(shell *ShellSession) agentstatus.Presentation 
 	if shell == nil {
 		return agentstatus.Resolve(agentstatus.Input{Unavailable: true})
 	}
-	in := agentstatus.Input{Orphaned: shell.IsOrphaned, LegacyStatus: StatusPaused.String(), LegacyIcon: "○"}
+	in := agentstatus.Input{Orphaned: shell.IsOrphaned, LegacyStatus: StatusPaused.String(), LegacyIcon: "○", DoneTTL: agentstatus.DefaultDoneTTL}
 	if shell.Agent != nil {
 		in.LegacyStatus = StatusActive.String()
 		in.LegacyIcon = "●"
 		in.ProviderSupported = supportsAgentActivity(shell.Agent.Type)
 		in.Activity = shell.Agent.Activity
 		in.CapturedAt = shell.Agent.ActivityCapturedAt
+		in.Now = shell.Agent.ActivityCapturedAt
 	}
 	return agentstatus.Resolve(in)
 }

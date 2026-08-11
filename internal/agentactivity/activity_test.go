@@ -629,3 +629,29 @@ func TestTrackerDebouncesIdleAndAcknowledgesDone(t *testing.T) {
 		t.Fatal(tracker.DisplayState())
 	}
 }
+
+func TestFallbackIdleIsMarkedInferred(t *testing.T) {
+	now := time.Unix(1000, 0)
+	var tracker Tracker
+	tracker.Apply(Result{State: StateWorking, Evidence: "busy"}, now)
+	tracker.Apply(Result{State: StateIdle, Evidence: "silence", FallbackIdle: true, VisibleIdle: true}, now.Add(time.Second))
+	if !tracker.IdleInferred {
+		t.Fatalf("fallback idle should be marked inferred")
+	}
+	if tracker.DisplayState() != string(StateIdle) {
+		t.Fatalf("fallback idle must not claim done, got %q", tracker.DisplayState())
+	}
+	tracker.Apply(Result{State: StateWorking, Evidence: "busy again"}, now.Add(2*time.Second))
+	if tracker.IdleInferred {
+		t.Fatalf("inferred flag should clear when work resumes")
+	}
+}
+
+func TestSnapshotRoundTrip(t *testing.T) {
+	now := time.Unix(2000, 0)
+	original := Tracker{State: StateIdle, Evidence: "claude.prompt.idle", ChangedAt: now, IdleInferred: true}
+	restored := Restore(original.Snapshot())
+	if restored.State != original.State || !restored.ChangedAt.Equal(now) || restored.Seen || !restored.IdleInferred {
+		t.Fatalf("Restore(Snapshot()) = %#v, want %#v", restored, original)
+	}
+}

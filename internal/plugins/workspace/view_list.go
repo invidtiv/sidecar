@@ -857,7 +857,7 @@ func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style
 	if agent == nil || !supportsAgentActivity(agent.Type) {
 		return "", "", lipgloss.Style{}, false
 	}
-	p := agentstatus.Resolve(agentstatus.Input{ProviderSupported: true, Activity: agent.Activity, CapturedAt: agent.ActivityCapturedAt})
+	p := agentstatus.Resolve(agentstatus.Input{ProviderSupported: true, Activity: agent.Activity, CapturedAt: agent.ActivityCapturedAt, Now: agent.ActivityCapturedAt, DoneTTL: agentstatus.DefaultDoneTTL})
 	switch p.Lane {
 	case agentstatus.LaneWorking:
 		return p.Icon, p.Label, styles.StatusCompleted, true

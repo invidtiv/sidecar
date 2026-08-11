@@ -212,3 +212,38 @@ func TestSummaryCountsProjectsAndAgents(t *testing.T) {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 }
+
+func TestCardLinesDimsDormantIdleAndEmphasisesDone(t *testing.T) {
+	now := time.Now()
+	card := func(lane agentstatus.LaneID, label string, age time.Duration) []kanban.Line {
+		return cardLines(workspaceinventory.Workspace{
+			Kind: workspaceinventory.KindShell, ProjectKey: "p", ProjectName: "one", Name: "agent", Provider: "codex",
+			Presentation: agentstatus.Presentation{Lane: lane, Label: label, ChangedAt: now.Add(-age)},
+		}, false, now)
+	}
+	recent := card(agentstatus.LaneIdle, "idle", time.Minute)
+	dormant := card(agentstatus.LaneIdle, "idle", DormantAfter+time.Minute)
+	if recent[1].Spans[2].Foreground == dormant[1].Spans[2].Foreground {
+		t.Fatalf("dormant idle should not share the colour of a fresh idle")
+	}
+	if recent[0].Spans[3].Foreground == dormant[0].Spans[3].Foreground {
+		t.Fatalf("dormant idle name should be dimmed")
+	}
+	done := card(agentstatus.LaneDone, "done", time.Minute)
+	if !done[1].Spans[2].Bold {
+		t.Fatalf("done status should be emphasised")
+	}
+	if recent[1].Spans[2].Bold {
+		t.Fatalf("idle status should not be emphasised")
+	}
+}
+
+func TestCardLinesMarksInferredIdle(t *testing.T) {
+	lines := cardLines(workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindShell, ProjectKey: "p", ProjectName: "one", Name: "agent", Provider: "grok",
+		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Label: "idle", Inferred: true},
+	}, false, time.Now())
+	if status := lines[1].Spans[2].Text; !strings.Contains(status, "~") {
+		t.Fatalf("status = %q, want inferred marker", status)
+	}
+}

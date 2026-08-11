@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -13,7 +14,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -121,13 +124,35 @@ type Model struct {
 	height             int
 }
 
+// ActivityStorePath is overridable so tests never touch the user's state dir.
+var ActivityStorePath = func() string {
+	return filepath.Join(config.StateDir(), activitystore.FileName)
+}
+
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
+	// Restored idle state is what lets a card say "idle 3h" instead of "25s"
+	// on the first cycle after launch, and lets a turn that finished while
+	// Sidecar was closed still land in the done lane.
+	if path := ActivityStorePath(); path != "" {
+		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
+	}
 	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
 	return m
+}
+
+// persistActivity writes committed trackers after a completed cycle. Failure
+// is silent by design: the store is a convenience, and a state directory that
+// cannot be written should not interrupt the board.
+func (m *Model) persistActivity() {
+	path := ActivityStorePath()
+	if path == "" {
+		return
+	}
+	_ = activitystore.Save(path, m.collector.TrackerSnapshot(), time.Now())
 }
 
 func (m *Model) Start(projects []Project) tea.Cmd {
@@ -433,6 +458,7 @@ func (m *Model) finishPhase() tea.Cmd {
 	}
 	m.loading = false
 	m.refreshCollector.CommitTrackers()
+	m.persistActivity()
 	metrics := m.refreshCollector.Metrics()
 	m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
 	m.syncBoard()
@@ -699,24 +725,39 @@ func kindGlyph(kind workspaceinventory.Kind) string {
 func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time) []kanban.Line {
 	hue := styles.ProjectHue(workspace.ProjectKey)
 	spine := spineGlyph(workspace.Kind)
+	dormant := isDormant(workspace.Presentation, now)
+	nameColor := styles.TextPrimary
+	if dormant {
+		nameColor = styles.TextMuted
+	}
 	line1 := kanban.Line{Spans: []kanban.Span{
 		{Text: spine, Foreground: hue},
 		{Text: " " + workspace.ProjectName, Foreground: hue, Bold: true},
 		{Text: " " + kindGlyph(workspace.Kind), Foreground: styles.TextMuted},
-		{Text: " " + workspace.Name, Foreground: styles.TextPrimary},
+		{Text: " " + workspace.Name, Foreground: nameColor},
 	}}
 
 	status := workspace.Presentation.Label
 	if workspace.Presentation.Attention {
 		status = "▲ " + status
 	}
+	// "~" marks an idle this provider inferred from silence rather than read
+	// from a completion marker, so a card that never reaches done reads as a
+	// known limitation instead of a missing signal.
+	if workspace.Presentation.Inferred {
+		status += " ~"
+	}
 	if age := relativeAge(workspace.Presentation.ChangedAt, now); age != "" {
 		status += " · " + age
+	}
+	statusColor := styles.LaneColor(string(workspace.Presentation.Lane))
+	if dormant {
+		statusColor = styles.TextMuted
 	}
 	line2 := kanban.Line{Spans: []kanban.Span{
 		{Text: spine, Foreground: hue},
 		{Text: " " + styles.AgentLabel(workspace.Provider), Foreground: styles.AgentColor(workspace.Provider), Background: styles.AgentChipFill()},
-		{Text: " " + status, Foreground: styles.LaneColor(string(workspace.Presentation.Lane))},
+		{Text: " " + status, Foreground: statusColor, Bold: workspace.Presentation.Lane == agentstatus.LaneDone},
 	}}
 
 	detail := choose(workspace.TaskID, workspace.Branch)
@@ -747,6 +788,18 @@ func errorCardLines(projectName string, err error) []kanban.Line {
 		{Spans: []kanban.Span{{Text: spine, Foreground: styles.TextMuted}, {Text: " project unavailable", Foreground: styles.TextMuted}}},
 		{Spans: []kanban.Span{{Text: spine, Foreground: styles.TextMuted}, {Text: " " + err.Error(), Foreground: styles.TextMuted}}},
 	}
+}
+
+// DormantAfter is when an idle session stops competing for attention. The idle
+// lane holds both "finished a minute ago" and "untouched since Tuesday";
+// dimming past this threshold separates them without a sixth lane.
+const DormantAfter = time.Hour
+
+func isDormant(p agentstatus.Presentation, now time.Time) bool {
+	if p.Lane != agentstatus.LaneIdle || p.ChangedAt.IsZero() {
+		return false
+	}
+	return now.Sub(p.ChangedAt) > DormantAfter
 }
 
 // relativeAge formats the gap between changedAt and now as the small units

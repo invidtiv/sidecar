@@ -32,6 +32,12 @@ type Input struct {
 	CapturedAt        time.Time
 	Now               time.Time
 	StaleAfter        time.Duration
+	// DoneTTL bounds how long a completed turn stays in the done lane. Done is
+	// an inbox of recent finishes, not a permanent bucket: past the TTL an
+	// unacknowledged completion decays into idle on its own, so the lane keeps
+	// meaning "this just finished" without requiring the user to dismiss it.
+	// Zero disables decay.
+	DoneTTL time.Duration
 }
 
 type Freshness string
@@ -54,6 +60,21 @@ type Presentation struct {
 	Health     bool
 	Semantic   bool
 	Freshness  Freshness
+	// Inferred marks an idle whose provider has no completion signal, so its
+	// absence from the done lane is a limitation rather than a fact.
+	Inferred bool
+}
+
+// DefaultDoneTTL is the window in which a finished turn still reads as
+// recently finished. Long enough to survive a coffee break, short enough that
+// the lane never becomes a second idle column.
+const DefaultDoneTTL = 10 * time.Minute
+
+func doneExpired(in Input) bool {
+	if in.DoneTTL <= 0 || in.Now.IsZero() || in.Activity.ChangedAt.IsZero() {
+		return false
+	}
+	return in.Now.Sub(in.Activity.ChangedAt) > in.DoneTTL
 }
 
 // Resolve applies health/liveness precedence before semantic activity. The
@@ -89,9 +110,14 @@ func Resolve(in Input) Presentation {
 			p.Lane, p.Icon, p.Label = LaneBlocked, "◆", "blocked"
 			p.Attention = p.Freshness == FreshnessCurrent && in.Activity.VisibleBlocker
 		case "done":
+			if doneExpired(in) {
+				p.Lane, p.Icon, p.Label = LaneIdle, "○", "idle"
+				break
+			}
 			p.Lane, p.Icon, p.Label = LaneDone, "✓", "done"
 		case string(agentactivity.StateIdle):
 			p.Lane, p.Icon, p.Label = LaneIdle, "○", "idle"
+			p.Inferred = in.Activity.IdleInferred
 		default:
 			p.Lane, p.Icon, p.Label = LanePaused, "?", "unknown"
 		}

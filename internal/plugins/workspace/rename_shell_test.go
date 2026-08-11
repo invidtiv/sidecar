@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -60,5 +61,22 @@ func TestRenameShellModalUsesSharedValidation(t *testing.T) {
 				t.Fatalf("modal error = %q, shared error = %v", p.renameShellError, sharedErr)
 			}
 		})
+	}
+}
+
+// Acknowledgement requires dwell so that arrowing through the list does not
+// silently clear completions the user never actually read.
+func TestDwellSatisfied(t *testing.T) {
+	now := time.Now()
+	p := &Plugin{}
+	if !p.dwellSatisfied(now) {
+		t.Fatalf("a selection that never changed should already count as read")
+	}
+	p.selectionSince = now
+	if p.dwellSatisfied(now.Add(AckDwell / 2)) {
+		t.Fatalf("passing selection should not acknowledge")
+	}
+	if !p.dwellSatisfied(now.Add(AckDwell + time.Millisecond)) {
+		t.Fatalf("held selection should acknowledge")
 	}
 }
