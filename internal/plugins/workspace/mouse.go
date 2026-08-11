@@ -1183,7 +1183,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	case regionPreviewPane:
 		return p.scrollPreview(delta)
 	case regionKanbanCard, regionKanbanColumn:
-		// Scroll within Kanban view - navigate rows in current column
+		// Scroll the lane under the pointer, not whichever lane happened to
+		// have keyboard focus before the wheel gesture.
+		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
+			return p.scrollKanbanColumn(region.Column, delta)
+		}
 		return p.scrollKanban(delta)
 	default:
 		// Fallback based on X position and view mode
@@ -1363,9 +1367,16 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 
 // scrollKanban scrolls within the current Kanban column.
 func (p *Plugin) scrollKanban(delta int) tea.Cmd {
-	oldRow := p.kanbanRow
-	p.moveKanbanRow(delta)
-	if p.kanbanRow != oldRow {
+	return p.scrollKanbanColumn(p.kanbanCol, delta)
+}
+
+func (p *Plugin) scrollKanbanColumn(column, delta int) tea.Cmd {
+	p.syncKanbanComponent()
+	oldSelection := p.kanban.Selection()
+	p.kanban.MoveInColumn(column, delta)
+	next := p.kanban.Selection()
+	p.kanbanCol, p.kanbanRow = next.Column, next.Row
+	if next != oldSelection {
 		oldShellSelected := p.shellSelected
 		oldShellIdx := p.selectedShellIdx
 		oldWorktreeIdx := p.selectedIdx

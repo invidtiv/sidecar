@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -143,6 +144,27 @@ func TestOverviewCompactViewportRetainsKeyboardAndMouseActivation(t *testing.T) 
 	cmd := m.Update(click)
 	if cmd == nil || cmd().(NavigateMsg).Workspace.ID != region.Data.(kanban.HitRegion).CardID {
 		t.Fatal("compact double click did not activate visible card")
+	}
+}
+
+func TestOverviewMouseWheelScrollsHoveredColumn(t *testing.T) {
+	m := compactOverviewModel(10)
+	m.View(200, 15)
+	var body *mouse.Region
+	for _, region := range m.mouse.HitMap.Regions() {
+		hit, ok := region.Data.(kanban.HitRegion)
+		if ok && hit.Kind == kanban.RegionColumnBody && hit.Column == 0 {
+			copy := region
+			body = &copy
+			break
+		}
+	}
+	if body == nil {
+		t.Fatal("missing scrollable column body region")
+	}
+	m.Update(tea.MouseWheelMsg(tea.Mouse{X: body.Rect.X, Y: body.Rect.Y, Button: tea.MouseWheelDown}))
+	if got, want := m.board.Selection(), (kanban.Selection{Column: 0, Row: mouse.WheelScrollLines}); got != want {
+		t.Fatalf("selection after wheel = %#v, want %#v", got, want)
 	}
 }
 

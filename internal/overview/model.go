@@ -346,6 +346,16 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			}
 		case mouse.ActionHover:
 			m.board.HandlePointer(kanban.PointerHover, region)
+		case mouse.ActionScrollUp, mouse.ActionScrollDown:
+			delta := action.Delta
+			if delta == 0 {
+				if action.Type == mouse.ActionScrollUp {
+					delta = -1
+				} else {
+					delta = 1
+				}
+			}
+			m.board.MoveInColumn(region.Column, delta)
 		}
 	}
 	return nil

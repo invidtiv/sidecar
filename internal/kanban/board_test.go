@@ -65,7 +65,7 @@ func TestComponentRenderOwnsScrollHitRegionsAndHeight(t *testing.T) {
 	if got.Compact || lipgloss.Height(got.View) != 14 {
 		t.Fatalf("render compact=%v height=%d", got.Compact, lipgloss.Height(got.View))
 	}
-	if len(got.Regions) != 3 { // one column plus the two visible cards
+	if len(got.Regions) != 3 { // header, scrollable column body, and one visible card
 		t.Fatalf("regions = %#v", got.Regions)
 	}
 	selectedRegion := got.Regions[len(got.Regions)-1]

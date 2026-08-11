@@ -7,13 +7,15 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 type RegionKind string
 
 const (
-	RegionColumn RegionKind = "column"
-	RegionCard   RegionKind = "card"
+	RegionColumn     RegionKind = "column"
+	RegionColumnBody RegionKind = "column-body"
+	RegionCard       RegionKind = "card"
 )
 
 type HitRegion struct {
@@ -92,6 +94,14 @@ func (c *Component) MoveColumn(delta int) { c.selection = c.board.MoveColumn(c.s
 
 func (c *Component) MoveRow(delta int) { c.selection = c.board.MoveRow(c.selection, delta) }
 
+// MoveInColumn targets the lane under a wheel gesture and moves its selection.
+// Keeping selection and viewport together means the next render can follow the
+// newly selected card without snapping a separately scrolled viewport back.
+func (c *Component) MoveInColumn(column, delta int) {
+	c.selection = c.board.Clamp(Selection{Column: column, Row: c.selection.Row})
+	c.selection = c.board.MoveRow(c.selection, delta)
+}
+
 func (c *Component) ScrollLane(column, delta int) {
 	if column < 0 || column >= len(c.board.Lanes) {
 		return
@@ -166,7 +176,18 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 		return RenderResult{Compact: true}
 	}
 	layout := CalculateLayout(options.Width, options.Height, len(c.board.Lanes), options.MinColumnWidth, options.CardHeight)
-	c.ensureSelectedVisible(layout.MaxCards)
+	maxCards := layout.MaxCards
+	showBelowRow := false
+	for _, lane := range c.board.Lanes {
+		if len(lane.Cards) > maxCards {
+			showBelowRow = layout.ContentRows > layout.CardHeight
+			break
+		}
+	}
+	if showBelowRow {
+		maxCards = max(1, (layout.ContentRows-1)/layout.CardHeight)
+	}
+	c.ensureSelectedVisible(maxCards)
 
 	borderStyle := lipgloss.NewStyle().Foreground(styles.BorderNormal)
 	vertSep := borderStyle.Render("│")
@@ -187,32 +208,36 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 		columnX += width + 1
 	}
 	lines = append(lines, strings.Join(columnHeaders, vertSep), borderStyle.Render(bracketRule(widths, "┼")))
+	contentLimit := layout.ContentRows
+	if showBelowRow {
+		contentLimit--
+	}
+	columnX = 2
+	for column, width := range widths {
+		regions = append(regions, HitRegion{Kind: RegionColumnBody, Column: column, Row: -1, X: columnX, Y: 5, W: width, H: layout.ContentRows})
+		columnX += width + 1
+	}
 
 	visibleByLane := make([][]Card, len(c.board.Lanes))
-	overflowByLane := make([]int, len(c.board.Lanes))
+	hiddenBelowByLane := make([]int, len(c.board.Lanes))
+	scrollbarsByLane := make([][]string, len(c.board.Lanes))
 	maxRows := 0
 	for column, lane := range c.board.Lanes {
 		start := c.scroll[lane.ID]
-		end := min(len(lane.Cards), start+layout.MaxCards)
+		end := min(len(lane.Cards), start+maxCards)
 		visible := lane.Cards[start:end]
-		if hidden := len(lane.Cards) - end; hidden > 0 {
-			if len(visible) > 0 {
-				visible = visible[:len(visible)-1]
-				hidden++
-			}
-			overflowByLane[column] = hidden
-		}
 		visibleByLane[column] = visible
+		hiddenBelowByLane[column] = len(lane.Cards) - end
+		scrollbarsByLane[column] = strings.Split(ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems: len(lane.Cards), ScrollOffset: start, VisibleItems: maxCards, TrackHeight: contentLimit,
+		}), "\n")
 		rows := len(visible)
-		if overflowByLane[column] > 0 {
-			rows++
-		}
 		if rows == 0 && lane.State != CellReady {
 			rows = 1
 		}
 		maxRows = max(maxRows, rows)
 	}
-	maxRows = min(maxRows, layout.MaxCards)
+	maxRows = min(maxRows, maxCards)
 	for visibleRow := 0; visibleRow < maxRows; visibleRow++ {
 		columnX = 2
 		for column, lane := range c.board.Lanes {
@@ -228,36 +253,52 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 			cells := make([]string, 0, len(c.board.Lanes))
 			for column, lane := range c.board.Lanes {
 				width := widths[column]
+				cardWidth := max(0, width-1)
 				cell := ""
 				switch {
 				case visibleRow < len(visibleByLane[column]):
 					card := visibleByLane[column][visibleRow]
 					selected := column == c.selection.Column && c.scroll[lane.ID]+visibleRow == c.selection.Row
 					if options.RenderCard != nil {
-						cell = options.RenderCard(card, line, width, selected, card.ID == c.hoverID)
+						cell = options.RenderCard(card, line, cardWidth, selected, card.ID == c.hoverID)
 					} else {
-						cell = defaultCardLine(card, line, width, selected)
-					}
-				case visibleRow == len(visibleByLane[column]) && overflowByLane[column] > 0:
-					if line == 0 {
-						cell = styles.Muted.Render(fmt.Sprintf(" ▾ %d more", overflowByLane[column]))
+						cell = defaultCardLine(card, line, cardWidth, selected)
 					}
 				case visibleRow == 0 && line == 0 && lane.State != CellReady:
 					cell = styles.Muted.Render(" " + emptyCellMessage(lane))
 				}
-				cells = append(cells, fit(cell, width))
+				scrollbarLine := visibleRow*layout.CardHeight + line
+				cells = append(cells, fit(cell, cardWidth)+scrollbarAt(scrollbarsByLane[column], scrollbarLine))
 			}
 			lines = append(lines, strings.Join(cells, vertSep))
 		}
 	}
-	for rendered := maxRows * layout.CardHeight; rendered < layout.ContentRows; rendered++ {
+	for rendered := maxRows * layout.CardHeight; rendered < contentLimit; rendered++ {
 		cells := make([]string, len(c.board.Lanes))
-		for i := range cells {
-			cells[i] = strings.Repeat(" ", widths[i])
+		for column := range cells {
+			cells[column] = strings.Repeat(" ", max(0, widths[column]-1)) + scrollbarAt(scrollbarsByLane[column], rendered)
+		}
+		lines = append(lines, strings.Join(cells, vertSep))
+	}
+	if showBelowRow {
+		cells := make([]string, len(c.board.Lanes))
+		for column, hidden := range hiddenBelowByLane {
+			if hidden > 0 {
+				cells[column] = fit(styles.Muted.Render(fmt.Sprintf(" ↓ %d more below", hidden)), widths[column])
+			} else {
+				cells[column] = strings.Repeat(" ", widths[column])
+			}
 		}
 		lines = append(lines, strings.Join(cells, vertSep))
 	}
 	return RenderResult{View: styles.RenderPanel(strings.Join(lines, "\n"), options.Width, options.Height, true), Regions: regions}
+}
+
+func scrollbarAt(lines []string, row int) string {
+	if row < 0 || row >= len(lines) {
+		return " "
+	}
+	return lines[row]
 }
 
 func (c *Component) ensureSelectedVisible(maxCards int) {
@@ -285,7 +326,7 @@ func (c *Component) clampScroll() {
 func defaultCardLine(card Card, line, width int, selected bool) string {
 	if len(card.Lines) > 0 {
 		if line < 0 || line >= len(card.Lines) {
-			return blankCardCell(width, selected)
+			return strings.Repeat(" ", width)
 		}
 		return renderSpans(card.Lines[line].Spans, width, selected)
 	}
@@ -301,16 +342,6 @@ func defaultCardLine(card Card, line, width int, selected bool) string {
 		return styles.Muted.Width(width).Render(fit(value, width))
 	}
 	return fit(value, width)
-}
-
-// blankCardCell fills a card row past the end of card.Lines, still carrying
-// the selection background so the highlight stays a solid block.
-func blankCardCell(width int, selected bool) string {
-	pad := strings.Repeat(" ", width)
-	if !selected {
-		return pad
-	}
-	return lipgloss.NewStyle().Background(styles.CardSelected.GetBackground()).Render(pad)
 }
 
 // renderSpans lays spans left to right against a running width budget,
@@ -361,14 +392,21 @@ func renderSpans(spans []Span, width int, selected bool) string {
 // colour and the count muted, truncated to width like any other cell.
 func renderLaneHeader(lane Lane, width int, selected bool) string {
 	labelStyle := lipgloss.NewStyle().Bold(true)
+	countStyle := styles.Muted
 	if lane.HeaderColor != nil {
 		labelStyle = labelStyle.Foreground(lane.HeaderColor)
 	}
 	if selected {
-		labelStyle = labelStyle.Underline(true)
+		background := styles.CardSelected.GetBackground()
+		labelStyle = labelStyle.Background(background)
+		countStyle = countStyle.Background(background)
 	}
-	rendered := labelStyle.Render(lane.Label) + " " + styles.Muted.Render(fmt.Sprintf("%d", len(lane.Cards)))
-	return fit(rendered, width)
+	rendered := labelStyle.Render(lane.Label) + countStyle.Render(fmt.Sprintf(" %d", len(lane.Cards)))
+	padding := strings.Repeat(" ", max(0, width-ansi.StringWidth(rendered)))
+	if selected {
+		padding = lipgloss.NewStyle().Background(styles.CardSelected.GetBackground()).Render(padding)
+	}
+	return ansi.Truncate(rendered, width, "") + padding
 }
 
 // bracketRule builds a per-column run of ─ joined by junction, landing the

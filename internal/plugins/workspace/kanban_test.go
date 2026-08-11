@@ -203,7 +203,7 @@ func TestKanbanRenderRegistersCardsAndConstrainsHeight(t *testing.T) {
 	if renderedHeight := lipgloss.Height(got); renderedHeight != height {
 		t.Fatalf("rendered height = %d, want %d", renderedHeight, height)
 	}
-	var cards, columns int
+	var cards, headers, bodies int
 	for _, region := range p.mouseHandler.HitMap.Regions() {
 		switch region.ID {
 		case regionKanbanCard:
@@ -212,11 +212,20 @@ func TestKanbanRenderRegistersCardsAndConstrainsHeight(t *testing.T) {
 				t.Fatalf("card region escapes board: %#v", region.Rect)
 			}
 		case regionKanbanColumn:
-			columns++
+			hit, ok := region.Data.(boardkanban.HitRegion)
+			if !ok {
+				t.Fatalf("column region lacks kanban data: %#v", region)
+			}
+			switch hit.Kind {
+			case boardkanban.RegionColumn:
+				headers++
+			case boardkanban.RegionColumnBody:
+				bodies++
+			}
 		}
 	}
-	if cards != 3 || columns != kanbanColumnCount() {
-		t.Fatalf("hit regions: cards=%d columns=%d", cards, columns)
+	if cards != 3 || headers != kanbanColumnCount() || bodies != kanbanColumnCount() {
+		t.Fatalf("hit regions: cards=%d headers=%d bodies=%d", cards, headers, bodies)
 	}
 }
 
@@ -255,6 +264,23 @@ func TestKanbanDoubleClickActivatesExactWorktree(t *testing.T) {
 	}
 	if p.attachedSession != "target" || p.selectedIdx != 1 {
 		t.Fatalf("activated session=%q selected=%d", p.attachedSession, p.selectedIdx)
+	}
+}
+
+func TestKanbanWheelTargetsHoveredColumn(t *testing.T) {
+	p := New()
+	p.shells = []*ShellSession{
+		{Name: "first"},
+		{Name: "second"},
+	}
+	p.kanbanCol = 1
+	action := mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 1, Region: &mouse.Region{
+		ID:   regionKanbanColumn,
+		Data: boardkanban.HitRegion{Kind: boardkanban.RegionColumnBody, Column: 0, Row: -1},
+	}}
+	p.handleMouseScroll(action)
+	if p.kanbanCol != 0 || p.kanbanRow != 1 {
+		t.Fatalf("wheel selection = column %d row %d, want column 0 row 1", p.kanbanCol, p.kanbanRow)
 	}
 }
 

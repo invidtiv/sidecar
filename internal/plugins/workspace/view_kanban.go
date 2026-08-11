@@ -41,7 +41,7 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionViewToggle, toggleX+len("List|"), 1, len("[Kanban]"), 1, 1)
 	for _, region := range result.Regions {
 		switch region.Kind {
-		case boardkanban.RegionColumn:
+		case boardkanban.RegionColumn, boardkanban.RegionColumnBody:
 			p.mouseHandler.HitMap.AddRect(regionKanbanColumn, region.X, region.Y, region.W, region.H, region)
 		case boardkanban.RegionCard:
 			p.mouseHandler.HitMap.AddRect(regionKanbanCard, region.X, region.Y, region.W, region.H, region)

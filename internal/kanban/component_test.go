@@ -195,33 +195,77 @@ func TestCellEmptyWithNoMessageRendersDimDot(t *testing.T) {
 	}
 }
 
-func TestOverflowIndicatorAppearsOnlyWhenCardsHiddenAndNeverInRegions(t *testing.T) {
+func TestOverflowUsesEveryCardSlotAndSelectionScrollsViewport(t *testing.T) {
 	cards := []Card{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}, {ID: "e"}}
 	var c Component
 	c.SetBoard(Board{Lanes: []Lane{{ID: "work", Label: "Work", Cards: cards}}})
-	result := c.Render(RenderOptions{Width: 40, Height: 14, Header: "Board", MinColumnWidth: 16, CardHeight: 4})
+	result := c.Render(RenderOptions{Width: 40, Height: 15, Header: "Board", MinColumnWidth: 16, CardHeight: 4})
 	plain := ansi.Strip(result.View)
-	if !strings.Contains(plain, "more") {
-		t.Fatalf("view lacks overflow indicator: %q", plain)
+	if !strings.Contains(plain, "↓ 3 more below") {
+		t.Fatalf("view lacks below indicator: %q", plain)
 	}
-	cardRegions := 0
+	if !strings.Contains(plain, "┃") {
+		t.Fatalf("view lacks scrollbar thumb: %q", plain)
+	}
+	var visible []string
 	for _, region := range result.Regions {
 		if region.Kind == RegionCard {
-			cardRegions++
-			if strings.Contains(region.CardID, "more") {
-				t.Fatalf("overflow indicator leaked into regions: %#v", region)
-			}
+			visible = append(visible, region.CardID)
 		}
 	}
-	if cardRegions != 1 {
-		t.Fatalf("card regions = %d, want 1 (overflow row must not be a region)", cardRegions)
+	if got, want := strings.Join(visible, ","), "a,b"; got != want {
+		t.Fatalf("visible cards = %s, want %s", got, want)
 	}
 
-	var full Component
-	full.SetBoard(Board{Lanes: []Lane{{ID: "work", Label: "Work", Cards: cards[:2]}}})
-	noOverflow := full.Render(RenderOptions{Width: 40, Height: 14, Header: "Board", MinColumnWidth: 16, CardHeight: 4})
-	if strings.Contains(ansi.Strip(noOverflow.View), "more") {
-		t.Fatalf("overflow indicator present without hidden cards: %q", noOverflow.View)
+	c.Select(Selection{Column: 0, Row: 4})
+	result = c.Render(RenderOptions{Width: 40, Height: 15, Header: "Board", MinColumnWidth: 16, CardHeight: 4})
+	visible = nil
+	for _, region := range result.Regions {
+		if region.Kind == RegionCard {
+			visible = append(visible, region.CardID)
+		}
+	}
+	if got, want := strings.Join(visible, ","), "d,e"; got != want {
+		t.Fatalf("scrolled cards = %s, want %s", got, want)
+	}
+	if strings.Contains(ansi.Strip(result.View), "more below") {
+		t.Fatalf("view still reports cards below at end of lane: %q", ansi.Strip(result.View))
+	}
+}
+
+func TestMoveInColumnTargetsHoveredLane(t *testing.T) {
+	var c Component
+	c.SetBoard(Board{Lanes: []Lane{
+		{ID: "left", Cards: []Card{{ID: "a"}, {ID: "b"}}},
+		{ID: "right", Cards: []Card{{ID: "c"}, {ID: "d"}, {ID: "e"}}},
+	}})
+	c.MoveInColumn(1, 2)
+	if got, want := c.Selection(), (Selection{Column: 1, Row: 2}); got != want {
+		t.Fatalf("selection = %#v, want %#v", got, want)
+	}
+}
+
+func TestSelectedStructuredCardDoesNotHighlightRowsPastItsContent(t *testing.T) {
+	card := Card{Lines: []Line{
+		{Spans: []Span{{Text: "one"}}},
+		{Spans: []Span{{Text: "two"}}},
+		{Spans: []Span{{Text: "three"}}},
+	}}
+	if got := defaultCardLine(card, 3, 12, true); strings.Contains(got, "\x1b[") {
+		t.Fatalf("blank row contains selection styling: %q", got)
+	}
+}
+
+func TestSelectedLaneHeaderUsesFullWidthBackgroundWithoutUnderline(t *testing.T) {
+	got := renderLaneHeader(Lane{ID: "work", Label: "WORK", Cards: []Card{{}}}, 20, true)
+	if strings.Contains(got, "\x1b[4m") {
+		t.Fatalf("selected header still underlined: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[48;") {
+		t.Fatalf("selected header lacks background styling: %q", got)
+	}
+	if width := ansi.StringWidth(got); width != 20 {
+		t.Fatalf("selected header width = %d, want 20", width)
 	}
 }
 
