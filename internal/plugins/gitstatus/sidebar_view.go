@@ -294,13 +294,24 @@ func (p *Plugin) renderSidebarSection(title string, entries []*FileEntry, lineNu
 		headerStyle = styles.StatusModified
 	}
 
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("%s (%d)", title, len(entries))))
+	// Available width for file names (-1 for scrollbar column)
+	maxWidth := p.sidebarWidth - 7 // Account for padding, cursor, and scrollbar
+
+	// Header: "Modified (17)" left, total +/− lines right-aligned when present.
+	// Line totals are free — already on each entry from numstat.
+	left := headerStyle.Render(fmt.Sprintf("%s (%d)", title, len(entries)))
+	adds, dels := sumDiffStats(entries)
+	right := formatSectionLineStats(adds, dels)
+	// Header sits in the same column as file rows (no status glyph); match
+	// entry content width so the stats column lines up with file +/−.
+	headerWidth := maxWidth
+	if headerWidth < 1 {
+		headerWidth = p.sidebarWidth - 4
+	}
+	sb.WriteString(renderRightAlignedPair(left, right, headerWidth))
 	sb.WriteString("\n")
 	*lineNum++
 	*currentY++
-
-	// Available width for file names (-1 for scrollbar column)
-	maxWidth := p.sidebarWidth - 7 // Account for padding, cursor, and scrollbar
 
 	for _, entry := range entries {
 		if *lineNum >= maxLines {
@@ -321,6 +332,41 @@ func (p *Plugin) renderSidebarSection(title string, entries []*FileEntry, lineNu
 	}
 
 	return sb.String()
+}
+
+// formatSectionLineStats styles aggregate +add/-del for a section header.
+// Returns empty when there are no counted lines (e.g. pure untracked).
+func formatSectionLineStats(additions, deletions int) string {
+	if additions == 0 && deletions == 0 {
+		return ""
+	}
+	return styles.DiffAdd.Render(fmt.Sprintf("+%d", additions)) +
+		styles.Muted.Render("/") +
+		styles.DiffRemove.Render(fmt.Sprintf("-%d", deletions))
+}
+
+// renderRightAlignedPair places left content at the start of the line and
+// right content flush-right within width. If they don't both fit, left is
+// truncated to make room for right (or right is dropped if width is tiny).
+func renderRightAlignedPair(left, right string, width int) string {
+	if width < 1 {
+		return left
+	}
+	if right == "" {
+		return truncateStyledLine(left, width)
+	}
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	gap := width - leftW - rightW
+	if gap >= 1 {
+		return left + strings.Repeat(" ", gap) + right
+	}
+	// Prefer keeping the stats visible when space is tight.
+	available := width - rightW - 1
+	if available < 6 {
+		return truncateStyledLine(left, width)
+	}
+	return truncateStyledLine(left, available) + " " + right
 }
 
 // renderSidebarEntry renders a single file entry in the sidebar.
@@ -422,7 +468,8 @@ func (p *Plugin) renderSidebarEntry(entry *FileEntry, selected bool, maxWidth in
 func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 	var sb strings.Builder
 
-	// Section header with push status and filter indicator
+	// Section header with push status, filter indicator, and total commit count
+	// (total is loaded async via rev-list --count; cheap for normal repos).
 	header := "Recent Commits"
 	if p.historyFilterActive {
 		// Show filter indicator
@@ -436,10 +483,15 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 		if len(filterParts) > 0 {
 			header = fmt.Sprintf("Commits %s", styles.StatusModified.Render("["+strings.Join(filterParts, ", ")+"]"))
 		}
-	} else if p.pushStatus != nil {
-		status := p.pushStatus.FormatAheadBehind()
-		if status != "" {
-			header = fmt.Sprintf("Recent Commits %s", styles.StatusModified.Render(status))
+	} else {
+		if p.totalCommitCountOK {
+			header = fmt.Sprintf("Recent Commits (%d)", p.totalCommitCount)
+		}
+		if p.pushStatus != nil {
+			status := p.pushStatus.FormatAheadBehind()
+			if status != "" {
+				header += " " + styles.StatusModified.Render(status)
+			}
 		}
 	}
 	// Add graph indicator if enabled

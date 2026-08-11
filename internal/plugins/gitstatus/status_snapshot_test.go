@@ -158,9 +158,76 @@ func TestRecentHistorySingleFlightCoalescesFollowUp(t *testing.T) {
 	if p.loadRecentCommits() != nil || !p.historyRefreshDirty {
 		t.Fatal("second history invalidation was not coalesced")
 	}
-	_, followUp := p.Update(first().(RecentCommitsLoadedMsg))
+	// loadRecentCommits batches history + commit-count; extract the history msg.
+	historyMsg := extractRecentCommitsLoaded(t, first)
+	_, followUp := p.Update(historyMsg)
 	if followUp == nil || p.activeHistoryRequestID != 2 || p.historyRefreshDirty {
 		t.Fatalf("history follow-up state: cmd=%v active=%d dirty=%v", followUp != nil, p.activeHistoryRequestID, p.historyRefreshDirty)
+	}
+}
+
+// extractRecentCommitsLoaded runs a tea.Cmd that may be a BatchMsg and returns
+// the RecentCommitsLoadedMsg produced by the history loader.
+func extractRecentCommitsLoaded(t *testing.T, cmd tea.Cmd) RecentCommitsLoadedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	msg := cmd()
+	if loaded, ok := msg.(RecentCommitsLoadedMsg); ok {
+		return loaded
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected RecentCommitsLoadedMsg or BatchMsg, got %T", msg)
+	}
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		inner := c()
+		if loaded, ok := inner.(RecentCommitsLoadedMsg); ok {
+			return loaded
+		}
+	}
+	t.Fatal("BatchMsg did not contain RecentCommitsLoadedMsg")
+	return RecentCommitsLoadedMsg{}
+}
+
+func TestCommitCountLoadedMsgUpdatesState(t *testing.T) {
+	p := snapshotPlugin(4)
+	_, cmd := p.Update(CommitCountLoadedMsg{Epoch: 4, Count: 1234, OK: true})
+	if cmd != nil {
+		t.Fatal("expected no follow-up cmd")
+	}
+	if !p.totalCommitCountOK || p.totalCommitCount != 1234 {
+		t.Fatalf("count state = %v/%d, want true/1234", p.totalCommitCountOK, p.totalCommitCount)
+	}
+	// Failed count must not clobber a good value.
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 4, OK: false})
+	if !p.totalCommitCountOK || p.totalCommitCount != 1234 {
+		t.Fatalf("failed load clobbered count: %v/%d", p.totalCommitCountOK, p.totalCommitCount)
+	}
+	// Stale epoch ignored.
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 1, Count: 9, OK: true})
+	if p.totalCommitCount != 1234 {
+		t.Fatalf("stale count applied: %d", p.totalCommitCount)
+	}
+}
+
+func TestLoadRecentCommitsBatchesCommitCount(t *testing.T) {
+	p := snapshotPlugin(5)
+	p.historyLoader = func(string, int) ([]*Commit, *PushStatus, error) {
+		return []*Commit{{Hash: "x"}}, nil, nil
+	}
+	cmd := p.loadRecentCommits()
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", msg)
+	}
+	if len(batch) < 2 {
+		t.Fatalf("expected history+count batch, got %d cmds", len(batch))
 	}
 }
 

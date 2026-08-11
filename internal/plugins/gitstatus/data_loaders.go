@@ -58,6 +58,8 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 }
 
 // loadRecentCommits loads recent commits for the sidebar with push status.
+// Also kicks off a separate total-commit-count load so a slow rev-list on a
+// huge monorepo cannot delay the commit list paint.
 func (p *Plugin) loadRecentCommits() tea.Cmd {
 	if p.activeHistoryRequestID != 0 {
 		p.historyRefreshDirty = true
@@ -72,12 +74,30 @@ func (p *Plugin) loadRecentCommits() tea.Cmd {
 	if loader == nil {
 		loader = GetCommitHistoryWithPushStatus
 	}
-	return func() tea.Msg {
+	historyCmd := func() tea.Msg {
 		commits, pushStatus, err := loader(workDir, commitHistoryPageSize)
 		if err != nil {
 			return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 		return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Commits: commits, PushStatus: pushStatus}
+	}
+	return tea.Batch(historyCmd, p.loadCommitCount())
+}
+
+// loadCommitCount fetches total commits reachable from HEAD in the background.
+// Safe to call often: rev-list --count is typically tens of ms.
+func (p *Plugin) loadCommitCount() tea.Cmd {
+	if p.repoRoot == "" {
+		return nil
+	}
+	epoch := p.ctx.Epoch
+	workDir := p.repoRoot
+	return func() tea.Msg {
+		n, err := GetCommitCount(workDir)
+		if err != nil {
+			return CommitCountLoadedMsg{Epoch: epoch, OK: false}
+		}
+		return CommitCountLoadedMsg{Epoch: epoch, Count: n, OK: true}
 	}
 }
 

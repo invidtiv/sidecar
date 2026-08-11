@@ -337,6 +337,25 @@ func GetCommitHistoryWithPushStatus(workDir string, limit int) ([]*Commit, *Push
 	return commits, pushStatus, nil
 }
 
+// GetCommitCount returns the total number of commits reachable from HEAD.
+// Uses `git rev-list --count HEAD`, which is typically cheap (tens of ms even
+// on mid-size repos). Call from a tea.Cmd so a pathological monorepo cannot
+// stall the UI; on failure (empty repo, no HEAD) return an error and leave
+// the count unset in the view.
+func GetCommitCount(workDir string) (int, error) {
+	cmd := gitReadOnly("rev-list", "--count", "HEAD")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // GetCommitHistoryWithOffset fetches commits starting from skip, up to limit.
 // Uses git log --skip=N to paginate through history.
 func GetCommitHistoryWithOffset(workDir string, limit, skip int) ([]*Commit, error) {

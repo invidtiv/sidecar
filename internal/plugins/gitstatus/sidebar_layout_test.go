@@ -1,6 +1,7 @@
 package gitstatus
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/mouse"
@@ -69,6 +70,104 @@ func makeCommitsWithHash(count int) []*Commit {
 		}
 	}
 	return commits
+}
+
+func TestRenderRightAlignedPair(t *testing.T) {
+	// Plain ASCII so lipgloss.Width matches len.
+	got := renderRightAlignedPair("Modified (2)", "+10/-3", 24)
+	want := "Modified (2)      +10/-3"
+	if got != want {
+		t.Fatalf("renderRightAlignedPair = %q, want %q", got, want)
+	}
+
+	// No right side: left only (may truncate).
+	got = renderRightAlignedPair("Staged (1)", "", 20)
+	if got != "Staged (1)" {
+		t.Fatalf("empty right: got %q", got)
+	}
+
+	// Tight width keeps stats when possible.
+	got = renderRightAlignedPair("Modified (17)", "+999/-999", 18)
+	if !strings.Contains(got, "+999/-999") {
+		t.Fatalf("expected stats preserved under tight width, got %q", got)
+	}
+}
+
+func TestFormatSectionLineStats_Empty(t *testing.T) {
+	if got := formatSectionLineStats(0, 0); got != "" {
+		t.Fatalf("expected empty for zero stats, got %q", got)
+	}
+	if got := formatSectionLineStats(1, 0); got == "" {
+		t.Fatal("expected non-empty for +1/-0")
+	}
+}
+
+func TestRenderSidebarSection_ShowsLineTotals(t *testing.T) {
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		tree: &FileTree{
+			Modified: []*FileEntry{
+				{Path: "a.go", Status: StatusModified, DiffStats: DiffStats{Additions: 10, Deletions: 2}},
+				{Path: "b.go", Status: StatusModified, DiffStats: DiffStats{Additions: 5, Deletions: 1}},
+			},
+		},
+		sidebarWidth: 40,
+		mouseHandler: handler,
+	}
+	lineNum, globalIdx, currentY := 0, 0, 0
+	out := p.renderSidebarSection("Modified", p.tree.Modified, &lineNum, &globalIdx, 10, &currentY)
+	// Strip ANSI for assertions
+	plain := stripANSI(out)
+	if !strings.Contains(plain, "Modified (2)") {
+		t.Fatalf("missing section title: %q", plain)
+	}
+	if !strings.Contains(plain, "+15") || !strings.Contains(plain, "-3") {
+		t.Fatalf("missing aggregate line stats: %q", plain)
+	}
+	// First line should end with the stats (right-aligned)
+	firstLine := strings.Split(plain, "\n")[0]
+	if !strings.HasSuffix(strings.TrimRight(firstLine, " "), "+15/-3") &&
+		!strings.Contains(firstLine, "+15/-3") {
+		t.Fatalf("first line should include aggregate stats, got %q", firstLine)
+	}
+}
+
+func TestRenderRecentCommits_ShowsTotalCount(t *testing.T) {
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		tree:               &FileTree{},
+		sidebarWidth:       40,
+		mouseHandler:       handler,
+		recentCommits:      makeCommitsWithHash(2),
+		totalCommitCount:   1558,
+		totalCommitCountOK: true,
+	}
+	y := 0
+	out := p.renderRecentCommits(&y, 5)
+	plain := stripANSI(out)
+	if !strings.Contains(plain, "Recent Commits (1558)") {
+		t.Fatalf("expected total count in header, got %q", plain)
+	}
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x1b {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func TestCommitHitRegions_CleanTree(t *testing.T) {
