@@ -87,14 +87,8 @@ github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0 h1:Az/dYXiTcwcRSe59Hzw4RI1rSnAZns+1msaCXetrMFE=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0/go.mod h1:VBtN8DXO7SNtyGmLiGA7IsFeKrBkQPze1/iAeM95arc=
-github.com/marcus/tasks v1.1.0 h1:wULEFd2wJiyMsdWCYM6fRGg51ZOfuVBdSeOtBnQZ//0=
-github.com/marcus/tasks v1.1.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
-github.com/marcus/tasks v1.2.0 h1:y7sYBal6oVEUBh9S0lc9sC1dnNupiq0I4beLKhfLRj0=
-github.com/marcus/tasks v1.2.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
-github.com/marcus/tasks v1.3.0 h1:zrCwHvT2WAWRKpTXarELeYQ+//IJQ7lSBhQmVoXaSq4=
-github.com/marcus/tasks v1.3.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
-github.com/marcus/tasks v1.5.0 h1:+OeK5fZF51UdKwt567p/OKPeCU1Jls7Ii5EJSErUg9U=
-github.com/marcus/tasks v1.5.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
+github.com/marcus/tasks v1.6.0 h1:27u/N9KvMxIV8kB/GdXiEpi94gvaHdlpecRnWWlGRs4=
+github.com/marcus/tasks v1.6.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
 github.com/marcus/td v0.56.0 h1:mUA5q6H4Hllru50XNa23qHlA5t87qL7eISdKKpzdHU8=
 github.com/marcus/td v0.56.0/go.mod h1:HI17rCBsF7yvTAdTJkH7j/sPrwOp6j3yRR+hGxeWMOY=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

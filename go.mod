@@ -47,7 +47,7 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/makeworld-the-better-one/dither/v2 v2.4.0 // indirect
-	github.com/marcus/tasks v1.5.0
+	github.com/marcus/tasks v1.6.0
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sixel v0.0.5 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
@@ -65,7 +65,7 @@ require (
 	golang.org/x/image v0.32.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.33.0 // indirect
 	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
