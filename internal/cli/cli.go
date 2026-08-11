@@ -22,11 +22,13 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 		return false, 0
 	}
 	if len(args) == 1 || isHelp(args[1]) {
-		fmt.Fprint(stdout, shellHelp)
+		if _, err := fmt.Fprint(stdout, shellHelp); err != nil {
+			return true, 1
+		}
 		return true, 0
 	}
 	if args[1] != "rename" {
-		fmt.Fprintf(stderr, "unknown shell command %q\n\n%s", args[1], shellHelp)
+		cliErrf(stderr, "unknown shell command %q\n\n%s", args[1], shellHelp)
 		return true, 2
 	}
 	return true, runShellRename(args[2:], stdout, stderr)
@@ -38,35 +40,37 @@ func runShellRename(args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		switch arg {
 		case "-h", "--help":
-			fmt.Fprint(stdout, renameHelp)
+			if _, err := fmt.Fprint(stdout, renameHelp); err != nil {
+				return 1
+			}
 			return 0
 		case "--json":
 			jsonOutput = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(stderr, "unknown option %q\n\n%s", arg, renameHelp)
+				cliErrf(stderr, "unknown option %q\n\n%s", arg, renameHelp)
 				return 2
 			}
 			positional = append(positional, arg)
 		}
 	}
 	if len(positional) != 1 {
-		fmt.Fprintf(stderr, "shell rename requires exactly one quoted display name\n\n%s", renameHelp)
+		cliErrf(stderr, "shell rename requires exactly one quoted display name\n\n%s", renameHelp)
 		return 2
 	}
 	name, err := shellstate.NormalizeName(positional[0])
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		cliErrln(stderr, err)
 		return 2
 	}
 	identity, err := currentShellIdentity(context.Background())
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		cliErrln(stderr, err)
 		return 1
 	}
 	result, err := shellstate.RenameCurrent(config.StateDir(), shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		cliErrln(stderr, err)
 		if shellstate.IsValidation(err) {
 			return 2
 		}
@@ -74,15 +78,29 @@ func runShellRename(args []string, stdout, stderr io.Writer) int {
 	}
 	if jsonOutput {
 		if err := json.NewEncoder(stdout).Encode(result); err != nil {
-			fmt.Fprintln(stderr, err)
+			cliErrln(stderr, err)
 			return 1
 		}
 	} else if result.Changed {
-		fmt.Fprintf(stdout, "Renamed current Sidecar shell %q to %q.\n", result.OldName, result.Name)
+		if _, err := fmt.Fprintf(stdout, "Renamed current Sidecar shell %q to %q.\n", result.OldName, result.Name); err != nil {
+			return 1
+		}
 	} else {
-		fmt.Fprintf(stdout, "Current Sidecar shell is already named %q.\n", result.Name)
+		if _, err := fmt.Fprintf(stdout, "Current Sidecar shell is already named %q.\n", result.Name); err != nil {
+			return 1
+		}
 	}
 	return 0
+}
+
+// cliErrf / cliErrln write usage and failure messages best-effort: the caller
+// already has a more specific exit code, and a broken stderr should not replace it.
+func cliErrf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
+func cliErrln(w io.Writer, a ...any) {
+	_, _ = fmt.Fprintln(w, a...)
 }
 
 type shellIdentity struct{ session, socket string }
