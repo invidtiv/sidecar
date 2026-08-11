@@ -95,7 +95,7 @@ func targetRow(t version.Target) string {
 		return line + styles.Muted.Render("  · "+t.Install.Method.String())
 	}
 	return line + styles.Muted.Render("  · manual") +
-		"\n" + styles.Muted.Render("      run: "+t.Install.ManualCommand)
+		"\n" + styles.Muted.Render("      update it yourself: "+t.Install.ManualCommand)
 }
 
 // previewChromeLines estimates everything in the preview other than the
@@ -297,8 +297,6 @@ func resultLabel(r version.Result) string {
 	switch r.Status {
 	case version.StatusUpdated:
 		return "updated to " + r.Version
-	case version.StatusUpToDate:
-		return "already current"
 	case version.StatusManual:
 		return "needs a manual update"
 	default:
@@ -399,7 +397,7 @@ func (m *Model) ensureUpdateCompleteModal() {
 		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
 			styles.Muted.Render(resultLabel(r)))
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("      run: "+r.Target.Install.ManualCommand)
+			row += "\n" + styles.Muted.Render("      update it yourself: "+r.Target.Install.ManualCommand)
 		}
 		rows = append(rows, row)
 	}
@@ -477,7 +475,7 @@ func (m *Model) ensureUpdateErrorModal() {
 			}
 		}
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("      run: "+r.Target.Install.ManualCommand)
+			row += "\n" + styles.Muted.Render("      update it yourself: "+r.Target.Install.ManualCommand)
 		}
 		rows = append(rows, row)
 	}

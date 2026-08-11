@@ -244,6 +244,12 @@ func TestStartUpdateBatch_EmptyPlan(t *testing.T) {
 	if m.updateInProgress {
 		t.Error("an empty plan must not report work in progress")
 	}
+	if m.updateModalState != UpdateModalComplete {
+		t.Errorf("an empty plan settles immediately, got %v", m.updateModalState)
+	}
+	if out := m.renderUpdateCompleteModal(); !strings.Contains(out, "Nothing to update") {
+		t.Errorf("completion should say there was nothing to do:\n%s", out)
+	}
 }
 
 // Every modal surface must stay inside the terminal at small sizes, for zero,
@@ -325,31 +331,90 @@ func TestSelectPlan_EnabledButNotInstalledIsNotPlanned(t *testing.T) {
 
 // A discovery result arriving while the confirmation is open must not rebuild
 // the modal out from under the user: the rebuilt modal has no focus until the
-// next frame, which previously made Enter do nothing.
+// next frame, which previously made Enter do nothing. This drives the real
+// Update branch, not a restatement of it.
 func TestProductStatus_DoesNotRebuildOpenPreview(t *testing.T) {
 	m := &Model{width: 80, height: 30, updateModalState: UpdateModalPreview}
 	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 	_ = m.renderUpdatePreviewModal()
 	built := m.updatePreviewModal
 
-	m.setProductStatus(version.ProductStatusMsg{
+	updated, _ := m.Update(version.ProductStatusMsg{
 		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
-	if m.updateModalState == UpdateModalPreview {
-		// mimic the Update branch that guards the rebuild
-		if m.updatePreviewModal != built {
-			t.Error("the open preview must not be rebuilt by a late discovery result")
-		}
+	after := updated.(Model)
+
+	if after.updatePreviewModal != built {
+		t.Error("the open preview must not be rebuilt by a late discovery result")
+	}
+	if after.updatePreviewModal.FocusedID() == "" {
+		t.Error("the open preview must keep its focus, or Enter would do nothing")
 	}
 }
 
-// Enter confirms the plan even if the modal was rebuilt since the last frame.
+// Once the preview is closed, a new discovery result does rebuild it.
+func TestProductStatus_RebuildsClosedPreview(t *testing.T) {
+	m := &Model{width: 80, height: 30, updateModalState: UpdateModalClosed}
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+	_ = m.renderUpdatePreviewModal()
+
+	updated, _ := m.Update(version.ProductStatusMsg{
+		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
+
+	if updated.(Model).updatePreviewModal != nil {
+		t.Error("a closed preview should be dropped so it rebuilds from the new plan")
+	}
+}
+
+// Retrying one failed product must neither re-run nor forget an upgrade that
+// already succeeded — including the restart claim that depends on it.
+func TestRetry_PreservesEarlierSuccess(t *testing.T) {
+	plan := []version.Target{
+		target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true),
+		target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true),
+	}
+	m := modelWithBatch(plan)
+	m.handleUpdateTargetResult(UpdateTargetResultMsg{PlanID: 7, Index: 0,
+		Result: version.Result{Target: plan[0], Status: version.StatusUpdated, Version: "0.96.0"}})
+	m.handleUpdateTargetResult(UpdateTargetResultMsg{PlanID: 7, Index: 1,
+		Result: version.Result{Target: plan[1], Status: version.StatusFailed, Err: errors.New("boom")}})
+
+	retry := version.RetryTargets(m.settledResults())
+	m.startUpdateBatch(retry)
+	m.updateInProgress = true
+	m.handleUpdateTargetResult(UpdateTargetResultMsg{PlanID: m.updatePlanID, Index: 0,
+		Result: version.Result{Target: retry[0], Status: version.StatusUpdated, Version: "1.6.0"}})
+
+	settled := m.settledResults()
+	if len(settled) != 2 {
+		t.Fatalf("expected both products in the settled set, got %d: %+v", len(settled), settled)
+	}
+	if settled[0].Target.Product != version.ProductSidecar || settled[0].Status != version.StatusUpdated {
+		t.Errorf("the earlier Sidecar success must survive the retry: %+v", settled[0])
+	}
+	if !m.needsRestart {
+		t.Error("Sidecar changed in this session, so a restart is still required after the retry")
+	}
+	if m.updateModalState != UpdateModalComplete {
+		t.Errorf("a fully successful retry should complete, got %v", m.updateModalState)
+	}
+}
+
+// Enter confirms the plan even when the modal was built since the last frame
+// and so has no focus list yet: the key handler primes it first.
 func TestPreviewEnterConfirms(t *testing.T) {
 	m := &Model{width: 80, height: 30, updateModalState: UpdateModalPreview}
 	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	m.ensureUpdatePreviewModal() // built but never rendered: no focus list yet
+	m.ensureUpdatePreviewModal() // built but never rendered
+	if m.updatePreviewModal.FocusedID() != "" {
+		t.Fatal("precondition: an unrendered modal has no focus")
+	}
 
-	action, _ := m.updatePreviewModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if action != "update" {
-		t.Fatalf("Enter should confirm the update, got %q", action)
+	_, _ = m.handleUpdateModalKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.updateModalState != UpdateModalProgress {
+		t.Fatalf("Enter should confirm the update, state is %v", m.updateModalState)
+	}
+	if len(m.updatePlan) != 1 || m.updatePlan[0].Product != version.ProductTd {
+		t.Errorf("confirmed plan = %+v", m.updatePlan)
 	}
 }

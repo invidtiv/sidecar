@@ -41,10 +41,9 @@ type Target struct {
 type ResultStatus string
 
 const (
-	StatusUpdated  ResultStatus = "updated"
-	StatusUpToDate ResultStatus = "up-to-date"
-	StatusManual   ResultStatus = "manual"
-	StatusFailed   ResultStatus = "failed"
+	StatusUpdated ResultStatus = "updated"
+	StatusManual  ResultStatus = "manual"
+	StatusFailed  ResultStatus = "failed"
 )
 
 // Result is the immutable outcome of attempting one target.
@@ -122,6 +121,9 @@ func DetectInstallation(ctx context.Context, env *Environment, d Descriptor, lat
 		inst.Detail = "not installed"
 		return inst
 	}
+	// Installed but unmanaged: never tell the user to install a second copy
+	// through a package manager that would shadow the one they run.
+	inst.ManualCommand = d.UnmanagedHint()
 	inst.ExecutablePath = path
 
 	if d.Formula != "" && ownedByHomebrew(ctx, env, d.Formula, path) {
@@ -141,12 +143,10 @@ func DetectInstallation(ctx context.Context, env *Environment, d Descriptor, lat
 		// No safe package set to install; never update part of a suite.
 		inst.Managed = false
 		inst.Detail = "no automated Go install for this product"
-		inst.ManualCommand = d.InstallHint()
 		return inst
 	}
 
 	inst.Detail = "unmanaged install at " + path
-	inst.ManualCommand = d.InstallHint()
 	return inst
 }
 
@@ -285,14 +285,18 @@ func Apply(ctx context.Context, env *Environment, t Target) Result {
 		return Result{Target: t, Status: StatusFailed, Err: fmt.Errorf("unknown product %q", t.Product)}
 	}
 
-	// Revalidate provenance immediately before touching anything: the target
-	// must still be what the user confirmed.
+	// Revalidate provenance immediately before touching anything. If the target
+	// no longer resolves to exactly what the user confirmed, refuse: running a
+	// different command against a different executable is never what they
+	// agreed to, even when that other install would also be updatable.
 	current := DetectInstallation(ctx, env, d, t.LatestVersion)
 	if current.Method != t.Install.Method || current.Managed != t.Install.Managed ||
 		current.ExecutablePath != t.Install.ExecutablePath {
 		t.Install = current
-		if !current.Managed {
-			return Result{Target: t, Status: StatusManual, Err: fmt.Errorf("install location changed since confirmation")}
+		return Result{
+			Target: t, Status: StatusManual,
+			Err: fmt.Errorf("%s now resolves to a different install than the one confirmed; nothing was changed",
+				d.DisplayName),
 		}
 	}
 
@@ -340,13 +344,13 @@ func brewReportsNoop(out string) bool {
 // expected version. A partially updated suite is a failure, not a success.
 func verifySuite(ctx context.Context, env *Environment, d Descriptor, want string) error {
 	for _, bin := range d.SuiteBinaries {
-		path, err := env.LookPath(bin)
+		path, err := env.LookPath(bin.Name)
 		if err != nil {
-			return fmt.Errorf("%s not found in PATH after update", bin)
+			return fmt.Errorf("%s not found in PATH after update", bin.Name)
 		}
-		out, err := env.Runner.Run(ctx, path, d.VersionArgs...)
+		out, err := env.Runner.Run(ctx, path, bin.VersionArgs...)
 		if err != nil {
-			return fmt.Errorf("%s is not executable after update: %v", bin, err)
+			return fmt.Errorf("%s is not executable after update: %v", bin.Name, err)
 		}
 		got := NormalizeVersion(out)
 		if !SameVersion(got, want) {
@@ -354,7 +358,7 @@ func verifySuite(ctx context.Context, env *Environment, d Descriptor, want strin
 				got = strings.TrimSpace(out)
 			}
 			return fmt.Errorf("%s reports %s after update, expected %s — update it manually with: %s",
-				bin, got, NormalizeVersion(want), d.InstallHint())
+				bin.Name, got, NormalizeVersion(want), d.InstallHint())
 		}
 	}
 	return nil
@@ -368,7 +372,7 @@ func InstalledVersion(ctx context.Context, env *Environment, d Descriptor) strin
 	if err != nil {
 		return ""
 	}
-	out, err := env.Runner.Run(ctx, path, d.VersionArgs...)
+	out, err := env.Runner.Run(ctx, path, d.VersionArgs()...)
 	if err != nil {
 		return ""
 	}

@@ -10,6 +10,13 @@ import (
 	"github.com/marcus/sidecar/internal/version"
 )
 
+const (
+	// metadataRefreshTimeout bounds the one package-manager metadata refresh.
+	metadataRefreshTimeout = 3 * time.Minute
+	// targetInstallTimeout bounds installing and verifying one product.
+	targetInstallTimeout = 15 * time.Minute
+)
+
 // UpdateBatchReadyMsg signals that package-manager metadata was refreshed and
 // the confirmed batch may start installing.
 type UpdateBatchReadyMsg struct {
@@ -117,12 +124,27 @@ func (m *Model) availableUpdateCount() int {
 // startUpdateBatch confirms a plan and begins running it. The plan is captured
 // immutably here; later discovery results cannot change what the user
 // confirmed.
+//
+// Results from an earlier batch for products this plan does not touch are
+// carried forward, so retrying one failed product neither re-runs nor forgets
+// an upgrade that already succeeded.
 func (m *Model) startUpdateBatch(plan []version.Target) tea.Cmd {
+	inPlan := make(map[version.ProductID]bool, len(plan))
+	for _, t := range plan {
+		inPlan[t.Product] = true
+	}
+	var carried []version.Result
+	for _, r := range m.settledResults() {
+		if !inPlan[r.Target.Product] {
+			carried = append(carried, r)
+		}
+	}
+
 	m.updatePlanID++
 	m.updatePlan = plan
+	m.updateCarried = carried
 	m.updateResults = nil
 	m.updateActiveIdx = 0
-	m.updateError = ""
 	m.updateInProgress = true
 	m.updateStartTime = time.Now()
 	m.updateModalState = UpdateModalProgress
@@ -137,9 +159,10 @@ func (m *Model) startUpdateBatch(plan []version.Target) tea.Cmd {
 	planID := m.updatePlanID
 	return tea.Batch(
 		m.startElapsedTimer(),
-		updateSpinnerTick(),
 		func() tea.Msg {
-			version.RefreshPackageMetadata(context.Background(), version.DefaultEnvironment(), plan)
+			ctx, cancel := context.WithTimeout(context.Background(), metadataRefreshTimeout)
+			defer cancel()
+			version.RefreshPackageMetadata(ctx, version.DefaultEnvironment(), plan)
 			return UpdateBatchReadyMsg{PlanID: planID}
 		},
 	)
@@ -161,7 +184,12 @@ func (m *Model) runUpdateTarget(planID, idx int) tea.Cmd {
 	}
 	target := m.updatePlan[idx]
 	return func() tea.Msg {
-		result := version.Apply(context.Background(), version.DefaultEnvironment(), target)
+		// The progress modal truthfully says the update cannot be cancelled, so
+		// a hung package manager must still end on its own rather than leaving
+		// that modal up forever.
+		ctx, cancel := context.WithTimeout(context.Background(), targetInstallTimeout)
+		defer cancel()
+		result := version.Apply(ctx, version.DefaultEnvironment(), target)
 		return UpdateTargetResultMsg{PlanID: planID, Index: idx, Result: result}
 	}
 }
@@ -204,16 +232,37 @@ func (m *Model) handleUpdateTargetResult(msg UpdateTargetResultMsg) tea.Cmd {
 	return m.finishUpdateBatch()
 }
 
+// settledResults is every target outcome the user should still be told about:
+// this batch's results plus anything carried over from an earlier one.
+func (m *Model) settledResults() []version.Result {
+	out := make([]version.Result, 0, len(m.updateCarried)+len(m.updateResults))
+	order := map[version.ProductID]int{
+		version.ProductSidecar: 0,
+		version.ProductTd:      1,
+		version.ProductTasks:   2,
+	}
+	for rank := 0; rank < 3; rank++ {
+		for _, set := range [][]version.Result{m.updateCarried, m.updateResults} {
+			for _, r := range set {
+				if order[r.Target.Product] == rank {
+					out = append(out, r)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // finishUpdateBatch settles the batch and picks the completion surface.
 func (m *Model) finishUpdateBatch() tea.Cmd {
+	results := m.settledResults()
 	m.updateInProgress = false
-	m.needsRestart = version.RestartRequired(m.updateResults)
+	// A Sidecar upgrade from an earlier batch still means this process is
+	// stale, so ask about the whole settled set, not just this batch.
+	m.needsRestart = version.RestartRequired(results)
 	m.clearUpdateResultModals()
 
-	failed := len(version.RetryTargets(m.updateResults)) > 0
-	if failed {
-		m.updateError = version.Summarize(m.updateResults)
-		m.statusIsError = true
+	if len(version.RetryTargets(results)) > 0 {
 		if m.updateModalState == UpdateModalProgress {
 			m.updateModalState = UpdateModalError
 		}
@@ -222,7 +271,7 @@ func (m *Model) finishUpdateBatch() tea.Cmd {
 	}
 
 	if m.updateModalState == UpdateModalClosed {
-		m.ShowToast(version.Summarize(m.updateResults), 10*time.Second)
+		m.ShowToast(version.Summarize(results), 10*time.Second)
 	}
 	return nil
 }
@@ -247,5 +296,25 @@ func (m *Model) updateToastSummary() string {
 			plan[0].DisplayName, plan[0].LatestVersion)
 	default:
 		return fmt.Sprintf("%d updates available! Press ! for details", len(plan))
+	}
+}
+
+// primeUpdateModalFocus renders the active update modal once if it has no
+// focus list yet. A modal builds its focusable elements during Render, so one
+// that was rebuilt since the last frame would otherwise swallow Enter.
+func (m *Model) primeUpdateModalFocus() {
+	switch m.updateModalState {
+	case UpdateModalPreview:
+		if m.updatePreviewModal != nil && m.updatePreviewModal.FocusedID() == "" {
+			_ = m.renderUpdatePreviewModal()
+		}
+	case UpdateModalComplete:
+		if m.updateCompleteModal != nil && m.updateCompleteModal.FocusedID() == "" {
+			_ = m.renderUpdateCompleteModal()
+		}
+	case UpdateModalError:
+		if m.updateErrorModal != nil && m.updateErrorModal.FocusedID() == "" {
+			_ = m.renderUpdateErrorModal()
+		}
 	}
 }

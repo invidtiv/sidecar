@@ -33,12 +33,15 @@ type Descriptor struct {
 	// Executable is the command used to read the installed version and to
 	// resolve install provenance.
 	Executable string
-	// SuiteBinaries lists every binary the release ships. A product is only
-	// verified as updated when all of them resolve to the released version;
-	// for Tasks that is the distribution contract.
-	SuiteBinaries []string
-	// VersionArgs are the arguments that make Executable print its version.
-	VersionArgs []string
+	// SuiteBinaries lists every binary the release ships, with the exact
+	// arguments each one accepts for printing its version. A product is only
+	// verified as updated when all of them report the released version; for
+	// Tasks that is the distribution contract.
+	//
+	// The arguments are per binary because they genuinely differ: `tasks` is
+	// subcommand-dispatched and wants `tasks version`, while `tasks-tui` and
+	// `tasks-api` parse flags and reject positional arguments.
+	SuiteBinaries []SuiteBinary
 
 	// Formula is the fully qualified Homebrew formula name.
 	Formula string
@@ -56,6 +59,21 @@ type Descriptor struct {
 	ReleasesURL string
 }
 
+// SuiteBinary is one executable a release ships.
+type SuiteBinary struct {
+	Name        string
+	VersionArgs []string
+}
+
+// VersionArgs returns the arguments that make the product's primary
+// executable print its version.
+func (d Descriptor) VersionArgs() []string {
+	if len(d.SuiteBinaries) == 0 {
+		return nil
+	}
+	return d.SuiteBinaries[0].VersionArgs
+}
+
 // SidecarDescriptor describes Sidecar itself.
 func SidecarDescriptor() Descriptor {
 	return Descriptor{
@@ -64,8 +82,7 @@ func SidecarDescriptor() Descriptor {
 		RepoOwner:     repoOwner,
 		RepoName:      repoName,
 		Executable:    "sidecar",
-		SuiteBinaries: []string{"sidecar"},
-		VersionArgs:   []string{"--version"},
+		SuiteBinaries: []SuiteBinary{{Name: "sidecar", VersionArgs: []string{"--version"}}},
 		Formula:       "marcus/tap/sidecar",
 		GoPackages:    []string{"github.com/marcus/sidecar/cmd/sidecar"},
 		GoLdflags:     true,
@@ -82,8 +99,7 @@ func TdDescriptor() Descriptor {
 		RepoOwner:     tdRepoOwner,
 		RepoName:      tdRepoName,
 		Executable:    "td",
-		SuiteBinaries: []string{"td"},
-		VersionArgs:   []string{"version", "--short"},
+		SuiteBinaries: []SuiteBinary{{Name: "td", VersionArgs: []string{"version", "--short"}}},
 		Formula:       "marcus/tap/td",
 		GoPackages:    []string{"github.com/marcus/td"},
 		CacheFile:     tdCacheFile,
@@ -94,14 +110,19 @@ func TdDescriptor() Descriptor {
 // TasksDescriptor describes the standalone Tasks command suite.
 func TasksDescriptor() Descriptor {
 	return Descriptor{
-		Product:       ProductTasks,
-		DisplayName:   "Tasks",
-		RepoOwner:     tasksRepoOwner,
-		RepoName:      tasksRepoName,
-		Executable:    "tasks",
-		SuiteBinaries: []string{"tasks", "tasks-tui", "tasks-api"},
-		VersionArgs:   []string{"--version"},
-		Formula:       "marcus/tap/tasks",
+		Product:     ProductTasks,
+		DisplayName: "Tasks",
+		RepoOwner:   tasksRepoOwner,
+		RepoName:    tasksRepoName,
+		Executable:  "tasks",
+		SuiteBinaries: []SuiteBinary{
+			// `tasks version`, not `tasks --version`: the CLI dispatches on the
+			// first argument and rejects an unknown one.
+			{Name: "tasks", VersionArgs: []string{"version"}},
+			{Name: "tasks-tui", VersionArgs: []string{"--version"}},
+			{Name: "tasks-api", VersionArgs: []string{"--version"}},
+		},
+		Formula: "marcus/tap/tasks",
 		GoPackages: []string{
 			"github.com/marcus/tasks/cmd/tasks",
 			"github.com/marcus/tasks/cmd/tasks-tui",
@@ -125,14 +146,22 @@ func DescriptorFor(id ProductID) (Descriptor, bool) {
 	return Descriptor{}, false
 }
 
-// InstallHint is the supported way to install a product that is missing.
-// Sidecar never runs these: turning an update confirmation into a new product
-// installation is a separate decision.
+// InstallHint is the supported way to install a product that is not installed
+// at all. Sidecar never runs it: turning an update confirmation into a new
+// product installation is a separate decision.
 func (d Descriptor) InstallHint() string {
 	if d.Formula == "" {
 		return d.ReleasesURL
 	}
 	return "brew install " + d.Formula
+}
+
+// UnmanagedHint is what to tell someone whose installed copy Sidecar does not
+// manage — a downloaded binary, a packaged build, or an active development
+// selector. Deliberately not `brew install`: that would create a second,
+// shadowing installation rather than updating the one they actually run.
+func (d Descriptor) UnmanagedHint() string {
+	return d.ReleasesURL
 }
 
 var semverPattern = regexp.MustCompile(`\d+\.\d+(\.\d+)?`)

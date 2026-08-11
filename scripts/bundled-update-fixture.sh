@@ -53,19 +53,47 @@ mkdir -p "$ROOT/bin" "$ROOT/cellar" "$ROOT/log" "$ROOT/elsewhere"
 
 # --- fake product binaries -------------------------------------------------
 # Each keg holds a script that prints the version its directory is named for,
-# in the same shape as the real command.
-make_keg() {
-    local name="$1" ver="$2" fmt="$3"
-    local dir="$ROOT/cellar/$name/$ver/bin"
-    mkdir -p "$dir"
-    for bin in ${4:-$name}; do
-        printf '#!/bin/bash\nprintf "%s\\n" "$(printf "%s" "%s")"\n' "$fmt" "$ver" > "$dir/$bin"
-        # shellcheck disable=SC2059
-        cat > "$dir/$bin" <<EOF
+# in the same shape as the real command — and, importantly, only for the exact
+# arguments that real command accepts. A fake that answered any argv would let
+# a wrong version invocation pass the proof unnoticed.
+version_args_for() {
+    case "$1" in
+        tasks) echo "version" ;;
+        td)    echo "version --short" ;;
+        *)     echo "--version" ;;
+    esac
+}
+
+version_output_for() {
+    case "$1" in
+        tasks|tasks-tui|tasks-api) echo "$1 %s" ;;
+        *)                         echo "%s" ;;
+    esac
+}
+
+write_fake_binary() {
+    local path="$1" bin="$2" ver="$3"
+    local want fmt
+    want="$(version_args_for "$bin")"
+    fmt="$(version_output_for "$bin")"
+    cat > "$path" <<EOF
 #!/bin/bash
+# Fixture stand-in for $bin. Accepts only the real command's version arguments.
+if [ "\$*" != "$want" ]; then
+    echo "$bin: unexpected arguments: \$*" >&2
+    exit 1
+fi
 printf '$fmt\n' '$ver'
 EOF
-        chmod +x "$dir/$bin"
+    chmod +x "$path"
+}
+
+make_keg() {
+    local name="$1" ver="$2"
+    local dir="$ROOT/cellar/$name/$ver/bin"
+    mkdir -p "$dir"
+    for bin in ${3:-$name}; do
+        write_fake_binary "$dir/$bin" "$bin" "$ver"
     done
     echo "$dir"
 }
@@ -79,7 +107,7 @@ link_bin() {
 install_sidecar() {
     local ver="$1"
     local dir
-    dir="$(make_keg sidecar "$ver" '%s')"
+    dir="$(make_keg sidecar "$ver")"
     link_bin sidecar "$dir"
 }
 
@@ -87,15 +115,11 @@ install_td() {
     local ver="$1" where="${2:-cellar}"
     if [ "$where" = "cellar" ]; then
         local dir
-        dir="$(make_keg td "$ver" '%s')"
+        dir="$(make_keg td "$ver")"
         link_bin td "$dir"
     else
         # An install Sidecar does not manage: outside any cellar or Go bin.
-        cat > "$ROOT/elsewhere/td" <<EOF
-#!/bin/bash
-printf '$ver\n'
-EOF
-        chmod +x "$ROOT/elsewhere/td"
+        write_fake_binary "$ROOT/elsewhere/td" td "$ver"
         ln -sfn "$ROOT/elsewhere/td" "$ROOT/bin/td"
     fi
 }
@@ -103,7 +127,7 @@ EOF
 install_tasks() {
     local ver="$1"
     local dir
-    dir="$(make_keg tasks "$ver" 'tasks version %s' 'tasks tasks-tui tasks-api')"
+    dir="$(make_keg tasks "$ver" 'tasks tasks-tui tasks-api')"
     link_bin tasks "$dir"
     link_bin tasks-tui "$dir"
     link_bin tasks-api "$dir"
@@ -173,17 +197,29 @@ case "\${1:-}" in
             tasks) bins="tasks tasks-tui tasks-api" ;;
             *)     bins="\$name" ;;
         esac
-        case "\$name" in
-            tasks) fmt='tasks version %s' ;;
-            *)     fmt='%s' ;;
-        esac
         # An optional delay makes the per-product progress display observable
         # in a driven capture; real package managers are never this fast.
         [ "\$SLOW" = "1" ] && sleep 3
         dir="\$ROOT/cellar/\$name/\$latest/bin"
         mkdir -p "\$dir"
         for b in \$bins; do
-            printf '#!/bin/bash\nprintf "%s\\\\n" "%s"\n' "\$fmt" "\$latest" > "\$dir/\$b"
+            case "\$b" in
+                tasks) want="version" ;;
+                td)    want="version --short" ;;
+                *)     want="--version" ;;
+            esac
+            case "\$b" in
+                tasks|tasks-tui|tasks-api) fmt="\$b %s" ;;
+                *)                         fmt="%s" ;;
+            esac
+            cat > "\$dir/\$b" <<INNER
+#!/bin/bash
+if [ "\\\$*" != "\$want" ]; then
+    echo "\$b: unexpected arguments: \\\$*" >&2
+    exit 1
+fi
+printf '\$fmt\\n' '\$latest'
+INNER
             chmod +x "\$dir/\$b"
             ln -sfn "\$dir/\$b" "\$ROOT/bin/\$b"
         done

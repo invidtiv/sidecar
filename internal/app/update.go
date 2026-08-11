@@ -334,13 +334,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case UpdateSpinnerTickMsg:
-		if m.updateInProgress {
-			m.updateSpinnerFrame = (m.updateSpinnerFrame + 1) % 10
-			return m, updateSpinnerTick()
-		}
-		return m, nil
-
 	case ToastMsg:
 		m.ShowToast(msg.Message, msg.Duration)
 		m.statusIsError = msg.IsError
@@ -1852,6 +1845,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Route to modal for Tab/Shift+Tab/Enter/Esc
 		m.ensureUpdatePreviewModal()
+		m.primeUpdateModalFocus()
 		if m.updatePreviewModal != nil {
 			action, cmd := m.updatePreviewModal.HandleKey(msg)
 			switch action {
@@ -1881,6 +1875,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Route to modal for Tab/Shift+Tab/Enter/Esc
 		m.ensureUpdateCompleteModal()
+		m.primeUpdateModalFocus()
 		if m.updateCompleteModal != nil {
 			action, cmd := m.updateCompleteModal.HandleKey(msg)
 			switch action {
@@ -1910,6 +1905,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Route to modal for Tab/Shift+Tab/Enter/Esc
 		m.ensureUpdateErrorModal()
+		m.primeUpdateModalFocus()
 		if m.updateErrorModal != nil {
 			action, cmd := m.updateErrorModal.HandleKey(msg)
 			switch action {

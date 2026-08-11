@@ -246,10 +246,10 @@ func TestInstallCommands(t *testing.T) {
 // binaries.
 func TestApply_TasksHomebrewSuite(t *testing.T) {
 	fake := newFakeEnv()
-	for _, bin := range []string{"tasks", "tasks-tui", "tasks-api"} {
-		path := "/opt/homebrew/Cellar/tasks/1.6.0/bin/" + bin
-		fake.paths[bin] = path
-		fake.outputs[path+" --version"] = bin + " version 1.6.0"
+	for _, bin := range TasksDescriptor().SuiteBinaries {
+		path := "/opt/homebrew/Cellar/tasks/1.6.0/bin/" + bin.Name
+		fake.paths[bin.Name] = path
+		fake.outputs[path+" "+strings.Join(bin.VersionArgs, " ")] = bin.Name + " 1.6.0"
 	}
 	fake.outputs["brew --cellar marcus/tap/tasks"] = "/opt/homebrew/Cellar/tasks\n"
 	fake.outputs["brew upgrade marcus/tap/tasks"] = "==> Upgrading marcus/tap/tasks"
@@ -285,14 +285,14 @@ func TestApply_TasksHomebrewSuite(t *testing.T) {
 // A partially updated suite is a failure, never a success.
 func TestApply_PartialSuiteFails(t *testing.T) {
 	fake := newFakeEnv()
-	for _, bin := range []string{"tasks", "tasks-tui"} {
-		path := "/opt/homebrew/Cellar/tasks/1.6.0/bin/" + bin
-		fake.paths[bin] = path
-		fake.outputs[path+" --version"] = bin + " version 1.6.0"
+	for _, bin := range TasksDescriptor().SuiteBinaries[:2] {
+		path := "/opt/homebrew/Cellar/tasks/1.6.0/bin/" + bin.Name
+		fake.paths[bin.Name] = path
+		fake.outputs[path+" "+strings.Join(bin.VersionArgs, " ")] = bin.Name + " 1.6.0"
 	}
 	stale := "/usr/local/bin/tasks-api"
 	fake.paths["tasks-api"] = stale
-	fake.outputs[stale+" --version"] = "tasks-api version 1.5.0"
+	fake.outputs[stale+" --version"] = "tasks-api 1.5.0"
 	fake.outputs["brew --cellar marcus/tap/tasks"] = "/opt/homebrew/Cellar/tasks\n"
 	fake.outputs["brew upgrade marcus/tap/tasks"] = "==> Upgrading"
 
@@ -460,5 +460,111 @@ func TestSummarize(t *testing.T) {
 	})
 	if got != "2 updated; Tasks failed" {
 		t.Errorf("Summarize() = %q", got)
+	}
+}
+
+// The released CLIs disagree about how to ask for a version: `tasks` dispatches
+// on a subcommand and rejects an unknown first argument, while `tasks-tui` and
+// `tasks-api` parse flags and reject positional arguments. Getting this wrong
+// makes the product look like a development build and silently disables its
+// update path, so the exact arguments are pinned here.
+func TestDescriptorVersionArgs(t *testing.T) {
+	want := map[string][]string{
+		"sidecar":   {"--version"},
+		"td":        {"version", "--short"},
+		"tasks":     {"version"},
+		"tasks-tui": {"--version"},
+		"tasks-api": {"--version"},
+	}
+	for _, d := range []Descriptor{SidecarDescriptor(), TdDescriptor(), TasksDescriptor()} {
+		for _, bin := range d.SuiteBinaries {
+			got := strings.Join(bin.VersionArgs, " ")
+			if exp := strings.Join(want[bin.Name], " "); got != exp {
+				t.Errorf("%s version args = %q, want %q", bin.Name, got, exp)
+			}
+		}
+		if strings.Join(d.VersionArgs(), " ") != strings.Join(d.SuiteBinaries[0].VersionArgs, " ") {
+			t.Errorf("%s: VersionArgs() should be the primary binary's args", d.Product)
+		}
+	}
+}
+
+// Verification asks every binary in its own dialect.
+func TestApply_VerifiesEachBinaryWithItsOwnArgs(t *testing.T) {
+	fake := newFakeEnv()
+	for _, bin := range TasksDescriptor().SuiteBinaries {
+		path := "/opt/homebrew/Cellar/tasks/1.6.0/bin/" + bin.Name
+		fake.paths[bin.Name] = path
+		fake.outputs[path+" "+strings.Join(bin.VersionArgs, " ")] = bin.Name + " 1.6.0"
+	}
+	fake.outputs["brew --cellar marcus/tap/tasks"] = "/opt/homebrew/Cellar/tasks\n"
+	fake.outputs["brew upgrade marcus/tap/tasks"] = "==> Upgrading"
+
+	res := Apply(context.Background(), fake.env(), Target{
+		Product: ProductTasks, DisplayName: "Tasks", LatestVersion: "v1.6.0",
+		Install: Installation{Method: InstallMethodHomebrew, Managed: true,
+			ExecutablePath: "/opt/homebrew/Cellar/tasks/1.6.0/bin/tasks"},
+	})
+	if res.Status != StatusUpdated {
+		t.Fatalf("expected updated, got %s (%v)", res.Status, res.Err)
+	}
+	for _, want := range []string{
+		"/opt/homebrew/Cellar/tasks/1.6.0/bin/tasks version",
+		"/opt/homebrew/Cellar/tasks/1.6.0/bin/tasks-tui --version",
+		"/opt/homebrew/Cellar/tasks/1.6.0/bin/tasks-api --version",
+	} {
+		if !fake.ran(want) {
+			t.Errorf("expected %q to be run; ran %v", want, fake.calls)
+		}
+	}
+}
+
+// An installed copy Sidecar does not manage must never be told to `brew
+// install`: that creates a second, shadowing installation.
+func TestUnmanagedHintDoesNotInstallASecondCopy(t *testing.T) {
+	fake := newFakeEnv()
+	fake.paths["sidecar"] = "/Users/x/.local/bin/sidecar"
+	fake.self = "/Users/x/.local/bin/sidecar"
+	fake.errs["brew --cellar marcus/tap/sidecar"] = fmt.Errorf("no keg")
+	fake.errs["brew --prefix marcus/tap/sidecar"] = fmt.Errorf("no keg")
+
+	inst := DetectInstallation(context.Background(), fake.env(), SidecarDescriptor(), "v0.96.0")
+
+	if inst.Managed {
+		t.Fatal("a downloaded binary must not be managed")
+	}
+	if strings.Contains(inst.ManualCommand, "brew install") {
+		t.Errorf("unmanaged install must not be told to brew install: %q", inst.ManualCommand)
+	}
+	if !strings.Contains(inst.ManualCommand, "releases") {
+		t.Errorf("unmanaged install should point at releases: %q", inst.ManualCommand)
+	}
+}
+
+// Provenance that changed since confirmation is refused outright, even when
+// the new location would also be updatable.
+func TestApply_RefusesDifferentManagedProvenance(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	fake := newFakeEnv()
+	fake.paths["td"] = home + "/go/bin/td"
+	fake.errs["brew --cellar marcus/tap/td"] = fmt.Errorf("no keg")
+	fake.errs["brew --prefix marcus/tap/td"] = fmt.Errorf("no keg")
+
+	res := Apply(context.Background(), fake.env(), Target{
+		Product: ProductTd, DisplayName: "td", LatestVersion: "v1.3.0",
+		Install: Installation{Method: InstallMethodHomebrew, Managed: true,
+			ExecutablePath: "/opt/homebrew/Cellar/td/1.2.0/bin/td"},
+	})
+
+	if res.Status != StatusManual {
+		t.Fatalf("expected refusal, got %s", res.Status)
+	}
+	for _, c := range fake.calls {
+		if strings.HasPrefix(c, "go install") || strings.HasPrefix(c, "brew upgrade") {
+			t.Errorf("must not run an unconfirmed command: %q", c)
+		}
 	}
 }

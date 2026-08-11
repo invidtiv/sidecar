@@ -127,7 +127,7 @@ When you confirm an update from the update modal, sidecar updates the products n
 - Homebrew: one `brew update` for the batch, then `brew upgrade marcus/tap/sidecar`, `brew upgrade marcus/tap/td`, and/or `brew upgrade marcus/tap/tasks`.
 - `go install`: `go install github.com/marcus/sidecar/cmd/sidecar@<version>`, `go install github.com/marcus/td@<version>`, and/or `go install github.com/marcus/tasks/cmd/{tasks,tasks-tui,tasks-api}@<version>`.
 
-These commands make their own network requests to Homebrew or the Go module proxy. After each product, sidecar runs the updated binaries with their version flag to verify the exact installed version.
+These commands make their own network requests to Homebrew or the Go module proxy. After each product, sidecar runs every binary that release ships with that binary's own version command (`tasks version`, `tasks-tui --version`, `td version --short`, and so on) to verify the exact installed version.
 
 Sidecar never installs a product you do not already have, and never overwrites an executable it does not recognise as Homebrew- or `go install`-managed (for example an active local development build). Those are reported with a manual command instead. No update runs until you choose **Update**.
 

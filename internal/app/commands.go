@@ -120,9 +120,6 @@ func FocusPlugin(pluginID string) tea.Cmd {
 	}
 }
 
-// UpdateSpinnerTickMsg triggers spinner animation during update.
-type UpdateSpinnerTickMsg struct{}
-
 // UpdateModalState represents the current state of the update modal.
 type UpdateModalState int
 
@@ -147,13 +144,6 @@ type ChangelogLoadedMsg struct {
 // Used to restore terminal state (mouse support) after returning from vim/etc.
 type EditorReturnedMsg struct {
 	Err error
-}
-
-// updateSpinnerTick returns a command that ticks the spinner every 100ms.
-func updateSpinnerTick() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-		return UpdateSpinnerTickMsg{}
-	})
 }
 
 // SwitchToMainWorktreeMsg requests switching to the main worktree.

@@ -282,10 +282,8 @@ type Model struct {
 	updateNotes    string // Sidecar release notes; they describe Sidecar only
 
 	// Update feature state
-	updateInProgress   bool
-	updateError        string
-	needsRestart       bool
-	updateSpinnerFrame int
+	updateInProgress bool
+	needsRestart     bool
 
 	// Confirmed batch. updatePlan is immutable once confirmed; updateResults
 	// records the settled outcome of every attempted target so a later failure
@@ -293,6 +291,7 @@ type Model struct {
 	// messages from an abandoned or superseded batch.
 	updatePlan      []version.Target
 	updateResults   []version.Result
+	updateCarried   []version.Result // outcomes carried over from an earlier batch
 	updatePlanID    int
 	updateActiveIdx int
 
