@@ -17,6 +17,7 @@ import (
 type routerTestPlugin struct {
 	nativeTestPlugin
 
+	id        string
 	context   string
 	blocks    bool
 	textInput bool
@@ -46,7 +47,13 @@ func newRouterPlugin(claimed ...string) *routerTestPlugin {
 	return p
 }
 
-func (p *routerTestPlugin) ID() string           { return "tasks" }
+func (p *routerTestPlugin) ID() string {
+	if p.id != "" {
+		return p.id
+	}
+	return "tasks"
+}
+
 func (p *routerTestPlugin) FocusContext() string { return p.context }
 func (p *routerTestPlugin) ConsumesTextInput() bool {
 	return p.textInput
@@ -399,6 +406,38 @@ func TestPasteReachesATextInputPlugin(t *testing.T) {
 
 	if len(p.keys) != 1 || p.keys[0] != "paste:schedule 1 @home ? #tag" {
 		t.Fatalf("plugin received %v, want the whole pasted string", p.keys)
+	}
+}
+
+// A paste belongs to the focused tab alone. Broadcasting it put the same text
+// into every background plugin's text input, so pasting into a workspace
+// terminal also typed into the Tasks prompt.
+func TestPasteReachesOnlyTheActivePlugin(t *testing.T) {
+	active := newRouterPlugin()
+	active.id = "workspace"
+	active.context = "workspace-interactive"
+	background := newRouterPlugin()
+	background.textInput = true
+	background.context = "tasks-prompt"
+
+	reg := plugin.NewRegistry(nil)
+	for _, p := range []*routerTestPlugin{active, background} {
+		if err := reg.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := routerTestModel(t, active)
+	m.registry = reg
+	m.activePlugin = 0
+	m.updateContext()
+
+	m.handlePaste(tea.PasteMsg{Content: "ls -la"})
+
+	if len(active.keys) != 1 || active.keys[0] != "paste:ls -la" {
+		t.Fatalf("active plugin received %v, want the paste", active.keys)
+	}
+	if len(background.keys) != 0 {
+		t.Fatalf("background plugin received %v, want nothing", background.keys)
 	}
 }
 

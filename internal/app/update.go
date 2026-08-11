@@ -64,8 +64,8 @@ func offsetMouseY(msg tea.MouseMsg, dy int) tea.MouseMsg {
 }
 
 // handlePaste routes a bracketed-paste message into the active text-input modal
-// (mirroring the per-modal key routing in handleKeyMsg), or forwards it to all
-// plugins when no app-level text-input modal is open. textinput.Update handles
+// (mirroring the per-modal key routing in handleKeyMsg), or forwards it to the
+// active plugin when no app-level text-input modal is open. textinput.Update handles
 // tea.PasteMsg natively in v2.
 func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	switch m.activeModal() {
@@ -121,18 +121,11 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// No app-level text-input modal active: forward to all plugins so the
-	// focused plugin (e.g. the notes editor textarea) receives the paste.
-	var cmds []tea.Cmd
-	plugins := m.registry.Plugins()
-	for i, p := range plugins {
-		newPlugin, cmd := p.Update(msg)
-		plugins[i] = newPlugin
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	return m, tea.Batch(cmds...)
+	// No app-level text-input modal active: hand the paste to the active plugin
+	// only, exactly as keys are routed. Broadcasting it instead dropped the same
+	// text into every background plugin's text input — a paste into a workspace
+	// terminal also landed in the Tasks prompt.
+	return m.forwardKeyToPlugin(msg)
 }
 
 // Update handles all messages and returns the updated model and commands.
