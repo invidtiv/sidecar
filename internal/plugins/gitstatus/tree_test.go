@@ -140,6 +140,41 @@ func TestDiffStats(t *testing.T) {
 	}
 }
 
+func TestSumDiffStats(t *testing.T) {
+	entries := []*FileEntry{
+		{DiffStats: DiffStats{Additions: 10, Deletions: 2}},
+		{DiffStats: DiffStats{Additions: 0, Deletions: 5}},
+		{DiffStats: DiffStats{Additions: 3, Deletions: 0}},
+	}
+	add, del := sumDiffStats(entries)
+	if add != 13 || del != 7 {
+		t.Fatalf("sumDiffStats = +%d/-%d, want +13/-7", add, del)
+	}
+	if add, del := sumDiffStats(nil); add != 0 || del != 0 {
+		t.Fatalf("sumDiffStats(nil) = +%d/-%d, want +0/-0", add, del)
+	}
+}
+
+func TestModifiedStats(t *testing.T) {
+	tree := &FileTree{
+		Staged: []*FileEntry{
+			{DiffStats: DiffStats{Additions: 100, Deletions: 50}},
+		},
+		Modified: []*FileEntry{
+			{DiffStats: DiffStats{Additions: 4, Deletions: 1}},
+			{DiffStats: DiffStats{Additions: 6, Deletions: 2}},
+		},
+	}
+	add, del := tree.ModifiedStats()
+	if add != 10 || del != 3 {
+		t.Fatalf("ModifiedStats = +%d/-%d, want +10/-3", add, del)
+	}
+	add, del = tree.StagedStats()
+	if add != 100 || del != 50 {
+		t.Fatalf("StagedStats = +%d/-%d, want +100/-50", add, del)
+	}
+}
+
 func TestParseOrdinaryEntry_AllStatuses(t *testing.T) {
 	tree := &FileTree{}
 

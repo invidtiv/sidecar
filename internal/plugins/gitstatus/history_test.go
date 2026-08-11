@@ -193,6 +193,33 @@ func TestCommitStats_Fields(t *testing.T) {
 	}
 }
 
+func TestGetCommitCount(t *testing.T) {
+	workDir := findRepoRoot(t)
+	n, err := GetCommitCount(workDir)
+	if err != nil {
+		t.Fatalf("GetCommitCount: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("GetCommitCount = %d, want >= 1 for this repo", n)
+	}
+	// Cross-check against a second call (stable).
+	n2, err := GetCommitCount(workDir)
+	if err != nil || n2 != n {
+		t.Fatalf("second GetCommitCount = %d/%v, want %d", n2, err, n)
+	}
+}
+
+func TestGetCommitCount_EmptyRepo(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+	// No commits yet — rev-list --count HEAD should fail.
+	if _, err := GetCommitCount(dir); err == nil {
+		t.Fatal("expected error for empty repo with no HEAD")
+	}
+}
+
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	workDir, err := os.Getwd()

@@ -77,6 +77,8 @@ type Plugin struct {
 	commitScrollOff      int       // Scroll offset for commits section in sidebar
 	loadingMoreCommits   bool      // Prevents duplicate load-more requests
 	moreCommitsAvailable bool      // Whether more commits are available to load
+	totalCommitCount     int       // Total commits in repo (from rev-list --count)
+	totalCommitCountOK   bool      // True once a successful count has been loaded
 
 	// Inline diff state (for three-pane view)
 	selectedDiffFile     string        // File being previewed in diff pane
@@ -713,6 +715,16 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.cursor = maxCursor
 		}
 		return p, tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
+
+	case CommitCountLoadedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.OK {
+			p.totalCommitCount = msg.Count
+			p.totalCommitCountOK = true
+		}
+		return p, nil
 
 	case MoreCommitsLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1571,6 +1583,18 @@ type RecentCommitsLoadedMsg struct {
 
 // GetEpoch implements plugin.EpochMessage.
 func (m RecentCommitsLoadedMsg) GetEpoch() uint64 { return m.Epoch }
+
+// CommitCountLoadedMsg is sent when total repo commit count is available.
+// Loaded independently of the commit page so a slow rev-list never delays
+// the infinite-scroll list.
+type CommitCountLoadedMsg struct {
+	Epoch uint64
+	Count int
+	OK    bool
+}
+
+// GetEpoch implements plugin.EpochMessage.
+func (m CommitCountLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // MoreCommitsLoadedMsg is sent when additional commits are fetched for infinite scroll.
 type MoreCommitsLoadedMsg struct {

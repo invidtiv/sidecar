@@ -495,7 +495,18 @@ func (t *FileTree) HasStagedFiles() bool {
 
 // StagedStats returns total additions and deletions for staged files.
 func (t *FileTree) StagedStats() (additions, deletions int) {
-	for _, e := range t.Staged {
+	return sumDiffStats(t.Staged)
+}
+
+// ModifiedStats returns total additions and deletions for modified (unstaged) files.
+func (t *FileTree) ModifiedStats() (additions, deletions int) {
+	return sumDiffStats(t.Modified)
+}
+
+// sumDiffStats totals +/− line counts across entries. Free: stats are already
+// loaded per-file via numstat when the tree is built.
+func sumDiffStats(entries []*FileEntry) (additions, deletions int) {
+	for _, e := range entries {
 		additions += e.DiffStats.Additions
 		deletions += e.DiffStats.Deletions
 	}
