@@ -196,22 +196,58 @@ func extractRecentCommitsLoaded(t *testing.T, cmd tea.Cmd) RecentCommitsLoadedMs
 
 func TestCommitCountLoadedMsgUpdatesState(t *testing.T) {
 	p := snapshotPlugin(4)
-	_, cmd := p.Update(CommitCountLoadedMsg{Epoch: 4, Count: 1234, OK: true})
+	p.activeCountRequestID = 1
+	_, cmd := p.Update(CommitCountLoadedMsg{Epoch: 4, RequestID: 1, Count: 1234, OK: true})
 	if cmd != nil {
 		t.Fatal("expected no follow-up cmd")
 	}
 	if !p.totalCommitCountOK || p.totalCommitCount != 1234 {
 		t.Fatalf("count state = %v/%d, want true/1234", p.totalCommitCountOK, p.totalCommitCount)
 	}
+	if p.activeCountRequestID != 0 {
+		t.Fatal("active count request should clear after success")
+	}
 	// Failed count must not clobber a good value.
-	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 4, OK: false})
+	p.activeCountRequestID = 2
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 4, RequestID: 2, OK: false})
 	if !p.totalCommitCountOK || p.totalCommitCount != 1234 {
 		t.Fatalf("failed load clobbered count: %v/%d", p.totalCommitCountOK, p.totalCommitCount)
 	}
 	// Stale epoch ignored.
-	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 1, Count: 9, OK: true})
+	p.activeCountRequestID = 3
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 1, RequestID: 3, Count: 9, OK: true})
 	if p.totalCommitCount != 1234 {
-		t.Fatalf("stale count applied: %d", p.totalCommitCount)
+		t.Fatalf("stale epoch count applied: %d", p.totalCommitCount)
+	}
+	// Stale request ID ignored (older in-flight completion after a newer request).
+	p.activeCountRequestID = 5
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 4, RequestID: 4, Count: 99, OK: true})
+	if p.totalCommitCount != 1234 {
+		t.Fatalf("stale request ID count applied: %d", p.totalCommitCount)
+	}
+	// Matching newer request applies.
+	_, _ = p.Update(CommitCountLoadedMsg{Epoch: 4, RequestID: 5, Count: 1300, OK: true})
+	if p.totalCommitCount != 1300 {
+		t.Fatalf("current request count not applied: %d", p.totalCommitCount)
+	}
+}
+
+func TestCommitCountSingleFlightCoalescesFollowUp(t *testing.T) {
+	p := snapshotPlugin(7)
+	first := p.loadCommitCount()
+	if first == nil || p.activeCountRequestID != 1 {
+		t.Fatalf("first count load: cmd=%v active=%d", first != nil, p.activeCountRequestID)
+	}
+	if p.loadCommitCount() != nil || !p.countRefreshDirty {
+		t.Fatal("second count load was not coalesced")
+	}
+	msg := first().(CommitCountLoadedMsg)
+	// Real GetCommitCount may fail off a fake /repo path; force OK for state test.
+	msg.OK = true
+	msg.Count = 42
+	_, followUp := p.Update(msg)
+	if followUp == nil || p.activeCountRequestID != 2 || p.countRefreshDirty {
+		t.Fatalf("count follow-up state: cmd=%v active=%d dirty=%v", followUp != nil, p.activeCountRequestID, p.countRefreshDirty)
 	}
 }
 

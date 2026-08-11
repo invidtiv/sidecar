@@ -85,19 +85,27 @@ func (p *Plugin) loadRecentCommits() tea.Cmd {
 }
 
 // loadCommitCount fetches total commits reachable from HEAD in the background.
-// Safe to call often: rev-list --count is typically tens of ms.
+// Single-flighted with a request ID so out-of-order completions cannot apply a
+// stale total; coalesces follow-ups via countRefreshDirty (same pattern as history).
 func (p *Plugin) loadCommitCount() tea.Cmd {
 	if p.repoRoot == "" {
 		return nil
 	}
+	if p.activeCountRequestID != 0 {
+		p.countRefreshDirty = true
+		return nil
+	}
+	p.nextCountRequestID++
+	requestID := p.nextCountRequestID
+	p.activeCountRequestID = requestID
 	epoch := p.ctx.Epoch
 	workDir := p.repoRoot
 	return func() tea.Msg {
 		n, err := GetCommitCount(workDir)
 		if err != nil {
-			return CommitCountLoadedMsg{Epoch: epoch, OK: false}
+			return CommitCountLoadedMsg{Epoch: epoch, RequestID: requestID, OK: false}
 		}
-		return CommitCountLoadedMsg{Epoch: epoch, Count: n, OK: true}
+		return CommitCountLoadedMsg{Epoch: epoch, RequestID: requestID, Count: n, OK: true}
 	}
 }
 

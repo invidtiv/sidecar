@@ -80,6 +80,12 @@ func TestRenderRightAlignedPair(t *testing.T) {
 		t.Fatalf("renderRightAlignedPair = %q, want %q", got, want)
 	}
 
+	// Exact fit (gap==0) must not truncate left.
+	got = renderRightAlignedPair("Modified (2)", "+10/-3", 18)
+	if got != "Modified (2)+10/-3" {
+		t.Fatalf("exact fit: got %q, want flush pair without truncation", got)
+	}
+
 	// No right side: left only (may truncate).
 	got = renderRightAlignedPair("Staged (1)", "", 20)
 	if got != "Staged (1)" {
