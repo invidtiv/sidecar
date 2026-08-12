@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/tty"
@@ -542,6 +543,92 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("retargeted-root click created a document pane")
+	}
+}
+
+func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
+	root := t.TempDir()
+	rel := "docs/plans/active/global-overview-workspaces.md"
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# Global overview"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Claude Code paints the operation and path independently. Keep resets
+	// inside and immediately after the candidate to exercise plain-to-styled
+	// visual-column mapping rather than only an unstyled approximation.
+	line := "\x1b[38;5;111m⏺\x1b[0m Update(" +
+		"\x1b[1;34mdocs/plans/active/global-\x1b[22moverview-workspaces.md\x1b[39m)"
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update(line)
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root, Epoch: 7}
+	p.width, p.height = 140, 30
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus = 1
+	p.paneNextID = 2
+	p.docs = make(map[int]*docPane)
+	p.interactiveState.MouseReportingEnabled = true
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	links := resolver.links(line)
+	if len(links) != 1 || links[0].Value != rel || links[0].Raw != rel {
+		t.Fatalf("Claude Update links = %#v", links)
+	}
+	wantStart := ansi.StringWidth("⏺ Update(")
+	if links[0].StartCol != wantStart || links[0].EndCol != wantStart+ansi.StringWidth(rel)-1 {
+		t.Fatalf("link columns = %d..%d, want %d..%d", links[0].StartCol, links[0].EndCol,
+			wantStart, wantStart+ansi.StringWidth(rel)-1)
+	}
+	decorated := decorateTerminalLinks(line, resolver)
+	if ansi.Strip(decorated) != "⏺ Update("+rel+")" || !strings.Contains(decorated, "\x1b[4m") {
+		t.Fatalf("styled decoration = %q", decorated)
+	}
+
+	action := actionAt(wantStart+2, 4)
+	cmd := p.handleMouseClick(action)
+	if cmd == nil {
+		t.Fatal("click on styled Claude Update path did not activate")
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view.Title() != rel {
+		t.Fatalf("click opened doc = %#v", doc)
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("document open command = %T, want batch", cmd())
+	}
+	loaded, ok := batch[0]().(docview.LoadedMsg)
+	if !ok || loaded.Path != rel || loaded.Result.Error != nil {
+		t.Fatalf("document load = %#v", loaded)
+	}
+}
+
+func TestInteractiveMouseReportingNonLinkClickStillForwards(t *testing.T) {
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("ordinary terminal text")
+	p := newSelectionTestPlugin()
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
+	p.interactiveState.MouseReportingEnabled = true
+
+	action := actionAt(3, 4)
+	_ = p.handleMouseClick(action)
+	if p.pendingClickResolution != clickResolutionForward {
+		t.Fatalf("non-link click resolution = %v, want forward", p.pendingClickResolution)
+	}
+
+	action.Shift = true
+	p.pendingClickResolution = clickResolutionNone
+	_ = p.handleMouseClick(action)
+	if p.pendingClickResolution != clickResolutionNone {
+		t.Fatalf("shift click resolution = %v, want local selection gesture", p.pendingClickResolution)
 	}
 }
 
