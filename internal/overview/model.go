@@ -716,16 +716,26 @@ type cardOrder struct {
 	changedAt time.Time
 }
 
+// boardLane is a shared lane as this board draws it: the theme's lane colours,
+// and CellReady, under which a lane with no cards is left blank rather than
+// carrying an empty-cell mark. Loading and error states are set over it per
+// refresh.
+func boardLane(lane agentstatus.LaneID) kanban.Lane {
+	built := kanban.AgentLane(lane, kanban.ThemeLanePalette)
+	built.State = kanban.CellReady
+	return built
+}
+
 func (m *Model) syncBoard() {
-	// The lanes are the shared definition's, wording, glyph and colour alike —
-	// the project board draws the same ones. The count is left to the Kanban
-	// component, which appends its own.
+	// The lanes are the shared definition's — the project board draws the same
+	// ones — in this board's own colours and cell state. The count is left to
+	// the Kanban component, which appends its own.
 	lanes := []kanban.Lane{
-		kanban.AgentLane(agentstatus.LaneWorking),
-		kanban.AgentLane(agentstatus.LaneBlocked),
-		kanban.AgentLane(agentstatus.LaneDone),
-		kanban.AgentLane(agentstatus.LaneIdle),
-		kanban.AgentLane(agentstatus.LanePaused),
+		boardLane(agentstatus.LaneWorking),
+		boardLane(agentstatus.LaneBlocked),
+		boardLane(agentstatus.LaneDone),
+		boardLane(agentstatus.LaneIdle),
+		boardLane(agentstatus.LanePaused),
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	order := make(map[string]cardOrder)

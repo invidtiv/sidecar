@@ -131,9 +131,9 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 			return tea.Batch(m.releasePreviewKeyboard(),
 				appmsg.ShowToast("Session ended", 3*time.Second))
 		},
-		// The browser draws the pane from its own capture once the keyboard is
-		// given back, so nothing is left to keep: the buffer this terminal loaded
-		// is replaced by the next capture either way.
+		// The terminal is closed with the mode: the browser holds a reference to
+		// the buffer it filled (see enterPreviewInteractive), so the rows the user
+		// was reading survive the close and the next capture lands in them.
 		ExitAction: tty.ExitClosesTerminal,
 	}
 }
@@ -227,6 +227,16 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		cmds = append(cmds, m.preview.terminal.SetDimensions(width, height))
 	}
 	cmds = append(cmds, m.preview.terminal.Open(tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}))
+	// The live buffer becomes the preview's own for the length of this
+	// activation. The component drops its state the moment the mode ends, and
+	// the capture poll is suspended while it is live, so without this reference
+	// leaving the mode falls back to the capture taken before entry — the pane
+	// jumps backwards in time to whatever it showed before the user typed. Held
+	// here, the rows the user was just reading stay on screen until the
+	// replacement capture lands in them.
+	if buffer := m.preview.terminal.Buffer(); buffer != nil {
+		m.preview.buffer = buffer
+	}
 	m.tracef("preview interactive enter workspace=%s pane=%s", workspace.ID, workspace.PaneID)
 	if !m.preview.interactiveHintShown {
 		m.preview.interactiveHintShown = true

@@ -1073,10 +1073,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case deferredPaneResizeMsg:
 		// The window has closed; assert the geometry the surface holds now against
 		// the pane size last observed with the output.
-		if p.interactiveState == nil || !p.interactiveState.Active {
+		if p.interactiveState == nil {
 			return p, nil
 		}
+		// Cleared before the liveness guard: the retry has arrived either way,
+		// and a flag left set describes one still to come, which is what stops
+		// the next burst from arming its own.
 		p.interactiveState.ResizeRetryPending = false
+		if !p.interactiveState.Active {
+			return p, nil
+		}
 		return p, p.maybeResizeInteractivePane(p.interactiveState.PaneWidth, p.interactiveState.PaneHeight)
 
 	case paneResizedMsg:

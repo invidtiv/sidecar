@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"image/color"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
@@ -190,6 +191,23 @@ func shellKanbanCardID(shell *ShellSession) string {
 	return "shell:" + id
 }
 
+// workspaceLanePalette is this board's lane hues. They are the ones the project
+// board has always drawn, and they are stated here rather than taken from the
+// theme's lane colours because the global browser's palette is a different one:
+// sharing what a lane is must not re-theme a surface that already had an answer.
+func workspaceLanePalette(lane agentstatus.LaneID) color.Color {
+	switch lane {
+	case kanbanLaneWorking:
+		return styles.StatusCompleted.GetForeground()
+	case kanbanLaneBlocked:
+		return styles.StatusModified.GetForeground()
+	case kanbanLaneDone:
+		return styles.Secondary
+	default:
+		return styles.TextMuted
+	}
+}
+
 func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 	lanes := make([]boardkanban.Lane, 0, kanbanColumnCount())
 	shells := boardkanban.Lane{ID: "shells", Label: "Shells", HeaderColor: styles.Muted.GetForeground()}
@@ -205,9 +223,9 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 		}
 	}
 	for _, laneID := range kanbanLaneOrder {
-		// Wording, glyph and colour are the shared definition's; the global board
-		// draws the same lanes from it.
-		lane := boardkanban.AgentLane(laneID)
+		// Wording and glyph are the shared definition's; the global board draws
+		// the same lanes from it. The hues stay this board's own.
+		lane := boardkanban.AgentLane(laneID, workspaceLanePalette)
 		for _, wt := range columns[laneID] {
 			lane.Cards = append(lane.Cards, boardkanban.Card{ID: "worktree:" + wt.IdentityKey(), Title: wt.Name, Detail: wt.TaskID})
 		}

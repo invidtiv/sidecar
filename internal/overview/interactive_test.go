@@ -107,7 +107,15 @@ func (f *fakeTerminal) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (f *fakeTerminal) Buffer() *tty.OutputBuffer { return f.buffer }
+// Buffer is nil once the terminal is no longer live, exactly as the component's
+// is: a fake that kept answering after the mode ended would let a host that
+// reads the buffer too late pass here and draw nothing in the real program.
+func (f *fakeTerminal) Buffer() *tty.OutputBuffer {
+	if !f.active {
+		return nil
+	}
+	return f.buffer
+}
 
 func (f *fakeTerminal) PaneSize() (int, int) { return f.paneW, f.paneH }
 

@@ -19,11 +19,14 @@ func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T
 	if m.previewBuffer() == nil {
 		t.Fatal("the watched preview captured nothing to begin with")
 	}
-	watched := m.previewBuffer().Lines()
 	press(t, m, interactiveEnterKey)
 	if !m.PreviewInteractive() {
 		t.Fatal("the pane never became live")
 	}
+	run(t, m, terminal.Update(tty.CaptureResultMsg{Output: longPaneOutput(40)}))
+	// Measured on the live rows, not the capture taken before entry: those are
+	// the ones the reader is looking at when they leave.
+	live := m.previewBuffer().Lines()
 	m.jumpPreviewWindow(2)
 
 	// The capture the exit starts is deliberately left in flight: what the
@@ -38,8 +41,8 @@ func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T
 	if m.previewBuffer() == nil {
 		t.Fatal("the preview dropped its buffer before the replacement capture arrived")
 	}
-	if got := m.previewBuffer().Lines(); len(got) != len(watched) {
-		t.Fatalf("buffer = %d lines, want the %d it was still drawing", len(got), len(watched))
+	if got := m.previewBuffer().Lines(); len(got) != len(live) {
+		t.Fatalf("buffer = %d lines, want the %d it was still drawing", len(got), len(live))
 	}
 	if m.preview.offset != 2 {
 		t.Fatalf("scroll position = %d, want the 2 rows back the reader was at", m.preview.offset)
@@ -120,4 +123,44 @@ func longPaneOutput(lines int) string {
 		rows[i] = "line of pane output"
 	}
 	return strings.Join(rows, "\n")
+}
+
+// Leaving the pane must not move it backwards in time. The capture the preview
+// held before the user started typing is minutes old by the time they stop, and
+// the poll that would refresh it is suspended for as long as the pane is live —
+// so a browser that falls back to it redraws the pane as it was before the
+// session, under the scroll offset the reader left on the live rows. What the
+// user was just looking at is what must still be on screen.
+func TestLeavingInteractiveKeepsShowingWhatWasOnScreen(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	press(t, m, "right")
+	run(t, m, m.previewSelect())
+	before := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(before, "pane %1 output") {
+		t.Fatalf("the watched preview never drew its capture:\n%s", before)
+	}
+
+	press(t, m, interactiveEnterKey)
+	run(t, m, terminal.Update(tty.CaptureResultMsg{Output: "TYPED IN LIVE PANE\nsecond live line"}))
+	live := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(live, "TYPED IN LIVE PANE") || !strings.Contains(live, "second live line") {
+		t.Fatalf("the live pane never drew what was typed into it:\n%s", live)
+	}
+
+	// The replacement capture is deliberately left in flight: what the browser
+	// draws in the meantime is the whole question.
+	if cmd := terminal.hooks.OnExit(); cmd == nil {
+		t.Fatal("leaving the mode started no replacement capture")
+	}
+	if m.PreviewInteractive() {
+		t.Fatal("the mode did not end")
+	}
+
+	after := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(after, "TYPED IN LIVE PANE") || !strings.Contains(after, "second live line") {
+		t.Fatalf("leaving the pane dropped what the user was looking at:\n%s", after)
+	}
+	if strings.Contains(after, "pane %1 output") {
+		t.Fatalf("leaving the pane redrew the capture taken before entry:\n%s", after)
+	}
 }

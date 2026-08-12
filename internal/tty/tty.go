@@ -168,8 +168,15 @@ type Model struct {
 
 	// resizeRetryPending records that a deferred assertion is already armed, so
 	// a burst of sizes arriving inside one debounce window schedules one retry
-	// rather than one per size.
+	// rather than one per size. It must be cleared on every path that can drop
+	// the retry message, or the model believes a retry it will never receive is
+	// still coming and swallows every resize after it.
 	resizeRetryPending bool
+
+	// nowFn is the model's clock for the resize debounce. Tests drive a burst
+	// through the window without wall-clock time passing inside it; nil is
+	// time.Now.
+	nowFn func() time.Time
 }
 
 // ExitAction separates ending input ownership from closing the terminal.
@@ -273,6 +280,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	}
 	m.visible = true
 	m.modelLive = false
+	m.resizeRetryPending = false
 	m.recoveryPending = false
 	m.fallbackEstablished = false
 	m.consecutiveRecoveryBlanks = 0
@@ -396,6 +404,9 @@ func (m *Model) releaseInput() {
 // Plugins should call this when they receive messages and interactive mode is active.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	if !m.IsActive() {
+		// An inactive model answers nothing, so a retry aimed at it is dropped
+		// here. The flag goes with it: it describes a message still in flight.
+		m.resizeRetryPending = false
 		return nil
 	}
 
@@ -430,10 +441,13 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.handlePollTick(msg)
 
 	case deferredResizeMsg:
+		// Cleared before the ownership guard: a retry this model will not act on
+		// is a retry it no longer has, and leaving the flag set here wedges every
+		// later resize behind a message that already came and went.
+		m.resizeRetryPending = false
 		if !m.owns(msg.Scope) {
 			return nil
 		}
-		m.resizeRetryPending = false
 		return m.assertDimensions()
 
 	case PaneResizedMsg:
@@ -1119,6 +1133,14 @@ func ResizeWait(last, now time.Time) time.Duration {
 	return 0
 }
 
+// now reads the model's clock.
+func (m *Model) now() time.Time {
+	if m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
+}
+
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	if width == m.Width && height == m.Height {
@@ -1152,7 +1174,7 @@ func (m *Model) assertDimensions() tea.Cmd {
 		return nil
 	}
 
-	if wait := ResizeWait(m.State.LastResizeAt, time.Now()); wait > 0 {
+	if wait := ResizeWait(m.State.LastResizeAt, m.now()); wait > 0 {
 		// One retry stands for the whole burst: it reads the geometry the model
 		// holds when it fires, which is the newest by then. Arming a second would
 		// chain a resize per size the window passed through.
@@ -1166,7 +1188,7 @@ func (m *Model) assertDimensions() tea.Cmd {
 	}
 	// Recorded here, where the resize is actually issued: a deferred call that
 	// consumed the budget would push its own retry out of reach.
-	m.State.LastResizeAt = time.Now()
+	m.State.LastResizeAt = m.now()
 	width, height := m.Width, m.Height
 
 	return func() tea.Msg {

@@ -259,6 +259,25 @@ func (p *Plugin) interactiveHintFloor() int {
 	return ansi.StringWidth(p.interactiveExitHint())
 }
 
+// terminalLiveEdgeKey is the chord this surface answers to put a scrolled-back
+// window back on the live edge, in the state the pane is in.
+//
+// While the pane is live every unshifted key belongs to it, so the way back is
+// the shifted chord the component's key hook maps. A watched pane never reaches
+// that hook — its keys are the surface's own — and answers the plain
+// jump-to-bottom key instead. Naming the shifted chord there would advertise a
+// key nothing answers, which reads as a pane stuck in history.
+func terminalLiveEdgeKey(interactive bool) string {
+	if interactive {
+		return tty.LiveEdgeKey
+	}
+	return watchedLiveEdgeKey
+}
+
+// watchedLiveEdgeKey is the jump-to-bottom key the preview answers while the
+// pane is only being watched (keys.go, "G").
+const watchedLiveEdgeKey = "G"
+
 // renderCapturedTerminal draws one embedded terminal: its header row — identity
 // chips left, hints right — and then the viewport, which runs from the next row
 // to the bottom of the surface.
@@ -329,7 +348,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		MouseReporting: interactive && p.interactiveState.MouseReportingEnabled,
 		PaneWidth:      input.PaneWidth,
 		PaneHeight:     input.PaneHeight,
-		LiveEdgeKey:    tty.LiveEdgeKey,
+		LiveEdgeKey:    terminalLiveEdgeKey(interactive),
 	}), 0, dimText)
 	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
 		if p.terminalSearch.InputActive {

@@ -384,9 +384,27 @@ func (p *Plugin) freezeTerminalSelectionViewport() {
 	if p.selectionTermPanel || !p.autoScrollOutput {
 		return
 	}
-	p.previewOffset = p.terminalSelectionViewportLayout().Start
+	p.previewOffset, _ = p.terminalWindowBounds()
 	p.autoScrollOutput = false
 	p.terminalSelectionFrozen = true
+}
+
+// terminalWindowBounds is the one derivation of where this surface's window can
+// sit: the start it is drawn at now, expressed as an offset the un-followed
+// render can actually place, and the furthest back an offset can name.
+//
+// Freeze and thaw both read it. Taking the start from the rendered layout and
+// the bound from the line count is two derivations of one window, and they
+// disagree wherever interactive mode's untrimmed rows or a pane shorter than the
+// viewport do — so releasing a drag moved the window the gesture had been
+// holding still.
+func (p *Plugin) terminalWindowBounds() (start, maxOffset int) {
+	layout := p.terminalSelectionViewportLayout()
+	// Following the live grid can place the window past MaxOffset — the pane's
+	// own top, below the last row an offset can name. An offset beyond it is
+	// clamped by the next render, so pinning it unclamped freezes the window
+	// somewhere it will not be drawn.
+	return min(max(layout.Start, 0), max(layout.MaxOffset, 0)), max(layout.MaxOffset, 0)
 }
 
 // thawTerminalSelectionViewport is the other half of the freeze, owed at the end
@@ -401,7 +419,7 @@ func (p *Plugin) thawTerminalSelectionViewport() {
 		return
 	}
 	p.terminalSelectionFrozen = false
-	maxOffset := p.getMaxScrollOffset()
+	_, maxOffset := p.terminalWindowBounds()
 	p.previewOffset = min(max(p.previewOffset, 0), maxOffset)
 	p.autoScrollOutput = tty.ThawOffsetFrom(p.previewOffset, maxOffset) == 0
 }

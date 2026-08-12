@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -638,27 +639,28 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 func TestBoardLanesComeFromTheSharedLaneDefinition(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
 	m.syncBoard()
-	want := map[kanban.LaneID]kanban.Lane{}
-	for _, lane := range []agentstatus.LaneID{
-		agentstatus.LaneWorking, agentstatus.LaneBlocked, agentstatus.LaneDone,
-		agentstatus.LaneIdle, agentstatus.LanePaused,
-	} {
-		want[kanban.LaneID(lane)] = kanban.AgentLane(lane)
+	// Stated as literals, not read back from boardLane: a test that builds its
+	// expectation from the production helper passes a rename or a re-theme
+	// through silently, which is what the shared table exists to catch.
+	wantLabel := map[kanban.LaneID]string{
+		kanban.LaneID(agentstatus.LaneWorking): "● Working",
+		kanban.LaneID(agentstatus.LaneBlocked): "◆ Blocked",
+		kanban.LaneID(agentstatus.LaneDone):    "✓ Done",
+		kanban.LaneID(agentstatus.LaneIdle):    "○ Idle",
+		kanban.LaneID(agentstatus.LanePaused):  "⏸ Paused",
 	}
 	lanes := m.board.Board().Lanes
-	if len(lanes) != len(want) {
-		t.Fatalf("lanes = %d, want %d", len(lanes), len(want))
+	if len(lanes) != len(wantLabel) {
+		t.Fatalf("lanes = %d, want %d", len(lanes), len(wantLabel))
 	}
 	for _, lane := range lanes {
-		shared := want[lane.ID]
-		if lane.Label != shared.Label {
-			t.Fatalf("lane %q label = %q, want the shared %q", lane.ID, lane.Label, shared.Label)
+		if lane.Label != wantLabel[lane.ID] {
+			t.Fatalf("lane %q label = %q, want %q", lane.ID, lane.Label, wantLabel[lane.ID])
 		}
-		if lane.HeaderColor != shared.HeaderColor {
-			t.Fatalf("lane %q colour = %v, want the shared %v", lane.ID, lane.HeaderColor, shared.HeaderColor)
-		}
-		if lane.HeaderColor == nil {
-			t.Fatalf("lane %q lost its header colour", lane.ID)
+		// This board draws the theme's lane hues, which the project board does
+		// not; pinning the source keeps the two boards' palettes independent.
+		if want := styles.LaneColor(string(lane.ID)); lane.HeaderColor != want {
+			t.Fatalf("lane %q hue = %v, want the theme's %v", lane.ID, lane.HeaderColor, want)
 		}
 	}
 	// The component appends its own count, so the label plus " N" has to fit
