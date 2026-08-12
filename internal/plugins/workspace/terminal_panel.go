@@ -118,6 +118,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		p.ctx.Logger.Debug("termPanel: switching session", "old", p.termPanelSession, "new", sessionName)
 	}
 	p.termPanelSession = sessionName
+	p.releaseTerminalDocProjection(true)
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -313,6 +314,21 @@ func (p *Plugin) termPanelMaxScroll() int {
 		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
 	}
 	return max(lineCount-height, 0)
+}
+
+// releaseTermPanelDocFreeze hands a panel viewport pinned by document activation
+// back to the ordinary distance-from-bottom scroll model without changing the
+// row currently at the top. Closing the document deliberately does not call
+// this: the first explicit panel navigation owns the transition.
+func (p *Plugin) releaseTermPanelDocFreeze() {
+	p.releaseTerminalDocProjection(true)
+	if !p.termPanelDocFrozen {
+		return
+	}
+	maxScroll := p.termPanelMaxScroll()
+	start := min(max(p.termPanelSelectionOffset, 0), maxScroll)
+	p.termPanelScroll = maxScroll - start
+	p.termPanelDocFrozen = false
 }
 
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
@@ -513,8 +529,10 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	}
 	// Switch to new session (old session preserved for later reuse)
 	p.termPanelSession = newSession
+	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
+	p.termPanelDocFrozen = false
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -526,9 +544,11 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.
 // Sessions are preserved so they can be reattached on next launch (like agent sessions).
 func (p *Plugin) cleanupTermPanelSession() {
+	p.releaseTerminalDocProjection(true)
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil
+	p.termPanelDocFrozen = false
 }
 
 // enforceLineWidths ensures every line in content is exactly targetWidth

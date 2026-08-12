@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/tty"
@@ -477,6 +478,8 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.autoScrollOutput = true
+	p.previewOffset = 7
 	resolver := p.terminalLinkResolver(false, buffer)
 	if links := resolver.links("README.md"); len(links) != 1 || links[0].Raw != "README.md" {
 		t.Fatalf("initial resolved links = %#v", links)
@@ -520,6 +523,8 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
 	}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.autoScrollOutput = true
+	p.previewOffset = 7
 	resolver := p.terminalLinkResolver(false, buffer)
 	links := resolver.links("README.md")
 	rootAResolved, err := filepath.EvalSymlinks(rootA)
@@ -535,8 +540,11 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	if err := os.Symlink(rootB, current); err != nil {
 		t.Fatal(err)
 	}
-	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
+	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd != nil {
 		t.Fatal("click activated link cached under previous selected root")
+	}
+	if !p.autoScrollOutput || p.previewOffset != 7 {
+		t.Fatalf("refused click mutated viewport: follow=%v offset=%d", p.autoScrollOutput, p.previewOffset)
 	}
 	if _, found := p.terminalLinkMemo.surfaces["shell:one"]; found {
 		t.Fatal("root mismatch did not invalidate stale surface memo")
@@ -562,7 +570,16 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 	line := "\x1b[38;5;111m⏺\x1b[0m Update(" +
 		"\x1b[1;34mdocs/plans/active/global-\x1b[22moverview-workspaces.md\x1b[39m)"
 	buffer := tty.NewOutputBuffer(20)
-	buffer.Update(line)
+	initialRows := []string{
+		line,
+		"  ⎿ Added terminal document navigation",
+		"    Running focused tests...",
+		"    internal/plugins/workspace: ok",
+	}
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(initialRows, "\n"), BaseLine: 100, Absolute: true,
+		HistoryRows: 0, PaneRows: len(initialRows),
+	})
 	p := newSelectionTestPlugin()
 	p.ctx = &plugin.Context{WorkDir: root, Epoch: 7}
 	p.width, p.height = 140, 30
@@ -600,6 +617,31 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 	if doc == nil || doc.view.Title() != rel {
 		t.Fatalf("click opened doc = %#v", doc)
 	}
+	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.docFocused() {
+		t.Fatalf("doc activation retained interactive terminal ownership: mode=%v interactive=%#v focus=%d",
+			p.viewMode, p.interactiveState, p.paneFocus)
+	}
+	if p.autoScrollOutput || p.previewOffset != 0 {
+		t.Fatalf("doc activation did not freeze clicked viewport: follow=%v offset=%d", p.autoScrollOutput, p.previewOffset)
+	}
+	// Claude redraws after the split: the transcript containing the clicked link
+	// moves into history while its new live grid is mostly chrome and blank rows.
+	// A live-follow viewport would start at PaneTop and look nearly empty.
+	postResizeRows := append(append([]string{}, initialRows...),
+		"╭─ Claude Code ─────────────────────────╮", "", "  ❯ ", "")
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(postResizeRows, "\n"), BaseLine: 100, Absolute: true,
+		HistoryRows: len(initialRows), PaneRows: 4,
+	})
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", buffer, 70, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") || strings.Contains(got, "INTERACTIVE") {
+		t.Fatalf("terminal was not coherent immediately after doc-open resize transition: %q", got)
+	}
+	if cmd := p.closeDocPane(); cmd == nil {
+		t.Fatal("closing document did not schedule terminal resize")
+	}
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", buffer, 120, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") {
+		t.Fatalf("closing document lost frozen terminal context: %q", got)
+	}
 	batch, ok := cmd().(tea.BatchMsg)
 	if !ok || len(batch) == 0 {
 		t.Fatalf("document open command = %T, want batch", cmd())
@@ -629,6 +671,366 @@ func TestInteractiveMouseReportingNonLinkClickStillForwards(t *testing.T) {
 	_ = p.handleMouseClick(action)
 	if p.pendingClickResolution != clickResolutionNone {
 		t.Fatalf("shift click resolution = %v, want local selection gesture", p.pendingClickResolution)
+	}
+}
+
+func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: "README.md:12\nworking", PaneRows: 2})
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.width, p.height = 100, 24
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus, p.paneNextID = 1, 2
+	p.docs = make(map[int]*docPane)
+	p.autoScrollOutput = true
+
+	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd == nil {
+		t.Fatal("interactive path:line did not activate")
+	}
+	if doc, _ := p.activeDocPane(); doc == nil || doc.view.Title() != "README.md" {
+		t.Fatalf("interactive path:line opened doc = %#v", doc)
+	}
+	if p.viewMode != ViewModeList || p.interactiveState != nil || p.autoScrollOutput {
+		t.Fatalf("path:line retained live ownership/follow: mode=%v interactive=%#v follow=%v",
+			p.viewMode, p.interactiveState, p.autoScrollOutput)
+	}
+}
+
+func TestInteractiveURLBesideExistingDocKeepsTerminalOwnership(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("https://example.com/docs")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.width, p.height = 100, 24
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus, p.paneNextID = 1, 2
+	p.docs = make(map[int]*docPane)
+	if cmd := p.openDocPane(root, "README.md", 0); cmd == nil {
+		t.Fatal("fixture did not open existing document")
+	}
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, MouseReportingEnabled: true, PaneOnEntry: PanePreview}
+	p.autoScrollOutput = true
+
+	if cmd := p.handleMouseClick(actionAt(10, 4)); cmd == nil {
+		t.Fatal("interactive URL did not activate")
+	}
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.autoScrollOutput {
+		t.Fatalf("URL beside doc changed terminal ownership: mode=%v interactive=%#v follow=%v",
+			p.viewMode, p.interactiveState, p.autoScrollOutput)
+	}
+}
+
+func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
+	rows := []string{"clicked docs/plan.md", "result", "tests", "done"}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(rows, "\n"), BaseLine: 50, Absolute: true,
+		PaneRows: len(rows),
+	})
+	p := newSelectionTestPlugin()
+	p.width, p.height = 100, 24
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.termPanelVisible = true
+	p.termPanelLayout = TermPanelRight
+	p.termPanelOutput = buffer
+	p.interactiveState.TermPanel = true
+	p.selectionTermPanel = true
+	p.autoScrollOutput = true
+
+	freeze := p.captureTerminalViewportForDocOpen(true)
+	p.applyTerminalViewportFreeze(freeze)
+	postResize := append(append([]string{}, rows...), "Claude chrome", "", "❯", "")
+	buffer.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
+		HistoryRows: len(rows), PaneRows: 4,
+	})
+	follow, offset, fromBottom := p.terminalScrollState(true, false)
+	if follow || fromBottom || offset != freeze.start {
+		t.Fatalf("panel freeze = follow %v offset %d fromBottom %v, want absolute %d",
+			follow, offset, fromBottom, freeze.start)
+	}
+	if !p.autoScrollOutput {
+		t.Fatal("panel freeze disturbed independent primary follow state")
+	}
+}
+
+func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
+	root := t.TempDir()
+	rel := "docs/panel.md"
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte("# Panel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows := []string{rel, "panel result", "tests pass", "done"}
+	panel := tty.NewOutputBuffer(40)
+	panel.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(rows, "\n"), BaseLine: 50, Absolute: true,
+		PaneRows: len(rows),
+	})
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.width, p.height = 120, 30
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: tty.NewOutputBuffer(20)}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus, p.paneNextID = 1, 2
+	p.docs = make(map[int]*docPane)
+	p.termPanelVisible = true
+	p.termPanelLayout = TermPanelRight
+	p.termPanelSession = "panel-session"
+	p.termPanelPaneID = "%2"
+	p.termPanelOutput = panel
+	p.interactiveState.TermPanel = true
+	p.selectionTermPanel = true
+	p.autoScrollOutput = true
+
+	surface := p.terminalSurfaceGeometry(true)
+	if !surface.OK {
+		t.Fatal("terminal panel fixture has no surface")
+	}
+	action := mouse.MouseAction{
+		Type: mouse.ActionClick, X: surface.X + 2, Y: surface.Y,
+		Region: &mouse.Region{ID: regionTermPanelContent, Rect: mouse.Rect{
+			X: surface.X, Y: surface.HeaderY, W: surface.Width, H: surface.Height + terminalHeaderRows,
+		}},
+	}
+	if cmd := p.handleMouseClick(action); cmd == nil || !p.termPanelDocFrozen {
+		t.Fatalf("panel doc activation = cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	}
+
+	postResize := append(append([]string{}, rows...), "Claude chrome", "", "❯", "")
+	panel.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
+		HistoryRows: len(rows), PaneRows: 4,
+	})
+	if cmd := p.closeDocPane(); cmd == nil || !p.termPanelDocFrozen {
+		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	}
+	frozenStart := p.termPanelSelectionOffset
+	follow, offset, fromBottom := p.terminalScrollState(true, false)
+	if follow || fromBottom || offset != frozenStart {
+		t.Fatalf("closed panel context = follow %v offset %d fromBottom %v", follow, offset, fromBottom)
+	}
+
+	p.activePane = PanePreview
+	p.termPanelFocused = true
+	p.handleListKeys(tea.KeyPressMsg{Code: 'G', Text: "G"})
+	follow, offset, fromBottom = p.terminalScrollState(true, false)
+	if p.termPanelDocFrozen || !follow || !fromBottom || offset != 0 {
+		t.Fatalf("G did not return panel live: frozen %v follow %v offset %d fromBottom %v",
+			p.termPanelDocFrozen, follow, offset, fromBottom)
+	}
+	if !p.autoScrollOutput {
+		t.Fatal("panel navigation disturbed independent primary follow")
+	}
+
+	// Recreate the frozen state and prove a wheel gesture first translates the
+	// same visible row, then applies the requested upward movement.
+	p.termPanelDocFrozen = true
+	p.termPanelSelectionOffset = frozenStart
+	p.releaseTermPanelDocFreeze()
+	before := p.termPanelScroll
+	p.termPanelDocFrozen = true
+	p.termPanelSelectionOffset = frozenStart
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, Region: action.Region})
+	if p.termPanelDocFrozen || p.termPanelScroll <= before {
+		t.Fatalf("wheel did not release and move panel: frozen %v scroll %d, translated %d",
+			p.termPanelDocFrozen, p.termPanelScroll, before)
+	}
+}
+
+func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T) {
+	root := t.TempDir()
+	rel := "docs/scrolled.md"
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte("# Scrolled"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows := []string{
+		"earlier Claude response",
+		"⏺ Update(" + rel + ")",
+		"  ⎿ preserved clicked neighborhood",
+		"working below the fold",
+		"more output",
+		"live prompt",
+	}
+	live := tty.NewOutputBuffer(40)
+	live.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(rows, "\n"), BaseLine: 700, Absolute: true,
+		HistoryRows: 2, PaneRows: 4,
+	})
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.width, p.height = 120, 30
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{
+		TmuxSession: "claude", TmuxPane: "%3", OutputBuf: live,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus, p.paneNextID = 1, 2
+	p.docs = make(map[int]*docPane)
+	p.terminalHistory = make(map[string]terminalHistoryState)
+	p.autoScrollOutput = false
+	p.previewOffset = 0
+
+	if cmd := p.handleMouseClick(actionAt(12, 5)); cmd == nil {
+		t.Fatal("scrolled Claude link did not activate")
+	}
+	projected := p.projectedTerminalBuffer(false)
+	if projected == nil || projected.LineCount() > p.height {
+		t.Fatalf("projection = %#v lines %d, want bounded visible copy", projected, projected.LineCount())
+	}
+	// SIGWINCH lets Claude replace its alternate-screen grid entirely. The new
+	// absolute base and wrapping have no coordinate relationship to the clicked
+	// screen; the live buffer must still accept it while the doc projection stays.
+	live.ApplySnapshot(tty.PaneSnapshot{
+		Output: "╭─ Claude Code narrow ─╮\n\n❯\n", BaseLine: 930, Absolute: true,
+		PaneRows: 4,
+	})
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, rel) || !strings.Contains(got, "preserved clicked neighborhood") {
+		t.Fatalf("projection lost clicked Claude screen after destructive redraw: %q", got)
+	}
+	if got := strings.Join(live.LinesRange(0, live.LineCount()), "\n"); !strings.Contains(got, "Claude Code narrow") || strings.Contains(got, rel) {
+		t.Fatalf("live buffer was blocked or overwritten by projection: %q", got)
+	}
+
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollDown, Delta: 1,
+		Region: &mouse.Region{ID: regionPreviewPane},
+	})
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, "Claude Code narrow") || strings.Contains(got, rel) {
+		t.Fatalf("passive wheel did not release and reveal current live grid: %q", got)
+	}
+
+	// A passive non-link click is also an explicit handoff to the terminal. It
+	// releases before gesture hit-testing so pixels and buffer coordinates share
+	// the live source.
+	p.terminalDocProjection = terminalDocProjection{
+		buffer: projected, source: live, identity: p.terminalProjectionIdentity(false),
+	}
+	p.handleMouseClick(actionAt(1, 4))
+	if p.terminalDocProjection.buffer != nil {
+		t.Fatal("passive click retained projected pixels while hit-testing live data")
+	}
+}
+
+func TestTerminalDocProjectionRejectsChangedSurfaceIdentity(t *testing.T) {
+	p := newSelectionTestPlugin()
+	p.shellSelected = true
+	live := tty.NewOutputBuffer(2)
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxPane: "%1", OutputBuf: live}}}
+	p.terminalDocProjection = terminalDocProjection{
+		buffer: tty.NewOutputBuffer(1), source: live, identity: "shell:one\x00\x00%1",
+	}
+	p.terminalDocProjection.buffer.Update("old screen")
+	if p.projectedTerminalBuffer(false) == nil {
+		t.Fatal("fixture projection did not match original surface")
+	}
+	p.shells[0].TmuxName = "two"
+	if p.projectedTerminalBuffer(false) != nil {
+		t.Fatal("projection resurrected after selected surface identity changed")
+	}
+	p.shells[0].TmuxName = "one"
+	p.loadSelectedContent()
+	if p.terminalDocProjection.buffer != nil {
+		t.Fatal("selection lifecycle retained stale terminal projection")
+	}
+}
+
+func TestTerminalDocProjectionRejectsRecreatedBufferWithSameTargetIDs(t *testing.T) {
+	t.Run("primary", func(t *testing.T) {
+		p := newSelectionTestPlugin()
+		p.shellSelected = true
+		original := tty.NewOutputBuffer(2)
+		p.shells = []*ShellSession{{TmuxName: "same", Agent: &Agent{
+			TmuxSession: "same", TmuxPane: "%1", OutputBuf: original,
+		}}}
+		projected := tty.NewOutputBuffer(1)
+		projected.Update("old primary screen")
+		p.terminalDocProjection = terminalDocProjection{
+			buffer: projected, source: original, identity: p.terminalProjectionIdentity(false),
+		}
+		original.Update("same buffer mutation")
+		if p.projectedTerminalBuffer(false) != projected {
+			t.Fatal("ordinary live buffer mutation invalidated projection")
+		}
+		p.shells[0].Agent = &Agent{
+			TmuxSession: "same", TmuxPane: "%1", OutputBuf: tty.NewOutputBuffer(2),
+		}
+		if p.projectedTerminalBuffer(false) != nil {
+			t.Fatal("primary projection resurrected over recreated buffer with reused target IDs")
+		}
+	})
+
+	t.Run("panel", func(t *testing.T) {
+		p := newSelectionTestPlugin()
+		p.termPanelSession, p.termPanelPaneID = "S", "%2"
+		original := tty.NewOutputBuffer(2)
+		p.termPanelOutput = original
+		projected := tty.NewOutputBuffer(1)
+		projected.Update("old panel screen")
+		p.terminalDocProjection = terminalDocProjection{
+			buffer: projected, source: original, termPanel: true,
+			identity: p.terminalProjectionIdentity(true),
+		}
+		p.cleanupTermPanelSession()
+		p.termPanelSession, p.termPanelPaneID = "S", "%2"
+		p.termPanelOutput = tty.NewOutputBuffer(2)
+		if p.projectedTerminalBuffer(true) != nil || p.terminalDocProjection.buffer != nil {
+			t.Fatal("panel projection survived cleanup and resurrected over recreated target")
+		}
+	})
+}
+
+func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "README.md")
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	if links := p.terminalLinkResolver(false, buffer).links("README.md"); len(links) != 1 {
+		t.Fatalf("fixture links = %#v", links)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd != nil {
+		t.Fatal("unsafe swapped link activated")
+	}
+	if p.terminalDocProjection.buffer != nil {
+		t.Fatal("refused link captured terminal projection")
 	}
 }
 

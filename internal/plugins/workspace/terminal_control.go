@@ -261,6 +261,9 @@ func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspace
 		return
 	}
 	if role == workspaceTerminalPanel {
+		if p.termPanelOutput != model.State.OutputBuf {
+			p.releaseTerminalDocProjection(true)
+		}
 		p.termPanelOutput = model.State.OutputBuf
 		return
 	}
@@ -268,11 +271,17 @@ func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspace
 	case "agent":
 		if wt := p.findWorktree(target.SourceID); wt != nil && wt.Agent != nil &&
 			wt.Agent.TmuxSession == target.Session {
+			if wt.Agent.OutputBuf != model.State.OutputBuf {
+				p.releaseTerminalDocProjection(false)
+			}
 			wt.Agent.OutputBuf = model.State.OutputBuf
 		}
 	case "shell":
 		if shell := p.findShellByName(target.SourceID); shell != nil && shell.Agent != nil &&
 			shell.Agent.TmuxSession == target.Session {
+			if shell.Agent.OutputBuf != model.State.OutputBuf {
+				p.releaseTerminalDocProjection(false)
+			}
 			shell.Agent.OutputBuf = model.State.OutputBuf
 		}
 	}

@@ -187,6 +187,9 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	}
 
 	if msg.Source.TermPanel {
+		if p.termPanelDocFrozen {
+			p.termPanelSelectionOffset += added
+		}
 		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
 		if scrollLines > added && !state.Exhausted {
 			return p.loadOlderTerminalHistory(true, scrollLines-added)

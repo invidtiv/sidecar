@@ -305,6 +305,7 @@ func sgrMouseFragmentState(s string) (possible, complete bool) {
 // Returns a tea.Cmd if mode entry succeeded, nil otherwise.
 // Requires tmux_interactive_input feature flag to be enabled.
 func (p *Plugin) enterInteractiveMode() tea.Cmd {
+	p.releaseTerminalDocProjection(false)
 	// Check feature flag
 	if !features.IsEnabled(features.TmuxInteractiveInput.Name) {
 		return nil
@@ -412,6 +413,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 
 // enterTermPanelInteractiveMode enters interactive mode targeting the terminal panel's tmux session.
 func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
+	p.releaseTerminalDocProjection(true)
 	if !features.IsEnabled(features.TmuxInteractiveInput.Name) {
 		return nil
 	}
@@ -443,6 +445,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	}
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
+	p.termPanelDocFrozen = false
 	p.interactiveState = &InteractiveState{
 		Active:        true,
 		TargetPane:    paneID,
@@ -649,7 +652,7 @@ func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int
 	}
 }
 
-func (p *Plugin) terminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
+func (p *Plugin) liveTerminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
 	if termPanel {
 		return p.termPanelOutput
 	}
@@ -663,6 +666,13 @@ func (p *Plugin) terminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
 		return wt.Agent.OutputBuf
 	}
 	return nil
+}
+
+func (p *Plugin) terminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
+	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
+		return projected
+	}
+	return p.liveTerminalOutputBuffer(termPanel)
 }
 
 // resizeSelectedPaneCmd resizes the currently selected tmux pane to match the

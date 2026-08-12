@@ -673,6 +673,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					return cmd
 				}
 			}
+			p.releaseTerminalDocProjection(false)
 			return p.prepareTerminalClickOrDrag(action)
 		}
 	case regionPaneDivider:
@@ -695,6 +696,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return cmd
 			}
 		}
+		p.releaseTermPanelDocFreeze()
 		return p.prepareTerminalClickOrDrag(action)
 	case regionDocPane:
 		if leafID, ok := action.Region.Data.(int); ok {
@@ -1178,6 +1180,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
+		p.releaseTermPanelDocFreeze()
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
@@ -1213,6 +1216,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	case regionPreviewPane:
+		p.releaseTerminalDocProjection(false)
 		return p.scrollPreview(delta)
 	case regionKanbanCard, regionKanbanColumn:
 		// Scroll the lane under the pointer, not whichever lane happened to
@@ -1335,6 +1339,7 @@ func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
 
 // scrollPreview scrolls the preview pane content.
 func (p *Plugin) scrollPreview(delta int) tea.Cmd {
+	p.releaseTerminalDocProjection(false)
 	// Unified scroll: delta < 0 = scroll up (toward top), delta > 0 = scroll down (toward bottom)
 	// Output tab uses burst debouncing for trackpad scroll smoothness.
 	if p.previewTab == PreviewTabOutput || p.shellSelected {

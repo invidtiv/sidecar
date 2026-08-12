@@ -243,10 +243,16 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 // (render, cursor, hit test) all pass selectionTermPanel && anchor-valid, while
 // tests exercise the branches directly.
 func (p *Plugin) terminalScrollState(termPanel, selectionAnchored bool) (follow bool, offset int, offsetFromBottom bool) {
+	if p.projectedTerminalBuffer(termPanel) != nil {
+		return false, 0, false
+	}
 	if !termPanel {
 		return p.autoScrollOutput, p.previewOffset, false
 	}
 	if selectionAnchored {
+		return false, p.termPanelSelectionOffset, false
+	}
+	if p.termPanelDocFrozen {
 		return false, p.termPanelSelectionOffset, false
 	}
 	return p.termPanelScroll == 0, p.termPanelScroll, true

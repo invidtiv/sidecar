@@ -585,6 +585,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 	}
+	if p.activePane == PanePreview && !p.termPanelFocused {
+		switch msg.String() {
+		case "j", "down", "k", "up", "g", "G", "ctrl+d", "ctrl+u":
+			p.releaseTerminalDocProjection(false)
+		}
+	}
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
@@ -626,6 +632,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll down
+			p.releaseTermPanelDocFreeze()
 			if p.termPanelScroll > 0 {
 				p.termPanelScroll--
 			}
@@ -708,6 +715,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to top of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+			p.releaseTermPanelDocFreeze()
 			if p.termPanelOutput != nil {
 				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
 			}
@@ -752,6 +760,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+			p.releaseTermPanelDocFreeze()
 			p.termPanelScroll = 0
 			return nil
 		}
@@ -831,6 +840,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.activePane = PanePreview
 		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 			// Right layout: move focus from agent to terminal panel
+			p.releaseTermPanelDocFreeze()
 			p.termPanelFocused = true
 		} else if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
@@ -912,6 +922,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
+			p.releaseTerminalDocProjection(false)
 			return nil
 		}
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
@@ -1059,6 +1070,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
+				p.releaseTermPanelDocFreeze()
 				if p.termPanelScroll > pageSize {
 					p.termPanelScroll -= pageSize
 				} else {
@@ -1087,6 +1099,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
+				p.releaseTermPanelDocFreeze()
 				p.termPanelScroll += pageSize
 				return nil
 			}

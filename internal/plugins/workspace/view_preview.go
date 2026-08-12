@@ -263,6 +263,9 @@ func (p *Plugin) interactiveHintFloor() int {
 // chips left, hints right — and then the viewport, which runs from the next row
 // to the bottom of the surface.
 func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
+		buffer = projected
+	}
 	interactive := p.interactiveDescribes(termPanel)
 	// While interactive the exit key leads the hints and is what the row must
 	// keep; the chips give way for it instead of the other way round.
