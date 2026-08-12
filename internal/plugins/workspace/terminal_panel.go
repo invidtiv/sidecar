@@ -402,8 +402,9 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 	// prepended as a row after these regions registered, leaving them a row high
 	// for its duration; it now lives in the header's right region and shifts
 	// nothing.
-	previewContentX := p.previewSplit().ContentX
-	previewContentY := p.previewContentY()
+	terminalBox, _ := p.terminalLeafBox()
+	previewContentX := terminalBox.X
+	previewContentY := terminalBox.Y
 
 	if p.termPanelLayout == TermPanelRight {
 		// Right layout: output | divider | terminal.
@@ -455,8 +456,9 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	outputBox, termBox, fits := p.termPanelSplitBoxes()
 
-	previewContentX := p.previewSplit().ContentX
-	previewContentY := p.previewContentY()
+	terminalBox, _ := p.terminalLeafBox()
+	previewContentX := terminalBox.X
+	previewContentY := terminalBox.Y
 
 	if p.termPanelLayout == TermPanelRight {
 		// Guard: if total exceeds width, fall back to shell-only

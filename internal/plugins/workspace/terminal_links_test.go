@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/tty"
@@ -48,7 +49,7 @@ func TestSafeHTTPURLRejectsNonHTTPAndControls(t *testing.T) {
 }
 
 func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
-	got := decorateTerminalLinks("visit https://example.com/x")
+	got := decorateTerminalLinks("visit https://example.com/x", nil)
 	if !strings.Contains(got, "\x1b]8;;https://example.com/x\x1b\\") {
 		t.Fatalf("validated URL did not receive OSC-8: %q", got)
 	}
@@ -57,7 +58,7 @@ func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
 	}
 
 	source := "\x1b]8;;javascript:alert(1)\x1b\\label\x1b]8;;\x1b\\"
-	cleaned := decorateTerminalLinks(source)
+	cleaned := decorateTerminalLinks(source, nil)
 	if strings.Contains(cleaned, "javascript:") || strings.Contains(cleaned, "\x1b]8;;") {
 		t.Fatalf("source-supplied OSC-8 survived sanitization: %q", cleaned)
 	}
@@ -143,7 +144,7 @@ func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T)
 	}
 
 	source := "\x1b]8;;https://hidden.example/\u00dc/https://evil.example\x07label\x1b]8;;\x07"
-	cleaned := decorateTerminalLinks(source)
+	cleaned := decorateTerminalLinks(source, nil)
 	if ansi.Strip(cleaned) != "label" {
 		t.Fatalf("UTF-8 URI payload leaked into label: %q", cleaned)
 	}
@@ -256,6 +257,400 @@ func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testi
 	}
 	if _, _, ok := resolveTerminalPath(base, "../secret.go"); ok {
 		t.Fatal("parent traversal outside workspace was accepted")
+	}
+}
+
+func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# doc\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("README.md")
+	write("docs/guide.markdown")
+	write("docs/overlap.md")
+	if err := os.Mkdir(filepath.Join(root, "directory.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "docs", Agent: &Agent{OutputBuf: tty.NewOutputBuffer(20)}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	buffer := p.shells[0].Agent.OutputBuf
+	buffer.Update("accepted capture")
+
+	tests := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{"prose", "please read README.md before continuing", []string{"README.md"}},
+		{"table", "| plan | docs/guide.markdown | ready |", []string{"docs/guide.markdown"}},
+		{"backticks", "opened `docs/guide.markdown`", []string{"docs/guide.markdown"}},
+		{"punctuation", "See (docs/guide.markdown).", []string{"docs/guide.markdown"}},
+		{"unicode columns", "✓ 日本語 docs/guide.markdown", []string{"docs/guide.markdown"}},
+		{"path line overlap", "docs/overlap.md:12", nil},
+		{"dangling", "missing.md", nil},
+		{"directory", "directory.md", nil},
+		{"outside absolute", outside, nil},
+		{"url overlap", "https://example.test/docs/guide.markdown", nil},
+		{"numeric suffix", "README.md5", nil},
+		{"identifier suffix", "README.mdfoo", nil},
+		{"colon without line", "README.md: prose", nil},
+		{"markdown suffix", "docs/guide.markdowned", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			links := p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, tc.line)
+			decorated := decorateTerminalLinks(tc.line, p.terminalLinkResolver(false, buffer))
+			if ansi.Strip(decorated) != tc.line {
+				t.Fatalf("decoration changed terminal text: %q", decorated)
+			}
+			if got := strings.Count(decorated, "\x1b[4m"); got != len(links) {
+				t.Fatalf("drawn link count = %d, resolved link count = %d: %q", got, len(links), decorated)
+			}
+			var bare []string
+			for _, link := range links {
+				if link.Kind == terminalPathLink && link.Line == 0 {
+					bare = append(bare, link.Value)
+				}
+			}
+			if !reflect.DeepEqual(bare, tc.want) {
+				t.Fatalf("bare links = %#v, want %#v; all=%#v", bare, tc.want, links)
+			}
+			if tc.name == "path line overlap" && (len(links) != 1 || links[0].Line != 12) {
+				t.Fatalf("existing path:line link was not authoritative: %#v", links)
+			}
+			for _, link := range links {
+				if link.Value == "docs/guide.markdown" && tc.name == "unicode columns" {
+					wantStart := ansi.StringWidth("✓ 日本語 ")
+					if link.StartCol != wantStart {
+						t.Fatalf("start column = %d, want visual column %d", link.StartCol, wantStart)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBareMarkdownResolutionMemoizesHitsAndMissesPerAcceptedCaptureAndSurface(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := t.TempDir()
+	for _, dir := range []string{root, otherRoot} {
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# readme"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md missing.md README.md")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxSession: "session-one", TmuxPane: "%1", OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	calls := 0
+	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
+		calls++
+		return resolveTerminalPathFromResolvedBase(base, raw)
+	}
+
+	line := "README.md missing.md README.md"
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line) // unrelated render
+	if calls != 2 {
+		t.Fatalf("resolver calls = %d, want one per unique hit/miss", calls)
+	}
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(true), buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 4 {
+		t.Fatalf("independent panel memo calls = %d, want 4 without evicting primary", calls)
+	}
+	buffer.Update(line + " changed")
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 6 {
+		t.Fatalf("resolver calls after accepted capture = %d, want 6", calls)
+	}
+	buffer.Update(line + " changed") // rejected duplicate publication
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 6 {
+		t.Fatalf("duplicate capture invalidated memo: calls=%d", calls)
+	}
+	p.shells[0].Agent.TmuxPane = "%2"
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 8 {
+		t.Fatalf("terminal target change calls = %d, want 8", calls)
+	}
+	p.shells[0] = &ShellSession{TmuxName: "two", Agent: &Agent{TmuxSession: "session-two", TmuxPane: "%1", OutputBuf: buffer}}
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 10 {
+		t.Fatalf("surface identity change calls = %d, want 10", calls)
+	}
+	p.ctx.WorkDir = otherRoot
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 12 {
+		t.Fatalf("surface root change calls = %d, want 12", calls)
+	}
+	p.shellSelected = false
+	p.worktrees = []*Worktree{{Name: "workspace", Path: root, Agent: &Agent{OutputBuf: buffer}}}
+	p.selectedIdx = 0
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != 14 {
+		t.Fatalf("shell to workspace surface change calls = %d, want 14", calls)
+	}
+}
+
+func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md missing.md")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	rootCalls, pathCalls := 0, 0
+	p.terminalRootResolver = func(raw string) (string, error) {
+		rootCalls++
+		return filepath.EvalSymlinks(raw)
+	}
+	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
+		pathCalls++
+		return resolveTerminalPathFromResolvedBase(base, raw)
+	}
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	_ = decorateTerminalLinks("README.md missing.md", resolver)
+	if rootCalls != 1 || pathCalls != 2 {
+		t.Fatalf("setup calls root=%d path=%d, want 1 and 2", rootCalls, pathCalls)
+	}
+	for range 5 {
+		// Decoration and activation both obtain an immutable surface context;
+		// neither may canonicalize or stat again after the accepted capture's
+		// hit and miss have populated the memo.
+		_ = decorateTerminalLinks("README.md missing.md", p.terminalLinkResolver(false, buffer))
+		context := p.terminalLinkSurfaceContext(false)
+		_ = p.resolvedTerminalLinks(context, buffer, "README.md missing.md")
+	}
+	// Exercise the real pointer activation lookup as well. The narrow synthetic
+	// viewport may refuse to open a pane, but resolving the link under the click
+	// must still be entirely memo-backed.
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, VisibleStart: 0, VisibleEnd: 2}
+	p.selection.Clear()
+	_, _ = p.activateTerminalLink(actionAt(2, 4))
+	if rootCalls != 2 || pathCalls != 2 {
+		t.Fatalf("cached render performed I/O or click did more than root revalidation: root=%d path=%d", rootCalls, pathCalls)
+	}
+}
+
+func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "README.md")
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outPath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	if links := resolver.links("README.md"); len(links) != 1 || links[0].Raw != "README.md" {
+		t.Fatalf("initial resolved links = %#v", links)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outPath, path); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
+		t.Fatal("click activated cached link after path escaped selected root")
+	}
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatal("escaping click created a document pane")
+	}
+}
+
+func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
+	parent := t.TempDir()
+	rootA := filepath.Join(parent, "a")
+	rootB := filepath.Join(parent, "b")
+	for _, dir := range []string{rootA, rootB} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(dir), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(parent, "current")
+	if err := os.Symlink(rootA, current); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: current}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	links := resolver.links("README.md")
+	rootAResolved, err := filepath.EvalSymlinks(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Root != rootAResolved {
+		t.Fatalf("initial link root = %#v, want %q", links, rootAResolved)
+	}
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rootB, current); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
+		t.Fatal("click activated link cached under previous selected root")
+	}
+	if _, found := p.terminalLinkMemo.surfaces["shell:one"]; found {
+		t.Fatal("root mismatch did not invalidate stale surface memo")
+	}
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatal("retargeted-root click created a document pane")
+	}
+}
+
+func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
+	root := t.TempDir()
+	rel := "docs/plans/active/global-overview-workspaces.md"
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# Global overview"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Claude Code paints the operation and path independently. Keep resets
+	// inside and immediately after the candidate to exercise plain-to-styled
+	// visual-column mapping rather than only an unstyled approximation.
+	line := "\x1b[38;5;111m⏺\x1b[0m Update(" +
+		"\x1b[1;34mdocs/plans/active/global-\x1b[22moverview-workspaces.md\x1b[39m)"
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update(line)
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root, Epoch: 7}
+	p.width, p.height = 140, 30
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus = 1
+	p.paneNextID = 2
+	p.docs = make(map[int]*docPane)
+	p.interactiveState.MouseReportingEnabled = true
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	links := resolver.links(line)
+	if len(links) != 1 || links[0].Value != rel || links[0].Raw != rel {
+		t.Fatalf("Claude Update links = %#v", links)
+	}
+	wantStart := ansi.StringWidth("⏺ Update(")
+	if links[0].StartCol != wantStart || links[0].EndCol != wantStart+ansi.StringWidth(rel)-1 {
+		t.Fatalf("link columns = %d..%d, want %d..%d", links[0].StartCol, links[0].EndCol,
+			wantStart, wantStart+ansi.StringWidth(rel)-1)
+	}
+	decorated := decorateTerminalLinks(line, resolver)
+	if ansi.Strip(decorated) != "⏺ Update("+rel+")" || !strings.Contains(decorated, "\x1b[4m") {
+		t.Fatalf("styled decoration = %q", decorated)
+	}
+
+	action := actionAt(wantStart+2, 4)
+	cmd := p.handleMouseClick(action)
+	if cmd == nil {
+		t.Fatal("click on styled Claude Update path did not activate")
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view.Title() != rel {
+		t.Fatalf("click opened doc = %#v", doc)
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("document open command = %T, want batch", cmd())
+	}
+	loaded, ok := batch[0]().(docview.LoadedMsg)
+	if !ok || loaded.Path != rel || loaded.Result.Error != nil {
+		t.Fatalf("document load = %#v", loaded)
+	}
+}
+
+func TestInteractiveMouseReportingNonLinkClickStillForwards(t *testing.T) {
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("ordinary terminal text")
+	p := newSelectionTestPlugin()
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
+	p.interactiveState.MouseReportingEnabled = true
+
+	action := actionAt(3, 4)
+	_ = p.handleMouseClick(action)
+	if p.pendingClickResolution != clickResolutionForward {
+		t.Fatalf("non-link click resolution = %v, want forward", p.pendingClickResolution)
+	}
+
+	action.Shift = true
+	p.pendingClickResolution = clickResolutionNone
+	_ = p.handleMouseClick(action)
+	if p.pendingClickResolution != clickResolutionNone {
+		t.Fatalf("shift click resolution = %v, want local selection gesture", p.pendingClickResolution)
+	}
+}
+
+func BenchmarkDecorateTerminalBareMarkdownLinks(b *testing.B) {
+	root := b.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "plan.md"), []byte("# Plan"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("| result | `docs/plan.md`, | missing.md |")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "bench", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	b.ResetTimer()
+	for range b.N {
+		_ = decorateTerminalLinks("| result | `docs/plan.md`, | missing.md |", resolver)
 	}
 }
 

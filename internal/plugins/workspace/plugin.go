@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -114,6 +115,9 @@ const (
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
+	regionDocPane          = "doc-pane"
+	regionDocClose         = "doc-close"
+	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -135,8 +139,8 @@ type Plugin struct {
 	// selectionSince timestamps the current selection so acknowledgement can
 	// require dwell. Arrowing past a shell is not reading it.
 	selectionSince time.Time
-	width   int
-	height  int
+	width          int
+	height         int
 
 	// Shared terminal components for the selected primary pane and its optional
 	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
@@ -146,6 +150,9 @@ type Plugin struct {
 	primaryTerminalTarget workspaceTerminalTarget
 	panelTerminalTarget   workspaceTerminalTarget
 	applicationFocused    bool
+	terminalLinkMemo      terminalLinkMemo
+	terminalPathResolver  func(string, string) (string, string, bool)
+	terminalRootResolver  func(string) (string, error)
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -175,6 +182,16 @@ type Plugin struct {
 	flashPreviewTime time.Time // When preview flash was triggered
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
+
+	// Preview pane tree state. A nil root retains the legacy path while the
+	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
+	// document registry and load-request state arrive with the open-doc journey.
+	paneRoot        *PaneNode
+	paneFocus       int
+	paneNextID      int
+	paneDragSplitID int
+	paneRestoreCmd  tea.Cmd
+	docs            map[int]*docPane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -571,6 +588,17 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.resetLifecycleState()
 	p.resetTerminalModels()
 	p.applicationFocused = true
+	p.paneRoot = nil
+	p.paneFocus = 0
+	p.paneNextID = 1
+	p.paneDragSplitID = 0
+	p.paneRestoreCmd = nil
+	p.docs = make(map[int]*docPane)
+	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
+		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
+		p.paneFocus = p.paneNextID
+		p.paneNextID++
+	}
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
@@ -655,6 +683,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveCopyKey(), "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(superCopyKey, "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractivePasteKey(), "paste", "workspace-interactive")
+
+		// Document panes are a distinct focus context: their navigation must not
+		// fall through to terminal scrolling or workspace refresh.
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("r", "render", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
 	}
 
 	// Load saved sidebar width
@@ -820,7 +858,8 @@ func (p *Plugin) saveSelectionState() {
 		return
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	hooks := p.shellStartupHooks.withDefaults()
+	wtState := hooks.getWorkspaceState(p.ctx.ProjectRoot)
 	wtState.WorkspaceName = ""
 	wtState.ShellTmuxName = ""
 
@@ -835,11 +874,17 @@ func (p *Plugin) saveSelectionState() {
 			wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
 		}
 	}
+	// A disabled feature must not consume or overwrite its dormant state. The
+	// nil paneRoot is the Init-time feature boundary and preserves PaneLayout
+	// verbatim through ordinary selection saves.
+	if p.paneRoot != nil {
+		wtState.PaneLayout = p.persistedPaneLayout()
+	}
 
 	// td-f88fdd: Shell display names now persisted in shells.json manifest
 	// Only save selection state (which worktree/shell is selected)
-	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" {
-		_ = state.SetWorkspaceState(p.ctx.ProjectRoot, wtState)
+	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" || wtState.PaneLayout != nil {
+		_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
 
@@ -850,9 +895,10 @@ func (p *Plugin) restoreSelectionState() bool {
 		return false
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	wtState := p.shellStartupHooks.withDefaults().getWorkspaceState(p.ctx.ProjectRoot)
 
-	// No saved state
+	// No saved selection. A layout is meaningful only after its terminal root
+	// has been selected, so never restore it independently.
 	if wtState.WorkspaceName == "" && wtState.ShellTmuxName == "" {
 		return false
 	}
@@ -863,6 +909,10 @@ func (p *Plugin) restoreSelectionState() bool {
 			if shell.TmuxName == wtState.ShellTmuxName {
 				p.shellSelected = true
 				p.selectedShellIdx = i
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
+				p.saveSelectionState()
 				return true
 			}
 		}
@@ -875,6 +925,10 @@ func (p *Plugin) restoreSelectionState() bool {
 			if wt.Name == wtState.WorkspaceName {
 				p.shellSelected = false
 				p.selectedIdx = i
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
+				p.saveSelectionState()
 				return true
 			}
 		}
@@ -1437,6 +1491,11 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 // Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
 	var cmds []tea.Cmd
+	if p.resetDocPanesForSelection() {
+		// The selection owns the terminal root. Persist the collapsed terminal
+		// immediately so an old worktree's document cannot return after restart.
+		p.saveSelectionState()
+	}
 
 	// Resize selected pane to match preview width so capture output is correct
 	if cmd := p.resizeSelectedPaneCmd(); cmd != nil {

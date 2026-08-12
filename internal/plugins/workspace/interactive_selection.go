@@ -415,14 +415,17 @@ func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
 func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea.Cmd {
 	p.pendingClickResolution = clickResolutionNone
 	modified := action.Shift || action.Alt
-	forwards := !modified && p.interactiveState != nil && p.interactiveState.MouseReportingEnabled
-	if !modified && !forwards {
-		// Link activation stays on the local path exactly where it was: an app
-		// that asked for mouse reports owns the clicks inside its own output.
+	// A validated link is Sidecar-owned even while the application has enabled
+	// mouse reporting: the same text is visibly decorated in passive and live
+	// terminal views, so an ordinary click must honor that promise before the
+	// gesture is offered to the application. Modified clicks remain selection
+	// gestures and never activate links.
+	if !modified {
 		if cmd, ok := p.activateTerminalLink(action); ok {
 			return cmd
 		}
 	}
+	forwards := !modified && p.interactiveState != nil && p.interactiveState.MouseReportingEnabled
 	if forwards {
 		p.armPendingClick(clickResolutionForward, action)
 	}

@@ -12,6 +12,7 @@ REPO="$TEST_ROOT/repo"
 PWD_FILE="$TEST_ROOT/pwd"
 ARGS_FILE="$TEST_ROOT/args"
 INNER_INPUT_FILE="$TEST_ROOT/inner-input"
+LAUNCH_TMUX_FILE="$TEST_ROOT/launch-tmux"
 REAL_CONTROL_PID_FILE="$TEST_ROOT/real-control.pid"
 DECOY_CONTROL_PID_FILE="$TEST_ROOT/decoy-control.pid"
 DECOY_TMUX_TMPDIR="$TEST_ROOT/decoy-tmux"
@@ -119,6 +120,7 @@ cat >"$FAKE_SIDECAR" <<'SHIM'
 #!/bin/bash
 pwd >"$SIDECAR_TEST_PWD_FILE"
 printf '%s\n' "$@" >"$SIDECAR_TEST_ARGS_FILE"
+printf '%s\n' "${TMUX-}" >"$SIDECAR_TEST_LAUNCH_TMUX_FILE"
 unset TMUX
 tmux -S "$SIDECAR_TEST_INNER_SOCKET" new-session -d -s proof \
     "read line; printf '%s' \"\$line\" > '$SIDECAR_TEST_INNER_INPUT_FILE'; sleep 30"
@@ -162,6 +164,7 @@ grep -F "launch repo:   $REPO" <<<"$paths" >/dev/null
 grep -F "run dir:       $RUN_DIR" <<<"$paths" >/dev/null
 
 SIDECAR_TEST_PWD_FILE="$PWD_FILE" SIDECAR_TEST_ARGS_FILE="$ARGS_FILE" \
+SIDECAR_TEST_LAUNCH_TMUX_FILE="$LAUNCH_TMUX_FILE" \
 SIDECAR_TEST_INNER_INPUT_FILE="$INNER_INPUT_FILE" \
 SIDECAR_TEST_REAL_CONTROL_PID_FILE="$REAL_CONTROL_PID_FILE" \
 SIDECAR_TEST_DECOY_CONTROL_PID_FILE="$DECOY_CONTROL_PID_FILE" \
@@ -170,15 +173,22 @@ SIDECAR_TEST_DECOY_SOCKET="$DECOY_SOCKET" \
 SIDECAR_TEST_INNER_SOCKET="$TEST_INNER_SOCKET" \
 SIDECAR_DRIVE_RUN_DIR="$RUN_DIR" SIDECAR_DRIVE_REPO="$REPO" \
 SIDECAR_DRIVE_ARGS="--enable-feature=notes_plugin --proof-trace" \
-SIDECAR_BIN="$FAKE_SIDECAR" "$DRIVER" start 80 24 >/dev/null
+SIDECAR_BIN="$FAKE_SIDECAR" \
+TMUX="$TEST_ROOT/forbidden-default,999999,0" \
+    "$DRIVER" start 80 24 >/dev/null
 
 host_pid=$(TMUX_TMPDIR="$RUN_DIR/tmux" tmux -L sidecar-drive \
     display-message -t host -p '#{pane_pid}')
 
 wait_for_file "$PWD_FILE"
+wait_for_file "$LAUNCH_TMUX_FILE"
 wait_for_file "$REAL_CONTROL_PID_FILE"
 wait_for_file "$DECOY_CONTROL_PID_FILE"
 test "$(cat "$PWD_FILE")" = "$REPO"
+case "$(cat "$LAUNCH_TMUX_FILE")" in
+    "$RUN_DIR/tmux/tmux-$(id -u)/sidecar-drive,"*) ;;
+    *) echo "launched Sidecar did not inherit only the private host socket" >&2; exit 1 ;;
+esac
 grep -Fx -- "-config" "$ARGS_FILE" >/dev/null
 grep -Fx -- "$RUN_DIR/config/config.json" "$ARGS_FILE" >/dev/null
 grep -Fx -- "--enable-feature=notes_plugin" "$ARGS_FILE" >/dev/null

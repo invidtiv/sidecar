@@ -143,10 +143,9 @@ func (p *Plugin) renderListView(width, height int) string {
 		// Register hit region for full-width preview (uses outer dimensions)
 		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, split.PreviewWidth, paneHeight, nil)
 
-		p.registerPreviewTabRegions(split)
-
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
+		p.registerPreviewTabRegions(split)
 
 		if p.previewFlashActive() {
 			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
@@ -171,12 +170,13 @@ func (p *Plugin) renderListView(width, height int) string {
 	// 2. Divider region (high priority - for drag)
 	p.mouseHandler.HitMap.AddRect(regionPaneDivider, sidebarW, 0, dividerHitWidth, paneHeight, nil)
 
-	// 3. Preview tab hit regions (highest priority for tabs)
-	p.registerPreviewTabRegions(split)
-
 	// Render content for each pane using pre-calculated content widths
 	sidebarContent := p.renderSidebarContent(sidebarContentW, innerHeight)
 	previewContent := p.renderPreviewContent(previewContentW, innerHeight)
+
+	// Preview tabs are registered after document bodies and their divider, so
+	// the visible chips remain the highest-priority targets.
+	p.registerPreviewTabRegions(split)
 
 	flashActive := p.previewFlashActive()
 

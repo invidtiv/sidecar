@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -31,12 +32,69 @@ type terminalLink struct {
 	EndCol   int
 	Value    string
 	Line     int
+	Root     string // canonical selected surface root for resolved bare paths
+	Raw      string // original candidate, revalidated on activation
+}
+
+type terminalLinkMemo struct {
+	surfaces map[string]terminalLinkSurfaceMemo
+}
+
+type terminalLinkSurfaceMemo struct {
+	rawRoot  string
+	root     string
+	target   string
+	buffer   *tty.OutputBuffer
+	revision uint64
+	paths    map[string]terminalLinkResolution
+}
+
+func (p *Plugin) terminalLinkTarget(termPanel bool) string {
+	if termPanel {
+		return p.termPanelSession + "\x00" + p.termPanelPaneID
+	}
+	if p.shellSelected {
+		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
+			return shell.Agent.TmuxSession + "\x00" + shell.Agent.TmuxPane
+		}
+		return ""
+	}
+	if wt := p.selectedWorktree(); wt != nil && wt.Agent != nil {
+		return wt.Agent.TmuxSession + "\x00" + wt.Agent.TmuxPane
+	}
+	return ""
+}
+
+type terminalLinkResolution struct {
+	rel string
+	ok  bool
+}
+
+type terminalLineLinkResolver struct {
+	plugin  *Plugin
+	context terminalLinkSurfaceContext
+	buffer  *tty.OutputBuffer
+}
+
+func (r *terminalLineLinkResolver) links(line string) []terminalLink {
+	return r.plugin.resolvedTerminalLinks(r.context, r.buffer, line)
+}
+
+type terminalLinkSurfaceContext struct {
+	rawRoot string
+	root    string
+	surface string
+	target  string
+	ok      bool
 }
 
 var (
 	terminalURLPattern  = regexp.MustCompile(`https?://[^\s<>"']+`)
 	terminalPathPattern = regexp.MustCompile(
 		`(?:^|[\s(\[])((?:\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
+	)
+	terminalBareMarkdownPattern = regexp.MustCompile(
+		`(?:^|[\s(\x5b` + "`" + `])((?:\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.(?i:md|markdown)[.,;!?)}\x5d` + "`" + `]*)`,
 	)
 )
 
@@ -104,11 +162,14 @@ func terminalLinkOverlapsBytes(plain string, links []terminalLink, start, end in
 	return false
 }
 
-func decorateTerminalLinks(line string) string {
+func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) string {
 	// tmux output is untrusted. Remove source-supplied OSC controls and
 	// synthesize OSC-8 only for URLs that pass safeHTTPURL.
 	line = stripSourceOSC8(line)
 	links := detectTerminalLinks(line)
+	if resolved != nil {
+		links = resolved.links(line)
+	}
 	// Apply from right to left so wrappers do not disturb later visual ranges.
 	for i := len(links) - 1; i >= 0; i-- {
 		link := links[i]
@@ -120,6 +181,140 @@ func decorateTerminalLinks(line string) string {
 		line = wrapTerminalVisualRange(line, link.StartCol, link.EndCol, open, close)
 	}
 	return line
+}
+
+func detectBareMarkdownCandidates(line string, existing []terminalLink) []terminalLink {
+	plain := ansi.Strip(line)
+	var links []terminalLink
+	for _, loc := range terminalBareMarkdownPattern.FindAllStringSubmatchIndex(plain, -1) {
+		if len(loc) < 4 || loc[2] < 0 {
+			continue
+		}
+		start, end := loc[2], loc[3]
+		value := strings.TrimRight(plain[start:end], ".,;!?)]}`")
+		end = start + len(value)
+		// The regexp deliberately stops at the markdown extension so it can
+		// retain punctuation for trimming. Require the next byte to be an
+		// actual token boundary; otherwise README.md5 and markdowned prose
+		// would borrow a valid prefix and become surprising links.
+		matchEnd := loc[3]
+		if matchEnd < len(plain) && !isBareMarkdownRightBoundary(plain[matchEnd]) {
+			continue
+		}
+		if value == "" || terminalLinkOverlapsBytes(plain, existing, start, end) {
+			continue
+		}
+		links = append(links, terminalLink{
+			Kind: terminalPathLink, StartCol: ansi.StringWidth(plain[:start]),
+			EndCol: ansi.StringWidth(plain[:end]) - 1, Value: value,
+		})
+	}
+	return links
+}
+
+func isBareMarkdownRightBoundary(next byte) bool {
+	return next == ' ' || next == '\t' || next == '\r' || next == '\n' ||
+		next == ')' || next == ']' || next == '}' || next == '`'
+}
+
+func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) *terminalLineLinkResolver {
+	if p.paneRoot == nil || buffer == nil {
+		return nil
+	}
+	context := p.terminalLinkSurfaceContext(termPanel)
+	if !context.ok {
+		return nil
+	}
+	return &terminalLineLinkResolver{plugin: p, context: context, buffer: buffer}
+}
+
+func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceContext {
+	return p.terminalLinkSurfaceContextWithFreshRoot(termPanel, false)
+}
+
+func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bool) terminalLinkSurfaceContext {
+	if p.ctx == nil {
+		return terminalLinkSurfaceContext{}
+	}
+	rawRoot := p.ctx.WorkDir
+	surface := ""
+	if p.shellSelected {
+		shell := p.getSelectedShell()
+		if shell == nil || shell.TmuxName == "" {
+			return terminalLinkSurfaceContext{}
+		}
+		surface = "shell:" + shell.TmuxName
+	} else {
+		wt := p.selectedWorktree()
+		if wt == nil {
+			return terminalLinkSurfaceContext{}
+		}
+		rawRoot = wt.Path
+		surface = "workspace:" + stablePathKey(wt.Path)
+	}
+	if termPanel {
+		surface += ":panel"
+	}
+	target := p.terminalLinkTarget(termPanel)
+	if !freshRoot && p.terminalLinkMemo.surfaces != nil {
+		if memo, found := p.terminalLinkMemo.surfaces[surface]; found &&
+			memo.rawRoot == filepath.Clean(rawRoot) && memo.target == target && memo.root != "" {
+			return terminalLinkSurfaceContext{rawRoot: memo.rawRoot, root: memo.root, surface: surface, target: target, ok: true}
+		}
+	}
+	rootResolver := filepath.EvalSymlinks
+	if p.terminalRootResolver != nil {
+		rootResolver = p.terminalRootResolver
+	}
+	root, err := rootResolver(rawRoot)
+	if err != nil {
+		return terminalLinkSurfaceContext{}
+	}
+	return terminalLinkSurfaceContext{rawRoot: filepath.Clean(rawRoot), root: filepath.Clean(root), surface: surface, target: target, ok: true}
+}
+
+func (p *Plugin) invalidateTerminalLinkSurface(surface string) {
+	if p.terminalLinkMemo.surfaces != nil {
+		delete(p.terminalLinkMemo.surfaces, surface)
+	}
+}
+
+func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffer *tty.OutputBuffer, line string) []terminalLink {
+	links := detectTerminalLinks(line)
+	if p.paneRoot == nil || buffer == nil || !context.ok {
+		return links
+	}
+	revision := buffer.Revision()
+	if p.terminalLinkMemo.surfaces == nil {
+		p.terminalLinkMemo.surfaces = make(map[string]terminalLinkSurfaceMemo)
+	}
+	memo, found := p.terminalLinkMemo.surfaces[context.surface]
+	if !found || memo.root != context.root || memo.target != context.target || memo.buffer != buffer || memo.revision != revision {
+		memo = terminalLinkSurfaceMemo{rawRoot: context.rawRoot, root: context.root, target: context.target, buffer: buffer, revision: revision,
+			paths: make(map[string]terminalLinkResolution)}
+	}
+	for _, candidate := range detectBareMarkdownCandidates(line, links) {
+		resolution, found := memo.paths[candidate.Value]
+		if !found {
+			resolver := resolveTerminalPathFromResolvedBase
+			if p.terminalPathResolver != nil {
+				resolver = p.terminalPathResolver
+			}
+			rel, _, resolved := resolver(context.root, candidate.Value)
+			resolution = terminalLinkResolution{rel: rel, ok: resolved}
+			memo.paths[candidate.Value] = resolution
+		}
+		if !resolution.ok {
+			continue
+		}
+		raw := candidate.Value
+		candidate.Value = resolution.rel
+		candidate.Root = context.root
+		candidate.Raw = raw
+		links = append(links, candidate)
+	}
+	p.terminalLinkMemo.surfaces[context.surface] = memo
+	return links
 }
 
 func stripSourceOSC8(line string) string {
@@ -242,13 +437,37 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 	if !ok {
 		return nil, false
 	}
-	for _, link := range detectTerminalLinks(ui.ExpandTabs(line, tabStopWidth)) {
+	termPanel := action.Region != nil && action.Region.ID == regionTermPanelContent
+	buffer := p.terminalOutputBuffer(termPanel)
+	context := p.terminalLinkSurfaceContext(termPanel)
+	for _, link := range p.resolvedTerminalLinks(context, buffer, ui.ExpandTabs(line, tabStopWidth)) {
 		if point.Col < link.StartCol || point.Col > link.EndCol {
 			continue
 		}
 		if link.Kind == terminalURLLink {
 			p.clearTerminalSelection()
 			return openInBrowser(link.Value), true
+		}
+		if link.Root != "" {
+			fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
+			if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
+				p.invalidateTerminalLinkSurface(context.surface)
+				return nil, false
+			}
+			rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
+			if !valid {
+				return nil, false
+			}
+			file, err := openContainedRegularFile(link.Root, rel)
+			if err != nil {
+				return nil, false
+			}
+			surface := strings.TrimSuffix(context.surface, ":panel")
+			cmd := p.openDocPaneFileForSurface(link.Root, surface, rel, link.Line, file)
+			if cmd != nil {
+				p.clearTerminalSelection()
+			}
+			return cmd, cmd != nil
 		}
 		cmd := p.openTerminalPath(link.Value, link.Line)
 		if cmd != nil {
@@ -277,6 +496,9 @@ func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if p.paneRoot != nil && docPaneTarget(rel, true) {
+		return p.openDocPane(filepath.Clean(baseResolved), filepath.ToSlash(rel), line)
+	}
 	navigate := func() tea.Msg {
 		return filebrowser.NavigateToFileMsg{Path: filepath.ToSlash(rel), Line: line}
 	}
@@ -299,6 +521,10 @@ func resolveTerminalPath(base, raw string) (relative, absolute string, ok bool) 
 	if err != nil {
 		return "", "", false
 	}
+	return resolveTerminalPathFromResolvedBase(baseResolved, raw)
+}
+
+func resolveTerminalPathFromResolvedBase(baseResolved, raw string) (relative, absolute string, ok bool) {
 	target := raw
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(baseResolved, target)

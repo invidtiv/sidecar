@@ -7,6 +7,20 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.viewMode == ViewModeList && p.docFocused() {
+		renderName := "Raw"
+		if doc, _ := p.activeDocPane(); doc != nil && !doc.view.Rendered() {
+			renderName = "Render"
+		}
+		return []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Close document pane", Context: "workspace-doc", Priority: 1},
+			{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 2},
+			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 3},
+			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 4},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 5},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 6},
+		}
+	}
 	switch p.viewMode {
 	case ViewModeInteractive:
 		return []plugin.Command{
@@ -369,6 +383,9 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeFilePicker:
 		return "workspace-file-picker"
 	default:
+		if p.docFocused() {
+			return "workspace-doc"
+		}
 		if p.activePane == PanePreview {
 			return "workspace-preview"
 		}

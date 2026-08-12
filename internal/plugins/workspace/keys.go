@@ -567,6 +567,15 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
+	if msg.String() == "tab" || msg.String() == "shift+tab" {
+		if _, leaf := p.activeDocPane(); leaf != nil {
+			p.cycleDocumentFocus(msg.String() == "shift+tab")
+			return nil
+		}
+	}
+	if handled, cmd := p.handleDocKey(msg); handled {
+		return cmd
+	}
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
