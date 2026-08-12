@@ -421,8 +421,34 @@ func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea
 	// gesture is offered to the application. Modified clicks remain selection
 	// gestures and never activate links.
 	if !modified {
-		if cmd, ok := p.activateTerminalLink(action); ok {
-			return cmd
+		if link, context, termPanel, found := p.terminalLinkAt(action); found {
+			documentTarget := link.Kind == terminalPathLink && docPaneTarget(link.Value, true)
+			// Preserve the exact live window containing the link before opening the
+			// document changes pane geometry. Claude commonly moves that transcript
+			// into history and publishes a sparse live grid after the resize; leaving
+			// follow enabled would replace the clicked context with that sparse grid.
+			freeze := p.captureTerminalViewportForDocOpen(termPanel)
+			if cmd, ok := p.activateResolvedTerminalLink(link, context, termPanel); ok {
+				// URLs and non-document file navigation do not resize this surface.
+				// Bare markdown and authoritative path:line routes both create a doc pane.
+				if !documentTarget {
+					return cmd
+				}
+				_, leaf := p.activeDocPane()
+				if leaf == nil {
+					return cmd
+				}
+				p.applyTerminalViewportFreeze(freeze)
+				// A document pane is not keyboard-focusable while terminal input is
+				// live. Link activation transfers focus out of the terminal, so leave
+				// interactive routing now rather than retaining stale interactive
+				// geometry/input ownership beside the newly focused document.
+				p.exitInteractiveMode()
+				p.activePane = PanePreview
+				p.paneFocus = leaf.ID
+				p.termPanelFocused = false
+				return cmd
+			}
 		}
 	}
 	forwards := !modified && p.interactiveState != nil && p.interactiveState.MouseReportingEnabled
@@ -430,6 +456,35 @@ func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea
 		p.armPendingClick(clickResolutionForward, action)
 	}
 	return p.prepareInteractiveDrag(action)
+}
+
+type terminalViewportFreeze struct {
+	termPanel bool
+	start     int
+}
+
+// captureTerminalViewportForDocOpen records the live surface's current window
+// before a document split resizes the tmux pane. It deliberately does not
+// mutate scroll state: a link can fail fresh-root or file revalidation at click
+// time, and a refused activation must remain an otherwise ordinary gesture.
+// The primary surface browses by an absolute top row; the terminal panel's
+// established passive contract stores the equivalent distance from the bottom.
+func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewportFreeze {
+	previousSource := p.selectionTermPanel
+	p.selectionTermPanel = termPanel
+	layout := p.terminalSelectionViewportLayout()
+	p.selectionTermPanel = previousSource
+	return terminalViewportFreeze{termPanel: termPanel, start: layout.Start}
+}
+
+func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
+	if freeze.termPanel {
+		p.termPanelSelectionOffset = freeze.start
+		p.termPanelDocFrozen = true
+		return
+	}
+	p.previewOffset = freeze.start
+	p.autoScrollOutput = false
 }
 
 func (p *Plugin) armPendingClick(resolution clickResolution, action mouse.MouseAction) {

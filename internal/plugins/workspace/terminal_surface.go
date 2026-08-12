@@ -354,6 +354,9 @@ func (p *Plugin) terminalScrollState(termPanel, selectionAnchored bool) (follow 
 	if selectionAnchored {
 		return false, p.termPanelSelectionOffset, false
 	}
+	if p.termPanelDocFrozen {
+		return false, p.termPanelSelectionOffset, false
+	}
 	return p.termPanelScroll == 0, p.termPanelScroll, true
 }
 

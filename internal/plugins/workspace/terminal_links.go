@@ -432,50 +432,61 @@ func wrapTerminalVisualRange(line string, startCol, endCol int, open, close stri
 	return out.String()
 }
 
-func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) {
+func (p *Plugin) terminalLinkAt(action mouse.MouseAction) (terminalLink, terminalLinkSurfaceContext, bool, bool) {
 	point, line, ok := p.terminalPointAndLine(action)
 	if !ok {
-		return nil, false
+		return terminalLink{}, terminalLinkSurfaceContext{}, false, false
 	}
 	termPanel := action.Region != nil && action.Region.ID == regionTermPanelContent
 	buffer := p.terminalOutputBuffer(termPanel)
 	context := p.terminalLinkSurfaceContext(termPanel)
 	for _, link := range p.resolvedTerminalLinks(context, buffer, ui.ExpandTabs(line, tabStopWidth)) {
-		if point.Col < link.StartCol || point.Col > link.EndCol {
-			continue
+		if point.Col >= link.StartCol && point.Col <= link.EndCol {
+			return link, context, termPanel, true
 		}
-		if link.Kind == terminalURLLink {
-			p.clearTerminalSelection()
-			return openInBrowser(link.Value), true
+	}
+	return terminalLink{}, context, termPanel, false
+}
+
+func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) {
+	link, context, termPanel, ok := p.terminalLinkAt(action)
+	if !ok {
+		return nil, false
+	}
+	return p.activateResolvedTerminalLink(link, context, termPanel)
+}
+
+func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context terminalLinkSurfaceContext, termPanel bool) (tea.Cmd, bool) {
+	if link.Kind == terminalURLLink {
+		p.clearTerminalSelection()
+		return openInBrowser(link.Value), true
+	}
+	if link.Root != "" {
+		fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
+		if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
+			p.invalidateTerminalLinkSurface(context.surface)
+			return nil, false
 		}
-		if link.Root != "" {
-			fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
-			if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
-				p.invalidateTerminalLinkSurface(context.surface)
-				return nil, false
-			}
-			rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
-			if !valid {
-				return nil, false
-			}
-			file, err := openContainedRegularFile(link.Root, rel)
-			if err != nil {
-				return nil, false
-			}
-			surface := strings.TrimSuffix(context.surface, ":panel")
-			cmd := p.openDocPaneFileForSurface(link.Root, surface, rel, link.Line, file)
-			if cmd != nil {
-				p.clearTerminalSelection()
-			}
-			return cmd, cmd != nil
+		rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
+		if !valid {
+			return nil, false
 		}
-		cmd := p.openTerminalPath(link.Value, link.Line)
+		file, err := openContainedRegularFile(link.Root, rel)
+		if err != nil {
+			return nil, false
+		}
+		surface := strings.TrimSuffix(context.surface, ":panel")
+		cmd := p.openDocPaneFileForSurface(link.Root, surface, rel, link.Line, file)
 		if cmd != nil {
 			p.clearTerminalSelection()
 		}
 		return cmd, cmd != nil
 	}
-	return nil, false
+	cmd := p.openTerminalPath(link.Value, link.Line)
+	if cmd != nil {
+		p.clearTerminalSelection()
+	}
+	return cmd, cmd != nil
 }
 
 func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {

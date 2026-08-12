@@ -515,6 +515,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	p.termPanelSession = newSession
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
+	p.termPanelDocFrozen = false
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -529,6 +530,7 @@ func (p *Plugin) cleanupTermPanelSession() {
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil
+	p.termPanelDocFrozen = false
 }
 
 // enforceLineWidths ensures every line in content is exactly targetWidth

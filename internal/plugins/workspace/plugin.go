@@ -279,6 +279,7 @@ type Plugin struct {
 	termPanelOutput          *tty.OutputBuffer // Captured output from the terminal session
 	termPanelScroll          int               // Scroll offset in terminal panel output
 	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
+	termPanelDocFrozen       bool              // Document split pins the panel to the clicked absolute viewport
 	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 
 	// File picker modal state (gf command)

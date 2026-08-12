@@ -443,6 +443,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	}
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
+	p.termPanelDocFrozen = false
 	p.interactiveState = &InteractiveState{
 		Active:        true,
 		TargetPane:    paneID,
