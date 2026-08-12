@@ -10,26 +10,28 @@ Evolve the existing app-level **Overview** into Sidecar's first-class global
 space. It gets its own top navigation and remembers its own active tab, while
 the current project remains intact underneath it.
 
-The two initial global tabs are:
+The three initial global tabs are:
 
 - **Agents** — the existing cross-project semantic Kanban board;
 - **Workspaces** — a two-pane browser over every configured project's durable
   shells and Git worktrees, with a status-grouped/filterable list on the left
-  and a read-only live terminal preview on the right.
+  and a read-only live terminal preview on the right; and
+- **Tasks** — the existing embedded Tasks experience over the user-owned global
+  Tasks store.
 
-Project space keeps its current plugin tabs (`Files`, `Workspaces`, `Git`,
-`Tasks`, and any enabled plugins). The header renders the tabs owned by the
-active space only. Project tabs do not sit behind an active global view, and
-global tabs do not appear as project plugins.
+Project space keeps project-owned tabs such as `Files`, `Workspaces`, `Git`, and
+`Notes`. The header renders the tabs owned by the active space only. Project
+tabs do not sit behind an active global view, and global tabs do not appear as
+project plugins.
 
 ```text
 Global space                         Project space
 
-Sidecar / Overview                  Sidecar / sidecar
-        [Agents] [Workspaces]               [Files] [Workspaces] [Git] …
-                 |                                   |
-                 v                                   v
-      all configured projects              one project/worktree context
+Sidecar / Overview                         Sidecar / sidecar
+        [Agents] [Workspaces] [Tasks]              [Files] [Workspaces] [Git] …
+                 |                                          |
+                 v                                          v
+      cross-project and global data                one project/worktree context
 ```
 
 This is not a synthetic project, `ProjectConfig`, plugin registry, or
@@ -59,7 +61,9 @@ Two explicit spaces make scope visible:
 
 The design deliberately shares data, status, filtering, list interaction,
 two-pane geometry, and terminal rendering. It does not force global Workspaces
-to instantiate one mutating project Workspaces plugin per repository.
+to instantiate one mutating project Workspaces plugin per repository. Tasks
+keeps its existing public embedded-TUI boundary and moves as one intact global
+experience rather than being reimplemented in Overview.
 
 ## Target journeys
 
@@ -162,6 +166,29 @@ input context so app/global shortcuts cannot steal printable characters or
 pastes. Filter and sort state are in-memory per consumer in the first version;
 they are not written to config or project state.
 
+### 5. Use Tasks as a global tool
+
+1. When the `tasks_plugin` feature is enabled, **Tasks** appears as the third
+   global tab and no longer appears among project plugins.
+2. The tab embeds the same Tasks-owned TUI, store, views, filters, prompts,
+   overlays, agent queue, command metadata, and Sidecar session namespace used
+   today. This is a placement/lifecycle change, not a fork of Tasks behavior.
+3. The model is constructed once after Sidecar's first frame, remains alive
+   across project switches and global/project toggles, and closes once when the
+   app shuts down or the feature is disabled. A project `registry.Reinit` must
+   not stop, rebuild, or rewrite it.
+4. `K` returns to the last-used global tab, so Tasks is one key away when it was
+   the user's last global destination; otherwise `K` plus its tab/number remains
+   the explicit route.
+5. Tasks' own Projects view and task context filters remain inside Tasks. The
+   global tab does not mean Sidecar pre-filters Tasks to configured projects or
+   creates a second cross-project task collector.
+
+`Files`, `Git`, project `Workspaces`, and `Notes` remain project-owned. Other
+surfaces that already read cross-project data, such as Conversations, are
+future global-scope candidates but are deliberately deferred until their own
+journey and navigation are designed.
+
 ## Product model and shared seams
 
 ### App scope and top navigation
@@ -182,17 +209,26 @@ type GlobalTab uint8
 const (
     GlobalAgents GlobalTab = iota
     GlobalWorkspaces
+    GlobalTasks
 )
 ```
 
 The app continues to own the current project/plugin. The Overview model owns
-the current global tab and the state of both global views. `headerLayout`, tab
+the current global tab and the state of its global views. `headerLayout`, tab
 hit regions, cycling, numeric shortcuts, footer context, and help use one list
 of visible tab specifications chosen from the active scope.
 
 Do not encode global tabs as fake plugin indices. Use typed tab IDs in mouse
 regions and key routing so a future enabled/disabled tab cannot shift an index
 into the wrong action.
+
+Tasks is an app-global hosted surface, not an Overview data projection. Keep
+its existing `tasksui.NewEmbedded` adapter and Tasks-owned command registry, but
+move its lifecycle out of the project plugin registry. When enabled, build it
+asynchronously after the first frame, keep its queue/ticks active even when a
+different global or project tab is visible, and close it at app shutdown. This
+preserves Tasks' background behavior without paying a rebuild on every project
+switch.
 
 ### Cross-project inventory
 
@@ -291,9 +327,9 @@ in memory and are never persisted or included in diagnostics.
 
 ### Actions and navigation
 
-Both global tabs activate the same app-owned validated navigation command.
-Resolve an item by stable `ProjectKey + Kind + Key`; never by display name,
-branch, tmux title, or current list index.
+The Agents and Workspaces global tabs activate the same app-owned validated
+navigation command. Resolve an item by stable `ProjectKey + Kind + Key`; never
+by display name, branch, tmux title, or current list index.
 
 Global Workspaces exposes only `Open`, `Filter`, `Sort`, `Refresh`, and pane
 navigation/scroll commands. Project Workspaces keeps its full command set.
@@ -346,12 +382,17 @@ footer remain visible at every supported size.
 
 1. Add typed app scope and typed global tab state while preserving the current
    project/plugin underneath.
-2. Render `[Agents] [Workspaces]` in global scope and project plugin tabs only
-   in project scope. Add scope-aware hit regions, numeric/cycle routing, footer,
-   help, and narrow-header behavior.
+2. Render `[Agents] [Workspaces] [Tasks]` in global scope (with Tasks omitted
+   when its feature is disabled) and project plugin tabs only in project scope.
+   Add scope-aware hit regions, numeric/cycle routing, footer, help, and
+   narrow-header behavior.
 3. Make `K`, `q`, and the Sidecar brand restore the remembered project
    destination; keep `@` and destination-name click as the explicit switcher.
-4. Keep the Workspaces global tab as an honest loading/placeholder view. Prove
+4. Move the existing Tasks host out of the project plugin registry and into the
+   global tab owner. Preserve its async construction, command/key routing,
+   feature flag, state namespace, agent queue, and shutdown behavior; prove
+   project switches do not stop or rebuild it.
+5. Keep the Workspaces global tab as an honest loading/placeholder view. Prove
    scope transitions do not call `registry.Reinit` or start cross-project I/O
    before Overview is entered.
 
@@ -409,6 +450,7 @@ is unchanged and returning to a project is exact.
 | `internal/kanban/`, `internal/agentstatus/` | Existing shared Agents semantics and board; no new status path |
 | `internal/plugins/workspace/view_list.go`, `keys.go`, `mouse.go`, `commands.go` | Adopt shared list/filter behavior while retaining project actions |
 | `internal/plugins/workspace/view_preview.go`, `pane_geometry.go`, `internal/tty/` | Extract only shared split/terminal presentation and immutable preview source boundary |
+| `internal/plugins/tasks/`, `internal/plugins/assembly/` | Preserve the Tasks embedding adapter while moving its ownership/lifecycle out of the project registry |
 | `internal/keymap/bindings.go` | Global-tab and filter contexts; audit collisions before assigning defaults |
 | `internal/styles/` | Scope-tab, project subtitle, group heading, and preview states using existing theme tokens where possible |
 | `scripts/tmux-drive.sh`, headless guide | Multi-project all-workspace fixture and isolated real-app proof |
@@ -419,6 +461,9 @@ is unchanged and returning to a project is exact.
 
 - global/project scope transitions preserve exact workdir, project root,
   project plugin, workspace selection, and plugin lifecycle counts;
+- enabled Tasks appears only in global navigation, preserves its exact embedded
+  views/filters/overlays/commands, survives project switches without rebuild,
+  and closes its model/agent queue exactly once at app shutdown;
 - scope-specific tabs, clicks, cycling, numeric shortcuts, help, footer hints,
   and narrow header truncation never route to hidden tabs;
 - no Overview collector work occurs before entry; switching global tabs shares
@@ -471,7 +516,8 @@ Capture text, PNG, and retained key/mouse transcripts for:
 
 1. startup into project space with no pre-entry Overview work;
 2. `K`/brand entry into Agents and exact return to the prior project plugin;
-3. global tab keyboard/click switching with only global tabs visible;
+3. global tab keyboard/click switching across Agents, Workspaces, and enabled
+   Tasks with only global tabs visible;
 4. incremental all-workspace loading, status grouping, all four sorts, and
    wide/narrow layouts;
 5. `/` filtering in global and project Workspaces, including paste, arrows,
@@ -489,8 +535,9 @@ test state; browsing itself must be read-only.
 
 ## Acceptance criteria
 
-1. Overview is visibly a global space with its own Agents and Workspaces top
-   navigation; project plugin tabs appear only in project space.
+1. Overview is visibly a global space with its own Agents, Workspaces, and
+   feature-gated Tasks top navigation; project plugin tabs appear only in
+   project space.
 2. The user can toggle global/project space with one action and recover the
    exact prior destination without project reinitialization.
 3. Global Workspaces shows every configured project's shells and Git worktrees,
@@ -508,7 +555,10 @@ test state; browsing itself must be read-only.
    cancellable inventory/cache with one tmux inventory per refresh cycle.
 9. Existing project Workspaces behavior and current Agents Kanban behavior do
    not regress, including narrow layouts and header/footer constraints.
-10. Automated gates, behavior-faithful isolated real-app proof, and independent
+10. Tasks retains its Tasks-owned store, embedded behavior, command parity,
+    agent queue, and Sidecar session state while no longer restarting on project
+    switches.
+11. Automated gates, behavior-faithful isolated real-app proof, and independent
     review pass before completion.
 
 ## Explicitly deferred
@@ -519,6 +569,8 @@ test state; browsing itself must be read-only.
 - persisted filters, sort modes, selection, or launching directly into global
   Workspaces until real use demonstrates value;
 - task/PR/CI/conversation aggregation or search that requires new slow adapters;
+- moving Conversations or any other currently project-placed surface into the
+  global tab set without its own journey and lifecycle design;
 - background OS notifications or durable attention history;
 - filesystem discovery beyond configured projects;
 - silently choosing among multiple plausible panes; and
@@ -532,8 +584,9 @@ unless real proof contradicts them:
 
 - keep the global destination name **Overview** rather than introducing
   `Global` as another noun;
-- name the tabs **Agents** and **Workspaces** rather than `Kanban` and `List`,
-  because the labels describe the content rather than its current rendering;
+- name the tabs **Agents**, **Workspaces**, and **Tasks** rather than `Kanban`,
+  `List`, or another presentation label, because they describe the owned
+  content rather than its current rendering;
 - include all durable workspaces, with no-session rows demoted to the bottom,
   rather than hiding them behind a default Live filter; and
 - use `/` to enter filtering rather than stealing printable project Workspace
