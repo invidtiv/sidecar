@@ -460,6 +460,52 @@ func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 	}
 }
 
+// A tab whose keys exist only as footer hints is a tab whose keys nobody can
+// look up. Help and the palette both read the keymap, so the global Workspaces
+// contexts have to be registered there — and what they document has to be the
+// read-only set the browser actually answers.
+func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+
+	title, ctx := m.helpSurface()
+	if title != "Workspaces" || ctx != "global-workspaces" {
+		t.Fatalf("help surface = %q/%q", title, ctx)
+	}
+	var help strings.Builder
+	m.renderBindingSection(&help, ctx)
+	rendered := ansi.Strip(help.String())
+	if strings.TrimSpace(rendered) == "" {
+		t.Fatal("the help modal renders an empty section for the global Workspaces tab")
+	}
+	for _, want := range []string{"enter", "/", "s", "r"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("help does not document %q:\n%s", want, rendered)
+		}
+	}
+
+	m.palette.SetSize(120, 40)
+	m.palette.Open(m.keymap, m.surfacePlugins(), m.activeContext, "global")
+	var found int
+	for _, entry := range m.palette.Filtered() {
+		if entry.Context == "global-workspaces" {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Fatal("the palette offers no global Workspaces commands in the global Workspaces context")
+	}
+
+	// The filter's own context is registered too, so the query's exits are
+	// discoverable while it owns the keyboard.
+	if len(m.keymap.BindingsForContext("global-workspaces-filter")) == 0 {
+		t.Fatal("the global filter context documents nothing")
+	}
+}
+
 func hasHint(hints []footerHint, keys, label string) bool {
 	for _, hint := range hints {
 		if hint.keys == keys && hint.label == label {

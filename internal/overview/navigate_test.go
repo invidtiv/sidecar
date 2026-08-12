@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -296,12 +297,22 @@ func TestGlobalBrowserOffersNoMutatingOrInteractivePath(t *testing.T) {
 	run(t, m, m.SetWorkspacesVisible(true))
 	captures := len(recorder.panes())
 
-	for _, command := range m.WorkspacesCommands() {
-		for _, forbidden := range []string{"new", "delete", "rename", "attach", "interactive", "merge", "diff", "task", "commit"} {
-			if strings.Contains(strings.ToLower(command.Name), forbidden) {
-				t.Fatalf("the read-only command set offers %q", command.Name)
+	// The discoverable command set — what help and the palette offer for this
+	// tab — carries the same boundary as the keys below.
+	var registered int
+	for _, binding := range keymap.DefaultBindings() {
+		if binding.Context != "global-workspaces" && binding.Context != "global-workspaces-filter" {
+			continue
+		}
+		registered++
+		for _, forbidden := range []string{"new", "delete", "rename", "attach", "interactive", "merge", "diff", "task", "commit", "start", "stop", "kill", "push", "approve"} {
+			if strings.Contains(binding.Command, forbidden) {
+				t.Fatalf("the read-only command set offers %q", binding.Command)
 			}
 		}
+	}
+	if registered == 0 {
+		t.Fatal("the global Workspaces tab registers no bindings, so help and the palette document nothing")
 	}
 
 	// The project plugin's mutating keys are not the browser's to answer.

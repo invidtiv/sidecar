@@ -290,6 +290,51 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	}
 }
 
+// A project whose inventory could not be read has to be visible in the list
+// that is missing it — including in the normal case, where the catalog is
+// longer than the pane and there are no leftover rows for it to occupy.
+func TestFailureRowsSurviveACatalogLongerThanThePane(t *testing.T) {
+	var m Model
+	var many []Item
+	for i := range 40 {
+		item := items()[0]
+		item.ID = string(rune('a'+i%26)) + strings.Repeat("x", i)
+		many = append(many, item)
+	}
+	m.SetItems(many)
+	m.SetFailures([]string{"braid unavailable: not a Git repository"})
+
+	view := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 12}).View)
+	if !strings.Contains(view, "braid unavailable") {
+		t.Fatalf("failure row was squeezed out by a full viewport:\n%s", view)
+	}
+	if !strings.Contains(view, "modal look and feel") {
+		t.Fatalf("failure row cost the list its items:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if ansi.StringWidth(line) != 46 {
+			t.Fatalf("failure row broke the box width: %q", line)
+		}
+	}
+	if lines := strings.Count(view, "\n") + 1; lines != 12 {
+		t.Fatalf("render produced %d lines in a 12-row box", lines)
+	}
+
+	// A long outage list collapses into a count rather than taking the pane.
+	failures := make([]string, 0, 20)
+	for i := range 20 {
+		failures = append(failures, "project"+string(rune('a'+i))+" unavailable: gone")
+	}
+	m.SetFailures(failures)
+	collapsed := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 12}).View)
+	if !strings.Contains(collapsed, "more projects unavailable") {
+		t.Fatalf("long failure list did not collapse:\n%s", collapsed)
+	}
+	if !strings.Contains(collapsed, "modal look and feel") {
+		t.Fatalf("failures pushed the catalog off the screen:\n%s", collapsed)
+	}
+}
+
 func TestRegionsFollowRenderedGeometry(t *testing.T) {
 	var m Model
 	m.SetItems(items())

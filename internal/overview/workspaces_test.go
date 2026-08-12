@@ -145,6 +145,12 @@ func TestPerProjectFailureIsAVisibleRowNotASilentGap(t *testing.T) {
 	if !strings.Contains(view, "braid unavailable") {
 		t.Fatalf("project failure is not surfaced:\n%s", view)
 	}
+	// And in the ordinary case, where the catalog fills the pane and there are
+	// no rows left over for the failure to occupy.
+	short := ansi.Strip(m.WorkspacesView(70, 8))
+	if !strings.Contains(short, "braid unavailable") {
+		t.Fatalf("project failure vanished in a full viewport:\n%s", short)
+	}
 }
 
 type errStub struct{ text string }

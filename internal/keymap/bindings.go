@@ -59,6 +59,45 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close-overview", Context: "overview"},
 		{Key: "K", Command: "toggle-overview", Context: "overview"},
 
+		// Global Workspaces context (cross-project shell/worktree browser).
+		// Like the Agents board above, these keys are answered by the app before
+		// keymap dispatch; they are registered so help, the palette, and the
+		// footer can discover them.
+		//
+		// This list is also the boundary the plan draws: the global browser is a
+		// reader, so there is deliberately no create, delete, attach, or
+		// interactive command here. Mutating workspace behaviour belongs to the
+		// owning project's Workspaces plugin, where its refusal rules live.
+		{Key: "enter", Command: "open-workspace", Context: "global-workspaces"},
+		{Key: "/", Command: "filter", Context: "global-workspaces"},
+		{Key: "s", Command: "sort", Context: "global-workspaces"},
+		{Key: "r", Command: "refresh", Context: "global-workspaces"},
+		{Key: "j", Command: "cursor-down", Context: "global-workspaces"},
+		{Key: "k", Command: "cursor-up", Context: "global-workspaces"},
+		{Key: "down", Command: "cursor-down", Context: "global-workspaces"},
+		{Key: "up", Command: "cursor-up", Context: "global-workspaces"},
+		{Key: "g", Command: "cursor-top", Context: "global-workspaces"},
+		{Key: "G", Command: "cursor-bottom", Context: "global-workspaces"},
+		{Key: "l", Command: "focus-preview", Context: "global-workspaces"},
+		{Key: "right", Command: "focus-preview", Context: "global-workspaces"},
+		{Key: "h", Command: "focus-list", Context: "global-workspaces"},
+		{Key: "left", Command: "focus-list", Context: "global-workspaces"},
+		{Key: "ctrl+d", Command: "scroll-preview-down", Context: "global-workspaces"},
+		{Key: "ctrl+u", Command: "scroll-preview-up", Context: "global-workspaces"},
+		{Key: "esc", Command: "close-overview", Context: "global-workspaces"},
+		{Key: "q", Command: "close-overview", Context: "global-workspaces"},
+		{Key: "K", Command: "toggle-overview", Context: "global-workspaces"},
+
+		// Global Workspaces filter context. While the query owns the keyboard it
+		// is a text input: only these keys mean anything else, and navigation
+		// stays live so a user can type, arrow onto a match, and press enter.
+		{Key: "enter", Command: "filter-accept", Context: "global-workspaces-filter"},
+		{Key: "esc", Command: "filter-clear", Context: "global-workspaces-filter"},
+		{Key: "down", Command: "cursor-down", Context: "global-workspaces-filter"},
+		{Key: "up", Command: "cursor-up", Context: "global-workspaces-filter"},
+		{Key: "ctrl+n", Command: "cursor-down", Context: "global-workspaces-filter"},
+		{Key: "ctrl+p", Command: "cursor-up", Context: "global-workspaces-filter"},
+
 		// Project switcher context
 		{Key: "@", Command: "toggle", Context: "project-switcher"},
 		{Key: "esc", Command: "close", Context: "project-switcher"},

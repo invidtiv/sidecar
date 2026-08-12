@@ -269,7 +269,22 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	if m.sortMode == SortActivity {
 		headingRows = len(sections)
 	}
-	m.rows = max(1, (body-headingRows)/rowHeight)
+	// A project whose inventory could not be read is a row, not a leftover. Its
+	// lines are reserved out of the body before the item viewport is sized, so a
+	// catalog longer than the pane — the normal multi-project case — cannot make
+	// an unavailable project silently vanish. The reservation is bounded: a long
+	// outage list collapses into a count rather than pushing the catalog off the
+	// screen.
+	failureRows := len(m.failures)
+	if failureRows > 0 {
+		limit := max(0, body-1)
+		if len(m.visible) > 0 {
+			limit = min(limit, max(1, body/3))
+		}
+		failureRows = min(failureRows, limit)
+	}
+	listBody := max(0, body-failureRows)
+	m.rows = max(1, (listBody-headingRows)/rowHeight)
 	m.ensureVisible()
 
 	var rowLines []string
@@ -313,15 +328,8 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		}
 	}
 
-	for _, failure := range m.failures {
-		if len(rowLines) >= body {
-			break
-		}
-		rowLines = append(rowLines, fit(styles.Muted.Render("⚠ "+failure), rowWidth))
-	}
-
-	if len(rowLines) > body {
-		rowLines = rowLines[:body]
+	if len(rowLines) > listBody {
+		rowLines = rowLines[:listBody]
 	}
 	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
 		TotalItems:   len(m.visible),
@@ -333,10 +341,34 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	if len(rowLines) > 0 {
 		lines = append(lines, strings.Split(content, "\n")...)
 	}
+	lines = append(lines, m.failureLines(failureRows, width)...)
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", width))
 	}
 	return Rendered{View: strings.Join(lines[:height], "\n"), Regions: regions}
+}
+
+// failureLines renders the per-project unavailable rows that fit in the space
+// reserved for them. When more projects failed than there is room for, the last
+// reserved line becomes a count: the user still learns that inventory is
+// incomplete, which is the whole point of the row.
+func (m *Model) failureLines(rows, width int) []string {
+	if rows <= 0 || len(m.failures) == 0 {
+		return nil
+	}
+	if len(m.failures) <= rows {
+		out := make([]string, 0, len(m.failures))
+		for _, failure := range m.failures {
+			out = append(out, fit(styles.Muted.Render("⚠ "+failure), width))
+		}
+		return out
+	}
+	out := make([]string, 0, rows)
+	for _, failure := range m.failures[:rows-1] {
+		out = append(out, fit(styles.Muted.Render("⚠ "+failure), width))
+	}
+	remaining := len(m.failures) - (rows - 1)
+	return append(out, fit(styles.Muted.Render(fmt.Sprintf("⚠ +%d more projects unavailable", remaining)), width))
 }
 
 // renderRow draws one item. Two lines where the width supports it: name and

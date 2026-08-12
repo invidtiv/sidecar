@@ -391,13 +391,9 @@ func (m *Model) WorkspacesSummary() string {
 	return fmt.Sprintf("%d workspaces", total)
 }
 
-// WorkspacesCommands lists the read-only command set of the global browser.
-// There is deliberately no create, delete, attach, or interactive entry here:
-// the global browser must not become a second implementation of destructive
-// workspace behaviour.
-func (m *Model) WorkspacesCommands() []struct{ Key, Name string } {
-	return []struct{ Key, Name string }{
-		{"enter", "Open"}, {"/", "Filter"}, {"s", "Sort"}, {"r", "Refresh"},
-		{"→", "Focus preview"}, {"←", "Focus list"}, {"jk", "Scroll preview"},
-	}
-}
+// The browser's command set is not declared here. It is registered in
+// internal/keymap under the "global-workspaces" and "global-workspaces-filter"
+// contexts, which is what makes it discoverable in help and the palette rather
+// than only in footer hints — and what makes the read-only boundary (no create,
+// delete, attach, or interactive command) a single documented fact instead of a
+// second list beside the keys this file actually answers.
