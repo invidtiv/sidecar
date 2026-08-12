@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sidecar Global Workspaces Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #101214;
+      --surface: #101214;
+      --surface-raised: #191c20;
+      --surface-selected: #191d20;
+      --surface-selected-strong: #22272c;
+      --line: #2a2e32;
+      --line-soft: #202428;
+      --text: #f2f3f5;
+      --text-soft: #c2c5cb;
+      --text-muted: #858b96;
+      --primary: #9bb8dc;
+      --working: #a5cf72;
+      --attention: #efa792;
+      --done: #8fb6dd;
+      --idle: #9ca2ab;
+      --paused: #be9bdd;
+      --shell: #d9b56f;
+      --sidecar-project: #8fd3e3;
+      --tasks-project: #d8a0d5;
+      --braid-project: #b6d578;
+      --vibes-project: #f0a66f;
+      --radius: 0;
+      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #ebe9e2;
+      color: var(--text);
+      font-family: var(--mono);
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    button, input, select { font: inherit; }
+
+    button { color: inherit; }
+
+    .sidecar-window {
+      width: min(1440px, 100%);
+      height: min(900px, calc(100vh - 48px));
+      min-height: min(900px, calc(100vh - 48px));
+      display: grid;
+      grid-template-rows: 48px 1fr 38px;
+      overflow: hidden;
+      background: var(--canvas);
+      border: 1px solid #2b2f33;
+      border-radius: 0;
+      box-shadow: 0 16px 44px rgba(0, 0, 0, .22);
+    }
+
+    .sidecar-header {
+      display: grid;
+      grid-template-columns: minmax(250px, 1fr) auto minmax(250px, 1fr);
+      align-items: stretch;
+      background: #121416;
+      border-bottom: 1px solid #222629;
+    }
+
+    .sidecar-destination {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .sidecar-brand,
+    .sidecar-scope {
+      height: 100%;
+      display: inline-flex;
+      align-items: center;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .sidecar-brand {
+      padding: 0 16px;
+      background: #34383e;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+
+    .sidecar-scope {
+      min-width: 0;
+      gap: 10px;
+      padding: 0 14px;
+      color: var(--text-soft);
+      white-space: nowrap;
+    }
+
+    .sidecar-scope span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidecar-scope:hover,
+    .sidecar-brand:hover { background: #3d4249; }
+
+    .sidecar-tabs {
+      display: flex;
+      align-items: end;
+      gap: 4px;
+      padding-top: 7px;
+    }
+
+    .sidecar-tab {
+      position: relative;
+      height: 34px;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 7px 7px 0 0;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .sidecar-tab:hover { color: var(--text); background: #2d3138; }
+
+    .sidecar-tab[aria-selected="true"] {
+      color: var(--text);
+      background: #1d2125;
+    }
+
+    .sidecar-tab[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 0;
+      height: 2px;
+      background: var(--primary);
+    }
+
+    .sidecar-header-meta {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      padding: 0 15px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .sidecar-live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--working);
+      box-shadow: 0 0 10px color-mix(in srgb, var(--working) 60%, transparent);
+    }
+
+    .sidecar-main {
+      min-height: 0;
+      padding: 0;
+    }
+
+    .sidecar-layout {
+      height: 100%;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(390px, 38%) 22px minmax(0, 1fr);
+    }
+
+    .sidecar-pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--surface);
+      border: 0;
+      border-radius: var(--radius);
+    }
+
+    .sidecar-sidebar {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+
+    .sidecar-pane-head {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px 8px;
+      border-bottom: 0;
+    }
+
+    .sidecar-title-block { min-width: 0; }
+
+    .sidecar-eyebrow {
+      margin-bottom: 7px;
+      color: var(--text-muted);
+      font-size: 11px;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .sidecar-pane-title {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      line-height: 1.2;
+    }
+
+    .sidecar-pane-title::after {
+      content: "";
+      width: clamp(80px, 17vw, 230px);
+      height: 1px;
+      background: var(--line);
+    }
+
+    .sidecar-count {
+      flex: none;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .sidecar-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 24px 10px;
+      border-bottom: 0;
+    }
+
+    .sidecar-filter-wrap {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0 5px;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid #363b40;
+      border-radius: 0;
+      color: var(--text-muted);
+    }
+
+    .sidecar-filter-wrap:focus-within {
+      border-color: var(--primary);
+      box-shadow: none;
+    }
+
+    .sidecar-filter {
+      width: 100%;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .sidecar-filter::placeholder { color: #6f7580; }
+
+    .sidecar-sort {
+      padding: 6px 22px 5px 6px;
+      border: 0;
+      border-bottom: 1px solid #363b40;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text-soft);
+      cursor: pointer;
+    }
+
+    .sidecar-workspace-list {
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-color: #525966 transparent;
+      scrollbar-width: thin;
+      padding: 0 16px 18px 24px;
+    }
+
+    .sidecar-group[hidden] { display: none; }
+
+    .sidecar-group-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 15px 0 7px;
+      background: linear-gradient(var(--surface) 82%, transparent);
+      color: var(--text-muted);
+      font-size: 10px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .sidecar-group-head::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: var(--line-soft);
+    }
+
+    .sidecar-group-count {
+      order: 2;
+      color: #717782;
+      letter-spacing: 0;
+    }
+
+    .sidecar-item {
+      position: relative;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 4px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: stretch;
+      margin: 2px 0;
+      padding: 7px 10px 7px 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .sidecar-item:hover { background: #171a1d; }
+
+    .sidecar-item[aria-selected="true"] {
+      background: var(--surface-selected);
+      box-shadow: none;
+    }
+
+    .sidecar-project-spine {
+      border-radius: 0;
+      background: var(--project-color);
+      opacity: .9;
+    }
+
+    .sidecar-item-main { min-width: 0; }
+
+    .sidecar-item-title-row,
+    .sidecar-item-subtitle-row {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sidecar-item-name {
+      overflow: hidden;
+      color: var(--text);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .sidecar-kind { color: var(--text-muted); }
+
+    .sidecar-item-subtitle-row {
+      margin-top: 5px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .sidecar-project-name {
+      color: var(--project-color);
+      font-weight: 500;
+    }
+
+    .sidecar-item-meta {
+      align-self: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .sidecar-agent {
+      color: var(--agent-color, var(--text-soft));
+    }
+
+    .sidecar-status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px color-mix(in srgb, currentColor 45%, transparent);
+    }
+
+    .sidecar-status-attention { color: var(--attention); }
+    .sidecar-status-working { color: var(--working); }
+    .sidecar-status-done { color: var(--done); }
+    .sidecar-status-shell { color: var(--shell); }
+    .sidecar-status-idle { color: var(--idle); }
+    .sidecar-status-paused { color: var(--paused); }
+
+    .sidecar-divider {
+      position: relative;
+      cursor: col-resize;
+    }
+
+    .sidecar-divider::after {
+      content: "";
+      position: absolute;
+      top: 20px;
+      bottom: 20px;
+      left: 10px;
+      width: 1px;
+      background: repeating-linear-gradient(to bottom, #34393e 0 5px, transparent 5px 10px);
+    }
+
+    .sidecar-preview {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+
+    .sidecar-preview-head {
+      min-height: 64px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      padding: 18px 24px 8px 6px;
+      border-bottom: 0;
+    }
+
+    .sidecar-preview-title {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .sidecar-preview-project {
+      color: var(--selected-project-color, var(--primary));
+    }
+
+    .sidecar-preview-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .sidecar-readonly {
+      color: #8e96a2;
+      white-space: nowrap;
+    }
+
+    .sidecar-open {
+      padding: 4px 0;
+      border: 0;
+      border-bottom: 1px solid #4a5057;
+      border-radius: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .sidecar-open:hover { color: var(--primary); border-color: var(--primary); }
+
+    .sidecar-preview-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 44px;
+      margin: 0 24px 0 6px;
+      padding: 7px 0 10px;
+      border-bottom: 1px solid var(--line);
+      color: var(--text-muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .sidecar-preview-meta span { overflow: hidden; text-overflow: ellipsis; }
+
+    .sidecar-terminal {
+      min-height: 0;
+      overflow: auto;
+      padding: 22px 24px 28px 6px;
+      background: var(--surface);
+      color: #d8dbe0;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      scrollbar-color: #525966 transparent;
+      scrollbar-width: thin;
+    }
+
+    .sidecar-terminal .muted { color: #717884; }
+    .sidecar-terminal .command { color: #a8c7ec; }
+    .sidecar-terminal .success { color: #a8d57b; }
+    .sidecar-terminal .accent { color: #d2acd9; }
+    .sidecar-terminal .warn { color: #efb180; }
+    .sidecar-terminal .cursor { color: var(--text); animation: sidecar-blink 1.1s step-end infinite; }
+
+    @keyframes sidecar-blink { 50% { opacity: 0; } }
+
+    .sidecar-footer {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 13px;
+      background: #121416;
+      border-top: 1px solid #222629;
+      color: var(--text-muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .sidecar-hints {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidecar-key { color: var(--text-soft); }
+
+    .sidecar-refresh { flex: none; }
+
+    .sidecar-empty {
+      display: none;
+      padding: 32px 16px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    @media (max-width: 920px) {
+      body { padding: 0; }
+      .sidecar-window { height: 100vh; min-height: 100vh; border: 0; border-radius: 0; }
+      .sidecar-header { grid-template-columns: minmax(190px, 1fr) auto; }
+      .sidecar-header-meta { display: none; }
+      .sidecar-layout { grid-template-columns: minmax(330px, 44%) 22px minmax(0, 1fr); }
+      .sidecar-item-meta { display: none; }
+    }
+
+    @media (max-width: 700px) {
+      .sidecar-header { grid-template-columns: 1fr auto; }
+      .sidecar-brand { padding: 0 10px; }
+      .sidecar-scope { padding: 0 8px; }
+      .sidecar-tab { padding: 0 10px; }
+      .sidecar-main { padding: 7px; }
+      .sidecar-layout { display: block; }
+      .sidecar-divider, .sidecar-preview { display: none; }
+      .sidecar-sidebar { height: 100%; }
+      .sidecar-footer { gap: 8px; }
+      .sidecar-refresh { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sidecar-window" aria-label="Sidecar global Workspaces mockup">
+    <header class="sidecar-header">
+      <div class="sidecar-destination">
+        <button class="sidecar-brand" type="button" title="Toggle project and global space">Sidecar</button>
+        <button class="sidecar-scope" type="button" title="Switch destination"><span>/</span><span>Overview</span></button>
+      </div>
+      <nav class="sidecar-tabs" aria-label="Global navigation" role="tablist">
+        <button class="sidecar-tab" type="button" role="tab" aria-selected="false">Agents</button>
+        <button class="sidecar-tab" type="button" role="tab" aria-selected="true">Workspaces</button>
+      </nav>
+      <div class="sidecar-header-meta"><span class="sidecar-live-dot"></span><span>12 live</span><span>19:31</span></div>
+    </header>
+
+    <section class="sidecar-main">
+      <div class="sidecar-layout">
+        <section class="sidecar-pane sidecar-sidebar" aria-label="All workspaces">
+          <header class="sidecar-pane-head">
+            <div class="sidecar-title-block">
+              <div class="sidecar-eyebrow">All configured projects</div>
+              <h1 class="sidecar-pane-title">Workspaces</h1>
+            </div>
+            <div class="sidecar-count" id="sidecarCount">12 sessions</div>
+          </header>
+
+          <div class="sidecar-tools">
+            <label class="sidecar-filter-wrap" title="Filter by workspace, project, branch, task, provider, or state">
+              <span>/</span>
+              <input class="sidecar-filter" id="sidecarFilter" type="search" placeholder="Filter workspaces…" autocomplete="off">
+            </label>
+            <select class="sidecar-sort" id="sidecarSort" aria-label="Sort workspaces">
+              <option value="activity">Activity</option>
+              <option value="project">Project</option>
+              <option value="recent">Recent</option>
+              <option value="name">Name</option>
+            </select>
+          </div>
+
+          <div class="sidecar-workspace-list" id="sidecarList" role="listbox" aria-label="Cross-project workspace sessions">
+            <div class="sidecar-empty" id="sidecarEmpty">No workspaces match this filter.</div>
+          </div>
+        </section>
+
+        <div class="sidecar-divider" aria-hidden="true"></div>
+
+        <section class="sidecar-pane sidecar-preview" aria-label="Selected terminal preview">
+          <header class="sidecar-preview-head">
+            <div class="sidecar-preview-title"><span class="sidecar-preview-project" id="sidecarPreviewProject">sidecar</span> / <span id="sidecarPreviewName">modal look and feel</span></div>
+            <div class="sidecar-preview-actions"><span class="sidecar-readonly">read-only preview</span><button class="sidecar-open" id="sidecarOpen" type="button">Open in project ↗</button></div>
+          </header>
+          <div class="sidecar-preview-meta">
+            <span id="sidecarPreviewKind">⑂ worktree</span>
+            <span id="sidecarPreviewBranch">branch modal-look-and-feel</span>
+            <span class="sidecar-agent" id="sidecarPreviewAgent">▶ codex</span>
+            <span id="sidecarPreviewStatus">working · changed 2m</span>
+          </div>
+          <div class="sidecar-terminal" id="sidecarTerminal" aria-live="polite"></div>
+        </section>
+      </div>
+    </section>
+
+    <footer class="sidecar-footer">
+      <div class="sidecar-hints"><span class="sidecar-key">↑/↓</span> navigate&nbsp;&nbsp; <span class="sidecar-key">/</span> filter&nbsp;&nbsp; <span class="sidecar-key">s</span> sort&nbsp;&nbsp; <span class="sidecar-key">enter</span> open&nbsp;&nbsp; <span class="sidecar-key">K</span> project</div>
+      <div class="sidecar-refresh">↻ refreshed 19:31:42</div>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      const projectColors = {
+        sidecar: "var(--sidecar-project)",
+        tasks: "var(--tasks-project)",
+        braid: "var(--braid-project)",
+        vibes: "var(--vibes-project)"
+      };
+
+      const groups = {
+        attention: { label: "Needs attention", order: 0 },
+        working: { label: "Working", order: 1 },
+        done: { label: "Recently done", order: 2 },
+        shell: { label: "Live shells", order: 3 },
+        idle: { label: "Idle", order: 4 },
+        paused: { label: "Paused / unavailable", order: 5 },
+        offline: { label: "No live session", order: 6 }
+      };
+
+      const workspaces = [
+        { id: "sidecar-modal", project: "sidecar", name: "modal look and feel", kind: "worktree", branch: "modal-look-and-feel", task: "td-281fa4", agent: "codex", icon: "▶", status: "working", state: "working", age: "2m", recent: 2,
+          terminal: `<span class="muted">~/code/sidecar-modal-look-and-feel  main +3</span>\n<span class="command">$ go test ./internal/modal ./internal/styles</span>\n<span class="success">ok  github.com/marcus/sidecar/internal/modal   0.412s</span>\n<span class="success">ok  github.com/marcus/sidecar/internal/styles  0.189s</span>\n\n<span class="accent">Codex</span>  The modal background regression is covered. I’m checking the\n       project switcher at narrow widths before handing it off.\n\n<span class="command">$ git diff --check</span>\n<span class="success">clean</span>\n<span class="cursor">▊</span>` },
+        { id: "tasks-window", project: "sidecar", name: "tasks window", kind: "shell", branch: "main", task: "", agent: "claude", icon: "◆", status: "permission required", state: "attention", age: "now", recent: 0,
+          terminal: `<span class="muted">~/code/sidecar  main</span>\n<span class="accent">Claude</span> needs permission to run:\n\n<span class="command">  make install-worktree</span>\n\nAllow this command?\n  <span class="success">❯ Yes</span>\n    No\n<span class="cursor">▊</span>` },
+        { id: "sidecar-kanban", project: "sidecar", name: "kanban scrolling polish", kind: "shell", branch: "main", task: "td-71de3d", agent: "shell", icon: "❯", status: "live", state: "shell", age: "4h", recent: 240,
+          terminal: `<span class="muted">~/code/sidecar  main ↑7</span>\n<span class="command">$ td show td-71de3d</span>\nPolish Overview kanban scrolling and selection\nStatus: <span class="warn">in_review</span>\n\n<span class="command">$ git status --short</span>\n?? internal/modal/background_test.go\n?? internal/styles/fill_background_test.go\n<span class="cursor">▊</span>` },
+        { id: "sidecar-cursor", project: "sidecar", name: "cursor shell kanban identity", kind: "worktree", branch: "cursor-kanban-identity", task: "", agent: "cursor", icon: "▌", status: "idle", state: "idle", age: "1h", recent: 60,
+          terminal: `<span class="muted">~/code/sidecar-cursor-kanban  cursor-kanban-identity</span>\n<span class="command">$ git status --short --branch</span>\n## cursor-kanban-identity\n\n<span class="muted">Cursor is idle at the shell prompt.</span>\n<span class="cursor">▊</span>` },
+        { id: "tasks-api", project: "tasks", name: "json output parity", kind: "worktree", branch: "json-output-parity", task: "td-a786d8", agent: "claude", icon: "◆", status: "done", state: "done", age: "8m", recent: 8,
+          terminal: `<span class="muted">~/code/tasks-json-output-parity  json-output-parity</span>\n<span class="command">$ go test ./...</span>\n<span class="success">ok  github.com/marcus/tasks/...</span>\n\n<span class="accent">Claude</span>  Implementation complete. CLI and API fixtures now share the\n        same canonical JSON projection.\n<span class="cursor">▊</span>` },
+        { id: "braid-models", project: "braid", name: "local model qualification", kind: "worktree", branch: "model-qualification", task: "", agent: "grok", icon: "✦", status: "working", state: "working", age: "6m", recent: 6,
+          terminal: `<span class="muted">~/code/braid-model-qualification  model-qualification</span>\n<span class="command">$ braid models qualify nativ-qwen</span>\nloading model adapter…\n<span class="success">health: ready</span>\n<span class="success">structured output: pass</span>\nlatency p50: 184ms\n<span class="cursor">▊</span>` },
+        { id: "vibes-privacy", project: "vibes", name: "privacy launch audit", kind: "worktree", branch: "privacy-launch", task: "", agent: "codex", icon: "▶", status: "paused", state: "paused", age: "2d", recent: 2880,
+          terminal: `<span class="muted">~/code/vibes-privacy  privacy-launch</span>\n<span class="warn">Session unavailable</span>\n\nThe durable workspace still exists, but Sidecar cannot find an\nunambiguous live tmux pane for this worktree.\n\nOpen in project to inspect or restart it.` },
+        { id: "sidecar-main", project: "sidecar", name: "main", kind: "worktree", branch: "main", task: "", agent: "", icon: "", status: "no session", state: "offline", age: "", recent: 9999,
+          terminal: `<span class="muted">~/code/sidecar  main</span>\n\nMain worktree\n\nNo live session is associated with this workspace. Open it in the\nsidecar project to create a shell or start an agent.` },
+        { id: "tasks-main", project: "tasks", name: "main", kind: "worktree", branch: "main", task: "", agent: "", icon: "", status: "no session", state: "offline", age: "", recent: 9999,
+          terminal: `<span class="muted">~/code/tasks  main</span>\n\nMain worktree\n\nNo live session is associated with this workspace.` },
+        { id: "braid-dev", project: "braid", name: "dev server", kind: "shell", branch: "main", task: "", agent: "shell", icon: "❯", status: "live", state: "shell", age: "3h", recent: 180,
+          terminal: `<span class="muted">~/code/braid  main</span>\n<span class="command">$ npm run dev</span>\n<span class="success">ready</span> - server listening on http://127.0.0.1:7781\nwatching editorial and model config…\n<span class="cursor">▊</span>` },
+        { id: "vibes-relay", project: "vibes", name: "relay deploy", kind: "shell", branch: "main", task: "", agent: "shell", icon: "❯", status: "live", state: "shell", age: "1d", recent: 1440,
+          terminal: `<span class="muted">~/code/vibes  main</span>\n<span class="command">$ make deploy</span>\n<span class="success">health check passed</span>\nrelay is serving the new build\n<span class="cursor">▊</span>` },
+        { id: "tasks-release", project: "tasks", name: "release v1.5", kind: "worktree", branch: "release-v1.5", task: "", agent: "codex", icon: "▶", status: "idle", state: "idle", age: "5h", recent: 300,
+          terminal: `<span class="muted">~/code/tasks-release-v1.5  release-v1.5</span>\n<span class="command">$ make release-notes</span>\nrelease notes generated\n\n<span class="muted">Codex is idle at the prompt.</span>\n<span class="cursor">▊</span>` }
+      ];
+
+      const filter = document.getElementById("sidecarFilter");
+      const sort = document.getElementById("sidecarSort");
+      const list = document.getElementById("sidecarList");
+      const empty = document.getElementById("sidecarEmpty");
+      const count = document.getElementById("sidecarCount");
+      let selectedId = workspaces[0].id;
+
+      function searchable(item) {
+        return [item.name, item.project, item.branch, item.task, item.agent, item.status, item.kind].join(" ").toLowerCase();
+      }
+
+      function sortedItems(items) {
+        const mode = sort.value;
+        return [...items].sort((a, b) => {
+          if (mode === "project") return a.project.localeCompare(b.project) || a.name.localeCompare(b.name);
+          if (mode === "recent") return a.recent - b.recent || a.name.localeCompare(b.name);
+          if (mode === "name") return a.name.localeCompare(b.name) || a.project.localeCompare(b.project);
+          return groups[a.state].order - groups[b.state].order || a.recent - b.recent || a.project.localeCompare(b.project);
+        });
+      }
+
+      function itemMarkup(item) {
+        const kind = item.kind === "shell" ? "❯" : "⑂";
+        const agent = item.agent && item.agent !== "shell" ? `<span class="sidecar-agent" style="--agent-color:${item.agent === "codex" ? "#7dd3fc" : item.agent === "claude" ? "#e59a7d" : item.agent === "grok" ? "#e2e8f0" : "#c4b5fd"}">${item.icon} ${item.agent}</span><span>·</span>` : "";
+        const context = item.task || item.branch || item.kind;
+        return `<button class="sidecar-item" type="button" role="option" aria-selected="${item.id === selectedId}" data-id="${item.id}" style="--project-color:${projectColors[item.project]}">
+          <span class="sidecar-project-spine"></span>
+          <span class="sidecar-item-main">
+            <span class="sidecar-item-title-row"><span class="sidecar-kind">${kind}</span><span class="sidecar-item-name">${item.name}</span></span>
+            <span class="sidecar-item-subtitle-row"><span class="sidecar-project-name">${item.project}</span><span>·</span>${agent}<span>${context}</span></span>
+          </span>
+          <span class="sidecar-item-meta sidecar-status-${item.state}"><span class="sidecar-status-dot"></span>&nbsp; ${item.status}${item.age ? ` · ${item.age}` : ""}</span>
+        </button>`;
+      }
+
+      function render() {
+        const query = filter.value.trim().toLowerCase();
+        const visible = sortedItems(workspaces.filter(item => !query || searchable(item).includes(query)));
+        if (visible.length && !visible.some(item => item.id === selectedId)) selectedId = visible[0].id;
+
+        const grouped = new Map();
+        visible.forEach(item => {
+          const key = sort.value === "activity" ? item.state : "all";
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key).push(item);
+        });
+
+        const sections = [...grouped.entries()].map(([key, items]) => {
+          const label = key === "all" ? `${sort.options[sort.selectedIndex].text} order` : groups[key].label;
+          return `<section class="sidecar-group"><div class="sidecar-group-head"><span>${label}</span><span class="sidecar-group-count">${items.length}</span></div>${items.map(itemMarkup).join("")}</section>`;
+        }).join("");
+
+        list.querySelectorAll(".sidecar-group").forEach(group => group.remove());
+        empty.insertAdjacentHTML("beforebegin", sections);
+        empty.style.display = visible.length ? "none" : "block";
+        count.textContent = query ? `${visible.length} of ${workspaces.length}` : `${workspaces.length} sessions`;
+
+        list.querySelectorAll(".sidecar-item").forEach(button => {
+          button.addEventListener("click", () => select(button.dataset.id));
+          button.addEventListener("dblclick", () => document.getElementById("sidecarOpen").click());
+        });
+        updatePreview();
+      }
+
+      function select(id) {
+        selectedId = id;
+        list.querySelectorAll(".sidecar-item").forEach(button => button.setAttribute("aria-selected", String(button.dataset.id === id)));
+        updatePreview();
+      }
+
+      function updatePreview() {
+        const item = workspaces.find(candidate => candidate.id === selectedId) || workspaces[0];
+        document.getElementById("sidecarPreviewProject").textContent = item.project;
+        document.getElementById("sidecarPreviewName").textContent = item.name;
+        document.getElementById("sidecarPreviewKind").textContent = `${item.kind === "shell" ? "❯" : "⑂"} ${item.kind}`;
+        document.getElementById("sidecarPreviewBranch").textContent = item.task ? `${item.task} · ${item.branch}` : `branch ${item.branch}`;
+        const agent = document.getElementById("sidecarPreviewAgent");
+        agent.textContent = item.agent ? `${item.icon} ${item.agent}` : "no agent";
+        agent.style.color = item.agent === "codex" ? "#7dd3fc" : item.agent === "claude" ? "#e59a7d" : item.agent === "grok" ? "#e2e8f0" : "var(--text-muted)";
+        document.getElementById("sidecarPreviewStatus").textContent = `${item.status}${item.age ? ` · changed ${item.age}` : ""}`;
+        document.getElementById("sidecarTerminal").innerHTML = item.terminal;
+        document.querySelector(".sidecar-preview").style.setProperty("--selected-project-color", projectColors[item.project]);
+      }
+
+      function moveSelection(delta) {
+        const buttons = [...list.querySelectorAll(".sidecar-item")];
+        if (!buttons.length) return;
+        const current = Math.max(0, buttons.findIndex(button => button.dataset.id === selectedId));
+        const next = buttons[Math.max(0, Math.min(buttons.length - 1, current + delta))];
+        select(next.dataset.id);
+        next.scrollIntoView({ block: "nearest" });
+      }
+
+      filter.addEventListener("input", render);
+      sort.addEventListener("change", render);
+      document.addEventListener("keydown", event => {
+        if (event.key === "/" && document.activeElement !== filter) {
+          event.preventDefault();
+          filter.focus();
+          filter.select();
+          return;
+        }
+        if (document.activeElement === filter) {
+          if (event.key === "Escape") {
+            if (filter.value) { filter.value = ""; render(); } else { filter.blur(); }
+          }
+          if (event.key === "ArrowDown") { event.preventDefault(); moveSelection(1); }
+          if (event.key === "ArrowUp") { event.preventDefault(); moveSelection(-1); }
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault(); moveSelection(1); }
+        if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault(); moveSelection(-1); }
+        if (event.key === "s") {
+          const next = (sort.selectedIndex + 1) % sort.options.length;
+          sort.selectedIndex = next;
+          render();
+        }
+        if (event.key === "Enter") document.getElementById("sidecarOpen").click();
+      });
+
+      document.getElementById("sidecarOpen").addEventListener("click", () => {
+        const item = workspaces.find(candidate => candidate.id === selectedId);
+        const button = document.getElementById("sidecarOpen");
+        button.textContent = `Opening ${item.project}…`;
+        window.setTimeout(() => { button.textContent = "Open in project ↗"; }, 900);
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>
