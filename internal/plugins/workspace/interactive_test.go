@@ -478,53 +478,6 @@ func TestExitInteractiveMode_WhenStateInactive(t *testing.T) {
 }
 
 // ============================================================================
-// handleEscapeTimer Tests (td-2e75f54f)
-// ============================================================================
-
-// TestHandleEscapeTimer_NilState tests timer with nil interactiveState
-func TestHandleEscapeTimer_NilState(t *testing.T) {
-	p := &Plugin{
-		interactiveState: nil,
-	}
-
-	// Should return nil and not panic
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when interactiveState is nil")
-	}
-}
-
-// TestHandleEscapeTimer_InactiveState tests timer with inactive state
-func TestHandleEscapeTimer_InactiveState(t *testing.T) {
-	p := &Plugin{
-		interactiveState: &InteractiveState{
-			Active:        false,
-			EscapePressed: true, // Even with pending escape, inactive should return nil
-		},
-	}
-
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when state is inactive")
-	}
-}
-
-// TestHandleEscapeTimer_NoPendingEscape tests timer fires with no pending escape
-func TestHandleEscapeTimer_NoPendingEscape(t *testing.T) {
-	p := &Plugin{
-		interactiveState: &InteractiveState{
-			Active:        true,
-			EscapePressed: false,
-		},
-	}
-
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when no escape is pending")
-	}
-}
-
-// ============================================================================
 // handleInteractiveKeys Tests (td-2e75f54f)
 // ============================================================================
 
@@ -575,15 +528,15 @@ func TestHandleInteractiveKeys_FirstEscapeSetsFlag(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: false,
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
 
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 	cmd := p.handleInteractiveKeys(msg)
 
 	// Should set EscapePressed flag and start timer
-	if !p.interactiveState.EscapePressed {
+	if !terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be true after first Escape")
 	}
 	if cmd == nil {
@@ -602,9 +555,10 @@ func TestHandleInteractiveKeys_DoubleEscapeExits(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: true, // First escape already pressed
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // First escape already pressed
 
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 	p.handleInteractiveKeys(msg)
@@ -622,19 +576,17 @@ func TestHandleInteractiveKeys_NonEscapeClearsPendingEscape(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: true, // Pending escape
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // Pending escape
 
-	// Note: We can't fully test this without mocking tmux commands
-	// The actual sendKeyToTmux will fail, which will exit interactive mode
-	// But we can verify the flag is cleared before the call
 	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
 	_ = p.handleInteractiveKeys(msg)
 
-	// The EscapePressed flag should be cleared
-	// (state might be nil if tmux command failed)
-	if p.interactiveState != nil && p.interactiveState.EscapePressed {
+	// The held escape goes out ahead of the key that ended the window, so
+	// nothing is left pending behind it.
+	if terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be false after non-escape key")
 	}
 }
@@ -680,9 +632,6 @@ func TestInteractiveState_Initialization(t *testing.T) {
 
 	if state.Active {
 		t.Error("expected Active to be false by default")
-	}
-	if state.EscapePressed {
-		t.Error("expected EscapePressed to be false by default")
 	}
 	if state.TargetPane != "" {
 		t.Error("expected TargetPane to be empty by default")
@@ -1070,17 +1019,18 @@ func TestHandleInteractiveKeys_CancelsPendingEscapeForMouseSequence(t *testing.T
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test-session",
-			EscapePressed: true, // ESC arrived first (split-read)
-			EscapeTime:    time.Now(),
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // ESC arrived first (split-read)
+	terminal.State.EscapeTime = time.Now()
 
 	// Partial mouse sequence arrives as the next message
 	msg := tea.KeyPressMsg{Code: '[', Text: "[<65;83;33M"}
 	cmd := p.handleInteractiveKeys(msg)
 
 	// EscapePressed must be cleared — it was part of the mouse sequence
-	if p.interactiveState.EscapePressed {
+	if terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be cleared after partial mouse sequence")
 	}
 	// Should remain in interactive mode

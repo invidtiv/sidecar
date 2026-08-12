@@ -192,15 +192,15 @@ func TestWheelBurstCoalescesAFlickWithoutLosingDistance(t *testing.T) {
 }
 
 func TestCopyNoticeSaysTheSameThingOnEverySurface(t *testing.T) {
-	empty := CopyResult{Empty: true}.Notice()
+	empty := DefaultConfig().Notice(CopyResult{Empty: true})
 	if empty.Message != "Nothing selected — ctrl+a selects all output" || empty.IsError {
 		t.Errorf("empty copy notice = %+v", empty)
 	}
-	failed := CopyResult{Err: errors.New("clipboard unavailable")}.Notice()
+	failed := DefaultConfig().Notice(CopyResult{Err: errors.New("clipboard unavailable")})
 	if failed.Message != "Copy failed: clipboard unavailable" || !failed.IsError {
 		t.Errorf("failed copy notice = %+v", failed)
 	}
-	copied := CopyResult{Lines: 3}.Notice()
+	copied := DefaultConfig().Notice(CopyResult{Lines: 3})
 	if copied.Message != "Copied 3 line(s)" || copied.IsError {
 		t.Errorf("successful copy notice = %+v", copied)
 	}

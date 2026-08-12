@@ -38,7 +38,7 @@ type terminalInputSender interface {
 }
 
 type terminalCaptureSource interface {
-	Capture(target string, scrollback int) (output string, row, col, height, width int, visible bool, err error)
+	Capture(target string, scrollback int) (output string, state PaneState, err error)
 }
 
 type defaultTerminalCaptureSource struct{}
@@ -50,13 +50,13 @@ type defaultTerminalCaptureSource struct{}
 // retention at about 2s. Any accepted nonblank candidate resets the budget.
 const terminalRecoveryBlankLimit = 8
 
-func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (string, int, int, int, int, bool, error) {
+func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (string, PaneState, error) {
 	output, err := CapturePaneOutput(target, scrollback)
 	if err != nil {
-		return "", 0, 0, 0, 0, false, err
+		return "", PaneState{}, err
 	}
-	row, col, height, width, visible, _ := QueryCursorPositionSync(target)
-	return output, row, col, height, width, visible, nil
+	state, _ := QueryPaneStateSync(target)
+	return output, state, nil
 }
 
 type defaultTerminalInputSender struct{}

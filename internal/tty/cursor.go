@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
@@ -69,35 +70,64 @@ func RenderCursorLine(line string, cursorCol int, visible bool) string {
 	return before + CursorStyle().Render(charStripped) + after
 }
 
-// QueryCursorPositionSync synchronously queries cursor position for the given target.
-// Used to capture cursor position atomically with output in poll goroutines.
-// Returns row, col (0-indexed), paneHeight, paneWidth, visible, and ok (false if query failed).
-// paneHeight is needed to calculate cursor offset when display height differs from pane height.
-func QueryCursorPositionSync(target string) (row, col, paneHeight, paneWidth int, visible, ok bool) {
+// PaneState is what one display-message reads about a pane beside its output:
+// where the cursor is, how big the grid is, and whether the application running
+// there has asked for mouse events.
+type PaneState struct {
+	CursorRow     int
+	CursorCol     int
+	PaneHeight    int
+	PaneWidth     int
+	CursorVisible bool
+
+	// MouseReporting is tmux's #{mouse_any_flag}. It is read here rather than
+	// scanned out of the capture because `capture-pane -e` emits rendering
+	// escapes only: the DECSET sequences that turn tracking on never reach it,
+	// so detection over a capture answers false for every mouse-aware app.
+	MouseReporting bool
+}
+
+// QueryPaneStateSync reads a pane's cursor, geometry and mouse-tracking flag in
+// the one display-message the capture path already pays for.
+func QueryPaneStateSync(target string) (PaneState, bool) {
 	if target == "" {
-		return 0, 0, 0, 0, false, false
+		return PaneState{}, false
 	}
 
 	cmd := exec.Command("tmux", "display-message", "-t", target,
-		"-p", "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}")
+		"-p", "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{mouse_any_flag}")
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, 0, 0, 0, false, false
+		return PaneState{}, false
 	}
 
 	parts := strings.Split(strings.TrimSpace(string(output)), ",")
 	if len(parts) < 2 {
-		return 0, 0, 0, 0, false, false
+		return PaneState{}, false
 	}
 
-	col, _ = strconv.Atoi(parts[0])
-	row, _ = strconv.Atoi(parts[1])
-	visible = len(parts) < 3 || parts[2] != "0"
+	var state PaneState
+	state.CursorCol, _ = strconv.Atoi(parts[0])
+	state.CursorRow, _ = strconv.Atoi(parts[1])
+	state.CursorVisible = len(parts) < 3 || parts[2] != "0"
 	if len(parts) >= 4 {
-		paneHeight, _ = strconv.Atoi(parts[3])
+		state.PaneHeight, _ = strconv.Atoi(parts[3])
 	}
 	if len(parts) >= 5 {
-		paneWidth, _ = strconv.Atoi(parts[4])
+		state.PaneWidth, _ = strconv.Atoi(parts[4])
 	}
-	return row, col, paneHeight, paneWidth, visible, true
+	if len(parts) >= 6 {
+		state.MouseReporting = parts[5] != "0" && parts[5] != ""
+	}
+	return state, true
+}
+
+// PlaceCursor is the terminal cursor every embedded surface draws: a blinking
+// block at the origin's cell. Shape and blink are the terminal's own, not each
+// host's, so a pane looks the same wherever it is embedded.
+func PlaceCursor(x, y int) *tea.Cursor {
+	cursor := tea.NewCursor(x, y)
+	cursor.Shape = tea.CursorBlock
+	cursor.Blink = true
+	return cursor
 }

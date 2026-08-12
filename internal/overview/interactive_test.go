@@ -81,6 +81,10 @@ func (f *fakeTerminal) Update(msg tea.Msg) tea.Cmd {
 		f.pastes = append(f.pastes, msg.Content)
 	case tty.CaptureResultMsg:
 		f.buffer.ApplySnapshot(tty.PaneSnapshot{Output: msg.Output})
+	case tty.SessionDeadMsg:
+		// The component ends itself on a pane that died under a send, which is
+		// how the browser learns the mode is over.
+		f.active = false
 	}
 	return nil
 }
@@ -579,19 +583,23 @@ func TestGeometryChangesResizeAnIdleLivePane(t *testing.T) {
 		t.Fatalf("after a window resize the pane is %v, want the new box %v", got, want)
 	}
 
+	// A press on the divider is a press away from the terminal, so it takes the
+	// keyboard back before the drag starts. The box it settles on is still the
+	// box the pane is sized to the next time anyone types in it.
 	m.WorkspacesView(previewWide, previewTall)
 	dividerX := m.previewSplit(previewWide).SidebarWidth
-	terminal.dims = nil
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: dividerX, Y: 5, Button: tea.MouseLeft}))
-	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: dividerX + 12, Y: 5, Button: tea.MouseLeft}))
-	if got, want := sized(t, "a divider drag"), surfaceDims(t); got != want {
-		t.Fatalf("after a divider drag the pane is %v, want the new box %v", got, want)
+	if m.PreviewInteractive() {
+		t.Fatal("a press on the divider left the pane holding the keyboard")
 	}
-
-	terminal.dims = nil
+	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: dividerX + 12, Y: 5, Button: tea.MouseLeft}))
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: dividerX + 12, Y: 5, Button: tea.MouseLeft}))
-	if got, want := sized(t, "a divider release"), surfaceDims(t); got != want {
-		t.Fatalf("after a divider release the pane is %v, want the settled box %v", got, want)
+
+	m.WorkspacesView(previewWide, previewTall)
+	terminal.dims = nil
+	enterInteractive(t, m)
+	if got, want := sized(t, "typing after a divider drag"), surfaceDims(t); got != want {
+		t.Fatalf("after a divider drag the pane is %v, want the settled box %v", got, want)
 	}
 }
 

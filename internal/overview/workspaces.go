@@ -448,20 +448,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	wasDragging := m.workspacesMouse.IsDragging()
 	dragSourceBefore := m.workspacesMouse.DragRegion()
 	action := m.workspacesMouse.HandleMouse(mouseMsg)
-	// A release can be lost when the pointer leaves the window or focus changes.
-	// The mouse handler cancels that stale drag on the next button-less motion;
-	// end the paired terminal gesture at the same boundary.
-	if action.Type == mouse.ActionHover && wasDragging && !m.workspacesMouse.IsDragging() &&
-		dragSourceBefore == previewRegionKind {
+	// What a pointer action over a terminal means is the shared layer's; what
+	// this surface does about it is its own.
+	switch m.previewPointerIntent(action, wasDragging, dragSourceBefore) {
+	case tty.PointerAbandon:
 		return m.abandonPreviewGesture()
-	}
-	// A drag over the terminal is a selection, and its release resolves the
-	// gesture the press armed. Both carry the region they started in, so neither
-	// depends on where the pointer has since travelled.
-	if action.Type == mouse.ActionDrag && action.DragStartID == previewRegionKind {
+	case tty.PointerDrag:
 		return m.dragPreview(action)
-	}
-	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewRegionKind {
+	case tty.PointerFinish:
 		return m.finishPreviewGesture()
 	}
 	// A drag moves the preview box, and a live pane is sized against that box.
@@ -473,20 +467,64 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
 		return m.syncTerminalGeometry()
 	}
+	// While the pane is live it keeps the wheel wherever the pointer is. Placing
+	// the notch by region instead lets one that drifted off the pane move the
+	// list, which rebinds the preview and ends the mode — so a stray trackpad
+	// notch would drop the user out of the pane they are typing in.
+	switch action.Type {
+	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		if m.PreviewInteractive() {
+			return m.wheelPreview(action)
+		}
+	}
 	if action.Region == nil {
 		return nil
 	}
 
-	// A press anywhere but the terminal is a click away from it, and clicking away
-	// is not a release of the gesture the terminal armed: the divider, a row and
-	// the sidebar all abandon it identically.
-	if kind, _ := action.Region.Data.(string); kind != previewRegionKind {
-		switch action.Type {
-		case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
-			m.preview.pointer.Abandon()
-		}
+	// A press anywhere but the terminal is a click away from it: it ends the
+	// gesture the press armed and the mode it was armed in, so the divider, the
+	// sort header, a row and the sidebar all leave the pane identically.
+	kind, _ := action.Region.Data.(string)
+	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
+	if pressAway {
+		m.preview.pointer.Abandon()
 	}
+	cmd := m.workspacesRegionMouse(action)
+	if !pressAway {
+		return cmd
+	}
+	// Last, so a region that hands the keyboard back itself — a row, the sidebar —
+	// rebinds the capture cadence to the selection this same event moved rather
+	// than to the one it is leaving. Whatever is left over ends the mode here.
+	return tea.Batch(cmd, m.exitPreviewInteractive())
+}
 
+// previewPointerIntent asks the shared layer what a pointer action over the
+// preview means. A drag and its release are answered by the region they started
+// in, which is what keeps a selection dragged off the box that box's.
+func (m *Model) previewPointerIntent(action mouse.MouseAction, wasDragging bool, dragSourceBefore string) tty.PointerIntent {
+	kind, _ := regionKind(action.Region)
+	return tty.PointerIntentFor(tty.PointerIntentInput{
+		Action:       action.Type,
+		OverTerminal: kind == previewRegionKind,
+		FromTerminal: action.DragStartID == previewRegionKind || dragSourceBefore == previewRegionKind,
+		LostRelease:  action.Type == mouse.ActionHover && wasDragging && !m.workspacesMouse.IsDragging(),
+	})
+}
+
+// regionKind names the region an action landed on, if it landed on one this
+// surface named itself.
+func regionKind(region *mouse.Region) (string, bool) {
+	if region == nil {
+		return "", false
+	}
+	kind, ok := region.Data.(string)
+	return kind, ok
+}
+
+// workspacesRegionMouse routes a mouse event to the region it landed on, after
+// the gesture-level decisions above have been made.
+func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over captured output moves that
 	// output, not the list underneath it.
 	if kind, ok := action.Region.Data.(string); ok {
@@ -510,14 +548,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 			// press arms a gesture the release resolves, a drag selects, a double
 			// or triple click takes the word or the line, and the wheel belongs
 			// to the application only while it has asked for mouse reports.
-			switch action.Type {
-			case mouse.ActionClick:
+			switch m.previewPointerIntent(action, false, "") {
+			case tty.PointerPress:
 				return m.pressPreview(action)
-			case mouse.ActionDoubleClick:
+			case tty.PointerSelectWord:
 				return m.selectPreviewUnit(action, tty.SelectUnitWord)
-			case mouse.ActionTripleClick:
+			case tty.PointerSelectLine:
 				return m.selectPreviewUnit(action, tty.SelectUnitLine)
-			case mouse.ActionScrollUp, mouse.ActionScrollDown:
+			case tty.PointerWheel:
 				return m.wheelPreview(action)
 			}
 			return nil

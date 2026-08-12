@@ -427,11 +427,12 @@ type Plugin struct {
 	// Interactive mode state (feature-gated behind tmux_interactive_input)
 	interactiveState *InteractiveState
 	// wheel coalesces a trackpad flick, so this surface takes the same amount of
-	// one as every other terminal surface does.
-	wheel              tty.WheelBurst
-	lastMouseEventTime time.Time // For suppressing split-CSI "[" near mouse activity
-	mouseFragment      string    // Incomplete split SGR mouse input awaiting its next chunk
-	mouseFragmentTime  time.Time // Last update to mouseFragment
+	// one as every other terminal surface does. clock is the time it and its
+	// cooldowns read: a field, because the burst takes the time from its caller
+	// so a whole flick can be driven a notch at a time without sleeping. nil is
+	// the wall clock.
+	wheel tty.WheelBurst
+	clock func() time.Time
 
 	// Sidebar header hover state
 	hoverNewButton            bool
@@ -1570,4 +1571,12 @@ func (p *Plugin) loadTaskDetailsIfNeeded() tea.Cmd {
 		return p.loadTaskDetails(wt.TaskID)
 	}
 	return nil
+}
+
+// now is the clock every wheel-burst decision reads.
+func (p *Plugin) now() time.Time {
+	if p.clock != nil {
+		return p.clock()
+	}
+	return time.Now()
 }

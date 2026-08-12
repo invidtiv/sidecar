@@ -71,6 +71,13 @@ type CaptureResultMsg struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+
+	// MouseReporting is tmux's #{mouse_any_flag}, read with the capture. It
+	// travels with the poll because it is the polling path's only source for it:
+	// the capture's own bytes never carry the DECSET sequences that turn
+	// tracking on, so who owns a click would otherwise mean one thing under
+	// control mode and another under the fallback.
+	MouseReporting bool
 }
 
 // PollTickMsg is sent to trigger a poll for output updates.

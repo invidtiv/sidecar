@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -80,53 +80,18 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		return terminalViewportResult{Layout: layout}
 	}
 
-	lines := in.Buffer.LinesRange(layout.Start, layout.End)
-	canvasBg := terminalCanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
-	inheritedBg := inheritedRowBackground(in.Buffer, layout.Start)
-	displayLines := make([]string, 0, max(len(lines), layout.DisplayHeight))
-	for i, line := range lines {
-		var openBg bool
-		line, inheritedBg, openBg = ui.CarryRowBackground(line, inheritedBg)
-		line = ui.ExpandTabs(line, tabStopWidth)
-		line = decorateTerminalLinks(line, in.LinkResolver)
-		absoluteLine := in.AbsoluteBase + layout.Start + i
-		if in.SearchMatches != nil {
-			for _, match := range in.SearchMatches.Items {
-				if match.Line == absoluteLine {
-					line = ui.InjectCharacterRangeBackground(line, match.StartCol, match.EndCol)
-				}
-			}
-		}
-		if in.Selection != nil && in.Selection.HasSelection() {
-			startCol, endCol := in.Selection.GetLineSelectionCols(absoluteLine)
-			if startCol >= 0 {
-				line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
-			}
-		}
-		if layout.Fit.ColOffset > 0 {
-			line = ansi.TruncateLeft(line, layout.Fit.ColOffset, "")
-		}
-		line = cache.Truncate(line, layout.DisplayWidth, "")
-		// Truncation can cut inside a background span, and the padding that
-		// follows appends unstyled cells, so a row that touches the background
-		// closes it here rather than letting it run into the next row.
-		if openBg {
-			line += ui.RowBackgroundDefault
-		}
-		displayLines = append(displayLines, line)
-	}
-
-	// Letterboxing pads the live grid out to the viewport rather than leaving
-	// a short capture (tmux strips trailing blank rows) to shift chrome. Same
-	// rule for passive follow and interactive: both show the live pane.
-	if in.PaneHeight > 0 && (in.Interactive || in.Follow) {
-		displayLines = padLinesToHeight(displayLines, layout.DisplayHeight)
-	}
-	if canvasBg != "" {
-		for i, line := range displayLines {
-			displayLines[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, layout.DisplayWidth)
-		}
-	}
+	displayLines := termpreview.DrawRows(termpreview.RowsInput{
+		Buffer:       in.Buffer,
+		Layout:       layout,
+		AbsoluteBase: in.AbsoluteBase,
+		TabWidth:     tabStopWidth,
+		Selection:    in.Selection,
+		Decorate:     in.decorate,
+		Truncate:     func(line string, width int) string { return cache.Truncate(line, width, "") },
+		PaneHeight:   in.PaneHeight,
+		Interactive:  in.Interactive,
+		Follow:       in.Follow,
+	})
 
 	if !in.NativeCursor {
 		if x, y, ok := terminalViewportCursorPosition(in); ok && y < len(displayLines) {
@@ -160,101 +125,27 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 }
 
-// terminalCanvasBackground recognizes the background carried across a
-// substantial share of a fullscreen TUI's live rows. tmux renders later
-// default-background cells correctly in a real terminal because that terminal's
-// default matches the canvas. Inside Sidecar those cells otherwise fall through
-// to the surrounding plugin surface and form rectangular seams.
-func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
-	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
-		return ""
-	}
-	rows := buffer.LinesRange(paneTop, paneTop+paneHeight)
-	if len(rows) == 0 {
-		return ""
-	}
-	counts := make(map[string]int)
-	blankRows := make(map[string]int)
-	inherited := inheritedRowBackground(buffer, paneTop)
-	for _, row := range rows {
-		// Counting the row as tmux would render it, not as it was captured: a
-		// canvas is emitted once and then carried, so without re-opening the
-		// inherited background only the first row of the canvas would vote.
-		resolved, next, _ := ui.CarryRowBackground(row, inherited)
-		inherited = next
-		blank := strings.TrimSpace(ansi.Strip(resolved)) == ""
-		for bg := range rowBackgrounds(resolved) {
-			counts[bg]++
-			if blank {
-				blankRows[bg]++
+// decorate is this surface's own per-row decoration: activatable links and
+// search matches, neither of which the browser surface has.
+func (in terminalViewportInput) decorate(line string, absoluteLine int) string {
+	line = decorateTerminalLinks(line, in.LinkResolver)
+	if in.SearchMatches != nil {
+		for _, match := range in.SearchMatches.Items {
+			if match.Line == absoluteLine {
+				line = ui.InjectCharacterRangeBackground(line, match.StartCol, match.EndCol)
 			}
 		}
 	}
-	canvas, best := "", 0
-	for bg, count := range counts {
-		if count > best {
-			canvas, best = bg, count
-		} else if count == best {
-			canvas = ""
-		}
-	}
-	if canvas == "" || best < canvasRowShare(len(rows)) || blankRows[canvas] == 0 {
-		return ""
-	}
-	return canvas
+	return line
 }
 
-// canvasRowShare is how many of the observed rows a background must cover to be
-// the pane's canvas rather than highlighting drawn on top of one.
-//
-// A canvas is on every row by definition — it is the surface the application
-// paints onto — so this is deliberately near-total rather than a simple
-// majority. Measured against live panes: Grok's canvas covers 43 of 43 and 56
-// of 56 rows, while a Claude Code diff's added-line green covers 19 of 55. An
-// earlier one-third rule sat directly between those two, so scrolling a long
-// diff by a single row flipped it and repainted the whole pane green.
-func canvasRowShare(rows int) int {
-	return max(2, rows*9/10)
+// terminalCanvasBackground and canvasRowShare name the shared canvas rule from
+// this surface's vocabulary.
+func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
+	return termpreview.CanvasBackground(buffer, paneTop, paneHeight)
 }
 
-// rowBackgroundLookback bounds how far back the inherited background is
-// resolved. tmux only ever re-emits a background when it changes, so in
-// principle the search runs to the top of the scrollback; bounding it keeps
-// render cost independent of history size, and a background that has survived
-// this many rows unchanged is a canvas whose first row is off-screen anyway.
-const rowBackgroundLookback = 300
-
-// inheritedRowBackground resolves the background left active by the rows above
-// start, which is what start's first cell is actually drawn in.
-func inheritedRowBackground(buffer *tty.OutputBuffer, start int) string {
-	if buffer == nil || start <= 0 {
-		return ""
-	}
-	from := max(start-rowBackgroundLookback, 0)
-	bg := ""
-	for _, row := range buffer.LinesRange(from, start) {
-		_, bg, _ = ui.CarryRowBackground(row, bg)
-	}
-	return bg
-}
-
-func rowBackgrounds(row string) map[string]struct{} {
-	backgrounds := make(map[string]struct{})
-	state := ansi.NormalState
-	remaining := row
-	for len(remaining) > 0 {
-		seq, _, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
-		if n <= 0 {
-			break
-		}
-		if next, touches := ui.SGRBackground(seq); touches && next != "\x1b[49m" {
-			backgrounds[next] = struct{}{}
-		}
-		state = newState
-		remaining = remaining[n:]
-	}
-	return backgrounds
-}
+func canvasRowShare(rows int) int { return termpreview.CanvasRowShare(rows) }
 
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
 	if !shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) {

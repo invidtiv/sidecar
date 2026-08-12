@@ -759,7 +759,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
-				p.updateMouseReportingMode(msg.Output)
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -1313,7 +1312,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
-				p.updateMouseReportingMode(msg.Output)
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -1938,15 +1936,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState.CursorRow = msg.Row
 			p.interactiveState.CursorCol = msg.Col
 			p.interactiveState.CursorVisible = msg.Visible
-		}
-
-	case escapeTimerMsg:
-		// Handle escape delay timer for interactive mode double-escape detection
-		if p.viewMode == ViewModeInteractive {
-			cmd := p.handleEscapeTimer()
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
 		}
 
 	case InteractiveSessionDeadMsg:

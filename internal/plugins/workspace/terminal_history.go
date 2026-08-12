@@ -251,22 +251,19 @@ func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
 // scrollback. Only the total and loading flag depend on finding matching
 // history state for this buffer.
 func (p *Plugin) terminalHistorySummary(termPanel bool, buffer *tty.OutputBuffer) (base, total int, loading bool) {
-	if buffer == nil {
-		return 0, 0, false
-	}
-	base, end, absolute := buffer.AbsoluteRange()
-	if !absolute {
-		// Relative buffer: local indices already are the coordinate space.
-		return 0, buffer.LineCount(), false
+	base, total = tty.BufferBase(buffer)
+	if !tty.BufferAbsolute(buffer) {
+		// Relative buffer: local indices already are the coordinate space, and
+		// tracked history is counted in absolute lines it cannot be measured in.
+		return base, total, false
 	}
 	source, ok := p.terminalHistoryFor(termPanel)
 	if !ok || source.Buffer != buffer {
 		// No tracked history for this buffer — its own range is still the truth.
-		return base, end, false
+		return base, total, false
 	}
 	state := p.terminalHistory[source.Key]
-	total = max(end, state.HistorySize)
-	return base, total, state.Loading
+	return base, max(total, state.HistorySize), state.Loading
 }
 
 func (m terminalHistoryLoadedMsg) String() string {

@@ -103,32 +103,39 @@ type socketTerminalCapture struct {
 	blankNext atomic.Bool
 }
 
-func (c *socketTerminalCapture) Capture(target string, scrollback int) (string, int, int, int, int, bool, error) {
+func (c *socketTerminalCapture) Capture(target string, scrollback int) (string, PaneState, error) {
 	c.count.Add(1)
 	out, err := c.tmux.cmd("capture-pane", "-p", "-e", "-S", "-"+strconv.Itoa(scrollback), "-t", target).Output()
 	if err != nil {
-		return "", 0, 0, 0, 0, false, err
+		return "", PaneState{}, err
 	}
 	if c.blankNext.Swap(false) {
 		out = nil
 	}
 	meta, err := c.tmux.cmd("display-message", "-p", "-t", target,
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}").Output()
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{mouse_any_flag}").Output()
 	if err != nil {
-		return "", 0, 0, 0, 0, false, err
+		return "", PaneState{}, err
 	}
 	parts := strings.Split(strings.TrimSpace(string(meta)), ",")
-	if len(parts) != 5 {
-		return "", 0, 0, 0, 0, false, errors.New("invalid cursor metadata")
+	if len(parts) != 6 {
+		return "", PaneState{}, errors.New("invalid cursor metadata")
 	}
 	values := make([]int, len(parts))
 	for i := range parts {
 		values[i], err = strconv.Atoi(parts[i])
 		if err != nil {
-			return "", 0, 0, 0, 0, false, err
+			return "", PaneState{}, err
 		}
 	}
-	return string(out), values[1], values[0], values[3], values[4], values[2] == 1, nil
+	return string(out), PaneState{
+		CursorRow:      values[1],
+		CursorCol:      values[0],
+		PaneHeight:     values[3],
+		PaneWidth:      values[4],
+		CursorVisible:  values[2] == 1,
+		MouseReporting: values[5] == 1,
+	}, nil
 }
 
 // TestTerminalModelControlDeathFallbackAndAlternateReseed runs the actual Model

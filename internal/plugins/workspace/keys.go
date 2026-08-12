@@ -595,14 +595,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
 		}
-		switch msg.String() {
-		case "ctrl+a":
+		config := p.terminalConfig()
+		switch {
+		case config.IsSelectAllChord(msg):
 			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
 			return nil
-		default:
-			if p.isTerminalCopyChord(msg) {
-				return p.copyInteractiveSelectionCmd()
-			}
+		case config.IsCopyChord(msg):
+			return p.copyInteractiveSelectionCmd()
 		}
 	}
 

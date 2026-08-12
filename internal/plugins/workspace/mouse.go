@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
@@ -43,10 +41,10 @@ func isBackgroundRegion(regionID string) bool {
 
 // handleMouse processes mouse input.
 func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	// Record the time of every mouse event, including motion. This is used by
-	// handleInteractiveKeys to suppress bare "[" runes that arrive shortly after
-	// mouse activity — see the split-CSI comment in handleInteractiveKeys.
-	p.lastMouseEventTime = time.Now()
+	// Every mouse event counts as activity for the terminals, routed to one of
+	// them or not: the shared key gate reads that clock to tell the bracket of a
+	// split SGR report from a typed one, and the component owns it.
+	p.noteTerminalMouseActivity()
 
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
@@ -101,14 +99,13 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// A release can be lost when the pointer leaves the window or focus changes.
 	// The mouse handler cancels that stale drag on the next button-less motion;
 	// cancel the paired click-to-activate intent at the same boundary.
-	lostRelease := action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging()
-	if lostRelease {
+	if action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging() {
 		// Drop what the press armed and end the gesture: an edge scroll tick still
 		// in flight belongs to a gesture that is over, and neither activation nor a
 		// forwarded click survives a release the app never saw.
 		p.pointer.Abandon()
-		terminalGesture := dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent
-		if terminalGesture && p.selection.Anchor.Valid() {
+		if p.terminalPointerIntent(mouse.ActionHover, "", dragSourceBefore, true) == tty.PointerAbandon &&
+			p.selection.Anchor.Valid() {
 			// A release outside the window never reaches Bubble Tea. Close the local
 			// selection gesture at the same point the shared handler abandons its drag.
 			return p.finishInteractiveSelection()
@@ -603,8 +600,15 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() && isBackgroundRegion(action.Region.ID) {
 		return nil
 	}
-	if action.Region.ID != regionPreviewPane && action.Region.ID != regionTermPanelContent {
-		p.pointer.Resolution = tty.ClickNone
+	// A press anywhere but a terminal is a click away from it: it ends the
+	// gesture the press armed and the mode it was armed in, so a divider, a row
+	// and the sidebar all leave the pane identically. Ending only one of them
+	// would leave a live pane holding the keyboard behind a divider drag.
+	if tty.PressLeavesTerminal(action.Region.ID, regionPreviewPane, regionTermPanelContent) {
+		p.pointer.Abandon()
+		if p.viewMode == ViewModeInteractive {
+			p.exitInteractiveMode()
+		}
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -622,7 +626,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if p.interactiveState != nil && p.interactiveState.Active {
 				return p.prepareInteractiveTerminalGesture(action)
 			}
-			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
+			return p.forwardClickToTmux(action.X, action.Y)
 		case regionPreviewPane:
 			p.activePane = PanePreview
 			if p.interactiveState != nil && p.interactiveState.TermPanel {
@@ -635,11 +639,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if p.interactiveState != nil && p.interactiveState.Active {
 				return p.prepareInteractiveTerminalGesture(action)
 			}
-			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
-		default:
-			// Click outside both panes — exit interactive mode
-			p.exitInteractiveMode()
-			// Continue to handle the click normally
+			return p.forwardClickToTmux(action.X, action.Y)
 		}
 	}
 
@@ -1157,13 +1157,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		regionID = action.Region.ID
 	}
 
-	// A notch belongs to whatever it is over, interactive or not: over a live
-	// terminal the app running there gets it as a mouse report, or it scrolls
-	// that terminal's captured output; over the sidebar it moves the list.
-	// An event with no region at all predates any hit map and cannot be placed;
-	// interactive mode is drawing the terminal, so it keeps that notch.
-	if p.viewMode == ViewModeInteractive &&
-		(regionID == "" || regionID == regionPreviewPane || regionID == regionTermPanelContent) {
+	// While interactive mode is live the pane keeps the wheel wherever the
+	// pointer is. Placing the notch by region instead lets one that drifted off
+	// the pane reach the sidebar, where moving the cursor changes the selected
+	// workspace and exits interactive mode — so a stray trackpad notch would
+	// silently drop the user out of the pane they are typing in.
+	if p.viewMode == ViewModeInteractive {
 		return p.forwardScrollToTmux(action, delta)
 	}
 
@@ -1182,6 +1181,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
 		p.releaseTermPanelDocFreeze()
+		p.clearTerminalSelectionOnScroll(true)
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
@@ -1345,9 +1345,10 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 	// Output tab uses burst debouncing for trackpad scroll smoothness.
 	if p.previewTab == PreviewTabOutput || p.shellSelected {
 		var flush bool
-		if delta, flush = p.wheel.Add(delta, time.Now()); !flush {
+		if delta, flush = p.wheel.Add(delta, p.now()); !flush {
 			return nil
 		}
+		p.clearTerminalSelectionOnScroll(false)
 	}
 
 	// Unified offset: 0 = top of content, higher = further down
@@ -1475,12 +1476,30 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		}
 		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
 	case regionPreviewPane, regionTermPanelContent:
+		if p.terminalPointerIntent(mouse.ActionDrag, "", dragRegion, false) != tty.PointerDrag {
+			return nil
+		}
 		if !p.selection.Anchor.Valid() && !p.anchorDragFromOrigin(action) {
 			return nil
 		}
 		return p.handleInteractiveSelectionDrag(action)
 	}
 	return nil
+}
+
+// terminalPointerIntent asks the shared layer what a pointer action over this
+// surface's terminals means. Which regions draw one is this plugin's to name;
+// what the action means over them is not.
+func (p *Plugin) terminalPointerIntent(action mouse.ActionType, region, gestureRegion string, lostRelease bool) tty.PointerIntent {
+	terminal := func(id string) bool {
+		return id == regionPreviewPane || id == regionTermPanelContent
+	}
+	return tty.PointerIntentFor(tty.PointerIntentInput{
+		Action:       action,
+		OverTerminal: terminal(region),
+		FromTerminal: terminal(gestureRegion),
+		LostRelease:  lostRelease,
+	})
 }
 
 // handleMouseDragEnd handles the end of a drag operation.
@@ -1497,8 +1516,8 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
 	}
-	terminalGesture := dragSource == regionPreviewPane || dragSource == regionTermPanelContent
-	if terminalGesture && (p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {
+	if p.terminalPointerIntent(mouse.ActionDragEnd, "", dragSource, false) == tty.PointerFinish &&
+		(p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {
 		return p.finishInteractiveSelection()
 	}
 

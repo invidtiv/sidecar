@@ -27,10 +27,12 @@ type RenderBufferInput struct {
 	AbsoluteBase int
 	Selection    *ui.SelectionState
 
-	// Letterbox pads the drawn rows out to the viewport height. A live grid wants
-	// it — tmux strips trailing blank rows, and a short capture would otherwise
-	// shift the chrome below — while a scrollback window does not.
-	Letterbox bool
+	// PaneHeight, Interactive and Follow describe the live grid behind the
+	// window, which is what decides letterboxing and what the pane's canvas
+	// background is measured over. A watched capture has no pane behind it.
+	PaneHeight  int
+	Interactive bool
+	Follow      bool
 
 	// TotalItems is the scrollbar's idea of how much there is to scroll through,
 	// which can exceed the loaded buffer while older history is still unfetched.
@@ -87,24 +89,18 @@ func RenderBuffer(in RenderBufferInput) string {
 	}
 
 	contentWidth := max(layout.DisplayWidth, 1)
-	rows := in.Buffer.LinesRange(layout.Start, layout.End)
-	visible := make([]string, 0, max(len(rows), body))
-	for i, line := range rows {
-		line = ui.ExpandTabs(line, tabWidth)
-		if in.Selection != nil && in.Selection.HasSelection() {
-			startCol, endCol := in.Selection.GetLineSelectionCols(in.AbsoluteBase + layout.Start + i)
-			if startCol >= 0 {
-				line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
-			}
-		}
-		if layout.Fit.ColOffset > 0 {
-			line = ansi.TruncateLeft(line, layout.Fit.ColOffset, "")
-		}
-		visible = append(visible, fill(line, contentWidth, truncate))
-	}
-	if in.Letterbox {
-		visible = padRows(visible, min(layout.DisplayHeight, body), contentWidth)
-	}
+	visible := DrawRows(RowsInput{
+		Buffer:       in.Buffer,
+		Layout:       layout,
+		AbsoluteBase: in.AbsoluteBase,
+		TabWidth:     tabWidth,
+		Selection:    in.Selection,
+		Truncate:     truncate,
+		PaneHeight:   in.PaneHeight,
+		Interactive:  in.Interactive,
+		Follow:       in.Follow,
+		Pad:          true,
+	})
 
 	if layout.ShowScrollbar {
 		// JoinHorizontal aligns the scrollbar to the widest line of the block it is

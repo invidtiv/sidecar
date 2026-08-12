@@ -144,6 +144,21 @@ keyboard is the one thing it reaches across: a pane that already exists can be
 typed into from the focused preview, which starts nothing and destroys
 nothing.
 
+Two further asymmetries are deliberate, and are decisions rather than gaps in
+the shared terminal surface:
+
+- **Scrollback depth.** The project surface fetches older history lazily as the
+  reader scrolls past what is loaded. The global preview stops at
+  `previewCaptureLines` and says so once, in a toast, when the reader reaches
+  it. The preview exists to recognise a workspace, not to read its history, and
+  the owning project — which already loads the whole thing — is one Enter away.
+- **Terminal search and link activation are project-only.** Both act on a
+  workspace the user is working in: search needs the full history the global
+  preview deliberately does not load, and a link opens a document pane in the
+  project the file belongs to. The global browser has neither a document pane
+  nor a project context to open one in, so it decorates nothing and searches
+  nothing rather than offering a key that half works.
+
 ### 4. Filter and sort without losing keyboard flow
 
 The default order is **Activity**, a vertical projection of the Kanban model:

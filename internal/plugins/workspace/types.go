@@ -372,13 +372,6 @@ type InteractiveState struct {
 	// LastKeyTime tracks when the last key was sent for polling decay.
 	LastKeyTime time.Time
 
-	// EscapePressed tracks if a single Escape was recently pressed
-	// (for double-escape exit detection with 150ms delay).
-	EscapePressed bool
-
-	// EscapeTime is when the first Escape was pressed.
-	EscapeTime time.Time
-
 	// CursorRow and CursorCol track the cached cursor position for overlay rendering.
 	// Updated asynchronously via cursorPositionMsg from poll handler (td-648af4).
 	CursorRow int
@@ -406,19 +399,11 @@ type InteractiveState struct {
 	// bracketed paste mode (ESC[?2004h). Updated from captured output.
 	BracketedPasteEnabled bool
 
-	// MouseReportingEnabled tracks whether the target app has enabled mouse
-	// reporting (1000/1002/1003/1006/1015). Updated from captured output, and
-	// read only to describe the surface: who owns a click or a notch is the
-	// terminal component's PaneMouseReporting, so the two can never disagree.
-	//
-	// Note: the capture path (`capture-pane -e`) emits rendering escapes only, so
-	// DECSET mode sequences never reach it and this stays false there; the
-	// emulator path does see them and sets it.
+	// MouseReportingEnabled tracks whether the application in the target pane has
+	// asked for mouse events. It is mirrored from the terminal component and read
+	// only to describe the surface: who owns a click or a notch is that
+	// component's PaneMouseReporting, so the two can never disagree.
 	MouseReportingEnabled bool
-
-	// EscapeTimerPending tracks if an escape timer is already in flight.
-	// Prevents duplicate timers from accumulating (td-83dc22).
-	EscapeTimerPending bool
 
 	// LastResizeAt tracks the last time we attempted to resize the tmux pane.
 	LastResizeAt time.Time

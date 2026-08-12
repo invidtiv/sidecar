@@ -122,6 +122,15 @@ type ScrollbackMove struct {
 	ToLive   bool
 }
 
+// IsScrollbackKey reports that a key press asks for a scrollback move. It is the
+// half of MapScrollbackKey that needs no page size, so a host resolves its
+// layout only for the keys this claims rather than on every keystroke it types
+// into a pane.
+func IsScrollbackKey(msg tea.KeyPressMsg) bool {
+	_, ok := MapScrollbackKey(msg, 1)
+	return ok
+}
+
 // MapScrollbackKey turns a shift-modified navigation key into a window move over
 // captured output. Shift is the modifier because every unshifted key belongs to
 // the pane.

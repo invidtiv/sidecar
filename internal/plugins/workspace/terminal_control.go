@@ -84,7 +84,18 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
-	return tty.New(&config)
+	model := tty.New(&config)
+	// This surface draws the pane whether or not the user is typing into it, so
+	// leaving the mode releases the keyboard and nothing else: closing here would
+	// drop the loaded scrollback the user just read and reconciliation would
+	// reopen the pane with an empty buffer on the same update.
+	model.ExitAction = tty.ExitReleasesInput
+	model.OnKey = p.interactiveKey
+	model.BeforeSend = p.beforeInteractiveSend
+	model.OnExit = p.leaveInteractiveMode
+	model.OnAttach = p.attachFromInteractive
+	model.OnSessionEnded = p.noteSessionEnded
+	return model
 }
 
 func (p *Plugin) resetTerminalModels() {
@@ -109,6 +120,18 @@ func (p *Plugin) stopTerminalModels() {
 	}
 	p.primaryTerminalTarget = workspaceTerminalTarget{}
 	p.panelTerminalTarget = workspaceTerminalTarget{}
+}
+
+// noteTerminalMouseActivity records a mouse event against both terminal
+// surfaces. It is deliberately not scoped to whichever one is live: the gate it
+// feeds asks whether a mouse event reached this host at all.
+func (p *Plugin) noteTerminalMouseActivity() {
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.NoteMouseActivity()
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.NoteMouseActivity()
+	}
 }
 
 func (p *Plugin) setTerminalFocus(focused bool) {

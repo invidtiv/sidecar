@@ -51,7 +51,9 @@ func TestInteractiveInputDropsSplitSGRMouseReportsAtEveryBoundary(t *testing.T) 
 	for split := 1; split < len(report); split++ {
 		t.Run("without-escape-"+string(rune('a'+split)), func(t *testing.T) {
 			p := newInteractiveInputTestPlugin()
-			p.lastMouseEventTime = time.Now()
+			// The component keeps the mouse clock the gate reads, so a test that
+			// wants a mouse event just gone says so where the surface would.
+			attachLiveTerminal(p, true).NoteMouseActivity()
 
 			if cmd := p.handleInteractiveKeys(keyPressForText(report[:split])); cmd != nil {
 				t.Fatalf("prefix %q reached command path", report[:split])
@@ -108,18 +110,29 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.previewOffset = 20
 	p.autoScrollOutput = true
+	// The burst takes the time from its caller, so the whole flick is driven here
+	// rather than waited out.
+	at := time.Now()
+	p.clock = func() time.Time { return at }
 	// Open the burst, so the notch under test arrives inside the debounce window.
-	p.wheel.Add(0, time.Now())
+	p.wheel.Add(0, at)
 
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
 	if p.previewOffset != 20 {
 		t.Fatalf("previewOffset = %d, want the debounced notch held back", p.previewOffset)
 	}
-	time.Sleep(2 * tty.WheelDebounceInterval)
+	if got := p.wheel.Pending(); got != -3 {
+		t.Fatalf("held-back delta = %d, want the whole notch retained (-3)", got)
+	}
+
+	at = at.Add(2 * tty.WheelDebounceInterval)
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
 	if p.previewOffset != 14 {
 		t.Fatalf("previewOffset = %d, want the held-back notch to arrive with the next one (14)",
 			p.previewOffset)
+	}
+	if got := p.wheel.Pending(); got != 0 {
+		t.Fatalf("delta left pending after a flush = %d", got)
 	}
 }
 
@@ -331,7 +344,9 @@ func newInteractiveInputTestPlugin() *Plugin {
 // notch belongs to the application is the component's one answer, so a test that
 // wants an app tracking the mouse says so here rather than on a mirror of it.
 func attachLiveTerminal(p *Plugin, mouseReporting bool) *tty.Model {
-	model := tty.New(nil)
+	// Built the way the plugin builds its own, so the host hooks the component
+	// calls — its chords, its snap-back, its way out — are the real ones.
+	model := p.newWorkspaceTerminal()
 	model.State = &tty.State{
 		Active:                true,
 		TargetSession:         p.interactiveState.TargetSession,
@@ -457,21 +472,37 @@ func TestModifiedKeysReachThePaneBeforeTheTerminalIsReconciled(t *testing.T) {
 	}
 }
 
-// A notch belongs to whatever it is over. Over the sidebar it moves the list,
-// even while a terminal is live, which is how the browser has always routed it.
-func TestAWheelOverTheSidebarDoesNotScrollTheLiveTerminal(t *testing.T) {
+// While interactive mode is live the pane keeps the wheel wherever the pointer
+// is. Routing a notch to the region under it hands one that drifted off the pane
+// to the sidebar, where moving the cursor changes the selected workspace and
+// drops the user out of the pane they are typing in.
+func TestAWheelOverTheSidebarStaysWithTheLiveTerminal(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.Update(strings.Repeat("scrollback\n", 100))
+	p.shells = []*ShellSession{
+		{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}},
+		{Name: "two", TmuxName: "sc-two"},
+	}
+	p.selectedShellIdx = 0
 	p.previewOffset = 12
 	p.autoScrollOutput = false
-	attachLiveTerminal(p, true)
+	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -3, X: 2, Y: 5,
 		Region: &mouse.Region{ID: regionSidebar},
 	})
-	if p.previewOffset != 12 {
-		t.Fatalf("a notch over the sidebar scrolled the terminal to %d", p.previewOffset)
+
+	if p.previewOffset != 9 {
+		t.Fatalf("previewOffset = %d, want the notch to have scrolled the terminal to 9", p.previewOffset)
+	}
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
+		t.Fatal("a notch over the sidebar dropped the user out of interactive mode")
+	}
+	if p.selectedShellIdx != 0 {
+		t.Fatalf("selected shell = %d, want the notch to have left the selection alone", p.selectedShellIdx)
 	}
 }

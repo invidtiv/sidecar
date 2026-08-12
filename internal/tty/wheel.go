@@ -110,6 +110,10 @@ func (b *WheelBurst) Add(delta int, now time.Time) (int, bool) {
 	return flushed, true
 }
 
+// Pending is the delta held back from the flick so far. It is carried by the
+// next event that gets through, never dropped.
+func (b *WheelBurst) Pending() int { return b.pending }
+
 // Reset drops a burst in progress, for a surface that is no longer the one being
 // scrolled.
 func (b *WheelBurst) Reset() {

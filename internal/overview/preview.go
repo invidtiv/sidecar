@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -433,10 +432,10 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "ctrl+u", "pgup":
 		m.scrollWatchedPreview(page)
 	case "G", "end":
-		m.clearPreviewSelection()
+		m.clearPreviewSelectionOnScroll()
 		m.preview.offset = 0
 	case "g", "home":
-		m.clearPreviewSelection()
+		m.clearPreviewSelectionOnScroll()
 		m.preview.offset = m.previewMaxOffset()
 	default:
 		return false, nil
@@ -448,7 +447,7 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // made outside a pointer gesture: a selection anchored to the rows it leaves
 // behind would highlight rows the user never picked.
 func (m *Model) scrollWatchedPreview(delta int) {
-	m.clearPreviewSelection()
+	m.clearPreviewSelectionOnScroll()
 	m.scrollPreview(delta)
 }
 
@@ -460,7 +459,7 @@ func (m *Model) terminalKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if config.IsCopyChord(msg) {
 		return true, m.copyPreviewSelectionCmd()
 	}
-	if msg.String() == "ctrl+a" {
+	if config.IsSelectAllChord(msg) {
 		m.selectAllPreviewOutput()
 		return true, nil
 	}
@@ -473,11 +472,16 @@ func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !m.PreviewInteractive() {
 		return false, nil
 	}
+	// Every key typed into a live pane comes through here, so the window's height
+	// is resolved only for the keys the shared rule claims.
+	if !tty.IsScrollbackKey(msg) {
+		return false, nil
+	}
 	move, ok := tty.MapScrollbackKey(msg, m.previewRows())
 	if !ok {
 		return false, nil
 	}
-	m.clearPreviewSelection()
+	m.clearPreviewSelectionOnScroll()
 	switch {
 	case move.ToOldest:
 		m.preview.offset = m.previewMaxOffset()
@@ -584,8 +588,15 @@ type previewWindow struct {
 }
 
 func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
+	buffer := m.previewBuffer()
+	// Gestures record their points in the buffer's own coordinates, which are
+	// absolute the moment a live pane has any scrollback. A window told nothing
+	// about the base draws every highlight short by exactly it, so a selection
+	// made while typing lands off screen even though the copied text is right.
+	base, _ := tty.BufferBase(buffer)
 	input := tty.ViewportInput{
-		Buffer:           m.previewBuffer(),
+		Buffer:           buffer,
+		AbsoluteBase:     base,
 		Width:            width,
 		Height:           height,
 		Offset:           m.preview.offset,
@@ -620,16 +631,7 @@ func (m *Model) previewGeometry() (tty.Geometry, bool) {
 	if !window.ok {
 		return tty.Geometry{}, false
 	}
-	return tty.Geometry{
-		Content: mouse.Rect{
-			X: window.surface.X, Y: window.surface.Y,
-			W: window.layout.DisplayWidth, H: window.layout.DisplayHeight,
-		},
-		Start:     window.layout.Start,
-		End:       window.layout.End,
-		ColOffset: window.layout.Fit.ColOffset,
-		TabWidth:  tty.DefaultTabWidth,
-	}, true
+	return tty.GeometryFor(window.surface.X, window.surface.Y, window.layout, tty.DefaultTabWidth), true
 }
 
 // previewPaneCoords maps a screen position to the 1-indexed pane coordinates
@@ -648,6 +650,17 @@ func (m *Model) previewPaneCoords(x, y int) (col, row int, ok bool) {
 		paneWidth, paneHeight = window.layout.DisplayWidth, window.layout.DisplayHeight
 	}
 	return tty.PaneCoordsAt(window.layout, x-window.surface.X, y-window.surface.Y, paneWidth, paneHeight)
+}
+
+// clearPreviewSelectionOnScroll is what every scroll made outside a pointer
+// gesture — a wheel notch, a shift-scrollback key, a jump to either end — does
+// to the selection. The rule is the shared layer's so that scrolling away from
+// a highlight and back answers the same way on every terminal surface.
+func (m *Model) clearPreviewSelectionOnScroll() {
+	if tty.ScrollKeepsSelection(m.previewBuffer()) {
+		return
+	}
+	m.clearPreviewSelection()
 }
 
 // clearPreviewSelection drops a selection made outside a pointer gesture —
@@ -680,8 +693,9 @@ func (m *Model) previewSelectionLines() []string {
 // notification type is this surface's.
 func (m *Model) copyPreviewSelectionCmd() tea.Cmd {
 	lines := m.previewSelectionLines()
+	config := m.TerminalConfig()
 	return func() tea.Msg {
-		notice := tty.CopySelectionNotice(lines)
+		notice := config.CopySelectionNotice(lines)
 		return appmsg.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}
@@ -741,6 +755,7 @@ func (m *Model) renderPreview(width, height int) string {
 	}
 
 	input := m.previewViewportInput(width, height-termpreview.HeaderRows)
+	_, total := tty.BufferBase(input.Buffer)
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width:  width,
 		Height: height,
@@ -748,12 +763,20 @@ func (m *Model) renderPreview(width, height int) string {
 		Hints:  styles.Muted.Render(hints),
 		Layout: tty.FitViewport(input),
 		Buffer: input.Buffer,
-		// A live grid is letterboxed out to the viewport rather than leaving a
-		// short capture to shift the chrome below it.
-		Letterbox: m.PreviewInteractive(),
-		Selection: &m.preview.selection,
-		TabWidth:  tty.DefaultTabWidth,
-		Message:   message,
+		// The window and the highlight drawn in it must resolve a line the same
+		// way, or a selection made over a pane with history is drawn rows away
+		// from the text it covers.
+		AbsoluteBase: input.AbsoluteBase,
+		TotalItems:   total,
+		// The live grid behind the window, from the same input the window was
+		// fitted to: letterboxing and the pane's canvas background are the shared
+		// renderer's to decide, not this surface's to guess at.
+		PaneHeight:  input.PaneHeight,
+		Interactive: input.Interactive,
+		Follow:      input.Follow,
+		Selection:   &m.preview.selection,
+		TabWidth:    tty.DefaultTabWidth,
+		Message:     message,
 	})
 }
 

@@ -30,6 +30,22 @@ type Geometry struct {
 	TabWidth  int
 }
 
+// GeometryFor places a drawn window on screen. The origin is the host's — it
+// alone knows where its chrome ends — and everything else is the layout's, so a
+// surface cannot hit-test against a window different from the one it drew.
+func GeometryFor(x, y int, layout Viewport, tabWidth int) Geometry {
+	if tabWidth <= 0 {
+		tabWidth = DefaultTabWidth
+	}
+	return Geometry{
+		Content:   mouse.Rect{X: x, Y: y, W: layout.DisplayWidth, H: layout.DisplayHeight},
+		Start:     layout.Start,
+		End:       layout.End,
+		ColOffset: layout.Fit.ColOffset,
+		TabWidth:  tabWidth,
+	}
+}
+
 // Rows is the number of buffer lines the surface currently draws.
 func (g Geometry) Rows() int { return g.End - g.Start }
 
@@ -61,6 +77,46 @@ func AbsoluteLine(buf *OutputBuffer, lineIdx int) int {
 		return lineIdx + base
 	}
 	return lineIdx
+}
+
+// BufferBase is the coordinate space a buffer keeps: the absolute line its
+// first loaded row sits at, and how many lines the space runs to.
+//
+// It is the one answer a host needs to draw what a gesture recorded. CellAt
+// records selection points through AbsoluteLine, so a viewport told nothing
+// about the base draws every highlight short by exactly it — off screen
+// entirely once a pane has any scrollback. A relative buffer's own indices are
+// already its coordinate space, so its base is zero.
+func BufferBase(buf *OutputBuffer) (base, total int) {
+	if buf == nil {
+		return 0, 0
+	}
+	base, end, absolute := buf.AbsoluteRange()
+	if !absolute {
+		return 0, buf.LineCount()
+	}
+	return base, end
+}
+
+// BufferAbsolute reports that a buffer numbers its lines in absolute pane
+// coordinates, which stay put as the pane produces more output.
+func BufferAbsolute(buf *OutputBuffer) bool {
+	if buf == nil {
+		return false
+	}
+	_, _, absolute := buf.AbsoluteRange()
+	return absolute
+}
+
+// ScrollKeepsSelection reports whether a selection survives a scroll made
+// outside a pointer gesture — a wheel notch, a shift-scrollback key.
+//
+// A selection in absolute coordinates names the same rows wherever the window
+// moves, so scrolling away from it and back must leave it where the user made
+// it. A buffer without them renumbers its lines as it grows, so the same anchor
+// would come to cover rows the user never picked.
+func ScrollKeepsSelection(buf *OutputBuffer) bool {
+	return BufferAbsolute(buf)
 }
 
 // ColAt maps a screen X coordinate to a visual column in the given line. The

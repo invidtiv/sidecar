@@ -54,6 +54,9 @@ func (m *Model) TerminalConfig() tty.Config {
 	if config.PasteKey == "" {
 		config.PasteKey = defaults.PasteKey
 	}
+	if config.SelectAllKey == "" {
+		config.SelectAllKey = defaults.SelectAllKey
+	}
 	// The browser has no attach path — attaching stays the owning project's — and
 	// an attach chord that only exited would be an undocumented third way out and
 	// a keystroke stolen from the pane.
@@ -396,7 +399,7 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 		m.pinPreviewToLive()
 		return m.preview.terminal.SendWheelNotches(delta < 0, col, row, notches)
 	}
-	m.clearPreviewSelection()
+	m.clearPreviewSelectionOnScroll()
 	before := m.preview.offset
 	m.scrollPreview(-delta)
 	if delta < 0 && m.preview.offset == before {
@@ -432,7 +435,14 @@ func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
 	if !m.PreviewInteractive() || !tty.IsTerminalMessage(msg) {
 		return nil
 	}
-	return m.forwardToTerminal(msg)
+	cmd := m.forwardToTerminal(msg)
+	// A pane that died under a forwarded click or keystroke ends the mode inside
+	// the component. Say so: the project surface raises the same toast, and a
+	// mode that ends by itself with no notice reads as a dropped keystroke.
+	if _, dead := msg.(tty.SessionDeadMsg); dead && !m.PreviewInteractive() {
+		return tea.Batch(cmd, appmsg.ShowToast("Session ended", 3*time.Second))
+	}
+	return cmd
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
@@ -475,10 +485,7 @@ func (m *Model) WorkspacesCursor() *tea.Cursor {
 	if !ok {
 		return nil
 	}
-	cursor := tea.NewCursor(window.surface.X+x, window.surface.Y+y)
-	cursor.Shape = tea.CursorBlock
-	cursor.Blink = true
-	return cursor
+	return tty.PlaceCursor(window.surface.X+x, window.surface.Y+y)
 }
 
 // previewBox is where the preview panel's content sits inside the tab. It is

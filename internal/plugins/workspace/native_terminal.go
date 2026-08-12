@@ -44,9 +44,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 	if !visible {
 		return nil
 	}
-	cursor := tea.NewCursor(x+cursorX, y+cursorY)
-	cursor.Shape = tea.CursorBlock
-	cursor.Blink = true
+	cursor := tty.PlaceCursor(x+cursorX, y+cursorY)
 	if cursor.X < 0 || cursor.X >= p.width || cursor.Y < 0 || cursor.Y >= p.height {
 		return nil
 	}

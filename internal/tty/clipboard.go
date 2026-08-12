@@ -30,6 +30,12 @@ func (c Config) IsPasteChord(msg tea.KeyPressMsg) bool {
 	return c.PasteKey != "" && msg.String() == c.PasteKey
 }
 
+// IsSelectAllChord reports whether a key press asks to select every line of
+// output.
+func (c Config) IsSelectAllChord(msg tea.KeyPressMsg) bool {
+	return c.SelectAllKey != "" && msg.String() == c.SelectAllKey
+}
+
 // CopyResult is the outcome of a copy: how many lines reached the clipboard, and
 // why none did. Hosts phrase their own notification from it.
 type CopyResult struct {
@@ -55,12 +61,14 @@ type CopyNotice struct {
 	Duration time.Duration
 }
 
-// Notice phrases a copy result.
-func (r CopyResult) Notice() CopyNotice {
+// Notice phrases a copy result. It is the Config's because the empty case
+// names the select-all chord, and a notice naming a key the surface does not
+// bind is worse than none.
+func (c Config) Notice(r CopyResult) CopyNotice {
 	notice := CopyNotice{Duration: CopyNoticeDuration}
 	switch {
 	case r.Empty:
-		notice.Message = "Nothing selected — ctrl+a selects all output"
+		notice.Message = "Nothing selected — " + c.SelectAllKey + " selects all output"
 	case r.Err != nil:
 		notice.Message = "Copy failed: " + r.Err.Error()
 		notice.IsError = true
@@ -72,8 +80,8 @@ func (r CopyResult) Notice() CopyNotice {
 
 // CopySelectionNotice copies selected terminal lines and phrases the outcome, so
 // a host needs only its own notification type to report a copy.
-func CopySelectionNotice(lines []string) CopyNotice {
-	return CopySelection(lines).Notice()
+func (c Config) CopySelectionNotice(lines []string) CopyNotice {
+	return c.Notice(CopySelection(lines))
 }
 
 // CopySelection writes selected terminal lines to the system clipboard, without

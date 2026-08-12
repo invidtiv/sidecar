@@ -28,13 +28,7 @@ func (p *Plugin) terminalSelectionGeometry() tty.Geometry {
 		left += previewContentInset
 		top += previewBorderRows
 	}
-	return tty.Geometry{
-		Content:   mouse.Rect{X: left, Y: top, W: layout.DisplayWidth, H: layout.DisplayHeight},
-		Start:     layout.Start,
-		End:       layout.End,
-		ColOffset: layout.Fit.ColOffset,
-		TabWidth:  tabStopWidth,
-	}
+	return tty.GeometryFor(left, top, layout, tabStopWidth)
 }
 
 // interactiveColAtX maps a viewport X coordinate to a visual column in the given line.
@@ -209,53 +203,71 @@ func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
 // frame reported mouse reporting at all. Motion now always selects locally;
 // only a release without motion reaches the app.
 func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea.Cmd {
-	// Drop the previous gesture's resolution first, before any branch below can
-	// return without arming a new one: a mouse-down that a link claims would
-	// otherwise leave the last press's forwarded click waiting for a release.
-	p.pointer.Resolution = tty.ClickNone
 	modified := action.Shift || action.Alt
-	// A validated link is Sidecar-owned even while the application has enabled
-	// mouse reporting: the same text is visibly decorated in passive and live
-	// terminal views, so an ordinary click must honor that promise before the
-	// gesture is offered to the application. Modified clicks remain selection
-	// gestures and never activate links.
-	if !modified {
-		if link, context, termPanel, found := p.terminalLinkAt(action); found {
-			documentTarget := link.Kind == terminalPathLink && docPaneTarget(link.Value, true)
-			// Preserve the exact live window containing the link before opening the
-			// document changes pane geometry. Claude commonly moves that transcript
-			// into history and publishes a sparse live grid after the resize; leaving
-			// follow enabled would replace the clicked context with that sparse grid.
-			freeze := p.captureTerminalViewportForDocOpen(termPanel)
-			if cmd, ok := p.activateResolvedTerminalLink(link, context, termPanel); ok {
-				// URLs and non-document file navigation do not resize this surface.
-				// Bare markdown and authoritative path:line routes both create a doc pane.
-				if !documentTarget {
-					return cmd
-				}
-				_, leaf := p.activeDocPane()
-				if leaf == nil {
-					return cmd
-				}
-				p.applyTerminalViewportFreeze(freeze)
-				// A document pane is not keyboard-focusable while terminal input is
-				// live. Link activation transfers focus out of the terminal, so leave
-				// interactive routing now rather than retaining stale interactive
-				// geometry/input ownership beside the newly focused document.
-				p.exitInteractiveMode()
-				p.activePane = PanePreview
-				p.paneFocus = leaf.ID
-				p.termPanelFocused = false
-				return cmd
-			}
-		}
-	}
+	linkCmd, claimed := p.activateTerminalLinkAt(action, modified)
 	terminal := p.activeInteractiveTerminal()
-	return p.prepareInteractiveDrag(action, tty.ResolveClick(tty.ClickIntent{
+	resolution := tty.ResolveClick(tty.ClickIntent{
 		Live:           true,
 		MouseReporting: terminal != nil && terminal.PaneMouseReporting(),
 		Modified:       modified,
-	}))
+		LinkClaimed:    claimed,
+	})
+	if claimed {
+		// A claimed press arms nothing, so the previous gesture's resolution is
+		// replaced by the shared resolver's answer for it rather than left waiting
+		// for a release that will never mean anything.
+		p.pointer.Resolution = resolution
+		return linkCmd
+	}
+	return p.prepareInteractiveDrag(action, resolution)
+}
+
+// activateTerminalLinkAt opens the link under a press, and reports whether one
+// took the click.
+//
+// A validated link is Sidecar-owned even while the application has enabled
+// mouse reporting: the same text is visibly decorated in passive and live
+// terminal views, so an ordinary click must honor that promise before the
+// gesture is offered to the application. Modified clicks remain selection
+// gestures and never activate links, and a link whose activation is refused —
+// a stale path, a failed revalidation — leaves an otherwise ordinary gesture.
+func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool) (tea.Cmd, bool) {
+	if modified {
+		return nil, false
+	}
+	link, context, termPanel, found := p.terminalLinkAt(action)
+	if !found {
+		return nil, false
+	}
+	documentTarget := link.Kind == terminalPathLink && docPaneTarget(link.Value, true)
+	// Preserve the exact live window containing the link before opening the
+	// document changes pane geometry. Claude commonly moves that transcript
+	// into history and publishes a sparse live grid after the resize; leaving
+	// follow enabled would replace the clicked context with that sparse grid.
+	freeze := p.captureTerminalViewportForDocOpen(termPanel)
+	cmd, ok := p.activateResolvedTerminalLink(link, context, termPanel)
+	if !ok {
+		return nil, false
+	}
+	// URLs and non-document file navigation do not resize this surface.
+	// Bare markdown and authoritative path:line routes both create a doc pane.
+	if !documentTarget {
+		return cmd, true
+	}
+	_, leaf := p.activeDocPane()
+	if leaf == nil {
+		return cmd, true
+	}
+	p.applyTerminalViewportFreeze(freeze)
+	// A document pane is not keyboard-focusable while terminal input is live.
+	// Link activation transfers focus out of the terminal, so leave interactive
+	// routing now rather than retaining stale interactive geometry/input
+	// ownership beside the newly focused document.
+	p.exitInteractiveMode()
+	p.activePane = PanePreview
+	p.paneFocus = leaf.ID
+	p.termPanelFocused = false
+	return cmd, true
 }
 
 type terminalViewportFreeze struct {
@@ -407,12 +419,12 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 		return p.enterInteractiveMode()
 	case tty.ClickForward:
 		// The press position, not the release: a click that resolves here never
-		// moved, and forwardClickToTmux sends press and release together.
+		// moved, and forwardClickToTmux sends press and release together. The
+		// component polls for the frame its own send provokes, so nothing is
+		// scheduled alongside it: two owners of that poll is two captures of
+		// every forwarded click.
 		pressX, pressY := p.pointer.PressPoint()
-		return tea.Batch(
-			p.forwardClickToTmux(pressX, pressY),
-			p.pollInteractivePaneImmediate(),
-		)
+		return p.forwardClickToTmux(pressX, pressY)
 	}
 	return nil
 }
@@ -527,6 +539,17 @@ func (p *Plugin) clearTerminalSelection() {
 	p.pointer.ResetUnit()
 }
 
+// clearTerminalSelectionOnScroll is what every scroll made outside a pointer
+// gesture — a wheel notch, a shift-scrollback key — does to the selection. The
+// rule is the shared layer's so that scrolling away from a highlight and back
+// answers the same way on every terminal surface.
+func (p *Plugin) clearTerminalSelectionOnScroll(termPanel bool) {
+	if tty.ScrollKeepsSelection(p.terminalOutputBuffer(termPanel)) {
+		return
+	}
+	p.clearTerminalSelection()
+}
+
 func (p *Plugin) terminalPointAndLine(action mouse.MouseAction) (ui.SelectionPoint, string, bool) {
 	if action.Region == nil {
 		return ui.SelectionPoint{}, "", false
@@ -571,8 +594,9 @@ func (p *Plugin) copyOnSelectEnabled() bool {
 // notification type is this surface's.
 func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
 	lines := p.interactiveSelectionLines()
+	config := p.terminalConfig()
 	return func() tea.Msg {
-		notice := tty.CopySelectionNotice(lines)
+		notice := config.CopySelectionNotice(lines)
 		return app.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}

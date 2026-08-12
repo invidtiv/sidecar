@@ -28,6 +28,11 @@ type Config struct {
 	// PasteKey is the keybinding to paste clipboard (default: "alt+v").
 	PasteKey string
 
+	// SelectAllKey is the keybinding to select every line of output
+	// (default: "ctrl+a"). The empty-copy notice names it, so a surface that
+	// hard-codes the chord can tell the user to press a key it no longer binds.
+	SelectAllKey string
+
 	// CopyOnSelect copies a finished selection without a copy chord, the way
 	// xterm does.
 	CopyOnSelect bool
@@ -44,6 +49,7 @@ func DefaultConfig() Config {
 		AttachKey:       "ctrl+]",
 		CopyKey:         "alt+c",
 		PasteKey:        "alt+v",
+		SelectAllKey:    "ctrl+a",
 		ScrollbackLines: DefaultScrollbackLines,
 	}
 }
@@ -138,7 +144,49 @@ type Model struct {
 	// Callbacks for plugin integration
 	OnExit   func() tea.Cmd // Called when user exits interactive mode
 	OnAttach func() tea.Cmd // Called when user requests full tmux attach
+
+	// OnSessionEnded is called instead of OnExit when the terminal ends because
+	// the pane died rather than because the user left it. A host that says
+	// nothing about that difference shows a mode ending by itself, which reads
+	// as a dropped keystroke. Nil falls back to OnExit.
+	OnSessionEnded func() tea.Cmd
+
+	// OnKey is the host's first look at a live key press: the chords that act on
+	// the surface around the pane rather than on the pane itself — its own
+	// panel toggles, its scrollback, its selection. Returning true stops the key
+	// before any of it becomes input, and before the double-escape window sees
+	// it. A host that answers a key here must not also answer it outside the
+	// component, or the pane receives it twice.
+	OnKey func(tea.KeyPressMsg) (tea.Cmd, bool)
+
+	// BeforeSend runs for a key that is about to reach the pane, and only for
+	// those: a held escape, a dropped mouse fragment and anything OnKey claimed
+	// never arrive here. It is where a host pins its viewport to the live edge
+	// and records that the user is typing.
+	BeforeSend func(tea.KeyPressMsg)
+
+	// ExitAction is what leaving the mode does to the terminal behind it.
+	ExitAction ExitAction
+
+	fragment MouseFragment
 }
+
+// ExitAction separates ending input ownership from closing the terminal.
+type ExitAction uint8
+
+const (
+	// ExitClosesTerminal ends the mode and the terminal together. A host that
+	// only shows the pane while the user is typing into it has nothing left to
+	// draw afterwards.
+	ExitClosesTerminal ExitAction = iota
+
+	// ExitReleasesInput ends input ownership alone: the buffer, its loaded
+	// scrollback and its feed survive. A host that keeps drawing the pane after
+	// the user leaves it requires this — closing here drops the scrollback the
+	// user just read, and the host's next reconciliation reopens the pane with
+	// an empty buffer on the same update, which reads as the output vanishing.
+	ExitReleasesInput
+)
 
 // New creates a new tty Model with the given configuration.
 // If config is nil, DefaultConfig() is used.
@@ -156,6 +204,9 @@ func New(config *Config) *Model {
 		}
 		if config.PasteKey != "" {
 			cfg.PasteKey = config.PasteKey
+		}
+		if config.SelectAllKey != "" {
+			cfg.SelectAllKey = config.SelectAllKey
 		}
 		if config.ScrollbackLines > 0 {
 			cfg.ScrollbackLines = config.ScrollbackLines
@@ -275,6 +326,36 @@ func (m *Model) Exit() {
 // Close releases the current target and rejects all queued deliveries.
 func (m *Model) Close() { m.Exit() }
 
+// endDeadSession closes a terminal whose pane is gone. There is no transport
+// left to keep, so this closes whatever the host's ExitAction says about the
+// ways out the user chooses.
+func (m *Model) endDeadSession() tea.Cmd {
+	m.Exit()
+	if m.OnSessionEnded != nil {
+		return m.OnSessionEnded()
+	}
+	if m.OnExit != nil {
+		return m.OnExit()
+	}
+	return nil
+}
+
+// releaseInput ends the component's ownership of the keyboard: the double-escape
+// window closes, a half-read mouse report is dropped, and nothing typed reaches
+// the pane until a host hands the keyboard back. Whether the terminal behind it
+// closes with the mode is [Model.ExitAction]'s answer, not this one's.
+func (m *Model) releaseInput() {
+	m.fragment.Reset()
+	if m.State != nil {
+		m.State.EscapePressed = false
+		m.State.EscapeTimerPending = false
+	}
+	if m.ExitAction == ExitReleasesInput {
+		return
+	}
+	m.Exit()
+}
+
 // Update handles messages in interactive mode.
 // Returns the updated model and any commands to execute.
 // Plugins should call this when they receive messages and interactive mode is active.
@@ -344,21 +425,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if !m.owns(msg.Scope) {
 			return nil
 		}
-		m.Exit()
-		if m.OnExit != nil {
-			return m.OnExit()
-		}
-		return nil
+		return m.endDeadSession()
 
 	case PasteResultMsg:
 		if !m.owns(msg.Scope) {
 			return nil
 		}
 		if msg.SessionDead {
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
-			}
+			return m.endDeadSession()
 		}
 		return nil
 	}
@@ -477,10 +551,7 @@ func (m *Model) Cursor() *tea.Cursor {
 		return nil
 	}
 	col := min(max(m.State.CursorCol-fit.ColOffset, 0), fit.Width-1)
-	cursor := tea.NewCursor(col, row)
-	cursor.Shape = tea.CursorBlock
-	cursor.Blink = true
-	return cursor
+	return PlaceCursor(col, row)
 }
 
 // PreferredMouseMode reports the mode suitable for an active embedded
@@ -548,9 +619,18 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
+	// The host's own acts come first, including ahead of the ways out: a host
+	// that is typing into its own field — a search box over the pane — owns
+	// every key while it is, exit chord included.
+	if m.OnKey != nil {
+		if cmd, handled := m.OnKey(msg); handled {
+			return cmd
+		}
+	}
+
 	// Check for exit key
 	if msg.String() == m.Config.ExitKey {
-		m.Exit()
+		m.releaseInput()
 		if m.OnExit != nil {
 			return m.OnExit()
 		}
@@ -560,10 +640,18 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Check for attach key. An empty AttachKey is a host with no attach path:
 	// the chord belongs to the pane like any other key.
 	if m.Config.AttachKey != "" && msg.String() == m.Config.AttachKey {
-		m.Exit()
+		m.releaseInput()
 		if m.OnAttach != nil {
 			return m.OnAttach()
 		}
+		return nil
+	}
+
+	now := time.Now()
+	// Reassembling a report split across reads reads state the one-key gate
+	// cannot: the fragment held from the previous read.
+	if len(msg.Text) > 0 && m.fragment.Consume(msg.Text, m.State.EscapePressed, m.State.EscapeTime, now) {
+		m.State.EscapePressed = false
 		return nil
 	}
 
@@ -572,12 +660,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		EscapePressed: m.State.EscapePressed,
 		EscapeAt:      m.State.EscapeTime,
 		LastMouseAt:   m.State.LastMouseEventTime,
-		Now:           time.Now(),
+		Now:           now,
 	}) {
 	case KeyGateExitDoubleEscape:
-		m.State.EscapePressed = false
-		m.State.EscapeTimerPending = false
-		m.Exit()
+		m.releaseInput()
 		if m.OnExit != nil {
 			return m.OnExit()
 		}
@@ -587,7 +673,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		// Hold the escape rather than forwarding it: the second half of a double
 		// escape may still be on its way, and the timer forwards it if it is not.
 		m.State.EscapePressed = true
-		m.State.EscapeTime = time.Now()
+		m.State.EscapeTime = now
 		if m.State.EscapeTimerPending {
 			return nil
 		}
@@ -598,6 +684,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		})
 
 	case KeyGateDrop:
+		if msg.Text == "[" {
+			// The bracket opened a report whose remainder is still to come, so it
+			// is held for the reassembly above rather than dropped outright.
+			m.fragment.Hold("[", now)
+		}
 		m.State.EscapePressed = false
 		return nil
 	}
@@ -608,6 +699,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.State.EscapePressed {
 		m.State.EscapePressed = false
 		pendingEscape = true
+	}
+
+	if m.BeforeSend != nil {
+		m.BeforeSend(msg)
 	}
 
 	// Paste key
@@ -721,6 +816,16 @@ func (m *Model) NoteMouseActivity() {
 	m.State.LastMouseEventTime = time.Now()
 }
 
+// LastMouseActivity is when a mouse event last reached this terminal. A host
+// that runs the shared key gate itself reads it from here rather than keeping a
+// clock of its own, or the two would disagree about the same bracket.
+func (m *Model) LastMouseActivity() time.Time {
+	if m.State == nil {
+		return time.Time{}
+	}
+	return m.State.LastMouseEventTime
+}
+
 // Buffer is the captured output the terminal is drawing, so a host can render
 // its own window over it — scrolled back, with a selection highlighted — instead
 // of only the live tail View draws.
@@ -818,9 +923,8 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 
 	if msg.Err != nil {
 		if IsSessionDeadError(msg.Err) {
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
+			if cmd := m.endDeadSession(); cmd != nil {
+				return cmd
 			}
 		}
 		// A transient capture failure must not strand a dead-control recovery.
@@ -862,11 +966,14 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 	m.State.PaneHeight = msg.PaneHeight
 	m.State.PaneWidth = msg.PaneWidth
 
-	// Update terminal mode state
+	// Update terminal mode state. Mouse tracking is taken from the flag the
+	// capture carried, and taken on every poll: an application turns tracking on
+	// and off without redrawing a cell, so a mode read only when the screen
+	// changed goes stale exactly when it matters.
 	if changed {
 		m.State.BracketedPasteEnabled = DetectBracketedPasteMode(msg.Output)
-		m.State.MouseReportingEnabled = DetectMouseReportingMode(msg.Output)
 	}
+	m.State.MouseReportingEnabled = msg.MouseReporting
 
 	// Control-death recovery is deliberately sequenced after this accepted
 	// capture. This guarantees the fallback screen becomes visible before a
@@ -899,7 +1006,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	scope := msg.Scope
 	pollGeneration := msg.Generation
 	return func() tea.Msg {
-		output, row, col, paneHeight, paneWidth, visible, err := m.capture.Capture(target, m.Config.ScrollbackLines)
+		output, state, err := m.capture.Capture(target, m.Config.ScrollbackLines)
 		if err != nil {
 			return CaptureResultMsg{
 				Scope:          scope,
@@ -914,11 +1021,12 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 			PollGeneration: pollGeneration,
 			Target:         target,
 			Output:         output,
-			CursorRow:      row,
-			CursorCol:      col,
-			CursorVisible:  visible,
-			PaneHeight:     paneHeight,
-			PaneWidth:      paneWidth,
+			CursorRow:      state.CursorRow,
+			CursorCol:      state.CursorCol,
+			CursorVisible:  state.CursorVisible,
+			PaneHeight:     state.PaneHeight,
+			PaneWidth:      state.PaneWidth,
+			MouseReporting: state.MouseReporting,
 		}
 	}
 }

@@ -347,6 +347,9 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 		return nil
 	}
 	w = p.terminalContentWidth(w)
+	if cmd, owned := p.resizeThroughTerminal(target, w, h); owned {
+		return cmd
+	}
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, w, h)
 		return nil
