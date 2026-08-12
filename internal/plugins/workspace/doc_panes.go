@@ -540,6 +540,16 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 	return paneTreeDividerStyle(focused).Render(strings.Repeat("─", maxInt(width, 0)))
 }
 
+func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
+	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
+	chips := p.docHeaderChips(doc, box.W)
+	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
+		if index == len(chips)-1 && chip.Drawn {
+			p.mouseHandler.HitMap.AddRect(regionDocClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
+		}
+	}
+}
+
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	doc, _ := p.activeDocPane()
 	if doc == nil || !(p.shellSelected || p.previewTab == PreviewTabOutput) {
@@ -548,7 +558,9 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
 	if !fits {
 		if p.docFocused() {
-			p.mouseHandler.HitMap.AddRect(regionDocPane, p.previewSplit().ContentX, p.previewContentY(), width, height, doc.leafID)
+			if absolute, ok := p.previewContentBox(); ok {
+				p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: width, H: height})
+			}
 			return p.renderDocPane(doc, Box{W: width, H: height}), true
 		}
 		return "", false
@@ -564,13 +576,10 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		case PaneDoc:
 			document = p.renderDocPane(doc, placement.Box)
 			if absolute, ok := p.previewContentBox(); ok {
-				p.mouseHandler.HitMap.AddRect(regionDocPane, absolute.X+placement.Box.X, absolute.Y+placement.Box.Y, placement.Box.W, placement.Box.H, placement.Node.ID)
-				chips := p.docHeaderChips(doc, placement.Box.W)
-				for index, chip := range layoutHeaderChips(chips, placement.Box.W, 0) {
-					if index == len(chips)-1 && chip.Drawn {
-						p.mouseHandler.HitMap.AddRect(regionDocClose, absolute.X+placement.Box.X+chip.Col, absolute.Y+placement.Box.Y, chip.Width, 1, placement.Node.ID)
-					}
-				}
+				p.registerDocPaneRegions(doc, placement.Node.ID, Box{
+					X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
+					W: placement.Box.W, H: placement.Box.H,
+				})
 			}
 		}
 	}

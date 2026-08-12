@@ -275,10 +275,34 @@ func TestDocPaneNarrowRefusalAndFocusedLeafFallback(t *testing.T) {
 	doc, leaf := p.activeDocPane()
 	p.width = 40
 	p.paneFocus = leaf.ID
+	p.mouseHandler.Clear()
 	got, ok := p.renderDocumentSplit(36, 20)
 	if !ok || !strings.Contains(got, doc.view.Title()) {
 		t.Fatalf("focused doc fallback not rendered full-size: ok=%v view=%q", ok, got)
 	}
+	var closeRegion *mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionDocClose {
+			regionCopy := region
+			closeRegion = &regionCopy
+			break
+		}
+	}
+	if closeRegion == nil {
+		t.Fatal("focused narrow fallback rendered a close chip without a close hit region")
+	}
+	if hit := p.mouseHandler.HitMap.Test(closeRegion.Rect.X, closeRegion.Rect.Y); hit == nil || hit.ID != regionDocClose {
+		t.Fatalf("close chip coordinates resolve to %#v, want %s", hit, regionDocClose)
+	}
+	if cmd := p.handleMouseClick(mouse.MouseAction{Region: closeRegion}); cmd == nil || p.activeDocPaneOrNil() != nil {
+		t.Fatal("focused narrow fallback close chip did not close the document")
+	}
+
+	// Reopen to retain the original assertion: terminal focus at the same narrow
+	// size falls back to the legacy full terminal rather than an invalid split.
+	p.width = 140
+	p.openTerminalPath("README.md", 1)
+	p.width = 40
 	p.paneFocus = terminalLeafID(p.paneRoot)
 	if _, ok := p.renderDocumentSplit(36, 20); ok {
 		t.Fatal("terminal-focused narrow layout did not fall back to legacy full terminal")
