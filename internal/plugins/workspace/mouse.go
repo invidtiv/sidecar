@@ -29,7 +29,7 @@ func isBackgroundRegion(regionID string) bool {
 		regionWorktreeItem, regionPreviewTab,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
-		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent,
+		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
 		regionDiffTabPreviewFile, regionDiffTabFileListPane:
@@ -702,6 +702,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.activePane = PanePreview
 				p.paneFocus = leafID
 				p.termPanelFocused = false
+			}
+		}
+	case regionPaneTreeDivider:
+		if splitID, ok := action.Region.Data.(int); ok {
+			if split := FindPane(p.paneRoot, splitID); split != nil && split.Split != nil {
+				p.paneDragSplitID = splitID
+				p.mouseHandler.StartDrag(action.X, action.Y, regionPaneTreeDivider, split.Split.Ratio)
 			}
 		}
 	case regionTermPanelDivider:
@@ -1471,6 +1478,20 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			}
 			p.termPanelSize = newSize
 		}
+	case regionPaneTreeDivider:
+		split := FindPane(p.paneRoot, p.paneDragSplitID)
+		content, ok := p.previewContentBox()
+		if split == nil || split.Split == nil || !ok {
+			return nil
+		}
+		startValue := p.mouseHandler.DragStartValue()
+		newRatio := startValue
+		if split.Split.Axis == SplitRows && content.H > 0 {
+			newRatio += action.DragDY * 100 / content.H
+		} else if split.Split.Axis == SplitCols && content.W > 0 {
+			newRatio += action.DragDX * 100 / content.W
+		}
+		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
 	case regionPreviewPane, regionTermPanelContent:
 		if !p.selection.Anchor.Valid() && !p.anchorDragFromOrigin(action) {
 			return nil
@@ -1501,6 +1522,11 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 
 	// Persist widths based on what was being dragged
 	switch dragSource {
+	case regionPaneTreeDivider:
+		p.saveSelectionState()
+		p.paneDragSplitID = 0
+		p.lastDragRegion = ""
+		return p.resizeDocTerminalCmd()
 	case regionDiffTabDivider:
 		_ = state.SetDiffTabFileListWidth(p.diffTabListWidth)
 	case regionTermPanelDivider:

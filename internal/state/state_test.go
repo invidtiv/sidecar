@@ -586,6 +586,35 @@ func TestSetWorkspaceState_ShellSelection(t *testing.T) {
 	}
 }
 
+func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
+	want := State{Workspace: map[string]WorkspaceState{"/repo": {
+		ShellTmuxName: "shell-1",
+		PaneLayout: &PaneLayoutJSON{Root: "/repo", Split: &PaneSplitJSON{
+			Axis: "cols", Ratio: 63,
+			A: &PaneLayoutJSON{Kind: "terminal"},
+			B: &PaneLayoutJSON{Kind: "doc", Active: 0, Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
+		}},
+	}}}
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got State
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	layout := got.Workspace["/repo"].PaneLayout
+	if layout == nil || layout.Root != "/repo" || layout.Split == nil || layout.Split.Ratio != 63 ||
+		layout.Split.B == nil || len(layout.Split.B.Tabs) != 1 || layout.Split.B.Tabs[0].Mode != "raw" {
+		t.Fatalf("pane layout round trip = %#v", layout)
+	}
+
+	var malformed State
+	if err := json.Unmarshal([]byte(`{"workspace":{"/repo":{"paneLayout":{"split":{"axis":7}}}}}`), &malformed); err == nil {
+		t.Fatal("malformed pane layout JSON unexpectedly decoded")
+	}
+}
+
 func TestGetLastWorktreePath_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()

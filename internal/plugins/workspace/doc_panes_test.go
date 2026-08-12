@@ -10,7 +10,9 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
@@ -27,6 +29,10 @@ func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	p.paneFocus = 1
 	p.paneNextID = 2
 	p.docs = make(map[int]*docPane)
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
+		setWorkspaceState: func(string, state.WorkspaceState) error { return nil },
+	}
 	if shell {
 		p.shellSelected = true
 		p.shells = []*ShellSession{{
@@ -248,5 +254,164 @@ func TestSelectionChangeClosesDocWithoutStealingSidebarFocus(t *testing.T) {
 	}
 	if p.activePane != PaneSidebar {
 		t.Fatalf("selection reset stole focus: active pane = %v", p.activePane)
+	}
+}
+
+func TestDocFocusedResizePersistsAndEmitsOneResize(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# resize\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	var saved state.WorkspaceState
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.openTerminalPath("README.md", 0)
+
+	cmd := p.handleListKeys(tea.KeyPressMsg{Code: '+'})
+	if cmd == nil || p.paneRoot.Split.Ratio != 45 {
+		t.Fatalf("grow doc ratio=%d cmd=%v, want 45 and resize", p.paneRoot.Split.Ratio, cmd != nil)
+	}
+	if saved.PaneLayout == nil || saved.PaneLayout.Split == nil || saved.PaneLayout.Split.Ratio != 45 {
+		t.Fatalf("saved layout after grow = %#v", saved.PaneLayout)
+	}
+	if _, ok := cmd().(paneResizedMsg); !ok {
+		t.Fatalf("keyboard resize command = %T, want one direct terminal resize", cmd())
+	}
+
+	for range 20 {
+		p.handleListKeys(tea.KeyPressMsg{Code: '-'})
+	}
+	if p.paneRoot.Split.Ratio != paneMaxRatio {
+		t.Fatalf("shrinking doc clamp ratio=%d, want %d", p.paneRoot.Split.Ratio, paneMaxRatio)
+	}
+}
+
+func TestPaneTreeDividerDragIsLocalUntilSourceAwareRelease(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# drag\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.sidebarWidth = 37
+	var saves int
+	var saved state.WorkspaceState
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saves++; saved = next; return nil },
+	}
+	p.openTerminalPath("README.md", 0)
+	saves = 0
+	p.selection.SelectRange(ui.SelectionPoint{Line: 1}, ui.SelectionPoint{Line: 2, Col: 2}, false)
+	splitID := p.paneRoot.ID
+	p.handleMouseClick(mouse.MouseAction{Region: &mouse.Region{ID: regionPaneTreeDivider, Data: splitID}, X: 70, Y: 5})
+
+	if cmd := p.handleMouseDrag(mouse.MouseAction{DragStartID: regionPaneTreeDivider, DragDX: 14}); cmd != nil {
+		t.Fatal("drag motion emitted a tmux resize command")
+	}
+	if p.paneRoot.Split.Ratio == 50 || saves != 0 {
+		t.Fatalf("drag motion ratio=%d saves=%d, want live change without persistence", p.paneRoot.Split.Ratio, saves)
+	}
+	cmd := p.handleMouseDragEnd(mouse.MouseAction{
+		DragStartID: regionPaneTreeDivider,
+		Region:      &mouse.Region{ID: regionPreviewPane},
+	})
+	if cmd == nil || saves != 1 || p.sidebarWidth != 37 {
+		t.Fatalf("release cmd=%v saves=%d sidebar=%d", cmd != nil, saves, p.sidebarWidth)
+	}
+	if !p.selection.HasSelection() {
+		t.Fatal("pane divider release finalized or cleared terminal selection")
+	}
+	if _, ok := cmd().(paneResizedMsg); !ok {
+		t.Fatalf("divider release command = %T, want one direct terminal resize", cmd())
+	}
+}
+
+func TestRestorePaneLayoutPrunesStaleTabsAndRejectsOtherRoot(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "docs/valid.md", "# restored\n")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	saved := state.WorkspaceState{
+		ShellTmuxName: "test-shell",
+		PaneLayout: &state.PaneLayoutJSON{Root: resolvedRoot, Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: 64,
+			A: &state.PaneLayoutJSON{Kind: "terminal"},
+			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{
+				{Path: "missing.md", Mode: "rendered"},
+				{Path: "docs/valid.md", Mode: "raw"},
+			}},
+		}},
+	}
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	if !p.restoreSelectionState() {
+		t.Fatal("saved shell selection was not restored")
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view.Title() != "docs/valid.md" || doc.view.Rendered() || p.paneRoot.Split.Ratio != 64 {
+		t.Fatalf("restored pane doc=%#v tree=%#v", doc, p.paneRoot)
+	}
+	if p.paneRestoreCmd == nil {
+		t.Fatal("valid restored document did not schedule its load")
+	}
+	if saved.PaneLayout == nil || saved.PaneLayout.Split == nil || len(saved.PaneLayout.Split.B.Tabs) != 1 || saved.PaneLayout.Split.B.Tabs[0].Path != "docs/valid.md" {
+		t.Fatalf("stale tabs were not pruned from persisted layout: %#v", saved.PaneLayout)
+	}
+
+	other := t.TempDir()
+	saved.PaneLayout.Root = other
+	p.resetPaneTreeToTerminal()
+	p.docs = make(map[int]*docPane)
+	p.paneRestoreCmd = nil
+	p.restoreSelectionState()
+	if p.activeDocPaneOrNil() != nil || p.paneRoot.Split != nil || p.paneRestoreCmd != nil {
+		t.Fatal("layout from another terminal root was restored")
+	}
+}
+
+func TestRestorePaneLayoutRejectsUnsupportedNestedTree(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "one.md", "one")
+	writeDocPaneFixture(t, root, "two.md", "two")
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: root, Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal"},
+		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: "rows", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "one.md"}}},
+			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "two.md"}}},
+		}},
+	}}
+	p.restorePaneLayout(layout)
+	if p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal || len(p.docs) != 0 {
+		t.Fatalf("unsupported nested tree was retained: root=%#v docs=%d", p.paneRoot, len(p.docs))
+	}
+}
+
+func TestRestorePaneLayoutCollapsesEscapingDocument(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: root, Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal"},
+		B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: outside}}},
+	}}
+	if cmd := p.restorePaneLayout(layout); cmd != nil {
+		t.Fatal("escaping doc scheduled a load")
+	}
+	if p.paneRoot == nil || p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal || len(p.docs) != 0 {
+		t.Fatalf("escaping doc did not collapse to terminal: root=%#v docs=%d", p.paneRoot, len(p.docs))
 	}
 }

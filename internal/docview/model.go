@@ -176,6 +176,15 @@ func (m *Model) ToggleRenderMode() {
 	m.clampScroll()
 }
 
+// Rendered reports whether markdown is shown rendered rather than raw.
+func (m *Model) Rendered() bool { return m.rendered }
+
+// SetRendered restores the persisted display mode.
+func (m *Model) SetRendered(rendered bool) {
+	m.rendered = rendered
+	m.clampScroll()
+}
+
 // Title returns the document's relative path.
 func (m *Model) Title() string { return m.path }
 

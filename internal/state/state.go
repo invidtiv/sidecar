@@ -59,6 +59,29 @@ type WorkspaceState struct {
 	WorkspaceName     string            `json:"workspaceName,omitempty"`     // Name of selected workspace
 	ShellTmuxName     string            `json:"shellTmuxName,omitempty"`     // TmuxName of selected shell (empty = workspace selected)
 	ShellDisplayNames map[string]string `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
+	PaneLayout        *PaneLayoutJSON   `json:"paneLayout,omitempty"`        // Structural document-pane layout for the selected terminal root
+}
+
+// PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
+// tabs are a list from the first version so adding tab UI later is additive.
+type PaneLayoutJSON struct {
+	Root   string           `json:"root,omitempty"`
+	Kind   string           `json:"kind,omitempty"`
+	Split  *PaneSplitJSON   `json:"split,omitempty"`
+	Tabs   []PaneDocTabJSON `json:"tabs,omitempty"`
+	Active int              `json:"active,omitempty"`
+}
+
+type PaneSplitJSON struct {
+	Axis  string          `json:"axis"`
+	Ratio int             `json:"ratio"`
+	A     *PaneLayoutJSON `json:"a"`
+	B     *PaneLayoutJSON `json:"b"`
+}
+
+type PaneDocTabJSON struct {
+	Path string `json:"path"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // NotesState holds persistent notes plugin state.

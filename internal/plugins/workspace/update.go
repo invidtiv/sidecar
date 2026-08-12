@@ -2071,6 +2071,10 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	var commands []tea.Cmd
 	if len(p.worktrees) > 0 || len(p.shells) > 0 {
 		p.restoreSelectionState()
+		if p.paneRestoreCmd != nil {
+			commands = append(commands, p.paneRestoreCmd)
+			p.paneRestoreCmd = nil
+		}
 	}
 
 	// Restore terminal panel only after selection is final, since its session

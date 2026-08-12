@@ -116,6 +116,7 @@ const (
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
 	regionDocPane          = "doc-pane"
+	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -181,10 +182,12 @@ type Plugin struct {
 	// Preview pane tree state. A nil root retains the legacy path while the
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
 	// document registry and load-request state arrive with the open-doc journey.
-	paneRoot   *PaneNode
-	paneFocus  int
-	paneNextID int
-	docs       map[int]*docPane
+	paneRoot        *PaneNode
+	paneFocus       int
+	paneNextID      int
+	paneDragSplitID int
+	paneRestoreCmd  tea.Cmd
+	docs            map[int]*docPane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -584,6 +587,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneRoot = nil
 	p.paneFocus = 0
 	p.paneNextID = 1
+	p.paneDragSplitID = 0
+	p.paneRestoreCmd = nil
 	p.docs = make(map[int]*docPane)
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
@@ -682,6 +687,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("r", "render", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
 	}
 
 	// Load saved sidebar width
@@ -847,7 +854,8 @@ func (p *Plugin) saveSelectionState() {
 		return
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	hooks := p.shellStartupHooks.withDefaults()
+	wtState := hooks.getWorkspaceState(p.ctx.ProjectRoot)
 	wtState.WorkspaceName = ""
 	wtState.ShellTmuxName = ""
 
@@ -862,11 +870,12 @@ func (p *Plugin) saveSelectionState() {
 			wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
 		}
 	}
+	wtState.PaneLayout = p.persistedPaneLayout()
 
 	// td-f88fdd: Shell display names now persisted in shells.json manifest
 	// Only save selection state (which worktree/shell is selected)
-	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" {
-		_ = state.SetWorkspaceState(p.ctx.ProjectRoot, wtState)
+	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" || wtState.PaneLayout != nil {
+		_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
 
@@ -877,9 +886,10 @@ func (p *Plugin) restoreSelectionState() bool {
 		return false
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	wtState := p.shellStartupHooks.withDefaults().getWorkspaceState(p.ctx.ProjectRoot)
 
-	// No saved state
+	// No saved selection. A layout is meaningful only after its terminal root
+	// has been selected, so never restore it independently.
 	if wtState.WorkspaceName == "" && wtState.ShellTmuxName == "" {
 		return false
 	}
@@ -890,6 +900,8 @@ func (p *Plugin) restoreSelectionState() bool {
 			if shell.TmuxName == wtState.ShellTmuxName {
 				p.shellSelected = true
 				p.selectedShellIdx = i
+				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				p.saveSelectionState()
 				return true
 			}
 		}
@@ -902,6 +914,8 @@ func (p *Plugin) restoreSelectionState() bool {
 			if wt.Name == wtState.WorkspaceName {
 				p.shellSelected = false
 				p.selectedIdx = i
+				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				p.saveSelectionState()
 				return true
 			}
 		}
@@ -1464,7 +1478,11 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 // Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
 	var cmds []tea.Cmd
-	p.resetDocPanesForSelection()
+	if p.resetDocPanesForSelection() {
+		// The selection owns the terminal root. Persist the collapsed terminal
+		// immediately so an old worktree's document cannot return after restart.
+		p.saveSelectionState()
+	}
 
 	// Resize selected pane to match preview width so capture output is correct
 	if cmd := p.resizeSelectedPaneCmd(); cmd != nil {

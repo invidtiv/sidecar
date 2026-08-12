@@ -9,6 +9,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -77,7 +79,9 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 		doc.root = root
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
-		return doc.view.Load(leaf.DocID, root, rel, line, epoch)
+		cmd := doc.view.Load(leaf.DocID, root, rel, line, epoch)
+		p.saveSelectionState()
+		return cmd
 	}
 
 	docID := p.paneNextID
@@ -106,7 +110,9 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 	viewer := docview.New(nil)
 	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, view: viewer}
 	p.activePane = PanePreview
-	return tea.Batch(viewer.Load(docID, root, rel, line, epoch), p.resizeDocTerminalCmd())
+	load := viewer.Load(docID, root, rel, line, epoch)
+	p.saveSelectionState()
+	return tea.Batch(load, p.resizeDocTerminalCmd())
 }
 
 func clonePaneTree(node *PaneNode) *PaneNode {
@@ -144,6 +150,7 @@ func (p *Plugin) closeDocPane() tea.Cmd {
 		return nil
 	}
 	p.activePane = PanePreview
+	p.saveSelectionState()
 	return p.resizeDocTerminalCmd()
 }
 
@@ -220,13 +227,209 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.closeDocPane()
 	case "r":
 		doc.view.ToggleRenderMode()
+		p.saveSelectionState()
 		return true, nil
+	case "+":
+		return true, p.resizeFocusedDoc(5)
+	case "-":
+		return true, p.resizeFocusedDoc(-5)
 	default:
 		doc.view.HandleKey(msg)
 		// A focused document is its own input context. Absorb keys it does not
 		// own so they cannot trigger workspace actions behind the pane.
 		return true, nil
 	}
+}
+
+func (p *Plugin) resizeFocusedDoc(delta int) tea.Cmd {
+	_, leaf := p.activeDocPane()
+	if leaf == nil {
+		return nil
+	}
+	parent, docInA := enclosingSplit(p.paneRoot, leaf.ID)
+	if parent == nil || parent.Split == nil {
+		return nil
+	}
+	if docInA {
+		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio+delta)
+	} else {
+		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio-delta)
+	}
+	p.saveSelectionState()
+	return p.resizeDocTerminalCmd()
+}
+
+func enclosingSplit(node *PaneNode, leafID int) (*PaneNode, bool) {
+	if node == nil || node.Split == nil {
+		return nil, false
+	}
+	if FindPane(node.Split.A, leafID) != nil {
+		if node.Split.A.ID == leafID {
+			return node, true
+		}
+		if parent, inA := enclosingSplit(node.Split.A, leafID); parent != nil {
+			return parent, inA
+		}
+	}
+	if node.Split.B.ID == leafID {
+		return node, false
+	}
+	return enclosingSplit(node.Split.B, leafID)
+}
+
+func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
+	if p.paneRoot == nil {
+		return nil
+	}
+	root, ok := p.selectedTerminalRoot()
+	if !ok {
+		return nil
+	}
+	if doc, _ := p.activeDocPane(); doc != nil && filepath.Clean(doc.root) != root {
+		return &state.PaneLayoutJSON{Root: root, Kind: "terminal"}
+	}
+	layout := p.encodePaneNode(p.paneRoot)
+	if layout == nil {
+		return nil
+	}
+	layout.Root = root
+	return layout
+}
+
+func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
+	if node == nil {
+		return nil
+	}
+	if node.Split != nil {
+		axis := "cols"
+		if node.Split.Axis == SplitRows {
+			axis = "rows"
+		}
+		return &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: axis, Ratio: clampPaneRatio(node.Split.Ratio),
+			A: p.encodePaneNode(node.Split.A), B: p.encodePaneNode(node.Split.B),
+		}}
+	}
+	if node.Kind == PaneTerminal {
+		return &state.PaneLayoutJSON{Kind: "terminal"}
+	}
+	doc := p.docs[node.DocID]
+	if doc == nil || doc.view == nil || doc.view.Title() == "" {
+		return nil
+	}
+	mode := "raw"
+	if doc.view.Rendered() {
+		mode = "rendered"
+	}
+	return &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: doc.view.Title(), Mode: mode}}}
+}
+
+func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
+	if p.paneRoot == nil || layout == nil || p.ctx == nil {
+		return nil
+	}
+	root, ok := p.selectedTerminalRoot()
+	if !ok || filepath.Clean(layout.Root) != root {
+		return nil
+	}
+	p.docs = make(map[int]*docPane)
+	p.paneNextID = 1
+	terminalCount := 0
+	var loads []tea.Cmd
+	restored := p.decodePaneNode(layout, root, &terminalCount, &loads)
+	if restored == nil || terminalCount != 1 || !supportedDocPaneTree(restored) {
+		p.resetPaneTreeToTerminal()
+		return nil
+	}
+	p.paneRoot = restored
+	p.paneFocus = terminalLeafID(restored)
+	p.paneNextID = maxPaneID(restored) + 1
+	return tea.Batch(loads...)
+}
+
+// Phase 4 can render the shipped terminal-plus-one-document journey. The JSON
+// remains structural for future leaves, but forward or hand-edited nested trees
+// must not silently drive terminal geometry that the renderer cannot display.
+func supportedDocPaneTree(root *PaneNode) bool {
+	if root == nil {
+		return false
+	}
+	if root.Split == nil {
+		return root.Kind == PaneTerminal
+	}
+	if root.Split.A == nil || root.Split.B == nil || root.Split.A.Split != nil || root.Split.B.Split != nil {
+		return false
+	}
+	return (root.Split.A.Kind == PaneTerminal && root.Split.B.Kind == PaneDoc) ||
+		(root.Split.A.Kind == PaneDoc && root.Split.B.Kind == PaneTerminal)
+}
+
+func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount *int, loads *[]tea.Cmd) *PaneNode {
+	if saved == nil {
+		return nil
+	}
+	if saved.Split != nil {
+		axis := SplitCols
+		switch saved.Split.Axis {
+		case "cols":
+		case "rows":
+			axis = SplitRows
+		default:
+			return nil
+		}
+		a := p.decodePaneNode(saved.Split.A, root, terminalCount, loads)
+		b := p.decodePaneNode(saved.Split.B, root, terminalCount, loads)
+		if a == nil {
+			return b
+		}
+		if b == nil {
+			return a
+		}
+		id := p.nextPaneID()
+		return &PaneNode{ID: id, Split: &PaneSplit{Axis: axis, Ratio: clampPaneRatio(saved.Split.Ratio), A: a, B: b}}
+	}
+	switch saved.Kind {
+	case "terminal":
+		*terminalCount++
+		if *terminalCount > 1 {
+			return nil
+		}
+		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
+	case "doc":
+		if len(saved.Tabs) == 0 {
+			return nil
+		}
+		active := clampInt(saved.Active, 0, len(saved.Tabs)-1)
+		ordered := append([]state.PaneDocTabJSON{saved.Tabs[active]}, saved.Tabs[:active]...)
+		ordered = append(ordered, saved.Tabs[active+1:]...)
+		for _, tab := range ordered {
+			rel, _, valid := resolveTerminalPath(root, tab.Path)
+			if !valid {
+				continue
+			}
+			id := p.nextPaneID()
+			viewer := docview.New(nil)
+			load := viewer.Load(id, root, filepath.ToSlash(rel), 0, p.ctx.Epoch)
+			viewer.SetRendered(tab.Mode != "raw")
+			p.docs[id] = &docPane{leafID: id, root: root, view: viewer}
+			*loads = append(*loads, load)
+			return &PaneNode{ID: id, Kind: PaneDoc, DocID: id}
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) nextPaneID() int {
+	id := p.paneNextID
+	p.paneNextID++
+	return id
+}
+
+func (p *Plugin) resetPaneTreeToTerminal() {
+	p.docs = make(map[int]*docPane)
+	p.paneNextID = 1
+	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
+	p.paneFocus = p.paneRoot.ID
 }
 
 func (p *Plugin) cycleDocumentFocus(reverse bool) {
@@ -295,6 +498,30 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 			}
 		}
 	}
+	if absolute, ok := p.previewContentBox(); ok {
+		for _, split := range dividers {
+			hit := split.Box
+			if split.Axis == SplitCols {
+				hit.W = dividerHitWidth
+				hit.X--
+			} else {
+				hit.H = dividerHitWidth
+				hit.Y--
+			}
+			p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
+				absolute.X+hit.X, absolute.Y+hit.Y, hit.W, hit.H, split.SplitID)
+		}
+	}
+	if dividers[0].Axis == SplitRows {
+		divider := lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat("─", width))
+		if leaves[0].Node.Kind == PaneTerminal {
+			return lipgloss.JoinVertical(lipgloss.Left, terminal, divider, document), true
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, document, divider, terminal), true
+	}
 	divider := ui.RenderDivider(height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, terminal, divider, document), true
+	if leaves[0].Node.Kind == PaneTerminal {
+		return lipgloss.JoinHorizontal(lipgloss.Top, terminal, divider, document), true
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, document, divider, terminal), true
 }
