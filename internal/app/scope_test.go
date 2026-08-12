@@ -32,6 +32,10 @@ type hostedTestPlugin struct {
 	context string
 	focused bool
 
+	// blocks stands in for an open Tasks overlay, picker, or prompt: the
+	// surface owns the keyboard and sidecar's globals must not fire under it.
+	blocks bool
+
 	inits   int
 	starts  int
 	stops   int
@@ -56,6 +60,7 @@ func (p *hostedTestPlugin) View(int, int) string       { return "hosted " + p.id
 func (p *hostedTestPlugin) IsFocused() bool            { return p.focused }
 func (p *hostedTestPlugin) SetFocused(f bool)          { p.focused = f }
 func (p *hostedTestPlugin) Commands() []plugin.Command { return nil }
+func (p *hostedTestPlugin) BlocksGlobalKeys() bool     { return p.blocks }
 func (p *hostedTestPlugin) FocusContext() string {
 	if p.context == "" {
 		return p.id
@@ -226,6 +231,97 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 	m = asAppModel(t, updated)
 	if m.inGlobalScope() || m.activePlugin != 2 || m.showQuitConfirm {
 		t.Fatalf("q from the Tasks tab: global=%v plugin=%d quit=%v",
+			m.inGlobalScope(), m.activePlugin, m.showQuitConfirm)
+	}
+}
+
+func TestEscInAHostedTasksOverlayGoesToTasksNotTheScopeToggle(t *testing.T) {
+	m, host := scopeModelWithTasks(t)
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalTasks
+	m.updateContext()
+
+	// An overlay is open inside Tasks: esc is its dismissal, so it must reach
+	// the surface instead of pulling the user out of the global space and
+	// leaving the overlay open underneath.
+	host.blocks = true
+	keys := host.keys
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.globalTab != GlobalTasks {
+		t.Fatalf("esc left the global space with a Tasks overlay open: global=%v tab=%v",
+			m.inGlobalScope(), m.globalTab)
+	}
+	if host.keys != keys+1 {
+		t.Fatalf("the hosted surface received %d keys, want %d", host.keys, keys+1)
+	}
+
+	// In a Tasks root context nothing wants esc, so it still leaves the space.
+	host.blocks = false
+	keys = host.keys
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("esc in a Tasks root context did not return to the project")
+	}
+	if host.keys != keys {
+		t.Fatalf("esc was forwarded to a root Tasks context: keys %d -> %d", keys, host.keys)
+	}
+}
+
+func TestGlobalSpaceStaysReachableWhenOnlyTasksIsEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = false
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+
+	registry := plugin.NewRegistry(nil)
+	for _, name := range []string{"files", "workspaces", "git", "notes"} {
+		if err := registry.Register(&navigationPlugin{id: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
+	m.intro.Active, m.intro.Done = false, true
+	m.width, m.height, m.ready = 140, 40, true
+	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
+	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: m.keymap}}
+	m.updateContext()
+
+	if m.overview != nil {
+		t.Fatal("the Overview model was built while its feature is disabled")
+	}
+	if !m.globalScopeAvailable() {
+		t.Fatal("an enabled Tasks host left the global space unreachable")
+	}
+
+	// K enters the space and lands on the only tab that exists — not the
+	// remembered Agents tab, which has nothing behind it.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if !m.globalTasksFocused() {
+		t.Fatalf("K did not reach the Tasks tab: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
+	}
+	tabs := m.visibleTabs()
+	if len(tabs) != 1 || tabs[0].global != GlobalTasks {
+		t.Fatalf("global tabs = %#v, want Tasks alone", tabs)
+	}
+
+	// The brand click and the switcher's Overview destination stay live too.
+	if _, _, ok := m.getLogoBounds(); !ok {
+		t.Fatal("the brand toggle is dead while the global space has a tab")
+	}
+	destinations := m.projectSwitcherDestinations("")
+	if len(destinations) == 0 || destinations[0].Kind != destinationOverview {
+		t.Fatalf("the switcher dropped the global destination: %#v", destinations)
+	}
+
+	// And q returns to the exact project plugin.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() || m.activePlugin != 2 || m.showQuitConfirm {
+		t.Fatalf("q from the Tasks-only global space: global=%v plugin=%d quit=%v",
 			m.inGlobalScope(), m.activePlugin, m.showQuitConfirm)
 	}
 }

@@ -244,7 +244,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		var b strings.Builder
 
 		// No projects configured
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.Muted.Render("No projects configured"))
 			return modal.RenderedSection{Content: b.String()}
 		}
@@ -399,7 +399,7 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 		b.WriteString("\n")
 
 		// No projects configured
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -688,9 +688,11 @@ func (m Model) getTabBounds() []TabBounds {
 }
 
 // getLogoBounds returns the X bounds for the "Sidecar" brand in the header.
-// Clicking it opens the cross-project overview when that feature is enabled.
+// Clicking it toggles the global space, so it is live whenever that space has
+// a tab to show — the cross-project Overview tabs, the hosted Tasks tab, or
+// both.
 func (m Model) getLogoBounds() (start, end int, ok bool) {
-	if m.overview == nil {
+	if !m.globalScopeAvailable() {
 		return 0, 0, false
 	}
 	// Leading space is part of the painted brand (" Sidecar").

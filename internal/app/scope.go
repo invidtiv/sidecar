@@ -88,14 +88,49 @@ func (r tabRef) same(other tabRef) bool {
 // inGlobalScope reports whether the global space owns the screen.
 func (m Model) inGlobalScope() bool { return m.scope == ScopeGlobal }
 
-// globalTabsVisible lists the global tabs in header order. Tasks appears only
-// while its feature is enabled — the host is nil otherwise.
+// globalTabsVisible lists the global tabs in header order. Each tab appears
+// only while the thing behind it exists: Agents and Workspaces are projections
+// of the cross-project catalog the Overview model owns, and Tasks is the hosted
+// surface. Either feature can be disabled independently, and a tab with nothing
+// behind it must not be rendered, numbered, or cycled onto.
 func (m Model) globalTabsVisible() []GlobalTab {
-	tabs := []GlobalTab{GlobalAgents, GlobalWorkspaces}
+	var tabs []GlobalTab
+	if m.overview != nil {
+		tabs = append(tabs, GlobalAgents, GlobalWorkspaces)
+	}
 	if m.globalTasks != nil {
 		tabs = append(tabs, GlobalTasks)
 	}
 	return tabs
+}
+
+// globalScopeAvailable reports that the global space has at least one tab to
+// show. It is the entry gate for K, q, the brand click, and the switcher's
+// Overview destination.
+//
+// Tying entry to the tabs that actually exist — rather than to the Overview
+// model alone — is what keeps an enabled Tasks host reachable when the
+// cross-project Overview feature is off. Tasks is no longer a project plugin,
+// so gating on Overview would leave it running, costing its full lifecycle,
+// with no way to look at it.
+func (m Model) globalScopeAvailable() bool {
+	return len(m.globalTabsVisible()) > 0
+}
+
+// ensureVisibleGlobalTab moves off a tab whose feature is disabled. The
+// remembered global tab survives the process, so entering the space must not
+// land on a tab that no longer exists.
+func (m *Model) ensureVisibleGlobalTab() {
+	tabs := m.globalTabsVisible()
+	if len(tabs) == 0 {
+		return
+	}
+	for _, tab := range tabs {
+		if tab == m.globalTab {
+			return
+		}
+	}
+	m.globalTab = tabs[0]
 }
 
 // visibleTabs returns the tabs owned by the active scope, in header order.
@@ -155,6 +190,16 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 		return nil
 	}
 	if m.globalTab == tab {
+		return nil
+	}
+	visible := false
+	for _, candidate := range m.globalTabsVisible() {
+		if candidate == tab {
+			visible = true
+			break
+		}
+	}
+	if !visible {
 		return nil
 	}
 	previous := m.globalTab
@@ -312,6 +357,22 @@ func (m Model) globalTasksPlugin() plugin.Plugin {
 // global tab and therefore owns keyboard and mouse input.
 func (m Model) globalTasksFocused() bool {
 	return m.inGlobalScope() && m.globalTab == GlobalTasks && m.globalTasksPlugin() != nil
+}
+
+// globalSurfaceWantsEsc reports that the focused global surface will handle esc
+// itself, so sidecar's scope-exit must not take it first.
+//
+// Today that surface is the hosted Tasks tab. Its overlays, pickers, and
+// prompts are dismissed by esc through precedence level 2 (a blocking overlay
+// or text-input context) or level 3 (a live contextual binding); both run after
+// the modal/esc switch at the top of handleKeyMsg, which is why the question has
+// to be asked there. A Tasks root context wants none of them, so esc there
+// still leaves the global space.
+func (m *Model) globalSurfaceWantsEsc() bool {
+	if !m.globalTasksFocused() {
+		return false
+	}
+	return m.consumesTextInput() || m.pluginBlocksGlobalKeys() || m.pluginClaimsKey("esc")
 }
 
 // focusedSurface is the plugin that owns input right now: the hosted Tasks

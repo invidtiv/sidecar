@@ -564,7 +564,7 @@ func (m *Model) initProjectSwitcher() {
 func (m *Model) projectSwitcherDestinations(query string) []projectSwitcherDestination {
 	projects := filterProjects(m.cfg.Projects.List, query)
 	result := make([]projectSwitcherDestination, 0, len(projects)+1)
-	if m.overview != nil {
+	if m.globalScopeAvailable() {
 		result = append(result, projectSwitcherDestination{Kind: destinationOverview, Name: "Overview"})
 	}
 	for i := range projects {
@@ -632,7 +632,7 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
 	m.resetProjectSwitcher()
-	if destination.Kind == destinationOverview && m.overview != nil {
+	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
 	}
 	m.exitOverview()
@@ -655,10 +655,11 @@ func (m *Model) overviewProjects() []overview.Project {
 // worktree, and active project plugin underneath are left exactly as they are,
 // so leaving again restores the precise destination the user came from.
 func (m *Model) enterOverview() tea.Cmd {
-	if m.overview == nil {
+	if !m.globalScopeAvailable() {
 		return nil
 	}
 	m.scope = ScopeGlobal
+	m.ensureVisibleGlobalTab()
 	m.updateContext()
 	return m.startVisibleGlobalTab()
 }
@@ -678,9 +679,9 @@ func (m *Model) exitOverview() {
 }
 
 // toggleOverview moves between the global and project spaces. No-op when the
-// Overview feature is disabled (m.overview is nil).
+// global space has no tab to show.
 func (m *Model) toggleOverview() tea.Cmd {
-	if m.overview == nil {
+	if !m.globalScopeAvailable() {
 		return nil
 	}
 	if m.inGlobalScope() {

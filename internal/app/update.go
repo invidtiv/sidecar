@@ -657,8 +657,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case ModalNone:
 			// No modal: Esc leaves the global space and returns to the project
-			// plugin underneath.
-			if m.inGlobalScope() {
+			// plugin underneath — unless the focused global surface wants esc
+			// itself. The hosted Tasks tab is a real surface whose overlays,
+			// pickers, and prompts close on esc through precedence level 2; this
+			// branch runs before that level, so without the guard esc would yank
+			// the user out of the global space and leave the overlay open.
+			if m.inGlobalScope() && !m.globalSurfaceWantsEsc() {
 				m.exitOverview()
 				m.updateContext()
 				return m, nil
@@ -889,7 +893,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		allProjects := m.cfg.Projects.List
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			// No projects configured - handle y for LLM prompt, ctrl+a for add, close on q/@
 			switch msg.String() {
 			case "y":
