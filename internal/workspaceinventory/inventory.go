@@ -157,6 +157,15 @@ func (c Collector) ValidateWorkspace(ctx context.Context, workspace Workspace) e
 		if !found {
 			return fmt.Errorf("worktree is no longer available")
 		}
+		// A plain worktree — the main worktree, or one nobody has run an agent
+		// in — is a real destination for the global browser, and it has no
+		// agent identity to recheck. Demanding one here would refuse to open
+		// exactly the rows the catalog added. Git's own worktree list above is
+		// the whole identity for those, and it is the same fact the project's
+		// Workspaces plugin resolves the pending selection against.
+		if !workspace.HasAgent() {
+			return nil
+		}
 		stateDir, ok := lookupWorktree(workspace.ProjectRoot, workspace.Path)
 		if !ok {
 			return fmt.Errorf("worktree agent identity is no longer available")

@@ -556,6 +556,7 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 				p.shellSelected, p.selectedIdx = false, i
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
+				p.finishNavigatedSelection()
 				return true
 			}
 		}
@@ -565,6 +566,7 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 				p.shellSelected, p.selectedShellIdx = true, i
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
+				p.finishNavigatedSelection()
 				return true
 			}
 		}
@@ -575,6 +577,29 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		p.toastTime = time.Now()
 	}
 	return false
+}
+
+// finishNavigatedSelection applies this plugin's own selection-change rule to a
+// selection that arrived from the global browser, so an arriving destination is
+// indistinguishable from one the user picked here.
+//
+// Doc panes belong to the selected terminal surface root. Landing on the item
+// that owns an open document keeps it — including the one restoreSelectionState
+// just rebuilt from the persisted PaneLayout. Landing on any other item in the
+// project collapses the doc subtree through resetDocPanesForSelection, exactly
+// as moving the cursor locally does, and persists the collapsed layout so a
+// document cannot come back attached to the wrong workspace.
+//
+// The rule lives here on purpose: no global code path reads, rewrites, or
+// prunes a project's pane layout. It hands over an identity and nothing else.
+func (p *Plugin) finishNavigatedSelection() {
+	if !p.resetDocPanesForSelection() {
+		return
+	}
+	// The restored layout described the workspace we just navigated away from,
+	// so its pending document load has nothing left to fill.
+	p.paneRestoreCmd = nil
+	p.saveSelectionState()
 }
 
 // Init initializes the plugin with context.

@@ -255,6 +255,14 @@ func (m Model) globalWorkspacesFilterFocused() bool {
 	return m.globalWorkspacesVisible() && m.overview.WorkspacesFilterFocused()
 }
 
+// globalWorkspacesFilterActive reports that a query is still narrowing the
+// browser's list, whether or not the input has focus. An accepted query is
+// still visible on screen, so esc has to clear what the user can see before it
+// can mean "leave the global space".
+func (m Model) globalWorkspacesFilterActive() bool {
+	return m.globalWorkspacesVisible() && m.overview.WorkspacesFilterActive()
+}
+
 // globalWorkspacesPreviewFocused reports that the browser's read-only preview
 // owns the keyboard, so its own focus-return keys — including esc — belong to
 // it rather than to sidecar's scope exit.
@@ -367,6 +375,18 @@ func (m Model) agentsBoardVisible() bool {
 	return m.inGlobalScope() && m.globalTab == GlobalAgents
 }
 
+// globalCatalogNavigable reports that a projection of the cross-project catalog
+// owns the screen, and therefore that an activation from it may still complete.
+//
+// Both catalog tabs activate the same validated navigation: the Agents board
+// through a card, the Workspaces browser through Enter or a double click. Tying
+// the in-flight validation to "a catalog tab is visible" — rather than to the
+// Agents board alone — is what lets the browser navigate at all, while a
+// validation that lands after the user left the catalog is still dropped.
+func (m Model) globalCatalogNavigable() bool {
+	return m.inGlobalScope() && catalogTab(m.globalTab) && m.overview != nil
+}
+
 // globalMouse routes a mouse event (already offset past the header) to the
 // visible global tab.
 func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
@@ -408,9 +428,11 @@ func (m Model) globalTasksFocused() bool {
 // context and an unfiltered, list-focused Workspaces tab want none of them, so
 // esc there still leaves the global space.
 func (m *Model) globalSurfaceWantsEsc() bool {
-	// The Workspaces filter answers esc itself: first press clears the query,
-	// second releases focus. Only then does esc mean "leave the global space".
-	if m.globalWorkspacesFilterFocused() {
+	// The Workspaces filter answers esc itself: while focused, the first press
+	// clears the query and the second releases focus; once accepted, esc still
+	// clears the query that is narrowing the list. Only an esc with nothing
+	// filtered means "leave the global space".
+	if m.globalWorkspacesFilterActive() {
 		return true
 	}
 	// The read-only preview answers esc too: it returns focus to the list, the

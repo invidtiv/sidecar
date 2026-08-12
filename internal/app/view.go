@@ -914,6 +914,7 @@ func (m Model) footerHints() []footerHint {
 		}
 		hints = append(hints,
 			footerHint{keys: "jk", label: "Move"},
+			footerHint{keys: "enter", label: "Open"},
 			footerHint{keys: "→", label: "Preview"},
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},

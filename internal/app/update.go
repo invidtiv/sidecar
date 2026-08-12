@@ -398,13 +398,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.FocusPluginByID(msg.PluginID)
 
 	case overview.NavigateMsg:
-		if m.overview == nil || !m.agentsBoardVisible() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
+		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
 			return m, nil
 		}
 		return m, m.overview.Validate(msg)
 
 	case overview.ValidationMsg:
-		if m.overview == nil || !m.agentsBoardVisible() || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
+		if !m.globalCatalogNavigable() || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
 			return m, nil
 		}
 		if msg.Err != nil {

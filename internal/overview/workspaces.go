@@ -186,6 +186,13 @@ func (m *Model) WorkspacesFilterFocused() bool {
 	return m.workspaces.Filter().Focused()
 }
 
+// WorkspacesFilterActive reports that a query is still narrowing the list, even
+// after enter handed navigation back to it. The app asks so that esc clears the
+// query the user can see before it means "leave the global space".
+func (m *Model) WorkspacesFilterActive() bool {
+	return m.workspaces.Filter().Active()
+}
+
 // WorkspacesPaste appends pasted text to a focused filter.
 func (m *Model) WorkspacesPaste(text string) bool {
 	if !m.WorkspacesFilterFocused() {
@@ -234,6 +241,12 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch key {
+	case "enter":
+		// Enter means the same thing in both layouts: open the exact owning
+		// project workspace through the app's validated navigation. The narrow
+		// full-width preview is reached with right/l, so Enter never has to
+		// mean two different things depending on how wide the terminal is.
+		return true, m.activateWorkspace()
 	case "/":
 		m.focusList()
 		m.workspaces.FocusFilter()
@@ -319,6 +332,13 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		case workspacelist.RegionRow:
 			m.focusList()
 			m.workspaces.SelectID(region.ID)
+			// A single click only selects. The second click opens the row the
+			// first one selected, so a double click can never activate a
+			// neighbour: the identity is resolved from the selection this same
+			// event just moved.
+			if action.Type == mouse.ActionDoubleClick {
+				return tea.Batch(m.previewSync(), m.activateWorkspace())
+			}
 		case workspacelist.RegionSort:
 			m.workspaces.CycleSort()
 		case workspacelist.RegionFilter:
@@ -331,6 +351,25 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		m.workspaces.Scroll(1)
 	}
 	return m.previewSync()
+}
+
+// activateWorkspace opens the selected row through the same app-owned
+// validated navigation the Agents board uses.
+//
+// The identity travels as the catalog record the row was built from — a stable
+// ProjectKey + Kind + Key — never as a row number, a display name, a branch, or
+// a tmux title. That is what makes duplicate names in different projects, a
+// list that re-sorted under the cursor, and a row that disappeared between the
+// keypress and the validation all resolve to the right answer or to none.
+//
+// Nothing is opened, attached to, created, or typed into here: the command only
+// asks the app to validate an identity.
+func (m *Model) activateWorkspace() tea.Cmd {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return nil
+	}
+	return m.RequestNavigation(workspace)
 }
 
 // SelectedWorkspace resolves the list cursor back to its catalog record.
@@ -358,7 +397,7 @@ func (m *Model) WorkspacesSummary() string {
 // workspace behaviour.
 func (m *Model) WorkspacesCommands() []struct{ Key, Name string } {
 	return []struct{ Key, Name string }{
-		{"/", "Filter"}, {"s", "Sort"}, {"r", "Refresh"},
+		{"enter", "Open"}, {"/", "Filter"}, {"s", "Sort"}, {"r", "Refresh"},
 		{"→", "Focus preview"}, {"←", "Focus list"}, {"jk", "Scroll preview"},
 	}
 }

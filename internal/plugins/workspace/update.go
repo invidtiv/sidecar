@@ -2078,6 +2078,12 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	var commands []tea.Cmd
 	if len(p.worktrees) > 0 || len(p.shells) > 0 {
 		p.restoreSelectionState()
+		// A destination the user chose in the global browser outranks the
+		// project's persisted selection. Shell discovery and the worktree
+		// refresh race, so without this the arm that finished second could
+		// restore the saved workspace over the one the user just opened.
+		// Re-applying here is a no-op once the selection has been consumed.
+		p.applyPendingWorkspaceSelection()
 		if p.paneRestoreCmd != nil {
 			commands = append(commands, p.paneRestoreCmd)
 			p.paneRestoreCmd = nil

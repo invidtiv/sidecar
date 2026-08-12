@@ -1,0 +1,63 @@
+Slice 4 real-app proof — exact navigation and integrated polish
+docs/plans/active/global-overview-workspaces.md, slice 4 items 1-2 and 5
+
+Isolation (verified with `./scripts/tmux-drive.sh paths` before the run):
+  run dir       /private/tmp/sidecar-drive-slice4-501
+  inner tmux    /private/tmp/sidecar-drive-slice4-501/tmux/tmux-501/default
+  state home    /private/tmp/sidecar-drive-slice4-501/state
+  config        /private/tmp/sidecar-drive-slice4-501/config/config.json
+  SIDECAR_ISOLATED_STATE=1; outer server on -L sidecar-drive.
+The machine's default tmux server was never started, stopped, or sent a command.
+
+Fixture (built under the run dir, never in a real repository):
+  alpha, beta, gamma — three configured Git projects, each with one commit
+  alpha: linked worktree .../worktrees/alpha/feature  (branch feature)
+  beta:  linked worktree .../worktrees/beta/feature   (branch feature)
+  => two worktrees whose display name is "feature", in different projects
+  gamma: main worktree only
+  No shells, no agents: every row is a plain workspace, which is exactly the
+  kind of row the catalog gained in slice 2 and the kind Enter had to learn to
+  open in slice 4.
+
+Reproduce:
+  go build -o /tmp/sidecar-drive-slice4-501-bin ./cmd/sidecar
+  export SIDECAR_DRIVE_RUN_DIR=/tmp/sidecar-drive-slice4-501
+  export SIDECAR_BIN=/tmp/sidecar-drive-slice4-501-bin
+  export SIDECAR_DRIVE_REPO=<run dir>/fixture/alpha
+  ./scripts/tmux-drive.sh paths      # confirm both axes are private first
+  ./scripts/tmux-drive.sh start 200 50
+
+Wide run (200x50), keys in order:
+  (launch)          01-startup-project              project space, no global work
+  K                 02-global-agents                Sidecar / Overview, [Agents][Workspaces]
+  2                 03-global-workspaces-wide       list + one read-only preview box
+  / feature         04-global-filter                "2 of 5", both duplicate names
+  Down              05-filter-selected-beta         preview follows the exact row (beta)
+  Enter Enter       06-opened-beta-feature          accept filter, then open:
+                                                    header "Sidecar / feature [feature]",
+                                                    project Workspaces focused, the
+                                                    beta/feature row selected — not its
+                                                    neighbour, and no agent started
+  K                 07-return-state-intact          the tab came back with "/ feature",
+                                                    "2 of 5", and the same selection
+
+Narrow run (62x26), restarted:
+  K 2               12-narrow-62-list               full-width list, two-line rows
+  Up Right          13-narrow-62-fullpreview        full-width read-only preview
+  Enter             14-narrow-opened-from-preview   Enter means "open" in both layouts
+  K Left Up Right   16-selected-beta-main           back in the browser, beta's main
+  Enter             17-same-project-open-beta-main  opened beta's main worktree exactly
+
+Read-only check after the run:
+  git status --porcelain in alpha, beta, gamma: empty
+  ./scripts/tmux-drive.sh panes: "(no sidecar-created panes)" — browsing started
+  no session, attached to nothing, and typed at nothing
+  ./scripts/tmux-drive.sh stop: drive session and inner server gone
+
+Not covered here (proved by unit tests instead): a project whose Workspaces
+preview has a doc pane open. Building that in the driver needs a live agent
+pane and a markdown link click; the behaviour it would show — the owning
+selection keeps its restored document, a sibling selection closes the doc
+subtree through the plugin's own rule, and no global code touches the layout —
+is proved in internal/plugins/workspace/navigated_selection_test.go and
+internal/overview/tab_state_test.go.

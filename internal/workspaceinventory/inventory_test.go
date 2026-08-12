@@ -736,3 +736,46 @@ func TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus(t *testing.
 		t.Fatalf("catalog collection mutated Sidecar state\nbefore=%v\nafter=%v", before, after)
 	}
 }
+
+// Slice 4 item 1 of docs/plans/active/global-overview-workspaces.md: the global
+// browser opens plain rows too, so validation must recheck what a plain
+// workspace actually has — Git's own worktree list — instead of demanding the
+// agent identity it was never collected with.
+func TestValidateWorkspaceAcceptsAPlainWorktreeAndStillGuardsAgentIdentity(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	worktree := filepath.Join(t.TempDir(), "topic")
+	for _, path := range []string{root, worktree} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n\nworktree " + worktree + "\nbranch refs/heads/topic\n"}}
+	collector := Collector{Runner: runner}
+
+	// The main worktree and an agentless linked worktree both validate with no
+	// recorded agent anywhere in state.
+	for _, path := range []string{root, worktree} {
+		plain := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(path), Path: path, Plain: true}
+		if err := collector.ValidateWorkspace(context.Background(), plain); err != nil {
+			t.Fatalf("plain worktree %q rejected: %v", path, err)
+		}
+	}
+	if after := snapshotTree(t, stateBase); len(after) != 0 {
+		t.Fatalf("validating a plain worktree wrote state: %v", after)
+	}
+
+	// A worktree Git no longer lists is refused whether or not it had an agent.
+	missing := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(root) + "-gone", Path: root + "-gone", Plain: true}
+	if err := collector.ValidateWorkspace(context.Background(), missing); err == nil || !strings.Contains(err.Error(), "no longer available") {
+		t.Fatalf("removed plain worktree validation = %v", err)
+	}
+
+	// An agent-backed worktree keeps its stricter identity check.
+	agent := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(worktree), Path: worktree}
+	if err := collector.ValidateWorkspace(context.Background(), agent); err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("agent worktree without a recorded agent = %v", err)
+	}
+}

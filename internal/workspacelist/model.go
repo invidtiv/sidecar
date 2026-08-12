@@ -202,6 +202,10 @@ func (m *Model) ensureVisible() {
 	m.scroll = min(max(m.scroll, 0), max(0, len(m.visible)-m.rows))
 }
 
+// ScrollOffset is the first visible row index. Consumers read it to prove the
+// viewport survived a refresh; nothing else depends on it.
+func (m *Model) ScrollOffset() int { return m.scroll }
+
 // Scroll moves the viewport without moving the selection (wheel behaviour).
 func (m *Model) Scroll(delta int) {
 	m.scroll = min(max(m.scroll+delta, 0), max(0, len(m.visible)-max(1, m.rows)))

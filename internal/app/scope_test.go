@@ -627,3 +627,39 @@ func TestEscapeReturnsPreviewFocusToTheListBeforeLeavingTheGlobalSpace(t *testin
 		t.Fatal("esc with the list focused should return to the project")
 	}
 }
+
+// A query that was accepted with enter is still narrowing the list even though
+// the input no longer has focus. Escape clears what the user can see before it
+// can mean "leave the global space" (slice 4 item 5).
+func TestEscapeClearsAnAcceptedGlobalFilterBeforeLeavingTheSpace(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope, m.globalTab = ScopeGlobal, GlobalWorkspaces
+	m.updateContext()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = asAppModel(t, updated)
+	for _, r := range "feature" {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = asAppModel(t, updated)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = asAppModel(t, updated)
+	if m.overview.WorkspacesFilterFocused() || !m.overview.WorkspacesFilterActive() {
+		t.Fatalf("enter did not accept the query: focused=%v active=%v",
+			m.overview.WorkspacesFilterFocused(), m.overview.WorkspacesFilterActive())
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("escape left the global space with a query still narrowing the list")
+	}
+	if m.overview.WorkspacesFilterActive() {
+		t.Fatal("escape did not clear the accepted query")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("escape on an unfiltered list should return to the project")
+	}
+}

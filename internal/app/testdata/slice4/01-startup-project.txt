@@ -1,0 +1,50 @@
+ Sidecar / alpha                                                                        td     git     files     workspaces                                                                        03:01
+
+
+
+
+                                                                                                >\/7
+                                                                                            _.-(6'  \
+                                                                                           (=___._/` \
+                                                                                                )  \ |
+                                                                                               /   / |
+                                                                                              /    > /
+                                                                                             j    < _\
+                                                                                         _.-' :      ``.
+                                                                                         \ r=._\        `.
+                                                                                        <`\\_  \         . `-.
+                                                                                         \ r-7  `-. ._  ' .  `\
+                                                                                          \`,      `-.`7  7)   )
+                                                                                           \/         \|  \'  / `-._
+                                                                        ╭─────────────────────────────────────────────────────╮
+                                                                        │                                                     │
+                                                                        │  Set up td                                          │
+                                                                        │                                                     │
+                                                                        │  td is installed but not configured for this        │
+                                                                        │  project.                                           │
+                                                                        │                                                     │
+                                                                        │    [x] Initialize td database                       │
+                                                                        │    [x] Add instructions to agent file               │
+                                                                        │                                                     │
+                                                                        │     Set Up        Skip                              │
+                                                                        │  Tab to switch · Enter to confirm · Esc to cancel   │
+                                                                        │                                                     │
+                                                                        ╰─────────────────────────────────────────────────────╯
+                                                                                 • Decisions and their reasoning
+                                                                                 • Structured handoffs between sessions
+
+                                                                               Local SQLite. No cloud. Git-friendly.
+
+                                                                               Learn more: https://marcus.github.io/td/
+
+                                                                               ╭────────────────────────────────────────╮
+                                                                               │ brew install marcus/tap/td             │
+                                                                               │ # or                                   │
+                                                                               │ go install github.com/marcus/td@latest │
+                                                                               │                                        │
+                                                                               │ td init                                │
+                                                                               ╰────────────────────────────────────────╯
+
+
+
+ 1-4  plugins   ?  help   q  quit                                                                                                                                                             ↻ 03:01:48

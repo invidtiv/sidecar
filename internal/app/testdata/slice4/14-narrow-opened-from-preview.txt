@@ -1,0 +1,26 @@
+ Sidecar / feature [feature]     td     git     workspaces  
+
+╭───────────────────╮ ╭──────────────────────────────────────╮
+│ Workspaces   New  │││  Output   Diff   Task                │
+│                   │││ No agent running                     │
+│  ◉ beta           │││ Press 's' to start an agent          │
+│    main  main     │││                                      │
+│  ⏸ worktrees…     │││                                      │
+│    branch featu…  │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                     			│
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+╰───────────────────╯ ╰──────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban      ↻ 03:05:25

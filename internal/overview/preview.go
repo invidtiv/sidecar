@@ -136,6 +136,13 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 		return nil
 	}
 	m.preview.visible = visible
+	// Moving between the catalog's two projections supersedes any activation
+	// still being validated. Agents and Workspaces share one cache, one
+	// generation, and one poll, so nothing else here marks the moment the user
+	// left the view they pressed enter on — and a destination that opens itself
+	// after the user moved on is exactly the surprise the generation/request
+	// machinery exists to prevent.
+	m.requestID++
 	if !visible {
 		m.releasePreview()
 		return nil
