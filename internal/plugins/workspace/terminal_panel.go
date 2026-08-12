@@ -320,6 +320,7 @@ func (p *Plugin) termPanelMaxScroll() int {
 // row currently at the top. Closing the document deliberately does not call
 // this: the first explicit panel navigation owns the transition.
 func (p *Plugin) releaseTermPanelDocFreeze() {
+	p.releaseTerminalDocProjection(true)
 	if !p.termPanelDocFrozen {
 		return
 	}

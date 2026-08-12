@@ -459,8 +459,20 @@ func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea
 }
 
 type terminalViewportFreeze struct {
+	termPanel  bool
+	start      int
+	projection terminalDocProjection
+}
+
+// terminalDocProjection is a bounded copy of the exact terminal rows visible
+// when a document link won the click. Full-screen applications own their grid:
+// SIGWINCH may replace it without retaining those rows in tmux history, so a
+// coordinate alone cannot preserve the context the user clicked. The live
+// terminal buffer continues updating independently beneath this read-only view.
+type terminalDocProjection struct {
+	buffer    *tty.OutputBuffer
 	termPanel bool
-	start     int
+	identity  string
 }
 
 // captureTerminalViewportForDocOpen records the live surface's current window
@@ -473,11 +485,26 @@ func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewp
 	previousSource := p.selectionTermPanel
 	p.selectionTermPanel = termPanel
 	layout := p.terminalSelectionViewportLayout()
+	buffer := p.interactiveOutputBuffer()
 	p.selectionTermPanel = previousSource
-	return terminalViewportFreeze{termPanel: termPanel, start: layout.Start}
+	freeze := terminalViewportFreeze{termPanel: termPanel, start: layout.Start}
+	if buffer == nil || layout.End <= layout.Start {
+		return freeze
+	}
+	rows := buffer.LinesRange(layout.Start, layout.End)
+	if len(rows) == 0 {
+		return freeze
+	}
+	snapshot := tty.NewOutputBuffer(len(rows))
+	snapshot.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
+	freeze.projection = terminalDocProjection{
+		buffer: snapshot, termPanel: termPanel, identity: p.terminalProjectionIdentity(termPanel),
+	}
+	return freeze
 }
 
 func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
+	p.terminalDocProjection = freeze.projection
 	if freeze.termPanel {
 		p.termPanelSelectionOffset = freeze.start
 		p.termPanelDocFrozen = true
@@ -485,6 +512,37 @@ func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 	}
 	p.previewOffset = freeze.start
 	p.autoScrollOutput = false
+}
+
+func (p *Plugin) projectedTerminalBuffer(termPanel bool) *tty.OutputBuffer {
+	projection := p.terminalDocProjection
+	if projection.buffer == nil || projection.termPanel != termPanel ||
+		projection.identity != p.terminalProjectionIdentity(termPanel) {
+		return nil
+	}
+	return projection.buffer
+}
+
+func (p *Plugin) terminalProjectionIdentity(termPanel bool) string {
+	if termPanel {
+		return "panel:" + p.termPanelSession + "\x00" + p.termPanelPaneID
+	}
+	if p.shellSelected {
+		if shell := p.getSelectedShell(); shell != nil {
+			return "shell:" + shell.TmuxName + "\x00" + p.terminalLinkTarget(false)
+		}
+		return ""
+	}
+	if wt := p.selectedWorktree(); wt != nil {
+		return "workspace:" + stablePathKey(wt.Path) + "\x00" + p.terminalLinkTarget(false)
+	}
+	return ""
+}
+
+func (p *Plugin) releaseTerminalDocProjection(termPanel bool) {
+	if p.terminalDocProjection.buffer != nil && p.terminalDocProjection.termPanel == termPanel {
+		p.terminalDocProjection = terminalDocProjection{}
+	}
 }
 
 func (p *Plugin) armPendingClick(resolution clickResolution, action mouse.MouseAction) {

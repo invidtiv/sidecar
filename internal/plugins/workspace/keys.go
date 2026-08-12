@@ -576,6 +576,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
 	}
+	if p.activePane == PanePreview && !p.termPanelFocused {
+		switch msg.String() {
+		case "j", "down", "k", "up", "g", "G", "ctrl+d", "ctrl+u":
+			p.releaseTerminalDocProjection(false)
+		}
+	}
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
@@ -809,6 +815,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.activePane = PanePreview
 		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 			// Right layout: move focus from agent to terminal panel
+			p.releaseTermPanelDocFreeze()
 			p.termPanelFocused = true
 		} else if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
@@ -890,6 +897,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
+			p.releaseTerminalDocProjection(false)
 			return nil
 		}
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {

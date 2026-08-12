@@ -281,6 +281,7 @@ type Plugin struct {
 	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
 	termPanelDocFrozen       bool              // Document split pins the panel to the clicked absolute viewport
 	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
+	terminalDocProjection    terminalDocProjection
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
@@ -595,6 +596,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneDragSplitID = 0
 	p.paneRestoreCmd = nil
 	p.docs = make(map[int]*docPane)
+	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
 		p.paneFocus = p.paneNextID
@@ -1491,6 +1493,7 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 // loadSelectedContent loads content based on the active preview tab.
 // Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
+	p.terminalDocProjection = terminalDocProjection{}
 	var cmds []tea.Cmd
 	if p.resetDocPanesForSelection() {
 		// The selection owns the terminal root. Persist the collapsed terminal
