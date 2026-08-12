@@ -255,6 +255,13 @@ func (m Model) globalWorkspacesFilterFocused() bool {
 	return m.globalWorkspacesVisible() && m.overview.WorkspacesFilterFocused()
 }
 
+// globalWorkspacesPreviewFocused reports that the browser's read-only preview
+// owns the keyboard, so its own focus-return keys — including esc — belong to
+// it rather than to sidecar's scope exit.
+func (m Model) globalWorkspacesPreviewFocused() bool {
+	return m.globalWorkspacesVisible() && m.overview.PreviewFocused()
+}
+
 // cycleTabs moves forward (+1) or backward (-1) through the active scope's own
 // tabs. It never crosses the scope boundary.
 func (m *Model) cycleTabs(delta int) tea.Cmd {
@@ -392,16 +399,24 @@ func (m Model) globalTasksFocused() bool {
 // globalSurfaceWantsEsc reports that the focused global surface will handle esc
 // itself, so sidecar's scope-exit must not take it first.
 //
-// Today that surface is the hosted Tasks tab. Its overlays, pickers, and
-// prompts are dismissed by esc through precedence level 2 (a blocking overlay
-// or text-input context) or level 3 (a live contextual binding); both run after
-// the modal/esc switch at the top of handleKeyMsg, which is why the question has
-// to be asked there. A Tasks root context wants none of them, so esc there
-// still leaves the global space.
+// Those surfaces are the Workspaces browser — whose filter and read-only
+// preview both give esc their own meaning — and the hosted Tasks tab, whose
+// overlays, pickers, and prompts are dismissed by esc through precedence level
+// 2 (a blocking overlay or text-input context) or level 3 (a live contextual
+// binding). All of them run after the modal/esc switch at the top of
+// handleKeyMsg, which is why the question has to be asked there. A Tasks root
+// context and an unfiltered, list-focused Workspaces tab want none of them, so
+// esc there still leaves the global space.
 func (m *Model) globalSurfaceWantsEsc() bool {
 	// The Workspaces filter answers esc itself: first press clears the query,
 	// second releases focus. Only then does esc mean "leave the global space".
 	if m.globalWorkspacesFilterFocused() {
+		return true
+	}
+	// The read-only preview answers esc too: it returns focus to the list, the
+	// same as left/h. Only an esc pressed with the list focused means "leave the
+	// global space".
+	if m.globalWorkspacesPreviewFocused() {
 		return true
 	}
 	if !m.globalTasksFocused() {

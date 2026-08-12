@@ -587,3 +587,43 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 		t.Fatal("leaving the global space left the preview polling behind it")
 	}
 }
+
+// Slice 3: escape belongs to the focused preview before it belongs to sidecar's
+// scope exit. With the preview focused — the only state the narrow layout has
+// once it goes full-width — esc returns focus to the list; only an esc pressed
+// with the list focused leaves the global space.
+func TestEscapeReturnsPreviewFocusToTheListBeforeLeavingTheGlobalSpace(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	if cmd := m.Init(); cmd != nil {
+		cmd()
+	}
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = asAppModel(t, updated)
+	if !m.overview.PreviewFocused() {
+		t.Fatal("right did not move focus to the preview")
+	}
+	if !m.globalSurfaceWantsEsc() {
+		t.Fatal("the focused preview does not claim esc, so scope exit takes it first")
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.globalTab != GlobalWorkspaces {
+		t.Fatalf("esc on a focused preview left the global space: scope=%v tab=%v", m.scope, m.globalTab)
+	}
+	if m.overview.PreviewFocused() {
+		t.Fatal("esc did not return focus to the list")
+	}
+
+	// List focused again: now esc means what it means everywhere else.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("esc with the list focused should return to the project")
+	}
+}
