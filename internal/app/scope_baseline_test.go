@@ -20,11 +20,11 @@ import (
 // Overview work introduces an explicit app scope and its own global tabs
 // (docs/plans/active/global-overview-workspaces.md, slice 0).
 //
-// These record the CURRENT behaviour, including the parts slice 1 deliberately
-// changes: today Overview shows the project's plugin tabs with none active, and
-// cycling/numeric keys leave the global space rather than moving between global
-// tabs. When slice 1 lands, these expectations move with it — that is the point
-// of recording them first.
+// The entry/exit and switcher-routing cases below are unchanged from the
+// baseline recording. The header and tab-routing cases moved with slice 1, which
+// gave the global space its own tabs: Overview no longer paints the project's
+// plugin tab row with nothing active, and cycling/numeric keys now move between
+// the tabs of the space the user is in.
 //
 // Deliberately not duplicated here, because the behaviour already has a home:
 //   - K / brand-click toggling — TestLogoClickAndKToggleOverview;
@@ -88,8 +88,8 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if !m.overviewActive || cmd == nil {
-		t.Fatalf("K did not enter Overview: active=%v cmd=%v", m.overviewActive, cmd != nil)
+	if !m.inGlobalScope() || cmd == nil {
+		t.Fatalf("K did not enter Overview: active=%v cmd=%v", m.inGlobalScope(), cmd != nil)
 	}
 	if m.ui.WorkDir != workDir || m.ui.ProjectRoot != projectRoot || m.activePlugin != active {
 		t.Fatalf("entry moved the project underneath: work=%q root=%q plugin=%d",
@@ -111,11 +111,11 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 		{"q", tea.KeyPressMsg{Code: 'q', Text: "q"}},
 	} {
 		entered := m
-		entered.overviewActive = true
+		entered.scope = ScopeGlobal
 		entered.updateContext()
 		updated, _ = entered.Update(key.msg)
 		exited := asAppModel(t, updated)
-		if exited.overviewActive {
+		if exited.inGlobalScope() {
 			t.Fatalf("%s did not leave Overview", key.name)
 		}
 		if exited.activePlugin != active || exited.ui.WorkDir != workDir || exited.ui.ProjectRoot != projectRoot {
@@ -131,7 +131,7 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 	}
 }
 
-func TestOverviewHeaderShowsProjectTabsWithNoneActive(t *testing.T) {
+func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	projectTitle, projectTabs, _, _ := m.headerLayout()
 	if len(projectTabs) != 4 {
@@ -140,74 +140,151 @@ func TestOverviewHeaderShowsProjectTabsWithNoneActive(t *testing.T) {
 	if !strings.Contains(ansi.Strip(projectTitle), "one") {
 		t.Fatalf("project title = %q, want the project name", ansi.Strip(projectTitle))
 	}
+	for i, tab := range projectTabs {
+		if tab.ref.scope != ScopeProject || tab.ref.plugin != i {
+			t.Fatalf("project tab %d = %#v, want the plugin at that index", i, tab.ref)
+		}
+	}
+	active := styles.RenderTab(m.registry.Plugins()[2].Name(), 2, 4, true, false)
+	if projectTabs[2].text != active {
+		t.Fatal("the active project plugin's tab is not drawn active")
+	}
 
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.updateContext()
 	title, tabs, _, _ := m.headerLayout()
 	if !strings.Contains(ansi.Strip(title), "Overview") {
 		t.Fatalf("global title = %q, want Overview", ansi.Strip(title))
 	}
-	if len(tabs) != len(projectTabs) {
-		t.Fatalf("global tabs = %d, want today's project tab row of %d", len(tabs), len(projectTabs))
+	// The global space owns its own tabs, and only its own. Tasks is absent
+	// because its feature is off in this fixture.
+	want := []GlobalTab{GlobalAgents, GlobalWorkspaces}
+	if len(tabs) != len(want) {
+		t.Fatalf("global tabs = %d, want %d", len(tabs), len(want))
 	}
-	// Today the project tab row is still rendered in the global space, and the
-	// active plugin's tab is drawn inactive because no project tab is current.
 	for i, tab := range tabs {
-		inactive := styles.RenderTab(m.registry.Plugins()[i].Name(), i, len(tabs), false, false)
-		if tab.text != inactive {
-			t.Fatalf("tab %d rendered active while Overview owns the screen", i)
+		if tab.ref.scope != ScopeGlobal || tab.ref.global != want[i] {
+			t.Fatalf("global tab %d = %#v, want %v", i, tab.ref, want[i])
+		}
+		if !strings.Contains(ansi.Strip(tab.text), want[i].Name()) {
+			t.Fatalf("global tab %d text = %q, want %q", i, ansi.Strip(tab.text), want[i].Name())
 		}
 	}
-	if got := len(m.getTabBounds()); got != len(tabs) {
-		t.Fatalf("tab bounds = %d, want one per rendered tab (%d)", got, len(tabs))
+	// The visible global tab is the active one; nothing renders a project tab
+	// behind it.
+	activeGlobal := styles.RenderTab(GlobalAgents.Name(), 0, len(want), true, false)
+	if tabs[0].text != activeGlobal {
+		t.Fatal("the visible global tab is not drawn active")
+	}
+	bounds := m.getTabBounds()
+	if len(bounds) != len(tabs) {
+		t.Fatalf("tab bounds = %d, want one per rendered tab (%d)", len(bounds), len(tabs))
+	}
+	for i, b := range bounds {
+		if !b.Tab.same(tabs[i].ref) {
+			t.Fatalf("hit region %d = %#v, want the tab it painted (%#v)", i, b.Tab, tabs[i].ref)
+		}
 	}
 }
 
-func TestOverviewTabClickAndNumberAndCycleKeysLeaveTheGlobalSpace(t *testing.T) {
+// Slice 1 replaces the recorded baseline: tab clicks, the number row, and
+// backtick/bracket cycling now move between the tabs of the space the user is
+// in, and never cross the scope boundary.
+func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 	t.Run("tab click", func(t *testing.T) {
-		m, _ := scopeBaselineModel(t, "git")
-		m.overviewActive = true
+		m, plugins := scopeBaselineModel(t, "git")
+		m.scope = ScopeGlobal
 		m.updateContext()
+		inits := totalInits(plugins)
 		bounds := m.getTabBounds()
-		if len(bounds) < 4 {
+		if len(bounds) != 2 {
 			t.Fatalf("tab bounds = %#v", bounds)
 		}
-		target := bounds[3]
+		target := bounds[1]
 		updated, _ := m.Update(tea.MouseClickMsg{X: (target.Start + target.End) / 2, Y: 0, Button: tea.MouseLeft})
 		clicked := asAppModel(t, updated)
-		if clicked.overviewActive || clicked.activePlugin != 3 {
-			t.Fatalf("tab click: overview=%v plugin=%d, want project space on plugin 3",
-				clicked.overviewActive, clicked.activePlugin)
+		if !clicked.inGlobalScope() || clicked.globalTab != GlobalWorkspaces {
+			t.Fatalf("tab click: global=%v tab=%v, want the global Workspaces tab",
+				clicked.inGlobalScope(), clicked.globalTab)
+		}
+		if clicked.activePlugin != 2 || clicked.ui.WorkDir != "/tmp/one" || totalInits(plugins) != inits {
+			t.Fatalf("tab click disturbed the project: plugin=%d work=%q inits=%d",
+				clicked.activePlugin, clicked.ui.WorkDir, totalInits(plugins))
 		}
 	})
 
-	numbers := map[string]int{"1": 0, "3": 2, "4": 3}
-	for key, want := range numbers {
-		t.Run("number "+key, func(t *testing.T) {
-			m, _ := scopeBaselineModel(t, "git")
-			m.overviewActive = true
+	// In the global space the number row addresses global tabs; a number with
+	// no tab behind it does nothing rather than reaching a project plugin.
+	globalNumbers := map[string]struct {
+		tab    GlobalTab
+		global bool
+	}{
+		"1": {GlobalAgents, true},
+		"2": {GlobalWorkspaces, true},
+		"3": {GlobalAgents, true}, // no third tab: Tasks is disabled here
+	}
+	for key, want := range globalNumbers {
+		t.Run("global number "+key, func(t *testing.T) {
+			m, plugins := scopeBaselineModel(t, "git")
+			m.scope = ScopeGlobal
 			m.updateContext()
+			inits := totalInits(plugins)
 			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
 			pressed := asAppModel(t, updated)
-			if pressed.overviewActive || pressed.activePlugin != want {
-				t.Fatalf("%s: overview=%v plugin=%d, want project space on %d",
-					key, pressed.overviewActive, pressed.activePlugin, want)
+			if pressed.inGlobalScope() != want.global || pressed.globalTab != want.tab {
+				t.Fatalf("%s: global=%v tab=%v, want %v/%v",
+					key, pressed.inGlobalScope(), pressed.globalTab, want.global, want.tab)
+			}
+			if pressed.activePlugin != 2 || totalInits(plugins) != inits {
+				t.Fatalf("%s disturbed the project: plugin=%d inits=%d", key, pressed.activePlugin, totalInits(plugins))
 			}
 		})
 	}
 
-	cycles := map[string]int{"`": 0, "]": 0, "~": 2, "[": 2}
-	for key, want := range cycles {
-		t.Run("cycle "+key, func(t *testing.T) {
-			// Start on the last plugin so forward cycling wraps visibly and
-			// backward cycling steps to its neighbour.
+	// In project space the number row keeps addressing plugin tabs.
+	projectNumbers := map[string]int{"1": 0, "3": 2, "4": 3}
+	for key, want := range projectNumbers {
+		t.Run("project number "+key, func(t *testing.T) {
+			m, _ := scopeBaselineModel(t, "git")
+			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			pressed := asAppModel(t, updated)
+			if pressed.inGlobalScope() || pressed.activePlugin != want {
+				t.Fatalf("%s: global=%v plugin=%d, want project space on %d",
+					key, pressed.inGlobalScope(), pressed.activePlugin, want)
+			}
+		})
+	}
+
+	globalCycles := map[string]GlobalTab{"`": GlobalWorkspaces, "]": GlobalWorkspaces, "~": GlobalWorkspaces, "[": GlobalWorkspaces}
+	for key, want := range globalCycles {
+		t.Run("global cycle "+key, func(t *testing.T) {
 			m, _ := scopeBaselineModel(t, "notes")
-			m.overviewActive = true
+			m.scope = ScopeGlobal
 			m.updateContext()
 			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
 			pressed := asAppModel(t, updated)
-			if pressed.overviewActive {
-				t.Fatalf("%s stayed in the global space", key)
+			if !pressed.inGlobalScope() {
+				t.Fatalf("%s left the global space", key)
+			}
+			if pressed.globalTab != want {
+				t.Fatalf("%s: tab = %v, want %v", key, pressed.globalTab, want)
+			}
+			if pressed.activePlugin != 3 {
+				t.Fatalf("%s moved the project plugin to %d", key, pressed.activePlugin)
+			}
+		})
+	}
+
+	projectCycles := map[string]int{"`": 0, "]": 0, "~": 2, "[": 2}
+	for key, want := range projectCycles {
+		t.Run("project cycle "+key, func(t *testing.T) {
+			// Start on the last plugin so forward cycling wraps visibly and
+			// backward cycling steps to its neighbour.
+			m, _ := scopeBaselineModel(t, "notes")
+			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			pressed := asAppModel(t, updated)
+			if pressed.inGlobalScope() {
+				t.Fatalf("%s entered the global space", key)
 			}
 			if pressed.activePlugin != want {
 				t.Fatalf("%s: plugin = %d, want %d", key, pressed.activePlugin, want)
@@ -218,7 +295,7 @@ func TestOverviewTabClickAndNumberAndCycleKeysLeaveTheGlobalSpace(t *testing.T) 
 
 func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	m, plugins := scopeBaselineModel(t, "git")
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.updateContext()
 	m.initProjectSwitcher()
 	if len(m.projectSwitcherFiltered) != 3 || m.projectSwitcherCursor != 0 {
@@ -231,9 +308,9 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	// The pinned Overview destination re-enters the global space and starts a
 	// fresh collection without touching the project underneath.
 	cmd := m.activateProjectSwitcherDestination(destinations[0])
-	if cmd == nil || !m.overviewActive || m.showProjectSwitcher {
+	if cmd == nil || !m.inGlobalScope() || m.showProjectSwitcher {
 		t.Fatalf("Overview destination: cmd=%v active=%v modal=%v",
-			cmd != nil, m.overviewActive, m.showProjectSwitcher)
+			cmd != nil, m.inGlobalScope(), m.showProjectSwitcher)
 	}
 	if m.ui.WorkDir != "/tmp/one" || m.activePlugin != 2 || totalInits(plugins) != inits {
 		t.Fatalf("Overview destination disturbed the project: work=%q plugin=%d inits=%d",
@@ -248,7 +325,7 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 		t.Fatalf("second destination = %#v, want the current project", same)
 	}
 	cmd = m.activateProjectSwitcherDestination(same)
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		t.Fatal("project destination stayed in the global space")
 	}
 	if cmd == nil {

@@ -176,7 +176,10 @@ func (r *Registry) Reinit(newWorkDir, newProjectRoot string) []tea.Cmd {
 	return cmds
 }
 
-// Context returns the current context.
+// Context returns the shared plugin context, or nil when the registry was
+// built without one. App-owned surfaces that are not registry plugins (the
+// global Tasks host) read it to inherit config, logger, and adapters without
+// taking part in the registry's per-project lifecycle.
 func (r *Registry) Context() *Context {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

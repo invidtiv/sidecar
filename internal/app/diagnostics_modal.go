@@ -70,7 +70,10 @@ func (m *Model) diagnosticsPluginsSection() modal.Section {
 		b.WriteString(styles.Title.Render("Plugins"))
 		b.WriteString("\n")
 
-		plugins := m.registry.Plugins()
+		// surfacePlugins, not the registry alone: the global Tasks host reports
+		// its own health (unconfigured, unreadable store) and dropping it out of
+		// the registry must not drop it out of diagnostics.
+		plugins := m.surfacePlugins()
 		for _, p := range plugins {
 			status := styles.StatusCompleted.Render("✓")
 			fmt.Fprintf(&b, "  %s %s: active\n", status, p.Name())

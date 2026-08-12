@@ -112,9 +112,11 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 }
 
 // TabBounds represents the X position range of a tab for mouse hit testing.
+// The tab is identified by its typed reference, not by a bare index, so a hit
+// region can only ever activate a tab of the scope that painted it.
 type TabBounds struct {
 	Start, End int
-	Plugin     int
+	Tab        tabRef
 }
 
 type projectAddState struct {
@@ -322,10 +324,14 @@ type Model struct {
 	// Intro animation
 	intro IntroModel
 
-	// Overview is an app-owned destination, not a project plugin. It is only
-	// constructed while the default-off feature is enabled.
-	overview       *overview.Model
-	overviewActive bool
+	// Scope state. The app owns the current project and project plugin; these
+	// three fields own the global space that can be shown over it. Overview is
+	// an app-owned destination, not a project plugin, and is only constructed
+	// while its feature is enabled.
+	overview    *overview.Model
+	scope       AppScope
+	globalTab   GlobalTab
+	globalTasks *globalTasksHost
 }
 
 // New creates a new application model.
@@ -365,6 +371,11 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
 	}
+	if features.IsEnabled(features.TasksPlugin.Name) {
+		// Tasks is a global tab, so its host is built here rather than
+		// registered as a project plugin. Constructing it does no I/O.
+		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
+	}
 	return m
 }
 
@@ -391,6 +402,13 @@ func (m Model) Init() tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+
+	// The global Tasks host starts alongside them and outlives them: it is not
+	// in the registry, so a later project switch cannot stop or rebuild it. Its
+	// model is built by the returned command, i.e. after the first frame.
+	if cmd := m.globalTasks.start(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	return tea.Batch(cmds...)
@@ -526,7 +544,7 @@ func (m *Model) initProjectSwitcher() {
 
 	// Set cursor to current project if found
 	for i, destination := range m.projectSwitcherFiltered {
-		if m.overviewActive && destination.Kind == destinationOverview {
+		if m.inGlobalScope() && destination.Kind == destinationOverview {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -534,7 +552,7 @@ func (m *Model) initProjectSwitcher() {
 		if m.overview != nil {
 			matchesCurrent = matchesCurrent || destination.Path == m.ui.ProjectRoot
 		}
-		if !m.overviewActive && destination.Kind == destinationProject && matchesCurrent {
+		if !m.inGlobalScope() && destination.Kind == destinationProject && matchesCurrent {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -615,9 +633,7 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
 	m.resetProjectSwitcher()
 	if destination.Kind == destinationOverview && m.overview != nil {
-		m.overviewActive = true
-		m.updateContext()
-		return m.overview.Start(m.overviewProjects())
+		return m.enterOverview()
 	}
 	m.exitOverview()
 	m.updateContext()
@@ -635,34 +651,44 @@ func (m *Model) overviewProjects() []overview.Project {
 	return selected
 }
 
-// exitOverview closes the Overview and hands keyboard focus back to the plugin
-// underneath. It restores the context itself so no caller can leave the app
-// stuck on "overview" after the board is gone.
+// enterOverview switches to the global space on its last-used tab. The project,
+// worktree, and active project plugin underneath are left exactly as they are,
+// so leaving again restores the precise destination the user came from.
+func (m *Model) enterOverview() tea.Cmd {
+	if m.overview == nil {
+		return nil
+	}
+	m.scope = ScopeGlobal
+	m.updateContext()
+	return m.startVisibleGlobalTab()
+}
+
+// exitOverview leaves the global space and hands keyboard focus back to the
+// project plugin underneath. It restores the context itself so no caller can
+// leave the app stuck on a global context after the space is gone.
 func (m *Model) exitOverview() {
-	if m.overviewActive && m.overview != nil {
+	wasGlobal := m.inGlobalScope()
+	if wasGlobal && m.overview != nil {
 		m.overview.Stop()
 	}
-	wasActive := m.overviewActive
-	m.overviewActive = false
-	if wasActive {
+	m.scope = ScopeProject
+	if wasGlobal {
 		m.updateContext()
 	}
 }
 
-// toggleOverview opens or closes the cross-project agent overview. No-op when
-// the feature is disabled (m.overview is nil).
+// toggleOverview moves between the global and project spaces. No-op when the
+// Overview feature is disabled (m.overview is nil).
 func (m *Model) toggleOverview() tea.Cmd {
 	if m.overview == nil {
 		return nil
 	}
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		m.exitOverview()
 		m.updateContext()
 		return nil
 	}
-	m.overviewActive = true
-	m.updateContext()
-	return m.overview.Start(m.overviewProjects())
+	return m.enterOverview()
 }
 
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {

@@ -261,7 +261,7 @@ func TestKeyPrecedence(t *testing.T) {
 			key:   tea.KeyPressMsg{Code: 'K', Text: "K"},
 			setup: func(m *Model, p *routerTestPlugin) { p.claims["K"] = true },
 			check: func(t *testing.T, m *Model, p *routerTestPlugin) {
-				if m.overviewActive {
+				if m.inGlobalScope() {
 					t.Fatal("K opened the Overview over a plugin that claims it")
 				}
 				wantOnlyPluginKey(t, p, "K")

@@ -76,7 +76,7 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
-		m.width < minWidth || m.height < minHeight || m.overviewActive {
+		m.width < minWidth || m.height < minHeight || m.inGlobalScope() {
 		return nil
 	}
 	active := m.ActivePlugin()
@@ -282,7 +282,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			destination := projects[i]
 			isCursor := i == m.projectSwitcherCursor
 			isOverview := destination.Kind == destinationOverview
-			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.overviewActive)
+			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.inGlobalScope())
 			itemID := projectSwitcherItemID(i)
 			isHovered := itemID == hoverID
 
@@ -558,8 +558,8 @@ func (m Model) renderHeader() string {
 }
 
 type headerTab struct {
-	plugin int
-	text   string
+	ref  tabRef
+	text string
 }
 
 // headerLayout keeps the header on the one physical row assumed by
@@ -569,7 +569,7 @@ type headerTab struct {
 func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spacing int) {
 	// Check if we're in a worktree for the indicator
 	worktreeIndicator := ""
-	if !m.overviewActive {
+	if !m.inGlobalScope() {
 		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
 			// Show worktree branch name as indicator
 			branchName := wtInfo.Branch
@@ -603,12 +603,14 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		title = styles.BarTitle.Render(" Sidecar") + repoSuffix + worktreeIndicator + " "
 	}
 
-	// Plugin tabs (themed)
-	plugins := m.registry.Plugins()
-	for i, p := range plugins {
-		isActive := !m.overviewActive && i == m.activePlugin
-		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		tabs = append(tabs, headerTab{plugin: i, text: tab})
+	// Tabs owned by the active scope: the global space's own tabs, or the
+	// project's plugin tabs. Never both — a project tab row behind an active
+	// global view is exactly the ambiguity this replaces.
+	visible := m.visibleTabs()
+	active := m.activeTab()
+	for i, ref := range visible {
+		tab := styles.RenderTab(m.tabLabel(ref), i, len(visible), ref.same(active), false)
+		tabs = append(tabs, headerTab{ref: ref, text: tab})
 	}
 
 	// Clock (conditional on config)
@@ -633,9 +635,12 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		clock = ""
 	}
 	for totalWidth() > m.width && len(tabs) > 0 {
+		// Drop inactive tabs from the right. The active tab of the active scope
+		// is protected: whichever space owns the screen keeps saying where the
+		// user is, however narrow the terminal gets.
 		remove := -1
 		for i := len(tabs) - 1; i >= 0; i-- {
-			if m.overviewActive || tabs[i].plugin != m.activePlugin {
+			if !tabs[i].ref.same(active) {
 				remove = i
 				break
 			}
@@ -675,7 +680,7 @@ func (m Model) getTabBounds() []TabBounds {
 	x := tabStartX
 	for _, tab := range tabs {
 		w := lipgloss.Width(tab.text)
-		bounds = append(bounds, TabBounds{Start: x, End: x + w, Plugin: tab.plugin})
+		bounds = append(bounds, TabBounds{Start: x, End: x + w, Tab: tab.ref})
 		x += w + 1 // +1 for space between tabs
 	}
 
@@ -727,7 +732,7 @@ func (m Model) getRepoNameBounds() (start, end int, ok bool) {
 
 // getWorktreeIndicatorBounds returns the X bounds for the worktree indicator in the header.
 func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		return 0, 0, false
 	}
 	wtInfo := m.currentWorktreeInfo()
@@ -756,8 +761,8 @@ func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
-	if m.overviewActive && m.overview != nil {
-		return m.overview.View(width, height)
+	if m.inGlobalScope() {
+		return m.renderGlobalContent(width, height)
 	}
 	p := m.ActivePlugin()
 	if p == nil {
@@ -773,6 +778,37 @@ func (m Model) renderContent(width, height int) string {
 	// Height() only pads short content; MaxHeight() also truncates tall content.
 	// This prevents plugin content from pushing the header off-screen.
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+}
+
+// renderGlobalContent renders the visible global tab.
+func (m Model) renderGlobalContent(width, height int) string {
+	switch m.globalTab {
+	case GlobalTasks:
+		if host := m.globalTasksPlugin(); host != nil {
+			return host.View(width, height)
+		}
+	case GlobalWorkspaces:
+		return m.renderGlobalWorkspacesPlaceholder(width, height)
+	}
+	if m.overview != nil {
+		return m.overview.View(width, height)
+	}
+	return ""
+}
+
+// renderGlobalWorkspacesPlaceholder is an honest empty state. The cross-project
+// workspace catalog arrives in a later slice; until then this tab must say so
+// rather than imply a list is loading, and it must collect nothing.
+func (m Model) renderGlobalWorkspacesPlaceholder(width, height int) string {
+	message := strings.Join([]string{
+		styles.Title.Render("Workspaces"),
+		"",
+		styles.Muted.Render("Every configured project's shells and worktrees will be browsable here."),
+		styles.Muted.Render("Nothing is being collected for this tab yet."),
+		"",
+		styles.Muted.Render("Use the project Workspaces tab for the current project."),
+	}, "\n")
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, message)
 }
 
 // renderFooter renders the bottom bar with key hints and status.
@@ -837,7 +873,7 @@ func (m Model) renderFooter() string {
 // pluginFooterStatus asks the active plugin for a condition that must stay
 // visible in the host footer.
 func (m Model) pluginFooterStatus() (string, bool) {
-	p := m.ActivePlugin()
+	p := m.focusedSurface()
 	if p == nil {
 		return "", false
 	}
@@ -854,17 +890,24 @@ type footerHint struct {
 }
 
 func (m Model) footerHints() []footerHint {
-	// Plugin-specific hints first - they're more contextually relevant
+	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
-	if m.overviewActive && m.overview != nil {
+	switch {
+	case m.globalTasksFocused():
+		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
+	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+		hints = append(hints, footerHint{keys: "esc", label: "Close"})
+	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},
 			footerHint{keys: "enter", label: "Open"},
 			footerHint{keys: "r", label: "Refresh"},
 			footerHint{keys: "esc", label: "Close"},
 		)
-	} else if p := m.ActivePlugin(); p != nil {
-		hints = m.pluginFooterHints(p, m.activeContext)
+	case !m.inGlobalScope():
+		if p := m.ActivePlugin(); p != nil {
+			hints = m.pluginFooterHints(p, m.activeContext)
+		}
 	}
 	// Then essential global hints
 	hints = append(hints, m.globalFooterHints()...)
@@ -872,7 +915,7 @@ func (m Model) footerHints() []footerHint {
 }
 
 func (m Model) activeDestinationName() string {
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		return "Overview"
 	}
 	return m.intro.RepoName
@@ -893,12 +936,20 @@ func (m Model) globalFooterHints() []footerHint {
 
 	var hints []footerHint
 
-	// Plugin switching hints (consolidated for brevity)
-	hints = append(hints, footerHint{keys: "1-5", label: "plugins"})
+	// Tab switching hints (consolidated for brevity). The advertised range is
+	// the active scope's own tab count, so the global space never promises a
+	// number that would reach a project plugin.
+	if count := len(m.visibleTabs()); count > 1 {
+		label := "plugins"
+		if m.inGlobalScope() {
+			label = "tabs"
+		}
+		hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", min(count, 9)), label: label})
+	}
 
 	for _, spec := range specs {
-		// In the Overview, q closes the overlay rather than quitting.
-		if spec.id == "quit" && m.overviewActive {
+		// In the global space, q returns to the project rather than quitting.
+		if spec.id == "quit" && m.inGlobalScope() {
 			continue
 		}
 		keys := keysByCmd[spec.id]
@@ -1032,24 +1083,41 @@ func (m *Model) helpGlobalSection() modal.Section {
 	}, nil)
 }
 
-// helpPluginSection renders the active plugin bindings section.
+// helpPluginSection renders the bindings of the surface that owns the screen:
+// the visible global tab in global scope, the active plugin in project scope.
+// Help must describe what the keys do here, not what they would do in the space
+// the user is not in.
 func (m *Model) helpPluginSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p := m.ActivePlugin(); p != nil {
-			ctx := p.FocusContext()
-			if ctx != "global" && ctx != "" {
-				bindings := m.keymap.BindingsForContext(ctx)
-				if len(bindings) > 0 {
-					var b strings.Builder
-					b.WriteString(styles.Title.Render(p.Name()))
-					b.WriteString("\n")
-					m.renderBindingSection(&b, ctx)
-					return modal.RenderedSection{Content: b.String()}
-				}
-			}
+		title, ctx := m.helpSurface()
+		if title == "" || ctx == "global" || ctx == "" {
+			return modal.RenderedSection{}
 		}
-		return modal.RenderedSection{}
+		bindings := m.keymap.BindingsForContext(ctx)
+		if len(bindings) == 0 {
+			return modal.RenderedSection{}
+		}
+		var b strings.Builder
+		b.WriteString(styles.Title.Render(title))
+		b.WriteString("\n")
+		m.renderBindingSection(&b, ctx)
+		return modal.RenderedSection{Content: b.String()}
 	}, nil)
+}
+
+// helpSurface names the surface help should document and the keymap context it
+// reads its bindings from.
+func (m *Model) helpSurface() (title, context string) {
+	if m.inGlobalScope() {
+		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+			return host.Name(), host.FocusContext()
+		}
+		return m.globalTab.Name(), m.globalTab.context()
+	}
+	if p := m.ActivePlugin(); p != nil {
+		return p.Name(), p.FocusContext()
+	}
+	return "", ""
 }
 
 // renderHelpModal renders the help modal.

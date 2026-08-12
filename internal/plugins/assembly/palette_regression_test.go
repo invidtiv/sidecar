@@ -29,10 +29,9 @@ func TestKeylessEntriesDoNotLeakIntoOtherPlugins(t *testing.T) {
 	pctx := &plugin.Context{Keymap: km, Logger: logger, WorkDir: dir}
 	reg := plugin.NewRegistry(pctx)
 
+	// Tasks is not planned here at all — it is a global tab owned by the app
+	// shell, and its palette behaviour is covered end to end in internal/app.
 	for _, entry := range Plan(config.Default()) {
-		if entry.ID == IDTasks {
-			continue // covered end to end in internal/app
-		}
 		if err := reg.Register(entry.New()); err != nil {
 			t.Fatalf("register %s: %v", entry.ID, err)
 		}

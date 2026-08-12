@@ -79,12 +79,12 @@ const (
 // There is deliberately no store/JSONL path: the embedded Tasks package uses
 // Tasks' own configuration resolution.
 type TasksPluginConfig struct {
-	// Position is the anchor the Tasks tab is inserted after. One of
-	// TasksPositionAfterWorkspaces (default) or TasksPositionAfterNotes.
-	// Unknown values are coerced back to the default by Validate.
-	//
-	// The resulting tab *number* is derived state: it depends on which
-	// preceding plugins are enabled, so no fixed shortcut number is promised.
+	// Position was the anchor the Tasks tab was inserted after while Tasks was
+	// a project plugin. Tasks is now a tab of the global space (Agents,
+	// Workspaces, Tasks), whose order is fixed, so the value is accepted,
+	// validated, and preserved for older configs but no longer moves anything.
+	// One of TasksPositionAfterWorkspaces (default) or TasksPositionAfterNotes;
+	// unknown values are coerced back to the default by Validate.
 	Position string `json:"position,omitempty"`
 }
 
