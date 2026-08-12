@@ -467,20 +467,18 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 // same single header row, so a shell and a worktree are sized identically and a
 // session can be sized before it is known which kind will render it (td-9b181e).
 func (p *Plugin) calculatePreviewDimensions() (width, height int) {
-	if p.width <= 0 || p.height <= 0 {
+	leaf, ok := p.terminalLeafBox()
+	if !ok {
 		if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && h > 0 {
 			return w - panelOverhead, h - panelBorderWidth - terminalHeaderRows
 		}
 		return 80, 24 // Safe defaults
 	}
 
-	// Width comes from the shared split, so this cannot drift from renderListView.
-	width = p.previewSplit().ContentWidth
-
-	// Height: the pane minus its top/bottom borders, then the one header row
-	// renderCapturedTerminal draws above the viewport.
-	paneHeight := p.height - panelBorderWidth
-	height = paneHeight - terminalHeaderRows
+	// The pane-tree leaf includes its header, while tmux receives only the
+	// terminal viewport below it.
+	width = leaf.W
+	height = leaf.H - terminalHeaderRows
 
 	if width < 20 {
 		width = 20

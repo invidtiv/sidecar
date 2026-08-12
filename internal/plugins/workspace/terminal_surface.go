@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/markdown"
 )
 
 // Every embedded terminal in the preview pane sits in the same vertical stack:
@@ -231,6 +232,59 @@ type terminalSurface struct {
 	OK      bool
 }
 
+// previewContentBox is the preview panel's inner box in plugin-local
+// coordinates. It includes the header row owned by each pane leaf and excludes
+// the preview panel's border and padding. Pane-tree layout starts here so the
+// tree, terminal sizers, renderers, cursor and hit testing share one authority.
+func (p *Plugin) previewContentBox() (Box, bool) {
+	if p.width <= 0 || p.height <= 0 {
+		return Box{}, false
+	}
+	split := p.previewSplit()
+	return Box{
+		X: split.ContentX,
+		Y: p.previewContentY(),
+		W: split.ContentWidth,
+		H: p.height - panelBorderWidth,
+	}, true
+}
+
+// terminalLeafBox returns the pane-tree box hosting the primary terminal. The
+// box includes its one-row header; the optional terminal panel is nested inside
+// this leaf and therefore does not add pane-tree chrome.
+//
+// With the feature disabled paneRoot is nil, and the legacy terminal is the
+// preview-content box itself. This keeps the seam load-bearing without changing
+// any rendered bytes in the single-terminal journey.
+func (p *Plugin) terminalLeafBox() (Box, bool) {
+	content, ok := p.previewContentBox()
+	if !ok || p.paneRoot == nil {
+		return content, ok
+	}
+
+	floors := Floors{
+		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
+		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+	}
+	leaves, _, fits := LayoutPanes(p.paneRoot, content, floors)
+	if !fits {
+		// A tree that cannot satisfy every leaf floor renders only its focused
+		// leaf in the full content box. Phase 1's only reachable tree is the
+		// single terminal, but keeping the fallback here prevents narrow windows
+		// from escaping the geometry authority when document leaves arrive.
+		if focused := FindPane(p.paneRoot, p.paneFocus); focused != nil && focused.Split == nil && focused.Kind == PaneTerminal {
+			return content, true
+		}
+		return Box{}, false
+	}
+	for _, placement := range leaves {
+		if placement.Node != nil && placement.Node.Kind == PaneTerminal {
+			return placement.Box, true
+		}
+	}
+	return Box{}, false
+}
+
 // terminalSurfaceGeometry is the single source of truth for where a terminal
 // surface is drawn and how big it is. termPanel selects the terminal panel
 // child; false selects the primary agent/shell terminal (which occupies the
@@ -241,14 +295,15 @@ type terminalSurface struct {
 // fall back to calculatePreviewDimensions, which carries the term.GetSize
 // fallback for a not-yet-sized plugin.
 func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
-	if p.width <= 0 || p.height <= 0 {
+	leaf, ok := p.terminalLeafBox()
+	if !ok {
 		return terminalSurface{}
 	}
 
-	// Preview content begins immediately after the panel border, and the first
-	// row of it is the surface's header.
-	x := p.previewSplit().ContentX
-	headerY := p.previewContentY()
+	// The leaf begins with the surface's own header. Any terminal-panel split is
+	// a subdivision within this box, not extra pane-tree chrome.
+	x := leaf.X
+	headerY := leaf.Y
 
 	if termPanel {
 		if !p.termPanelVisible {

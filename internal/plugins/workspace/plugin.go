@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -135,8 +136,8 @@ type Plugin struct {
 	// selectionSince timestamps the current selection so acknowledgement can
 	// require dwell. Arrowing past a shell is not reading it.
 	selectionSince time.Time
-	width   int
-	height  int
+	width          int
+	height         int
 
 	// Shared terminal components for the selected primary pane and its optional
 	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
@@ -175,6 +176,13 @@ type Plugin struct {
 	flashPreviewTime time.Time // When preview flash was triggered
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
+
+	// Preview pane tree state. A nil root retains the legacy path while the
+	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
+	// document registry and load-request state arrive with the open-doc journey.
+	paneRoot   *PaneNode
+	paneFocus  int
+	paneNextID int
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -571,6 +579,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.resetLifecycleState()
 	p.resetTerminalModels()
 	p.applicationFocused = true
+	p.paneRoot = nil
+	p.paneFocus = 0
+	p.paneNextID = 1
+	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
+		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
+		p.paneFocus = p.paneNextID
+		p.paneNextID++
+	}
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
