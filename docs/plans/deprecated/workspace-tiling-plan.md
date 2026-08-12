@@ -1,5 +1,14 @@
 # Workspace/Shell Tiling in the Workspaces Tab — Implementation Plan
 
+> **DEPRECATED 2026-08-11:** Superseded by
+> [Doc panes on a preview pane tree](../active/preview-pane-tree-and-doc-panes.md),
+> which builds the same binary split tree but starts from a document leaf (no
+> PTY) rather than N tmux tiles, and folds tmux tiling in as a later phase. This
+> plan's investigation of tmux sizing (§1.2), per-tile PTY policy (§2.2) and
+> risks (§4) is still accurate and is referenced by the successor; its layout,
+> phasing and file-level findings predate `terminal_surface.go` and
+> `terminal_links.go` and no longer describe the code.
+
 ## 1. Investigation Findings
 
 ### 1.1 Workspaces plugin & current `View` structure

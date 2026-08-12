@@ -4,6 +4,8 @@
 
 **Supersedes:** [Cross-Project Overview — Vision & Exploration](../deprecated/cross-project-vision.md)
 
+**Follow-on:** [First-class global Overview and cross-project Workspaces](global-overview-workspaces.md)
+
 ## Decision first
 
 Add **Overview** as a first-class Sidecar destination reached from a pinned,
