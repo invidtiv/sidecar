@@ -218,6 +218,21 @@ func (p *Plugin) paneFocusChip(label string, focused bool) string {
 	return dimText(label)
 }
 
+func (p *Plugin) primaryTerminalFocused() bool {
+	if p.activePane != PanePreview || p.termPanelFocused {
+		return false
+	}
+	if _, doc := p.activeDocPane(); doc != nil {
+		return p.paneFocus == terminalLeafID(p.paneRoot)
+	}
+	return p.termPanelVisible
+}
+
+func (p *Plugin) primaryTerminalFocusVisible() bool {
+	_, doc := p.activeDocPane()
+	return p.termPanelVisible || doc != nil
+}
+
 // terminalHeader renders a surface's single header row at the plugin's
 // truncation settings. hintFloor is the columns the right region keeps at the
 // chips' expense; zero leaves the chips first in line.
@@ -406,9 +421,9 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 		// Interactive mode targeting this agent pane - show exit hint with
 		// highlight. The exit key leads, so the header's hint floor keeps it.
 		hint = p.interactiveExitHint() + dimText(" • "+p.getInteractiveAttachKey()+" attach")
-	case p.termPanelVisible && p.activePane == PanePreview:
+	case p.primaryTerminalFocusVisible() && p.activePane == PanePreview:
 		// Split with the terminal panel: say which child has focus.
-		agentFocused := !p.termPanelFocused
+		agentFocused := p.primaryTerminalFocused()
 		chips = append(chips, p.paneFocusChip("Agent", agentFocused))
 		if agentFocused {
 			hint = dimText("enter interactive")
@@ -469,7 +484,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	if name == "" {
 		name = "Shell"
 	}
-	shellFocused := p.termPanelVisible && !p.termPanelFocused && p.activePane == PanePreview
+	shellFocused := p.primaryTerminalFocused()
 	chips := []string{p.paneFocusChip(name, shellFocused)}
 
 	// Hint depends on mode - interactive mode shows exit hints

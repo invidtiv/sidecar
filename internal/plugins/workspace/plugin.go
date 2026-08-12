@@ -116,6 +116,7 @@ const (
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
 	regionDocPane          = "doc-pane"
+	regionDocClose         = "doc-close"
 	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs

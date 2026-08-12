@@ -221,6 +221,7 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 |---------|------|
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
+| `workspace-doc` | Markdown document beside terminal (opt-in preview) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -255,6 +256,24 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 | `alt+c` | copy |
 | `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |
+
+### Document Pane
+
+An unmodified click on a resolvable markdown `path:line` in workspace or shell
+terminal output opens the document beside that terminal when
+`workspace_doc_panes` is enabled. Bare markdown paths are not links yet.
+`shift`-drag and `alt`-drag remain terminal selection gestures.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `j` / `down` | scroll-down | Scroll down |
+| `k` / `up` | scroll-up | Scroll up |
+| `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
+| `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
+| `r` | render | Toggle rendered/raw markdown |
+| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize document pane |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between panes |
+| `q` / `esc` | close | Close document pane |
 
 ## TD Monitor Plugin
 

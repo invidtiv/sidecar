@@ -8,9 +8,13 @@ import (
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
 	if p.viewMode == ViewModeList && p.docFocused() {
+		renderName := "Raw"
+		if doc, _ := p.activeDocPane(); doc != nil && !doc.view.Rendered() {
+			renderName = "Render"
+		}
 		return []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Close document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "render", Name: "Render", Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 2},
+			{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 2},
 			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 3},
 			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 4},
 			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 5},

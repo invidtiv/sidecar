@@ -704,6 +704,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.termPanelFocused = false
 			}
 		}
+	case regionDocClose:
+		return p.closeDocPane()
 	case regionPaneTreeDivider:
 		if splitID, ok := action.Region.Data.(int); ok {
 			if split := FindPane(p.paneRoot, splitID); split != nil && split.Split != nil {

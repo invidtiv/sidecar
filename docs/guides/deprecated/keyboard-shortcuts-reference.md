@@ -152,6 +152,7 @@ Complete shortcut listings and context reference. For implementation patterns, s
 |---------|------|
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
+| `workspace-doc` | Markdown document beside terminal (opt-in preview) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -182,6 +183,22 @@ Complete shortcut listings and context reference. For implementation patterns, s
 | `ctrl+]` | attach |
 | `alt+c` | copy |
 | `alt+v` | paste |
+
+### Document Pane
+
+With `workspace_doc_panes` enabled, an unmodified click on a resolvable markdown
+`path:line` opens it beside the selected workspace or shell terminal. Bare paths
+are not links yet. `shift`-drag and `alt`-drag continue to select terminal text.
+
+| Key | Action |
+|-----|--------|
+| `j`, `↓` / `k`, `↑` | Scroll one line |
+| `ctrl+d` / `ctrl+u` | Scroll half a page |
+| `g` / `G` | Jump to start / end |
+| `r` | Toggle rendered / raw markdown |
+| `+` / `-` | Grow / shrink document pane |
+| `tab` / `shift+tab` | Move focus between panes |
+| `q` / `esc` | Close document pane |
 
 ## TD Monitor Plugin
 

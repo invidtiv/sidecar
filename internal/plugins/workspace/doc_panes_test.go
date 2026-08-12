@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
@@ -122,8 +123,84 @@ func TestDocPaneRetargetRejectsStaleLoadAndDoesNotResizeAgain(t *testing.T) {
 	p.applyDocLoaded(stale)
 	doc, _ := p.activeDocPane()
 	doc.view.SetSize(60, 4)
-	if got := doc.view.View(); strings.Contains(got, "OLD CONTENT") || !strings.Contains(got, "Loading two.md") {
+	if got := doc.view.View(); strings.Contains(got, "OLD CONTENT") || !strings.Contains(got, "Loading document") || !strings.Contains(got, "two.md") {
 		t.Fatalf("stale result changed retargeted viewer: %q", got)
+	}
+}
+
+func TestDocumentSplitFocusChromeCloseRegionAndExactBox(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "docs/guide.md", "# Guide\n\nbody\n")
+	p := docPaneTestPlugin(t, root, true)
+	open := p.openTerminalPath("docs/guide.md", 0)
+	for _, child := range open().(tea.BatchMsg) {
+		if msg, ok := child().(docview.LoadedMsg); ok {
+			p.applyDocLoaded(msg)
+		}
+	}
+
+	_, leaf := p.activeDocPane()
+	const width, height = 100, 12
+	docFocused, ok := p.renderDocumentSplit(width, height)
+	if !ok {
+		t.Fatal("document split was not rendered")
+	}
+	lines := strings.Split(docFocused, "\n")
+	if len(lines) != height {
+		t.Fatalf("rendered rows = %d, want %d", len(lines), height)
+	}
+	for row, line := range lines {
+		if got := ansi.StringWidth(line); got != width {
+			t.Fatalf("row %d width = %d, want %d: %q", row, got, width, line)
+		}
+	}
+	if stripped := ansi.Strip(docFocused); !strings.Contains(stripped, "guide.md") || !strings.Contains(stripped, "Rendered") || !strings.Contains(stripped, "×") || !strings.Contains(stripped, "q close") {
+		t.Fatalf("document header lacks identity/mode/close/hint: %q", stripped)
+	}
+
+	var closeRegion *mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionDocClose {
+			regionCopy := region
+			closeRegion = &regionCopy
+			break
+		}
+	}
+	if closeRegion == nil {
+		t.Fatal("rendered close chip has no hit region")
+	}
+
+	p.paneFocus = terminalLeafID(p.paneRoot)
+	terminalFocused, ok := p.renderDocumentSplit(width, height)
+	if !ok || terminalFocused == docFocused {
+		t.Fatal("moving focus did not change header/divider treatment")
+	}
+	if !strings.Contains(ansi.Strip(terminalFocused), "▸ Shell") {
+		t.Fatalf("terminal focus is not named in its header: %q", ansi.Strip(terminalFocused))
+	}
+
+	p.paneFocus = leaf.ID
+	if cmd := p.handleMouseClick(mouse.MouseAction{Region: closeRegion}); cmd == nil || p.activeDocPaneOrNil() != nil {
+		t.Fatal("close header chip did not close the document and schedule terminal resize")
+	}
+}
+
+func TestDocumentCommandsDescribeCurrentMode(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.openTerminalPath("README.md", 0)
+	commands := p.Commands()
+	if len(commands) == 0 || commands[0].Context != "workspace-doc" || commands[0].Name != "Close" {
+		t.Fatalf("document commands = %#v", commands)
+	}
+	if commands[1].Name != "Raw" {
+		t.Fatalf("rendered-mode action = %q, want Raw", commands[1].Name)
+	}
+	doc, _ := p.activeDocPane()
+	doc.view.SetRendered(false)
+	if got := p.Commands()[1].Name; got != "Render" {
+		t.Fatalf("raw-mode action = %q, want Render", got)
 	}
 }
 

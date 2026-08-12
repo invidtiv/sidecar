@@ -145,7 +145,7 @@ func TestMissingFileShowsError(t *testing.T) {
 	if !ok || !m.SetResult(msg) {
 		t.Fatal("missing-file result was not accepted")
 	}
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "Unable to load missing.md") {
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "Document unavailable") || !strings.Contains(got, "missing.md") {
 		t.Fatalf("error view = %q", got)
 	}
 }
@@ -154,8 +154,23 @@ func TestLoadingState(t *testing.T) {
 	m := newTestModel(t)
 	m.SetSize(30, 2)
 	_ = m.Load(1, t.TempDir(), "wait.md", 0, 3)
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading wait.md") {
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading document") || !strings.Contains(got, "wait.md") {
 		t.Fatalf("loading view = %q", got)
+	}
+}
+
+func TestEmptyAndTruncatedStates(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(30, 3)
+	msg := loadFixture(t, m, "", 0)
+	if !m.SetResult(msg) || !strings.Contains(ansi.Strip(m.View()), "Empty document") {
+		t.Fatalf("empty view = %q", m.View())
+	}
+
+	msg = loadFixture(t, m, "# visible", 0)
+	msg.Result.IsTruncated = true
+	if !m.SetResult(msg) || !strings.Contains(ansi.Strip(m.View()), "Preview truncated") {
+		t.Fatalf("truncated view = %q", m.View())
 	}
 }
 
@@ -181,7 +196,7 @@ func TestSetResultRejectsStaleIdentityWithoutMutation(t *testing.T) {
 			if m.SetResult(stale) {
 				t.Fatal("stale result was accepted")
 			}
-			if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading fixture.md") {
+			if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading document") {
 				t.Fatalf("stale result mutated model: %q", got)
 			}
 		})

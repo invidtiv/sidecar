@@ -190,10 +190,10 @@ func (m *Model) Title() string { return m.path }
 
 func (m *Model) lines() []string {
 	if m.loading {
-		return []string{"Loading " + m.path + "…"}
+		return []string{"Loading document…", m.path}
 	}
 	if m.result.Error != nil {
-		return []string{"Unable to load " + m.path + ": " + m.result.Error.Error()}
+		return []string{"Document unavailable", m.path, m.result.Error.Error()}
 	}
 	if m.result.IsImage {
 		return []string{"Image preview is not supported"}
@@ -201,17 +201,27 @@ func (m *Model) lines() []string {
 	if m.result.IsBinary {
 		return []string{"Binary preview is not supported"}
 	}
+	if m.result.Content == "" {
+		return []string{"Empty document"}
+	}
+	var lines []string
 	if !m.rendered {
 		if len(m.result.HighlightedLines) > 0 {
-			return m.result.HighlightedLines
+			lines = m.result.HighlightedLines
+		} else {
+			lines = m.result.Lines
 		}
-		return m.result.Lines
+	} else {
+		if m.renderWidth != m.width {
+			m.renderedLines = m.renderer.RenderContent(m.result.Content, m.width)
+			m.renderWidth = m.width
+		}
+		lines = m.renderedLines
 	}
-	if m.renderWidth != m.width {
-		m.renderedLines = m.renderer.RenderContent(m.result.Content, m.width)
-		m.renderWidth = m.width
+	if m.result.IsTruncated {
+		return append([]string{"Preview truncated", ""}, lines...)
 	}
-	return m.renderedLines
+	return lines
 }
 
 func (m *Model) invalidateRender() {

@@ -11,7 +11,6 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 type docPane struct {
@@ -112,7 +111,7 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 	if content, ok := p.previewContentBox(); !ok {
 		return nil
 	} else if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
-		p.toastMessage = "Window is too narrow to open a document pane"
+		p.toastMessage = "Document pane needs a wider window; terminal left unchanged"
 		p.toastTime = time.Now()
 		return nil
 	}
@@ -490,11 +489,55 @@ func (p *Plugin) cycleDocumentFocus(reverse bool) {
 	p.termPanelFocused = false
 }
 
+func (p *Plugin) docHeaderChips(doc *docPane, width int) []string {
+	// Keep each chip whole so the shared header layout can drop it cleanly at
+	// narrow widths. Bound the path before styling so a deep path does not crowd
+	// out the mode and close affordances.
+	pathBudget := maxInt(width/2, 8)
+	path := p.truncateCache.Truncate(doc.view.Title(), pathBudget, "…")
+	pathStyle := styles.BarChip
+	if p.paneFocus == doc.leafID {
+		pathStyle = styles.BarChipActive
+	}
+	mode := "Rendered"
+	if !doc.view.Rendered() {
+		mode = "Raw"
+	}
+	return []string{
+		styles.RenderPillWithStyle(path, pathStyle, nil),
+		styles.RenderPillWithStyle(mode, styles.BarChip, nil),
+		styles.RenderPillWithStyle("×", styles.BarChip, nil),
+	}
+}
+
 func (p *Plugin) renderDocPane(doc *docPane, box Box) string {
 	contentHeight := maxInt(box.H-terminalHeaderRows, 0)
 	doc.view.SetSize(box.W, contentHeight)
-	header := p.terminalHeader([]string{p.paneFocusChip(doc.view.Title(), p.paneFocus == doc.leafID)}, dimText("q close · r raw"), box.W, 0)
+	action := "raw"
+	if !doc.view.Rendered() {
+		action = "render"
+	}
+	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · r "+action), box.W, 0)
 	return header + "\n" + doc.view.View()
+}
+
+func paneTreeDividerStyle(focused bool) lipgloss.Style {
+	if focused {
+		return lipgloss.NewStyle().Foreground(styles.BorderActive)
+	}
+	return lipgloss.NewStyle().Foreground(styles.BorderNormal)
+}
+
+func renderPaneTreeDividerV(height int, focused bool) string {
+	if height <= 0 {
+		return ""
+	}
+	return paneTreeDividerStyle(focused).Render(
+		strings.TrimSuffix(strings.Repeat("│\n", height), "\n"))
+}
+
+func renderPaneTreeDividerH(width int, focused bool) string {
+	return paneTreeDividerStyle(focused).Render(strings.Repeat("─", maxInt(width, 0)))
 }
 
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
@@ -522,6 +565,12 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 			document = p.renderDocPane(doc, placement.Box)
 			if absolute, ok := p.previewContentBox(); ok {
 				p.mouseHandler.HitMap.AddRect(regionDocPane, absolute.X+placement.Box.X, absolute.Y+placement.Box.Y, placement.Box.W, placement.Box.H, placement.Node.ID)
+				chips := p.docHeaderChips(doc, placement.Box.W)
+				for index, chip := range layoutHeaderChips(chips, placement.Box.W, 0) {
+					if index == len(chips)-1 && chip.Drawn {
+						p.mouseHandler.HitMap.AddRect(regionDocClose, absolute.X+placement.Box.X+chip.Col, absolute.Y+placement.Box.Y, chip.Width, 1, placement.Node.ID)
+					}
+				}
 			}
 		}
 	}
@@ -540,13 +589,13 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		}
 	}
 	if dividers[0].Axis == SplitRows {
-		divider := lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat("─", width))
+		divider := renderPaneTreeDividerH(width, p.docFocused())
 		if leaves[0].Node.Kind == PaneTerminal {
 			return lipgloss.JoinVertical(lipgloss.Left, terminal, divider, document), true
 		}
 		return lipgloss.JoinVertical(lipgloss.Left, document, divider, terminal), true
 	}
-	divider := ui.RenderDivider(height)
+	divider := renderPaneTreeDividerV(height, p.docFocused())
 	if leaves[0].Node.Kind == PaneTerminal {
 		return lipgloss.JoinHorizontal(lipgloss.Top, terminal, divider, document), true
 	}
