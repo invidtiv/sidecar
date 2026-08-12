@@ -229,6 +229,10 @@ func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) 
 }
 
 func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceContext {
+	return p.terminalLinkSurfaceContextWithFreshRoot(termPanel, false)
+}
+
+func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bool) terminalLinkSurfaceContext {
 	if p.ctx == nil {
 		return terminalLinkSurfaceContext{}
 	}
@@ -252,7 +256,7 @@ func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceC
 		surface += ":panel"
 	}
 	target := p.terminalLinkTarget(termPanel)
-	if p.terminalLinkMemo.surfaces != nil {
+	if !freshRoot && p.terminalLinkMemo.surfaces != nil {
 		if memo, found := p.terminalLinkMemo.surfaces[surface]; found &&
 			memo.rawRoot == filepath.Clean(rawRoot) && memo.target == target && memo.root != "" {
 			return terminalLinkSurfaceContext{rawRoot: memo.rawRoot, root: memo.root, surface: surface, target: target, ok: true}
@@ -267,6 +271,12 @@ func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceC
 		return terminalLinkSurfaceContext{}
 	}
 	return terminalLinkSurfaceContext{rawRoot: filepath.Clean(rawRoot), root: filepath.Clean(root), surface: surface, target: target, ok: true}
+}
+
+func (p *Plugin) invalidateTerminalLinkSurface(surface string) {
+	if p.terminalLinkMemo.surfaces != nil {
+		delete(p.terminalLinkMemo.surfaces, surface)
+	}
 }
 
 func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffer *tty.OutputBuffer, line string) []terminalLink {
@@ -439,6 +449,11 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 			return openInBrowser(link.Value), true
 		}
 		if link.Root != "" {
+			fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
+			if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
+				p.invalidateTerminalLinkSurface(context.surface)
+				return nil, false
+			}
 			rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
 			if !valid {
 				return nil, false

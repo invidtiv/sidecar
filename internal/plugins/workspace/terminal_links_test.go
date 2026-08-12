@@ -454,8 +454,8 @@ func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.
 	p.interactiveState = &InteractiveState{Active: true, VisibleStart: 0, VisibleEnd: 2}
 	p.selection.Clear()
 	_, _ = p.activateTerminalLink(actionAt(2, 4))
-	if rootCalls != 1 || pathCalls != 2 {
-		t.Fatalf("cached render/click performed filesystem work: root=%d path=%d", rootCalls, pathCalls)
+	if rootCalls != 2 || pathCalls != 2 {
+		t.Fatalf("cached render performed I/O or click did more than root revalidation: root=%d path=%d", rootCalls, pathCalls)
 	}
 }
 
@@ -491,6 +491,57 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("escaping click created a document pane")
+	}
+}
+
+func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
+	parent := t.TempDir()
+	rootA := filepath.Join(parent, "a")
+	rootB := filepath.Join(parent, "b")
+	for _, dir := range []string{rootA, rootB} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(dir), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(parent, "current")
+	if err := os.Symlink(rootA, current); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: current}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	links := resolver.links("README.md")
+	rootAResolved, err := filepath.EvalSymlinks(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Root != rootAResolved {
+		t.Fatalf("initial link root = %#v, want %q", links, rootAResolved)
+	}
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(rootB, current); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
+		t.Fatal("click activated link cached under previous selected root")
+	}
+	if _, found := p.terminalLinkMemo.surfaces["shell:one"]; found {
+		t.Fatal("root mismatch did not invalidate stale surface memo")
+	}
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatal("retargeted-root click created a document pane")
 	}
 }
 
