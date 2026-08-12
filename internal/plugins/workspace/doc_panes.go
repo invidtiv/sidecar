@@ -86,13 +86,18 @@ func paneTreeFloors() Floors {
 }
 
 func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
+	_, surface, _ := p.selectedTerminalSurface()
+	return p.openDocPaneForSurface(root, surface, rel, line)
+}
+
+func (p *Plugin) openDocPaneForSurface(root, surface, rel string, line int) tea.Cmd {
 	if p.paneRoot == nil || p.ctx == nil {
 		return nil
 	}
 	epoch := p.ctx.Epoch
 	if doc, leaf := p.activeDocPane(); doc != nil {
 		doc.root = root
-		_, doc.surface, _ = p.selectedTerminalSurface()
+		doc.surface = surface
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
 		cmd := doc.view.Load(leaf.DocID, root, rel, line, epoch)
@@ -124,7 +129,6 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
 	viewer := docview.New(nil)
-	_, surface, _ := p.selectedTerminalSurface()
 	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, surface: surface, view: viewer}
 	p.activePane = PanePreview
 	load := viewer.Load(docID, root, rel, line, epoch)

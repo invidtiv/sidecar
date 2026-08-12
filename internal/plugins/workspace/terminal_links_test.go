@@ -305,10 +305,14 @@ func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing
 		{"directory", "directory.md", nil},
 		{"outside absolute", outside, nil},
 		{"url overlap", "https://example.test/docs/guide.markdown", nil},
+		{"numeric suffix", "README.md5", nil},
+		{"identifier suffix", "README.mdfoo", nil},
+		{"colon without line", "README.md: prose", nil},
+		{"markdown suffix", "docs/guide.markdowned", nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			links := p.resolvedTerminalLinks(false, buffer, tc.line)
+			links := p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, tc.line)
 			decorated := decorateTerminalLinks(tc.line, p.terminalLinkResolver(false, buffer))
 			if ansi.Strip(decorated) != tc.line {
 				t.Fatalf("decoration changed terminal text: %q", decorated)
@@ -358,51 +362,100 @@ func TestBareMarkdownResolutionMemoizesHitsAndMissesPerAcceptedCaptureAndSurface
 	calls := 0
 	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
 		calls++
-		return resolveTerminalPath(base, raw)
+		return resolveTerminalPathFromResolvedBase(base, raw)
 	}
 
 	line := "README.md missing.md README.md"
-	p.resolvedTerminalLinks(false, buffer, line)
-	p.resolvedTerminalLinks(false, buffer, line) // unrelated render
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line) // unrelated render
 	if calls != 2 {
 		t.Fatalf("resolver calls = %d, want one per unique hit/miss", calls)
 	}
-	p.resolvedTerminalLinks(true, buffer, line)
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(true), buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 4 {
 		t.Fatalf("independent panel memo calls = %d, want 4 without evicting primary", calls)
 	}
 	buffer.Update(line + " changed")
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 6 {
 		t.Fatalf("resolver calls after accepted capture = %d, want 6", calls)
 	}
 	buffer.Update(line + " changed") // rejected duplicate publication
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 6 {
 		t.Fatalf("duplicate capture invalidated memo: calls=%d", calls)
 	}
 	p.shells[0].Agent.TmuxPane = "%2"
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 8 {
 		t.Fatalf("terminal target change calls = %d, want 8", calls)
 	}
 	p.shells[0] = &ShellSession{TmuxName: "two", Agent: &Agent{TmuxSession: "session-two", TmuxPane: "%1", OutputBuf: buffer}}
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 10 {
 		t.Fatalf("surface identity change calls = %d, want 10", calls)
 	}
 	p.ctx.WorkDir = otherRoot
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 12 {
 		t.Fatalf("surface root change calls = %d, want 12", calls)
 	}
 	p.shellSelected = false
 	p.worktrees = []*Worktree{{Name: "workspace", Path: root, Agent: &Agent{OutputBuf: buffer}}}
 	p.selectedIdx = 0
-	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
 	if calls != 14 {
 		t.Fatalf("shell to workspace surface change calls = %d, want 14", calls)
+	}
+}
+
+func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md missing.md")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{
+		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
+	}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	rootCalls, pathCalls := 0, 0
+	p.terminalRootResolver = func(raw string) (string, error) {
+		rootCalls++
+		return filepath.EvalSymlinks(raw)
+	}
+	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
+		pathCalls++
+		return resolveTerminalPathFromResolvedBase(base, raw)
+	}
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	_ = decorateTerminalLinks("README.md missing.md", resolver)
+	if rootCalls != 1 || pathCalls != 2 {
+		t.Fatalf("setup calls root=%d path=%d, want 1 and 2", rootCalls, pathCalls)
+	}
+	for range 5 {
+		// Decoration and activation both obtain an immutable surface context;
+		// neither may canonicalize or stat again after the accepted capture's
+		// hit and miss have populated the memo.
+		_ = decorateTerminalLinks("README.md missing.md", p.terminalLinkResolver(false, buffer))
+		context := p.terminalLinkSurfaceContext(false)
+		_ = p.resolvedTerminalLinks(context, buffer, "README.md missing.md")
+	}
+	// Exercise the real pointer activation lookup as well. The narrow synthetic
+	// viewport may refuse to open a pane, but resolving the link under the click
+	// must still be entirely memo-backed.
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, VisibleStart: 0, VisibleEnd: 2}
+	p.selection.Clear()
+	_, _ = p.activateTerminalLink(actionAt(2, 4))
+	if rootCalls != 1 || pathCalls != 2 {
+		t.Fatalf("cached render/click performed filesystem work: root=%d path=%d", rootCalls, pathCalls)
 	}
 }
 

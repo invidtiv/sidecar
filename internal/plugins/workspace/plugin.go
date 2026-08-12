@@ -152,6 +152,7 @@ type Plugin struct {
 	applicationFocused    bool
 	terminalLinkMemo      terminalLinkMemo
 	terminalPathResolver  func(string, string) (string, string, bool)
+	terminalRootResolver  func(string) (string, error)
 
 	// Worktree state
 	worktrees                  []*Worktree
