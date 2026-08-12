@@ -150,6 +150,8 @@ type Plugin struct {
 	primaryTerminalTarget workspaceTerminalTarget
 	panelTerminalTarget   workspaceTerminalTarget
 	applicationFocused    bool
+	terminalLinkMemo      terminalLinkMemo
+	terminalPathResolver  func(string, string) (string, string, bool)
 
 	// Worktree state
 	worktrees                  []*Worktree

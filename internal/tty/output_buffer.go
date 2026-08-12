@@ -129,6 +129,7 @@ type OutputBuffer struct {
 	// a split from another.
 	paneBase  int
 	paneKnown bool
+	revision  uint64
 }
 
 // NewOutputBuffer creates a new output buffer with the given capacity.
@@ -190,6 +191,7 @@ func (b *OutputBuffer) applyRelative(s PaneSnapshot) bool {
 	b.lines = splitSnapshotRows(content, s)
 	b.setPaneSplitLocked(0, s)
 	b.trimLocked()
+	b.revision++
 
 	return true
 }
@@ -229,6 +231,7 @@ func (b *OutputBuffer) applyAbsolute(s PaneSnapshot) bool {
 	b.lastRawHash = rawHash
 	b.lastLen = rawLen
 	b.lastBase = baseLine
+	b.revision++
 	return true
 }
 
@@ -288,6 +291,7 @@ func (b *OutputBuffer) PrependSnapshot(content string, baseLine int) bool {
 		// previous relative content had no longer describes these rows.
 		b.paneKnown = false
 		b.trimLocked()
+		b.revision++
 		return true
 	}
 
@@ -322,6 +326,7 @@ func (b *OutputBuffer) PrependSnapshot(content string, baseLine int) bool {
 	b.lines = combined
 	b.baseLine = combinedBase
 	b.trimLocked()
+	b.revision++
 	return true
 }
 
@@ -362,6 +367,7 @@ func (b *OutputBuffer) Write(content string) {
 
 	// Trim to capacity (keep most recent lines)
 	b.trimLocked()
+	b.revision++
 }
 
 // Lines returns a copy of all lines in the buffer.
@@ -446,6 +452,15 @@ func (b *OutputBuffer) LineCount() int {
 	return len(b.lines)
 }
 
+// Revision advances only when accepted content changes. Consumers may use it
+// to cache work derived from a captured terminal without tying invalidation to
+// animation or other render-only state.
+func (b *OutputBuffer) Revision() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.revision
+}
+
 // LastNonEmptyLine returns the index of the last line containing printable
 // content, or -1 when every line is empty. It scans under the buffer lock and
 // avoids copying the full scrollback into the render path.
@@ -478,6 +493,7 @@ func (b *OutputBuffer) Clear() {
 	b.lastBase = 0
 	b.paneBase = 0
 	b.paneKnown = false
+	b.revision++
 }
 
 // Len returns the number of lines in the buffer.

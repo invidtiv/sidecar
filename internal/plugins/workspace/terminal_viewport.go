@@ -35,6 +35,7 @@ type terminalViewportInput struct {
 	TotalItems    int
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
+	LinkResolver  *terminalLineLinkResolver
 }
 
 type terminalViewportLayout struct {
@@ -242,7 +243,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		var openBg bool
 		line, inheritedBg, openBg = ui.CarryRowBackground(line, inheritedBg)
 		line = ui.ExpandTabs(line, tabStopWidth)
-		line = decorateTerminalLinks(line)
+		line = decorateTerminalLinks(line, in.LinkResolver)
 		absoluteLine := in.AbsoluteBase + layout.Start + i
 		if in.SearchMatches != nil {
 			for _, match := range in.SearchMatches.Items {

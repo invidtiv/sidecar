@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -33,10 +34,56 @@ type terminalLink struct {
 	Line     int
 }
 
+type terminalLinkMemo struct {
+	surfaces map[string]terminalLinkSurfaceMemo
+}
+
+type terminalLinkSurfaceMemo struct {
+	root     string
+	target   string
+	buffer   *tty.OutputBuffer
+	revision uint64
+	paths    map[string]terminalLinkResolution
+}
+
+func (p *Plugin) terminalLinkTarget(termPanel bool) string {
+	if termPanel {
+		return p.termPanelSession + "\x00" + p.termPanelPaneID
+	}
+	if p.shellSelected {
+		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
+			return shell.Agent.TmuxSession + "\x00" + shell.Agent.TmuxPane
+		}
+		return ""
+	}
+	if wt := p.selectedWorktree(); wt != nil && wt.Agent != nil {
+		return wt.Agent.TmuxSession + "\x00" + wt.Agent.TmuxPane
+	}
+	return ""
+}
+
+type terminalLinkResolution struct {
+	rel string
+	ok  bool
+}
+
+type terminalLineLinkResolver struct {
+	plugin    *Plugin
+	termPanel bool
+	buffer    *tty.OutputBuffer
+}
+
+func (r *terminalLineLinkResolver) links(line string) []terminalLink {
+	return r.plugin.resolvedTerminalLinks(r.termPanel, r.buffer, line)
+}
+
 var (
 	terminalURLPattern  = regexp.MustCompile(`https?://[^\s<>"']+`)
 	terminalPathPattern = regexp.MustCompile(
 		`(?:^|[\s(\[])((?:\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
+	)
+	terminalBareMarkdownPattern = regexp.MustCompile(
+		`(?:^|[\s(\x5b` + "`" + `])((?:\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.(?i:md|markdown)[.,;!?)}\x5d` + "`" + `]*)`,
 	)
 )
 
@@ -104,11 +151,14 @@ func terminalLinkOverlapsBytes(plain string, links []terminalLink, start, end in
 	return false
 }
 
-func decorateTerminalLinks(line string) string {
+func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) string {
 	// tmux output is untrusted. Remove source-supplied OSC controls and
 	// synthesize OSC-8 only for URLs that pass safeHTTPURL.
 	line = stripSourceOSC8(line)
 	links := detectTerminalLinks(line)
+	if resolved != nil {
+		links = resolved.links(line)
+	}
 	// Apply from right to left so wrappers do not disturb later visual ranges.
 	for i := len(links) - 1; i >= 0; i-- {
 		link := links[i]
@@ -120,6 +170,77 @@ func decorateTerminalLinks(line string) string {
 		line = wrapTerminalVisualRange(line, link.StartCol, link.EndCol, open, close)
 	}
 	return line
+}
+
+func detectBareMarkdownCandidates(line string, existing []terminalLink) []terminalLink {
+	plain := ansi.Strip(line)
+	var links []terminalLink
+	for _, loc := range terminalBareMarkdownPattern.FindAllStringSubmatchIndex(plain, -1) {
+		if len(loc) < 4 || loc[2] < 0 {
+			continue
+		}
+		start, end := loc[2], loc[3]
+		value := strings.TrimRight(plain[start:end], ".,;!?)]}`")
+		end = start + len(value)
+		if value == "" || terminalLinkOverlapsBytes(plain, existing, start, end) {
+			continue
+		}
+		links = append(links, terminalLink{
+			Kind: terminalPathLink, StartCol: ansi.StringWidth(plain[:start]),
+			EndCol: ansi.StringWidth(plain[:end]) - 1, Value: value,
+		})
+	}
+	return links
+}
+
+func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) *terminalLineLinkResolver {
+	if p.paneRoot == nil || buffer == nil {
+		return nil
+	}
+	return &terminalLineLinkResolver{plugin: p, termPanel: termPanel, buffer: buffer}
+}
+
+func (p *Plugin) resolvedTerminalLinks(termPanel bool, buffer *tty.OutputBuffer, line string) []terminalLink {
+	links := detectTerminalLinks(line)
+	if p.paneRoot == nil || buffer == nil {
+		return links
+	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return links
+	}
+	if termPanel {
+		surface += ":panel"
+	}
+	target := p.terminalLinkTarget(termPanel)
+	revision := buffer.Revision()
+	if p.terminalLinkMemo.surfaces == nil {
+		p.terminalLinkMemo.surfaces = make(map[string]terminalLinkSurfaceMemo)
+	}
+	memo, found := p.terminalLinkMemo.surfaces[surface]
+	if !found || memo.root != root || memo.target != target || memo.buffer != buffer || memo.revision != revision {
+		memo = terminalLinkSurfaceMemo{root: root, target: target, buffer: buffer, revision: revision,
+			paths: make(map[string]terminalLinkResolution)}
+	}
+	for _, candidate := range detectBareMarkdownCandidates(line, links) {
+		resolution, found := memo.paths[candidate.Value]
+		if !found {
+			resolver := resolveTerminalPath
+			if p.terminalPathResolver != nil {
+				resolver = p.terminalPathResolver
+			}
+			rel, _, resolved := resolver(root, candidate.Value)
+			resolution = terminalLinkResolution{rel: rel, ok: resolved}
+			memo.paths[candidate.Value] = resolution
+		}
+		if !resolution.ok {
+			continue
+		}
+		candidate.Value = resolution.rel
+		links = append(links, candidate)
+	}
+	p.terminalLinkMemo.surfaces[surface] = memo
+	return links
 }
 
 func stripSourceOSC8(line string) string {
@@ -242,7 +363,9 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 	if !ok {
 		return nil, false
 	}
-	for _, link := range detectTerminalLinks(ui.ExpandTabs(line, tabStopWidth)) {
+	termPanel := action.Region != nil && action.Region.ID == regionTermPanelContent
+	buffer := p.terminalOutputBuffer(termPanel)
+	for _, link := range p.resolvedTerminalLinks(termPanel, buffer, ui.ExpandTabs(line, tabStopWidth)) {
 		if point.Col < link.StartCol || point.Col > link.EndCol {
 			continue
 		}

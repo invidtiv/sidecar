@@ -348,6 +348,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		TotalItems:       totalItems,
 		LoadingOlder:     loadingOlder,
 		SearchMatches:    p.terminalSearchMatches(termPanel),
+		LinkResolver:     p.terminalLinkResolver(termPanel, buffer),
 	}, p.truncateCache)
 	if result.Content == "" {
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)

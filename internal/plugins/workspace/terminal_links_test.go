@@ -48,7 +48,7 @@ func TestSafeHTTPURLRejectsNonHTTPAndControls(t *testing.T) {
 }
 
 func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
-	got := decorateTerminalLinks("visit https://example.com/x")
+	got := decorateTerminalLinks("visit https://example.com/x", nil)
 	if !strings.Contains(got, "\x1b]8;;https://example.com/x\x1b\\") {
 		t.Fatalf("validated URL did not receive OSC-8: %q", got)
 	}
@@ -57,7 +57,7 @@ func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
 	}
 
 	source := "\x1b]8;;javascript:alert(1)\x1b\\label\x1b]8;;\x1b\\"
-	cleaned := decorateTerminalLinks(source)
+	cleaned := decorateTerminalLinks(source, nil)
 	if strings.Contains(cleaned, "javascript:") || strings.Contains(cleaned, "\x1b]8;;") {
 		t.Fatalf("source-supplied OSC-8 survived sanitization: %q", cleaned)
 	}
@@ -143,7 +143,7 @@ func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T)
 	}
 
 	source := "\x1b]8;;https://hidden.example/\u00dc/https://evil.example\x07label\x1b]8;;\x07"
-	cleaned := decorateTerminalLinks(source)
+	cleaned := decorateTerminalLinks(source, nil)
 	if ansi.Strip(cleaned) != "label" {
 		t.Fatalf("UTF-8 URI payload leaked into label: %q", cleaned)
 	}
@@ -256,6 +256,175 @@ func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testi
 	}
 	if _, _, ok := resolveTerminalPath(base, "../secret.go"); ok {
 		t.Fatal("parent traversal outside workspace was accepted")
+	}
+}
+
+func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# doc\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("README.md")
+	write("docs/guide.markdown")
+	write("docs/overlap.md")
+	if err := os.Mkdir(filepath.Join(root, "directory.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "docs", Agent: &Agent{OutputBuf: tty.NewOutputBuffer(20)}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	buffer := p.shells[0].Agent.OutputBuf
+	buffer.Update("accepted capture")
+
+	tests := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{"prose", "please read README.md before continuing", []string{"README.md"}},
+		{"table", "| plan | docs/guide.markdown | ready |", []string{"docs/guide.markdown"}},
+		{"backticks", "opened `docs/guide.markdown`", []string{"docs/guide.markdown"}},
+		{"punctuation", "See (docs/guide.markdown).", []string{"docs/guide.markdown"}},
+		{"unicode columns", "✓ 日本語 docs/guide.markdown", []string{"docs/guide.markdown"}},
+		{"path line overlap", "docs/overlap.md:12", nil},
+		{"dangling", "missing.md", nil},
+		{"directory", "directory.md", nil},
+		{"outside absolute", outside, nil},
+		{"url overlap", "https://example.test/docs/guide.markdown", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			links := p.resolvedTerminalLinks(false, buffer, tc.line)
+			decorated := decorateTerminalLinks(tc.line, p.terminalLinkResolver(false, buffer))
+			if ansi.Strip(decorated) != tc.line {
+				t.Fatalf("decoration changed terminal text: %q", decorated)
+			}
+			if got := strings.Count(decorated, "\x1b[4m"); got != len(links) {
+				t.Fatalf("drawn link count = %d, resolved link count = %d: %q", got, len(links), decorated)
+			}
+			var bare []string
+			for _, link := range links {
+				if link.Kind == terminalPathLink && link.Line == 0 {
+					bare = append(bare, link.Value)
+				}
+			}
+			if !reflect.DeepEqual(bare, tc.want) {
+				t.Fatalf("bare links = %#v, want %#v; all=%#v", bare, tc.want, links)
+			}
+			if tc.name == "path line overlap" && (len(links) != 1 || links[0].Line != 12) {
+				t.Fatalf("existing path:line link was not authoritative: %#v", links)
+			}
+			for _, link := range links {
+				if link.Value == "docs/guide.markdown" && tc.name == "unicode columns" {
+					wantStart := ansi.StringWidth("✓ 日本語 ")
+					if link.StartCol != wantStart {
+						t.Fatalf("start column = %d, want visual column %d", link.StartCol, wantStart)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestBareMarkdownResolutionMemoizesHitsAndMissesPerAcceptedCaptureAndSurface(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := t.TempDir()
+	for _, dir := range []string{root, otherRoot} {
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# readme"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md missing.md README.md")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxSession: "session-one", TmuxPane: "%1", OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	calls := 0
+	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
+		calls++
+		return resolveTerminalPath(base, raw)
+	}
+
+	line := "README.md missing.md README.md"
+	p.resolvedTerminalLinks(false, buffer, line)
+	p.resolvedTerminalLinks(false, buffer, line) // unrelated render
+	if calls != 2 {
+		t.Fatalf("resolver calls = %d, want one per unique hit/miss", calls)
+	}
+	p.resolvedTerminalLinks(true, buffer, line)
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 4 {
+		t.Fatalf("independent panel memo calls = %d, want 4 without evicting primary", calls)
+	}
+	buffer.Update(line + " changed")
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 6 {
+		t.Fatalf("resolver calls after accepted capture = %d, want 6", calls)
+	}
+	buffer.Update(line + " changed") // rejected duplicate publication
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 6 {
+		t.Fatalf("duplicate capture invalidated memo: calls=%d", calls)
+	}
+	p.shells[0].Agent.TmuxPane = "%2"
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 8 {
+		t.Fatalf("terminal target change calls = %d, want 8", calls)
+	}
+	p.shells[0] = &ShellSession{TmuxName: "two", Agent: &Agent{TmuxSession: "session-two", TmuxPane: "%1", OutputBuf: buffer}}
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 10 {
+		t.Fatalf("surface identity change calls = %d, want 10", calls)
+	}
+	p.ctx.WorkDir = otherRoot
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 12 {
+		t.Fatalf("surface root change calls = %d, want 12", calls)
+	}
+	p.shellSelected = false
+	p.worktrees = []*Worktree{{Name: "workspace", Path: root, Agent: &Agent{OutputBuf: buffer}}}
+	p.selectedIdx = 0
+	p.resolvedTerminalLinks(false, buffer, line)
+	if calls != 14 {
+		t.Fatalf("shell to workspace surface change calls = %d, want 14", calls)
+	}
+}
+
+func BenchmarkDecorateTerminalBareMarkdownLinks(b *testing.B) {
+	root := b.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "plan.md"), []byte("# Plan"), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("| result | `docs/plan.md`, | missing.md |")
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "bench", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	b.ResetTimer()
+	for range b.N {
+		_ = decorateTerminalLinks("| result | `docs/plan.md`, | missing.md |", resolver)
 	}
 }
 
