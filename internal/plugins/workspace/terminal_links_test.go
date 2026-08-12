@@ -459,6 +459,41 @@ func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.
 	}
 }
 
+func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "README.md")
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outPath, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("README.md")
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	resolver := p.terminalLinkResolver(false, buffer)
+	if links := resolver.links("README.md"); len(links) != 1 || links[0].Raw != "README.md" {
+		t.Fatalf("initial resolved links = %#v", links)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outPath, path); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
+		t.Fatal("click activated cached link after path escaped selected root")
+	}
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatal("escaping click created a document pane")
+	}
+}
+
 func BenchmarkDecorateTerminalBareMarkdownLinks(b *testing.B) {
 	root := b.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {

@@ -2,7 +2,9 @@ package filebrowser
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,69 +61,76 @@ func LoadPreview(rootDir, path string, epoch uint64) tea.Cmd {
 			}
 		}
 
-		result := PreviewResult{
-			TotalSize: info.Size(),
-			ModTime:   info.ModTime(),
-			Mode:      info.Mode(),
-		}
-
 		// Check for image files BEFORE binary detection
 		// Image files are handled by the image renderer, not text preview
 		if image.IsImageFile(path) {
+			result := PreviewResult{TotalSize: info.Size(), ModTime: info.ModTime(), Mode: info.Mode()}
 			result.IsImage = true
 			return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: result}
 		}
 
-		// Check size limit
-		readSize := info.Size()
-		if readSize > maxPreviewSize {
-			readSize = maxPreviewSize
-			result.IsTruncated = true
-		}
-
-		// Read file
 		f, err := os.Open(fullPath)
 		if err != nil {
-			result.Error = err
-			return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: result}
+			return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: PreviewResult{Error: err}}
 		}
 		defer func() { _ = f.Close() }()
-
-		data := make([]byte, readSize)
-		n, _ := f.Read(data)
-		data = data[:n]
-
-		// Check for binary (fm pattern)
-		if isBinary(data) {
-			result.IsBinary = true
-			return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: result}
-		}
-
-		result.Content = string(data)
-		result.Lines = strings.Split(result.Content, "\n")
-
-		// Apply syntax highlighting using theme-configured style
-		highlighted, err := Highlight(result.Content, filepath.Ext(path), styles.GetSyntaxTheme())
-		if err == nil {
-			result.HighlightedLines = strings.Split(highlighted, "\n")
-		} else {
-			// Fallback to raw lines
-			result.HighlightedLines = result.Lines
-		}
-
-		// Limit lines
-		if len(result.Lines) > maxPreviewLines {
-			result.Lines = result.Lines[:maxPreviewLines]
-			result.HighlightedLines = result.HighlightedLines[:maxPreviewLines]
-			result.IsTruncated = true
-		}
-
 		return PreviewLoadedMsg{
 			Epoch:  epoch,
 			Path:   path,
-			Result: result,
+			Result: loadPreviewFromOpenFile(f, path, info),
 		}
 	}
+}
+
+// LoadPreviewFile reads an already-open regular file and takes ownership of it.
+// This lets containment-sensitive callers pin the inode before scheduling the
+// asynchronous read rather than re-following a pathname later.
+func LoadPreviewFile(file *os.File, path string, epoch uint64) tea.Cmd {
+	return func() tea.Msg {
+		defer func() { _ = file.Close() }()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			if err == nil {
+				err = fmt.Errorf("not a regular file")
+			}
+			return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: PreviewResult{Error: err}}
+		}
+		return PreviewLoadedMsg{Epoch: epoch, Path: path, Result: loadPreviewFromOpenFile(file, path, info)}
+	}
+}
+
+func loadPreviewFromOpenFile(file *os.File, path string, info os.FileInfo) PreviewResult {
+	result := PreviewResult{TotalSize: info.Size(), ModTime: info.ModTime(), Mode: info.Mode()}
+	readSize := info.Size()
+	if readSize > maxPreviewSize {
+		readSize = maxPreviewSize
+		result.IsTruncated = true
+	}
+	data := make([]byte, readSize)
+	n, err := file.Read(data)
+	if err != nil && !errors.Is(err, io.EOF) {
+		result.Error = err
+		return result
+	}
+	data = data[:n]
+	if isBinary(data) {
+		result.IsBinary = true
+		return result
+	}
+	result.Content = string(data)
+	result.Lines = strings.Split(result.Content, "\n")
+	highlighted, err := Highlight(result.Content, filepath.Ext(path), styles.GetSyntaxTheme())
+	if err == nil {
+		result.HighlightedLines = strings.Split(highlighted, "\n")
+	} else {
+		result.HighlightedLines = result.Lines
+	}
+	if len(result.Lines) > maxPreviewLines {
+		result.Lines = result.Lines[:maxPreviewLines]
+		result.HighlightedLines = result.HighlightedLines[:maxPreviewLines]
+		result.IsTruncated = true
+	}
+	return result
 }
 
 // Highlight returns a syntax highlighted string.

@@ -33,6 +33,7 @@ type terminalLink struct {
 	Value    string
 	Line     int
 	Root     string // canonical selected surface root for resolved bare paths
+	Raw      string // original candidate, revalidated on activation
 }
 
 type terminalLinkMemo struct {
@@ -296,8 +297,10 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 		if !resolution.ok {
 			continue
 		}
+		raw := candidate.Value
 		candidate.Value = resolution.rel
 		candidate.Root = context.root
+		candidate.Raw = raw
 		links = append(links, candidate)
 	}
 	p.terminalLinkMemo.surfaces[context.surface] = memo
@@ -436,8 +439,16 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 			return openInBrowser(link.Value), true
 		}
 		if link.Root != "" {
+			rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
+			if !valid {
+				return nil, false
+			}
+			file, err := openContainedRegularFile(link.Root, rel)
+			if err != nil {
+				return nil, false
+			}
 			surface := strings.TrimSuffix(context.surface, ":panel")
-			cmd := p.openDocPaneForSurface(link.Root, surface, link.Value, link.Line)
+			cmd := p.openDocPaneFileForSurface(link.Root, surface, rel, link.Line, file)
 			if cmd != nil {
 				p.clearTerminalSelection()
 			}

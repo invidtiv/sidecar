@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -91,6 +92,15 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 }
 
 func (p *Plugin) openDocPaneForSurface(root, surface, rel string, line int) tea.Cmd {
+	return p.openDocPaneFileForSurface(root, surface, rel, line, nil)
+}
+
+func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, file *os.File) tea.Cmd {
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
 	if p.paneRoot == nil || p.ctx == nil {
 		return nil
 	}
@@ -100,7 +110,13 @@ func (p *Plugin) openDocPaneForSurface(root, surface, rel string, line int) tea.
 		doc.surface = surface
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
-		cmd := doc.view.Load(leaf.DocID, root, rel, line, epoch)
+		var cmd tea.Cmd
+		if file != nil {
+			cmd = doc.view.LoadFile(leaf.DocID, file, rel, line, epoch)
+			file = nil
+		} else {
+			cmd = doc.view.Load(leaf.DocID, root, rel, line, epoch)
+		}
 		p.saveSelectionState()
 		return cmd
 	}
@@ -131,7 +147,13 @@ func (p *Plugin) openDocPaneForSurface(root, surface, rel string, line int) tea.
 	viewer := docview.New(nil)
 	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, surface: surface, view: viewer}
 	p.activePane = PanePreview
-	load := viewer.Load(docID, root, rel, line, epoch)
+	var load tea.Cmd
+	if file != nil {
+		load = viewer.LoadFile(docID, file, rel, line, epoch)
+		file = nil
+	} else {
+		load = viewer.Load(docID, root, rel, line, epoch)
+	}
 	p.saveSelectionState()
 	return tea.Batch(load, p.resizeDocTerminalCmd())
 }

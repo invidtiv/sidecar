@@ -150,6 +150,38 @@ func TestMissingFileShowsError(t *testing.T) {
 	}
 }
 
+func TestLoadFileReadsPinnedInodeAfterPathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.md")
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t)
+	m.SetSize(30, 1)
+	msg, ok := m.LoadFile(1, file, "fixture.md", 1, 9)().(LoadedMsg)
+	if !ok || !m.SetResult(msg) {
+		t.Fatal("pinned-file result was not accepted")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "inside") || strings.Contains(view, "outside") {
+		t.Fatalf("loader re-followed replaced path: %q", view)
+	}
+}
+
 func TestLoadingState(t *testing.T) {
 	m := newTestModel(t)
 	m.SetSize(30, 2)

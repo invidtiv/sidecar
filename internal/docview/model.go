@@ -2,6 +2,7 @@ package docview
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -60,6 +61,16 @@ func New(renderer *markdown.Renderer) *Model {
 // Load retargets the model and returns a command that wraps the existing file
 // browser loader. Only the docview-owned LoadedMsg is broadcast.
 func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint64) tea.Cmd {
+	return m.load(modelID, relPath, line, epoch, filebrowser.LoadPreview(rootDir, relPath, epoch))
+}
+
+// LoadFile retargets the model from an already-open file. The returned command
+// owns and closes file after reading it.
+func (m *Model) LoadFile(modelID int, file *os.File, relPath string, line int, epoch uint64) tea.Cmd {
+	return m.load(modelID, relPath, line, epoch, filebrowser.LoadPreviewFile(file, relPath, epoch))
+}
+
+func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load tea.Cmd) tea.Cmd {
 	m.modelID = modelID
 	m.requestGeneration++
 	m.epoch = epoch
@@ -72,7 +83,6 @@ func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint6
 	m.invalidateRender()
 
 	generation := m.requestGeneration
-	load := filebrowser.LoadPreview(rootDir, relPath, epoch)
 	return func() tea.Msg {
 		msg, ok := load().(filebrowser.PreviewLoadedMsg)
 		if !ok {
