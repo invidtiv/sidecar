@@ -200,8 +200,9 @@ func LayoutPanes(root *PaneNode, box Box, floors Floors) (leaves []Placement, di
 Plus pure mutators, each returning a new focus target so callers never guess:
 `SplitLeaf(root, leafID, axis, newLeaf) (*PaneNode, int)`,
 `ClosePane(root, leafID) (*PaneNode, int)` (sibling subtree replaces the parent),
-`FindPane(root, id)`, `Neighbor(root, fromID, dir)` (geometric, from the
-`LayoutPanes` boxes), `SetRatio(root, splitID, ratio)`.
+`FindPane(root, id)`, `SetRatio(root, splitID, ratio)`. Geometric `Neighbor`
+navigation is deferred until Phase 7, when more than two user-created leaves make
+it part of a reachable journey.
 
 Why a tree and not a list: closing a leaf must collapse its parent into its
 sibling, and "split the right half again" must not require re-deriving structure.
@@ -226,8 +227,8 @@ type Model struct { /* unexported */ }
 
 func New(renderer *markdown.Renderer) *Model
 
-func (m *Model) Load(rootDir, relPath string, line int) tea.Cmd // wraps filebrowser.LoadPreview
-func (m *Model) SetResult(res filebrowser.PreviewResult, path string)
+func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint64) tea.Cmd
+func (m *Model) SetResult(msg LoadedMsg) bool // false for stale model/request/epoch
 func (m *Model) SetSize(width, height int)   // invalidates the render cache on width change
 func (m *Model) View() string                // exactly height rows, never wider than width
 func (m *Model) HandleKey(k tea.KeyMsg) (handled bool)
@@ -237,9 +238,14 @@ func (m *Model) Title() string               // relative path, for the header ch
 ```
 
 It composes what already exists: `filebrowser.LoadPreview` for IO,
-`markdown.Renderer` for rendering, `filebrowser.Highlight` output for raw mode,
-`internal/image` for images. It owns only the part that has no home today —
-scroll window, mode toggle, header row, and clamping output to exactly the box.
+`markdown.Renderer` for rendering, and `filebrowser.Highlight` output for raw
+mode. `Load` unwraps `filebrowser.PreviewLoadedMsg` inside its command and emits a
+docview-owned `LoadedMsg` carrying model ID, request generation and plugin epoch;
+the filebrowser therefore ignores the broadcast, and rapid retargets cannot apply
+an old result to a new document. The model owns only the part that has no home
+today — load/render state, scroll window, mode toggle and clamping output to
+exactly the content box. Image rendering is deferred until a user journey can
+open images in these panes.
 
 Import direction is `docview → filebrowser` (loading) and
 `workspace → docview`. That is one new edge and no cycle. Moving `LoadPreview`
@@ -250,10 +256,12 @@ Likewise, filebrowser adopting `docview.Model` for its own preview pane is the
 payoff that would justify the extraction; it is explicitly out of scope here and
 should only happen once `docview` has proven itself under the workspace plugin.
 
-Header row: one row, same `terminalHeaderRow` helper the terminal surfaces use
-(`terminal_surface.go:118`) — chips left (path, `raw`/`rendered` mode), hints
-right (`q close · r raw`). This keeps every pane in the preview region on the
-same one-header-row stack, so `previewContentY() + terminalHeaderRows` stays a
+The workspace plugin, not `docview`, composes the one-row header using its
+existing `terminalHeaderRow` helper (`terminal_surface.go:118`) — chips left
+(path, `raw`/`rendered` mode), hints right (`q close · r raw`). Keeping that
+plugin-local helper out of `docview` preserves the dependency direction and
+makes `Model.View` unambiguously content-only. Every pane still uses the same
+one-header-row stack, so `previewContentY() + terminalHeaderRows` stays a
 universal fact.
 
 ### 3.3 Plugin state
@@ -264,12 +272,19 @@ On `Plugin`:
 paneRoot   *PaneNode          // nil ⇒ legacy single-terminal path (flag off)
 paneFocus  int                // ID of the focused leaf
 paneNextID int
-docs       map[int]*docview.Model // DocID -> viewer
+docs       map[int]*docPane   // DocID -> root identity + viewer
 ```
 
 `paneRoot == nil` is the pre-flag path and must stay working through Phase 5.
 When the tree holds exactly one `PaneTerminal` leaf, the render path must produce
 **identical bytes** to today (Phase 1's acceptance test).
+
+A doc belongs to the currently selected terminal surface root: the project root
+for a project shell, or the selected workspace path for a workspace terminal.
+Changing that sidebar selection closes doc leaves and resets their pending load
+generations before loading the next terminal, so a document from one worktree
+cannot survive beside another worktree's output. `Init` performs the same reset
+before restoring state for a new project context.
 
 ### 3.4 Geometry: extending the existing authority
 
@@ -289,12 +304,18 @@ Concretely, one new private helper is the seam:
 func (p *Plugin) terminalLeafBox() Box
 ```
 
+Tree boxes are plugin-local **preview content boxes**: they include the leaf's
+one-row header but no additional border or padding. The existing outer preview
+panel remains the only panel chrome. Doc focus is shown in its header/divider,
+not by adding a nested `RenderPanel` later; otherwise Phase 5 would silently
+change the terminal's geometry after the resize contract had shipped.
+
 `terminalSurfaceGeometry`, `calculatePreviewDimensions`,
 `calculateAgentPaneDimensions` and `calculateTermPanelDimensions` all take their
 container from `terminalLeafBox()` instead of from the raw preview split. That is
 the whole geometry change, and it is why the terminal panel does **not** need to
 become a tree node in v1: it keeps subdividing its own box, which merely got
-smaller. Folding it into the tree is Phase 6, where it earns its keep.
+smaller. Folding it into the tree is Phase 7, where it earns its keep.
 
 **Consequence to handle deliberately:** opening or resizing a doc pane changes the
 terminal's box, so it must trigger the same tmux resize path as a sidebar drag —
@@ -310,27 +331,21 @@ definition:
 ```go
 // docPaneTarget reports whether a resolved link should open in a doc pane rather
 // than switching to the file browser.
-func docPaneTarget(rel string, sameWorktree bool) bool
+func docPaneTarget(rel string, resolvedInsideSelectedSurface bool) bool
 ```
 
-v1 rule: **`.md` / `.markdown`, and only when the file resolves inside the current
-worktree.** Everything else keeps today's behavior exactly, including the
-cross-worktree `SwitchWorktree → FocusPlugin → NavigateToFileMsg` sequence, which
-a pane in *this* worktree's tab cannot honor.
+v1 rule: **`.md` / `.markdown`, and only when the file resolves inside the root
+owned by the currently selected terminal surface.** This includes the selected
+workspace even when its path differs from `p.ctx.WorkDir`; that is the primary
+workspace journey, not a cross-worktree exception. Everything else keeps today's
+file-browser behavior. The opened doc entry retains its resolved root identity,
+not only a relative path.
 
-Modifier override, both directions, so neither destination is a trap:
-
-| Gesture | Result |
-|---|---|
-| Click a `.md` link | Opens in a doc pane |
-| `alt`-click a `.md` link | Opens in the file browser (today's behavior) |
-| Click any other file link | File browser (unchanged) |
-
-`alt` is chosen because `mouse.go:669` already excludes `alt` and `shift` from
-link activation to reserve them for selection — so the doc-pane branch reads the
-same guard and inverts only inside it. (If `alt`-click turns out to be taken by a
-terminal selection gesture in interactive mode, fall back to `shift`; the check
-lives in one place either way.)
+Clicking a `.md` link opens a doc pane; clicking any other file link keeps the
+existing file-browser route. Alt- and shift-modified gestures retain their
+current terminal-selection semantics. A file-browser override is deliberately
+deferred until a shortcut audit finds a gesture that does not steal terminal
+selection behavior.
 
 Which text is *recognized* as a link is a separate question from where it opens,
 and v1 inherits today's `path:line` requirement — bare `foo.md` mentions become
@@ -354,7 +369,7 @@ Focus is `p.paneFocus`. In v1 the focusable set is {terminal leaf, doc leaf}.
 
 | Key | Context | Action |
 |---|---|---|
-| `tab` | list view, preview focused | cycle focus between panes (only bound when >1 leaf) |
+| `tab` / `shift+tab` | list view | cycle sidebar → terminal leaf → doc leaf (reverse for shift; omit hidden/unavailable stops) |
 | `q` / `esc` | doc pane focused | close the pane, focus the terminal |
 | `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `pgup`/`pgdn` | doc pane focused | scroll |
 | `r` | doc pane focused | toggle rendered ⇄ raw |
@@ -363,7 +378,9 @@ Focus is `p.paneFocus`. In v1 the focusable set is {terminal leaf, doc leaf}.
 Registered under a new keymap context `workspace-doc` so the footer hints come
 from `Commands()` (`commands.go`) and nothing is rendered as a footer by the
 plugin (`AGENTS.md`). Existing `workspace-list` / `workspace-preview` /
-`workspace-interactive` bindings are untouched.
+`workspace-interactive` bindings are untouched. `handleListKeys` still needs an
+explicit doc-focus branch before its existing direct handling of `tab`, `esc`
+and `+`/`-`; changing the command context alone does not change dispatch.
 
 **Interactive mode is the sharp edge.** When the terminal leaf is interactive,
 keys are forwarded to tmux — so doc-pane keys must not be. Rule: while the
@@ -371,7 +388,7 @@ terminal leaf is interactive, the doc pane is visible but not focusable by
 keyboard; clicking it exits interactive mode first (this is exactly what
 `handleMouseClick`'s `default:` branch already does for clicks outside both
 terminal panes, `mouse.go:641`). No prefix chord in v1. `ctrl+w` stays reserved
-for Phase 6, unbound until then.
+for Phase 7, unbound until then.
 
 Mouse:
 
@@ -404,10 +421,11 @@ The doc leaf carries a `tabs` list rather than a single `path` even though v1
 never writes more than one entry — see §3.8.
 
 Restore in `restoreSelectionState` (`plugin.go`): validate each doc leaf's path
-still exists and still resolves inside the worktree (reuse `resolveTerminalPath`);
-drop leaves that fail and collapse the dangling split. Save on open, close, retarget
-and divider release — the same set of moments that already call
-`saveSelectionState`.
+still exists and still resolves inside the restored terminal surface root (reuse
+`resolveTerminalPath`); drop leaves that fail and collapse the dangling split.
+Save on open, close, retarget and divider release — the same set of moments that
+already call `saveSelectionState`. A sidebar selection change closes the doc
+subtree and persists the resulting single-terminal layout.
 
 Ratios are percentages, matching `TermPanelSize`, so the same clamp
 (`[15, 85]`) and the same drag math apply.
@@ -463,15 +481,18 @@ ship single-doc panes (Phases 3–5) → move filebrowser's `tabs.go` model down
 
 ## 4. Phases
 
-Each phase is a shippable PR. The flag stays off through Phase 4.
+Each phase is a reviewable slice. Phases 0–3 are implemented and reviewed as one
+steel-thread batch: their first meaningful delivery is the real click → open →
+read → close journey, not three invisible layers shipped in isolation. The flag
+stays off through Phase 4.
 
 **Phase 0 — tree + flag, nothing wired.**
 `panetree.go` with `LayoutPanes`, `SplitLeaf`, `ClosePane`, `FindPane`,
-`Neighbor`, `SetRatio`, floors and clamping. Feature `workspace_doc_panes`
+`SetRatio`, floors and clamping. Feature `workspace_doc_panes`
 (default false) in `features.go`. Table tests for layout math: single leaf gets
 the whole box; ratio rounding never loses or duplicates a column; floors produce
 `fits == false` rather than an under-floor box; close collapses to the sibling;
-neighbor lookup across a nested split. No plugin changes.
+nested row/column splits preserve every cell. No plugin changes.
 
 **Phase 1 — geometry seam, single terminal leaf, zero visible change.**
 Add `paneRoot`/`paneFocus`; initialize to a single `PaneTerminal` leaf when the
@@ -479,31 +500,44 @@ flag is on. Introduce `terminalLeafBox()` and route
 `terminalSurfaceGeometry` / `calculatePreviewDimensions` /
 `calculateAgentPaneDimensions` / `calculateTermPanelDimensions` through it.
 Acceptance: with the flag on and one leaf, `renderListView` output is byte-for-byte
-identical to flag-off, with and without the terminal panel, in both layouts — a
-golden test over the existing testdata fixtures.
+identical to flag-off, with the sidebar hidden and visible and with the terminal
+panel absent/right/bottom. Use a direct differential test over constructed plugin
+states (there are no existing render goldens), and assert terminal geometry agrees
+with the tree placement. `Init` must reset/rebuild all tree, doc and request state.
 
 **Phase 2 — `internal/docview`.**
 The `Model` from §3.2, tested standalone: loads a fixture markdown file, renders
 at a given width, emits exactly `height` rows, clamps width, scrolls, toggles
-raw/rendered, degrades below `MinWidthForMarkdown`, handles binary/image/missing
-files without panicking.
+raw/rendered, degrades below `MinWidthForMarkdown`, reports missing-file errors,
+and rejects stale model/request/epoch results. Binary and image rendering remain
+deferred because no Phase 3 route can open them.
 
 **Phase 3 — open, render, close.**
 `docPaneTarget`, the `openTerminalPath` branch, the doc leaf render inside
 `renderListView`, `regionDocPane`, focus, close, the `workspace-doc` keymap
 context, and the resize commands on open/close. Fixed 50/50 ratio; no drag yet.
-End-to-end: click a `.md` path in a shell → pane appears right, terminal reflows,
-tmux pane is resized once.
+End-to-end: in both a project shell and selected-workspace output, click an
+already-recognized `README.md:1` path → Sidecar stays on Workspaces, the pane
+appears right, terminal reflows, and the tmux pane is resized once; scroll, then
+close and verify one resize back to the terminal. Non-markdown links retain the
+file-browser route. At a width that cannot satisfy both leaves, keep the focused
+leaf full-size and explain the refusal rather than drawing an under-floor pane.
 
 **Phase 4 — divider drag + keyboard resize + persistence.**
 `regionPaneTreeDivider`, drag with live ratio and resize-on-release, `+`/`-`,
-`WorkspaceState.PaneLayout` save/restore with stale-path pruning.
+`WorkspaceState.PaneLayout` save/restore with stale-path pruning. Preserve
+`DragStartID` through release: the new divider must neither finalize terminal
+selection nor fall through the current default branch that persists sidebar
+width. Open/close/keyboard resize/divider release each emit the terminal resize
+commands exactly once; drag motion emits none.
 
 **Phase 5 — polish, then flip the default.**
-Focused-pane border treatment (reuse `styles.RenderPanel(..., focused)`), header
-chips and hints, empty/error states, `alt`-click override documented in the
-help/keyboard docs and the website. Flip `workspace_doc_panes` to default true
-once it has been lived with.
+Focused-pane header/divider treatment without nested panel chrome, header chips
+and hints, empty/error states, and the click behavior documented in help/keyboard
+docs and the website. Flip `workspace_doc_panes` to default true only after the
+integrated isolated real-app proof and a lived-in worktree run establish that the
+ordinary single-terminal, terminal-panel, selection and interactive journeys did
+not regress.
 
 **Phase 6 — bare markdown paths.**
 
@@ -520,14 +554,11 @@ Rule, deliberately conservative — **resolve or do nothing**:
    `.markdown`, bounded by whitespace or `(`/`[`/`` ` ``, with trailing
    punctuation trimmed the way `safeHTTPURL` already trims it. No `:line` needed.
    Skip any candidate overlapping a link the existing patterns already found.
-2. Resolve against a short, ordered candidate list, first hit wins:
-   - the selected workspace/shell's working directory (already
-     `openTerminalPath`'s `base`);
-   - the project root (`p.ctx.WorkDir`);
-   - for an absolute path, itself.
-
-   That is the whole heuristic. No walking up parents, no globbing, no searching
-   the tree — those turn a mis-typed word into a surprise navigation.
+2. Resolve against the selected terminal surface root (already
+   `openTerminalPath`'s `base`); absolute paths are accepted only when they still
+   resolve inside that root. That is the whole heuristic. No fallback to a
+   different worktree, walking up parents, globbing, or searching the tree —
+   those turn a mis-typed word into a surprise navigation.
 3. Every candidate goes through the existing `resolveTerminalPath`, so symlink
    resolution, worktree containment and the regular-file check are unchanged and
    unduplicated.
@@ -535,18 +566,20 @@ Rule, deliberately conservative — **resolve or do nothing**:
    toast — the text stays plain text. A false positive here is worse than a miss,
    because the underline is a promise.
 
-Because resolution now happens at *decoration* time rather than only at click
-time, `decorateTerminalLinks` gains a resolver callback and the plugin memoizes
-`candidate → resolved | miss` per capture generation. Terminal output is
-re-decorated on every poll, so an unmemoized `os.Stat` per candidate per frame is
-not acceptable; the memo is invalidated with the same generation counters the
-capture pipeline already carries.
+Decoration and click activation consume the same resolved-link set; otherwise a
+drawn underline can disagree with what a click opens. `decorateTerminalLinks`
+therefore gains a resolver callback and the plugin memoizes
+`{surface root, candidate} → resolved | miss`. Invalidate the memo on an accepted
+terminal-content update and on terminal target/root changes, not on unrelated
+animation renders. Terminal output is re-decorated frequently, so an unmemoized
+`os.Stat` per candidate per frame is not acceptable.
 
 Tests: a table of realistic agent output lines — plain prose containing
 "README.md", a real relative path, a real path in backticks, a path in a
 sentence with a trailing period, a path outside the worktree, a `.md` directory,
 a dangling path — asserting exactly which become links. Plus a benchmark on the
-decorate path to prove the memo holds.
+decorate path and a resolver-call-count test proving each unique candidate is
+resolved once per accepted capture.
 
 **Phase 7 — fold in tmux tiling (the deprecated plan).**
 Add `PaneTerminal` leaves that point at other workspaces/shells; migrate the
@@ -594,8 +627,10 @@ open in one panel there. Doc panes in other plugins follow from the same seam.
   through the existing containment check, and Glamour output is ANSI that lands in
   our own viewport — but the doc pane must clamp every line to its box width the
   same way the terminal surfaces do, or a long code fence will shift the divider.
-- **`alt`-click collision** with terminal selection gestures in interactive mode
-  (§3.5). Decide with one grep during Phase 3; the check is in one function.
+- **Modified-click collision.** Alt and Shift already belong to terminal
+  selection gestures, including interactive mode. Preserve them in v1; add a
+  file-browser override only after a shortcut audit identifies a non-conflicting
+  gesture.
 - **Scope creep into filebrowser.** The temptation in Phase 2 is to refactor
   filebrowser onto `docview` immediately. Resist: that plugin works, and this
   feature does not need it to change.
