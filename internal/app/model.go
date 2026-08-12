@@ -666,10 +666,10 @@ func (m *Model) toggleOverview() tea.Cmd {
 }
 
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
-	return m.switchProjectWithSelection(projectPath, inventory, nil)
+	return m.switchProjectWithSelection(projectPath, inventory, nil, true)
 }
 
-func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection) tea.Cmd {
+func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection, restoreLastWorktree bool) tea.Cmd {
 	// Skip if already on this project
 	if projectPath == m.ui.WorkDir {
 		return func() tea.Msg {
@@ -699,7 +699,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		normalizedTargetMain, _ := normalizePath(targetMainRepo)
 
 		// Only restore saved worktree if switching to the main repo path
-		if normalizedProject == normalizedTargetMain {
+		if restoreLastWorktree && normalizedProject == normalizedTargetMain {
 			if savedWorktree := state.GetLastWorktreePath(normalizedTargetMain); savedWorktree != "" {
 				// Don't restore if the saved worktree is where we're coming FROM
 				// (user is explicitly leaving that worktree)
@@ -802,23 +802,27 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
 	m.exitOverview()
 	kind := plugin.WorkspaceSelectionWorktree
-	target := workspace.Path
+	target := workspace.ProjectRoot
 	key := workspace.Key
+	if target == "" {
+		target = workspace.Path
+	}
+	if workspace.Kind == workspaceinventory.KindWorktree && m.cfg.Plugins.Workspace.OverviewWorktreeScope == config.OverviewWorktreeScopeWorktree {
+		target = workspace.Path
+	}
 	if workspace.Kind == workspaceinventory.KindShell {
 		kind = plugin.WorkspaceSelectionShell
-		target = workspace.ProjectRoot
 		key = workspace.TmuxName
 	}
 	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path}
-	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) ||
-		(workspace.Kind == workspaceinventory.KindShell && workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.ProjectRoot)) {
+	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) {
 		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(pending)
 		}
 		m.updateContext()
 		return m.FocusPluginByID(workspacePluginID)
 	}
-	return m.switchProjectWithSelection(target, nil, &pending)
+	return m.switchProjectWithSelection(target, nil, &pending, false)
 }
 
 // previewProjectTheme applies the theme for the currently selected project in the switcher.

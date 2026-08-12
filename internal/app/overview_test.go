@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -338,6 +339,112 @@ func TestValidatedCrossProjectNavigationFocusesWorkspaceWithoutInput(t *testing.
 	}
 }
 
+func TestOverviewWorktreeNavigationScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		scope     string
+		card      string
+		saveTopic bool
+		want      string
+	}{
+		{name: "project root by default", scope: config.OverviewWorktreeScopeProject, card: "worktree", want: "main"},
+		{name: "worktree scope when configured", scope: config.OverviewWorktreeScopeWorktree, card: "worktree", want: "worktree"},
+		{name: "configured main card ignores saved linked worktree", scope: config.OverviewWorktreeScopeWorktree, card: "main", saveTopic: true, want: "main"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := newOverviewGitRepo(t, "source")
+			main := newOverviewGitRepo(t, "main")
+			commitOverviewFixture(t, main)
+			worktree := filepath.Join(t.TempDir(), "topic")
+			runOverviewGit(t, main, "worktree", "add", "-q", "-b", "topic", worktree)
+			if err := state.InitWithDir(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.saveTopic {
+				if err := state.SetLastWorktreePath(workspaceinventory.CanonicalPath(main), workspaceinventory.CanonicalPath(worktree)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cfg := config.Default()
+			cfg.Plugins.Workspace.OverviewWorktreeScope = tt.scope
+			km := keymap.NewRegistry()
+			ctx := &plugin.Context{WorkDir: source, ProjectRoot: source, Config: cfg, Keymap: km}
+			reg := plugin.NewRegistry(ctx)
+			workspacePlugin := &navigationPlugin{id: workspacePluginID}
+			if err := reg.Register(workspacePlugin); err != nil {
+				t.Fatal(err)
+			}
+			m := New(reg, km, cfg, "", source, source, workspacePluginID)
+			m.overview = overview.New(workspaceinventory.Collector{})
+			m.overviewActive = true
+			cardPath := worktree
+			if tt.card == "main" {
+				cardPath = main
+			}
+			workspace := workspaceinventory.Workspace{
+				ProjectKey:  workspaceinventory.CanonicalPath(main),
+				ProjectRoot: main,
+				Kind:        workspaceinventory.KindWorktree,
+				Key:         workspaceinventory.CanonicalPath(cardPath),
+				Path:        cardPath,
+			}
+
+			cmd := m.navigateFromOverview(workspace)
+			if cmd == nil {
+				t.Fatal("navigation returned no command")
+			}
+			wantPath := main
+			if tt.want == "worktree" {
+				wantPath = worktree
+			}
+			if workspaceinventory.CanonicalPath(m.ui.WorkDir) != workspaceinventory.CanonicalPath(wantPath) ||
+				workspaceinventory.CanonicalPath(m.ui.ProjectRoot) != workspaceinventory.CanonicalPath(main) {
+				t.Fatalf("navigation scope: WorkDir=%q ProjectRoot=%q, want %q and %q", m.ui.WorkDir, m.ui.ProjectRoot, wantPath, main)
+			}
+			if workspacePlugin.pending == nil || workspacePlugin.pending.Kind != plugin.WorkspaceSelectionWorktree || workspacePlugin.pending.Path != cardPath {
+				t.Fatalf("pending selection = %#v, want exact worktree %q", workspacePlugin.pending, cardPath)
+			}
+			if !workspacePlugin.focused {
+				t.Fatal("Workspaces plugin was not focused")
+			}
+		})
+	}
+}
+
+func TestOverviewShellNavigationLeavesLinkedWorktreeScope(t *testing.T) {
+	main := newOverviewGitRepo(t, "main")
+	commitOverviewFixture(t, main)
+	worktree := filepath.Join(t.TempDir(), "topic")
+	runOverviewGit(t, main, "worktree", "add", "-q", "-b", "topic", worktree)
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	km := keymap.NewRegistry()
+	ctx := &plugin.Context{WorkDir: worktree, ProjectRoot: main, Config: cfg, Keymap: km}
+	reg := plugin.NewRegistry(ctx)
+	workspacePlugin := &navigationPlugin{id: workspacePluginID}
+	if err := reg.Register(workspacePlugin); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, km, cfg, "", worktree, main, workspacePluginID)
+	m.overview = overview.New(workspaceinventory.Collector{})
+	m.overviewActive = true
+	workspace := workspaceinventory.Workspace{ProjectRoot: main, Kind: workspaceinventory.KindShell, Key: "shell", Path: main, TmuxName: "shell"}
+
+	if cmd := m.navigateFromOverview(workspace); cmd == nil {
+		t.Fatal("navigation returned no command")
+	}
+	if workspaceinventory.CanonicalPath(m.ui.WorkDir) != workspaceinventory.CanonicalPath(main) {
+		t.Fatalf("shell navigation WorkDir = %q, want project root %q", m.ui.WorkDir, main)
+	}
+	if workspacePlugin.pending == nil || workspacePlugin.pending.Kind != plugin.WorkspaceSelectionShell || workspacePlugin.pending.Key != "shell" {
+		t.Fatalf("pending shell selection = %#v", workspacePlugin.pending)
+	}
+}
+
 func TestOverviewNavigationDoesNotMutateBeforeValidation(t *testing.T) {
 	source := newOverviewGitRepo(t, "source")
 	target := newOverviewGitRepo(t, "target")
@@ -496,6 +603,23 @@ func newOverviewGitRepo(t *testing.T, name string) string {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	return path
+}
+
+func commitOverviewFixture(t *testing.T, repo string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOverviewGit(t, repo, "add", "README.md")
+	runOverviewGit(t, repo, "-c", "user.name=Sidecar Test", "-c", "user.email=sidecar@example.test", "commit", "-q", "-m", "fixture")
+}
+
+func runOverviewGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmdArgs := append([]string{"-C", repo}, args...)
+	if out, err := exec.Command("git", cmdArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
 }
 
 func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {

@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const (
@@ -135,8 +136,8 @@ type Plugin struct {
 	// selectionSince timestamps the current selection so acknowledgement can
 	// require dwell. Arrowing past a shell is not reading it.
 	selectionSince time.Time
-	width   int
-	height  int
+	width          int
+	height         int
 
 	// Shared terminal components for the selected primary pane and its optional
 	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
@@ -528,7 +529,7 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 	switch target.Kind {
 	case plugin.WorkspaceSelectionWorktree:
 		for i, wt := range p.worktrees {
-			if filepath.Clean(wt.Path) == filepath.Clean(target.Path) {
+			if workspaceinventory.CanonicalPath(wt.Path) == workspaceinventory.CanonicalPath(target.Path) {
 				p.shellSelected, p.selectedIdx = false, i
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()

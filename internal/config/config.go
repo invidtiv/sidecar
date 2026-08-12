@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+const (
+	OverviewWorktreeScopeProject  = "project"
+	OverviewWorktreeScopeWorktree = "worktree"
+)
+
 // Config is the root configuration structure.
 type Config struct {
 	Projects ProjectsConfig `json:"projects"`
@@ -153,6 +158,10 @@ type WorkspacePluginConfig struct {
 	InteractivePasteKey string `json:"interactivePasteKey,omitempty"`
 	// CopyOnSelect copies terminal selections when a drag completes. Default: false.
 	CopyOnSelect bool `json:"copyOnSelect,omitempty"`
+	// OverviewWorktreeScope controls whether activating a worktree on the cross-project
+	// Overview enters the project root or scopes Sidecar to that worktree. Valid values
+	// are "project" (the default) and "worktree".
+	OverviewWorktreeScope string `json:"overviewWorktreeScope,omitempty"`
 	// SidebarDisplay controls what information is shown in the workspace sidebar entries.
 	SidebarDisplay SidebarDisplayConfig `json:"sidebarDisplay"`
 	// WorktreeSetup controls repository artifacts Sidecar may copy or execute when
@@ -243,8 +252,9 @@ func Default() *Config {
 				Position: TasksPositionAfterWorkspaces,
 			},
 			Workspace: WorkspacePluginConfig{
-				DirPrefix:           true,
-				TmuxCaptureMaxBytes: 2 * 1024 * 1024,
+				DirPrefix:             true,
+				TmuxCaptureMaxBytes:   2 * 1024 * 1024,
+				OverviewWorktreeScope: OverviewWorktreeScopeProject,
 				WorktreeSetup: WorktreeSetupConfig{
 					CopyEnvFiles: true,
 					EnvFiles:     []string{".env", ".env.local", ".env.development", ".env.development.local"},

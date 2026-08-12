@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/plugin"
@@ -25,6 +27,25 @@ func TestPendingOverviewSelectionUsesExactWorktreePathAndShellName(t *testing.T)
 	}
 	if p.kanbanCol != kanbanShellColumnIndex || p.kanbanRow != 1 {
 		t.Fatalf("Kanban shell selection = %d,%d", p.kanbanCol, p.kanbanRow)
+	}
+}
+
+func TestPendingOverviewSelectionCanonicalizesWorktreePath(t *testing.T) {
+	realPath := filepath.Join(t.TempDir(), "topic")
+	if err := os.Mkdir(realPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(t.TempDir(), "topic-alias")
+	if err := os.Symlink(realPath, aliasPath); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New()
+	p.worktreesLoaded = true
+	p.worktrees = []*Worktree{{Name: "topic", Path: aliasPath}}
+	p.SetPendingWorkspaceSelection(plugin.PendingWorkspaceSelection{Kind: plugin.WorkspaceSelectionWorktree, Path: realPath})
+	if p.selectedIdx != 0 || p.pendingOverviewSelection != nil || p.toastMessage != "" {
+		t.Fatalf("canonical selection: index=%d pending=%#v toast=%q", p.selectedIdx, p.pendingOverviewSelection, p.toastMessage)
 	}
 }
 
