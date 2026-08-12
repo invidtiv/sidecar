@@ -99,6 +99,18 @@ func routerTestModel(t *testing.T, p plugin.Plugin) Model {
 	return m
 }
 
+func TestWorkspaceInteractiveKeepsBareBackslashForTheTerminal(t *testing.T) {
+	p := newRouterPlugin()
+	p.id = "workspace-manager"
+	p.context = "workspace-interactive"
+	m := routerTestModel(t, p)
+	keymap.RegisterDefaults(m.keymap)
+	m.updateContext()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	wantOnlyPluginKey(t, p, "\\")
+}
+
 // TestKeyPrecedence walks every level of the documented precedence order and
 // every row of the Tasks key-conflict table.
 func TestKeyPrecedence(t *testing.T) {

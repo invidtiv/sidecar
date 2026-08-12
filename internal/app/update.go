@@ -280,7 +280,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.inGlobalScope() {
-			return m, m.globalMouse(offsetMouseY(msg, -headerHeight))
+			cmd := m.globalMouse(offsetMouseY(msg, -headerHeight))
+			m.updateContext()
+			return m, cmd
 		}
 
 		// Forward mouse events to active plugin with Y offset for app header (2 lines)
@@ -1509,6 +1511,10 @@ func (m *Model) updateContext() {
 			// A focused filter is a text-input context, so sidecar's printable
 			// shortcuts stay off the query.
 			m.activeContext = "global-workspaces-filter"
+			return
+		}
+		if m.globalWorkspacesVisible() && m.overview != nil {
+			m.activeContext = m.overview.WorkspaceFocusContext()
 			return
 		}
 		m.activeContext = m.globalTab.context()

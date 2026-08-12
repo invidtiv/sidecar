@@ -984,15 +984,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 
 	case "\\":
-		p.toggleSidebar()
-		resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
-		if p.termPanelVisible {
-			resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
-		}
-		if !p.sidebarVisible {
-			resizeCmds = append(resizeCmds, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
-		}
-		return tea.Batch(resizeCmds...)
+		return p.toggleSidebarCmd()
 	case "tab", "shift+tab":
 		// Switch focus between panes (consistent with other plugins)
 		if p.activePane == PaneSidebar && p.sidebarVisible {
@@ -1248,6 +1240,21 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// toggleSidebarCmd is the single non-interactive transition used by list,
+// preview and document focus. Keeping its resize/toast side effects together
+// prevents one pane from hiding a sidebar it cannot later restore.
+func (p *Plugin) toggleSidebarCmd() tea.Cmd {
+	p.toggleSidebar()
+	resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
+	if p.termPanelVisible {
+		resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
+	}
+	if !p.sidebarVisible {
+		resizeCmds = append(resizeCmds, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+	}
+	return tea.Batch(resizeCmds...)
 }
 
 // handleCreateKeys handles keys in create modal.

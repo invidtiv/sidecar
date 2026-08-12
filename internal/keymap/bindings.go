@@ -87,6 +87,21 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "close-overview", Context: "global-workspaces"},
 		{Key: "q", Command: "close-overview", Context: "global-workspaces"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces"},
+
+		// The selected-pane preview is read-only. It keeps the sidebar toggle and
+		// preview navigation but owns no terminal input path.
+		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces-preview"},
+		{Key: "h", Command: "focus-list", Context: "global-workspaces-preview"},
+		{Key: "left", Command: "focus-list", Context: "global-workspaces-preview"},
+		{Key: "j", Command: "scroll-preview-down", Context: "global-workspaces-preview"},
+		{Key: "k", Command: "scroll-preview-up", Context: "global-workspaces-preview"},
+		{Key: "g", Command: "preview-top", Context: "global-workspaces-preview"},
+		{Key: "G", Command: "preview-live", Context: "global-workspaces-preview"},
+		{Key: "r", Command: "refresh", Context: "global-workspaces-preview"},
+		{Key: "esc", Command: "close-overview", Context: "global-workspaces-preview"},
+		{Key: "q", Command: "close-overview", Context: "global-workspaces-preview"},
+		{Key: "K", Command: "toggle-overview", Context: "global-workspaces-preview"},
 
 		// Global Workspaces filter context. While the query owns the keyboard it
 		// is a text input: only these keys mean anything else, and navigation

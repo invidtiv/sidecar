@@ -12,18 +12,10 @@
 // The rule that keeps this honest: nothing in this package imports a plugin,
 // the app, or the inventory. It receives resolved display fields only.
 //
-// The two consumers share different amounts of it, deliberately. The global
-// browser is built on Model — stable-ID selection, activity grouping, the four
-// sorts, the viewport and its regions — because it has no list of its own. The
-// project sidebar shares Filter, MatchFields, and NoMatchRow, and keeps its own
-// rendering: its rows carry a [New] button, a Shells [+] button, delete
-// warnings, toasts, a section separator, and hit regions that encode shell
-// versus worktree in the sign of the index, and its sections are Shells and
-// Worktrees rather than activity buckets. Moving that into Model would move
-// project-owned presentation into a package that must not know about it, and
-// would change the non-filtered project journey the plan's characterization
-// tests pin. The shared seam is the part both surfaces genuinely agree on:
-// what "matches" means.
+// Both consumers render through RenderSidebar. Global Model supplies activity
+// sections and a sort action; project Workspaces supplies Shells/Workspaces
+// sections and optional creation actions. The component lays out both without
+// learning what those actions do.
 package workspacelist
 
 import (

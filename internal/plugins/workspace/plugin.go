@@ -739,6 +739,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("r", "render", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-doc")
 	}
 
 	// Load saved sidebar width
@@ -1391,13 +1392,16 @@ func (p *Plugin) moveCursor(delta int) {
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
 
-	if p.filterActive() {
-		// A filtered list walks only the rows the user can see. The unfiltered
-		// walk below is untouched: with no query it is still the exact
-		// shell-first, clamped navigation the sidebar has always had.
-		p.moveCursorFiltered(delta)
-	} else {
-		p.moveCursorUnfiltered(delta)
+	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
+	current := p.sharedSidebarSelectionIndex()
+	if current < 0 && len(shells)+len(worktrees) > 0 {
+		current = 0
+	}
+	next := workspacelist.MoveIndex(current, delta, len(shells)+len(worktrees))
+	if next >= 0 && next < len(shells) {
+		p.shellSelected, p.selectedShellIdx = true, shells[next]
+	} else if next >= len(shells) && next-len(shells) < len(worktrees) {
+		p.shellSelected, p.selectedIdx = false, worktrees[next-len(shells)]
 	}
 
 	// Reset preview scroll state when changing selection
@@ -1408,58 +1412,6 @@ func (p *Plugin) moveCursor(delta int) {
 		p.applySelectionChange()
 	}
 	p.ensureVisible()
-}
-
-// moveCursorUnfiltered is the original shell-first walk.
-func (p *Plugin) moveCursorUnfiltered(delta int) {
-	shellCount := len(p.shells)
-	worktreeCount := len(p.worktrees)
-
-	if p.shellSelected {
-		// Currently on a shell entry
-		newShellIdx := p.selectedShellIdx + delta
-		if newShellIdx < 0 {
-			// Already at first shell, stay there
-			newShellIdx = 0
-		} else if newShellIdx >= shellCount {
-			// Moving past last shell -> go to first worktree (if any)
-			if worktreeCount > 0 {
-				p.shellSelected = false
-				p.selectedIdx = 0
-			} else {
-				// No worktrees, stay on last shell
-				newShellIdx = shellCount - 1
-			}
-		}
-		if p.shellSelected {
-			p.selectedShellIdx = newShellIdx
-		}
-	} else if worktreeCount == 0 {
-		// No worktrees exist, select shell if any
-		if shellCount > 0 {
-			p.shellSelected = true
-			p.selectedShellIdx = 0
-		}
-	} else {
-		// Currently on a worktree
-		newIdx := p.selectedIdx + delta
-		if newIdx < 0 {
-			// Moving up from first worktree -> go to last shell (if any)
-			if shellCount > 0 {
-				p.shellSelected = true
-				p.selectedShellIdx = shellCount - 1
-			} else {
-				// No shells, stay on first worktree
-				p.selectedIdx = 0
-			}
-		} else if newIdx >= worktreeCount {
-			// Already at last worktree, stay there
-			p.selectedIdx = worktreeCount - 1
-		} else {
-			// Normal worktree navigation
-			p.selectedIdx = newIdx
-		}
-	}
 }
 
 // applySelectionChange resets the per-selection preview, diff, and task state.
@@ -1494,26 +1446,15 @@ func (p *Plugin) applySelectionChange() {
 // ensureVisible adjusts scroll to keep selected item visible.
 // Accounts for shells (which appear before worktrees in the sidebar).
 func (p *Plugin) ensureVisible() {
-	// scrollOffset is a position into the worktree rows the sidebar draws: the
-	// shell section renders in full above the scrolled region, and view_list.go
-	// walks visibleWorktrees from this offset. Counting shells into the position
-	// here would scroll the worktree list by the size of a section that never
-	// scrolls, so the position is worktree-relative — and, while a filter is
-	// active, relative to the rows the query actually leaves visible.
-	worktrees := p.visibleWorktreeIndices()
-	if !p.shellSelected {
-		position := indexOfValue(worktrees, p.selectedIdx)
-		if position < 0 {
-			position = 0
-		}
+	position := p.sharedSidebarSelectionIndex()
+	if position >= 0 {
 		if position < p.scrollOffset {
 			p.scrollOffset = position
-		}
-		if p.visibleCount > 0 && position >= p.scrollOffset+p.visibleCount {
+		} else if p.visibleCount > 0 && position >= p.scrollOffset+p.visibleCount {
 			p.scrollOffset = position - p.visibleCount + 1
 		}
 	}
-	p.clampScrollOffset(len(worktrees))
+	p.clampScrollOffset(p.sharedSidebarRowCount())
 }
 
 // clampScrollOffset keeps the offset inside the rows currently drawn. A query

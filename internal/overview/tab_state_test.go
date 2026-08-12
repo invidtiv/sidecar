@@ -35,7 +35,6 @@ func TestEachGlobalTabKeepsItsViewStateAcrossSpaceToggles(t *testing.T) {
 	m.workspaces.SelectID("d")
 	// A short viewport is what makes the scroll position a real fact to keep.
 	m.WorkspacesView(previewWide, shortTall)
-	m.workspaces.Scroll(1)
 	m.Update(key("j")) // Agents board selection
 	board := m.board.Selection()
 

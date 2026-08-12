@@ -26,6 +26,14 @@ func TestMapKeyToTmux_Printable(t *testing.T) {
 	}
 }
 
+func TestMapKeyToTmux_BackslashRemainsLiteral(t *testing.T) {
+	msg := tea.KeyPressMsg{Code: '\\', Text: "\\"}
+	key, useLiteral := tty.MapKeyToTmux(msg)
+	if key != "\\" || !useLiteral {
+		t.Fatalf("backslash mapped to %q literal=%v, want literal backslash", key, useLiteral)
+	}
+}
+
 // TestMapKeyToTmux_MultiRune tests multi-character input
 func TestMapKeyToTmux_MultiRune(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'h', Text: "hello"}

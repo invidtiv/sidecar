@@ -481,7 +481,7 @@ func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
 	if strings.TrimSpace(rendered) == "" {
 		t.Fatal("the help modal renders an empty section for the global Workspaces tab")
 	}
-	for _, want := range []string{"enter", "/", "s", "r"} {
+	for _, want := range []string{"enter", "/", "s", "r", "\\"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("help does not document %q:\n%s", want, rendered)
 		}
@@ -503,6 +503,39 @@ func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
 	// discoverable while it owns the keyboard.
 	if len(m.keymap.BindingsForContext("global-workspaces-filter")) == 0 {
 		t.Fatal("the global filter context documents nothing")
+	}
+}
+
+func TestGlobalWorkspaceContextFollowsMouseFocusAndSidebarToggle(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+	if m.activeContext != "global-workspaces" {
+		t.Fatalf("initial context = %q", m.activeContext)
+	}
+
+	// A preview click is routed through app.Update, which must refresh context
+	// after Overview changes focus.
+	split := m.overview.WorkspacesView(m.width, 20)
+	_ = split
+	previewX := m.width - 5
+	updated, _ := m.Update(tea.MouseClickMsg{X: previewX, Y: headerHeight + 5, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if m.activeContext != "global-workspaces-preview" {
+		t.Fatalf("context after preview click = %q", m.activeContext)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	m = asAppModel(t, updated)
+	if m.overview.WorkspaceSidebarVisible() || m.activeContext != "global-workspaces-preview" {
+		t.Fatalf("hidden visible=%v context=%q", m.overview.WorkspaceSidebarVisible(), m.activeContext)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	m = asAppModel(t, updated)
+	if !m.overview.WorkspaceSidebarVisible() || m.activeContext != "global-workspaces" {
+		t.Fatalf("restored visible=%v context=%q", m.overview.WorkspaceSidebarVisible(), m.activeContext)
 	}
 }
 

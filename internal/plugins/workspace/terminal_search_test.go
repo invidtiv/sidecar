@@ -71,6 +71,15 @@ func TestTerminalSearchInputAndNavigationAreConsumed(t *testing.T) {
 	}
 }
 
+func TestTerminalSearchKeepsBackslashLiteral(t *testing.T) {
+	p := terminalSearchPlugin("path\\to\\file", 0)
+	p.beginTerminalSearch()
+	handled, _ := p.handleTerminalSearchKey(tea.KeyPressMsg{Code: '\\', Text: "\\"}, false)
+	if !handled || p.terminalSearch.Query != "\\" {
+		t.Fatalf("backslash handled=%v query=%q, want literal input", handled, p.terminalSearch.Query)
+	}
+}
+
 func TestInteractiveTerminalSearchShortcut(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl | tea.ModShift}
 	if !isInteractiveSearchKey(msg) {

@@ -909,6 +909,7 @@ func (m Model) footerHints() []footerHint {
 				footerHint{keys: "gG", label: "Top/Live"},
 				footerHint{keys: "←", label: "List"},
 				footerHint{keys: "r", label: "Refresh"},
+				footerHint{keys: "\\", label: "Sidebar"},
 			)
 			break
 		}
@@ -919,6 +920,7 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},
 			footerHint{keys: "r", label: "Refresh"},
+			footerHint{keys: "\\", label: "Sidebar"},
 			footerHint{keys: "esc", label: "Close"},
 		)
 	case m.inGlobalScope() && m.overview != nil:
@@ -1135,6 +1137,9 @@ func (m *Model) helpSurface() (title, context string) {
 	if m.inGlobalScope() {
 		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
 			return host.Name(), host.FocusContext()
+		}
+		if m.globalWorkspacesVisible() {
+			return m.globalTab.Name(), m.overview.WorkspaceFocusContext()
 		}
 		return m.globalTab.Name(), m.globalTab.context()
 	}

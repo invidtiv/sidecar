@@ -233,36 +233,6 @@ func (p *Plugin) selectLastVisible() {
 	p.ensureVisible()
 }
 
-// moveCursorFiltered walks the visible rows only: shells first, then
-// worktrees, clamping at both ends exactly as the unfiltered walk does.
-func (p *Plugin) moveCursorFiltered(delta int) {
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-	if len(shells)+len(worktrees) == 0 {
-		return
-	}
-	position := 0
-	switch {
-	case p.shellSelected:
-		position = indexOfValue(shells, p.selectedShellIdx)
-	default:
-		if found := indexOfValue(worktrees, p.selectedIdx); found >= 0 {
-			position = len(shells) + found
-		} else {
-			position = -1
-		}
-	}
-	if position < 0 {
-		position = 0
-	} else {
-		position = min(max(position+delta, 0), len(shells)+len(worktrees)-1)
-	}
-	if position < len(shells) {
-		p.shellSelected, p.selectedShellIdx = true, shells[position]
-		return
-	}
-	p.shellSelected, p.selectedIdx = false, worktrees[position-len(shells)]
-}
-
 func indexOfValue(values []int, want int) int {
 	for i, value := range values {
 		if value == want {

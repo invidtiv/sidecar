@@ -41,13 +41,14 @@ const (
 	previewFocusedPoll = 2 * time.Second
 	previewVisiblePoll = livePollEvery
 
-	// globalSidebarPercent is the list's share of the tab. The floors below it
-	// are the same idea as the project plugin's: neither pane may be squeezed
-	// into an unreadable column.
-	globalSidebarPercent  = 42
-	globalListMinWidth    = 28
-	globalPreviewMinWidth = 44
-	globalDividerWidth    = 1
+	// The default share and the floors below it match the project plugin's outer
+	// split: neither pane may be squeezed into an unreadable column.
+	defaultWorkspaceSidebarPercent = 40
+	globalListMinWidth             = 28
+	globalPreviewMinWidth          = 44
+	globalDividerWidth             = 1
+	globalPanelOverhead            = 4 // left/right border plus one column of padding
+	globalContentInset             = 2 // left border plus left padding
 )
 
 // previewFocus is which of the two panes owns the keyboard.
@@ -393,8 +394,10 @@ func (m *Model) previewNarrow() bool {
 func (m *Model) previewSplit(width int) termpreview.Split {
 	return termpreview.SplitFor(width, termpreview.SplitConfig{
 		SidebarVisible: true,
-		SidebarPercent: globalSidebarPercent,
+		SidebarPercent: m.sidebarWidth,
 		DividerWidth:   globalDividerWidth,
+		PanelOverhead:  globalPanelOverhead,
+		ContentInset:   globalContentInset,
 		SidebarMin:     globalListMinWidth,
 		PreviewMin:     globalPreviewMinWidth,
 	})

@@ -8,7 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 // RegionKind names a mouse target the list drew. Regions are reported from the
@@ -28,6 +27,7 @@ type Region struct {
 	X, Y, W, H    int
 	VisibleIndex  int
 	SectionHeader bool
+	Data          any
 }
 
 // Model is the list state a consumer owns: the catalog projection, the chosen
@@ -139,7 +139,7 @@ func (m *Model) Move(delta int) bool {
 	if index < 0 {
 		index = 0
 	}
-	next := min(max(index+delta, 0), len(m.visible)-1)
+	next := MoveIndex(index, delta, len(m.visible))
 	if next == index {
 		return false
 	}
@@ -206,10 +206,10 @@ func (m *Model) ensureVisible() {
 // viewport survived a refresh; nothing else depends on it.
 func (m *Model) ScrollOffset() int { return m.scroll }
 
-// Scroll moves the viewport without moving the selection (wheel behaviour).
-func (m *Model) Scroll(delta int) {
-	m.scroll = min(max(m.scroll+delta, 0), max(0, len(m.visible)-max(1, m.rows)))
-}
+// Scroll follows the selected row. It remains as the compatibility entry point
+// for callers that previously moved only the viewport; workspace wheel input
+// must have the same selection-following semantics everywhere.
+func (m *Model) Scroll(delta int) { m.Move(delta) }
 
 // RenderOptions describes the box the list is drawn into.
 type RenderOptions struct {
@@ -233,42 +233,13 @@ const twoLineWidth = 34
 // group headings, rows, and a scrollbar. Group headings scroll with their rows
 // so the heading a row sits under is always the heading above it.
 func (m *Model) Render(opts RenderOptions) Rendered {
-	width, height := opts.Width, opts.Height
-	if width < 1 || height < 1 {
-		return Rendered{}
-	}
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
-	m.twoLine = width >= twoLineWidth
-	rowHeight := 1
-	if m.twoLine {
-		rowHeight = 2
-	}
-
-	title := opts.Title
-	if title == "" {
-		title = "Workspaces"
-	}
-	sortLabel := m.sortMode.Label()
-	gap := max(1, width-ansi.StringWidth(title)-ansi.StringWidth(sortLabel))
-	header := styles.Title.Render(title) + strings.Repeat(" ", gap) + styles.Muted.Render(sortLabel)
-	lines := []string{fit(header, width)}
-	regions := []Region{{Kind: RegionSort, X: width - ansi.StringWidth(sortLabel), Y: 0, W: ansi.StringWidth(sortLabel), H: 1}}
-
+	m.twoLine = opts.Width >= twoLineWidth
 	matched, total := m.Counts()
-	lines = append(lines, fit(m.filter.RenderRow(width, matched, total), width))
-	regions = append(regions, Region{Kind: RegionFilter, X: 0, Y: 1, W: width, H: 1})
-
-	body := max(0, height-len(lines))
-	// Reserve one column for the scrollbar so rows never sit under it.
-	rowWidth := max(1, width-1)
 	sections := Grouped(m.visible, m.sortMode)
-	headingRows := 0
-	if m.sortMode == SortActivity {
-		headingRows = len(sections)
-	}
 	// A project whose inventory could not be read is a row, not a leftover. Its
 	// lines are reserved out of the body before the item viewport is sized, so a
 	// catalog longer than the pane — the normal multi-project case — cannot make
@@ -277,75 +248,47 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	// screen.
 	failureRows := len(m.failures)
 	if failureRows > 0 {
-		limit := max(0, body-1)
+		limit := max(0, opts.Height-3)
 		if len(m.visible) > 0 {
-			limit = min(limit, max(1, body/3))
+			limit = min(limit, max(1, opts.Height/3))
 		}
 		failureRows = min(failureRows, limit)
 	}
-	listBody := max(0, body-failureRows)
-	m.rows = max(1, (listBody-headingRows)/rowHeight)
-	m.ensureVisible()
-
-	var rowLines []string
-	index := 0
-	y := len(lines)
+	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
-		sectionStart := index
-		sectionEnd := index + len(section.Items)
-		index = sectionEnd
-		if sectionEnd <= m.scroll || sectionStart >= m.scroll+m.rows {
-			continue
-		}
+		title := ""
 		if m.sortMode == SortActivity && section.Group != "" {
-			heading := styles.Muted.Render(string(section.Group)) + " " + styles.Muted.Render(fmt.Sprintf("%d", len(section.Items)))
-			rowLines = append(rowLines, fit(heading, rowWidth))
-			y++
+			title = fmt.Sprintf("%s %d", section.Group, len(section.Items))
 		}
-		for offset, item := range section.Items {
-			position := sectionStart + offset
-			if position < m.scroll || position >= m.scroll+m.rows {
-				continue
-			}
-			selected := item.ID == m.selectedID
-			row := m.renderRow(item, selected, opts.Focused, rowWidth, now)
-			rowLines = append(rowLines, row...)
-			regions = append(regions, Region{Kind: RegionRow, ID: item.ID, X: 0, Y: y, W: rowWidth, H: len(row), VisibleIndex: position})
-			y += len(row)
+		s := SidebarSection{Title: title}
+		for _, item := range section.Items {
+			item := item
+			s.Rows = append(s.Rows, SidebarRow{ID: item.ID, Data: item.Data, Render: func(width int, selected, focused bool) []string {
+				return m.renderRow(item, selected, focused, width, now)
+			}})
 		}
+		sidebarSections = append(sidebarSections, s)
 	}
-
+	empty := []string(nil)
 	if len(m.visible) == 0 {
 		// An empty list must say which kind of empty it is: a query that matches
 		// nothing reads very differently from a catalog that is still loading.
 		switch {
 		case m.filter.Active():
-			rowLines = append(rowLines, fit(NoMatchRow(rowWidth, m.filter.Query()), rowWidth))
+			empty = []string{NoMatchRow(max(1, opts.Width-1), m.filter.Query())}
 		case m.loading:
-			rowLines = append(rowLines, fit(styles.Muted.Render("Loading workspaces…"), rowWidth))
+			empty = []string{styles.Muted.Render("Loading workspaces…")}
 		case m.emptyText != "":
-			rowLines = append(rowLines, fit(styles.Muted.Render(m.emptyText), rowWidth))
+			empty = []string{styles.Muted.Render(m.emptyText)}
 		}
 	}
-
-	if len(rowLines) > listBody {
-		rowLines = rowLines[:listBody]
-	}
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   len(m.visible),
-		ScrollOffset: m.scroll,
-		VisibleItems: m.rows,
-		TrackHeight:  len(rowLines),
-	})
-	content := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(rowLines, "\n"), scrollbar)
-	if len(rowLines) > 0 {
-		lines = append(lines, strings.Split(content, "\n")...)
-	}
-	lines = append(lines, m.failureLines(failureRows, width)...)
-	for len(lines) < height {
-		lines = append(lines, strings.Repeat(" ", width))
-	}
-	return Rendered{View: strings.Join(lines[:height], "\n"), Regions: regions}
+	rendered := RenderSidebar(SidebarOptions{Width: opts.Width, Height: opts.Height, Title: opts.Title, Focused: opts.Focused,
+		SelectedID: m.selectedID, ScrollOffset: m.scroll,
+		HeaderMeta:   &SidebarAction{ID: "sort", Label: m.sortMode.Label()},
+		FilterActive: true, FilterLine: m.filter.RenderRow(opts.Width, matched, total),
+		Sections: sidebarSections, EmptyLines: empty, FooterLines: m.failureLines(failureRows, opts.Width)})
+	m.scroll, m.rows = rendered.ScrollOffset, rendered.VisibleRows
+	return Rendered{View: rendered.View, Regions: rendered.Regions}
 }
 
 // failureLines renders the per-project unavailable rows that fit in the space
@@ -412,8 +355,7 @@ func (m *Model) renderRow(item Item, selected, focused bool, width int, now time
 	line2 := "   " + strings.Join(detail, " · ")
 
 	if selected {
-		style := selectionStyle(focused)
-		return []string{style.Width(width).Render(fit(line1, width) + "\n" + fit(line2, width))}
+		return []string{ApplySelection(fit(line1, width)+"\n"+fit(line2, width), width, true, focused)}
 	}
 	styledProject := lipgloss.NewStyle().Foreground(hue).Render(item.Project)
 	styledDetail := styledProject

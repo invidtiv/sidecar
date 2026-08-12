@@ -3,13 +3,15 @@ package overview
 import (
 	"fmt"
 	"sort"
-	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -135,27 +137,38 @@ func (m *Model) WorkspacesView(width, height int) string {
 		m.workspacesMouse = mouse.NewHandler()
 	}
 	m.workspacesMouse.Clear()
+	if !m.sidebarVisible {
+		m.addPreviewRegion(0, width, height)
+		return styles.RenderPanel(m.renderPreview(width-globalPanelOverhead, height-2), width, height, true)
+	}
 
 	if m.previewNarrow() {
 		if m.preview.full {
 			m.addPreviewRegion(0, width, height)
-			return m.renderPreview(width, height)
+			return styles.RenderPanel(m.renderPreview(width-globalPanelOverhead, height-2), width, height, true)
 		}
-		return m.renderWorkspaceList(0, width, height)
+		m.addSidebarRegion(0, width, height)
+		return styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
 	}
 
 	split := m.previewSplit(width)
-	list := m.renderWorkspaceList(0, split.SidebarWidth, height)
+	m.addSidebarRegion(0, split.SidebarWidth, height)
 	m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-	preview := m.renderPreview(split.PreviewWidth, height)
+	list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
+	preview := m.renderPreview(split.ContentWidth, height-2)
 
-	divider := strings.TrimSuffix(strings.Repeat(styles.Muted.Render("│")+"\n", height), "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, list, divider, preview)
+	leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
+	rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
+	divider := ui.RenderDivider(height)
+	// Register the forgiving three-column divider target last, above both pane
+	// regions and any list row that reaches the content edge.
+	m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 }
 
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
-func (m *Model) renderWorkspaceList(x, width, height int) string {
+func (m *Model) renderWorkspaceList(x, y, width, height int) string {
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
 		Width:   width,
 		Height:  height,
@@ -164,13 +177,24 @@ func (m *Model) renderWorkspaceList(x, width, height int) string {
 		Now:     m.now(),
 	})
 	for _, region := range rendered.Regions {
-		m.workspacesMouse.HitMap.AddRect(string(region.Kind), x+region.X, region.Y, region.W, region.H, region)
+		m.workspacesMouse.HitMap.AddRect(string(region.Kind), x+region.X, y+region.Y, region.W, region.H, region)
 	}
 	return rendered.View
 }
 
 // previewRegionKind is the hit region covering the read-only preview box.
 const previewRegionKind = "global-preview"
+
+const (
+	workspacesSidebarRegion = "global-workspaces-sidebar"
+	workspacesDividerRegion = "global-workspaces-divider"
+)
+
+func (m *Model) addSidebarRegion(x, width, height int) {
+	if width > 0 && height > 0 {
+		m.workspacesMouse.HitMap.AddRect(workspacesSidebarRegion, x, 0, width, height, workspacesSidebarRegion)
+	}
+}
 
 func (m *Model) addPreviewRegion(x, width, height int) {
 	if width < 1 || height < 1 {
@@ -230,6 +254,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, m.previewSync()
 	}
+	if key == "\\" {
+		return true, m.toggleWorkspaceSidebar()
+	}
 
 	// While the preview has focus its keys come first, so list navigation
 	// cannot move the cursor out from under the output being read. Every key it
@@ -272,6 +299,29 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// WorkspaceFocusContext distinguishes list and read-only preview so binding,
+// footer and help discovery follow mouse/keyboard focus. A hidden sidebar is
+// necessarily preview-focused until backslash restores it.
+func (m *Model) WorkspaceFocusContext() string {
+	if m.PreviewFocused() || !m.sidebarVisible {
+		return "global-workspaces-preview"
+	}
+	return "global-workspaces"
+}
+
+func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
+
+func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
+	m.sidebarVisible = !m.sidebarVisible
+	if m.sidebarVisible {
+		m.focusList()
+		return nil
+	}
+	m.preview.full = true
+	cmd := m.focusPreviewPane()
+	return tea.Batch(cmd, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+}
+
 func (m *Model) navigateWorkspaces(key string) bool {
 	switch key {
 	case "j", "down", "ctrl+n":
@@ -299,27 +349,45 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	action := m.workspacesMouse.HandleMouse(mouseMsg)
+	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
+		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
+		return nil
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {
+		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
+		return nil
+	}
 	if action.Region == nil {
-		if action.Type == mouse.ActionScrollUp {
-			m.workspaces.Scroll(-1)
-		} else if action.Type == mouse.ActionScrollDown {
-			m.workspaces.Scroll(1)
-		}
 		return nil
 	}
 
 	// The preview owns its own wheel: scrolling over captured output moves that
 	// output, not the list underneath it.
-	if kind, ok := action.Region.Data.(string); ok && kind == previewRegionKind {
-		switch action.Type {
-		case mouse.ActionClick, mouse.ActionDoubleClick:
-			return m.focusPreviewPane()
-		case mouse.ActionScrollUp:
-			m.scrollPreview(1)
-		case mouse.ActionScrollDown:
-			m.scrollPreview(-1)
+	if kind, ok := action.Region.Data.(string); ok {
+		switch kind {
+		case workspacesDividerRegion:
+			if action.Type == mouse.ActionClick {
+				m.workspacesMouse.StartDrag(action.X, action.Y, workspacesDividerRegion, m.sidebarWidth)
+			}
+			return nil
+		case workspacesSidebarRegion:
+			switch action.Type {
+			case mouse.ActionClick, mouse.ActionDoubleClick:
+				m.focusList()
+			case mouse.ActionScrollUp, mouse.ActionScrollDown:
+				m.workspaces.Move(action.Delta)
+				return m.previewSync()
+			}
+			return nil
+		case previewRegionKind:
+			switch action.Type {
+			case mouse.ActionClick, mouse.ActionDoubleClick:
+				return m.focusPreviewPane()
+			case mouse.ActionScrollUp, mouse.ActionScrollDown:
+				m.scrollPreview(-action.Delta)
+			}
+			return nil
 		}
-		return nil
 	}
 
 	region, ok := action.Region.Data.(workspacelist.Region)
@@ -346,9 +414,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 			m.workspaces.FocusFilter()
 		}
 	case mouse.ActionScrollUp:
-		m.workspaces.Scroll(-1)
+		m.workspaces.Move(action.Delta)
 	case mouse.ActionScrollDown:
-		m.workspaces.Scroll(1)
+		m.workspaces.Move(action.Delta)
 	}
 	return m.previewSync()
 }

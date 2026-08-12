@@ -283,7 +283,7 @@ func rowPoint(m *Model, id string) (int, int, bool) {
 	})
 	for _, region := range rendered.Regions {
 		if region.Kind == workspacelist.RegionRow && region.ID == id {
-			return region.X + 1, region.Y, true
+			return globalContentInset + region.X + 1, 1 + region.Y, true
 		}
 	}
 	return 0, 0, false

@@ -353,8 +353,8 @@ func TestWheelOverThePreviewScrollsTheCaptureNotTheList(t *testing.T) {
 	scroll := m.workspaces.SelectedID()
 
 	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseWheelUp}))
-	if m.preview.offset != 1 {
-		t.Fatalf("wheel over the preview did not scroll it: offset %d", m.preview.offset)
+	if m.preview.offset != 3 {
+		t.Fatalf("wheel over the preview did not use the shared three-row step: offset %d", m.preview.offset)
 	}
 	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseWheelDown}))
 	if m.preview.offset != 0 {
@@ -373,6 +373,112 @@ func TestWheelOverThePreviewScrollsTheCaptureNotTheList(t *testing.T) {
 	m.WorkspacesMouse(tea.MouseClickMsg{X: 2, Y: 4, Button: tea.MouseLeft})
 	if m.PreviewFocused() {
 		t.Fatal("clicking a list row left focus on the preview")
+	}
+}
+
+func TestGlobalWorkspaceChromeProtectsThePreviewRightEdge(t *testing.T) {
+	m, recorder := previewModel(t)
+	split := m.previewSplit(previewWide)
+	// The preview's final inner column is stable scrollbar chrome. Fill every
+	// content column before it and put a marker in the last one; this is the
+	// column that disappeared when the raw preview was drawn against the screen
+	// edge without the project Workspace panel's inset.
+	recorder.output["%1"] = strings.Repeat("x", split.ContentWidth-2) + "Z"
+	run(t, m, m.SetWorkspacesVisible(true))
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	lines := strings.Split(view, "\n")
+
+	if got := ansi.StringWidth(lines[2]); got != previewWide {
+		t.Fatalf("preview body row width = %d, want %d: %q", got, previewWide, lines[2])
+	}
+	markerColumn := split.ContentX + split.ContentWidth - 2
+	if got := []rune(lines[2])[markerColumn]; got != 'Z' {
+		t.Fatalf("last preview content column = %q at x=%d, want marker Z\n%s", got, markerColumn, view)
+	}
+	if got := []rune(lines[2])[previewWide-1]; got != '│' {
+		t.Fatalf("right panel border = %q, want visible border at x=%d", got, previewWide-1)
+	}
+}
+
+func TestWorkspaceListWheelMovesSelectionLikeTheProjectSidebar(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.WorkspacesView(previewWide, previewTall)
+
+	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{
+		X: globalContentInset + 2, Y: 4, Button: tea.MouseWheelDown,
+	}))
+	if got := m.workspaces.SelectedID(); got != "d" {
+		t.Fatalf("one wheel notch selected %q, want d after the shared three-row step", got)
+	}
+}
+
+func TestWorkspaceSidebarHoverDoesNotStealPreviewFocus(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	press(t, m, "right")
+
+	selected := m.workspaces.SelectedID()
+	// The outer border belongs only to the broad sidebar fallback region, so
+	// this proves blank-space hover does not inherit row-click focus behavior.
+	m.WorkspacesMouse(tea.MouseMotionMsg(tea.Mouse{X: 0, Y: 4}))
+
+	if !m.PreviewFocused() {
+		t.Fatal("hovering over sidebar blank space stole focus from the preview")
+	}
+	if got := m.workspaces.SelectedID(); got != selected {
+		t.Fatalf("hover changed selection to %q, want %q", got, selected)
+	}
+}
+
+func TestWorkspaceSidebarWheelUpdatesSelectionAndPreviewWithoutStealingFocus(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	press(t, m, "right")
+
+	// Use the outer border to exercise the broad sidebar region rather than a
+	// row. Like project Workspaces, the wheel moves the cursor and its preview
+	// while keyboard focus remains on the preview pane.
+	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{
+		X: 0, Y: 4, Button: tea.MouseWheelDown,
+	})))
+
+	if !m.PreviewFocused() {
+		t.Fatal("wheel over sidebar blank space stole focus from the preview")
+	}
+	if got := m.workspaces.SelectedID(); got != "d" {
+		t.Fatalf("one wheel notch selected %q, want d after the shared three-row step", got)
+	}
+	if got := m.preview.workspaceID; got != "d" {
+		t.Fatalf("preview followed workspace %q, want d", got)
+	}
+}
+
+func TestGlobalWorkspaceDividerUsesTheProjectSidebarResizeGesture(t *testing.T) {
+	originalSave := saveWorkspaceSidebarWidth
+	var saved int
+	saveWorkspaceSidebarWidth = func(width int) error {
+		saved = width
+		return nil
+	}
+	t.Cleanup(func() { saveWorkspaceSidebarWidth = originalSave })
+
+	m, _ := previewModel(t)
+	m.sidebarWidth = defaultWorkspaceSidebarPercent
+	m.WorkspacesView(previewWide, previewTall)
+	dividerX := m.previewSplit(previewWide).SidebarWidth
+
+	m.WorkspacesMouse(tea.MouseClickMsg{X: dividerX, Y: 5, Button: tea.MouseLeft})
+	m.WorkspacesMouse(tea.MouseMotionMsg{X: dividerX + 12, Y: 5, Button: tea.MouseLeft})
+	if got := m.sidebarWidth; got != 50 {
+		t.Fatalf("dragged sidebar width = %d%%, want 50%%", got)
+	}
+	if got := m.previewSplit(previewWide).SidebarWidth; got <= dividerX {
+		t.Fatalf("drag did not move divider: x=%d, started at %d", got, dividerX)
+	}
+	m.WorkspacesMouse(tea.MouseReleaseMsg{X: dividerX + 12, Y: 5, Button: tea.MouseLeft})
+	if saved != 50 {
+		t.Fatalf("drag release saved %d%%, want 50%%", saved)
 	}
 }
 
@@ -411,6 +517,48 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 	}
 	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "read-only") {
 		t.Fatalf("narrow layout did not return to the list:\n%s", back)
+	}
+}
+
+func TestGlobalBackslashHidesAndRestoresSidebarFromListAndPreview(t *testing.T) {
+	for _, startPreview := range []bool{false, true} {
+		name := "list"
+		if startPreview {
+			name = "preview"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, _ := previewModel(t)
+			run(t, m, m.SetWorkspacesVisible(true))
+			m.WorkspacesView(previewWide, previewTall)
+			if startPreview {
+				press(t, m, "right")
+			}
+			handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+			if !handled || cmd == nil || m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces-preview" {
+				t.Fatalf("hide handled=%v cmd=%v visible=%v context=%q", handled, cmd != nil, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
+			}
+			view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+			if strings.Contains(view, "Activity") {
+				t.Fatalf("hidden sidebar still rendered list:\n%s", view)
+			}
+			handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+			if !handled || !m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces" {
+				t.Fatalf("restore handled=%v visible=%v context=%q", handled, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
+			}
+		})
+	}
+}
+
+func TestGlobalFilterKeepsBackslashLiteral(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	press(t, m, "/")
+	press(t, m, "\\")
+	if got := m.workspaces.Filter().Query(); got != "\\" {
+		t.Fatalf("filter query = %q, want literal backslash", got)
+	}
+	if !m.WorkspaceSidebarVisible() {
+		t.Fatal("literal filter input toggled the sidebar")
 	}
 }
 

@@ -4,6 +4,10 @@
 
 **Builds on:** [Cross-project agent overview](cross-project-overview.md)
 
+**Corrective follow-on:** [Workspace sidebar convergence](workspace-sidebar-convergence.md)
+records the remaining work after the first implementation introduced a separate
+global row renderer instead of fully reusing the project Workspaces sidebar.
+
 **Prerequisite:** [Doc panes on a preview pane tree](preview-pane-tree-and-doc-panes.md)
 is in progress on another worktree and lands first. This plan starts only after
 it does, so the project Workspaces preview region this plan shares is the

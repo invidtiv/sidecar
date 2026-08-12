@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -201,232 +200,6 @@ func (p *Plugin) renderListView(width, height int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 }
 
-// renderSidebarContent renders the worktree list sidebar content (no borders).
-func (p *Plugin) renderSidebarContent(width, height int) string {
-	var lines []string
-
-	// Header with [New] button
-	titleText := "Workspaces"
-	buttonText := "New"
-	buttonStyle := styles.Button
-	if p.hoverNewButton {
-		buttonStyle = styles.ButtonHover
-	}
-	styledButton := styles.RenderPillWithStyle(buttonText, buttonStyle, nil)
-	buttonWidth := lipgloss.Width(styledButton)
-
-	// Calculate spacing between title and button
-	titleWidth := lipgloss.Width(titleText)
-	spacing := width - titleWidth - buttonWidth
-	if spacing < 1 {
-		spacing = 1
-	}
-
-	header := styles.Title.Render(titleText) + strings.Repeat(" ", spacing) + styledButton
-	lines = append(lines, header)
-
-	// Register hit region for the button (X position = 2 for panel padding + spacing + titleWidth)
-	// The button is at the right edge of the sidebar content
-	buttonX := 2 + titleWidth + spacing // 2 for left border+padding
-	p.mouseHandler.HitMap.AddRect(regionCreateWorktreeButton, buttonX, 1, buttonWidth, 1, nil)
-
-	// Show warnings from delete operation if any
-	if len(p.deleteWarnings) > 0 {
-		warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
-		for _, w := range p.deleteWarnings {
-			// Truncate warning to fit width
-			if lipgloss.Width(w) > width-2 {
-				w = ansi.Truncate(w, max(1, width-3), "…")
-			}
-			lines = append(lines, warningStyle.Render("⚠ "+w))
-		}
-	}
-
-	// Show toast message if active (td-a1c8456f: session disconnect notification)
-	if p.toastMessage != "" && !p.toastTime.IsZero() && time.Since(p.toastTime) < flashDuration {
-		toastStyle := lipgloss.NewStyle().Foreground(styles.Warning).Bold(true)
-		msg := p.toastMessage
-		if len(msg) > width-4 {
-			msg = msg[:width-7] + "..."
-		}
-		lines = append(lines, toastStyle.Render("⚠ "+msg))
-	}
-
-	// Track Y position for hit regions (add 3 for border + header + empty line)
-	currentY := 3
-	// header + empty line
-	headerRows := 2
-
-	// The shared `/` filter row appears only once filtering is in play, so the
-	// unfiltered sidebar keeps its exact layout and hit geometry. When it is
-	// shown it sits directly under the header and pushes everything below it
-	// down by exactly one row — the same row the click target is registered on.
-	if p.filterActive() {
-		matched, total := p.filterCounts()
-		lines = append(lines, p.listFilter.RenderRow(width, matched, total))
-		p.mouseHandler.HitMap.AddRect(regionListFilter, 0, 2, width, 1, nil)
-		currentY++
-		headerRows++
-	}
-
-	lines = append(lines, "") // Empty line after header/warnings
-
-	// Calculate visible items (each item is 2 lines)
-	contentHeight := height - headerRows
-	itemHeight := 2 // Each worktree item takes 2 lines
-
-	// The visible index lists are the shared filter's projection of the list.
-	// With no query they are every shell and every worktree, in order, which is
-	// why the unfiltered journey runs through the identical loops below.
-	visibleShells := p.visibleShellIndices()
-	visibleWorktrees := p.visibleWorktreeIndices()
-
-	// === Render shells section ===
-	if len(visibleShells) > 0 {
-		// Shells subheader with [+] button (right-aligned)
-		shellsTitle := styles.Muted.Render("Shells")
-		shellsTitleWidth := lipgloss.Width(shellsTitle)
-		shellsPlusStyle := styles.Button
-		if p.hoverShellsPlusButton {
-			shellsPlusStyle = styles.ButtonHover
-		}
-		shellsPlusBtn := styles.RenderPillWithStyle("+", shellsPlusStyle, nil)
-		shellsPlusBtnWidth := lipgloss.Width(shellsPlusBtn)
-		// Right-align button with fill spacing
-		spacing := width - shellsTitleWidth - shellsPlusBtnWidth
-		if spacing < 1 {
-			spacing = 1
-		}
-		shellsHeader := shellsTitle + strings.Repeat(" ", spacing) + shellsPlusBtn
-		lines = append(lines, shellsHeader)
-		// Register hit region for shells [+] button (right-aligned)
-		shellsPlusBtnX := 2 + shellsTitleWidth + spacing // 2 for left border+padding
-		p.mouseHandler.HitMap.AddRect(regionShellsPlusButton, shellsPlusBtnX, currentY, shellsPlusBtnWidth, 1, nil)
-		currentY++
-
-		// Render each shell entry (width-1 to match worktree items, leaving room for scrollbar)
-		shellItemWidth := width - 1
-		for _, i := range visibleShells {
-			shell := p.shells[i]
-			selected := p.shellSelected && i == p.selectedShellIdx
-			shellLine := p.renderShellEntryForSession(shell, selected, shellItemWidth)
-			lines = append(lines, shellLine)
-			// Register hit region with negative index: -1 -> shells[0], -2 -> shells[1], etc.
-			p.mouseHandler.HitMap.AddRect(regionWorktreeItem, 0, currentY, shellItemWidth, itemHeight, -(i + 1))
-			currentY += itemHeight
-		}
-
-		// Add separator line after shells
-		lines = append(lines, styles.Muted.Render(strings.Repeat("─", width)))
-		currentY++
-	}
-
-	// Calculate shell section height (subheader + shells*2 + separator)
-	shellSectionHeight := 0
-	if len(visibleShells) > 0 {
-		shellSectionHeight = 1 + len(visibleShells)*itemHeight + 1
-	}
-
-	// Adjust visible count for shell section
-	p.visibleCount = (contentHeight - shellSectionHeight) / itemHeight
-
-	// Render worktree items
-	if len(visibleWorktrees) == 0 {
-		if p.filterActive() && len(visibleShells) == 0 {
-			// A query that matches nothing says so. A blank list would read as
-			// "this project has no workspaces".
-			lines = append(lines, workspacelist.NoMatchRow(width, p.listFilter.Query()))
-		} else if !p.shellSelected && len(p.shells) == 0 && !p.filterActive() {
-			// Calculate vertical centering for empty state
-			emptyStateHeight := 2 // "No workspaces" + "Press 'n'..."
-			emptyStartY := (contentHeight - emptyStateHeight) / 2
-			if emptyStartY < 0 {
-				emptyStartY = 0
-			}
-
-			// Add padding lines before empty state message
-			for i := 0; i < emptyStartY; i++ {
-				lines = append(lines, "")
-			}
-
-			// Center the text horizontally
-			msg1 := "No workspaces"
-			msg2 := "Press 'n' to create one"
-			pad1 := (width - len(msg1)) / 2
-			pad2 := (width - len(msg2)) / 2
-			if pad1 < 0 {
-				pad1 = 0
-			}
-			if pad2 < 0 {
-				pad2 = 0
-			}
-
-			lines = append(lines, styles.Muted.Render(strings.Repeat(" ", pad1)+msg1))
-			lines = append(lines, styles.Muted.Render(strings.Repeat(" ", pad2)+msg2))
-		}
-		// When shell is selected and no worktrees, just show the shell entries (already rendered above)
-	} else {
-		// Worktrees subheader with [+] button (right-aligned, only if we have shells above)
-		if len(visibleShells) > 0 {
-			workspacesTitle := styles.Muted.Render("Workspaces")
-			workspacesTitleWidth := lipgloss.Width(workspacesTitle)
-			workspacesPlusStyle := styles.Button
-			if p.hoverWorkspacesPlusButton {
-				workspacesPlusStyle = styles.ButtonHover
-			}
-			workspacesPlusBtn := styles.RenderPillWithStyle("+", workspacesPlusStyle, nil)
-			workspacesPlusBtnWidth := lipgloss.Width(workspacesPlusBtn)
-			// Right-align button with fill spacing
-			spacing := width - workspacesTitleWidth - workspacesPlusBtnWidth
-			if spacing < 1 {
-				spacing = 1
-			}
-			workspacesHeader := workspacesTitle + strings.Repeat(" ", spacing) + workspacesPlusBtn
-			lines = append(lines, workspacesHeader)
-			// Register hit region for worktrees [+] button (right-aligned)
-			workspacesPlusBtnX := 2 + workspacesTitleWidth + spacing // 2 for left border+padding
-			p.mouseHandler.HitMap.AddRect(regionWorkspacesPlusButton, workspacesPlusBtnX, currentY, workspacesPlusBtnWidth, 1, nil)
-			currentY++
-		}
-
-		// Guard against negative scrollOffset
-		if p.scrollOffset < 0 {
-			p.scrollOffset = 0
-		}
-
-		// Render worktree items at reduced width to leave room for scrollbar
-		worktreeItemWidth := width - 1
-		var worktreeLines []string
-		for position := p.scrollOffset; position < len(visibleWorktrees) && position < p.scrollOffset+p.visibleCount; position++ {
-			i := visibleWorktrees[position]
-			wt := p.worktrees[i]
-			// Only show as selected if not shellSelected AND index matches
-			selected := !p.shellSelected && i == p.selectedIdx
-			line := p.renderWorktreeItem(wt, selected, worktreeItemWidth)
-
-			// Register hit region with ABSOLUTE index
-			p.mouseHandler.HitMap.AddRect(regionWorktreeItem, 0, currentY, worktreeItemWidth, itemHeight, i)
-
-			worktreeLines = append(worktreeLines, line)
-			currentY += itemHeight
-		}
-
-		// Build scrollbar alongside worktree content
-		worktreeContent := strings.Join(worktreeLines, "\n")
-		trackHeight := p.visibleCount * itemHeight
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(visibleWorktrees),
-			ScrollOffset: p.scrollOffset,
-			VisibleItems: p.visibleCount,
-			TrackHeight:  trackHeight,
-		})
-		worktreeWithScrollbar := lipgloss.JoinHorizontal(lipgloss.Top, worktreeContent, scrollbar)
-		lines = append(lines, worktreeWithScrollbar)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
 // renderWorktreeItem renders a single worktree list item.
 func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) string {
 	// Keep selection visible even when preview pane is active (dimmed style)
@@ -575,16 +348,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		}
 		content := line1 + "\n" + line2
 
-		// Use bright style when sidebar is focused, dimmed when preview is focused
-		if isActiveFocus {
-			return styles.ListItemSelected.Width(width).Render(content)
-		}
-		// Dimmed selection style (when preview pane is active)
-		dimmedSelectedStyle := lipgloss.NewStyle().
-			Background(styles.BgSecondary).
-			Foreground(styles.TextSecondary).
-			Width(width)
-		return dimmedSelectedStyle.Render(content)
+		return workspacelist.ApplySelection(content, width, true, isActiveFocus)
 	}
 
 	// Not selected - use colored styles for visual interest
@@ -795,15 +559,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 		}
 		content := line1 + "\n" + line2
 
-		if isActiveFocus {
-			return styles.ListItemSelected.Width(width).Render(content)
-		}
-		// Dimmed selection style
-		dimmedSelectedStyle := lipgloss.NewStyle().
-			Background(styles.BgSecondary).
-			Foreground(styles.TextSecondary).
-			Width(width)
-		return dimmedSelectedStyle.Render(content)
+		return workspacelist.ApplySelection(content, width, true, isActiveFocus)
 	}
 
 	// Not selected - use styled icon

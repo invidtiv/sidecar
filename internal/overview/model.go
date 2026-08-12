@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -124,6 +125,8 @@ type Model struct {
 	mouse              *mouse.Handler
 	workspaces         workspacelist.Model
 	workspacesMouse    *mouse.Handler
+	sidebarWidth       int
+	sidebarVisible     bool
 	catalog            map[string]workspaceinventory.Workspace
 	preview            previewState
 	width              int
@@ -135,6 +138,13 @@ var ActivityStorePath = func() string {
 	return filepath.Join(config.StateDir(), activitystore.FileName)
 }
 
+// Sidebar preference access is overridable so interaction tests can prove a
+// drag release without reading or writing the developer's real state file.
+var (
+	loadWorkspaceSidebarWidth = state.GetWorkspaceSidebarWidth
+	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
+)
+
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
 	// Restored idle state is what lets a card say "idle 3h" instead of "25s"
@@ -143,7 +153,10 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true}
+	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
+		m.sidebarWidth = savedWidth
+	}
 	m.workspaces.SetEmptyText("No shells or worktrees found in the configured projects")
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr

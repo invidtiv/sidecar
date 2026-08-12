@@ -194,13 +194,36 @@ func TestDocumentCommandsDescribeCurrentMode(t *testing.T) {
 	if len(commands) == 0 || commands[0].Context != "workspace-doc" || commands[0].Name != "Close" {
 		t.Fatalf("document commands = %#v", commands)
 	}
-	if commands[1].Name != "Raw" {
-		t.Fatalf("rendered-mode action = %q, want Raw", commands[1].Name)
+	if commands[1].ID != "toggle-sidebar" || commands[2].Name != "Raw" {
+		t.Fatalf("document sidebar/render commands = %#v", commands[:3])
 	}
 	doc, _ := p.activeDocPane()
 	doc.view.SetRendered(false)
-	if got := p.Commands()[1].Name; got != "Render" {
+	if got := p.Commands()[2].Name; got != "Render" {
 		t.Fatalf("raw-mode action = %q, want Render", got)
+	}
+}
+
+func TestDocumentBackslashHidesAndRestoresWorkspaceSidebar(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.sidebarVisible = true
+	p.openTerminalPath("README.md", 0)
+	if p.FocusContext() != "workspace-doc" {
+		t.Fatalf("focus context = %q, want workspace-doc", p.FocusContext())
+	}
+
+	handled, cmd := p.handleDocKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	if !handled || cmd == nil || p.sidebarVisible || p.activePane != PanePreview {
+		t.Fatalf("hide handled=%v cmd=%v visible=%v pane=%v", handled, cmd != nil, p.sidebarVisible, p.activePane)
+	}
+	if p.FocusContext() != "workspace-doc" {
+		t.Fatalf("hidden document context = %q, want workspace-doc", p.FocusContext())
+	}
+	handled, _ = p.handleDocKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	if !handled || !p.sidebarVisible || p.activePane != PaneSidebar {
+		t.Fatalf("restore handled=%v visible=%v pane=%v", handled, p.sidebarVisible, p.activePane)
 	}
 }
 

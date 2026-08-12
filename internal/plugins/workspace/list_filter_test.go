@@ -87,6 +87,18 @@ func TestSlashOpensADedicatedTextInputContextThatKeepsProjectCommandsSafe(t *tes
 	}
 }
 
+func TestProjectFilterKeepsBackslashLiteral(t *testing.T) {
+	p := filterPlugin(t)
+	p.handleKeyPress(key("/"))
+	p.handleKeyPress(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	if got := p.listFilter.Query(); got != "\\" {
+		t.Fatalf("filter query = %q, want literal backslash", got)
+	}
+	if !p.sidebarVisible {
+		t.Fatal("literal filter input toggled the sidebar")
+	}
+}
+
 func TestFilterMatchesNameBranchTaskAgentAndKeepsNavigationLive(t *testing.T) {
 	p := filterPlugin(t)
 	p.handleKeyPress(key("/"))
@@ -242,6 +254,33 @@ func TestFilterRowIsClickableAndShiftsRowsByExactlyOneLine(t *testing.T) {
 	}
 }
 
+func TestSharedSidebarRegionsFollowWarningsAndPanelInsets(t *testing.T) {
+	p := filterPlugin(t)
+	p.handleKeyPress(key("/"))
+	p.deleteWarnings = []string{"cleanup is unavailable"}
+	p.mouseHandler.Clear()
+	view := strings.Split(ansi.Strip(p.renderSidebarContent(40, 24)), "\n")
+
+	var filterY, firstRowY = -1, -1
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		switch {
+		case region.ID == regionListFilter:
+			filterY = region.Rect.Y
+		case region.ID == regionWorktreeItem && firstRowY < 0:
+			firstRowY = region.Rect.Y
+			if region.Rect.X != 2 {
+				t.Fatalf("row region X = %d, want first panel content column 2", region.Rect.X)
+			}
+		}
+	}
+	if filterY != 3 { // border row + header + warning
+		t.Fatalf("filter region Y = %d, want 3 after warning", filterY)
+	}
+	if firstRowY < 0 || !strings.Contains(view[firstRowY-1], "codex shell") {
+		t.Fatalf("first row region Y=%d does not match painted row:\n%s", firstRowY, strings.Join(view, "\n"))
+	}
+}
+
 // scrollOffset is a position into the *filtered* worktree projection, so a
 // query typed while the sidebar is scrolled has to bring the offset back inside
 // the rows that survived it — including when the selection itself survived and
@@ -277,10 +316,10 @@ func TestFilteringAScrolledSidebarStillDrawsTheMatchingRows(t *testing.T) {
 	}
 }
 
-// The shell section renders in full above the scrolled worktree region, so the
-// scroll offset must stay worktree-relative: counting shells into it scrolls
-// the worktree list by the height of a section that never scrolls.
-func TestScrollOffsetIsWorktreeRelativeWithShellsPresent(t *testing.T) {
+// Shells and worktrees share one viewport, so a long shell section cannot push
+// every worktree below the pane and the selected row is counted in the same
+// shell-first projection used for navigation.
+func TestScrollOffsetUsesSharedShellFirstViewport(t *testing.T) {
 	p := filterPlugin(t)
 	for i := 0; i < 20; i++ {
 		p.worktrees = append(p.worktrees, &Worktree{Name: fmt.Sprintf("bulk-%02d", i), Path: p.ctx.ProjectRoot})
@@ -299,8 +338,8 @@ func TestScrollOffsetIsWorktreeRelativeWithShellsPresent(t *testing.T) {
 	last := len(p.worktrees) - 1
 	p.selectedIdx = last
 	p.ensureVisible()
-	if want := last - p.visibleCount + 1; p.scrollOffset != want {
-		t.Fatalf("scroll offset = %d, want %d (shell rows must not shift it)", p.scrollOffset, want)
+	if want := len(p.shells) + last - p.visibleCount + 1; p.scrollOffset != want {
+		t.Fatalf("scroll offset = %d, want %d (shell and worktree rows share one viewport)", p.scrollOffset, want)
 	}
 	view := ansi.Strip(p.renderSidebarContent(40, 24))
 	if !strings.Contains(view, p.worktrees[last].Name) {

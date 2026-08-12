@@ -266,6 +266,8 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	switch msg.String() {
+	case "\\":
+		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeDocPane()
 	case "r":

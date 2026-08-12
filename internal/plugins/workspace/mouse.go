@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
@@ -1438,16 +1439,7 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 	case regionPaneDivider:
 		// Calculate new sidebar width based on drag
 		startValue := p.mouseHandler.DragStartValue()
-		newWidth := startValue + (action.DragDX * 100 / p.width) // Convert px delta to %
-
-		// Clamp to reasonable bounds (10% - 60%)
-		if newWidth < 10 {
-			newWidth = 10
-		}
-		if newWidth > 60 {
-			newWidth = 60
-		}
-		p.sidebarWidth = newWidth
+		p.sidebarWidth = workspacelist.ResizePercent(startValue, action.DragDX, p.width)
 	case regionDiffTabDivider:
 		// Calculate new diff tab file list width based on drag (pixel-based)
 		startValue := p.mouseHandler.DragStartValue()
