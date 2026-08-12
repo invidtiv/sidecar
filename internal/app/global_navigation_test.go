@@ -225,6 +225,49 @@ func TestGlobalWorkspacesOpensTheChosenWorktreeNotTheRememberedOne(t *testing.T)
 	}
 }
 
+// A shell names a project, not a worktree — it is stored under the project root
+// and resolves the same from anywhere in the repo. Opening one in another
+// project must therefore keep that project's remembered worktree, both for the
+// landing and for the memory itself, so a later `@` switch still returns there.
+func TestGlobalWorkspacesOpensAShellInTheRememberedWorktree(t *testing.T) {
+	m, _, plugins := globalNavigationModel(t)
+	target := newOverviewGitRepo(t, "target")
+	if out, err := exec.Command("git", "-C", target, "commit", "-q", "--allow-empty", "-m", "root").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	linked := filepath.Join(t.TempDir(), "topic")
+	if out, err := exec.Command("git", "-C", target, "worktree", "add", "-q", "-b", "topic", linked).CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v: %s", err, out)
+	}
+	normalizedMain, _ := normalizePath(target)
+	normalizedLinked, _ := normalizePath(linked)
+	if err := state.SetLastWorktreePath(normalizedMain, normalizedLinked); err != nil {
+		t.Fatal(err)
+	}
+	writeShellManifest(t, target, "sc-shell-2")
+
+	workspace := workspaceinventory.Workspace{
+		ProjectKey:  workspaceinventory.CanonicalPath(target),
+		ProjectRoot: target,
+		Kind:        workspaceinventory.KindShell,
+		Key:         "sc-shell-2",
+		TmuxName:    "sc-shell-2",
+		Path:        target,
+	}
+	updated, _ := openFromGlobalWorkspaces(t, m, workspace)
+
+	if got, _ := normalizePath(updated.ui.WorkDir); got != normalizedLinked {
+		t.Fatalf("work dir = %q, want the remembered worktree %q", updated.ui.WorkDir, normalizedLinked)
+	}
+	if remembered := state.GetLastWorktreePath(normalizedMain); remembered != normalizedLinked {
+		t.Fatalf("remembered worktree = %q, want it untouched at %q", remembered, normalizedLinked)
+	}
+	pending := plugins[workspacePluginID].pending
+	if pending == nil || pending.Kind != plugin.WorkspaceSelectionShell || pending.Key != "sc-shell-2" {
+		t.Fatalf("pending shell selection = %#v", pending)
+	}
+}
+
 // Leaving the catalog before the validation lands drops it: an activation must
 // not open a project under a user who has already moved on.
 func TestGlobalWorkspacesActivationDroppedAfterLeavingTheCatalog(t *testing.T) {

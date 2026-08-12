@@ -726,12 +726,15 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		normalizedTargetMain, _ := normalizePath(targetMainRepo)
 
 		// Only restore saved worktree if switching to the main repo path.
-		// A pending selection is an exact destination the user picked in the
-		// global browser — including the main worktree of a project whose last
-		// visit was somewhere else. Restoring that remembered worktree here
-		// would open a neighbour of the item they chose, so an explicit
-		// destination outranks the memory.
-		if normalizedProject == normalizedTargetMain && pending == nil {
+		// A pending worktree selection is an exact destination the user picked
+		// in the global browser — including the main worktree of a project
+		// whose last visit was somewhere else. Restoring that remembered
+		// worktree here would open a neighbour of the item they chose, so an
+		// explicit destination outranks the memory. A shell selection names no
+		// worktree at all: shells are project-scoped and resolve identically
+		// from any worktree, so the remembered worktree still wins there.
+		if normalizedProject == normalizedTargetMain &&
+			(pending == nil || pending.Kind != plugin.WorkspaceSelectionWorktree) {
 			if savedWorktree := state.GetLastWorktreePath(normalizedTargetMain); savedWorktree != "" {
 				// Don't restore if the saved worktree is where we're coming FROM
 				// (user is explicitly leaving that worktree)
