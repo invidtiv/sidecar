@@ -117,7 +117,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	// A focused global filter is a text input and takes the paste, exactly as
 	// it takes typed characters.
 	if m.globalWorkspacesFilterFocused() && m.overview.WorkspacesPaste(msg.Content) {
-		return m, nil
+		// A paste can change what the filter matches, and therefore what is
+		// selected; the preview follows the selection.
+		return m, m.overview.WorkspacesPreviewCmd()
 	}
 
 	// A global view that sidecar draws itself owns keyboard focus, so a paste

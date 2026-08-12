@@ -75,7 +75,7 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg:
+	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg:
 		return true
 	default:
 		return false
@@ -125,6 +125,7 @@ type Model struct {
 	workspaces         workspacelist.Model
 	workspacesMouse    *mouse.Handler
 	catalog            map[string]workspaceinventory.Workspace
+	preview            previewState
 	width              int
 	height             int
 }
@@ -246,6 +247,10 @@ func (m *Model) Stop() {
 	m.generation++
 	m.requestID++
 	m.loading = false
+	// Stopping the cycle stops the preview with it: a tab nobody is looking at
+	// has no reason to keep capturing a pane or to keep what it captured.
+	m.preview.visible = false
+	m.releasePreview()
 }
 
 // RequestNavigation binds a card activation to the current Overview lifecycle
@@ -340,10 +345,18 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			m.applyStatusResult(msg.Result)
 		}
 		m.syncBoard()
+		// The list's selection can move when incremental results arrive (the
+		// first result selects a row at all), so the preview follows it here
+		// rather than waiting for the user to press a key.
+		preview := m.previewSync()
 		if len(m.pendingInventory) > 0 || len(m.pending) > 0 || m.active > 0 {
-			return m.dispatchProjects()
+			return tea.Batch(m.dispatchProjects(), preview)
 		}
-		return m.finishPhase()
+		return tea.Batch(m.finishPhase(), preview)
+	case previewMsg:
+		return m.applyPreview(msg)
+	case previewPollMsg:
+		return m.pollPreview(msg)
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)

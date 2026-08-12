@@ -1,11 +1,10 @@
 package workspace
 
 import (
-	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/termpreview"
 )
 
 // Every embedded terminal in the preview pane sits in the same vertical stack:
@@ -22,8 +21,9 @@ const (
 	// terminalHeaderRows is the single row every embedded terminal reserves for
 	// its identity chips and its hints. It is one row for every surface — shell,
 	// worktree and both terminal-panel children — so a terminal always begins on
-	// the row immediately below it.
-	terminalHeaderRows = 1
+	// the row immediately below it. The shared presentation layer names the same
+	// row, and both consumers read it from there.
+	terminalHeaderRows = termpreview.HeaderRows
 
 	// previewTabRows is the standalone tab row plus its blank spacer, which only
 	// the non-terminal preview tabs (Diff, Task) still render: on the Output tab
@@ -32,7 +32,7 @@ const (
 
 	// headerChipGap is the columns between two chips, and the minimum gap between
 	// the header's left and right regions.
-	headerChipGap = 1
+	headerChipGap = termpreview.ChipGap
 
 	// termPanelDividerRows / termPanelDividerCols size the rule drawn between
 	// the primary terminal and the terminal panel.
@@ -52,50 +52,26 @@ const (
 
 // previewSplit is the horizontal split of the plugin's viewport into sidebar,
 // divider and preview panel, in plugin-local columns. Seven call sites used to
-// recompute this; they now all read it from previewSplitFor.
-type previewSplit struct {
-	SidebarWidth        int // outer width of the sidebar panel; 0 when hidden
-	SidebarContentWidth int // sidebar width inside border + padding
-	PreviewX            int // outer x of the preview panel
-	PreviewWidth        int // outer width of the preview panel
-	ContentX            int // x of the preview panel's first content column
-	ContentWidth        int // preview width inside border + padding
-}
+// recompute this; they now all read it from previewSplitFor, which is itself a
+// thin binding of the plugin's chrome constants to the shared split.
+type previewSplit = termpreview.Split
 
 // previewSplitFor computes the split for an explicit viewport width. The render
 // path passes the width it was handed; everything else uses previewSplit.
+//
+// The arithmetic moved to internal/termpreview so the global Workspaces browser
+// can place its own list and preview with the same rules — the same floors, the
+// same divider, the same clamp order — instead of growing a parallel one.
 func (p *Plugin) previewSplitFor(width int) previewSplit {
-	if !p.sidebarVisible {
-		return previewSplit{
-			PreviewWidth: width,
-			ContentX:     previewContentInset,
-			ContentWidth: width - panelOverhead,
-		}
-	}
-
-	// RenderPanel handles borders internally, so only the divider comes off the
-	// available space here.
-	available := width - dividerWidth
-	sidebarW := (available * p.sidebarWidth) / 100
-	if sidebarW < sidebarMinWidth {
-		sidebarW = sidebarMinWidth
-	}
-	if sidebarW > available-previewMinWidth {
-		sidebarW = available - previewMinWidth
-	}
-	previewW := available - sidebarW
-	if previewW < previewMinWidth {
-		previewW = previewMinWidth
-	}
-	previewX := sidebarW + dividerWidth
-	return previewSplit{
-		SidebarWidth:        sidebarW,
-		SidebarContentWidth: sidebarW - panelOverhead,
-		PreviewX:            previewX,
-		PreviewWidth:        previewW,
-		ContentX:            previewX + previewContentInset,
-		ContentWidth:        previewW - panelOverhead,
-	}
+	return termpreview.SplitFor(width, termpreview.SplitConfig{
+		SidebarVisible: p.sidebarVisible,
+		SidebarPercent: p.sidebarWidth,
+		DividerWidth:   dividerWidth,
+		PanelOverhead:  panelOverhead,
+		ContentInset:   previewContentInset,
+		SidebarMin:     sidebarMinWidth,
+		PreviewMin:     previewMinWidth,
+	})
 }
 
 // previewSplit computes the split for the plugin's current width.
@@ -118,67 +94,16 @@ func (p *Plugin) previewContentY() int {
 }
 
 // terminalHeaderRow composes the one row above an embedded terminal: identity
-// chips on the left, hints right-aligned on the right.
-//
-// Truncation is deliberately asymmetric. The chips say what the surface is and
-// carry the only hit regions on the row, so they are kept whole — a chip either
-// fits or is dropped entirely, never clipped mid-chip — while the hints are
-// advisory and give way first. The result is always exactly one row and never
-// wider than width, so the terminal below can never lose a row to overflow.
-//
-// hintFloor inverts that priority for the columns it names: the right region
-// keeps at least that many, dropping chips to find them. It exists because the
-// rule is backwards for interactive mode, where the chips are decoration and
-// the key that gets the user back out is not.
-//
-// truncate is passed in rather than reached for so this stays a plain function
-// over strings: the caller supplies the plugin's ANSI-aware truncation cache.
+// chips on the left, hints right-aligned on the right. Both the row and the
+// chip placement it renders from now live in internal/termpreview, so the
+// global read-only preview draws a header with the same rules — including the
+// whole-chip drop — rather than a lookalike.
 func terminalHeaderRow(chips []string, hints string, width, hintFloor int, truncate func(string, int) string) string {
-	if width <= 0 {
-		return ""
-	}
-	if hints == "" {
-		hintFloor = 0
-	}
-
-	var left strings.Builder
-	leftWidth := 0
-	for i, placement := range layoutHeaderChips(chips, width, hintFloor) {
-		if !placement.Drawn {
-			continue
-		}
-		if leftWidth > 0 {
-			left.WriteString(strings.Repeat(" ", headerChipGap))
-		}
-		left.WriteString(chips[i])
-		leftWidth = placement.Col + placement.Width
-	}
-
-	if hints == "" {
-		return left.String()
-	}
-	available := width - leftWidth - headerChipGap
-	if available < 1 {
-		return left.String()
-	}
-	hints = truncate(hints, available)
-	gap := width - leftWidth - ansi.StringWidth(hints)
-	if gap < headerChipGap {
-		// truncate reported a narrower string than it produced; keep the row
-		// exactly one row wide rather than risk a wrap.
-		return left.String()
-	}
-	return left.String() + strings.Repeat(" ", gap) + hints
+	return termpreview.HeaderRow(chips, hints, width, hintFloor, truncate)
 }
 
-// headerChipPlacement is where one chip landed on a header row: Col is its
-// first column, relative to the row's own first column, and Drawn is false for
-// a chip the row had no columns for.
-type headerChipPlacement struct {
-	Col   int
-	Width int
-	Drawn bool
-}
+// headerChipPlacement is where one chip landed on a header row.
+type headerChipPlacement = termpreview.ChipPlacement
 
 // layoutHeaderChips places chips left to right in the columns a header row can
 // give them, dropping whole chips rather than clipping one. It is the single
@@ -186,51 +111,15 @@ type headerChipPlacement struct {
 // it and the tab hit regions are registered from it, so a chip dropped for want
 // of columns cannot keep a live click target — which it did, on top of the
 // interactive exit hint that took its columns.
-//
-// hintFloor is the columns the row's right region has claimed; zero leaves the
-// chips the whole width.
 func layoutHeaderChips(chips []string, width, hintFloor int) []headerChipPlacement {
-	placements := make([]headerChipPlacement, len(chips))
-	if width <= 0 {
-		return placements
-	}
-	budget := width
-	if hintFloor > 0 {
-		budget = max(width-hintFloor-headerChipGap, 0)
-	}
-
-	used := 0
-	for i, chip := range chips {
-		if chip == "" {
-			continue
-		}
-		chipWidth := ansi.StringWidth(chip)
-		col, cost := used, chipWidth
-		if used > 0 {
-			col += headerChipGap
-			cost += headerChipGap
-		}
-		if used+cost > budget {
-			break
-		}
-		placements[i] = headerChipPlacement{Col: col, Width: chipWidth, Drawn: true}
-		used += cost
-	}
-	return placements
+	return termpreview.LayoutChips(chips, width, hintFloor)
 }
 
 // terminalSurface locates one embedded terminal inside the plugin's viewport
-// and reports the size of its viewport.
-type terminalSurface struct {
-	X int // plugin-local column of the terminal's first content column
-	Y int // plugin-local row of the terminal's first content row
-	// HeaderY is the row the surface's chips-and-hints header is drawn on, one
-	// above Y.
-	HeaderY int
-	Width   int // terminal content columns
-	Height  int // terminal content rows, header row excluded
-	OK      bool
-}
+// and reports the size of its viewport. It is the shared surface type: the
+// plugin's pane tree produces the leaf box, and termpreview.SurfaceIn turns a
+// box into the header row plus the viewport under it.
+type terminalSurface = termpreview.Surface
 
 // previewContentBox is the preview panel's inner box in plugin-local
 // coordinates. It includes the header row owned by each pane leaf and excludes
@@ -301,9 +190,15 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 	}
 
 	// The leaf begins with the surface's own header. Any terminal-panel split is
-	// a subdivision within this box, not extra pane-tree chrome.
-	x := leaf.X
-	headerY := leaf.Y
+	// a subdivision within this box, not extra pane-tree chrome. Where the header
+	// and the viewport sit inside the box is the shared layer's answer, taken
+	// from the box the pane tree placed — one derivation, two consumers.
+	placed := termpreview.SurfaceIn(leaf)
+	if !placed.OK {
+		return terminalSurface{}
+	}
+	x := placed.X
+	headerY := placed.HeaderY
 
 	if termPanel {
 		if !p.termPanelVisible {

@@ -3,11 +3,13 @@ package overview
 import (
 	"fmt"
 	"sort"
-	"time"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -121,26 +123,60 @@ func laneGroup(lane agentstatus.LaneID) workspacelist.Group {
 	}
 }
 
-// WorkspacesView renders the global Workspaces tab. Slice 2 ships the list;
-// the read-only selected-pane preview beside it arrives in slice 3, so the
-// list takes the full width for now rather than drawing an empty pane.
+// WorkspacesView renders the global Workspaces tab: the list on the left and
+// exactly one read-only terminal box on the right.
+//
+// At widths that cannot sustain two useful panes the list is full width and the
+// preview replaces it when focused, rather than shrinking both into unreadable
+// columns.
 func (m *Model) WorkspacesView(width, height int) string {
 	m.width, m.height = width, height
 	if m.workspacesMouse == nil {
 		m.workspacesMouse = mouse.NewHandler()
 	}
 	m.workspacesMouse.Clear()
+
+	if m.previewNarrow() {
+		if m.preview.full {
+			m.addPreviewRegion(0, width, height)
+			return m.renderPreview(width, height)
+		}
+		return m.renderWorkspaceList(0, width, height)
+	}
+
+	split := m.previewSplit(width)
+	list := m.renderWorkspaceList(0, split.SidebarWidth, height)
+	m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
+	preview := m.renderPreview(split.PreviewWidth, height)
+
+	divider := strings.TrimSuffix(strings.Repeat(styles.Muted.Render("│")+"\n", height), "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, divider, preview)
+}
+
+// renderWorkspaceList draws the list and registers its regions at an x offset,
+// so a click lands on the row the list actually drew there.
+func (m *Model) renderWorkspaceList(x, width, height int) string {
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
 		Width:   width,
 		Height:  height,
 		Title:   "Workspaces",
-		Focused: true,
-		Now:     time.Now(),
+		Focused: !m.PreviewFocused(),
+		Now:     m.now(),
 	})
 	for _, region := range rendered.Regions {
-		m.workspacesMouse.HitMap.AddRect(string(region.Kind), region.X, region.Y, region.W, region.H, region)
+		m.workspacesMouse.HitMap.AddRect(string(region.Kind), x+region.X, region.Y, region.W, region.H, region)
 	}
 	return rendered.View
+}
+
+// previewRegionKind is the hit region covering the read-only preview box.
+const previewRegionKind = "global-preview"
+
+func (m *Model) addPreviewRegion(x, width, height int) {
+	if width < 1 || height < 1 {
+		return
+	}
+	m.workspacesMouse.HitMap.AddRect(previewRegionKind, x, 0, width, height, previewRegionKind)
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -159,6 +195,11 @@ func (m *Model) WorkspacesPaste(text string) bool {
 	m.workspaces.Reproject()
 	return true
 }
+
+// WorkspacesPreviewCmd is the command a paste or another caller-side selection
+// change owes the preview: the cursor may have moved to a different item, and
+// the preview follows the cursor.
+func (m *Model) WorkspacesPreviewCmd() tea.Cmd { return m.previewSync() }
 
 // WorkspacesKey handles one key for the global Workspaces tab and reports
 // whether it consumed it. While the filter has focus it consumes everything
@@ -180,27 +221,40 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if m.workspaces.FilterKey(key, msg.Text) == workspacelist.KeyIgnored {
 			m.navigateWorkspaces(key)
 		}
-		return true, nil
+		return true, m.previewSync()
 	}
+
+	// While the preview has focus its keys come first, so list navigation
+	// cannot move the cursor out from under the output being read. Every key it
+	// answers scrolls or moves focus; none reaches a terminal.
+	if m.PreviewFocused() {
+		if handled, cmd := m.previewKey(key); handled {
+			return true, cmd
+		}
+	}
+
 	switch key {
 	case "/":
+		m.focusList()
 		m.workspaces.FocusFilter()
 		return true, nil
 	case "s":
 		m.workspaces.CycleSort()
-		return true, nil
+		return true, m.previewSync()
 	case "r":
-		return true, m.Start(m.projects)
+		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
+	case "right", "l":
+		return true, m.focusPreviewPane()
 	case "esc":
 		if m.workspaces.Filter().Active() {
 			m.workspaces.Filter().Reset()
 			m.workspaces.Reproject()
-			return true, nil
+			return true, m.previewSync()
 		}
 		return false, nil
 	}
 	if m.navigateWorkspaces(key) {
-		return true, nil
+		return true, m.previewSync()
 	}
 	return false, nil
 }
@@ -240,6 +294,21 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	}
+
+	// The preview owns its own wheel: scrolling over captured output moves that
+	// output, not the list underneath it.
+	if kind, ok := action.Region.Data.(string); ok && kind == previewRegionKind {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick:
+			return m.focusPreviewPane()
+		case mouse.ActionScrollUp:
+			m.scrollPreview(1)
+		case mouse.ActionScrollDown:
+			m.scrollPreview(-1)
+		}
+		return nil
+	}
+
 	region, ok := action.Region.Data.(workspacelist.Region)
 	if !ok {
 		return nil
@@ -248,10 +317,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	case mouse.ActionClick, mouse.ActionDoubleClick:
 		switch region.Kind {
 		case workspacelist.RegionRow:
+			m.focusList()
 			m.workspaces.SelectID(region.ID)
 		case workspacelist.RegionSort:
 			m.workspaces.CycleSort()
 		case workspacelist.RegionFilter:
+			m.focusList()
 			m.workspaces.FocusFilter()
 		}
 	case mouse.ActionScrollUp:
@@ -259,7 +330,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	case mouse.ActionScrollDown:
 		m.workspaces.Scroll(1)
 	}
-	return nil
+	return m.previewSync()
 }
 
 // SelectedWorkspace resolves the list cursor back to its catalog record.
@@ -286,5 +357,8 @@ func (m *Model) WorkspacesSummary() string {
 // the global browser must not become a second implementation of destructive
 // workspace behaviour.
 func (m *Model) WorkspacesCommands() []struct{ Key, Name string } {
-	return []struct{ Key, Name string }{{"/", "Filter"}, {"s", "Sort"}, {"r", "Refresh"}}
+	return []struct{ Key, Name string }{
+		{"/", "Filter"}, {"s", "Sort"}, {"r", "Refresh"},
+		{"→", "Focus preview"}, {"←", "Focus list"}, {"jk", "Scroll preview"},
+	}
 }

@@ -527,3 +527,63 @@ func TestGlobalWorkspacesFilterOwnsItsKeysAndPastes(t *testing.T) {
 		t.Fatal("escape on an unfiltered list should return to the project")
 	}
 }
+
+// Slice 3 item 2: the read-only selected-pane preview polls only while its own
+// tab is visible, so the scope has to be the thing that tells it. Nothing else
+// can: the preview must not infer visibility from renders, or a background
+// frame would keep it capturing.
+func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	if cmd := m.Init(); cmd != nil {
+		cmd()
+	}
+
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("the preview was live before the global space was ever entered")
+	}
+
+	// Entering on Agents is not the Workspaces tab, so the preview stays asleep.
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("the Agents tab woke the Workspaces preview")
+	}
+
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	if !m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("switching to the Workspaces tab did not wake its preview")
+	}
+
+	// Another global tab, and leaving the space entirely, both put it back to
+	// sleep — cancelling the in-flight capture and dropping what it captured.
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("moving to another global tab left the preview polling")
+	}
+
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("q should have returned to project space")
+	}
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("leaving the global space left the preview polling behind it")
+	}
+}

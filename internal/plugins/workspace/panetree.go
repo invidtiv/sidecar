@@ -1,5 +1,7 @@
 package workspace
 
+import "github.com/marcus/sidecar/internal/termpreview"
+
 const (
 	paneMinRatio = 15
 	paneMaxRatio = 85
@@ -38,10 +40,11 @@ type PaneSplit struct {
 	A, B  *PaneNode
 }
 
-// Box is a rectangle in preview-content coordinates.
-type Box struct {
-	X, Y, W, H int
-}
+// Box is a rectangle in preview-content coordinates. It is the shared
+// presentation layer's box type, so a leaf this tree places can be handed
+// straight to the terminal presentation beneath it without a conversion that
+// could quietly disagree.
+type Box = termpreview.Box
 
 // Placement associates a leaf with its allocated box.
 type Placement struct {

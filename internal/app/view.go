@@ -901,8 +901,20 @@ func (m Model) footerHints() []footerHint {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+		// The preview is read-only, so its hints are scrolling and getting back
+		// to the list — there is nothing here that sends a key to a terminal.
+		if m.overview != nil && m.overview.PreviewFocused() {
+			hints = append(hints,
+				footerHint{keys: "jk", label: "Scroll"},
+				footerHint{keys: "gG", label: "Top/Live"},
+				footerHint{keys: "←", label: "List"},
+				footerHint{keys: "r", label: "Refresh"},
+			)
+			break
+		}
 		hints = append(hints,
 			footerHint{keys: "jk", label: "Move"},
+			footerHint{keys: "→", label: "Preview"},
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},
 			footerHint{keys: "r", label: "Refresh"},

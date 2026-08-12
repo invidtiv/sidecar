@@ -231,10 +231,16 @@ func (m *Model) startVisibleGlobalTab() tea.Cmd {
 	if !m.inGlobalScope() {
 		return nil
 	}
-	if catalogTab(m.globalTab) && m.overview != nil {
-		return m.overview.Ensure(m.overviewProjects())
+	if m.overview == nil {
+		return nil
 	}
-	return nil
+	// The read-only selected preview polls only while its own tab is visible, so
+	// the scope tells it directly rather than inferring visibility from renders.
+	visible := m.overview.SetWorkspacesVisible(m.globalTab == GlobalWorkspaces)
+	if catalogTab(m.globalTab) {
+		return tea.Batch(m.overview.Ensure(m.overviewProjects()), visible)
+	}
+	return visible
 }
 
 // globalWorkspacesVisible reports that the cross-project Workspaces browser
