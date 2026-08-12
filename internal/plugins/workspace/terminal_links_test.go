@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/tty"
@@ -764,6 +765,93 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 	}
 	if !p.autoScrollOutput {
 		t.Fatal("panel freeze disturbed independent primary follow state")
+	}
+}
+
+func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
+	root := t.TempDir()
+	rel := "docs/panel.md"
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte("# Panel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows := []string{rel, "panel result", "tests pass", "done"}
+	panel := tty.NewOutputBuffer(40)
+	panel.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(rows, "\n"), BaseLine: 50, Absolute: true,
+		PaneRows: len(rows),
+	})
+	p := newSelectionTestPlugin()
+	p.ctx = &plugin.Context{WorkDir: root}
+	p.width, p.height = 120, 30
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: tty.NewOutputBuffer(20)}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus, p.paneNextID = 1, 2
+	p.docs = make(map[int]*docPane)
+	p.termPanelVisible = true
+	p.termPanelLayout = TermPanelRight
+	p.termPanelSession = "panel-session"
+	p.termPanelPaneID = "%2"
+	p.termPanelOutput = panel
+	p.interactiveState.TermPanel = true
+	p.selectionTermPanel = true
+	p.autoScrollOutput = true
+
+	surface := p.terminalSurfaceGeometry(true)
+	if !surface.OK {
+		t.Fatal("terminal panel fixture has no surface")
+	}
+	action := mouse.MouseAction{
+		Type: mouse.ActionClick, X: surface.X + 2, Y: surface.Y,
+		Region: &mouse.Region{ID: regionTermPanelContent, Rect: mouse.Rect{
+			X: surface.X, Y: surface.HeaderY, W: surface.Width, H: surface.Height + terminalHeaderRows,
+		}},
+	}
+	if cmd := p.handleMouseClick(action); cmd == nil || !p.termPanelDocFrozen {
+		t.Fatalf("panel doc activation = cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	}
+
+	postResize := append(append([]string{}, rows...), "Claude chrome", "", "❯", "")
+	panel.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
+		HistoryRows: len(rows), PaneRows: 4,
+	})
+	if cmd := p.closeDocPane(); cmd == nil || !p.termPanelDocFrozen {
+		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	}
+	frozenStart := p.termPanelSelectionOffset
+	follow, offset, fromBottom := p.terminalScrollState(true, false)
+	if follow || fromBottom || offset != frozenStart {
+		t.Fatalf("closed panel context = follow %v offset %d fromBottom %v", follow, offset, fromBottom)
+	}
+
+	p.activePane = PanePreview
+	p.termPanelFocused = true
+	p.handleListKeys(tea.KeyPressMsg{Code: 'G', Text: "G"})
+	follow, offset, fromBottom = p.terminalScrollState(true, false)
+	if p.termPanelDocFrozen || !follow || !fromBottom || offset != 0 {
+		t.Fatalf("G did not return panel live: frozen %v follow %v offset %d fromBottom %v",
+			p.termPanelDocFrozen, follow, offset, fromBottom)
+	}
+	if !p.autoScrollOutput {
+		t.Fatal("panel navigation disturbed independent primary follow")
+	}
+
+	// Recreate the frozen state and prove a wheel gesture first translates the
+	// same visible row, then applies the requested upward movement.
+	p.termPanelDocFrozen = true
+	p.termPanelSelectionOffset = frozenStart
+	p.releaseTermPanelDocFreeze()
+	before := p.termPanelScroll
+	p.termPanelDocFrozen = true
+	p.termPanelSelectionOffset = frozenStart
+	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, Region: action.Region})
+	if p.termPanelDocFrozen || p.termPanelScroll <= before {
+		t.Fatalf("wheel did not release and move panel: frozen %v scroll %d, translated %d",
+			p.termPanelDocFrozen, p.termPanelScroll, before)
 	}
 }
 

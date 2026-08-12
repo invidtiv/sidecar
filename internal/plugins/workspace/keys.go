@@ -610,6 +610,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll down
+			p.releaseTermPanelDocFreeze()
 			if p.termPanelScroll > 0 {
 				p.termPanelScroll--
 			}
@@ -687,6 +688,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to top of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+			p.releaseTermPanelDocFreeze()
 			if p.termPanelOutput != nil {
 				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
 			}
@@ -727,6 +729,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+			p.releaseTermPanelDocFreeze()
 			p.termPanelScroll = 0
 			return nil
 		}
@@ -1034,6 +1037,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
+				p.releaseTermPanelDocFreeze()
 				if p.termPanelScroll > pageSize {
 					p.termPanelScroll -= pageSize
 				} else {
@@ -1062,6 +1066,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
+				p.releaseTermPanelDocFreeze()
 				p.termPanelScroll += pageSize
 				return nil
 			}

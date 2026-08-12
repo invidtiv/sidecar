@@ -315,6 +315,20 @@ func (p *Plugin) termPanelMaxScroll() int {
 	return max(lineCount-height, 0)
 }
 
+// releaseTermPanelDocFreeze hands a panel viewport pinned by document activation
+// back to the ordinary distance-from-bottom scroll model without changing the
+// row currently at the top. Closing the document deliberately does not call
+// this: the first explicit panel navigation owns the transition.
+func (p *Plugin) releaseTermPanelDocFreeze() {
+	if !p.termPanelDocFrozen {
+		return
+	}
+	maxScroll := p.termPanelMaxScroll()
+	start := min(max(p.termPanelSelectionOffset, 0), maxScroll)
+	p.termPanelScroll = maxScroll - start
+	p.termPanelDocFrozen = false
+}
+
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
 // tmux pane to match the current split dimensions.
 func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {

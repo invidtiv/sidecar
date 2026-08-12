@@ -1174,6 +1174,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
+		p.releaseTermPanelDocFreeze()
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {
 			p.termPanelScroll = 0
