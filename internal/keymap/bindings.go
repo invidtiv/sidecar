@@ -64,10 +64,11 @@ func DefaultBindings() []Binding {
 		// keymap dispatch; they are registered so help, the palette, and the
 		// footer can discover them.
 		//
-		// This list is also the boundary the plan draws: the global browser is a
-		// reader, so there is deliberately no create, delete, attach, or
-		// interactive command here. Mutating workspace behaviour belongs to the
-		// owning project's Workspaces plugin, where its refusal rules live.
+		// This list is also the boundary the plan draws: the browser's list is a
+		// reader, so there is deliberately no create, delete, or attach command
+		// here. Creating and destroying workspaces belongs to the owning
+		// project's Workspaces plugin, where its refusal rules live. Typing into
+		// a pane that already exists is on the other side of that line.
 		{Key: "enter", Command: "open-workspace", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
@@ -88,9 +89,18 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close-overview", Context: "global-workspaces"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces"},
+		// The list answers the two interactive keys as well, because the project
+		// sidebar does: on both surfaces "i" from the list moves focus to the
+		// pane and hands it the keyboard in one press.
+		{Key: "i", Command: "interactive", Context: "global-workspaces"},
+		{Key: "E", Command: "interactive", Context: "global-workspaces"},
 
-		// The selected-pane preview is read-only. It keeps the sidebar toggle and
-		// preview navigation but owns no terminal input path.
+		// The selected-pane preview watches a pane until the user asks for its
+		// keyboard: "i" or "E" hands input to the live pane behind the selection,
+		// the same two keys the project plugin answers. Nothing here creates a
+		// session — an item with no live pane refuses instead.
+		{Key: "i", Command: "interactive", Context: "global-workspaces-preview"},
+		{Key: "E", Command: "interactive", Context: "global-workspaces-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces-preview"},
 		{Key: "h", Command: "focus-list", Context: "global-workspaces-preview"},
 		{Key: "left", Command: "focus-list", Context: "global-workspaces-preview"},
@@ -102,6 +112,17 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "close-overview", Context: "global-workspaces-preview"},
 		{Key: "q", Command: "close-overview", Context: "global-workspaces-preview"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces-preview"},
+
+		// The preview forwarding keys to a live pane. Almost every key is the
+		// pane's, ctrl+c included, so only the acts that belong to the surface
+		// around it are listed: the ways out and the terminal's own selection and
+		// scrollback. The exit, copy and paste chords are configurable, so the app
+		// registers those from config — the default table cannot read it.
+		{Key: "ctrl+a", Command: "select-all", Context: "global-workspaces-terminal"},
+		{Key: "shift+up", Command: "scrollback", Context: "global-workspaces-terminal"},
+		{Key: "shift+down", Command: "scrollback", Context: "global-workspaces-terminal"},
+		{Key: "shift+pgup", Command: "scrollback", Context: "global-workspaces-terminal"},
+		{Key: "shift+pgdown", Command: "scrollback", Context: "global-workspaces-terminal"},
 
 		// Global Workspaces filter context. While the query owns the keyboard it
 		// is a text input: only these keys mean anything else, and navigation
@@ -454,6 +475,8 @@ func DefaultBindings() []Binding {
 		{Key: "m", Command: "merge-workflow", Context: "workspace-list"},
 		{Key: "T", Command: "link-task", Context: "workspace-list"},
 		{Key: "s", Command: "start-agent", Context: "workspace-list"},
+		// Both keys enter interactive mode, on this surface and the global one.
+		{Key: "i", Command: "interactive", Context: "workspace-list"},
 		{Key: "E", Command: "interactive", Context: "workspace-list"},
 		{Key: "t", Command: "attach", Context: "workspace-list"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-list"},
@@ -495,6 +518,7 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "focus-left", Context: "workspace-preview"},
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
+		{Key: "i", Command: "interactive", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
 		{Key: "y", Command: "approve", Context: "workspace-preview"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},

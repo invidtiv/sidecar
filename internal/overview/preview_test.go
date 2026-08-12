@@ -17,9 +17,10 @@ import (
 )
 
 // Slice 3 of docs/plans/active/global-overview-workspaces.md: the global
-// Workspaces tab's right side is one read-only terminal box fed by a selected-
-// pane source with generation cancellation, immediate selected capture, and
-// adaptive visible-only polling.
+// Workspaces tab's right side is one terminal box, fed while it is watched by a
+// selected-pane source with generation cancellation, immediate selected
+// capture, and adaptive visible-only polling. Handing that box its keyboard is
+// interactive_test.go's subject; everything here is the watching state.
 //
 // The shared geometry and header/body presentation are termpreview's, and the
 // agreement between that layer and the pane tree is proved in
@@ -153,9 +154,20 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	if !strings.Contains(view, "pane %1 output") {
 		t.Fatalf("preview does not show the selected pane's capture:\n%s", view)
 	}
-	if !strings.Contains(view, "alpha") || !strings.Contains(view, "read-only") {
-		t.Fatalf("preview header lost its identity or its read-only marking:\n%s", view)
+	if !strings.Contains(view, "alpha") {
+		t.Fatalf("preview header lost its identity:\n%s", view)
 	}
+	// The way in is advertised only where it works. With the list focused "i" is
+	// a list key, so offering it here would describe a keystroke that does
+	// nothing.
+	if strings.Contains(view, "i to type") {
+		t.Fatalf("the watched preview advertises a key the focused list does not answer:\n%s", view)
+	}
+	press(t, m, "right")
+	if focused := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); !strings.Contains(focused, "i to type") {
+		t.Fatalf("a focused preview does not say how to hand the pane its keyboard:\n%s", focused)
+	}
+	press(t, m, "left")
 
 	// Moving the cursor captures the newly selected pane straight away, and only
 	// that one: a selection change is a thing the user feels.
@@ -232,8 +244,8 @@ func TestHiddenTabDoesNoWorkAndKeepsNothing(t *testing.T) {
 	if m.preview.generation == generation {
 		t.Fatal("hiding did not supersede the in-flight capture")
 	}
-	if len(m.preview.snapshot.Lines) != 0 || m.preview.workspaceID != "" {
-		t.Fatalf("hidden preview retained %+v", m.preview.snapshot)
+	if m.preview.buffer != nil || m.preview.workspaceID != "" {
+		t.Fatalf("hidden preview retained %+v", m.preview.capture)
 	}
 	if cmd := m.pollPreview(previewPollMsg{Generation: generation, WorkspaceID: "a"}); cmd != nil {
 		t.Fatal("a poll survived the tab being hidden")
@@ -334,9 +346,9 @@ func TestPreviewFocusScrollsOutputAndNeverMovesTheList(t *testing.T) {
 		t.Fatalf("unfocused cadence = %s, want %s", got, previewVisiblePoll)
 	}
 
-	// Focus moves and scrolling are the whole key vocabulary of a read-only
-	// pane: nothing it answers can reach a terminal, and the selection is
-	// untouched throughout.
+	// Focus moves and scrolling are the whole key vocabulary of a watched pane:
+	// nothing it answers reaches a terminal until the user asks for the
+	// keyboard, and the selection is untouched throughout.
 	if m.workspaces.SelectedID() != selected {
 		t.Fatalf("selection changed to %q during preview navigation", m.workspaces.SelectedID())
 	}
@@ -356,6 +368,7 @@ func TestWheelOverThePreviewScrollsTheCaptureNotTheList(t *testing.T) {
 	if m.preview.offset != 3 {
 		t.Fatalf("wheel over the preview did not use the shared three-row step: offset %d", m.preview.offset)
 	}
+	settleWheel()
 	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseWheelDown}))
 	if m.preview.offset != 0 {
 		t.Fatalf("wheel down did not return to live output: offset %d", m.preview.offset)
@@ -492,7 +505,7 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 		t.Fatal("60 columns was not treated as narrow")
 	}
 	list := ansi.Strip(m.WorkspacesView(narrow, tall))
-	if !strings.Contains(list, "alpha") || strings.Contains(list, "read-only") {
+	if !strings.Contains(list, "alpha") || strings.Contains(list, "i to type") {
 		t.Fatalf("narrow layout is not a full-width list:\n%s", list)
 	}
 	for _, line := range strings.Split(list, "\n") {
@@ -507,7 +520,7 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 	}
 	run(t, m, cmd)
 	preview := ansi.Strip(m.WorkspacesView(narrow, tall))
-	if !strings.Contains(preview, "read-only") || strings.Contains(preview, "delta") {
+	if !strings.Contains(preview, "i to type") || strings.Contains(preview, "delta") {
 		t.Fatalf("right did not open a full-width preview:\n%s", preview)
 	}
 
@@ -515,7 +528,7 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 	if !handled || m.PreviewFocused() {
 		t.Fatal("esc did not return the narrow layout to its list")
 	}
-	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "read-only") {
+	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "i to type") {
 		t.Fatalf("narrow layout did not return to the list:\n%s", back)
 	}
 }
@@ -546,6 +559,52 @@ func TestGlobalBackslashHidesAndRestoresSidebarFromListAndPreview(t *testing.T) 
 				t.Fatalf("restore handled=%v visible=%v context=%q", handled, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
 			}
 		})
+	}
+}
+
+// Every way back to the list restores the sidebar, not just backslash. Focus on
+// a list nothing draws would move an invisible cursor while the preview kept the
+// keys help advertises.
+func TestLeavingTheHiddenSidebarPreviewRedrawsTheList(t *testing.T) {
+	for _, back := range []string{"esc", "h", "left"} {
+		t.Run(back, func(t *testing.T) {
+			m, _ := previewModel(t)
+			run(t, m, m.SetWorkspacesVisible(true))
+			m.WorkspacesView(previewWide, previewTall)
+			press(t, m, "\\")
+			if m.WorkspaceSidebarVisible() {
+				t.Fatal("test premise: backslash did not hide the sidebar")
+			}
+
+			press(t, m, back)
+
+			if !m.WorkspaceSidebarVisible() || m.PreviewFocused() {
+				t.Fatalf("%q left visible=%v previewFocused=%v", back, m.WorkspaceSidebarVisible(), m.PreviewFocused())
+			}
+			if got := m.WorkspaceFocusContext(); got != "global-workspaces" {
+				t.Fatalf("%q advertises %q while the list has focus", back, got)
+			}
+			if view := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); !strings.Contains(view, "alpha") {
+				t.Fatalf("%q left the focused list undrawn:\n%s", back, view)
+			}
+		})
+	}
+}
+
+// The same disagreement reached through the window size: a preview focused at a
+// width that cannot hold two panes takes the whole tab, whether or not anyone is
+// typing into it.
+func TestShrinkingTheWindowKeepsTheFocusedPreviewOnScreen(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.WorkspacesView(previewWide, previewTall)
+	press(t, m, "right")
+
+	narrow := globalListMinWidth + globalDividerWidth + globalPreviewMinWidth - 1
+	run(t, m, m.WorkspacesResize(narrow, previewTall))
+
+	if layout := m.workspacesLayout(); !layout.previewOnly || !layout.previewDrawn {
+		t.Fatalf("narrow focused layout = %#v, want the preview filling the tab", layout)
 	}
 }
 

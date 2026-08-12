@@ -3,9 +3,10 @@ package termpreview
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 func rows(view string) []string { return strings.Split(view, "\n") }
@@ -93,11 +94,27 @@ func TestHeaderRowDropsWholeChipsAndClipsHints(t *testing.T) {
 	}
 }
 
-func TestRenderReadOnlyFillsAnExactBoxWithNoCursor(t *testing.T) {
-	snap := Snapshot{PaneID: "%1", Lines: []string{"first", "second", strings.Repeat("wide", 40)}, CapturedAt: time.Now()}
-	result := RenderReadOnly(snap, ReadOnlyOptions{Width: 30, Height: 6, Chips: []string{"shell"}, Hints: "read-only"})
+func drawBuffer(t *testing.T, in RenderBufferInput, lines []string) string {
+	t.Helper()
+	buffer := tty.NewOutputBuffer(600)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(lines, "\n")})
+	if len(lines) == 0 {
+		buffer = nil
+	}
+	in.Buffer = buffer
+	in.Layout = tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: in.Width, Height: in.Height - HeaderRows,
+		Offset: in.Layout.Start, Follow: in.Layout.Start == 0,
+	})
+	return RenderBuffer(in)
+}
 
-	lines := rows(result.View)
+func TestRenderBufferFillsAnExactBoxWithNoCursor(t *testing.T) {
+	view := drawBuffer(t, RenderBufferInput{
+		Width: 30, Height: 6, Chips: []string{"shell"}, Hints: "read-only",
+	}, []string{"first", "second", strings.Repeat("wide", 40)})
+
+	lines := rows(view)
 	if len(lines) != 6 {
 		t.Fatalf("rendered %d rows, want exactly 6", len(lines))
 	}
@@ -106,106 +123,88 @@ func TestRenderReadOnlyFillsAnExactBoxWithNoCursor(t *testing.T) {
 			t.Fatalf("row %d is %d columns, want exactly 30: %q", i, width, line)
 		}
 	}
-	if result.Rows != 5 {
-		t.Fatalf("body rows = %d, want height minus the header row", result.Rows)
-	}
-	// A read-only capture has no live cursor to place, and drawing one would
-	// invite typing into a surface that forwards nothing.
-	if strings.Contains(result.View, "\x1b[?25h") || strings.Contains(result.View, "\x1b[6n") {
-		t.Fatal("read-only preview emitted cursor control sequences")
+	// A captured pane has no live cursor to place, and drawing one would invite
+	// typing into a surface that forwards nothing.
+	if strings.Contains(view, "\x1b[?25h") || strings.Contains(view, "\x1b[6n") {
+		t.Fatal("preview emitted cursor control sequences")
 	}
 }
 
-func TestRenderReadOnlyScrollsBackFromTheLiveBottom(t *testing.T) {
-	lines := make([]string, 0, 20)
+// The window is the caller's — the same value it hit-tests against — so the box
+// draws exactly the lines it was handed and never re-derives them.
+func TestRenderBufferDrawsTheWindowItIsGiven(t *testing.T) {
+	content := make([]string, 0, 20)
 	for i := range 20 {
-		lines = append(lines, string(rune('a'+i)))
+		content = append(content, string(rune('a'+i)))
 	}
-	snap := Snapshot{PaneID: "%1", Lines: lines}
-	opts := ReadOnlyOptions{Width: 10, Height: 6}
+	buffer := tty.NewOutputBuffer(600)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(content, "\n")})
 
-	live := RenderReadOnly(snap, opts)
-	if live.MaxOffset != 15 || live.Start != 15 {
-		t.Fatalf("live view start=%d max=%d, want the last 5 lines", live.Start, live.MaxOffset)
-	}
-	if !strings.Contains(live.View, "t") {
-		t.Fatalf("live view is not following output: %q", live.View)
-	}
-
-	opts.Offset = 4
-	back := RenderReadOnly(snap, opts)
-	if back.Start != 11 {
-		t.Fatalf("scrolled start = %d, want 11", back.Start)
+	draw := func(offset int, follow bool) string {
+		in := RenderBufferInput{Width: 10, Height: 6, Buffer: buffer}
+		in.Layout = tty.FitViewport(tty.ViewportInput{
+			Buffer: buffer, Width: in.Width, Height: in.Height - HeaderRows,
+			Offset: offset, Follow: follow,
+		})
+		return RenderBuffer(in)
 	}
 
-	opts.Offset = 999
-	clamped := RenderReadOnly(snap, opts)
-	if clamped.Start != 0 {
-		t.Fatalf("over-scroll start = %d, want clamped to the top", clamped.Start)
+	if live := draw(0, true); !strings.Contains(live, "t") || strings.Contains(live, "a\n") {
+		t.Fatalf("following the buffer did not draw its last rows: %q", live)
+	}
+	if back := draw(11, false); !strings.Contains(back, "l") || strings.Contains(back, "t") {
+		t.Fatalf("a scrolled window drew the wrong rows: %q", back)
 	}
 }
 
-func TestRenderReadOnlyStatesWithNothingToDraw(t *testing.T) {
+// A selection is highlighted where the buffer is drawn, in the coordinates the
+// selection was recorded in.
+func TestRenderBufferHighlightsTheSelection(t *testing.T) {
+	selection := &ui.SelectionState{}
+	selection.SelectRange(ui.SelectionPoint{Line: 1, Col: 0}, ui.SelectionPoint{Line: 1, Col: 3}, false)
+
+	lines := []string{"alpha", "bravo", "delta"}
+	plain := drawBuffer(t, RenderBufferInput{Width: 20, Height: 5}, lines)
+	highlighted := drawBuffer(t, RenderBufferInput{Width: 20, Height: 5, Selection: selection}, lines)
+
+	if plain == highlighted {
+		t.Fatal("a selection changed nothing about what was drawn")
+	}
+	if ansi.Strip(plain) != ansi.Strip(highlighted) {
+		t.Fatalf("highlighting changed the text:\n%q\n%q", ansi.Strip(plain), ansi.Strip(highlighted))
+	}
+}
+
+func TestRenderBufferStatesWithNothingToDraw(t *testing.T) {
 	// An unavailable preview is a message, not a blank box: the reason and the
 	// item's metadata are what the pane is for when there is no capture.
-	result := RenderReadOnly(Snapshot{}, ReadOnlyOptions{
+	view := drawBuffer(t, RenderBufferInput{
 		Width: 24, Height: 4, Chips: []string{"api"},
 		Message: "No live session\nbranch feature/x",
-	})
-	if !strings.Contains(result.View, "No live session") || !strings.Contains(result.View, "branch feature/x") {
-		t.Fatalf("unavailable state lost its reason or metadata: %q", result.View)
+	}, nil)
+	if !strings.Contains(view, "No live session") || !strings.Contains(view, "branch feature/x") {
+		t.Fatalf("unavailable state lost its reason or metadata: %q", view)
 	}
-	for _, line := range rows(result.View) {
+	for _, line := range rows(view) {
 		if ansi.StringWidth(line) != 24 {
 			t.Fatalf("unavailable row is not padded to width: %q", line)
 		}
 	}
 
-	// A failed capture is not silently drawn as empty output.
-	failed := RenderReadOnly(Snapshot{PaneID: "%1", Err: errFake{}}, ReadOnlyOptions{Width: 20, Height: 3, Message: "capture failed"})
-	if !strings.Contains(failed.View, "capture failed") {
-		t.Fatalf("capture error state = %q", failed.View)
+	// A buffer with nothing in it is not silently drawn as blank output.
+	if empty := drawBuffer(t, RenderBufferInput{Width: 20, Height: 3}, nil); !strings.Contains(empty, "No output captured") {
+		t.Fatalf("empty state = %q", empty)
 	}
-
-	if view := RenderReadOnly(Snapshot{}, ReadOnlyOptions{Width: 0, Height: 5}).View; view != "" {
+	if view := drawBuffer(t, RenderBufferInput{Width: 0, Height: 5}, nil); view != "" {
 		t.Fatalf("zero width rendered %q", view)
 	}
 	// Too short for a body: the header still fits, and nothing wraps.
-	short := RenderReadOnly(Snapshot{Lines: []string{"x"}}, ReadOnlyOptions{Width: 10, Height: 1, Chips: []string{"api"}})
-	if strings.Contains(short.View, "\n") {
-		t.Fatalf("single-row box wrapped: %q", short.View)
+	short := drawBuffer(t, RenderBufferInput{Width: 10, Height: 1, Chips: []string{"api"}}, []string{"x"})
+	if strings.Contains(short, "\n") {
+		t.Fatalf("single-row box wrapped: %q", short)
 	}
 }
 
 type errFake struct{}
 
 func (errFake) Error() string { return "boom" }
-
-func TestSnapshotLinesDropsTrailingBlankRows(t *testing.T) {
-	lines := SnapshotLines("one\r\ntwo\n\n\n")
-	if len(lines) != 2 || lines[0] != "one" || lines[1] != "two" {
-		t.Fatalf("SnapshotLines = %q", lines)
-	}
-	if SnapshotLines("") != nil || SnapshotLines("\n\n") != nil {
-		t.Fatal("blank capture produced lines")
-	}
-	// A line that is only ANSI styling is still blank.
-	if got := SnapshotLines("real\n\x1b[0m   \x1b[0m\n"); len(got) != 1 {
-		t.Fatalf("styled blank row was kept: %q", got)
-	}
-}
-
-func TestSnapshotIsAValueWithNoWriteBack(t *testing.T) {
-	source := []string{"one", "two"}
-	snap := Snapshot{PaneID: "%1", Lines: source}
-	RenderReadOnly(snap, ReadOnlyOptions{Width: 8, Height: 4})
-	if source[0] != "one" || source[1] != "two" {
-		t.Fatalf("rendering mutated the capture: %q", source)
-	}
-	if snap.Empty() {
-		t.Fatal("snapshot with lines reported empty")
-	}
-	if !(Snapshot{}).Empty() {
-		t.Fatal("zero snapshot reported non-empty")
-	}
-}

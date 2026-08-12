@@ -499,7 +499,7 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 		Region: &mouse.Region{ID: regionTermPanelContent, Rect: rect},
 	}
 
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 	if !p.selection.Anchor.Valid() {
 		t.Fatal("panel selection did not establish an anchor")
 	}

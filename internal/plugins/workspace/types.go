@@ -406,21 +406,15 @@ type InteractiveState struct {
 	// bracketed paste mode (ESC[?2004h). Updated from captured output.
 	BracketedPasteEnabled bool
 
-	// MouseReportingEnabled tracks whether the target app has enabled
-	// mouse reporting (1000/1002/1003/1006/1015). Updated from captured output.
+	// MouseReportingEnabled tracks whether the target app has enabled mouse
+	// reporting (1000/1002/1003/1006/1015). Updated from captured output, and
+	// read only to describe the surface: who owns a click or a notch is the
+	// terminal component's PaneMouseReporting, so the two can never disagree.
 	//
 	// Note: the capture path (`capture-pane -e`) emits rendering escapes only, so
 	// DECSET mode sequences never reach it and this stays false there; the
-	// emulator path does see them and sets it. Click handling reads it only to
-	// resolve a release that never moved — motion always selects locally, or an
-	// app with mouse tracking on (Claude Code, grok) would eat every drag. Wheel
-	// routing uses PaneMouseReporting instead.
+	// emulator path does see them and sets it.
 	MouseReportingEnabled bool
-
-	// PaneMouseReporting is tmux's #{mouse_any_flag} for the target pane: the
-	// app has enabled at least one mouse tracking mode and expects wheel notches
-	// as mouse reports rather than having the viewer scroll its own scrollback.
-	PaneMouseReporting bool
 
 	// EscapeTimerPending tracks if an escape timer is already in flight.
 	// Prevents duplicate timers from accumulating (td-83dc22).

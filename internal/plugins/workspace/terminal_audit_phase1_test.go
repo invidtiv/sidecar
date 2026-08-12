@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -17,9 +18,8 @@ func TestInteractivePollContinuesDuringScrollBurst(t *testing.T) {
 	p := &Plugin{
 		interactiveState: &InteractiveState{Active: true},
 		worktrees:        []*Worktree{{Name: "sidecar-test"}},
-		lastScrollTime:   time.Now(),
-		scrollBurstCount: 1,
 	}
+	p.wheel.Add(-1, time.Now())
 
 	if cmd := p.pollInteractivePane(); cmd == nil {
 		t.Fatal("adaptive poll returned nil during scroll; poll chain would terminate")
@@ -33,8 +33,9 @@ func TestInteractiveLiteralKeysSurviveRecentScroll(t *testing.T) {
 	for _, literal := range []string{"m", "M", ";", "<"} {
 		t.Run(literal, func(t *testing.T) {
 			p := newInteractiveInputTestPlugin()
-			p.lastScrollTime = time.Now()
-			p.scrollBurstCount = 4
+			for range 4 {
+				p.wheel.Add(-1, time.Now())
+			}
 
 			msg := tea.KeyPressMsg{Code: []rune(literal)[0], Text: literal}
 			if cmd := p.handleInteractiveKeys(msg); cmd == nil {
@@ -107,61 +108,62 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.previewOffset = 20
 	p.autoScrollOutput = true
-	p.lastScrollTime = time.Now()
+	// Open the burst, so the notch under test arrives inside the debounce window.
+	p.wheel.Add(0, time.Now())
 
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
-	if p.previewOffset != 20 || p.pendingScrollDelta != -3 {
-		t.Fatalf("debounced delta not retained: offset=%d pending=%d", p.previewOffset, p.pendingScrollDelta)
+	if p.previewOffset != 20 {
+		t.Fatalf("previewOffset = %d, want the debounced notch held back", p.previewOffset)
 	}
-	p.lastScrollTime = time.Now().Add(-2 * scrollDebounceInterval)
+	time.Sleep(2 * tty.WheelDebounceInterval)
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
 	if p.previewOffset != 14 {
-		t.Fatalf("previewOffset = %d, want accumulated movement to 14", p.previewOffset)
-	}
-	if p.pendingScrollDelta != 0 {
-		t.Fatalf("pendingScrollDelta = %d, want 0 after application", p.pendingScrollDelta)
+		t.Fatalf("previewOffset = %d, want the held-back notch to arrive with the next one (14)",
+			p.previewOffset)
 	}
 }
 
-func TestForwardClickCommandDoesNotMutateExitedInteractiveState(t *testing.T) {
-	installSuccessfulFakeTmux(t)
+// A forwarded click is delivered by the terminal component, so it holds no
+// reference to interactive state that the user may have left in the meantime.
+func TestForwardedClickSurvivesLeavingInteractiveMode(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
 	p := newInteractiveInputTestPlugin()
 	p.width = 100
 	p.height = 30
 	p.shellSelected = true
-	p.interactiveState.MouseReportingEnabled = true
+	p.interactiveState.TargetPane = "%7"
+	attachLiveTerminal(p, true)
 
 	cmd := p.forwardClickToTmux(10, 5)
 	if cmd == nil {
 		t.Fatal("expected click forwarding command")
 	}
-	oldInteraction := p.interactiveState
 	p.exitInteractiveMode()
 
-	msg := cmd() // Regression: this used to dereference p.interactiveState here.
-	result, ok := msg.(interactiveClickSentMsg)
-	if !ok || result.Err != nil || result.Interaction != oldInteraction {
-		t.Fatalf("click command result = %#v, want successful interactiveClickSentMsg", msg)
-	}
+	runCommandTree(cmd) // The command must not reach for p.interactiveState here.
+	tty.WaitForPendingSends()
 
-	// Re-entering the same session must not let the old result mutate the new
-	// interaction merely because the tmux target name matches.
-	newKeyTime := time.Unix(123, 0)
-	p.viewMode = ViewModeInteractive
-	p.interactiveState = &InteractiveState{
-		Active:        true,
-		TargetSession: oldInteraction.TargetSession,
-		LastKeyTime:   newKeyTime,
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, _ = p.Update(result)
-	if !p.interactiveState.LastKeyTime.Equal(newKeyTime) {
-		t.Fatal("stale click success updated a newly entered interaction")
+	if !strings.Contains(string(logged), "-t %7") {
+		t.Fatalf("forwarded click did not reach the pane: %s", logged)
 	}
-	staleErr := result
-	staleErr.Err = os.ErrClosed
-	_, _ = p.Update(staleErr)
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		t.Fatal("stale click error exited a newly entered interaction")
+}
+
+// An app that has not asked for mouse reports never receives a click: the
+// component is the one authority on who owns the pointer.
+func TestClickIsNotForwardedWithoutMouseReporting(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.width = 100
+	p.height = 30
+	p.shellSelected = true
+	attachLiveTerminal(p, false)
+
+	if cmd := p.forwardClickToTmux(10, 5); cmd != nil {
+		t.Fatal("a click was forwarded to an app that never asked for the mouse")
 	}
 }
 
@@ -324,6 +326,28 @@ func newInteractiveInputTestPlugin() *Plugin {
 	}
 }
 
+// attachLiveTerminal gives the plugin the terminal component interactive mode
+// routes input through, without a tmux server behind it. Whether a click or a
+// notch belongs to the application is the component's one answer, so a test that
+// wants an app tracking the mouse says so here rather than on a mirror of it.
+func attachLiveTerminal(p *Plugin, mouseReporting bool) *tty.Model {
+	model := tty.New(nil)
+	model.State = &tty.State{
+		Active:                true,
+		TargetSession:         p.interactiveState.TargetSession,
+		TargetPane:            p.interactiveState.TargetPane,
+		MouseReportingEnabled: mouseReporting,
+		CursorVisible:         true,
+		OutputBuf:             tty.NewOutputBuffer(outputBufferCap),
+	}
+	if p.interactiveState.TermPanel {
+		p.panelTerminal = model
+	} else {
+		p.primaryTerminal = model
+	}
+	return model
+}
+
 func keyPressForText(text string) tea.KeyPressMsg {
 	runes := []rune(text)
 	return tea.KeyPressMsg{Code: runes[0], Text: text}
@@ -401,4 +425,53 @@ func keyPressFor(key string) tea.KeyPressMsg {
 		msg.Mod = tea.ModShift
 	}
 	return msg
+}
+
+// A mode-entry message can precede the wrapper's reconciliation by one update.
+// Ordinary keys reach the pane through the plugin's own provisional path in that
+// window, and modified ones — shift+enter, ctrl+enter into Claude Code — have to
+// take it too rather than being silently dropped.
+func TestModifiedKeysReachThePaneBeforeTheTerminalIsReconciled(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newInteractiveInputTestPlugin()
+	p.interactiveState.TargetPane = "%9"
+	// No terminal component yet: exactly the window the fallback exists for.
+	if p.activeInteractiveTerminal() != nil {
+		t.Fatal("fixture already has a reconciled terminal")
+	}
+
+	shiftEnter := uv.UnknownCsiEvent("\x1b[13;2u")
+	cmd := p.handleUnknownSequence(shiftEnter)
+	if cmd == nil {
+		t.Fatal("shift+enter was dropped while an ordinary key would have been sent")
+	}
+	runCommandTree(cmd)
+	tty.WaitForPendingSends()
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "-t %9") {
+		t.Fatalf("the modified key did not reach the pane: %s", logged)
+	}
+}
+
+// A notch belongs to whatever it is over. Over the sidebar it moves the list,
+// even while a terminal is live, which is how the browser has always routed it.
+func TestAWheelOverTheSidebarDoesNotScrollTheLiveTerminal(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.previewOffset = 12
+	p.autoScrollOutput = false
+	attachLiveTerminal(p, true)
+
+	p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -3, X: 2, Y: 5,
+		Region: &mouse.Region{ID: regionSidebar},
+	})
+	if p.previewOffset != 12 {
+		t.Fatalf("a notch over the sidebar scrolled the terminal to %d", p.previewOffset)
+	}
 }

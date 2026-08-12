@@ -65,6 +65,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	if !m.ready || m.hasModal() {
 		return tea.MouseModeAllMotion
 	}
+	// A global terminal being typed into is the same case as a plugin's: cell
+	// motion, so the pane's own application gets clean clicks.
+	if m.globalWorkspacesVisible() && m.overview.PreviewInteractive() {
+		return tea.MouseModeCellMotion
+	}
 	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {
 		switch mode := provider.PreferredMouseMode(); mode {
 		case tea.MouseModeCellMotion, tea.MouseModeAllMotion:
@@ -76,8 +81,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
-		m.width < minWidth || m.height < minHeight || m.inGlobalScope() {
+		m.width < minWidth || m.height < minHeight {
 		return nil
+	}
+	if m.inGlobalScope() {
+		return m.placeContentCursor(m.globalCursor())
 	}
 	active := m.ActivePlugin()
 	if active == nil || !active.IsFocused() {
@@ -87,7 +95,22 @@ func (m Model) pluginCursor() *tea.Cursor {
 	if !ok {
 		return nil
 	}
-	local := provider.Cursor()
+	return m.placeContentCursor(provider.Cursor())
+}
+
+// globalCursor is the only cursor the global space draws: the Workspaces
+// browser's embedded terminal while the user is typing into it. Every other
+// global surface is a reader and reports none.
+func (m Model) globalCursor() *tea.Cursor {
+	if !m.globalWorkspacesVisible() {
+		return nil
+	}
+	return m.overview.WorkspacesCursor()
+}
+
+// placeContentCursor moves a surface-local cursor into screen coordinates and
+// drops one the content area does not contain.
+func (m Model) placeContentCursor(local *tea.Cursor) *tea.Cursor {
 	if local == nil {
 		return nil
 	}
@@ -894,16 +917,46 @@ type footerHint struct {
 	label string
 }
 
+// typingFooterHints answers for a pane the user is typing into, on either
+// surface. Such a footer advertises only the ways out: every other key is on its
+// way to the pane — the tab numbers, the help key and ctrl+c included — so the
+// global hints are not appended to it.
+func (m Model) typingFooterHints() ([]footerHint, bool) {
+	if m.inGlobalScope() {
+		if m.globalTab == GlobalWorkspaces && m.overview != nil && m.overview.PreviewInteractive() {
+			return []footerHint{
+				{keys: m.overview.InteractiveExitKey(), label: "Stop typing"},
+				{keys: "esc esc", label: "Stop typing"},
+			}, true
+		}
+		return nil, false
+	}
+	if m.activeContext == "workspace-interactive" {
+		if p := m.ActivePlugin(); p != nil {
+			return m.pluginFooterHints(p, m.activeContext), true
+		}
+	}
+	return nil, false
+}
+
 func (m Model) footerHints() []footerHint {
+	if hints, typing := m.typingFooterHints(); typing {
+		return hints
+	}
 	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
 	switch {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
-		// The preview is read-only, so its hints are scrolling and getting back
-		// to the list — there is nothing here that sends a key to a terminal.
+		// A watched preview scrolls, gets back to the list, and — only when there
+		// is a live pane behind the selection — asks for its keyboard. Offering
+		// the key for an item the header itself reports has no live pane would
+		// contradict the same box the user is reading.
 		if m.overview != nil && m.overview.PreviewFocused() {
+			if m.overview.PreviewCanType() {
+				hints = append(hints, footerHint{keys: "i / click", label: "Type"})
+			}
 			hints = append(hints,
 				footerHint{keys: "jk", label: "Scroll"},
 				footerHint{keys: "gG", label: "Top/Live"},
@@ -1178,9 +1231,16 @@ func (m Model) renderBindingSection(b *strings.Builder, context string) {
 		// Find all keys for this command
 		var keys []string
 		for _, b2 := range bindings {
-			if b2.Command == binding.Command {
-				keys = append(keys, b2.Key)
+			if b2.Command != binding.Command {
+				continue
 			}
+			// A global key the focused context binds for itself does something
+			// else there. The command keeps its line, because the palette can
+			// still run it, but help must not promise the key.
+			if context == "global" && m.contextShadowsGlobalKey(b2.Key) {
+				continue
+			}
+			keys = append(keys, b2.Key)
 		}
 
 		keyStr := formatBindingKeys(keys)
@@ -1190,6 +1250,17 @@ func (m Model) renderBindingSection(b *strings.Builder, context string) {
 		padded := fmt.Sprintf("%-11s", keyStr)
 		fmt.Fprintf(b, "  %s %s\n", styles.Muted.Render(padded), cmdName)
 	}
+}
+
+// contextShadowsGlobalKey reports that the focused context binds this key
+// itself, which is the same lookup handleKeyMsg makes before answering a global
+// key.
+func (m Model) contextShadowsGlobalKey(key string) bool {
+	if m.activeContext == "" || m.activeContext == "global" {
+		return false
+	}
+	_, bound := m.keymap.CommandForContextKey(m.activeContext, key)
+	return bound
 }
 
 // formatBindingKeys formats multiple keys into a display string.

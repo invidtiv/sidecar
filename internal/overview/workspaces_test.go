@@ -83,8 +83,8 @@ func TestGlobalWorkspacesListsEveryProjectsShellsAndWorktrees(t *testing.T) {
 	view := ansi.Strip(m.WorkspacesView(60, 24))
 
 	for _, want := range []string{
-		"Workspaces", "Activity", "/ filter",
-		"NEEDS ATTENTION", "WORKING", "LIVE", "NO SESSION",
+		"Workspaces", "Activity",
+		"Needs Attention (1)", "Working (1)", "Live (1)", "No Session (1)",
 		"modal", "Shell 1", "dormant", "pipeline",
 		"sidecar", "braid",
 	} {
@@ -245,5 +245,28 @@ func TestFocusedFilterLeavesCtrlCToTheHost(t *testing.T) {
 	if !m.WorkspacesFilterFocused() || m.workspaces.Filter().Query() != "brai" {
 		t.Fatalf("ctrl+c disturbed the filter: focused=%v query=%q",
 			m.WorkspacesFilterFocused(), m.workspaces.Filter().Query())
+	}
+}
+
+// A height too small to draw a box is not a narrow layout: the split still
+// places both panels, so the tab does not silently become a full-width list at
+// degenerate sizes.
+func TestDegenerateHeightStillDrawsBothPanels(t *testing.T) {
+	m, _ := previewModel(t)
+	m.WorkspacesView(previewWide, 2)
+	if layout := m.workspacesLayout(); layout.listOnly || layout.previewOnly || layout.previewDrawn {
+		t.Fatalf("layout at height 2 = %#v, want the split with nothing drawable", layout)
+	}
+	var preview, sidebar bool
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		switch region.Data {
+		case previewRegionKind:
+			preview = true
+		case workspacesSidebarRegion:
+			sidebar = true
+		}
+	}
+	if !preview || !sidebar {
+		t.Fatalf("height 2 registered sidebar=%v preview=%v, want both panels", sidebar, preview)
 	}
 }

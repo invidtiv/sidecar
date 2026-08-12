@@ -281,3 +281,56 @@ func TestModelNativeCursorAdjustsPaneHeightAndBounds(t *testing.T) {
 		t.Fatalf("inactive PreferredMouseMode() = %v, want none", mode)
 	}
 }
+
+// A host with no attach path clears AttachKey, and the chord is then the pane's
+// input like any other key rather than a silent third way out.
+func TestEmptyAttachKeyIsForwardedToThePane(t *testing.T) {
+	input := &fakeTerminalInputSender{}
+	m := New(nil)
+	m.Config.AttachKey = ""
+	m.input = input
+	m.Enter("session", "%1")
+
+	attached := false
+	m.OnAttach = func() tea.Cmd { attached = true; return nil }
+	m.Update(tea.KeyPressMsg{Code: ']', Mod: tea.ModCtrl})
+
+	if attached || !m.IsActive() {
+		t.Fatal("ctrl+] ended the mode even though no attach key is configured")
+	}
+	if len(input.calls) == 0 || input.calls[0].kind != "keys" {
+		t.Fatalf("ctrl+] did not reach the pane: %#v", input.calls)
+	}
+}
+
+// A wheel notch reaches the application as the SGR report a real terminal would
+// send — but only once a host has hit-tested it. A raw mouse message offered to
+// the component is activity and nothing more: the host owns which gesture was a
+// selection, and which viewport cell the pointer was actually over.
+func TestWheelReachesAnApplicationThatAskedForMouseEvents(t *testing.T) {
+	input := &fakeTerminalInputSender{}
+	m := New(nil)
+	m.input = input
+	m.Enter("session", "%1")
+	m.State.MouseReportingEnabled = true
+
+	m.Update(tea.MouseWheelMsg{X: 4, Y: 2, Button: tea.MouseWheelUp})
+	if len(input.calls) != 0 {
+		t.Fatalf("a raw wheel message was forwarded without the host routing it: %#v", input.calls)
+	}
+	if m.State.LastMouseEventTime.IsZero() {
+		t.Fatal("a mouse message did not count as mouse activity, so the bare-[ gate is blind to it")
+	}
+
+	m.SendWheelNotches(true, 5, 3, 2)
+	m.SendWheelNotches(false, 5, 3, 1)
+	if len(input.calls) != 2 {
+		t.Fatalf("wheel calls = %#v", input.calls)
+	}
+	if got := input.calls[0]; got.kind != "wheel" || !got.up || got.col != 5 || got.row != 3 || got.notches != 2 {
+		t.Fatalf("wheel up call = %#v, want two notches at the pane's own 5,3", got)
+	}
+	if got := input.calls[1]; got.kind != "wheel" || got.up {
+		t.Fatalf("wheel down call = %#v", got)
+	}
+}

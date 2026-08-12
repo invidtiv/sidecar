@@ -82,11 +82,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 func (p *Plugin) newWorkspaceTerminal() *tty.Model {
-	config := tty.DefaultConfig()
-	config.ExitKey = p.getInteractiveExitKey()
-	config.AttachKey = p.getInteractiveAttachKey()
-	config.CopyKey = p.getInteractiveCopyKey()
-	config.PasteKey = p.getInteractivePasteKey()
+	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
 	return tty.New(&config)
 }
@@ -319,7 +315,6 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 	p.interactiveState.PaneWidth = state.PaneWidth
 	p.interactiveState.BracketedPasteEnabled = state.BracketedPasteEnabled
 	p.interactiveState.MouseReportingEnabled = state.MouseReportingEnabled
-	p.interactiveState.PaneMouseReporting = state.MouseReportingEnabled
 	p.interactiveState.LastKeyTime = state.LastKeyTime
 }
 

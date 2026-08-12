@@ -38,195 +38,40 @@ type terminalViewportInput struct {
 	LinkResolver  *terminalLineLinkResolver
 }
 
-type terminalViewportLayout struct {
-	Start          int
-	End            int
-	EffectiveCount int
-	DisplayWidth   int
-	DisplayHeight  int
-	MaxOffset      int
-	AbsoluteStart  int
-	ShowScrollbar  bool
-
-	// PadWidth is the column the content block is padded to before a scrollbar
-	// is joined to it. It tracks the viewport rather than the pane so the
-	// scrollbar stays at the viewport's edge.
-	PadWidth int
-
-	// Fit records how the pane's observed geometry was projected onto the
-	// viewport: letterboxed when the pane is smaller, clipped (with ColOffset
-	// as the first visible column) when it is larger.
-	Fit tty.PaneFit
-
-	// PaneClipped reports that the pane itself does not fit the viewport, as
-	// opposed to Fit.ClippedWidth, which also trips when the scrollbar takes a
-	// column off an otherwise perfectly sized pane.
-	PaneClipped bool
-
-	// PaneTop is the buffer index of pane row 0, so a rendered row maps back to
-	// the pane row tmux would report for it, and so the native cursor lands on
-	// the row it belongs to.
-	//
-	// It comes from the buffer, which was told the split by whoever published
-	// the content — a screen-model frame knows its loaded history rows and its
-	// grid height at the instant it is built, and a capture knows its own row
-	// count and the pane height read with it. Both alternatives were tried and
-	// both drift. The absolute-coordinate form (history_size + cursor_row -
-	// buffer base) mixes two independently observed quantities: display-message
-	// and capture-pane are separate writes, so N lines can scroll into history
-	// between them and the cursor is drawn N rows too high until the pane is
-	// re-seeded. Re-deriving it as "the buffer's last PaneHeight lines" instead
-	// assumes a serialization detail that does not hold: a grid whose final row
-	// is blank ends in a newline that reads as a terminator, the buffer is a row
-	// short, and the cursor is drawn one row too high (td-d29821). Absolute
-	// coordinates are still what scrollback, search, and selection use, where a
-	// transient off-by-N is harmless.
-	PaneTop int
-}
-
-// paneRowAt maps a 0-indexed rendered row to a 0-indexed pane row.
-func (l terminalViewportLayout) paneRowAt(relY int) int {
-	return l.Start + relY - l.PaneTop
-}
+// terminalViewportLayout is the shared layout value. Links, search and the
+// overlaid cursor are drawn on top of it here; where the drawn window *is* is
+// one rule, shared with every other surface that embeds a terminal.
+type terminalViewportLayout = tty.Viewport
 
 type terminalViewportResult struct {
 	Content string
 	Layout  terminalViewportLayout
 }
 
+// viewport is the plugin's render inputs narrowed to the shared layout inputs.
+// This surface always reserves the scrollbar column.
+func (in terminalViewportInput) viewport() tty.ViewportInput {
+	return tty.ViewportInput{
+		Buffer:           in.Buffer,
+		Width:            in.Width,
+		Height:           in.Height,
+		Offset:           in.Offset,
+		OffsetFromBottom: in.OffsetFromBottom,
+		Follow:           in.Follow,
+		TrimTrailing:     in.TrimTrailing,
+		Interactive:      in.Interactive,
+		CursorRow:        in.CursorRow,
+		CursorCol:        in.CursorCol,
+		CursorVisible:    in.CursorVisible,
+		PaneHeight:       in.PaneHeight,
+		PaneWidth:        in.PaneWidth,
+		AbsoluteBase:     in.AbsoluteBase,
+		Scrollbar:        true,
+	}
+}
+
 func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportLayout {
-	layout := terminalViewportLayout{
-		DisplayWidth:  max(in.Width, 0),
-		DisplayHeight: max(in.Height, 0),
-	}
-	if layout.DisplayWidth == 0 || layout.DisplayHeight == 0 {
-		return layout
-	}
-
-	// Project the pane's observed geometry onto the viewport (td-73fa86). The
-	// pane can be any size — another sidecar instance may own the session — so
-	// the requested size is only a request.
-	fit := tty.FitPane(tty.PaneFitInput{
-		ViewWidth:  layout.DisplayWidth,
-		ViewHeight: layout.DisplayHeight,
-		PaneWidth:  in.PaneWidth,
-		PaneHeight: in.PaneHeight,
-		CursorCol:  in.CursorCol,
-		HasCursor:  in.Interactive && in.CursorVisible,
-	})
-	layout.DisplayWidth = fit.Width
-	// A shorter pane only letterboxes while the viewport mirrors the live pane.
-	// Outside interactive mode the viewport is a scrollback window, so the extra
-	// rows show more history rather than stretching the pane.
-	if !in.Interactive && fit.LetterboxedHeight {
-		fit.Height = layout.DisplayHeight
-		fit.LetterboxedHeight = false
-	}
-	layout.DisplayHeight = fit.Height
-	layout.PadWidth = layout.DisplayWidth
-	// Record the pane-vs-viewport verdict before the scrollbar steals a column:
-	// losing a column to chrome is not a geometry mismatch and must not read as
-	// one (td-73fa86).
-	layout.PaneClipped = fit.Clipped()
-	if layout.DisplayWidth > 1 {
-		// The scrollbar owns the viewport's final column even when all content
-		// fits; RenderScrollbar draws a spacer in that state. Keeping the chrome
-		// stable prevents a newly published frame from clipping the application's
-		// last column while the corresponding tmux resize is still in flight
-		// (td-0818ef). A pane already sized to the remaining content area fits
-		// as-is; subtracting again would clip its own final column (td-e8bdcf).
-		contentWidth := max(in.Width, 0) - 1
-		layout.DisplayWidth = min(layout.DisplayWidth, contentWidth)
-		fit = fit.WithWidth(layout.DisplayWidth, in.PaneWidth, in.CursorCol, in.Interactive && in.CursorVisible)
-		// Keep the scrollbar pinned to the viewport edge even when a narrower
-		// pane letterboxes the content.
-		layout.PadWidth = max(layout.DisplayWidth, contentWidth)
-		layout.ShowScrollbar = true
-	}
-	layout.Fit = fit
-	// Geometry is settled above so hit testing can ask for it without a buffer;
-	// only the scroll window needs one.
-	if in.Buffer == nil {
-		return layout
-	}
-
-	lineCount, paneTop, paneKnown := in.Buffer.PaneWindow()
-	// Pane row 0, in buffer coordinates. Settled against the full line count
-	// before any trailing-blank trim: the producer split describes the live
-	// grid including blank final rows (td-d29821).
-	//
-	// Between a resize and the capture that follows it, paneTop still describes
-	// the old pane height while in.PaneHeight is already the new one, so the
-	// cursor sits off by the delta for one poll. That is the accepted cost of
-	// taking the split from the producer: the alternative — inferring it from
-	// the buffer's tail — was self-consistent across a resize but wrong whenever
-	// the grid's last row was blank, which is every prompt at the bottom of a
-	// screen rather than the instant after a drag (td-d29821).
-	switch {
-	case paneKnown:
-		layout.PaneTop = min(paneTop, lineCount)
-	case in.PaneHeight > 0:
-		layout.PaneTop = max(lineCount-in.PaneHeight, 0)
-	}
-
-	// Live-grid follow: geometry is known and we are pinned to the live edge.
-	// Full-screen programs (Grok, Claude, …) keep intentional blank rows in the
-	// pane. Trimming them shrinks EffectiveCount so MaxOffset walks Start up
-	// into history — painting the previous bottom chrome under the header until
-	// interactive mode (which never trims) re-aligns it.
-	liveGridFollow := in.Follow && (paneKnown || in.PaneHeight > 0)
-
-	layout.EffectiveCount = lineCount
-	if in.TrimTrailing && !liveGridFollow {
-		layout.EffectiveCount = max(in.Buffer.LastNonEmptyLine()+1, 0)
-		if layout.PaneTop > layout.EffectiveCount {
-			layout.PaneTop = layout.EffectiveCount
-		}
-	}
-	layout.MaxOffset = max(layout.EffectiveCount-layout.DisplayHeight, 0)
-
-	switch {
-	case liveGridFollow:
-		// Pin to the live grid rather than MaxOffset of a (possibly trimmed)
-		// effective count. When the pane is taller than the viewport, show its
-		// bottom; when shorter, show from PaneTop and let render pad.
-		paneRows := lineCount - layout.PaneTop
-		if paneRows <= layout.DisplayHeight {
-			layout.Start = layout.PaneTop
-		} else {
-			layout.Start = max(lineCount-layout.DisplayHeight, layout.PaneTop)
-		}
-	case in.Follow:
-		layout.Start = layout.MaxOffset
-	case in.OffsetFromBottom:
-		layout.Start = layout.MaxOffset - min(max(in.Offset, 0), layout.MaxOffset)
-	default:
-		layout.Start = min(max(in.Offset, 0), layout.MaxOffset)
-	}
-	// A pane taller than the viewport is clipped, so pin the window to the
-	// cursor when following: the live row matters more than the pane's last
-	// row, which is usually blank padding below it (td-73fa86).
-	// Gated on interactive mode, which is the only state that carries a cursor
-	// row at all; ClippedHeight implies observed geometry, so PaneTop is already
-	// set. Deliberately not gated on the cursor being *visible*: a full-screen
-	// app that hides it (less, some TUIs) still has a live row, and anchoring on
-	// the pane's tail instead would clip exactly what the user is looking at.
-	if fit.ClippedHeight && in.Follow && in.Interactive {
-		cursorLine := layout.PaneTop + in.CursorRow
-		layout.Start = min(layout.Start, max(cursorLine-layout.DisplayHeight+1, 0))
-	}
-	// Live-grid follow reads from the full buffer so blank final pane rows stay
-	// addressable; scrollback browsing still ends at EffectiveCount after trim.
-	endBound := layout.EffectiveCount
-	if liveGridFollow {
-		endBound = lineCount
-	}
-	layout.End = min(layout.Start+layout.DisplayHeight, endBound)
-	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
-	if !paneKnown && in.PaneHeight <= 0 {
-		layout.PaneTop = layout.Start
-	}
-	return layout
+	return tty.FitViewport(in.viewport())
 }
 
 func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) terminalViewportResult {
@@ -412,27 +257,9 @@ func rowBackgrounds(row string) map[string]struct{} {
 }
 
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
-	layout := calculateTerminalViewportLayout(in)
-	if in.Buffer == nil || layout.EffectiveCount == 0 ||
-		!shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) ||
-		layout.DisplayWidth <= 0 || layout.DisplayHeight <= 0 {
+	if !shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) {
 		return 0, 0, false
 	}
-	visibleRows := layout.End - layout.Start
-	if in.PaneHeight > 0 && (in.Interactive || in.Follow) {
-		visibleRows = layout.DisplayHeight
-	}
-	if visibleRows <= 0 {
-		return 0, 0, false
-	}
-	// Pane row 0 is a buffer index; the cursor is CursorRow rows below it, and
-	// the scroll offset turns that into a rendered row. This is the same PaneTop
-	// hit testing maps clicks through, so the drawn cursor and the pane row tmux
-	// reports for it can never disagree (td-d29821).
-	y = layout.PaneTop + in.CursorRow - layout.Start
-	if y < 0 || y >= visibleRows {
-		return 0, 0, false
-	}
-	x = min(max(in.CursorCol-layout.Fit.ColOffset, 0), layout.DisplayWidth-1)
-	return x, y, true
+	shared := in.viewport()
+	return tty.ViewportCursor(tty.FitViewport(shared), shared)
 }

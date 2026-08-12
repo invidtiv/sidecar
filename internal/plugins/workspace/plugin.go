@@ -209,17 +209,7 @@ type Plugin struct {
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	selectionTermPanel            bool
-	pendingClickResolution        clickResolution // what a release without motion means
-	pendingClickX                 int             // ... and where the button went down
-	pendingClickY                 int
-	selectionUnit                 selectionUnit     // granularity the live gesture extends by
-	selectionUnitStart            ui.SelectionPoint // anchor unit's far edges, kept whole in both directions
-	selectionUnitEnd              ui.SelectionPoint
-	selectionDragX                int    // last pointer position of the live selection drag
-	selectionDragY                int    // ... which the edge auto-scroll tick re-reads
-	selectionGeneration           uint64 // invalidates auto-scroll ticks once a gesture ends
-	selectionAutoScrollPending    bool
-	selectionAutoScrollTicks      int // ticks since the last real drag motion
+	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
 	paneGeometry                  map[string]paneGeometry
@@ -435,12 +425,11 @@ type Plugin struct {
 	autoShellChecked bool
 
 	// Interactive mode state (feature-gated behind tmux_interactive_input)
-	interactiveState   *InteractiveState
-	lastScrollTime     time.Time // For scroll debouncing (td-e2ce50)
+	interactiveState *InteractiveState
+	// wheel coalesces a trackpad flick, so this surface takes the same amount of
+	// one as every other terminal surface does.
+	wheel              tty.WheelBurst
 	lastMouseEventTime time.Time // For suppressing split-CSI "[" near mouse activity
-	scrollBurstCount   int       // Consecutive scroll events for burst detection
-	scrollBurstStarted time.Time // When current burst started
-	pendingScrollDelta int       // Wheel delta accumulated while burst debounce is active
 	mouseFragment      string    // Incomplete split SGR mouse input awaiting its next chunk
 	mouseFragmentTime  time.Time // Last update to mouseFragment
 

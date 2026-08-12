@@ -321,14 +321,6 @@ type cursorPositionMsg struct {
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
 type paneResizedMsg struct{}
 
-// interactiveClickSentMsg reports asynchronous click forwarding back to the
-// event loop, where interactive state may be mutated safely.
-type interactiveClickSentMsg struct {
-	SessionName string
-	Interaction *InteractiveState
-	Err         error
-}
-
 // FetchPRListMsg delivers the list of open PRs from gh CLI.
 type FetchPRListMsg struct {
 	OperationScope

@@ -658,19 +658,19 @@ func TestInteractiveMouseReportingNonLinkClickStillForwards(t *testing.T) {
 	p := newSelectionTestPlugin()
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
-	p.interactiveState.MouseReportingEnabled = true
+	attachLiveTerminal(p, true)
 
 	action := actionAt(3, 4)
 	_ = p.handleMouseClick(action)
-	if p.pendingClickResolution != clickResolutionForward {
-		t.Fatalf("non-link click resolution = %v, want forward", p.pendingClickResolution)
+	if p.pointer.Resolution != tty.ClickForward {
+		t.Fatalf("non-link click resolution = %v, want forward", p.pointer.Resolution)
 	}
 
 	action.Shift = true
-	p.pendingClickResolution = clickResolutionNone
+	p.pointer.Resolution = tty.ClickNone
 	_ = p.handleMouseClick(action)
-	if p.pendingClickResolution != clickResolutionNone {
-		t.Fatalf("shift click resolution = %v, want local selection gesture", p.pendingClickResolution)
+	if p.pointer.Resolution != tty.ClickNone {
+		t.Fatalf("shift click resolution = %v, want local selection gesture", p.pointer.Resolution)
 	}
 }
 
@@ -1149,5 +1149,33 @@ func TestLinkDecorationPreservesSearchAndSelectionRendering(t *testing.T) {
 	if !strings.Contains(result.Content, "\x1b]8;;https://example.com\x1b\\") ||
 		!strings.Contains(result.Content, ui.GetSelectionBgANSI()) {
 		t.Fatalf("combined rendering lost link/highlight controls: %q", result.Content)
+	}
+}
+
+// A mouse-down that a link takes never arms a gesture, so the previous press's
+// resolution must not survive it: the link's own release would otherwise fire a
+// click into the application on top of opening the link.
+func TestALinkClaimedPressDropsThePreviousGesturesClick(t *testing.T) {
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("https://example.com/docs and ordinary text")
+	p := newSelectionTestPlugin()
+	p.width, p.height = 100, 24
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
+	attachLiveTerminal(p, true)
+
+	// An ordinary press over a mouse-reporting pane arms the application's click.
+	_ = p.handleMouseClick(actionAt(30, 4))
+	if p.pointer.Resolution != tty.ClickForward {
+		t.Fatalf("press over a mouse-reporting pane armed %v, want forward", p.pointer.Resolution)
+	}
+
+	// The next press lands on a link, which takes the click outright.
+	if cmd := p.handleMouseClick(actionAt(4, 4)); cmd == nil {
+		t.Fatal("the click on the URL did not activate it")
+	}
+	if p.pointer.Resolution != tty.ClickNone {
+		t.Fatalf("a link-claimed press left %v armed from the gesture before it",
+			p.pointer.Resolution)
 	}
 }

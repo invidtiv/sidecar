@@ -1,0 +1,151 @@
+package tty
+
+import (
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// A split SGR mouse report can reach a host as ordinary key text. Two windows
+// tell the difference between that and real typing: the escape that opened the
+// report was delivered microseconds before its continuation, and any successfully
+// parsed mouse event comes from the same burst of terminal output as the leak.
+const (
+	EscapeFragmentWindow = 5 * time.Millisecond
+	MouseFragmentWindow  = 10 * time.Millisecond
+)
+
+// KeyGate is what a terminal surface does with a key press before any of it
+// becomes input for the pane.
+type KeyGate uint8
+
+const (
+	// KeyGateSend is an ordinary key: send it, preceded by whatever escape the
+	// double-escape window is still holding.
+	KeyGateSend KeyGate = iota
+	// KeyGateDrop is a fragment of an SGR mouse report that the input reader
+	// split across reads and delivered as text. Any held escape belongs to that
+	// report rather than to the keyboard, so it is dropped with the fragment.
+	KeyGateDrop
+	// KeyGateHoldEscape is an escape that must not be forwarded yet: it may be
+	// the first half of the double-escape that leaves interactive mode.
+	KeyGateHoldEscape
+	// KeyGateExitDoubleEscape is the second escape inside that window.
+	KeyGateExitDoubleEscape
+)
+
+// KeyGateInput is one key press and the two clocks the decision reads.
+type KeyGateInput struct {
+	Msg tea.KeyPressMsg
+
+	// EscapePressed and EscapeAt are the state of the double-escape window.
+	EscapePressed bool
+	EscapeAt      time.Time
+
+	// LastMouseAt is when a mouse event last reached the host, whether or not it
+	// was routed to this surface.
+	LastMouseAt time.Time
+
+	Now time.Time
+}
+
+// GateKey classifies a key press over a live terminal surface. It decides only
+// what kind of key this is; what a host does about it — how it leaves the mode,
+// how it sends — stays the host's.
+//
+// With all-motion mouse reporting on, the terminal emits an SGR sequence for
+// every pointer movement, and the input reader can split one across reads:
+//
+//	Read 1: ESC        → an escape key press, or consumed internally
+//	Read 2: [          → a bare bracket rune, the leak
+//	Read 3: <35;10;20M → runes, or a parsed mouse event
+//
+// The escape window catches the case where the ESC arrived as a key press. When
+// the reader consumed the ESC itself, nothing marks the window, and only the
+// proximity of a real mouse event distinguishes the leak from someone typing a
+// bracket.
+func GateKey(in KeyGateInput) KeyGate {
+	msg := in.Msg
+	if msg.Code == tea.KeyEscape {
+		if in.EscapePressed {
+			return KeyGateExitDoubleEscape
+		}
+		return KeyGateHoldEscape
+	}
+	if len(msg.Text) > 0 && LooksLikeMouseFragment(msg.Text) {
+		return KeyGateDrop
+	}
+	if msg.Text == "[" {
+		escGate := in.EscapePressed && in.Now.Sub(in.EscapeAt) < EscapeFragmentWindow
+		mouseGate := in.Now.Sub(in.LastMouseAt) < MouseFragmentWindow
+		if escGate || mouseGate {
+			return KeyGateDrop
+		}
+	}
+	return KeyGateSend
+}
+
+// SnapBackCooldown suppresses snap-back for input arriving right after a scroll.
+// A flick that leaks mouse-report bytes as key text would otherwise throw the
+// viewport back to the live edge in the middle of the gesture.
+const SnapBackCooldown = 100 * time.Millisecond
+
+// ShouldSnapBack reports whether a key press is real typing, which a scrolled-back
+// viewport owes a jump to the live edge: keystrokes that land under a window
+// parked in history are invisible as they are typed.
+//
+// sinceScroll is how long ago the surface last scrolled.
+func ShouldSnapBack(msg tea.KeyPressMsg, sinceScroll time.Duration) bool {
+	if sinceScroll < SnapBackCooldown {
+		return false
+	}
+	if len(msg.Text) > 0 {
+		if LooksLikeMouseFragment(msg.Text) {
+			return false
+		}
+		// Multi-character text is a paste or a split sequence, never one keystroke.
+		return len([]rune(msg.Text)) == 1
+	}
+	// An escape may be the first byte of a mouse report; the double-escape window
+	// owns the real one.
+	if msg.Code == tea.KeyEscape {
+		return false
+	}
+	return true
+}
+
+// ScrollbackMove is where a shift-scrollback key puts the window. Rows is a
+// relative move, positive towards older output; the two jumps are absolute.
+type ScrollbackMove struct {
+	Rows     int
+	ToOldest bool
+	ToLive   bool
+}
+
+// MapScrollbackKey turns a shift-modified navigation key into a window move over
+// captured output. Shift is the modifier because every unshifted key belongs to
+// the pane.
+//
+// pageSize is the surface's drawn height; a page keeps one row of context, the
+// way a pager does.
+func MapScrollbackKey(msg tea.KeyPressMsg, pageSize int) (ScrollbackMove, bool) {
+	if !msg.Mod.Contains(tea.ModShift) {
+		return ScrollbackMove{}, false
+	}
+	page := max(pageSize-1, 1)
+	switch msg.Code {
+	case tea.KeyUp:
+		return ScrollbackMove{Rows: 1}, true
+	case tea.KeyDown:
+		return ScrollbackMove{Rows: -1}, true
+	case tea.KeyPgUp:
+		return ScrollbackMove{Rows: page}, true
+	case tea.KeyPgDown:
+		return ScrollbackMove{Rows: -page}, true
+	case tea.KeyHome:
+		return ScrollbackMove{ToOldest: true}, true
+	case tea.KeyEnd:
+		return ScrollbackMove{ToLive: true}, true
+	}
+	return ScrollbackMove{}, false
+}

@@ -466,7 +466,7 @@ func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
 	p.shellSelected = true
 	p.previewOffset = 0
 	p.autoScrollOutput = true
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	cmd := p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	if cmd == nil {
@@ -498,7 +498,7 @@ func TestForwardedWheelPinsViewportToLiveOutput(t *testing.T) {
 	p.shellSelected = true
 	p.previewOffset = 12
 	p.autoScrollOutput = false
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
@@ -514,7 +514,7 @@ func TestWheelDownForwardsWheelDownButton(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
@@ -537,7 +537,7 @@ func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
 	p.shellSelected = true
 	p.previewOffset = 5
 	p.autoScrollOutput = false
-	p.interactiveState.PaneMouseReporting = false
+	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
@@ -566,7 +566,7 @@ func TestWheelWithAltScrollsScrollbackDespiteMouseTracking(t *testing.T) {
 	p.shellSelected = true
 	p.previewOffset = 5
 	p.autoScrollOutput = false
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Alt: true})
 	tty.WaitForPendingSends()
@@ -592,7 +592,7 @@ func TestWheelOutsidePaneFallsBackToScrollback(t *testing.T) {
 	p.shellSelected = true
 	p.previewOffset = 5
 	p.autoScrollOutput = false
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 0, Y: 0})
 	if p.previewOffset != 4 {
@@ -635,7 +635,7 @@ func TestForwardedWheelSendsOneReportPerNotch(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 
 	// Exactly what mouse.HandleMouse produces for a single wheel-up notch.
 	p.handleMouseScroll(mouse.MouseAction{
@@ -677,7 +677,7 @@ func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.interactiveState.PaneMouseReporting = true
+	attachLiveTerminal(p, true)
 	p.interactiveState.LastKeyTime = time.Now().Add(-time.Hour)
 
 	p.handleMouseScroll(mouse.MouseAction{
@@ -694,7 +694,7 @@ func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
 
 	// The deferral still applies when the wheel moves sidecar's own viewport,
 	// which repaints without a capture.
-	p.interactiveState.PaneMouseReporting = false
+	attachLiveTerminal(p, false)
 	if _, deferred := p.interactiveScrollDelay(); !deferred {
 		t.Fatal("scroll-burst deferral lost for locally handled scrolling")
 	}

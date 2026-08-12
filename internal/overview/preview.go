@@ -6,24 +6,34 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-// The global Workspaces preview is one read-only terminal box. Not a pane tree,
-// not a docview, not a workspace plugin instance per project: the plan is
-// explicit that rendering pane-tree layouts globally is deferred, and that a
-// project whose own preview has a document open still previews here as its
-// selected pane's captured output alone.
+// The global Workspaces preview is one terminal box. Not a pane tree, not a
+// docview, not a workspace plugin instance per project: the plan is explicit
+// that rendering pane-tree layouts globally is deferred, and that a project
+// whose own preview has a document open still previews here as its selected
+// pane's captured output alone.
 //
-// It is also deliberately cheap. There is exactly one capture in flight at a
-// time — for the selected pane and nothing else — started by a selection change
-// and repeated only while the tab is visible. No control-mode client, no output
-// buffer, no watcher, and none of them per project. A capture that arrives for
-// a superseded generation or a pane the cursor has already left is dropped.
+// The box has two states, and they differ only in where the output comes from.
+// Watching is deliberately cheap: exactly one capture in flight at a time — for
+// the selected pane and nothing else — started by a selection change and
+// repeated only while the tab is visible. No control-mode client, no watcher,
+// and none of them per project. A capture that arrives for a superseded
+// generation or a pane the cursor has already left is dropped. Typing
+// (internal/overview/interactive.go) hands the same pane to internal/tty's
+// embedded terminal, which owns the live feed for as long as the user is in it;
+// the capture cadence stands down meanwhile so one pane never has two readers.
 //
-// Nothing captured here is persisted. The snapshot lives in memory for as long
+// Both states put their output in the same kind of buffer and draw it through
+// the same window, which is why selection, the wheel and copy behave identically
+// in each. Nothing captured is persisted: the buffer lives in memory for as long
 // as the tab is on screen and is released when it is not, so a pane's contents
 // never reach config, state, or diagnostics.
 
@@ -93,13 +103,45 @@ type previewState struct {
 	// the user has already moved off.
 	generation  int
 	workspaceID string
-	snapshot    termpreview.Snapshot
+	capture     previewCapture
 	reason      string
+	// offset is rows scrolled back from the live bottom. Zero follows output.
 	offset      int
 	scheduled   bool
 	requestedAt time.Time
 
+	// buffer is the captured output while the pane is being watched. It is the
+	// same kind of buffer the live terminal keeps, so selection, the wheel and
+	// copy work identically in both states rather than only while typing.
+	buffer *tty.OutputBuffer
+
+	// selection, pointer and wheel are the shared interaction layer's state: what
+	// is selected, what the gesture in flight will mean, and how much of a flick
+	// the surface has taken.
+	selection ui.SelectionState
+	pointer   tty.Pointer
+	wheel     tty.WheelBurst
+
+	// scrollbackLimitShown records that the reader has been told once where the
+	// rest of this pane's history is.
+	scrollbackLimitShown bool
+
+	// terminal is the embedded terminal the preview hands the keyboard to. It is
+	// built on first use and reused afterwards, so a browser nobody has typed in
+	// still costs nothing.
+	terminal             previewTerminal
+	interactiveHintShown bool
+
 	metrics PreviewMetrics
+}
+
+// previewCapture is the identity of the last capture the box accepted. The
+// contents live in the buffer beside it; this is what late captures are rejected
+// against and what the header hints are phrased from.
+type previewCapture struct {
+	PaneID     string
+	CapturedAt time.Time
+	Err        error
 }
 
 // PreviewMetrics is what the cadence was tuned against: how many captures the
@@ -153,14 +195,28 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 
 // releasePreview cancels whatever the preview was doing and forgets what it
 // captured. Captured terminal contents are memory-only, and a tab nobody is
-// looking at has no reason to keep holding them.
+// looking at has no reason to keep holding them — including the live terminal's
+// buffer and its control-mode subscription.
 func (m *Model) releasePreview() {
+	if m.preview.terminal != nil {
+		m.preview.terminal.Exit()
+	}
 	m.preview.generation++
 	m.preview.workspaceID = ""
-	m.preview.snapshot = termpreview.Snapshot{}
+	m.resetPreviewContent()
 	m.preview.reason = ""
-	m.preview.offset = 0
 	m.preview.scheduled = false
+}
+
+// resetPreviewContent drops the captured output and everything anchored to it.
+// A selection names buffer lines, so it cannot outlive the buffer it named.
+func (m *Model) resetPreviewContent() {
+	m.preview.capture = previewCapture{}
+	m.preview.buffer = nil
+	m.preview.offset = 0
+	m.preview.selection.Clear()
+	m.preview.pointer.Abandon()
+	m.preview.pointer.ResetUnit()
 }
 
 // previewSync starts a capture when the selection has moved to a different
@@ -189,10 +245,15 @@ func (m *Model) previewSync() tea.Cmd {
 // the tab becoming visible, an explicit refresh — so none of them waits out a
 // poll interval before showing anything.
 func (m *Model) previewSelect() tea.Cmd {
+	// Binding the preview to a selection ends any live terminal: it is attached
+	// to the pane the user was typing in, and it must not keep the keyboard —
+	// or its control-mode subscription — while the browser shows another item.
+	if m.preview.terminal != nil {
+		m.preview.terminal.Exit()
+	}
 	m.preview.generation++
 	m.preview.scheduled = false
-	m.preview.snapshot = termpreview.Snapshot{}
-	m.preview.offset = 0
+	m.resetPreviewContent()
 	m.preview.reason = ""
 
 	workspace, ok := m.SelectedWorkspace()
@@ -253,16 +314,18 @@ func (m *Model) applyPreview(msg previewMsg) tea.Cmd {
 	}
 	m.preview.metrics.LastLatency = m.now().Sub(m.preview.requestedAt)
 	if msg.Err != nil {
-		m.preview.snapshot = termpreview.Snapshot{PaneID: msg.PaneID, Err: msg.Err, CapturedAt: msg.At}
+		m.preview.capture = previewCapture{PaneID: msg.PaneID, Err: msg.Err, CapturedAt: msg.At}
 		m.preview.reason = "Could not read this pane: " + msg.Err.Error()
 		return m.schedulePreviewPoll()
 	}
 	m.preview.reason = ""
-	m.preview.snapshot = termpreview.Snapshot{
-		PaneID:     msg.PaneID,
-		Lines:      termpreview.SnapshotLines(msg.Output),
-		CapturedAt: msg.At,
+	m.preview.capture = previewCapture{PaneID: msg.PaneID, CapturedAt: msg.At}
+	if m.preview.buffer == nil {
+		m.preview.buffer = tty.NewOutputBuffer(previewCaptureLines)
 	}
+	// The same call the live terminal makes with its own captures, so a watched
+	// pane and a driven one are one kind of content behind one kind of window.
+	m.preview.buffer.ApplySnapshot(tty.PaneSnapshot{Output: msg.Output})
 	return m.schedulePreviewPoll()
 }
 
@@ -289,6 +352,12 @@ func (m *Model) previewInterval() time.Duration {
 	if !m.preview.visible || m.preview.workspaceID == "" || m.preview.reason != "" {
 		return 0
 	}
+	// A live terminal is already following this pane. Capturing it as well would
+	// give one pane two readers and paint the terminal's own frames over with
+	// staler ones.
+	if m.PreviewInteractive() {
+		return 0
+	}
 	if m.preview.focus == focusPreview {
 		return previewFocusedPoll
 	}
@@ -311,39 +380,116 @@ func (m *Model) pollPreview(msg previewPollMsg) tea.Cmd {
 	}
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
-		m.preview.snapshot = termpreview.Snapshot{}
+		m.resetPreviewContent()
 		return nil
 	}
 	m.preview.metrics.Polls++
 	return m.capturePreviewCmd(workspace)
 }
 
-// PreviewFocused reports that the read-only preview owns the keyboard.
+// PreviewFocused reports that the preview owns the keyboard.
 func (m *Model) PreviewFocused() bool { return m.preview.focus == focusPreview }
 
-// previewKey handles a key while the preview has focus. Every one of them
-// scrolls or moves focus: there is no path here that reaches a terminal, which
-// is what "read-only" has to mean in the key routing and not only in the docs.
-func (m *Model) previewKey(key string) (bool, tea.Cmd) {
+// previewKey handles a key while the preview has focus.
+//
+// While the pane is live every key belongs to it, ctrl+c included: the project
+// plugin forwards it so a user can interrupt what is running in the pane
+// (internal/app's workspace-interactive branch), and an embedded terminal that
+// could not send SIGINT would be the odd one out. The ways out are the terminal
+// component's own — the exit key or a double escape, both answered inside it —
+// and quitting sidecar is one exit key away.
+//
+// While the pane is merely being watched, these keys scroll it, move focus, or
+// ask for the keyboard.
+func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	key := msg.String()
+	// Acts on the terminal itself come first in both states, and they are the
+	// same acts on both surfaces: the configured copy chord, select-all, and
+	// shift-scrollback. Everything after this is the browser's own navigation,
+	// which a live pane does not have.
+	if handled, cmd := m.terminalKey(msg); handled {
+		return true, cmd
+	}
+	if m.PreviewInteractive() {
+		// Typing is owed a view of itself: a window left in scrollback would take
+		// the keystroke and show none of it.
+		if m.preview.offset != 0 && tty.ShouldSnapBack(msg, m.now().Sub(m.preview.wheel.LastAt())) {
+			m.pinPreviewToLive()
+		}
+		return true, m.forwardToTerminal(msg)
+	}
 	page := max(1, m.previewRows()/2)
 	switch key {
+	case interactiveEnterKey, interactiveEnterKeyAlt:
+		return true, m.enterPreviewInteractive()
 	case "left", "h", "esc":
-		m.focusList()
-		return true, nil
+		return true, m.focusList()
 	case "j", "down":
-		m.scrollPreview(-1)
+		m.scrollWatchedPreview(-1)
 	case "k", "up":
-		m.scrollPreview(1)
+		m.scrollWatchedPreview(1)
 	case "ctrl+d", "pgdown":
-		m.scrollPreview(-page)
+		m.scrollWatchedPreview(-page)
 	case "ctrl+u", "pgup":
-		m.scrollPreview(page)
+		m.scrollWatchedPreview(page)
 	case "G", "end":
+		m.clearPreviewSelection()
 		m.preview.offset = 0
 	case "g", "home":
+		m.clearPreviewSelection()
 		m.preview.offset = m.previewMaxOffset()
 	default:
 		return false, nil
+	}
+	return true, nil
+}
+
+// scrollWatchedPreview moves the window with the keyboard, which is a scroll
+// made outside a pointer gesture: a selection anchored to the rows it leaves
+// behind would highlight rows the user never picked.
+func (m *Model) scrollWatchedPreview(delta int) {
+	m.clearPreviewSelection()
+	m.scrollPreview(delta)
+}
+
+// terminalKey answers the chords that act on the terminal surface rather than on
+// the browser around it. They are answered in both of the preview's states,
+// because the selection they act on exists in both.
+func (m *Model) terminalKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	config := m.TerminalConfig()
+	if config.IsCopyChord(msg) {
+		return true, m.copyPreviewSelectionCmd()
+	}
+	if msg.String() == "ctrl+a" {
+		m.selectAllPreviewOutput()
+		return true, nil
+	}
+	return m.previewScrollbackKey(msg)
+}
+
+// previewScrollbackKey walks the window through scrollback while a pane is live.
+// Shift is the modifier because every unshifted key is the pane's.
+func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !m.PreviewInteractive() {
+		return false, nil
+	}
+	move, ok := tty.MapScrollbackKey(msg, m.previewRows())
+	if !ok {
+		return false, nil
+	}
+	m.clearPreviewSelection()
+	switch {
+	case move.ToOldest:
+		m.preview.offset = m.previewMaxOffset()
+		return true, m.notePreviewScrollbackLimit()
+	case move.ToLive:
+		m.preview.offset = 0
+	default:
+		before := m.preview.offset
+		m.scrollPreview(move.Rows)
+		if move.Rows > 0 && m.preview.offset == before {
+			return true, m.notePreviewScrollbackLimit()
+		}
 	}
 	return true, nil
 }
@@ -360,28 +506,186 @@ func (m *Model) focusPreviewPane() tea.Cmd {
 	if m.previewNarrow() {
 		m.preview.full = true
 	}
-	if m.preview.reason == "" && m.preview.snapshot.Empty() {
+	if m.preview.reason == "" && m.previewBuffer() == nil {
 		return m.previewSelect()
 	}
 	return nil
 }
 
-func (m *Model) focusList() {
+// focusList moves focus back to the list. Leaving the preview leaves any live
+// terminal with it: the keyboard cannot be in two places, and a pane that kept
+// its subscription while the user browsed elsewhere would be a reader nobody is
+// reading.
+func (m *Model) focusList() tea.Cmd {
+	cmd := m.exitPreviewInteractive()
 	m.preview.focus = focusList
 	m.preview.full = false
+	// Focus cannot rest on something nobody draws: with the sidebar hidden the
+	// layout is preview-only, so the list comes back with the keyboard.
+	m.sidebarVisible = true
+	return cmd
 }
 
+// scrollPreview moves the window delta rows back through scrollback, negative
+// towards the live edge.
 func (m *Model) scrollPreview(delta int) {
+	if delta == 0 {
+		return
+	}
 	m.preview.offset = min(max(m.preview.offset+delta, 0), m.previewMaxOffset())
 }
 
-func (m *Model) previewMaxOffset() int {
-	return max(0, len(m.preview.snapshot.Lines)-m.previewRows())
+// scrollPreviewRows moves the window by delta rendered rows, positive downwards,
+// which is the direction the shared edge-scroll rule reports.
+func (m *Model) scrollPreviewRows(delta int) { m.scrollPreview(-delta) }
+
+// pinPreviewToLive returns the window to the live edge, dropping a selection
+// anchored to rows the jump leaves behind. It is what an application taking the
+// wheel owes the viewport: while it owns what the pane shows, a window left
+// scrolled back would sit frozen over stale rows as the app repainted below it.
+func (m *Model) pinPreviewToLive() {
+	if m.preview.offset == 0 {
+		return
+	}
+	m.clearPreviewSelection()
+	m.preview.offset = 0
 }
+
+func (m *Model) previewMaxOffset() int { return m.previewWindow().layout.MaxOffset }
 
 // previewRows is the body height of the preview box at the last rendered size.
 func (m *Model) previewRows() int {
+	if window := m.previewWindow(); window.ok {
+		return max(window.layout.DisplayHeight, 1)
+	}
 	return max(1, m.height-termpreview.HeaderRows)
+}
+
+// previewBuffer is the captured output the box is drawing: the live terminal's
+// own buffer while the user is typing into it, and the browser's capture buffer
+// while it is being watched. One kind of content behind one kind of window is
+// what lets selection, the wheel and copy behave the same in both states.
+func (m *Model) previewBuffer() *tty.OutputBuffer {
+	if m.PreviewInteractive() {
+		return m.preview.terminal.Buffer()
+	}
+	return m.preview.buffer
+}
+
+// previewWindow is the drawn window of the preview box: where it sits on screen,
+// and which buffer lines land in it. Hit testing, scrolling, the native cursor
+// and the renderer all read this one answer, so a click can never land on a
+// different cell than the one the user aimed at.
+type previewWindow struct {
+	surface termpreview.Surface
+	input   tty.ViewportInput
+	layout  tty.Viewport
+	ok      bool
+}
+
+func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
+	input := tty.ViewportInput{
+		Buffer:           m.previewBuffer(),
+		Width:            width,
+		Height:           height,
+		Offset:           m.preview.offset,
+		OffsetFromBottom: true,
+		Follow:           m.preview.offset == 0,
+		Scrollbar:        true,
+		// A watched pane is a scrollback window, so tmux's trailing blank rows are
+		// not content. A live one is a grid, whose blank rows are.
+		TrimTrailing: !m.PreviewInteractive(),
+	}
+	if m.PreviewInteractive() {
+		input.Interactive = true
+		input.PaneWidth, input.PaneHeight = m.preview.terminal.PaneSize()
+		input.CursorRow, input.CursorCol, input.CursorVisible = m.preview.terminal.CursorState()
+	}
+	return input
+}
+
+func (m *Model) previewWindow() previewWindow {
+	surface, ok := m.previewSurface()
+	if !ok {
+		return previewWindow{}
+	}
+	input := m.previewViewportInput(surface.Width, surface.Height)
+	return previewWindow{surface: surface, input: input, layout: tty.FitViewport(input), ok: true}
+}
+
+// previewGeometry places the drawn content for the shared hit tests. The rect is
+// the surface the layout named, so hit testing and pixels cannot disagree.
+func (m *Model) previewGeometry() (tty.Geometry, bool) {
+	window := m.previewWindow()
+	if !window.ok {
+		return tty.Geometry{}, false
+	}
+	return tty.Geometry{
+		Content: mouse.Rect{
+			X: window.surface.X, Y: window.surface.Y,
+			W: window.layout.DisplayWidth, H: window.layout.DisplayHeight,
+		},
+		Start:     window.layout.Start,
+		End:       window.layout.End,
+		ColOffset: window.layout.Fit.ColOffset,
+		TabWidth:  tty.DefaultTabWidth,
+	}, true
+}
+
+// previewPaneCoords maps a screen position to the 1-indexed pane coordinates
+// tmux's mouse protocol expects, and refuses everything that is not a live pane
+// cell.
+func (m *Model) previewPaneCoords(x, y int) (col, row int, ok bool) {
+	if !m.PreviewInteractive() {
+		return 0, 0, false
+	}
+	window := m.previewWindow()
+	if !window.ok {
+		return 0, 0, false
+	}
+	paneWidth, paneHeight := m.preview.terminal.PaneSize()
+	if paneWidth <= 0 || paneHeight <= 0 {
+		paneWidth, paneHeight = window.layout.DisplayWidth, window.layout.DisplayHeight
+	}
+	return tty.PaneCoordsAt(window.layout, x-window.surface.X, y-window.surface.Y, paneWidth, paneHeight)
+}
+
+// clearPreviewSelection drops a selection made outside a pointer gesture —
+// scrolling away from it, leaving a pane, pinning back to live. The anchor unit
+// goes with it: a word span left over from an old double-click would otherwise
+// redefine where the next shift-click extends from.
+func (m *Model) clearPreviewSelection() {
+	m.preview.selection.Clear()
+	m.preview.pointer.ResetUnit()
+}
+
+// selectAllPreviewOutput selects every line the buffer holds, at character
+// granularity so an earlier word gesture cannot redefine the next shift-click.
+func (m *Model) selectAllPreviewOutput() {
+	m.preview.pointer.ResetUnit()
+	start, end, ok := tty.SelectAllSpan(m.previewBuffer(), tty.DefaultTabWidth)
+	if !ok {
+		return
+	}
+	m.preview.selection.SelectRange(start, end, false)
+}
+
+// previewSelectionLines is the text the selection covers.
+func (m *Model) previewSelectionLines() []string {
+	return tty.SelectedLines(m.previewBuffer(), &m.preview.selection, tty.DefaultTabWidth)
+}
+
+// copyPreviewSelectionCmd writes the selection to the clipboard and says what
+// happened. Both the rule and the wording are the shared layer's; only the
+// notification type is this surface's.
+func (m *Model) copyPreviewSelectionCmd() tea.Cmd {
+	lines := m.previewSelectionLines()
+	return func() tea.Msg {
+		notice := tty.CopySelectionNotice(lines)
+		return appmsg.ToastMsg{
+			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		}
+	}
 }
 
 // previewNarrow reports a tab too narrow to sustain two useful panes.
@@ -403,32 +707,23 @@ func (m *Model) previewSplit(width int) termpreview.Split {
 	})
 }
 
-// renderPreview draws the read-only terminal box: the selected item's identity
-// on the header row, then its captured output or the reason there is none.
-// selectedPaneSource is the global browser's implementation of the shared
-// snapshot seam. It is the only way the renderer reaches captured output, which
-// is what keeps the surface read-only by construction: the seam has one method,
-// it returns a value, and there is nothing on it to write through.
-type selectedPaneSource struct{ state *previewState }
-
-var _ termpreview.Source = selectedPaneSource{}
-
-func (s selectedPaneSource) Snapshot() (termpreview.Snapshot, bool) {
-	if s.state == nil || s.state.workspaceID == "" {
-		return termpreview.Snapshot{}, false
-	}
-	return s.state.snapshot, !s.state.snapshot.Empty()
-}
-
+// renderPreview draws the terminal box: the selected item's identity on the
+// header row, then a window of the pane's captured output — or the reason there
+// is none. Watching and typing draw the same way, from the same kind of buffer
+// through the same window, so a selection, a scrolled-back window and a
+// highlighted word look and behave the same in either state.
+//
+// The size is the layout's own box, which is the box previewWindow places its
+// surface in; hit testing therefore maps onto the rows drawn here.
 func (m *Model) renderPreview(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
-		return termpreview.RenderReadOnly(termpreview.Snapshot{}, termpreview.ReadOnlyOptions{
+		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 			Width: width, Height: height, Message: "No workspace selected",
-		}).View
+		})
 	}
 
 	chips := []string{previewChip(workspace.Name, m.PreviewFocused())}
@@ -436,22 +731,30 @@ func (m *Model) renderPreview(width, height int) string {
 		chips = append(chips, styles.Muted.Render(workspace.ProjectName))
 	}
 
-	hints := previewHints(workspace, m.preview.snapshot, m.now())
+	hints := m.interactiveHints()
+	if !m.PreviewInteractive() {
+		hints = previewHints(workspace, m.preview.capture, m.PreviewFocused(), m.now())
+	}
 	message := m.preview.reason
 	if message != "" {
 		message += "\n\n" + previewMetadata(workspace)
 	}
-	snapshot, _ := selectedPaneSource{state: &m.preview}.Snapshot()
-	result := termpreview.RenderReadOnly(snapshot, termpreview.ReadOnlyOptions{
-		Width:     width,
-		Height:    height,
-		Chips:     chips,
-		Hints:     styles.Muted.Render(hints),
-		Offset:    m.preview.offset,
+
+	input := m.previewViewportInput(width, height-termpreview.HeaderRows)
+	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
+		Width:  width,
+		Height: height,
+		Chips:  chips,
+		Hints:  styles.Muted.Render(hints),
+		Layout: tty.FitViewport(input),
+		Buffer: input.Buffer,
+		// A live grid is letterboxed out to the viewport rather than leaving a
+		// short capture to shift the chrome below it.
+		Letterbox: m.PreviewInteractive(),
+		Selection: &m.preview.selection,
+		TabWidth:  tty.DefaultTabWidth,
 		Message:   message,
-		Scrollbar: true,
 	})
-	return result.View
 }
 
 func previewChip(name string, focused bool) string {
@@ -464,23 +767,30 @@ func previewChip(name string, focused bool) string {
 	return styles.Title.Render(name)
 }
 
-// previewHints is the header's right region: what the item is doing and how
-// fresh the reading is, plus the scroll state when the reader has moved back.
-func previewHints(workspace workspaceinventory.Workspace, snap termpreview.Snapshot, now time.Time) string {
+// previewHints is the header's right region while the pane is being watched:
+// what the item is doing, how fresh the reading is, and — when there is a live
+// pane behind it and this surface can act on it — how to hand the keyboard over.
+func previewHints(workspace workspaceinventory.Workspace, capture previewCapture, focused bool, now time.Time) string {
 	parts := make([]string, 0, 3)
 	if workspace.HasAgent() && workspace.Presentation.Label != "" {
 		parts = append(parts, workspace.Presentation.Label)
 	} else if workspace.Live {
 		parts = append(parts, "live")
 	}
-	if !snap.CapturedAt.IsZero() {
-		if age := now.Sub(snap.CapturedAt); age >= time.Second {
+	if !capture.CapturedAt.IsZero() {
+		if age := now.Sub(capture.CapturedAt); age >= time.Second {
 			parts = append(parts, fmt.Sprintf("captured %ds ago", int(age.Seconds())))
 		} else {
 			parts = append(parts, "captured now")
 		}
 	}
-	parts = append(parts, "read-only")
+	if _, unavailable := previewUnavailable(workspace); unavailable {
+		parts = append(parts, "no live pane")
+	} else if focused {
+		// Only where it is true. With the list focused this key does nothing here,
+		// and a hint for a key that does nothing is indistinguishable from a bug.
+		parts = append(parts, interactiveEnterKey+" to type")
+	}
 	return strings.Join(parts, " · ")
 }
 
@@ -497,9 +807,6 @@ func previewMetadata(workspace workspaceinventory.Workspace) string {
 	}
 	if workspace.Provider != "" {
 		lines = append(lines, "agent    "+workspace.Provider)
-	}
-	if workspace.TmuxName != "" {
-		lines = append(lines, "session  "+workspace.TmuxName)
 	}
 	if workspace.Path != "" {
 		lines = append(lines, "path     "+workspace.Path)

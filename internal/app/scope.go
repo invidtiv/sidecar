@@ -234,8 +234,10 @@ func (m *Model) startVisibleGlobalTab() tea.Cmd {
 	if m.overview == nil {
 		return nil
 	}
-	// The read-only selected preview polls only while its own tab is visible, so
+	// The selected preview reads a pane only while its own tab is visible, so
 	// the scope tells it directly rather than inferring visibility from renders.
+	// The same switch releases a terminal the user was typing into: a tab nobody
+	// is looking at holds neither a capture nor a live pane.
 	visible := m.overview.SetWorkspacesVisible(m.globalTab == GlobalWorkspaces)
 	if catalogTab(m.globalTab) {
 		return tea.Batch(m.overview.Ensure(m.overviewProjects()), visible)
@@ -263,9 +265,11 @@ func (m Model) globalWorkspacesFilterActive() bool {
 	return m.globalWorkspacesVisible() && m.overview.WorkspacesFilterActive()
 }
 
-// globalWorkspacesPreviewFocused reports that the browser's read-only preview
-// owns the keyboard, so its own focus-return keys — including esc — belong to
-// it rather than to sidecar's scope exit.
+// globalWorkspacesPreviewFocused reports that the browser's preview owns the
+// keyboard, so its own keys — including esc — belong to it rather than to
+// sidecar's scope exit. That covers both of the preview's states: watching,
+// where esc returns focus to the list, and typing into a live pane, where esc
+// is the pane's and a second one leaves the mode.
 func (m Model) globalWorkspacesPreviewFocused() bool {
 	return m.globalWorkspacesVisible() && m.overview.PreviewFocused()
 }
@@ -419,8 +423,8 @@ func (m Model) globalTasksFocused() bool {
 // globalSurfaceWantsEsc reports that the focused global surface will handle esc
 // itself, so sidecar's scope-exit must not take it first.
 //
-// Those surfaces are the Workspaces browser — whose filter and read-only
-// preview both give esc their own meaning — and the hosted Tasks tab, whose
+// Those surfaces are the Workspaces browser — whose filter and preview both
+// give esc their own meaning — and the hosted Tasks tab, whose
 // overlays, pickers, and prompts are dismissed by esc through precedence level
 // 2 (a blocking overlay or text-input context) or level 3 (a live contextual
 // binding). All of them run after the modal/esc switch at the top of
@@ -435,9 +439,10 @@ func (m *Model) globalSurfaceWantsEsc() bool {
 	if m.globalWorkspacesFilterActive() {
 		return true
 	}
-	// The read-only preview answers esc too: it returns focus to the list, the
-	// same as left/h. Only an esc pressed with the list focused means "leave the
-	// global space".
+	// The preview answers esc too: while watching it returns focus to the list,
+	// the same as left/h, and while typing it goes to the pane (a second one
+	// leaves the mode). Only an esc pressed with the list focused means "leave
+	// the global space".
 	if m.globalWorkspacesPreviewFocused() {
 		return true
 	}
@@ -477,13 +482,18 @@ func (m Model) surfacePlugins() []plugin.Plugin {
 	return plugins
 }
 
-// shutdown saves the active project plugin and closes everything sidecar owns,
-// including the global Tasks host. Every quit path calls it, so the Tasks model
-// is closed exactly once however the user leaves.
+// shutdown saves the active project plugin and closes everything sidecar owns:
+// the project registry, the global Tasks host, and the global browser's
+// embedded terminal, whose control subprocess outlives the process otherwise.
+// Every quit path calls it, so each is closed exactly once however the user
+// leaves.
 func (m *Model) shutdown() {
 	if activePlugin := m.ActivePlugin(); activePlugin != nil {
 		_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 	}
 	m.registry.Stop()
 	m.globalTasks.stop()
+	if m.overview != nil {
+		m.overview.Stop()
+	}
 }

@@ -256,7 +256,7 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	m.SetItems(items())
 
 	wide := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
-	for _, want := range []string{"Workspaces", "Activity", "/ filter", "NEEDS ATTENTION", "WORKING", "NO SESSION", "sidecar", "braid"} {
+	for _, want := range []string{"Workspaces", "Activity", "Needs Attention (1)", "Working (1)", "No Session (1)", "sidecar", "braid"} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide render is missing %q:\n%s", want, wide)
 		}
@@ -266,6 +266,21 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 			t.Fatalf("render produced a %d-wide line in a 46-wide box: %q", ansi.StringWidth(line), line)
 		}
 	}
+
+	// The filter row is chrome the list only spends a row on while a query is
+	// live, so an unfiltered list starts at its first heading.
+	if strings.Contains(wide, "/ filter") {
+		t.Fatalf("an unfiltered list drew the filter row:\n%s", wide)
+	}
+	if got := strings.Split(wide, "\n")[1]; !strings.Contains(got, "Needs Attention (1)") {
+		t.Fatalf("the first heading is on row %q, want it directly under the title", got)
+	}
+	m.FocusFilter()
+	filtering := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
+	if row := strings.Split(filtering, "\n")[1]; !strings.HasPrefix(row, "/ ") {
+		t.Fatalf("a live filter drew %q under the title, want its query row:\n%s", row, filtering)
+	}
+	m.Filter().Reset()
 
 	// No-match is an explicit state, with counts to explain it.
 	m.FocusFilter()
@@ -343,10 +358,18 @@ func TestRegionsFollowRenderedGeometry(t *testing.T) {
 	if !ok || sort.Kind != RegionSort {
 		t.Fatalf("sort region = %#v ok=%v", sort, ok)
 	}
-	filter, ok := RegionAt(rendered.Regions, 3, 1)
+	// No filter row is drawn until a query is live, so there is no region for
+	// one to click either.
+	if filter, ok := RegionAt(rendered.Regions, 3, 1); ok && filter.Kind == RegionFilter {
+		t.Fatal("an unfiltered list registered a filter region")
+	}
+	m.FocusFilter()
+	filtering := m.Render(RenderOptions{Width: 46, Height: 20})
+	filter, ok := RegionAt(filtering.Regions, 3, 1)
 	if !ok || filter.Kind != RegionFilter {
 		t.Fatalf("filter region = %#v ok=%v", filter, ok)
 	}
+	m.Filter().Reset()
 	var rows int
 	for _, region := range rendered.Regions {
 		if region.Kind == RegionRow {
@@ -401,5 +424,30 @@ func TestRelativeAgeUsesTheBoardsUnits(t *testing.T) {
 	}
 	if RelativeAge(time.Time{}, now) != "" {
 		t.Fatal("a zero change time must render nothing")
+	}
+}
+
+// Two shells in one project can share a display name; only the tmux session
+// name tells them apart, and it is a filter field rather than a rendered one.
+func TestFilterSeparatesIdenticallyNamedShellsByTmuxName(t *testing.T) {
+	rows := []Item{
+		{ID: "a", Name: "shell", Project: "sidecar", TmuxName: "sc-alpha", Status: "live", Group: GroupLive},
+		{ID: "b", Name: "shell", Project: "sidecar", TmuxName: "sc-bravo", Status: "live", Group: GroupLive},
+	}
+	var matched []string
+	for _, row := range rows {
+		if Match(row, "sc-bravo") {
+			matched = append(matched, row.ID)
+		}
+	}
+	if len(matched) != 1 || matched[0] != "b" {
+		t.Fatalf("query matched %v, want only the shell with that session", matched)
+	}
+	var m Model
+	for _, row := range rows {
+		rendered := ansi.Strip(strings.Join(m.renderRow(row, false, true, 60, time.Now()), "\n"))
+		if strings.Contains(rendered, row.TmuxName) {
+			t.Fatalf("the tmux session name became visible in the row: %q", rendered)
+		}
 	}
 }

@@ -1,5 +1,26 @@
 package tty
 
+import tea "charm.land/bubbletea/v2"
+
+// IsTerminalMessage reports whether msg is one of the messages an embedded
+// Model's own commands produce. Every one of them carries a MessageScope, so a
+// host may hand each of them to more than one Model: the activation that owns
+// the scope acts on it and the others ignore it.
+//
+// It exists because a host that is not a plugin — the global Workspaces browser
+// is routed by message type rather than broadcast — cannot otherwise recognise
+// the control-plane messages, which are deliberately unexported.
+func IsTerminalMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case SessionDeadMsg, PasteResultMsg, EscapeTimerMsg, PaneResizedMsg,
+		CaptureResultMsg, PollTickMsg,
+		terminalControlMsg, terminalControlRetryMsg, paneResolvedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 // MessageScope identifies one activation of one Model. Bubble Tea broadcasts
 // messages to every plugin, so terminal messages must be scoped to prevent a
 // capture or session failure from one consumer affecting another.

@@ -28,6 +28,10 @@ type Config struct {
 	// PasteKey is the keybinding to paste clipboard (default: "alt+v").
 	PasteKey string
 
+	// CopyOnSelect copies a finished selection without a copy chord, the way
+	// xterm does.
+	CopyOnSelect bool
+
 	// ScrollbackLines is the number of scrollback lines to capture
 	// (default: DefaultScrollbackLines).
 	ScrollbackLines int
@@ -553,8 +557,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	// Check for attach key
-	if msg.String() == m.Config.AttachKey {
+	// Check for attach key. An empty AttachKey is a host with no attach path:
+	// the chord belongs to the pane like any other key.
+	if m.Config.AttachKey != "" && msg.String() == m.Config.AttachKey {
 		m.Exit()
 		if m.OnAttach != nil {
 			return m.OnAttach()
@@ -562,57 +567,39 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	// Double-escape exit handling
-	if msg.Code == tea.KeyEscape {
-		if m.State.EscapePressed {
-			// Second Escape within window: exit
-			m.State.EscapePressed = false
-			m.State.EscapeTimerPending = false
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
-			}
-			return nil
-		}
-		// First Escape: mark pending and start delay timer
-		m.State.EscapePressed = true
-		m.State.EscapeTime = time.Now()
-		if !m.State.EscapeTimerPending {
-			m.State.EscapeTimerPending = true
-			scope := m.Scope()
-			return tea.Tick(DoubleEscapeDelay, func(t time.Time) tea.Msg {
-				return EscapeTimerMsg{Scope: scope}
-			})
+	switch GateKey(KeyGateInput{
+		Msg:           msg,
+		EscapePressed: m.State.EscapePressed,
+		EscapeAt:      m.State.EscapeTime,
+		LastMouseAt:   m.State.LastMouseEventTime,
+		Now:           time.Now(),
+	}) {
+	case KeyGateExitDoubleEscape:
+		m.State.EscapePressed = false
+		m.State.EscapeTimerPending = false
+		m.Exit()
+		if m.OnExit != nil {
+			return m.OnExit()
 		}
 		return nil
-	}
 
-	// Filter partial SGR mouse sequences (td-e2ce50: use lenient check for truncated sequences)
-	// Catches even very short fragments like "[<" that occur when terminal splits mouse events.
-	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
-	if len(msg.Text) > 0 {
-		if LooksLikeMouseFragment(msg.Text) {
-			m.State.EscapePressed = false
-			return nil // Drop mouse sequence fragments
-		}
-	}
-
-	// Suppress bare "[" that leaks from split SGR mouse sequences.
-	// See the detailed comment in workspace/interactive.go handleInteractiveKeys
-	// for the full explanation. Two gates:
-	//   1. ESC gate: EscapePressed && <5ms since ESC — the ESC was delivered as
-	//      a separate keypress and "[" is its CSI continuation.
-	//   2. Mouse gate: <10ms since last tea.MouseMsg — Bubble Tea consumed the
-	//      ESC internally but "[" leaked as a rune. Successfully-parsed mouse
-	//      events and the leaked "[" come from the same terminal output burst.
-	if msg.Text == "[" {
-		escGate := m.State.EscapePressed &&
-			time.Since(m.State.EscapeTime) < 5*time.Millisecond
-		mouseGate := time.Since(m.State.LastMouseEventTime) < 10*time.Millisecond
-		if escGate || mouseGate {
-			m.State.EscapePressed = false
+	case KeyGateHoldEscape:
+		// Hold the escape rather than forwarding it: the second half of a double
+		// escape may still be on its way, and the timer forwards it if it is not.
+		m.State.EscapePressed = true
+		m.State.EscapeTime = time.Now()
+		if m.State.EscapeTimerPending {
 			return nil
 		}
+		m.State.EscapeTimerPending = true
+		scope := m.Scope()
+		return tea.Tick(DoubleEscapeDelay, func(t time.Time) tea.Msg {
+			return EscapeTimerMsg{Scope: scope}
+		})
+
+	case KeyGateDrop:
+		m.State.EscapePressed = false
+		return nil
 	}
 
 	// Handle pending escape before processing new key
@@ -671,6 +658,33 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// SendUnknownSequence forwards an unparsed CSI sequence — kitty CSI u or
+// modifyOtherKeys, which Bubble Tea does not turn into a KeyPressMsg — to the
+// pane as the key it actually is, so modified keys like shift+enter reach the
+// application running there.
+//
+// It is a method rather than a case in Update because a host that already
+// forwards these itself would otherwise send each of them twice; the caller
+// decides which of the two paths owns the sequence.
+func (m *Model) SendUnknownSequence(msg tea.Msg) tea.Cmd {
+	if !m.IsActive() {
+		return nil
+	}
+	raw := ExtractUnknownCSIBytes(msg)
+	if raw == nil {
+		return nil
+	}
+	csiu := NormalizeToCSIu(raw)
+	if csiu == "" {
+		return nil
+	}
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{Value: csiu, Literal: true}),
+		m.schedulePoll(KeystrokeDebounce),
+	)
+}
+
 // handlePaste forwards bracketed-paste content (delivered as a tea.PasteMsg in
 // v2) to the tmux session; tmux applies the target app's bracketed paste mode.
 func (m *Model) handlePaste(content string) tea.Cmd {
@@ -685,32 +699,90 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleMouse processes mouse input in interactive mode.
-func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	// Record every mouse event (including motion) for split-CSI suppression.
-	// See the "[" gate comment in handleKey.
+// handleMouse records mouse activity in interactive mode.
+//
+// It deliberately forwards nothing. A pointer event only becomes the pane's
+// after a host has hit-tested it, routed it through PaneCoords, and decided the
+// gesture was not a local selection; a second path here would send raw viewport
+// coordinates to a clipped pane and forward drags the host had already claimed.
+func (m *Model) handleMouse(tea.MouseMsg) tea.Cmd {
+	m.NoteMouseActivity()
+	return nil
+}
+
+// NoteMouseActivity records that a mouse event reached this host, which is what
+// the bare-"[" gate in handleKey reads. Hosts that route pointer events
+// themselves must call it, or a split SGR sequence leaks into the pane as a
+// literal bracket.
+func (m *Model) NoteMouseActivity() {
+	if m.State == nil {
+		return
+	}
 	m.State.LastMouseEventTime = time.Now()
+}
 
-	if !m.IsActive() || !m.State.MouseReportingEnabled {
+// Buffer is the captured output the terminal is drawing, so a host can render
+// its own window over it — scrolled back, with a selection highlighted — instead
+// of only the live tail View draws.
+func (m *Model) Buffer() *OutputBuffer {
+	if !m.IsActive() {
 		return nil
 	}
+	return m.State.OutputBuf
+}
 
-	// Only handle left-button click (press) events. In v2 a press is a
-	// MouseClickMsg; release/wheel/motion are distinct types we ignore here.
-	click, ok := msg.(tea.MouseClickMsg)
-	if !ok {
+// PaneMouseReporting reports that the application running in the pane has asked
+// for mouse events. It is the whole of "does this notch or click belong to the
+// app or to the surface showing it".
+func (m *Model) PaneMouseReporting() bool {
+	return m.IsActive() && m.State.MouseReportingEnabled
+}
+
+// PaneSize is the pane's observed grid, which can differ from the viewport it is
+// drawn in: another client may be driving the same session.
+func (m *Model) PaneSize() (width, height int) {
+	if !m.IsActive() {
+		return 0, 0
+	}
+	return m.State.PaneWidth, m.State.PaneHeight
+}
+
+// CursorState is the pane's own cursor, in pane coordinates.
+func (m *Model) CursorState() (row, col int, visible bool) {
+	if !m.IsActive() {
+		return 0, 0, false
+	}
+	return m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible
+}
+
+// SendClick forwards a press and release at 1-indexed pane coordinates to the
+// application running in the pane, and polls straight away so the frame it draws
+// in response is not held back by the idle cadence.
+func (m *Model) SendClick(col, row int) tea.Cmd {
+	if !m.IsActive() {
 		return nil
 	}
-	mouse := click.Mouse()
-	if mouse.Button != tea.MouseLeft {
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendMouse(m.Scope(), m.inputTarget(), col, row),
+		m.schedulePoll(0),
+	)
+}
+
+// SendWheelNotches forwards whole wheel notches at 1-indexed pane coordinates.
+//
+// The wheel is the user's most recent input, so it counts as activity: the poll
+// cadence decays to its slow tier on idle time, and a scroll that did not reset
+// it would be repainted at that tier.
+func (m *Model) SendWheelNotches(up bool, col, row, notches int) tea.Cmd {
+	if !m.IsActive() || notches <= 0 {
 		return nil
 	}
-
-	// Convert to pane-relative coordinates
-	col := mouse.X + 1
-	row := mouse.Y + 1
-
-	return m.input.SendMouse(m.Scope(), m.inputTarget(), col, row)
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendWheel(m.Scope(), m.inputTarget(), up, col, row, notches),
+		m.schedulePoll(0),
+	)
 }
 
 // handleEscapeTimer processes the escape delay timer firing.

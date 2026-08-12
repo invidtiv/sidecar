@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
@@ -102,20 +103,16 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// cancel the paired click-to-activate intent at the same boundary.
 	lostRelease := action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging()
 	if lostRelease {
-		// Neither activation nor a forwarded click survives a release the app
-		// never saw.
-		p.pendingClickResolution = clickResolutionNone
-	}
-	lostTerminalRelease := lostRelease &&
-		(dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent)
-	if lostTerminalRelease {
-		if p.selection.Anchor.Valid() {
+		// Drop what the press armed and end the gesture: an edge scroll tick still
+		// in flight belongs to a gesture that is over, and neither activation nor a
+		// forwarded click survives a release the app never saw.
+		p.pointer.Abandon()
+		terminalGesture := dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent
+		if terminalGesture && p.selection.Anchor.Valid() {
 			// A release outside the window never reaches Bubble Tea. Close the local
 			// selection gesture at the same point the shared handler abandons its drag.
 			return p.finishInteractiveSelection()
 		}
-		// No anchor to finish, but the gesture is over: stop any edge auto-scroll.
-		p.beginSelectionGesture()
 	}
 
 	switch action.Type {
@@ -607,7 +604,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	if action.Region.ID != regionPreviewPane && action.Region.ID != regionTermPanelContent {
-		p.pendingClickResolution = clickResolutionNone
+		p.pointer.Resolution = tty.ClickNone
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -1154,17 +1151,20 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 	}
 
-	// In interactive mode the wheel belongs to the pane: either the app running
-	// there gets it as a mouse report, or it scrolls the captured output. Exit
-	// interactive mode first to scroll the sidebar.
-	if p.viewMode == ViewModeInteractive {
-		return p.forwardScrollToTmux(action, delta)
-	}
-
 	// Determine which pane based on region or position
 	regionID := ""
 	if action.Region != nil {
 		regionID = action.Region.ID
+	}
+
+	// A notch belongs to whatever it is over, interactive or not: over a live
+	// terminal the app running there gets it as a mouse report, or it scrolls
+	// that terminal's captured output; over the sidebar it moves the list.
+	// An event with no region at all predates any hit map and cannot be placed;
+	// interactive mode is drawing the terminal, so it keeps that notch.
+	if p.viewMode == ViewModeInteractive &&
+		(regionID == "" || regionID == regionPreviewPane || regionID == regionTermPanelContent) {
+		return p.forwardScrollToTmux(action, delta)
 	}
 
 	switch regionID {
@@ -1344,31 +1344,10 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 	// Unified scroll: delta < 0 = scroll up (toward top), delta > 0 = scroll down (toward bottom)
 	// Output tab uses burst debouncing for trackpad scroll smoothness.
 	if p.previewTab == PreviewTabOutput || p.shellSelected {
-		now := time.Now()
-
-		// Detect and handle scroll bursts (fast trackpad scrolling)
-		timeSinceLastScroll := now.Sub(p.lastScrollTime)
-		if timeSinceLastScroll < scrollBurstTimeout {
-			p.scrollBurstCount++
-		} else {
-			// Burst ended, reset
-			p.scrollBurstCount = 1
-			p.scrollBurstStarted = now
-		}
-
-		// During burst mode, use more aggressive debouncing
-		debounceInterval := scrollDebounceInterval
-		if p.scrollBurstCount > scrollBurstThreshold {
-			debounceInterval = scrollBurstDebounce
-		}
-
-		p.pendingScrollDelta += delta
-		if timeSinceLastScroll < debounceInterval {
+		var flush bool
+		if delta, flush = p.wheel.Add(delta, time.Now()); !flush {
 			return nil
 		}
-		p.lastScrollTime = now
-		delta = p.pendingScrollDelta
-		p.pendingScrollDelta = 0
 	}
 
 	// Unified offset: 0 = top of content, higher = further down
@@ -1510,7 +1489,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// swallowed, so drop the click resolution it would have carried out too —
 	// the same boundary where the auto-scroll tick abandons its gesture.
 	if p.isModalViewMode() {
-		p.pendingClickResolution = clickResolutionNone
+		p.pointer.Resolution = tty.ClickNone
 		return nil
 	}
 
@@ -1519,7 +1498,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		dragSource = p.lastDragRegion
 	}
 	terminalGesture := dragSource == regionPreviewPane || dragSource == regionTermPanelContent
-	if terminalGesture && (p.selection.Anchor.Valid() || p.pendingClickResolution != clickResolutionNone) {
+	if terminalGesture && (p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {
 		return p.finishInteractiveSelection()
 	}
 

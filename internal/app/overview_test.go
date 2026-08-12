@@ -749,3 +749,68 @@ func TestExitOverviewRestoresPluginContext(t *testing.T) {
 		t.Fatal("activeContext still overview after the board closed")
 	}
 }
+
+// The chord that leaves interactive mode is the user's configured one on both
+// surfaces, and it is registered so help and the palette name the key the
+// browser actually answers.
+func TestConfiguredInteractiveExitKeyReachesTheWorkspacesBrowser(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Plugins.Workspace.InteractiveExitKey = "ctrl+q"
+
+	km := keymap.NewRegistry()
+	m := New(plugin.NewRegistry(nil), km, cfg, "", "/tmp/one", "/tmp/one", "")
+
+	if got := m.overview.InteractiveExitKey(); got != "ctrl+q" {
+		t.Fatalf("browser exit key = %q, want the configured chord", got)
+	}
+	var bound []string
+	for _, binding := range km.BindingsForContext("global-workspaces-terminal") {
+		if binding.Command == "exit-interactive" {
+			bound = append(bound, binding.Key)
+		}
+	}
+	if len(bound) != 1 || bound[0] != "ctrl+q" {
+		t.Fatalf("exit-interactive is bound to %v, want only the configured chord", bound)
+	}
+}
+
+// The two surfaces that host a terminal resolve one configuration, so the chords
+// they answer for the same act cannot drift apart. Everything below reads the
+// same TerminalConfig the project Workspaces plugin reads, which it calls
+// directly from p.terminalConfig.
+func TestBothTerminalSurfacesAnswerOneResolvedConfiguration(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Plugins.Workspace.InteractiveExitKey = "ctrl+q"
+	cfg.Plugins.Workspace.InteractiveCopyKey = "alt+y"
+	cfg.Plugins.Workspace.InteractivePasteKey = "alt+p"
+	cfg.Plugins.Workspace.InteractiveAttachKey = "ctrl+g"
+	cfg.Plugins.Workspace.CopyOnSelect = true
+
+	shared := TerminalConfig(cfg)
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	browser := m.overview.TerminalConfig()
+
+	for _, tc := range []struct{ act, want, got string }{
+		{"exit", shared.ExitKey, browser.ExitKey},
+		{"copy", shared.CopyKey, browser.CopyKey},
+		{"paste", shared.PasteKey, browser.PasteKey},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("the browser answers %q for %s, want the resolved %q", tc.got, tc.act, tc.want)
+		}
+	}
+	if !browser.CopyOnSelect {
+		t.Error("copy-on-select is configured but the browser does not honour it")
+	}
+	// The one act the two surfaces deliberately differ on, and the reason: the
+	// browser has no attach path, so the chord stays the pane's input.
+	if browser.AttachKey != "" || shared.AttachKey != "ctrl+g" {
+		t.Errorf("attach chords = browser %q, plugin %q", browser.AttachKey, shared.AttachKey)
+	}
+}

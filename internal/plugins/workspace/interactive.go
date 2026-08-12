@@ -16,10 +16,6 @@ import (
 
 // Interactive mode constants
 const (
-	// doubleEscapeDelay is the max time between Escape presses for double-escape exit.
-	// Single Escape is delayed by this amount to detect double-press.
-	doubleEscapeDelay = 150 * time.Millisecond
-
 	// pollingDecayFast is the polling interval during active typing.
 	pollingDecayFast = 50 * time.Millisecond
 
@@ -35,57 +31,14 @@ const (
 	// inactivitySlowThreshold triggers slow polling.
 	inactivitySlowThreshold = 10 * time.Second
 
-	// defaultExitKey is the default keybinding to exit interactive mode.
-	defaultExitKey = "ctrl+\\"
-
-	// defaultAttachKey is the default keybinding to attach from interactive mode (td-fd68d1).
-	defaultAttachKey = "ctrl+]"
-
-	// defaultCopyKey is the default keybinding to copy selection in interactive mode.
-	defaultCopyKey = "alt+c"
-
-	// superCopyKey is the platform copy chord — Cmd+C on macOS, Super+C
-	// elsewhere. It copies alongside the configured key rather than replacing it,
-	// because it is a platform convention rather than a sidecar binding: the
-	// terminal owns the selection, so the emulator's own copy has nothing to act
-	// on and passes the chord through to us. Terminals that intercept it first
-	// (iTerm2) never deliver it, which is why the configurable chord stays.
-	superCopyKey = "super+c"
-
-	// defaultPasteKey is the default keybinding to paste clipboard in interactive mode.
-	defaultPasteKey = "alt+v"
+	// superCopyKey is the platform copy chord, which every terminal surface
+	// answers alongside the configured one.
+	superCopyKey = tty.SuperCopyKey
 )
 
-// =============================================================================
-// Scroll tuning constants (td-3b15ee)
-// Adjust these to balance scroll responsiveness vs escape sequence filtering.
-// =============================================================================
-const (
-	// scrollDebounceInterval is the base debounce for scroll events (~60fps).
-	// Lower = more responsive but more CPU. Higher = smoother but laggy.
-	scrollDebounceInterval = 16 * time.Millisecond
-
-	// scrollBurstDebounce is used during fast scrolling (burst mode).
-	// Lower = more responsive. Higher = better filtering but feels sluggish.
-	// 32ms ≈ 30fps, good balance of smooth scrolling and reduced event spam.
-	scrollBurstDebounce = 12 * time.Millisecond
-
-	// scrollBurstThreshold is scroll events needed to enter burst mode.
-	// Lower = enter burst mode faster. Higher = more normal scrolling before burst kicks in.
-	scrollBurstThreshold = 3
-
-	// scrollBurstTimeout is how long after last scroll before burst mode ends.
-	// Should be long enough for garbage events to clear. Too long = delayed typing response.
-	scrollBurstTimeout = 500 * time.Millisecond
-
-	// snapBackCooldown prevents snap-back to live output during active scrolling.
-	// If user scrolled within this window, suspicious input won't trigger snap-back.
-	snapBackCooldown = 100 * time.Millisecond
-
-	// mouseFragmentTimeout bounds state kept while reassembling an SGR mouse
-	// report split across terminal input reads.
-	mouseFragmentTimeout = 50 * time.Millisecond
-)
+// mouseFragmentTimeout bounds state kept while reassembling an SGR mouse report
+// split across terminal input reads.
+const mouseFragmentTimeout = 50 * time.Millisecond
 
 // partialMouseSeqRegex is now provided by the tty package as tty.PartialMouseSeqRegex
 
@@ -97,55 +50,28 @@ type escapeTimerMsg struct{}
 // Sent when send-keys or capture fails with a session/pane not found error.
 type InteractiveSessionDeadMsg struct{}
 
-// getInteractiveExitKey returns the configured exit keybinding for interactive mode.
-// Falls back to defaultExitKey ("ctrl+\") if not configured.
-func (p *Plugin) getInteractiveExitKey() string {
-	if p.ctx != nil && p.ctx.Config != nil {
-		if key := p.ctx.Config.Plugins.Workspace.InteractiveExitKey; key != "" {
-			return key
-		}
+// terminalConfig is the one resolution of the user's terminal-interaction
+// settings this plugin works from: chords, and whether a finished selection
+// copies itself.
+func (p *Plugin) terminalConfig() tty.Config {
+	if p.ctx == nil {
+		return app.TerminalConfig(nil)
 	}
-	return defaultExitKey
+	return app.TerminalConfig(p.ctx.Config)
 }
 
-// getInteractiveAttachKey returns the configured attach keybinding for interactive mode (td-fd68d1).
-// Falls back to defaultAttachKey ("ctrl+]") if not configured.
-func (p *Plugin) getInteractiveAttachKey() string {
-	if p.ctx != nil && p.ctx.Config != nil {
-		if key := p.ctx.Config.Plugins.Workspace.InteractiveAttachKey; key != "" {
-			return key
-		}
-	}
-	return defaultAttachKey
-}
+func (p *Plugin) getInteractiveExitKey() string { return p.terminalConfig().ExitKey }
 
-// getInteractiveCopyKey returns the configured copy keybinding for interactive mode.
-// Falls back to defaultCopyKey ("alt+c") if not configured.
-func (p *Plugin) getInteractiveCopyKey() string {
-	if p.ctx != nil && p.ctx.Config != nil {
-		if key := p.ctx.Config.Plugins.Workspace.InteractiveCopyKey; key != "" {
-			return key
-		}
-	}
-	return defaultCopyKey
-}
+func (p *Plugin) getInteractiveAttachKey() string { return p.terminalConfig().AttachKey }
+
+func (p *Plugin) getInteractiveCopyKey() string { return p.terminalConfig().CopyKey }
+
+func (p *Plugin) getInteractivePasteKey() string { return p.terminalConfig().PasteKey }
 
 // isTerminalCopyChord reports whether a key press asks to copy the terminal
-// selection: the configured (or default) copy key, or the platform copy chord.
+// selection.
 func (p *Plugin) isTerminalCopyChord(msg tea.KeyPressMsg) bool {
-	key := msg.String()
-	return key == p.getInteractiveCopyKey() || key == superCopyKey
-}
-
-// getInteractivePasteKey returns the configured paste keybinding for interactive mode.
-// Falls back to defaultPasteKey ("alt+v") if not configured.
-func (p *Plugin) getInteractivePasteKey() string {
-	if p.ctx != nil && p.ctx.Config != nil {
-		if key := p.ctx.Config.Plugins.Workspace.InteractivePasteKey; key != "" {
-			return key
-		}
-	}
-	return defaultPasteKey
+	return p.terminalConfig().IsCopyChord(msg)
 }
 
 // sendInteractiveKeysCmd sends keys to tmux asynchronously (td-c2961e).
@@ -174,17 +100,6 @@ func (p *Plugin) updateMouseReportingMode(output string) {
 		return
 	}
 	p.interactiveState.MouseReportingEnabled = tty.DetectMouseReportingMode(output)
-}
-
-// setPaneMouseReporting records tmux's #{mouse_any_flag} for the interactive
-// pane. It is only called with metadata captured alongside the pane, so a
-// capture that carried no cursor metadata leaves the last known value alone
-// rather than falsely reporting the app released the mouse.
-func (p *Plugin) setPaneMouseReporting(enabled bool) {
-	if p.interactiveState == nil || !p.interactiveState.Active {
-		return
-	}
-	p.interactiveState.PaneMouseReporting = enabled
 }
 
 // updateBracketedPasteMode updates the BracketedPasteEnabled state from captured output.
@@ -609,17 +524,8 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 }
 
 // terminalContentWidth returns the columns tmux can actually render into.
-// The terminal scrollbar is stable viewport chrome: its column is reserved even
-// while all output fits and RenderScrollbar draws only a spacer. Making this
-// depend on the current history length creates a one-frame geometry race: a new
-// frame can make the scrollbar visible before the asynchronous tmux resize has
-// taken effect, clipping the application's final column and later reflowing it
-// on the next repaint (td-0818ef).
 func (p *Plugin) terminalContentWidth(width int) int {
-	if width <= 1 {
-		return width
-	}
-	return width - 1
+	return tty.ContentWidth(width)
 }
 
 // maybeResizeVisiblePane corrects a passively displayed pane whose size drifted
@@ -767,8 +673,7 @@ func (p *Plugin) exitInteractiveMode() {
 	}
 	p.interactiveState = nil
 	p.mouseFragment = ""
-	p.pendingScrollDelta = 0
-	p.scrollBurstCount = 0
+	p.wheel.Reset()
 	p.clearTerminalSelection()
 	p.viewMode = ViewModeList
 }
@@ -859,80 +764,50 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	// Secondary exit: Double-Escape with 150ms delay
-	// Per spec: first Escape is delayed to detect double-press
-	if msg.Code == tea.KeyEscape {
-		if p.interactiveState.EscapePressed {
-			// Second Escape within window: exit interactive mode
-			p.interactiveState.EscapePressed = false
-			p.interactiveState.EscapeTimerPending = false // Cancel pending timer
-			p.exitInteractiveMode()
-			p.previewOffset = 0
-			p.autoScrollOutput = true
-			return p.pollSelectedAgentNowIfVisible()
-		}
-		// First Escape: mark pending and start delay timer
-		// Do NOT forward to tmux yet - wait for timer or next key
-		p.interactiveState.EscapePressed = true
-		p.interactiveState.EscapeTime = time.Now()
-		// Timer leak prevention (td-83dc22): only schedule timer if one isn't already pending
-		if !p.interactiveState.EscapeTimerPending {
-			p.interactiveState.EscapeTimerPending = true
-			return tea.Tick(doubleEscapeDelay, func(t time.Time) tea.Msg {
-				return escapeTimerMsg{}
-			})
-		}
+	// Reassembling an SGR mouse report split across input reads is this surface's
+	// own: it holds the partial fragment between reads, which the shared gate —
+	// deciding one key at a time — cannot.
+	if len(msg.Text) > 0 && p.consumeSplitMouseFragment(msg.Text) {
+		p.interactiveState.EscapePressed = false
 		return nil
 	}
 
-	// Filter partial SGR mouse sequences that leaked through Bubble Tea's
-	// input parser due to split-read timing (ESC arrived separately) (td-791865).
-	// Must be checked BEFORE forwarding pending escape, since the ESC was part
-	// of the mouse sequence, not a real user keypress.
-	// td-e2ce50: Use lenient check to catch truncated/split sequences during fast scrolling.
-	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
-	if len(msg.Text) > 0 {
-		if p.consumeSplitMouseFragment(msg.Text) {
-			p.interactiveState.EscapePressed = false
-			return nil
-		}
-		if tty.LooksLikeMouseFragment(msg.Text) {
-			// Cancel the pending escape — it was the leading byte of this mouse event
-			p.interactiveState.EscapePressed = false
-			return nil // Drop mouse sequence fragments
-		}
-	}
+	switch tty.GateKey(tty.KeyGateInput{
+		Msg:           msg,
+		EscapePressed: p.interactiveState.EscapePressed,
+		EscapeAt:      p.interactiveState.EscapeTime,
+		LastMouseAt:   p.lastMouseEventTime,
+		Now:           time.Now(),
+	}) {
+	case tty.KeyGateExitDoubleEscape:
+		p.interactiveState.EscapePressed = false
+		p.interactiveState.EscapeTimerPending = false // Cancel pending timer
+		p.exitInteractiveMode()
+		p.previewOffset = 0
+		p.autoScrollOutput = true
+		return p.pollSelectedAgentNowIfVisible()
 
-	// Suppress bare "[" that leaks from split SGR mouse sequences.
-	//
-	// With tea.WithMouseAllMotion(), the terminal sends an SGR mouse sequence
-	// (ESC [ < params M/m) for every mouse movement. Bubble Tea's input reader
-	// can split these sequences across read boundaries:
-	//
-	//   Read 1: ESC        → delivered as tea.KeyEscape (or consumed internally)
-	//   Read 2: [          → delivered as tea.KeyRunes{'['}  ← the leak
-	//   Read 3: <35;10;20M → delivered as tea.KeyRunes or parsed as mouse
-	//
-	// The ESC-time-gate catches case where ESC was delivered as a keypress
-	// (setting EscapePressed). But sometimes Bubble Tea's parser consumes the
-	// ESC internally while still emitting "[" as a leftover rune — EscapePressed
-	// is never set, so the ESC gate doesn't fire.
-	//
-	// The mouse-proximity gate catches this: if ANY mouse event was delivered
-	// within the last 10ms, a bare "[" is almost certainly a CSI fragment, not
-	// a real keypress. Real "[" typing doesn't coincide with mouse activity at
-	// sub-10ms granularity. This works because successfully-parsed mouse events
-	// (tea.MouseMsg) and the leaked "[" originate from the same burst of terminal
-	// output — they arrive within microseconds of each other.
-	if msg.Text == "[" {
-		escGate := p.interactiveState.EscapePressed &&
-			time.Since(p.interactiveState.EscapeTime) < 5*time.Millisecond
-		mouseGate := time.Since(p.lastMouseEventTime) < 10*time.Millisecond
-		if escGate || mouseGate {
-			p.rememberMouseFragment("[")
-			p.interactiveState.EscapePressed = false
+	case tty.KeyGateHoldEscape:
+		p.interactiveState.EscapePressed = true
+		p.interactiveState.EscapeTime = time.Now()
+		// Timer leak prevention (td-83dc22): only schedule a timer if one isn't
+		// already pending.
+		if p.interactiveState.EscapeTimerPending {
 			return nil
 		}
+		p.interactiveState.EscapeTimerPending = true
+		return tea.Tick(tty.DoubleEscapeDelay, func(t time.Time) tea.Msg {
+			return escapeTimerMsg{}
+		})
+
+	case tty.KeyGateDrop:
+		if msg.Text == "[" {
+			// The bracket opened a report whose remainder is still to come, so hold
+			// it for the reassembly above rather than dropping it outright.
+			p.rememberMouseFragment("[")
+		}
+		p.interactiveState.EscapePressed = false
+		return nil
 	}
 
 	// Non-escape key: check if we have a pending Escape to forward first
@@ -952,7 +827,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	if msg.String() == p.getInteractivePasteKey() {
+	if p.terminalConfig().IsPasteChord(msg) {
 		p.interactiveState.LastKeyTime = time.Now()
 		if !p.autoScrollOutput {
 			p.autoScrollOutput = true
@@ -1009,9 +884,10 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // handleUnknownSequence forwards unrecognized CSI sequences to tmux in
-// interactive mode. BubbleTea v1 doesn't parse CSI u (kitty keyboard protocol)
+// interactive mode. Bubble Tea does not parse CSI u (kitty keyboard protocol)
 // or modifyOtherKeys sequences, so modified keys like shift+enter arrive as
-// unknownCSISequenceMsg. We normalize them to CSI u format and forward to tmux.
+// unknownCSISequenceMsg. Normalization and delivery belong to the shared
+// terminal component, which already owns ordered input for this pane.
 func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	if p.viewMode != ViewModeInteractive {
 		return nil
@@ -1019,22 +895,22 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return nil
 	}
-
-	raw := tty.ExtractUnknownCSIBytes(msg)
-	if raw == nil {
-		return nil
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
+		return terminal.SendUnknownSequence(msg)
 	}
-
-	csiu := tty.NormalizeToCSIu(raw)
+	// The same provisional window handleInteractiveKeys keeps: a mode-entry
+	// message can precede the wrapper's reconciliation by one update. Without a
+	// fallback here, ordinary keys reach the pane during that window while
+	// modified ones — shift+enter, ctrl+enter — are silently dropped.
+	csiu := tty.NormalizeToCSIu(tty.ExtractUnknownCSIBytes(msg))
 	if csiu == "" {
 		return nil
 	}
-
-	sessionName := p.interactiveState.TargetSession
-	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
-		sessionName = terminal.GetTarget()
+	target := p.interactiveState.TargetPane
+	if target == "" {
+		target = p.interactiveState.TargetSession
 	}
-	return sendInteractiveKeysCmd(sessionName, tty.KeySpec{Value: csiu, Literal: true})
+	return sendInteractiveKeysCmd(target, tty.KeySpec{Value: csiu, Literal: true})
 }
 
 // handleEscapeTimer processes the escape delay timer firing.
@@ -1067,12 +943,6 @@ func (p *Plugin) handleEscapeTimer() tea.Cmd {
 	return terminal.Update(tty.EscapeTimerMsg{Scope: terminal.Scope()})
 }
 
-// maxWheelNotchesPerFlush caps how many wheel reports one debounced burst can
-// send. A fast trackpad flick can coalesce a large delta, and every notch is a
-// separate `tmux send-keys`; past a point the app has scrolled as far as the
-// gesture meant anyway.
-const maxWheelNotchesPerFlush = 10
-
 // forwardScrollToTmux routes a wheel notch for the interactive pane.
 //
 // When the app running in the pane has enabled mouse tracking, the notch is its
@@ -1088,31 +958,10 @@ const maxWheelNotchesPerFlush = 10
 // auto-scroll, scroll down (delta > 0)
 // moves toward live output.
 func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
-	now := time.Now()
-
-	// Detect and handle scroll bursts (fast trackpad scrolling)
-	timeSinceLastScroll := now.Sub(p.lastScrollTime)
-	if timeSinceLastScroll < scrollBurstTimeout {
-		p.scrollBurstCount++
-	} else {
-		// Burst ended, reset
-		p.scrollBurstCount = 1
-		p.scrollBurstStarted = now
-	}
-
-	// During burst mode, use more aggressive debouncing
-	debounceInterval := scrollDebounceInterval
-	if p.scrollBurstCount > scrollBurstThreshold {
-		debounceInterval = scrollBurstDebounce
-	}
-
-	p.pendingScrollDelta += delta
-	if timeSinceLastScroll < debounceInterval {
+	delta, flush := p.wheel.Add(delta, time.Now())
+	if !flush {
 		return nil
 	}
-	p.lastScrollTime = now
-	delta = p.pendingScrollDelta
-	p.pendingScrollDelta = 0
 
 	if cmd, forwarded := p.forwardWheelToPane(action, delta); forwarded {
 		return cmd
@@ -1165,31 +1014,26 @@ func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cm
 	return nil
 }
 
-// forwardWheelToPane sends delta as SGR wheel reports when the app running in
-// the interactive pane has asked for mouse events. It reports forwarded=false
-// whenever the notch belongs to the local viewport instead — no mouse tracking,
-// no interactive pane, or a pointer position that does not map into the pane —
-// so the caller falls through to its scrollback handling unchanged.
+// forwardWheelToPane sends delta as SGR wheel reports when the notch belongs to
+// the app running in the interactive pane. It reports forwarded=false whenever
+// the notch belongs to the local viewport instead, so the caller falls through
+// to its scrollback handling unchanged.
 func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cmd, bool) {
-	state := p.interactiveState
-	if delta == 0 || state == nil || !state.Active || !state.PaneMouseReporting {
-		return nil, false
+	terminal := p.activeInteractiveTerminal()
+	reporting := terminal != nil && terminal.PaneMouseReporting()
+	var col, row int
+	inPane := false
+	if reporting {
+		col, row, inPane = p.interactiveMouseCoords(action.X, action.Y)
 	}
-	// Alt is the "give me the terminal, not the app" modifier for the wheel.
-	// Shift is checked too for symmetry with click handling, but shift+wheel
-	// never reaches here — mouse.HandleMouse maps it to horizontal scroll.
-	if action.Shift || action.Alt {
-		return nil, false
-	}
-	sessionName := state.TargetSession
-	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
-		sessionName = terminal.GetTarget()
-	}
-	if sessionName == "" {
-		return nil, false
-	}
-	col, row, ok := p.interactiveMouseCoords(action.X, action.Y)
-	if !ok {
+	route, notches := tty.RouteWheel(tty.WheelInput{
+		Delta:          delta,
+		Shift:          action.Shift,
+		Alt:            action.Alt,
+		MouseReporting: reporting,
+		InPane:         inPane,
+	})
+	if route != tty.WheelPane {
 		return nil, false
 	}
 
@@ -1200,31 +1044,20 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 	// repainted below it.
 	p.pinInteractiveViewportToLive()
 
-	// The wheel is the user's most recent input, so it counts as activity: the
-	// poll cadence decays to its slow tier on idle time, and a scroll that did
-	// not reset it would be repainted at that tier.
-	state.LastKeyTime = time.Now()
+	// The wheel is the user's most recent input, so it counts as activity for
+	// this surface's own poll cadence as well as the component's: the cadence
+	// decays to a slow tier on idle time, and a scroll that did not reset it
+	// would be repainted at that tier.
+	p.interactiveState.LastKeyTime = time.Now()
 
-	// Delta is a line count — mouse.HandleMouse expands one notch into
-	// WheelScrollLines — but the pane wants notches, and the app applies its own
-	// lines-per-notch on top. Forwarding the line count made every notch scroll
-	// roughly WheelScrollLines times too far.
-	up := delta < 0
-	notches := min(wheelNotchesForDelta(delta), maxWheelNotchesPerFlush)
-
-	// Queued from the Update loop so wheel reports keep their order relative to
-	// keystrokes for the same pane rather than racing them.
-	cmd := awaitInteractiveSend(tty.SendOrdered(sessionName, func() error {
-		return tty.SendSGRWheel(sessionName, up, col, row, notches)
-	}))
-	return tea.Batch(cmd, p.pollInteractivePaneImmediate()), true
+	return tea.Batch(
+		terminal.SendWheelNotches(delta < 0, col, row, notches),
+		p.pollInteractivePaneImmediate(),
+	), true
 }
 
-// wheelNotchesForDelta converts a scroll delta in lines back into whole wheel
-// notches, never rounding a real scroll down to nothing.
 func wheelNotchesForDelta(delta int) int {
-	lines := max(delta, -delta)
-	return max(lines/mouse.WheelScrollLines, 1)
+	return tty.WheelNotches(delta)
 }
 
 // pinInteractiveViewportToLive returns the interactive viewport to the live edge
@@ -1252,52 +1085,48 @@ func (p *Plugin) pinInteractiveViewportToLive() {
 	p.cancelTerminalHistoryIntent(false)
 }
 
+// handleInteractiveScrollbackKey walks the window through scrollback while a
+// pane is live. Which keys mean what is the shared layer's; applying the move to
+// this surface — and reaching further back for history it has not loaded yet —
+// is this one's.
 func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if !msg.Mod.Contains(tea.ModShift) {
-		return false, nil
-	}
-
 	pageSize := p.getPreviewVisibleHeight()
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+	termPanel := p.interactiveState != nil && p.interactiveState.TermPanel
+	if termPanel {
 		if _, panelHeight, ok := p.calculateTermPanelDimensions(); ok {
 			pageSize = panelHeight
 		}
 	}
-	pageSize = max(pageSize-1, 1)
+	move, ok := tty.MapScrollbackKey(msg, pageSize)
+	if !ok {
+		return false, nil
+	}
 
-	switch msg.Code {
-	case tea.KeyUp:
-		return true, p.scrollInteractiveViewport(-1)
-	case tea.KeyDown:
-		return true, p.scrollInteractiveViewport(1)
-	case tea.KeyPgUp:
-		return true, p.scrollInteractiveViewport(-pageSize)
-	case tea.KeyPgDown:
-		return true, p.scrollInteractiveViewport(pageSize)
-	case tea.KeyHome:
-		if p.interactiveState != nil && p.interactiveState.TermPanel {
+	switch {
+	case move.ToOldest:
+		if termPanel {
 			p.clearTerminalSelection()
 			p.termPanelScroll = p.termPanelMaxScroll()
 			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
-		} else {
-			p.previewOffset = 0
-			p.autoScrollOutput = false
-			return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
 		}
-	case tea.KeyEnd:
-		if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.previewOffset = 0
+		p.autoScrollOutput = false
+		return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
+	case move.ToLive:
+		if termPanel {
 			p.clearTerminalSelection()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
-		} else {
-			p.previewOffset = p.getMaxScrollOffset()
-			p.autoScrollOutput = true
-			p.cancelTerminalHistoryIntent(false)
+			return true, nil
 		}
-	default:
-		return false, nil
+		p.previewOffset = p.getMaxScrollOffset()
+		p.autoScrollOutput = true
+		p.cancelTerminalHistoryIntent(false)
+		return true, nil
 	}
-	return true, nil
+	// This surface browses by an absolute top offset, so older output is a
+	// smaller offset: the shared move counts rows backwards.
+	return true, p.scrollInteractiveViewport(-move.Rows)
 }
 
 func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
@@ -1329,35 +1158,21 @@ func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	return nil
 }
 
-// forwardClickToTmux sends a mouse click to the tmux pane.
-// Currently a no-op as full mouse support requires knowing the terminal's mouse mode.
-// This is provided for future extension.
+// forwardClickToTmux hands a click to the application running in the interactive
+// pane. It goes out through the same component the keystrokes do, so a click and
+// the keys around it keep their order rather than racing as separate commands,
+// and whether the click belongs to the application at all is the component's one
+// answer — the same one the wheel asks.
 func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
-	if p.interactiveState == nil || !p.interactiveState.Active {
+	terminal := p.activeInteractiveTerminal()
+	if terminal == nil || !terminal.PaneMouseReporting() {
 		return nil
-	}
-	if !p.interactiveState.MouseReportingEnabled {
-		return nil
-	}
-	interaction := p.interactiveState
-	sessionName := interaction.TargetSession
-	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.GetTarget() != "" {
-		sessionName = terminal.GetTarget()
 	}
 	col, row, ok := p.interactiveMouseCoords(x, y)
 	if !ok {
 		return nil
 	}
-
-	return func() tea.Msg {
-		if err := tty.SendSGRMouse(sessionName, 0, col, row, false); err != nil {
-			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
-		}
-		if err := tty.SendSGRMouse(sessionName, 0, col, row, true); err != nil {
-			return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction, Err: err}
-		}
-		return interactiveClickSentMsg{SessionName: sessionName, Interaction: interaction}
-	}
+	return terminal.SendClick(col, row)
 }
 
 func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
@@ -1381,12 +1196,6 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
-	relX := x - surface.X
-	relY := y - surface.Y
-	if relX < 0 || relY < 0 {
-		return 0, 0, false
-	}
-
 	// The pane's real geometry decides what is on screen where, so hit testing
 	// reads the layout the render path produced rather than re-deriving one: a
 	// wider pane is drawn horizontally scrolled, a taller one starts partway
@@ -1396,20 +1205,8 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		paneWidth, paneHeight = surface.Width, surface.Height
 	}
 
-	layout := p.terminalSelectionViewportLayout()
-	if layout.DisplayWidth <= 0 || layout.DisplayHeight <= 0 {
-		return 0, 0, false
-	}
-	if relX >= layout.DisplayWidth || relY >= layout.DisplayHeight {
-		return 0, 0, false
-	}
-
-	col = min(relX+layout.Fit.ColOffset+1, paneWidth)
-	// Vertical placement comes from the buffer window, not the fit: the
-	// workspace viewport scrolls history as well as the live pane.
-	row = min(max(layout.paneRowAt(relY)+1, 1), paneHeight)
-
-	return col, row, true
+	return tty.PaneCoordsAt(p.terminalSelectionViewportLayout(),
+		x-surface.X, y-surface.Y, paneWidth, paneHeight)
 }
 
 // pollInteractivePane schedules a poll for interactive mode with adaptive timing.
@@ -1489,17 +1286,10 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 // rest of the burst window is exactly the wrong thing — it is the difference
 // between scrolling that tracks the wheel and scrolling that lurches.
 func (p *Plugin) interactiveScrollDelay() (time.Duration, bool) {
-	if p.interactiveState != nil && p.interactiveState.PaneMouseReporting {
+	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.PaneMouseReporting() {
 		return 0, false
 	}
-	if p.scrollBurstCount <= 0 {
-		return 0, false
-	}
-	elapsed := time.Since(p.lastScrollTime)
-	if elapsed >= scrollBurstTimeout {
-		return 0, false
-	}
-	return scrollBurstTimeout - elapsed, true
+	return p.wheel.Remaining(time.Now())
 }
 
 // getCursorPosition returns the cached cursor position for rendering (td-648af4).
@@ -1519,49 +1309,8 @@ func shouldOverlayCursor(interactive, cursorVisible, atLiveEdge bool) bool {
 	return interactive && cursorVisible && atLiveEdge
 }
 
-// shouldSnapBack determines if we should snap back to live view for a given key (td-e2ce50).
-// Returns false during active scrolling or for input that looks like mouse sequence fragments.
-// This prevents bounce-scroll caused by split mouse events triggering snap-back.
+// shouldSnapBack reports whether a key is real typing, which a viewport parked
+// in scrollback owes a jump to the live edge.
 func (p *Plugin) shouldSnapBack(msg tea.KeyPressMsg) bool {
-	// Guard 1: Don't snap back during active scrolling (time-based protection)
-	// If user scrolled recently, suspicious input is likely mouse garbage
-	if time.Since(p.lastScrollTime) < snapBackCooldown {
-		return false
-	}
-
-	// Guard 2: Don't snap back for anything that looks like mouse sequence data
-	if len(msg.Text) > 0 {
-		// Check for any mouse-like fragments
-		if tty.LooksLikeMouseFragment(msg.Text) {
-			return false
-		}
-		// Multi-character input (not single keypress) is suspicious during scrolling
-		// Could be paste (which we handle separately) or split mouse sequence
-		if len([]rune(msg.Text)) > 1 {
-			return false
-		}
-	}
-
-	// Guard 3: Don't snap back for Escape - it might be start of a mouse sequence
-	// Real escape is handled by the double-escape exit logic
-	if msg.Code == tea.KeyEscape {
-		return false
-	}
-
-	// Snap back for actual user typing:
-	// - Single printable characters
-	// - Navigation/editing keys
-	// Single character that's not suspicious
-	if len(msg.Text) > 0 {
-		return len([]rune(msg.Text)) == 1
-	}
-	switch msg.Code {
-	case tea.KeyEnter, tea.KeyTab, tea.KeyBackspace, tea.KeyDelete,
-		tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
-		tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown:
-		return true
-	default:
-		// Other special keys (ctrl+x, etc.) - snap back
-		return true
-	}
+	return tty.ShouldSnapBack(msg, time.Since(p.wheel.LastAt()))
 }

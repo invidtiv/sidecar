@@ -88,6 +88,13 @@ func BuildEntries(km *keymap.Registry, plugins []plugin.Plugin, activeContext, p
 			seen[key] = true
 
 			entry := bindingToEntry(b, cmdMeta, activeContext, pluginContext)
+			// A global key the focused context binds for itself cannot fire there,
+			// so the entry keeps its command and loses its key: the palette is the
+			// way to reach it while that context holds the keyboard, and a key it
+			// would advertise instead would do something else.
+			if b.Context == "global" && shadowed(km, activeContext, b.Key) {
+				entry.Key = ""
+			}
 			entries = append(entries, entry)
 		}
 	}
@@ -116,6 +123,16 @@ func BuildEntries(km *keymap.Registry, plugins []plugin.Plugin, activeContext, p
 	}
 
 	return entries
+}
+
+// shadowed reports that the focused context binds this key itself, which is
+// what makes a global binding on the same key unreachable there.
+func shadowed(km *keymap.Registry, activeContext, key string) bool {
+	if km == nil || activeContext == "" || activeContext == "global" {
+		return false
+	}
+	_, bound := km.CommandForContextKey(activeContext, key)
+	return bound
 }
 
 // invocable reports whether selecting this command in the palette would run

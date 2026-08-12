@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -76,7 +77,7 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg:
+	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg, previewAutoScrollTickMsg:
 		return true
 	default:
 		return false
@@ -129,6 +130,7 @@ type Model struct {
 	sidebarVisible     bool
 	catalog            map[string]workspaceinventory.Workspace
 	preview            previewState
+	terminalConfig     tty.Config
 	width              int
 	height             int
 }
@@ -370,6 +372,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.applyPreview(msg)
 	case previewPollMsg:
 		return m.pollPreview(msg)
+	case previewAutoScrollTickMsg:
+		return m.advancePreviewAutoScroll(msg)
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)
@@ -712,13 +716,25 @@ type cardOrder struct {
 	changedAt time.Time
 }
 
+// boardLane builds a lane whose wording comes from the same group names the
+// Workspaces list renders, so a rename lands on both tabs at once. The count
+// is left to the Kanban component, which appends its own.
+func boardLane(lane agentstatus.LaneID) kanban.Lane {
+	return kanban.Lane{
+		ID:          kanban.LaneID(lane),
+		Label:       string(laneGroup(lane)),
+		HeaderColor: styles.LaneColor(string(lane)),
+		State:       kanban.CellReady,
+	}
+}
+
 func (m *Model) syncBoard() {
 	lanes := []kanban.Lane{
-		{ID: "working", Label: "WORKING", HeaderColor: styles.LaneColor("working"), State: kanban.CellReady},
-		{ID: "blocked", Label: "NEEDS ATTENTION", HeaderColor: styles.LaneColor("blocked"), State: kanban.CellReady},
-		{ID: "done", Label: "DONE", HeaderColor: styles.LaneColor("done"), State: kanban.CellReady},
-		{ID: "idle", Label: "IDLE", HeaderColor: styles.LaneColor("idle"), State: kanban.CellReady},
-		{ID: "paused", Label: "PAUSED", HeaderColor: styles.LaneColor("paused"), State: kanban.CellReady},
+		boardLane(agentstatus.LaneWorking),
+		boardLane(agentstatus.LaneBlocked),
+		boardLane(agentstatus.LaneDone),
+		boardLane(agentstatus.LaneIdle),
+		boardLane(agentstatus.LanePaused),
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	order := make(map[string]cardOrder)
@@ -839,22 +855,22 @@ func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time
 		{Text: " " + status, Foreground: statusColor, Bold: workspace.Presentation.Lane == agentstatus.LaneDone},
 	}}
 
-	detail := choose(workspace.TaskID, workspace.Branch)
-	if workspace.Kind == workspaceinventory.KindShell {
-		// Session name only — the "tmux" qualifier was repeated on every shell
-		// card and added no information beyond the name itself.
-		detail = workspace.TmuxName
+	// A shell has neither task nor branch; its detail line stays empty rather
+	// than carrying the tmux session name, which is an identity key only.
+	parts := make([]string, 0, 2)
+	if detail := choose(workspace.TaskID, workspace.Branch); detail != "" {
+		parts = append(parts, detail)
 	}
 	switch {
 	case stale:
-		detail += " · stale"
+		parts = append(parts, "stale")
 	case workspace.Presentation.Freshness != "" && workspace.Presentation.Freshness != agentstatus.FreshnessCurrent:
-		detail += " · " + string(workspace.Presentation.Freshness)
+		parts = append(parts, string(workspace.Presentation.Freshness))
 	}
-	line3 := kanban.Line{Spans: []kanban.Span{
-		{Text: spine, Foreground: hue},
-		{Text: " " + detail, Foreground: styles.TextMuted},
-	}}
+	line3 := kanban.Line{Spans: []kanban.Span{{Text: spine, Foreground: hue}}}
+	if len(parts) > 0 {
+		line3.Spans = append(line3.Spans, kanban.Span{Text: " " + strings.Join(parts, " · "), Foreground: styles.TextMuted})
+	}
 	return []kanban.Line{line1, line2, line3}
 }
 

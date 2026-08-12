@@ -6,19 +6,20 @@
 // `previewContentBox` computes the box, `LayoutPanes` divides it, and
 // `terminalLeafBox` names the terminal leaf. What lives here is the arithmetic
 // those functions were doing inline — the outer sidebar/preview split, the one
-// header row above every terminal, and the read-only rendering of a captured
-// pane — so a second consumer (the global Workspaces browser) can reuse it
-// without recomputing any of it.
+// header row above every terminal, and the rendering of a pane's body into that
+// box, captured or live — so a second consumer (the global Workspaces browser)
+// can reuse it without recomputing any of it.
 //
 // That distinction is the point. The doc-panes plan names "a second independent
 // geometry computation" as its biggest failure mode, and a cross-project browser
 // that grew its own idea of where a terminal goes is exactly how that failure
 // would have arrived. Global Workspaces therefore does not instantiate a pane
-// tree at all: its right side is one read-only terminal box, and it gets that
-// box from the same functions the plugin's leaf box is built from.
+// tree at all: its right side is one terminal box, and it gets that box from the
+// same functions the plugin's leaf box is built from.
 //
-// Nothing here reads tmux, owns a buffer, or forwards input. A consumer hands
-// in an immutable Snapshot and gets back rows of text.
+// Nothing here reads tmux, owns a buffer, or forwards input. A consumer hands in
+// an immutable Snapshot, or a body some terminal component already rendered, and
+// gets back rows of text.
 package termpreview
 
 // HeaderRows is the single row every embedded terminal reserves above its

@@ -255,6 +255,9 @@ func (p *Plugin) deleteShellInfoSection() modal.Section {
 
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Name:    %s\n", lipgloss.NewStyle().Bold(true).Render(shell.Name))
+		// Display names are not unique and every shell of a project shares its
+		// directory, so the session name is the only thing that tells the user
+		// which session this irreversible delete will kill.
 		fmt.Fprintf(&sb, "Session: %s", dimText(shell.TmuxName))
 
 		return modal.RenderedSection{Content: sb.String()}
@@ -328,7 +331,6 @@ func (p *Plugin) renameShellInfoSection() modal.Section {
 
 		shell := p.renameShellSession
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Session: %s\n", dimText(shell.TmuxName))
 		fmt.Fprintf(&sb, "Current: %s", lipgloss.NewStyle().Bold(true).Render(shell.Name))
 
 		return modal.RenderedSection{Content: sb.String()}

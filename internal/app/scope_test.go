@@ -191,7 +191,7 @@ func TestGlobalWorkspacesTabIsAnHonestEmptyList(t *testing.T) {
 	// With nothing collected the list says so rather than drawing a blank pane
 	// that reads as "no workspaces exist".
 	content := ansi.Strip(m.renderContent(m.width, 20))
-	if !strings.Contains(content, "Workspaces") || !strings.Contains(content, "Activity") || !strings.Contains(content, "/ filter") {
+	if !strings.Contains(content, "Workspaces") || !strings.Contains(content, "Activity") {
 		t.Fatalf("global Workspaces list header is missing:\n%s", content)
 	}
 	if !strings.Contains(content, "No shells or worktrees") {
@@ -204,6 +204,29 @@ func TestGlobalWorkspacesTabIsAnHonestEmptyList(t *testing.T) {
 	// reaching the project plugin underneath.
 	if !m.globalOverlayOwnsKeys() {
 		t.Fatal("the placeholder does not own the keyboard")
+	}
+}
+
+// "i" is the Workspaces browser's, on the list as well as the preview: it is
+// the surface's primary way into a pane, and sidecar's issue lookup must not
+// take the key back from it.
+func TestInteractiveKeysReachTheGlobalListRatherThanTheIssueModal(t *testing.T) {
+	for _, key := range []string{"i", "E"} {
+		t.Run(key, func(t *testing.T) {
+			m, _ := scopeBaselineModel(t, "git")
+			m.scope = ScopeGlobal
+			m.globalTab = GlobalWorkspaces
+			m.updateContext()
+			if m.activeContext != "global-workspaces" {
+				t.Fatalf("test premise: activeContext = %q", m.activeContext)
+			}
+
+			m.handleKeyMsg(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+
+			if m.showIssueInput {
+				t.Fatalf("%q opened the issue lookup from the global Workspaces list", key)
+			}
+		})
 	}
 }
 
@@ -740,5 +763,34 @@ func TestEscapeClearsAnAcceptedGlobalFilterBeforeLeavingTheSpace(t *testing.T) {
 	m = asAppModel(t, updated)
 	if m.inGlobalScope() {
 		t.Fatal("escape on an unfiltered list should return to the project")
+	}
+}
+
+// Quitting has to release the global browser's terminal like every other one
+// sidecar owns; a pane left attached outlives the process as an orphaned tmux
+// control subprocess.
+func TestShutdownReleasesTheGlobalBrowsersTerminal(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	if cmd := m.Init(); cmd != nil {
+		cmd()
+	}
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	if !m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("the Workspaces tab never woke its preview")
+	}
+
+	m.shutdown()
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("quitting left the global browser's preview attached")
 	}
 }

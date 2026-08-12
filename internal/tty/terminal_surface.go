@@ -34,6 +34,7 @@ type terminalInputSender interface {
 	SendEscapePaste(MessageScope, string, string) tea.Cmd
 	PasteClipboard(MessageScope, string) tea.Cmd
 	SendMouse(MessageScope, string, int, int) tea.Cmd
+	SendWheel(MessageScope, string, bool, int, int, int) tea.Cmd
 }
 
 type terminalCaptureSource interface {
@@ -84,15 +85,28 @@ func (defaultTerminalInputSender) PasteClipboard(scope MessageScope, target stri
 	return PasteClipboardToTmuxCmd(scope, target)
 }
 
+// Pointer reports are queued at call time, like keystrokes, so a click or a
+// notch keeps its place relative to the keys around it. Bubble Tea runs each Cmd
+// concurrently, so ordering established inside the returned Cmd would be no
+// ordering at all (td-8fcd2e).
 func (defaultTerminalInputSender) SendMouse(scope MessageScope, target string, col, row int) tea.Cmd {
-	return func() tea.Msg {
+	return awaitOrderedSend(scope, SendOrdered(target, func() error {
 		if err := SendSGRMouse(target, 0, col, row, false); err != nil {
-			if IsSessionDeadError(err) {
-				return SessionDeadMsg{Scope: scope}
-			}
-			return nil
+			return err
 		}
-		if err := SendSGRMouse(target, 0, col, row, true); err != nil && IsSessionDeadError(err) {
+		return SendSGRMouse(target, 0, col, row, true)
+	}))
+}
+
+func (defaultTerminalInputSender) SendWheel(scope MessageScope, target string, up bool, col, row, notches int) tea.Cmd {
+	return awaitOrderedSend(scope, SendOrdered(target, func() error {
+		return SendSGRWheel(target, up, col, row, notches)
+	}))
+}
+
+func awaitOrderedSend(scope MessageScope, done <-chan error) tea.Cmd {
+	return func() tea.Msg {
+		if err := <-done; err != nil && IsSessionDeadError(err) {
 			return SessionDeadMsg{Scope: scope}
 		}
 		return nil

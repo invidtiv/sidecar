@@ -665,8 +665,8 @@ func TestPollingDecayConstants(t *testing.T) {
 // TestDoubleEscapeDelayConstant tests double escape delay is reasonable
 func TestDoubleEscapeDelayConstant(t *testing.T) {
 	// Per spec: 150ms delay for double-escape
-	if doubleEscapeDelay.Milliseconds() != 150 {
-		t.Errorf("doubleEscapeDelay should be 150ms, got %v", doubleEscapeDelay)
+	if tty.DoubleEscapeDelay.Milliseconds() != 150 {
+		t.Errorf("tty.DoubleEscapeDelay should be 150ms, got %v", tty.DoubleEscapeDelay)
 	}
 }
 
@@ -794,8 +794,8 @@ func TestViewModeInteractiveAllowsDoubleClick(t *testing.T) {
 func TestGetInteractiveExitKey_Default(t *testing.T) {
 	p := &Plugin{ctx: nil}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s', got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s', got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 
@@ -803,8 +803,8 @@ func TestGetInteractiveExitKey_Default(t *testing.T) {
 func TestGetInteractiveExitKey_NilConfig(t *testing.T) {
 	p := &Plugin{ctx: &plugin.Context{}}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s' with nil config, got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s' with nil config, got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 
@@ -814,8 +814,8 @@ func TestGetInteractiveExitKey_EmptyConfigKey(t *testing.T) {
 	cfg.Plugins.Workspace.InteractiveExitKey = ""
 	p := &Plugin{ctx: &plugin.Context{Config: cfg}}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s' with empty config, got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s' with empty config, got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 

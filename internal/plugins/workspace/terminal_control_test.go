@@ -187,7 +187,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			assertOnlyPanelTarget("paste")
 
 			clearLog()
-			p.interactiveState.MouseReportingEnabled = true
+			panel.State.MouseReportingEnabled = true
 			p.interactiveState.PaneWidth = 40
 			p.interactiveState.PaneHeight = 10
 			var mouseX, mouseY int
@@ -207,10 +207,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			if cmd == nil {
 				t.Fatal("panel mouse click produced no command")
 			}
-			result, ok := cmd().(interactiveClickSentMsg)
-			if !ok || result.Err != nil || result.SessionName != "%2" {
-				t.Fatalf("panel mouse result = %#v", result)
-			}
+			runCommandTree(cmd)
 			assertOnlyPanelTarget("mouse")
 		})
 	}

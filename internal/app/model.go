@@ -370,6 +370,16 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
+		// One resolution of the user's terminal settings, handed to every surface
+		// that hosts a terminal: the browser's live pane answers the chords the
+		// project plugin answers. The bindings are registered here for the same
+		// reason the plugin registers its own — the default table cannot read the
+		// user's config.
+		terminal := TerminalConfig(cfg)
+		m.overview.SetTerminalConfig(terminal)
+		km.RegisterPluginBinding(terminal.ExitKey, "exit-interactive", "global-workspaces-terminal")
+		km.RegisterPluginBinding(terminal.CopyKey, "copy-selection", "global-workspaces-terminal")
+		km.RegisterPluginBinding(terminal.PasteKey, "paste", "global-workspaces-terminal")
 	}
 	if features.IsEnabled(features.TasksPlugin.Name) {
 		// Tasks is a global tab, so its host is built here rather than
@@ -1173,6 +1183,31 @@ func (m *Model) clearThemeSwitcherModal() {
 	m.themeSwitcherModal = nil
 	m.themeSwitcherModalWidth = 0
 	m.themeSwitcherMouseHandler = nil
+}
+
+// openIssueInput opens the issue lookup modal and reports that it took the
+// keyboard. It is the one entry point, so the palette reaches the same modal as
+// the key — which is what keeps the capability reachable from the contexts that
+// bind "i" for themselves.
+func (m *Model) openIssueInput() bool {
+	if m.hasModal() {
+		return false
+	}
+	m.showIssueInput = true
+	m.activeContext = "issue-input"
+	m.initIssueInput()
+	return true
+}
+
+// runHostCommand runs a command sidecar's own key handler implements, naming it
+// by the ID the default bindings advertise. It reports whether the ID was one of
+// them.
+func (m *Model) runHostCommand(id string) bool {
+	switch id {
+	case "open-issue":
+		return m.openIssueInput()
+	}
+	return false
 }
 
 // initIssueInput initializes the issue input modal.

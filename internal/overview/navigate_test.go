@@ -169,8 +169,8 @@ func TestEnterInsideTheFilterAcceptsInsteadOfNavigating(t *testing.T) {
 	}
 }
 
-// Enter still opens while the read-only preview holds focus: nothing there
-// forwards a key to a terminal, so the key keeps one meaning in the tab.
+// Enter still opens while a watched preview holds focus: no key is forwarded to
+// a terminal until the user asks for its keyboard, so enter keeps one meaning.
 func TestEnterOpensWhileThePreviewHasFocus(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
@@ -289,10 +289,13 @@ func rowPoint(m *Model, id string) (int, int, bool) {
 	return 0, 0, false
 }
 
-// The global browser is a reader. Creation, deletion, attach, and interactive
-// input stay in the owning project's Workspaces plugin, where their validation
-// and refusal rules live — so the keys that mean those things here mean nothing.
-func TestGlobalBrowserOffersNoMutatingOrInteractivePath(t *testing.T) {
+// The global browser's list is a reader. Creation, deletion, attach and the Git
+// and Task lifecycle stay in the owning project's Workspaces plugin, where their
+// validation and refusal rules live — so the keys that mean those things here
+// mean nothing. Typing into a pane that already exists is on the other side of
+// that line: it creates nothing, so i/E are answered from the list exactly as
+// the project sidebar answers them.
+func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 	m, recorder := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	captures := len(recorder.panes())
@@ -305,9 +308,9 @@ func TestGlobalBrowserOffersNoMutatingOrInteractivePath(t *testing.T) {
 			continue
 		}
 		registered++
-		for _, forbidden := range []string{"new", "delete", "rename", "attach", "interactive", "merge", "diff", "task", "commit", "start", "stop", "kill", "push", "approve"} {
+		for _, forbidden := range []string{"new", "delete", "rename", "attach", "merge", "diff", "task", "commit", "start", "stop", "kill", "push", "approve"} {
 			if strings.Contains(binding.Command, forbidden) {
-				t.Fatalf("the read-only command set offers %q", binding.Command)
+				t.Fatalf("the list's command set offers %q", binding.Command)
 			}
 		}
 	}
@@ -317,7 +320,7 @@ func TestGlobalBrowserOffersNoMutatingOrInteractivePath(t *testing.T) {
 
 	// The project plugin's mutating keys are not the browser's to answer.
 	before := m.workspaces.SelectedID()
-	for _, k := range []string{"n", "D", "p", "a", "i", "c", "x", "N", "R"} {
+	for _, k := range []string{"n", "D", "p", "a", "c", "x", "N", "R"} {
 		if handled, cmd := m.WorkspacesKey(key(k)); handled {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}

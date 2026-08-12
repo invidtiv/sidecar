@@ -25,7 +25,7 @@ func TestRenderSidebarOwnsSectionsViewportAndTypedGeometry(t *testing.T) {
 	rendered := RenderSidebar(SidebarOptions{
 		Width: 36, Height: 9, Title: "Workspaces", Focused: true,
 		SelectedID: "wt:b", HeaderAction: &SidebarAction{ID: "new", Label: "New"},
-		FilterActive: true, FilterLine: "/ side (2 of 4)", BlankAfterHeader: true, Sections: sections,
+		FilterActive: true, FilterLine: "/ side (2 of 4)", Sections: sections,
 	})
 	if rendered.ScrollOffset == 0 {
 		t.Fatal("selected final row did not move the shared viewport")
@@ -52,6 +52,58 @@ func TestRenderSidebarOwnsSectionsViewportAndTypedGeometry(t *testing.T) {
 	if selected.Y+selected.H > 9 {
 		t.Fatalf("selected region extends beyond viewport: %#v", selected)
 	}
+}
+
+func TestRenderSidebarSeparatesSectionsAndKeepsRegionsOnTheirRows(t *testing.T) {
+	sections := []SidebarSection{
+		{Title: SectionTitle("Shells", 2), Rows: []SidebarRow{
+			testSidebarRow("shell:a", "alpha", -1), testSidebarRow("shell:b", "beta", -2),
+		}},
+		{Title: SectionTitle("Workspaces", 1), Rows: []SidebarRow{testSidebarRow("wt:a", "topic", 0)}},
+	}
+	// The project sidebar and the global browser configure the same renderer
+	// differently; the section shape they get must not differ.
+	configurations := map[string]SidebarOptions{
+		"project": {HeaderAction: &SidebarAction{ID: "new", Label: "New"}},
+		"global":  {HeaderMeta: &SidebarAction{ID: "sort", Label: "Activity"}, FooterLines: []string{"1 project unavailable"}},
+	}
+	for name, opts := range configurations {
+		t.Run(name, func(t *testing.T) {
+			opts.Width, opts.Height, opts.Title, opts.Focused = 36, 20, "Workspaces", true
+			opts.SelectedID, opts.FilterActive, opts.FilterLine, opts.Sections = "shell:a", true, "/ filter…", sections
+			rendered := RenderSidebar(opts)
+			lines := strings.Split(ansi.Strip(rendered.View), "\n")
+			trimmed := make([]string, len(lines))
+			for i, line := range lines {
+				trimmed[i] = strings.TrimRight(line, " ")
+			}
+			if trimmed[1] != "/ filter…" || trimmed[2] != "Shells (2)" {
+				t.Fatalf("first heading does not sit flush under the filter row:\n%s", strings.Join(trimmed[:5], "\n"))
+			}
+			workspaces := indexOfLine(trimmed, "Workspaces (1)")
+			if workspaces < 2 || trimmed[workspaces-1] != "" || trimmed[workspaces-2] == "" {
+				t.Fatalf("later heading is not preceded by exactly one blank:\n%s", strings.Join(trimmed, "\n"))
+			}
+			for _, region := range rendered.Regions {
+				if region.Kind != RegionRow {
+					continue
+				}
+				rowName := map[string]string{"shell:a": "alpha", "shell:b": "beta", "wt:a": "topic"}[region.ID]
+				if !strings.Contains(trimmed[region.Y], rowName) {
+					t.Fatalf("region %q points at row %d = %q, want the %q row", region.ID, region.Y, trimmed[region.Y], rowName)
+				}
+			}
+		})
+	}
+}
+
+func indexOfLine(lines []string, want string) int {
+	for i, line := range lines {
+		if line == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestRenderSidebarOmitsAbsentActions(t *testing.T) {

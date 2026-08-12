@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 type stageRunner struct {
@@ -629,5 +630,36 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	got, ok := cmd().(NavigateMsg)
 	if !ok || got.Workspace.ID != workspace.ID || got.Workspace.Path != workspace.Path {
 		t.Fatalf("double-click navigation = %#v", cmd())
+	}
+}
+
+func TestBoardLanesAreWordedByTheListGroupNames(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	m.syncBoard()
+	want := map[kanban.LaneID]string{
+		"working": string(workspacelist.GroupWorking),
+		"blocked": string(workspacelist.GroupNeedsAttention),
+		"done":    string(workspacelist.GroupDone),
+		"idle":    string(workspacelist.GroupIdle),
+		"paused":  string(workspacelist.GroupPaused),
+	}
+	lanes := m.board.Board().Lanes
+	if len(lanes) != len(want) {
+		t.Fatalf("lanes = %d, want %d", len(lanes), len(want))
+	}
+	for _, lane := range lanes {
+		if lane.Label != want[lane.ID] {
+			t.Fatalf("lane %q label = %q, want %q", lane.ID, lane.Label, want[lane.ID])
+		}
+		if lane.HeaderColor == nil {
+			t.Fatalf("lane %q lost its header colour", lane.ID)
+		}
+	}
+	// The component appends its own count, so the label plus " N" has to fit
+	// the narrowest column the board lays out or the heading truncates.
+	for _, lane := range lanes {
+		if width := ansi.StringWidth(lane.Label + " 0"); width > minColumnWidth {
+			t.Fatalf("lane %q header needs %d columns, have %d", lane.ID, width, minColumnWidth)
+		}
 	}
 }

@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // TestMain keeps activity persistence inside the test's own directory. The
@@ -19,3 +22,8 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// settleWheel ends the burst the shared accumulator is coalescing. Notches that
+// arrive inside one debounce window are one flick, so a test that means two
+// separate gestures has to let the window pass.
+func settleWheel() { time.Sleep(2 * tty.WheelDebounceInterval) }

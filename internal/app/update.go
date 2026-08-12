@@ -122,6 +122,14 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, m.overview.WorkspacesPreviewCmd()
 	}
 
+	// A pane the global browser is typing into is a real terminal and takes the
+	// paste, exactly as it takes typed characters.
+	if m.globalWorkspacesVisible() {
+		if handled, cmd := m.overview.WorkspacesTerminalPaste(msg.Content); handled {
+			return m, cmd
+		}
+	}
+
 	// A global view that sidecar draws itself owns keyboard focus, so a paste
 	// must not reach a hidden project plugin (an interactive tmux pane would
 	// run it). The hosted Tasks tab is a real surface and gets its own pastes,
@@ -200,6 +208,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The global Tasks host lays out against the same content box.
 		if cmd := m.globalTasks.update(adjustedMsg); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		// So does the Workspaces browser, whose live pane is sized against the
+		// box the new geometry gives it.
+		if m.overview != nil {
+			if cmd := m.overview.WorkspacesResize(msg.Width, adjustedHeight); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		// First real frame: name the terminal after the project.
 		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
@@ -488,6 +503,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handler := m.pluginCommandHandler(msg.CommandID, msg.Context); handler != nil {
 			return m, handler()
 		}
+		// Sidecar's own globals are answered inside handleKeyMsg rather than by a
+		// registered keymap handler, so the palette resolves them here. They must
+		// not be registered with the keymap instead: findCommand falls back to the
+		// global context whenever the focused context's binding has no handler, so
+		// a registered global would fire for every context that rebinds its key.
+		if (&m).runHostCommand(msg.CommandID) {
+			return m, nil
+		}
 		return m, nil
 
 	case version.ProductStatusMsg:
@@ -541,7 +564,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// input in disguise: while a global view sidecar draws itself holds focus,
 	// it must not reach a hidden interactive pane, same as a regular key press.
 	if m.globalOverlayOwnsKeys() && tty.ExtractUnknownCSIBytes(msg) != nil {
+		// Unless a global surface is itself driving a terminal, in which case the
+		// sequence is that pane's input and is delivered as the key it encodes.
+		if m.globalWorkspacesVisible() {
+			if handled, cmd := m.overview.WorkspacesTerminalKeySequence(msg); handled {
+				return m, cmd
+			}
+		}
 		return m, nil
+	}
+
+	// An embedded terminal's own messages are scope-tagged, so the global
+	// Workspaces browser is offered every one of them alongside the plugins:
+	// whichever activation owns the scope acts on it and the rest ignore it.
+	if m.overview != nil && tty.IsTerminalMessage(msg) {
+		if cmd := m.overview.WorkspacesTerminalMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Forward other messages to ALL plugins (not just active)
@@ -1459,10 +1498,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "i":
-		if !m.hasModal() {
-			m.showIssueInput = true
-			m.activeContext = "issue-input"
-			m.initIssueInput()
+		// A context that binds "i" for itself — the Workspaces list and preview
+		// hand the keyboard to a live pane — answers before the issue modal, or
+		// the binding help advertises could never fire.
+		if _, bound := m.keymap.CommandForContextKey(m.activeContext, "i"); bound {
+			break
+		}
+		if m.openIssueInput() {
 			return m, nil
 		}
 	case "r":

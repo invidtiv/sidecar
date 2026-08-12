@@ -11,6 +11,8 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -22,9 +24,12 @@ import (
 // so switching tabs re-renders what is already collected instead of launching a
 // duplicate tmux/Git fan-out.
 //
-// It is also read-only. Creation, deletion, attach, interactive input, Git
-// lifecycle, and Task actions stay in the owning project's Workspaces plugin,
-// where their validation and refusal rules live.
+// The list itself is a reader. Creation, deletion, attach, Git lifecycle, and
+// Task actions stay in the owning project's Workspaces plugin, where their
+// validation and refusal rules live. The one thing the browser does drive is an
+// existing live pane: the focused preview hands its keyboard to the pane behind
+// the selected row (internal/overview/interactive.go), which creates nothing and
+// destroys nothing — it types into a session that is already there.
 
 // syncWorkspaces rebuilds the list projection from the same results map the
 // board uses. It is called from syncBoard so the two projections can never
@@ -71,6 +76,7 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 		Branch:       item.Branch,
 		Task:         item.TaskID,
 		Provider:     item.Provider,
+		TmuxName:     item.TmuxName,
 	}
 	if row.Project == "" {
 		row.Project = item.ProjectName
@@ -112,12 +118,11 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 	if stale {
 		row.Status += " · stale"
 	}
+	// A shell has neither task nor branch, and its tmux session name is an
+	// identity key rather than something a reader acts on, so it shows nothing.
 	detail := item.TaskID
 	if detail == "" {
 		detail = item.Branch
-	}
-	if item.Kind == workspaceinventory.KindShell {
-		detail = item.TmuxName
 	}
 	row.Detail = detail
 	return row
@@ -141,8 +146,48 @@ func laneGroup(lane agentstatus.LaneID) workspacelist.Group {
 	}
 }
 
+// workspacesLayout is the tab's one placement rule. Three arrangements are
+// possible — the preview alone (hidden sidebar, or narrow and focused), the
+// list alone (narrow), and the ordinary split — and both the renderer and the
+// live terminal read the answer from here. A second derivation is how the
+// terminal ends up sized against a box nobody drew.
+type workspacesLayout struct {
+	// previewOnly is the preview filling the tab, with no list beside it.
+	previewOnly bool
+	// listOnly is the narrow arrangement, where the list has the tab to itself
+	// and there is no preview box on screen to place anything in.
+	listOnly bool
+	// previewDrawn reports that the preview box has room to draw in, and
+	// therefore that box is meaningful. A degenerate size is not an arrangement.
+	previewDrawn bool
+	box          termpreview.Box
+	split        termpreview.Split
+}
+
+func (m *Model) workspacesLayout() workspacesLayout {
+	// The panel's top and bottom border rows are not content.
+	height := m.height - 2
+	drawable := m.width >= 1 && height >= 1
+	if !m.sidebarVisible || (m.previewNarrow() && m.preview.full) {
+		layout := workspacesLayout{previewOnly: true, previewDrawn: drawable}
+		if drawable {
+			layout.box = termpreview.Box{X: globalContentInset, Y: 1, W: m.width - globalPanelOverhead, H: height}
+		}
+		return layout
+	}
+	if m.previewNarrow() {
+		return workspacesLayout{listOnly: true}
+	}
+	split := m.previewSplit(m.width)
+	layout := workspacesLayout{previewDrawn: drawable, split: split}
+	if drawable {
+		layout.box = termpreview.Box{X: split.ContentX, Y: 1, W: split.ContentWidth, H: height}
+	}
+	return layout
+}
+
 // WorkspacesView renders the global Workspaces tab: the list on the left and
-// exactly one read-only terminal box on the right.
+// exactly one terminal box on the right.
 //
 // At widths that cannot sustain two useful panes the list is full width and the
 // preview replaces it when focused, rather than shrinking both into unreadable
@@ -153,25 +198,21 @@ func (m *Model) WorkspacesView(width, height int) string {
 		m.workspacesMouse = mouse.NewHandler()
 	}
 	m.workspacesMouse.Clear()
-	if !m.sidebarVisible {
+	layout := m.workspacesLayout()
+	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
-		return styles.RenderPanel(m.renderPreview(width-globalPanelOverhead, height-2), width, height, true)
+		return styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
 	}
-
-	if m.previewNarrow() {
-		if m.preview.full {
-			m.addPreviewRegion(0, width, height)
-			return styles.RenderPanel(m.renderPreview(width-globalPanelOverhead, height-2), width, height, true)
-		}
+	if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
 		return styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
 	}
 
-	split := m.previewSplit(width)
+	split := layout.split
 	m.addSidebarRegion(0, split.SidebarWidth, height)
 	m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
 	list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
-	preview := m.renderPreview(split.ContentWidth, height-2)
+	preview := m.renderPreview(layout.box.W, layout.box.H)
 
 	leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
 	rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
@@ -198,7 +239,7 @@ func (m *Model) renderWorkspaceList(x, y, width, height int) string {
 	return rendered.View
 }
 
-// previewRegionKind is the hit region covering the read-only preview box.
+// previewRegionKind is the hit region covering the preview box.
 const previewRegionKind = "global-preview"
 
 const (
@@ -254,6 +295,12 @@ func (m *Model) WorkspacesPreviewCmd() tea.Cmd { return m.previewSync() }
 // printable characters mid-query.
 func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+	// A live pane owns the keyboard outright, before the filter and before any
+	// of the browser's own keys: while the user is typing into a terminal, "/"
+	// is a slash, "q" is a q, and ctrl+c interrupts what is running there.
+	if m.PreviewInteractive() {
+		return m.previewKey(msg)
+	}
 	if m.workspaces.Filter().Focused() {
 		// ctrl+c is the host's, even mid-query. It is one of sidecar's two ways
 		// out, and every other text-input surface hands it back (internal/app's
@@ -275,10 +322,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	// While the preview has focus its keys come first, so list navigation
-	// cannot move the cursor out from under the output being read. Every key it
-	// answers scrolls or moves focus; none reaches a terminal.
+	// cannot move the cursor out from under the output being read.
 	if m.PreviewFocused() {
-		if handled, cmd := m.previewKey(key); handled {
+		if handled, cmd := m.previewKey(msg); handled {
 			return true, cmd
 		}
 	}
@@ -291,9 +337,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// mean two different things depending on how wide the terminal is.
 		return true, m.activateWorkspace()
 	case "/":
-		m.focusList()
+		cmd := m.focusList()
 		m.workspaces.FocusFilter()
-		return true, nil
+		return true, cmd
 	case "s":
 		m.workspaces.CycleSort()
 		return true, m.previewSync()
@@ -301,6 +347,12 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "right", "l":
 		return true, m.focusPreviewPane()
+	case interactiveEnterKey, interactiveEnterKeyAlt:
+		// The keyboard entry point is the list on both surfaces: the project
+		// sidebar answers i/E without a focus move first, so one press from the
+		// list here both focuses the pane and hands it the keyboard. A selection
+		// with no live pane refuses, and focus stays where the user left it.
+		return true, m.enterPreviewInteractive()
 	case "esc":
 		if m.workspaces.Filter().Active() {
 			m.workspaces.Filter().Reset()
@@ -315,11 +367,16 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// WorkspaceFocusContext distinguishes list and read-only preview so binding,
-// footer and help discovery follow mouse/keyboard focus. A hidden sidebar is
-// necessarily preview-focused until backslash restores it.
+// WorkspaceFocusContext distinguishes the list, the watched preview, and a
+// preview whose pane is being typed into, so binding, footer and help discovery
+// follow mouse/keyboard focus. Focus alone decides it: hiding the sidebar moves
+// focus to the preview and focusing the list brings the sidebar back, so the
+// advertised keys are always the focused surface's.
 func (m *Model) WorkspaceFocusContext() string {
-	if m.PreviewFocused() || !m.sidebarVisible {
+	if m.PreviewInteractive() {
+		return "global-workspaces-terminal"
+	}
+	if m.PreviewFocused() {
 		return "global-workspaces-preview"
 	}
 	return "global-workspaces"
@@ -327,15 +384,31 @@ func (m *Model) WorkspaceFocusContext() string {
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
 
+// toggleWorkspaceSidebar shows or hides the list. Restoring it moves focus back
+// to the list, which ends interactive mode. Hiding it leaves focus on the
+// preview, so any live pane is resized to the wider box it will be drawn in.
 func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
 	m.sidebarVisible = !m.sidebarVisible
 	if m.sidebarVisible {
-		m.focusList()
-		return nil
+		return m.focusList()
 	}
 	m.preview.full = true
 	cmd := m.focusPreviewPane()
-	return tea.Batch(cmd, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+	return tea.Batch(cmd, m.syncTerminalGeometry(), appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+}
+
+// WorkspacesResize adopts a new tab size ahead of the frame that will use it,
+// so a live pane is resized when the window is, rather than the next time a
+// message happens to reach the terminal.
+func (m *Model) WorkspacesResize(width, height int) tea.Cmd {
+	m.width, m.height = width, height
+	// A window narrow enough to drop the preview would leave the keyboard
+	// pointed at a box that is no longer drawn, so a focused preview takes the
+	// whole tab instead — the arrangement focusPreviewPane makes when narrow.
+	if m.PreviewFocused() && m.previewNarrow() {
+		m.preview.full = true
+	}
+	return m.syncTerminalGeometry()
 }
 
 func (m *Model) navigateWorkspaces(key string) bool {
@@ -364,17 +437,54 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	// Every mouse event counts as mouse activity for the live pane, whether or
+	// not it is routed there: the terminal component's bare-"[" gate reads a
+	// host-wide last-mouse time, and a split SGR sequence would otherwise leak
+	// into the pane as a literal bracket.
+	if m.preview.terminal != nil {
+		m.preview.terminal.NoteMouseActivity()
+	}
+
+	wasDragging := m.workspacesMouse.IsDragging()
+	dragSourceBefore := m.workspacesMouse.DragRegion()
 	action := m.workspacesMouse.HandleMouse(mouseMsg)
+	// A release can be lost when the pointer leaves the window or focus changes.
+	// The mouse handler cancels that stale drag on the next button-less motion;
+	// end the paired terminal gesture at the same boundary.
+	if action.Type == mouse.ActionHover && wasDragging && !m.workspacesMouse.IsDragging() &&
+		dragSourceBefore == previewRegionKind {
+		return m.abandonPreviewGesture()
+	}
+	// A drag over the terminal is a selection, and its release resolves the
+	// gesture the press armed. Both carry the region they started in, so neither
+	// depends on where the pointer has since travelled.
+	if action.Type == mouse.ActionDrag && action.DragStartID == previewRegionKind {
+		return m.dragPreview(action)
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewRegionKind {
+		return m.finishPreviewGesture()
+	}
+	// A drag moves the preview box, and a live pane is sized against that box.
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
-		return nil
+		return m.syncTerminalGeometry()
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
-		return nil
+		return m.syncTerminalGeometry()
 	}
 	if action.Region == nil {
 		return nil
+	}
+
+	// A press anywhere but the terminal is a click away from it, and clicking away
+	// is not a release of the gesture the terminal armed: the divider, a row and
+	// the sidebar all abandon it identically.
+	if kind, _ := action.Region.Data.(string); kind != previewRegionKind {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
+			m.preview.pointer.Abandon()
+		}
 	}
 
 	// The preview owns its own wheel: scrolling over captured output moves that
@@ -389,18 +499,26 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		case workspacesSidebarRegion:
 			switch action.Type {
 			case mouse.ActionClick, mouse.ActionDoubleClick:
-				m.focusList()
+				return m.focusList()
 			case mouse.ActionScrollUp, mouse.ActionScrollDown:
 				m.workspaces.Move(action.Delta)
 				return m.previewSync()
 			}
 			return nil
 		case previewRegionKind:
+			// The terminal box answers the pointer the way a terminal does: a
+			// press arms a gesture the release resolves, a drag selects, a double
+			// or triple click takes the word or the line, and the wheel belongs
+			// to the application only while it has asked for mouse reports.
 			switch action.Type {
-			case mouse.ActionClick, mouse.ActionDoubleClick:
-				return m.focusPreviewPane()
+			case mouse.ActionClick:
+				return m.pressPreview(action)
+			case mouse.ActionDoubleClick:
+				return m.selectPreviewUnit(action, tty.SelectUnitWord)
+			case mouse.ActionTripleClick:
+				return m.selectPreviewUnit(action, tty.SelectUnitLine)
 			case mouse.ActionScrollUp, mouse.ActionScrollDown:
-				m.scrollPreview(-action.Delta)
+				return m.wheelPreview(action)
 			}
 			return nil
 		}
@@ -410,23 +528,27 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	var focus tea.Cmd
 	switch action.Type {
 	case mouse.ActionClick, mouse.ActionDoubleClick:
 		switch region.Kind {
 		case workspacelist.RegionRow:
-			m.focusList()
+			// The selection moves before focus does: giving the keyboard back
+			// rebinds the capture cadence, and it has to bind to the row the
+			// click landed on rather than to the one it is leaving.
 			m.workspaces.SelectID(region.ID)
+			focus = m.focusList()
 			// A single click only selects. The second click opens the row the
 			// first one selected, so a double click can never activate a
 			// neighbour: the identity is resolved from the selection this same
 			// event just moved.
 			if action.Type == mouse.ActionDoubleClick {
-				return tea.Batch(m.previewSync(), m.activateWorkspace())
+				return tea.Batch(focus, m.previewSync(), m.activateWorkspace())
 			}
 		case workspacelist.RegionSort:
 			m.workspaces.CycleSort()
 		case workspacelist.RegionFilter:
-			m.focusList()
+			focus = m.focusList()
 			m.workspaces.FocusFilter()
 		}
 	case mouse.ActionScrollUp:
@@ -434,7 +556,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	case mouse.ActionScrollDown:
 		m.workspaces.Move(action.Delta)
 	}
-	return m.previewSync()
+	return tea.Batch(focus, m.previewSync())
 }
 
 // activateWorkspace opens the selected row through the same app-owned
@@ -476,8 +598,9 @@ func (m *Model) WorkspacesSummary() string {
 }
 
 // The browser's command set is not declared here. It is registered in
-// internal/keymap under the "global-workspaces" and "global-workspaces-filter"
-// contexts, which is what makes it discoverable in help and the palette rather
-// than only in footer hints — and what makes the read-only boundary (no create,
-// delete, attach, or interactive command) a single documented fact instead of a
+// internal/keymap under the "global-workspaces", "global-workspaces-preview",
+// "global-workspaces-terminal" and "global-workspaces-filter" contexts, which is
+// what makes it discoverable in help and the palette rather than only in footer
+// hints — and what makes the boundary (no create, delete or attach anywhere; the
+// pane's keyboard only from the preview) a single documented fact instead of a
 // second list beside the keys this file actually answers.

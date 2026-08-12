@@ -28,7 +28,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	sections := make([]workspacelist.SidebarSection, 0, 2)
 	visibleShells := p.visibleShellIndices()
 	if len(visibleShells) > 0 {
-		section := workspacelist.SidebarSection{Title: "Shells", Action: &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}}
+		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Shells", len(visibleShells)), Action: &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}}
 		for _, index := range visibleShells {
 			index := index
 			shell := p.shells[index]
@@ -46,11 +46,11 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	}
 	visibleWorktrees := p.visibleWorktreeIndices()
 	if len(visibleWorktrees) > 0 {
-		section := workspacelist.SidebarSection{Title: "Workspaces", Action: &workspacelist.SidebarAction{ID: regionWorkspacesPlusButton, Label: "+", Hovered: p.hoverWorkspacesPlusButton}}
-		// Preserve the original compact presentation when the project has no
-		// shell section: the top-level New action already owns creation.
-		if len(visibleShells) == 0 {
-			section.Title, section.Action = "", nil
+		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Workspaces", len(visibleWorktrees))}
+		// With no Shells section above it this heading lands one row under the
+		// panel header, whose "New" creates the same thing the "+" would.
+		if len(visibleShells) > 0 {
+			section.Action = &workspacelist.SidebarAction{ID: regionWorkspacesPlusButton, Label: "+", Hovered: p.hoverWorkspacesPlusButton}
 		}
 		for _, index := range visibleWorktrees {
 			index := index
@@ -89,7 +89,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		SelectedID: selectedID, ScrollOffset: p.scrollOffset,
 		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "New", Hovered: p.hoverNewButton},
 		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
-		BlankAfterHeader: true, Sections: sections, EmptyLines: empty,
+		Sections: sections, EmptyLines: empty,
 	})
 	p.scrollOffset, p.visibleCount = rendered.ScrollOffset, rendered.VisibleRows
 	for _, region := range rendered.Regions {

@@ -95,8 +95,8 @@ func (p *Plugin) previewContentY() int {
 
 // terminalHeaderRow composes the one row above an embedded terminal: identity
 // chips on the left, hints right-aligned on the right. Both the row and the
-// chip placement it renders from now live in internal/termpreview, so the
-// global read-only preview draws a header with the same rules — including the
+// chip placement it renders from live in internal/termpreview, so the global
+// Workspaces preview draws a header with the same rules — including the
 // whole-chip drop — rather than a lookalike.
 func terminalHeaderRow(chips []string, hints string, width, hintFloor int, truncate func(string, int) string) string {
 	return termpreview.HeaderRow(chips, hints, width, hintFloor, truncate)

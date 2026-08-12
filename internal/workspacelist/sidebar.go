@@ -38,20 +38,19 @@ type SidebarSection struct {
 // SidebarOptions contains only resolved presentation state. Collection,
 // selection side effects, preview loading and mutations stay with the caller.
 type SidebarOptions struct {
-	Width, Height    int
-	Title            string
-	Focused          bool
-	SelectedID       string
-	ScrollOffset     int
-	HeaderAction     *SidebarAction
-	HeaderMeta       *SidebarAction
-	PrefixLines      []string
-	FilterLine       string
-	FilterActive     bool
-	BlankAfterHeader bool
-	Sections         []SidebarSection
-	EmptyLines       []string
-	FooterLines      []string
+	Width, Height int
+	Title         string
+	Focused       bool
+	SelectedID    string
+	ScrollOffset  int
+	HeaderAction  *SidebarAction
+	HeaderMeta    *SidebarAction
+	PrefixLines   []string
+	FilterLine    string
+	FilterActive  bool
+	Sections      []SidebarSection
+	EmptyLines    []string
+	FooterLines   []string
 }
 
 // SidebarRendered is the exact view, geometry and viewport produced by one
@@ -103,9 +102,6 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		lines = append(lines, fit(opts.FilterLine, width))
 		regions = append(regions, Region{Kind: RegionFilter, X: 0, Y: y, W: width, H: 1})
 	}
-	if opts.BlankAfterHeader {
-		lines = append(lines, "")
-	}
 
 	footerRows := min(len(opts.FooterLines), max(0, height-len(lines)))
 	bodyHeight := max(0, height-len(lines)-footerRows)
@@ -138,12 +134,20 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 	visibleEnd := sidebarVisibleEnd(flat, opts.Sections, scroll, bodyHeight, width, opts.SelectedID, opts.Focused)
 	rowWidth := max(1, width-1)
 	y := len(lines)
+	bodyStart := y
 	lastSection := -1
 	visibleRows := 0
 	for i := scroll; i < visibleEnd; i++ {
 		entry := flat[i]
 		section := opts.Sections[entry.section]
 		if entry.section != lastSection && section.Title != "" {
+			// Sections are separated by one blank line; the first heading in view
+			// sits flush against the chrome above it, so a scrolled list does not
+			// spend a row on a separator with nothing before it.
+			if y > bodyStart {
+				lines = append(lines, "")
+				y++
+			}
 			heading, x, w := sidebarSectionHeader(section, rowWidth)
 			lines = append(lines, fit(heading, rowWidth))
 			if section.Action != nil && w > 0 {
@@ -206,6 +210,9 @@ func sidebarVisibleEnd(flat []sidebarFlatRow, sections []SidebarSection, scroll,
 		need := 0
 		if entry.section != lastSection && section.Title != "" {
 			need++
+			if remaining < height {
+				need++ // the blank separator RenderSidebar draws above the heading
+			}
 		}
 		rowLines := sidebarRowLines(entry.row.Render(max(1, width-1), entry.row.ID == selectedID, focused))
 		need += max(1, len(rowLines))

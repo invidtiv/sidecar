@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 // Baseline characterization for the project Workspaces sidebar, recorded before
@@ -283,5 +284,51 @@ func TestSidebarNavigationAtShippedDocPaneDefaultWithDocumentOpen(t *testing.T) 
 	}
 	if got, ok := p.terminalLeafBox(); !ok || got != terminalBefore {
 		t.Fatalf("terminal leaf after close = %+v ok=%v, want %+v", got, ok, terminalBefore)
+	}
+}
+
+// The panel header's "New" and the Workspaces section's "+" create the same
+// thing. With no shells above it the section heading sits directly under the
+// header, and the two would read as two different offers.
+func TestWorkspacesSectionOffersNoSecondCreateButtonWithoutShells(t *testing.T) {
+	p := sidebarBaselinePlugin(t)
+	p.shellSelected = false
+	p.shells = nil
+	view := ansi.Strip(p.renderSidebarContent(30, 24))
+	if !strings.Contains(view, workspacelist.SectionTitle("Workspaces", 3)) {
+		t.Fatalf("the section heading is gone:\n%s", view)
+	}
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionWorkspacesPlusButton {
+			t.Fatalf("a second create button is still offered:\n%s", view)
+		}
+	}
+}
+
+// The heading wording and the blank line between sections are what a user
+// compares the two Workspaces surfaces by, so the project sidebar pins them
+// here: title, then the first heading with no separator above it, then one
+// blank line before the next section.
+func TestSidebarHeadingsAndSeparatorPlacement(t *testing.T) {
+	p := sidebarBaselinePlugin(t)
+	lines := strings.Split(ansi.Strip(p.renderSidebarContent(30, 24)), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	if len(lines) < 7 {
+		t.Fatalf("sidebar rendered %d lines:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+
+	if got, want := strings.TrimSpace(lines[1]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
+		t.Fatalf("first heading = %q, want %q directly under the title", got, want)
+	}
+	if lines[2] == "" {
+		t.Fatalf("a separator was drawn above the first section:\n%s", strings.Join(lines, "\n"))
+	}
+	if lines[4] != "" {
+		t.Fatalf("sections are not separated by a blank line: %q\n%s", lines[4], strings.Join(lines, "\n"))
+	}
+	if got, want := strings.TrimSpace(lines[5]), workspacelist.SectionTitle("Workspaces", 3); !strings.HasPrefix(got, want) {
+		t.Fatalf("second heading = %q, want %q", got, want)
 	}
 }

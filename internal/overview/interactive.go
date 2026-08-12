@@ -1,0 +1,539 @@
+package overview
+
+import (
+	"fmt"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
+)
+
+// Typing into a pane from the global browser is not a second way to talk to
+// tmux. Reading a pane here is still the collector's one Capture; driving one is
+// internal/tty's embeddable terminal — the exact component the project
+// Workspaces plugin drives, with the same exit key, the same double-escape, the
+// same control-mode client and the same key mapping. This file is only the
+// wiring: which selection is eligible, where the terminal is drawn, and how the
+// user gets in and out.
+//
+// Creating a shell from the global space remains out of scope: nothing here
+// starts a session, and a selection with no live pane is refused rather than
+// given one.
+
+const (
+	// interactiveEnterKeys are the ways in from the preview. The project
+	// plugin answers both for the same act (internal/plugins/workspace/keys.go).
+	interactiveEnterKey    = "i"
+	interactiveEnterKeyAlt = "E"
+)
+
+// SetTerminalConfig adopts the user's terminal settings, so the browser's live
+// pane and the project plugin's answer the same chords for the same acts. It is
+// a setter rather than a constructor argument because this package must not
+// import internal/config: the app resolves the values once and hands the same
+// value to both surfaces.
+func (m *Model) SetTerminalConfig(config tty.Config) {
+	m.terminalConfig = config
+}
+
+// TerminalConfig is the resolved configuration this surface answers. The app
+// asks so the keymap binding, the footer, and the palette describe the keys the
+// surface actually answers.
+func (m *Model) TerminalConfig() tty.Config {
+	config := m.terminalConfig
+	defaults := tty.DefaultConfig()
+	if config.ExitKey == "" {
+		config.ExitKey = defaults.ExitKey
+	}
+	if config.CopyKey == "" {
+		config.CopyKey = defaults.CopyKey
+	}
+	if config.PasteKey == "" {
+		config.PasteKey = defaults.PasteKey
+	}
+	// The browser has no attach path — attaching stays the owning project's — and
+	// an attach chord that only exited would be an undocumented third way out and
+	// a keystroke stolen from the pane.
+	config.AttachKey = ""
+	config.ScrollbackLines = previewCaptureLines
+	return config
+}
+
+// InteractiveExitKey is the chord that ends interactive mode here.
+func (m *Model) InteractiveExitKey() string { return m.TerminalConfig().ExitKey }
+
+// previewTerminal is the embedded-terminal seam. *tty.Model is the only
+// implementation; tests substitute a recorder so proving the interaction path
+// never has to reach a real tmux server.
+type previewTerminal interface {
+	Open(tty.Target) tea.Cmd
+	Update(tea.Msg) tea.Cmd
+	SetDimensions(width, height int) tea.Cmd
+	SendUnknownSequence(tea.Msg) tea.Cmd
+	IsActive() bool
+	Exit()
+
+	// The pane as content: what it has drawn, how big its grid is, and where its
+	// cursor sits. The browser renders its own window over this rather than the
+	// component's live tail, so a scrolled-back window and a highlighted
+	// selection are drawn the same way whether or not anyone is typing.
+	Buffer() *tty.OutputBuffer
+	PaneSize() (width, height int)
+	CursorState() (row, col int, visible bool)
+
+	// The pane as a mouse target. Whether a click or a notch belongs to the
+	// application is the shared layer's rule; delivering it is the component's.
+	PaneMouseReporting() bool
+	SendClick(col, row int) tea.Cmd
+	SendWheelNotches(up bool, col, row, notches int) tea.Cmd
+	NoteMouseActivity()
+}
+
+var _ previewTerminal = (*tty.Model)(nil)
+
+// newPreviewTerminal builds the browser's terminal. It is a variable so the
+// seam can be substituted without a tmux server behind it.
+var newPreviewTerminal = func(config tty.Config) previewTerminal {
+	return tty.New(&config)
+}
+
+// PreviewInteractive reports that the focused preview is forwarding keys to a
+// live pane. The app asks so the keymap context, the footer hints, the mouse
+// mode and the native cursor all follow the same fact.
+func (m *Model) PreviewInteractive() bool {
+	return m.preview.terminal != nil && m.preview.terminal.IsActive()
+}
+
+// PreviewCanType reports that the selection has a live pane this surface could
+// hand the keyboard to. The footer asks so it never offers a key the preview
+// itself is refusing.
+func (m *Model) PreviewCanType() bool {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return false
+	}
+	_, unavailable := previewUnavailable(workspace)
+	return !unavailable
+}
+
+// enterPreviewInteractive hands the selected pane's keyboard to the user.
+//
+// It refuses exactly what the preview already refuses to read: an item with no
+// live pane, or an ambiguous match the catalog will not guess between. The
+// refusal is the reason the preview already shows, said out loud as a toast,
+// because a key that silently does nothing is indistinguishable from a bug.
+func (m *Model) enterPreviewInteractive() tea.Cmd {
+	if m.PreviewInteractive() {
+		return nil
+	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return nil
+	}
+	if reason, unavailable := previewUnavailable(workspace); unavailable {
+		m.preview.reason = reason
+		return appmsg.ShowToast(reason, 3*time.Second)
+	}
+	if m.preview.terminal == nil {
+		m.preview.terminal = newPreviewTerminal(m.TerminalConfig())
+	}
+
+	m.preview.focus = focusPreview
+	if m.previewNarrow() {
+		m.preview.full = true
+	}
+	m.preview.offset = 0
+	// The selection names lines of the capture buffer the live one is about to
+	// replace, so it cannot survive the handover.
+	m.clearPreviewSelection()
+	// The capture poll and the terminal are two readers of one pane, and only
+	// one of them may be running. Bumping the generation drops whatever capture
+	// is in flight; previewInterval stops arming new ones while the terminal is
+	// live.
+	m.preview.generation++
+	m.preview.scheduled = false
+
+	var cmds []tea.Cmd
+	if width, height, ok := m.previewTerminalSize(); ok {
+		cmds = append(cmds, m.preview.terminal.SetDimensions(width, height))
+	}
+	cmds = append(cmds, m.preview.terminal.Open(tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}))
+	m.tracef("preview interactive enter workspace=%s pane=%s", workspace.ID, workspace.PaneID)
+	if !m.preview.interactiveHintShown {
+		m.preview.interactiveHintShown = true
+		cmds = append(cmds, appmsg.ShowToast("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop", 3*time.Second))
+	}
+	return tea.Batch(cmds...)
+}
+
+// exitPreviewInteractive gives the keyboard back to the browser and resumes the
+// read-only capture cadence for whatever is selected now. It is idempotent, so
+// every path that could end the mode — the exit key, double escape, a dead
+// session, moving focus, changing selection, hiding the tab — may simply call
+// it.
+func (m *Model) exitPreviewInteractive() tea.Cmd {
+	if !m.PreviewInteractive() {
+		return nil
+	}
+	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
+	// previewSelect ends the terminal and rebinds the capture cadence to the
+	// current selection, which is the whole of "give the keyboard back".
+	return m.previewSelect()
+}
+
+// forwardToTerminal hands one message to the live terminal and notices when the
+// terminal ended the mode itself — the exit key, double escape, or a session
+// that died under it. The component owns those decisions; this is where the
+// browser learns the answer and goes back to capturing.
+func (m *Model) forwardToTerminal(msg tea.Msg) tea.Cmd {
+	if !m.PreviewInteractive() {
+		return nil
+	}
+	cmd := m.preview.terminal.Update(msg)
+	if m.preview.terminal.IsActive() {
+		return cmd
+	}
+	return tea.Batch(cmd, m.previewSelect())
+}
+
+// pressPreview arms a pointer gesture over the preview box. Nothing is decided
+// here: a release without motion activates the pane (or hands the click to the
+// application running in it), while motion selects text instead. Deciding on
+// mouse-down would mean a drag that starts on the terminal could never select.
+//
+// Focus moves in the same press that arms the click, so one click into the
+// terminal both brings the keyboard here and starts typing — the project surface
+// answers a click that way, and a click that only moved focus would leave the
+// second one to be swallowed as a double click's word selection.
+func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
+	focus := tea.Cmd(nil)
+	if !m.PreviewFocused() {
+		focus = m.focusPreviewPane()
+	}
+	geometry, ok := m.previewGeometry()
+	if !ok || action.Region == nil {
+		return focus
+	}
+
+	want := tty.ResolveClick(tty.ClickIntent{
+		Live:           m.PreviewInteractive(),
+		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
+		Modified:       action.Shift || action.Alt,
+	})
+
+	// Track the gesture even when the buffer is empty or the press lands on
+	// padding: a plain click still needs its release, and motion can become
+	// selectable once it reaches a row.
+	m.workspacesMouse.StartDrag(action.X, action.Y, previewRegionKind, 0)
+	m.preview.pointer.Press(geometry, m.previewBuffer(), &m.preview.selection, tty.PressEvent{
+		X: action.X, Y: action.Y,
+		Shift: action.Shift, Alt: action.Alt,
+		Rect: action.Region.Rect, Want: want,
+		// One terminal is drawn here, so every gesture is in the same source.
+		SameSource: true,
+	})
+	return focus
+}
+
+// dragPreview extends the live selection, scrolling the window when the pointer
+// has run past an edge so a selection can reach content that is not on screen.
+func (m *Model) dragPreview(action mouse.MouseAction) tea.Cmd {
+	geometry, ok := m.previewGeometry()
+	if !ok {
+		return nil
+	}
+	buffer := m.previewBuffer()
+	if !m.preview.selection.Anchor.Valid() &&
+		!m.preview.pointer.AnchorFrom(geometry, buffer, &m.preview.selection,
+			action.X-action.DragDX, action.Y-action.DragDY, action.Alt) {
+		return nil
+	}
+	// The tick re-reads this position, so a pointer held still past an edge keeps
+	// scrolling after motion events stop arriving. Real motion also restarts the
+	// hold budget that bounds a chain running on a lost release.
+	m.preview.pointer.NoteDragMotion(action.X, action.Y)
+	m.scrollPreviewRows(tty.EdgeScrollDelta(geometry, action.Y, tty.DragScrollStep))
+	// The window may have moved under the pointer, so ask again before extending.
+	geometry, _ = m.previewGeometry()
+	if !m.preview.pointer.DragTo(geometry, buffer, &m.preview.selection, action.X, action.Y) {
+		return nil
+	}
+	if tty.EdgeScrollDelta(geometry, action.Y, tty.AutoScrollStep) == 0 {
+		return nil
+	}
+	return m.schedulePreviewAutoScroll()
+}
+
+// selectPreviewUnit installs the word or line under the pointer as the gesture's
+// anchor unit, so the button still held extends by that unit.
+func (m *Model) selectPreviewUnit(action mouse.MouseAction, unit tty.SelectionUnit) tea.Cmd {
+	geometry, ok := m.previewGeometry()
+	if !ok || action.Region == nil {
+		return nil
+	}
+	m.preview.pointer.AdoptSurface(&m.preview.selection, action.Region.Rect)
+	if !m.preview.pointer.SelectUnitAt(geometry, m.previewBuffer(), &m.preview.selection,
+		action.X, action.Y, unit) {
+		return nil
+	}
+	// Arm drag tracking exactly as a plain mouse-down does, so the button still
+	// held keeps delivering motion to this gesture and its release arrives as a
+	// drag end rather than a fresh click.
+	m.workspacesMouse.StartDrag(action.X, action.Y, previewRegionKind, 0)
+	if m.TerminalConfig().CopyOnSelect {
+		return m.copyPreviewSelectionCmd()
+	}
+	return nil
+}
+
+// finishPreviewGesture resolves the gesture: a selection was made, or the click
+// meant what the press armed it to mean.
+func (m *Model) finishPreviewGesture() tea.Cmd {
+	resolution, selected := m.preview.pointer.Release(&m.preview.selection)
+	if selected {
+		if m.TerminalConfig().CopyOnSelect {
+			return m.copyPreviewSelectionCmd()
+		}
+		return nil
+	}
+	switch resolution {
+	case tty.ClickActivate:
+		return m.enterPreviewInteractive()
+	case tty.ClickForward:
+		// The press position, not the release: a click that resolves here never
+		// moved, and the send carries a press and a release together.
+		pressX, pressY := m.preview.pointer.PressPoint()
+		col, row, ok := m.previewPaneCoords(pressX, pressY)
+		if !ok {
+			return nil
+		}
+		return m.preview.terminal.SendClick(col, row)
+	}
+	return nil
+}
+
+// abandonPreviewGesture ends a gesture whose release will never arrive — the
+// pointer left the window, or focus changed. Neither activation nor a forwarded
+// click survives a release the app never saw.
+func (m *Model) abandonPreviewGesture() tea.Cmd {
+	// Before anything else: an edge scroll tick still in flight belongs to a
+	// gesture that is over.
+	m.preview.pointer.Abandon()
+	if m.preview.selection.Anchor.Valid() {
+		// The release happened, outside the window. Close the selection where the
+		// shared handler abandons its drag.
+		return m.finishPreviewGesture()
+	}
+	return nil
+}
+
+// previewAutoScrollTickMsg drives one step of the held-pointer edge scroll. The
+// generation pins it to the gesture that scheduled it, so a tick in flight when
+// the button comes up is discarded.
+type previewAutoScrollTickMsg struct {
+	generation uint64
+}
+
+func (m *Model) schedulePreviewAutoScroll() tea.Cmd {
+	return m.preview.pointer.ScheduleAutoScroll(func(generation uint64) tea.Msg {
+		return previewAutoScrollTickMsg{generation: generation}
+	})
+}
+
+// advancePreviewAutoScroll scrolls one step for a pointer still held past an
+// edge and re-arms itself. It stops when the gesture ended, the pointer came
+// back inside the content, or the window has no more rows in that direction.
+func (m *Model) advancePreviewAutoScroll(msg previewAutoScrollTickMsg) tea.Cmd {
+	if !m.preview.pointer.AdvanceAutoScroll(msg.generation, m.previewAutoScrollTarget()) {
+		return nil
+	}
+	return m.schedulePreviewAutoScroll()
+}
+
+// previewAutoScrollTarget is this surface's window, for the shared driver.
+func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
+	return tty.AutoScrollTarget{
+		Geometry:  func() tty.Geometry { geometry, _ := m.previewGeometry(); return geometry },
+		Buffer:    m.previewBuffer,
+		Selection: &m.preview.selection,
+		Scroll: func(delta int) bool {
+			before := m.preview.offset
+			m.scrollPreviewRows(delta)
+			return m.preview.offset != before
+		},
+	}
+}
+
+// wheelPreview routes a wheel notch. The application running in the pane owns it
+// only while it has asked for mouse reports; every other notch scrolls the window
+// the surface is drawing, which is what makes the wheel work over a plain shell.
+func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
+	// One flick is one gesture, whichever surface it lands on: the shared burst
+	// coalesces it so the distance travelled does not depend on how fast this
+	// surface happens to repaint.
+	delta, flush := m.preview.wheel.Add(action.Delta, m.now())
+	if !flush {
+		return nil
+	}
+	reporting := m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting()
+	var col, row int
+	inPane := false
+	if reporting {
+		col, row, inPane = m.previewPaneCoords(action.X, action.Y)
+	}
+	route, notches := tty.RouteWheel(tty.WheelInput{
+		Delta:          delta,
+		Shift:          action.Shift,
+		Alt:            action.Alt,
+		MouseReporting: reporting,
+		InPane:         inPane,
+	})
+	if route == tty.WheelPane {
+		// While the app owns the wheel it also owns what the pane shows.
+		m.pinPreviewToLive()
+		return m.preview.terminal.SendWheelNotches(delta < 0, col, row, notches)
+	}
+	m.clearPreviewSelection()
+	before := m.preview.offset
+	m.scrollPreview(-delta)
+	if delta < 0 && m.preview.offset == before {
+		return m.notePreviewScrollbackLimit()
+	}
+	return nil
+}
+
+// notePreviewScrollbackLimit says out loud that this surface does not read
+// further back.
+//
+// The browser deliberately does not extend its capture window at the top: it
+// holds one bounded capture per selected pane so that watching a whole machine's
+// workspaces stays cheap, and lazily loading history here would make every
+// scrolled-back preview a second reader of a pane the owning project already
+// reads in full. Rather than let the window dead-end silently, say where the
+// full buffer is.
+func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
+	if m.preview.scrollbackLimitShown {
+		return nil
+	}
+	m.preview.scrollbackLimitShown = true
+	return appmsg.ShowToast(fmt.Sprintf(
+		"Showing the last %d lines — open the workspace in its project for the full buffer",
+		previewCaptureLines), 3*time.Second)
+}
+
+// WorkspacesTerminalMsg offers the browser's terminal one of the terminal
+// component's own messages. Every one of them is scope-tagged, so the app hands
+// them to this surface and to the plugins alike and each activation keeps only
+// its own.
+func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
+	if !m.PreviewInteractive() || !tty.IsTerminalMessage(msg) {
+		return nil
+	}
+	return m.forwardToTerminal(msg)
+}
+
+// WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
+// key like shift+enter, which never becomes a KeyPressMsg — into a live pane,
+// and reports whether it took it. Without it those keys would be dropped on
+// their way past the global scope, and the pane would see a plain enter.
+func (m *Model) WorkspacesTerminalKeySequence(msg tea.Msg) (bool, tea.Cmd) {
+	if !m.PreviewInteractive() {
+		return false, nil
+	}
+	return true, m.preview.terminal.SendUnknownSequence(msg)
+}
+
+// WorkspacesTerminalPaste routes bracketed-paste content into a live pane and
+// reports whether it took it. A paste with no terminal up belongs to the filter
+// or to nobody.
+func (m *Model) WorkspacesTerminalPaste(content string) (bool, tea.Cmd) {
+	if !m.PreviewInteractive() || content == "" {
+		return false, nil
+	}
+	return true, m.forwardToTerminal(tea.PasteMsg{Content: content})
+}
+
+// WorkspacesCursor is the live pane's own cursor, in tab-local coordinates. It
+// is placed against the window this surface drew, not against a second one the
+// terminal component rendered for itself, so the cell the cursor sits in is the
+// cell a click there is forwarded to.
+//
+// It is nil for every other state: a watched pane has no cursor to place, and
+// drawing one would invite typing into something that forwards nothing.
+func (m *Model) WorkspacesCursor() *tea.Cursor {
+	if !m.PreviewInteractive() {
+		return nil
+	}
+	window := m.previewWindow()
+	if !window.ok || !window.input.CursorVisible {
+		return nil
+	}
+	x, y, ok := tty.ViewportCursor(window.layout, window.input)
+	if !ok {
+		return nil
+	}
+	cursor := tea.NewCursor(window.surface.X+x, window.surface.Y+y)
+	cursor.Shape = tea.CursorBlock
+	cursor.Blink = true
+	return cursor
+}
+
+// previewBox is where the preview panel's content sits inside the tab. It is
+// the box the layout named, so the terminal is sized and the cursor placed
+// against exactly what WorkspacesView drew.
+func (m *Model) previewBox() (termpreview.Box, bool) {
+	layout := m.workspacesLayout()
+	return layout.box, layout.previewDrawn
+}
+
+// previewSurface is the terminal viewport inside that box: the box minus the
+// one header row, taken from the shared layer rather than recomputed.
+func (m *Model) previewSurface() (termpreview.Surface, bool) {
+	box, ok := m.previewBox()
+	if !ok {
+		return termpreview.Surface{}, false
+	}
+	surface := termpreview.SurfaceIn(box)
+	if !surface.OK || surface.Width < 1 || surface.Height < 1 {
+		return termpreview.Surface{}, false
+	}
+	return surface, true
+}
+
+// syncTerminalGeometry keeps the live pane sized to the box the layout gives
+// it. Every caller is a path that moves that box — a window resize, a divider
+// drag, the sidebar toggle — because the terminal has no other way to learn its
+// new size: an idle pane under control mode emits nothing to ride along with.
+// SetDimensions is a no-op when nothing moved.
+func (m *Model) syncTerminalGeometry() tea.Cmd {
+	if !m.PreviewInteractive() {
+		return nil
+	}
+	width, height, ok := m.previewTerminalSize()
+	if !ok {
+		return nil
+	}
+	return m.preview.terminal.SetDimensions(width, height)
+}
+
+// previewTerminalSize is the pane size this box can actually draw: the surface
+// minus the column the scrollbar reserves. A pane sized to the full surface
+// would be one column wider than what is drawn, so it would be permanently
+// clipped and every forwarded click near the right edge would land a column off.
+func (m *Model) previewTerminalSize() (width, height int, ok bool) {
+	surface, ok := m.previewSurface()
+	if !ok {
+		return 0, 0, false
+	}
+	return tty.ContentWidth(surface.Width), surface.Height, true
+}
+
+// interactiveHints is the header's right region while the pane is live. It says
+// the two things a user in this mode needs: that keys are going to the pane, and
+// how to stop.
+func (m *Model) interactiveHints() string {
+	return "typing · " + m.InteractiveExitKey() + " or esc esc to stop"
+}

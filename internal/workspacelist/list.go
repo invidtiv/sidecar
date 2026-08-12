@@ -19,6 +19,7 @@
 package workspacelist
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -32,14 +33,28 @@ import (
 type Group string
 
 const (
-	GroupNeedsAttention Group = "NEEDS ATTENTION"
-	GroupWorking        Group = "WORKING"
-	GroupDone           Group = "DONE"
-	GroupLive           Group = "LIVE"
-	GroupIdle           Group = "IDLE"
-	GroupPaused         Group = "PAUSED"
-	GroupNoSession      Group = "NO SESSION"
+	GroupNeedsAttention Group = "Needs Attention"
+	GroupWorking        Group = "Working"
+	GroupDone           Group = "Done"
+	GroupLive           Group = "Live"
+	GroupIdle           Group = "Idle"
+	GroupPaused         Group = "Paused"
+	GroupNoSession      Group = "No Session"
 )
+
+// SectionTitle words a list section's heading. Both the project sidebar and the
+// global browser render through it so a heading cannot gain a count on one
+// surface and lose it on the other.
+//
+// The Kanban board words its lane headers itself: a column is as narrow as 17
+// columns there, which "Needs Attention (0)" overruns, and its label and count
+// carry different colours rather than one string.
+func SectionTitle(name string, count int) string {
+	if name == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s (%d)", name, count)
+}
 
 // activityOrder is the Activity sort's group order, straight from the plan:
 // needs attention, working, done, live plain shells, idle, paused/unavailable,
@@ -118,18 +133,22 @@ type Item struct {
 	Branch       string
 	Task         string
 	Provider     string
-	Status       string
-	Detail       string
-	Marker       RowMarker
-	Group        Group
-	ChangedAt    time.Time
-	Data         any
+	// TmuxName is an identity key, never rendered. It is searchable so two
+	// shells sharing a display name inside one project can be told apart.
+	TmuxName  string
+	Status    string
+	Detail    string
+	Marker    RowMarker
+	Group     Group
+	ChangedAt time.Time
+	Data      any
 }
 
 // haystack is the exact field set the filter promises to search: workspace or
-// shell name, project, branch, task, provider, and the semantic status label.
+// shell name, project, branch, task, provider, tmux session name, and the
+// semantic status label.
 func (i Item) haystack() string {
-	return strings.ToLower(strings.Join([]string{i.Name, i.Project, i.Branch, i.Task, i.Provider, i.Status, string(i.Group)}, "\x00"))
+	return strings.ToLower(strings.Join([]string{i.Name, i.Project, i.Branch, i.Task, i.Provider, i.TmuxName, i.Status, string(i.Group)}, "\x00"))
 }
 
 // Match reports whether an item satisfies a query. Matching is

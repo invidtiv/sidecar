@@ -256,7 +256,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	for _, section := range sections {
 		title := ""
 		if m.sortMode == SortActivity && section.Group != "" {
-			title = fmt.Sprintf("%s %d", section.Group, len(section.Items))
+			title = SectionTitle(string(section.Group), len(section.Items))
 		}
 		s := SidebarSection{Title: title}
 		for _, item := range section.Items {
@@ -282,8 +282,11 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	rendered := RenderSidebar(SidebarOptions{Width: opts.Width, Height: opts.Height, Title: opts.Title, Focused: opts.Focused,
 		SelectedID: m.selectedID, ScrollOffset: m.scroll,
-		HeaderMeta:   &SidebarAction{ID: "sort", Label: m.sortMode.Label()},
-		FilterActive: true, FilterLine: m.filter.RenderRow(opts.Width, matched, total),
+		HeaderMeta: &SidebarAction{ID: "sort", Label: m.sortMode.Label()},
+		// The filter row costs a row of chrome, so it appears when the filter is
+		// live and not before — the rule the project sidebar already follows, so
+		// the first heading sits on the same row on both surfaces.
+		FilterActive: m.filter.Active(), FilterLine: m.filter.RenderRow(opts.Width, matched, total),
 		Sections: sidebarSections, EmptyLines: empty, FooterLines: m.failureLines(failureRows, opts.Width)})
 	m.scroll, m.rows = rendered.ScrollOffset, rendered.VisibleRows
 	return Rendered{View: rendered.View, Regions: rendered.Regions}

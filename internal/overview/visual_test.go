@@ -116,22 +116,36 @@ func TestCardLinesAgentChipUsesConversationsIcon(t *testing.T) {
 	}
 }
 
-func TestCardLinesShellDetailIsSessionNameOnly(t *testing.T) {
+func TestCardLinesNeverShowTheTmuxSessionName(t *testing.T) {
 	shell := workspaceinventory.Workspace{
 		Kind: workspaceinventory.KindShell, ProjectKey: "p", ProjectName: "one", Name: "agent",
 		Provider: "codex", TmuxName: "sidecar-sh-sidecar-8",
 		Presentation: agentstatus.Presentation{Lane: agentstatus.LaneIdle, Label: "idle"},
 	}
-	lines := cardLines(shell, false, time.Now())
-	if len(lines) < 3 || len(lines[2].Spans) < 2 {
-		t.Fatalf("expected detail span on line 3, got %#v", lines)
-	}
-	detail := lines[2].Spans[1].Text
-	if strings.Contains(detail, "tmux") {
-		t.Fatalf("shell detail = %q, must not repeat the 'tmux' label", detail)
-	}
-	if !strings.Contains(detail, "sidecar-sh-sidecar-8") {
-		t.Fatalf("shell detail = %q, want session name", detail)
+	for _, stale := range []bool{false, true} {
+		lines := cardLines(shell, stale, time.Now())
+		if len(lines) != 3 {
+			t.Fatalf("card lines = %d, want 3", len(lines))
+		}
+		for _, line := range lines {
+			for _, span := range line.Spans {
+				if strings.Contains(span.Text, "sidecar-sh-sidecar-8") {
+					t.Fatalf("card span = %q, must not show the tmux session name", span.Text)
+				}
+			}
+		}
+		// A shell has no task or branch, so its detail line carries the spine
+		// alone unless freshness has something to say.
+		detail := ""
+		if len(lines[2].Spans) > 1 {
+			detail = lines[2].Spans[1].Text
+		}
+		if stale && !strings.Contains(detail, "stale") {
+			t.Fatalf("stale shell detail = %q, want stale", detail)
+		}
+		if !stale && detail != "" {
+			t.Fatalf("fresh shell detail = %q, want nothing", detail)
+		}
 	}
 }
 
