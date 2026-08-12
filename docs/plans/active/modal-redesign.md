@@ -261,13 +261,20 @@ Each phase builds, tests, and is separately committable. Visual proof after
 phases 1, 3, and 5 via `scripts/tmux-drive.sh` + `scripts/tmux-screenshot.sh`
 on the isolated test tmux socket (never the default server).
 
-**Phase 0 — Fix the background bug (small, ships alone).**
-`styles.FillBackground`: match both `\x1b[0m` and `\x1b[m`; stop appending a
-trailing reset that strands lipgloss's own padding; apply the fill to the whole
-modal inner block, not just the viewport. Add `internal/modal` regression test
-asserting every rendered line's non-border cells carry the modal background
-(parse the ANSI, assert no default-bg runs). This test is the guard rail for
-everything after it.
+**Phase 0 — Fix the background bug. DONE.**
+`styles.FillBackground` now matches both `\x1b[0m` and `\x1b[m`, and opens each
+line with the background so unstyled leading content does not depend on the
+enclosing container. `internal/modal/background_test.go` and
+`internal/styles/fill_background_test.go` parse the rendered ANSI and assert no
+cell inside the modal border is emitted without a background; they fail against
+the pre-fix code in 5 of 6 cases.
+
+Measured on a live 120x40 project switcher (`scripts/tmux-drive.sh`, isolated
+socket), counting cells with no background set inside the modal interior:
+**281 across 7 lines → 0**. The only fills left inside modals are deliberate:
+the `SurfaceRaised` key chips and the boxed input border, both of which this
+plan replaces on aesthetic grounds rather than correctness. This test is the
+guard rail for everything after it.
 
 **Phase 1 — Tokens and primitives.** Add the style tokens + `normalize.go`
 derivation + contrast tests. Add `Header`, `Row`, `Choice`, `Field`, `Actions`
