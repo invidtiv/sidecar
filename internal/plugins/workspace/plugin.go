@@ -115,6 +115,7 @@ const (
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
+	regionDocPane          = "doc-pane"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -183,6 +184,7 @@ type Plugin struct {
 	paneRoot   *PaneNode
 	paneFocus  int
 	paneNextID int
+	docs       map[int]*docPane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -582,6 +584,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneRoot = nil
 	p.paneFocus = 0
 	p.paneNextID = 1
+	p.docs = make(map[int]*docPane)
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
 		p.paneFocus = p.paneNextID
@@ -671,6 +674,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveCopyKey(), "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(superCopyKey, "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractivePasteKey(), "paste", "workspace-interactive")
+
+		// Document panes are a distinct focus context: their navigation must not
+		// fall through to terminal scrolling or workspace refresh.
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("r", "render", "workspace-doc")
 	}
 
 	// Load saved sidebar width
@@ -1453,6 +1464,7 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 // Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
 	var cmds []tea.Cmd
+	p.resetDocPanesForSelection()
 
 	// Resize selected pane to match preview width so capture output is correct
 	if cmd := p.resizeSelectedPaneCmd(); cmd != nil {

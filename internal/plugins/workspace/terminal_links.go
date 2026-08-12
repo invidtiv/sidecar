@@ -277,6 +277,9 @@ func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if p.paneRoot != nil && docPaneTarget(rel, true) {
+		return p.openDocPane(filepath.Clean(baseResolved), filepath.ToSlash(rel), line)
+	}
 	navigate := func() tea.Msg {
 		return filebrowser.NavigateToFileMsg{Path: filepath.ToSlash(rel), Line: line}
 	}

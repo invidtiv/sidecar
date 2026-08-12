@@ -659,6 +659,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.activePane = PaneSidebar
 	case regionPreviewPane:
 		p.activePane = PanePreview
+		p.paneFocus = terminalLeafID(p.paneRoot)
 		if p.termPanelVisible {
 			p.termPanelFocused = false
 		}
@@ -687,6 +688,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
 		p.activePane = PanePreview
+		p.paneFocus = terminalLeafID(p.paneRoot)
 		p.termPanelFocused = true
 		if !action.Shift && !action.Alt {
 			if cmd, ok := p.activateTerminalLink(action); ok {
@@ -694,6 +696,14 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			}
 		}
 		return p.prepareTerminalClickOrDrag(action)
+	case regionDocPane:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+			}
+		}
 	case regionTermPanelDivider:
 		// Start drag for terminal panel resizing (percentage-based).
 		startSize := p.termPanelEffectiveSize()
@@ -1144,6 +1154,15 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
+	case regionDocPane:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				if doc := p.docs[leaf.DocID]; doc != nil {
+					doc.view.Scroll(delta)
+				}
+			}
+		}
+		return nil
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
 		p.termPanelScroll -= delta

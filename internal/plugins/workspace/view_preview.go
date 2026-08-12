@@ -14,6 +14,13 @@ import (
 
 // renderPreviewContent renders the preview pane content (no borders).
 func (p *Plugin) renderPreviewContent(width, height int) string {
+	if content, ok := p.renderDocumentSplit(width, height); ok {
+		return content
+	}
+	return p.renderPreviewContentLegacy(width, height)
+}
+
+func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 	var lines []string
 
 	// Show welcome guide only when no worktree AND no shell is selected

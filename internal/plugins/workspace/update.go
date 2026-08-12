@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -59,6 +60,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.applyTerminalHistory(msg)
 	case terminalSearchHistoryLoadedMsg:
 		p.applyTerminalSearchHistory(msg)
+		return p, nil
+	case docview.LoadedMsg:
+		p.applyDocLoaded(msg)
 		return p, nil
 
 	case tea.WindowSizeMsg:
