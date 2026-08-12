@@ -139,17 +139,40 @@ func nonNegativeFloor(floor PaneFloor) PaneFloor {
 }
 
 // SplitLeaf replaces leafID with an internal node whose first child preserves
-// the existing leaf identity. The new leaf receives a unique positive ID when
-// its supplied ID is missing or already in use. The returned focus target is
-// the new leaf's ID.
+// the existing leaf identity. A single new leaf receives a unique positive ID
+// when its supplied ID is missing or already in use; a subtree must already
+// have stable, non-colliding IDs. The returned focus target is the new subtree's
+// first leaf.
 func SplitLeaf(root *PaneNode, leafID int, axis SplitAxis, newLeaf *PaneNode) (*PaneNode, int) {
-	leaf := FindPane(root, leafID)
-	if leaf == nil || leaf.Split != nil || newLeaf == nil || newLeaf.Split != nil {
+	rootNodes, rootIDs, valid := inspectPaneTree(root)
+	leaf := rootIDs[leafID]
+	if !valid || leaf == nil || leaf.Split != nil || newLeaf == nil || (axis != SplitCols && axis != SplitRows) {
 		return root, leafID
 	}
+	candidateNodes, candidateIDs, valid := inspectPaneTree(newLeaf)
+	if !valid || paneTreesOverlap(rootNodes, candidateNodes) {
+		return root, leafID
+	}
+	if newLeaf.Split != nil {
+		for node := range candidateNodes {
+			if node.ID <= 0 {
+				return root, leafID
+			}
+		}
+	}
+	for id := range candidateIDs {
+		if rootIDs[id] != nil {
+			// Preserve the convenient leaf API: a single new leaf may omit its
+			// identity or collide and will receive the next available ID below.
+			// Subtrees must arrive with stable, non-colliding identities.
+			if newLeaf.Split != nil {
+				return root, leafID
+			}
+		}
+	}
 
-	nextID := maxPaneID(root) + 1
-	if newLeaf.ID <= 0 || FindPane(root, newLeaf.ID) != nil {
+	nextID := maxInt(maxPaneID(root), maxPaneID(newLeaf)) + 1
+	if newLeaf.ID <= 0 || rootIDs[newLeaf.ID] != nil {
 		newLeaf.ID = nextID
 		nextID++
 	} else if newLeaf.ID >= nextID {
@@ -166,7 +189,57 @@ func SplitLeaf(root *PaneNode, leafID int, axis SplitAxis, newLeaf *PaneNode) (*
 			B:     newLeaf,
 		},
 	}
-	return root, newLeaf.ID
+	return root, firstLeaf(newLeaf).ID
+}
+
+// inspectPaneTree validates structural and identity invariants without
+// recursion, so malformed external input cannot loop forever. The returned
+// maps are useful to prove a proposed subtree is detached before mutation.
+func inspectPaneTree(root *PaneNode) (nodes map[*PaneNode]struct{}, ids map[int]*PaneNode, valid bool) {
+	nodes = make(map[*PaneNode]struct{})
+	ids = make(map[int]*PaneNode)
+	if root == nil {
+		return nodes, ids, false
+	}
+
+	stack := []*PaneNode{root}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node == nil {
+			return nodes, ids, false
+		}
+		if _, exists := nodes[node]; exists {
+			return nodes, ids, false
+		}
+		nodes[node] = struct{}{}
+		if node.ID > 0 {
+			if ids[node.ID] != nil {
+				return nodes, ids, false
+			}
+			ids[node.ID] = node
+		} else if node.Split != nil {
+			return nodes, ids, false
+		}
+
+		if node.Split == nil {
+			continue
+		}
+		if node.Split.Axis != SplitCols && node.Split.Axis != SplitRows || node.Split.A == nil || node.Split.B == nil {
+			return nodes, ids, false
+		}
+		stack = append(stack, node.Split.B, node.Split.A)
+	}
+	return nodes, ids, true
+}
+
+func paneTreesOverlap(a, b map[*PaneNode]struct{}) bool {
+	for node := range b {
+		if _, exists := a[node]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 // ClosePane removes a leaf and collapses its parent into the sibling subtree.

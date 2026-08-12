@@ -167,6 +167,126 @@ func TestSplitLeafAllocatesUniqueIDsAndSetRatioClamps(t *testing.T) {
 	}
 }
 
+func TestSplitLeafRejectsTargetAsNewLeafWithoutMutation(t *testing.T) {
+	root := &PaneNode{ID: 1, Kind: PaneTerminal}
+	before := *root
+
+	gotRoot, focus := SplitLeaf(root, 1, SplitCols, root)
+	if gotRoot != root || focus != 1 {
+		t.Fatalf("rejected split returned root %p focus %d, want %p focus 1", gotRoot, focus, root)
+	}
+	if *root != before {
+		t.Fatalf("rejected split mutated root: got %+v, want %+v", *root, before)
+	}
+}
+
+func TestSplitLeafRejectsExistingSiblingWithoutMutation(t *testing.T) {
+	left := &PaneNode{ID: 1, Kind: PaneTerminal}
+	right := &PaneNode{ID: 2, Kind: PaneDoc}
+	root := splitNode(10, SplitCols, 50, left, right)
+	beforeRoot := *root
+	beforeSplit := *root.Split
+	beforeLeft := *left
+	beforeRight := *right
+
+	gotRoot, focus := SplitLeaf(root, 1, SplitRows, right)
+	if gotRoot != root || focus != 1 {
+		t.Fatalf("rejected split returned root %p focus %d, want %p focus 1", gotRoot, focus, root)
+	}
+	if *root != beforeRoot || *root.Split != beforeSplit || *left != beforeLeft || *right != beforeRight {
+		t.Fatalf("rejected split mutated tree: root=%+v split=%+v left=%+v right=%+v", *root, *root.Split, *left, *right)
+	}
+}
+
+func TestSplitLeafRejectsMalformedSubtreeWithoutMutation(t *testing.T) {
+	root := &PaneNode{ID: 1, Kind: PaneTerminal}
+	cyclic := &PaneNode{ID: 2}
+	cyclic.Split = &PaneSplit{Axis: SplitRows, Ratio: 50, A: cyclic, B: &PaneNode{ID: 3, Kind: PaneDoc}}
+	before := *root
+
+	gotRoot, focus := SplitLeaf(root, 1, SplitCols, cyclic)
+	if gotRoot != root || focus != 1 {
+		t.Fatalf("rejected split returned root %p focus %d, want %p focus 1", gotRoot, focus, root)
+	}
+	if *root != before {
+		t.Fatalf("rejected split mutated root: got %+v, want %+v", *root, before)
+	}
+}
+
+func TestSplitLeafRejectsSharedPointersAndCollidingSubtreeIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		candidate func() *PaneNode
+	}{
+		{
+			name: "shared child pointer",
+			candidate: func() *PaneNode {
+				child := &PaneNode{ID: 3, Kind: PaneDoc}
+				return splitNode(2, SplitRows, 50, child, child)
+			},
+		},
+		{
+			name: "duplicate IDs",
+			candidate: func() *PaneNode {
+				return splitNode(2, SplitRows, 50,
+					&PaneNode{ID: 3, Kind: PaneDoc},
+					&PaneNode{ID: 3, Kind: PaneTerminal})
+			},
+		},
+		{
+			name: "ID collides with existing tree",
+			candidate: func() *PaneNode {
+				return splitNode(2, SplitRows, 50,
+					&PaneNode{ID: 1, Kind: PaneDoc},
+					&PaneNode{ID: 3, Kind: PaneTerminal})
+			},
+		},
+		{
+			name: "subtree leaf has no stable ID",
+			candidate: func() *PaneNode {
+				return splitNode(2, SplitRows, 50,
+					&PaneNode{Kind: PaneDoc},
+					&PaneNode{ID: 3, Kind: PaneTerminal})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := &PaneNode{ID: 1, Kind: PaneTerminal}
+			before := *root
+			candidate := tt.candidate()
+			gotRoot, focus := SplitLeaf(root, 1, SplitCols, candidate)
+			if gotRoot != root || focus != 1 {
+				t.Fatalf("rejected split returned root %p focus %d, want %p focus 1", gotRoot, focus, root)
+			}
+			if *root != before {
+				t.Fatalf("rejected split mutated root: got %+v, want %+v", *root, before)
+			}
+		})
+	}
+}
+
+func TestSplitLeafAcceptsDetachedSubtreeWithStableIDs(t *testing.T) {
+	root := &PaneNode{ID: 1, Kind: PaneTerminal}
+	subtree := splitNode(4, SplitRows, 60,
+		&PaneNode{ID: 2, Kind: PaneDoc},
+		&PaneNode{ID: 3, Kind: PaneTerminal})
+
+	root, focus := SplitLeaf(root, 1, SplitCols, subtree)
+	if focus != 2 {
+		t.Fatalf("focus = %d, want first leaf 2", focus)
+	}
+	if root.Split == nil || root.Split.B != subtree {
+		t.Fatalf("detached subtree was not installed: %+v", root)
+	}
+	for _, id := range []int{1, 2, 3, 4, root.ID} {
+		if FindPane(root, id) == nil {
+			t.Fatalf("stable pane ID %d missing after split", id)
+		}
+	}
+}
+
 func splitNode(id int, axis SplitAxis, ratio int, a, b *PaneNode) *PaneNode {
 	return &PaneNode{ID: id, Split: &PaneSplit{Axis: axis, Ratio: ratio, A: a, B: b}}
 }
