@@ -167,6 +167,13 @@ func (m *Model) WorkspacesPaste(text string) bool {
 func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
 	if m.workspaces.Filter().Focused() {
+		// ctrl+c is the host's, even mid-query. It is one of sidecar's two ways
+		// out, and every other text-input surface hands it back (internal/app's
+		// precedence level 2 intercepts it before forwarding); a focused filter
+		// must not be the one place the quit confirmation is unreachable.
+		if key == "ctrl+c" {
+			return false, nil
+		}
 		// Keys the filter ignores are navigation, which stays live while
 		// filtering. Anything else is swallowed: a focused query is a text
 		// input, and a stray key must not reach the app's global switch.

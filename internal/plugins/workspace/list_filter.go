@@ -135,8 +135,13 @@ func containsIndex(indices []int, want int) bool {
 // clampSelectionToFilter keeps the cursor on a row the user can see. Selection
 // is preserved whenever the selected identity still matches; only a selection
 // the query removed moves, and then to the first visible row.
+//
+// Scroll is re-clamped either way: the offset is a position into the filtered
+// projection, so a query typed while the list is scrolled has to bring the
+// offset back inside the rows that survived it, even when the selection did.
 func (p *Plugin) clampSelectionToFilter() tea.Cmd {
 	if p.selectionVisible() {
+		p.ensureVisible()
 		return nil
 	}
 	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()

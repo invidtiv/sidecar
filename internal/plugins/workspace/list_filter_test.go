@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -238,5 +239,71 @@ func TestFilterRowIsClickableAndShiftsRowsByExactlyOneLine(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the filter row registered no region")
+	}
+}
+
+// scrollOffset is a position into the *filtered* worktree projection, so a
+// query typed while the sidebar is scrolled has to bring the offset back inside
+// the rows that survived it — including when the selection itself survived and
+// the cursor never moves.
+func TestFilteringAScrolledSidebarStillDrawsTheMatchingRows(t *testing.T) {
+	p := filterPlugin(t)
+	for i := 0; i < 30; i++ {
+		p.worktrees = append(p.worktrees, &Worktree{Name: fmt.Sprintf("bulk-%02d", i), Path: p.ctx.ProjectRoot})
+	}
+	p.worktrees[len(p.worktrees)-1].Name = "needle"
+
+	p.renderSidebarContent(40, 24) // establishes visibleCount
+	p.handleKeyPress(key("G"))     // scroll to the last worktree
+	if p.scrollOffset == 0 {
+		t.Fatal("G did not scroll the sidebar; the case no longer exercises the bug")
+	}
+	if selectionLabel(p) != "worktree:needle" {
+		t.Fatalf("G selected %s, want the last worktree", selectionLabel(p))
+	}
+
+	p.handleKeyPress(key("/"))
+	typeQuery(p, "needle")
+	if len(p.visibleWorktreeIndices()) != 1 || !p.selectionVisible() {
+		t.Fatalf("query left %d visible worktrees, selectionVisible=%v",
+			len(p.visibleWorktreeIndices()), p.selectionVisible())
+	}
+	if p.scrollOffset != 0 {
+		t.Fatalf("scroll offset = %d, want the filtered list clamped to its only row", p.scrollOffset)
+	}
+	view := ansi.Strip(p.renderSidebarContent(40, 24))
+	if !strings.Contains(view, "needle") {
+		t.Fatalf("the matching row was scrolled off the filtered list:\n%s", view)
+	}
+}
+
+// The shell section renders in full above the scrolled worktree region, so the
+// scroll offset must stay worktree-relative: counting shells into it scrolls
+// the worktree list by the height of a section that never scrolls.
+func TestScrollOffsetIsWorktreeRelativeWithShellsPresent(t *testing.T) {
+	p := filterPlugin(t)
+	for i := 0; i < 20; i++ {
+		p.worktrees = append(p.worktrees, &Worktree{Name: fmt.Sprintf("bulk-%02d", i), Path: p.ctx.ProjectRoot})
+	}
+	p.renderSidebarContent(40, 24)
+	if p.visibleCount <= 0 || p.visibleCount >= len(p.worktrees) {
+		t.Fatalf("visibleCount = %d does not exercise scrolling over %d worktrees", p.visibleCount, len(p.worktrees))
+	}
+
+	p.shellSelected, p.selectedIdx = false, 0
+	p.ensureVisible()
+	if p.scrollOffset != 0 {
+		t.Fatalf("first worktree left the list scrolled to %d", p.scrollOffset)
+	}
+
+	last := len(p.worktrees) - 1
+	p.selectedIdx = last
+	p.ensureVisible()
+	if want := last - p.visibleCount + 1; p.scrollOffset != want {
+		t.Fatalf("scroll offset = %d, want %d (shell rows must not shift it)", p.scrollOffset, want)
+	}
+	view := ansi.Strip(p.renderSidebarContent(40, 24))
+	if !strings.Contains(view, p.worktrees[last].Name) {
+		t.Fatalf("selected last worktree is not on screen:\n%s", view)
 	}
 }

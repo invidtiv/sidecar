@@ -1466,28 +1466,36 @@ func (p *Plugin) applySelectionChange() {
 // ensureVisible adjusts scroll to keep selected item visible.
 // Accounts for shells (which appear before worktrees in the sidebar).
 func (p *Plugin) ensureVisible() {
-	// Calculate effective position in the combined list (shells + worktrees).
-	// While a filter is active the position is counted over the rows actually
-	// drawn, so scrolling follows what the user can see.
-	var effectivePos int
-	if p.filterActive() {
-		shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-		if p.shellSelected {
-			effectivePos = max(0, indexOfValue(shells, p.selectedShellIdx))
-		} else {
-			effectivePos = len(shells) + max(0, indexOfValue(worktrees, p.selectedIdx))
+	// scrollOffset is a position into the worktree rows the sidebar draws: the
+	// shell section renders in full above the scrolled region, and view_list.go
+	// walks visibleWorktrees from this offset. Counting shells into the position
+	// here would scroll the worktree list by the size of a section that never
+	// scrolls, so the position is worktree-relative — and, while a filter is
+	// active, relative to the rows the query actually leaves visible.
+	worktrees := p.visibleWorktreeIndices()
+	if !p.shellSelected {
+		position := indexOfValue(worktrees, p.selectedIdx)
+		if position < 0 {
+			position = 0
 		}
-	} else if p.shellSelected {
-		effectivePos = p.selectedShellIdx
-	} else {
-		effectivePos = len(p.shells) + p.selectedIdx
+		if position < p.scrollOffset {
+			p.scrollOffset = position
+		}
+		if p.visibleCount > 0 && position >= p.scrollOffset+p.visibleCount {
+			p.scrollOffset = position - p.visibleCount + 1
+		}
 	}
+	p.clampScrollOffset(len(worktrees))
+}
 
-	if effectivePos < p.scrollOffset {
-		p.scrollOffset = effectivePos
-	}
-	if p.visibleCount > 0 && effectivePos >= p.scrollOffset+p.visibleCount {
-		p.scrollOffset = effectivePos - p.visibleCount + 1
+// clampScrollOffset keeps the offset inside the rows currently drawn. A query
+// that shrinks the list must never leave the offset past its end, which would
+// render an empty sidebar under a filter row still counting matches.
+func (p *Plugin) clampScrollOffset(total int) {
+	if p.visibleCount > 0 {
+		if maxOffset := max(0, total-p.visibleCount); p.scrollOffset > maxOffset {
+			p.scrollOffset = maxOffset
+		}
 	}
 	// Guard against negative scroll offset (can happen with empty worktree list)
 	if p.scrollOffset < 0 {

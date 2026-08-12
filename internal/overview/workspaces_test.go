@@ -182,3 +182,26 @@ func TestSelectedWorkspaceResolvesBackToTheCatalogRecord(t *testing.T) {
 		t.Fatalf("selected workspace = %#v ok=%v", workspace, ok)
 	}
 }
+
+// ctrl+c is host-reserved: it is one of sidecar's two ways out, and a focused
+// filter must not be the one text input that swallows it.
+func TestFocusedFilterLeavesCtrlCToTheHost(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	m.WorkspacesKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "brai" {
+		m.WorkspacesKey(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if !m.WorkspacesFilterFocused() {
+		t.Fatal("filter lost focus while typing")
+	}
+
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); handled {
+		t.Fatal("focused filter swallowed ctrl+c; the quit confirmation is unreachable")
+	}
+	// It is left to the host untouched: the query and its focus survive.
+	if !m.WorkspacesFilterFocused() || m.workspaces.Filter().Query() != "brai" {
+		t.Fatalf("ctrl+c disturbed the filter: focused=%v query=%q",
+			m.WorkspacesFilterFocused(), m.workspaces.Filter().Query())
+	}
+}
