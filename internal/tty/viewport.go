@@ -28,6 +28,25 @@ type ViewportInput struct {
 	Scrollbar bool
 }
 
+// TrimsTrailingRows reports whether a surface's window ends at the last line
+// with text on it rather than at the end of the buffer.
+//
+// A window that is not mirroring a live grid is a scrollback window, and
+// tmux's trailing blank rows are padding rather than content there. A live
+// grid's blank rows are the application's own — full-screen programs draw
+// chrome against them — so they stay addressable. FitViewport applies the same
+// exemption while following a known live grid, which is why a host must not
+// add a second condition of its own: the two surfaces would then answer a
+// scrolled-back pane differently.
+func TrimsTrailingRows(interactive bool) bool { return !interactive }
+
+// ShouldOverlayCursor reports whether a surface may draw the pane's cursor.
+// A window scrolled off the live edge is showing history, and a cursor painted
+// over history sits on a row the pane is not writing to.
+func ShouldOverlayCursor(interactive, cursorVisible, atLiveEdge bool) bool {
+	return interactive && cursorVisible && atLiveEdge
+}
+
 // Viewport is where a buffer's lines land inside a viewport: which lines are
 // drawn, how wide and tall the drawn area is, and how the pane's own geometry
 // was projected onto it.

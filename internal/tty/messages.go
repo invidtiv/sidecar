@@ -13,7 +13,7 @@ import tea "charm.land/bubbletea/v2"
 func IsTerminalMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case SessionDeadMsg, PasteResultMsg, EscapeTimerMsg, PaneResizedMsg,
-		CaptureResultMsg, PollTickMsg,
+		CaptureResultMsg, PollTickMsg, deferredResizeMsg,
 		terminalControlMsg, terminalControlRetryMsg, paneResolvedMsg:
 		return true
 	default:
@@ -53,6 +53,13 @@ type EscapeTimerMsg struct {
 // PaneResizedMsg is sent when a pane resize operation completes.
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
 type PaneResizedMsg struct {
+	Scope MessageScope
+}
+
+// deferredResizeMsg re-runs a resize that arrived inside the debounce window.
+// It carries no dimensions: the model holds the size it owes the pane, so a
+// retry always asserts the newest one rather than a stale request.
+type deferredResizeMsg struct {
 	Scope MessageScope
 }
 

@@ -70,6 +70,38 @@ func (in terminalViewportInput) viewport() tty.ViewportInput {
 	}
 }
 
+// terminalWindowInput is this surface's one construction of a terminal's
+// window: which buffer it draws, how big the surface is, and where the window
+// sits inside it. The render path, hit testing and the native cursor must
+// resolve a screen row to the same buffer row, so none of them may build a
+// second one — every field here moves EffectiveCount, MaxOffset or Start.
+//
+// Decoration is the caller's: a selection, links and search matches change what
+// a row looks like, never which row it is.
+func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, width, height int) terminalViewportInput {
+	interactive := p.interactiveDescribes(termPanel)
+	in := terminalViewportInput{
+		Buffer:       buffer,
+		Width:        width,
+		Height:       height,
+		Interactive:  interactive,
+		TrimTrailing: tty.TrimsTrailingRows(interactive),
+	}
+	in.PaneWidth, in.PaneHeight = p.resolvedPaneGeometry(termPanel, interactive)
+	if interactive {
+		row, col, _, _, visible, _ := p.getCursorPosition()
+		in.CursorRow, in.CursorCol, in.CursorVisible = row, col, visible
+	}
+	// The scrollbar takes a column from the content, and tracked history moves
+	// where the window's rows sit in the buffer's coordinates (td-73fa86).
+	in.AbsoluteBase, in.TotalItems, in.LoadingOlder = p.terminalHistorySummary(termPanel, buffer)
+	// Gating the frozen offset on the anchor alone would freeze the window of a
+	// selection belonging to the *other* surface.
+	in.Follow, in.Offset, in.OffsetFromBottom =
+		p.terminalScrollState(termPanel, p.selectionTermPanel && p.selection.Anchor.Valid())
+	return in
+}
+
 func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportLayout {
 	return tty.FitViewport(in.viewport())
 }
@@ -139,16 +171,8 @@ func (in terminalViewportInput) decorate(line string, absoluteLine int) string {
 	return line
 }
 
-// terminalCanvasBackground and canvasRowShare name the shared canvas rule from
-// this surface's vocabulary.
-func terminalCanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
-	return termpreview.CanvasBackground(buffer, paneTop, paneHeight)
-}
-
-func canvasRowShare(rows int) int { return termpreview.CanvasRowShare(rows) }
-
 func terminalViewportCursorPosition(in terminalViewportInput) (x, y int, ok bool) {
-	if !shouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) {
+	if !tty.ShouldOverlayCursor(in.Interactive, in.CursorVisible, in.Follow) {
 		return 0, 0, false
 	}
 	shared := in.viewport()

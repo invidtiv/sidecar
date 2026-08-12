@@ -653,22 +653,6 @@ func TestForwardedWheelSendsOneReportPerNotch(t *testing.T) {
 	}
 }
 
-func TestWheelNotchesForDelta(t *testing.T) {
-	for _, tc := range []struct {
-		delta, want int
-	}{
-		{-mouse.WheelScrollLines, 1},
-		{mouse.WheelScrollLines, 1},
-		{-3 * mouse.WheelScrollLines, 3},
-		{-1, 1}, // sub-notch deltas still scroll rather than being dropped
-		{1, 1},
-	} {
-		if got := wheelNotchesForDelta(tc.delta); got != tc.want {
-			t.Fatalf("wheelNotchesForDelta(%d) = %d, want %d", tc.delta, got, tc.want)
-		}
-	}
-}
-
 // A forwarded wheel changed the pane, so the capture that repaints it must not
 // be deferred behind the scroll-burst window the local viewport uses, and the
 // notch has to count as activity or polling decays to its slow tier.

@@ -19,28 +19,9 @@ func (p *Plugin) Cursor() *tea.Cursor {
 
 	// Same buffer window and pane geometry the content render uses, or the
 	// cursor desyncs from the pixels it is supposed to sit on.
-	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
-		p.selectionTermPanel && p.selection.Anchor.Valid())
-	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
-	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
-	cursorX, cursorY, visible := terminalViewportCursorPosition(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		Interactive:      true,
-		CursorRow:        p.interactiveState.CursorRow,
-		CursorCol:        p.interactiveState.CursorCol,
-		CursorVisible:    p.interactiveState.CursorVisible,
-		PaneHeight:       paneHeight,
-		PaneWidth:        paneWidth,
-		NativeCursor:     true,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
-	})
+	input := p.terminalWindowInput(termPanel, buffer, width, height)
+	input.NativeCursor = true
+	cursorX, cursorY, visible := terminalViewportCursorPosition(input)
 	if !visible {
 		return nil
 	}

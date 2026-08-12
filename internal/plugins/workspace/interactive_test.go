@@ -858,21 +858,6 @@ func TestDetectBracketedPasteMode_DisabledOnly(t *testing.T) {
 	}
 }
 
-func TestDetectMouseReportingMode_EnabledOnly(t *testing.T) {
-	output := "some output" + tty.MouseModeEnable1006 + "more output"
-	if !tty.DetectMouseReportingMode(output) {
-		t.Error("expected mouse reporting to be detected as enabled")
-	}
-}
-
-func TestDetectMouseReportingMode_DisabledOnly(t *testing.T) {
-	output := "some output" + tty.MouseModeEnable1006 + tty.MouseModeDisable1006
-	if tty.DetectMouseReportingMode(output) {
-		t.Error("expected mouse reporting to be detected as disabled")
-	}
-}
-
-// TestDetectBracketedPasteMode_EnabledThenDisabled tests detection when enable followed by disable
 func TestDetectBracketedPasteMode_EnabledThenDisabled(t *testing.T) {
 	output := "some output\x1b[?2004henabled\x1b[?2004ldisabled"
 	if tty.DetectBracketedPasteMode(output) {
@@ -994,6 +979,7 @@ func TestHandleInteractiveKeys_DropsPartialMouseSequence(t *testing.T) {
 			TargetSession: "test-session",
 		},
 	}
+	attachLiveTerminal(p, false)
 
 	// Simulate a partial mouse sequence arriving as KeyRunes
 	msg := tea.KeyPressMsg{Code: '[', Text: "[<65;83;33M"}
@@ -1219,6 +1205,9 @@ func copyChordTestPlugin(configuredCopyKey string) *Plugin {
 		cfg.Plugins.Workspace.InteractiveCopyKey = configuredCopyKey
 		p.ctx = &plugin.Context{Config: cfg}
 	}
+	// The component is already open, as reconciliation leaves it: a key that
+	// reaches the pane is then the only work the plugin can return.
+	attachLiveTerminal(p, false)
 	return p
 }
 

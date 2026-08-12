@@ -88,10 +88,6 @@ type State struct {
 	BracketedPasteEnabled bool
 	MouseReportingEnabled bool
 
-	// Visible buffer range for selection mapping
-	VisibleStart int
-	VisibleEnd   int
-
 	// Resize debouncing
 	LastResizeAt time.Time
 
@@ -187,6 +183,33 @@ const (
 	// an empty buffer on the same update, which reads as the output vanishing.
 	ExitReleasesInput
 )
+
+// Hooks are the host's answers to everything the component decides for itself:
+// the chords the surface around the pane owns, the moment a key is about to
+// reach it, and the ways the mode can end. They are set together because a host
+// that wires some of them re-implements the rest outside the component, which is
+// how two surfaces embedding the same terminal come to answer the same key
+// differently.
+type Hooks struct {
+	OnKey          func(tea.KeyPressMsg) (tea.Cmd, bool)
+	BeforeSend     func(tea.KeyPressMsg)
+	OnExit         func() tea.Cmd
+	OnAttach       func() tea.Cmd
+	OnSessionEnded func() tea.Cmd
+	ExitAction     ExitAction
+}
+
+// SetHooks adopts a host's whole contract with the component. ExitAction is
+// carried with the callbacks rather than defaulted, so a host states what
+// leaving the mode does to the terminal behind it.
+func (m *Model) SetHooks(h Hooks) {
+	m.OnKey = h.OnKey
+	m.BeforeSend = h.BeforeSend
+	m.OnExit = h.OnExit
+	m.OnAttach = h.OnAttach
+	m.OnSessionEnded = h.OnSessionEnded
+	m.ExitAction = h.ExitAction
+}
 
 // New creates a new tty Model with the given configuration.
 // If config is nil, DefaultConfig() is used.
@@ -340,6 +363,13 @@ func (m *Model) endDeadSession() tea.Cmd {
 	return nil
 }
 
+// ReleaseInput ends the component's ownership of the keyboard for a host that
+// took the mode away from outside — a click landing off every terminal region,
+// a focus change. Every way out must close the double-escape window and drop a
+// half-read mouse report, or a timer scheduled by the last escape still reaches
+// a model the host believes it has left.
+func (m *Model) ReleaseInput() { m.releaseInput() }
+
 // releaseInput ends the component's ownership of the keyboard: the double-escape
 // window closes, a half-read mouse report is dropped, and nothing typed reaches
 // the pane until a host hands the keyboard back. Whether the terminal behind it
@@ -393,6 +423,12 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		return m.handlePollTick(msg)
+
+	case deferredResizeMsg:
+		if !m.owns(msg.Scope) {
+			return nil
+		}
+		return m.assertDimensions()
 
 	case PaneResizedMsg:
 		if !m.owns(msg.Scope) {
@@ -1053,6 +1089,10 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 	})
 }
 
+// ResizeDebounce bounds how often a resize is asserted against tmux while a
+// layout is still moving — a window drag delivers one size per frame.
+const ResizeDebounce = 500 * time.Millisecond
+
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	if width == m.Width && height == m.Height {
@@ -1061,7 +1101,18 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 
 	m.Width = width
 	m.Height = height
+	return m.assertDimensions()
+}
 
+// assertDimensions gives the pane the size the model holds, or defers doing
+// so until the debounce window closes.
+//
+// The debounce bounds how often tmux is asked; it must not decide whether the
+// pane is ever given the size. Two layout changes inside one window — ctrl+t
+// then alt+t, a window resize followed by a panel toggle — would otherwise leave
+// the pane at the first one's geometry with nothing left to correct it, because
+// the model already believes it asked for the second.
+func (m *Model) assertDimensions() tea.Cmd {
 	if !m.IsActive() {
 		return nil
 	}
@@ -1069,17 +1120,23 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 		return m.restartControlForResize()
 	}
 
-	// Debounce resize
-	if !m.State.LastResizeAt.IsZero() && time.Since(m.State.LastResizeAt) < 500*time.Millisecond {
-		return nil
-	}
-	m.State.LastResizeAt = time.Now()
-
 	target := m.GetTarget()
 	scope := m.Scope()
 	if target == "" {
 		return nil
 	}
+
+	if !m.State.LastResizeAt.IsZero() {
+		if wait := ResizeDebounce - time.Since(m.State.LastResizeAt); wait > 0 {
+			return tea.Tick(wait, func(time.Time) tea.Msg {
+				return deferredResizeMsg{Scope: scope}
+			})
+		}
+	}
+	// Recorded here, where the resize is actually issued: a deferred call that
+	// consumed the budget would push its own retry out of reach.
+	m.State.LastResizeAt = time.Now()
+	width, height := m.Width, m.Height
 
 	return func() tea.Msg {
 		// Check if resize is needed

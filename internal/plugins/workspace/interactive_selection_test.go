@@ -11,18 +11,30 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-// newSelectionTestPlugin creates a Plugin with interactive state configured for selection tests.
-// The pane starts at Y=2, has 1 row of content offset (tab bar), and shows lines 0-9.
+// newSelectionTestPlugin puts a live terminal with ten selectable rows on
+// screen. The window is the one the surface draws — there is no second cached
+// one to hit-test against — so the pane starts at Y=2 and its first buffer line
+// is drawn below the border and the header row.
 func newSelectionTestPlugin() *Plugin {
 	p := &Plugin{
-		viewMode:     ViewModeInteractive,
-		mouseHandler: mouse.NewHandler(),
+		viewMode:      ViewModeInteractive,
+		mouseHandler:  mouse.NewHandler(),
+		width:         100,
+		height:        30,
+		sidebarWidth:  40,
+		previewTab:    PreviewTabOutput,
+		shellSelected: true,
+		shells: []*ShellSession{{
+			TmuxName: "shell-1",
+			Agent:    &Agent{OutputBuf: tty.NewOutputBuffer(100)},
+		}},
 		interactiveState: &InteractiveState{
-			Active:       true,
-			VisibleStart: 0,
-			VisibleEnd:   10,
+			Active:        true,
+			TargetSession: "shell-1",
+			TargetPane:    "%1",
 		},
 	}
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 10))
 	p.selection.Clear() // initialize sentinels
 	return p
 }
@@ -274,13 +286,9 @@ func TestPrepareInteractiveDrag_InvalidY(t *testing.T) {
 
 func TestPrepareInteractiveDrag_NilRegion(t *testing.T) {
 	p := &Plugin{
-		viewMode:     ViewModeInteractive,
-		mouseHandler: mouse.NewHandler(),
-		interactiveState: &InteractiveState{
-			Active:       true,
-			VisibleStart: 0,
-			VisibleEnd:   10,
-		},
+		viewMode:         ViewModeInteractive,
+		mouseHandler:     mouse.NewHandler(),
+		interactiveState: &InteractiveState{Active: true},
 	}
 	p.selection.Clear()
 

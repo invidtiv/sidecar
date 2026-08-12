@@ -10,18 +10,13 @@ const (
 	BracketedPasteDisable = "\x1b[?2004l" // ESC[?2004l - app disables bracketed paste
 	BracketedPasteStart   = "\x1b[200~"   // ESC[200~ - start of pasted content
 	BracketedPasteEnd     = "\x1b[201~"   // ESC[201~ - end of pasted content
-
-	MouseModeEnable1000  = "\x1b[?1000h"
-	MouseModeEnable1002  = "\x1b[?1002h"
-	MouseModeEnable1003  = "\x1b[?1003h"
-	MouseModeEnable1006  = "\x1b[?1006h"
-	MouseModeEnable1015  = "\x1b[?1015h"
-	MouseModeDisable1000 = "\x1b[?1000l"
-	MouseModeDisable1002 = "\x1b[?1002l"
-	MouseModeDisable1003 = "\x1b[?1003l"
-	MouseModeDisable1006 = "\x1b[?1006l"
-	MouseModeDisable1015 = "\x1b[?1015l"
 )
+
+// Whether the application in a pane has asked for mouse events is tmux's
+// #{mouse_any_flag}, read with the capture (tty.ControlSnapshot.MouseReporting).
+// It is deliberately not detected from captured text: capture-pane never
+// carries the DECSET sequences that would announce it, so a text-based answer
+// is silently wrong exactly when it matters.
 
 // DetectBracketedPasteMode checks captured output to determine if the app has
 // enabled bracketed paste mode. Looks for the most recent occurrence of either
@@ -31,40 +26,4 @@ func DetectBracketedPasteMode(output string) bool {
 	disableIdx := strings.LastIndex(output, BracketedPasteDisable)
 	// If enable was found more recently than disable, bracketed paste is enabled
 	return enableIdx > disableIdx
-}
-
-// DetectMouseReportingMode checks captured output to determine if the app has
-// enabled mouse reporting. Looks for the most recent occurrence of enable vs disable
-// sequences across all mouse mode types.
-func DetectMouseReportingMode(output string) bool {
-	enableSeqs := []string{
-		MouseModeEnable1000,
-		MouseModeEnable1002,
-		MouseModeEnable1003,
-		MouseModeEnable1006,
-		MouseModeEnable1015,
-	}
-	disableSeqs := []string{
-		MouseModeDisable1000,
-		MouseModeDisable1002,
-		MouseModeDisable1003,
-		MouseModeDisable1006,
-		MouseModeDisable1015,
-	}
-
-	latestEnable := -1
-	for _, seq := range enableSeqs {
-		if idx := strings.LastIndex(output, seq); idx > latestEnable {
-			latestEnable = idx
-		}
-	}
-
-	latestDisable := -1
-	for _, seq := range disableSeqs {
-		if idx := strings.LastIndex(output, seq); idx > latestDisable {
-			latestDisable = idx
-		}
-	}
-
-	return latestEnable > latestDisable
 }

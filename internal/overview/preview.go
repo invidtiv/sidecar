@@ -105,7 +105,14 @@ type previewState struct {
 	capture     previewCapture
 	reason      string
 	// offset is rows scrolled back from the live bottom. Zero follows output.
-	offset      int
+	offset int
+	// frozen pins the window to frozenStart, an absolute top row, for the
+	// duration of a pointer gesture. A window placed from the live bottom moves
+	// whenever the buffer does, and the watched buffer is renumbered by every
+	// capture, so a poll landing mid-drag would slide the rows out from under the
+	// pointer while the anchor still named the ones it was made on.
+	frozen      bool
+	frozenStart int
 	scheduled   bool
 	requestedAt time.Time
 
@@ -213,6 +220,7 @@ func (m *Model) resetPreviewContent() {
 	m.preview.capture = previewCapture{}
 	m.preview.buffer = nil
 	m.preview.offset = 0
+	m.preview.frozen, m.preview.frozenStart = false, 0
 	m.preview.selection.Clear()
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
@@ -402,20 +410,18 @@ func (m *Model) PreviewFocused() bool { return m.preview.focus == focusPreview }
 // ask for the keyboard.
 func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
-	// Acts on the terminal itself come first in both states, and they are the
-	// same acts on both surfaces: the configured copy chord, select-all, and
-	// shift-scrollback. Everything after this is the browser's own navigation,
-	// which a live pane does not have.
+	if m.PreviewInteractive() {
+		// Every live key goes to the component, exit chords and this surface's own
+		// chords included: it consults them through OnKey before anything becomes
+		// input, and a surface that answered them out here as well would send them
+		// to the pane twice.
+		return true, m.forwardToTerminal(msg)
+	}
+	// The same acts on the terminal surface the live pane routes through OnKey.
+	// The selection they act on exists in both states, so a watched pane answers
+	// them too; everything after this is the browser's own navigation.
 	if handled, cmd := m.terminalKey(msg); handled {
 		return true, cmd
-	}
-	if m.PreviewInteractive() {
-		// Typing is owed a view of itself: a window left in scrollback would take
-		// the keystroke and show none of it.
-		if m.preview.offset != 0 && tty.ShouldSnapBack(msg, m.now().Sub(m.preview.wheel.LastAt())) {
-			m.pinPreviewToLive()
-		}
-		return true, m.forwardToTerminal(msg)
 	}
 	page := max(1, m.previewRows()/2)
 	switch key {
@@ -433,10 +439,10 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.scrollWatchedPreview(page)
 	case "G", "end":
 		m.clearPreviewSelectionOnScroll()
-		m.preview.offset = 0
+		m.jumpPreviewWindow(0)
 	case "g", "home":
 		m.clearPreviewSelectionOnScroll()
-		m.preview.offset = m.previewMaxOffset()
+		m.jumpPreviewWindow(m.previewMaxOffset())
 	default:
 		return false, nil
 	}
@@ -484,14 +490,14 @@ func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	m.clearPreviewSelectionOnScroll()
 	switch {
 	case move.ToOldest:
-		m.preview.offset = m.previewMaxOffset()
+		m.jumpPreviewWindow(m.previewMaxOffset())
 		return true, m.notePreviewScrollbackLimit()
 	case move.ToLive:
-		m.preview.offset = 0
+		m.jumpPreviewWindow(0)
 	default:
-		before := m.preview.offset
+		before := m.previewScrollAnchor()
 		m.scrollPreview(move.Rows)
-		if move.Rows > 0 && m.preview.offset == before {
+		if move.Rows > 0 && m.previewScrollAnchor() == before {
 			return true, m.notePreviewScrollbackLimit()
 		}
 	}
@@ -536,7 +542,52 @@ func (m *Model) scrollPreview(delta int) {
 	if delta == 0 {
 		return
 	}
-	m.preview.offset = min(max(m.preview.offset+delta, 0), m.previewMaxOffset())
+	maxOffset := m.previewMaxOffset()
+	if m.preview.frozen {
+		// A frozen window is placed from the top of the buffer, where older output
+		// is a smaller start rather than a larger distance from the bottom.
+		m.preview.frozenStart = min(max(m.preview.frozenStart-delta, 0), maxOffset)
+		return
+	}
+	m.preview.offset = min(max(m.preview.offset+delta, 0), maxOffset)
+}
+
+// previewScrollAnchor is where the window sits, in whichever coordinate it is
+// currently placed by. Callers use it to tell whether a scroll moved anything.
+func (m *Model) previewScrollAnchor() int {
+	if m.preview.frozen {
+		return m.preview.frozenStart
+	}
+	return m.preview.offset
+}
+
+// freezePreviewWindow pins the window to the rows the user can see, before a
+// gesture reads or moves it.
+func (m *Model) freezePreviewWindow() {
+	if m.preview.frozen {
+		return
+	}
+	m.preview.frozenStart = m.previewWindow().layout.Start
+	m.preview.frozen = true
+}
+
+// thawPreviewWindow places the window back against the live bottom, where it
+// follows new output again, without moving the rows on screen.
+func (m *Model) thawPreviewWindow() {
+	if !m.preview.frozen {
+		return
+	}
+	layout := m.previewWindow().layout
+	m.preview.frozen = false
+	m.preview.offset = min(max(layout.MaxOffset-layout.Start, 0), layout.MaxOffset)
+}
+
+// jumpPreviewWindow places the window at an explicit distance back from the
+// live bottom, which ends any freeze: a jump is not a gesture reading the rows
+// it lands on.
+func (m *Model) jumpPreviewWindow(offset int) {
+	m.preview.frozen = false
+	m.preview.offset = offset
 }
 
 // scrollPreviewRows moves the window by delta rendered rows, positive downwards,
@@ -548,11 +599,11 @@ func (m *Model) scrollPreviewRows(delta int) { m.scrollPreview(-delta) }
 // wheel owes the viewport: while it owns what the pane shows, a window left
 // scrolled back would sit frozen over stale rows as the app repainted below it.
 func (m *Model) pinPreviewToLive() {
-	if m.preview.offset == 0 {
+	if m.preview.offset == 0 && !m.preview.frozen {
 		return
 	}
 	m.clearPreviewSelection()
-	m.preview.offset = 0
+	m.jumpPreviewWindow(0)
 }
 
 func (m *Model) previewMaxOffset() int { return m.previewWindow().layout.MaxOffset }
@@ -594,20 +645,25 @@ func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
 	// about the base draws every highlight short by exactly it, so a selection
 	// made while typing lands off screen even though the copied text is right.
 	base, _ := tty.BufferBase(buffer)
+	interactive := m.PreviewInteractive()
 	input := tty.ViewportInput{
-		Buffer:           buffer,
-		AbsoluteBase:     base,
-		Width:            width,
-		Height:           height,
-		Offset:           m.preview.offset,
-		OffsetFromBottom: true,
-		Follow:           m.preview.offset == 0,
-		Scrollbar:        true,
-		// A watched pane is a scrollback window, so tmux's trailing blank rows are
-		// not content. A live one is a grid, whose blank rows are.
-		TrimTrailing: !m.PreviewInteractive(),
+		Buffer:       buffer,
+		AbsoluteBase: base,
+		Width:        width,
+		Height:       height,
+		Scrollbar:    true,
+		// Whether tmux's trailing blank rows are padding or the application's own
+		// content is the shared rule, so the same pane cannot draw one way in this
+		// tab and another in the project's.
+		TrimTrailing: tty.TrimsTrailingRows(interactive),
 	}
-	if m.PreviewInteractive() {
+	if m.preview.frozen {
+		input.Offset = m.preview.frozenStart
+	} else {
+		input.Offset, input.OffsetFromBottom = m.preview.offset, true
+		input.Follow = m.preview.offset == 0
+	}
+	if interactive {
 		input.Interactive = true
 		input.PaneWidth, input.PaneHeight = m.preview.terminal.PaneSize()
 		input.CursorRow, input.CursorCol, input.CursorVisible = m.preview.terminal.CursorState()

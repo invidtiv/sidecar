@@ -21,6 +21,7 @@ import (
 
 type fakeTerminal struct {
 	config     tty.Config
+	hooks      tty.Hooks
 	target     tty.Target
 	active     bool
 	opens      int
@@ -67,24 +68,39 @@ func (f *fakeTerminal) Open(target tty.Target) tea.Cmd {
 	return nil
 }
 
+// Update stands in for the component's own key pipeline, in its order: the
+// host's chords first, then the ways out, then what is left reaches the pane.
 func (f *fakeTerminal) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if f.hooks.OnKey != nil {
+			if cmd, handled := f.hooks.OnKey(msg); handled {
+				return cmd
+			}
+		}
 		key := msg.String()
-		f.keys = append(f.keys, key)
-		// The real component owns both ways out; the fake answers the exit key so
-		// the browser's own "the terminal ended the mode" path is exercised.
 		if key == f.config.ExitKey {
 			f.active = false
+			if f.hooks.OnExit != nil {
+				return f.hooks.OnExit()
+			}
+			return nil
 		}
+		if f.hooks.BeforeSend != nil {
+			f.hooks.BeforeSend(msg)
+		}
+		f.keys = append(f.keys, key)
 	case tea.PasteMsg:
 		f.pastes = append(f.pastes, msg.Content)
 	case tty.CaptureResultMsg:
 		f.buffer.ApplySnapshot(tty.PaneSnapshot{Output: msg.Output})
 	case tty.SessionDeadMsg:
-		// The component ends itself on a pane that died under a send, which is
-		// how the browser learns the mode is over.
+		// The component ends itself on a pane that died under a send, and says so
+		// through the hook rather than leaving the host to notice.
 		f.active = false
+		if f.hooks.OnSessionEnded != nil {
+			return f.hooks.OnSessionEnded()
+		}
 	}
 	return nil
 }
@@ -130,8 +146,9 @@ func interactiveModel(t *testing.T) (*Model, *captureRecorder, *fakeTerminal) {
 	m, recorder := previewModel(t)
 	terminal := newFakeTerminal("live pane body")
 	original := newPreviewTerminal
-	newPreviewTerminal = func(config tty.Config) previewTerminal {
+	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
 		terminal.config = config
+		terminal.hooks = hooks
 		return terminal
 	}
 	t.Cleanup(func() { newPreviewTerminal = original })
@@ -299,8 +316,9 @@ func TestTheConfiguredExitKeyIsTheOneTheSurfaceAnswers(t *testing.T) {
 	}
 }
 
-// The terminal component owns the ways out. The browser learns the mode ended
-// from the component's own state and goes back to capturing the selection.
+// The terminal component owns the ways out, and reports them through the OnExit
+// hook this surface registered. The browser gives the keyboard back there and
+// goes back to capturing the selection.
 func TestTheExitKeyGivesTheKeyboardBackAndResumesCapture(t *testing.T) {
 	m, recorder, _ := interactiveModel(t)
 	enterInteractive(t, m)

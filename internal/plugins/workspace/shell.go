@@ -194,9 +194,6 @@ type (
 		// RowsJoined says the capture was taken with -J, so it carries no usable
 		// history/pane split.
 		RowsJoined bool
-		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
-		// meaningful when HasCursor is set.
-		MouseReporting bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -995,7 +992,6 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
-			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,

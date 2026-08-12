@@ -57,10 +57,7 @@ type AgentOutputMsg struct {
 	HasHistory    bool
 	// RowsJoined says the capture was taken with -J, so it carries no usable
 	// history/pane split.
-	RowsJoined bool
-	// MouseReporting is tmux's #{mouse_any_flag} for the pane, captured with the
-	// cursor metadata. Only meaningful when HasCursor is set.
-	MouseReporting bool
+	RowsJoined     bool
 	Activity       agentactivity.Result
 	CapturedAt     time.Time
 	PaneTitle      string

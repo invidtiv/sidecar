@@ -588,6 +588,26 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	return nil
 }
 
+// notePressAwayFromTerminal answers a button going down anywhere but a
+// terminal: it ends the gesture the press armed and the mode it was armed in,
+// so a divider, a row and the sidebar all leave the pane identically. Ending
+// only one of them would leave a live pane holding the keyboard behind a
+// divider drag, or fire the armed click under a selection the user moved away
+// from. Which actions put a button down is the shared layer's, or a surface
+// answers a double click differently from a single one.
+func (p *Plugin) notePressAwayFromTerminal(action mouse.MouseAction) {
+	if action.Region == nil || !tty.PressesTerminal(action.Type) {
+		return
+	}
+	if !tty.PressLeavesTerminal(action.Region.ID, regionPreviewPane, regionTermPanelContent) {
+		return
+	}
+	p.pointer.Abandon()
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+}
+
 // handleMouseClick handles single click events.
 func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if action.Region == nil {
@@ -600,16 +620,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() && isBackgroundRegion(action.Region.ID) {
 		return nil
 	}
-	// A press anywhere but a terminal is a click away from it: it ends the
-	// gesture the press armed and the mode it was armed in, so a divider, a row
-	// and the sidebar all leave the pane identically. Ending only one of them
-	// would leave a live pane holding the keyboard behind a divider drag.
-	if tty.PressLeavesTerminal(action.Region.ID, regionPreviewPane, regionTermPanelContent) {
-		p.pointer.Abandon()
-		if p.viewMode == ViewModeInteractive {
-			p.exitInteractiveMode()
-		}
-	}
+	p.notePressAwayFromTerminal(action)
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
 	if p.viewMode == ViewModeInteractive {
@@ -663,8 +674,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 		// Keep the passive viewport stable through the whole pointer gesture.
 		// A release without motion makes the terminal live; motion selects text.
-		// Entering here used to resize/reframe the terminal before drag tracking
-		// was armed, which made immediate click-drag selection jump or disappear.
+		// Entering interactive mode here would resize and reframe the terminal
+		// before drag tracking is armed, so an immediate click-drag selection
+		// jumps or disappears.
 		if p.previewTab == PreviewTabOutput || p.shellSelected {
 			if !action.Shift && !action.Alt {
 				if cmd, ok := p.activateTerminalLink(action); ok {
@@ -994,6 +1006,8 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	p.notePressAwayFromTerminal(action)
+
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
@@ -1120,6 +1134,7 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() || action.Region == nil {
 		return nil
 	}
+	p.notePressAwayFromTerminal(action)
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
@@ -1142,14 +1157,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	// A wheel action always carries its distance in lines (mouse.WheelScrollLines
+	// per notch); a second normalization here would be a second answer to how far
+	// one notch travels.
 	delta := action.Delta
-	if delta == 0 {
-		if action.Type == mouse.ActionScrollUp {
-			delta = -1
-		} else {
-			delta = 1
-		}
-	}
 
 	// Determine which pane based on region or position
 	regionID := ""

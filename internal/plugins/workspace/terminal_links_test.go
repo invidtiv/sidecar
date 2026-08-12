@@ -453,7 +453,7 @@ func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.
 	// viewport may refuse to open a pane, but resolving the link under the click
 	// must still be entirely memo-backed.
 	p.viewMode = ViewModeInteractive
-	p.interactiveState = &InteractiveState{Active: true, VisibleStart: 0, VisibleEnd: 2}
+	p.interactiveState = &InteractiveState{Active: true}
 	p.selection.Clear()
 	_, _ = p.activateTerminalLink(actionAt(2, 4))
 	if rootCalls != 2 || pathCalls != 2 {

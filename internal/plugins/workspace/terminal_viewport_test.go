@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -276,11 +277,9 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	agentBuffer := testTerminalBuffer("0\n1\n2\n3\n4\n5")
 	panelBuffer := testTerminalBuffer("a\nb\nc\nd\ne")
 	state := &InteractiveState{
-		Active:       true,
-		VisibleStart: 91,
-		VisibleEnd:   99,
-		PaneHeight:   3,
-		PaneWidth:    20,
+		Active:     true,
+		PaneHeight: 3,
+		PaneWidth:  20,
 	}
 	p := &Plugin{
 		viewMode:         ViewModeInteractive,
@@ -364,8 +363,8 @@ func TestTerminalPanelSelectionMapsFromPanelViewport(t *testing.T) {
 	}
 	p.selection.ViewRect = mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
 
-	layout := p.interactiveViewportLayout()
-	line, ok := p.interactiveLineIndexAtY(6) // first row after the panel hint
+	layout := p.terminalSelectionViewportLayout()
+	line, _, ok := p.interactiveCharAtXY(11, 6) // first row after the panel hint
 	if !ok {
 		t.Fatal("terminal-panel output row did not map to its buffer")
 	}
@@ -506,9 +505,9 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 	if !p.autoScrollOutput {
 		t.Fatal("panel selection disabled independent agent auto-follow")
 	}
-	frozen := p.interactiveViewportLayout()
+	frozen := p.terminalSelectionViewportLayout()
 	panel.Write("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11")
-	afterAppend := p.interactiveViewportLayout()
+	afterAppend := p.terminalSelectionViewportLayout()
 	if afterAppend.Start != frozen.Start {
 		t.Fatalf("panel selection viewport moved on append: start %d -> %d", frozen.Start, afterAppend.Start)
 	}
@@ -1134,11 +1133,11 @@ func TestTerminalViewportDetectsCanvasCarriedAcrossRows(t *testing.T) {
 // The row counts here are the ones measured off live panes: a Grok canvas
 // covers every row, a Claude Code diff covered 19 of 55.
 func TestCanvasRowShareSeparatesCanvasFromDiffHighlighting(t *testing.T) {
-	if got := canvasRowShare(55); got <= 19 {
+	if got := termpreview.CanvasRowShare(55); got <= 19 {
 		t.Errorf("a 19-of-55 diff still reaches the canvas threshold (%d)", got)
 	}
 	for _, rows := range []int{43, 56} {
-		if got := canvasRowShare(rows); got > rows {
+		if got := termpreview.CanvasRowShare(rows); got > rows {
 			t.Errorf("a canvas covering all %d rows cannot reach the threshold (%d)", rows, got)
 		}
 	}
@@ -1155,7 +1154,7 @@ func TestTerminalViewportDoesNotTreatFullPaneDiffAsCanvas(t *testing.T) {
 	buffer := tty.NewOutputBuffer(100)
 	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
 
-	if bg := terminalCanvasBackground(buffer, 0, len(rows)); bg != "" {
+	if bg := termpreview.CanvasBackground(buffer, 0, len(rows)); bg != "" {
 		t.Errorf("a fully green diff was promoted to canvas %q", bg)
 	}
 }

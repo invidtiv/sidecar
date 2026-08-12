@@ -49,19 +49,10 @@ func (p *Plugin) selectionHitLayout() (terminalViewportLayout, bool) {
 		return terminalViewportLayout{}, false
 	}
 	layout := p.terminalSelectionViewportLayout()
-	if layout.End <= layout.Start && p.interactiveState != nil {
-		// Compatibility for callers that construct only the old cached state.
-		layout.Start = p.interactiveState.VisibleStart
-		layout.End = p.interactiveState.VisibleEnd
-	}
 	if layout.End <= layout.Start {
 		return terminalViewportLayout{}, false
 	}
 	return layout, true
-}
-
-func (p *Plugin) interactiveLineIndexAtY(y int) (int, bool) {
-	return tty.LineIndexAt(p.terminalSelectionGeometry(), p.interactiveOutputBuffer(), y)
 }
 
 // selectionAutoScrollTickMsg drives one step of the held-pointer edge scroll.
@@ -187,8 +178,8 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 // prepareTerminalClickOrDrag keeps a passive terminal's viewport stable until
 // the pointer gesture has declared itself. A drag selects the rows that were
 // actually under the pointer; a release without motion activates the terminal.
-// Entering interactive mode on mouse-down used to resize/reframe the pane and
-// clear the anchor before the first motion event arrived.
+// Entering interactive mode on mouse-down resizes and reframes the pane, which
+// would clear the anchor before the first motion event arrived.
 func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
 	return p.prepareInteractiveDrag(action, tty.ResolveClick(tty.ClickIntent{
 		Modified: action.Shift || action.Alt,
@@ -196,13 +187,16 @@ func (p *Plugin) prepareTerminalClickOrDrag(action mouse.MouseAction) tea.Cmd {
 }
 
 // prepareInteractiveTerminalGesture arms a click over a live terminal without
-// deciding yet whether it belongs to the app or to a selection. Forwarding the
-// button press on mouse-down, as this used to do whenever the app had mouse
-// tracking on, meant apps like Claude Code and grok swallowed every drag after
-// the first — the pane only ever selected during the window before the first
-// frame reported mouse reporting at all. Motion now always selects locally;
-// only a release without motion reaches the app.
+// deciding yet whether it belongs to the app or to a selection. Motion always
+// selects locally and only a release without motion reaches the app: a press
+// forwarded on mouse-down is swallowed by apps like Claude Code and grok, which
+// leaves the pane unselectable for every gesture after the first.
 func (p *Plugin) prepareInteractiveTerminalGesture(action mouse.MouseAction) tea.Cmd {
+	// Drop the previous gesture's resolution first, before any branch below can
+	// return without arming a new one — prepareInteractiveDrag refuses an action
+	// with no region, and a surviving resolution fires at a stale position on the
+	// next release.
+	p.pointer.Resolution = tty.ClickNone
 	modified := action.Shift || action.Alt
 	linkCmd, claimed := p.activateTerminalLinkAt(action, modified)
 	terminal := p.activeInteractiveTerminal()
@@ -444,20 +438,11 @@ func (p *Plugin) interactiveSelectionLines() []string {
 	return tty.SelectedLines(p.interactiveOutputBuffer(), &p.selection, tabStopWidth)
 }
 
-func (p *Plugin) interactiveViewportLayout() terminalViewportLayout {
-	return p.terminalSelectionViewportLayout()
-}
-
+// terminalSelectionViewportLayout is the window a pointer gesture maps against:
+// the one the render path draws, built from the same input rather than a second
+// construction of it (td-73fa86).
 func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
-	// A nil buffer is fine: the layout's geometry (the fit, the display size)
-	// comes from the viewport and the pane, and hit testing needs it whether or
-	// not any output has been captured yet.
-	buffer := p.interactiveOutputBuffer()
-
-	termPanel := p.selectionTermPanel
-	if p.interactiveState != nil && p.interactiveState.Active {
-		termPanel = p.interactiveState.TermPanel
-	}
+	termPanel := p.effectiveSelectionTermPanel()
 	// One derivation of the surface's viewport size, shared with the render and
 	// cursor paths. The fallback covers the two cases the surface cannot place:
 	// an unsized plugin, and the term panel asked for while hidden.
@@ -465,32 +450,11 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	if surface := p.terminalSurfaceGeometry(termPanel); surface.OK {
 		width, height = surface.Width, surface.Height
 	}
-
-	interactive := p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active
-	input := terminalViewportInput{
-		Buffer:      buffer,
-		Width:       width,
-		Height:      height,
-		Interactive: interactive,
-	}
-	// Same geometry the render path uses, or hit-testing drifts from the pixels
-	// (td-73fa86).
-	input.PaneWidth, input.PaneHeight = p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
-	if p.interactiveState != nil {
-		input.CursorCol = p.interactiveState.CursorCol
-		input.CursorRow = p.interactiveState.CursorRow
-		input.CursorVisible = p.interactiveState.CursorVisible
-	}
-	// The scrollbar takes a column from the content, which moves every column
-	// the user can click on; hit testing has to see the same viewport the render
-	// does (td-73fa86).
-	_, input.TotalItems, _ = p.terminalHistorySummary(termPanel, buffer)
-	// Exactly the condition the render and cursor paths use. Gating on the anchor
-	// alone froze the offset for a selection that belongs to the *other* surface,
-	// so hit testing read a different buffer window than the one drawn.
-	input.Follow, input.Offset, input.OffsetFromBottom =
-		p.terminalScrollState(termPanel, p.selectionTermPanel && p.selection.Anchor.Valid())
-	return calculateTerminalViewportLayout(input)
+	// A nil buffer is fine: the layout's geometry (the fit, the display size)
+	// comes from the viewport and the pane, and hit testing needs it whether or
+	// not any output has been captured yet.
+	return calculateTerminalViewportLayout(
+		p.terminalWindowInput(termPanel, p.interactiveOutputBuffer(), width, height))
 }
 
 func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {
@@ -522,12 +486,6 @@ func (p *Plugin) selectTerminalUnit(action mouse.MouseAction, unit tty.Selection
 		return p.copyInteractiveSelectionCmd()
 	}
 	return nil
-}
-
-// beginSelectionGesture closes whatever gesture was running: any auto-scroll
-// tick still in flight belongs to the old generation and is dropped.
-func (p *Plugin) beginSelectionGesture() {
-	p.pointer.Begin()
 }
 
 // clearTerminalSelection drops a selection made outside a pointer gesture —

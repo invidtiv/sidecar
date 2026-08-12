@@ -303,56 +303,21 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 
-	var cursorRow, cursorCol int
-	var cursorVisible bool
-	// Rendering derives from the pane's observed geometry, not the size sidecar
-	// last requested (td-73fa86). Interactive mode has a fresher copy on the
-	// interactive state; list view relies on the per-pane cache.
-	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, interactive)
-	if interactive {
-		row, col, _, _, visible, _ := p.getCursorPosition()
-		cursorRow, cursorCol, cursorVisible = row, col, visible
-		if p.interactiveState.MouseReportingEnabled {
-			hint += " " + dimText("app mouse • ⇧drag select")
-		}
+	if interactive && p.interactiveState.MouseReportingEnabled {
+		hint += " " + dimText("app mouse • ⇧drag select")
 	}
 
-	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
-		p.selectionTermPanel && p.selection.Anchor.Valid())
-	// Trim trailing blanks for scrollback browsing of sparse shell output.
-	// calculateTerminalViewportLayout ignores this while following a known live
-	// grid so full-screen TUI chrome stays aligned (blank final pane rows).
-	trimTrailing := p.autoScrollOutput && !interactive
-	if termPanel {
-		trimTrailing = !interactive
-	}
-	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
-	var selection *ui.SelectionState
+	// The window itself — the buffer, the pane geometry it is fitted to, and
+	// where it sits in scrollback — is the surface's one derivation, shared with
+	// hit testing and the native cursor. Only decoration is added here.
+	input := p.terminalWindowInput(termPanel, buffer, width, height)
+	input.NativeCursor = interactive
 	if p.selectionTermPanel == termPanel {
-		selection = &p.selection
+		input.Selection = &p.selection
 	}
-	result := renderTerminalViewport(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		TrimTrailing:     trimTrailing,
-		Interactive:      interactive,
-		Selection:        selection,
-		CursorRow:        cursorRow,
-		CursorCol:        cursorCol,
-		CursorVisible:    cursorVisible,
-		PaneHeight:       paneHeight,
-		PaneWidth:        paneWidth,
-		NativeCursor:     interactive,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
-		SearchMatches:    p.terminalSearchMatches(termPanel),
-		LinkResolver:     p.terminalLinkResolver(termPanel, buffer),
-	}, p.truncateCache)
+	input.SearchMatches = p.terminalSearchMatches(termPanel)
+	input.LinkResolver = p.terminalLinkResolver(termPanel, buffer)
+	result := renderTerminalViewport(input, p.truncateCache)
 	if result.Content == "" {
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
@@ -361,7 +326,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	// own fit: the scrollbar column is chrome, not a mismatch, and would
 	// otherwise make the banner permanent.
 	if result.Layout.PaneClipped {
-		if indicator := tty.PaneSizeIndicator(paneWidth, paneHeight,
+		if indicator := tty.PaneSizeIndicator(input.PaneWidth, input.PaneHeight,
 			result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
 			hint += " " + dimText(indicator)
 		}
@@ -369,10 +334,10 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
 		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))
 	}
-	if loadingOlder {
+	if input.LoadingOlder {
 		hint += " " + dimText("loading older history…")
-	} else if result.Layout.Start == 0 && absoluteBase > 0 {
-		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", absoluteBase))
+	} else if result.Layout.Start == 0 && input.AbsoluteBase > 0 {
+		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", input.AbsoluteBase))
 	}
 	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
 		if p.terminalSearch.InputActive {

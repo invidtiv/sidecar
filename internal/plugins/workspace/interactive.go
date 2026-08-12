@@ -168,10 +168,10 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 		CursorVisible: true, // Assume visible until we get first cursor query result
 		PaneOnEntry:   p.activePane,
 	}
-	// The embedded terminal owns input now, so make the preview the active pane.
+	// The embedded terminal owns input, so the preview is the active pane:
 	// nativeTerminalActive() gates both the native cursor and cell-motion mouse
-	// reporting on it, and entering from the sidebar used to leave it behind —
-	// interactive mode with no visible cursor at all (td-62b8ab).
+	// reporting on it, and entering from the sidebar without this is interactive
+	// mode with no visible cursor at all (td-62b8ab).
 	p.activePane = PanePreview
 	p.selectionTermPanel = false
 	p.clearTerminalSelection()
@@ -259,9 +259,9 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 // calculatePreviewDimensions returns the content width and height for the preview pane.
 // Used to resize tmux panes to match the visible area.
 // IMPORTANT: This must stay in sync with renderListView() width calculations.
-// It no longer takes a selection kind: every terminal surface now reserves the
-// same single header row, so a shell and a worktree are sized identically and a
-// session can be sized before it is known which kind will render it (td-9b181e).
+// It takes no selection kind: every terminal surface reserves the same single
+// header row, so a shell and a worktree are sized identically and a session can
+// be sized before it is known which kind will render it (td-9b181e).
 func (p *Plugin) calculatePreviewDimensions() (width, height int) {
 	leaf, ok := p.terminalLeafBox()
 	if !ok {
@@ -395,14 +395,11 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		return touch
 	}
 	p.interactiveState.LastResizeAt = time.Now()
-	// The capture already returned the actual pane size. Trust that atomic
-	// observation instead of spawning two more display-message queries around
-	// the resize.
-	//
-	// This one stays a direct call: it corrects a pane whose real size drifted
-	// from what this instance asked for — another machine resized it — and the
-	// component, believing it already asked for these dimensions, would skip the
-	// resize that fixes exactly that.
+	// A direct call, not the component's: this corrects a pane whose real size
+	// drifted from what this instance asked for — another machine resized it —
+	// and the component, believing it already asked for these dimensions, would
+	// skip exactly the resize that fixes it. The size comes from the capture,
+	// which observed it atomically with the output.
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		return paneResizedMsg{}
@@ -582,7 +579,17 @@ func (p *Plugin) previewResizeTarget() string {
 }
 
 // exitInteractiveMode exits interactive mode and returns to list view.
+//
+// Every way out goes through here, including the ones that never reach the
+// component — a click landing off every terminal region, a filter opening, a
+// selection change. The component keeps the escape window and any half-read
+// mouse report, and ExitReleasesInput leaves it active behind this surface, so
+// a mode left without releasing input still delivers the escape timer it
+// scheduled to a pane the user has walked away from.
 func (p *Plugin) exitInteractiveMode() {
+	if terminal := p.activeInteractiveTerminal(); terminal != nil {
+		terminal.ReleaseInput()
+	}
 	if p.interactiveState != nil {
 		// Preserve focus on whichever sub-pane was interactive
 		p.termPanelFocused = p.interactiveState.TermPanel
@@ -618,17 +625,21 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return p.leaveInteractiveMode()
 	}
-	terminal := p.interactiveTerminal()
+	terminal, open := p.interactiveTerminal()
 	if terminal == nil {
 		return nil
 	}
-	return terminal.Update(msg)
+	return tea.Batch(open, terminal.Update(msg))
 }
 
 // interactiveTerminal is the component behind the live pane, opened here if a
 // mode-entry message has outrun the wrapper's reconciliation: the component is
 // the only sender, so the mode cannot be live without it.
-func (p *Plugin) interactiveTerminal() *tty.Model {
+//
+// Opening returns work — the control client's mailbox and the first capture —
+// and a caller that drops it leaves the subprocess running with nobody draining
+// it and no frame ever scheduled.
+func (p *Plugin) interactiveTerminal() (*tty.Model, tea.Cmd) {
 	terminal := p.activeInteractiveTerminal()
 	if terminal == nil {
 		if p.primaryTerminal == nil || p.panelTerminal == nil {
@@ -637,15 +648,15 @@ func (p *Plugin) interactiveTerminal() *tty.Model {
 		terminal = p.activeInteractiveTerminal()
 	}
 	if terminal == nil {
-		return nil
+		return nil, nil
 	}
 	if !terminal.IsActive() {
-		terminal.Open(tty.Target{
+		return terminal, terminal.Open(tty.Target{
 			Session: p.interactiveState.TargetSession,
 			Pane:    p.interactiveState.TargetPane,
 		})
 	}
-	return terminal
+	return terminal, nil
 }
 
 // interactiveKey is the component's OnKey hook: the chords that act on the
@@ -770,10 +781,10 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	if terminal := p.activeInteractiveTerminal(); terminal != nil && terminal.IsActive() {
 		return terminal.SendUnknownSequence(msg)
 	}
-	// The same provisional window handleInteractiveKeys keeps: a mode-entry
-	// message can precede the wrapper's reconciliation by one update. Without a
-	// fallback here, ordinary keys reach the pane during that window while
-	// modified ones — shift+enter, ctrl+enter — are silently dropped.
+	// A mode-entry message can precede the wrapper's reconciliation by one
+	// update. Without a fallback for that window, ordinary keys reach the pane
+	// through the component interactiveTerminal opens while modified ones —
+	// shift+enter, ctrl+enter — are silently dropped.
 	csiu := tty.NormalizeToCSIu(tty.ExtractUnknownCSIBytes(msg))
 	if csiu == "" {
 		return nil
@@ -828,6 +839,7 @@ func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cm
 		return nil
 	}
 
+	p.clearTerminalSelectionOnScroll(false)
 	maxOffset := p.getMaxScrollOffset()
 	if delta < 0 {
 		// Scroll up: move toward top of content
@@ -895,10 +907,6 @@ func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cm
 	// The component polls for the frame its own send provokes; scheduling a
 	// second one here would capture every forwarded notch twice.
 	return terminal.SendWheelNotches(delta < 0, col, row, notches), true
-}
-
-func wheelNotchesForDelta(delta int) int {
-	return tty.WheelNotches(delta)
 }
 
 // pinInteractiveViewportToLive returns the interactive viewport to the live edge
@@ -1030,12 +1038,12 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 		return 0, 0, false
 	}
 
-	// Origin and size of the surface interactive mode is targeting. This used to
-	// re-derive the terminal panel's offset from calculatePreviewDimensions while
-	// the split itself divides the container height, so in the bottom layout it
-	// landed a row off — and a click was forwarded to the wrong tmux row — for
-	// every window height where the two floors disagreed. There is now one
-	// derivation, and it is the one the render path draws with.
+	// Origin and size of the surface interactive mode is targeting, taken from
+	// the one derivation the render path draws with. Re-deriving the terminal
+	// panel's offset from calculatePreviewDimensions instead lands a row off in
+	// the bottom layout — the split divides the container height — for every
+	// window height where the two floors disagree, and a click is forwarded to
+	// the wrong tmux row.
 	targetingTermPanel := p.interactiveState != nil && p.interactiveState.Active &&
 		p.interactiveState.TermPanel && p.termPanelVisible
 	surface := p.terminalSurfaceGeometry(targetingTermPanel)

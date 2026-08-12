@@ -97,10 +97,64 @@ type previewTerminal interface {
 
 var _ previewTerminal = (*tty.Model)(nil)
 
-// newPreviewTerminal builds the browser's terminal. It is a variable so the
-// seam can be substituted without a tmux server behind it.
-var newPreviewTerminal = func(config tty.Config) previewTerminal {
-	return tty.New(&config)
+// newPreviewTerminal builds the browser's terminal with the host contract the
+// component calls back through. It is a variable so the seam can be substituted
+// without a tmux server behind it; a substitute is handed the same hooks, so a
+// test drives the real ways in and out.
+var newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
+	model := tty.New(&config)
+	model.SetHooks(hooks)
+	return model
+}
+
+// previewTerminalHooks is everything this surface owns about a live pane, said
+// once, to the component that owns the rest. Answering any of it outside the
+// component instead — a chord read before the key is forwarded, a mode ending
+// noticed by polling IsActive afterwards — is a second implementation of a
+// pipeline the project surface already drives through these same hooks.
+func (m *Model) previewTerminalHooks() tty.Hooks {
+	return tty.Hooks{
+		OnKey:      m.previewTerminalKey,
+		BeforeSend: m.beforePreviewSend,
+		OnExit:     m.releasePreviewKeyboard,
+		OnSessionEnded: func() tea.Cmd {
+			// A pane that died under a keystroke or a forwarded click ends the mode
+			// inside the component. The project surface raises the same toast, and a
+			// mode that ends by itself with no notice reads as a dropped keystroke.
+			return tea.Batch(m.releasePreviewKeyboard(),
+				appmsg.ShowToast("Session ended", 3*time.Second))
+		},
+		// The browser draws the pane from its own capture once the keyboard is
+		// given back, so nothing is left to keep: the buffer this terminal loaded
+		// is replaced by the next capture either way.
+		ExitAction: tty.ExitClosesTerminal,
+	}
+}
+
+// previewTerminalKey is the component's OnKey hook: the chords that act on the
+// terminal surface rather than on the pane inside it.
+func (m *Model) previewTerminalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	handled, cmd := m.terminalKey(msg)
+	return cmd, handled
+}
+
+// beforePreviewSend is the component's BeforeSend hook. Typing is owed a view of
+// itself: a window left in scrollback would take the keystroke and show none of
+// it.
+func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
+	if m.preview.offset == 0 && !m.preview.frozen {
+		return
+	}
+	if m.TerminalConfig().IsPasteChord(msg) || tty.ShouldSnapBack(msg, m.now().Sub(m.preview.wheel.LastAt())) {
+		m.pinPreviewToLive()
+	}
+}
+
+// releasePreviewKeyboard is the component's OnExit hook: give the keyboard back
+// and resume the read-only capture cadence for whatever is selected now.
+func (m *Model) releasePreviewKeyboard() tea.Cmd {
+	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
+	return m.previewSelect()
 }
 
 // PreviewInteractive reports that the focused preview is forwarding keys to a
@@ -141,14 +195,14 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		return appmsg.ShowToast(reason, 3*time.Second)
 	}
 	if m.preview.terminal == nil {
-		m.preview.terminal = newPreviewTerminal(m.TerminalConfig())
+		m.preview.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooks())
 	}
 
 	m.preview.focus = focusPreview
 	if m.previewNarrow() {
 		m.preview.full = true
 	}
-	m.preview.offset = 0
+	m.jumpPreviewWindow(0)
 	// The selection names lines of the capture buffer the live one is about to
 	// replace, so it cannot survive the handover.
 	m.clearPreviewSelection()
@@ -172,34 +226,28 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// exitPreviewInteractive gives the keyboard back to the browser and resumes the
-// read-only capture cadence for whatever is selected now. It is idempotent, so
-// every path that could end the mode — the exit key, double escape, a dead
-// session, moving focus, changing selection, hiding the tab — may simply call
-// it.
+// exitPreviewInteractive takes the keyboard back from a live pane on this
+// surface's own initiative — focus moved, the selection changed, the tab was
+// hidden. The ways out the *user* chooses are the component's, and it calls
+// OnExit for them, so this must not be a second path: it is the same one, asked
+// for from outside.
 func (m *Model) exitPreviewInteractive() tea.Cmd {
 	if !m.PreviewInteractive() {
 		return nil
 	}
-	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
-	// previewSelect ends the terminal and rebinds the capture cadence to the
-	// current selection, which is the whole of "give the keyboard back".
-	return m.previewSelect()
+	m.preview.terminal.Exit()
+	return m.releasePreviewKeyboard()
 }
 
-// forwardToTerminal hands one message to the live terminal and notices when the
-// terminal ended the mode itself — the exit key, double escape, or a session
-// that died under it. The component owns those decisions; this is where the
-// browser learns the answer and goes back to capturing.
+// forwardToTerminal hands one message to the live terminal. What a key means,
+// which chords never reach the pane, and every way the mode can end are the
+// component's, and it reports each of them through the hooks this surface
+// registered — so nothing here inspects what the message did afterwards.
 func (m *Model) forwardToTerminal(msg tea.Msg) tea.Cmd {
 	if !m.PreviewInteractive() {
 		return nil
 	}
-	cmd := m.preview.terminal.Update(msg)
-	if m.preview.terminal.IsActive() {
-		return cmd
-	}
-	return tea.Batch(cmd, m.previewSelect())
+	return m.preview.terminal.Update(msg)
 }
 
 // pressPreview arms a pointer gesture over the preview box. Nothing is decided
@@ -244,6 +292,11 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 // dragPreview extends the live selection, scrolling the window when the pointer
 // has run past an edge so a selection can reach content that is not on screen.
 func (m *Model) dragPreview(action mouse.MouseAction) tea.Cmd {
+	// Freeze before anything reads or moves the window: a capture landing
+	// mid-drag renumbers the watched buffer, and a window still placed against
+	// the live bottom follows it, leaving the anchor naming different text than
+	// the highlight being dragged.
+	m.freezePreviewWindow()
 	geometry, ok := m.previewGeometry()
 	if !ok {
 		return nil
@@ -295,6 +348,9 @@ func (m *Model) selectPreviewUnit(action mouse.MouseAction, unit tty.SelectionUn
 // finishPreviewGesture resolves the gesture: a selection was made, or the click
 // meant what the press armed it to mean.
 func (m *Model) finishPreviewGesture() tea.Cmd {
+	// The gesture is over, so the window goes back to following the live edge
+	// from wherever it was pinned.
+	m.thawPreviewWindow()
 	resolution, selected := m.preview.pointer.Release(&m.preview.selection)
 	if selected {
 		if m.TerminalConfig().CopyOnSelect {
@@ -330,6 +386,7 @@ func (m *Model) abandonPreviewGesture() tea.Cmd {
 		// shared handler abandons its drag.
 		return m.finishPreviewGesture()
 	}
+	m.thawPreviewWindow()
 	return nil
 }
 
@@ -363,9 +420,9 @@ func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 		Buffer:    m.previewBuffer,
 		Selection: &m.preview.selection,
 		Scroll: func(delta int) bool {
-			before := m.preview.offset
+			before := m.previewScrollAnchor()
 			m.scrollPreviewRows(delta)
-			return m.preview.offset != before
+			return m.previewScrollAnchor() != before
 		},
 	}
 }
@@ -400,9 +457,9 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 		return m.preview.terminal.SendWheelNotches(delta < 0, col, row, notches)
 	}
 	m.clearPreviewSelectionOnScroll()
-	before := m.preview.offset
+	before := m.previewScrollAnchor()
 	m.scrollPreview(-delta)
-	if delta < 0 && m.preview.offset == before {
+	if delta < 0 && m.previewScrollAnchor() == before {
 		return m.notePreviewScrollbackLimit()
 	}
 	return nil
@@ -435,14 +492,7 @@ func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
 	if !m.PreviewInteractive() || !tty.IsTerminalMessage(msg) {
 		return nil
 	}
-	cmd := m.forwardToTerminal(msg)
-	// A pane that died under a forwarded click or keystroke ends the mode inside
-	// the component. Say so: the project surface raises the same toast, and a
-	// mode that ends by itself with no notice reads as a dropped keystroke.
-	if _, dead := msg.(tty.SessionDeadMsg); dead && !m.PreviewInteractive() {
-		return tea.Batch(cmd, appmsg.ShowToast("Session ended", 3*time.Second))
-	}
-	return cmd
+	return m.forwardToTerminal(msg)
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
@@ -478,7 +528,12 @@ func (m *Model) WorkspacesCursor() *tea.Cursor {
 		return nil
 	}
 	window := m.previewWindow()
-	if !window.ok || !window.input.CursorVisible {
+	if !window.ok {
+		return nil
+	}
+	// A window scrolled off the live edge is showing history: the same rule the
+	// project surface draws its cursor by, so shift+up hides it in both.
+	if !tty.ShouldOverlayCursor(window.input.Interactive, window.input.CursorVisible, window.input.Follow) {
 		return nil
 	}
 	x, y, ok := tty.ViewportCursor(window.layout, window.input)
