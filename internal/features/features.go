@@ -68,7 +68,7 @@ var (
 	// WorkspaceDocPanes enables document panes beside workspace terminals.
 	WorkspaceDocPanes = Feature{
 		Name:        "workspace_doc_panes",
-		Default:     false,
+		Default:     true,
 		Description: "Open documents in panes beside workspace terminals",
 	}
 

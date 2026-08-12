@@ -186,9 +186,10 @@ Complete shortcut listings and context reference. For implementation patterns, s
 
 ### Document Pane
 
-With `workspace_doc_panes` enabled, an unmodified click on a resolvable markdown
+Document panes are enabled by default. An unmodified click on a resolvable markdown
 `path:line` opens it beside the selected workspace or shell terminal. Bare paths
-are not links yet. `shift`-drag and `alt`-drag continue to select terminal text.
+are added in the Phase 6 delivery. `shift`-drag and `alt`-drag continue to select
+terminal text. Use `--disable-feature=workspace_doc_panes` to opt out for a launch.
 
 | Key | Action |
 |-----|--------|

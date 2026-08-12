@@ -245,20 +245,21 @@ Real-time streaming of agent terminal output. Shows exactly what the agent seesâ
 
 #### Read referenced markdown beside the terminal
 
-Document panes are currently an opt-in preview. Enable them in
+Document panes are enabled by default. To turn them off for a launch, run
+`sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
 `~/.config/sidecar/config.json`:
 
 ```json
 {
   "features": {
     "flags": {
-      "workspace_doc_panes": true
+      "workspace_doc_panes": false
     }
   }
 }
 ```
 
-With the flag enabled, click a markdown `path:line` shown in a selected workspace
+Click a markdown `path:line` shown in a selected workspace
 or project shell terminal, such as `docs/guide.md:24`. The document opens beside
 the terminal in Workspaces and starts at that source line. Other file types keep
 opening in Files. A bare path such as `docs/guide.md` is not clickable yet; it

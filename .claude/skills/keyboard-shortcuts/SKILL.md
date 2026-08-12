@@ -260,8 +260,9 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 ### Document Pane
 
 An unmodified click on a resolvable markdown `path:line` in workspace or shell
-terminal output opens the document beside that terminal when
-`workspace_doc_panes` is enabled. Bare markdown paths are not links yet.
+terminal output opens the document beside that terminal. Document panes are
+enabled by default; `--disable-feature=workspace_doc_panes` opts out for a launch.
+Bare markdown paths are added in the Phase 6 delivery.
 `shift`-drag and `alt`-drag remain terminal selection gestures.
 
 | Key | Command | Description |
