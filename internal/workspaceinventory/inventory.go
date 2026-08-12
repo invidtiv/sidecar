@@ -45,6 +45,9 @@ type Workspace struct {
 	// "is there an agent here?", and it is what keeps the Agents projection
 	// identical to what it collected before the catalog carried plain rows.
 	Plain bool
+	// IsMain is explicit inventory identity, resolved while collecting Git's
+	// worktree list. Presentation callers must not guess it from a name.
+	IsMain bool
 	// Live and Ambiguous describe session health, which is not the same
 	// question as agent activity: a plain shell or an agentless worktree can
 	// own a live pane while having no agent semantics at all. Keeping them
@@ -80,6 +83,7 @@ type Item struct {
 	Provider                string
 	PaneID, TmuxName        string
 	Live, Ambiguous         bool
+	IsMain                  bool
 	Agent                   *agentstatus.Presentation
 	ObservedAt              time.Time
 }
@@ -90,7 +94,7 @@ func (w Workspace) Item() Item {
 		ID: w.ID, ProjectKey: w.ProjectKey, ProjectName: w.ProjectName, ProjectRoot: w.ProjectRoot,
 		Kind: w.Kind, Key: w.Key, Name: w.Name, Path: w.Path, Branch: w.Branch, TaskID: w.TaskID,
 		Provider: w.Provider, PaneID: w.PaneID, TmuxName: w.TmuxName,
-		Live: w.Live, Ambiguous: w.Ambiguous, ObservedAt: w.ObservedAt,
+		Live: w.Live, Ambiguous: w.Ambiguous, IsMain: w.IsMain, ObservedAt: w.ObservedAt,
 	}
 	if w.HasAgent() {
 		presentation := w.Presentation
@@ -430,7 +434,7 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 				taskID = strings.TrimSpace(string(taskBytes))
 			}
 		}
-		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, ObservedAt: now}
+		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, IsMain: canonical(wt.Path) == result.ProjectKey, ObservedAt: now}
 		workspace.ID = workspace.ProjectKey + ":worktree:" + workspace.Key
 		workspace.Plain = provider == ""
 		if workspace.HasAgent() {

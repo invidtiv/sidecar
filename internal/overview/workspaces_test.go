@@ -30,16 +30,52 @@ func catalogModel(t *testing.T) *Model {
 	}
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar", Workspaces: []workspaceinventory.Workspace{
 		{ID: "s1", ProjectKey: "sidecar", ProjectName: "sidecar", Kind: workspaceinventory.KindWorktree, Name: "modal", Branch: "modal-look", Provider: "codex", Live: true,
-			Presentation: agentstatus.Presentation{Lane: agentstatus.LaneBlocked, Label: "needs input", ChangedAt: now.Add(-time.Minute)}},
+			Presentation: agentstatus.Presentation{Lane: agentstatus.LaneBlocked, Icon: "◆", Label: "needs input", ChangedAt: now.Add(-time.Minute)}},
 		{ID: "s2", ProjectKey: "sidecar", ProjectName: "sidecar", Kind: workspaceinventory.KindShell, Name: "Shell 1", TmuxName: "sidecar-sh-1", Live: true},
 		{ID: "s3", ProjectKey: "sidecar", ProjectName: "sidecar", Kind: workspaceinventory.KindWorktree, Name: "dormant", Branch: "old", Plain: true},
 	}}
 	m.results["braid"] = workspaceinventory.ProjectResult{ProjectKey: "braid", Workspaces: []workspaceinventory.Workspace{
 		{ID: "b1", ProjectKey: "braid", ProjectName: "braid", Kind: workspaceinventory.KindWorktree, Name: "pipeline", Branch: "pipeline", Provider: "claude", Live: true,
-			Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Label: "working", ChangedAt: now.Add(-2 * time.Minute)}},
+			Presentation: agentstatus.Presentation{Lane: agentstatus.LaneWorking, Icon: "●", Label: "working", ChangedAt: now.Add(-2 * time.Minute)}},
 	}}
 	m.syncBoard()
 	return m
+}
+
+func TestGlobalRowsProjectStatusProviderProjectDetailAndAge(t *testing.T) {
+	m := catalogModel(t)
+	m.collector.Now = func() time.Time { return time.Now() }
+	m.sidebarWidth = 60
+	view := ansi.Strip(m.WorkspacesView(120, 24))
+	for _, want := range []string{"◆ modal", "▶ codex", "sidecar", "needs input", "modal-look", "1m", "● pipeline", "claude", "braid"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("global row lost %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestGlobalRowMarkerProjectionCoversHealthPlainAndMain(t *testing.T) {
+	cases := []struct {
+		name string
+		item workspaceinventory.Item
+		icon string
+		tone workspacelist.MarkerTone
+	}{
+		{"missing health", workspaceinventory.Item{Agent: &agentstatus.Presentation{Health: true, Icon: "✗", Label: "folder missing"}}, "✗", workspacelist.MarkerError},
+		{"orphan health", workspaceinventory.Item{Agent: &agentstatus.Presentation{Health: true, Icon: "⚠", Label: "session ended"}}, "⚠", workspacelist.MarkerWarning},
+		{"ambiguous", workspaceinventory.Item{Ambiguous: true}, "?", workspacelist.MarkerWarning},
+		{"plain live", workspaceinventory.Item{Live: true}, "◎", workspacelist.MarkerLive},
+		{"main fallback", workspaceinventory.Item{IsMain: true}, "◉", workspacelist.MarkerMain},
+		{"plain stopped", workspaceinventory.Item{}, "○", workspacelist.MarkerMuted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := listItem(tc.item, "sidecar", 0, false).Marker
+			if got.Icon != tc.icon || got.Tone != tc.tone {
+				t.Fatalf("marker = %#v, want icon %q tone %q", got, tc.icon, tc.tone)
+			}
+		})
+	}
 }
 
 func TestGlobalWorkspacesListsEveryProjectsShellsAndWorktrees(t *testing.T) {
@@ -76,7 +112,7 @@ func TestPlainRowsGetPresentationBucketsNotFabricatedAgentState(t *testing.T) {
 	for _, item := range m.workspaces.Visible() {
 		byID[item.ID] = item
 	}
-	if got := byID["s2"]; got.Group != workspacelist.GroupLive || got.Status != "live" || got.Provider != "shell" {
+	if got := byID["s2"]; got.Group != workspacelist.GroupLive || got.Status != "live" || got.Provider != "" || got.Marker.Icon != "◎" {
 		t.Fatalf("live plain shell = %#v", got)
 	}
 	if got := byID["s3"]; got.Group != workspacelist.GroupNoSession || got.Status != "no session" || got.Provider != "" {

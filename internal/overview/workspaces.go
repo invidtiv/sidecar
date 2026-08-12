@@ -80,18 +80,34 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 		row.Status = item.Agent.Label
 		row.ChangedAt = item.Agent.ChangedAt
 		row.Group = laneGroup(item.Agent.Lane)
+		row.Marker = workspacelist.RowMarker{Icon: item.Agent.Icon, Lane: string(item.Agent.Lane)}
+		if item.Agent.Health {
+			row.Marker.Lane = ""
+			switch item.Agent.Icon {
+			case "✗":
+				row.Marker.Tone = workspacelist.MarkerError
+			case "⚠":
+				row.Marker.Tone = workspacelist.MarkerWarning
+			default:
+				row.Marker.Tone = workspacelist.MarkerMuted
+			}
+		}
 		if !item.Live && !item.Ambiguous {
 			row.Group = workspacelist.GroupNoSession
 		}
 	case item.Ambiguous:
 		row.Status, row.Group = "ambiguous panes", workspacelist.GroupPaused
+		row.Marker = workspacelist.RowMarker{Icon: "?", Tone: workspacelist.MarkerWarning}
 	case item.Live:
 		row.Status, row.Group = "live", workspacelist.GroupLive
-		if item.Kind == workspaceinventory.KindShell {
-			row.Provider = "shell"
-		}
+		row.Marker = workspacelist.RowMarker{Icon: "◎", Tone: workspacelist.MarkerLive}
 	default:
 		row.Status, row.Group = "no session", workspacelist.GroupNoSession
+		if item.IsMain {
+			row.Marker = workspacelist.RowMarker{Icon: "◉", Tone: workspacelist.MarkerMain}
+		} else {
+			row.Marker = workspacelist.RowMarker{Icon: "○", Tone: workspacelist.MarkerMuted}
+		}
 	}
 	if stale {
 		row.Status += " · stale"

@@ -120,6 +120,7 @@ type Item struct {
 	Provider     string
 	Status       string
 	Detail       string
+	Marker       RowMarker
 	Group        Group
 	ChangedAt    time.Time
 	Data         any

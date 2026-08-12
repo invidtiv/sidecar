@@ -68,6 +68,20 @@ func TestUnselectedShellUsesAgentChip(t *testing.T) {
 	}
 }
 
+func TestSharedRowKeepsProjectSpecificWorktreeLabels(t *testing.T) {
+	p := &Plugin{activePane: PaneSidebar, ctx: &plugin.Context{}}
+	wt := &Worktree{
+		Name: "feature", Branch: "feature/rows", TaskID: "td-row", PRURL: "https://example.test/pr/1",
+		ChosenAgentType: AgentClaude, Status: StatusWaiting, Stats: &GitStats{Additions: 12, Deletions: 3},
+	}
+	plain := ansi.Strip(p.renderWorktreeItem(wt, false, 64))
+	for _, want := range []string{"feature", " PR", "branch feature/rows", "claude", "td-row", "+12 -3"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("project row lost %q: %q", want, plain)
+		}
+	}
+}
+
 func TestActivityRenderingShowsUnseenDoneThenSeenIdle(t *testing.T) {
 	p := &Plugin{activePane: PaneSidebar, ctx: &plugin.Context{}}
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateIdle}}

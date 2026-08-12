@@ -43,7 +43,6 @@ type Model struct {
 	scroll     int
 	visible    []Item
 	rows       int
-	twoLine    bool
 	loading    bool
 	failures   []string
 	emptyText  string
@@ -237,7 +236,6 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	m.twoLine = opts.Width >= twoLineWidth
 	matched, total := m.Counts()
 	sections := Grouped(m.visible, m.sortMode)
 	// A project whose inventory could not be read is a row, not a leftover. Its
@@ -319,50 +317,22 @@ func (m *Model) failureLines(rows, width int) []string {
 // Project colour reinforces identity but is never the only differentiator —
 // the project name is always spelled out.
 func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time) []string {
-	hue := styles.ProjectHue(item.ProjectKey)
-	age := RelativeAge(item.ChangedAt, now)
-
-	if !m.twoLine {
-		text := " " + item.Name
-		if item.Project != "" {
-			text += " · " + item.Project
-		}
-		line := fit(text, width)
-		if selected {
-			return []string{selectionStyle(focused).Width(width).Render(line)}
-		}
-		return []string{styles.ListItemNormal.Width(width).Render(line)}
-	}
-
-	name := item.Name
-	if maxName := width - ansi.StringWidth(age) - 4; maxName > 0 && ansi.StringWidth(name) > maxName {
-		name = ansi.Truncate(name, maxName, "…")
-	}
-	line1 := " " + name
-	if pad := width - ansi.StringWidth(line1) - ansi.StringWidth(age) - 1; pad > 0 && age != "" {
-		line1 += strings.Repeat(" ", pad) + age
-	}
-	detail := []string{item.Project}
-	if item.Provider != "" {
-		detail = append(detail, item.Provider)
-	}
+	project := RowField{Text: item.Project, Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project)}
+	after := make([]RowField, 0, 2)
 	if item.Status != "" {
-		detail = append(detail, item.Status)
+		after = append(after, RowField{Text: item.Status, Rendered: styles.Muted.Render(item.Status)})
 	}
 	if item.Detail != "" {
-		detail = append(detail, item.Detail)
+		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
 	}
-	line2 := "   " + strings.Join(detail, " · ")
-
-	if selected {
-		return []string{ApplySelection(fit(line1, width)+"\n"+fit(line2, width), width, true, focused)}
-	}
-	styledProject := lipgloss.NewStyle().Foreground(hue).Render(item.Project)
-	styledDetail := styledProject
-	if rest := strings.Join(detail[1:], " · "); rest != "" {
-		styledDetail += styles.Muted.Render(" · " + rest)
-	}
-	return []string{styles.ListItemNormal.Width(width).Render(fit(line1, width) + "\n" + fit("   "+styledDetail, width))}
+	return RenderRow(RowPresentation{
+		Marker:         item.Marker,
+		Name:           item.Name,
+		Age:            RelativeAge(item.ChangedAt, now),
+		BeforeProvider: []RowField{project},
+		Provider:       item.Provider,
+		AfterProvider:  after,
+	}, width, selected, focused)
 }
 
 func selectionStyle(focused bool) lipgloss.Style {

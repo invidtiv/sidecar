@@ -226,7 +226,7 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	captures := 0
 	collector := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "", nil }}
 	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, []Pane{{ID: "%1", Path: root}, {ID: "%2", Path: root}})
-	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable {
+	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable || !result.Workspaces[0].IsMain {
 		t.Fatalf("ambiguous result = %#v", result)
 	}
 	if captures != 0 {
