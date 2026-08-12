@@ -8,7 +8,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
+	"github.com/marcus/sidecar/internal/ui"
 )
+
+const tabStopWidth = 8
 
 // LoadedMsg is the result of a Model load. Its identity fields ensure a result
 // can only be applied to the model, request, and plugin epoch that issued it.
@@ -219,6 +222,10 @@ func fitLine(line string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	// A terminal expands tabs based on their current visual column, while ANSI
+	// width helpers count them as zero-width control characters. Normalize them
+	// first so the subsequent clamp describes what the terminal will display.
+	line = ui.ExpandTabs(line, tabStopWidth)
 	line = ansi.Truncate(line, width, "")
 	if padding := width - ansi.StringWidth(line); padding > 0 {
 		line += strings.Repeat(" ", padding)

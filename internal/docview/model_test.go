@@ -73,6 +73,26 @@ func TestViewHasExactHeightAndANSIClampedWidth(t *testing.T) {
 	}
 }
 
+func TestViewExpandsRawTabsBeforeWidthClamp(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(5, 1)
+	msg := loadFixture(t, m, "\t12345", 1)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+
+	view := m.View()
+	if strings.Contains(view, "\t") {
+		t.Fatalf("view retained a terminal-expanded tab: %q", view)
+	}
+	if got := ansi.StringWidth(view); got != 5 {
+		t.Fatalf("visible width = %d, want 5 (%q)", got, view)
+	}
+	if strings.Contains(ansi.Strip(view), "1") {
+		t.Fatalf("content beyond the tab stop escaped the box: %q", view)
+	}
+}
+
 func TestScrollAndLineTargetClamp(t *testing.T) {
 	m := newTestModel(t)
 	m.SetSize(20, 2)
