@@ -1,0 +1,61 @@
+Baseline transcript — global Overview / project space, slice 0
+docs/plans/active/global-overview-workspaces.md, slice 0 item 3
+
+Recorded before any global-scope work, so a later slice can be compared against
+what Sidecar does today. Every capture in this directory is the ANSI-stripped
+pane text of a real Sidecar process driven headlessly, with trailing spaces
+removed. isolated-paths.txt records the roots the run used; both isolation axes
+were private (tmux server under the run dir via TMUX_TMPDIR, state/config under
+the run dir with SIDECAR_ISOLATED_STATE=1). The machine's default tmux server
+was never touched.
+
+How to reproduce
+----------------
+  go build -o /tmp/sidecar-slice0/sidecar ./cmd/sidecar
+  export SIDECAR_DRIVE_RUN_DIR=/tmp/sidecar-drive-slice0-$(id -u)
+  export SIDECAR_BIN=/tmp/sidecar-slice0/sidecar
+  ./scripts/tmux-drive.sh paths          # confirm both axes are isolated first
+  ./scripts/tmux-drive.sh start 200 50
+  ...steps below...
+  ./scripts/tmux-drive.sh stop
+
+The isolated config had no configured projects, so the Agents board is honestly
+empty. That is deliberate for this recording: what is being characterized is app
+chrome, scope naming, tab routing and exact return, not board content — board
+content already has dense coverage in internal/overview.
+
+Wide transcript (200x50)
+------------------------
+  start 200 50                -> wide-project-startup.txt
+      Project space. Title "Sidecar / sidecar [global-workspace]"; project
+      plugin tabs td/git/files/workspaces; td plugin active.
+  keys K                      -> wide-global-agents.txt
+      Global space. Title becomes "Sidecar / Overview" and the content is the
+      Agent Overview board — but the header still shows the PROJECT plugin tab
+      row, with no tab marked active. This is the exact ambiguity slice 1
+      replaces with [Agents] [Workspaces] [Tasks].
+  keys q                      -> (not captured; returns to td)
+  keys 4                      -> wide-project-workspaces.txt
+      A number key routes to a project plugin. From the global space it would
+      also have left it; today numeric keys and ` [ ] ~ are project-plugin
+      navigation whatever the space.
+  keys j                      -> wide-project-workspaces-after-j.txt
+      Sidebar navigation moves the selection shell-first through shells then
+      worktrees and the preview follows it.
+  keys K                      -> wide-global-agents-reentry.txt
+      Re-entering the global space from Workspaces; the project underneath is
+      untouched.
+  keys q                      -> wide-project-restored.txt
+      Exact return: the Workspaces plugin, its sidebar and its preview come back
+      as they were, with no project reinitialization.
+
+Narrow transcript (72x30)
+-------------------------
+  start 72 30                 -> narrow-project-startup.txt
+  keys 4                      -> narrow-project-workspaces.txt
+      Header truncation drops inactive tabs from the right (files is gone) while
+      keeping the destination title and the active plugin tab; the two-pane
+      split still renders both panes at this width.
+  keys K                      -> narrow-global-agents.txt
+      Compact Overview keeps the app header and footer, and the project tab row
+      is still what the header shows in the global space.

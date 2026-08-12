@@ -1,0 +1,30 @@
+ Sidecar / sidecar [global-workspace]     td     git     workspaces
+
+╭──────────────────────────╮ ╭─────────────────────────────────────────╮
+│ Workspaces         New   │││  Output   Diff   Task 			│
+│                          │││ No agent running                        │
+│  ◉ sidecar               │││ Press 's' to start an agent		│
+│    main  main            │││                                         │
+│  ⏸ sidecar-global-w…     │││                                         │
+│    branch global-works…  │││                                         │
+│  ⏸ sidecar-grok-con…     │││                                         │
+│    branch grok-conver…   │││                                         │
+│  ⏸ sidecar-preview-…     │││                                         │
+│    branch preview-pan…   │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+│                          │││                                         │
+╰──────────────────────────╯ ╰─────────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban                ↻ 22:18:37

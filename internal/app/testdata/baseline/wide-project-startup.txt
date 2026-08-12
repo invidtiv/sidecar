@@ -1,0 +1,50 @@
+ Sidecar / sidecar [global-workspace]                                                              td     git     files     workspaces                                                             22:17
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  CURRENT WORK                                                                                                                                                                                        │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│ IN PROGRESS:                                                                                                                                                                                         │
+│   ◆ td-98028c P1 Preview pane tree and document panes through Phase 6 (ses_c6f957)                                                                                                                   │
+│   ■ td-df7c6a P1 Graduate doc panes after integrated isolated proof (ses_2d78c4)                                                                                                                     │
+│   ✗ td-7dd76f P1 Preserve live terminal content when doc pane resizes it (ses_ca1ff4)                                                                                                                │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  BOARD: All Issues [swimlanes] (1-14 of 69)                                                                                                                                                          │
+│ ★ REVIEWABLE (7):                                                                                                                                                                                    │
+│ [REV] ✗ td-8c122a P1 Detect Codex background terminal work as working                                                                                                                                │
+│ [REV] ■ td-847b0c P1 Overview: drop refreshing flash; show agent icons on kanban cards                                                                                                               │
+│ [REV] ✗ td-0818ef P1 Fix intermittent workspace terminal focus geometry drift                                                                                                                        │
+│ [REV] ✗ td-3ca6f1 P1 Show live agents from untyped shell manifests in Overview                                                                                                                       │
+│ [REV] ✗ td-8492c5 P1 Fix HistorySnapshot.Output race with appendLoadedHistory                                                                                                                        │
+│ [REV] ■ td-71de3d P2 Polish Overview kanban scrolling and selection                                                                                                                                  │
+│ [REV] ✗ td-3615a6 P2 Make screenmodel import guard independent of local go.work                                                                                                                      │
+│                                                                                                                                                                                                      │
+│ IN PROGRESS (3):                                                                                                                                                                                     │
+│ [WIP] ✗ td-7dd76f P1 Preserve live terminal content when doc pane resizes it                                                                                                                         │
+│ [WIP] ■ td-df7c6a P1 Graduate doc panes after integrated isolated proof                                                                                                                              │
+│ [WIP] ◆ td-98028c P1 Preview pane tree and document panes through Phase 6                                                                                                                            │
+│                                                                                                                                                                                                      │
+│   ▼ more below                                                                                                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  ACTIVITY LOG (1-11 of 50)                                                                                                                                                                           │
+│ Time  Sess       Type  Issue       Message                                                                                                                                                           │
+│ 22:07 ses_ca1ff4 [ACT] lg-41fc6926 created issue                                                                                                                                                     │
+│ 22:07 ses_ca1ff4 [LOG] td-7dd76f   Tracing exact doc-open resize journey through workspace resize commands, tty.Model resize/reseed generation, screen-model publication, OutputB... • Pres...       │
+│ 22:07 ses_ca1ff4 [ACT] lg-fa054b0d created issue                                                                                                                                                     │
+│ 22:07 ses_ca1ff4 [LOG] td-7dd76f   Started work • Preserve live terminal content when doc pane resizes it                                                                                            │
+│ 22:07 ses_ca1ff4 [ACT] td-7dd76f   started work • Preserve live terminal content when doc pane resizes it                                                                                            │
+│ 22:07 ses_3f230e [ACT] td-7dd76f   created issue • Preserve live terminal content when doc pane resizes it                                                                                           │
+│ 22:04 ses_0e1587 [ACT] lg-2302be6e created issue                                                                                                                                                     │
+│ 22:04 ses_0e1587 [LOG] td-7c7b16   Approved: Independent review of aabeb44..283454e clean. In live mouse-reporting mode, an unmodified click now consults the same securely resol... • Reco...       │
+│ 22:04 ses_0e1587 [ACT] td-7c7b16   approved • Recognize ANSI-styled Claude Update markdown links                                                                                                     │
+│ 22:04 ses_0e1587 [ACT] rv-ae07eaee created issue                                                                                                                                                     │
+│ 22:03 ses_fc59fd [ACT] lg-42efc208 created issue                                                                                                                                                     │
+│   ↓ 39 more below                                                                                                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter  Details   /  Search   a  Approve   R  Review   c  Closed   F  Filter   b  Boards   r  Refresh   v  View   C  Close   O  Reopen   x  Delete   h  Handoffs   S  Sort   T  Type          ↻ 22:17:34
