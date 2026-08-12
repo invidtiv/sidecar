@@ -303,10 +303,6 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 
-	if interactive && p.interactiveState.MouseReportingEnabled {
-		hint += " " + dimText("app mouse • ⇧drag select")
-	}
-
 	// The window itself — the buffer, the pane geometry it is fitted to, and
 	// where it sits in scrollback — is the surface's one derivation, shared with
 	// hit testing and the native cursor. Only decoration is added here.
@@ -321,24 +317,20 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	if result.Content == "" {
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
-	// A pane larger than this viewport is clipped, so say so rather than let the
-	// missing columns/rows look like corruption (td-73fa86). Gated on the pane's
-	// own fit: the scrollbar column is chrome, not a mismatch, and would
-	// otherwise make the banner permanent.
-	if result.Layout.PaneClipped {
-		if indicator := tty.PaneSizeIndicator(input.PaneWidth, input.PaneHeight,
-			result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
-			hint += " " + dimText(indicator)
-		}
-	}
-	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
-		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))
-	}
-	if input.LoadingOlder {
-		hint += " " + dimText("loading older history…")
-	} else if result.Layout.Start == 0 && input.AbsoluteBase > 0 {
-		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", input.AbsoluteBase))
-	}
+	// What the header states about the drawn window — that it is off the live
+	// edge and how to get back, that older lines exist above it, that the pane is
+	// clipped, that the application has the mouse — is the shared derivation's.
+	// The global browser states the same facts from the same one. This header
+	// clips from the right rather than dropping notes, so it takes them all.
+	hint = tty.AppendStatus(hint, tty.WindowStatus(tty.WindowStatusInput{
+		Layout:         result.Layout,
+		AbsoluteBase:   input.AbsoluteBase,
+		LoadingOlder:   input.LoadingOlder,
+		MouseReporting: interactive && p.interactiveState.MouseReportingEnabled,
+		PaneWidth:      input.PaneWidth,
+		PaneHeight:     input.PaneHeight,
+		LiveEdgeKey:    tty.LiveEdgeKey,
+	}), 0, dimText)
 	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
 		if p.terminalSearch.InputActive {
 			hint += " " + dimText("/"+p.terminalSearch.Query+"▌")

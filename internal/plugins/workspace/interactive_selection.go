@@ -386,6 +386,24 @@ func (p *Plugin) freezeTerminalSelectionViewport() {
 	}
 	p.previewOffset = p.terminalSelectionViewportLayout().Start
 	p.autoScrollOutput = false
+	p.terminalSelectionFrozen = true
+}
+
+// thawTerminalSelectionViewport is the other half of the freeze, owed at the end
+// of every gesture that took one: a pane pinned by a drag and never released has
+// stopped following output for good, which reads as an agent that went quiet.
+//
+// Where the window resumes following from is the shared rule's — the rows on
+// screen stay where they are, and a window still sitting against the live edge
+// follows new output again.
+func (p *Plugin) thawTerminalSelectionViewport() {
+	if !p.terminalSelectionFrozen {
+		return
+	}
+	p.terminalSelectionFrozen = false
+	maxOffset := p.getMaxScrollOffset()
+	p.previewOffset = min(max(p.previewOffset, 0), maxOffset)
+	p.autoScrollOutput = tty.ThawOffsetFrom(p.previewOffset, maxOffset) == 0
 }
 
 // anchorDragFromOrigin starts a selection for a drag whose mouse-down landed off
@@ -397,6 +415,9 @@ func (p *Plugin) anchorDragFromOrigin(action mouse.MouseAction) bool {
 }
 
 func (p *Plugin) finishInteractiveSelection() tea.Cmd {
+	// The gesture is over, so the window goes back to following output from
+	// wherever it was pinned.
+	p.thawTerminalSelectionViewport()
 	resolution, selected := p.pointer.Release(&p.selection)
 	if selected {
 		if p.copyOnSelectEnabled() {
@@ -551,12 +572,9 @@ func (p *Plugin) copyOnSelectEnabled() bool {
 // happened. Both the rule and the wording are the shared layer's; only the
 // notification type is this surface's.
 func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
-	lines := p.interactiveSelectionLines()
-	config := p.terminalConfig()
-	return func() tea.Msg {
-		notice := config.CopySelectionNotice(lines)
+	return p.terminalConfig().CopySelectionCmd(p.interactiveSelectionLines(), func(notice tty.CopyNotice) tea.Msg {
 		return app.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}
-	}
+	})
 }

@@ -165,6 +165,11 @@ type Model struct {
 	ExitAction ExitAction
 
 	fragment MouseFragment
+
+	// resizeRetryPending records that a deferred assertion is already armed, so
+	// a burst of sizes arriving inside one debounce window schedules one retry
+	// rather than one per size.
+	resizeRetryPending bool
 }
 
 // ExitAction separates ending input ownership from closing the terminal.
@@ -428,6 +433,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if !m.owns(msg.Scope) {
 			return nil
 		}
+		m.resizeRetryPending = false
 		return m.assertDimensions()
 
 	case PaneResizedMsg:
@@ -1093,6 +1099,26 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 // layout is still moving — a window drag delivers one size per frame.
 const ResizeDebounce = 500 * time.Millisecond
 
+// ResizeWait is how long a host must hold off asserting geometry, given when it
+// last did. Zero means assert now. Every surface that resizes a pane asks here:
+// a second literal budget beside this one is how two surfaces come to answer the
+// same layout change at different rates.
+//
+// Waiting is not dropping. A caller that gets a positive wait still owes the
+// pane the newest geometry and must schedule exactly one deferred assertion for
+// it — one, however many sizes arrive inside the window, or a burst becomes a
+// chain of resizes spaced a debounce apart, which is what the budget exists to
+// prevent.
+func ResizeWait(last, now time.Time) time.Duration {
+	if last.IsZero() {
+		return 0
+	}
+	if wait := ResizeDebounce - now.Sub(last); wait > 0 {
+		return wait
+	}
+	return 0
+}
+
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	if width == m.Width && height == m.Height {
@@ -1126,12 +1152,17 @@ func (m *Model) assertDimensions() tea.Cmd {
 		return nil
 	}
 
-	if !m.State.LastResizeAt.IsZero() {
-		if wait := ResizeDebounce - time.Since(m.State.LastResizeAt); wait > 0 {
-			return tea.Tick(wait, func(time.Time) tea.Msg {
-				return deferredResizeMsg{Scope: scope}
-			})
+	if wait := ResizeWait(m.State.LastResizeAt, time.Now()); wait > 0 {
+		// One retry stands for the whole burst: it reads the geometry the model
+		// holds when it fires, which is the newest by then. Arming a second would
+		// chain a resize per size the window passed through.
+		if m.resizeRetryPending {
+			return nil
 		}
+		m.resizeRetryPending = true
+		return tea.Tick(wait, func(time.Time) tea.Msg {
+			return deferredResizeMsg{Scope: scope}
+		})
 	}
 	// Recorded here, where the resize is actually issued: a deferred call that
 	// consumed the budget would push its own retry out of reach.

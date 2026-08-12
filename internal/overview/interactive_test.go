@@ -38,6 +38,8 @@ type fakeTerminal struct {
 	cursorRow  int
 	cursorCol  int
 	mouseNoted int
+	released   int
+	exits      int
 }
 
 type fakeWheel struct {
@@ -137,7 +139,14 @@ func (f *fakeTerminal) SendUnknownSequence(msg tea.Msg) tea.Cmd {
 
 func (f *fakeTerminal) IsActive() bool { return f.active }
 
-func (f *fakeTerminal) Exit() { f.active = false }
+func (f *fakeTerminal) Exit() { f.exits++; f.active = false }
+
+// ReleaseInput records that the host left through the seam that also drops a
+// half-read mouse report, which is the only way out this surface may take.
+func (f *fakeTerminal) ReleaseInput() {
+	f.released++
+	f.active = false
+}
 
 // interactiveModel is the preview fixture with the terminal seam replaced, so
 // entering interactive mode never reaches a tmux server.

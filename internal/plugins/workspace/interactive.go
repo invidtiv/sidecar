@@ -391,8 +391,11 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		return touch
 	}
 
-	if !p.interactiveState.LastResizeAt.IsZero() && time.Since(p.interactiveState.LastResizeAt) < 500*time.Millisecond {
-		return touch
+	// The budget is the shared one, and waiting it out is not dropping the
+	// resize: the pane is still drawn at the size it has not been given, so one
+	// deferred assertion is armed for the whole window.
+	if wait := tty.ResizeWait(p.interactiveState.LastResizeAt, time.Now()); wait > 0 {
+		return tea.Batch(touch, p.deferInteractivePaneResize(wait))
 	}
 	p.interactiveState.LastResizeAt = time.Now()
 	// A direct call, not the component's: this corrects a pane whose real size
@@ -404,6 +407,17 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
 		return paneResizedMsg{}
 	}
+}
+
+// deferInteractivePaneResize arms one assertion of the pane's geometry for the
+// whole debounce window. The retry reads the geometry the surface holds when it
+// fires, which is the newest by then, so a burst of sizes needs exactly one.
+func (p *Plugin) deferInteractivePaneResize(wait time.Duration) tea.Cmd {
+	if p.interactiveState == nil || p.interactiveState.ResizeRetryPending {
+		return nil
+	}
+	p.interactiveState.ResizeRetryPending = true
+	return tea.Tick(wait, func(time.Time) tea.Msg { return deferredPaneResizeMsg{} })
 }
 
 // resizeThroughTerminal hands a resize to the component that owns the pane. The
@@ -685,18 +699,20 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return cmd, true
 	}
-	if handled, cmd := p.handleInteractiveScrollbackKey(msg); handled {
-		return cmd, true
-	}
-	config := p.terminalConfig()
-	if config.IsCopyChord(msg) {
-		return p.copyInteractiveSelectionCmd(), true
-	}
-	if config.IsSelectAllChord(msg) {
-		p.selectAllTerminalOutput(p.interactiveState.TermPanel)
-		return nil, true
-	}
-	return nil, false
+	// Everything above is this surface's own — a search over its own buffer and
+	// the panel the global browser does not draw. What is left is the set every
+	// host answers, in the order the shared layer answers it.
+	return p.terminalConfig().ResolveSurfaceChord(msg, tty.SurfaceChords{
+		Copy: p.copyInteractiveSelectionCmd,
+		SelectAll: func() tea.Cmd {
+			p.selectAllTerminalOutput(p.interactiveState.TermPanel)
+			return nil
+		},
+		Scrollback: func(key tea.KeyPressMsg) (tea.Cmd, bool) {
+			handled, cmd := p.handleInteractiveScrollbackKey(key)
+			return cmd, handled
+		},
+	})
 }
 
 // beforeInteractiveSend runs for a key on its way to the pane. Typing is owed a
@@ -811,102 +827,29 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 // auto-scroll, scroll down (delta > 0)
 // moves toward live output.
 func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
-	delta, flush := p.wheel.Add(delta, p.now())
-	if !flush {
-		return nil
-	}
-
-	if cmd, forwarded := p.forwardWheelToPane(action, delta); forwarded {
-		return cmd
-	}
-
-	// When interactive mode targets the terminal panel, scroll terminal panel output
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		p.clearTerminalSelectionOnScroll(true)
-		p.termPanelScroll -= delta
-		if p.termPanelScroll < 0 {
-			p.termPanelScroll = 0
-		}
-		if maxScroll := p.termPanelMaxScroll(); p.termPanelScroll > maxScroll {
-			p.termPanelScroll = maxScroll
-		}
-		if delta > 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -delta)
-		}
-		return nil
-	}
-
-	p.clearTerminalSelectionOnScroll(false)
-	maxOffset := p.getMaxScrollOffset()
-	if delta < 0 {
-		// Scroll up: move toward top of content
-		if p.autoScrollOutput && maxOffset >= p.previewOffset {
-			p.previewOffset = maxOffset
-		}
-		p.previewOffset += delta
-		if p.previewOffset < 0 {
-			p.previewOffset = 0
-		}
-		p.autoScrollOutput = false
-		if p.previewOffset == 0 {
-			return p.loadOlderTerminalHistory(false, -delta)
-		}
-	} else {
-		// Scroll down: move toward bottom of content
-		p.previewOffset += delta
-		if p.previewOffset > maxOffset {
-			p.previewOffset = maxOffset
-		}
-		if p.previewOffset >= maxOffset {
-			p.autoScrollOutput = true
-			p.cancelTerminalHistoryIntent(false)
-		}
-	}
-	return nil
-}
-
-// forwardWheelToPane sends delta as SGR wheel reports when the notch belongs to
-// the app running in the interactive pane. It reports forwarded=false whenever
-// the notch belongs to the local viewport instead, so the caller falls through
-// to its scrollback handling unchanged.
-func (p *Plugin) forwardWheelToPane(action mouse.MouseAction, delta int) (tea.Cmd, bool) {
 	terminal := p.activeInteractiveTerminal()
-	reporting := terminal != nil && terminal.PaneMouseReporting()
-	var col, row int
-	inPane := false
-	if reporting {
-		col, row, inPane = p.interactiveMouseCoords(action.X, action.Y)
-	}
-	route, notches := tty.RouteWheel(tty.WheelInput{
-		Delta:          delta,
-		Shift:          action.Shift,
-		Alt:            action.Alt,
-		MouseReporting: reporting,
-		InPane:         inPane,
+	return tty.WheelHandler{
+		Burst:          &p.wheel,
+		MouseReporting: func() bool { return terminal != nil && terminal.PaneMouseReporting() },
+		PaneCoords:     p.interactiveMouseCoords,
+		// While the app owns the wheel it also owns what the pane shows, so the
+		// viewport is pinned to the live frame.
+		PinToLive: p.pinInteractiveViewportToLive,
+		// The wheel is the user's most recent input, so it counts as activity for
+		// this surface's own poll cadence as well as the component's: the cadence
+		// decays to a slow tier on idle time, and a scroll that did not reset it
+		// would be repainted at that tier.
+		NoteActivity: func() { p.interactiveState.LastKeyTime = time.Now() },
+		SendNotches: func(up bool, col, row, notches int) tea.Cmd {
+			return terminal.SendWheelNotches(up, col, row, notches)
+		},
+		// Every notch the application has not claimed moves this surface's own
+		// window, which is what makes the wheel work over a plain shell.
+		ScrollLocal: p.scrollInteractiveViewportByWheel,
+	}.Handle(tty.WheelGesture{
+		Delta: delta, X: action.X, Y: action.Y,
+		Shift: action.Shift, Alt: action.Alt, Now: p.now(),
 	})
-	if route != tty.WheelPane {
-		return nil, false
-	}
-
-	// While the app owns the wheel it also owns what the pane shows, so the
-	// viewport is pinned to the live frame. Without this a viewport left
-	// scrolled back — by alt+wheel, or by plain wheel from before the app
-	// enabled tracking — would sit frozen over stale rows while the app
-	// repainted below it.
-	p.pinInteractiveViewportToLive()
-
-	// The wheel is the user's most recent input, so it counts as activity for
-	// this surface's own poll cadence as well as the component's: the cadence
-	// decays to a slow tier on idle time, and a scroll that did not reset it
-	// would be repainted at that tier.
-	p.interactiveState.LastKeyTime = time.Now()
-
-	// The component polls for the frame its own send provokes; scheduling a
-	// second one here would capture every forwarded notch twice.
-	return terminal.SendWheelNotches(delta < 0, col, row, notches), true
 }
 
 // pinInteractiveViewportToLive returns the interactive viewport to the live edge
@@ -984,6 +927,48 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 	return true, p.scrollInteractiveViewport(-move.Rows)
 }
 
+// scrollInteractiveViewportByWheel moves the interactive window by a coalesced
+// notch. It is the wheel's own placement, not the scrollback keys': a notch
+// leaves the window wherever it lands, including past a max offset the surface
+// has not measured yet, where a key-driven jump would clamp to what is loaded.
+func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
+	if p.interactiveState != nil && p.interactiveState.TermPanel {
+		p.clearTerminalSelectionOnScroll(true)
+		p.termPanelScroll = min(max(p.termPanelScroll-delta, 0), p.termPanelMaxScroll())
+		if delta > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
+		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -delta)
+		}
+		return nil
+	}
+
+	p.clearTerminalSelectionOnScroll(false)
+	maxOffset := p.getMaxScrollOffset()
+	if delta < 0 {
+		if p.autoScrollOutput && maxOffset >= p.previewOffset {
+			p.previewOffset = maxOffset
+		}
+		p.previewOffset = max(p.previewOffset+delta, 0)
+		p.autoScrollOutput = false
+		if p.previewOffset == 0 {
+			return p.loadOlderTerminalHistory(false, -delta)
+		}
+		return nil
+	}
+	p.previewOffset = min(p.previewOffset+delta, maxOffset)
+	if p.previewOffset >= maxOffset {
+		p.autoScrollOutput = true
+		p.cancelTerminalHistoryIntent(false)
+	}
+	return nil
+}
+
+// scrollInteractiveViewport moves whichever pane interactive mode is pointed at
+// by delta rows towards the live edge, and reaches for older history when the
+// window runs out of loaded buffer. It is the scrollback keys' placement: a key
+// move lands inside what the surface has measured.
 func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.clearTerminalSelectionOnScroll(true)

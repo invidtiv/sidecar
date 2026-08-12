@@ -1070,6 +1070,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case deferredPaneResizeMsg:
+		// The window has closed; assert the geometry the surface holds now against
+		// the pane size last observed with the output.
+		if p.interactiveState == nil || !p.interactiveState.Active {
+			return p, nil
+		}
+		p.interactiveState.ResizeRetryPending = false
+		return p, p.maybeResizeInteractivePane(p.interactiveState.PaneWidth, p.interactiveState.PaneHeight)
+
 	case paneResizedMsg:
 		// Pane was resized to match preview dimensions - trigger fresh poll so
 		// captured content reflects the new width/wrapping.

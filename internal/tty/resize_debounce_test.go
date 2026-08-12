@@ -57,11 +57,25 @@ func TestDeferredResizeDoesNotConsumeTheDebounceBudget(t *testing.T) {
 	}
 }
 
-// Once the window has closed the retry asserts the newest geometry.
+// Once the window has closed the retry asserts the newest geometry — and a
+// burst of sizes arms exactly one retry to do it with. A window drag delivers a
+// size per frame; a retry per size would chain a resize every debounce window,
+// each one querying and resizing the pane, which is what the budget exists to
+// prevent.
 func TestDeferredResizeAssertsTheNewestGeometry(t *testing.T) {
 	m := debouncedModel(t, 10*time.Millisecond)
-	m.SetDimensions(60, 20)
-	m.SetDimensions(50, 18)
+	sizes := [][2]int{{60, 20}, {58, 20}, {56, 19}, {52, 18}, {50, 18}}
+	armed := 0
+	for _, size := range sizes {
+		if cmd := m.SetDimensions(size[0], size[1]); cmd != nil {
+			if _, ok := cmd().(deferredResizeMsg); ok {
+				armed++
+			}
+		}
+	}
+	if armed != 1 {
+		t.Fatalf("a burst of %d sizes armed %d retries, want exactly 1", len(sizes), armed)
+	}
 	m.State.LastResizeAt = time.Now().Add(-2 * ResizeDebounce)
 
 	cmd := m.Update(deferredResizeMsg{Scope: m.Scope()})

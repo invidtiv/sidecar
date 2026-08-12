@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"image/color"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
@@ -199,20 +198,6 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 	}
 	lanes = append(lanes, shells)
 	columns := p.getKanbanColumns()
-	labels := map[kanbanLane]string{
-		kanbanLaneWorking: "● Working",
-		kanbanLaneBlocked: "◆ Blocked",
-		kanbanLaneDone:    "✓ Done",
-		kanbanLaneIdle:    "○ Idle",
-		kanbanLanePaused:  "⏸ Paused",
-	}
-	colors := map[kanbanLane]color.Color{
-		kanbanLaneWorking: styles.StatusCompleted.GetForeground(),
-		kanbanLaneBlocked: styles.StatusModified.GetForeground(),
-		kanbanLaneDone:    styles.Secondary,
-		kanbanLaneIdle:    styles.TextMuted,
-		kanbanLanePaused:  styles.TextMuted,
-	}
 	agentShellsByLane := make(map[kanbanLane][]*ShellSession, len(kanbanLaneOrder))
 	for _, shell := range p.shells {
 		if lane, ok := shellKanbanActivityLane(shell); ok {
@@ -220,7 +205,9 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 		}
 	}
 	for _, laneID := range kanbanLaneOrder {
-		lane := boardkanban.Lane{ID: boardkanban.LaneID(laneID), Label: labels[laneID], HeaderColor: colors[laneID]}
+		// Wording, glyph and colour are the shared definition's; the global board
+		// draws the same lanes from it.
+		lane := boardkanban.AgentLane(laneID)
 		for _, wt := range columns[laneID] {
 			lane.Cards = append(lane.Cards, boardkanban.Card{ID: "worktree:" + wt.IdentityKey(), Title: wt.Name, Detail: wt.TaskID})
 		}

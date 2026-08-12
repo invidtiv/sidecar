@@ -19,7 +19,6 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
-	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 type stageRunner struct {
@@ -633,23 +632,30 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	}
 }
 
-func TestBoardLanesAreWordedByTheListGroupNames(t *testing.T) {
+// The board words and colours nothing itself: every lane is the shared
+// definition the project board draws the same lanes from, so a rename or a
+// re-theme cannot land on one board alone.
+func TestBoardLanesComeFromTheSharedLaneDefinition(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
 	m.syncBoard()
-	want := map[kanban.LaneID]string{
-		"working": string(workspacelist.GroupWorking),
-		"blocked": string(workspacelist.GroupNeedsAttention),
-		"done":    string(workspacelist.GroupDone),
-		"idle":    string(workspacelist.GroupIdle),
-		"paused":  string(workspacelist.GroupPaused),
+	want := map[kanban.LaneID]kanban.Lane{}
+	for _, lane := range []agentstatus.LaneID{
+		agentstatus.LaneWorking, agentstatus.LaneBlocked, agentstatus.LaneDone,
+		agentstatus.LaneIdle, agentstatus.LanePaused,
+	} {
+		want[kanban.LaneID(lane)] = kanban.AgentLane(lane)
 	}
 	lanes := m.board.Board().Lanes
 	if len(lanes) != len(want) {
 		t.Fatalf("lanes = %d, want %d", len(lanes), len(want))
 	}
 	for _, lane := range lanes {
-		if lane.Label != want[lane.ID] {
-			t.Fatalf("lane %q label = %q, want %q", lane.ID, lane.Label, want[lane.ID])
+		shared := want[lane.ID]
+		if lane.Label != shared.Label {
+			t.Fatalf("lane %q label = %q, want the shared %q", lane.ID, lane.Label, shared.Label)
+		}
+		if lane.HeaderColor != shared.HeaderColor {
+			t.Fatalf("lane %q colour = %v, want the shared %v", lane.ID, lane.HeaderColor, shared.HeaderColor)
 		}
 		if lane.HeaderColor == nil {
 			t.Fatalf("lane %q lost its header colour", lane.ID)

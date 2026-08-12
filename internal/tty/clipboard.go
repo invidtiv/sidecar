@@ -84,6 +84,16 @@ func (c Config) CopySelectionNotice(lines []string) CopyNotice {
 	return c.Notice(CopySelection(lines))
 }
 
+// CopySelectionCmd copies selected terminal lines and reports the outcome as
+// the host's own notification. wrap is the only part of a copy a surface owns:
+// which toast type carries the notice. A host that phrased the notice itself
+// would be a second wording of the same three outcomes.
+func (c Config) CopySelectionCmd(lines []string, wrap func(CopyNotice) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		return wrap(c.CopySelectionNotice(lines))
+	}
+}
+
 // CopySelection writes selected terminal lines to the system clipboard, without
 // the styling they were drawn with.
 func CopySelection(lines []string) CopyResult {

@@ -318,6 +318,12 @@ type cursorPositionMsg struct {
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
 type paneResizedMsg struct{}
 
+// deferredPaneResizeMsg re-asserts a pane's geometry once the shared resize
+// budget has recovered. A resize that arrived inside the window is owed, not
+// dropped: the debounce bounds how often tmux is asked, never whether the pane
+// is ever given the size it is drawn at.
+type deferredPaneResizeMsg struct{}
+
 // FetchPRListMsg delivers the list of open PRs from gh CLI.
 type FetchPRListMsg struct {
 	OperationScope

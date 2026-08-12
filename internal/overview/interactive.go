@@ -24,10 +24,10 @@ import (
 // given one.
 
 const (
-	// interactiveEnterKeys are the ways in from the preview. The project
-	// plugin answers both for the same act (internal/plugins/workspace/keys.go).
-	interactiveEnterKey    = "i"
-	interactiveEnterKeyAlt = "E"
+	// The ways in from the preview, shared with the project plugin, which
+	// answers both for the same act.
+	interactiveEnterKey    = tty.EnterInteractiveKey
+	interactiveEnterKeyAlt = tty.EnterInteractiveKeyAlt
 )
 
 // SetTerminalConfig adopts the user's terminal settings, so the browser's live
@@ -77,6 +77,13 @@ type previewTerminal interface {
 	SetDimensions(width, height int) tea.Cmd
 	SendUnknownSequence(tea.Msg) tea.Cmd
 	IsActive() bool
+
+	// ReleaseInput is every way out this surface takes on its own initiative.
+	// Exit closes the terminal without ending input ownership, which leaves a
+	// half-read SGR mouse report held for the next session to receive the tail
+	// of; releasing drops the fragment and closes the double-escape window, and
+	// closes the terminal too under this surface's ExitAction.
+	ReleaseInput()
 	Exit()
 
 	// The pane as content: what it has drawn, how big its grid is, and where its
@@ -142,7 +149,7 @@ func (m *Model) previewTerminalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // itself: a window left in scrollback would take the keystroke and show none of
 // it.
 func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
-	if m.preview.offset == 0 && !m.preview.frozen {
+	if m.preview.offset == 0 && !m.preview.freeze.Active() {
 		return
 	}
 	if m.TerminalConfig().IsPasteChord(msg) || tty.ShouldSnapBack(msg, m.now().Sub(m.preview.wheel.LastAt())) {
@@ -151,10 +158,12 @@ func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
 }
 
 // releasePreviewKeyboard is the component's OnExit hook: give the keyboard back
-// and resume the read-only capture cadence for whatever is selected now.
+// and resume the read-only capture cadence for whatever is selected now. What is
+// on screen stays there until the replacement capture lands, so leaving the mode
+// is not a moment of blank pane and a lost scroll position.
 func (m *Model) releasePreviewKeyboard() tea.Cmd {
 	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
-	return m.previewSelect()
+	return m.bindPreview(true)
 }
 
 // PreviewInteractive reports that the focused preview is forwarding keys to a
@@ -235,7 +244,7 @@ func (m *Model) exitPreviewInteractive() tea.Cmd {
 	if !m.PreviewInteractive() {
 		return nil
 	}
-	m.preview.terminal.Exit()
+	m.preview.terminal.ReleaseInput()
 	return m.releasePreviewKeyboard()
 }
 
@@ -431,31 +440,24 @@ func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 // only while it has asked for mouse reports; every other notch scrolls the window
 // the surface is drawing, which is what makes the wheel work over a plain shell.
 func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
-	// One flick is one gesture, whichever surface it lands on: the shared burst
-	// coalesces it so the distance travelled does not depend on how fast this
-	// surface happens to repaint.
-	delta, flush := m.preview.wheel.Add(action.Delta, m.now())
-	if !flush {
-		return nil
-	}
-	reporting := m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting()
-	var col, row int
-	inPane := false
-	if reporting {
-		col, row, inPane = m.previewPaneCoords(action.X, action.Y)
-	}
-	route, notches := tty.RouteWheel(tty.WheelInput{
-		Delta:          delta,
-		Shift:          action.Shift,
-		Alt:            action.Alt,
-		MouseReporting: reporting,
-		InPane:         inPane,
+	return tty.WheelHandler{
+		Burst:          &m.preview.wheel,
+		MouseReporting: func() bool { return m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting() },
+		PaneCoords:     m.previewPaneCoords,
+		PinToLive:      m.pinPreviewToLive,
+		SendNotches: func(up bool, col, row, notches int) tea.Cmd {
+			return m.preview.terminal.SendWheelNotches(up, col, row, notches)
+		},
+		ScrollLocal: m.scrollPreviewByWheel,
+	}.Handle(tty.WheelGesture{
+		Delta: action.Delta, X: action.X, Y: action.Y,
+		Shift: action.Shift, Alt: action.Alt, Now: m.now(),
 	})
-	if route == tty.WheelPane {
-		// While the app owns the wheel it also owns what the pane shows.
-		m.pinPreviewToLive()
-		return m.preview.terminal.SendWheelNotches(delta < 0, col, row, notches)
-	}
+}
+
+// scrollPreviewByWheel moves this surface's own window by a coalesced notch, and
+// says where the buffer ends when a scroll up had nowhere left to go.
+func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 	m.clearPreviewSelectionOnScroll()
 	before := m.previewScrollAnchor()
 	m.scrollPreview(-delta)

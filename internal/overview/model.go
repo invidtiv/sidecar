@@ -716,25 +716,16 @@ type cardOrder struct {
 	changedAt time.Time
 }
 
-// boardLane builds a lane whose wording comes from the same group names the
-// Workspaces list renders, so a rename lands on both tabs at once. The count
-// is left to the Kanban component, which appends its own.
-func boardLane(lane agentstatus.LaneID) kanban.Lane {
-	return kanban.Lane{
-		ID:          kanban.LaneID(lane),
-		Label:       string(laneGroup(lane)),
-		HeaderColor: styles.LaneColor(string(lane)),
-		State:       kanban.CellReady,
-	}
-}
-
 func (m *Model) syncBoard() {
+	// The lanes are the shared definition's, wording, glyph and colour alike —
+	// the project board draws the same ones. The count is left to the Kanban
+	// component, which appends its own.
 	lanes := []kanban.Lane{
-		boardLane(agentstatus.LaneWorking),
-		boardLane(agentstatus.LaneBlocked),
-		boardLane(agentstatus.LaneDone),
-		boardLane(agentstatus.LaneIdle),
-		boardLane(agentstatus.LanePaused),
+		kanban.AgentLane(agentstatus.LaneWorking),
+		kanban.AgentLane(agentstatus.LaneBlocked),
+		kanban.AgentLane(agentstatus.LaneDone),
+		kanban.AgentLane(agentstatus.LaneIdle),
+		kanban.AgentLane(agentstatus.LanePaused),
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	order := make(map[string]cardOrder)

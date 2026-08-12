@@ -467,13 +467,11 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
 		return m.syncTerminalGeometry()
 	}
-	// While the pane is live it keeps the wheel wherever the pointer is. Placing
-	// the notch by region instead lets one that drifted off the pane move the
-	// list, which rebinds the preview and ends the mode — so a stray trackpad
-	// notch would drop the user out of the pane they are typing in.
+	// Whether a notch is placed by region or stays with the pointer is the
+	// shared rule's answer, argued there.
 	switch action.Type {
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		if m.PreviewInteractive() {
+		if tty.WheelStaysWithPointer(m.PreviewInteractive()) {
 			return m.wheelPreview(action)
 		}
 	}

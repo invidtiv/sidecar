@@ -185,7 +185,7 @@ func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
 	}
 
 	release(t, m, x+6, y+3)
-	if m.preview.frozen {
+	if m.preview.freeze.Active() {
 		t.Fatal("the window stayed pinned after the gesture that pinned it ended")
 	}
 }

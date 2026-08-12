@@ -38,6 +38,14 @@ type ViewportInput struct {
 // exemption while following a known live grid, which is why a host must not
 // add a second condition of its own: the two surfaces would then answer a
 // scrolled-back pane differently.
+//
+// What this costs a watched pane the user has scrolled back on: nothing that
+// moves the rows. A scrollback window is placed by an explicit Start (or by a
+// distance back from the live bottom), so trimming changes EffectiveCount,
+// MaxOffset and where the window may stop — never which buffer line lands on
+// which screen row at a given offset. The visible effect is that the window
+// cannot be scrolled into the pane's trailing blank padding, which is the
+// behaviour every surface wants of a history window.
 func TrimsTrailingRows(interactive bool) bool { return !interactive }
 
 // ShouldOverlayCursor reports whether a surface may draw the pane's cursor.

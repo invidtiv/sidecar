@@ -1168,12 +1168,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		regionID = action.Region.ID
 	}
 
-	// While interactive mode is live the pane keeps the wheel wherever the
-	// pointer is. Placing the notch by region instead lets one that drifted off
-	// the pane reach the sidebar, where moving the cursor changes the selected
-	// workspace and exits interactive mode — so a stray trackpad notch would
-	// silently drop the user out of the pane they are typing in.
-	if p.viewMode == ViewModeInteractive {
+	// Whether a notch is placed by region or stays with the pointer is the shared
+	// rule's answer, argued there.
+	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
 		return p.forwardScrollToTmux(action, delta)
 	}
 

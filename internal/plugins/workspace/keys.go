@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -1012,7 +1013,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "r":
 		return func() tea.Msg { return RefreshMsg{} }
-	case "i", "E":
+	case tty.EnterInteractiveKey, tty.EnterInteractiveKeyAlt:
 		// Alternate shortcuts for interactive mode (enter is primary). "E" is
 		// what the preview hint and the command palette advertise; it was listed
 		// in the keymap but never handled here, so it did nothing and the keys

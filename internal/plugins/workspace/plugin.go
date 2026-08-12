@@ -207,8 +207,13 @@ type Plugin struct {
 	activityAnimationGeneration uint64
 
 	// Interactive selection state (preview pane)
-	selection                     ui.SelectionState
-	selectionTermPanel            bool
+	selection          ui.SelectionState
+	selectionTermPanel bool
+	// terminalSelectionFrozen records that a pointer gesture pinned the preview
+	// pane's window, which is what the gesture's end has to release. Without it a
+	// pinned window is indistinguishable from one the user scrolled back on
+	// purpose, and thawing would drag that one to the live edge.
+	terminalSelectionFrozen       bool
 	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState

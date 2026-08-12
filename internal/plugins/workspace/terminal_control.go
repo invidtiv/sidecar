@@ -85,17 +85,27 @@ func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
 	model := tty.New(&config)
-	// This surface draws the pane whether or not the user is typing into it, so
-	// leaving the mode releases the keyboard and nothing else: closing here would
-	// drop the loaded scrollback the user just read and reconciliation would
-	// reopen the pane with an empty buffer on the same update.
-	model.ExitAction = tty.ExitReleasesInput
-	model.OnKey = p.interactiveKey
-	model.BeforeSend = p.beforeInteractiveSend
-	model.OnExit = p.leaveInteractiveMode
-	model.OnAttach = p.attachFromInteractive
-	model.OnSessionEnded = p.noteSessionEnded
+	model.SetHooks(p.terminalHooks())
 	return model
+}
+
+// terminalHooks is everything this surface owns about a live pane, said once, to
+// the component that owns the rest. It is one value rather than field-by-field
+// assignment so a hook cannot be added to one embedding host and forgotten in
+// the other — the global browser states its contract the same way.
+func (p *Plugin) terminalHooks() tty.Hooks {
+	return tty.Hooks{
+		OnKey:          p.interactiveKey,
+		BeforeSend:     p.beforeInteractiveSend,
+		OnExit:         p.leaveInteractiveMode,
+		OnAttach:       p.attachFromInteractive,
+		OnSessionEnded: p.noteSessionEnded,
+		// This surface draws the pane whether or not the user is typing into it,
+		// so leaving the mode releases the keyboard and nothing else: closing here
+		// would drop the loaded scrollback the user just read and reconciliation
+		// would reopen the pane with an empty buffer on the same update.
+		ExitAction: tty.ExitReleasesInput,
+	}
 }
 
 func (p *Plugin) resetTerminalModels() {

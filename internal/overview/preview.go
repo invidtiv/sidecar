@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -106,13 +107,10 @@ type previewState struct {
 	reason      string
 	// offset is rows scrolled back from the live bottom. Zero follows output.
 	offset int
-	// frozen pins the window to frozenStart, an absolute top row, for the
-	// duration of a pointer gesture. A window placed from the live bottom moves
-	// whenever the buffer does, and the watched buffer is renumbered by every
-	// capture, so a poll landing mid-drag would slide the rows out from under the
-	// pointer while the anchor still named the ones it was made on.
-	frozen      bool
-	frozenStart int
+	// freeze holds the window still for the duration of a pointer gesture. The
+	// rule, and the offset the window resumes following from, are the shared
+	// layer's — the project surface freezes its own panes by the same one.
+	freeze      tty.WindowFreeze
 	scheduled   bool
 	requestedAt time.Time
 
@@ -205,7 +203,7 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 // buffer and its control-mode subscription.
 func (m *Model) releasePreview() {
 	if m.preview.terminal != nil {
-		m.preview.terminal.Exit()
+		m.preview.terminal.ReleaseInput()
 	}
 	m.preview.generation++
 	m.preview.workspaceID = ""
@@ -220,7 +218,7 @@ func (m *Model) resetPreviewContent() {
 	m.preview.capture = previewCapture{}
 	m.preview.buffer = nil
 	m.preview.offset = 0
-	m.preview.frozen, m.preview.frozenStart = false, 0
+	m.preview.freeze = tty.WindowFreeze{}
 	m.preview.selection.Clear()
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
@@ -251,20 +249,38 @@ func (m *Model) previewSync() tea.Cmd {
 // straight away. Every caller is a path the user can feel — a selection change,
 // the tab becoming visible, an explicit refresh — so none of them waits out a
 // poll interval before showing anything.
-func (m *Model) previewSelect() tea.Cmd {
+func (m *Model) previewSelect() tea.Cmd { return m.bindPreview(false) }
+
+// bindPreview binds the preview to the current selection and captures it.
+//
+// keepContent asks for what is already drawn to stay on screen until the
+// replacement capture arrives, and is honoured only while the selection is still
+// the item that content came from. Dropping the buffer first leaves a pane that
+// plainly has output reading "no output captured" for a round trip and forgets
+// where the window was scrolled to — the project surface keeps its loaded
+// scrollback across the same handover.
+func (m *Model) bindPreview(keepContent bool) tea.Cmd {
+	workspace, selected := m.SelectedWorkspace()
+	keep := keepContent && selected && workspace.ID == m.preview.workspaceID
+
 	// Binding the preview to a selection ends any live terminal: it is attached
 	// to the pane the user was typing in, and it must not keep the keyboard —
 	// or its control-mode subscription — while the browser shows another item.
 	if m.preview.terminal != nil {
-		m.preview.terminal.Exit()
+		m.preview.terminal.ReleaseInput()
 	}
 	m.preview.generation++
 	m.preview.scheduled = false
-	m.resetPreviewContent()
+	if keep {
+		// The selection was made over the terminal's own buffer, which the
+		// handover replaces, so it cannot survive it even though the rows do.
+		m.clearPreviewSelection()
+	} else {
+		m.resetPreviewContent()
+	}
 	m.preview.reason = ""
 
-	workspace, ok := m.SelectedWorkspace()
-	if !ok {
+	if !selected {
 		m.preview.workspaceID = ""
 		return nil
 	}
@@ -272,9 +288,11 @@ func (m *Model) previewSelect() tea.Cmd {
 
 	// An item with no single live pane behind it is not captured at all. There
 	// is nothing to read, and guessing among several panes is exactly what the
-	// catalog refuses to do.
+	// catalog refuses to do — and there is no replacement coming for kept
+	// content to wait for.
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
+		m.resetPreviewContent()
 		return nil
 	}
 	return m.capturePreviewCmd(workspace)
@@ -461,15 +479,18 @@ func (m *Model) scrollWatchedPreview(delta int) {
 // the browser around it. They are answered in both of the preview's states,
 // because the selection they act on exists in both.
 func (m *Model) terminalKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	config := m.TerminalConfig()
-	if config.IsCopyChord(msg) {
-		return true, m.copyPreviewSelectionCmd()
-	}
-	if config.IsSelectAllChord(msg) {
-		m.selectAllPreviewOutput()
-		return true, nil
-	}
-	return m.previewScrollbackKey(msg)
+	// The set and the order are the shared layer's. This surface has no chords
+	// of its own to answer ahead of them: the search and the panel toggles the
+	// project surface answers first belong to a panel this one does not draw.
+	cmd, handled := m.TerminalConfig().ResolveSurfaceChord(msg, tty.SurfaceChords{
+		Copy:      m.copyPreviewSelectionCmd,
+		SelectAll: func() tea.Cmd { m.selectAllPreviewOutput(); return nil },
+		Scrollback: func(key tea.KeyPressMsg) (tea.Cmd, bool) {
+			handled, cmd := m.previewScrollbackKey(key)
+			return cmd, handled
+		},
+	})
+	return handled, cmd
 }
 
 // previewScrollbackKey walks the window through scrollback while a pane is live.
@@ -543,10 +564,8 @@ func (m *Model) scrollPreview(delta int) {
 		return
 	}
 	maxOffset := m.previewMaxOffset()
-	if m.preview.frozen {
-		// A frozen window is placed from the top of the buffer, where older output
-		// is a smaller start rather than a larger distance from the bottom.
-		m.preview.frozenStart = min(max(m.preview.frozenStart-delta, 0), maxOffset)
+	if m.preview.freeze.Active() {
+		m.preview.freeze.Scroll(delta, maxOffset)
 		return
 	}
 	m.preview.offset = min(max(m.preview.offset+delta, 0), maxOffset)
@@ -555,8 +574,8 @@ func (m *Model) scrollPreview(delta int) {
 // previewScrollAnchor is where the window sits, in whichever coordinate it is
 // currently placed by. Callers use it to tell whether a scroll moved anything.
 func (m *Model) previewScrollAnchor() int {
-	if m.preview.frozen {
-		return m.preview.frozenStart
+	if m.preview.freeze.Active() {
+		return m.preview.freeze.Start()
 	}
 	return m.preview.offset
 }
@@ -564,29 +583,22 @@ func (m *Model) previewScrollAnchor() int {
 // freezePreviewWindow pins the window to the rows the user can see, before a
 // gesture reads or moves it.
 func (m *Model) freezePreviewWindow() {
-	if m.preview.frozen {
-		return
-	}
-	m.preview.frozenStart = m.previewWindow().layout.Start
-	m.preview.frozen = true
+	m.preview.freeze.Freeze(m.previewWindow().layout.Start)
 }
 
 // thawPreviewWindow places the window back against the live bottom, where it
 // follows new output again, without moving the rows on screen.
 func (m *Model) thawPreviewWindow() {
-	if !m.preview.frozen {
-		return
+	if offset, thawed := m.preview.freeze.Thaw(m.previewWindow().layout); thawed {
+		m.preview.offset = offset
 	}
-	layout := m.previewWindow().layout
-	m.preview.frozen = false
-	m.preview.offset = min(max(layout.MaxOffset-layout.Start, 0), layout.MaxOffset)
 }
 
 // jumpPreviewWindow places the window at an explicit distance back from the
 // live bottom, which ends any freeze: a jump is not a gesture reading the rows
 // it lands on.
 func (m *Model) jumpPreviewWindow(offset int) {
-	m.preview.frozen = false
+	m.preview.freeze.Release()
 	m.preview.offset = offset
 }
 
@@ -599,7 +611,7 @@ func (m *Model) scrollPreviewRows(delta int) { m.scrollPreview(-delta) }
 // wheel owes the viewport: while it owns what the pane shows, a window left
 // scrolled back would sit frozen over stale rows as the app repainted below it.
 func (m *Model) pinPreviewToLive() {
-	if m.preview.offset == 0 && !m.preview.frozen {
+	if m.preview.offset == 0 && !m.preview.freeze.Active() {
 		return
 	}
 	m.clearPreviewSelection()
@@ -657,8 +669,8 @@ func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
 		// tab and another in the project's.
 		TrimTrailing: tty.TrimsTrailingRows(interactive),
 	}
-	if m.preview.frozen {
-		input.Offset = m.preview.frozenStart
+	if m.preview.freeze.Active() {
+		input.Offset = m.preview.freeze.Start()
 	} else {
 		input.Offset, input.OffsetFromBottom = m.preview.offset, true
 		input.Follow = m.preview.offset == 0
@@ -748,14 +760,11 @@ func (m *Model) previewSelectionLines() []string {
 // happened. Both the rule and the wording are the shared layer's; only the
 // notification type is this surface's.
 func (m *Model) copyPreviewSelectionCmd() tea.Cmd {
-	lines := m.previewSelectionLines()
-	config := m.TerminalConfig()
-	return func() tea.Msg {
-		notice := config.CopySelectionNotice(lines)
+	return m.TerminalConfig().CopySelectionCmd(m.previewSelectionLines(), func(notice tty.CopyNotice) tea.Msg {
 		return appmsg.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}
-	}
+	})
 }
 
 // previewNarrow reports a tab too narrow to sustain two useful panes.
@@ -812,12 +821,14 @@ func (m *Model) renderPreview(width, height int) string {
 
 	input := m.previewViewportInput(width, height-termpreview.HeaderRows)
 	_, total := tty.BufferBase(input.Buffer)
+	layout := tty.FitViewport(input)
+	hints = m.appendWindowStatus(styles.Muted.Render(hints), input, layout, width, chips)
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width:  width,
 		Height: height,
 		Chips:  chips,
-		Hints:  styles.Muted.Render(hints),
-		Layout: tty.FitViewport(input),
+		Hints:  hints,
+		Layout: layout,
 		Buffer: input.Buffer,
 		// The window and the highlight drawn in it must resolve a line the same
 		// way, or a selection made over a pane with history is drawn rows away
@@ -834,6 +845,46 @@ func (m *Model) renderPreview(width, height int) string {
 		TabWidth:    tty.DefaultTabWidth,
 		Message:     message,
 	})
+}
+
+// appendWindowStatus adds the shared facts about the drawn window to the
+// header's right region: that it is off the live edge and how to get back, that
+// older lines exist above it, that the pane is clipped, that the application has
+// the mouse. The project surface states the same ones from the same derivation.
+//
+// The region here is narrower than the project's header, so notes are dropped by
+// the shared width rule — least important first — rather than by this surface
+// never having said them.
+func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout tty.Viewport, width int, chips []string) string {
+	// The columns left of the chips, which the header draws first and never
+	// clips. A budget of one is a header with no room: a zero would read as
+	// "unbudgeted" and let a note overrun the row the terminal is drawn under.
+	budget := width - globalPanelOverhead
+	for _, chip := range chips {
+		budget -= ansi.StringWidth(chip) + 1
+	}
+	budget = max(budget, 1)
+	notes := tty.WindowStatus(tty.WindowStatusInput{
+		Layout:       layout,
+		AbsoluteBase: input.AbsoluteBase,
+		// The browser holds one bounded capture per pane and never extends it at
+		// the top, so there is no older history to offer or to be loading.
+		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
+		PaneWidth:      input.PaneWidth,
+		PaneHeight:     input.PaneHeight,
+		LiveEdgeKey:    m.previewLiveEdgeKey(),
+	})
+	return tty.AppendStatus(hints, notes, budget, func(note string) string { return styles.Muted.Render(note) })
+}
+
+// previewLiveEdgeKey is the chord that puts this surface's window back on the
+// live edge in the state it is in: every unshifted key belongs to a live pane,
+// so the shifted one is named there and the plain one while merely watching.
+func (m *Model) previewLiveEdgeKey() string {
+	if m.PreviewInteractive() {
+		return tty.LiveEdgeKey
+	}
+	return "end"
 }
 
 func previewChip(name string, focused bool) string {

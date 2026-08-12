@@ -402,6 +402,12 @@ type InteractiveState struct {
 
 	// LastResizeAt tracks the last time we attempted to resize the tmux pane.
 	LastResizeAt time.Time
+
+	// ResizeRetryPending records that a deferred assertion of the pane's
+	// geometry is already armed. A layout still moving delivers one size per
+	// frame; without this each of them would arm its own retry and the burst
+	// would become a chain of resizes spaced a debounce window apart.
+	ResizeRetryPending bool
 }
 
 // GitStats holds file change statistics.
