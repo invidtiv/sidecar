@@ -1,13 +1,16 @@
 package workspace
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -338,7 +341,7 @@ func TestRestorePaneLayoutPrunesStaleTabsAndRejectsOtherRoot(t *testing.T) {
 	p.ctx.ProjectRoot = root
 	saved := state.WorkspaceState{
 		ShellTmuxName: "test-shell",
-		PaneLayout: &state.PaneLayoutJSON{Root: resolvedRoot, Split: &state.PaneSplitJSON{
+		PaneLayout: &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 			Axis: "cols", Ratio: 64,
 			A: &state.PaneLayoutJSON{Kind: "terminal"},
 			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{
@@ -381,7 +384,7 @@ func TestRestorePaneLayoutRejectsUnsupportedNestedTree(t *testing.T) {
 	writeDocPaneFixture(t, root, "one.md", "one")
 	writeDocPaneFixture(t, root, "two.md", "two")
 	p := docPaneTestPlugin(t, root, true)
-	layout := &state.PaneLayoutJSON{Root: root, Split: &state.PaneSplitJSON{
+	layout := &state.PaneLayoutJSON{Root: root, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
 		A: &state.PaneLayoutJSON{Kind: "terminal"},
 		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
@@ -403,7 +406,7 @@ func TestRestorePaneLayoutCollapsesEscapingDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := docPaneTestPlugin(t, root, true)
-	layout := &state.PaneLayoutJSON{Root: root, Split: &state.PaneSplitJSON{
+	layout := &state.PaneLayoutJSON{Root: root, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
 		A: &state.PaneLayoutJSON{Kind: "terminal"},
 		B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: outside}}},
@@ -413,5 +416,114 @@ func TestRestorePaneLayoutCollapsesEscapingDocument(t *testing.T) {
 	}
 	if p.paneRoot == nil || p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal || len(p.docs) != 0 {
 		t.Fatalf("escaping doc did not collapse to terminal: root=%#v docs=%d", p.paneRoot, len(p.docs))
+	}
+}
+
+func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# shell A\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.shells = append(p.shells, &ShellSession{Name: "Shell B", TmuxName: "test-shell-b", Agent: &Agent{TmuxPane: "%903", OutputBuf: tty.NewOutputBuffer(20)}})
+	var saved state.WorkspaceState
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.openTerminalPath("README.md", 0)
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.surface != "shell:test-shell" {
+		t.Fatalf("opened doc surface = %#v", doc)
+	}
+
+	// Selection handlers save immediately before loadSelectedContent performs
+	// its reset. That early save must already describe shell B as terminal-only.
+	p.selectedShellIdx = 1
+	p.saveSelectionState()
+	if saved.ShellTmuxName != "test-shell-b" || saved.PaneLayout == nil || saved.PaneLayout.Surface != "shell:test-shell-b" || saved.PaneLayout.Split != nil || saved.PaneLayout.Kind != "terminal" {
+		t.Fatalf("shell B early save retained shell A layout: %#v", saved)
+	}
+	p.loadSelectedContent()
+	if p.activeDocPaneOrNil() != nil || p.paneRoot.Split != nil {
+		t.Fatal("shell A document survived switch to same-root shell B")
+	}
+}
+
+func TestSurfaceKindIdentityClosesSameRootDocument(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# shell\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.worktrees = []*Worktree{{Name: "same-root", Path: root, Agent: &Agent{TmuxPane: "%904", OutputBuf: tty.NewOutputBuffer(20)}}}
+	var saved state.WorkspaceState
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.openTerminalPath("README.md", 0)
+	p.shellSelected = false
+	p.selectedIdx = 0
+	p.saveSelectionState()
+	if saved.PaneLayout == nil || saved.PaneLayout.Surface != "workspace:"+stablePathKey(root) || saved.PaneLayout.Split != nil {
+		t.Fatalf("same-root workspace save retained shell layout: %#v", saved.PaneLayout)
+	}
+	p.loadSelectedContent()
+	if p.activeDocPaneOrNil() != nil {
+		t.Fatal("shell document survived switch to workspace at the same root")
+	}
+}
+
+func TestFeatureDisabledPreservesPaneLayoutForReenable(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# dormant\n")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := state.WorkspaceState{
+		ShellTmuxName: "test-shell",
+		PaneLayout: &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: 61,
+			A: &state.PaneLayoutJSON{Kind: "terminal"},
+			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}},
+		}},
+	}
+	wantJSON, err := json.Marshal(saved.PaneLayout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	cfg := config.Default()
+	cfg.Features.Flags[features.WorkspaceDocPanes.Name] = false
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	p := New()
+	p.shellStartupHooks = hooks
+	if err := p.Init(&plugin.Context{WorkDir: root, ProjectRoot: root, Config: cfg, Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	p.shells = []*ShellSession{{Name: "Shell", TmuxName: "test-shell", Agent: &Agent{TmuxPane: "%905", OutputBuf: tty.NewOutputBuffer(20)}}}
+	if !p.restoreSelectionState() {
+		t.Fatal("disabled feature did not restore ordinary shell selection")
+	}
+	gotJSON, err := json.Marshal(saved.PaneLayout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotJSON) != string(wantJSON) || p.paneRoot != nil || p.paneRestoreCmd != nil {
+		t.Fatalf("disabled feature changed dormant layout: got=%s want=%s root=%#v", gotJSON, wantJSON, p.paneRoot)
+	}
+
+	cfg.Features.Flags[features.WorkspaceDocPanes.Name] = true
+	features.Init(cfg)
+	if err := p.Init(&plugin.Context{WorkDir: root, ProjectRoot: root, Config: cfg, Epoch: 2}); err != nil {
+		t.Fatal(err)
+	}
+	p.shells = []*ShellSession{{Name: "Shell", TmuxName: "test-shell", Agent: &Agent{TmuxPane: "%905", OutputBuf: tty.NewOutputBuffer(20)}}}
+	if !p.restoreSelectionState() || p.activeDocPaneOrNil() == nil || p.paneRoot.Split == nil || p.paneRoot.Split.Ratio != 61 {
+		t.Fatalf("re-enabled feature did not restore preserved layout: root=%#v doc=%#v", p.paneRoot, p.activeDocPaneOrNil())
 	}
 }

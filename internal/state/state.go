@@ -65,11 +65,12 @@ type WorkspaceState struct {
 // PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
 // tabs are a list from the first version so adding tab UI later is additive.
 type PaneLayoutJSON struct {
-	Root   string           `json:"root,omitempty"`
-	Kind   string           `json:"kind,omitempty"`
-	Split  *PaneSplitJSON   `json:"split,omitempty"`
-	Tabs   []PaneDocTabJSON `json:"tabs,omitempty"`
-	Active int              `json:"active,omitempty"`
+	Root    string           `json:"root,omitempty"`
+	Surface string           `json:"surface,omitempty"`
+	Kind    string           `json:"kind,omitempty"`
+	Split   *PaneSplitJSON   `json:"split,omitempty"`
+	Tabs    []PaneDocTabJSON `json:"tabs,omitempty"`
+	Active  int              `json:"active,omitempty"`
 }
 
 type PaneSplitJSON struct {

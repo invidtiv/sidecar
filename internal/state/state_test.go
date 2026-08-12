@@ -589,7 +589,7 @@ func TestSetWorkspaceState_ShellSelection(t *testing.T) {
 func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
 	want := State{Workspace: map[string]WorkspaceState{"/repo": {
 		ShellTmuxName: "shell-1",
-		PaneLayout: &PaneLayoutJSON{Root: "/repo", Split: &PaneSplitJSON{
+		PaneLayout: &PaneLayoutJSON{Root: "/repo", Surface: "shell:shell-1", Split: &PaneSplitJSON{
 			Axis: "cols", Ratio: 63,
 			A: &PaneLayoutJSON{Kind: "terminal"},
 			B: &PaneLayoutJSON{Kind: "doc", Active: 0, Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
@@ -604,7 +604,7 @@ func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	layout := got.Workspace["/repo"].PaneLayout
-	if layout == nil || layout.Root != "/repo" || layout.Split == nil || layout.Split.Ratio != 63 ||
+	if layout == nil || layout.Root != "/repo" || layout.Surface != "shell:shell-1" || layout.Split == nil || layout.Split.Ratio != 63 ||
 		layout.Split.B == nil || len(layout.Split.B.Tabs) != 1 || layout.Split.B.Tabs[0].Mode != "raw" {
 		t.Fatalf("pane layout round trip = %#v", layout)
 	}

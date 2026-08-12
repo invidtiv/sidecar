@@ -15,9 +15,10 @@ import (
 )
 
 type docPane struct {
-	leafID int
-	root   string
-	view   *docview.Model
+	leafID  int
+	root    string
+	surface string
+	view    *docview.Model
 }
 
 func docPaneTarget(rel string, resolvedInsideSelectedSurface bool) bool {
@@ -33,22 +34,37 @@ func docPaneTarget(rel string, resolvedInsideSelectedSurface bool) bool {
 }
 
 func (p *Plugin) selectedTerminalRoot() (string, bool) {
+	root, _, ok := p.selectedTerminalSurface()
+	return root, ok
+}
+
+// selectedTerminalSurface identifies the actual terminal selection, not only
+// its filesystem root. Project shells deliberately share ctx.WorkDir, so the
+// tmux name is required to distinguish shell A from shell B.
+func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 	if p.ctx == nil {
-		return "", false
+		return "", "", false
 	}
-	root := p.ctx.WorkDir
-	if !p.shellSelected {
+	root = p.ctx.WorkDir
+	if p.shellSelected {
+		shell := p.getSelectedShell()
+		if shell == nil || shell.TmuxName == "" {
+			return "", "", false
+		}
+		identity = "shell:" + shell.TmuxName
+	} else {
 		wt := p.selectedWorktree()
 		if wt == nil {
-			return "", false
+			return "", "", false
 		}
 		root = wt.Path
+		identity = "workspace:" + stablePathKey(wt.Path)
 	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	return filepath.Clean(resolved), true
+	return filepath.Clean(resolved), identity, true
 }
 
 func (p *Plugin) activeDocPane() (*docPane, *PaneNode) {
@@ -77,6 +93,7 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 	epoch := p.ctx.Epoch
 	if doc, leaf := p.activeDocPane(); doc != nil {
 		doc.root = root
+		_, doc.surface, _ = p.selectedTerminalSurface()
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
 		cmd := doc.view.Load(leaf.DocID, root, rel, line, epoch)
@@ -108,7 +125,8 @@ func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
 	viewer := docview.New(nil)
-	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, view: viewer}
+	_, surface, _ := p.selectedTerminalSurface()
+	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, surface: surface, view: viewer}
 	p.activePane = PanePreview
 	load := viewer.Load(docID, root, rel, line, epoch)
 	p.saveSelectionState()
@@ -170,8 +188,8 @@ func (p *Plugin) resetDocPanesForSelection() bool {
 	if doc == nil {
 		return false
 	}
-	root, ok := p.selectedTerminalRoot()
-	if ok && filepath.Clean(doc.root) == root {
+	root, surface, ok := p.selectedTerminalSurface()
+	if ok && filepath.Clean(doc.root) == root && doc.surface == surface {
 		return false
 	}
 	return p.closeDocPaneState()
@@ -202,8 +220,8 @@ func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
 	if doc == nil || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
 		return
 	}
-	root, ok := p.selectedTerminalRoot()
-	if !ok || filepath.Clean(doc.root) != root {
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok || filepath.Clean(doc.root) != root || doc.surface != surface {
 		return
 	}
 	doc.view.SetResult(msg)
@@ -281,18 +299,19 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 	if p.paneRoot == nil {
 		return nil
 	}
-	root, ok := p.selectedTerminalRoot()
+	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {
 		return nil
 	}
-	if doc, _ := p.activeDocPane(); doc != nil && filepath.Clean(doc.root) != root {
-		return &state.PaneLayoutJSON{Root: root, Kind: "terminal"}
+	if doc, _ := p.activeDocPane(); doc != nil && (filepath.Clean(doc.root) != root || doc.surface != surface) {
+		return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: "terminal"}
 	}
 	layout := p.encodePaneNode(p.paneRoot)
 	if layout == nil {
 		return nil
 	}
 	layout.Root = root
+	layout.Surface = surface
 	return layout
 }
 
@@ -328,8 +347,8 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if p.paneRoot == nil || layout == nil || p.ctx == nil {
 		return nil
 	}
-	root, ok := p.selectedTerminalRoot()
-	if !ok || filepath.Clean(layout.Root) != root {
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok || filepath.Clean(layout.Root) != root || layout.Surface != surface {
 		return nil
 	}
 	p.docs = make(map[int]*docPane)
@@ -411,12 +430,20 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 			viewer := docview.New(nil)
 			load := viewer.Load(id, root, filepath.ToSlash(rel), 0, p.ctx.Epoch)
 			viewer.SetRendered(tab.Mode != "raw")
-			p.docs[id] = &docPane{leafID: id, root: root, view: viewer}
+			p.docs[id] = &docPane{leafID: id, root: root, surface: savedRootSurface(p, root), view: viewer}
 			*loads = append(*loads, load)
 			return &PaneNode{ID: id, Kind: PaneDoc, DocID: id}
 		}
 	}
 	return nil
+}
+
+func savedRootSurface(p *Plugin, root string) string {
+	selectedRoot, surface, ok := p.selectedTerminalSurface()
+	if !ok || selectedRoot != root {
+		return ""
+	}
+	return surface
 }
 
 func (p *Plugin) nextPaneID() int {

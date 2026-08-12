@@ -870,7 +870,12 @@ func (p *Plugin) saveSelectionState() {
 			wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
 		}
 	}
-	wtState.PaneLayout = p.persistedPaneLayout()
+	// A disabled feature must not consume or overwrite its dormant state. The
+	// nil paneRoot is the Init-time feature boundary and preserves PaneLayout
+	// verbatim through ordinary selection saves.
+	if p.paneRoot != nil {
+		wtState.PaneLayout = p.persistedPaneLayout()
+	}
 
 	// td-f88fdd: Shell display names now persisted in shells.json manifest
 	// Only save selection state (which worktree/shell is selected)
@@ -900,7 +905,9 @@ func (p *Plugin) restoreSelectionState() bool {
 			if shell.TmuxName == wtState.ShellTmuxName {
 				p.shellSelected = true
 				p.selectedShellIdx = i
-				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
 				p.saveSelectionState()
 				return true
 			}
@@ -914,7 +921,9 @@ func (p *Plugin) restoreSelectionState() bool {
 			if wt.Name == wtState.WorkspaceName {
 				p.shellSelected = false
 				p.selectedIdx = i
-				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
 				p.saveSelectionState()
 				return true
 			}
