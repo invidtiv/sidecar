@@ -4,6 +4,13 @@
 
 **Builds on:** [Cross-project agent overview](cross-project-overview.md)
 
+**Prerequisite:** [Doc panes on a preview pane tree](preview-pane-tree-and-doc-panes.md)
+is in progress on another worktree and lands first. This plan starts only after
+it does, so the project Workspaces preview region this plan shares is the
+pane-tree version — `panetree.go`, `internal/docview`, and the
+`terminalLeafBox()` seam in `terminal_surface.go` — not today's single-terminal
+split. Every shared-seam decision below is written against that end state.
+
 ## Decision first
 
 Evolve the existing app-level **Overview** into Sidecar's first-class global
@@ -297,19 +304,45 @@ to inspect tmux, switch projects, create worktrees, or attach to terminals.
 Adopt it in project Workspaces before or in the same slice that uses it in the
 global browser. Characterization tests must preserve the existing shell-first
 navigation, selection styles, scrollbar, mouse geometry, sidebar-width
-persistence, and all project-owned commands when no filter is active.
+persistence, and all project-owned commands when no filter is active. Run them
+with doc panes enabled too: the list sits beside a preview region that may hold
+a doc pane, hit regions are registered in a documented order (pane bodies, then
+dividers, then chips — last registered wins), and the filter's text-input
+context must coexist with the `workspace-doc` keymap context (`q`, `r`,
+`+`/`-`) without either stealing the other's keys. The sidebar itself is a stop
+in the doc-panes `tab`/`shift+tab` focus cycle (sidebar → terminal leaf → doc
+leaf), so the shared list component must keep that cycle working when it
+replaces the sidebar rendering.
 
 ### Shared two-pane and terminal preview presentation
 
 Reuse the existing workspace split geometry and low-level terminal rendering,
-but do not extract the whole Workspaces plugin. A narrow shared presentation
-layer should own:
+but do not extract the whole Workspaces plugin. By the time this work starts,
+`terminal_surface.go` is still the single geometry authority for the project
+preview region, but the region's contents are a pane tree: `LayoutPanes`
+places terminal and doc leaves inside the preview box, and every existing
+sizer reads its container from `terminalLeafBox()`. Whatever this plan
+extracts must extend that one authority — the doc-panes plan names a second
+independent geometry computation as its biggest failure mode, and adding a
+global consumer must not become the way that failure arrives.
 
-- sidebar/preview width calculation and drag geometry;
+A narrow shared presentation layer should own:
+
+- sidebar/preview width calculation and drag geometry (the `previewSplitFor`
+  outer split — sidebar vs. preview region — not the inner pane tree);
 - focused/unfocused panel rendering and constrained height;
 - terminal header, ANSI-safe truncation, background fill, scrollbar, native
-  cursor suppression for read-only captures, and empty/unavailable messages;
+  cursor suppression for read-only captures, and empty/unavailable messages
+  (the same `terminalHeaderRow` stack doc panes adopted, so header geometry
+  stays one fact);
 - a `PreviewSource`-shaped seam that returns immutable selected-pane snapshots.
+
+Global Workspaces does **not** instantiate a pane tree. Its right side is
+always exactly one read-only terminal box: no doc leaves, no splits, no
+`docview` models, no per-project `PaneLayout` interpretation. A project whose
+own Workspaces preview has a doc pane open still previews globally as its
+selected pane's captured output alone. Rendering pane-tree layouts in the
+global browser is explicitly deferred (see below).
 
 Project Workspaces adapts its existing live `tty.OutputBuffer` and terminal
 surface. Global Workspaces uses a read-only selected-pane source. The global
@@ -369,10 +402,16 @@ footer remain visible at every supported size.
 
 1. Finish or explicitly resolve the current in-review Overview work before
    changing the same Kanban/model seams (`td-71de3d`, `td-3ca6f1`, and
-   `td-847b0c` at this research snapshot).
+   `td-847b0c` at this research snapshot), and land the doc-panes plan
+   (`preview-pane-tree-and-doc-panes.md`) from its worktree. Slices 2–3 here
+   extract seams from `terminal_surface.go`, `view_list.go`, and `mouse.go`
+   that the pane tree rewrites; starting before it merges guarantees a
+   conflict on the plugin's hottest files.
 2. Characterize current app entry/exit, header tabs, project-switcher behavior,
    Overview selection/navigation, project workspace sidebar navigation, pane
-   geometry, and terminal preview behavior.
+   geometry, and terminal preview behavior. Run the characterization at the
+   `workspace_doc_panes` flag's shipped default, and include one doc-pane-open
+   case so later extraction cannot silently regress the pane tree.
 3. Record the exact current wide/narrow screenshots and keyboard/mouse
    transcript on isolated tmux and state paths.
 4. Independently review the baseline tests. This slice changes no product
@@ -417,7 +456,11 @@ is unchanged and returning to a project is exact.
 
 1. Extract/reuse the two-pane geometry and low-level terminal presentation
    needed by both consumers; keep Diff, Task, attach, and lifecycle code
-   project-owned.
+   project-owned. The project side reads its container through the pane tree's
+   `terminalLeafBox()` seam — extract beneath that seam (header row, fill,
+   truncation, snapshot source), never a parallel computation of the preview
+   box, and add a test that the shared layer and `LayoutPanes` agree on the
+   terminal leaf's geometry.
 2. Add the global selected-pane preview source with generation cancellation,
    immediate selected capture, adaptive visible polling, and no persistence.
 3. Add focus navigation, preview scrolling, mouse/wheel behavior, unavailable
@@ -432,11 +475,18 @@ is unchanged and returning to a project is exact.
 2. Handle disappeared projects/items, ambiguous panes, duplicate names,
    linked worktrees, and same-project navigation without selecting a neighbor
    or sending terminal input.
-3. Preserve each global tab's filter/sort/selection/scroll state while toggling
+3. Navigating into a project restores its persisted `WorkspaceState` through
+   the project's own rules, including `PaneLayout`. Doc panes belong to the
+   selected terminal surface root: navigating to the item that owns an open
+   doc pane restores it, while navigating to a different item in that project
+   closes the doc subtree via the plugin's existing selection-change rule.
+   Either way, no global code path reads, rewrites, or prunes any project's
+   pane layout itself.
+4. Preserve each global tab's filter/sort/selection/scroll state while toggling
    spaces during the process lifetime.
-4. Complete wide/narrow, mouse/keyboard, theme, Nerd Font fallback, footer, and
+5. Complete wide/narrow, mouse/keyboard, theme, Nerd Font fallback, footer, and
    first-frame/startup proof.
-5. Independently review the integrated candidate and fix findings before the
+6. Independently review the integrated candidate and fix findings before the
    feature is considered complete.
 
 ## Likely file map
@@ -449,9 +499,10 @@ is unchanged and returning to a project is exact.
 | `internal/workspacelist/` (new) | Stable list model, filter matcher/input, sort/group, rendering, keyboard/mouse, tests |
 | `internal/kanban/`, `internal/agentstatus/` | Existing shared Agents semantics and board; no new status path |
 | `internal/plugins/workspace/view_list.go`, `keys.go`, `mouse.go`, `commands.go` | Adopt shared list/filter behavior while retaining project actions |
-| `internal/plugins/workspace/view_preview.go`, `pane_geometry.go`, `internal/tty/` | Extract only shared split/terminal presentation and immutable preview source boundary |
+| `internal/plugins/workspace/terminal_surface.go`, `panetree.go`, `view_preview.go`, `pane_geometry.go`, `internal/tty/` | Extract only shared split/terminal presentation and the immutable preview source boundary, beneath the pane-tree geometry authority |
+| `internal/docview/` (from doc-panes plan) | Untouched by this plan; global preview renders captured terminal output only, never doc panes |
 | `internal/plugins/tasks/`, `internal/plugins/assembly/` | Preserve the Tasks embedding adapter while moving its ownership/lifecycle out of the project registry |
-| `internal/keymap/bindings.go` | Global-tab and filter contexts; audit collisions before assigning defaults |
+| `internal/keymap/bindings.go` | Global-tab and filter contexts; audit collisions — including the `workspace-doc` context — before assigning defaults |
 | `internal/styles/` | Scope-tab, project subtitle, group heading, and preview states using existing theme tokens where possible |
 | `scripts/tmux-drive.sh`, headless guide | Multi-project all-workspace fixture and isolated real-app proof |
 
@@ -479,7 +530,13 @@ is unchanged and returning to a project is exact.
   clears/exits predictably, consumes keys/pastes only while focused, and behaves
   identically in project and global lists;
 - project Workspaces retains creation, deletion, attach, interactive, Diff,
-  Task, sidebar resizing, shell-first navigation, and Kanban toggle behavior;
+  Task, sidebar resizing, shell-first navigation, Kanban toggle, and doc-pane
+  behavior (open/close/drag/persistence) with the shared list and preview
+  extraction in place;
+- global navigation into a project with a persisted `PaneLayout` behaves
+  exactly as a local selection would: the owning selection restores its doc
+  pane, a different selection closes the doc subtree through the plugin's own
+  rule, and no global code path reads or writes any project's pane layout;
 - global Workspaces exposes no mutating/interactive command path;
 - selected preview rejects stale captures, captures only the selected pane,
   pauses/slows when hidden or unfocused, constrains output width/height, and
@@ -510,7 +567,11 @@ The fixture should contain:
   one missing/non-Git project;
 - enough items in multiple groups to scroll; and
 - a feature/task name shared across name, branch, and task fields for filter
-  proof.
+  proof; and
+- one project whose Workspaces preview has a doc pane open with a persisted
+  pane layout, to prove global browsing leaves it alone, navigating to the
+  owning item restores it, and navigating to a sibling item closes it through
+  the project's own selection-change rule.
 
 Capture text, PNG, and retained key/mouse transcripts for:
 
@@ -554,7 +615,9 @@ test state; browsing itself must be read-only.
 8. Agents and Workspaces share one read-only, bounded, incremental,
    cancellable inventory/cache with one tmux inventory per refresh cycle.
 9. Existing project Workspaces behavior and current Agents Kanban behavior do
-   not regress, including narrow layouts and header/footer constraints.
+   not regress, including narrow layouts, header/footer constraints, and the
+   doc-pane pane tree (geometry, link routing, persistence) landed before this
+   work began.
 10. Tasks retains its Tasks-owned store, embedded behavior, command parity,
     agent queue, and Sidecar session state while no longer restarting on project
     switches.
@@ -566,6 +629,10 @@ test state; browsing itself must be read-only.
 - cross-project creation, rename, delete, attach, terminal input, or other
   mutating bulk actions;
 - cloning the project Workspaces Diff and Task preview tabs into global space;
+- rendering pane-tree layouts or doc panes in the global preview — the global
+  right side is one read-only terminal box, and opening documents from it
+  (e.g. clicking a markdown link in captured output) is out of scope until the
+  doc-pane experience has settled in project space;
 - persisted filters, sort modes, selection, or launching directly into global
   Workspaces until real use demonstrates value;
 - task/PR/CI/conversation aggregation or search that requires new slow adapters;
