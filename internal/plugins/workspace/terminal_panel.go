@@ -118,6 +118,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		p.ctx.Logger.Debug("termPanel: switching session", "old", p.termPanelSession, "new", sessionName)
 	}
 	p.termPanelSession = sessionName
+	p.releaseTerminalDocProjection(true)
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -528,6 +529,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	}
 	// Switch to new session (old session preserved for later reuse)
 	p.termPanelSession = newSession
+	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
 	p.termPanelDocFrozen = false
@@ -542,6 +544,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.
 // Sessions are preserved so they can be reattached on next launch (like agent sessions).
 func (p *Plugin) cleanupTermPanelSession() {
+	p.releaseTerminalDocProjection(true)
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil

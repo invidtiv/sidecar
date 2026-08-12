@@ -924,7 +924,7 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	// releases before gesture hit-testing so pixels and buffer coordinates share
 	// the live source.
 	p.terminalDocProjection = terminalDocProjection{
-		buffer: projected, identity: p.terminalProjectionIdentity(false),
+		buffer: projected, source: live, identity: p.terminalProjectionIdentity(false),
 	}
 	p.handleMouseClick(actionAt(1, 4))
 	if p.terminalDocProjection.buffer != nil {
@@ -935,9 +935,10 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 func TestTerminalDocProjectionRejectsChangedSurfaceIdentity(t *testing.T) {
 	p := newSelectionTestPlugin()
 	p.shellSelected = true
-	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxPane: "%1"}}}
+	live := tty.NewOutputBuffer(2)
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxPane: "%1", OutputBuf: live}}}
 	p.terminalDocProjection = terminalDocProjection{
-		buffer: tty.NewOutputBuffer(1), identity: "shell:one\x00\x00%1",
+		buffer: tty.NewOutputBuffer(1), source: live, identity: "shell:one\x00\x00%1",
 	}
 	p.terminalDocProjection.buffer.Update("old screen")
 	if p.projectedTerminalBuffer(false) == nil {
@@ -952,6 +953,51 @@ func TestTerminalDocProjectionRejectsChangedSurfaceIdentity(t *testing.T) {
 	if p.terminalDocProjection.buffer != nil {
 		t.Fatal("selection lifecycle retained stale terminal projection")
 	}
+}
+
+func TestTerminalDocProjectionRejectsRecreatedBufferWithSameTargetIDs(t *testing.T) {
+	t.Run("primary", func(t *testing.T) {
+		p := newSelectionTestPlugin()
+		p.shellSelected = true
+		original := tty.NewOutputBuffer(2)
+		p.shells = []*ShellSession{{TmuxName: "same", Agent: &Agent{
+			TmuxSession: "same", TmuxPane: "%1", OutputBuf: original,
+		}}}
+		projected := tty.NewOutputBuffer(1)
+		projected.Update("old primary screen")
+		p.terminalDocProjection = terminalDocProjection{
+			buffer: projected, source: original, identity: p.terminalProjectionIdentity(false),
+		}
+		original.Update("same buffer mutation")
+		if p.projectedTerminalBuffer(false) != projected {
+			t.Fatal("ordinary live buffer mutation invalidated projection")
+		}
+		p.shells[0].Agent = &Agent{
+			TmuxSession: "same", TmuxPane: "%1", OutputBuf: tty.NewOutputBuffer(2),
+		}
+		if p.projectedTerminalBuffer(false) != nil {
+			t.Fatal("primary projection resurrected over recreated buffer with reused target IDs")
+		}
+	})
+
+	t.Run("panel", func(t *testing.T) {
+		p := newSelectionTestPlugin()
+		p.termPanelSession, p.termPanelPaneID = "S", "%2"
+		original := tty.NewOutputBuffer(2)
+		p.termPanelOutput = original
+		projected := tty.NewOutputBuffer(1)
+		projected.Update("old panel screen")
+		p.terminalDocProjection = terminalDocProjection{
+			buffer: projected, source: original, termPanel: true,
+			identity: p.terminalProjectionIdentity(true),
+		}
+		p.cleanupTermPanelSession()
+		p.termPanelSession, p.termPanelPaneID = "S", "%2"
+		p.termPanelOutput = tty.NewOutputBuffer(2)
+		if p.projectedTerminalBuffer(true) != nil || p.terminalDocProjection.buffer != nil {
+			t.Fatal("panel projection survived cleanup and resurrected over recreated target")
+		}
+	})
 }
 
 func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {

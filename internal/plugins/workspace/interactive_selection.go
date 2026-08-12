@@ -471,6 +471,7 @@ type terminalViewportFreeze struct {
 // terminal buffer continues updating independently beneath this read-only view.
 type terminalDocProjection struct {
 	buffer    *tty.OutputBuffer
+	source    *tty.OutputBuffer
 	termPanel bool
 	identity  string
 }
@@ -498,7 +499,8 @@ func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewp
 	snapshot := tty.NewOutputBuffer(len(rows))
 	snapshot.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
 	freeze.projection = terminalDocProjection{
-		buffer: snapshot, termPanel: termPanel, identity: p.terminalProjectionIdentity(termPanel),
+		buffer: snapshot, source: p.liveTerminalOutputBuffer(termPanel),
+		termPanel: termPanel, identity: p.terminalProjectionIdentity(termPanel),
 	}
 	return freeze
 }
@@ -517,7 +519,8 @@ func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 func (p *Plugin) projectedTerminalBuffer(termPanel bool) *tty.OutputBuffer {
 	projection := p.terminalDocProjection
 	if projection.buffer == nil || projection.termPanel != termPanel ||
-		projection.identity != p.terminalProjectionIdentity(termPanel) {
+		projection.identity != p.terminalProjectionIdentity(termPanel) ||
+		projection.source == nil || projection.source != p.liveTerminalOutputBuffer(termPanel) {
 		return nil
 	}
 	return projection.buffer
