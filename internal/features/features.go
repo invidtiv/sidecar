@@ -65,6 +65,13 @@ var (
 		Description: "Enable the Conversations plugin (multi-agent session history)",
 	}
 
+	// WorkspaceDocPanes enables document panes beside workspace terminals.
+	WorkspaceDocPanes = Feature{
+		Name:        "workspace_doc_panes",
+		Default:     false,
+		Description: "Open documents in panes beside workspace terminals",
+	}
+
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
@@ -81,6 +88,7 @@ var allFeatures = []Feature{
 	NotesPlugin,
 	TasksPlugin,
 	ConversationsPlugin,
+	WorkspaceDocPanes,
 	CrossProjectOverview,
 }
 
