@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 // Modal style functions - return fresh styles using current theme colors.
@@ -251,17 +252,37 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		lines = append(lines, toastStyle.Render("⚠ "+msg))
 	}
 
-	lines = append(lines, "") // Empty line after header/warnings
-
 	// Track Y position for hit regions (add 3 for border + header + empty line)
 	currentY := 3
+	// header + empty line
+	headerRows := 2
+
+	// The shared `/` filter row appears only once filtering is in play, so the
+	// unfiltered sidebar keeps its exact layout and hit geometry. When it is
+	// shown it sits directly under the header and pushes everything below it
+	// down by exactly one row — the same row the click target is registered on.
+	if p.filterActive() {
+		matched, total := p.filterCounts()
+		lines = append(lines, p.listFilter.RenderRow(width, matched, total))
+		p.mouseHandler.HitMap.AddRect(regionListFilter, 0, 2, width, 1, nil)
+		currentY++
+		headerRows++
+	}
+
+	lines = append(lines, "") // Empty line after header/warnings
 
 	// Calculate visible items (each item is 2 lines)
-	contentHeight := height - 2 // header + empty line
-	itemHeight := 2             // Each worktree item takes 2 lines
+	contentHeight := height - headerRows
+	itemHeight := 2 // Each worktree item takes 2 lines
+
+	// The visible index lists are the shared filter's projection of the list.
+	// With no query they are every shell and every worktree, in order, which is
+	// why the unfiltered journey runs through the identical loops below.
+	visibleShells := p.visibleShellIndices()
+	visibleWorktrees := p.visibleWorktreeIndices()
 
 	// === Render shells section ===
-	if len(p.shells) > 0 {
+	if len(visibleShells) > 0 {
 		// Shells subheader with [+] button (right-aligned)
 		shellsTitle := styles.Muted.Render("Shells")
 		shellsTitleWidth := lipgloss.Width(shellsTitle)
@@ -285,7 +306,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 
 		// Render each shell entry (width-1 to match worktree items, leaving room for scrollbar)
 		shellItemWidth := width - 1
-		for i, shell := range p.shells {
+		for _, i := range visibleShells {
+			shell := p.shells[i]
 			selected := p.shellSelected && i == p.selectedShellIdx
 			shellLine := p.renderShellEntryForSession(shell, selected, shellItemWidth)
 			lines = append(lines, shellLine)
@@ -301,17 +323,20 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 
 	// Calculate shell section height (subheader + shells*2 + separator)
 	shellSectionHeight := 0
-	if len(p.shells) > 0 {
-		shellSectionHeight = 1 + len(p.shells)*itemHeight + 1
+	if len(visibleShells) > 0 {
+		shellSectionHeight = 1 + len(visibleShells)*itemHeight + 1
 	}
 
 	// Adjust visible count for shell section
 	p.visibleCount = (contentHeight - shellSectionHeight) / itemHeight
 
 	// Render worktree items
-	if len(p.worktrees) == 0 {
-		// No worktrees exist - show empty state message (unless shell is selected or shells exist)
-		if !p.shellSelected && len(p.shells) == 0 {
+	if len(visibleWorktrees) == 0 {
+		if p.filterActive() && len(visibleShells) == 0 {
+			// A query that matches nothing says so. A blank list would read as
+			// "this project has no workspaces".
+			lines = append(lines, workspacelist.NoMatchRow(width, p.listFilter.Query()))
+		} else if !p.shellSelected && len(p.shells) == 0 && !p.filterActive() {
 			// Calculate vertical centering for empty state
 			emptyStateHeight := 2 // "No workspaces" + "Press 'n'..."
 			emptyStartY := (contentHeight - emptyStateHeight) / 2
@@ -342,7 +367,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		// When shell is selected and no worktrees, just show the shell entries (already rendered above)
 	} else {
 		// Worktrees subheader with [+] button (right-aligned, only if we have shells above)
-		if len(p.shells) > 0 {
+		if len(visibleShells) > 0 {
 			workspacesTitle := styles.Muted.Render("Workspaces")
 			workspacesTitleWidth := lipgloss.Width(workspacesTitle)
 			workspacesPlusStyle := styles.Button
@@ -372,7 +397,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		// Render worktree items at reduced width to leave room for scrollbar
 		worktreeItemWidth := width - 1
 		var worktreeLines []string
-		for i := p.scrollOffset; i < len(p.worktrees) && i < p.scrollOffset+p.visibleCount; i++ {
+		for position := p.scrollOffset; position < len(visibleWorktrees) && position < p.scrollOffset+p.visibleCount; position++ {
+			i := visibleWorktrees[position]
 			wt := p.worktrees[i]
 			// Only show as selected if not shellSelected AND index matches
 			selected := !p.shellSelected && i == p.selectedIdx
@@ -389,7 +415,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		worktreeContent := strings.Join(worktreeLines, "\n")
 		trackHeight := p.visibleCount * itemHeight
 		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(p.worktrees),
+			TotalItems:   len(visibleWorktrees),
 			ScrollOffset: p.scrollOffset,
 			VisibleItems: p.visibleCount,
 			TrackHeight:  trackHeight,

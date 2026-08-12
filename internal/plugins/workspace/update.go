@@ -2036,8 +2036,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		// v2: bracketed paste arrives as a dedicated message. Forward to tmux
-		// when in interactive mode.
+		// v2: bracketed paste arrives as a dedicated message. A focused list
+		// filter is a text input and takes the paste first; otherwise it goes
+		// to tmux when in interactive mode.
+		if handled, cmd := p.handleFilterPaste(msg.Content); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
 		if cmd := p.handleInteractivePaste(msg.Content); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

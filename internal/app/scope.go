@@ -204,27 +204,49 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 	}
 	previous := m.globalTab
 	m.globalTab = tab
-	if previous == GlobalAgents && m.overview != nil {
-		// Leaving the board: stop its collection rather than polling projects
-		// behind a tab nobody is looking at. Slice 2 shares one catalog between
-		// Agents and Workspaces; until then, only the visible tab collects.
+	if catalogTab(previous) && !catalogTab(tab) && m.overview != nil {
+		// Leaving the catalog entirely (for Tasks): stop collecting rather than
+		// polling projects behind a tab nobody is looking at. Moving between
+		// Agents and Workspaces does not stop anything — they are two
+		// projections of one cache, and restarting here would be exactly the
+		// duplicated fan-out this design exists to avoid.
 		m.overview.Stop()
 	}
 	m.updateContext()
 	return m.startVisibleGlobalTab()
 }
 
+// catalogTab reports that a global tab is a projection of the cross-project
+// catalog. Agents and Workspaces both are; Tasks owns its own store.
+func catalogTab(tab GlobalTab) bool {
+	return tab == GlobalAgents || tab == GlobalWorkspaces
+}
+
 // startVisibleGlobalTab starts whatever collection the visible global tab
-// needs. Workspaces is a placeholder in this slice and collects nothing; Tasks
-// is already alive and owned by the global tab host, not by tab visibility.
+// needs. Agents and Workspaces share one collector, so the second of them to
+// become visible reuses the cycle the first started instead of launching its
+// own. Tasks is already alive and owned by the global tab host, not by tab
+// visibility.
 func (m *Model) startVisibleGlobalTab() tea.Cmd {
 	if !m.inGlobalScope() {
 		return nil
 	}
-	if m.globalTab == GlobalAgents && m.overview != nil {
-		return m.overview.Start(m.overviewProjects())
+	if catalogTab(m.globalTab) && m.overview != nil {
+		return m.overview.Ensure(m.overviewProjects())
 	}
 	return nil
+}
+
+// globalWorkspacesVisible reports that the cross-project Workspaces browser
+// owns the screen, and therefore its own keys and mouse events.
+func (m Model) globalWorkspacesVisible() bool {
+	return m.inGlobalScope() && m.globalTab == GlobalWorkspaces && m.overview != nil
+}
+
+// globalWorkspacesFilterFocused reports that the browser's inline filter is
+// taking typed text, so the app must keep its printable shortcuts off it.
+func (m Model) globalWorkspacesFilterFocused() bool {
+	return m.globalWorkspacesVisible() && m.overview.WorkspacesFilterFocused()
 }
 
 // cycleTabs moves forward (+1) or backward (-1) through the active scope's own
@@ -333,13 +355,15 @@ func (m Model) agentsBoardVisible() bool {
 }
 
 // globalMouse routes a mouse event (already offset past the header) to the
-// visible global tab. The Workspaces placeholder has nothing to click.
+// visible global tab.
 func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	switch {
 	case m.globalTasksFocused():
 		return m.globalTasks.update(msg)
 	case m.globalTab == GlobalAgents && m.overview != nil:
 		return m.overview.Update(msg)
+	case m.globalWorkspacesVisible():
+		return m.overview.WorkspacesMouse(msg)
 	}
 	return nil
 }
@@ -369,6 +393,11 @@ func (m Model) globalTasksFocused() bool {
 // to be asked there. A Tasks root context wants none of them, so esc there
 // still leaves the global space.
 func (m *Model) globalSurfaceWantsEsc() bool {
+	// The Workspaces filter answers esc itself: first press clears the query,
+	// second releases focus. Only then does esc mean "leave the global space".
+	if m.globalWorkspacesFilterFocused() {
+		return true
+	}
 	if !m.globalTasksFocused() {
 		return false
 	}

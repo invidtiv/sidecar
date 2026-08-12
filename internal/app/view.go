@@ -790,6 +790,9 @@ func (m Model) renderGlobalContent(width, height int) string {
 			return host.View(width, height)
 		}
 	case GlobalWorkspaces:
+		if m.overview != nil {
+			return m.overview.WorkspacesView(width, height)
+		}
 		return m.renderGlobalWorkspacesPlaceholder(width, height)
 	}
 	if m.overview != nil {
@@ -798,9 +801,9 @@ func (m Model) renderGlobalContent(width, height int) string {
 	return ""
 }
 
-// renderGlobalWorkspacesPlaceholder is an honest empty state. The cross-project
-// workspace catalog arrives in a later slice; until then this tab must say so
-// rather than imply a list is loading, and it must collect nothing.
+// renderGlobalWorkspacesPlaceholder is the honest empty state for a build with
+// no cross-project catalog behind the tab at all. With the Overview model
+// present, the tab renders the shared workspace list instead.
 func (m Model) renderGlobalWorkspacesPlaceholder(width, height int) string {
 	message := strings.Join([]string{
 		styles.Title.Render("Workspaces"),
@@ -898,7 +901,13 @@ func (m Model) footerHints() []footerHint {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
-		hints = append(hints, footerHint{keys: "esc", label: "Close"})
+		hints = append(hints,
+			footerHint{keys: "jk", label: "Move"},
+			footerHint{keys: "/", label: "Filter"},
+			footerHint{keys: "s", label: "Sort"},
+			footerHint{keys: "r", label: "Refresh"},
+			footerHint{keys: "esc", label: "Close"},
+		)
 	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},

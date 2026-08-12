@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 const (
@@ -115,11 +116,15 @@ type Model struct {
 	firstResult        bool
 	maxActive          int
 	pollScheduled      bool
+	configuredPaths    []string
 	board              kanban.Component
 	cards              map[string]workspaceinventory.Workspace
 	agentCount         int
 	compactScroll      int
 	mouse              *mouse.Handler
+	workspaces         workspacelist.Model
+	workspacesMouse    *mouse.Handler
+	catalog            map[string]workspaceinventory.Workspace
 	width              int
 	height             int
 }
@@ -137,7 +142,8 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler()}
+	m.workspaces.SetEmptyText("No shells or worktrees found in the configured projects")
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -157,6 +163,34 @@ func (m *Model) persistActivity() {
 
 func (m *Model) Start(projects []Project) tea.Cmd {
 	return m.start(projects, "refresh")
+}
+
+// Ensure starts collection only when the shared catalog has nothing live
+// behind it. The Agents board and the global Workspaces list are two
+// projections of one cache: whichever becomes visible first starts the cycle,
+// and the other reuses its results, its trackers, and its poll. A second
+// collector here would double every project's tmux and Git fan-out for a view
+// that already has the data.
+func (m *Model) Ensure(projects []Project) tea.Cmd {
+	if m.cancel == nil || !sameConfiguredProjects(m.configuredPaths, projects) {
+		return m.start(projects, "refresh")
+	}
+	if m.loading || m.pollScheduled {
+		return nil
+	}
+	return m.start(projects, "refresh")
+}
+
+func sameConfiguredProjects(paths []string, projects []Project) bool {
+	if len(paths) != len(projects) {
+		return false
+	}
+	for i, project := range projects {
+		if paths[i] != project.Path {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
@@ -182,6 +216,10 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 		m.syncBoard()
 	}
 	m.cycleStart, m.configured, m.firstResult, m.maxActive = time.Now(), len(projects), false, 0
+	m.configuredPaths = m.configuredPaths[:0]
+	for _, project := range projects {
+		m.configuredPaths = append(m.configuredPaths, project.Path)
+	}
 	m.tracef("cycle generation=%d reason=%s configured=%d start", m.generation, reason, len(projects))
 	generation := m.generation
 	ctx := m.ctx
@@ -676,9 +714,11 @@ func (m *Model) syncBoard() {
 			continue
 		}
 		for _, workspace := range result.Workspaces {
-			// Untyped shell definitions are live-discovery candidates, not cards.
-			// RefreshProjectStatus retains them only after identifying an agent.
-			if workspace.Kind == workspaceinventory.KindShell && strings.TrimSpace(workspace.Provider) == "" {
+			// The board is the agent-only projection of the shared catalog.
+			// Untyped shell definitions are live-discovery candidates, and plain
+			// worktrees have no agent semantics at all; both belong to the
+			// Workspaces list, not to a Kanban lane.
+			if !workspace.HasAgent() {
 				continue
 			}
 			m.cards[workspace.ID] = workspace
@@ -708,6 +748,9 @@ func (m *Model) syncBoard() {
 		}
 	}
 	m.board.SetBoard(kanban.Board{Lanes: lanes})
+	// One collection, two projections: the list is rebuilt from the same
+	// results map, in the same pass, so the tabs cannot disagree.
+	m.syncWorkspaces()
 }
 
 // spineGlyph is the per-kind left accent every content line carries: solid

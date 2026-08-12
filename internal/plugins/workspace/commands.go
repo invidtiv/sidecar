@@ -244,6 +244,15 @@ func (p *Plugin) Commands() []plugin.Command {
 			return cmds
 		}
 
+		// Filter focus is its own context: while a query is being typed the only
+		// commands that apply are the ones that end or accept it.
+		if p.filterFocused() && p.activePane == PaneSidebar {
+			return []plugin.Command{
+				{ID: "filter-accept", Name: "Select", Description: "Keep the selected match and return to the list", Context: "workspace-filter", Priority: 1},
+				{ID: "filter-clear", Name: "Clear", Description: "Clear the query, then exit the filter", Context: "workspace-filter", Priority: 2},
+			}
+		}
+
 		// Sidebar list commands - reorganized with unique priorities
 		// Priority 1-4: Base commands (always visible)
 		// Priority 5-8: Worktree-specific commands
@@ -255,6 +264,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 4},
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
+			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
 		}
 
 		// Shell-specific commands when shell is selected
@@ -386,6 +396,11 @@ func (p *Plugin) FocusContext() string {
 		if p.docFocused() {
 			return "workspace-doc"
 		}
+		if p.filterFocused() && p.activePane == PaneSidebar {
+			// A dedicated text-input context: while the query has focus, app
+			// shortcuts must not take printable characters or pastes from it.
+			return "workspace-filter"
+		}
 		if p.activePane == PanePreview {
 			return "workspace-preview"
 		}
@@ -396,6 +411,9 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
+	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
+		return true
+	}
 	switch p.viewMode {
 	case ViewModeInteractive,
 		ViewModeCreate,

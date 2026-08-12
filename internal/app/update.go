@@ -114,6 +114,12 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// A focused global filter is a text input and takes the paste, exactly as
+	// it takes typed characters.
+	if m.globalWorkspacesFilterFocused() && m.overview.WorkspacesPaste(msg.Content) {
+		return m, nil
+	}
+
 	// A global view that sidecar draws itself owns keyboard focus, so a paste
 	// must not reach a hidden project plugin (an interactive tmux pane would
 	// run it). The hosted Tasks tab is a real surface and gets its own pastes,
@@ -687,6 +693,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// The global Workspaces browser answers for its own keys before sidecar's
+	// global switch runs. It has to be here rather than beside the Agents board
+	// below: while its filter has focus every printable key is query text, and
+	// the tab/number/quit switches further down would otherwise take "q", "1",
+	// and "`" out of the middle of a search.
+	if !m.hasModal() && m.globalWorkspacesVisible() {
+		if handled, cmd := m.overview.WorkspacesKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
 	}
 
 	// Interactive/inline edit mode: forward ALL keys to plugin including ctrl+c
@@ -1485,6 +1503,12 @@ func (m *Model) updateContext() {
 			m.activeContext = host.FocusContext()
 			return
 		}
+		if m.globalWorkspacesFilterFocused() {
+			// A focused filter is a text-input context, so sidecar's printable
+			// shortcuts stay off the query.
+			m.activeContext = "global-workspaces-filter"
+			return
+		}
 		m.activeContext = m.globalTab.context()
 		return
 	}
@@ -1639,6 +1663,7 @@ func isTextInputContext(ctx string) bool {
 	switch ctx {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
+		"global-workspaces-filter",
 		"issue-input":
 		return true
 	default:

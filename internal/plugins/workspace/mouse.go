@@ -26,7 +26,7 @@ func (p *Plugin) isModalViewMode() bool {
 func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab,
+		regionWorktreeItem, regionPreviewTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
@@ -717,6 +717,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Start drag for terminal panel resizing (percentage-based).
 		startSize := p.termPanelEffectiveSize()
 		p.mouseHandler.StartDrag(action.X, action.Y, regionTermPanelDivider, startSize)
+	case regionListFilter:
+		// Clicking the filter row focuses the query, the same as `/`.
+		p.activePane = PaneSidebar
+		p.focusListFilter()
 	case regionWorktreeItem:
 		// Click on worktree or shell entry - select it
 		if idx, ok := action.Region.Data.(int); ok {

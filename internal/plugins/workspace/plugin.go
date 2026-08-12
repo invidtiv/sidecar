@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 const (
@@ -46,6 +47,7 @@ const (
 	regionPaneDivider  = "pane-divider"
 	regionWorktreeItem = "workspace-item"
 	regionPreviewTab   = "preview-tab"
+	regionListFilter   = "workspace-list-filter"
 	// Agent choice modal IDs (modal library)
 	agentChoiceListID    = "agent-choice-list"
 	agentChoiceConfirmID = "agent-choice-confirm"
@@ -173,12 +175,17 @@ type Plugin struct {
 	activePane       FocusPane
 	previewTab       PreviewTab
 	selectedIdx      int
-	scrollOffset     int       // Sidebar list scroll offset
-	visibleCount     int       // Number of visible list items
-	previewOffset    int       // Scroll offset: absolute line from top (0 = first line) for all tabs
-	autoScrollOutput bool      // Auto-scroll output to follow agent (paused when user scrolls up)
-	sidebarWidth     int       // Persisted sidebar width
-	sidebarVisible   bool      // Whether sidebar is visible (toggled with \)
+	scrollOffset     int  // Sidebar list scroll offset
+	visibleCount     int  // Number of visible list items
+	previewOffset    int  // Scroll offset: absolute line from top (0 = first line) for all tabs
+	autoScrollOutput bool // Auto-scroll output to follow agent (paused when user scrolls up)
+	sidebarWidth     int  // Persisted sidebar width
+	sidebarVisible   bool // Whether sidebar is visible (toggled with \)
+
+	// listFilter is the shared `/` filter over the sidebar list. The component
+	// is internal/workspacelist, the same one the global Workspaces browser
+	// uses, so both lists agree on matching, counts, and escape behaviour.
+	listFilter       workspacelist.Filter
 	flashPreviewTime time.Time // When preview flash was triggered
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
@@ -581,6 +588,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.invalidateShellStartup()
 	p.stopTerminalModels()
 	p.ctx = ctx
+	// Filter state is in-memory and per consumer: a project or worktree switch
+	// starts from an unfiltered list rather than restoring a query whose origin
+	// the user can no longer see.
+	p.resetListFilter()
 	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
 	p.repoSnapshot = nil
 	p.refreshOperationID = ""
@@ -683,6 +694,13 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveCopyKey(), "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(superCopyKey, "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractivePasteKey(), "paste", "workspace-interactive")
+
+		// The shared `/` filter is its own text-input context. It is registered
+		// beside workspace-doc deliberately: the two contexts are never active
+		// at once, so neither claims the other's keys.
+		ctx.Keymap.RegisterPluginBinding("/", "filter-list", "workspace-list")
+		ctx.Keymap.RegisterPluginBinding("enter", "filter-accept", "workspace-filter")
+		ctx.Keymap.RegisterPluginBinding("esc", "filter-clear", "workspace-filter")
 
 		// Document panes are a distinct focus context: their navigation must not
 		// fall through to terminal scrolling or workspace refresh.
@@ -1345,6 +1363,27 @@ func (p *Plugin) moveCursor(delta int) {
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
 
+	if p.filterActive() {
+		// A filtered list walks only the rows the user can see. The unfiltered
+		// walk below is untouched: with no query it is still the exact
+		// shell-first, clamped navigation the sidebar has always had.
+		p.moveCursorFiltered(delta)
+	} else {
+		p.moveCursorUnfiltered(delta)
+	}
+
+	// Reset preview scroll state when changing selection
+	selectionChanged := p.shellSelected != oldShellSelected ||
+		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
+		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+	if selectionChanged {
+		p.applySelectionChange()
+	}
+	p.ensureVisible()
+}
+
+// moveCursorUnfiltered is the original shell-first walk.
+func (p *Plugin) moveCursorUnfiltered(delta int) {
 	shellCount := len(p.shells)
 	worktreeCount := len(p.worktrees)
 
@@ -1393,47 +1432,52 @@ func (p *Plugin) moveCursor(delta int) {
 			p.selectedIdx = newIdx
 		}
 	}
+}
 
-	// Reset preview scroll state when changing selection
-	selectionChanged := p.shellSelected != oldShellSelected ||
-		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
-	if selectionChanged {
-		// Selection alone no longer acknowledges: the poll handlers clear the
-		// done marker once the selection has been held long enough to read.
-		p.selectionSince = time.Now()
-		p.previewOffset = 0
-		p.autoScrollOutput = true
-		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
-		p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
-		p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
-		p.commitStatusList = nil // Clear stale commit list from previous worktree
-		p.commitStatusWorktree = ""
-		p.diffTabCursor = 0 // Reset diff tab file selection
-		p.diffTabScroll = 0
-		p.diffTabDiffScroll = 0
-		p.diffTabHorizScroll = 0
-		p.diffTabFocus = DiffTabFocusFileList
-		p.diffTabParsedDiff = nil
-		p.commitDetail = nil
-		p.commitFileCursor = 0
-		p.commitFileScroll = 0
-		p.commitFileDiffRaw = ""
-		p.commitFileParsed = nil
-		// Exit interactive mode when switching selection (td-fc758e88)
-		p.exitInteractiveMode()
-		// Persist selection to disk
-		p.saveSelectionState()
-	}
-	p.ensureVisible()
+// applySelectionChange resets the per-selection preview, diff, and task state.
+func (p *Plugin) applySelectionChange() {
+	// Selection alone no longer acknowledges: the poll handlers clear the
+	// done marker once the selection has been held long enough to read.
+	p.selectionSince = time.Now()
+	p.previewOffset = 0
+	p.autoScrollOutput = true
+	p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
+	p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
+	p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
+	p.commitStatusList = nil // Clear stale commit list from previous worktree
+	p.commitStatusWorktree = ""
+	p.diffTabCursor = 0 // Reset diff tab file selection
+	p.diffTabScroll = 0
+	p.diffTabDiffScroll = 0
+	p.diffTabHorizScroll = 0
+	p.diffTabFocus = DiffTabFocusFileList
+	p.diffTabParsedDiff = nil
+	p.commitDetail = nil
+	p.commitFileCursor = 0
+	p.commitFileScroll = 0
+	p.commitFileDiffRaw = ""
+	p.commitFileParsed = nil
+	// Exit interactive mode when switching selection (td-fc758e88)
+	p.exitInteractiveMode()
+	// Persist selection to disk
+	p.saveSelectionState()
 }
 
 // ensureVisible adjusts scroll to keep selected item visible.
 // Accounts for shells (which appear before worktrees in the sidebar).
 func (p *Plugin) ensureVisible() {
-	// Calculate effective position in the combined list (shells + worktrees)
+	// Calculate effective position in the combined list (shells + worktrees).
+	// While a filter is active the position is counted over the rows actually
+	// drawn, so scrolling follows what the user can see.
 	var effectivePos int
-	if p.shellSelected {
+	if p.filterActive() {
+		shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
+		if p.shellSelected {
+			effectivePos = max(0, indexOfValue(shells, p.selectedShellIdx))
+		} else {
+			effectivePos = len(shells) + max(0, indexOfValue(worktrees, p.selectedIdx))
+		}
+	} else if p.shellSelected {
 		effectivePos = p.selectedShellIdx
 	} else {
 		effectivePos = len(p.shells) + p.selectedIdx

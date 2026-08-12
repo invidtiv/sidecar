@@ -191,13 +191,15 @@ func TestStatusPollDiscoversAgentStartedAfterUntypedShellWasPlain(t *testing.T) 
 	collector := base.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory}))
 
 	first := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "zsh"}})
-	if len(first.Workspaces) != 1 || first.Workspaces[0].Provider != "" {
+	firstShell, ok := shellNamed(first, "late-agent")
+	if !ok || firstShell.Provider != "" {
 		t.Fatalf("plain candidate was not retained internally: %#v", first.Workspaces)
 	}
 
 	output = "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)"
 	second := collector.RefreshProjectStatus(context.Background(), first, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "node"}})
-	if len(second.Workspaces) != 1 || second.Workspaces[0].Provider != "codex" || second.Workspaces[0].Presentation.Lane != agentstatus.LaneWorking {
+	secondShell, ok := shellNamed(second, "late-agent")
+	if !ok || secondShell.Provider != "codex" || secondShell.Presentation.Lane != agentstatus.LaneWorking {
 		t.Fatalf("late agent was not discovered by status poll: %#v", second.Workspaces)
 	}
 }
@@ -639,4 +641,98 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// shellNamed finds one shell row in a result. The catalog now also carries
+// plain worktrees, so a test about a shell has to name the shell.
+func shellNamed(result ProjectResult, tmuxName string) (Workspace, bool) {
+	for _, workspace := range result.Workspaces {
+		if workspace.Kind == KindShell && workspace.Key == tmuxName {
+			return workspace, true
+		}
+	}
+	return Workspace{}, false
+}
+
+// TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus covers slice 2
+// item 1: the read-only inventory became an all-workspace catalog, and the
+// Agents projection over it is exactly what the board collected before.
+func TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	linked := filepath.Join(t.TempDir(), "repo-topic")
+	for _, dir := range []string{root, linked} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The main worktree carries a recorded agent; the linked worktree carries
+	// nothing at all and has no session.
+	worktreeState, err := projectdir.WorktreeDirWithBase(stateBase, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeState, "agent"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"plain-shell","displayName":"Shell 1","namespace":"` + tmuxenv.Namespace() + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, stateBase)
+
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\nworktree " + linked + "\nbranch refs/heads/topic\n"}}
+	captures := 0
+	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "$ ", nil }}.WithDefaults()
+	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
+	collector := base.ForRefresh(2, BuildShellClaims([]ProjectResult{inventory}))
+	result := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{
+		{ID: "%1", Session: "plain-shell", Path: root, Command: "zsh"},
+	})
+
+	catalog := Catalog(result)
+	if len(catalog) != 3 {
+		t.Fatalf("catalog = %#v, want main worktree, linked worktree, and the plain shell", catalog)
+	}
+	byName := map[string]Item{}
+	for _, item := range catalog {
+		byName[item.Name] = item
+	}
+	main, linkedItem, shell := byName[filepath.Base(root)], byName[filepath.Base(linked)], byName["Shell 1"]
+	if main.Agent == nil || main.Provider != "codex" {
+		t.Fatalf("agent worktree lost its status: %#v", main)
+	}
+	if linkedItem.Agent != nil || linkedItem.Provider != "" || linkedItem.Live || linkedItem.Branch != "topic" {
+		t.Fatalf("plain worktree was given a fabricated agent state: %#v", linkedItem)
+	}
+	if shell.Agent != nil {
+		t.Fatalf("an unidentified shell is not an agent: %#v", shell)
+	}
+	if !shell.Live || shell.PaneID != "%1" {
+		t.Fatalf("plain shell lost its session health: %#v", shell)
+	}
+
+	// The plain worktree costs no pane capture: correlation is enough to know
+	// whether it is live, and capturing it would be work for a row with no
+	// agent semantics.
+	if captures != 1 {
+		t.Fatalf("captures = %d, want only the shell's discovery capture", captures)
+	}
+
+	// The Agents projection is the agent-only subset.
+	agents := AgentWorkspaces(result.Workspaces)
+	if len(agents) != 1 || agents[0].Provider != "codex" {
+		t.Fatalf("agent projection = %#v", agents)
+	}
+
+	// Cataloguing is read-only.
+	if after := snapshotTree(t, stateBase); !reflect.DeepEqual(before, after) {
+		t.Fatalf("catalog collection mutated Sidecar state\nbefore=%v\nafter=%v", before, after)
+	}
 }

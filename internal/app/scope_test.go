@@ -142,8 +142,25 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 		t.Fatalf("entry ran the collector %d times, want 1", runner.calls)
 	}
 
-	// The Workspaces placeholder collects nothing, and neither does re-entering
-	// the global space while it is the remembered tab.
+	// Slice 2: the Workspaces tab is the second projection of the same catalog,
+	// so switching onto it — and back — reuses the running cycle rather than
+	// starting a second one.
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	if runner.calls != 1 {
+		t.Fatalf("switching between the two catalog tabs collected again: %d calls", runner.calls)
+	}
+
+	// Leaving the global space stops collection, so returning to the remembered
+	// Workspaces tab starts exactly one new shared cycle.
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 	m = asAppModel(t, updated)
 	if cmd != nil {
@@ -153,26 +170,32 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 	m = asAppModel(t, updated)
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if cmd != nil {
-		cmd()
+	if cmd == nil {
+		t.Fatal("re-entering the Workspaces tab started no collection")
 	}
+	cmd()
 	if m.globalTab != GlobalWorkspaces {
 		t.Fatalf("re-entry forgot the last global tab: %v", m.globalTab)
 	}
-	if runner.calls != 1 {
-		t.Fatalf("the Workspaces tab collected: %d calls", runner.calls)
+	if runner.calls != 2 {
+		t.Fatalf("re-entry collector calls = %d, want exactly one more shared cycle", runner.calls)
 	}
 }
 
-func TestGlobalWorkspacesTabIsAnHonestPlaceholder(t *testing.T) {
+func TestGlobalWorkspacesTabIsAnHonestEmptyList(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	m.scope = ScopeGlobal
 	m.globalTab = GlobalWorkspaces
 	m.updateContext()
 
+	// With nothing collected the list says so rather than drawing a blank pane
+	// that reads as "no workspaces exist".
 	content := ansi.Strip(m.renderContent(m.width, 20))
-	if !strings.Contains(content, "Workspaces") || !strings.Contains(content, "Nothing is being collected") {
-		t.Fatalf("placeholder does not say what it is:\n%s", content)
+	if !strings.Contains(content, "Workspaces") || !strings.Contains(content, "Activity") || !strings.Contains(content, "/ filter") {
+		t.Fatalf("global Workspaces list header is missing:\n%s", content)
+	}
+	if !strings.Contains(content, "No shells or worktrees") {
+		t.Fatalf("empty list is not honest about being empty:\n%s", content)
 	}
 	if m.activeContext != "global-workspaces" {
 		t.Fatalf("activeContext = %q, want the placeholder's own context", m.activeContext)
@@ -444,4 +467,63 @@ func hasHint(hints []footerHint, keys, label string) bool {
 		}
 	}
 	return false
+}
+
+// TestGlobalWorkspacesFilterOwnsItsKeysAndPastes covers slice 2 item 3's app
+// side: while the cross-project filter has focus it is a text-input context, so
+// sidecar's own tab, number, quit, and scope shortcuts cannot take characters
+// out of a query.
+func TestGlobalWorkspacesFilterOwnsItsKeysAndPastes(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m = asAppModel(t, updated)
+	if !m.overview.WorkspacesFilterFocused() {
+		t.Fatal("`/` did not focus the global filter")
+	}
+	if m.activeContext != "global-workspaces-filter" || !m.consumesTextInput() {
+		t.Fatalf("filter context = %q consumes=%v", m.activeContext, m.consumesTextInput())
+	}
+
+	// Keys that mean "quit", "switch tab", and "leave the global space"
+	// everywhere else are query text here.
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'q', Text: "q"},
+		{Code: '1', Text: "1"},
+		{Code: '`', Text: "`"},
+		{Code: 'k', Text: "K", Mod: tea.ModShift},
+	} {
+		updated, _ = m.Update(key)
+		m = asAppModel(t, updated)
+	}
+	if !m.inGlobalScope() || m.globalTab != GlobalWorkspaces {
+		t.Fatalf("typing left the tab: scope=%v tab=%v", m.scope, m.globalTab)
+	}
+
+	// Pastes go to the query too, not to a hidden project plugin.
+	updated, _ = m.Update(tea.PasteMsg{Content: "sidecar"})
+	m = asAppModel(t, updated)
+
+	// Escape clears, then releases focus, and only then leaves the global space.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("the first escape left the global space instead of clearing the query")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.overview.WorkspacesFilterFocused() {
+		t.Fatal("the second escape should release filter focus and stay in the global space")
+	}
+	if m.activeContext != "global-workspaces" || m.consumesTextInput() {
+		t.Fatalf("context after exit = %q consumes=%v", m.activeContext, m.consumesTextInput())
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("escape on an unfiltered list should return to the project")
+	}
 }

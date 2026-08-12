@@ -576,6 +576,15 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
 	}
+	// A focused list filter owns the keyboard while the sidebar has focus. It is
+	// asked after the doc-pane keys deliberately: a focused document keeps its
+	// own q/r/+/- context, and the two focuses are mutually exclusive, so
+	// neither steals the other's keys.
+	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
+		if handled, cmd := p.handleFilterKey(msg); handled {
+			return cmd
+		}
+	}
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
@@ -592,6 +601,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	switch msg.String() {
+	case "/":
+		// Explicit filter entry. Only from the sidebar, and never in kanban or
+		// from the preview, where `/` belongs to terminal search.
+		if p.viewMode != ViewModeKanban && p.activePane == PaneSidebar && !p.docFocused() {
+			p.focusListFilter()
+			return nil
+		}
 	case "j", "down":
 		if p.viewMode == ViewModeKanban {
 			// Kanban mode: move cursor down within column (no selection change)
@@ -668,6 +684,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if p.activePane == PaneSidebar {
+			if p.filterActive() {
+				p.selectFirstVisible()
+				p.scrollOffset = 0
+				return p.loadSelectedContent()
+			}
 			// Jump to top = select first shell if any, otherwise first worktree
 			if len(p.shells) > 0 {
 				p.shellSelected = true
@@ -712,6 +733,10 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if p.activePane == PaneSidebar {
+			if p.filterActive() {
+				p.selectLastVisible()
+				return p.loadSelectedContent()
+			}
 			// Jump to bottom = select last worktree (not shell)
 			if len(p.worktrees) > 0 {
 				p.shellSelected = false
