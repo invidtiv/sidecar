@@ -4,7 +4,7 @@ You are the **orchestrator**. Stay in this session. Do not implement the stories
 
 This is an unattended all-nighter. Work until the tickets below are closed or you are genuinely blocked. Re-read `td show` / `td tree` before each wave — the user may have added stories.
 
-Repo: this checkout. Branch: `global-workspace`.
+Work in **this worktree** — the one you were launched in. Do not switch checkouts, create another worktree, or assume a branch name. Commit here.
 
 ---
 
