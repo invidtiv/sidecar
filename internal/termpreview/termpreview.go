@@ -22,6 +22,8 @@
 // gets back rows of text.
 package termpreview
 
+import "github.com/marcus/sidecar/internal/mouse"
+
 // HeaderRows is the single row every embedded terminal reserves above its
 // viewport for identity chips and hints. It is one row for every surface, so a
 // terminal always begins on the row immediately below its box's first row.
@@ -30,9 +32,11 @@ const HeaderRows = 1
 // Box is a rectangle in surface-local coordinates. It is the currency between
 // the pane tree and this package: `LayoutPanes` produces boxes, and everything
 // here consumes them.
-type Box struct {
-	X, Y, W, H int
-}
+//
+// It is an alias of mouse.Rect, not a separate struct: a box and a hit region
+// are the same rectangle, so the layout that draws a pane and the hit map that
+// receives its clicks cannot disagree about the geometry.
+type Box = mouse.Rect
 
 // Surface locates one embedded terminal inside a box and reports the size of
 // its viewport. It is the box minus its header row — no more, no less, so a

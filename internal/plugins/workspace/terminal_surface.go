@@ -3,7 +3,6 @@ package workspace
 import (
 	"time"
 
-	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -148,11 +147,7 @@ func (p *Plugin) terminalLeafBox() (Box, bool) {
 		return content, ok
 	}
 
-	floors := Floors{
-		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
-		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
-	}
-	leaves, _, fits := LayoutPanes(p.paneRoot, content, floors)
+	leaves, _, fits := LayoutPanes(p.paneRoot, content, paneTreeFloors())
 	if !fits {
 		// A tree that cannot satisfy every leaf floor renders only its focused
 		// leaf in the full content box. Phase 1's only reachable tree is the
