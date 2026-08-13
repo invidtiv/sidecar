@@ -2204,26 +2204,7 @@ func (p *Plugin) cycleDiffScope() tea.Cmd {
 }
 
 func (p *Plugin) applyDiffScope() {
-	p.diffContent, p.diffRaw = "", ""
-	p.multiFileDiff = nil
-	p.commitStatusList = nil
-	if p.diffSnapshot == nil {
-		return
-	}
-	switch p.diffScope {
-	case DiffScopeCommits:
-		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
-	case DiffScopeAggregate:
-		// Aggregate is deliberately rendered as two labelled raw sections so
-		// committed and uncommitted changes cannot be mistaken for each other.
-	default:
-		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
-		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
-		// Commits are listed below the files so a clean worktree still shows the
-		// branch's work. Both come from the same pinned snapshot, so the two
-		// sections can never describe different revisions.
-		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
-	}
+	p.applySharedDiffScope()
 }
 
 // onDiffTabCursorChanged resets diff pane state when cursor changes in the file list.
@@ -2254,15 +2235,10 @@ func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 // so this does not require onDiffTabCursorChanged. Skip if that commit is
 // already loaded to avoid a second fetch on refresh or a no-op move-back.
 func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
-	fileCount := p.diffTabFileCount()
-	if p.diffTabCursor < fileCount {
+	commit, ok := p.asDiffView().SelectedCommit()
+	if !ok {
 		return nil
 	}
-	commitIdx := p.diffTabCursor - fileCount
-	if commitIdx < 0 || commitIdx >= len(p.commitStatusList) {
-		return nil
-	}
-	commit := p.commitStatusList[commitIdx]
 	if commitDetailMatchesListHash(p.commitDetail, commit.Hash) {
 		return nil
 	}

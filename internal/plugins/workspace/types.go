@@ -6,6 +6,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // ViewMode represents the current view state.
@@ -47,45 +48,35 @@ const (
 	PreviewTabTask                     // TD task info
 )
 
-// DiffViewMode specifies the diff rendering mode.
-type DiffViewMode int
-
-const (
-	DiffViewUnified    DiffViewMode = iota // Line-by-line unified view
-	DiffViewSideBySide                     // Side-by-side split view
-	DiffViewFullFile                       // Full-file side-by-side view (like VS Code diff)
+// Diff view types live in workspacediff so the global preview can use the
+// same model without constructing a Plugin.
+type (
+	DiffViewMode = workspacediff.ViewMode
+	DiffScope    = workspacediff.Scope
+	LoadState    = workspacediff.LoadState
+	DiffTabFocus = workspacediff.Focus
 )
 
-// DiffScope names the three distinct questions answered by the Diff tab.
-// Keeping this separate from DiffViewMode avoids confusing data selection
-// (working tree/commits/aggregate) with presentation (unified/split/full-file).
-type DiffScope int
-
 const (
-	DiffScopeWorkingTree DiffScope = iota
-	DiffScopeCommits
-	DiffScopeAggregate
-)
+	DiffViewUnified    = workspacediff.ViewUnified
+	DiffViewSideBySide = workspacediff.ViewSideBySide
+	DiffViewFullFile   = workspacediff.ViewFullFile
 
-type LoadState int
+	DiffScopeWorkingTree = workspacediff.ScopeWorkingTree
+	DiffScopeCommits     = workspacediff.ScopeCommits
+	DiffScopeAggregate   = workspacediff.ScopeAggregate
 
-const (
-	LoadStateUnknown LoadState = iota
-	LoadStateLoading
-	LoadStateClean
-	LoadStateReady
-	LoadStateTruncated
-	LoadStateError
-)
+	LoadStateUnknown   = workspacediff.LoadStateUnknown
+	LoadStateLoading   = workspacediff.LoadStateLoading
+	LoadStateClean     = workspacediff.LoadStateClean
+	LoadStateReady     = workspacediff.LoadStateReady
+	LoadStateTruncated = workspacediff.LoadStateTruncated
+	LoadStateError     = workspacediff.LoadStateError
 
-// DiffTabFocus represents which sub-pane is focused within the diff tab.
-type DiffTabFocus int
-
-const (
-	DiffTabFocusFileList    DiffTabFocus = iota // File list navigation (files + commits)
-	DiffTabFocusDiff                            // Per-file diff viewing
-	DiffTabFocusCommitFiles                     // Commit file list (drilled into a commit)
-	DiffTabFocusCommitDiff                      // Commit file diff viewing
+	DiffTabFocusFileList    = workspacediff.FocusFileList
+	DiffTabFocusDiff        = workspacediff.FocusDiff
+	DiffTabFocusCommitFiles = workspacediff.FocusCommitFiles
+	DiffTabFocusCommitDiff  = workspacediff.FocusCommitDiff
 )
 
 // TermPanelLayout represents the terminal panel split orientation.
@@ -435,12 +426,7 @@ type WorktreeChanges struct {
 }
 
 // CommitStatusInfo holds commit information with merge/push status.
-type CommitStatusInfo struct {
-	Hash    string // Short commit hash
-	Subject string // Commit subject line
-	Pushed  bool   // Is commit pushed to remote?
-	Merged  bool   // Is commit merged to base branch?
-}
+type CommitStatusInfo = workspacediff.CommitInfo
 
 // validateManagedSessionsMsg triggers periodic validation of managedSessions.
 type validateManagedSessionsMsg struct{}

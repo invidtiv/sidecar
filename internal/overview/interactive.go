@@ -9,6 +9,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // Typing into a pane from the global browser is not a second way to talk to
@@ -197,6 +198,7 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	if m.PreviewInteractive() {
 		return nil
 	}
+	_ = m.ensureOutputTab()
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
@@ -386,6 +388,10 @@ func (m *Model) finishPreviewGesture() tea.Cmd {
 	}
 	switch resolution {
 	case tty.ClickActivate:
+		// Diff/Task are views of the row. Only the Output terminal types.
+		if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
+			return nil
+		}
 		return m.enterPreviewInteractive()
 	case tty.ClickForward:
 		// The press position, not the release: a click that resolves here never

@@ -88,6 +88,8 @@ func DefaultBindings() []Binding {
 		// Enter from the list starts typing. E is the remaining explicit
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
+		{Key: ",", Command: "prev-tab", Context: "global-workspaces"},
+		{Key: ".", Command: "next-tab", Context: "global-workspaces"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface

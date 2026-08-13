@@ -90,8 +90,9 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | Key | Action |
 |-----|--------|
 | `j` / `k` / arrows / `g` / `G` | Move selection; preview follows; not typing |
-| `enter` / `E` | Start typing in the selected live pane. A dead row stays put |
-| click in pane | Start typing |
+| `,` / `.` | Previous / next preview tab (Output / Diff / Task) on a non-main worktree. Shells and the main worktree have no tab row |
+| `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
+| click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
 | click a list row | Select it; preview follows; not typing |
 | click another row while typing | Switch session and stay typing |
 | double-click a row | Open that identity in its owning project |

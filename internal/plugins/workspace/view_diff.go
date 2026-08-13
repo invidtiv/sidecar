@@ -53,7 +53,8 @@ func (p *Plugin) clampDiffTabCursor() {
 const diffTabCollapseThreshold = 120
 
 // renderDiffContent renders git diff using a two-pane layout (or collapsed single-pane
-// when width is below diffTabCollapseThreshold).
+// when width is below diffTabCollapseThreshold). Snapshot apply/load live in
+// workspacediff.View; this method keeps plugin-only mouse, full-file, and drill-down.
 func (p *Plugin) renderDiffContent(width, height int) string {
 	wt := p.selectedWorktree()
 	if wt == nil {
@@ -72,7 +73,6 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 	hasFiles := p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 0
 	hasCommits := len(p.commitStatusList) > 0
 
-	// Only show "No changes" if there are truly no files AND no commits to display
 	if !hasFiles && !hasCommits {
 		if p.diffRaw == "" {
 			if p.diffScope == DiffScopeCommits {
@@ -80,24 +80,19 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 			}
 			return dimText("Working Tree vs HEAD: clean")
 		}
-		// Have raw diff but no parsed multi-file diff — fall back to basic rendering
 		return p.renderDiffContentBasicWithHeight(width, height)
 	}
 
-	// Clamp cursor before rendering (avoid state mutation during View)
 	p.clampDiffTabCursor()
 
-	// Collapsed single-pane mode for narrow terminals
 	if width < diffTabCollapseThreshold {
 		return p.renderDiffContentCollapsed(width, height)
 	}
 
-	// Two-pane layout dimensions
 	fileListWidth := p.diffTabListWidth
 	if fileListWidth <= 0 {
 		fileListWidth = diffTabFileListWidth(width)
 	}
-	// Clamp to available space
 	if fileListWidth < 20 {
 		fileListWidth = 20
 	}
@@ -108,39 +103,30 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 	if fileListWidth > maxW {
 		fileListWidth = maxW
 	}
-	diffPaneWidth := width - fileListWidth - 1 // -1 for divider
+	diffPaneWidth := width - fileListWidth - 1
 	if diffPaneWidth < 10 {
 		diffPaneWidth = 10
 	}
 
-	// Absolute origin of diff tab content, for hit region registration.
-	// Preview content starts after sidebar + main divider + panel border/padding.
 	contentBaseX := p.previewSplit().ContentX
-	// The diff tab is not a terminal surface, so it still renders the standalone
-	// tab row and its spacer above its content.
 	baseY := previewBorderRows + previewTabRows
 
-	// Register hit region for the diff tab divider (for drag-to-resize).
 	absXDivider := contentBaseX + fileListWidth
 	p.mouseHandler.HitMap.AddRect(regionDiffTabDivider, absXDivider, 0, dividerHitWidth, p.height, nil)
 
-	rightPaneX := contentBaseX + fileListWidth + 1 // +1 for divider
+	rightPaneX := contentBaseX + fileListWidth + 1
 
 	var leftPane, rightPane string
 
 	if p.diffTabFocus == DiffTabFocusCommitFiles || p.diffTabFocus == DiffTabFocusCommitDiff {
-		// Commit drill-down: left=commit files, right=commit file diff
 		leftPane = p.renderCommitFileList(fileListWidth, height, contentBaseX, baseY)
 		rightPane = p.renderCommitFileDiffPane(diffPaneWidth, height, rightPaneX, baseY)
 	} else {
-		// Default: left=files+commits, right=per-file diff
 		leftPane = p.renderDiffTabFileList(fileListWidth, height, contentBaseX, baseY)
 		rightPane = p.renderDiffTabDiffPane(diffPaneWidth, height, rightPaneX, baseY)
 	}
 
 	divider := p.renderDiffTabDivider(height)
-
-	// Pad panes to equal height so lipgloss.JoinHorizontal aligns correctly
 	leftPane = padToHeight(leftPane, height, fileListWidth)
 	rightPane = padToHeight(rightPane, height, diffPaneWidth)
 

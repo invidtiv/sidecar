@@ -130,6 +130,8 @@ func key(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "enter":
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case ",", ".":
+		return tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 	}
 	return tea.KeyPressMsg{}
 }

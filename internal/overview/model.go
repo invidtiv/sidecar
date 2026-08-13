@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -78,7 +79,8 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg, previewAutoScrollTickMsg:
+	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg, previewAutoScrollTickMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg:
 		return true
 	default:
 		return false
@@ -131,6 +133,10 @@ type Model struct {
 	sidebarVisible     bool
 	catalog            map[string]workspaceinventory.Workspace
 	preview            previewState
+	previewTab         workspacediff.Tab
+	diff               workspacediff.View
+	task               workspacediff.TaskView
+	previewExtrasID    string
 	terminalConfig     tty.Config
 	width              int
 	height             int
@@ -386,6 +392,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.pollPreview(msg)
 	case previewAutoScrollTickMsg:
 		return m.advancePreviewAutoScroll(msg)
+	case workspacediff.SnapshotMsg:
+		return m.applyDiffSnapshot(msg)
+	case workspacediff.CommitDetailMsg:
+		m.applyCommitDetail(msg)
+		return nil
+	case workspacediff.TaskMsg:
+		m.applyTask(msg)
+		return nil
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)

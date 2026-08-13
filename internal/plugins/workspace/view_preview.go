@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // renderPreviewContent renders the preview pane content (no borders).
@@ -177,17 +178,7 @@ func (p *Plugin) truncateAllLines(content string, maxWidth int) string {
 // previewTabChips renders the Output / Diff / Task pills as separate chips, so
 // the header row can drop whole chips rather than clip one in half.
 func (p *Plugin) previewTabChips() []string {
-	tabs := []string{"Output", "Diff", "Task"}
-	rendered := make([]string, 0, len(tabs))
-
-	for i, tab := range tabs {
-		style := styles.BarChip
-		if PreviewTab(i) == p.previewTab {
-			style = styles.BarChipActive
-		}
-		rendered = append(rendered, styles.RenderPillWithStyle(tab, style, nil))
-	}
-	return rendered
+	return workspacediff.TabChips(workspacediff.Tab(p.previewTab))
 }
 
 // previewTabsVisible reports whether the preview is in a state that draws the
@@ -199,7 +190,7 @@ func (p *Plugin) previewTabsVisible() bool {
 		return false
 	}
 	wt := p.selectedWorktree()
-	return wt != nil && !wt.IsMain
+	return wt != nil && workspacediff.TabsVisible(false, wt.IsMain)
 }
 
 // renderTabs renders the standalone tab row the Diff and Task tabs still use.
@@ -608,7 +599,10 @@ func (p *Plugin) renderTaskContent(width, height int) string {
 	}
 
 	if wt.TaskID == "" {
-		return dimText("No linked task\nPress 't' to link a task")
+		view, _ := workspacediff.RenderTask(workspacediff.TaskView{}, workspacediff.TaskRenderOpts{
+			EmptyHint: "Press 't' to link a task", Width: width, Height: height,
+		})
+		return view
 	}
 
 	// Check if we're loading or don't have cached details for this task

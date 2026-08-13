@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 )
 
-const maxUntrackedTotalBytes int64 = 4 << 20
+// maxUntrackedTotalBytes is defined in diff.go (aliased from workspacediff).
 
 func collectWorktreeChanges(ctx context.Context, workdir string, processes *atomic.Int64) (*WorktreeChanges, *GitStats) {
 	changes := &WorktreeChanges{State: LoadStateLoading}
@@ -160,4 +160,3 @@ func countLinesBounded(r io.Reader, limit int64) (int, error) {
 	}
 	return n, s.Err()
 }
-

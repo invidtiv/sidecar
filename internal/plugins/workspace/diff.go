@@ -13,34 +13,18 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 const (
-	// maxUntrackedFileSize is the maximum size of an untracked file to include
-	// as a full diff. Files larger than this get a size warning instead.
-	maxUntrackedFileSize = 1 << 20 // 1 MB
-
-	// maxUntrackedFiles is the maximum number of untracked files to include
-	// as synthetic diffs. This prevents performance issues in repos with many
-	// untracked files (e.g., missing .gitignore entries).
-	maxUntrackedFiles = 50
+	maxUntrackedFileSize   = workspacediff.MaxUntrackedFileSize
+	maxUntrackedFiles      = workspacediff.MaxUntrackedFiles
+	maxUntrackedTotalBytes = workspacediff.MaxUntrackedTotalBytes
 )
 
 // DiffSnapshot contains all three explicit diff views resolved from the same
 // immutable worktree/base identity.
-type DiffSnapshot struct {
-	State                 LoadState
-	WorkingTree           string
-	Commits               []CommitStatusInfo
-	AggregateCommitted    string
-	AggregateUncommitted  string
-	BaseRef               string
-	MergeBase             string
-	UntrackedShown        int
-	UntrackedOmitted      int
-	UntrackedBytesOmitted int64
-	Truncated             bool
-}
+type DiffSnapshot = workspacediff.Snapshot
 
 // loadSelectedDiff returns a command to load diff for the selected worktree.
 // Also loads task details if Task tab is active.
@@ -106,72 +90,11 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 }
 
 func loadDiffSnapshot(ctx context.Context, workdir, baseRef string) (*DiffSnapshot, error) {
-	if _, err := os.Lstat(workdir); err != nil {
-		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
-	}
-	if baseRef == "" {
-		baseRef = detectDefaultBranchContext(ctx, workdir)
-	}
-	if baseRef == "" {
-		return nil, fmt.Errorf("resolve base ref for git log and aggregate diff in %s", workdir)
-	}
-	baseOIDBytes, err := gitOutputBytes(ctx, workdir, "rev-parse", "--verify", baseRef+"^{commit}")
-	if err != nil {
-		return nil, fmt.Errorf("resolve base ref %q: %w", baseRef, err)
-	}
-	headOIDBytes, err := gitOutputBytes(ctx, workdir, "rev-parse", "--verify", "HEAD^{commit}")
-	if err != nil {
-		return nil, fmt.Errorf("resolve HEAD: %w", err)
-	}
-	return loadDiffSnapshotPinned(ctx, workdir, baseRef, strings.TrimSpace(string(baseOIDBytes)), strings.TrimSpace(string(headOIDBytes)))
+	return workspacediff.LoadSnapshot(ctx, workdir, baseRef)
 }
 
 func loadDiffSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID string) (*DiffSnapshot, error) {
-	if _, err := os.Lstat(workdir); err != nil {
-		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
-	}
-	if baseOID == "" {
-		return nil, fmt.Errorf("resolved base OID is unavailable for %q", baseRef)
-	}
-	if headOID == "" {
-		return nil, fmt.Errorf("resolved HEAD OID is unavailable")
-	}
-
-	tracked, err := gitOutputBytes(ctx, workdir, "diff", "--binary", headOID)
-	if err != nil {
-		return nil, err
-	}
-	untracked, meta, err := getUntrackedFileDiffsContext(ctx, workdir)
-	if err != nil {
-		return nil, err
-	}
-	working := joinDiffParts(string(tracked), untracked)
-
-	mergeBaseBytes, err := gitOutputBytes(ctx, workdir, "merge-base", baseOID, headOID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve merge-base for base ref %q: %w", baseRef, err)
-	}
-	mergeBase := strings.TrimSpace(string(mergeBaseBytes))
-	committed, err := gitOutputBytes(ctx, workdir, "diff", "--binary", mergeBase+".."+headOID)
-	if err != nil {
-		return nil, fmt.Errorf("aggregate committed diff for %q (%s..HEAD): %w", baseRef, mergeBase, err)
-	}
-	commits, err := getWorktreeCommitsBetweenContext(ctx, workdir, baseOID, headOID)
-	if err != nil {
-		return nil, fmt.Errorf("unique commits for base ref %q using git log %s..HEAD: %w", baseRef, baseRef, err)
-	}
-
-	state := LoadStateReady
-	if working == "" && len(commits) == 0 && len(committed) == 0 {
-		state = LoadStateClean
-	} else if meta.Truncated {
-		state = LoadStateTruncated
-	}
-	return &DiffSnapshot{State: state, WorkingTree: working, Commits: commits,
-		AggregateCommitted: string(committed), AggregateUncommitted: working,
-		BaseRef: baseRef, MergeBase: mergeBase, UntrackedShown: meta.Shown,
-		UntrackedOmitted: meta.Omitted, UntrackedBytesOmitted: meta.BytesOmitted,
-		Truncated: meta.Truncated}, nil
+	return workspacediff.LoadSnapshotPinned(ctx, workdir, baseRef, baseOID, headOID)
 }
 
 func gitOutputBytes(ctx context.Context, dir string, args ...string) ([]byte, error) {

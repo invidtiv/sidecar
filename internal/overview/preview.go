@@ -239,7 +239,7 @@ func (m *Model) previewSync() tea.Cmd {
 		return nil
 	}
 	if selected.ID == m.preview.workspaceID {
-		return nil
+		return m.ensurePreviewExtras()
 	}
 	return m.previewSelect()
 }
@@ -284,6 +284,7 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		return nil
 	}
 	m.preview.workspaceID = workspace.ID
+	extras := m.ensurePreviewExtras()
 
 	// An item with no single live pane behind it is not captured at all. There
 	// is nothing to read, and guessing among several panes is exactly what the
@@ -292,9 +293,9 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
 		m.resetPreviewContent()
-		return nil
+		return extras
 	}
-	return m.capturePreviewCmd(workspace)
+	return tea.Batch(extras, m.capturePreviewCmd(workspace))
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live
@@ -776,56 +777,7 @@ func (m *Model) previewSplit(width int) termpreview.Split {
 // The size is the layout's own box, which is the box previewWindow places its
 // surface in; hit testing therefore maps onto the rows drawn here.
 func (m *Model) renderPreview(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
-	workspace, ok := m.SelectedWorkspace()
-	if !ok {
-		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
-			Width: width, Height: height, Message: "No workspace selected",
-		})
-	}
-
-	chips := []string{previewChip(workspace.Name, m.PreviewFocused())}
-	if workspace.ProjectName != "" {
-		chips = append(chips, styles.Muted.Render(workspace.ProjectName))
-	}
-
-	hints := m.interactiveHints()
-	if !m.PreviewInteractive() {
-		hints = previewHints(workspace, m.PreviewFocused())
-	}
-	message := m.preview.reason
-	if message != "" {
-		message += "\n\n" + previewMetadata(workspace)
-	}
-
-	input := m.previewViewportInput(width, height-termpreview.HeaderRows)
-	_, total := tty.BufferBase(input.Buffer)
-	layout := tty.FitViewport(input)
-	hints = m.appendWindowStatus(styles.Muted.Render(hints), input, layout, width, chips)
-	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
-		Width:  width,
-		Height: height,
-		Chips:  chips,
-		Hints:  hints,
-		Layout: layout,
-		Buffer: input.Buffer,
-		// The window and the highlight drawn in it must resolve a line the same
-		// way, or a selection made over a pane with history is drawn rows away
-		// from the text it covers.
-		AbsoluteBase: input.AbsoluteBase,
-		TotalItems:   total,
-		// The live grid behind the window, from the same input the window was
-		// fitted to: letterboxing and the pane's canvas background are the shared
-		// renderer's to decide, not this surface's to guess at.
-		PaneHeight:  input.PaneHeight,
-		Interactive: input.Interactive,
-		Follow:      input.Follow,
-		Selection:   &m.preview.selection,
-		TabWidth:    tty.DefaultTabWidth,
-		Message:     message,
-	})
+	return m.renderPreviewWithTabs(width, height)
 }
 
 // appendWindowStatus adds the shared facts about the drawn window to the
