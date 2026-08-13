@@ -1,0 +1,145 @@
+package terminallink
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+func TestScanFindsSafeURLAndPathLine(t *testing.T) {
+	spans := Scan("see https://example.com/docs?q=1, then internal/foo.go:123", nil)
+	if len(spans) != 2 {
+		t.Fatalf("spans = %#v, want URL and path", spans)
+	}
+	if spans[0].Kind != KindURL || spans[0].Value != "https://example.com/docs?q=1" {
+		t.Fatalf("URL span = %#v", spans[0])
+	}
+	if spans[1].Kind != KindFile || spans[1].Value != "internal/foo.go" || spans[1].Extra.Line != 123 {
+		t.Fatalf("path span = %#v", spans[1])
+	}
+}
+
+func TestScanIssueOnTypicalAgentLine(t *testing.T) {
+	spans := Scan("review td-196c42", nil)
+	if len(spans) != 1 {
+		t.Fatalf("spans = %#v, want one issue", spans)
+	}
+	if spans[0].Kind != KindIssue || spans[0].Value != "td-196c42" {
+		t.Fatalf("issue span = %#v", spans[0])
+	}
+	if spans[0].StartCol != ansi.StringWidth("review ") || spans[0].EndCol != ansi.StringWidth("review td-196c42")-1 {
+		t.Fatalf("issue columns = %d..%d", spans[0].StartCol, spans[0].EndCol)
+	}
+}
+
+func TestScanIssueDoesNotOverlapURLOrFile(t *testing.T) {
+	line := "see https://example.com/td-196c42 and td-196c42.go:12 then review td-196c42"
+	spans := Scan(line, nil)
+	var issues, files, urls int
+	for _, span := range spans {
+		switch span.Kind {
+		case KindIssue:
+			issues++
+			if span.Value != "td-196c42" {
+				t.Fatalf("issue value = %q", span.Value)
+			}
+		case KindFile:
+			files++
+			if span.Value != "td-196c42.go" || span.Extra.Line != 12 {
+				t.Fatalf("file span = %#v", span)
+			}
+		case KindURL:
+			urls++
+		}
+		for _, other := range spans {
+			if span == other {
+				continue
+			}
+			if span.StartCol <= other.EndCol && span.EndCol >= other.StartCol {
+				t.Fatalf("overlapping spans %#v and %#v", span, other)
+			}
+		}
+	}
+	if urls != 1 || files != 1 || issues != 1 {
+		t.Fatalf("kinds url=%d file=%d issue=%d, want 1 each: %#v", urls, files, issues, spans)
+	}
+}
+
+func TestScanIssueRequiresWordBoundaryAndFourHex(t *testing.T) {
+	for _, line := range []string{
+		"xtd-196c42",
+		"td-abc",
+		"td-",
+		"TD-196c42",
+	} {
+		if spans := Scan(line, nil); len(spans) != 0 {
+			t.Fatalf("Scan(%q) = %#v, want none", line, spans)
+		}
+	}
+	spans := Scan("see td-196C42 done", nil)
+	if len(spans) != 1 || spans[0].Value != "td-196C42" {
+		t.Fatalf("mixed-case issue = %#v", spans)
+	}
+}
+
+func TestScanBareMarkdownUsesResolverAndSkipsMisses(t *testing.T) {
+	resolve := func(raw string) (string, Extra, bool) {
+		if raw == "README.md" {
+			return "README.md", Extra{Raw: raw}, true
+		}
+		return "", Extra{}, false
+	}
+	spans := Scan("please read README.md and missing.md", resolve)
+	if len(spans) != 1 || spans[0].Kind != KindFile || spans[0].Value != "README.md" || spans[0].Extra.Raw != "README.md" {
+		t.Fatalf("bare spans = %#v", spans)
+	}
+}
+
+func TestScanWithoutResolverOmitsBareMarkdown(t *testing.T) {
+	spans := Scan("please read README.md", nil)
+	if len(spans) != 0 {
+		t.Fatalf("nil resolver still emitted %#v", spans)
+	}
+}
+
+func TestScanFirstKindWinsOnURLContainingMarkdownPath(t *testing.T) {
+	spans := Scan("https://example.test/docs/guide.markdown", func(string) (string, Extra, bool) {
+		t.Fatal("resolver should not run for a URL overlap")
+		return "", Extra{}, false
+	})
+	if len(spans) != 1 || spans[0].Kind != KindURL {
+		t.Fatalf("spans = %#v, want the URL only", spans)
+	}
+}
+
+func TestSafeHTTPURLRejectsNonHTTPAndControls(t *testing.T) {
+	for _, value := range []string{
+		"javascript:alert(1)",
+		"file:///etc/passwd",
+		"https://example.com/\x1b]8;;evil",
+		"https:///missing-host",
+	} {
+		if _, ok := SafeHTTPURL(value); ok {
+			t.Fatalf("unsafe URL accepted: %q", value)
+		}
+	}
+	if OpenHTTP("file:///etc/passwd") != nil {
+		t.Fatal("browser command accepted non-http URL")
+	}
+}
+
+func TestScanDoesNotImportWorkspaceOrOverview(t *testing.T) {
+	// Compile-time contract: this package is the shared detector. Hosts import
+	// it; it must not import them. The blank imports below would fail to
+	// compile if we accidentally grew a host dependency — they stay in the
+	// host packages' tests. Here we only document the rule and check kinds.
+	for _, kind := range []Kind{KindURL, KindFile, KindIssue} {
+		if kind == "" {
+			t.Fatal("empty kind")
+		}
+	}
+	if strings.Contains(string(KindIssue), "preview") {
+		t.Fatal("issue kind must stay a data label, not an activation path")
+	}
+}

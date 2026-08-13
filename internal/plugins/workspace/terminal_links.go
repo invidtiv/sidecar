@@ -1,13 +1,9 @@
 package workspace
 
 import (
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -88,78 +85,40 @@ type terminalLinkSurfaceContext struct {
 	ok      bool
 }
 
-var (
-	terminalURLPattern  = regexp.MustCompile(`https?://[^\s<>"']+`)
-	terminalPathPattern = regexp.MustCompile(
-		`(?:^|[\s(\[])((?:\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
-	)
-	terminalBareMarkdownPattern = regexp.MustCompile(
-		`(?:^|[\s(\x5b` + "`" + `])((?:\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.(?i:md|markdown)[.,;!?)}\x5d` + "`" + `]*)`,
-	)
-)
-
 func safeHTTPURL(raw string) (string, bool) {
-	raw = strings.TrimRight(raw, ".,;!?) ]}")
-	for _, r := range raw {
-		if unicode.IsControl(r) {
-			return "", false
-		}
-	}
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", false
-	}
-	return raw, true
+	return terminallink.SafeHTTPURL(raw)
 }
 
 func detectTerminalLinks(line string) []terminalLink {
-	plain := ansi.Strip(line)
-	var links []terminalLink
-	for _, loc := range terminalURLPattern.FindAllStringIndex(plain, -1) {
-		value, ok := safeHTTPURL(plain[loc[0]:loc[1]])
-		if !ok {
-			continue
-		}
-		endByte := loc[0] + len(value)
-		links = append(links, terminalLink{
-			Kind:     terminalURLLink,
-			StartCol: ansi.StringWidth(plain[:loc[0]]),
-			EndCol:   ansi.StringWidth(plain[:endByte]) - 1,
-			Value:    value,
-		})
-	}
-	for _, loc := range terminalPathPattern.FindAllStringSubmatchIndex(plain, -1) {
-		if len(loc) < 6 || loc[2] < 0 || loc[4] < 0 {
-			continue
-		}
-		start, end := loc[2], loc[3]
-		if terminalLinkOverlapsBytes(plain, links, start, end) {
-			continue
-		}
-		lineNo, err := strconv.Atoi(plain[loc[4]:loc[5]])
-		if err != nil {
-			continue
-		}
-		links = append(links, terminalLink{
-			Kind:     terminalPathLink,
-			StartCol: ansi.StringWidth(plain[:start]),
-			EndCol:   ansi.StringWidth(plain[:end]) - 1,
-			Value:    plain[start:end],
-			Line:     lineNo,
-		})
-	}
-	return links
+	return activatableTerminalLinks(terminallink.Scan(line, nil))
 }
 
-func terminalLinkOverlapsBytes(plain string, links []terminalLink, start, end int) bool {
-	startCol := ansi.StringWidth(plain[:start])
-	endCol := ansi.StringWidth(plain[:end]) - 1
-	for _, link := range links {
-		if startCol <= link.EndCol && endCol >= link.StartCol {
-			return true
+// activatableTerminalLinks keeps url and file spans. Issue spans are parsed
+// so a later split can bind them to a td pane; this host ignores the kind and
+// must not open the issue-preview modal.
+func activatableTerminalLinks(spans []terminallink.Span) []terminalLink {
+	links := make([]terminalLink, 0, len(spans))
+	for _, span := range spans {
+		switch span.Kind {
+		case terminallink.KindURL:
+			links = append(links, terminalLink{
+				Kind:     terminalURLLink,
+				StartCol: span.StartCol,
+				EndCol:   span.EndCol,
+				Value:    span.Value,
+			})
+		case terminallink.KindFile:
+			links = append(links, terminalLink{
+				Kind:     terminalPathLink,
+				StartCol: span.StartCol,
+				EndCol:   span.EndCol,
+				Value:    span.Value,
+				Line:     span.Extra.Line,
+				Raw:      span.Extra.Raw,
+			})
 		}
 	}
-	return false
+	return links
 }
 
 func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) string {
@@ -181,40 +140,6 @@ func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) stri
 		line = wrapTerminalVisualRange(line, link.StartCol, link.EndCol, open, close)
 	}
 	return line
-}
-
-func detectBareMarkdownCandidates(line string, existing []terminalLink) []terminalLink {
-	plain := ansi.Strip(line)
-	var links []terminalLink
-	for _, loc := range terminalBareMarkdownPattern.FindAllStringSubmatchIndex(plain, -1) {
-		if len(loc) < 4 || loc[2] < 0 {
-			continue
-		}
-		start, end := loc[2], loc[3]
-		value := strings.TrimRight(plain[start:end], ".,;!?)]}`")
-		end = start + len(value)
-		// The regexp deliberately stops at the markdown extension so it can
-		// retain punctuation for trimming. Require the next byte to be an
-		// actual token boundary; otherwise README.md5 and markdowned prose
-		// would borrow a valid prefix and become surprising links.
-		matchEnd := loc[3]
-		if matchEnd < len(plain) && !isBareMarkdownRightBoundary(plain[matchEnd]) {
-			continue
-		}
-		if value == "" || terminalLinkOverlapsBytes(plain, existing, start, end) {
-			continue
-		}
-		links = append(links, terminalLink{
-			Kind: terminalPathLink, StartCol: ansi.StringWidth(plain[:start]),
-			EndCol: ansi.StringWidth(plain[:end]) - 1, Value: value,
-		})
-	}
-	return links
-}
-
-func isBareMarkdownRightBoundary(next byte) bool {
-	return next == ' ' || next == '\t' || next == '\r' || next == '\n' ||
-		next == ')' || next == ']' || next == '}' || next == '`'
 }
 
 func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) *terminalLineLinkResolver {
@@ -280,9 +205,8 @@ func (p *Plugin) invalidateTerminalLinkSurface(surface string) {
 }
 
 func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffer *tty.OutputBuffer, line string) []terminalLink {
-	links := detectTerminalLinks(line)
 	if p.paneRoot == nil || buffer == nil || !context.ok {
-		return links
+		return detectTerminalLinks(line)
 	}
 	revision := buffer.Revision()
 	if p.terminalLinkMemo.surfaces == nil {
@@ -293,25 +217,26 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 		memo = terminalLinkSurfaceMemo{rawRoot: context.rawRoot, root: context.root, target: context.target, buffer: buffer, revision: revision,
 			paths: make(map[string]terminalLinkResolution)}
 	}
-	for _, candidate := range detectBareMarkdownCandidates(line, links) {
-		resolution, found := memo.paths[candidate.Value]
+	resolver := resolveTerminalPathFromResolvedBase
+	if p.terminalPathResolver != nil {
+		resolver = p.terminalPathResolver
+	}
+	links := activatableTerminalLinks(terminallink.Scan(line, func(raw string) (string, terminallink.Extra, bool) {
+		resolution, found := memo.paths[raw]
 		if !found {
-			resolver := resolveTerminalPathFromResolvedBase
-			if p.terminalPathResolver != nil {
-				resolver = p.terminalPathResolver
-			}
-			rel, _, resolved := resolver(context.root, candidate.Value)
-			resolution = terminalLinkResolution{rel: rel, ok: resolved}
-			memo.paths[candidate.Value] = resolution
+			rel, _, ok := resolver(context.root, raw)
+			resolution = terminalLinkResolution{rel: rel, ok: ok}
+			memo.paths[raw] = resolution
 		}
 		if !resolution.ok {
-			continue
+			return "", terminallink.Extra{}, false
 		}
-		raw := candidate.Value
-		candidate.Value = resolution.rel
-		candidate.Root = context.root
-		candidate.Raw = raw
-		links = append(links, candidate)
+		return resolution.rel, terminallink.Extra{Raw: raw}, true
+	}))
+	for i := range links {
+		if links[i].Kind == terminalPathLink && links[i].Raw != "" {
+			links[i].Root = context.root
+		}
 	}
 	p.terminalLinkMemo.surfaces[context.surface] = memo
 	return links

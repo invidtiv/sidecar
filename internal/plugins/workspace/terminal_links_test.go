@@ -19,6 +19,30 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
+func TestIssueSpanIsDetectedButNotActivatedOrDecorated(t *testing.T) {
+	line := "review td-196c42"
+	if links := detectTerminalLinks(line); len(links) != 0 {
+		t.Fatalf("host must ignore issue spans: %#v", links)
+	}
+	if got := decorateTerminalLinks(line, nil); strings.Contains(got, "\x1b[4m") {
+		t.Fatalf("issue id was decorated: %q", got)
+	}
+
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update(line)
+	p := newSelectionTestPlugin()
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.docs = make(map[int]*docPane)
+	if cmd, ok := p.activateTerminalLink(actionAt(8, 4)); ok || cmd != nil {
+		t.Fatal("clicking a td issue id activated a host path")
+	}
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatal("issue click opened a document pane")
+	}
+}
+
 func TestDetectTerminalLinksFindsSafeURLAndPathLine(t *testing.T) {
 	line := "see https://example.com/docs?q=1, then internal/foo.go:123"
 	links := detectTerminalLinks(line)
