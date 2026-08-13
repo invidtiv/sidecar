@@ -1047,8 +1047,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "z":
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			p.cycleDiffScope()
-			return nil
+			return p.cycleDiffScope()
 		}
 	case "ctrl+d":
 		// Page down in preview pane (unified: increase offset toward bottom)
@@ -2194,7 +2193,7 @@ func (p *Plugin) cycleDiffTabViewMode() tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) cycleDiffScope() {
+func (p *Plugin) cycleDiffScope() tea.Cmd {
 	p.diffScope = (p.diffScope + 1) % 3
 	p.diffTabCursor, p.diffTabScroll, p.diffTabDiffScroll, p.diffTabHorizScroll = 0, 0, 0, 0
 	p.diffTabFocus = DiffTabFocusFileList
@@ -2203,6 +2202,7 @@ func (p *Plugin) cycleDiffScope() {
 	}
 	p.fullFileDiff, p.diffTabParsedDiff, p.commitDetail = nil, nil, nil
 	p.applyDiffScope()
+	return p.loadSelectedDiffTabCommit()
 }
 
 func (p *Plugin) applyDiffScope() {
@@ -2246,21 +2246,35 @@ func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 		if p.diffViewMode == DiffViewFullFile {
 			return p.loadFullFileDiffForWorkspace()
 		}
-	} else {
-		// Cursor on a commit — auto-load commit detail for preview
-		p.diffTabParsedDiff = nil
-		commitIdx := p.diffTabCursor - fileCount
-		if commitIdx >= 0 && commitIdx < len(p.commitStatusList) {
-			commit := p.commitStatusList[commitIdx]
-			p.commitDetail = nil
-			p.commitFileCursor = 0
-			p.commitFileScroll = 0
-			p.commitFileDiffRaw = ""
-			p.commitFileParsed = nil
-			return p.loadCommitDetail(commit.Hash)
-		}
+		return nil
 	}
-	return nil
+	return p.loadSelectedDiffTabCommit()
+}
+
+// loadSelectedDiffTabCommit loads the commit under the cursor.
+// Snapshot/scope populate can leave the cursor on a commit without a move,
+// so this does not require onDiffTabCursorChanged. Skip if that commit is
+// already loaded to avoid a second fetch on refresh or a no-op move-back.
+func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
+	fileCount := p.diffTabFileCount()
+	if p.diffTabCursor < fileCount {
+		return nil
+	}
+	commitIdx := p.diffTabCursor - fileCount
+	if commitIdx < 0 || commitIdx >= len(p.commitStatusList) {
+		return nil
+	}
+	commit := p.commitStatusList[commitIdx]
+	if p.commitDetail != nil && p.commitDetail.Hash == commit.Hash {
+		return nil
+	}
+	p.diffTabParsedDiff = nil
+	p.commitDetail = nil
+	p.commitFileCursor = 0
+	p.commitFileScroll = 0
+	p.commitFileDiffRaw = ""
+	p.commitFileParsed = nil
+	return p.loadCommitDetail(commit.Hash)
 }
 
 // handleCommitFilesKey handles keys when viewing files within a commit.

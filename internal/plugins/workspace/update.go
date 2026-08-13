@@ -255,6 +255,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
 				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
 			}
+			// Opening/applying a snapshot selects the first item without a
+			// cursor-change event. Load that commit if it is the current item.
+			cmds = append(cmds, p.loadSelectedDiffTabCommit())
 		}
 
 	case DiffErrorMsg:
