@@ -773,7 +773,10 @@ func TestWheelOverTheTerminalDoesNotStartTyping(t *testing.T) {
 	}
 }
 
-func TestClickingAnotherLiveRowWhileTypingStaysInteractive(t *testing.T) {
+// A click on the left pane is how a user gets the arrow keys back, exactly as
+// it is on the project surface. Selecting another live row moves the producer
+// to it and watches it; it does not keep typing into the pane the user left.
+func TestClickingAnotherLiveRowWhileTypingReturnsToTheList(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	enterInteractive(t, m)
 	m.WorkspacesView(previewWide, previewTall)
@@ -787,11 +790,17 @@ func TestClickingAnotherLiveRowWhileTypingStaysInteractive(t *testing.T) {
 	if m.workspaces.SelectedID() != "b" {
 		t.Fatalf("the click selected %q, want b", m.workspaces.SelectedID())
 	}
-	if !m.PreviewInteractive() {
-		t.Fatal("clicking another live row while typing left the list")
+	if m.PreviewInteractive() {
+		t.Fatal("clicking a row left the keyboard in the pane, so j/k would type into the shell")
+	}
+	if m.PreviewFocused() {
+		t.Fatal("clicking a row left focus on the preview")
 	}
 	if terminal.target != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
 		t.Fatalf("the terminal opened %+v, want bravo's pane", terminal.target)
+	}
+	if !terminal.IsActive() {
+		t.Fatal("the clicked row's pane stopped being watched")
 	}
 }
 

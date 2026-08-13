@@ -585,21 +585,21 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 
 	// A press anywhere but the terminal is a click away from it: it ends the
-	// gesture the press armed. A list row is the exception while typing —
-	// that is a tab switch, not a click-away.
+	// gesture the press armed and hands the keyboard back to the list. That
+	// includes a list row, which is what the project surface answers — a click
+	// on the left pane is how the user gets the arrow keys back, and a row that
+	// kept the keyboard in the pane would send j/k into the shell instead.
 	kind, _ := action.Region.Data.(string)
 	if region, ok := action.Region.Data.(workspacelist.Region); ok && region.Kind == workspacelist.RegionRow {
 		kind = string(region.Kind)
 	}
-	rowClick := kind == string(workspacelist.RegionRow) &&
-		(action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick)
 	docClick := isPreviewDocRegion(kind)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
 	cmd := m.workspacesRegionMouse(action)
-	if !pressAway || (rowClick && m.PreviewInteractive()) || docClick {
+	if !pressAway || docClick {
 		return cmd
 	}
 	// Last, so a region that hands the keyboard back itself — the sidebar,
