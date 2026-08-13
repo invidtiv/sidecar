@@ -269,7 +269,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 
 		// Shell-specific commands when shell is selected
-		if p.shellSelected {
+		if p.selectingShell() {
 			shell := p.getSelectedShell()
 			if shell == nil || shell.Agent == nil {
 				cmds = append(cmds,

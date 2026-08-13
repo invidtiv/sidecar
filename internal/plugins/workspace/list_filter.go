@@ -103,22 +103,52 @@ func (p *Plugin) visibleWorktreeIndices() []int {
 	indices := make([]int, 0, len(p.worktrees))
 	query := p.listFilter.Query()
 	for i, wt := range p.worktrees {
-		if query == "" || workspacelist.MatchFields(query, p.worktreeFilterFields(wt)...) {
+		if query == "" || workspacelist.MatchFields(query, p.worktreeFilterFields(wt)...) || len(p.visibleNestedShells(wt)) > 0 {
 			indices = append(indices, i)
 		}
 	}
 	return indices
 }
 
+func (p *Plugin) nestedShellTotal() int {
+	n := 0
+	for _, wt := range p.worktrees {
+		if p.isCurrentWorkDir(wt.Path) {
+			continue
+		}
+		n += len(p.nestedByWorkDir[filepath.Clean(wt.Path)])
+	}
+	return n
+}
+
+func (p *Plugin) visibleNestedCount() int {
+	n := 0
+	for _, i := range p.visibleWorktreeIndices() {
+		n += len(p.visibleNestedShells(p.worktrees[i]))
+	}
+	return n
+}
+
 // filterCounts is the "N of M" the filter row reports.
 func (p *Plugin) filterCounts() (matched, total int) {
-	return len(p.visibleShellIndices()) + len(p.visibleWorktreeIndices()), len(p.shells) + len(p.worktrees)
+	return len(p.visibleShellIndices()) + len(p.visibleWorktreeIndices()) + p.visibleNestedCount(),
+		len(p.shells) + len(p.worktrees) + p.nestedShellTotal()
 }
 
 // selectionVisible reports that the current selection survives the query.
 func (p *Plugin) selectionVisible() bool {
 	if p.shellSelected {
 		return containsIndex(p.visibleShellIndices(), p.selectedShellIdx)
+	}
+	if p.selectedNestedTmux != "" {
+		for _, i := range p.visibleWorktreeIndices() {
+			for _, shell := range p.visibleNestedShells(p.worktrees[i]) {
+				if shell.TmuxName == p.selectedNestedTmux {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	return containsIndex(p.visibleWorktreeIndices(), p.selectedIdx)
 }
@@ -144,15 +174,11 @@ func (p *Plugin) clampSelectionToFilter() tea.Cmd {
 		p.ensureVisible()
 		return nil
 	}
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-	switch {
-	case len(shells) > 0:
-		p.shellSelected, p.selectedShellIdx = true, shells[0]
-	case len(worktrees) > 0:
-		p.shellSelected, p.selectedIdx = false, worktrees[0]
-	default:
+	items := p.visibleSidebarItems()
+	if len(items) == 0 {
 		return nil
 	}
+	p.selectSidebarItem(items[0])
 	p.exitInteractiveMode()
 	p.saveSelectionState()
 	p.ensureVisible()
@@ -204,30 +230,22 @@ func (p *Plugin) resetListFilter() { p.listFilter.Reset() }
 
 // selectFirstVisible / selectLastVisible are the filtered forms of g and G.
 func (p *Plugin) selectFirstVisible() {
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-	switch {
-	case len(shells) > 0:
-		p.shellSelected, p.selectedShellIdx = true, shells[0]
-	case len(worktrees) > 0:
-		p.shellSelected, p.selectedIdx = false, worktrees[0]
-	default:
+	items := p.visibleSidebarItems()
+	if len(items) == 0 {
 		return
 	}
+	p.selectSidebarItem(items[0])
 	p.scrollOffset = 0
 	p.exitInteractiveMode()
 	p.saveSelectionState()
 }
 
 func (p *Plugin) selectLastVisible() {
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-	switch {
-	case len(worktrees) > 0:
-		p.shellSelected, p.selectedIdx = false, worktrees[len(worktrees)-1]
-	case len(shells) > 0:
-		p.shellSelected, p.selectedShellIdx = true, shells[len(shells)-1]
-	default:
+	items := p.visibleSidebarItems()
+	if len(items) == 0 {
 		return
 	}
+	p.selectSidebarItem(items[len(items)-1])
 	p.exitInteractiveMode()
 	p.saveSelectionState()
 	p.ensureVisible()

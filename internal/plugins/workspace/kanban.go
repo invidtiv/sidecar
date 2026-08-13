@@ -271,8 +271,7 @@ func (p *Plugin) syncKanbanToList() {
 	if shell := p.selectedKanbanShell(); shell != nil {
 		for i, s := range p.shells {
 			if s == shell || (s.TmuxName != "" && s.TmuxName == shell.TmuxName) || s.Name == shell.Name {
-				p.shellSelected = true
-				p.selectedShellIdx = i
+				p.selectTopShellAt(i)
 				return
 			}
 		}
@@ -284,8 +283,7 @@ func (p *Plugin) syncKanbanToList() {
 	}
 	for i, w := range p.worktrees {
 		if w.IdentityKey() == wt.IdentityKey() {
-			p.shellSelected = false
-			p.selectedIdx = i
+			p.selectWorktreeAt(i)
 			return
 		}
 	}
@@ -294,7 +292,8 @@ func (p *Plugin) syncKanbanToList() {
 func (p *Plugin) applyKanbanSelectionChange(oldShellSelected bool, oldShellIdx, oldWorktreeIdx int) bool {
 	selectionChanged := p.shellSelected != oldShellSelected ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx) ||
+		p.selectedNestedTmux != ""
 	if selectionChanged {
 		p.resetPreviewScroll()
 		p.taskLoading = false

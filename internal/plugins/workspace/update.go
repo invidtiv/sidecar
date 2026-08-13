@@ -147,6 +147,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.worktrees = msg.Worktrees
 			p.conflicts = msg.Conflicts
 			p.worktreesLoaded = true
+			p.rebuildNestedShellsFromState()
+			if cmd := p.backfillWorkDirsCmd(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 
 			// Restore selection by finding the worktree with the same name
 			if selectedKey != "" {
@@ -955,6 +959,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if existingShell != nil {
 			// td-f88fdd: Recreated orphaned shell - update existing entry
 			existingShell.IsOrphaned = false
+			if existingShell.WorkDir == "" && p.ctx != nil {
+				existingShell.WorkDir = p.ctx.WorkDir
+			}
 			existingShell.Agent = &Agent{
 				Type:        displayAgentType,
 				TmuxSession: msg.SessionName,
@@ -970,15 +977,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 
 			if !msg.KeepSelection {
-				p.shellSelected = true
-				p.selectedShellIdx = existingIdx
+				p.selectTopShellAt(existingIdx)
 				p.saveSelectionState()
 			}
 		} else {
 			// Create new shell session entry
+			workDir := ""
+			if p.ctx != nil {
+				workDir = p.ctx.WorkDir
+			}
 			shell := &ShellSession{
 				Name:     msg.DisplayName,
 				TmuxName: msg.SessionName,
+				WorkDir:  workDir,
 				Agent: &Agent{
 					Type:        displayAgentType, // td-2ba8a3: Show chosen agent type
 					TmuxSession: msg.SessionName,
@@ -1001,8 +1012,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Auto-select and focus the new shell, unless it was created on the
 			// user's behalf rather than at their request.
 			if !msg.KeepSelection {
-				p.shellSelected = true
-				p.selectedShellIdx = len(p.shells) - 1
+				p.selectTopShellAt(len(p.shells) - 1)
 				p.saveSelectionState()
 			}
 		}
@@ -1103,6 +1113,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case shellAttachAfterCreateMsg:
 		// Attach to shell after it was created
 		return p, p.attachToShellByIndex(msg.Index)
+
+	case shellAttachByNameMsg:
+		return p, p.attachToShellSession(p.findShellByName(msg.TmuxName))
 
 	case shellResumeInjectedMsg:
 		// Resume command was injected into shell - enter interactive mode (td-aa4136)
@@ -1274,7 +1287,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.shellManifest = msg.Manifest
 		cmds = append(cmds, p.applyManifestSync(msg))
 		// Reload content if a shell is selected
-		if p.shellSelected {
+		if p.selectingShell() {
 			cmds = append(cmds, p.loadSelectedContent())
 		}
 		return p, tea.Batch(cmds...)

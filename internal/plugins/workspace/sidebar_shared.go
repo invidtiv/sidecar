@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -9,6 +10,88 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
+
+type sidebarNavKind int
+
+const (
+	navKindShell sidebarNavKind = iota
+	navKindWorktree
+	navKindNestedShell
+)
+
+type sidebarNavItem struct {
+	kind        sidebarNavKind
+	shellIdx    int
+	worktreeIdx int
+	shell       *ShellSession
+}
+
+// nestedShellHit is the hit-map payload for a sibling shell nested under a
+// worktree. Top-section shells keep the existing negative-int encoding.
+type nestedShellHit struct {
+	TmuxName string
+}
+
+func (p *Plugin) visibleNestedShells(wt *Worktree) []*ShellSession {
+	if wt == nil || p.isCurrentWorkDir(wt.Path) {
+		return nil
+	}
+	shells := p.nestedByWorkDir[filepath.Clean(wt.Path)]
+	query := p.listFilter.Query()
+	if query == "" {
+		return shells
+	}
+	out := make([]*ShellSession, 0, len(shells))
+	for _, shell := range shells {
+		if workspacelist.MatchFields(query, p.shellFilterFields(shell)...) {
+			out = append(out, shell)
+		}
+	}
+	return out
+}
+
+func (p *Plugin) visibleSidebarItems() []sidebarNavItem {
+	items := make([]sidebarNavItem, 0, len(p.shells)+len(p.worktrees)+p.nestedShellTotal())
+	for _, index := range p.visibleShellIndices() {
+		items = append(items, sidebarNavItem{kind: navKindShell, shellIdx: index})
+	}
+	for _, index := range p.visibleWorktreeIndices() {
+		items = append(items, sidebarNavItem{kind: navKindWorktree, worktreeIdx: index})
+		wt := p.worktrees[index]
+		for _, shell := range p.visibleNestedShells(wt) {
+			items = append(items, sidebarNavItem{kind: navKindNestedShell, worktreeIdx: index, shell: shell})
+		}
+	}
+	return items
+}
+
+func (p *Plugin) selectSidebarItem(item sidebarNavItem) {
+	switch item.kind {
+	case navKindShell:
+		p.selectTopShellAt(item.shellIdx)
+	case navKindWorktree:
+		p.selectWorktreeAt(item.worktreeIdx)
+	case navKindNestedShell:
+		tmuxName := ""
+		if item.shell != nil {
+			tmuxName = item.shell.TmuxName
+		}
+		p.selectNestedShell(item.worktreeIdx, tmuxName)
+	}
+}
+
+func (p *Plugin) sidebarItemSelected(item sidebarNavItem) bool {
+	switch item.kind {
+	case navKindShell:
+		return p.shellSelected && p.selectedShellIdx == item.shellIdx
+	case navKindWorktree:
+		return !p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx == item.worktreeIdx
+	case navKindNestedShell:
+		return !p.shellSelected && item.shell != nil && p.selectedNestedTmux == item.shell.TmuxName
+	default:
+		return false
+	}
+}
 
 // renderSidebarContent projects project-owned shells, worktrees and optional
 // lifecycle actions into the same presentation component used by global
@@ -57,8 +140,18 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 			wt := p.worktrees[index]
 			id := "worktree:" + wt.IdentityKey()
 			section.Rows = append(section.Rows, workspacelist.SidebarRow{ID: id, Data: index, Render: func(rowWidth int, selected, _ bool) []string {
-				return []string{p.renderWorktreeItem(wt, selected, rowWidth)}
+				return []string{p.renderWorktreeSidebarItem(wt, selected, rowWidth)}
 			}})
+			for _, shell := range p.visibleNestedShells(wt) {
+				shell := shell
+				nestedID := "nested:" + shell.TmuxName
+				if shell.TmuxName == "" {
+					nestedID = fmt.Sprintf("nested:%s:%s", wt.IdentityKey(), shell.Name)
+				}
+				section.Rows = append(section.Rows, workspacelist.SidebarRow{ID: nestedID, Data: nestedShellHit{TmuxName: shell.TmuxName}, Render: func(rowWidth int, selected, _ bool) []string {
+					return []string{p.renderNestedShellEntry(shell, selected, rowWidth)}
+				}})
+			}
 		}
 		sections = append(sections, section)
 	}
@@ -71,6 +164,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		} else {
 			selectedID = "shell:" + shell.TmuxName
 		}
+	} else if p.selectedNestedTmux != "" {
+		selectedID = "nested:" + p.selectedNestedTmux
 	} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
 		selectedID = "worktree:" + p.worktrees[p.selectedIdx].IdentityKey()
 	}
@@ -109,17 +204,15 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 }
 
 func (p *Plugin) sharedSidebarRowCount() int {
-	return len(p.visibleShellIndices()) + len(p.visibleWorktreeIndices())
+	return len(p.visibleSidebarItems())
 }
 
 func (p *Plugin) sharedSidebarSelectionIndex() int {
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
-	if p.shellSelected {
-		return indexOfValue(shells, p.selectedShellIdx)
+	items := p.visibleSidebarItems()
+	for i, item := range items {
+		if p.sidebarItemSelected(item) {
+			return i
+		}
 	}
-	position := indexOfValue(worktrees, p.selectedIdx)
-	if position < 0 {
-		return -1
-	}
-	return len(shells) + position
+	return -1
 }

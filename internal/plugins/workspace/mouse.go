@@ -735,14 +735,28 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.focusListFilter()
 	case regionWorktreeItem:
 		// Click on worktree or shell entry - select it
+		if hit, ok := action.Region.Data.(nestedShellHit); ok {
+			parent, shell := p.findNestedShell(hit.TmuxName)
+			if shell != nil {
+				if p.shellSelected || p.selectedNestedTmux != hit.TmuxName {
+					p.selectNestedShell(parent, hit.TmuxName)
+					p.resetPreviewScroll()
+					p.taskLoading = false
+					p.exitInteractiveMode()
+					p.saveSelectionState()
+				}
+				p.ensureVisible()
+				p.activePane = PaneSidebar
+				return p.loadSelectedContent()
+			}
+		}
 		if idx, ok := action.Region.Data.(int); ok {
 			if idx < 0 {
 				// Shell entry clicked (negative index: -1 -> shells[0], -2 -> shells[1], etc.)
 				shellIdx := -(idx + 1)
 				if shellIdx >= 0 && shellIdx < len(p.shells) {
-					if !p.shellSelected || p.selectedShellIdx != shellIdx {
-						p.shellSelected = true
-						p.selectedShellIdx = shellIdx
+					if !p.shellSelected || p.selectedShellIdx != shellIdx || p.selectedNestedTmux != "" {
+						p.selectTopShellAt(shellIdx)
 						p.resetPreviewScroll()
 						p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 						// Exit interactive mode when switching selection (td-fc758e88)
@@ -754,9 +768,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
 				// Worktree clicked
-				if p.shellSelected || p.selectedIdx != idx {
-					p.shellSelected = false
-					p.selectedIdx = idx
+				if p.shellSelected || p.selectedNestedTmux != "" || p.selectedIdx != idx {
+					p.selectWorktreeAt(idx)
 					p.resetPreviewScroll()
 					p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 					// Exit interactive mode when switching selection (td-fc758e88)
@@ -1017,19 +1030,25 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
+		if hit, ok := action.Region.Data.(nestedShellHit); ok {
+			parent, shell := p.findNestedShell(hit.TmuxName)
+			if shell != nil {
+				p.selectNestedShell(parent, hit.TmuxName)
+				p.saveSelectionState()
+				return p.ensureShellAndAttach(shell)
+			}
+		}
 		if idx, ok := action.Region.Data.(int); ok {
 			if idx < 0 {
 				// Double-click on shell entry (negative index: -1 -> shells[0], -2 -> shells[1], etc.)
 				shellIdx := -(idx + 1)
 				if shellIdx >= 0 && shellIdx < len(p.shells) {
-					p.shellSelected = true
-					p.selectedShellIdx = shellIdx
+					p.selectTopShellAt(shellIdx)
 					p.saveSelectionState()
 					return p.ensureShellAndAttachByIndex(shellIdx)
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
-				p.shellSelected = false
-				p.selectedIdx = idx
+				p.selectWorktreeAt(idx)
 				p.saveSelectionState()
 				wt := p.worktrees[idx]
 				if wt.Agent != nil {
@@ -1255,14 +1274,16 @@ func (p *Plugin) scrollSidebar(delta int) tea.Cmd {
 	oldShellSelected := p.shellSelected
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
+	oldNested := p.selectedNestedTmux
 
 	// Delegate to moveCursor which handles multi-shell navigation properly
 	p.moveCursor(delta)
 
 	// Check if selection actually changed
 	selectionChanged := p.shellSelected != oldShellSelected ||
+		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
 
 	if selectionChanged {
 		return p.loadSelectedContent()

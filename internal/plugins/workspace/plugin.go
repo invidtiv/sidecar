@@ -453,9 +453,17 @@ type Plugin struct {
 	hoverWorkspacesPlusButton bool
 
 	// Multiple shell sessions (not tied to git worktrees)
-	shells           []*ShellSession // All shell sessions for this project
-	selectedShellIdx int             // Currently selected shell index
-	shellSelected    bool            // True when any shell is selected (vs a worktree)
+	shells           []*ShellSession // Current workDir shells (top Shells section)
+	selectedShellIdx int             // Currently selected top-section shell index
+	shellSelected    bool            // True when a top-section shell is selected
+	// nestedByWorkDir is the nest projection of the full manifest, keyed by
+	// parent worktree path. Current workDir shells stay out of this map.
+	nestedByWorkDir map[string][]*ShellSession
+	// selectedNestedTmux is set when a sibling shell row is selected.
+	selectedNestedTmux string
+	// attachSession replaces tmux attach when set. Tests use it so Enter never
+	// talks to the user's tmux server.
+	attachSession func(sessionName, displayName string) tea.Cmd
 
 	// Type selector modal state (shell vs worktree)
 	typeSelectorIdx        int             // 0=Shell, 1=Worktree
@@ -557,7 +565,7 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 	case plugin.WorkspaceSelectionWorktree:
 		for i, wt := range p.worktrees {
 			if filepath.Clean(wt.Path) == filepath.Clean(target.Path) {
-				p.shellSelected, p.selectedIdx = false, i
+				p.selectWorktreeAt(i)
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
 				p.finishNavigatedSelection()
@@ -567,12 +575,19 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 	case plugin.WorkspaceSelectionShell:
 		for i, shell := range p.shells {
 			if shell.TmuxName == target.Key {
-				p.shellSelected, p.selectedShellIdx = true, i
+				p.selectTopShellAt(i)
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
 				p.finishNavigatedSelection()
 				return true
 			}
+		}
+		if parent, shell := p.findNestedShell(target.Key); shell != nil {
+			p.selectNestedShell(parent, shell.TmuxName)
+			p.pendingOverviewSelection = nil
+			p.selectKanbanFromList()
+			p.finishNavigatedSelection()
+			return true
 		}
 	}
 	if p.worktreesLoaded && !p.shellStartupLoading {
@@ -663,8 +678,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)
+	p.nestedByWorkDir = nil
 	p.selectedShellIdx = 0
 	p.shellSelected = false
+	p.selectedNestedTmux = ""
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
@@ -912,16 +929,10 @@ func (p *Plugin) saveSelectionState() {
 	wtState.WorkspaceName = ""
 	wtState.ShellTmuxName = ""
 
-	if p.shellSelected {
-		// Shell is selected - save shell TmuxName
-		if p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			wtState.ShellTmuxName = p.shells[p.selectedShellIdx].TmuxName
-		}
-	} else {
-		// Worktree is selected - save worktree name
-		if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-			wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
-		}
+	if shell := p.getSelectedShell(); shell != nil {
+		wtState.ShellTmuxName = shell.TmuxName
+	} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
+		wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
 	}
 	// A disabled feature must not consume or overwrite its dormant state. The
 	// nil paneRoot is the Init-time feature boundary and preserves PaneLayout
@@ -956,14 +967,21 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.ShellTmuxName != "" {
 		for i, shell := range p.shells {
 			if shell.TmuxName == wtState.ShellTmuxName {
-				p.shellSelected = true
-				p.selectedShellIdx = i
+				p.selectTopShellAt(i)
 				if p.paneRoot != nil {
 					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
 				}
 				p.saveSelectionState()
 				return true
 			}
+		}
+		if parent, shell := p.findNestedShell(wtState.ShellTmuxName); shell != nil {
+			p.selectNestedShell(parent, shell.TmuxName)
+			if p.paneRoot != nil {
+				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+			}
+			p.saveSelectionState()
+			return true
 		}
 		// Shell no longer exists, fall through to try worktree
 	}
@@ -972,8 +990,7 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.WorkspaceName != "" {
 		for i, wt := range p.worktrees {
 			if wt.Name == wtState.WorkspaceName {
-				p.shellSelected = false
-				p.selectedIdx = i
+				p.selectWorktreeAt(i)
 				if p.paneRoot != nil {
 					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
 				}
@@ -996,15 +1013,132 @@ func isDefaultShellName(name string) bool {
 }
 
 // selectedWorktree returns the currently selected worktree.
-// Returns nil if shell entry is selected (shell is not a worktree).
+// Returns nil if a shell (top-section or nested) is selected.
 func (p *Plugin) selectedWorktree() *Worktree {
 	if p.shellSelected {
 		return nil
+	}
+	if p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell != nil {
+			return nil
+		}
 	}
 	if p.selectedIdx < 0 || p.selectedIdx >= len(p.worktrees) {
 		return nil
 	}
 	return p.worktrees[p.selectedIdx]
+}
+
+func (p *Plugin) selectTopShellAt(idx int) {
+	p.shellSelected = true
+	p.selectedShellIdx = idx
+	p.selectedNestedTmux = ""
+}
+
+func (p *Plugin) selectWorktreeAt(idx int) {
+	p.shellSelected = false
+	p.selectedIdx = idx
+	p.selectedNestedTmux = ""
+}
+
+func (p *Plugin) selectNestedShell(parentIdx int, tmuxName string) {
+	p.shellSelected = false
+	p.selectedIdx = parentIdx
+	p.selectedNestedTmux = tmuxName
+}
+
+func (p *Plugin) selectingShell() bool {
+	return p.getSelectedShell() != nil
+}
+
+func (p *Plugin) currentWorkDir() string {
+	if p.ctx == nil {
+		return ""
+	}
+	return p.ctx.WorkDir
+}
+
+func (p *Plugin) isCurrentWorkDir(path string) bool {
+	return sameWorkDir(path, p.currentWorkDir())
+}
+
+func (p *Plugin) worktreePaths() []string {
+	paths := make([]string, 0, len(p.worktrees))
+	for _, wt := range p.worktrees {
+		if wt != nil && wt.Path != "" {
+			paths = append(paths, wt.Path)
+		}
+	}
+	return paths
+}
+
+func (p *Plugin) findNestedShell(tmuxName string) (parentIdx int, shell *ShellSession) {
+	if tmuxName == "" {
+		return -1, nil
+	}
+	for i, wt := range p.worktrees {
+		for _, candidate := range p.nestedByWorkDir[filepath.Clean(wt.Path)] {
+			if candidate != nil && candidate.TmuxName == tmuxName {
+				return i, candidate
+			}
+		}
+	}
+	return -1, nil
+}
+
+func (p *Plugin) rebuildNestedShells(defs []ShellDefinition, paneID func(string) string) {
+	current := p.currentWorkDir()
+	grouped := groupManifestShellsByWorkDir(defs, p.worktreePaths(), current, paneID)
+	nested := make(map[string][]*ShellSession, len(grouped))
+	for dir, shells := range grouped {
+		if sameWorkDir(dir, current) {
+			continue
+		}
+		nested[filepath.Clean(dir)] = shells
+	}
+	p.nestedByWorkDir = nested
+	if p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell == nil {
+			p.selectedNestedTmux = ""
+		}
+	}
+}
+
+func (p *Plugin) rebuildNestedShellsFromState() {
+	var defs []ShellDefinition
+	if p.shellManifest != nil {
+		defs = p.shellManifest.Shells
+	}
+	p.rebuildNestedShells(defs, nil)
+}
+
+func (p *Plugin) backfillWorkDirsCmd() tea.Cmd {
+	if p.shellManifest == nil {
+		return nil
+	}
+	inferred := make(map[string]string)
+	current := p.currentWorkDir()
+	paths := p.worktreePaths()
+	var defs []ShellDefinition
+	if p.shellManifest != nil {
+		defs = p.shellManifest.Shells
+	}
+	for _, def := range defs {
+		if strings.TrimSpace(def.WorkDir) != "" {
+			continue
+		}
+		if dir := inferDefinitionWorkDir(def, paths, current); dir != "" {
+			inferred[def.TmuxName] = dir
+		}
+	}
+	if len(inferred) == 0 {
+		return nil
+	}
+	manifest := p.shellManifest
+	return func() tea.Msg {
+		_ = manifest.BackfillWorkDirs(inferred)
+		return nil
+	}
 }
 
 // AckDwell is how long a session's output must stay selected before its
@@ -1065,7 +1199,7 @@ func (p *Plugin) backgroundPollInterval() time.Duration {
 
 // getOutputLineCount returns the line count of the currently visible output buffer.
 func (p *Plugin) getOutputLineCount() int {
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
 			return shell.Agent.OutputBuf.LineCount()
 		}
@@ -1111,7 +1245,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 func (p *Plugin) getMaxScrollOffset() int {
 	var contentHeight int
 	switch {
-	case p.shellSelected:
+	case p.selectingShell():
 		contentHeight = p.getOutputLineCount()
 	default:
 		switch p.previewTab {
@@ -1509,28 +1643,27 @@ func (p *Plugin) toggleSidebar() {
 }
 
 // moveCursor moves the selection cursor.
-// Navigation order: shells[0], shells[1], ..., worktrees[0], worktrees[1], ...
+// Navigation order: current shells, then each worktree and its nested children.
 func (p *Plugin) moveCursor(delta int) {
 	oldShellSelected := p.shellSelected
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
+	oldNested := p.selectedNestedTmux
 
-	shells, worktrees := p.visibleShellIndices(), p.visibleWorktreeIndices()
+	items := p.visibleSidebarItems()
 	current := p.sharedSidebarSelectionIndex()
-	if current < 0 && len(shells)+len(worktrees) > 0 {
+	if current < 0 && len(items) > 0 {
 		current = 0
 	}
-	next := workspacelist.MoveIndex(current, delta, len(shells)+len(worktrees))
-	if next >= 0 && next < len(shells) {
-		p.shellSelected, p.selectedShellIdx = true, shells[next]
-	} else if next >= len(shells) && next-len(shells) < len(worktrees) {
-		p.shellSelected, p.selectedIdx = false, worktrees[next-len(shells)]
+	next := workspacelist.MoveIndex(current, delta, len(items))
+	if next >= 0 && next < len(items) {
+		p.selectSidebarItem(items[next])
 	}
 
-	// Reset preview scroll state when changing selection
 	selectionChanged := p.shellSelected != oldShellSelected ||
+		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
 	if selectionChanged {
 		p.applySelectionChange()
 	}

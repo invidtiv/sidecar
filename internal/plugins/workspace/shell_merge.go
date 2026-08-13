@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -84,6 +86,11 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 			shell.ChosenAgent = definitionToAgentType(definition.AgentType)
 			shell.SkipPerms = definition.SkipPerms
 			shell.IsOrphaned = !running
+			if definition.WorkDir != "" {
+				shell.WorkDir = definition.WorkDir
+			} else if shell.WorkDir == "" {
+				shell.WorkDir = in.WorkDir
+			}
 			// A shell that comes back to life needs an Agent, or it renders as
 			// live while every open path refuses it: enterInteractiveMode wants
 			// an Agent, recreateOrphanedShell only handles orphans, and no
@@ -113,9 +120,15 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 			continue
 		}
 		shell.IsOrphaned = false
+		if shell.WorkDir == "" {
+			shell.WorkDir = in.WorkDir
+		}
 		result.Shells = append(result.Shells, shell)
 		definition := shellToDefinition(shell)
 		definition.Namespace = in.Namespace
+		if definition.WorkDir == "" {
+			definition.WorkDir = in.WorkDir
+		}
 		result.Restored = append(result.Restored, definition)
 	}
 
@@ -133,10 +146,77 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 			DisplayName: deriveShellDisplayName(in.WorkDir, name),
 			Namespace:   in.Namespace,
 			CreatedAt:   now(),
+			WorkDir:     in.WorkDir,
 		}
 		result.Shells = append(result.Shells, shellSessionFromDefinition(definition, true, paneID))
 		result.Restored = append(result.Restored, definition)
 	}
 
 	return result
+}
+
+func sameWorkDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// inferDefinitionWorkDir resolves a shell's parent worktree. An explicit
+// WorkDir wins. Otherwise a unique basename match against known worktree
+// paths, or — for old manifests — the current workDir when the session name
+// could only have been produced there.
+func inferDefinitionWorkDir(def ShellDefinition, worktreePaths []string, currentWorkDir string) string {
+	if dir := strings.TrimSpace(def.WorkDir); dir != "" {
+		return filepath.Clean(dir)
+	}
+	var matches []string
+	seen := make(map[string]bool, len(worktreePaths))
+	for _, path := range worktreePaths {
+		if path == "" {
+			continue
+		}
+		clean := filepath.Clean(path)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		if shellDiscoveryPattern(path).MatchString(def.TmuxName) {
+			matches = append(matches, clean)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	if currentWorkDir != "" && shellDiscoveryPattern(currentWorkDir).MatchString(def.TmuxName) {
+		return filepath.Clean(currentWorkDir)
+	}
+	return ""
+}
+
+// groupManifestShellsByWorkDir is the nest projection of the full manifest.
+// It does not decide what belongs in this workDir's Shells section.
+func groupManifestShellsByWorkDir(
+	defs []ShellDefinition,
+	worktreePaths []string,
+	currentWorkDir string,
+	paneID func(string) string,
+) map[string][]*ShellSession {
+	if paneID == nil {
+		paneID = func(string) string { return "" }
+	}
+	groups := make(map[string][]*ShellSession)
+	for _, def := range defs {
+		workDir := inferDefinitionWorkDir(def, worktreePaths, currentWorkDir)
+		if workDir == "" {
+			continue
+		}
+		// Sibling liveness is not this workDir's Running set. Give the row a
+		// session target so attach is by TmuxName, never panesForPath.
+		shell := shellSessionFromDefinition(def, true, paneID)
+		shell.WorkDir = workDir
+		shell.IsOrphaned = false
+		groups[workDir] = append(groups[workDir], shell)
+	}
+	return groups
 }
