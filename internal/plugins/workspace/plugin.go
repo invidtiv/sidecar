@@ -1141,10 +1141,14 @@ func (p *Plugin) previewShowsTerminal() bool {
 }
 
 // previewMaxScroll is the furthest back the primary terminal's window can sit,
-// in rows from the live bottom. It is the same bound the absolute model used as
-// its last addressable top row, read the other way round.
+// in rows from the live bottom. It is the bound of the window the render path
+// actually draws, not the raw line count: whenever the window is not following,
+// the trailing blank rows of a captured pane are trimmed, so a count-based
+// bound would let the window walk past the oldest row that can be shown — a
+// dead zone at the top of scrollback, and a scrollback-history load that only
+// fires after the reader pushes through it.
 func (p *Plugin) previewMaxScroll() int {
-	return p.getMaxScrollOffset()
+	return p.previewWindowBound()
 }
 
 // scrollPreviewWindow moves the primary terminal's window delta rows back
@@ -1234,8 +1238,15 @@ func (p *Plugin) thawPreviewGesturePin() {
 // the line count is two derivations of one window, and they disagree wherever
 // interactive mode's untrimmed rows or a pane shorter than the viewport do — so
 // releasing a drag moved the window the gesture had been holding still.
+//
+// It is measured as a window off the live edge, because that is the only state
+// a bound is ever asked about: a window following the live grid is placed by
+// the grid, not by an offset, and its untrimmed count would otherwise let the
+// first step back name a row the trimmed window cannot draw.
 func (p *Plugin) previewWindowBound() int {
-	return max(p.terminalViewportLayoutFor(false).MaxOffset, 0)
+	in := p.terminalWindowInputFor(false)
+	in.Follow = false
+	return max(calculateTerminalViewportLayout(in).MaxOffset, 0)
 }
 
 // pollSelectedAgentNowIfVisible triggers an immediate poll for visible output.

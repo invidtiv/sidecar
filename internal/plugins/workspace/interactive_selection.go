@@ -479,6 +479,13 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 // means the primary terminal — the freeze's bound, for one — gets it whichever
 // surface a selection currently sits on.
 func (p *Plugin) terminalViewportLayoutFor(termPanel bool) terminalViewportLayout {
+	return calculateTerminalViewportLayout(p.terminalWindowInputFor(termPanel))
+}
+
+// terminalWindowInputFor is the render path's input for a named surface, so a
+// caller that wants the drawn window's geometry — its bound, for one — builds it
+// once rather than reconstructing the viewport size beside it.
+func (p *Plugin) terminalWindowInputFor(termPanel bool) terminalViewportInput {
 	// One derivation of the surface's viewport size, shared with the render and
 	// cursor paths. The fallback covers the two cases the surface cannot place:
 	// an unsized plugin, and the term panel asked for while hidden.
@@ -489,8 +496,7 @@ func (p *Plugin) terminalViewportLayoutFor(termPanel bool) terminalViewportLayou
 	// A nil buffer is fine: the layout's geometry (the fit, the display size)
 	// comes from the viewport and the pane, and hit testing needs it whether or
 	// not any output has been captured yet.
-	return calculateTerminalViewportLayout(
-		p.terminalWindowInput(termPanel, p.terminalOutputBuffer(termPanel), width, height))
+	return p.terminalWindowInput(termPanel, p.terminalOutputBuffer(termPanel), width, height)
 }
 
 func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {

@@ -125,8 +125,8 @@ func TestPreviewWindowJumps(t *testing.T) {
 	p.selectedIdx = 0
 
 	p.jumpPreviewWindow(p.previewMaxScroll())
-	if p.previewScroll != p.getMaxScrollOffset() {
-		t.Errorf("jump to oldest: previewScroll = %d, want %d", p.previewScroll, p.getMaxScrollOffset())
+	if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
+		t.Errorf("jump to oldest: drawn window starts at %d, want the oldest row 0", start)
 	}
 
 	p.jumpPreviewWindow(0)
@@ -204,6 +204,48 @@ func scrollTestOutputPlugin(scroll int) *Plugin {
 	return p
 }
 
+// A captured pane usually ends in blank rows, and a window that is not
+// following trims them. The furthest back the window may sit has to be the
+// bound of the window the render draws, not the raw line count: a count-based
+// bound leaves a dead zone of notches at the top of scrollback where nothing
+// moves, and the scrollback-history load — which fires when the window reaches
+// the bound — only starts after the reader pushes through it.
+func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
+	p := &Plugin{previewTab: PreviewTabOutput, width: 120, height: 40}
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
+		Output:     strings.Repeat("agent output line\n", 110) + strings.Repeat("\n", 10),
+		PaneHeight: 10,
+	}))
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
+
+	bound := p.previewMaxScroll()
+	if bound == 0 {
+		t.Fatal("the fixture has no scrollback to walk back through")
+	}
+	if untrimmed := p.getMaxScrollOffset(); bound >= untrimmed {
+		t.Fatalf("bound = %d, want fewer rows than the untrimmed count allows (%d) — "+
+			"the fixture's blank tail is not being trimmed, so it proves nothing", bound, untrimmed)
+	}
+
+	// Walk back further than any bound could allow.
+	p.scrollPreviewWindow(1000)
+	if p.previewScroll != bound {
+		t.Fatalf("previewScroll = %d, want the bound %d", p.previewScroll, bound)
+	}
+	if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
+		t.Fatalf("drawn window starts at %d, want the oldest row 0", start)
+	}
+
+	// One notch forward has to move the rows on screen: a window parked past the
+	// oldest drawn row would spend the whole dead zone before anything happened.
+	p.scrollPreviewWindow(-1)
+	if start := p.terminalViewportLayoutFor(false).Start; start != 1 {
+		t.Fatalf("after one notch back towards live the window starts at %d, want 1", start)
+	}
+}
+
 // TestGJumpToTop verifies g reaches the oldest content the tab holds.
 func TestGJumpToTop(t *testing.T) {
 	t.Run("task", func(t *testing.T) {
@@ -217,9 +259,8 @@ func TestGJumpToTop(t *testing.T) {
 	t.Run("output", func(t *testing.T) {
 		p := scrollTestOutputPlugin(0)
 		p.jumpPreviewWindow(p.previewMaxScroll())
-		if p.previewScroll != p.getMaxScrollOffset() {
-			t.Errorf("after g: previewScroll = %d, want the furthest back %d",
-				p.previewScroll, p.getMaxScrollOffset())
+		if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
+			t.Errorf("after g: drawn window starts at %d, want the oldest row 0", start)
 		}
 	})
 }
