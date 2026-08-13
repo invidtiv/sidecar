@@ -19,6 +19,36 @@ func TestDefault(t *testing.T) {
 	if cfg.Plugins.GitStatus.RefreshInterval != time.Second {
 		t.Errorf("got refresh %v, want 1s", cfg.Plugins.GitStatus.RefreshInterval)
 	}
+	if cfg.Plugins.Workspace.OverviewWorktreeScope != OverviewWorktreeScopeProject {
+		t.Errorf("got Overview worktree scope %q, want %q", cfg.Plugins.Workspace.OverviewWorktreeScope, OverviewWorktreeScopeProject)
+	}
+}
+
+func TestLoadFrom_OverviewWorktreeScope(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "unset defaults to project", raw: `{}`, want: OverviewWorktreeScopeProject},
+		{name: "legacy worktree scope", raw: `{"plugins":{"workspace":{"overviewWorktreeScope":"worktree"}}}`, want: OverviewWorktreeScopeWorktree},
+		{name: "invalid keeps default", raw: `{"plugins":{"workspace":{"overviewWorktreeScope":"repository"}}}`, want: OverviewWorktreeScopeProject},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Plugins.Workspace.OverviewWorktreeScope != tt.want {
+				t.Fatalf("OverviewWorktreeScope = %q, want %q", cfg.Plugins.Workspace.OverviewWorktreeScope, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadFrom_NonExistent(t *testing.T) {

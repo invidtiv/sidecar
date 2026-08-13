@@ -261,3 +261,23 @@ func TestSave_WorkspaceAutoCreateShellRoundTrip(t *testing.T) {
 		t.Error("AutoCreateShell did not survive a save/load round trip")
 	}
 }
+
+func TestSave_OverviewWorktreeScopeRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	SetTestConfigPath(path)
+	defer ResetTestConfigPath()
+
+	cfg := Default()
+	cfg.Plugins.Workspace.OverviewWorktreeScope = OverviewWorktreeScopeWorktree
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	if loaded.Plugins.Workspace.OverviewWorktreeScope != OverviewWorktreeScopeWorktree {
+		t.Fatalf("OverviewWorktreeScope = %q, want %q", loaded.Plugins.Workspace.OverviewWorktreeScope, OverviewWorktreeScopeWorktree)
+	}
+}

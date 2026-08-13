@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
@@ -576,7 +577,7 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 	switch target.Kind {
 	case plugin.WorkspaceSelectionWorktree:
 		for i, wt := range p.worktrees {
-			if filepath.Clean(wt.Path) == filepath.Clean(target.Path) {
+			if workspaceinventory.CanonicalPath(wt.Path) == workspaceinventory.CanonicalPath(target.Path) {
 				p.selectWorktreeAt(i)
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()

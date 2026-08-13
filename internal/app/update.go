@@ -433,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Key:  msg.Path,
 			Path: msg.Path,
 		}
-		return m, m.switchProjectWithSelection(msg.Path, nil, &pending)
+		return m, m.switchProjectWithSelection(msg.Path, nil, &pending, false)
 
 	case overview.NavigateMsg:
 		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {

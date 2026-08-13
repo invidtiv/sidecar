@@ -203,6 +203,20 @@ All plugins reinitialize with the new project context. State (active plugin, cur
 
 Press `W` to switch between git worktrees within the current repository. When you switch away from a project and return later, sidecar remembers which worktree you were working in and restores it automatically.
 
+Opening a worktree from the cross-project Overview keeps Sidecar scoped to the project root
+by default, while selecting that worktree in Workspaces and its preview. To instead enter the
+selected worktree's scope, set:
+
+```json
+{
+  "plugins": {
+    "workspace": {
+      "overviewWorktreeScope": "worktree"
+    }
+  }
+}
+```
+
 ## Themes
 
 Press `#` to open the theme switcher. Choose from built-in themes (default, dracula) or press `Tab` to browse 453 community color schemes derived from iTerm2-Color-Schemes.

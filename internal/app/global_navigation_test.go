@@ -207,8 +207,10 @@ func TestGlobalWorkspacesOpensTheChosenWorktreeNotTheRememberedOne(t *testing.T)
 	}
 
 	// The linked worktree itself is reachable too, and it is a different
-	// destination from its main repo even though both are one project.
+	// destination from its main repo even though both are one project. Under
+	// the configured worktree scope the landing follows the card exactly.
 	m2, _, plugins2 := globalNavigationModel(t)
+	m2.cfg.Plugins.Workspace.OverviewWorktreeScope = config.OverviewWorktreeScopeWorktree
 	linkedWorkspace := workspaceinventory.Workspace{
 		ProjectKey:  workspaceinventory.CanonicalPath(target),
 		ProjectRoot: target,

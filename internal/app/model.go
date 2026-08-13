@@ -736,10 +736,10 @@ func (m *Model) toggleOverview() tea.Cmd {
 }
 
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
-	return m.switchProjectWithSelection(projectPath, inventory, nil)
+	return m.switchProjectWithSelection(projectPath, inventory, nil, true)
 }
 
-func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection) tea.Cmd {
+func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection, restoreLastWorktree bool) tea.Cmd {
 	// Skip if already on this project
 	if projectPath == m.ui.WorkDir {
 		return func() tea.Msg {
@@ -776,7 +776,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		// explicit destination outranks the memory. A shell selection names no
 		// worktree at all: shells are project-scoped and resolve identically
 		// from any worktree, so the remembered worktree still wins there.
-		if normalizedProject == normalizedTargetMain &&
+		if restoreLastWorktree && normalizedProject == normalizedTargetMain &&
 			(pending == nil || pending.Kind != plugin.WorkspaceSelectionWorktree) {
 			if savedWorktree := state.GetLastWorktreePath(normalizedTargetMain); savedWorktree != "" {
 				// Don't restore if the saved worktree is where we're coming FROM
@@ -907,23 +907,30 @@ func (m *Model) openInGitFromOverview(path string) tea.Cmd {
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
 	m.leaveOverview(false)
 	kind := plugin.WorkspaceSelectionWorktree
-	target := workspace.Path
+	target := workspace.ProjectRoot
 	key := workspace.Key
+	if target == "" {
+		target = workspace.Path
+	}
+	if workspace.Kind == workspaceinventory.KindWorktree && m.cfg.Plugins.Workspace.OverviewWorktreeScope == config.OverviewWorktreeScopeWorktree {
+		target = workspace.Path
+	}
 	if workspace.Kind == workspaceinventory.KindShell {
 		kind = plugin.WorkspaceSelectionShell
-		target = workspace.ProjectRoot
 		key = workspace.TmuxName
 	}
 	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path}
-	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) ||
-		(workspace.Kind == workspaceinventory.KindShell && workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.ProjectRoot)) {
+	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) {
 		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(pending)
 		}
 		m.updateContext()
 		return m.FocusPluginByID(workspacePluginID)
 	}
-	return m.switchProjectWithSelection(target, nil, &pending)
+	// Worktree cards name an exact destination, so the remembered worktree must
+	// not override it. Shells are project-scoped and still open in whichever
+	// worktree the project was last visited in.
+	return m.switchProjectWithSelection(target, nil, &pending, kind == plugin.WorkspaceSelectionShell)
 }
 
 // previewProjectTheme applies the theme for the currently selected project in the switcher.
