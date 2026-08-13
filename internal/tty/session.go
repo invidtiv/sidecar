@@ -272,3 +272,16 @@ func CapturePaneOutput(target string, scrollback int) (string, error) {
 	}
 	return string(output), nil
 }
+
+// CapturePaneWithState is a capture plus the geometry observed with it. Every
+// capture-shaped producer needs both — the rows alone cannot say where the live
+// grid starts — so the pair is read here once rather than each caller inventing
+// its own second tmux call.
+func CapturePaneWithState(target string, scrollback int) (string, PaneState, error) {
+	output, err := CapturePaneOutput(target, scrollback)
+	if err != nil {
+		return "", PaneState{}, err
+	}
+	state, _ := QueryPaneStateSync(target)
+	return output, state, nil
+}

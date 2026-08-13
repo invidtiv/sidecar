@@ -76,8 +76,13 @@ type previewMsg struct {
 	WorkspaceID string
 	PaneID      string
 	Output      string
-	Err         error
-	At          time.Time
+	// Pane is the geometry tmux reported for the pane at the instant of the
+	// capture. Without it the rows say nothing about where the live grid starts,
+	// which is what a full-screen application needs for its background fill and
+	// its intentional blank rows to survive the window rules.
+	Pane tty.PaneState
+	Err  error
+	At   time.Time
 }
 
 // previewPollMsg is the adaptive refresh tick for an unchanged live pane.
@@ -145,6 +150,10 @@ type previewCapture struct {
 	PaneID     string
 	CapturedAt time.Time
 	Err        error
+	// Pane is the geometry observed with the accepted capture. It clears with
+	// the capture it describes, so a stale height can never outlive the rows it
+	// was read beside.
+	Pane tty.PaneState
 }
 
 // PreviewMetrics is what the cadence was tuned against: how many captures the
@@ -325,8 +334,8 @@ func (m *Model) capturePreviewCmd(workspace workspaceinventory.Workspace) tea.Cm
 	m.preview.metrics.Captures++
 	m.tracef("preview generation=%d capture workspace=%s pane=%s", generation, id, pane)
 	return func() tea.Msg {
-		output, err := capture(pane, previewCaptureLines)
-		return previewMsg{Generation: generation, WorkspaceID: id, PaneID: pane, Output: output, Err: err, At: time.Now()}
+		output, state, err := capture(pane, previewCaptureLines)
+		return previewMsg{Generation: generation, WorkspaceID: id, PaneID: pane, Output: output, Pane: state, Err: err, At: time.Now()}
 	}
 }
 
@@ -344,13 +353,18 @@ func (m *Model) applyPreview(msg previewMsg) tea.Cmd {
 		return m.schedulePreviewPoll()
 	}
 	m.preview.reason = ""
-	m.preview.capture = previewCapture{PaneID: msg.PaneID, CapturedAt: msg.At}
+	m.preview.capture = previewCapture{PaneID: msg.PaneID, CapturedAt: msg.At, Pane: msg.Pane}
 	if m.preview.buffer == nil {
 		m.preview.buffer = tty.NewOutputBuffer(previewCaptureLines)
 	}
 	// The same call the live terminal makes with its own captures, so a watched
 	// pane and a driven one are one kind of content behind one kind of window.
-	m.preview.buffer.ApplySnapshot(tty.PaneSnapshot{Output: msg.Output})
+	// Stating the split is what tells the window that the capture's tail is a
+	// live grid rather than history (td-c3644b).
+	m.preview.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
+		Output:     msg.Output,
+		PaneHeight: msg.Pane.PaneHeight,
+	}))
 	return m.schedulePreviewPoll()
 }
 
@@ -659,12 +673,27 @@ func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
 	// shared rule's answer, the same one the project surfaces place theirs by.
 	placement := tty.PlaceWindow(&m.preview.freeze, m.preview.offset)
 	input.Offset, input.OffsetFromBottom, input.Follow = placement.Offset, placement.FromBottom, placement.Follow
+	// Pane geometry is not an interactive-only fact. A watched full-screen
+	// application needs it too: it is what fills the canvas with the pane's own
+	// background and what keeps its intentional blank rows from being trimmed
+	// into a window that walks up into history (td-c3644b).
+	input.PaneWidth, input.PaneHeight = m.previewPaneSize()
 	if interactive {
 		input.Interactive = true
-		input.PaneWidth, input.PaneHeight = m.preview.terminal.PaneSize()
 		input.CursorRow, input.CursorCol, input.CursorVisible = m.preview.terminal.CursorState()
 	}
 	return input
+}
+
+// previewPaneSize is the geometry of the pane behind the box: the live
+// terminal's while the user is typing into it, and the geometry observed with
+// the last accepted capture while it is being watched. One answer for both
+// states is what keeps a pane drawn the same way whether or not it is driven.
+func (m *Model) previewPaneSize() (width, height int) {
+	if m.PreviewInteractive() {
+		return m.preview.terminal.PaneSize()
+	}
+	return m.preview.capture.Pane.PaneWidth, m.preview.capture.Pane.PaneHeight
 }
 
 func (m *Model) previewWindow() previewWindow {

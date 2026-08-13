@@ -2,6 +2,7 @@ package overview
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -32,20 +34,24 @@ type captureRecorder struct {
 	mu     sync.Mutex
 	calls  []string
 	output map[string]string
-	err    error
+	// state is the geometry tmux reports beside a pane's capture, per pane. The
+	// zero value is a capture taken with no geometry observed.
+	state map[string]tty.PaneState
+	err   error
 }
 
-func (c *captureRecorder) capture(pane string, lines int) (string, error) {
+func (c *captureRecorder) capture(pane string, lines int) (string, tty.PaneState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, pane)
 	if c.err != nil {
-		return "", c.err
+		return "", tty.PaneState{}, c.err
 	}
+	state := c.state[pane]
 	if out, ok := c.output[pane]; ok {
-		return out, nil
+		return out, state, nil
 	}
-	return "pane " + pane + " output\nsecond line", nil
+	return "pane " + pane + " output\nsecond line", state, nil
 }
 
 func (c *captureRecorder) panes() []string {
@@ -67,7 +73,7 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 
 	now := time.Now()
 	m := New(workspaceinventory.Collector{})
-	recorder := &captureRecorder{output: map[string]string{}}
+	recorder := &captureRecorder{output: map[string]string{}, state: map[string]tty.PaneState{}}
 	m.collector.Capture = recorder.capture
 	m.projects = []Project{{Name: "sidecar", Path: "/tmp/sidecar", Key: "sidecar"}}
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar", Workspaces: []workspaceinventory.Workspace{
@@ -789,5 +795,57 @@ func TestPreviewWorkIsMeasuredAndBounded(t *testing.T) {
 	}
 	if m.PreviewMetrics().LastLatency > time.Second {
 		t.Fatalf("selection latency = %s, far past the frame budget", m.PreviewMetrics().LastLatency)
+	}
+}
+
+// A watched full-screen application (Grok, Claude, …) keeps intentional blank
+// rows at the bottom of its grid. Without the geometry tmux reported beside the
+// capture, the window took those rows for padding, trimmed them, and started
+// that many rows higher — painting the pane's previous bottom chrome under the
+// header while the live grid's own bottom fell off the end (td-c3644b).
+func TestAWatchedFullScreenPaneIsDrawnFromItsLiveGridNotItsHistory(t *testing.T) {
+	m, recorder := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.WorkspacesView(previewWide, previewTall)
+	paneHeight := m.previewRows()
+	if paneHeight < 8 {
+		t.Fatalf("preview body height = %d, too short to stage a full-screen pane", paneHeight)
+	}
+
+	history := make([]string, 30)
+	for i := range history {
+		history[i] = fmt.Sprintf("history %d", i)
+	}
+	grid := make([]string, paneHeight)
+	grid[0] = "GROK TOP"
+	grid[paneHeight-4] = "INPUT BOX"
+	// tmux terminates its capture, so the pane's last row is a real blank row
+	// rather than the tail of the row above it.
+	recorder.output["%1"] = strings.Join(append(history, grid...), "\n") + "\n"
+	recorder.state["%1"] = tty.PaneState{PaneWidth: m.previewSplit(previewWide).ContentWidth - 1, PaneHeight: paneHeight}
+
+	// Recapture the same pane with its geometry attached.
+	run(t, m, m.pollPreview(previewPollMsg{Generation: m.preview.generation, WorkspaceID: "a"}))
+
+	window := m.previewWindow()
+	if !window.ok {
+		t.Fatal("the rendered preview has no window")
+	}
+	if window.input.PaneHeight != paneHeight {
+		t.Fatalf("the watched window was told pane height %d, want the captured %d", window.input.PaneHeight, paneHeight)
+	}
+	if window.layout.PaneTop != len(history) {
+		t.Fatalf("pane row 0 landed at buffer line %d, want %d — the capture's split was not published", window.layout.PaneTop, len(history))
+	}
+	if window.layout.Start != window.layout.PaneTop {
+		t.Fatalf("the live window starts at %d, want the grid's own top %d", window.layout.Start, window.layout.PaneTop)
+	}
+
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "GROK TOP") || !strings.Contains(view, "INPUT BOX") {
+		t.Fatalf("the watched preview did not draw the pane's live grid:\n%s", view)
+	}
+	if strings.Contains(view, "history 29") {
+		t.Fatalf("history bled into the top of the watched preview:\n%s", view)
 	}
 }

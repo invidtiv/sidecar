@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 type fakeRunner struct {
@@ -101,7 +102,10 @@ func TestTwoProjectInventoryIsReadOnlyAndExcludesPlainShells(t *testing.T) {
 		"%4\tagent-two\t" + rootTwo + "\tclaude\tClaude\t0",
 	}, "\n")}
 	captures := 0
-	collector := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "› Write tests for @filename", nil }}
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		captures++
+		return "› Write tests for @filename", tty.PaneState{}, nil
+	}}
 	panes, err := collector.ListPanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -147,11 +151,11 @@ func TestCollectorDiscoversAgentStartedInUntypedShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
-	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, tty.PaneState, error) {
 		if target == "%1" {
-			return "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", nil
+			return "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 		}
-		return "$ ", nil
+		return "$ ", tty.PaneState{}, nil
 	}}
 	panes := []Pane{
 		{ID: "%1", Session: "dynamic-agent", Path: root, Command: "node"},
@@ -186,7 +190,7 @@ func TestStatusPollDiscoversAgentStartedAfterUntypedShellWasPlain(t *testing.T) 
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	output := "$ "
-	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { return output, nil }}.WithDefaults()
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { return output, tty.PaneState{}, nil }}.WithDefaults()
 	inventory := base.CollectProjectInventory(context.Background(), "sidecar", root)
 	collector := base.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory}))
 
@@ -224,7 +228,7 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	captures := 0
-	collector := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "", nil }}
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "", tty.PaneState{}, nil }}
 	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, []Pane{{ID: "%1", Path: root}, {ID: "%2", Path: root}})
 	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable || !result.Workspaces[0].IsMain {
 		t.Fatalf("ambiguous result = %#v", result)
@@ -261,11 +265,11 @@ func TestCollectorMatchesLiveSiblingWorktreeWithoutConfiguredOwner(t *testing.T)
 		"branch refs/heads/terminal-cutover",
 		"",
 	}, "\n")}}
-	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, tty.PaneState, error) {
 		if target != "%40" {
 			t.Fatalf("captured pane %q, want %%40", target)
 		}
-		return "• Working (1s • esc to interrupt)", nil
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}
 	result := collector.CollectProject(context.Background(), "sidecar", projectRoot, []string{projectRoot}, []Pane{{
 		ID: "%40", Session: "sidecar-ws-sidecar-terminal-cutover", Path: worktree, Command: "node",
@@ -292,10 +296,10 @@ func TestPanesForPathDoesNotClaimNestedConfiguredProject(t *testing.T) {
 
 func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	collector := Collector{Capture: func(string, int) (string, error) {
+	collector := Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		out := outputs[0]
 		outputs = outputs[1:]
-		return out, nil
+		return out, tty.PaneState{}, nil
 	}}.WithDefaults()
 	pane := []Pane{{ID: "%1", Session: "agent", Path: "/tmp/repo", Command: "codex"}}
 	first := Workspace{ID: "repo:worktree:one", Provider: "codex"}
@@ -311,9 +315,9 @@ func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 }
 
 func TestRefreshCollectorBoundsMatchedPaneCaptures(t *testing.T) {
-	collector := (Collector{Capture: func(string, int) (string, error) {
+	collector := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		time.Sleep(10 * time.Millisecond)
-		return "› ready", nil
+		return "› ready", tty.PaneState{}, nil
 	}}).ForRefresh(2)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -334,8 +338,8 @@ func TestRefreshCollectorBoundsMatchedPaneCaptures(t *testing.T) {
 func TestLiveStatusRefreshReusesInventoryWithoutGitOrMetadataReads(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
-	collector := (Collector{Runner: runner, Capture: func(string, int) (string, error) {
-		return "• Working (1s • esc to interrupt)", nil
+	collector := (Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}).ForRefresh(2)
 	previous := ProjectResult{ProjectKey: canonical(root), ProjectRoot: root, Workspaces: []Workspace{{
 		ID: "repo:worktree:agent", ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Path: root, Provider: "codex",
@@ -447,7 +451,7 @@ func TestLegacyAgentShellSessionIsReservedFromWorktreeCapture(t *testing.T) {
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	captures := 0
-	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "working", nil }}.WithDefaults()
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "working", tty.PaneState{}, nil }}.WithDefaults()
 	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
 	claims := BuildShellClaims([]ProjectResult{inventory})
 	result := base.ForRefresh(4, claims).RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "legacy-agent", Path: root, Command: "codex"}})
@@ -465,14 +469,14 @@ func TestCanceledCaptureCannotMutateSharedTracker(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls int64
-	base := (Collector{Capture: func(string, int) (string, error) {
+	base := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		call := atomic.AddInt64(&calls, 1)
 		if call == 1 {
 			close(started)
 			<-release
-			return "› Write tests for @filename", nil
+			return "› Write tests for @filename", tty.PaneState{}, nil
 		}
-		return "• Working (1s • esc to interrupt)", nil
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}).WithDefaults()
 	oldCollector := base.ForRefresh(1)
 	oldCtx, cancel := context.WithCancel(context.Background())
@@ -502,7 +506,9 @@ func TestCanceledLocalTrackerApplyCannotReachCommittedState(t *testing.T) {
 	applyLocked := make(chan struct{})
 	releaseApply := make(chan struct{})
 	base := (Collector{
-		Capture: func(string, int) (string, error) { return "› Write tests for @filename", nil },
+		Capture: func(string, int) (string, tty.PaneState, error) {
+			return "› Write tests for @filename", tty.PaneState{}, nil
+		},
 		beforeTrackerApply: func() {
 			close(applyLocked)
 			<-releaseApply
@@ -530,10 +536,10 @@ func TestCanceledLocalTrackerApplyCannotReachCommittedState(t *testing.T) {
 
 func TestSuccessfulRefreshCommitsTrackerContinuity(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	base := (Collector{Capture: func(string, int) (string, error) {
+	base := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		output := outputs[0]
 		outputs = outputs[1:]
-		return output, nil
+		return output, tty.PaneState{}, nil
 	}}).WithDefaults()
 	first := base.ForRefresh(1)
 	working := Workspace{ID: "same-agent", Provider: "codex"}
@@ -689,7 +695,7 @@ func TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus(t *testing.
 
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\nworktree " + linked + "\nbranch refs/heads/topic\n"}}
 	captures := 0
-	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "$ ", nil }}.WithDefaults()
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "$ ", tty.PaneState{}, nil }}.WithDefaults()
 	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
 	collector := base.ForRefresh(2, BuildShellClaims([]ProjectResult{inventory}))
 	result := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{

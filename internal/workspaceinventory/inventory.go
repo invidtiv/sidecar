@@ -205,9 +205,15 @@ func (ExecRunner) Output(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// CaptureFunc reads one pane: its capture text and the geometry observed with
+// it. The geometry travels with the capture because a capture's rows alone
+// cannot say where the live grid starts, and a consumer that has to ask
+// separately pairs rows from one instant with a height from another.
+type CaptureFunc func(target string, lines int) (string, tty.PaneState, error)
+
 type Collector struct {
 	Runner             Runner
-	Capture            func(string, int) (string, error)
+	Capture            CaptureFunc
 	Now                func() time.Time
 	DoneTTL            time.Duration
 	trackers           *trackerStore
@@ -243,7 +249,7 @@ func (c Collector) defaults() Collector {
 		c.Runner = ExecRunner{}
 	}
 	if c.Capture == nil {
-		c.Capture = tty.CapturePaneOutput
+		c.Capture = tty.CapturePaneWithState
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -514,7 +520,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		workspace.PaneID, workspace.TmuxName = pane.ID, pane.Session
 		if pane.Dead {
 			input.Orphaned = true
-		} else if output, err := c.capturePane(ctx, pane.ID, 80); err != nil {
+		} else if output, _, err := c.capturePane(ctx, pane.ID, 80); err != nil {
 			input.Err = true
 		} else {
 			select {
@@ -551,7 +557,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 	workspace.Presentation = agentstatus.Resolve(input)
 }
 
-func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (string, error) {
+func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (string, tty.PaneState, error) {
 	if c.captures == nil {
 		return c.Capture(paneID, lines)
 	}
@@ -559,7 +565,7 @@ func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (s
 	case c.captures <- struct{}{}:
 		defer func() { <-c.captures }()
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return "", tty.PaneState{}, ctx.Err()
 	}
 	if c.metrics != nil {
 		c.metrics.captures.Add(1)

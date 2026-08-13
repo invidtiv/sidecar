@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -495,10 +496,10 @@ func TestOverviewCancellationStopsPollAndTraceIsPrivacySafe(t *testing.T) {
 
 func TestOverviewStopDiscardsGenerationLocalTrackers(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	collector := workspaceinventory.Collector{Capture: func(string, int) (string, error) {
+	collector := workspaceinventory.Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		output := outputs[0]
 		outputs = outputs[1:]
-		return output, nil
+		return output, tty.PaneState{}, nil
 	}}
 	m := New(collector)
 	m.ctx, m.cancel = context.WithCancel(context.Background())

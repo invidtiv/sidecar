@@ -51,12 +51,7 @@ type defaultTerminalCaptureSource struct{}
 const terminalRecoveryBlankLimit = 8
 
 func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (string, PaneState, error) {
-	output, err := CapturePaneOutput(target, scrollback)
-	if err != nil {
-		return "", PaneState{}, err
-	}
-	state, _ := QueryPaneStateSync(target)
-	return output, state, nil
+	return CapturePaneWithState(target, scrollback)
 }
 
 type defaultTerminalInputSender struct{}
