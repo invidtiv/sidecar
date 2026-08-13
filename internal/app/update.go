@@ -423,15 +423,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.FocusPluginByID(msg.PluginID)
 
 	case overview.OpenInGitMsg:
-		if msg.Path == "" {
-			return m, nil
+		return m, m.openInGitFromOverview(msg.Path)
+
+	case openInGitSwitchMsg:
+		// Nil inventory, same as navigateFromOverview: resolve ProjectRoot
+		// from the target checkout, not the current project's worktree cache.
+		pending := plugin.PendingWorkspaceSelection{
+			Kind: plugin.WorkspaceSelectionWorktree,
+			Key:  msg.Path,
+			Path: msg.Path,
 		}
-		// Sequence, not Batch: SwitchWorktree re-inits plugins and deadlocks
-		// if FocusPlugin forks beside it. FocusPluginByIDMsg exits global.
-		return m, tea.Sequence(
-			SwitchWorktree(msg.Path),
-			FocusPlugin("git-status"),
-		)
+		return m, m.switchProjectWithSelection(msg.Path, nil, &pending)
 
 	case overview.NavigateMsg:
 		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
