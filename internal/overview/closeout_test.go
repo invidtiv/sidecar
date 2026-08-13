@@ -65,9 +65,13 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 	}
 	m.scrollPreview(20)
 	pinned := m.preview.freeze.Start()
-	bound := m.previewMaxOffset()
 
 	terminal.hooks.OnExit()
+
+	// The bound is measured after the exit, as production does: leaving the
+	// mode changes whether trailing rows are trimmed, and a bound taken in the
+	// interactive state could disagree with the one the leave rule actually saw.
+	bound := m.previewMaxOffset()
 
 	if m.preview.freeze.Active() {
 		t.Fatal("the window stayed pinned after the mode that pinned it ended")
