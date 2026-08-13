@@ -204,3 +204,40 @@ func TestRenderBufferStatesWithNothingToDraw(t *testing.T) {
 		t.Fatalf("single-row box wrapped: %q", short)
 	}
 }
+
+// The header belongs to the frame placing the box and the body to what the box
+// shows, so the halves are drawable separately — and RenderBuffer is exactly
+// their composition, which is what lets a surface that wants the whole box in
+// one call stay byte-identical to a frame that draws the halves itself.
+func TestRenderBufferIsItsHalvesComposed(t *testing.T) {
+	buffer := tty.NewOutputBuffer(600)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: "first\nsecond\nthird"})
+
+	in := RenderBufferInput{
+		Width: 24, Height: 5, Chips: []string{"shell"}, Hints: "read-only", Buffer: buffer,
+	}
+	in.Layout = tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: in.Width, Height: in.Height - HeaderRows, Follow: true,
+	})
+
+	header, body := RenderHeader(in), RenderBody(in)
+	if composed := header + "\n" + body; RenderBuffer(in) != composed {
+		t.Fatalf("RenderBuffer is not its halves composed:\n%q\nvs\n%q", RenderBuffer(in), composed)
+	}
+	if strings.Contains(header, "\n") {
+		t.Fatalf("header is more than the one row it reserves: %q", header)
+	}
+	if got := len(rows(body)); got != in.Height-HeaderRows {
+		t.Fatalf("body drew %d rows, want %d", got, in.Height-HeaderRows)
+	}
+
+	// A box with no row under its header has no body, so a frame drawing the
+	// halves cannot spend a row the composed form does not.
+	short := RenderBufferInput{Width: 10, Height: HeaderRows, Chips: []string{"api"}}
+	if drawn := RenderBody(short); drawn != "" {
+		t.Fatalf("box with no room below its header drew a body: %q", drawn)
+	}
+	if RenderBuffer(short) != RenderHeader(short) {
+		t.Fatalf("header-only box = %q, want its header", RenderBuffer(short))
+	}
+}

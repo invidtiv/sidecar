@@ -556,15 +556,35 @@ func (p *Plugin) docHeaderChips(doc *docPane, width int) []string {
 	}
 }
 
-func (p *Plugin) renderDocPane(doc *docPane, box Box) string {
-	contentHeight := maxInt(box.H-terminalHeaderRows, 0)
-	doc.view.SetSize(box.W, contentHeight)
+// docPaneHeaderRow is the doc leaf's header row. The frame draws it, not the
+// leaf: a leaf that decided for itself whether it spent its box's first row
+// would put its body on a different relative row than its neighbours', which is
+// the property termpreview.HeaderRows exists to state.
+func (p *Plugin) docPaneHeaderRow(doc *docPane, box Box) string {
 	action := "raw"
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · m "+action), box.W, 0)
-	return header + "\n" + doc.view.View()
+	return p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · m "+action), box.W, 0)
+}
+
+// renderDocPaneBody draws the doc leaf below the frame's header row. It is the
+// box minus that row — the same subtraction termpreview.SurfaceIn makes for a
+// terminal leaf.
+func (p *Plugin) renderDocPaneBody(doc *docPane, box Box) string {
+	doc.view.SetSize(box.W, maxInt(box.H-terminalHeaderRows, 0))
+	return doc.view.View()
+}
+
+// composePaneLeaf joins the header row the frame drew to the body the leaf
+// drew. An empty header is a leaf the frame owes no header row; an empty body
+// still costs the join its newline, because a leaf with no box left under its
+// header has spent that row all the same.
+func composePaneLeaf(header, body string) string {
+	if header == "" {
+		return body
+	}
+	return header + "\n" + body
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -622,7 +642,8 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 			if absolute, ok := p.previewContentBox(); ok {
 				p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: width, H: height})
 			}
-			return p.renderDocPane(doc, Box{W: width, H: height}), true
+			zoomed := Box{W: width, H: height}
+			return composePaneLeaf(p.docPaneHeaderRow(doc, zoomed), p.renderDocPaneBody(doc, zoomed)), true
 		}
 		return "", false
 	}
@@ -633,9 +654,15 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	for _, placement := range leaves {
 		switch placement.Node.Kind {
 		case PaneTerminal:
+			// The terminal leaf is the one leaf whose header the frame does not
+			// draw yet: the terminal panel puts a second surface, with a second
+			// header row, inside this one leaf. M1 absorbs the panel into the tree
+			// and each surface becomes a leaf the frame can head itself.
 			terminal = p.renderPreviewContentLegacy(placement.Box.W, placement.Box.H)
 		case PaneDoc:
-			document = p.renderDocPane(doc, placement.Box)
+			document = composePaneLeaf(
+				p.docPaneHeaderRow(doc, placement.Box),
+				p.renderDocPaneBody(doc, placement.Box))
 			if absolute, ok := p.previewContentBox(); ok {
 				p.registerDocPaneRegions(doc, placement.Node.ID, Box{
 					X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,

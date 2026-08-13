@@ -53,15 +53,38 @@ type RenderBufferInput struct {
 	Decorate func(line string, absoluteLine int) string
 }
 
-// RenderBuffer draws a window of a terminal buffer into a fixed box: one header
-// row, then exactly Height-HeaderRows body rows of exactly Width columns.
+// RenderHeader draws the one row above an embedded terminal — identity chips
+// left, hints right — filled to exactly Width columns.
+//
+// It is separate from RenderBody because the header belongs to the frame that
+// places the box, not to whatever the box is showing. A frame that draws every
+// leaf's header itself is the only way every leaf's body can start on the same
+// relative row, which is what HeaderRows states.
+func RenderHeader(in RenderBufferInput) string {
+	if in.Width < 1 || in.Height < 1 {
+		return ""
+	}
+	truncate := in.Truncate
+	if truncate == nil {
+		truncate = TruncateANSI
+	}
+	return fill(HeaderRow(in.Chips, in.Hints, in.Width, 0, truncate), in.Width, truncate)
+}
+
+// RenderBody draws the window of a terminal buffer that sits under the header
+// row: exactly Height-HeaderRows rows of exactly Width columns, or nothing when
+// the box has no row to spare below its header.
 //
 // It renders no cursor. A host that owns one places it natively against the box
 // this returns, using the same Layout — a cursor drawn here and a cursor placed
 // there would be two answers to one question.
-func RenderBuffer(in RenderBufferInput) string {
+func RenderBody(in RenderBufferInput) string {
 	width, height := in.Width, in.Height
 	if width < 1 || height < 1 {
+		return ""
+	}
+	body := height - HeaderRows
+	if body < 1 {
 		return ""
 	}
 	truncate := in.Truncate
@@ -71,12 +94,6 @@ func RenderBuffer(in RenderBufferInput) string {
 	tabWidth := in.TabWidth
 	if tabWidth <= 0 {
 		tabWidth = tty.DefaultTabWidth
-	}
-	header := fill(HeaderRow(in.Chips, in.Hints, width, 0, truncate), width, truncate)
-
-	body := height - HeaderRows
-	if body < 1 {
-		return header
 	}
 
 	layout := in.Layout
@@ -89,7 +106,7 @@ func RenderBuffer(in RenderBufferInput) string {
 		for _, line := range strings.Split(message, "\n") {
 			lines = append(lines, fill(line, width, truncate))
 		}
-		return strings.Join(append([]string{header}, padRows(lines, body, width)...), "\n")
+		return strings.Join(padRows(lines, body, width), "\n")
 	}
 
 	contentWidth := max(layout.DisplayWidth, 1)
@@ -128,7 +145,23 @@ func RenderBuffer(in RenderBufferInput) string {
 		visible[i] = fill(line, width, truncate)
 	}
 
-	return strings.Join(append([]string{header}, padRows(visible, body, width)...), "\n")
+	return strings.Join(padRows(visible, body, width), "\n")
+}
+
+// RenderBuffer draws a whole embedded terminal box: RenderHeader over
+// RenderBody. It is kept as their composition for the surfaces that want the
+// box in one call, so splitting the two halves costs its callers nothing; a
+// frame that owns the header row calls the halves instead.
+func RenderBuffer(in RenderBufferInput) string {
+	header := RenderHeader(in)
+	if header == "" {
+		return ""
+	}
+	body := RenderBody(in)
+	if body == "" {
+		return header
+	}
+	return header + "\n" + body
 }
 
 // fill truncates a line to width and right-pads it, so every rendered row is
