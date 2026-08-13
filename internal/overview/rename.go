@@ -175,11 +175,6 @@ func (m *Model) handleRenameShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.closeRenameShell()
 		return true, nil
 	}
-	// q is quit modal (locked product). Do not type it into the name.
-	if key == "q" {
-		m.closeRenameShell()
-		return true, nil
-	}
 	if m.renameModal.FocusedID() == renameShellInputID {
 		m.renameError = ""
 	}

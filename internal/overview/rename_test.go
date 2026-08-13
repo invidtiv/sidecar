@@ -70,7 +70,7 @@ func TestRWhileTypingGoesToThePane(t *testing.T) {
 	}
 }
 
-func TestRenameModalQAndEscCloseWithoutWriting(t *testing.T) {
+func TestRenameModalEscClosesWithoutWriting(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	m.workspaces.SelectID("c")
@@ -78,19 +78,40 @@ func TestRenameModalQAndEscCloseWithoutWriting(t *testing.T) {
 	if !m.RenameShellOpen() {
 		t.Fatal("premise: modal should be open")
 	}
+	m.renameInput.SetValue("should-not-persist")
 	press(t, m, "esc")
 	if m.RenameShellOpen() {
 		t.Fatal("esc did not close the rename modal")
 	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Name != "charlie" {
+		t.Fatalf("esc wrote the name: %#v", workspace)
+	}
+}
 
+func TestRenameModalQTypesIntoTheName(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.workspaces.SelectID("c")
 	press(t, m, "R")
+	if !m.RenameShellOpen() {
+		t.Fatal("premise: modal should be open")
+	}
+	before := m.renameInput.Value()
 	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if !handled {
-		t.Fatal("q was not handled as quit-modal")
+		t.Fatal("q in the rename field was not handled")
 	}
 	run(t, m, cmd)
-	if m.RenameShellOpen() {
-		t.Fatal("q did not close the rename modal")
+	if !m.RenameShellOpen() {
+		t.Fatal("q closed the rename modal instead of typing")
+	}
+	if !strings.Contains(m.renameInput.Value(), "q") {
+		t.Fatalf("name after q = %q, want it to contain q (was %q)", m.renameInput.Value(), before)
+	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Name != "charlie" {
+		t.Fatalf("typing q persisted the name: %#v", workspace)
 	}
 }
 
