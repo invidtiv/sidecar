@@ -71,6 +71,7 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
+		{Key: "p", Command: "pin", Context: "global-workspaces"},
 		{Key: "r", Command: "refresh", Context: "global-workspaces"},
 		{Key: "j", Command: "cursor-down", Context: "global-workspaces"},
 		{Key: "k", Command: "cursor-up", Context: "global-workspaces"},
@@ -90,6 +91,10 @@ func DefaultBindings() []Binding {
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
 		{Key: ",", Command: "prev-tab", Context: "global-workspaces"},
 		{Key: ".", Command: "next-tab", Context: "global-workspaces"},
+		// Display-name write, not create/destroy. Worktrees ignore the key.
+		{Key: "R", Command: "rename-shell", Context: "global-workspaces"},
+		// Navigation: leave global and open the project's Git plugin.
+		{Key: "O", Command: "open-in-git", Context: "global-workspaces"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface

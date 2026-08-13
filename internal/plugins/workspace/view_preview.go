@@ -26,14 +26,14 @@ func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 
 	// Show welcome guide only when no worktree AND no shell is selected
 	wt := p.selectedWorktree()
-	if wt == nil && !p.shellSelected {
+	if wt == nil && !p.selectingShell() {
 		return p.truncateAllLines(p.renderWelcomeGuide(width, height), width)
 	}
 
 	// When shell is selected, show shell content directly without tabs
 	// (Output/Diff/Task tabs are not relevant for the project shell). The shell's
 	// name is the left region of the terminal's own header row instead.
-	if p.shellSelected {
+	if p.selectingShell() {
 		if p.termPanelVisible {
 			return p.renderShellWithTermPanel(width, height)
 		}
@@ -186,7 +186,7 @@ func (p *Plugin) previewTabChips() []string {
 // guide nor the main-worktree view is a tab; anything else — including the
 // Output tab's no-agent and orphaned states — puts them on its first row.
 func (p *Plugin) previewTabsVisible() bool {
-	if p.shellSelected {
+	if p.selectingShell() {
 		return false
 	}
 	wt := p.selectedWorktree()
@@ -613,11 +613,11 @@ func (p *Plugin) renderTaskContent(width, height int) string {
 	task := p.cachedTask
 	var lines []string
 
-	// Mode indicator
-	modeHint := dimText("[m] raw")
+	mode := "Raw"
 	if p.taskMarkdownMode {
-		modeHint = dimText("[m] rendered")
+		mode = "Rendered"
 	}
+	modeHint := dimText("[m] " + mode)
 
 	// Header
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Task: %s", task.ID))+"  "+modeHint)

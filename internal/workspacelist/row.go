@@ -42,19 +42,45 @@ type RowField struct {
 
 func PlainField(text string) RowField { return RowField{Text: text} }
 
+// Kind is a presentation identity for a row. These strings match the catalog
+// kinds the caller already resolved; this package never imports inventory.
+const (
+	KindWorktree = "worktree"
+	KindShell    = "shell"
+)
+
+// KindGlyph is the Agents-board pair: worktree ⑂, shell ❯. Unknown or empty
+// kinds render nothing so a project-plugin row can omit them.
+func KindGlyph(kind string) string {
+	switch kind {
+	case KindShell:
+		return "❯"
+	case KindWorktree:
+		return "⑂"
+	default:
+		return ""
+	}
+}
+
 // RowPresentation is the neutral two-line workspace row contract shared by
 // the project and global Workspaces surfaces. Callers resolve all state and
 // supply display fields; this package owns layout, marker placement, provider
 // treatment, ANSI-safe fitting, and selection.
+//
+// Kind is a presentation field, not a status marker. Marker stays the
+// outdented gutter icon (working/live/idle/ambiguous/main).
 type RowPresentation struct {
-	Marker   RowMarker
-	Name     string
-	Age      string
-	NameMeta []RowField
+	Marker     RowMarker
+	Kind       string
+	Name       string
+	NamePrefix RowField
+	Age        string
+	NameMeta   []RowField
 
 	BeforeProvider []RowField
 	Provider       string
 	AfterProvider  []RowField
+	Pinned         bool
 }
 
 // RenderRow renders one or two physical lines. Narrow rows retain the status
@@ -91,13 +117,14 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 		icon = markerStyle(row.Marker).Render(icon)
 	}
 	prefix := " " + icon + " "
+	namePrefix := renderField(row.NamePrefix, selected)
 	meta := renderFields(row.NameMeta, selected)
 	metaText := ""
 	if len(meta) > 0 {
 		metaText = strings.Join(meta, "")
 	}
 	age := row.Age
-	reserved := ansi.StringWidth(prefix) + ansi.StringWidth(metaText)
+	reserved := ansi.StringWidth(prefix) + ansi.StringWidth(namePrefix) + ansi.StringWidth(metaText)
 	if age != "" {
 		reserved += ansi.StringWidth(age) + 2
 	}
@@ -106,7 +133,7 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 	if ansi.StringWidth(name) > nameWidth {
 		name = ansi.Truncate(name, nameWidth, "…")
 	}
-	line := prefix + name + metaText
+	line := prefix + namePrefix + name + metaText
 	if age != "" {
 		if pad := width - ansi.StringWidth(line) - ansi.StringWidth(age) - 1; pad > 0 {
 			line += strings.Repeat(" ", pad) + age
@@ -116,7 +143,21 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 }
 
 func renderRowFields(row RowPresentation, selected bool) []string {
-	fields := renderFields(row.BeforeProvider, selected)
+	fields := make([]string, 0, 1+len(row.BeforeProvider)+1+len(row.AfterProvider))
+	if glyph := KindGlyph(row.Kind); glyph != "" {
+		if !selected {
+			glyph = styles.Muted.Render(glyph)
+		}
+		fields = append(fields, glyph)
+	}
+	if row.Pinned {
+		mark := "*"
+		if !selected {
+			mark = styles.Muted.Render(mark)
+		}
+		fields = append(fields, mark)
+	}
+	fields = append(fields, renderFields(row.BeforeProvider, selected)...)
 	if row.Provider != "" {
 		provider := styles.AgentLabel(row.Provider)
 		if provider == "" {
@@ -135,16 +176,21 @@ func renderRowFields(row RowPresentation, selected bool) []string {
 func renderFields(fields []RowField, selected bool) []string {
 	out := make([]string, 0, len(fields))
 	for _, field := range fields {
-		if field.Text == "" {
-			continue
+		if value := renderField(field, selected); value != "" {
+			out = append(out, value)
 		}
-		value := field.Text
-		if !selected && field.Rendered != "" {
-			value = field.Rendered
-		}
-		out = append(out, value)
 	}
 	return out
+}
+
+func renderField(field RowField, selected bool) string {
+	if field.Text == "" {
+		return ""
+	}
+	if !selected && field.Rendered != "" {
+		return field.Rendered
+	}
+	return field.Text
 }
 
 func narrowRow(row RowPresentation, width int, selected bool) string {

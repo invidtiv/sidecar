@@ -66,6 +66,12 @@ func sidebarBaselinePlugin(t *testing.T) *Plugin {
 
 // selectionLabel names the current sidebar selection in navigation order.
 func selectionLabel(p *Plugin) string {
+	if !p.shellSelected && p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell != nil {
+			return "nested:" + shell.Name
+		}
+		return "nested:?"
+	}
 	if p.shellSelected {
 		if p.selectedShellIdx < 0 || p.selectedShellIdx >= len(p.shells) {
 			return "shell:?"

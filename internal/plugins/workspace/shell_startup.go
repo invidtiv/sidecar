@@ -235,6 +235,10 @@ func reconcileShellStartup(
 				definition.Namespace = ns
 				changed = true
 			}
+			if definition.WorkDir == "" {
+				definition.WorkDir = workDir
+				changed = true
+			}
 			definitions = append(definitions, definition)
 			delete(running, definition.TmuxName)
 			continue
@@ -273,6 +277,7 @@ func reconcileShellStartup(
 			DisplayName: deriveShellDisplayName(workDir, name),
 			Namespace:   ns,
 			CreatedAt:   now,
+			WorkDir:     workDir,
 		})
 		changed = true
 	}
@@ -328,6 +333,7 @@ func shellSessionFromDefinition(
 	shell := &ShellSession{
 		Name:        definition.DisplayName,
 		TmuxName:    definition.TmuxName,
+		WorkDir:     definition.WorkDir,
 		CreatedAt:   definition.CreatedAt,
 		ChosenAgent: definitionToAgentType(definition.AgentType),
 		SkipPerms:   definition.SkipPerms,
@@ -400,6 +406,7 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 
 	p.shellManifest = result.manifest
 	p.shells = result.shells
+	p.rebuildNestedShellsFromState()
 	p.applyPendingWorkspaceSelection()
 	if p.managedSessions == nil {
 		p.managedSessions = make(map[string]bool)
@@ -409,6 +416,9 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	}
 
 	var commands []tea.Cmd
+	if cmd := p.backfillWorkDirsCmd(); cmd != nil {
+		commands = append(commands, cmd)
+	}
 	if result.watcher != nil {
 		p.shellWatcher = result.watcher
 		p.shellWatcherMessages = result.watcher.Start()

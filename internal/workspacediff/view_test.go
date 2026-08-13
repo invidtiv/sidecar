@@ -85,13 +85,28 @@ func TestApplySnapshotDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 
 func TestTabsVisible(t *testing.T) {
 	if TabsVisible(true, false) {
-		t.Fatal("shell should have no tabs")
+		t.Fatal("project-plugin shell should have no tabs")
 	}
 	if TabsVisible(false, true) {
 		t.Fatal("main worktree should have no tabs")
 	}
 	if !TabsVisible(false, false) {
 		t.Fatal("non-main worktree should have tabs")
+	}
+}
+
+func TestGlobalTabsFor(t *testing.T) {
+	if GlobalTabsFor(true, false) != TabSetOutputDiff {
+		t.Fatal("global shell should be Output+Diff")
+	}
+	if GlobalTabsFor(false, false) != TabSetOutputDiffTask {
+		t.Fatal("global topic worktree should keep Task")
+	}
+	if GlobalTabsFor(false, true) != TabSetNone {
+		t.Fatal("global main worktree should stay tabless")
+	}
+	if GlobalTabsFor(true, false).Contains(TabTask) {
+		t.Fatal("global shell must not include Task")
 	}
 }
 
@@ -107,10 +122,26 @@ func TestCycleTab(t *testing.T) {
 	}
 }
 
+func TestCycleTabInShellSkipsTask(t *testing.T) {
+	if got := CycleTabIn(TabOutput, 1, TabSetOutputDiff); got != TabDiff {
+		t.Fatalf("period from Output = %v, want Diff", got)
+	}
+	if got := CycleTabIn(TabDiff, 1, TabSetOutputDiff); got != TabOutput {
+		t.Fatalf("period from Diff wrapped to %v, want Output (not Task)", got)
+	}
+	if got := CycleTabIn(TabTask, 1, TabSetOutputDiff); got != TabDiff {
+		t.Fatalf("stale Task tab cycled to %v, want Diff", got)
+	}
+}
+
 func TestTabChipsMarksActive(t *testing.T) {
 	chips := TabChips(TabDiff)
 	if len(chips) != 3 {
 		t.Fatalf("chips = %d, want 3", len(chips))
+	}
+	shell := TabChipsFor(TabDiff, TabSetOutputDiff)
+	if len(shell) != 2 {
+		t.Fatalf("shell chips = %d, want 2", len(shell))
 	}
 }
 

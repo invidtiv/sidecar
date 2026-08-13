@@ -322,14 +322,19 @@ func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 	captures := len(recorder.panes())
 
 	// The discoverable command set — what help and the palette offer for this
-	// tab — carries the same boundary as the keys below.
+	// tab — carries the same boundary as the keys below. rename-shell is a
+	// display-name write (same as `sidecar shell rename`), not create/destroy.
+	allowed := map[string]bool{"rename-shell": true, "open-in-git": true}
 	var registered int
 	for _, binding := range keymap.DefaultBindings() {
 		if binding.Context != "global-workspaces" && binding.Context != "global-workspaces-filter" {
 			continue
 		}
 		registered++
-		for _, forbidden := range []string{"new", "delete", "rename", "attach", "merge", "diff", "task", "commit", "start", "stop", "kill", "push", "approve"} {
+		if allowed[binding.Command] {
+			continue
+		}
+		for _, forbidden := range []string{"new", "delete", "rename", "attach", "merge", "diff", "task", "commit", "start", "stop", "kill", "push", "approve", "create"} {
 			if strings.Contains(binding.Command, forbidden) {
 				t.Fatalf("the list's command set offers %q", binding.Command)
 			}
@@ -340,8 +345,9 @@ func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 	}
 
 	// The project plugin's mutating keys are not the browser's to answer.
+	// R on a worktree is ignored; R on a shell is rename-shell (tested separately).
 	before := m.workspaces.SelectedID()
-	for _, k := range []string{"n", "D", "p", "a", "c", "x", "N", "R"} {
+	for _, k := range []string{"n", "D", "a", "c", "x", "N", "R"} {
 		if handled, cmd := m.WorkspacesKey(key(k)); handled {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}

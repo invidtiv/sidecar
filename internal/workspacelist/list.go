@@ -12,7 +12,7 @@
 // The rule that keeps this honest: nothing in this package imports a plugin,
 // the app, or the inventory. It receives resolved display fields only.
 //
-// Both consumers render through RenderSidebar. Global Model supplies activity
+// Both consumers render through RenderSidebar. Global Model supplies sort
 // sections and a sort action; project Workspaces supplies Shells/Workspaces
 // sections and optional creation actions. The component lays out both without
 // learning what those actions do.
@@ -135,9 +135,11 @@ type Item struct {
 	Provider     string
 	// TmuxName is an identity key, never rendered. It is searchable so two
 	// shells sharing a display name inside one project can be told apart.
-	TmuxName  string
-	Status    string
-	Detail    string
+	TmuxName string
+	Status   string
+	Detail   string
+	// Kind is a presentation string ("worktree" / "shell"), not a catalog type.
+	Kind      string
 	Marker    RowMarker
 	Group     Group
 	ChangedAt time.Time
@@ -229,16 +231,89 @@ func Sorted(items []Item, mode Sort) []Item {
 	return out
 }
 
-// Grouped splits sorted items into headed sections. Only the Activity sort has
-// semantic sections; the other modes render as one unheaded run so the sort the
-// user asked for is the only thing organising the list.
+// Recent time-bucket headings. Empty buckets are omitted.
+const (
+	RecentNew      = "New"
+	RecentToday    = "Today"
+	RecentThisWeek = "This week"
+	RecentOlder    = "Older"
+)
+
+var recentBucketOrder = []string{RecentNew, RecentToday, RecentThisWeek, RecentOlder}
+
+// Section is a rendered group of items with its heading. Title is the heading
+// without a count; empty Title means an unheaded run. Group is the Activity
+// bucket when that sort is in play.
+type Section struct {
+	Title string
+	Group Group
+	Items []Item
+}
+
+// Grouped splits sorted items into headed sections. Activity uses the Kanban
+// projection; Project one heading per project; Recent the time buckets; Name
+// stays a single unheaded run.
 func Grouped(items []Item, mode Sort) []Section {
-	if mode != SortActivity {
-		if len(items) == 0 {
-			return nil
-		}
-		return []Section{{Items: items}}
+	return GroupedAt(items, mode, time.Time{}, nil)
+}
+
+// GroupedAt is Grouped with a clock for Recent buckets and an optional pinned
+// identity list. Pinned items that still exist sit in a headed "Pinned"
+// section first and are not re-bucketed below. Gone pin IDs are dropped.
+func GroupedAt(items []Item, mode Sort, now time.Time, pinnedIDs []string) []Section {
+	if now.IsZero() {
+		now = time.Now()
 	}
+	pinned, rest := splitPinned(items, pinnedIDs)
+	var sections []Section
+	switch mode {
+	case SortProject:
+		sections = groupByProject(rest)
+	case SortRecent:
+		sections = groupByRecent(rest, now)
+	case SortName:
+		if len(rest) > 0 {
+			sections = []Section{{Items: rest}}
+		}
+	default:
+		sections = groupByActivity(rest)
+	}
+	if len(pinned) > 0 {
+		return append([]Section{{Title: "Pinned", Items: pinned}}, sections...)
+	}
+	return sections
+}
+
+func splitPinned(items []Item, pinnedIDs []string) (pinned, rest []Item) {
+	if len(pinnedIDs) == 0 {
+		return nil, items
+	}
+	index := make(map[string]Item, len(items))
+	for _, item := range items {
+		index[item.ID] = item
+	}
+	seen := make(map[string]bool, len(pinnedIDs))
+	for _, id := range pinnedIDs {
+		item, ok := index[id]
+		if !ok || seen[id] {
+			continue
+		}
+		pinned = append(pinned, item)
+		seen[id] = true
+	}
+	if len(pinned) == 0 {
+		return nil, items
+	}
+	rest = make([]Item, 0, len(items)-len(pinned))
+	for _, item := range items {
+		if !seen[item.ID] {
+			rest = append(rest, item)
+		}
+	}
+	return pinned, rest
+}
+
+func groupByActivity(items []Item) []Section {
 	var sections []Section
 	for _, group := range activityOrder {
 		var members []Item
@@ -248,7 +323,7 @@ func Grouped(items []Item, mode Sort) []Section {
 			}
 		}
 		if len(members) > 0 {
-			sections = append(sections, Section{Group: group, Items: members})
+			sections = append(sections, Section{Title: string(group), Group: group, Items: members})
 		}
 	}
 	// An item whose caller invented a group still has to appear somewhere.
@@ -264,8 +339,64 @@ func Grouped(items []Item, mode Sort) []Section {
 	return sections
 }
 
-// Section is a rendered group of items with its heading.
-type Section struct {
-	Group Group
-	Items []Item
+func groupByProject(items []Item) []Section {
+	var sections []Section
+	var current int
+	var key string
+	started := false
+	for _, item := range items {
+		itemKey := item.ProjectKey
+		if itemKey == "" {
+			itemKey = item.Project
+		}
+		if !started || itemKey != key {
+			title := item.Project
+			if title == "" {
+				title = item.ProjectKey
+			}
+			sections = append(sections, Section{Title: title})
+			current = len(sections) - 1
+			key = itemKey
+			started = true
+		}
+		sections[current].Items = append(sections[current].Items, item)
+	}
+	return sections
+}
+
+func groupByRecent(items []Item, now time.Time) []Section {
+	buckets := make(map[string][]Item, len(recentBucketOrder))
+	for _, item := range items {
+		name := recentBucket(item.ChangedAt, now)
+		buckets[name] = append(buckets[name], item)
+	}
+	var sections []Section
+	for _, name := range recentBucketOrder {
+		members := buckets[name]
+		if len(members) == 0 {
+			continue
+		}
+		sections = append(sections, Section{Title: name, Items: members})
+	}
+	return sections
+}
+
+func recentBucket(changedAt, now time.Time) string {
+	if changedAt.IsZero() {
+		return RecentOlder
+	}
+	age := now.Sub(changedAt)
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Hour:
+		return RecentNew
+	case age < 24*time.Hour:
+		return RecentToday
+	case age < 7*24*time.Hour:
+		return RecentThisWeek
+	default:
+		return RecentOlder
+	}
 }

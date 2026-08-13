@@ -830,6 +830,85 @@ func TestSetShowIdleWorktrees_InitializesNilState(t *testing.T) {
 	}
 }
 
+func TestGetPinnedWorkspaceIDs_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetPinnedWorkspaceIDs(); got != nil {
+		t.Errorf("GetPinnedWorkspaceIDs() with nil current = %v, want nil", got)
+	}
+}
+
+func TestGetPinnedWorkspaceIDs_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{PinnedWorkspaceIDs: []string{"a", "b"}}
+	got := GetPinnedWorkspaceIDs()
+	if strings.Join(got, ",") != "a,b" {
+		t.Errorf("GetPinnedWorkspaceIDs() = %v, want [a b]", got)
+	}
+	got[0] = "mutated"
+	if current.PinnedWorkspaceIDs[0] != "a" {
+		t.Error("GetPinnedWorkspaceIDs() exposed the stored slice")
+	}
+}
+
+func TestSetPinnedWorkspaceIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetPinnedWorkspaceIDs([]string{"s1", "", "s2", "s1"}); err != nil {
+		t.Fatalf("SetPinnedWorkspaceIDs() failed: %v", err)
+	}
+	if got := strings.Join(current.PinnedWorkspaceIDs, ","); got != "s1,s2" {
+		t.Errorf("current.PinnedWorkspaceIDs = %s, want s1,s2", got)
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if got := strings.Join(loaded.PinnedWorkspaceIDs, ","); got != "s1,s2" {
+		t.Errorf("saved PinnedWorkspaceIDs = %s, want s1,s2", got)
+	}
+	if !strings.Contains(string(data), `"pinnedWorkspaceIDs"`) {
+		t.Fatalf("persisted JSON should name pinnedWorkspaceIDs:\n%s", data)
+	}
+}
+
+func TestSetPinnedWorkspaceIDs_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetPinnedWorkspaceIDs([]string{"s1"}); err != nil {
+		t.Fatalf("SetPinnedWorkspaceIDs() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetPinnedWorkspaceIDs() should initialize current state")
+	}
+	if got := strings.Join(current.PinnedWorkspaceIDs, ","); got != "s1" {
+		t.Errorf("PinnedWorkspaceIDs = %s, want s1", got)
+	}
+}
+
 func TestSetLastWorktreePath_InitializesNilState(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalPath := path

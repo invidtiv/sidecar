@@ -46,6 +46,7 @@ type Model struct {
 	loading    bool
 	failures   []string
 	emptyText  string
+	pinnedIDs  []string
 }
 
 func (m *Model) Filter() *Filter { return &m.filter }
@@ -78,9 +79,67 @@ func (m *Model) SetItems(items []Item) {
 	m.reproject()
 }
 
+// SetPinned replaces the pin order. IDs that are not in the current catalog
+// are kept until the next reproject so a later SetItems can restore them;
+// display only includes pins that still have a matching item.
+func (m *Model) SetPinned(ids []string) {
+	m.pinnedIDs = uniquePinned(ids)
+	m.reproject()
+}
+
+// PinnedIDs returns the configured pin order, including IDs that are not
+// currently visible.
+func (m *Model) PinnedIDs() []string { return append([]string(nil), m.pinnedIDs...) }
+
+// IsPinned reports whether id is in the pin list.
+func (m *Model) IsPinned(id string) bool {
+	for _, existing := range m.pinnedIDs {
+		if existing == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TogglePin pins or unpins id and returns the new pin order. First-pinned
+// first: a new pin is appended.
+func (m *Model) TogglePin(id string) []string {
+	if id == "" {
+		return m.PinnedIDs()
+	}
+	for i, existing := range m.pinnedIDs {
+		if existing == id {
+			m.pinnedIDs = append(m.pinnedIDs[:i:i], m.pinnedIDs[i+1:]...)
+			m.reproject()
+			return m.PinnedIDs()
+		}
+	}
+	m.pinnedIDs = append(m.pinnedIDs, id)
+	m.reproject()
+	return m.PinnedIDs()
+}
+
+func uniquePinned(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 func (m *Model) reproject() {
 	previous := m.selectedID
-	m.visible = Sorted(Filtered(m.items, m.filter.Query()), m.sortMode)
+	matched := Filtered(m.items, m.filter.Query())
+	pinned, rest := splitPinned(matched, m.pinnedIDs)
+	m.visible = append(pinned, Sorted(rest, m.sortMode)...)
 	if previous != "" && m.indexOf(previous) >= 0 {
 		m.selectedID = previous
 		m.ensureVisible()
@@ -228,16 +287,16 @@ type Rendered struct {
 // ANSI-safe truncated line instead of a name/subtitle pair.
 const twoLineWidth = 34
 
-// Render draws the list: header with the active sort, filter row, activity
-// group headings, rows, and a scrollbar. Group headings scroll with their rows
-// so the heading a row sits under is always the heading above it.
+// Render draws the list: header with the active sort, filter row, section
+// headings, rows, and a scrollbar. Headings scroll with their rows so the
+// heading a row sits under is always the heading above it.
 func (m *Model) Render(opts RenderOptions) Rendered {
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
 	matched, total := m.Counts()
-	sections := Grouped(m.visible, m.sortMode)
+	sections := GroupedAt(m.visible, m.sortMode, now, m.pinnedIDs)
 	// A project whose inventory could not be read is a row, not a leftover. Its
 	// lines are reserved out of the body before the item viewport is sized, so a
 	// catalog longer than the pane — the normal multi-project case — cannot make
@@ -255,8 +314,8 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
 		title := ""
-		if m.sortMode == SortActivity && section.Group != "" {
-			title = SectionTitle(string(section.Group), len(section.Items))
+		if section.Title != "" {
+			title = SectionTitle(section.Title, len(section.Items))
 		}
 		s := SidebarSection{Title: title}
 		for _, item := range section.Items {
@@ -315,26 +374,31 @@ func (m *Model) failureLines(rows, width int) []string {
 	return append(out, fit(styles.Muted.Render(fmt.Sprintf("⚠ +%d more projects unavailable", remaining)), width))
 }
 
-// renderRow draws one item. Two lines where the width supports it: name and
-// relative age, then the textual project identity with provider and status.
-// Project colour reinforces identity but is never the only differentiator —
-// the project name is always spelled out.
+// renderRow draws one global list item. Two lines where the width supports it:
+// project + name with relative age, then kind glyph + agent. Status lives in
+// the gutter marker and is not repeated as text. Project colour reinforces
+// the project word but is never the only differentiator.
 func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time) []string {
-	project := RowField{Text: item.Project, Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project)}
-	after := make([]RowField, 0, 2)
-	if item.Status != "" {
-		after = append(after, RowField{Text: item.Status, Rendered: styles.Muted.Render(item.Status)})
+	namePrefix := RowField{}
+	if item.Project != "" {
+		namePrefix = RowField{
+			Text:     item.Project + " ",
+			Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project) + " ",
+		}
 	}
+	after := make([]RowField, 0, 1)
 	if item.Detail != "" {
 		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
 	}
 	return RenderRow(RowPresentation{
-		Marker:         item.Marker,
-		Name:           item.Name,
-		Age:            RelativeAge(item.ChangedAt, now),
-		BeforeProvider: []RowField{project},
-		Provider:       item.Provider,
-		AfterProvider:  after,
+		Marker:        item.Marker,
+		Kind:          item.Kind,
+		Name:          item.Name,
+		NamePrefix:    namePrefix,
+		Age:           RelativeAge(item.ChangedAt, now),
+		Provider:      item.Provider,
+		AfterProvider: after,
+		Pinned:        m.IsPinned(item.ID),
 	}, width, selected, focused)
 }
 

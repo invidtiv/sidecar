@@ -238,7 +238,7 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	if !found {
 		return nil, false
 	}
-	documentTarget := link.Kind == terminalPathLink && docPaneTarget(link.Value, true)
+	documentTarget := link.Kind == terminalPathLink && p.paneRoot != nil && docPaneTarget(link.Value)
 	// Preserve the exact live window containing the link before opening the
 	// document changes pane geometry. Claude commonly moves that transcript
 	// into history and publishes a sparse live grid after the resize; leaving

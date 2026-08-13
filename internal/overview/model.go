@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -80,7 +81,9 @@ type pollMsg struct{ Generation int }
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg, previewAutoScrollTickMsg,
-		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg:
+		previewDocLoadedMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
+		renameShellDoneMsg:
 		return true
 	default:
 		return false
@@ -149,6 +152,14 @@ type Model struct {
 	viewFlyoutWidth   int
 	viewFlyoutSortIdx int
 	viewFlyoutMouse   *mouse.Handler
+
+	renameOpen       bool
+	renameWorkspace  workspaceinventory.Workspace
+	renameInput      textinput.Model
+	renameError      string
+	renameModal      *modal.Modal
+	renameModalWidth int
+	renameMouse      *mouse.Handler
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -163,6 +174,8 @@ var (
 	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
 	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
 	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
+	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
+	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -173,11 +186,12 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -392,6 +406,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.pollPreview(msg)
 	case previewAutoScrollTickMsg:
 		return m.advancePreviewAutoScroll(msg)
+	case previewDocLoadedMsg:
+		m.applyPreviewDocLoaded(msg)
+		return nil
 	case workspacediff.SnapshotMsg:
 		return m.applyDiffSnapshot(msg)
 	case workspacediff.CommitDetailMsg:
@@ -399,6 +416,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case workspacediff.TaskMsg:
 		m.applyTask(msg)
+		return nil
+	case renameShellDoneMsg:
+		m.applyRenameShell(msg)
 		return nil
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
@@ -834,9 +854,9 @@ func spineGlyph(kind workspaceinventory.Kind) string {
 
 func kindGlyph(kind workspaceinventory.Kind) string {
 	if kind == workspaceinventory.KindShell {
-		return "❯"
+		return workspacelist.KindGlyph(workspacelist.KindShell)
 	}
-	return "⑂"
+	return workspacelist.KindGlyph(workspacelist.KindWorktree)
 }
 
 // cardLines builds the three styled content rows for a live workspace card.
@@ -1027,6 +1047,19 @@ func fitCompactLine(line string, width int) string {
 }
 
 func (m *Model) Commands() []struct{ Key, Name string } {
+	if m.RenameShellOpen() {
+		return []struct{ Key, Name string }{{"enter", "Rename"}, {"esc", "Cancel"}}
+	}
+	if !m.PreviewInteractive() {
+		cmds := []struct{ Key, Name string }{{"enter", "Type"}, {"p", "Pin"}, {"r", "Refresh"}}
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			cmds = append(cmds, struct{ Key, Name string }{"R", "Rename"})
+		}
+		if m.canOpenInGit() {
+			cmds = append(cmds, struct{ Key, Name string }{"O", "Git"})
+		}
+		return cmds
+	}
 	return []struct{ Key, Name string }{{"enter", "Open"}, {"r", "Refresh"}}
 }
 

@@ -833,7 +833,7 @@ All keyboard shortcuts by context:
 | `k`, `↑` | Scroll up |
 | `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
 | `g`, `G` | Jump to start / end |
-| `r` | Toggle rendered / raw markdown |
+| `m` | Toggle rendered / raw markdown |
 | `+`, `-` | Grow / shrink document pane |
 | `tab`, `shift+tab` | Move focus between panes |
 | `q`, `esc` | Close document pane |

@@ -114,6 +114,10 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.globalWorkspacesVisible() && m.overview.RenameShellOpen() && m.overview.RenameShellPaste(msg.Content) {
+		return m, nil
+	}
+
 	// A focused global filter is a text input and takes the paste, exactly as
 	// it takes typed characters.
 	if m.globalWorkspacesFilterFocused() && m.overview.WorkspacesPaste(msg.Content) {
@@ -261,6 +265,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if mi.Y < headerHeight && isClickPress && mi.Button == tea.MouseLeft {
 			// Brand logo opens the Overview (when the feature is enabled).
 			if start, end, ok := m.getLogoBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+				return m, m.toggleOverview()
+			}
+
+			if start, end, ok := m.getScopeBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				return m, m.toggleOverview()
 			}
 
@@ -414,6 +422,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.exitOverview()
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case overview.OpenInGitMsg:
+		return m, m.openInGitFromOverview(msg.Path)
+
+	case openInGitSwitchMsg:
+		// Nil inventory, same as navigateFromOverview: resolve ProjectRoot
+		// from the target checkout, not the current project's worktree cache.
+		pending := plugin.PendingWorkspaceSelection{
+			Kind: plugin.WorkspaceSelectionWorktree,
+			Key:  msg.Path,
+			Path: msg.Path,
+		}
+		return m, m.switchProjectWithSelection(msg.Path, nil, &pending)
+
 	case overview.NavigateMsg:
 		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
 			return m, nil
@@ -510,6 +531,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a registered global would fire for every context that rebinds its key.
 		if (&m).runHostCommand(msg.CommandID) {
 			return m, nil
+		}
+		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
@@ -1709,6 +1733,7 @@ func isTextInputContext(ctx string) bool {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
 		"global-workspaces-filter",
+		"global-workspaces-rename",
 		"issue-input":
 		return true
 	default:

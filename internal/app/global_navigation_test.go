@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -321,12 +322,11 @@ func TestGlobalTabViewStateSurvivesSpaceToggles(t *testing.T) {
 	m, _, _ := globalNavigationModel(t)
 
 	// Filter and sort the browser, then leave and come back the way a user does.
-	// s opens the view fly-out; j + enter picks Project without cycling.
+	// s opens the view fly-out; j + enter picks Project and closes it.
 	for _, k := range []tea.KeyPressMsg{
 		{Code: 's', Text: "s"},
 		{Code: 'j', Text: "j"},
 		{Code: tea.KeyEnter},
-		{Code: tea.KeyEsc},
 		{Code: '/', Text: "/"},
 	} {
 		updated, _ := m.Update(k)
@@ -376,6 +376,107 @@ var stateBase string
 
 // writeShellManifest gives a project one durable shell so the shell identity
 // validates the way a collected one does.
+func TestOpenInGitCrossProjectSelectsTargetCheckout(t *testing.T) {
+	m, source, _ := globalNavigationModel(t)
+	// The cache is the current project's worktrees — the same state a
+	// SwitchWorktree call would use, and the thing that used to keep
+	// ProjectRoot on A after WorkDir moved to B.
+	m.cachedWorktreeInventory = []WorktreeInfo{{Path: source, IsMain: true}}
+	target := newOverviewGitRepo(t, "target")
+
+	updated, cmd := m.Update(overview.OpenInGitMsg{Path: target})
+	m = asAppModel(t, updated)
+	if cmd == nil {
+		t.Fatal("OpenInGitMsg produced no command")
+	}
+	msg := cmd()
+	seq := reflect.ValueOf(msg)
+	if seq.Kind() != reflect.Slice || seq.Len() != 2 {
+		t.Fatalf("OpenInGit sequence = %T len=%d, want two-command Sequence", msg, seq.Len())
+	}
+	first := seq.Index(0).Interface().(tea.Cmd)()
+	switchMsg, ok := first.(openInGitSwitchMsg)
+	if !ok {
+		t.Fatalf("first sequence message = %T, want openInGitSwitchMsg", first)
+	}
+	if switchMsg.Path != target {
+		t.Fatalf("switch path = %q, want %q", switchMsg.Path, target)
+	}
+	updated, _ = m.Update(switchMsg)
+	m = asAppModel(t, updated)
+	if workspaceinventory.CanonicalPath(m.ui.WorkDir) != workspaceinventory.CanonicalPath(target) {
+		t.Fatalf("WorkDir = %q, want target %q", m.ui.WorkDir, target)
+	}
+	if workspaceinventory.CanonicalPath(m.ui.ProjectRoot) == workspaceinventory.CanonicalPath(source) {
+		t.Fatalf("ProjectRoot stayed on the source project: %q", m.ui.ProjectRoot)
+	}
+	if workspaceinventory.CanonicalPath(m.ui.ProjectRoot) != workspaceinventory.CanonicalPath(target) &&
+		workspaceinventory.CanonicalPath(m.ui.ProjectRoot) != workspaceinventory.CanonicalPath(GetMainWorktreePath(target)) {
+		t.Fatalf("ProjectRoot = %q, want target %q (or its main)", m.ui.ProjectRoot, target)
+	}
+
+	second := seq.Index(1).Interface().(tea.Cmd)()
+	focus, ok := second.(FocusPluginByIDMsg)
+	if !ok {
+		t.Fatalf("second sequence message = %T, want FocusPluginByIDMsg", second)
+	}
+	if focus.PluginID != "git-status" {
+		t.Fatalf("focus plugin = %q, want git-status", focus.PluginID)
+	}
+	updated, _ = m.Update(focus)
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("FocusPlugin left the app in global")
+	}
+}
+
+func TestOpenInGitMissingPathStaysInGlobal(t *testing.T) {
+	m, source, plugins := globalNavigationModel(t)
+	m.cachedWorktreeInventory = []WorktreeInfo{{Path: source, IsMain: true}}
+	gitBefore := plugins["git"].focused
+	inits := totalNavigationInits(plugins)
+
+	updated, cmd := m.Update(overview.OpenInGitMsg{Path: filepath.Join(t.TempDir(), "gone")})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.ui.WorkDir != source || m.ui.ProjectRoot != source {
+		t.Fatalf("missing path left global or moved project: global=%v work=%q root=%q", m.inGlobalScope(), m.ui.WorkDir, m.ui.ProjectRoot)
+	}
+	if totalNavigationInits(plugins) != inits {
+		t.Fatal("missing path reinitialized plugins")
+	}
+	if plugins["git"].focused != gitBefore {
+		t.Fatal("missing path focused the Git plugin")
+	}
+	if cmd == nil {
+		t.Fatal("missing path produced no toast")
+	}
+	toast, ok := cmd().(ToastMsg)
+	if !ok || !toast.IsError || !strings.Contains(toast.Message, "no longer exists") {
+		t.Fatalf("missing path cmd = %#v, want an error toast", toast)
+	}
+	// Applying the toast must not leave global or focus Git.
+	updated, more := m.Update(toast)
+	m = asAppModel(t, updated)
+	if more != nil {
+		t.Fatalf("toast produced a follow-up command: %T", more())
+	}
+	if !m.inGlobalScope() || plugins["git"].focused != gitBefore {
+		t.Fatal("applying the missing-path toast left global or focused Git")
+	}
+}
+
+func TestFocusPluginByIDMsgLeavesGlobal(t *testing.T) {
+	m, _, _ := globalNavigationModel(t)
+	if !m.inGlobalScope() {
+		t.Fatal("premise: should start in global")
+	}
+	updated, _ := m.Update(FocusPluginByIDMsg{PluginID: "git"})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("FocusPluginByIDMsg left the app in global")
+	}
+}
+
 func writeShellManifest(t *testing.T, root, tmuxName string) {
 	t.Helper()
 	projectState, err := projectdir.ResolveWithBase(stateBase, root)

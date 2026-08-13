@@ -47,6 +47,10 @@ type RenderBufferInput struct {
 	// ambiguous match, a failed capture. Multi-line messages are rendered as
 	// written, so a caller can put the item's metadata under the reason.
 	Message string
+
+	// Decorate is the host's per-row decoration (links). Nil draws the row
+	// undecorated.
+	Decorate func(line string, absoluteLine int) string
 }
 
 // RenderBuffer draws a window of a terminal buffer into a fixed box: one header
@@ -95,6 +99,7 @@ func RenderBuffer(in RenderBufferInput) string {
 		AbsoluteBase: in.AbsoluteBase,
 		TabWidth:     tabWidth,
 		Selection:    in.Selection,
+		Decorate:     in.Decorate,
 		Truncate:     truncate,
 		PaneHeight:   in.PaneHeight,
 		Interactive:  in.Interactive,

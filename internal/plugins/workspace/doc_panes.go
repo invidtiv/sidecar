@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 type docPane struct {
@@ -21,16 +22,8 @@ type docPane struct {
 	view    *docview.Model
 }
 
-func docPaneTarget(rel string, resolvedInsideSelectedSurface bool) bool {
-	if !resolvedInsideSelectedSurface {
-		return false
-	}
-	switch strings.ToLower(filepath.Ext(rel)) {
-	case ".md", ".markdown":
-		return true
-	default:
-		return false
-	}
+func docPaneTarget(path string) bool {
+	return strings.TrimSpace(path) != ""
 }
 
 func (p *Plugin) selectedTerminalRoot() (string, bool) {
@@ -117,6 +110,7 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 		} else {
 			cmd = doc.view.Load(leaf.DocID, root, rel, line, epoch)
 		}
+		applyDocRenderMode(doc.view, rel, line)
 		p.saveSelectionState()
 		return cmd
 	}
@@ -154,8 +148,20 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	} else {
 		load = viewer.Load(docID, root, rel, line, epoch)
 	}
+	applyDocRenderMode(viewer, rel, line)
 	p.saveSelectionState()
 	return tea.Batch(load, p.resizeDocTerminalCmd())
+}
+
+func applyDocRenderMode(view *docview.Model, path string, line int) {
+	if view == nil {
+		return
+	}
+	if !terminallink.Markdown(path) || line > 0 {
+		view.SetRendered(false)
+		return
+	}
+	view.SetRendered(true)
 }
 
 func clonePaneTree(node *PaneNode) *PaneNode {
@@ -252,7 +258,18 @@ func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
 	doc.view.SetResult(msg)
 }
 
+// docVisible reports whether the document split is on screen. Diff and Task
+// replace that split without clearing paneFocus, so a still-selected doc leaf
+// is not the keyboard owner while those tabs are showing.
+func (p *Plugin) docVisible() bool {
+	doc, _ := p.activeDocPane()
+	return doc != nil && (p.shellSelected || p.previewTab == PreviewTabOutput)
+}
+
 func (p *Plugin) docFocused() bool {
+	if !p.docVisible() {
+		return false
+	}
 	leaf := FindPane(p.paneRoot, p.paneFocus)
 	return p.activePane == PanePreview && leaf != nil && leaf.Split == nil && leaf.Kind == PaneDoc
 }
@@ -270,9 +287,8 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeDocPane()
-	case "r":
-		doc.view.ToggleRenderMode()
-		p.saveSelectionState()
+	case "m":
+		p.toggleDocRenderMode()
 		return true, nil
 	case "+":
 		return true, p.resizeFocusedDoc(5)
@@ -545,8 +561,17 @@ func (p *Plugin) renderDocPane(doc *docPane, box Box) string {
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · r "+action), box.W, 0)
+	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · m "+action), box.W, 0)
 	return header + "\n" + doc.view.View()
+}
+
+func (p *Plugin) toggleDocRenderMode() {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view == nil {
+		return
+	}
+	doc.view.ToggleRenderMode()
+	p.saveSelectionState()
 }
 
 func paneTreeDividerStyle(focused bool) lipgloss.Style {
@@ -572,17 +597,23 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
 	chips := p.docHeaderChips(doc, box.W)
 	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
-		if index == len(chips)-1 && chip.Drawn {
+		if !chip.Drawn {
+			continue
+		}
+		switch index {
+		case len(chips) - 2:
+			p.mouseHandler.HitMap.AddRect(regionDocMode, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
+		case len(chips) - 1:
 			p.mouseHandler.HitMap.AddRect(regionDocClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
 		}
 	}
 }
 
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
-	doc, _ := p.activeDocPane()
-	if doc == nil || !(p.shellSelected || p.previewTab == PreviewTabOutput) {
+	if !p.docVisible() {
 		return "", false
 	}
+	doc, _ := p.activeDocPane()
 	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
 	if !fits {
 		if p.docFocused() {

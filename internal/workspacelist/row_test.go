@@ -50,6 +50,112 @@ func TestRowProviderChipAndSelectedLabelTreatment(t *testing.T) {
 	}
 }
 
+func TestKindGlyphMatchesTheAgentsBoardPair(t *testing.T) {
+	if got := KindGlyph(KindWorktree); got != "⑂" {
+		t.Fatalf("worktree glyph = %q, want ⑂", got)
+	}
+	if got := KindGlyph(KindShell); got != "❯" {
+		t.Fatalf("shell glyph = %q, want ❯", got)
+	}
+	if got := KindGlyph(""); got != "" {
+		t.Fatalf("empty kind should render nothing, got %q", got)
+	}
+}
+
+func TestTwoLineRowPutsProjectNameAgeThenKindAndAgent(t *testing.T) {
+	row := RowPresentation{
+		Marker:     RowMarker{Icon: "●", Lane: "working"},
+		Kind:       KindWorktree,
+		NamePrefix: PlainField("sidecar "),
+		Name:       "review td-196c42",
+		Age:        "1m",
+		Provider:   "grok",
+		AfterProvider: []RowField{
+			PlainField("working"),
+			PlainField("td-196c42"),
+		},
+	}
+	lines := RenderRow(row, 56, false, true)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lines))
+	}
+	line1 := ansi.Strip(lines[0])
+	line2 := ansi.Strip(lines[1])
+	if !strings.Contains(line1, "sidecar review td-196c42") {
+		t.Fatalf("line 1 lost project+name: %q", line1)
+	}
+	if !strings.Contains(line1, "1m") {
+		t.Fatalf("line 1 lost age: %q", line1)
+	}
+	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● ") {
+		t.Fatalf("line 1 lost outdented status marker: %q", line1)
+	}
+	if !strings.Contains(line2, "⑂") {
+		t.Fatalf("line 2 lost worktree glyph: %q", line2)
+	}
+	if !strings.Contains(line2, "grok") {
+		t.Fatalf("line 2 lost agent: %q", line2)
+	}
+	if idxGlyph, idxAgent := strings.Index(line2, "⑂"), strings.Index(line2, "grok"); idxGlyph < 0 || idxAgent < idxGlyph {
+		t.Fatalf("kind glyph must precede the agent on line 2: %q", line2)
+	}
+
+	shell := row
+	shell.Kind = KindShell
+	shell.Name = "Shell 2"
+	shell.NamePrefix = PlainField("braid ")
+	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
+	shell.AfterProvider = nil
+	got := ansi.Strip(strings.Join(RenderRow(shell, 56, false, true), "\n"))
+	if !strings.Contains(got, "braid Shell 2") {
+		t.Fatalf("shell line 1 lost project+name: %q", got)
+	}
+	if !strings.Contains(got, "❯") {
+		t.Fatalf("shell line 2 lost kind glyph: %q", got)
+	}
+}
+
+func TestPinnedMarkSitsOnLineTwoAndDoesNotStealTheMarker(t *testing.T) {
+	row := RowPresentation{
+		Marker: RowMarker{Icon: "●", Lane: "working"},
+		Kind:   KindWorktree,
+		Name:   "review",
+		Pinned: true,
+	}
+	lines := RenderRow(row, 40, false, true)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lines))
+	}
+	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
+	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● review") {
+		t.Fatalf("pin stole the status marker: %q", line1)
+	}
+	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "*") {
+		t.Fatalf("line 2 lost kind or pin mark: %q", line2)
+	}
+}
+
+func TestKindGlyphIsTheFirstNarrowSecondary(t *testing.T) {
+	row := RowPresentation{
+		Marker:        RowMarker{Icon: "●", Lane: "working"},
+		Kind:          KindWorktree,
+		Name:          "feature",
+		NamePrefix:    PlainField("sidecar "),
+		Provider:      "codex",
+		AfterProvider: []RowField{PlainField("working")},
+	}
+	plain := ansi.Strip(strings.Join(RenderRow(row, 20, false, true), "\n"))
+	if !strings.HasPrefix(plain, " ● ") || !strings.Contains(plain, "feature") {
+		t.Fatalf("narrow row lost gutter+name: %q", plain)
+	}
+	if !strings.Contains(plain, "⑂") {
+		t.Fatalf("narrow row dropped the kind glyph first: %q", plain)
+	}
+	if strings.Contains(plain, "sidecar") {
+		t.Fatalf("narrow row promoted project over name: %q", plain)
+	}
+}
+
 func TestRowWidthsAndNarrowPriorityAreANSISafe(t *testing.T) {
 	row := RowPresentation{
 		Marker: RowMarker{Icon: "◆", Lane: "blocked"}, Name: "a very long résumé workspace", Age: "12m",

@@ -15,32 +15,56 @@ import (
 
 const (
 	previewTabRegionKind = "global-preview-tab"
+	previewGitRegionKind = "global-preview-git"
 	previewTabRows       = 2
 )
 
-// previewTabHit is the chip index stored on the tab-row region.
+// previewTabHit is the tab stored on the tab-row region.
 type previewTabHit int
 
-// previewTabsVisible is the same rule as the project plugin: chips only for a
-// selected non-main worktree. Shells and the main worktree have no tab row.
-func (m *Model) previewTabsVisible() bool {
+// previewGitHit marks the Git action chip (a jump, not a tab).
+type previewGitHit struct{}
+
+// previewTabSet is which chips this row may show. Global shells get Output+Diff;
+// topic worktrees keep Output+Diff+Task; the main worktree stays tabless.
+func (m *Model) previewTabSet() workspacediff.TabSet {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
-		return false
+		return workspacediff.TabSetNone
 	}
-	return workspacediff.TabsVisible(workspace.Kind == workspaceinventory.KindShell, workspace.IsMain)
+	return workspacediff.GlobalTabsFor(workspace.Kind == workspaceinventory.KindShell, workspace.IsMain)
+}
+
+func (m *Model) previewTabsVisible() bool {
+	return m.previewTabSet().Visible()
+}
+
+func (m *Model) previewTabChips() []string {
+	return workspacediff.TabChipsFor(m.previewTab, m.previewTabSet())
+}
+
+func gitActionChip() string {
+	return styles.RenderPillWithStyle("Git", styles.BarChip, nil)
+}
+
+func (m *Model) previewTabRowChips() []string {
+	chips := m.previewTabChips()
+	if m.canOpenInGit() {
+		chips = append(chips, gitActionChip())
+	}
+	return chips
 }
 
 func (m *Model) cyclePreviewTab(delta int) tea.Cmd {
 	if !m.previewTabsVisible() {
 		return nil
 	}
-	m.previewTab = workspacediff.CycleTab(m.previewTab, delta)
+	m.previewTab = workspacediff.CycleTabIn(m.previewTab, delta, m.previewTabSet())
 	return m.ensurePreviewExtras()
 }
 
 func (m *Model) setPreviewTab(tab workspacediff.Tab) tea.Cmd {
-	if !m.previewTabsVisible() {
+	if !m.previewTabSet().Contains(tab) {
 		m.previewTab = workspacediff.TabOutput
 		return nil
 	}
@@ -61,8 +85,9 @@ func (m *Model) ensureOutputTab() tea.Cmd {
 	return nil
 }
 
-// ensurePreviewExtras loads Diff/Task for the selected worktree. Switching
+// ensurePreviewExtras loads Diff/Task for the selected row. Switching
 // rows rebuilds the model; the same row is a no-op if already loaded.
+// Shells load Diff from ProjectRoot (the main checkout), not a worktree path.
 func (m *Model) ensurePreviewExtras() tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || !m.previewTabsVisible() {
@@ -70,21 +95,34 @@ func (m *Model) ensurePreviewExtras() tea.Cmd {
 		m.previewTab = workspacediff.TabOutput
 		return nil
 	}
+	if !m.previewTabSet().Contains(m.previewTab) {
+		m.previewTab = workspacediff.TabOutput
+	}
 	if workspace.ID != m.previewExtrasID {
 		m.resetPreviewExtras()
 		m.previewExtrasID = workspace.ID
 	}
 	switch m.previewTab {
 	case workspacediff.TabDiff:
+		path := previewDiffPath(workspace)
 		if m.diff.State != workspacediff.LoadStateUnknown && m.diff.State != workspacediff.LoadStateError {
-			return m.diff.LoadSelectedCommit(workspace.Path, workspace.ID)
+			return m.diff.LoadSelectedCommit(path, workspace.ID)
 		}
 		m.diff.State = workspacediff.LoadStateLoading
-		return workspacediff.LoadSnapshotCmd(workspace.Path, "", workspace.ID)
+		return workspacediff.LoadSnapshotCmd(path, "", workspace.ID)
 	case workspacediff.TabTask:
 		return m.loadPreviewTask(workspace)
 	}
 	return nil
+}
+
+// previewDiffPath is the checkout workspacediff should read. Shells have no
+// worktree of their own; the mini-diff is the project's main checkout.
+func previewDiffPath(workspace workspaceinventory.Workspace) string {
+	if workspace.Kind == workspaceinventory.KindShell {
+		return workspace.ProjectRoot
+	}
+	return workspace.Path
 }
 
 func (m *Model) resetPreviewExtras() {
@@ -115,7 +153,7 @@ func (m *Model) applyDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
 		m.diff.Error = msg.Err.Error()
 		return nil
 	}
-	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, workspace.Path, workspace.ID)
+	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, previewDiffPath(workspace), workspace.ID)
 }
 
 func (m *Model) applyCommitDetail(msg workspacediff.CommitDetailMsg) {
@@ -143,19 +181,64 @@ func (m *Model) applyTask(msg workspacediff.TaskMsg) {
 }
 
 func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
-	if !m.previewTabsVisible() || m.PreviewInteractive() || box.W < 1 {
+	if box.W < 1 {
+		return
+	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return
+	}
+	chips, tabCount, gitIndex := m.previewHitChips(workspace)
+	if len(chips) == 0 {
 		return
 	}
 	hintFloor := 0
 	if m.previewTab == workspacediff.TabOutput && m.PreviewInteractive() {
 		hintFloor = len([]rune(m.interactiveHints()))
 	}
-	for i, placement := range termpreview.LayoutChips(workspacediff.TabChips(m.previewTab), box.W, hintFloor) {
+	for i, placement := range termpreview.LayoutChips(chips, box.W, hintFloor) {
 		if !placement.Drawn {
 			continue
 		}
-		m.workspacesMouse.HitMap.AddRect(previewTabRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, previewTabHit(i))
+		if i == gitIndex {
+			m.workspacesMouse.HitMap.AddRect(previewGitRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, previewGitHit{})
+			continue
+		}
+		if m.PreviewInteractive() || i >= tabCount {
+			continue
+		}
+		tabs := m.previewTabSet().Tabs()
+		if i < len(tabs) {
+			m.workspacesMouse.HitMap.AddRect(previewTabRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, previewTabHit(tabs[i]))
+		}
 	}
+}
+
+// previewHitChips is the header chips that have hit targets. The Git chip is
+// registered even while typing, so it can jump without sending O to the pane.
+func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips []string, tabCount, gitIndex int) {
+	gitIndex = -1
+	if m.previewTabsVisible() && !m.PreviewInteractive() {
+		chips = m.previewTabRowChips()
+		tabCount = len(m.previewTabChips())
+		if m.canOpenInGit() {
+			gitIndex = tabCount
+		}
+		return chips, tabCount, gitIndex
+	}
+	if m.PreviewInteractive() && m.canOpenInGit() {
+		chips = m.previewHeaderChips(workspace)
+		gitIndex = len(chips) - 1
+		return chips, 0, gitIndex
+	}
+	return nil, 0, -1
+}
+
+func (m *Model) gitActionChips() []string {
+	if !m.canOpenInGit() {
+		return nil
+	}
+	return []string{gitActionChip()}
 }
 
 func (m *Model) renderPreviewWithTabs(width, height int) string {
@@ -167,7 +250,7 @@ func (m *Model) renderPreviewWithTabs(width, height int) string {
 	}
 
 	var lines []string
-	lines = append(lines, termpreview.HeaderRow(workspacediff.TabChips(m.previewTab), "", width, 0, termpreview.TruncateANSI))
+	lines = append(lines, termpreview.HeaderRow(m.previewTabRowChips(), "", width, 0, termpreview.TruncateANSI))
 	lines = append(lines, "")
 	contentHeight := height - previewTabRows
 	if contentHeight < 1 {
@@ -188,7 +271,7 @@ func (m *Model) renderPreviewWithTabs(width, height int) string {
 	return m.truncatePreviewLines(strings.Join(lines, "\n"), width)
 }
 
-func (m *Model) renderOutputPreview(width, height int) string {
+func (m *Model) renderOutputTerminal(width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
@@ -215,18 +298,35 @@ func (m *Model) renderOutputPreview(width, height int) string {
 		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
-		Message: message,
+		Message: message, Decorate: m.decoratePreviewLine,
 	})
+}
+
+func (m *Model) renderOutputPreview(width, height int) string {
+	if m.preview.doc != nil {
+		box := termpreview.Box{W: width, H: height}
+		termBox, docBox, split := m.previewDocLayout(box)
+		if split {
+			term := m.renderOutputTerminal(termBox.W, termBox.H)
+			document := m.renderPreviewDoc(m.preview.doc, docBox)
+			return joinPreviewDoc(term, document, height, m.preview.doc.focused)
+		}
+	}
+	return m.renderOutputTerminal(width, height)
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {
 	if m.previewTabsVisible() && !m.PreviewInteractive() {
-		// Same chips as the project plugin: Output / Diff / Task. While
-		// typing, the chips yield so the header can still name the live edge.
-		return workspacediff.TabChips(m.previewTab)
+		// Output / Diff / Task, plus Git as a jump (not a tab).
+		return m.previewTabRowChips()
 	}
 	chips := []string{previewChip(workspace.Name, m.PreviewFocused())}
-	if workspace.ProjectName != "" {
+	// While typing, O is a letter; the Git chip is how you jump without exiting.
+	// Drop the project-name chip when Git is present so the live-edge window
+	// status still fits on the header.
+	if m.canOpenInGit() {
+		chips = append(chips, gitActionChip())
+	} else if workspace.ProjectName != "" {
 		chips = append(chips, styles.Muted.Render(workspace.ProjectName))
 	}
 	return chips

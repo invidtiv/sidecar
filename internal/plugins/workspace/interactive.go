@@ -107,6 +107,15 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// Determine target based on current selection
 	var sessionName, paneID string
 
+	if p.selectedNestedTmux != "" {
+		shell := p.getSelectedShell()
+		if shell == nil {
+			return nil
+		}
+		// Nested sibling shells attach by session name. Never recreate them
+		// in this workDir — that would steal a sibling's session identity.
+		return p.ensureShellAndAttach(shell)
+	}
 	if p.shellSelected {
 		// Shell session
 		if p.selectedShellIdx < 0 || p.selectedShellIdx >= len(p.shells) {
@@ -571,15 +580,17 @@ func (p *Plugin) attachWithResize(target, sessionName, displayName string, onCom
 
 // previewResizeTarget returns the tmux target for the currently selected pane.
 func (p *Plugin) previewResizeTarget() string {
-	if p.shellSelected {
-		shell := p.getSelectedShell()
-		if shell == nil || shell.Agent == nil {
-			return ""
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.Agent == nil {
+			return shell.TmuxName
 		}
 		if shell.Agent.TmuxPane != "" {
 			return shell.Agent.TmuxPane
 		}
-		return shell.Agent.TmuxSession
+		if shell.Agent.TmuxSession != "" {
+			return shell.Agent.TmuxSession
+		}
+		return shell.TmuxName
 	}
 
 	wt := p.selectedWorktree()

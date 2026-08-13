@@ -20,6 +20,8 @@ func TestMain(m *testing.M) {
 	ActivityStorePath = func() string { return filepath.Join(dir, "agent-activity.json") }
 	loadShowIdleWorktrees = func() bool { return false }
 	saveShowIdleWorktrees = func(bool) error { return nil }
+	loadPinnedWorkspaceIDs = func() []string { return nil }
+	savePinnedWorkspaceIDs = func([]string) error { return nil }
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

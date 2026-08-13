@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -48,6 +49,13 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 		header, footer := ansi.Strip(lines[0]), ansi.Strip(lines[len(lines)-1])
 		if !strings.Contains(header, "Sidecar") || !strings.Contains(header, "Overview") {
 			t.Fatalf("%dx%d header lost the global destination: %q", size.w, size.h, header)
+		}
+		raw := m.renderHeader()
+		if strings.Contains(raw, styles.Subtitle.Render(" / Overview")) {
+			t.Fatalf("%dx%d Overview is still muted subtitle text: %q", size.w, size.h, header)
+		}
+		if !strings.Contains(raw, styles.BarChipActive.Render("Overview")) {
+			t.Fatalf("%dx%d Overview is not a filled breadcrumb pill: %q", size.w, size.h, header)
 		}
 		if !strings.Contains(header, "Workspaces") {
 			t.Fatalf("%dx%d header dropped the active global tab: %q", size.w, size.h, header)
@@ -154,6 +162,54 @@ func TestGlobalWorkspacesRendersTheSameFrameUnderAnyTheme(t *testing.T) {
 	}
 	if lipgloss.Height(second) != m.height {
 		t.Fatalf("themed frame height = %d, want %d", lipgloss.Height(second), m.height)
+	}
+}
+
+func TestGlobalHeaderKeepsOverviewAfterClockDrops(t *testing.T) {
+	m := globalFrameModel(t)
+	m.showClock = true
+	m.ui.Clock = time.Date(2025, 1, 1, 14, 30, 0, 0, time.UTC)
+	m.width, m.height, m.ready = 200, 40, true
+
+	title, tabs, clock, _ := m.headerLayout()
+	if clock == "" || !strings.Contains(ansi.Strip(title), "Overview") {
+		t.Fatalf("wide header lost clock or Overview: title=%q clock=%q", ansi.Strip(title), ansi.Strip(clock))
+	}
+	tabsWidth := 0
+	for i, tab := range tabs {
+		tabsWidth += lipgloss.Width(tab.text)
+		if i > 0 {
+			tabsWidth++
+		}
+	}
+	// One column below the full row: clock is the first thing headerLayout drops.
+	m.width = lipgloss.Width(title) + tabsWidth + lipgloss.Width(clock) - 1
+	header := m.renderHeader()
+	plain := ansi.Strip(header)
+	if strings.Contains(plain, "14:30") {
+		t.Fatalf("clock should have dropped at width %d: %q", m.width, plain)
+	}
+	if !strings.Contains(plain, "Overview") {
+		t.Fatalf("Overview vanished after the clock dropped: %q", plain)
+	}
+	if !strings.Contains(header, styles.BarChipActive.Render("Overview")) {
+		t.Fatalf("Overview pill missing after the clock dropped: %q", plain)
+	}
+	if len(m.getTabBounds()) != len(tabs) {
+		t.Fatalf("dropping the clock also dropped a tab: bounds=%d want %d", len(m.getTabBounds()), len(tabs))
+	}
+
+	// Keep shrinking until an inactive tab is gone. The destination pill
+	// stays: headerLayout drops inactive tabs before the protected title.
+	for m.width > 20 && len(m.getTabBounds()) == len(tabs) {
+		m.width--
+	}
+	plain = ansi.Strip(m.renderHeader())
+	if !strings.Contains(plain, "Overview") {
+		t.Fatalf("Overview vanished before inactive tabs were gone: %q", plain)
+	}
+	if len(m.getTabBounds()) == 0 {
+		t.Fatal("narrow header dropped every tab")
 	}
 }
 

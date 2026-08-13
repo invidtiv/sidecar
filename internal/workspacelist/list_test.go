@@ -16,10 +16,10 @@ import (
 func items() []Item {
 	base := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	return []Item{
-		{ID: "a", Name: "modal look and feel", Project: "sidecar", ProjectOrder: 0, Branch: "modal-look-and-feel", Task: "td-71de3d", Provider: "codex", Status: "working", Group: GroupWorking, ChangedAt: base},
-		{ID: "b", Name: "Kanban scrolling", Project: "sidecar", ProjectOrder: 0, Provider: "shell", Status: "live", Group: GroupLive, ChangedAt: base.Add(-time.Hour)},
-		{ID: "c", Name: "réponse", Project: "braid", ProjectOrder: 1, Branch: "feature/RÉPONSE", Provider: "claude", Status: "needs attention", Group: GroupNeedsAttention, ChangedAt: base.Add(-2 * time.Hour)},
-		{ID: "d", Name: "old worktree", Project: "td", ProjectOrder: 2, Status: "no session", Group: GroupNoSession},
+		{ID: "a", Name: "modal look and feel", Project: "sidecar", ProjectOrder: 0, Branch: "modal-look-and-feel", Task: "td-71de3d", Provider: "codex", Status: "working", Kind: KindWorktree, Group: GroupWorking, ChangedAt: base},
+		{ID: "b", Name: "Kanban scrolling", Project: "sidecar", ProjectOrder: 0, Provider: "shell", Status: "live", Kind: KindShell, Group: GroupLive, ChangedAt: base.Add(-time.Hour)},
+		{ID: "c", Name: "réponse", Project: "braid", ProjectOrder: 1, Branch: "feature/RÉPONSE", Provider: "claude", Status: "needs attention", Kind: KindWorktree, Group: GroupNeedsAttention, ChangedAt: base.Add(-2 * time.Hour)},
+		{ID: "d", Name: "old worktree", Project: "td", ProjectOrder: 2, Status: "no session", Kind: KindWorktree, Group: GroupNoSession},
 	}
 }
 
@@ -155,11 +155,160 @@ func TestActivityGroupingIsTheKanbanProjection(t *testing.T) {
 			t.Fatalf("sections = %v, want %v", got, want)
 		}
 	}
-	// The other sorts are one unheaded run: the chosen sort is the only thing
-	// organising the list.
-	if sections := Grouped(Sorted(items(), SortName), SortName); len(sections) != 1 || sections[0].Group != "" {
-		t.Fatalf("non-activity sort produced sections: %#v", sections)
+	if sections[0].Title != string(GroupNeedsAttention) {
+		t.Fatalf("activity heading = %q, want %q", sections[0].Title, GroupNeedsAttention)
 	}
+}
+
+func TestNameSortStaysUnheaded(t *testing.T) {
+	sections := Grouped(Sorted(items(), SortName), SortName)
+	if len(sections) != 1 || sections[0].Title != "" || sections[0].Group != "" {
+		t.Fatalf("name sort produced headings: %#v", sections)
+	}
+	if got := idsOf(sections[0].Items); strings.Join(got, ",") != "b,a,d,c" {
+		t.Fatalf("name sort items = %v", got)
+	}
+}
+
+func TestProjectSortHeadsEachProjectAndOmitsEmpty(t *testing.T) {
+	sections := Grouped(Sorted(items(), SortProject), SortProject)
+	if len(sections) != 3 {
+		t.Fatalf("project sections = %d, want 3 (empty projects omitted): %#v", len(sections), sections)
+	}
+	want := []struct {
+		title string
+		ids   string
+	}{
+		{"sidecar", "a,b"},
+		{"braid", "c"},
+		{"td", "d"},
+	}
+	for i, tc := range want {
+		if sections[i].Title != tc.title {
+			t.Fatalf("section %d title = %q, want %q", i, sections[i].Title, tc.title)
+		}
+		if got := strings.Join(idsOf(sections[i].Items), ","); got != tc.ids {
+			t.Fatalf("section %q items = %s, want %s", tc.title, got, tc.ids)
+		}
+	}
+}
+
+func TestRecentSortHeadsNonEmptyBucketsNewestFirst(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	rows := []Item{
+		{ID: "new-b", Name: "newer", ChangedAt: now.Add(-10 * time.Minute)},
+		{ID: "new-a", Name: "new", ChangedAt: now.Add(-30 * time.Minute)},
+		{ID: "today", Name: "today", ChangedAt: now.Add(-3 * time.Hour)},
+		{ID: "week", Name: "week", ChangedAt: now.Add(-3 * 24 * time.Hour)},
+		{ID: "old", Name: "old", ChangedAt: now.Add(-30 * 24 * time.Hour)},
+		{ID: "zero", Name: "zero"},
+	}
+	sections := GroupedAt(Sorted(rows, SortRecent), SortRecent, now, nil)
+	want := []struct {
+		title string
+		ids   string
+	}{
+		{RecentNew, "new-b,new-a"},
+		{RecentToday, "today"},
+		{RecentThisWeek, "week"},
+		{RecentOlder, "old,zero"},
+	}
+	if len(sections) != len(want) {
+		t.Fatalf("recent sections = %#v", sections)
+	}
+	for i, tc := range want {
+		if sections[i].Title != tc.title {
+			t.Fatalf("section %d title = %q, want %q", i, sections[i].Title, tc.title)
+		}
+		if got := strings.Join(idsOf(sections[i].Items), ","); got != tc.ids {
+			t.Fatalf("section %q items = %s, want %s", tc.title, got, tc.ids)
+		}
+	}
+
+	// Empty buckets are omitted.
+	sparse := []Item{
+		{ID: "hot", ChangedAt: now.Add(-5 * time.Minute)},
+		{ID: "ancient", ChangedAt: now.Add(-40 * 24 * time.Hour)},
+	}
+	got := GroupedAt(Sorted(sparse, SortRecent), SortRecent, now, nil)
+	if len(got) != 2 || got[0].Title != RecentNew || got[1].Title != RecentOlder {
+		t.Fatalf("sparse recent sections = %#v", got)
+	}
+}
+
+func TestPinnedSectionSitsAboveSortGroupsAndIsNotDuplicated(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	all := items()
+	sections := GroupedAt(Sorted(all, SortActivity), SortActivity, now, []string{"d", "missing", "a", "d"})
+	if len(sections) < 2 || sections[0].Title != "Pinned" {
+		t.Fatalf("pinned block missing: %#v", sections)
+	}
+	if got := strings.Join(idsOf(sections[0].Items), ","); got != "d,a" {
+		t.Fatalf("pin order = %s, want first-pinned first and gone IDs dropped", got)
+	}
+	var rest []string
+	for _, section := range sections[1:] {
+		rest = append(rest, idsOf(section.Items)...)
+		if section.Title == "Pinned" {
+			t.Fatal("pinned block repeated")
+		}
+	}
+	if strings.Contains(strings.Join(rest, ","), "a") || strings.Contains(strings.Join(rest, ","), "d") {
+		t.Fatalf("pinned rows were re-bucketed: %v", rest)
+	}
+	if strings.Join(rest, ",") != "c,b" {
+		t.Fatalf("unpinned activity remainder = %v, want c,b", rest)
+	}
+}
+
+func TestModelTogglePinHeadsTheListAndDoesNotDuplicate(t *testing.T) {
+	var m Model
+	m.SetItems(items())
+	m.SetSort(SortActivity)
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "c,a,b,d" {
+		t.Fatalf("activity visible = %s", got)
+	}
+	if got := m.TogglePin("d"); strings.Join(got, ",") != "d" {
+		t.Fatalf("first pin = %v", got)
+	}
+	if got := m.TogglePin("a"); strings.Join(got, ",") != "d,a" {
+		t.Fatalf("pin order = %v, want first-pinned first", got)
+	}
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "d,a,c,b" {
+		t.Fatalf("visible after pin = %s, want pinned first then activity", got)
+	}
+	view := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20}).View)
+	if !strings.Contains(view, "Pinned (2)") {
+		t.Fatalf("missing Pinned heading:\n%s", view)
+	}
+	if strings.Count(view, "old worktree") != 1 || strings.Count(view, "modal look and feel") != 1 {
+		t.Fatalf("pinned rows were duplicated:\n%s", view)
+	}
+	if !strings.Contains(view, "*") {
+		t.Fatalf("pinned row has no pin mark:\n%s", view)
+	}
+	if got := m.TogglePin("d"); strings.Join(got, ",") != "a" {
+		t.Fatalf("unpin = %v", got)
+	}
+	if m.IsPinned("d") || !m.IsPinned("a") {
+		t.Fatal("unpin did not restore pin membership")
+	}
+
+	m.SetPinned([]string{"gone", "b", "gone"})
+	if got := strings.Join(m.PinnedIDs(), ","); got != "gone,b" {
+		t.Fatalf("SetPinned kept %s", got)
+	}
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "b,c,a,d" {
+		t.Fatalf("gone pin leaked into visible: %s", got)
+	}
+}
+
+func idsOf(items []Item) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.ID)
+	}
+	return out
 }
 
 func TestSelectionFollowsIdentityThroughRefreshFilterAndSort(t *testing.T) {
@@ -290,6 +439,32 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	if !strings.Contains(empty, "0 of 4") || !strings.Contains(empty, "No workspaces match") {
 		t.Fatalf("no-match state is not honest:\n%s", empty)
 	}
+
+	m.Filter().Reset()
+	m.Reproject()
+
+	// Project and Recent print headings; Name stays a flat run.
+	m.SetSort(SortProject)
+	projectView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces"}).View)
+	for _, want := range []string{"sidecar (2)", "braid (1)", "td (1)"} {
+		if !strings.Contains(projectView, want) {
+			t.Fatalf("project sort missing heading %q:\n%s", want, projectView)
+		}
+	}
+	m.SetSort(SortRecent)
+	recentView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Now: time.Date(2026, 8, 11, 12, 30, 0, 0, time.UTC)}).View)
+	if !strings.Contains(recentView, "New (1)") || !strings.Contains(recentView, "Today (2)") {
+		t.Fatalf("recent sort missing buckets:\n%s", recentView)
+	}
+	if strings.Contains(recentView, "This week") {
+		t.Fatalf("recent sort kept an empty bucket:\n%s", recentView)
+	}
+	m.SetSort(SortName)
+	nameView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20}).View)
+	if strings.Contains(nameView, " (") && strings.Contains(nameView, "sidecar (") {
+		t.Fatalf("name sort grew project headings:\n%s", nameView)
+	}
+	m.SetSort(SortActivity)
 
 	// Narrow: one truncated line per row, still exactly the box width.
 	m.Filter().Reset()
@@ -449,5 +624,46 @@ func TestFilterSeparatesIdenticallyNamedShellsByTmuxName(t *testing.T) {
 		if strings.Contains(rendered, row.TmuxName) {
 			t.Fatalf("the tmux session name became visible in the row: %q", rendered)
 		}
+	}
+}
+
+func TestGlobalRenderRowIsProjectNameAgeThenKindAndAgent(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	var m Model
+	item := Item{
+		ID: "a", Name: "review td-196c42", Project: "sidecar", ProjectKey: "sidecar",
+		Provider: "grok", Status: "working", Detail: "td-196c42", Kind: KindWorktree,
+		Marker: RowMarker{Icon: "●", Lane: "working"}, ChangedAt: now.Add(-time.Minute),
+	}
+	lines := m.renderRow(item, false, true, 56, now)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
+	if !strings.Contains(line1, "sidecar review td-196c42") || !strings.Contains(line1, "1m") {
+		t.Fatalf("line 1 = %q, want project + name + age", line1)
+	}
+	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "grok") {
+		t.Fatalf("line 2 = %q, want kind glyph + agent", line2)
+	}
+	for _, status := range []string{"working", "live", "idle", "ambiguous panes", "no session"} {
+		if strings.Contains(line1, status) || strings.Contains(line2, status) {
+			t.Fatalf("status text %q leaked onto the row:\n%s\n%s", status, line1, line2)
+		}
+	}
+
+	shell := item
+	shell.Kind = KindShell
+	shell.Name = "Shell 2"
+	shell.Project = "braid"
+	shell.Status = "live"
+	shell.Detail = ""
+	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
+	got := ansi.Strip(strings.Join(m.renderRow(shell, false, true, 56, now), "\n"))
+	if !strings.Contains(got, "braid Shell 2") || !strings.Contains(got, "❯") {
+		t.Fatalf("shell row = %q", got)
+	}
+	if strings.Contains(got, "live") {
+		t.Fatalf("shell row repeated status text: %q", got)
 	}
 }

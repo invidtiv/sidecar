@@ -45,12 +45,33 @@ func catalogModel(t *testing.T) *Model {
 func TestGlobalRowsProjectStatusProviderProjectDetailAndAge(t *testing.T) {
 	m := catalogModel(t)
 	m.collector.Now = func() time.Time { return time.Now() }
-	m.sidebarWidth = 60
-	view := ansi.Strip(m.WorkspacesView(120, 24))
-	for _, want := range []string{"◆ modal", "▶ codex", "sidecar", "needs input", "modal-look", "1m", "● pipeline", "claude", "braid"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("global row lost %q:\n%s", want, view)
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 60, 22))
+	for _, want := range []string{"◆", "sidecar modal", "1m", "▶", "codex", "modal-look", "●", "braid pipeline", "claude", "⑂", "❯"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("global row lost %q:\n%s", want, list)
 		}
+	}
+	for _, status := range []string{"needs input", "working", "live", "idle", "ambiguous panes", "no session"} {
+		if strings.Contains(list, status) {
+			t.Fatalf("global list repeated status text %q:\n%s", status, list)
+		}
+	}
+}
+
+func TestListItemCarriesPresentationKind(t *testing.T) {
+	wt := listItem(workspaceinventory.Item{Kind: workspaceinventory.KindWorktree, Name: "topic"}, "sidecar", 0, false)
+	if wt.Kind != workspacelist.KindWorktree {
+		t.Fatalf("worktree kind = %q", wt.Kind)
+	}
+	sh := listItem(workspaceinventory.Item{Kind: workspaceinventory.KindShell, Name: "Shell 1"}, "sidecar", 0, false)
+	if sh.Kind != workspacelist.KindShell {
+		t.Fatalf("shell kind = %q", sh.Kind)
+	}
+	if workspacelist.KindGlyph(wt.Kind) != kindGlyph(workspaceinventory.KindWorktree) {
+		t.Fatal("list worktree glyph drifted from the Agents board")
+	}
+	if workspacelist.KindGlyph(sh.Kind) != kindGlyph(workspaceinventory.KindShell) {
+		t.Fatal("list shell glyph drifted from the Agents board")
 	}
 }
 
@@ -139,7 +160,7 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 			t.Fatalf("fly-out is missing %q:\n%s", want, view)
 		}
 	}
-	// j moves the highlight; enter applies that mode without cycling.
+	// j moves the highlight; enter applies that mode and closes the fly-out.
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'j', Text: "j"}); !handled {
 		t.Fatal("j was not handled in the fly-out")
 	}
@@ -149,11 +170,40 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 	if m.workspaces.Sort() != workspacelist.SortProject {
 		t.Fatalf("enter applied %s, want Project", m.workspaces.Sort().Label())
 	}
-	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
-		t.Fatal("esc did not close the fly-out")
+	if m.ViewFlyoutOpen() {
+		t.Fatal("enter on a sort left the fly-out open; the user should not need Done")
 	}
 	if view := ansi.Strip(m.WorkspacesView(60, 24)); !strings.Contains(view, "Project") {
 		t.Fatalf("list header did not keep the chosen sort:\n%s", view)
+	}
+
+	// Esc still dismisses without requiring Done.
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 's', Text: "s"}); !handled || !m.ViewFlyoutOpen() {
+		t.Fatal("`s` did not reopen the view fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
+		t.Fatal("esc did not close the fly-out")
+	}
+
+	// Enter on the idle checkbox toggles and leaves the fly-out open.
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 's', Text: "s"}); !handled || !m.ViewFlyoutOpen() {
+		t.Fatal("`s` did not reopen the view fly-out for the idle checkbox")
+	}
+	beforeIdle := m.showIdleWorktrees
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyTab}); !handled {
+		t.Fatal("tab was not handled in the fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter}); !handled {
+		t.Fatal("enter on the idle checkbox was not handled")
+	}
+	if m.showIdleWorktrees == beforeIdle {
+		t.Fatal("enter on the idle checkbox did not toggle show idle worktrees")
+	}
+	if !m.ViewFlyoutOpen() {
+		t.Fatal("enter on the idle checkbox closed the fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
+		t.Fatal("esc did not close the fly-out after the idle toggle")
 	}
 
 	// `/` focuses the filter; typed characters are query text, and even keys
@@ -189,6 +239,24 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 	first := m.workspaces.SelectedID()
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'j', Text: "j"}); !handled || m.workspaces.SelectedID() == first {
 		t.Fatal("j did not move the selection after leaving the filter")
+	}
+}
+
+func TestProjectAndRecentSortsRenderSectionHeadings(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	m.workspaces.SetSort(workspacelist.SortProject)
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "sidecar (2)") || !strings.Contains(list, "braid (1)") {
+		t.Fatalf("project sort lost per-project headings:\n%s", list)
+	}
+
+	now := time.Now()
+	m.collector.Now = func() time.Time { return now }
+	m.workspaces.SetSort(workspacelist.SortRecent)
+	list = ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "New (") && !strings.Contains(list, "Today (") {
+		t.Fatalf("recent sort lost time-bucket headings:\n%s", list)
 	}
 }
 
@@ -462,6 +530,141 @@ func TestIdleFlagPersistsThroughTheFlyOut(t *testing.T) {
 	if !m2.showIdleWorktrees {
 		t.Fatal("a new model did not restore the persisted idle flag")
 	}
+}
+
+func TestPinKeyTogglesAPinnedSectionAboveTheSort(t *testing.T) {
+	var saved []string
+	origLoad, origSave := loadPinnedWorkspaceIDs, savePinnedWorkspaceIDs
+	loadPinnedWorkspaceIDs = func() []string { return append([]string(nil), saved...) }
+	savePinnedWorkspaceIDs = func(ids []string) error {
+		saved = append([]string(nil), ids...)
+		return nil
+	}
+	t.Cleanup(func() {
+		loadPinnedWorkspaceIDs = origLoad
+		savePinnedWorkspaceIDs = origSave
+	})
+
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	if !m.workspaces.SelectID("s2") {
+		t.Fatal("could not select the shell")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"}); !handled {
+		t.Fatal("p on the list was not handled")
+	}
+	if !m.workspaces.IsPinned("s2") {
+		t.Fatal("p did not pin the selected row")
+	}
+	if strings.Join(saved, ",") != "s2" {
+		t.Fatalf("pin did not persist: %v", saved)
+	}
+
+	m.workspaces.SelectID("s1")
+	m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if strings.Join(m.workspaces.PinnedIDs(), ",") != "s2,s1" {
+		t.Fatalf("pin order = %v, want first-pinned first", m.workspaces.PinnedIDs())
+	}
+	if got := idsOfVisible(m); strings.Join(got, ",") != "s2,s1,b1" {
+		t.Fatalf("visible = %v, want pinned first then activity", got)
+	}
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "Pinned (2)") {
+		t.Fatalf("missing Pinned heading:\n%s", list)
+	}
+	if strings.Count(list, "sidecar Shell 1") != 1 || strings.Count(list, "sidecar modal") != 1 {
+		t.Fatalf("pinned rows were duplicated:\n%s", list)
+	}
+
+	m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if m.workspaces.IsPinned("s1") || !m.workspaces.IsPinned("s2") {
+		t.Fatal("p did not unpin the selected row")
+	}
+
+	m2 := New(workspaceinventory.Collector{})
+	if strings.Join(m2.workspaces.PinnedIDs(), ",") != "s2" {
+		t.Fatalf("a new model did not restore pins: %v", m2.workspaces.PinnedIDs())
+	}
+}
+
+func TestGoneCatalogPinsAreDroppedQuietly(t *testing.T) {
+	var saved []string
+	origLoad, origSave := loadPinnedWorkspaceIDs, savePinnedWorkspaceIDs
+	loadPinnedWorkspaceIDs = func() []string { return append([]string(nil), saved...) }
+	savePinnedWorkspaceIDs = func(ids []string) error {
+		saved = append([]string(nil), ids...)
+		return nil
+	}
+	t.Cleanup(func() {
+		loadPinnedWorkspaceIDs = origLoad
+		savePinnedWorkspaceIDs = origSave
+	})
+
+	m := catalogModel(t)
+	m.workspaces.SetPinned([]string{"gone", "s1"})
+	m.loading = false
+	m.syncBoard()
+	if got := strings.Join(m.workspaces.PinnedIDs(), ","); got != "s1" {
+		t.Fatalf("gone pin survived sync: %s", got)
+	}
+	if strings.Join(saved, ",") != "s1" {
+		t.Fatalf("gone pin was not dropped from persist: %v", saved)
+	}
+}
+
+func TestPinKeyWhileFilterFocusedStaysQueryText(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	m.WorkspacesKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"}); !handled {
+		t.Fatal("filter did not consume p")
+	}
+	if m.workspaces.Filter().Query() != "p" {
+		t.Fatalf("query = %q, want p", m.workspaces.Filter().Query())
+	}
+	if len(m.workspaces.PinnedIDs()) != 0 {
+		t.Fatal("p mid-query pinned a row")
+	}
+}
+
+func TestPinKeyWhileTypingGoesToThePane(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	enterInteractive(t, m)
+	if !m.PreviewInteractive() {
+		t.Fatal("test premise: not typing")
+	}
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if !handled {
+		t.Fatal("interactive p was not handled")
+	}
+	run(t, m, cmd)
+	if len(terminal.keys) == 0 || terminal.keys[len(terminal.keys)-1] != "p" {
+		t.Fatalf("pane keys = %v, want p", terminal.keys)
+	}
+	if len(m.workspaces.PinnedIDs()) != 0 {
+		t.Fatal("typing p pinned a row")
+	}
+}
+
+func TestListFocusedCommandsAdvertisePin(t *testing.T) {
+	m := catalogModel(t)
+	var found bool
+	for _, cmd := range m.Commands() {
+		if cmd.Key == "p" && cmd.Name == "Pin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("list-focused Commands() omitted Pin: %#v", m.Commands())
+	}
+}
+
+func idsOfVisible(m *Model) []string {
+	var ids []string
+	for _, item := range m.workspaces.Visible() {
+		ids = append(ids, item.ID)
+	}
+	return ids
 }
 
 func visibleByID(m *Model) map[string]workspacelist.Item {

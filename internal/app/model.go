@@ -847,6 +847,33 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	)
 }
 
+// openInGitSwitchMsg switches to a checkout from the global list without
+// using the current project's cached worktree inventory.
+type openInGitSwitchMsg struct {
+	Path string
+}
+
+// openInGitFromOverview leaves global and opens the Git plugin on the
+// checkout the mini-diff showed. A missing path stays in global.
+func (m *Model) openInGitFromOverview(path string) tea.Cmd {
+	if path == "" || !WorktreeExists(path) {
+		return func() tea.Msg {
+			return ToastMsg{Message: "Worktree no longer exists", Duration: 3 * time.Second, IsError: true}
+		}
+	}
+	normalizedPath, _ := normalizePath(path)
+	normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
+	if normalizedPath == normalizedWorkDir {
+		return FocusPlugin("git-status")
+	}
+	// Sequence, not Batch: switch re-inits plugins and deadlocks if
+	// FocusPlugin forks beside it. FocusPluginByIDMsg exits global.
+	return tea.Sequence(
+		func() tea.Msg { return openInGitSwitchMsg{Path: path} },
+		FocusPlugin("git-status"),
+	)
+}
+
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
 	m.exitOverview()
 	kind := plugin.WorkspaceSelectionWorktree
@@ -1211,6 +1238,23 @@ func (m *Model) runHostCommand(id string) bool {
 		return m.openIssueInput()
 	}
 	return false
+}
+
+// runGlobalWorkspacesCommand runs a palette-selected command the global
+// Workspaces list answers itself. Keys are handled in overview.WorkspacesKey;
+// the palette has no keymap handler, so it lands here.
+func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
+	if !m.globalWorkspacesVisible() || m.overview == nil || m.overview.PreviewInteractive() {
+		return nil
+	}
+	switch id {
+	case "rename-shell":
+		return m.overview.OpenRenameShell()
+	case "open-in-git":
+		return m.overview.OpenSelectedInGit()
+	default:
+		return nil
+	}
 }
 
 // initIssueInput initializes the issue input modal.

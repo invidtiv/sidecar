@@ -27,12 +27,14 @@ import (
 //
 // The list itself is a reader. Creation, deletion, attach, Git lifecycle, and
 // Task actions stay in the owning project's Workspaces plugin, where their
-// validation and refusal rules live. The one thing the browser does drive is an
-// existing live pane: Enter, a click in the pane, or E hands the keyboard to
-// the pane behind the selected row (internal/overview/interactive.go), which
-// creates nothing and destroys nothing — it types into a session that is
-// already there. The list stays the browse surface; there is no watched-preview
-// keyboard mode.
+// validation and refusal rules live. Renaming a shell display name is the one
+// write that belongs here: it is the same shellstate persist the project
+// plugin and `sidecar shell rename` already do, aimed at the owning project's
+// shells.json. The other thing the browser drives is an existing live pane:
+// Enter, a click in the pane, or E hands the keyboard to the pane behind the
+// selected row (internal/overview/interactive.go), which creates nothing and
+// destroys nothing — it types into a session that is already there. The list
+// stays the browse surface; there is no watched-preview keyboard mode.
 
 // syncWorkspaces rebuilds the list projection from the same results map the
 // board uses. It is called from syncBoard so the two projections can never
@@ -64,9 +66,33 @@ func (m *Model) syncWorkspaces() {
 	}
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
+	if !m.loading {
+		m.pruneGonePins()
+	}
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+}
+
+func (m *Model) pruneGonePins() {
+	ids := m.workspaces.PinnedIDs()
+	if len(ids) == 0 {
+		return
+	}
+	kept := make([]string, 0, len(ids))
+	dropped := false
+	for _, id := range ids {
+		if _, ok := m.catalog[id]; ok {
+			kept = append(kept, id)
+			continue
+		}
+		dropped = true
+	}
+	if !dropped {
+		return
+	}
+	m.workspaces.SetPinned(kept)
+	_ = savePinnedWorkspaceIDs(kept)
 }
 
 // listItem projects one catalog row into the shared list component's display
@@ -84,6 +110,7 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 		Task:         item.TaskID,
 		Provider:     item.Provider,
 		TmuxName:     item.TmuxName,
+		Kind:         string(item.Kind),
 	}
 	if row.Project == "" {
 		row.Project = item.ProjectName
@@ -209,7 +236,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 	var view string
 	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
-		m.registerPreviewTabRegions(layout.box)
+		m.registerPreviewOutputRegions(layout.box)
 		view = styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
 	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
@@ -218,7 +245,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 		split := layout.split
 		m.addSidebarRegion(0, split.SidebarWidth, height)
 		m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-		m.registerPreviewTabRegions(layout.box)
+		m.registerPreviewOutputRegions(layout.box)
 		list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
 		preview := m.renderPreview(layout.box.W, layout.box.H)
 
@@ -229,6 +256,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 		// regions and any list row that reaches the content edge.
 		m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
 		view = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
+	}
+	if m.renameOpen {
+		return m.overlayRenameShell(view, width, height)
 	}
 	if m.viewFlyoutOpen {
 		return m.overlayViewFlyout(view, width, height)
@@ -273,6 +303,12 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 	m.workspacesMouse.HitMap.AddRect(previewRegionKind, x, 0, width, height, previewRegionKind)
 }
 
+func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
+	termBox, _, _ := m.previewDocLayout(box)
+	m.registerPreviewTabRegions(termBox)
+	m.registerPreviewDocRegions(box)
+}
+
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
 // the app can report a text-input context and keep its own printable shortcuts
 // off the query.
@@ -313,6 +349,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// is a slash, "q" is a q, and ctrl+c interrupts what is running there.
 	if m.PreviewInteractive() {
 		return m.previewKey(msg)
+	}
+	if m.renameOpen {
+		return m.handleRenameShellKey(msg)
 	}
 	// The fly-out is an overlay, not a third browse mode. Esc / backdrop close
 	// it and leave the list as the rest state. "/" still focuses the filter.
@@ -376,6 +415,15 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "s":
 		m.openViewFlyout()
 		return true, nil
+	case "p":
+		return true, m.toggleWorkspacePin()
+	case "R":
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			return true, m.OpenRenameShell()
+		}
+		return false, nil
+	case "O":
+		return true, m.OpenSelectedInGit()
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "esc":
@@ -400,10 +448,40 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
 	}
+	if m.renameOpen {
+		return "global-workspaces-rename"
+	}
 	return "global-workspaces"
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
+
+func (m *Model) toggleWorkspacePin() tea.Cmd {
+	item, ok := m.workspaces.Selected()
+	if !ok {
+		return nil
+	}
+	ids := m.workspaces.TogglePin(item.ID)
+	if !m.loading {
+		ids = m.knownPinnedIDs(ids)
+		m.workspaces.SetPinned(ids)
+	}
+	_ = savePinnedWorkspaceIDs(ids)
+	return nil
+}
+
+func (m *Model) knownPinnedIDs(ids []string) []string {
+	if len(m.catalog) == 0 {
+		return ids
+	}
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := m.catalog[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
 
 // toggleWorkspaceSidebar shows or hides the list. It is a layout toggle only:
 // hiding fills the tab with the preview and leaves the keyboard on the list, so
@@ -454,6 +532,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	mouseMsg, ok := msg.(tea.MouseMsg)
 	if !ok {
 		return nil
+	}
+	if m.renameOpen {
+		return m.handleRenameShellMouse(mouseMsg)
 	}
 	if m.viewFlyoutOpen {
 		return m.handleViewFlyoutMouse(mouseMsg)
@@ -512,12 +593,13 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	rowClick := kind == string(workspacelist.RegionRow) &&
 		(action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick)
+	docClick := isPreviewDocRegion(kind)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
 	cmd := m.workspacesRegionMouse(action)
-	if !pressAway || (rowClick && m.PreviewInteractive()) {
+	if !pressAway || (rowClick && m.PreviewInteractive()) || docClick {
 		return cmd
 	}
 	// Last, so a region that hands the keyboard back itself — the sidebar,
@@ -554,11 +636,20 @@ func regionKind(region *mouse.Region) (string, bool) {
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over captured output moves that
 	// output, not the list underneath it.
+	if _, ok := action.Region.Data.(previewGitHit); ok {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.OpenSelectedInGit()
+		}
+		return nil
+	}
 	if tab, ok := action.Region.Data.(previewTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.setPreviewTab(workspacediff.Tab(tab))
 		}
 		return nil
+	}
+	if kind, ok := action.Region.Data.(string); ok && isPreviewDocRegion(kind) {
+		return m.handlePreviewDocMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch kind {
@@ -689,6 +780,7 @@ func (m *Model) WorkspacesSummary() string {
 // internal/keymap under the "global-workspaces", "global-workspaces-terminal"
 // and "global-workspaces-filter" contexts, which is what makes it discoverable
 // in help and the palette rather than only in footer hints — and what makes
-// the boundary (no create, delete or attach anywhere; typing only via Enter /
-// click / E) a single documented fact instead of a second list beside the
-// keys this file actually answers.
+// the boundary (no create, delete or attach anywhere; rename-shell is a
+// display-name write, not create/destroy; typing only via Enter / click / E)
+// a single documented fact instead of a second list beside the keys this
+// file actually answers.

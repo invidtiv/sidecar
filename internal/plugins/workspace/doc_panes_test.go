@@ -153,8 +153,8 @@ func TestDocumentSplitFocusChromeCloseRegionAndExactBox(t *testing.T) {
 			t.Fatalf("row %d width = %d, want %d: %q", row, got, width, line)
 		}
 	}
-	if stripped := ansi.Strip(docFocused); !strings.Contains(stripped, "guide.md") || !strings.Contains(stripped, "Rendered") || !strings.Contains(stripped, "×") || !strings.Contains(stripped, "q close") {
-		t.Fatalf("document header lacks identity/mode/close/hint: %q", stripped)
+	if stripped := ansi.Strip(docFocused); !strings.Contains(stripped, "guide.md") || !strings.Contains(stripped, "Rendered") || !strings.Contains(stripped, "×") || !strings.Contains(stripped, "q close") || !strings.Contains(stripped, "m raw") || strings.Contains(stripped, "r raw") || strings.Contains(stripped, "r render") {
+		t.Fatalf("document header lacks identity/mode/close/m-hint: %q", stripped)
 	}
 
 	var closeRegion *mouse.Region
@@ -181,6 +181,128 @@ func TestDocumentSplitFocusChromeCloseRegionAndExactBox(t *testing.T) {
 	p.paneFocus = leaf.ID
 	if cmd := p.handleMouseClick(mouse.MouseAction{Region: closeRegion}); cmd == nil || p.activeDocPaneOrNil() != nil {
 		t.Fatal("close header chip did not close the document and schedule terminal resize")
+	}
+}
+
+func TestDocPaneMAndModeChipToggleRender(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n\nbody\n")
+	p := docPaneTestPlugin(t, root, true)
+	open := p.openTerminalPath("README.md", 0)
+	for _, child := range open().(tea.BatchMsg) {
+		if msg, ok := child().(docview.LoadedMsg); ok {
+			p.applyDocLoaded(msg)
+		}
+	}
+	doc, leaf := p.activeDocPane()
+	if doc == nil || !doc.view.Rendered() {
+		t.Fatalf("opened doc = %#v, want rendered markdown", doc)
+	}
+
+	handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !handled || doc.view.Rendered() {
+		t.Fatalf("m did not toggle to raw: handled=%v rendered=%v", handled, doc.view.Rendered())
+	}
+	p.mouseHandler.Clear()
+	rawView, ok := p.renderDocumentSplit(100, 12)
+	if !ok {
+		t.Fatal("document split was not rendered")
+	}
+	if stripped := ansi.Strip(rawView); !strings.Contains(stripped, "Raw") || !strings.Contains(stripped, "m render") || strings.Contains(stripped, "r render") {
+		t.Fatalf("raw header/hint = %q", stripped)
+	}
+
+	handled, _ = p.handleDocKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if !handled || doc.view.Rendered() {
+		t.Fatalf("r should be absorbed without toggling: handled=%v rendered=%v", handled, doc.view.Rendered())
+	}
+
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !doc.view.Rendered() {
+		t.Fatal("second m did not restore rendered mode")
+	}
+
+	p.paneFocus = terminalLeafID(p.paneRoot)
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !doc.view.Rendered() {
+		t.Fatal("m on the terminal pane toggled the document")
+	}
+	if p.viewMode != ViewModeList {
+		t.Fatalf("m on the terminal pane changed view mode to %v", p.viewMode)
+	}
+
+	p.paneFocus = leaf.ID
+	p.mouseHandler.Clear()
+	if _, ok := p.renderDocumentSplit(100, 12); !ok {
+		t.Fatal("document split was not rendered for mode chip")
+	}
+	modeRegion := docPaneRegion(p, regionDocMode)
+	if modeRegion == nil {
+		t.Fatal("rendered mode chip has no hit region")
+	}
+	if hit := p.mouseHandler.HitMap.Test(modeRegion.Rect.X, modeRegion.Rect.Y); hit == nil || hit.ID != regionDocMode {
+		t.Fatalf("mode chip coordinates resolve to %#v, want %s", hit, regionDocMode)
+	}
+	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, Region: modeRegion})
+	if doc.view.Rendered() {
+		t.Fatal("mode chip click did not toggle to raw")
+	}
+	if p.paneFocus != leaf.ID {
+		t.Fatalf("mode chip click moved focus to %d, want doc %d", p.paneFocus, leaf.ID)
+	}
+}
+
+func docPaneRegion(p *Plugin, id string) *mouse.Region {
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == id {
+			regionCopy := region
+			return &regionCopy
+		}
+	}
+	return nil
+}
+
+func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
+	p := docPaneTestPlugin(t, root, false)
+	open := p.openTerminalPath("README.md", 0)
+	for _, child := range open().(tea.BatchMsg) {
+		if msg, ok := child().(docview.LoadedMsg); ok {
+			p.applyDocLoaded(msg)
+		}
+	}
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil || !doc.view.Rendered() || !p.taskMarkdownMode {
+		t.Fatalf("opened doc = %#v rendered=%v task=%v", doc, doc != nil && doc.view.Rendered(), p.taskMarkdownMode)
+	}
+	if p.FocusContext() != "workspace-doc" {
+		t.Fatalf("output context = %q, want workspace-doc", p.FocusContext())
+	}
+
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionPreviewTab, Data: int(PreviewTabTask)},
+	})
+	if p.previewTab != PreviewTabTask || p.paneFocus != leaf.ID {
+		t.Fatalf("task click tab=%v focus=%d, want Task with doc leaf %d", p.previewTab, p.paneFocus, leaf.ID)
+	}
+	if p.FocusContext() == "workspace-doc" {
+		t.Fatal("hidden document kept workspace-doc focus context")
+	}
+
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !doc.view.Rendered() {
+		t.Fatal("task-tab m toggled the hidden document")
+	}
+	if p.taskMarkdownMode {
+		t.Fatal("task-tab m did not toggle task markdown to raw")
+	}
+
+	p.previewTab = PreviewTabOutput
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if doc.view.Rendered() || p.taskMarkdownMode {
+		t.Fatalf("output m should toggle the visible doc only: doc=%v task=%v", doc.view.Rendered(), p.taskMarkdownMode)
 	}
 }
 
@@ -334,20 +456,20 @@ func TestDocPaneNarrowRefusalAndFocusedLeafFallback(t *testing.T) {
 	}
 }
 
-func TestDocPaneTargetOnlyAcceptsMarkdownInsideSelectedSurface(t *testing.T) {
+func TestDocPaneTargetAcceptsAnyReadablePath(t *testing.T) {
 	for _, tc := range []struct {
-		path   string
-		inside bool
-		want   bool
+		path string
+		want bool
 	}{
-		{"README.md", true, true},
-		{"notes.MARKDOWN", true, true},
-		{"README.md", false, false},
-		{"main.go", true, false},
-		{"archive.md.txt", true, false},
+		{"README.md", true},
+		{"notes.MARKDOWN", true},
+		{"main.go", true},
+		{"archive.json", true},
+		{"", false},
+		{"   ", false},
 	} {
-		if got := docPaneTarget(tc.path, tc.inside); got != tc.want {
-			t.Errorf("docPaneTarget(%q, %v) = %v, want %v", tc.path, tc.inside, got, tc.want)
+		if got := docPaneTarget(tc.path); got != tc.want {
+			t.Errorf("docPaneTarget(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }

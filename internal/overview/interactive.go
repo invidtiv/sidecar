@@ -297,11 +297,26 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	modified := action.Shift || action.Alt
+	linkCmd, claimed := m.activatePreviewLinkAt(action, modified)
 	want := tty.ResolveClick(tty.ClickIntent{
 		Live:           m.PreviewInteractive(),
 		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
-		Modified:       action.Shift || action.Alt,
+		Modified:       modified,
+		LinkClaimed:    claimed,
 	})
+	if claimed {
+		// Arm a no-op release so the click is claimed (LinkClaimed) and is
+		// not "start typing". Shift/alt never reach here.
+		m.workspacesMouse.StartDrag(action.X, action.Y, previewRegionKind, 0)
+		m.preview.pointer.Press(geometry, m.previewBuffer(), &m.preview.selection, tty.PressEvent{
+			X: action.X, Y: action.Y,
+			Shift: action.Shift, Alt: action.Alt,
+			Rect: action.Region.Rect, Want: want,
+			SameSource: true,
+		})
+		return linkCmd
+	}
 
 	// Track the gesture even when the buffer is empty or the press lands on
 	// padding: a plain click still needs its release, and motion can become
@@ -581,7 +596,7 @@ func (m *Model) previewBox() (termpreview.Box, bool) {
 // previewSurface is the terminal viewport inside that box: the box minus the
 // one header row, taken from the shared layer rather than recomputed.
 func (m *Model) previewSurface() (termpreview.Surface, bool) {
-	box, ok := m.previewBox()
+	box, ok := m.previewTerminalBox()
 	if !ok {
 		return termpreview.Surface{}, false
 	}

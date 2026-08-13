@@ -577,7 +577,14 @@ func (m Model) renderHeader() string {
 	}
 	header := title + strings.Repeat(" ", spacing/2) + strings.Join(tabTexts, " ") + strings.Repeat(" ", spacing-(spacing/2)) + clock
 	header = ansi.Truncate(header, m.width, "")
-	return styles.Header.Width(m.width).MaxWidth(m.width).Render(header)
+	return m.headerBarStyle().Width(m.width).MaxWidth(m.width).Render(header)
+}
+
+func (m Model) headerBarStyle() lipgloss.Style {
+	if m.inGlobalScope() {
+		return styles.HeaderGlobal
+	}
+	return styles.Header
 }
 
 type headerTab struct {
@@ -604,11 +611,9 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 	}
 
 	// Calculate final title width (with repo name and worktree indicator) - used for tab positioning
+	destination := m.headerDestinationSuffix()
 	finalTitleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	activeName := m.activeDestinationName()
-	if activeName != "" {
-		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
-	}
+	finalTitleWidth += lipgloss.Width(destination)
 	finalTitleWidth += lipgloss.Width(worktreeIndicator)
 	finalTitleWidth += 1 // trailing space
 
@@ -618,12 +623,7 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		titleContent := styles.BarTitle.Render(" "+m.intro.View()) + m.intro.RepoNameView() + worktreeIndicator + " "
 		title = lipgloss.NewStyle().Width(finalTitleWidth).Render(titleContent)
 	} else {
-		// Static title with repo name and worktree indicator
-		repoSuffix := ""
-		if activeName != "" {
-			repoSuffix = styles.Subtitle.Render(" / " + activeName)
-		}
-		title = styles.BarTitle.Render(" Sidecar") + repoSuffix + worktreeIndicator + " "
+		title = styles.BarTitle.Render(" Sidecar") + destination + worktreeIndicator + " "
 	}
 
 	// Tabs owned by the active scope: the global space's own tabs, or the
@@ -710,6 +710,25 @@ func (m Model) getTabBounds() []TabBounds {
 	return bounds
 }
 
+func (m Model) headerDestinationParts() (sep, name string) {
+	activeName := m.activeDestinationName()
+	if activeName == "" {
+		return "", ""
+	}
+	sep = styles.Subtitle.Render(" / ")
+	if m.inGlobalScope() {
+		name = styles.BarChipActive.Render(activeName)
+	} else {
+		name = styles.Subtitle.Render(activeName)
+	}
+	return sep, name
+}
+
+func (m Model) headerDestinationSuffix() string {
+	sep, name := m.headerDestinationParts()
+	return sep + name
+}
+
 // getLogoBounds returns the X bounds for the "Sidecar" brand in the header.
 // Clicking it toggles the global space, so it is live whenever that space has
 // a tab to show — the cross-project Overview tabs, the hosted Tasks tab, or
@@ -729,8 +748,33 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 	return 0, end, true
 }
 
+// getScopeBounds returns the X bounds for the global Overview pill. Clicking
+// it is the same toggle as the brand logo / K.
+func (m Model) getScopeBounds() (start, end int, ok bool) {
+	if !m.inGlobalScope() || !m.globalScopeAvailable() {
+		return 0, 0, false
+	}
+	sep, name := m.headerDestinationParts()
+	if name == "" {
+		return 0, 0, false
+	}
+	start = lipgloss.Width(styles.BarTitle.Render(" Sidecar")) + lipgloss.Width(sep)
+	end = start + lipgloss.Width(name)
+	if m.width > 0 {
+		title, _, _, _ := m.headerLayout()
+		end = min(end, max(start, lipgloss.Width(title)-1))
+		if end <= start {
+			return 0, 0, false
+		}
+	}
+	return start, end, true
+}
+
 // getRepoNameBounds returns the X bounds for the repo name in the header.
 func (m Model) getRepoNameBounds() (start, end int, ok bool) {
+	if m.inGlobalScope() {
+		return 0, 0, false
+	}
 	name := m.activeDestinationName()
 	if name == "" {
 		return 0, 0, false
@@ -949,6 +993,13 @@ func (m Model) footerHints() []footerHint {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+		if m.overview != nil && m.overview.RenameShellOpen() {
+			hints = append(hints,
+				footerHint{keys: "enter", label: "Rename"},
+				footerHint{keys: "esc", label: "Cancel"},
+			)
+			break
+		}
 		// Two states only: the list browses, Enter / click / E type. Leftover
 		// preview-only chrome (hidden sidebar) still scrolls and can start typing.
 		if m.overview != nil && m.overview.PreviewFocused() && !m.overview.PreviewInteractive() {
@@ -969,10 +1020,17 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "enter", label: "Type"},
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},
+			footerHint{keys: "p", label: "Pin"},
 			footerHint{keys: "r", label: "Refresh"},
 			footerHint{keys: "\\", label: "Sidebar"},
 			footerHint{keys: "esc", label: "Close"},
 		)
+		if m.overview != nil && m.overview.SelectedShell() {
+			hints = append(hints, footerHint{keys: "R", label: "Rename"})
+		}
+		if m.overview != nil && m.overview.CanOpenInGit() {
+			hints = append(hints, footerHint{keys: "O", label: "Git"})
+		}
 	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},

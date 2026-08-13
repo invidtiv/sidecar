@@ -312,6 +312,7 @@ func (w *Worktree) IdentityKey() string {
 type ShellSession struct {
 	Name        string // Display name (e.g., "Shell 1")
 	TmuxName    string // tmux session name (e.g., "sidecar-sh-project-1")
+	WorkDir     string // Parent worktree path; persisted on the definition
 	Agent       *Agent // Reuses Agent struct for tmux state
 	CreatedAt   time.Time
 	ChosenAgent AgentType // td-317b64: Agent type selected at creation (AgentNone for plain shell)

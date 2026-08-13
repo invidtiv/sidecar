@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func TestGlobalPreviewChipsOnlyForNonMainWorktrees(t *testing.T) {
@@ -23,12 +24,15 @@ func TestGlobalPreviewChipsOnlyForNonMainWorktrees(t *testing.T) {
 	}
 
 	m.workspaces.SelectID("c")
-	if m.previewTabsVisible() {
-		t.Fatal("shell should have no tab row")
+	if !m.previewTabsVisible() {
+		t.Fatal("shell should show Output/Diff chips")
 	}
 	shell := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if strings.Contains(shell, "Diff") && strings.Contains(shell, "Task") {
-		t.Fatalf("shell preview still draws Diff/Task chips:\n%s", shell)
+	if !strings.Contains(shell, "Output") || !strings.Contains(shell, "Diff") {
+		t.Fatalf("shell preview missing Output/Diff chips:\n%s", shell)
+	}
+	if strings.Contains(shell, "Task") {
+		t.Fatalf("shell preview drew a Task chip:\n%s", shell)
 	}
 
 	ws := m.catalog["a"]
@@ -146,16 +150,55 @@ func TestEnterOnDiffSwitchesToOutputAndTypes(t *testing.T) {
 	}
 }
 
-func TestShellAndMainHaveNoTabCycle(t *testing.T) {
+func TestPeriodOnShellCyclesOutputAndDiff(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	m.workspaces.SelectID("c")
+	if m.previewTab != workspacediff.TabOutput {
+		t.Fatalf("initial shell tab = %v, want Output", m.previewTab)
+	}
+	press(t, m, ".")
+	if m.previewTab != workspacediff.TabDiff {
+		t.Fatalf("period on shell = %v, want Diff", m.previewTab)
+	}
+	press(t, m, ".")
+	if m.previewTab != workspacediff.TabOutput {
+		t.Fatalf("second period on shell = %v, want Output (not Task)", m.previewTab)
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if strings.Contains(view, "Task") {
+		t.Fatalf("shell cycle drew Task:\n%s", view)
+	}
+}
+
+func TestMainHasNoTabCycle(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	ws := m.catalog["a"]
+	ws.IsMain = true
+	m.catalog["a"] = ws
+	m.workspaces.SelectID("a")
 	handled, _ := m.WorkspacesKey(key("."))
 	if handled {
-		t.Fatal("period on a shell was consumed as next-tab")
+		t.Fatal("period on the main worktree was consumed as next-tab")
 	}
 	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("shell tab = %v, want Output", m.previewTab)
+		t.Fatalf("main tab = %v, want Output", m.previewTab)
+	}
+}
+
+func TestPreviewDiffPathUsesProjectRootForShells(t *testing.T) {
+	shell := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindShell, Path: "/tmp/shell-cwd", ProjectRoot: "/repos/sidecar",
+	}
+	if got := previewDiffPath(shell); got != "/repos/sidecar" {
+		t.Fatalf("shell diff path = %q, want ProjectRoot", got)
+	}
+	wt := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindWorktree, Path: "/repos/sidecar-feature", ProjectRoot: "/repos/sidecar",
+	}
+	if got := previewDiffPath(wt); got != "/repos/sidecar-feature" {
+		t.Fatalf("worktree diff path = %q, want Path", got)
 	}
 }
 

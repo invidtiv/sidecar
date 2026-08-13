@@ -201,6 +201,14 @@ func (p *Plugin) renderListView(width, height int) string {
 
 // renderWorktreeItem renders a single worktree list item.
 func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) string {
+	return p.renderWorktreeItemKind(wt, selected, width, "")
+}
+
+func (p *Plugin) renderWorktreeSidebarItem(wt *Worktree, selected bool, width int) string {
+	return p.renderWorktreeItemKind(wt, selected, width, workspacelist.KindWorktree)
+}
+
+func (p *Plugin) renderWorktreeItemKind(wt *Worktree, selected bool, width int, kind string) string {
 	resolvedStatus := agentStatusPresentation(wt)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(wt.Agent)
 	marker := workspacelist.RowMarker{}
@@ -283,7 +291,7 @@ func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) stri
 		after = append(after, workspacelist.RowField{Text: "⚠ session ended", Rendered: styles.StatusModified.Render("⚠ session ended")})
 	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Name: name, Age: formatRelativeTime(wt.UpdatedAt), NameMeta: nameMeta,
+		Marker: marker, Kind: kind, Name: name, Age: formatRelativeTime(wt.UpdatedAt), NameMeta: nameMeta,
 		BeforeProvider: before, Provider: provider, AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")
@@ -340,6 +348,30 @@ func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
 
 // renderShellEntryForSession renders a shell entry for a specific shell session.
 func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, width int) string {
+	return p.renderShellEntry(shell, selected, width, 0, "")
+}
+
+func (p *Plugin) renderNestedShellEntry(shell *ShellSession, selected bool, width int) string {
+	return p.renderShellEntry(shell, selected, width, 2, workspacelist.KindShell)
+}
+
+func (p *Plugin) renderShellEntry(shell *ShellSession, selected bool, width int, indent int, kind string) string {
+	if indent > 0 {
+		width = max(1, width-indent)
+	}
+	content := p.renderShellEntryKind(shell, selected, width, kind)
+	if indent <= 0 {
+		return content
+	}
+	pad := strings.Repeat(" ", indent)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = pad + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width int, kind string) string {
 	resolvedStatus := shellAgentStatusPresentation(shell)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
 	marker := workspacelist.RowMarker{}
@@ -378,7 +410,7 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	}
 	after := []workspacelist.RowField{{Text: status, Rendered: dimText(status)}}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Name: shell.Name, BeforeProvider: before,
+		Marker: marker, Kind: kind, Name: shell.Name, BeforeProvider: before,
 		Provider: string(provider), AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")

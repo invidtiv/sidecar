@@ -479,7 +479,7 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 		var matches []Pane
 		switch workspace.Kind {
 		case KindWorktree:
-			matches = panesForPath(workspace.Path, allRoots, panes, c.reservedSessions)
+			matches = resolveWorktreePanes(*workspace, panesForPath(workspace.Path, allRoots, panes, c.reservedSessions))
 		case KindShell:
 			if workspace.Namespace != "" && workspace.Namespace == tmuxenv.Namespace() {
 				matches = panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
@@ -665,6 +665,59 @@ func canonicalOwner(path string, roots []string) string {
 		}
 	}
 	return owner
+}
+
+const (
+	worktreeSessionPrefix  = "sidecar-ws-"
+	termPanelSessionPrefix = "sidecar-tp-"
+	editorSessionPrefix    = "sidecar-edit-"
+	shellSessionPrefix     = "sidecar-sh-"
+)
+
+// resolveWorktreePanes picks the Output / type target for a worktree row.
+// Sidecar chrome (term panels, inline editors) and project shells are not
+// rivals. A live sidecar-ws-* session wins when it is the only such session;
+// leftover unmanaged or extra worktree sessions stay Ambiguous.
+func resolveWorktreePanes(workspace Workspace, matches []Pane) []Pane {
+	remaining := make([]Pane, 0, len(matches))
+	for _, pane := range matches {
+		if worktreeChromeSession(pane.Session) {
+			continue
+		}
+		remaining = append(remaining, pane)
+	}
+	if preferred := preferredWorktreePane(workspace, remaining); preferred != nil {
+		return []Pane{*preferred}
+	}
+	return remaining
+}
+
+func worktreeChromeSession(session string) bool {
+	return strings.HasPrefix(session, termPanelSessionPrefix) ||
+		strings.HasPrefix(session, editorSessionPrefix) ||
+		strings.HasPrefix(session, shellSessionPrefix)
+}
+
+func preferredWorktreePane(workspace Workspace, matches []Pane) *Pane {
+	expected := workspace.TmuxName
+	if !strings.HasPrefix(expected, worktreeSessionPrefix) {
+		expected = ""
+	}
+	var live []Pane
+	for i := range matches {
+		pane := &matches[i]
+		if !strings.HasPrefix(pane.Session, worktreeSessionPrefix) || pane.Dead {
+			continue
+		}
+		if expected != "" && pane.Session == expected {
+			return pane
+		}
+		live = append(live, *pane)
+	}
+	if len(live) == 1 {
+		return &live[0]
+	}
+	return nil
 }
 
 func panesForPath(path string, roots []string, panes []Pane, ignoredSessions map[string]bool) []Pane {

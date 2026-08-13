@@ -24,6 +24,7 @@ func workspacesEmptyText(showIdle bool) string {
 func (m *Model) ViewFlyoutOpen() bool { return m.viewFlyoutOpen }
 
 func (m *Model) openViewFlyout() {
+	m.closeRenameShell()
 	m.viewFlyoutOpen = true
 	m.viewFlyoutSortIdx = sortIndex(m.workspaces.Sort())
 	m.viewFlyout = nil
@@ -150,6 +151,7 @@ func (m *Model) applyViewFlyoutAction(action string, beforeIdle bool) tea.Cmd {
 	if mode, ok := sortFromAction(action); ok {
 		m.workspaces.SetSort(mode)
 		m.viewFlyoutSortIdx = sortIndex(mode)
+		m.closeViewFlyout()
 		return m.previewSync()
 	}
 	if m.showIdleWorktrees != beforeIdle {

@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/markdown"
-	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 )
 
 func newTestModel(t *testing.T) *Model {
@@ -223,7 +223,7 @@ func TestSetResultRejectsStaleIdentityWithoutMutation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stale := current
-			stale.Result = filebrowser.PreviewResult{Error: errors.New("stale")}
+			stale.Result = filepreview.PreviewResult{Error: errors.New("stale")}
 			tt.edit(&stale)
 			if m.SetResult(stale) {
 				t.Fatal("stale result was accepted")

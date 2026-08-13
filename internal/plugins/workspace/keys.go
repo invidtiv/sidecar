@@ -579,7 +579,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// A focused list filter owns the keyboard while the sidebar has focus. It is
 	// asked after the doc-pane keys deliberately: a focused document keeps its
-	// own q/r/+/- context, and the two focuses are mutually exclusive, so
+	// own q/m/+/- context, and the two focuses are mutually exclusive, so
 	// neither steals the other's keys.
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
 		if handled, cmd := p.handleFilterKey(msg); handled {
@@ -697,14 +697,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Jump to top = select first shell if any, otherwise first worktree
 			if len(p.shells) > 0 {
-				p.shellSelected = true
-				p.selectedShellIdx = 0
+				p.selectTopShellAt(0)
 				// Exit interactive mode when switching selection (td-fc758e88)
 				p.exitInteractiveMode()
 				p.saveSelectionState()
 			} else if len(p.worktrees) > 0 {
-				p.shellSelected = false
-				p.selectedIdx = 0
+				p.selectWorktreeAt(0)
 				// Exit interactive mode when switching selection (td-fc758e88)
 				p.exitInteractiveMode()
 				p.saveSelectionState()
@@ -745,17 +743,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				p.selectLastVisible()
 				return p.loadSelectedContent()
 			}
-			// Jump to bottom = select last worktree (not shell)
-			if len(p.worktrees) > 0 {
-				p.shellSelected = false
-				p.selectedIdx = len(p.worktrees) - 1
-				// Exit interactive mode when switching selection (td-fc758e88)
-				p.exitInteractiveMode()
-				p.saveSelectionState()
-				p.ensureVisible()
+			// Jump to the last visible sidebar row (worktree or nested child).
+			if p.sharedSidebarRowCount() > 0 {
+				p.selectLastVisible()
 				return p.loadSelectedContent()
 			}
-			// No worktrees, stay on shell
 			return nil
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
@@ -870,6 +862,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Enter interactive mode (tmux input passthrough) - feature gated
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal to attach to.
 		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+			if p.selectedNestedTmux != "" {
+				return p.ensureShellAndAttach(p.getSelectedShell())
+			}
 			// Handle orphaned worktrees: start new agent instead of silently returning nil
 			if !p.shellSelected {
 				wt := p.selectedWorktree()
@@ -887,12 +882,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "t":
 		// Attach to tmux session
-		// Shell entry: attach to selected shell session
-		if p.shellSelected {
-			if p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-				return p.ensureShellAndAttachByIndex(p.selectedShellIdx)
-			}
-			return nil
+		// Shell entry: attach to selected shell session by TmuxName
+		if shell := p.getSelectedShell(); shell != nil {
+			return p.ensureShellAndAttach(shell)
 		}
 		wt := p.selectedWorktree()
 		if wt == nil {
@@ -1131,8 +1123,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "R":
 		// Rename selected shell session
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			shell := p.shells[p.selectedShellIdx]
+		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeRenameShell
 			p.renameShellSession = shell
 			p.renameShellInput = textinput.New()
