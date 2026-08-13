@@ -95,10 +95,7 @@ func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, w
 	// The scrollbar takes a column from the content, and tracked history moves
 	// where the window's rows sit in the buffer's coordinates (td-73fa86).
 	in.AbsoluteBase, in.TotalItems, in.LoadingOlder = p.terminalHistorySummary(termPanel, buffer)
-	// Gating the frozen offset on the anchor alone would freeze the window of a
-	// selection belonging to the *other* surface.
-	in.Follow, in.Offset, in.OffsetFromBottom =
-		p.terminalScrollState(termPanel, p.selectionTermPanel && p.selection.Anchor.Valid())
+	in.Follow, in.Offset, in.OffsetFromBottom = p.terminalScrollState(termPanel)
 	return in
 }
 

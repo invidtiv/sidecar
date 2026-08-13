@@ -632,7 +632,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll down
-			p.releaseTermPanelDocFreeze()
+			p.thawTermPanelWindow()
 			if p.termPanelScroll > 0 {
 				p.termPanelScroll--
 			}
@@ -715,7 +715,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to top of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
-			p.releaseTermPanelDocFreeze()
+			p.thawTermPanelWindow()
 			if p.termPanelOutput != nil {
 				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
 			}
@@ -760,7 +760,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
 		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
-			p.releaseTermPanelDocFreeze()
+			p.thawTermPanelWindow()
 			p.termPanelScroll = 0
 			return nil
 		}
@@ -840,7 +840,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.activePane = PanePreview
 		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
 			// Right layout: move focus from agent to terminal panel
-			p.releaseTermPanelDocFreeze()
+			p.thawTermPanelWindow()
 			p.termPanelFocused = true
 		} else if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
@@ -1059,7 +1059,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				p.releaseTermPanelDocFreeze()
+				p.thawTermPanelWindow()
 				if p.termPanelScroll > pageSize {
 					p.termPanelScroll -= pageSize
 				} else {
@@ -1088,7 +1088,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				p.releaseTermPanelDocFreeze()
+				p.thawTermPanelWindow()
 				p.termPanelScroll += pageSize
 				return nil
 			}

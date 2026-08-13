@@ -758,7 +758,7 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
 		HistoryRows: len(rows), PaneRows: 4,
 	})
-	follow, offset, fromBottom := p.terminalScrollState(true, false)
+	follow, offset, fromBottom := p.terminalScrollState(true)
 	if follow || fromBottom || offset != freeze.start {
 		t.Fatalf("panel freeze = follow %v offset %d fromBottom %v, want absolute %d",
 			follow, offset, fromBottom, freeze.start)
@@ -810,8 +810,8 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 			X: surface.X, Y: surface.HeaderY, W: surface.Width, H: surface.Height + terminalHeaderRows,
 		}},
 	}
-	if cmd := p.handleMouseClick(action); cmd == nil || !p.termPanelDocFrozen {
-		t.Fatalf("panel doc activation = cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	if cmd := p.handleMouseClick(action); cmd == nil || !p.termPanelFreeze.Active() {
+		t.Fatalf("panel doc activation = cmd %v frozen %v", cmd != nil, p.termPanelFreeze.Active())
 	}
 
 	postResize := append(append([]string{}, rows...), "Claude chrome", "", "❯", "")
@@ -819,11 +819,11 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
 		HistoryRows: len(rows), PaneRows: 4,
 	})
-	if cmd := p.closeDocPane(); cmd == nil || !p.termPanelDocFrozen {
-		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.termPanelDocFrozen)
+	if cmd := p.closeDocPane(); cmd == nil || !p.termPanelFreeze.Active() {
+		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.termPanelFreeze.Active())
 	}
-	frozenStart := p.termPanelSelectionOffset
-	follow, offset, fromBottom := p.terminalScrollState(true, false)
+	frozenStart := p.termPanelFreeze.Start()
+	follow, offset, fromBottom := p.terminalScrollState(true)
 	if follow || fromBottom || offset != frozenStart {
 		t.Fatalf("closed panel context = follow %v offset %d fromBottom %v", follow, offset, fromBottom)
 	}
@@ -831,10 +831,10 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	p.activePane = PanePreview
 	p.termPanelFocused = true
 	p.handleListKeys(tea.KeyPressMsg{Code: 'G', Text: "G"})
-	follow, offset, fromBottom = p.terminalScrollState(true, false)
-	if p.termPanelDocFrozen || !follow || !fromBottom || offset != 0 {
+	follow, offset, fromBottom = p.terminalScrollState(true)
+	if p.termPanelFreeze.Active() || !follow || !fromBottom || offset != 0 {
 		t.Fatalf("G did not return panel live: frozen %v follow %v offset %d fromBottom %v",
-			p.termPanelDocFrozen, follow, offset, fromBottom)
+			p.termPanelFreeze.Active(), follow, offset, fromBottom)
 	}
 	if !p.autoScrollOutput {
 		t.Fatal("panel navigation disturbed independent primary follow")
@@ -842,16 +842,16 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 
 	// Recreate the frozen state and prove a wheel gesture first translates the
 	// same visible row, then applies the requested upward movement.
-	p.termPanelDocFrozen = true
-	p.termPanelSelectionOffset = frozenStart
-	p.releaseTermPanelDocFreeze()
+	p.termPanelFreeze.Release()
+	p.termPanelFreeze.Freeze(frozenStart)
+	p.thawTermPanelWindow()
 	before := p.termPanelScroll
-	p.termPanelDocFrozen = true
-	p.termPanelSelectionOffset = frozenStart
+	p.termPanelFreeze.Release()
+	p.termPanelFreeze.Freeze(frozenStart)
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, Region: action.Region})
-	if p.termPanelDocFrozen || p.termPanelScroll <= before {
+	if p.termPanelFreeze.Active() || p.termPanelScroll <= before {
 		t.Fatalf("wheel did not release and move panel: frozen %v scroll %d, translated %d",
-			p.termPanelDocFrozen, p.termPanelScroll, before)
+			p.termPanelFreeze.Active(), p.termPanelScroll, before)
 	}
 }
 

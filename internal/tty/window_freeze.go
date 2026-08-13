@@ -69,6 +69,26 @@ func (f *WindowFreeze) Thaw(layout Viewport) (offset int, ok bool) {
 	return ThawOffset(layout), true
 }
 
+// ThawFrom is Thaw for a surface that measures its own bound rather than
+// reading it back from a layout it rendered.
+func (f *WindowFreeze) ThawFrom(maxOffset int) (offset int, ok bool) {
+	if !f.active {
+		return 0, false
+	}
+	f.active = false
+	return ThawOffsetFrom(f.start, maxOffset), true
+}
+
+// Rebase shifts a frozen start by rows prepended to the buffer, so a window
+// pinned to an absolute row keeps the same output after a history load
+// renumbers the buffer underneath it.
+func (f *WindowFreeze) Rebase(added int) {
+	if !f.active {
+		return
+	}
+	f.start = max(f.start+added, 0)
+}
+
 // Release drops the freeze without placing the window, for a jump that chooses
 // its own offset — a jump is not a gesture reading the rows it lands on.
 func (f *WindowFreeze) Release() { f.active = false }

@@ -273,17 +273,16 @@ type Plugin struct {
 	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
 
 	// Terminal panel state (Ctrl+T toggle)
-	termPanelVisible         bool              // Whether the terminal panel is shown
-	termPanelLayout          TermPanelLayout   // Bottom or right split
-	termPanelSize            int               // Split size in percentage (0 = use default 50%)
-	termPanelSession         string            // Tmux session name for the terminal panel
-	termPanelPaneID          string            // Tmux pane ID for resize operations
-	termPanelOutput          *tty.OutputBuffer // Captured output from the terminal session
-	termPanelScroll          int               // Scroll offset in terminal panel output
-	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
-	termPanelDocFrozen       bool              // Document split pins the panel to the clicked absolute viewport
-	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
-	terminalDocProjection    terminalDocProjection
+	termPanelVisible      bool              // Whether the terminal panel is shown
+	termPanelLayout       TermPanelLayout   // Bottom or right split
+	termPanelSize         int               // Split size in percentage (0 = use default 50%)
+	termPanelSession      string            // Tmux session name for the terminal panel
+	termPanelPaneID       string            // Tmux pane ID for resize operations
+	termPanelOutput       *tty.OutputBuffer // Captured output from the terminal session
+	termPanelScroll       int               // Rows back from the live bottom; 0 follows output
+	termPanelFreeze       tty.WindowFreeze  // Pins the panel to an absolute start while a gesture or a document holds it
+	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
+	terminalDocProjection terminalDocProjection
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker

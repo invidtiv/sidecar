@@ -706,7 +706,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return cmd
 			}
 		}
-		p.releaseTermPanelDocFreeze()
+		p.thawTermPanelWindow()
 		return p.prepareTerminalClickOrDrag(action)
 	case regionDocPane:
 		if leafID, ok := action.Region.Data.(int); ok {
@@ -1188,7 +1188,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionTermPanelContent:
 		// Scroll terminal panel output directly (position-based, not focus-based)
-		p.releaseTermPanelDocFreeze()
+		p.thawTermPanelWindow()
 		p.clearTerminalSelectionOnScroll(true)
 		p.termPanelScroll -= delta
 		if p.termPanelScroll < 0 {

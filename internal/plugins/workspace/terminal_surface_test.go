@@ -444,19 +444,19 @@ func TestTerminalScrollState(t *testing.T) {
 	p.autoScrollOutput = true
 	p.previewOffset = 7
 
-	follow, offset, fromBottom := p.terminalScrollState(false, true)
+	follow, offset, fromBottom := p.terminalScrollState(false)
 	if !follow || offset != 7 || fromBottom {
 		t.Fatalf("primary scroll state = (%v,%d,%v), want (true,7,false)", follow, offset, fromBottom)
 	}
 
 	p.termPanelScroll = 3
-	follow, offset, fromBottom = p.terminalScrollState(true, false)
+	follow, offset, fromBottom = p.terminalScrollState(true)
 	if follow || offset != 3 || !fromBottom {
 		t.Fatalf("panel scroll state = (%v,%d,%v), want (false,3,true)", follow, offset, fromBottom)
 	}
 
-	p.termPanelSelectionOffset = 11
-	follow, offset, fromBottom = p.terminalScrollState(true, true)
+	p.termPanelFreeze.Freeze(11)
+	follow, offset, fromBottom = p.terminalScrollState(true)
 	if follow || offset != 11 || fromBottom {
 		t.Fatalf("anchored panel scroll state = (%v,%d,%v), want (false,11,false)",
 			follow, offset, fromBottom)

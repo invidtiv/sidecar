@@ -238,22 +238,21 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 // layout all have to agree on which window of the buffer is on screen, so they
 // share this derivation.
 //
-// selectionAnchored is a parameter rather than something read here so the two
-// callers that mean something different by it can say so: the three live paths
-// (render, cursor, hit test) all pass selectionTermPanel && anchor-valid, while
-// tests exercise the branches directly.
-func (p *Plugin) terminalScrollState(termPanel, selectionAnchored bool) (follow bool, offset int, offsetFromBottom bool) {
+// The terminal panel places its window from the live bottom: termPanelScroll is
+// the distance back from it and zero means live, so following is derived rather
+// than tracked. A window a pointer gesture or a document freeze is holding still
+// is placed from an absolute start instead, and that is the shared freeze's
+// answer — the panel no longer carries a frozen flag of its own for the render
+// path to translate.
+func (p *Plugin) terminalScrollState(termPanel bool) (follow bool, offset int, offsetFromBottom bool) {
 	if p.projectedTerminalBuffer(termPanel) != nil {
 		return false, 0, false
 	}
 	if !termPanel {
 		return p.autoScrollOutput, p.previewOffset, false
 	}
-	if selectionAnchored {
-		return false, p.termPanelSelectionOffset, false
-	}
-	if p.termPanelDocFrozen {
-		return false, p.termPanelSelectionOffset, false
+	if p.termPanelFreeze.Active() {
+		return false, p.termPanelFreeze.Start(), false
 	}
 	return p.termPanelScroll == 0, p.termPanelScroll, true
 }

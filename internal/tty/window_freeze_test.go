@@ -32,6 +32,32 @@ func TestWindowFreezeThawsToTheSameRowsItPinned(t *testing.T) {
 	}
 }
 
+// A surface that measures its own bound rather than rendering a layout to read
+// it back from thaws by the same rule, and a history load that renumbers the
+// buffer underneath a pinned window keeps it over the same output.
+func TestWindowFreezeThawsAndRebasesFromAMeasuredBound(t *testing.T) {
+	var freeze WindowFreeze
+	if _, ok := freeze.ThawFrom(100); ok {
+		t.Fatal("thawing a window nobody froze reported an offset to move it to")
+	}
+	freeze.Rebase(20) // Nothing is pinned, so there is nothing to renumber.
+	if freeze.Active() || freeze.Start() != 0 {
+		t.Fatalf("rebase pinned an unfrozen window at %d", freeze.Start())
+	}
+	freeze.Freeze(30)
+	freeze.Rebase(20) // Twenty rows of scrollback arrived above the window.
+	if freeze.Start() != 50 {
+		t.Fatalf("rebased start = %d, want 50", freeze.Start())
+	}
+	offset, ok := freeze.ThawFrom(120)
+	if !ok || offset != 70 {
+		t.Fatalf("thaw = (%d, %v), want the same rows as 70 back from the live edge", offset, ok)
+	}
+	if freeze.Active() {
+		t.Fatal("the window stayed pinned after it was thawed")
+	}
+}
+
 // A window pinned at the live bottom resumes following, which is what makes a
 // drag-select over a live pane leave it live.
 func TestWindowFreezeThawsToTheLiveEdge(t *testing.T) {

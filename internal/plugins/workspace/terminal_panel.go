@@ -316,19 +316,16 @@ func (p *Plugin) termPanelMaxScroll() int {
 	return max(lineCount-height, 0)
 }
 
-// releaseTermPanelDocFreeze hands a panel viewport pinned by document activation
-// back to the ordinary distance-from-bottom scroll model without changing the
-// row currently at the top. Closing the document deliberately does not call
-// this: the first explicit panel navigation owns the transition.
-func (p *Plugin) releaseTermPanelDocFreeze() {
+// thawTermPanelWindow hands a panel window pinned to an absolute start — by a
+// pointer gesture or by document activation — back to the distance-from-bottom
+// model without moving the rows on screen. Where it resumes following from is
+// the shared rule's. Closing a document deliberately does not call this: the
+// first explicit panel navigation owns the transition.
+func (p *Plugin) thawTermPanelWindow() {
 	p.releaseTerminalDocProjection(true)
-	if !p.termPanelDocFrozen {
-		return
+	if offset, thawed := p.termPanelFreeze.ThawFrom(p.termPanelMaxScroll()); thawed {
+		p.termPanelScroll = offset
 	}
-	maxScroll := p.termPanelMaxScroll()
-	start := min(max(p.termPanelSelectionOffset, 0), maxScroll)
-	p.termPanelScroll = maxScroll - start
-	p.termPanelDocFrozen = false
 }
 
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
@@ -535,7 +532,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
-	p.termPanelDocFrozen = false
+	p.termPanelFreeze.Release()
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -551,7 +548,7 @@ func (p *Plugin) cleanupTermPanelSession() {
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil
-	p.termPanelDocFrozen = false
+	p.termPanelFreeze.Release()
 }
 
 // enforceLineWidths ensures every line in content is exactly targetWidth

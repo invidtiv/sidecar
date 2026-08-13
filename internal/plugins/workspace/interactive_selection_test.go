@@ -809,12 +809,12 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
 			p.selectionTermPanel, p.selection.Anchor)
 	}
-	if p.termPanelSelectionOffset == 0 {
+	if p.termPanelFreeze.Start() == 0 {
 		t.Fatal("panel selection reused the stale zero offset instead of freezing its live viewport")
 	}
-	if p.selection.Anchor.Line < p.termPanelSelectionOffset {
+	if p.selection.Anchor.Line < p.termPanelFreeze.Start() {
 		t.Fatalf("panel anchor line %d precedes frozen viewport %d",
-			p.selection.Anchor.Line, p.termPanelSelectionOffset)
+			p.selection.Anchor.Line, p.termPanelFreeze.Start())
 	}
 }
 
@@ -843,12 +843,12 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 	if !p.selectionTermPanel || !p.selection.HasSelection() {
 		t.Fatal("double-click did not create a terminal-panel selection")
 	}
-	if p.termPanelSelectionOffset == 0 {
+	if p.termPanelFreeze.Start() == 0 {
 		t.Fatal("double-click reused stale panel offset zero")
 	}
-	if p.selection.Start.Line < p.termPanelSelectionOffset {
+	if p.selection.Start.Line < p.termPanelFreeze.Start() {
 		t.Fatalf("selected line %d precedes panel viewport %d",
-			p.selection.Start.Line, p.termPanelSelectionOffset)
+			p.selection.Start.Line, p.termPanelFreeze.Start())
 	}
 }
 
@@ -1188,16 +1188,16 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a panel drag past the top edge scheduled no auto-scroll tick")
 	}
-	before := p.termPanelSelectionOffset
+	before := p.termPanelFreeze.Start()
 	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd == nil {
 		t.Fatal("the panel tick did not re-arm while the pointer was still past the edge")
 	}
-	if p.termPanelSelectionOffset >= before {
-		t.Errorf("panel offset = %d, want less than %d", p.termPanelSelectionOffset, before)
+	if p.termPanelFreeze.Start() >= before {
+		t.Errorf("panel offset = %d, want less than %d", p.termPanelFreeze.Start(), before)
 	}
-	if p.selection.Start.Line != p.termPanelSelectionOffset {
+	if p.selection.Start.Line != p.termPanelFreeze.Start() {
 		t.Errorf("panel selection start = %d, want the newly revealed top row %d",
-			p.selection.Start.Line, p.termPanelSelectionOffset)
+			p.selection.Start.Line, p.termPanelFreeze.Start())
 	}
 
 	for range tty.AutoScrollMaxRun {
@@ -1210,9 +1210,9 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 			break
 		}
 	}
-	if p.termPanelSelectionOffset != 0 {
+	if p.termPanelFreeze.Start() != 0 {
 		t.Fatalf("panel auto-scroll stopped at %d, want the top of the panel buffer",
-			p.termPanelSelectionOffset)
+			p.termPanelFreeze.Start())
 	}
 	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd != nil {
 		t.Error("panel auto-scroll re-armed at the buffer edge")

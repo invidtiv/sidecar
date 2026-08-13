@@ -118,19 +118,20 @@ func (p *Plugin) extendSelectionDragTo(x, y int) bool {
 }
 
 // scrollTerminalSelectionViewport moves the surface the selection is anchored in
-// by delta rows, clamped to the buffer. Both surfaces browse scrollback by an
-// absolute top offset while selecting, so one derivation covers each of them.
+// by delta rendered rows, positive downwards, clamped to the buffer. A window a
+// gesture is holding is placed from an absolute start on both surfaces, so one
+// derivation covers each of them; the panel's is the shared freeze, which counts
+// in the same bottom-relative direction its own offset does.
 func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
 	if delta == 0 {
 		return
 	}
 	layout := p.terminalSelectionViewportLayout()
-	target := min(max(layout.Start+delta, 0), layout.MaxOffset)
 	if p.selectionTermPanel {
-		p.termPanelSelectionOffset = target
+		p.termPanelFreeze.Scroll(-delta, layout.MaxOffset)
 		return
 	}
-	p.previewOffset = target
+	p.previewOffset = min(max(layout.Start+delta, 0), layout.MaxOffset)
 	p.autoScrollOutput = false
 }
 
@@ -171,7 +172,9 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 	}
 	p.selectionTermPanel = termPanel
 	if termPanel && !p.selection.Anchor.Valid() {
-		p.termPanelSelectionOffset = p.terminalSelectionViewportLayout().Start
+		// Pin the panel before anything hit-tests against it: a gesture reads the
+		// rows it was armed on, whatever output arrives underneath.
+		p.termPanelFreeze.Freeze(p.terminalSelectionViewportLayout().Start)
 	}
 }
 
@@ -286,8 +289,8 @@ type terminalDocProjection struct {
 // before a document split resizes the tmux pane. It deliberately does not
 // mutate scroll state: a link can fail fresh-root or file revalidation at click
 // time, and a refused activation must remain an otherwise ordinary gesture.
-// The primary surface browses by an absolute top row; the terminal panel's
-// established passive contract stores the equivalent distance from the bottom.
+// Both surfaces record the window as the absolute row it starts at; the panel
+// translates that back to a distance from the live bottom when it thaws.
 func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewportFreeze {
 	previousSource := p.selectionTermPanel
 	p.selectionTermPanel = termPanel
@@ -314,8 +317,10 @@ func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewp
 func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 	p.terminalDocProjection = freeze.projection
 	if freeze.termPanel {
-		p.termPanelSelectionOffset = freeze.start
-		p.termPanelDocFrozen = true
+		// The clicked window wins over anything an earlier gesture pinned: this is
+		// the context the document was opened from.
+		p.termPanelFreeze.Release()
+		p.termPanelFreeze.Freeze(freeze.start)
 		return
 	}
 	p.previewOffset = freeze.start
@@ -377,11 +382,16 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 	return p.scheduleSelectionAutoScroll()
 }
 
-// freezeTerminalSelectionViewport pins the preview pane to the window the user
-// can currently see. The term panel is frozen earlier, when its selection source
-// is prepared, because its offset is only consulted once an anchor exists.
+// freezeTerminalSelectionViewport pins the surface being dragged to the window
+// the user can currently see. The panel is normally pinned earlier, when its
+// selection source is prepared; freezing again here is the shared rule's no-op,
+// so a gesture that outlived an intervening thaw still holds its own rows.
 func (p *Plugin) freezeTerminalSelectionViewport() {
-	if p.selectionTermPanel || !p.autoScrollOutput {
+	if p.selectionTermPanel {
+		p.termPanelFreeze.Freeze(p.terminalSelectionViewportLayout().Start)
+		return
+	}
+	if !p.autoScrollOutput {
 		return
 	}
 	p.previewOffset, _ = p.terminalWindowBounds()
