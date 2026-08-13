@@ -171,14 +171,27 @@ type Plugin struct {
 	managedSessions map[string]bool
 
 	// View state
-	viewMode         ViewMode
-	activePane       FocusPane
-	previewTab       PreviewTab
-	selectedIdx      int
-	scrollOffset     int  // Sidebar list scroll offset
-	visibleCount     int  // Number of visible list items
-	previewOffset    int  // Scroll offset: absolute line from top (0 = first line) for all tabs
-	autoScrollOutput bool // Auto-scroll output to follow agent (paused when user scrolls up)
+	viewMode     ViewMode
+	activePane   FocusPane
+	previewTab   PreviewTab
+	selectedIdx  int
+	scrollOffset int // Sidebar list scroll offset
+	visibleCount int // Number of visible list items
+	// previewOffset is the document tabs' scroll position: an absolute line
+	// from the top of the rendered content. The terminal surfaces do not use
+	// it — a window over a live buffer is placed from the live bottom instead,
+	// which is previewScroll below.
+	previewOffset int
+	// previewScroll is the primary terminal surface's window: rows back from
+	// the live bottom, where zero is live. Following output is derived from it
+	// rather than tracked beside it, so the two cannot disagree.
+	previewScroll int
+	// previewFreeze holds that window still at an absolute start while a
+	// pointer gesture reads its rows or a document keeps the context it was
+	// opened from. previewFreezeDoc says which of the two is holding it: a
+	// gesture's pin ends with the gesture, a document's outlives it.
+	previewFreeze    tty.WindowFreeze
+	previewFreezeDoc bool
 	sidebarWidth     int  // Persisted sidebar width
 	sidebarVisible   bool // Whether sidebar is visible (toggled with \)
 
@@ -207,13 +220,8 @@ type Plugin struct {
 	activityAnimationGeneration uint64
 
 	// Interactive selection state (preview pane)
-	selection          ui.SelectionState
-	selectionTermPanel bool
-	// terminalSelectionFrozen records that a pointer gesture pinned the preview
-	// pane's window, which is what the gesture's end has to release. Without it a
-	// pinned window is indistinguishable from one the user scrolled back on
-	// purpose, and thawing would drag that one to the live edge.
-	terminalSelectionFrozen       bool
+	selection                     ui.SelectionState
+	selectionTermPanel            bool
 	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
@@ -501,7 +509,6 @@ func New() *Plugin {
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
-		autoScrollOutput:    true, // Auto-scroll to follow agent output
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
 		terminalHistory:     make(map[string]terminalHistoryState),
@@ -1097,8 +1104,10 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 	return h
 }
 
-// getMaxScrollOffset returns the maximum scroll offset for the current preview content.
-// offset=0 means top of content; maxOffset means the furthest the user can scroll down.
+// getMaxScrollOffset returns the maximum scroll offset for the current preview
+// content: how far a document's absolute offset can move from the top of its
+// content, which is the same number of rows a terminal window can sit back from
+// its live bottom (previewMaxScroll reads it that way round).
 func (p *Plugin) getMaxScrollOffset() int {
 	var contentHeight int
 	switch {
@@ -1122,9 +1131,111 @@ func (p *Plugin) getMaxScrollOffset() int {
 	return maxOffset
 }
 
-// scrollToBottom sets previewOffset to show the latest content.
-func (p *Plugin) scrollToBottom() {
-	p.previewOffset = p.getMaxScrollOffset()
+// previewShowsTerminal reports whether the preview pane is drawing the primary
+// terminal rather than a document: the Output tab, or any shell selection.
+// Every scroll path asks it, because the two are placed by different models —
+// a document by an absolute line from its top, a terminal by a distance back
+// from its live bottom.
+func (p *Plugin) previewShowsTerminal() bool {
+	return p.previewTab == PreviewTabOutput || p.shellSelected
+}
+
+// previewMaxScroll is the furthest back the primary terminal's window can sit,
+// in rows from the live bottom. It is the same bound the absolute model used as
+// its last addressable top row, read the other way round.
+func (p *Plugin) previewMaxScroll() int {
+	return p.getMaxScrollOffset()
+}
+
+// scrollPreviewWindow moves the primary terminal's window delta rows back
+// through scrollback, negative towards the live edge — the same direction the
+// global preview and the shared scrollback rule count in, so no call site has
+// to invert anything.
+//
+// Scrolling is an explicit navigation of this surface, so it thaws first: a
+// window a gesture or a document pinned to an absolute start is handed back to
+// the distance-from-bottom model where it stands, rather than being moved in a
+// coordinate the reader can no longer see.
+func (p *Plugin) scrollPreviewWindow(delta int) {
+	p.thawPreviewWindow()
+	if delta == 0 {
+		return
+	}
+	p.previewScroll = min(max(p.previewScroll+delta, 0), p.previewMaxScroll())
+}
+
+// jumpPreviewWindow places the primary terminal's window at an explicit
+// distance back from the live bottom, which ends any pin: a jump chooses its
+// own window rather than resuming from the one a gesture was reading.
+func (p *Plugin) jumpPreviewWindow(offset int) {
+	p.releasePreviewWindowPin()
+	p.previewScroll = max(offset, 0)
+}
+
+// resetPreviewScroll puts the preview back where a new selection or a newly
+// opened tab starts it: documents at the top of their content, the terminal
+// window at the live bottom.
+func (p *Plugin) resetPreviewScroll() {
+	p.previewOffset = 0
+	p.jumpPreviewWindow(0)
+}
+
+// pinPreviewWindow holds the primary terminal's window at an absolute start and
+// records who is holding it. The two owners are not released by the same
+// events: a pointer gesture's pin ends with the gesture, while a document
+// activation's outlives it, because the document is meant to keep showing the
+// context it was opened from. Whether this pin takes at all is the shared
+// freeze's rule — a second freeze inside one gesture keeps the first.
+func (p *Plugin) pinPreviewWindow(start int, doc bool) {
+	if p.previewFreeze.Active() {
+		return
+	}
+	p.previewFreeze.Freeze(start)
+	p.previewFreezeDoc = doc
+}
+
+// releasePreviewWindowPin drops the pin whoever placed it, for a jump that
+// chooses its own window rather than resuming from the pinned one.
+func (p *Plugin) releasePreviewWindowPin() {
+	p.previewFreeze.Release()
+	p.previewFreezeDoc = false
+}
+
+// thawPreviewWindow hands a window pinned to an absolute start back to the
+// distance-from-bottom model without moving the rows on screen, so it follows
+// new output again from exactly where it was left. Where it resumes from is the
+// shared rule's. Every explicit navigation of this surface calls it: a window
+// pinned and never released has stopped following output for good, which reads
+// as an agent that went quiet.
+func (p *Plugin) thawPreviewWindow() {
+	if !p.previewFreeze.Active() {
+		return
+	}
+	if offset, thawed := p.previewFreeze.ThawFrom(p.previewWindowBound()); thawed {
+		p.previewScroll = offset
+	}
+	p.previewFreezeDoc = false
+}
+
+// thawPreviewGesturePin is the half of the freeze a pointer gesture owes at its
+// end. A document activation's pin is not the gesture's to release: it outlives
+// the selection the click made, because the document is meant to keep showing
+// the context it was opened from, and only an explicit navigation ends it.
+func (p *Plugin) thawPreviewGesturePin() {
+	if p.previewFreezeDoc {
+		return
+	}
+	p.thawPreviewWindow()
+}
+
+// previewWindowBound is the furthest back this surface's window can be placed,
+// taken from the window the render path actually draws. Freeze and thaw both
+// read it there: taking the start from the rendered layout and the bound from
+// the line count is two derivations of one window, and they disagree wherever
+// interactive mode's untrimmed rows or a pane shorter than the viewport do — so
+// releasing a drag moved the window the gesture had been holding still.
+func (p *Plugin) previewWindowBound() int {
+	return max(p.terminalViewportLayoutFor(false).MaxOffset, 0)
 }
 
 // pollSelectedAgentNowIfVisible triggers an immediate poll for visible output.
@@ -1414,8 +1525,7 @@ func (p *Plugin) applySelectionChange() {
 	// Selection alone no longer acknowledges: the poll handlers clear the
 	// done marker once the selection has been held long enough to read.
 	p.selectionSince = time.Now()
-	p.previewOffset = 0
-	p.autoScrollOutput = true
+	p.resetPreviewScroll()
 	p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
 	p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
 	p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
@@ -1471,9 +1581,8 @@ func (p *Plugin) clampScrollOffset(total int) {
 func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 	prevTab := p.previewTab
 	p.previewTab = PreviewTab((int(p.previewTab) + delta + 3) % 3)
-	p.previewOffset = 0
+	p.resetPreviewScroll()
 	p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-	p.autoScrollOutput = true  // Reset auto-scroll when switching tabs
 
 	if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
 		p.clearTerminalSelection()

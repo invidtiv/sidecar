@@ -99,8 +99,9 @@ func TestGetMaxScrollOffset(t *testing.T) {
 	}
 }
 
-// TestScrollToBottom verifies scrollToBottom pins offset to max.
-func TestScrollToBottom(t *testing.T) {
+// TestPreviewWindowJumps verifies the terminal window's two ends: the live
+// bottom it follows from, and the oldest rows it can name.
+func TestPreviewWindowJumps(t *testing.T) {
 	p := &Plugin{
 		height:     20,
 		previewTab: PreviewTabOutput,
@@ -123,109 +124,104 @@ func TestScrollToBottom(t *testing.T) {
 	p.worktrees = []*Worktree{wt}
 	p.selectedIdx = 0
 
-	p.previewOffset = 0
-	p.scrollToBottom()
+	p.jumpPreviewWindow(p.previewMaxScroll())
+	if p.previewScroll != p.getMaxScrollOffset() {
+		t.Errorf("jump to oldest: previewScroll = %d, want %d", p.previewScroll, p.getMaxScrollOffset())
+	}
 
-	expected := p.getMaxScrollOffset()
-	if p.previewOffset != expected {
-		t.Errorf("scrollToBottom: previewOffset = %d, want %d", p.previewOffset, expected)
+	p.jumpPreviewWindow(0)
+	if p.previewScroll != 0 {
+		t.Errorf("jump to live: previewScroll = %d, want 0", p.previewScroll)
 	}
 }
 
-// TestScrollDirectionConsistency verifies that j/down always increases offset
-// and k/up always decreases it, regardless of tab.
+// TestScrollDirectionConsistency verifies that j/down always moves towards newer
+// content and k/up towards older, in whichever model the tab is placed by: a
+// document by an absolute line from its top, a terminal by rows back from its
+// live bottom.
 func TestScrollDirectionConsistency(t *testing.T) {
-	tests := []struct {
-		name       string
-		previewTab PreviewTab
-	}{
-		{"output tab", PreviewTabOutput},
-		{"task tab", PreviewTabTask},
-	}
+	t.Run("task tab j increases offset", func(t *testing.T) {
+		p := &Plugin{
+			height:                20,
+			previewTab:            PreviewTabTask,
+			previewOffset:         5,
+			activePane:            PanePreview,
+			taskRenderedLineCount: 100,
+		}
+		if maxOffset := p.getMaxScrollOffset(); p.previewOffset < maxOffset {
+			p.previewOffset++
+		}
+		if p.previewOffset != 6 {
+			t.Errorf("after j: previewOffset = %d, want 6", p.previewOffset)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name+" j increases offset", func(t *testing.T) {
-			p := &Plugin{
-				height:           20,
-				previewTab:       tt.previewTab,
-				previewOffset:    5,
-				autoScrollOutput: false,
-				activePane:       PanePreview,
-			}
-			// Set up content so maxOffset > 5
-			switch tt.previewTab {
-			case PreviewTabOutput:
-				wt := &Worktree{
-					Name: "test",
-					Agent: &Agent{
-						OutputBuf: tty.NewOutputBuffer(500),
-					},
-				}
-				content := ""
-				for i := 0; i < 100; i++ {
-					if i > 0 {
-						content += "\n"
-					}
-					content += "line"
-				}
-				wt.Agent.OutputBuf.Write(content)
-				p.worktrees = []*Worktree{wt}
-			case PreviewTabTask:
-				p.taskRenderedLineCount = 100
-			}
+	t.Run("task tab k decreases offset", func(t *testing.T) {
+		p := &Plugin{
+			height:                20,
+			previewTab:            PreviewTabTask,
+			previewOffset:         5,
+			activePane:            PanePreview,
+			taskRenderedLineCount: 100,
+		}
+		if p.previewOffset > 0 {
+			p.previewOffset--
+		}
+		if p.previewOffset != 4 {
+			t.Errorf("after k: previewOffset = %d, want 4", p.previewOffset)
+		}
+	})
 
-			// Simulate j/down: should increase offset
-			maxOffset := p.getMaxScrollOffset()
-			if p.previewOffset < maxOffset {
-				p.previewOffset++
-			}
-			if p.previewOffset != 6 {
-				t.Errorf("after j: previewOffset = %d, want 6", p.previewOffset)
-			}
-		})
+	t.Run("output tab j moves towards the live bottom", func(t *testing.T) {
+		p := scrollTestOutputPlugin(5)
+		p.scrollPreviewWindow(-1)
+		if p.previewScroll != 4 {
+			t.Errorf("after j: previewScroll = %d, want 4", p.previewScroll)
+		}
+	})
 
-		t.Run(tt.name+" k decreases offset", func(t *testing.T) {
-			p := &Plugin{
-				height:           20,
-				previewTab:       tt.previewTab,
-				previewOffset:    5,
-				autoScrollOutput: false,
-				activePane:       PanePreview,
-			}
-
-			// Simulate k/up: should decrease offset
-			if p.previewOffset > 0 {
-				p.previewOffset--
-			}
-			if p.previewOffset != 4 {
-				t.Errorf("after k: previewOffset = %d, want 4", p.previewOffset)
-			}
-		})
-	}
+	t.Run("output tab k moves back through scrollback", func(t *testing.T) {
+		p := scrollTestOutputPlugin(5)
+		p.scrollPreviewWindow(1)
+		if p.previewScroll != 6 {
+			t.Errorf("after k: previewScroll = %d, want 6", p.previewScroll)
+		}
+	})
 }
 
-// TestGJumpToTop verifies g sets offset to 0 for all tabs.
+// scrollTestOutputPlugin is an Output tab with 100 lines of captured output and
+// its window scroll rows back from the live bottom.
+func scrollTestOutputPlugin(scroll int) *Plugin {
+	p := &Plugin{
+		height:        20,
+		previewTab:    PreviewTabOutput,
+		activePane:    PanePreview,
+		previewScroll: scroll,
+	}
+	buffer := tty.NewOutputBuffer(500)
+	buffer.Write(strings.TrimSuffix(strings.Repeat("line\n", 100), "\n"))
+	p.worktrees = []*Worktree{{Name: "test", Agent: &Agent{OutputBuf: buffer}}}
+	return p
+}
+
+// TestGJumpToTop verifies g reaches the oldest content the tab holds.
 func TestGJumpToTop(t *testing.T) {
-	tests := []struct {
-		name string
-		tab  PreviewTab
-	}{
-		{"output", PreviewTabOutput},
-		{"task", PreviewTabTask},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &Plugin{
-				previewTab:    tt.tab,
-				previewOffset: 50,
-			}
-			// g -> jump to top
-			p.previewOffset = 0
-			if p.previewOffset != 0 {
-				t.Errorf("after g: previewOffset = %d, want 0", p.previewOffset)
-			}
-		})
-	}
+	t.Run("task", func(t *testing.T) {
+		p := &Plugin{previewTab: PreviewTabTask, previewOffset: 50}
+		p.previewOffset = 0
+		if p.previewOffset != 0 {
+			t.Errorf("after g: previewOffset = %d, want 0", p.previewOffset)
+		}
+	})
+
+	t.Run("output", func(t *testing.T) {
+		p := scrollTestOutputPlugin(0)
+		p.jumpPreviewWindow(p.previewMaxScroll())
+		if p.previewScroll != p.getMaxScrollOffset() {
+			t.Errorf("after g: previewScroll = %d, want the furthest back %d",
+				p.previewScroll, p.getMaxScrollOffset())
+		}
+	})
 }
 
 // TestGGJumpToBottom verifies G sets offset to maxOffset for all tabs.
@@ -244,74 +240,23 @@ func TestGGJumpToBottom(t *testing.T) {
 	}
 }
 
-// TestAutoScrollOutputDisabledOnManualScroll verifies auto-scroll pauses on user scroll.
-func TestAutoScrollOutputDisabledOnManualScroll(t *testing.T) {
-	p := &Plugin{
-		height:           20,
-		previewTab:       PreviewTabOutput,
-		previewOffset:    10,
-		autoScrollOutput: true,
+// Following output is derived from the window's position rather than tracked
+// beside it: a window scrolled back is not following, and G returns it.
+func TestFollowIsDerivedFromTheWindowPosition(t *testing.T) {
+	p := scrollTestOutputPlugin(0)
+	if follow, _, _ := p.terminalScrollState(false); !follow {
+		t.Error("a window at the live bottom is not following output")
 	}
-	wt := &Worktree{
-		Name: "test",
-		Agent: &Agent{
-			OutputBuf: tty.NewOutputBuffer(500),
-		},
-	}
-	content := ""
-	for i := 0; i < 100; i++ {
-		if i > 0 {
-			content += "\n"
-		}
-		content += "line"
-	}
-	wt.Agent.OutputBuf.Write(content)
-	p.worktrees = []*Worktree{wt}
 
-	// Scroll up (k): should disable auto-scroll
-	if p.previewOffset > 0 {
-		p.previewOffset--
+	p.scrollPreviewWindow(1)
+	follow, offset, fromBottom := p.terminalScrollState(false)
+	if follow || offset != 1 || !fromBottom {
+		t.Errorf("after scrolling up: (%v,%d,%v), want (false,1,true)", follow, offset, fromBottom)
 	}
-	p.autoScrollOutput = false
 
-	if p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=false after scroll up")
-	}
-}
-
-// TestAutoScrollReenabledAtBottom verifies pressing G re-enables auto-scroll.
-func TestAutoScrollReenabledAtBottom(t *testing.T) {
-	p := &Plugin{
-		height:           20,
-		previewTab:       PreviewTabOutput,
-		previewOffset:    5,
-		autoScrollOutput: false,
-	}
-	wt := &Worktree{
-		Name: "test",
-		Agent: &Agent{
-			OutputBuf: tty.NewOutputBuffer(500),
-		},
-	}
-	content := ""
-	for i := 0; i < 100; i++ {
-		if i > 0 {
-			content += "\n"
-		}
-		content += "line"
-	}
-	wt.Agent.OutputBuf.Write(content)
-	p.worktrees = []*Worktree{wt}
-
-	// G -> jump to bottom, re-enable auto-scroll
-	p.previewOffset = p.getMaxScrollOffset()
-	p.autoScrollOutput = true
-
-	if !p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=true after G")
-	}
-	if p.previewOffset != p.getMaxScrollOffset() {
-		t.Errorf("expected previewOffset=%d, got %d", p.getMaxScrollOffset(), p.previewOffset)
+	p.jumpPreviewWindow(0)
+	if follow, _, _ := p.terminalScrollState(false); !follow {
+		t.Error("G did not put the window back on the live edge")
 	}
 }
 
@@ -357,25 +302,24 @@ func TestPageScrollClamping(t *testing.T) {
 	})
 }
 
-// TestTabSwitchResetsOffset verifies switching tabs resets scroll position.
+// TestTabSwitchResetsOffset verifies switching tabs resets both scroll models:
+// the document to the top of its content, the terminal to its live bottom.
 func TestTabSwitchResetsOffset(t *testing.T) {
 	p := &Plugin{
-		height:           20,
-		previewTab:       PreviewTabOutput,
-		previewOffset:    50,
-		autoScrollOutput: false,
+		height:        20,
+		previewTab:    PreviewTabOutput,
+		previewOffset: 50,
+		previewScroll: 12,
 	}
 
-	// Simulate tab switch
 	p.previewTab = PreviewTabTask
-	p.previewOffset = 0
-	p.autoScrollOutput = true
+	p.resetPreviewScroll()
 
 	if p.previewOffset != 0 {
 		t.Errorf("after tab switch: previewOffset = %d, want 0", p.previewOffset)
 	}
-	if !p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=true after tab switch")
+	if p.previewScroll != 0 {
+		t.Errorf("after tab switch: previewScroll = %d, want the live bottom", p.previewScroll)
 	}
 }
 
@@ -464,8 +408,6 @@ func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.previewOffset = 0
-	p.autoScrollOutput = true
 	attachLiveTerminal(p, true)
 
 	cmd := p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
@@ -484,8 +426,8 @@ func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
 		t.Fatalf("no SGR wheel-up report reached tmux: %s", logged)
 	}
 
-	if p.previewOffset != 0 || !p.autoScrollOutput {
-		t.Fatalf("local scrollback moved: previewOffset=%d autoScroll=%v", p.previewOffset, p.autoScrollOutput)
+	if p.previewScroll != 0 {
+		t.Fatalf("local scrollback moved: previewScroll=%d", p.previewScroll)
 	}
 }
 
@@ -496,16 +438,14 @@ func TestForwardedWheelPinsViewportToLiveOutput(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.previewOffset = 12
-	p.autoScrollOutput = false
+	p.previewScroll = 12
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
 
-	if !p.autoScrollOutput || p.previewOffset != p.getMaxScrollOffset() {
-		t.Fatalf("viewport not pinned to live: previewOffset=%d max=%d autoScroll=%v",
-			p.previewOffset, p.getMaxScrollOffset(), p.autoScrollOutput)
+	if p.previewScroll != 0 {
+		t.Fatalf("viewport not pinned to live: previewScroll=%d", p.previewScroll)
 	}
 }
 
@@ -534,16 +474,16 @@ func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
 	logPath := installSuccessfulFakeTmux(t)
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
-	p.shellSelected = true
-	p.previewOffset = 5
-	p.autoScrollOutput = false
+	givePaneScrollableOutput(p, 120)
+	// Far enough back from the live bottom that a notch has somewhere to go.
+	p.previewScroll = 5
 	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
 
-	if p.previewOffset != 4 {
-		t.Fatalf("previewOffset = %d, want 4 after scrolling local scrollback", p.previewOffset)
+	if p.previewScroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 after scrolling local scrollback back a row", p.previewScroll)
 	}
 	logged, err := os.ReadFile(logPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -563,16 +503,16 @@ func TestWheelWithAltScrollsScrollbackDespiteMouseTracking(t *testing.T) {
 	logPath := installSuccessfulFakeTmux(t)
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
-	p.shellSelected = true
-	p.previewOffset = 5
-	p.autoScrollOutput = false
+	givePaneScrollableOutput(p, 120)
+	// Far enough back from the live bottom that a notch has somewhere to go.
+	p.previewScroll = 5
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Alt: true})
 	tty.WaitForPendingSends()
 
-	if p.previewOffset != 4 {
-		t.Fatalf("previewOffset = %d, want 4 — alt+wheel must stay local", p.previewOffset)
+	if p.previewScroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 — alt+wheel must stay local", p.previewScroll)
 	}
 	logged, err := os.ReadFile(logPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -589,14 +529,14 @@ func TestWheelOutsidePaneFallsBackToScrollback(t *testing.T) {
 	installSuccessfulFakeTmux(t)
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
-	p.shellSelected = true
-	p.previewOffset = 5
-	p.autoScrollOutput = false
+	givePaneScrollableOutput(p, 120)
+	// Far enough back from the live bottom that a notch has somewhere to go.
+	p.previewScroll = 5
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 0, Y: 0})
-	if p.previewOffset != 4 {
-		t.Fatalf("previewOffset = %d, want 4 when the pointer maps outside the pane", p.previewOffset)
+	if p.previewScroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 when the pointer maps outside the pane", p.previewScroll)
 	}
 }
 
@@ -688,8 +628,7 @@ func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
 // be left highlighting rows the user never picked.
 func TestPinningViewportClearsSelection(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
-	p.previewOffset = 12
-	p.autoScrollOutput = false
+	p.previewScroll = 12
 	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
 	if !p.selection.HasSelection() {
 		t.Fatal("test setup did not produce a selection")

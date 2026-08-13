@@ -260,8 +260,6 @@ func TestPreviewPaneClickEntersInteractiveMode(t *testing.T) {
 
 func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T) {
 	p := newPreviewClickTestPlugin()
-	p.previewOffset = 0 // stale/ignored while following, as in the real app
-	p.autoScrollOutput = true
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
 	renderedStart := p.terminalSelectionViewportLayout().Start
 	if renderedStart == 0 {
@@ -284,8 +282,9 @@ func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T)
 	if !p.selection.HasSelection() {
 		t.Fatal("immediate click-drag did not create a selection")
 	}
-	if p.previewOffset != renderedStart {
-		t.Fatalf("selection froze viewport at %d, want rendered live start %d", p.previewOffset, renderedStart)
+	if p.previewFreeze.Start() != renderedStart {
+		t.Fatalf("selection froze viewport at %d, want rendered live start %d",
+			p.previewFreeze.Start(), renderedStart)
 	}
 }
 
@@ -464,11 +463,16 @@ func TestScrollFallbackUsesRenderedPreviewSplit(t *testing.T) {
 					Agent: &Agent{OutputBuf: markerBuffer("SECOND", 100)},
 				})
 				p.shells[0].Agent.OutputBuf = markerBuffer("FIRST", 100)
-				p.autoScrollOutput = false
+				// A window already back in scrollback, so a notch towards the
+				// live edge has somewhere to move it.
+				p.previewScroll = 5
 
 				p.handleMouseScroll(mouse.MouseAction{Delta: 1, X: pos.x})
 				gotSidebar := p.selectedShellIdx == 1
-				gotPreview := p.previewOffset > 0
+				// A notch the preview took moves its window one row towards the
+				// live bottom; one the sidebar took resets it to the live edge
+				// with the selection, which is not the same answer.
+				gotPreview := p.previewScroll == 4
 				if gotSidebar != pos.wantSidebar || gotPreview == pos.wantSidebar {
 					t.Fatalf("x=%d split=%+v: sidebar scrolled=%v preview scrolled=%v, want sidebar=%v",
 						pos.x, split, gotSidebar, gotPreview, pos.wantSidebar)

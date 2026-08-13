@@ -201,8 +201,7 @@ func (p *Plugin) selectCreatedWorktree(wt *Worktree) {
 	}
 	p.shellSelected = false
 	p.selectedIdx = idx
-	p.previewOffset = 0
-	p.autoScrollOutput = true
+	p.resetPreviewScroll()
 	p.saveSelectionState()
 	p.ensureVisible()
 }

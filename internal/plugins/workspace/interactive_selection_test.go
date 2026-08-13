@@ -763,7 +763,6 @@ func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
 
 func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
 	p := newSelectionTestPlugin()
-	p.autoScrollOutput = true
 	buf := tty.NewOutputBuffer(100)
 	buf.Write("follow me")
 	p.shellSelected = true
@@ -772,7 +771,7 @@ func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
 
 	p.prepareInteractiveDrag(actionAt(2, 4), tty.ClickNone)
 	p.finishInteractiveSelection()
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("click without drag disabled follow mode")
 	}
 }
@@ -871,6 +870,9 @@ func TestWordSelectionMapsVisualColumnAfterWideGlyph(t *testing.T) {
 func newTerminalDragTestPlugin() *Plugin {
 	p := newPreviewClickTestPlugin()
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 200))
+	// The window starts at the oldest row the buffer holds, so a gesture over it
+	// names rows these tests can assert by absolute line.
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset
 	return p
 }
 
@@ -926,7 +928,7 @@ func TestDragOutsideContentClampsInsteadOfStalling(t *testing.T) {
 // Dragging past an edge is how a selection reaches text that is not on screen.
 func TestDragPastEdgeScrollsSelectionThroughScrollback(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 50
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 50
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	start := p.terminalSelectionViewportLayout().Start
@@ -1096,7 +1098,7 @@ func TestSingleCharWordSurvivesDragEnd(t *testing.T) {
 // to keep scrolling on its own, and has to stop at the buffer edge.
 func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
@@ -1130,7 +1132,7 @@ func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 
 func TestSelectionAutoScrollStopsWhenGestureEnds(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
@@ -1223,7 +1225,7 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 // scrolls the pane under the modal all the way to line zero.
 func TestSelectionAutoScrollStopsUnderAModal(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
@@ -1250,7 +1252,8 @@ func TestSelectionAutoScrollSelfLimitsWithoutMotion(t *testing.T) {
 	// Deep enough scrollback that an unbounded chain would keep going.
 	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(1000)
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 900))
-	p.previewOffset = p.terminalSelectionViewportLayout().MaxOffset
+	// From the live bottom, so the chain has the whole buffer to run through.
+	p.previewScroll = 0
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)

@@ -285,8 +285,7 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 		viewMode:         ViewModeInteractive,
 		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
-		previewOffset:    2,
-		autoScrollOutput: true,
+		previewScroll:    2,
 		termPanelOutput:  panelBuffer,
 		termPanelScroll:  99,
 		interactiveState: state,
@@ -297,7 +296,7 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	}
 	p.selection.Clear()
 	beforeState := *state
-	beforePreviewOffset := p.previewOffset
+	beforePreviewScroll := p.previewScroll
 	beforePanelScroll := p.termPanelScroll
 
 	_ = p.renderOutputContent(20, 4)
@@ -311,8 +310,8 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	if *state != beforeState {
 		t.Fatalf("panel render mutated interactive state: got %+v want %+v", *state, beforeState)
 	}
-	if p.previewOffset != beforePreviewOffset {
-		t.Fatalf("render mutated previewOffset: got %d want %d", p.previewOffset, beforePreviewOffset)
+	if p.previewScroll != beforePreviewScroll {
+		t.Fatalf("render mutated previewScroll: got %d want %d", p.previewScroll, beforePreviewScroll)
 	}
 	if p.termPanelScroll != beforePanelScroll {
 		t.Fatalf("render mutated termPanelScroll: got %d want %d", p.termPanelScroll, beforePanelScroll)
@@ -332,7 +331,6 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 		viewMode:         ViewModeInteractive,
 		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
-		autoScrollOutput: true,
 		interactiveState: &InteractiveState{Active: true},
 		worktrees: []*Worktree{{
 			Agent: &Agent{OutputBuf: buffer},
@@ -343,11 +341,12 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 	if !handled {
 		t.Fatal("shift+PageUp was forwarded instead of scrolling sidecar")
 	}
-	if p.autoScrollOutput {
+	if p.previewScroll == 0 {
 		t.Fatal("shift+PageUp did not leave live-follow mode")
 	}
-	if p.previewOffset >= p.getMaxScrollOffset() {
-		t.Fatalf("shift+PageUp did not move back: offset=%d max=%d", p.previewOffset, p.getMaxScrollOffset())
+	if p.previewScroll > p.previewMaxScroll() {
+		t.Fatalf("shift+PageUp moved past the buffer: scroll=%d max=%d",
+			p.previewScroll, p.previewMaxScroll())
 	}
 }
 
@@ -484,7 +483,6 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 		width:            80,
 		height:           20,
 		viewMode:         ViewModeInteractive,
-		autoScrollOutput: true,
 		termPanelVisible: true,
 		termPanelOutput:  panel,
 		mouseHandler:     handler,
@@ -502,7 +500,7 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 	if !p.selection.Anchor.Valid() {
 		t.Fatal("panel selection did not establish an anchor")
 	}
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("panel selection disabled independent agent auto-follow")
 	}
 	frozen := p.terminalSelectionViewportLayout()

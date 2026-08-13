@@ -84,8 +84,7 @@ func TestAWheelScrollKeepsAnAbsoluteSelection(t *testing.T) {
 		PaneHeight: 10,
 	}))
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
-	p.previewOffset = 40
-	p.autoScrollOutput = false
+	p.previewScroll = 40
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 520, Col: 0}, ui.SelectionPoint{Line: 520, Col: 5}, false)
 
@@ -112,8 +111,7 @@ func TestAScrollbackKeyKeepsAnAbsoluteSelection(t *testing.T) {
 		PaneHeight: 10,
 	}))
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
-	p.previewOffset = 40
-	p.autoScrollOutput = false
+	p.previewScroll = 40
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 520, Col: 0}, ui.SelectionPoint{Line: 520, Col: 5}, false)
 

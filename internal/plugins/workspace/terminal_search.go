@@ -168,8 +168,12 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 	state.HistorySize = msg.Capture.HistorySize
 	state.Exhausted = newBase == 0
 	p.terminalHistory[msg.Source.Key] = state
-	if !msg.Source.TermPanel && !p.autoScrollOutput {
-		p.previewOffset += added
+	// A window placed from the live bottom rides the renumbering out; only one
+	// pinned to an absolute row has to be shifted by the rows just prepended.
+	if msg.Source.TermPanel {
+		p.termPanelFreeze.Rebase(added)
+	} else {
+		p.previewFreeze.Rebase(added)
 	}
 	p.recomputeTerminalSearch()
 	if !p.terminalSearch.InputActive {
@@ -296,9 +300,11 @@ func (p *Plugin) revealTerminalSearchMatch() {
 		p.termPanelScroll = maxScroll - start
 		return
 	}
+	p.thawPreviewWindow()
+	maxScroll := p.previewMaxScroll()
 	height := p.getPreviewVisibleHeight()
-	p.previewOffset = min(max(localLine-height/2, 0), p.getMaxScrollOffset())
-	p.autoScrollOutput = false
+	start := min(max(localLine-height/2, 0), maxScroll)
+	p.previewScroll = maxScroll - start
 }
 
 func (p *Plugin) terminalSearchMatches(termPanel bool) *terminalSearchMatches {

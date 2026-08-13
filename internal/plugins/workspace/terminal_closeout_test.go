@@ -161,20 +161,21 @@ func TestDragSelectLeavesThePaneFollowingOutput(t *testing.T) {
 	givePaneScrollableOutput(p, 120)
 
 	p.freezeTerminalSelectionViewport()
-	if p.autoScrollOutput {
+	if !p.previewFreeze.Active() {
 		t.Fatal("the window was not pinned for the gesture")
 	}
 	// The gesture ended where it started, against the live edge — and there is a
 	// live edge to be at: a pane with no output makes every bound zero, and an
 	// assertion against zero cannot tell following from stuck.
-	if _, maxOffset := p.terminalWindowBounds(); maxOffset == 0 {
+	if p.previewWindowBound() == 0 {
 		t.Fatal("the fixture has no scrollback, so the window cannot be off the live edge at all")
 	}
 	p.finishInteractiveSelection()
-	if !p.autoScrollOutput {
-		t.Fatal("the pane stopped following output after a drag-select that ended at the live edge")
+	if p.previewScroll != 0 {
+		t.Fatalf("the pane stopped following output after a drag-select that ended at the live edge (%d rows back)",
+			p.previewScroll)
 	}
-	if p.terminalSelectionFrozen {
+	if p.previewFreeze.Active() {
 		t.Fatal("the window stayed pinned after the gesture that pinned it ended")
 	}
 }
@@ -190,17 +191,21 @@ func TestThawKeepsAWindowTheGestureScrolledBack(t *testing.T) {
 	p.freezeTerminalSelectionViewport()
 	// The drag ran up past the top of the window, taking it back through
 	// scrollback. Those are the rows the user is reading when they let go.
-	scrolledBack := p.previewOffset - 20
+	pinned := p.previewFreeze.Start()
+	scrolledBack := pinned - 20
 	if scrolledBack <= 0 {
-		t.Fatalf("the pinned window is only %d rows from the top of the buffer", p.previewOffset)
+		t.Fatalf("the pinned window is only %d rows from the top of the buffer", pinned)
 	}
-	p.previewOffset = scrolledBack
+	p.scrollTerminalSelectionViewport(-20)
+	if p.previewFreeze.Start() != scrolledBack {
+		t.Fatalf("the drag moved the window to %d, want %d", p.previewFreeze.Start(), scrolledBack)
+	}
 
 	p.thawTerminalSelectionViewport()
-	if p.previewOffset != scrolledBack {
-		t.Fatalf("previewOffset = %d, want the %d rows the gesture left on screen", p.previewOffset, scrolledBack)
+	if start := p.terminalSelectionViewportLayout().Start; start != scrolledBack {
+		t.Fatalf("window start = %d, want the %d rows the gesture left on screen", start, scrolledBack)
 	}
-	if p.autoScrollOutput {
+	if p.previewScroll == 0 {
 		t.Fatal("a window left in scrollback was dragged back to the live edge")
 	}
 }
@@ -215,14 +220,14 @@ func TestReleasingADragLeavesTheWindowWhereTheFreezePinnedIt(t *testing.T) {
 	givePaneScrollableOutput(p, 120)
 
 	p.freezeTerminalSelectionViewport()
-	pinned := p.previewOffset
+	if pinned, bound := p.previewFreeze.Start(), p.previewWindowBound(); pinned != bound {
+		t.Fatalf("the live window pinned at %d, want the furthest offset it can name (%d)", pinned, bound)
+	}
 
 	p.thawTerminalSelectionViewport()
-	if p.previewOffset != pinned {
-		t.Fatalf("releasing the drag moved the window from %d to %d", pinned, p.previewOffset)
-	}
-	if !p.autoScrollOutput {
-		t.Fatal("a window pinned at the live edge stopped following output when the drag ended")
+	if p.previewScroll != 0 {
+		t.Fatalf("releasing the drag moved the window %d rows off the live edge it was pinned at",
+			p.previewScroll)
 	}
 }
 

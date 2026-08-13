@@ -238,23 +238,24 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 // layout all have to agree on which window of the buffer is on screen, so they
 // share this derivation.
 //
-// The terminal panel places its window from the live bottom: termPanelScroll is
-// the distance back from it and zero means live, so following is derived rather
+// Both surfaces place their window from the live bottom: the scroll is the
+// distance back from it and zero means live, so following is derived rather
 // than tracked. A window a pointer gesture or a document freeze is holding still
 // is placed from an absolute start instead, and that is the shared freeze's
-// answer — the panel no longer carries a frozen flag of its own for the render
-// path to translate.
+// answer — neither surface carries a frozen flag of its own for the render path
+// to translate.
 func (p *Plugin) terminalScrollState(termPanel bool) (follow bool, offset int, offsetFromBottom bool) {
 	if p.projectedTerminalBuffer(termPanel) != nil {
 		return false, 0, false
 	}
-	if !termPanel {
-		return p.autoScrollOutput, p.previewOffset, false
+	freeze, scroll := &p.previewFreeze, p.previewScroll
+	if termPanel {
+		freeze, scroll = &p.termPanelFreeze, p.termPanelScroll
 	}
-	if p.termPanelFreeze.Active() {
-		return false, p.termPanelFreeze.Start(), false
+	if freeze.Active() {
+		return false, freeze.Start(), false
 	}
-	return p.termPanelScroll == 0, p.termPanelScroll, true
+	return scroll == 0, scroll, true
 }
 
 // interactiveDescribes reports whether the live interactive state is the one

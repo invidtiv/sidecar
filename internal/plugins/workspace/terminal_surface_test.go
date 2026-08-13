@@ -36,7 +36,6 @@ func surfacePlugin(shellSelected bool) *Plugin {
 	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = true
 	p.sidebarWidth = 40
-	p.autoScrollOutput = true
 	p.shellSelected = shellSelected
 	p.selectedShellIdx = 0
 	p.worktrees = []*Worktree{{
@@ -441,12 +440,23 @@ func TestFlashHintRendersInHeaderAndAddsNoRow(t *testing.T) {
 
 func TestTerminalScrollState(t *testing.T) {
 	p := surfacePlugin(false)
-	p.autoScrollOutput = true
-	p.previewOffset = 7
+	p.previewScroll = 7
 
 	follow, offset, fromBottom := p.terminalScrollState(false)
-	if !follow || offset != 7 || fromBottom {
-		t.Fatalf("primary scroll state = (%v,%d,%v), want (true,7,false)", follow, offset, fromBottom)
+	if follow || offset != 7 || !fromBottom {
+		t.Fatalf("primary scroll state = (%v,%d,%v), want (false,7,true)", follow, offset, fromBottom)
+	}
+
+	p.previewFreeze.Freeze(5)
+	follow, offset, fromBottom = p.terminalScrollState(false)
+	if follow || offset != 5 || fromBottom {
+		t.Fatalf("pinned primary scroll state = (%v,%d,%v), want (false,5,false)",
+			follow, offset, fromBottom)
+	}
+	p.previewFreeze.Release()
+	p.previewScroll = 0
+	if follow, _, _ = p.terminalScrollState(false); !follow {
+		t.Fatal("a window against the live bottom is not following output")
 	}
 
 	p.termPanelScroll = 3

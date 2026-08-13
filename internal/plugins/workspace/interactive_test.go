@@ -806,30 +806,32 @@ func TestGetInteractiveExitKey_VariousKeys(t *testing.T) {
 	}
 }
 
-// TestForwardScrollToTmux_ScrollUp tests that scroll up pauses auto-scroll (top-down offset)
+// TestForwardScrollToTmux_ScrollUp tests that a notch the application does not
+// claim steps this surface's own window back through scrollback.
 func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
-	// previewOffset=5 means we're 5 lines from top; scroll up decreases it
-	p := &Plugin{autoScrollOutput: true, previewOffset: 5}
-	p.forwardScrollToTmux(mouse.MouseAction{}, -1)
-	if p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=false after scroll up")
+	p := &Plugin{
+		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		terminalHistory: make(map[string]terminalHistoryState),
 	}
-	if p.previewOffset != 4 {
-		t.Errorf("expected previewOffset=4, got %d", p.previewOffset)
+	givePaneScrollableOutput(p, 120)
+	p.forwardScrollToTmux(mouse.MouseAction{}, -1)
+	if p.previewScroll != 1 {
+		t.Errorf("expected the window 1 row back from the live bottom, got %d", p.previewScroll)
 	}
 }
 
-// TestForwardScrollToTmux_ScrollDown tests that scroll down resumes auto-scroll at bottom (top-down offset)
+// TestForwardScrollToTmux_ScrollDown tests that scrolling back down returns the
+// window to the live bottom it follows from.
 func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
-	// With no content loaded, maxOffset=0. previewOffset=0 is already at bottom.
-	// Scroll down should enable auto-scroll when at max offset.
-	p := &Plugin{autoScrollOutput: false, previewOffset: 0, height: 10}
-	p.forwardScrollToTmux(mouse.MouseAction{}, 1)
-	if !p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=true after scrolling to bottom (maxOffset=0)")
+	p := &Plugin{
+		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		terminalHistory: make(map[string]terminalHistoryState),
 	}
-	if p.previewOffset != 0 {
-		t.Errorf("expected previewOffset=0 (clamped to maxOffset), got %d", p.previewOffset)
+	givePaneScrollableOutput(p, 120)
+	p.previewScroll = 1
+	p.forwardScrollToTmux(mouse.MouseAction{}, 1)
+	if p.previewScroll != 0 {
+		t.Errorf("expected the window back at the live bottom, got %d rows back", p.previewScroll)
 	}
 }
 

@@ -195,10 +195,10 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 		}
 		return nil
 	}
-	// Prepending shifts the old local coordinates down by added lines. Replay
-	// the user's pending upward movement in that shifted coordinate space.
-	p.previewOffset = max(p.previewOffset+added-scrollLines, 0)
-	p.autoScrollOutput = false
+	// A window placed from the live bottom is not renumbered by a prepend, so
+	// only the user's pending upward movement is replayed here.
+	p.previewFreeze.Rebase(added)
+	p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
 	if scrollLines > added && !state.Exhausted {
 		return p.loadOlderTerminalHistory(false, scrollLines-added)
 	}

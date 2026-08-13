@@ -478,8 +478,7 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	p.autoScrollOutput = true
-	p.previewOffset = 7
+	p.previewScroll = 7
 	resolver := p.terminalLinkResolver(false, buffer)
 	if links := resolver.links("README.md"); len(links) != 1 || links[0].Raw != "README.md" {
 		t.Fatalf("initial resolved links = %#v", links)
@@ -523,8 +522,7 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
 	}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	p.autoScrollOutput = true
-	p.previewOffset = 7
+	p.previewScroll = 7
 	resolver := p.terminalLinkResolver(false, buffer)
 	links := resolver.links("README.md")
 	rootAResolved, err := filepath.EvalSymlinks(rootA)
@@ -543,8 +541,9 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd != nil {
 		t.Fatal("click activated link cached under previous selected root")
 	}
-	if !p.autoScrollOutput || p.previewOffset != 7 {
-		t.Fatalf("refused click mutated viewport: follow=%v offset=%d", p.autoScrollOutput, p.previewOffset)
+	if p.previewScroll != 7 || p.previewFreeze.Active() {
+		t.Fatalf("refused click mutated viewport: scroll=%d pinned=%v",
+			p.previewScroll, p.previewFreeze.Active())
 	}
 	if _, found := p.terminalLinkMemo.surfaces["shell:one"]; found {
 		t.Fatal("root mismatch did not invalidate stale surface memo")
@@ -621,8 +620,9 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 		t.Fatalf("doc activation retained interactive terminal ownership: mode=%v interactive=%#v focus=%d",
 			p.viewMode, p.interactiveState, p.paneFocus)
 	}
-	if p.autoScrollOutput || p.previewOffset != 0 {
-		t.Fatalf("doc activation did not freeze clicked viewport: follow=%v offset=%d", p.autoScrollOutput, p.previewOffset)
+	if !p.previewFreeze.Active() || p.previewFreeze.Start() != 0 {
+		t.Fatalf("doc activation did not freeze clicked viewport: pinned=%v start=%d",
+			p.previewFreeze.Active(), p.previewFreeze.Start())
 	}
 	// Claude redraws after the split: the transcript containing the clicked link
 	// moves into history while its new live grid is mostly chrome and blank rows.
@@ -689,7 +689,6 @@ func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *te
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
-	p.autoScrollOutput = true
 
 	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd == nil {
 		t.Fatal("interactive path:line did not activate")
@@ -697,9 +696,9 @@ func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *te
 	if doc, _ := p.activeDocPane(); doc == nil || doc.view.Title() != "README.md" {
 		t.Fatalf("interactive path:line opened doc = %#v", doc)
 	}
-	if p.viewMode != ViewModeList || p.interactiveState != nil || p.autoScrollOutput {
-		t.Fatalf("path:line retained live ownership/follow: mode=%v interactive=%#v follow=%v",
-			p.viewMode, p.interactiveState, p.autoScrollOutput)
+	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.previewFreeze.Active() {
+		t.Fatalf("path:line retained live ownership/follow: mode=%v interactive=%#v pinned=%v",
+			p.viewMode, p.interactiveState, p.previewFreeze.Active())
 	}
 }
 
@@ -723,14 +722,14 @@ func TestInteractiveURLBesideExistingDocKeepsTerminalOwnership(t *testing.T) {
 	}
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{Active: true, MouseReportingEnabled: true, PaneOnEntry: PanePreview}
-	p.autoScrollOutput = true
 
 	if cmd := p.handleMouseClick(actionAt(10, 4)); cmd == nil {
 		t.Fatal("interactive URL did not activate")
 	}
-	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.autoScrollOutput {
-		t.Fatalf("URL beside doc changed terminal ownership: mode=%v interactive=%#v follow=%v",
-			p.viewMode, p.interactiveState, p.autoScrollOutput)
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||
+		p.previewScroll != 0 || p.previewFreeze.Active() {
+		t.Fatalf("URL beside doc changed terminal ownership: mode=%v interactive=%#v scroll=%d pinned=%v",
+			p.viewMode, p.interactiveState, p.previewScroll, p.previewFreeze.Active())
 	}
 }
 
@@ -749,7 +748,6 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 	p.termPanelOutput = buffer
 	p.interactiveState.TermPanel = true
 	p.selectionTermPanel = true
-	p.autoScrollOutput = true
 
 	freeze := p.captureTerminalViewportForDocOpen(true)
 	p.applyTerminalViewportFreeze(freeze)
@@ -763,7 +761,7 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 		t.Fatalf("panel freeze = follow %v offset %d fromBottom %v, want absolute %d",
 			follow, offset, fromBottom, freeze.start)
 	}
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("panel freeze disturbed independent primary follow state")
 	}
 }
@@ -798,7 +796,6 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	p.termPanelOutput = panel
 	p.interactiveState.TermPanel = true
 	p.selectionTermPanel = true
-	p.autoScrollOutput = true
 
 	surface := p.terminalSurfaceGeometry(true)
 	if !surface.OK {
@@ -836,7 +833,7 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 		t.Fatalf("G did not return panel live: frozen %v follow %v offset %d fromBottom %v",
 			p.termPanelFreeze.Active(), follow, offset, fromBottom)
 	}
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("panel navigation disturbed independent primary follow")
 	}
 
@@ -888,8 +885,9 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
 	p.terminalHistory = make(map[string]terminalHistoryState)
-	p.autoScrollOutput = false
-	p.previewOffset = 0
+	// The reader has scrolled back off the live grid, so the rows they clicked
+	// are the transcript above it rather than the pane's current frame.
+	p.previewScroll = 1
 
 	if cmd := p.handleMouseClick(actionAt(12, 5)); cmd == nil {
 		t.Fatal("scrolled Claude link did not activate")

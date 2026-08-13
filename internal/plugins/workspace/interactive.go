@@ -723,15 +723,14 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 		return
 	}
 	p.interactiveState.LastKeyTime = time.Now()
-	if p.autoScrollOutput {
+	if p.previewScroll == 0 && !p.previewFreeze.Active() {
 		return
 	}
 	// A paste is the user's own act on the viewport, so it snaps back
 	// unconditionally; ordinary keys defer to the shared rule, which ignores the
 	// mouse-report bytes a flick leaks as text.
 	if p.terminalConfig().IsPasteChord(msg) || p.shouldSnapBack(msg) {
-		p.autoScrollOutput = true
-		p.scrollToBottom()
+		p.jumpPreviewWindow(0)
 	}
 }
 
@@ -740,8 +739,7 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 // scrollback would show output older than what the pane now holds.
 func (p *Plugin) leaveInteractiveMode() tea.Cmd {
 	p.exitInteractiveMode()
-	p.previewOffset = 0
-	p.autoScrollOutput = true
+	p.resetPreviewScroll()
 	return p.pollSelectedAgentNowIfVisible()
 }
 
@@ -821,11 +819,10 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 // notch locally would slide the viewport across the app's live frame and leave
 // the layout looking torn (the reported symptom).
 //
-// Otherwise the notch scrolls the captured pane output using previewOffset. No
-// tmux subprocesses needed — we scroll through the already-captured capture
-// window (captureLineCount) of scrollback. Scroll up (delta < 0) pauses
-// auto-scroll, scroll down (delta > 0)
-// moves toward live output.
+// Otherwise the notch moves this surface's own window through the captured pane
+// output. No tmux subprocesses needed — we scroll through the already-captured
+// capture window (captureLineCount) of scrollback. Scroll up (delta < 0) steps
+// back through scrollback, scroll down (delta > 0) moves toward live output.
 func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
 	terminal := p.activeInteractiveTerminal()
 	return tty.WheelHandler{
@@ -869,13 +866,12 @@ func (p *Plugin) pinInteractiveViewportToLive() {
 		}
 		return
 	}
-	maxOffset := p.getMaxScrollOffset()
-	if p.autoScrollOutput && p.previewOffset >= maxOffset {
+	if p.previewScroll == 0 && !p.previewFreeze.Active() {
 		return
 	}
 	p.clearTerminalSelection()
-	p.previewOffset = maxOffset
-	p.autoScrollOutput = true
+	// A jump chooses its own window, so any pin is dropped rather than thawed.
+	p.jumpPreviewWindow(0)
 	p.cancelTerminalHistoryIntent(false)
 }
 
@@ -911,8 +907,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 			p.termPanelScroll = p.termPanelMaxScroll()
 			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
 		}
-		p.previewOffset = 0
-		p.autoScrollOutput = false
+		p.jumpPreviewWindow(p.previewMaxScroll())
 		return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
 	case move.ToLive:
 		if termPanel {
@@ -921,14 +916,13 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 			p.cancelTerminalHistoryIntent(true)
 			return true, nil
 		}
-		p.previewOffset = p.getMaxScrollOffset()
-		p.autoScrollOutput = true
+		p.jumpPreviewWindow(0)
 		p.cancelTerminalHistoryIntent(false)
 		return true, nil
 	}
-	// This surface browses by an absolute top offset, so older output is a
-	// smaller offset: the shared move counts rows backwards.
-	return true, p.scrollInteractiveViewport(-move.Rows)
+	// Both surfaces count their window in rows back from the live bottom, which
+	// is the direction the shared move already counts in.
+	return true, p.scrollInteractiveViewport(move.Rows)
 }
 
 // scrollInteractiveViewportByWheel moves the interactive window by a coalesced
@@ -950,56 +944,43 @@ func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
 	}
 
 	p.clearTerminalSelectionOnScroll(false)
-	maxOffset := p.getMaxScrollOffset()
-	if delta < 0 {
-		if p.autoScrollOutput && maxOffset >= p.previewOffset {
-			p.previewOffset = maxOffset
-		}
-		p.previewOffset = max(p.previewOffset+delta, 0)
-		p.autoScrollOutput = false
-		if p.previewOffset == 0 {
-			return p.loadOlderTerminalHistory(false, -delta)
-		}
-		return nil
-	}
-	p.previewOffset = min(p.previewOffset+delta, maxOffset)
-	if p.previewOffset >= maxOffset {
-		p.autoScrollOutput = true
+	// A wheel notch counts up the screen; the window counts back from the live
+	// bottom. That single negation is the whole translation.
+	p.scrollPreviewWindow(-delta)
+	if delta > 0 && p.previewScroll == 0 {
 		p.cancelTerminalHistoryIntent(false)
+	}
+	if delta < 0 && p.previewScroll == p.previewMaxScroll() {
+		return p.loadOlderTerminalHistory(false, -delta)
 	}
 	return nil
 }
 
 // scrollInteractiveViewport moves whichever pane interactive mode is pointed at
-// by delta rows towards the live edge, and reaches for older history when the
-// window runs out of loaded buffer. It is the scrollback keys' placement: a key
-// move lands inside what the surface has measured.
+// delta rows back through scrollback, negative towards the live edge, and
+// reaches for older history when the window runs out of loaded buffer. It is
+// the scrollback keys' placement: a key move lands inside what the surface has
+// measured, and it counts in the direction the shared move reports.
 func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.clearTerminalSelectionOnScroll(true)
 		p.thawTermPanelWindow()
-		p.termPanelScroll -= delta
-		p.termPanelScroll = min(max(p.termPanelScroll, 0), p.termPanelMaxScroll())
-		if delta > 0 && p.termPanelScroll == 0 {
+		p.termPanelScroll = min(max(p.termPanelScroll+delta, 0), p.termPanelMaxScroll())
+		if delta < 0 && p.termPanelScroll == 0 {
 			p.cancelTerminalHistoryIntent(true)
 		}
-		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -delta)
+		if delta > 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, delta)
 		}
 		return nil
 	}
 
-	maxOffset := p.getMaxScrollOffset()
-	if delta < 0 && p.autoScrollOutput && maxOffset >= p.previewOffset {
-		p.previewOffset = maxOffset
-	}
-	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
-	p.autoScrollOutput = p.previewOffset >= maxOffset
-	if delta > 0 && p.autoScrollOutput {
+	p.scrollPreviewWindow(delta)
+	if delta < 0 && p.previewScroll == 0 {
 		p.cancelTerminalHistoryIntent(false)
 	}
-	if delta < 0 && p.previewOffset == 0 {
-		return p.loadOlderTerminalHistory(false, -delta)
+	if delta > 0 && p.previewScroll == p.previewMaxScroll() {
+		return p.loadOlderTerminalHistory(false, delta)
 	}
 	return nil
 }

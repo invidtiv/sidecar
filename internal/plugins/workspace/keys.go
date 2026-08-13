@@ -642,17 +642,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Scroll down: increase offset (toward bottom of content)
-		maxOffset := p.getMaxScrollOffset()
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		// Scroll down: a terminal window moves towards its live bottom, a
+		// document's offset towards the end of its content.
+		if p.previewShowsTerminal() {
+			p.scrollPreviewWindow(-1)
+			return nil
 		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			if p.previewOffset >= maxOffset {
-				p.autoScrollOutput = true
-			} else {
-				p.autoScrollOutput = false
-			}
+		if maxOffset := p.getMaxScrollOffset(); p.previewOffset < maxOffset {
+			p.previewOffset++
 		}
 	case "k", "up":
 		if p.viewMode == ViewModeKanban {
@@ -677,12 +674,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Scroll up: decrease offset (toward top of content)
+		// Scroll up: a terminal window moves back through scrollback, a
+		// document's offset towards the top of its content.
+		if p.previewShowsTerminal() {
+			p.scrollPreviewWindow(1)
+			return nil
+		}
 		if p.previewOffset > 0 {
 			p.previewOffset--
-		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
 		}
 	case "g":
 		if p.viewMode == ViewModeKanban {
@@ -725,11 +724,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Go to top (first line) - pause auto-scroll
-		p.previewOffset = 0
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
+		// Go to top: the oldest rows the surface holds.
+		if p.previewShowsTerminal() {
+			p.jumpPreviewWindow(p.previewMaxScroll())
+			return nil
 		}
+		p.previewOffset = 0
 	case "G":
 		if p.viewMode == ViewModeKanban {
 			// Kanban mode: jump cursor to bottom of current column
@@ -768,11 +768,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Go to bottom (newest content) - resume auto-scroll
-		p.previewOffset = p.getMaxScrollOffset()
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = true
+		// Go to bottom: the newest content, which for a terminal is the live
+		// edge it follows from.
+		if p.previewShowsTerminal() {
+			p.jumpPreviewWindow(0)
+			return nil
 		}
+		p.previewOffset = p.getMaxScrollOffset()
 	case "n":
 		// In diff tab: handle internally (next change navigation)
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
@@ -1067,13 +1069,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				}
 				return nil
 			}
+			if p.previewShowsTerminal() {
+				p.scrollPreviewWindow(-pageSize)
+				return nil
+			}
 			maxOffset := p.getMaxScrollOffset()
 			p.previewOffset += pageSize
 			if p.previewOffset > maxOffset {
 				p.previewOffset = maxOffset
-			}
-			if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
-				p.autoScrollOutput = true
 			}
 		}
 	case "ctrl+u":
@@ -1092,12 +1095,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				p.termPanelScroll += pageSize
 				return nil
 			}
+			if p.previewShowsTerminal() {
+				p.scrollPreviewWindow(pageSize)
+				return nil
+			}
 			p.previewOffset -= pageSize
 			if p.previewOffset < 0 {
 				p.previewOffset = 0
-			}
-			if p.previewTab == PreviewTabOutput || p.shellSelected {
-				p.autoScrollOutput = false
 			}
 		}
 	// Agent control keys

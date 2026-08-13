@@ -83,12 +83,13 @@ func TestInteractiveInputDropsSplitSGRMouseReportsAtEveryBoundary(t *testing.T) 
 
 func TestHandleMouseScrollHonorsFullWheelDelta(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
-	p.previewOffset = 20
-	p.autoScrollOutput = true
+	p.width, p.height = 120, 40
+	givePaneScrollableOutput(p, 120)
+	p.previewScroll = 20
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -3})
-	if p.previewOffset != 17 {
-		t.Fatalf("previewOffset = %d, want 17 after Delta -3", p.previewOffset)
+	if p.previewScroll != 23 {
+		t.Fatalf("previewScroll = %d, want 23 after Delta -3", p.previewScroll)
 	}
 }
 
@@ -108,8 +109,9 @@ func TestHandleMouseScrollHonorsFullWheelDeltaInTerminalPanel(t *testing.T) {
 
 func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
-	p.previewOffset = 20
-	p.autoScrollOutput = true
+	p.width, p.height = 120, 40
+	givePaneScrollableOutput(p, 120)
+	p.previewScroll = 20
 	// The burst takes the time from its caller, so the whole flick is driven here
 	// rather than waited out.
 	at := time.Now()
@@ -118,8 +120,8 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p.wheel.Add(0, at)
 
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
-	if p.previewOffset != 20 {
-		t.Fatalf("previewOffset = %d, want the debounced notch held back", p.previewOffset)
+	if p.previewScroll != 20 {
+		t.Fatalf("previewScroll = %d, want the debounced notch held back", p.previewScroll)
 	}
 	if got := p.wheel.Pending(); got != -3 {
 		t.Fatalf("held-back delta = %d, want the whole notch retained (-3)", got)
@@ -127,9 +129,9 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 
 	at = at.Add(2 * tty.WheelDebounceInterval)
 	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
-	if p.previewOffset != 14 {
-		t.Fatalf("previewOffset = %d, want the held-back notch to arrive with the next one (14)",
-			p.previewOffset)
+	if p.previewScroll != 26 {
+		t.Fatalf("previewScroll = %d, want the held-back notch to arrive with the next one (26)",
+			p.previewScroll)
 	}
 	if got := p.wheel.Pending(); got != 0 {
 		t.Fatalf("delta left pending after a flush = %d", got)
@@ -328,9 +330,8 @@ func TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation(t *testing.T) 
 
 func newInteractiveInputTestPlugin() *Plugin {
 	return &Plugin{
-		viewMode:         ViewModeInteractive,
-		previewTab:       PreviewTabOutput,
-		autoScrollOutput: true,
+		viewMode:   ViewModeInteractive,
+		previewTab: PreviewTabOutput,
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "sidecar-test",
@@ -503,8 +504,7 @@ func TestAWheelOverTheSidebarStaysWithTheLiveTerminal(t *testing.T) {
 		{Name: "two", TmuxName: "sc-two"},
 	}
 	p.selectedShellIdx = 0
-	p.previewOffset = 12
-	p.autoScrollOutput = false
+	p.previewScroll = 12
 	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{
@@ -512,8 +512,8 @@ func TestAWheelOverTheSidebarStaysWithTheLiveTerminal(t *testing.T) {
 		Region: &mouse.Region{ID: regionSidebar},
 	})
 
-	if p.previewOffset != 9 {
-		t.Fatalf("previewOffset = %d, want the notch to have scrolled the terminal to 9", p.previewOffset)
+	if p.previewScroll != 15 {
+		t.Fatalf("previewScroll = %d, want the notch to have scrolled the terminal to 15", p.previewScroll)
 	}
 	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
 		t.Fatal("a notch over the sidebar dropped the user out of interactive mode")

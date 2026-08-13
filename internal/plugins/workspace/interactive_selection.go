@@ -119,9 +119,9 @@ func (p *Plugin) extendSelectionDragTo(x, y int) bool {
 
 // scrollTerminalSelectionViewport moves the surface the selection is anchored in
 // by delta rendered rows, positive downwards, clamped to the buffer. A window a
-// gesture is holding is placed from an absolute start on both surfaces, so one
-// derivation covers each of them; the panel's is the shared freeze, which counts
-// in the same bottom-relative direction its own offset does.
+// gesture is holding is placed from an absolute start on either surface, so one
+// rule — the shared freeze's — covers both, counting in the same direction the
+// bottom-relative offsets do.
 func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
 	if delta == 0 {
 		return
@@ -131,8 +131,7 @@ func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
 		p.termPanelFreeze.Scroll(-delta, layout.MaxOffset)
 		return
 	}
-	p.previewOffset = min(max(layout.Start+delta, 0), layout.MaxOffset)
-	p.autoScrollOutput = false
+	p.previewFreeze.Scroll(-delta, layout.MaxOffset)
 }
 
 // prepareInteractiveDrag arms the pointer over a terminal surface. want is what
@@ -327,8 +326,10 @@ func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 		p.pinTermPanelWindow(freeze.start, true)
 		return
 	}
-	p.previewOffset = freeze.start
-	p.autoScrollOutput = false
+	// Same for the primary surface: the clicked window wins over anything an
+	// earlier gesture pinned, and it outlives the selection the click made.
+	p.releasePreviewWindowPin()
+	p.pinPreviewWindow(freeze.start, true)
 }
 
 func (p *Plugin) projectedTerminalBuffer(termPanel bool) *tty.OutputBuffer {
@@ -364,10 +365,8 @@ func (p *Plugin) releaseTerminalDocProjection(termPanel bool) {
 }
 
 func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cmd {
-	// Freeze before anything reads or moves the window: previewOffset is ignored
-	// while follow mode is active and is commonly still zero, so leaving it that
-	// way lets the next render interpret zero as the top of the buffer and a drag
-	// from the live edge jumps through all of scrollback.
+	// Freeze before anything reads or moves the window: a gesture reads the rows
+	// it was armed on, whatever output arrives underneath them.
 	p.freezeTerminalSelectionViewport()
 	// The tick re-reads this position, so a pointer held still past an edge keeps
 	// scrolling after motion events stop arriving. Real motion also restarts the
@@ -391,51 +390,26 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 // selection source is prepared; freezing again here is the shared rule's no-op,
 // so a gesture that outlived an intervening thaw still holds its own rows.
 func (p *Plugin) freezeTerminalSelectionViewport() {
-	if p.selectionTermPanel {
-		p.pinTermPanelWindow(p.terminalSelectionViewportLayout().Start, false)
-		return
-	}
-	if !p.autoScrollOutput {
-		return
-	}
-	p.previewOffset, _ = p.terminalWindowBounds()
-	p.autoScrollOutput = false
-	p.terminalSelectionFrozen = true
-}
-
-// terminalWindowBounds is the one derivation of where this surface's window can
-// sit: the start it is drawn at now, expressed as an offset the un-followed
-// render can actually place, and the furthest back an offset can name.
-//
-// Freeze and thaw both read it. Taking the start from the rendered layout and
-// the bound from the line count is two derivations of one window, and they
-// disagree wherever interactive mode's untrimmed rows or a pane shorter than the
-// viewport do — so releasing a drag moved the window the gesture had been
-// holding still.
-func (p *Plugin) terminalWindowBounds() (start, maxOffset int) {
 	layout := p.terminalSelectionViewportLayout()
+	if p.selectionTermPanel {
+		p.pinTermPanelWindow(layout.Start, false)
+		return
+	}
 	// Following the live grid can place the window past MaxOffset — the pane's
 	// own top, below the last row an offset can name. An offset beyond it is
 	// clamped by the next render, so pinning it unclamped freezes the window
 	// somewhere it will not be drawn.
-	return min(max(layout.Start, 0), max(layout.MaxOffset, 0)), max(layout.MaxOffset, 0)
+	p.pinPreviewWindow(min(max(layout.Start, 0), max(layout.MaxOffset, 0)), false)
 }
 
 // thawTerminalSelectionViewport is the other half of the freeze, owed at the end
-// of every gesture that took one: a pane pinned by a drag and never released has
-// stopped following output for good, which reads as an agent that went quiet.
-//
-// Where the window resumes following from is the shared rule's — the rows on
-// screen stay where they are, and a window still sitting against the live edge
-// follows new output again.
+// of every gesture that took one. Both halves are the shared rule's; which
+// surface they apply to is all this call site decides.
 func (p *Plugin) thawTerminalSelectionViewport() {
-	if !p.terminalSelectionFrozen {
+	if p.selectionTermPanel {
 		return
 	}
-	p.terminalSelectionFrozen = false
-	_, maxOffset := p.terminalWindowBounds()
-	p.previewOffset = min(max(p.previewOffset, 0), maxOffset)
-	p.autoScrollOutput = tty.ThawOffsetFrom(p.previewOffset, maxOffset) == 0
+	p.thawPreviewGesturePin()
 }
 
 // anchorDragFromOrigin starts a selection for a drag whose mouse-down landed off
@@ -498,7 +472,13 @@ func (p *Plugin) interactiveSelectionLines() []string {
 // the one the render path draws, built from the same input rather than a second
 // construction of it (td-73fa86).
 func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
-	termPanel := p.effectiveSelectionTermPanel()
+	return p.terminalViewportLayoutFor(p.effectiveSelectionTermPanel())
+}
+
+// terminalViewportLayoutFor is that window for a named surface, so a caller that
+// means the primary terminal — the freeze's bound, for one — gets it whichever
+// surface a selection currently sits on.
+func (p *Plugin) terminalViewportLayoutFor(termPanel bool) terminalViewportLayout {
 	// One derivation of the surface's viewport size, shared with the render and
 	// cursor paths. The fallback covers the two cases the surface cannot place:
 	// an unsized plugin, and the term panel asked for while hidden.
@@ -510,7 +490,7 @@ func (p *Plugin) terminalSelectionViewportLayout() terminalViewportLayout {
 	// comes from the viewport and the pane, and hit testing needs it whether or
 	// not any output has been captured yet.
 	return calculateTerminalViewportLayout(
-		p.terminalWindowInput(termPanel, p.interactiveOutputBuffer(), width, height))
+		p.terminalWindowInput(termPanel, p.terminalOutputBuffer(termPanel), width, height))
 }
 
 func (p *Plugin) selectTerminalWord(action mouse.MouseAction) tea.Cmd {

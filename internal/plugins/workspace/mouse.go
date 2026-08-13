@@ -743,8 +743,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					if !p.shellSelected || p.selectedShellIdx != shellIdx {
 						p.shellSelected = true
 						p.selectedShellIdx = shellIdx
-						p.previewOffset = 0
-						p.autoScrollOutput = true
+						p.resetPreviewScroll()
 						p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 						// Exit interactive mode when switching selection (td-fc758e88)
 						p.exitInteractiveMode()
@@ -758,8 +757,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				if p.shellSelected || p.selectedIdx != idx {
 					p.shellSelected = false
 					p.selectedIdx = idx
-					p.previewOffset = 0
-					p.autoScrollOutput = true
+					p.resetPreviewScroll()
 					p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 					// Exit interactive mode when switching selection (td-fc758e88)
 					p.exitInteractiveMode()
@@ -775,9 +773,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if idx, ok := action.Region.Data.(int); ok && idx >= 0 && idx <= 2 {
 			prevTab := p.previewTab
 			p.previewTab = PreviewTab(idx)
-			p.previewOffset = 0
+			p.resetPreviewScroll()
 			p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-			p.autoScrollOutput = true
 			if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
 				p.clearTerminalSelection()
 			}
@@ -1349,45 +1346,29 @@ func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
 // scrollPreview scrolls the preview pane content.
 func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 	p.releaseTerminalDocProjection(false)
-	// Unified scroll: delta < 0 = scroll up (toward top), delta > 0 = scroll down (toward bottom)
-	// Output tab uses burst debouncing for trackpad scroll smoothness.
-	if p.previewTab == PreviewTabOutput || p.shellSelected {
+	// Unified scroll: delta < 0 = scroll up (toward older content), delta > 0 =
+	// scroll down (toward newer). A terminal's window is placed from its live
+	// bottom, so a notch up is a step back through scrollback; a document's
+	// offset is an absolute line from the top, so a notch up is a smaller one.
+	if p.previewShowsTerminal() {
+		// The Output tab uses burst debouncing for trackpad scroll smoothness.
 		var flush bool
 		if delta, flush = p.wheel.Add(delta, p.now()); !flush {
 			return nil
 		}
 		p.clearTerminalSelectionOnScroll(false)
-	}
-
-	// Unified offset: 0 = top of content, higher = further down
-	maxOffset := p.getMaxScrollOffset()
-	if delta < 0 {
-		// Scroll UP: move toward top of content
-		if (p.previewTab == PreviewTabOutput || p.shellSelected) &&
-			p.autoScrollOutput && maxOffset >= p.previewOffset {
-			p.previewOffset = maxOffset
-		}
-		p.previewOffset += delta
-		if p.previewOffset < 0 {
-			p.previewOffset = 0
-		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
-			if p.previewOffset == 0 {
-				return p.loadOlderTerminalHistory(false, -delta)
-			}
-		}
-	} else {
-		// Scroll DOWN: move toward bottom of content
-		p.previewOffset += delta
-		if p.previewOffset > maxOffset {
-			p.previewOffset = maxOffset
-		}
-		if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
-			p.autoScrollOutput = true
+		p.scrollPreviewWindow(-delta)
+		if delta > 0 && p.previewScroll == 0 {
 			p.cancelTerminalHistoryIntent(false)
 		}
+		if delta < 0 && p.previewScroll == p.previewMaxScroll() {
+			return p.loadOlderTerminalHistory(false, -delta)
+		}
+		return nil
 	}
+
+	maxOffset := p.getMaxScrollOffset()
+	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
 	return nil
 }
 

@@ -46,7 +46,6 @@ func sidebarBaselinePlugin(t *testing.T) *Plugin {
 	p.sidebarVisible = true
 	p.sidebarWidth = 30
 	p.activePane = PaneSidebar
-	p.autoScrollOutput = true
 	p.shellSelected = true
 	p.shells = []*ShellSession{
 		{Name: "one", TmuxName: "shell-one", Agent: &Agent{TmuxPane: "%1", OutputBuf: tty.NewOutputBuffer(20)}},
@@ -149,7 +148,7 @@ func TestSidebarNavigationIsShellFirstAndClampsAtBothEnds(t *testing.T) {
 func TestSidebarSelectionChangeResetsPreviewScrollAndFollowsLiveOutput(t *testing.T) {
 	p := sidebarBaselinePlugin(t)
 	p.previewOffset = 12
-	p.autoScrollOutput = false
+	p.previewScroll = 9
 	p.diffTabCursor = 3
 	p.scrollOffset = 5
 
@@ -157,21 +156,22 @@ func TestSidebarSelectionChangeResetsPreviewScrollAndFollowsLiveOutput(t *testin
 	if selectionLabel(p) != "shell:two" {
 		t.Fatalf("selection did not move: %q", selectionLabel(p))
 	}
-	if p.previewOffset != 0 || !p.autoScrollOutput || p.diffTabCursor != 0 {
-		t.Fatalf("selection change left stale preview state: offset=%d autoScroll=%v diffCursor=%d",
-			p.previewOffset, p.autoScrollOutput, p.diffTabCursor)
+	if p.previewOffset != 0 || p.previewScroll != 0 || p.diffTabCursor != 0 {
+		t.Fatalf("selection change left stale preview state: offset=%d scroll=%d diffCursor=%d",
+			p.previewOffset, p.previewScroll, p.diffTabCursor)
 	}
 
 	// A movement that changes nothing (already clamped) leaves the state alone.
 	p.previewOffset = 7
-	p.autoScrollOutput = false
+	p.previewScroll = 7
 	pressList(p, "k")
 	pressList(p, "k")
 	if selectionLabel(p) != "shell:one" {
 		t.Fatalf("selection = %q, want the clamped first shell", selectionLabel(p))
 	}
-	if p.previewOffset != 0 {
-		t.Fatalf("clamped move should still have reset once: offset=%d", p.previewOffset)
+	if p.previewOffset != 0 || p.previewScroll != 0 {
+		t.Fatalf("clamped move should still have reset once: offset=%d scroll=%d",
+			p.previewOffset, p.previewScroll)
 	}
 
 	// g resets the sidebar scroll offset with the selection.
@@ -189,14 +189,16 @@ func TestSidebarSelectionOnlyMovesInsideTheSidebarPane(t *testing.T) {
 
 	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(500)
 	p.shells[0].Agent.OutputBuf.Write(strings.Repeat("line\n", 200))
+	// A window already back in scrollback, so j has somewhere to move it.
+	p.previewScroll = 5
 
 	pressList(p, "j")
 	pressList(p, "j")
 	if got := selectionLabel(p); got != before {
 		t.Fatalf("preview-pane j changed selection: %q -> %q", before, got)
 	}
-	if p.previewOffset == 0 {
-		t.Fatal("preview-pane j did not scroll the preview instead")
+	if p.previewScroll != 3 {
+		t.Fatalf("preview-pane j did not scroll the preview instead: scroll=%d", p.previewScroll)
 	}
 }
 

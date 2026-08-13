@@ -361,8 +361,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Auto-focus newly created worktree (same pattern as click selection)
 			p.shellSelected = false
 			p.selectedIdx = len(p.worktrees) - 1
-			p.previewOffset = 0
-			p.autoScrollOutput = true
+			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
 
@@ -593,8 +592,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.viewMode = ViewModeList
 					p.shellSelected = false
 					p.selectedIdx = i
-					p.previewOffset = 0
-					p.autoScrollOutput = true
+					p.resetPreviewScroll()
 					p.saveSelectionState()
 					p.ensureVisible()
 					p.clearFetchPRState()
@@ -614,8 +612,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Auto-focus newly fetched worktree
 			p.shellSelected = false
 			p.selectedIdx = len(p.worktrees) - 1
-			p.previewOffset = 0
-			p.autoScrollOutput = true
+			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
 			p.clearFetchPRState()
@@ -1011,7 +1008,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if !msg.KeepSelection {
 			p.activePane = PaneSidebar
-			p.autoScrollOutput = true
+			p.jumpPreviewWindow(0)
 		}
 
 		// Resize pane to match preview width immediately
@@ -1130,8 +1127,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.worktrees = append(p.worktrees, msg.Worktree)
 		p.shellSelected = false
 		p.selectedIdx = len(p.worktrees) - 1
-		p.previewOffset = 0
-		p.autoScrollOutput = true
+		p.resetPreviewScroll()
 		p.saveSelectionState()
 		p.ensureVisible()
 

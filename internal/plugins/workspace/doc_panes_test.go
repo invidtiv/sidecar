@@ -28,7 +28,6 @@ func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	p.activePane = PanePreview
 	p.viewMode = ViewModeList
 	p.previewTab = PreviewTabOutput
-	p.autoScrollOutput = true
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus = 1
 	p.paneNextID = 2
