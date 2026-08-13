@@ -234,13 +234,6 @@ func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips [
 	return nil, 0, -1
 }
 
-func (m *Model) gitActionChips() []string {
-	if !m.canOpenInGit() {
-		return nil
-	}
-	return []string{gitActionChip()}
-}
-
 func (m *Model) renderPreviewWithTabs(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""

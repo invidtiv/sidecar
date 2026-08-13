@@ -26,11 +26,6 @@ func docPaneTarget(path string) bool {
 	return strings.TrimSpace(path) != ""
 }
 
-func (p *Plugin) selectedTerminalRoot() (string, bool) {
-	root, _, ok := p.selectedTerminalSurface()
-	return root, ok
-}
-
 // selectedTerminalSurface identifies the actual terminal selection, not only
 // its filesystem root. Project shells deliberately share ctx.WorkDir, so the
 // tmux name is required to distinguish shell A from shell B.
@@ -469,7 +464,11 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		ordered = append(ordered, saved.Tabs[active+1:]...)
 		for _, tab := range ordered {
 			rel, _, valid := resolveTerminalPath(root, tab.Path)
-			if !valid {
+			// ResolveFile may accept a file outside root, reporting it as an
+			// absolute display path. A restored layout only ever addresses the
+			// viewer with a root-relative path, so an escaping tab is dropped
+			// rather than joined onto root as if it were relative.
+			if !valid || filepath.IsAbs(rel) {
 				continue
 			}
 			id := p.nextPaneID()

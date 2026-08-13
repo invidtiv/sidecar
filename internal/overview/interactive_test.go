@@ -316,12 +316,13 @@ func TestLivePaneTakesEveryKeyIncludingCtrlC(t *testing.T) {
 // The exit key is the user's, not this file's: whatever the project plugin's
 // interactive mode answers, the browser's live pane answers too.
 func TestTheConfiguredExitKeyIsTheOneTheSurfaceAnswers(t *testing.T) {
-	m, _, terminal := interactiveModel(t)
+	m, _, _ := interactiveModel(t)
 	m.SetTerminalConfig(tty.Config{ExitKey: "ctrl+q"})
 	m.closePreviewTerminal()
 	m.preview.terminal = nil
 	run(t, m, m.syncPreviewTerminal())
-	terminal = m.preview.terminal.(*fakeTerminal)
+	// The rebuilt pane is the one under test, not the one the helper made.
+	terminal := m.preview.terminal.(*fakeTerminal)
 	enterInteractive(t, m)
 
 	if terminal.config.ExitKey != "ctrl+q" {

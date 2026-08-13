@@ -132,7 +132,9 @@ func TestFourSortsAreStableAndPresentationOnly(t *testing.T) {
 		}
 	}
 	// An unchanged poll must not churn: sorting twice is identical.
-	if strings.Join(order(SortActivity), ",") != strings.Join(order(SortActivity), ",") {
+	first := strings.Join(order(SortActivity), ",")
+	second := strings.Join(order(SortActivity), ",")
+	if first != second {
 		t.Fatal("repeated sorts disagree")
 	}
 	if SortActivity.Next() != SortProject || SortProject.Next() != SortRecent || SortRecent.Next() != SortName || SortName.Next() != SortActivity {

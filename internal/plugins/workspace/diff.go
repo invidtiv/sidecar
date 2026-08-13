@@ -450,14 +450,6 @@ func getWorktreeCommitsContext(ctx context.Context, workdir, baseBranch string) 
 	return parseCommitStatusOutput(ctx, workdir, output, "HEAD")
 }
 
-func getWorktreeCommitsBetweenContext(ctx context.Context, workdir, baseOID, headOID string) ([]CommitStatusInfo, error) {
-	output, err := tryGitLogRangeContext(ctx, workdir, baseOID, headOID)
-	if err != nil {
-		return nil, err
-	}
-	return parseCommitStatusOutput(ctx, workdir, output, headOID)
-}
-
 func parseCommitStatusOutput(ctx context.Context, workdir string, output []byte, headRef string) ([]CommitStatusInfo, error) {
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {

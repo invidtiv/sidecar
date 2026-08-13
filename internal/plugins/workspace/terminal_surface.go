@@ -31,10 +31,6 @@ const (
 	// the tab chips are the left region of the terminal's own header row.
 	previewTabRows = 2
 
-	// headerChipGap is the columns between two chips, and the minimum gap between
-	// the header's left and right regions.
-	headerChipGap = termpreview.ChipGap
-
 	// termPanelDividerRows / termPanelDividerCols size the rule drawn between
 	// the primary terminal and the terminal panel.
 	termPanelDividerRows = 1

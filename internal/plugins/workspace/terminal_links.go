@@ -255,10 +255,6 @@ func stripSourceOSC8(line string) string {
 	return terminallink.StripOSC8(line)
 }
 
-func wrapTerminalVisualRange(line string, startCol, endCol int, open, close string) string {
-	return terminallink.WrapVisualRange(line, startCol, endCol, open, close)
-}
-
 func (p *Plugin) terminalLinkAt(action mouse.MouseAction) (terminalLink, terminalLinkSurfaceContext, bool, bool) {
 	point, line, ok := p.terminalPointAndLine(action)
 	if !ok {

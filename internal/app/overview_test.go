@@ -725,6 +725,9 @@ func newOverviewGitRepo(t *testing.T, name string) string {
 	if out, err := exec.Command("git", "init", "-q", "-b", "main", path).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
+	// CI runners have no global git identity, so commits here must carry one.
+	runOverviewGit(t, path, "config", "user.name", "Sidecar Test")
+	runOverviewGit(t, path, "config", "user.email", "sidecar@example.test")
 	return path
 }
 

@@ -204,7 +204,3 @@ func TestRenderBufferStatesWithNothingToDraw(t *testing.T) {
 		t.Fatalf("single-row box wrapped: %q", short)
 	}
 }
-
-type errFake struct{}
-
-func (errFake) Error() string { return "boom" }

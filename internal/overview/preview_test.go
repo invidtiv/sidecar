@@ -36,21 +36,6 @@ type captureRecorder struct {
 	// state is the geometry tmux reports beside a pane's capture, per pane. The
 	// zero value is a capture taken with no geometry observed.
 	state map[string]tty.PaneState
-	err   error
-}
-
-func (c *captureRecorder) capture(pane string, lines int) (string, tty.PaneState, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.calls = append(c.calls, pane)
-	if c.err != nil {
-		return "", tty.PaneState{}, c.err
-	}
-	state := c.state[pane]
-	if out, ok := c.output[pane]; ok {
-		return out, state, nil
-	}
-	return "pane " + pane + " output\nsecond line", state, nil
 }
 
 func (c *captureRecorder) panes() []string {

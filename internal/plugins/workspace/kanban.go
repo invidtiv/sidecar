@@ -140,14 +140,6 @@ func (p *Plugin) kanbanColumnItemCount(col int, columns map[kanbanLane][]*Worktr
 	return n
 }
 
-func (p *Plugin) kanbanShellAt(row int) *ShellSession {
-	shells := p.plainKanbanShells()
-	if row < 0 || row >= len(shells) {
-		return nil
-	}
-	return shells[row]
-}
-
 // plainKanbanShells are shells without a supported live agent identity. Agent
 // shells live in the activity lanes with worktrees (same model as Overview).
 func (p *Plugin) plainKanbanShells() []*ShellSession {
@@ -315,14 +307,6 @@ func (p *Plugin) moveKanbanRow(delta int) {
 	p.kanban.MoveRow(delta)
 	next := p.kanban.Selection()
 	p.kanbanCol, p.kanbanRow = next.Column, next.Row
-}
-
-func (p *Plugin) getKanbanWorktree(col, row int) *Worktree {
-	card, ok := p.workspaceKanbanBoard().CardAt(boardkanban.Selection{Column: col, Row: row})
-	if !ok || !strings.HasPrefix(card.ID, "worktree:") {
-		return nil
-	}
-	return p.kanbanWorktreeByID(card.ID)
 }
 
 func (p *Plugin) syncListToKanban() {

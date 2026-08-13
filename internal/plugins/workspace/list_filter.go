@@ -250,12 +250,3 @@ func (p *Plugin) selectLastVisible() {
 	p.saveSelectionState()
 	p.ensureVisible()
 }
-
-func indexOfValue(values []int, want int) int {
-	for i, value := range values {
-		if value == want {
-			return i
-		}
-	}
-	return -1
-}

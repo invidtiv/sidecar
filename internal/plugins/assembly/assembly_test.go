@@ -29,14 +29,6 @@ func initFeatures(t *testing.T, flags map[string]bool) {
 	features.Init(cfg)
 }
 
-func entriesFor(ids ...string) []Entry {
-	out := make([]Entry, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, Entry{ID: id})
-	}
-	return out
-}
-
 func TestConversationsWanted(t *testing.T) {
 	tests := []struct {
 		name          string

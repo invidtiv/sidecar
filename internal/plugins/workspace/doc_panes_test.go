@@ -631,8 +631,12 @@ func TestRestorePaneLayoutRejectsUnsupportedNestedTree(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "one.md", "one")
 	writeDocPaneFixture(t, root, "two.md", "two")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := docPaneTestPlugin(t, root, true)
-	layout := &state.PaneLayoutJSON{Root: root, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
 		A: &state.PaneLayoutJSON{Kind: "terminal"},
 		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
@@ -653,8 +657,12 @@ func TestRestorePaneLayoutCollapsesEscapingDocument(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := docPaneTestPlugin(t, root, true)
-	layout := &state.PaneLayoutJSON{Root: root, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
 		A: &state.PaneLayoutJSON{Kind: "terminal"},
 		B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: outside}}},
