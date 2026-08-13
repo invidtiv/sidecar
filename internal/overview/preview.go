@@ -423,8 +423,8 @@ func (m *Model) PreviewFocused() bool { return m.preview.focus == focusPreview }
 // component's own — the exit key or a double escape, both answered inside it —
 // and quitting sidecar is one exit key away.
 //
-// While the pane is merely being watched, these keys scroll it, move focus, or
-// ask for the keyboard.
+// While the pane is merely on screen (sidebar hidden), these keys scroll it,
+// restore the list, or start typing. There is no watched-preview keyboard mode.
 func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
 	if m.PreviewInteractive() {
@@ -442,7 +442,7 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	page := max(1, m.previewRows()/2)
 	switch key {
-	case interactiveEnterKey, interactiveEnterKeyAlt:
+	case "enter", interactiveEnterKeyAlt:
 		return true, m.enterPreviewInteractive()
 	case "left", "h", "esc":
 		return true, m.focusList()
@@ -909,9 +909,9 @@ func previewHints(workspace workspaceinventory.Workspace, focused bool) string {
 	if _, unavailable := previewUnavailable(workspace); unavailable {
 		parts = append(parts, "no live pane")
 	} else if focused {
-		// Only where it is true. With the list focused this key does nothing here,
-		// and a hint for a key that does nothing is indistinguishable from a bug.
-		parts = append(parts, interactiveEnterKey+" to type")
+		// Enter is the primary way in from the list; this hint is only shown
+		// on leftover preview-only chrome (hidden sidebar).
+		parts = append(parts, "enter to type")
 	}
 	return strings.Join(parts, " · ")
 }

@@ -158,7 +158,7 @@ func TestPreviewHintsKeepStatusAndDropFreshness(t *testing.T) {
 	if got := previewHints(agent, false); got != "needs input" {
 		t.Fatalf("unfocused agent hints = %q, want the presentation label only", got)
 	}
-	if got := previewHints(agent, true); got != "needs input · i to type" {
+	if got := previewHints(agent, true); got != "needs input · enter to type" {
 		t.Fatalf("focused agent hints = %q, want status and the type hint", got)
 	}
 
@@ -168,7 +168,7 @@ func TestPreviewHintsKeepStatusAndDropFreshness(t *testing.T) {
 	if got := previewHints(live, false); got != "live" {
 		t.Fatalf("live shell hints = %q, want the live label only", got)
 	}
-	if got := previewHints(live, true); got != "live · i to type" {
+	if got := previewHints(live, true); got != "live · enter to type" {
 		t.Fatalf("focused live shell hints = %q, want live and the type hint", got)
 	}
 
@@ -212,21 +212,23 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	if hasCaptureFreshness(view) {
 		t.Fatalf("preview header still reports capture freshness:\n%s", view)
 	}
-	// The way in is advertised only where it works. With the list focused "i" is
-	// a list key, so offering it here would describe a keystroke that does
-	// nothing.
+	// The list is the browse surface. The type hint belongs on leftover
+	// preview-only chrome (hidden sidebar), not on the list-focused split.
 	if strings.Contains(view, "i to type") {
-		t.Fatalf("the watched preview advertises a key the focused list does not answer:\n%s", view)
+		t.Fatalf("the preview still advertises i as a way in:\n%s", view)
 	}
-	press(t, m, "right")
+	if strings.Contains(view, "enter to type") {
+		t.Fatalf("the list-focused preview advertises a type hint that belongs on preview chrome:\n%s", view)
+	}
+	press(t, m, "\\")
 	focused := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(focused, "i to type") {
+	if !strings.Contains(focused, "enter to type") {
 		t.Fatalf("a focused preview does not say how to hand the pane its keyboard:\n%s", focused)
 	}
 	if !strings.Contains(focused, "needs input") || hasCaptureFreshness(focused) {
 		t.Fatalf("focusing the preview lost status or reintroduced freshness:\n%s", focused)
 	}
-	press(t, m, "left")
+	press(t, m, "\\")
 
 	// Moving the cursor captures the newly selected pane straight away, and only
 	// that one: a selection change is a thing the user feels.
@@ -377,9 +379,9 @@ func TestPreviewFocusScrollsOutputAndNeverMovesTheList(t *testing.T) {
 	run(t, m, m.SetWorkspacesVisible(true))
 
 	selected := m.workspaces.SelectedID()
-	press(t, m, "right")
+	run(t, m, m.focusPreviewPane())
 	if !m.PreviewFocused() {
-		t.Fatal("right did not move focus to the preview")
+		t.Fatal("focusPreviewPane did not move focus to the preview")
 	}
 
 	press(t, m, "k")
@@ -494,7 +496,7 @@ func TestWorkspaceListWheelMovesSelectionLikeTheProjectSidebar(t *testing.T) {
 func TestWorkspaceSidebarHoverDoesNotStealPreviewFocus(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
-	press(t, m, "right")
+	run(t, m, m.focusPreviewPane())
 
 	selected := m.workspaces.SelectedID()
 	// The outer border belongs only to the broad sidebar fallback region, so
@@ -512,7 +514,7 @@ func TestWorkspaceSidebarHoverDoesNotStealPreviewFocus(t *testing.T) {
 func TestWorkspaceSidebarWheelUpdatesSelectionAndPreviewWithoutStealingFocus(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
-	press(t, m, "right")
+	run(t, m, m.focusPreviewPane())
 
 	// Use the outer border to exercise the broad sidebar region rather than a
 	// row. Like project Workspaces, the wheel moves the cursor and its preview
@@ -570,7 +572,7 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 		t.Fatal("60 columns was not treated as narrow")
 	}
 	list := ansi.Strip(m.WorkspacesView(narrow, tall))
-	if !strings.Contains(list, "alpha") || strings.Contains(list, "i to type") {
+	if !strings.Contains(list, "alpha") || strings.Contains(list, "enter to type") {
 		t.Fatalf("narrow layout is not a full-width list:\n%s", list)
 	}
 	for _, line := range strings.Split(list, "\n") {
@@ -579,21 +581,23 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 		}
 	}
 
-	handled, cmd := m.WorkspacesKey(key("right"))
+	// There is no watched-preview focus. Hiding the sidebar is how the
+	// preview takes the tab without typing.
+	handled, cmd := m.WorkspacesKey(key("\\"))
 	if !handled {
-		t.Fatal("right was not handled in the narrow layout")
+		t.Fatal("backslash was not handled in the narrow layout")
 	}
 	run(t, m, cmd)
 	preview := ansi.Strip(m.WorkspacesView(narrow, tall))
-	if !strings.Contains(preview, "i to type") || strings.Contains(preview, "delta") {
-		t.Fatalf("right did not open a full-width preview:\n%s", preview)
+	if !strings.Contains(preview, "enter to type") || strings.Contains(preview, "delta") {
+		t.Fatalf("hiding the sidebar did not open a full-width preview:\n%s", preview)
 	}
 
 	handled, _ = m.WorkspacesKey(key("esc"))
 	if !handled || m.PreviewFocused() {
 		t.Fatal("esc did not return the narrow layout to its list")
 	}
-	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "i to type") {
+	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "enter to type") {
 		t.Fatalf("narrow layout did not return to the list:\n%s", back)
 	}
 }
@@ -609,7 +613,7 @@ func TestGlobalBackslashHidesAndRestoresSidebarFromListAndPreview(t *testing.T) 
 			run(t, m, m.SetWorkspacesVisible(true))
 			m.WorkspacesView(previewWide, previewTall)
 			if startPreview {
-				press(t, m, "right")
+				run(t, m, m.focusPreviewPane())
 			}
 			handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 			if !handled || cmd == nil || m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces-preview" {
@@ -663,7 +667,7 @@ func TestShrinkingTheWindowKeepsTheFocusedPreviewOnScreen(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	m.WorkspacesView(previewWide, previewTall)
-	press(t, m, "right")
+	run(t, m, m.focusPreviewPane())
 
 	narrow := globalListMinWidth + globalDividerWidth + globalPreviewMinWidth - 1
 	run(t, m, m.WorkspacesResize(narrow, previewTall))

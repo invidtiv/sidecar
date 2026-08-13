@@ -69,6 +69,9 @@ func (p *hostedTestPlugin) FocusContext() string {
 	return p.context
 }
 
+func (p *hostedTestPlugin) ClaimsKey(string) bool { return false }
+func (p *hostedTestPlugin) QuitKeyExits() bool    { return true }
+
 // scopeModelWithTasks is the baseline four-plugin project model with a hosted
 // Tasks stand-in attached to the global tab owner.
 func scopeModelWithTasks(t *testing.T) (Model, *hostedTestPlugin) {
@@ -92,7 +95,7 @@ func TestScopeTransitionsNeverReinitializeTheProject(t *testing.T) {
 		{"enter global", tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}},
 		{"global tab 2", tea.KeyPressMsg{Code: '2', Text: "2"}},
 		{"cycle global", tea.KeyPressMsg{Code: '`', Text: "`"}},
-		{"back to project", tea.KeyPressMsg{Code: 'q', Text: "q"}},
+		{"back to project", tea.KeyPressMsg{Code: tea.KeyEsc}},
 		{"enter global again", tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}},
 		{"escape to project", tea.KeyPressMsg{Code: tea.KeyEsc}},
 	}
@@ -167,7 +170,7 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 	if cmd != nil {
 		cmd()
 	}
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asAppModel(t, updated)
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
@@ -279,26 +282,46 @@ func TestGlobalWorkspacesTabIsAnHonestEmptyList(t *testing.T) {
 	}
 }
 
-// "i" is the Workspaces browser's, on the list as well as the preview: it is
-// the surface's primary way into a pane, and sidecar's issue lookup must not
-// take the key back from it.
-func TestInteractiveKeysReachTheGlobalListRatherThanTheIssueModal(t *testing.T) {
-	for _, key := range []string{"i", "E"} {
-		t.Run(key, func(t *testing.T) {
-			m, _ := scopeBaselineModel(t, "git")
-			m.scope = ScopeGlobal
-			m.globalTab = GlobalWorkspaces
-			m.updateContext()
-			if m.activeContext != "global-workspaces" {
-				t.Fatalf("test premise: activeContext = %q", m.activeContext)
-			}
+// "i" is Sidecar's find-TD-task shortcut on the Workspaces list. E still
+// starts typing and must not open the issue modal.
+func TestIssueLookupOpensFromTheGlobalWorkspacesList(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+	if m.activeContext != "global-workspaces" {
+		t.Fatalf("test premise: activeContext = %q", m.activeContext)
+	}
 
-			m.handleKeyMsg(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if !m.showIssueInput {
+		t.Fatal("i did not open the issue lookup from the global Workspaces list")
+	}
+}
 
-			if m.showIssueInput {
-				t.Fatalf("%q opened the issue lookup from the global Workspaces list", key)
-			}
-		})
+func TestQOpensQuitModalFromGlobalWorkspacesList(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || !m.showQuitConfirm || m.globalTab != GlobalWorkspaces {
+		t.Fatalf("q from Workspaces list: global=%v quit=%v tab=%v",
+			m.inGlobalScope(), m.showQuitConfirm, m.globalTab)
+	}
+}
+
+func TestEDoesNotOpenTheIssueModalFromTheGlobalWorkspacesList(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalWorkspaces
+	m.updateContext()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	if m.showIssueInput {
+		t.Fatal("E opened the issue lookup instead of starting to type")
 	}
 }
 
@@ -344,12 +367,12 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 		t.Fatal("the Tasks tab did not render the hosted surface")
 	}
 
-	// q still returns to the exact project destination.
+	// q opens the quit modal and stays in the global space.
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = asAppModel(t, updated)
-	if m.inGlobalScope() || m.activePlugin != 2 || m.showQuitConfirm {
-		t.Fatalf("q from the Tasks tab: global=%v plugin=%d quit=%v",
-			m.inGlobalScope(), m.activePlugin, m.showQuitConfirm)
+	if !m.inGlobalScope() || !m.showQuitConfirm || m.globalTab != GlobalTasks {
+		t.Fatalf("q from the Tasks tab: global=%v quit=%v tab=%v",
+			m.inGlobalScope(), m.showQuitConfirm, m.globalTab)
 	}
 }
 
@@ -435,10 +458,10 @@ func TestGlobalSpaceStaysReachableWhenOnlyTasksIsEnabled(t *testing.T) {
 		t.Fatalf("the switcher dropped the global destination: %#v", destinations)
 	}
 
-	// And q returns to the exact project plugin.
+	// And q opens the quit modal without leaving the global space.
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = asAppModel(t, updated)
-	if m.inGlobalScope() || m.activePlugin != 2 || m.showQuitConfirm {
+	if !m.inGlobalScope() || !m.showQuitConfirm || m.activePlugin != 2 {
 		t.Fatalf("q from the Tasks-only global space: global=%v plugin=%d quit=%v",
 			m.inGlobalScope(), m.activePlugin, m.showQuitConfirm)
 	}
@@ -520,6 +543,7 @@ func TestTasksHostSurvivesProjectSwitchesAndClosesOnceAtShutdown(t *testing.T) {
 
 func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 	m, _ := scopeModelWithTasks(t)
+	keymap.RegisterDefaults(m.keymap)
 
 	projectHints := m.footerHints()
 	if !hasHint(projectHints, "1-4", "plugins") {
@@ -532,10 +556,8 @@ func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 	if !hasHint(globalHints, "1-3", "tabs") {
 		t.Fatalf("global footer advertises the wrong tab range: %#v", globalHints)
 	}
-	for _, hint := range globalHints {
-		if hint.label == "quit" {
-			t.Fatal("q quits from the global space instead of returning to the project")
-		}
+	if !hasHint(globalHints, "q", "quit") {
+		t.Fatalf("global footer lost quit: %#v", globalHints)
 	}
 
 	if title, ctx := m.helpSurface(); title != "Agents" || ctx != "overview" {
@@ -752,10 +774,10 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 	if cmd != nil {
 		cmd()
 	}
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asAppModel(t, updated)
 	if m.inGlobalScope() {
-		t.Fatal("q should have returned to project space")
+		t.Fatal("esc should have returned to project space")
 	}
 	if m.overview.WorkspacesPreviewVisible() {
 		t.Fatal("leaving the global space left the preview polling behind it")
@@ -776,10 +798,10 @@ func TestEscapeReturnsPreviewFocusToTheListBeforeLeavingTheGlobalSpace(t *testin
 	m.globalTab = GlobalWorkspaces
 	m.updateContext()
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 	m = asAppModel(t, updated)
 	if !m.overview.PreviewFocused() {
-		t.Fatal("right did not move focus to the preview")
+		t.Fatal("hiding the sidebar did not move focus to the preview")
 	}
 	if !m.globalSurfaceWantsEsc() {
 		t.Fatal("the focused preview does not claim esc, so scope exit takes it first")

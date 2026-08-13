@@ -128,7 +128,7 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 		msg  tea.KeyPressMsg
 	}{
 		{"K", tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}},
-		{"q", tea.KeyPressMsg{Code: 'q', Text: "q"}},
+		{"esc", tea.KeyPressMsg{Code: tea.KeyEsc}},
 	} {
 		entered := m
 		entered.scope = ScopeGlobal
@@ -148,6 +148,15 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 		if got := totalInits(plugins); got != inits {
 			t.Fatalf("%s reinitialized plugins: inits %d -> %d", key.name, inits, got)
 		}
+	}
+
+	entered := m
+	entered.scope = ScopeGlobal
+	entered.updateContext()
+	updated, _ = entered.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	quitting := asAppModel(t, updated)
+	if !quitting.inGlobalScope() || !quitting.showQuitConfirm {
+		t.Fatalf("q from Overview: global=%v quit=%v", quitting.inGlobalScope(), quitting.showQuitConfirm)
 	}
 }
 

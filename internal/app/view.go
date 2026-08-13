@@ -949,13 +949,11 @@ func (m Model) footerHints() []footerHint {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
-		// A watched preview scrolls, gets back to the list, and — only when there
-		// is a live pane behind the selection — asks for its keyboard. Offering
-		// the key for an item the header itself reports has no live pane would
-		// contradict the same box the user is reading.
-		if m.overview != nil && m.overview.PreviewFocused() {
+		// Two states only: the list browses, Enter / click / E type. Leftover
+		// preview-only chrome (hidden sidebar) still scrolls and can start typing.
+		if m.overview != nil && m.overview.PreviewFocused() && !m.overview.PreviewInteractive() {
 			if m.overview.PreviewCanType() {
-				hints = append(hints, footerHint{keys: "i / click", label: "Type"})
+				hints = append(hints, footerHint{keys: "enter / click", label: "Type"})
 			}
 			hints = append(hints,
 				footerHint{keys: "jk", label: "Scroll"},
@@ -968,8 +966,7 @@ func (m Model) footerHints() []footerHint {
 		}
 		hints = append(hints,
 			footerHint{keys: "jk", label: "Move"},
-			footerHint{keys: "enter", label: "Open"},
-			footerHint{keys: "→", label: "Preview"},
+			footerHint{keys: "enter", label: "Type"},
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},
 			footerHint{keys: "r", label: "Refresh"},
@@ -1027,10 +1024,6 @@ func (m Model) globalFooterHints() []footerHint {
 	}
 
 	for _, spec := range specs {
-		// In the global space, q returns to the project rather than quitting.
-		if spec.id == "quit" && m.inGlobalScope() {
-			continue
-		}
 		keys := keysByCmd[spec.id]
 		if len(keys) == 0 {
 			continue

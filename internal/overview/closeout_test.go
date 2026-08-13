@@ -14,12 +14,11 @@ import (
 // The project surface keeps its loaded scrollback across the same handover.
 func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
-	press(t, m, "right")
 	run(t, m, m.previewSelect())
 	if m.previewBuffer() == nil {
 		t.Fatal("the watched preview captured nothing to begin with")
 	}
-	press(t, m, interactiveEnterKey)
+	press(t, m, "enter")
 	if !m.PreviewInteractive() {
 		t.Fatal("the pane never became live")
 	}
@@ -57,9 +56,8 @@ func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T
 // different item still replaces everything.
 func TestBindingADifferentItemStillReplacesTheContent(t *testing.T) {
 	m, _, _ := interactiveModel(t)
-	press(t, m, "right")
 	run(t, m, m.previewSelect())
-	press(t, m, interactiveEnterKey)
+	press(t, m, "enter")
 
 	m.workspaces.SelectID("b")
 	m.WorkspacesView(previewWide, previewTall)
@@ -133,14 +131,13 @@ func longPaneOutput(lines int) string {
 // user was just looking at is what must still be on screen.
 func TestLeavingInteractiveKeepsShowingWhatWasOnScreen(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
-	press(t, m, "right")
 	run(t, m, m.previewSelect())
 	before := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
 	if !strings.Contains(before, "pane %1 output") {
 		t.Fatalf("the watched preview never drew its capture:\n%s", before)
 	}
 
-	press(t, m, interactiveEnterKey)
+	press(t, m, "enter")
 	run(t, m, terminal.Update(tty.CaptureResultMsg{Output: "TYPED IN LIVE PANE\nsecond live line"}))
 	live := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
 	if !strings.Contains(live, "TYPED IN LIVE PANE") || !strings.Contains(live, "second live line") {

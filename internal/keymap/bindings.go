@@ -56,7 +56,6 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "select", Context: "overview"},
 		{Key: "r", Command: "refresh", Context: "overview"},
 		{Key: "esc", Command: "close-overview", Context: "overview"},
-		{Key: "q", Command: "close-overview", Context: "overview"},
 		{Key: "K", Command: "toggle-overview", Context: "overview"},
 
 		// Global Workspaces context (cross-project shell/worktree browser).
@@ -69,7 +68,7 @@ func DefaultBindings() []Binding {
 		// here. Creating and destroying workspaces belongs to the owning
 		// project's Workspaces plugin, where its refusal rules live. Typing into
 		// a pane that already exists is on the other side of that line.
-		{Key: "enter", Command: "open-workspace", Context: "global-workspaces"},
+		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
 		{Key: "r", Command: "refresh", Context: "global-workspaces"},
@@ -79,27 +78,21 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "cursor-up", Context: "global-workspaces"},
 		{Key: "g", Command: "cursor-top", Context: "global-workspaces"},
 		{Key: "G", Command: "cursor-bottom", Context: "global-workspaces"},
-		{Key: "l", Command: "focus-preview", Context: "global-workspaces"},
-		{Key: "right", Command: "focus-preview", Context: "global-workspaces"},
 		{Key: "h", Command: "focus-list", Context: "global-workspaces"},
 		{Key: "left", Command: "focus-list", Context: "global-workspaces"},
 		{Key: "ctrl+d", Command: "scroll-preview-down", Context: "global-workspaces"},
 		{Key: "ctrl+u", Command: "scroll-preview-up", Context: "global-workspaces"},
 		{Key: "esc", Command: "close-overview", Context: "global-workspaces"},
-		{Key: "q", Command: "close-overview", Context: "global-workspaces"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces"},
-		// The list answers the two interactive keys as well, because the project
-		// sidebar does: on both surfaces "i" from the list moves focus to the
-		// pane and hands it the keyboard in one press.
-		{Key: "i", Command: "interactive", Context: "global-workspaces"},
+		// Enter from the list starts typing. E is the remaining explicit
+		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
 
-		// The selected-pane preview watches a pane until the user asks for its
-		// keyboard: "i" or "E" hands input to the live pane behind the selection,
-		// the same two keys the project plugin answers. Nothing here creates a
-		// session — an item with no live pane refuses instead.
-		{Key: "i", Command: "interactive", Context: "global-workspaces-preview"},
+		// Sidebar-hidden preview chrome. Enter / E start typing; i stays
+		// find-TD-task. There is no watched-preview keyboard mode: l / → do
+		// not move focus here.
+		{Key: "enter", Command: "interactive", Context: "global-workspaces-preview"},
 		{Key: "E", Command: "interactive", Context: "global-workspaces-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces-preview"},
 		{Key: "h", Command: "focus-list", Context: "global-workspaces-preview"},
@@ -110,7 +103,6 @@ func DefaultBindings() []Binding {
 		{Key: "G", Command: "preview-live", Context: "global-workspaces-preview"},
 		{Key: "r", Command: "refresh", Context: "global-workspaces-preview"},
 		{Key: "esc", Command: "close-overview", Context: "global-workspaces-preview"},
-		{Key: "q", Command: "close-overview", Context: "global-workspaces-preview"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces-preview"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
@@ -475,8 +467,7 @@ func DefaultBindings() []Binding {
 		{Key: "m", Command: "merge-workflow", Context: "workspace-list"},
 		{Key: "T", Command: "link-task", Context: "workspace-list"},
 		{Key: "s", Command: "start-agent", Context: "workspace-list"},
-		// Both keys enter interactive mode, on this surface and the global one.
-		{Key: "i", Command: "interactive", Context: "workspace-list"},
+		// E is the explicit type key. i is Sidecar's find-TD-task shortcut.
 		{Key: "E", Command: "interactive", Context: "workspace-list"},
 		{Key: "t", Command: "attach", Context: "workspace-list"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-list"},
@@ -518,7 +509,6 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "focus-left", Context: "workspace-preview"},
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
-		{Key: "i", Command: "interactive", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
 		{Key: "y", Command: "approve", Context: "workspace-preview"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},

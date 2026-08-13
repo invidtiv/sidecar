@@ -399,12 +399,10 @@ func installSuccessfulFakeTmux(t *testing.T) string {
 	return logPath
 }
 
-// Interactive mode is advertised under three keys — enter (primary), and the
-// "E"/"i" alternates named by the preview hint and the command palette. "E" was
-// listed in the keymap but never handled, so it silently did nothing and the
-// keys typed after it were read as workspace bindings (td-10c761).
+// Interactive mode is enter (primary) and E. i is Sidecar's find-TD-task
+// shortcut, not a way into the pane (td-ba46ea).
 func TestInteractiveModeEntryKeys(t *testing.T) {
-	for _, key := range []string{"enter", "E", "i"} {
+	for _, key := range []string{"enter", "E"} {
 		t.Run(key, func(t *testing.T) {
 			installSuccessfulFakeTmux(t)
 			p := New()
@@ -425,6 +423,24 @@ func TestInteractiveModeEntryKeys(t *testing.T) {
 				t.Fatalf("%q left interactive state inactive: %#v", key, p.interactiveState)
 			}
 		})
+	}
+}
+
+func TestIDoesNotEnterInteractiveMode(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := New()
+	p.width, p.height = 100, 30
+	p.shellSelected = true
+	p.selectedShellIdx = 0
+	p.shells = []*ShellSession{{
+		TmuxName: "sidecar-test",
+		Agent:    &Agent{TmuxSession: "sidecar-test", TmuxPane: "%1"},
+	}}
+
+	p.handleListKeys(keyPressFor("i"))
+
+	if p.viewMode == ViewModeInteractive {
+		t.Fatal("i entered interactive mode; it is find-TD-task")
 	}
 }
 

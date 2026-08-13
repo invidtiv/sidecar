@@ -419,7 +419,7 @@ func TestOverviewExitBeforeNavigateMsgIgnoresLateActivation(t *testing.T) {
 		key         tea.KeyPressMsg
 		staysGlobal bool
 	}{
-		{"q returns to the project", tea.KeyPressMsg{Code: 'q', Text: "q"}, false},
+		{"esc returns to the project", tea.KeyPressMsg{Code: tea.KeyEsc}, false},
 		{"2 switches to another global tab", tea.KeyPressMsg{Code: '2', Text: "2"}, true},
 	}
 	for _, tc := range cases {
@@ -625,7 +625,6 @@ func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
 	keys := map[string]tea.KeyPressMsg{
 		"esc": {Code: tea.KeyEsc},
-		"q":   {Code: 'q', Text: "q"},
 		"K":   {Code: 'k', Text: "K", Mod: tea.ModShift},
 	}
 	for name, key := range keys {
@@ -643,6 +642,21 @@ func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
 				t.Fatalf("%s leaked to the covered plugin (%d key inputs)", name, shell.keyInputs)
 			}
 		})
+	}
+}
+
+func TestQOpensQuitModalFromTheAgentsBoard(t *testing.T) {
+	m, shell := overviewModelOverTextInput(t)
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("q left the global space instead of opening the quit modal")
+	}
+	if !m.showQuitConfirm {
+		t.Fatal("q did not open the quit modal from the Agents board")
+	}
+	if shell.keyInputs != 0 {
+		t.Fatalf("q leaked to the covered plugin (%d key inputs)", shell.keyInputs)
 	}
 }
 
@@ -742,10 +756,10 @@ func TestExitOverviewRestoresPluginContext(t *testing.T) {
 		t.Fatalf("out-of-range number left the global space: global=%v context=%q", m.inGlobalScope(), m.activeContext)
 	}
 	// Leaving the space restores the covered plugin's own context.
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asAppModel(t, updated)
 	if m.inGlobalScope() {
-		t.Fatal("q should leave the global space")
+		t.Fatal("esc should leave the global space")
 	}
 	if m.activeContext == "overview" {
 		t.Fatal("activeContext still overview after the board closed")

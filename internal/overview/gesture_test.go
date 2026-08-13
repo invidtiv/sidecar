@@ -136,12 +136,15 @@ func TestClickingAwayFromALivePaneGivesTheKeyboardBack(t *testing.T) {
 	enterInteractive(t, m)
 	previewAt(t, m)
 
-	click(t, m, 2, 3)
+	// Chrome, not a row: a row click while typing is a tab switch.
+	m.WorkspacesView(previewWide, previewTall)
+	dividerX := m.previewSplit(previewWide).SidebarWidth
+	click(t, m, dividerX, 5)
 	if m.PreviewInteractive() || terminal.IsActive() {
-		t.Fatal("clicking the list kept the pane's keyboard")
+		t.Fatal("clicking away from the pane kept its keyboard")
 	}
 	if m.PreviewFocused() {
-		t.Fatal("clicking the list left focus on the preview")
+		t.Fatal("clicking away left focus on a watched preview")
 	}
 }
 

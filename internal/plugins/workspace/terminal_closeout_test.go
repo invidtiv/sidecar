@@ -241,11 +241,10 @@ func givePaneScrollableOutput(p *Plugin, lines int) *tty.OutputBuffer {
 	return buffer
 }
 
-// The chords that enter a live pane are the shared ones, so the browser and this
-// surface cannot drift into answering different keys for the same act.
+// E is the remaining shared explicit type key. i is find-TD-task, not a way in.
 func TestEnterInteractiveChordsAreTheSharedOnes(t *testing.T) {
-	if tty.EnterInteractiveKey != "i" || tty.EnterInteractiveKeyAlt != "E" {
-		t.Fatalf("enter chords = %q/%q", tty.EnterInteractiveKey, tty.EnterInteractiveKeyAlt)
+	if tty.EnterInteractiveKeyAlt != "E" {
+		t.Fatalf("enter alternate = %q, want E", tty.EnterInteractiveKeyAlt)
 	}
 }
 

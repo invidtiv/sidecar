@@ -577,11 +577,9 @@ func TestPaletteRunsPluginCommandHandlers(t *testing.T) {
 	}
 }
 
-// The contexts that bind "i" for themselves — the Workspaces list and preview,
-// on both surfaces — take the key away from sidecar's issue lookup, so the
-// palette has to be able to run it. The entry is still offered there; it is
-// offered without a key, because the key means something else in that context.
-func TestTheIssueLookupStaysReachableWhereItsKeyIsTaken(t *testing.T) {
+// The Workspaces list and leftover preview chrome no longer take "i", so
+// the palette and help advertise it as find-TD-task again.
+func TestTheIssueLookupAdvertisesIOnWorkspaces(t *testing.T) {
 	for _, context := range []string{"workspace-list", "workspace-preview", "global-workspaces", "global-workspaces-preview"} {
 		t.Run(context, func(t *testing.T) {
 			p := newRouterPlugin()
@@ -598,19 +596,24 @@ func TestTheIssueLookupStaysReachableWhereItsKeyIsTaken(t *testing.T) {
 			if entry.CommandID == "" {
 				t.Fatal("the palette does not offer the issue lookup at all")
 			}
-			if entry.Key != "" {
-				t.Fatalf("the palette advertises %q for the issue lookup, a key this context binds for itself", entry.Key)
+			if entry.Key != "i" {
+				t.Fatalf("the palette advertises %q for the issue lookup, want i", entry.Key)
 			}
 
 			var help strings.Builder
 			m.renderBindingSection(&help, "global")
+			var found bool
 			for _, line := range strings.Split(ansi.Strip(help.String()), "\n") {
 				if !strings.Contains(line, formatCommandName("open-issue")) {
 					continue
 				}
-				if strings.TrimSpace(line) != formatCommandName("open-issue") {
-					t.Fatalf("help offers a key for the issue lookup here: %q", line)
+				found = true
+				if !strings.Contains(line, "i") {
+					t.Fatalf("help does not advertise i for the issue lookup: %q", line)
 				}
+			}
+			if !found {
+				t.Fatal("help does not list the issue lookup")
 			}
 
 			m.showPalette = true
@@ -954,9 +957,9 @@ func TestBracketsUnderAPluginOverlayWithoutKeyRouterReachThePlugin(t *testing.T)
 	}
 }
 
-// The Workspaces list and preview bind "i" to interactive mode, and help says
-// so. A global toggle that fired first would make that binding a lie.
-func TestInteractiveKeyReachesTheWorkspacePluginInsteadOfTheIssueModal(t *testing.T) {
+// i is Sidecar's find-TD-task shortcut on the Workspaces list and leftover
+// preview chrome. It must not be swallowed as "enter interactive".
+func TestIssueLookupOpensFromTheProjectWorkspacesList(t *testing.T) {
 	for _, context := range []string{"workspace-list", "workspace-preview"} {
 		t.Run(context, func(t *testing.T) {
 			p := newRouterPlugin()
@@ -967,10 +970,9 @@ func TestInteractiveKeyReachesTheWorkspacePluginInsteadOfTheIssueModal(t *testin
 			m.updateContext()
 
 			m.handleKeyMsg(tea.KeyPressMsg{Code: 'i', Text: "i"})
-			if m.showIssueInput {
-				t.Fatal("\"i\" opened the issue modal instead of entering interactive mode")
+			if !m.showIssueInput {
+				t.Fatal("\"i\" did not open the issue modal from the Workspaces list")
 			}
-			wantOnlyPluginKey(t, p, "i")
 		})
 	}
 }

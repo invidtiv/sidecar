@@ -57,8 +57,8 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 				t.Fatalf("%dx%d header showed a project tab: %q", size.w, size.h, header)
 			}
 		}
-		if !strings.Contains(footer, "Open") {
-			t.Fatalf("%dx%d footer does not offer the Open action: %q", size.w, size.h, footer)
+		if !strings.Contains(footer, "Type") {
+			t.Fatalf("%dx%d footer does not offer the Type action: %q", size.w, size.h, footer)
 		}
 		if !strings.Contains(plain, "Workspaces") {
 			t.Fatalf("%dx%d content is not the browser:\n%s", size.w, size.h, plain)
@@ -66,17 +66,17 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 	}
 }
 
-// The footer follows focus: with the read-only preview focused it advertises
-// scrolling and the way back, never anything that would reach a terminal.
+// The footer follows the two-state model: the list advertises Type, and leftover
+// preview-only chrome (hidden sidebar) advertises scrolling and the way back.
 func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 	m := globalFrameModel(t)
 	m.width, m.height, m.ready = 160, 40, true
 
 	list := footerLabels(m)
-	if !containsHint(list, "Open") || !containsHint(list, "Filter") || !containsHint(list, "Preview") {
+	if !containsHint(list, "Type") || !containsHint(list, "Filter") || containsHint(list, "Preview") {
 		t.Fatalf("list footer = %v", list)
 	}
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 	m = asAppModel(t, updated)
 	preview := footerLabels(m)
 	if !containsHint(preview, "Scroll") || !containsHint(preview, "List") {

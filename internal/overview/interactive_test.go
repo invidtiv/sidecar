@@ -173,11 +173,10 @@ func interactiveModel(t *testing.T) (*Model, *captureRecorder, *fakeTerminal) {
 	return m, recorder, terminal
 }
 
-// enterInteractive focuses the preview and asks for the pane's keyboard.
+// enterInteractive starts typing from the list. Enter is the primary way in.
 func enterInteractive(t *testing.T, m *Model) {
 	t.Helper()
-	press(t, m, "right")
-	press(t, m, interactiveEnterKey)
+	press(t, m, "enter")
 }
 
 func ctrlKey(r rune) tea.KeyPressMsg {
@@ -191,7 +190,7 @@ func TestPreviewHandsTheKeyboardToTheSelectedLivePane(t *testing.T) {
 	enterInteractive(t, m)
 
 	if !m.PreviewInteractive() {
-		t.Fatal("i did not hand the keyboard to the selected pane")
+		t.Fatal("enter did not hand the keyboard to the selected pane")
 	}
 	if terminal.target != (tty.Target{Session: "sc-alpha", Pane: "%1"}) {
 		t.Fatalf("the terminal opened %+v, want the selected row's own session and pane", terminal.target)
@@ -214,11 +213,10 @@ func TestPreviewHandsTheKeyboardToTheSelectedLivePane(t *testing.T) {
 	}
 }
 
-// The primary keyboard entry point is the list, as it is on the project
-// surface: "i" with the list focused reaches the pane without a focus move
-// first, so the two surfaces answer the same key from the same place.
+// The primary keyboard entry point is the list: Enter (and E) with the list
+// focused reaches the pane without a focus move first.
 func TestTheListHandsTheKeyboardToThePaneInOnePress(t *testing.T) {
-	for _, key := range []string{interactiveEnterKey, interactiveEnterKeyAlt} {
+	for _, key := range []string{"enter", interactiveEnterKeyAlt} {
 		t.Run(key, func(t *testing.T) {
 			m, _, terminal := interactiveModel(t)
 			if m.PreviewFocused() {
@@ -273,14 +271,14 @@ func TestLivePaneTakesEveryKeyIncludingCtrlC(t *testing.T) {
 	enterInteractive(t, m)
 	selected := m.workspaces.SelectedID()
 
-	for _, k := range []string{"/", "q", "j", "s", "\\"} {
+	for _, k := range []string{"/", "q", "i", "j", "s", "\\"} {
 		handled, cmd := m.WorkspacesKey(key(k))
 		if !handled {
 			t.Fatalf("%q was not forwarded to the live pane", k)
 		}
 		run(t, m, cmd)
 	}
-	if got := strings.Join(terminal.keys, ""); got != "/qjs\\" {
+	if got := strings.Join(terminal.keys, ""); got != "/qijs\\" {
 		t.Fatalf("the pane received %q, want every key", got)
 	}
 	if m.WorkspacesFilterFocused() || m.workspaces.SelectedID() != selected || !m.WorkspaceSidebarVisible() {
@@ -350,14 +348,20 @@ func TestTheExitKeyGivesTheKeyboardBackAndResumesCapture(t *testing.T) {
 	if m.PreviewInteractive() {
 		t.Fatal("the exit key left the keyboard with the pane")
 	}
-	if !m.PreviewFocused() {
-		t.Fatal("leaving the pane also left the preview")
+	if m.PreviewFocused() {
+		t.Fatal("leaving the pane left focus on a watched preview")
+	}
+	if m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("exit landed on %q, want the list", m.WorkspaceFocusContext())
+	}
+	if m.workspaces.SelectedID() == "" {
+		t.Fatal("exit lost the session the list was showing")
 	}
 	if len(recorder.panes()) <= captures {
 		t.Fatalf("leaving did not resume the capture cadence: %v", recorder.panes())
 	}
-	if interval := m.previewInterval(); interval != previewFocusedPoll {
-		t.Fatalf("cadence after leaving is %s, want the focused cadence", interval)
+	if interval := m.previewInterval(); interval != previewVisiblePoll {
+		t.Fatalf("cadence after leaving is %s, want the list's visible cadence", interval)
 	}
 }
 
@@ -403,7 +407,7 @@ func TestInteractivePreviewDrawsTheLiveBodyAndPlacesTheCursor(t *testing.T) {
 	if !strings.Contains(view, "live pane body") {
 		t.Fatalf("the live pane's output is not on screen:\n%s", view)
 	}
-	if strings.Contains(view, "i to type") {
+	if strings.Contains(view, "i to type") || strings.Contains(view, "enter to type") {
 		t.Fatalf("a pane already being typed into still advertises the way in:\n%s", view)
 	}
 	if !strings.Contains(view, m.InteractiveExitKey()) {
@@ -480,10 +484,8 @@ func TestPasteReachesTheLivePane(t *testing.T) {
 	}
 }
 
-// The way in is discoverable, and it is the same pair of keys on both
-// surfaces: help and the palette read the bindings the browser and the project
-// plugin both answer. The way out is registered by the app from config, which
-// is proved where that registration happens.
+// The way in is discoverable: Enter on the global list, E on both surfaces.
+// i is find-TD-task, not a way into the pane.
 func TestInteractiveEnterKeysAreDiscoverableOnBothSurfaces(t *testing.T) {
 	contexts := map[string]map[string]bool{
 		"global-workspaces":         {},
@@ -500,9 +502,15 @@ func TestInteractiveEnterKeysAreDiscoverableOnBothSurfaces(t *testing.T) {
 		}
 	}
 	for context, keys := range contexts {
-		if !keys[interactiveEnterKey] || !keys[interactiveEnterKeyAlt] {
-			t.Fatalf("%s binds interactive to %v, want both %q and %q", context, keys, interactiveEnterKey, interactiveEnterKeyAlt)
+		if keys["i"] {
+			t.Fatalf("%s still binds i to interactive", context)
 		}
+		if !keys[interactiveEnterKeyAlt] {
+			t.Fatalf("%s binds interactive to %v, want %q", context, keys, interactiveEnterKeyAlt)
+		}
+	}
+	if !contexts["global-workspaces"]["enter"] || !contexts["global-workspaces-preview"]["enter"] {
+		t.Fatal("global Workspaces does not bind enter to interactive")
 	}
 }
 
@@ -652,5 +660,124 @@ func TestShrinkingTheWindowWhileTypingKeepsThePaneOnScreen(t *testing.T) {
 	}
 	if layout := m.workspacesLayout(); !layout.previewOnly || !layout.previewDrawn {
 		t.Fatalf("narrow interactive layout = %#v, want the pane filling the tab", layout)
+	}
+}
+
+func TestEnterOnADeadRowStaysOnTheList(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	m.workspaces.SelectID("d")
+	run(t, m, m.previewSync())
+
+	handled, cmd := m.WorkspacesKey(key("enter"))
+	if !handled {
+		t.Fatal("enter on a dead row was not answered")
+	}
+	run(t, m, cmd)
+
+	if m.PreviewInteractive() || terminal.opens != 0 {
+		t.Fatal("enter on a dead row started typing")
+	}
+	if request, ok := navigation(t, cmd); ok {
+		t.Fatalf("enter on a dead row navigated to %#v", request.Workspace)
+	}
+	if m.PreviewFocused() {
+		t.Fatal("enter on a dead row moved focus off the list")
+	}
+	if m.workspaces.SelectedID() != "d" {
+		t.Fatalf("enter moved the selection to %q", m.workspaces.SelectedID())
+	}
+}
+
+func TestRightAndLDoNotFocusAWatchedPreview(t *testing.T) {
+	m, _, _ := interactiveModel(t)
+	for _, k := range []string{"right", "l"} {
+		handled, _ := m.WorkspacesKey(key(k))
+		if handled {
+			t.Fatalf("%q was handled as a watched-preview focus", k)
+		}
+		if m.PreviewFocused() || m.PreviewInteractive() {
+			t.Fatalf("%q moved focus off the list", k)
+		}
+	}
+}
+
+func TestClickingAListRowDoesNotStartTyping(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	m.WorkspacesView(previewWide, previewTall)
+	x, y, ok := rowPoint(m, "b")
+	if !ok {
+		t.Fatal("row b was not rendered")
+	}
+
+	click(t, m, x, y)
+
+	if m.PreviewInteractive() || terminal.opens != 0 {
+		t.Fatal("a single click on a list row started typing")
+	}
+	if m.workspaces.SelectedID() != "b" {
+		t.Fatalf("the click selected %q, want b", m.workspaces.SelectedID())
+	}
+	if m.PreviewFocused() {
+		t.Fatal("a list-row click left focus on the preview")
+	}
+}
+
+func TestWheelOverTheTerminalDoesNotStartTyping(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	m.WorkspacesView(previewWide, previewTall)
+	surface, ok := m.previewSurface()
+	if !ok {
+		t.Fatal("the rendered preview has no terminal surface")
+	}
+
+	settleWheel()
+	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: surface.X + 2, Y: surface.Y + 3, Button: tea.MouseWheelUp}))
+
+	if m.PreviewInteractive() || terminal.opens != 0 {
+		t.Fatal("a wheel notch over the terminal started typing")
+	}
+	if m.PreviewFocused() {
+		t.Fatal("a wheel notch over the terminal focused a watched preview")
+	}
+}
+
+func TestClickingAnotherLiveRowWhileTypingStaysInteractive(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	enterInteractive(t, m)
+	m.WorkspacesView(previewWide, previewTall)
+	x, y, ok := rowPoint(m, "b")
+	if !ok {
+		t.Fatal("row b was not rendered")
+	}
+
+	click(t, m, x, y)
+
+	if m.workspaces.SelectedID() != "b" {
+		t.Fatalf("the click selected %q, want b", m.workspaces.SelectedID())
+	}
+	if !m.PreviewInteractive() {
+		t.Fatal("clicking another live row while typing left the list")
+	}
+	if terminal.target != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
+		t.Fatalf("the terminal opened %+v, want bravo's pane", terminal.target)
+	}
+}
+
+func TestClickingADeadRowWhileTypingLandsOnTheList(t *testing.T) {
+	m, _, _ := interactiveModel(t)
+	enterInteractive(t, m)
+	m.WorkspacesView(previewWide, previewTall)
+	x, y, ok := rowPoint(m, "d")
+	if !ok {
+		t.Fatal("row d was not rendered")
+	}
+
+	click(t, m, x, y)
+
+	if m.workspaces.SelectedID() != "d" {
+		t.Fatalf("the click selected %q, want d", m.workspaces.SelectedID())
+	}
+	if m.PreviewInteractive() || m.PreviewFocused() {
+		t.Fatal("clicking a dead row while typing did not land on the list")
 	}
 }

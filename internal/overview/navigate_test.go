@@ -7,13 +7,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
-// Slice 4 items 1-2 of docs/plans/active/global-overview-workspaces.md: Enter
-// and double-click in the global browser open the exact owning workspace
-// through the same validated navigation the Agents board uses.
+// Double-click in the global browser opens the exact owning workspace through
+// the same validated navigation the Agents board uses. Enter starts typing
+// in place and never navigates.
 //
 // What is proved here is the request the browser makes: which identity travels,
 // when no request is made at all, and that activating never captures, attaches,
@@ -43,14 +44,42 @@ func navigation(t *testing.T, cmd tea.Cmd) (NavigateMsg, bool) {
 
 func activate(t *testing.T, m *Model) (NavigateMsg, bool) {
 	t.Helper()
+	return navigation(t, m.activateWorkspace())
+}
+
+func TestEnterStartsTypingOnALiveRowAndDoesNotNavigate(t *testing.T) {
+	m, recorder := previewModel(t)
+	original := newPreviewTerminal
+	terminal := newFakeTerminal("live pane body")
+	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
+		terminal.config = config
+		terminal.hooks = hooks
+		return terminal
+	}
+	t.Cleanup(func() { newPreviewTerminal = original })
+	run(t, m, m.SetWorkspacesVisible(true))
+	captures := len(recorder.panes())
+
 	handled, cmd := m.WorkspacesKey(key("enter"))
 	if !handled {
 		t.Fatal("enter was not handled by the global Workspaces tab")
 	}
-	return navigation(t, cmd)
+	if request, ok := navigation(t, cmd); ok {
+		t.Fatalf("enter navigated to %#v", request.Workspace)
+	}
+	run(t, m, cmd)
+	if !m.PreviewInteractive() {
+		t.Fatal("enter on a live row did not start typing")
+	}
+	if terminal.target != (tty.Target{Session: "sc-alpha", Pane: "%1"}) {
+		t.Fatalf("the terminal opened %+v, want the selected row", terminal.target)
+	}
+	if got := len(recorder.panes()); got != captures {
+		t.Fatalf("enter captured extra panes: %v", recorder.panes())
+	}
 }
 
-func TestEnterOpensTheSelectedWorkspaceByStableIdentity(t *testing.T) {
+func TestDoubleClickOpensTheSelectedWorkspaceByStableIdentity(t *testing.T) {
 	m, recorder := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	captures := len(recorder.panes())
@@ -73,7 +102,7 @@ func TestEnterOpensTheSelectedWorkspaceByStableIdentity(t *testing.T) {
 			m.WorkspacesView(previewWide, previewTall)
 			request, ok := activate(t, m)
 			if !ok {
-				t.Fatal("enter produced no navigation request")
+				t.Fatal("activation produced no navigation request")
 			}
 			want, _ := m.SelectedWorkspace()
 			if request.Workspace.ID != tc.id || request.Workspace.Kind != tc.kind {
@@ -97,23 +126,23 @@ func TestEnterOpensTheSelectedWorkspaceByStableIdentity(t *testing.T) {
 	}
 }
 
-func TestEnterFollowsTheCursorThroughSortAndFilter(t *testing.T) {
+func TestActivationFollowsTheCursorThroughSortAndFilter(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 
 	// The row under the cursor keeps its identity when sorting reorders the
-	// list beneath it, so enter opens the item the user is looking at.
+	// list beneath it, so activation opens the item the user is looking at.
 	m.workspaces.SelectID("d")
 	m.WorkspacesView(previewWide, previewTall)
 	press(t, m, "s")
 	press(t, m, "s")
 	request, ok := activate(t, m)
 	if !ok || request.Workspace.ID != "d" {
-		t.Fatalf("after two sort cycles enter opened %#v, want d", request.Workspace)
+		t.Fatalf("after two sort cycles activation opened %#v, want d", request.Workspace)
 	}
 
-	// Filtering to one row and pressing enter opens that row, not the one that
-	// used to occupy its position.
+	// Filtering to one row and activating opens that row, not the one that
+	// used to occupy its position. Enter in the filter only accepts the query.
 	press(t, m, "/")
 	for _, r := range "echo" {
 		m.WorkspacesKey(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -125,7 +154,7 @@ func TestEnterFollowsTheCursorThroughSortAndFilter(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 	request, ok = activate(t, m)
 	if !ok || request.Workspace.ID != "e" {
-		t.Fatalf("filtered enter opened %#v, want e", request.Workspace)
+		t.Fatalf("filtered activation opened %#v, want e", request.Workspace)
 	}
 }
 
@@ -144,12 +173,20 @@ func TestEnterWithNoSelectionRequestsNothing(t *testing.T) {
 	m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.WorkspacesView(previewWide, previewTall)
 	if request, ok := activate(t, m); ok {
-		t.Fatalf("enter on an empty list requested %#v", request.Workspace)
+		t.Fatalf("activation on an empty list requested %#v", request.Workspace)
+	}
+	handled, cmd := m.WorkspacesKey(key("enter"))
+	if !handled {
+		t.Fatal("enter on an empty list was not answered")
+	}
+	if request, ok := navigation(t, cmd); ok {
+		t.Fatalf("enter on an empty list navigated to %#v", request.Workspace)
 	}
 }
 
 // While the query has focus, enter belongs to the filter: it accepts the
-// current match and returns to list navigation rather than opening a project.
+// current match and returns to list navigation rather than opening a project
+// or starting to type.
 func TestEnterInsideTheFilterAcceptsInsteadOfNavigating(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
@@ -166,21 +203,6 @@ func TestEnterInsideTheFilterAcceptsInsteadOfNavigating(t *testing.T) {
 	}
 	if m.WorkspacesFilterFocused() || m.workspaces.SelectedID() != "b" {
 		t.Fatalf("filter enter = focused:%v selected:%q", m.WorkspacesFilterFocused(), m.workspaces.SelectedID())
-	}
-}
-
-// Enter still opens while a watched preview holds focus: no key is forwarded to
-// a terminal until the user asks for its keyboard, so enter keeps one meaning.
-func TestEnterOpensWhileThePreviewHasFocus(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	press(t, m, "right")
-	if !m.PreviewFocused() {
-		t.Fatal("right did not focus the preview")
-	}
-	request, ok := activate(t, m)
-	if !ok || request.Workspace.ID != "a" {
-		t.Fatalf("preview-focused enter opened %#v, want the selected item", request.Workspace)
 	}
 }
 
@@ -293,8 +315,7 @@ func rowPoint(m *Model, id string) (int, int, bool) {
 // and Task lifecycle stay in the owning project's Workspaces plugin, where their
 // validation and refusal rules live — so the keys that mean those things here
 // mean nothing. Typing into a pane that already exists is on the other side of
-// that line: it creates nothing, so i/E are answered from the list exactly as
-// the project sidebar answers them.
+// that line: it creates nothing, so Enter / E start typing from the list.
 func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 	m, recorder := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))

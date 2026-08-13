@@ -27,9 +27,11 @@ import (
 // The list itself is a reader. Creation, deletion, attach, Git lifecycle, and
 // Task actions stay in the owning project's Workspaces plugin, where their
 // validation and refusal rules live. The one thing the browser does drive is an
-// existing live pane: the focused preview hands its keyboard to the pane behind
-// the selected row (internal/overview/interactive.go), which creates nothing and
-// destroys nothing — it types into a session that is already there.
+// existing live pane: Enter, a click in the pane, or E hands the keyboard to
+// the pane behind the selected row (internal/overview/interactive.go), which
+// creates nothing and destroys nothing — it types into a session that is
+// already there. The list stays the browse surface; there is no watched-preview
+// keyboard mode.
 
 // syncWorkspaces rebuilds the list projection from the same results map the
 // board uses. It is called from syncBoard so the two projections can never
@@ -330,12 +332,11 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch key {
-	case "enter":
-		// Enter means the same thing in both layouts: open the exact owning
-		// project workspace through the app's validated navigation. The narrow
-		// full-width preview is reached with right/l, so Enter never has to
-		// mean two different things depending on how wide the terminal is.
-		return true, m.activateWorkspace()
+	case "enter", interactiveEnterKeyAlt:
+		// Enter (and E) start typing in the selected live pane. A row with no
+		// live pane refuses and stays on the list — it does not navigate.
+		// Double-click is the remaining jump-to-project path.
+		return true, m.enterPreviewInteractive()
 	case "/":
 		cmd := m.focusList()
 		m.workspaces.FocusFilter()
@@ -345,14 +346,6 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.previewSync()
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
-	case "right", "l":
-		return true, m.focusPreviewPane()
-	case interactiveEnterKey, interactiveEnterKeyAlt:
-		// The keyboard entry point is the list on both surfaces: the project
-		// sidebar answers i/E without a focus move first, so one press from the
-		// list here both focuses the pane and hands it the keyboard. A selection
-		// with no live pane refuses, and focus stays where the user left it.
-		return true, m.enterPreviewInteractive()
 	case "esc":
 		if m.workspaces.Filter().Active() {
 			m.workspaces.Filter().Reset()
@@ -367,11 +360,10 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// WorkspaceFocusContext distinguishes the list, the watched preview, and a
-// preview whose pane is being typed into, so binding, footer and help discovery
-// follow mouse/keyboard focus. Focus alone decides it: hiding the sidebar moves
-// focus to the preview and focusing the list brings the sidebar back, so the
-// advertised keys are always the focused surface's.
+// WorkspaceFocusContext distinguishes the list from a pane being typed into
+// (and the leftover preview-only layout when the sidebar is hidden), so
+// binding, footer and help discovery follow mouse/keyboard focus. There is no
+// watched-preview keyboard mode: the only way onto the pane is typing.
 func (m *Model) WorkspaceFocusContext() string {
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
@@ -480,21 +472,26 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 
 	// A press anywhere but the terminal is a click away from it: it ends the
-	// gesture the press armed and the mode it was armed in, so the divider, the
-	// sort header, a row and the sidebar all leave the pane identically.
+	// gesture the press armed. A list row is the exception while typing —
+	// that is a tab switch, not a click-away.
 	kind, _ := action.Region.Data.(string)
+	if region, ok := action.Region.Data.(workspacelist.Region); ok && region.Kind == workspacelist.RegionRow {
+		kind = string(region.Kind)
+	}
+	rowClick := kind == string(workspacelist.RegionRow) &&
+		(action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
 	cmd := m.workspacesRegionMouse(action)
-	if !pressAway {
+	if !pressAway || (rowClick && m.PreviewInteractive()) {
 		return cmd
 	}
-	// Last, so a region that hands the keyboard back itself — a row, the sidebar —
-	// rebinds the capture cadence to the selection this same event moved rather
-	// than to the one it is leaving. Whatever is left over ends the mode here.
-	return tea.Batch(cmd, m.exitPreviewInteractive())
+	// Last, so a region that hands the keyboard back itself — the sidebar,
+	// sort header, chrome — rebinds the capture cadence to the selection this
+	// same event moved rather than to the one it is leaving.
+	return tea.Batch(cmd, m.focusList())
 }
 
 // previewPointerIntent asks the shared layer what a pointer action over the
@@ -572,15 +569,21 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			// The selection moves before focus does: giving the keyboard back
 			// rebinds the capture cadence, and it has to bind to the row the
 			// click landed on rather than to the one it is leaving.
+			wasTyping := m.PreviewInteractive()
 			m.workspaces.SelectID(region.ID)
-			focus = m.focusList()
 			// A single click only selects. The second click opens the row the
 			// first one selected, so a double click can never activate a
 			// neighbour: the identity is resolved from the selection this same
 			// event just moved.
 			if action.Type == mouse.ActionDoubleClick {
-				return tea.Batch(focus, m.previewSync(), m.activateWorkspace())
+				return tea.Batch(m.focusList(), m.previewSync(), m.activateWorkspace())
 			}
+			if wasTyping {
+				// Tabbed-terminal: switch session and keep typing when the new
+				// row has a live pane; otherwise land on the list.
+				return m.switchPreviewInteractive()
+			}
+			focus = m.focusList()
 		case workspacelist.RegionSort:
 			m.workspaces.CycleSort()
 		case workspacelist.RegionFilter:
@@ -637,6 +640,6 @@ func (m *Model) WorkspacesSummary() string {
 // internal/keymap under the "global-workspaces", "global-workspaces-preview",
 // "global-workspaces-terminal" and "global-workspaces-filter" contexts, which is
 // what makes it discoverable in help and the palette rather than only in footer
-// hints — and what makes the boundary (no create, delete or attach anywhere; the
-// pane's keyboard only from the preview) a single documented fact instead of a
+// hints — and what makes the boundary (no create, delete or attach anywhere;
+// typing only via Enter / click / E) a single documented fact instead of a
 // second list beside the keys this file actually answers.

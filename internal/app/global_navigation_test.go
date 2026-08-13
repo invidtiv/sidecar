@@ -276,7 +276,7 @@ func TestGlobalWorkspacesActivationDroppedAfterLeavingTheCatalog(t *testing.T) {
 		exit func(t *testing.T, m Model) Model
 	}{
 		{"back to the project", func(t *testing.T, m Model) Model {
-			updated, _ := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+			updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 			return asAppModel(t, updated)
 		}},
 		{"on to another global tab", func(t *testing.T, m Model) Model {

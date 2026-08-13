@@ -24,9 +24,7 @@ import (
 // given one.
 
 const (
-	// The ways in from the preview, shared with the project plugin, which
-	// answers both for the same act.
-	interactiveEnterKey    = tty.EnterInteractiveKey
+	// E is the remaining explicit type key. i is find-TD-task, not a way in.
 	interactiveEnterKeyAlt = tty.EnterInteractiveKeyAlt
 )
 
@@ -123,12 +121,16 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 	return tty.Hooks{
 		OnKey:      m.previewTerminalKey,
 		BeforeSend: m.beforePreviewSend,
-		OnExit:     m.releasePreviewKeyboard,
+		OnExit: func() tea.Cmd {
+			// User-chosen ways out (ctrl+\, esc esc) land on the list, still
+			// showing this session. There is no watched-preview rest state.
+			return tea.Batch(m.releasePreviewKeyboard(), m.focusList())
+		},
 		OnSessionEnded: func() tea.Cmd {
 			// A pane that died under a keystroke or a forwarded click ends the mode
 			// inside the component. The project surface raises the same toast, and a
 			// mode that ends by itself with no notice reads as a dropped keystroke.
-			return tea.Batch(m.releasePreviewKeyboard(),
+			return tea.Batch(m.releasePreviewKeyboard(), m.focusList(),
 				appmsg.ShowToast("Session ended", 3*time.Second))
 		},
 		// The terminal is closed with the mode: the browser holds a reference to
@@ -243,6 +245,17 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		cmds = append(cmds, appmsg.ShowToast("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop", 3*time.Second))
 	}
 	return tea.Batch(cmds...)
+}
+
+// switchPreviewInteractive rebinds a live pane to the current selection. Used
+// when the user clicks another list row while typing: stay interactive on the
+// new live pane, or refuse and land on the list if it has none.
+func (m *Model) switchPreviewInteractive() tea.Cmd {
+	sync := m.previewSync()
+	if m.PreviewCanType() {
+		return tea.Batch(sync, m.enterPreviewInteractive())
+	}
+	return tea.Batch(sync, m.focusList())
 }
 
 // exitPreviewInteractive takes the keyboard back from a live pane on this

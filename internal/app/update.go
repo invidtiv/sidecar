@@ -812,12 +812,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "q":
-		// In the global space, q returns to the project rather than quitting.
-		if !m.hasModal() && m.inGlobalScope() {
-			m.exitOverview()
-			m.updateContext()
-			return m, nil
-		}
 		if !m.hasModal() && m.quitKeyExits() {
 			m.initQuitModal()
 			m.showQuitConfirm = true
@@ -1498,9 +1492,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "i":
-		// A context that binds "i" for itself — the Workspaces list and preview
-		// hand the keyboard to a live pane — answers before the issue modal, or
-		// the binding help advertises could never fire.
+		// A context that binds "i" for itself answers before the issue modal,
+		// or the binding help advertises could never fire. Workspaces no longer
+		// takes the key — Enter / E / click start typing — so find-TD-task
+		// stays reachable on those lists.
 		if _, bound := m.keymap.CommandForContextKey(m.activeContext, "i"); bound {
 			break
 		}
@@ -1687,7 +1682,7 @@ func (m *Model) consumesTextInput() bool {
 // Root contexts are plugin top-level views (not sub-views like detail/diff/commit).
 func isRootContext(ctx string) bool {
 	switch ctx {
-	case "global", "", "overview", "global-workspaces":
+	case "global", "", "overview", "global-workspaces", "global-workspaces-preview":
 		return true
 	// Plugin root contexts where 'q' is not used for navigation
 	case "conversations", "conversations-sidebar", "conversations-main":
