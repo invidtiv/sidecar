@@ -271,7 +271,7 @@ func (m *Model) renderPreviewWithTabs(width, height int) string {
 	return m.truncatePreviewLines(strings.Join(lines, "\n"), width)
 }
 
-func (m *Model) renderOutputPreview(width, height int) string {
+func (m *Model) renderOutputTerminal(width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
@@ -298,8 +298,21 @@ func (m *Model) renderOutputPreview(width, height int) string {
 		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
-		Message: message,
+		Message: message, Decorate: m.decoratePreviewLine,
 	})
+}
+
+func (m *Model) renderOutputPreview(width, height int) string {
+	if m.preview.doc != nil {
+		box := termpreview.Box{W: width, H: height}
+		termBox, docBox, split := m.previewDocLayout(box)
+		if split {
+			term := m.renderOutputTerminal(termBox.W, termBox.H)
+			document := m.renderPreviewDoc(m.preview.doc, docBox)
+			return joinPreviewDoc(term, document, height, m.preview.doc.focused)
+		}
+	}
+	return m.renderOutputTerminal(width, height)
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {

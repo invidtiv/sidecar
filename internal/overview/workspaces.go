@@ -236,7 +236,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 	var view string
 	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
-		m.registerPreviewTabRegions(layout.box)
+		m.registerPreviewOutputRegions(layout.box)
 		view = styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
 	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
@@ -245,7 +245,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 		split := layout.split
 		m.addSidebarRegion(0, split.SidebarWidth, height)
 		m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-		m.registerPreviewTabRegions(layout.box)
+		m.registerPreviewOutputRegions(layout.box)
 		list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
 		preview := m.renderPreview(layout.box.W, layout.box.H)
 
@@ -301,6 +301,12 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(previewRegionKind, x, 0, width, height, previewRegionKind)
+}
+
+func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
+	termBox, _, _ := m.previewDocLayout(box)
+	m.registerPreviewTabRegions(termBox)
+	m.registerPreviewDocRegions(box)
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -587,12 +593,13 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	rowClick := kind == string(workspacelist.RegionRow) &&
 		(action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick)
+	docClick := kind == previewDocRegionKind || kind == previewDocCloseKind
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
 	cmd := m.workspacesRegionMouse(action)
-	if !pressAway || (rowClick && m.PreviewInteractive()) {
+	if !pressAway || (rowClick && m.PreviewInteractive()) || docClick {
 		return cmd
 	}
 	// Last, so a region that hands the keyboard back itself — the sidebar,
@@ -640,6 +647,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			return m.setPreviewTab(workspacediff.Tab(tab))
 		}
 		return nil
+	}
+	if kind, ok := action.Region.Data.(string); ok && (kind == previewDocRegionKind || kind == previewDocCloseKind) {
+		return m.handlePreviewDocMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch kind {

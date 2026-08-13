@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/markdown"
-	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -21,7 +21,7 @@ type LoadedMsg struct {
 	RequestGeneration uint64
 	Epoch             uint64
 	Path              string
-	Result            filebrowser.PreviewResult
+	Result            filepreview.PreviewResult
 }
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
@@ -43,7 +43,7 @@ type Model struct {
 
 	loading  bool
 	rendered bool
-	result   filebrowser.PreviewResult
+	result   filepreview.PreviewResult
 
 	renderWidth   int
 	renderedLines []string
@@ -61,13 +61,13 @@ func New(renderer *markdown.Renderer) *Model {
 // Load retargets the model and returns a command that wraps the existing file
 // browser loader. Only the docview-owned LoadedMsg is broadcast.
 func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint64) tea.Cmd {
-	return m.load(modelID, relPath, line, epoch, filebrowser.LoadPreview(rootDir, relPath, epoch))
+	return m.load(modelID, relPath, line, epoch, filepreview.LoadPreview(rootDir, relPath, epoch))
 }
 
 // LoadFile retargets the model from an already-open file. The returned command
 // owns and closes file after reading it.
 func (m *Model) LoadFile(modelID int, file *os.File, relPath string, line int, epoch uint64) tea.Cmd {
-	return m.load(modelID, relPath, line, epoch, filebrowser.LoadPreviewFile(file, relPath, epoch))
+	return m.load(modelID, relPath, line, epoch, filepreview.LoadPreviewFile(file, relPath, epoch))
 }
 
 func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load tea.Cmd) tea.Cmd {
@@ -79,16 +79,16 @@ func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load t
 	m.scroll = 0
 	m.loading = true
 	m.rendered = line <= 0
-	m.result = filebrowser.PreviewResult{}
+	m.result = filepreview.PreviewResult{}
 	m.invalidateRender()
 
 	generation := m.requestGeneration
 	return func() tea.Msg {
-		msg, ok := load().(filebrowser.PreviewLoadedMsg)
+		msg, ok := load().(filepreview.PreviewLoadedMsg)
 		if !ok {
 			return LoadedMsg{
 				ModelID: modelID, RequestGeneration: generation, Epoch: epoch, Path: relPath,
-				Result: filebrowser.PreviewResult{Error: fmt.Errorf("unexpected preview load result")},
+				Result: filepreview.PreviewResult{Error: fmt.Errorf("unexpected preview load result")},
 			}
 		}
 		return LoadedMsg{

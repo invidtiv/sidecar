@@ -4,10 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
@@ -129,17 +127,25 @@ func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) stri
 	if resolved != nil {
 		links = resolved.links(line)
 	}
-	// Apply from right to left so wrappers do not disturb later visual ranges.
-	for i := len(links) - 1; i >= 0; i-- {
-		link := links[i]
-		open, close := "\x1b[4m", "\x1b[24m"
-		if link.Kind == terminalURLLink {
-			open = "\x1b]8;;" + link.Value + "\x1b\\\x1b[4m"
-			close = "\x1b[24m\x1b]8;;\x1b\\"
+	return terminallink.Decorate(line, spansFromTerminalLinks(links))
+}
+
+func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
+	spans := make([]terminallink.Span, 0, len(links))
+	for _, link := range links {
+		span := terminallink.Span{StartCol: link.StartCol, EndCol: link.EndCol, Value: link.Value}
+		switch link.Kind {
+		case terminalURLLink:
+			span.Kind = terminallink.KindURL
+		case terminalPathLink:
+			span.Kind = terminallink.KindFile
+			span.Extra = terminallink.Extra{Line: link.Line, Raw: link.Raw}
+		default:
+			continue
 		}
-		line = wrapTerminalVisualRange(line, link.StartCol, link.EndCol, open, close)
+		spans = append(spans, span)
 	}
-	return line
+	return spans
 }
 
 func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) *terminalLineLinkResolver {
@@ -243,118 +249,11 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 }
 
 func stripSourceOSC8(line string) string {
-	out := make([]byte, 0, len(line))
-	inOSC := false
-	for pos := 0; pos < len(line); {
-		if inOSC {
-			if terminatorLen := oscTerminatorLen(line, pos); terminatorLen > 0 {
-				pos += terminatorLen
-				inOSC = false
-				continue
-			}
-			if introLen := oscIntroducerLen(line, pos); introLen > 0 {
-				// Real terminal parsers restart OSC parsing on a nested
-				// introducer. Remain in the discard state so the nested
-				// payload cannot become an active hyperlink.
-				pos += introLen
-				continue
-			}
-			_, size := utf8.DecodeRuneInString(line[pos:])
-			pos += size
-			continue
-		}
-
-		if introLen := oscIntroducerLen(line, pos); introLen > 0 {
-			pos += introLen
-			inOSC = true
-			continue
-		}
-		_, size := utf8.DecodeRuneInString(line[pos:])
-		segment := line[pos : pos+size]
-		if segment[0] == ']' {
-			// Removing an intervening OSC must not concatenate an ordinary
-			// trailing ESC with a later ']' into a fresh OSC introducer.
-			for len(out) > 0 && out[len(out)-1] == '\x1b' {
-				out = out[:len(out)-1]
-			}
-		}
-		out = append(out, segment...)
-		pos += size
-	}
-	cleaned := string(out)
-	if containsSourceOSCIntroducer(cleaned) {
-		// The scan removes variable-length controls. Fail closed if bytes on
-		// either side of a removal ever concatenate into a new OSC introducer.
-		return ""
-	}
-	return cleaned
-}
-
-func oscIntroducerLen(value string, pos int) int {
-	switch {
-	case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == ']':
-		return 2
-	case value[pos] == '\x9d':
-		return 1
-	case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9d':
-		return 2
-	default:
-		return 0
-	}
-}
-
-func oscTerminatorLen(value string, pos int) int {
-	switch {
-	case value[pos] == '\x07' || value[pos] == '\x9c':
-		return 1
-	case pos+1 < len(value) && value[pos] == '\x1b' && value[pos+1] == '\\':
-		return 2
-	case pos+1 < len(value) && value[pos] == '\xc2' && value[pos+1] == '\x9c':
-		return 2
-	default:
-		return 0
-	}
-}
-
-func containsSourceOSCIntroducer(value string) bool {
-	for pos := 0; pos < len(value); {
-		if oscIntroducerLen(value, pos) > 0 {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(value[pos:])
-		pos += size
-	}
-	return false
+	return terminallink.StripOSC8(line)
 }
 
 func wrapTerminalVisualRange(line string, startCol, endCol int, open, close string) string {
-	var out strings.Builder
-	state := ansi.NormalState
-	col := 0
-	wrapping := false
-	for len(line) > 0 {
-		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(line, state, nil)
-		if n <= 0 {
-			out.WriteString(line)
-			break
-		}
-		inRange := width > 0 && col >= startCol && col <= endCol
-		if inRange && !wrapping {
-			out.WriteString(open)
-			wrapping = true
-		} else if !inRange && wrapping && width > 0 {
-			out.WriteString(close)
-			wrapping = false
-		}
-		out.WriteString(seq)
-		col += width
-		state = newState
-		line = line[n:]
-	}
-	if wrapping {
-		out.WriteString(close)
-	}
-	return out.String()
+	return terminallink.WrapVisualRange(line, startCol, endCol, open, close)
 }
 
 func (p *Plugin) terminalLinkAt(action mouse.MouseAction) (terminalLink, terminalLinkSurfaceContext, bool, bool) {

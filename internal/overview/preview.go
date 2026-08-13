@@ -14,11 +14,9 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-// The global Workspaces preview is one terminal box. Not a pane tree, not a
-// docview, not a workspace plugin instance per project: the plan is explicit
-// that rendering pane-tree layouts globally is deferred, and that a project
-// whose own preview has a document open still previews here as its selected
-// pane's captured output alone.
+// The global Workspaces preview is one terminal box, with an optional
+// terminal-adjacent docview when the user clicks a file link. It is not a
+// workspace plugin instance and does not open the issue-preview modal.
 //
 // The box has two states, and they differ only in where the output comes from.
 // Watching is deliberately cheap: exactly one capture in flight at a time — for
@@ -135,6 +133,10 @@ type previewState struct {
 	terminal             previewTerminal
 	interactiveHintShown bool
 
+	// doc is the optional file preview beside the terminal. Issue ids are not
+	// activated here.
+	doc *previewDoc
+
 	metrics PreviewMetrics
 }
 
@@ -221,6 +223,7 @@ func (m *Model) resetPreviewContent() {
 	m.preview.selection.Clear()
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
+	m.preview.doc = nil
 }
 
 // previewSync starts a capture when the selection has moved to a different
@@ -434,6 +437,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// input, and a surface that answered them out here as well would send them
 		// to the pane twice.
 		return true, m.forwardToTerminal(msg)
+	}
+	if handled, cmd := m.previewDocKey(msg); handled {
+		return true, cmd
 	}
 	// The same acts on the terminal surface the live pane routes through OnKey.
 	// The selection they act on exists in both states, so a watched pane answers
