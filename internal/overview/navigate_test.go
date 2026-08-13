@@ -341,7 +341,7 @@ func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 
 	// The project plugin's mutating keys are not the browser's to answer.
 	before := m.workspaces.SelectedID()
-	for _, k := range []string{"n", "D", "p", "a", "c", "x", "N", "R"} {
+	for _, k := range []string{"n", "D", "a", "c", "x", "N", "R"} {
 		if handled, cmd := m.WorkspacesKey(key(k)); handled {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}

@@ -261,6 +261,48 @@ func TestPinnedSectionSitsAboveSortGroupsAndIsNotDuplicated(t *testing.T) {
 	}
 }
 
+func TestModelTogglePinHeadsTheListAndDoesNotDuplicate(t *testing.T) {
+	var m Model
+	m.SetItems(items())
+	m.SetSort(SortActivity)
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "c,a,b,d" {
+		t.Fatalf("activity visible = %s", got)
+	}
+	if got := m.TogglePin("d"); strings.Join(got, ",") != "d" {
+		t.Fatalf("first pin = %v", got)
+	}
+	if got := m.TogglePin("a"); strings.Join(got, ",") != "d,a" {
+		t.Fatalf("pin order = %v, want first-pinned first", got)
+	}
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "d,a,c,b" {
+		t.Fatalf("visible after pin = %s, want pinned first then activity", got)
+	}
+	view := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20}).View)
+	if !strings.Contains(view, "Pinned (2)") {
+		t.Fatalf("missing Pinned heading:\n%s", view)
+	}
+	if strings.Count(view, "old worktree") != 1 || strings.Count(view, "modal look and feel") != 1 {
+		t.Fatalf("pinned rows were duplicated:\n%s", view)
+	}
+	if !strings.Contains(view, "*") {
+		t.Fatalf("pinned row has no pin mark:\n%s", view)
+	}
+	if got := m.TogglePin("d"); strings.Join(got, ",") != "a" {
+		t.Fatalf("unpin = %v", got)
+	}
+	if m.IsPinned("d") || !m.IsPinned("a") {
+		t.Fatal("unpin did not restore pin membership")
+	}
+
+	m.SetPinned([]string{"gone", "b", "gone"})
+	if got := strings.Join(m.PinnedIDs(), ","); got != "gone,b" {
+		t.Fatalf("SetPinned kept %s", got)
+	}
+	if got := strings.Join(idsOf(m.Visible()), ","); got != "b,c,a,d" {
+		t.Fatalf("gone pin leaked into visible: %s", got)
+	}
+}
+
 func idsOf(items []Item) []string {
 	out := make([]string, 0, len(items))
 	for _, item := range items {

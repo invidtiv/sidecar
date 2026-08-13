@@ -115,6 +115,26 @@ func TestTwoLineRowPutsProjectNameAgeThenKindAndAgent(t *testing.T) {
 	}
 }
 
+func TestPinnedMarkSitsOnLineTwoAndDoesNotStealTheMarker(t *testing.T) {
+	row := RowPresentation{
+		Marker: RowMarker{Icon: "●", Lane: "working"},
+		Kind:   KindWorktree,
+		Name:   "review",
+		Pinned: true,
+	}
+	lines := RenderRow(row, 40, false, true)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(lines))
+	}
+	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
+	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● review") {
+		t.Fatalf("pin stole the status marker: %q", line1)
+	}
+	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "*") {
+		t.Fatalf("line 2 lost kind or pin mark: %q", line2)
+	}
+}
+
 func TestKindGlyphIsTheFirstNarrowSecondary(t *testing.T) {
 	row := RowPresentation{
 		Marker:        RowMarker{Icon: "●", Lane: "working"},

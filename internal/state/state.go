@@ -39,6 +39,10 @@ type State struct {
 	// ShowIdleWorktrees reveals "no session" rows on the global Workspaces list.
 	// Fresh state leaves this off so the list is sessions by default.
 	ShowIdleWorktrees bool `json:"showIdleWorktrees,omitempty"`
+
+	// PinnedWorkspaceIDs is the ordered catalog IDs pinned to the top of the
+	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
+	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -607,6 +611,43 @@ func SetShowIdleWorktrees(show bool) error {
 	current.ShowIdleWorktrees = show
 	mu.Unlock()
 	return Save()
+}
+
+// GetPinnedWorkspaceIDs returns the saved global pin order, or nil if none.
+func GetPinnedWorkspaceIDs() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || len(current.PinnedWorkspaceIDs) == 0 {
+		return nil
+	}
+	return append([]string(nil), current.PinnedWorkspaceIDs...)
+}
+
+// SetPinnedWorkspaceIDs saves the global Workspaces pin order.
+func SetPinnedWorkspaceIDs(ids []string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.PinnedWorkspaceIDs = uniquePinnedIDs(ids)
+	mu.Unlock()
+	return Save()
+}
+
+func uniquePinnedIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // ClearLastWorktreePath removes the saved worktree path for a main repo.

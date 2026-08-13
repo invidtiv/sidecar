@@ -532,6 +532,141 @@ func TestIdleFlagPersistsThroughTheFlyOut(t *testing.T) {
 	}
 }
 
+func TestPinKeyTogglesAPinnedSectionAboveTheSort(t *testing.T) {
+	var saved []string
+	origLoad, origSave := loadPinnedWorkspaceIDs, savePinnedWorkspaceIDs
+	loadPinnedWorkspaceIDs = func() []string { return append([]string(nil), saved...) }
+	savePinnedWorkspaceIDs = func(ids []string) error {
+		saved = append([]string(nil), ids...)
+		return nil
+	}
+	t.Cleanup(func() {
+		loadPinnedWorkspaceIDs = origLoad
+		savePinnedWorkspaceIDs = origSave
+	})
+
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	if !m.workspaces.SelectID("s2") {
+		t.Fatal("could not select the shell")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"}); !handled {
+		t.Fatal("p on the list was not handled")
+	}
+	if !m.workspaces.IsPinned("s2") {
+		t.Fatal("p did not pin the selected row")
+	}
+	if strings.Join(saved, ",") != "s2" {
+		t.Fatalf("pin did not persist: %v", saved)
+	}
+
+	m.workspaces.SelectID("s1")
+	m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if strings.Join(m.workspaces.PinnedIDs(), ",") != "s2,s1" {
+		t.Fatalf("pin order = %v, want first-pinned first", m.workspaces.PinnedIDs())
+	}
+	if got := idsOfVisible(m); strings.Join(got, ",") != "s2,s1,b1" {
+		t.Fatalf("visible = %v, want pinned first then activity", got)
+	}
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "Pinned (2)") {
+		t.Fatalf("missing Pinned heading:\n%s", list)
+	}
+	if strings.Count(list, "sidecar Shell 1") != 1 || strings.Count(list, "sidecar modal") != 1 {
+		t.Fatalf("pinned rows were duplicated:\n%s", list)
+	}
+
+	m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if m.workspaces.IsPinned("s1") || !m.workspaces.IsPinned("s2") {
+		t.Fatal("p did not unpin the selected row")
+	}
+
+	m2 := New(workspaceinventory.Collector{})
+	if strings.Join(m2.workspaces.PinnedIDs(), ",") != "s2" {
+		t.Fatalf("a new model did not restore pins: %v", m2.workspaces.PinnedIDs())
+	}
+}
+
+func TestGoneCatalogPinsAreDroppedQuietly(t *testing.T) {
+	var saved []string
+	origLoad, origSave := loadPinnedWorkspaceIDs, savePinnedWorkspaceIDs
+	loadPinnedWorkspaceIDs = func() []string { return append([]string(nil), saved...) }
+	savePinnedWorkspaceIDs = func(ids []string) error {
+		saved = append([]string(nil), ids...)
+		return nil
+	}
+	t.Cleanup(func() {
+		loadPinnedWorkspaceIDs = origLoad
+		savePinnedWorkspaceIDs = origSave
+	})
+
+	m := catalogModel(t)
+	m.workspaces.SetPinned([]string{"gone", "s1"})
+	m.loading = false
+	m.syncBoard()
+	if got := strings.Join(m.workspaces.PinnedIDs(), ","); got != "s1" {
+		t.Fatalf("gone pin survived sync: %s", got)
+	}
+	if strings.Join(saved, ",") != "s1" {
+		t.Fatalf("gone pin was not dropped from persist: %v", saved)
+	}
+}
+
+func TestPinKeyWhileFilterFocusedStaysQueryText(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	m.WorkspacesKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"}); !handled {
+		t.Fatal("filter did not consume p")
+	}
+	if m.workspaces.Filter().Query() != "p" {
+		t.Fatalf("query = %q, want p", m.workspaces.Filter().Query())
+	}
+	if len(m.workspaces.PinnedIDs()) != 0 {
+		t.Fatal("p mid-query pinned a row")
+	}
+}
+
+func TestPinKeyWhileTypingGoesToThePane(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	enterInteractive(t, m)
+	if !m.PreviewInteractive() {
+		t.Fatal("test premise: not typing")
+	}
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if !handled {
+		t.Fatal("interactive p was not handled")
+	}
+	run(t, m, cmd)
+	if len(terminal.keys) == 0 || terminal.keys[len(terminal.keys)-1] != "p" {
+		t.Fatalf("pane keys = %v, want p", terminal.keys)
+	}
+	if len(m.workspaces.PinnedIDs()) != 0 {
+		t.Fatal("typing p pinned a row")
+	}
+}
+
+func TestListFocusedCommandsAdvertisePin(t *testing.T) {
+	m := catalogModel(t)
+	var found bool
+	for _, cmd := range m.Commands() {
+		if cmd.Key == "p" && cmd.Name == "Pin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("list-focused Commands() omitted Pin: %#v", m.Commands())
+	}
+}
+
+func idsOfVisible(m *Model) []string {
+	var ids []string
+	for _, item := range m.workspaces.Visible() {
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
 func visibleByID(m *Model) map[string]workspacelist.Item {
 	byID := map[string]workspacelist.Item{}
 	for _, item := range m.workspaces.Visible() {

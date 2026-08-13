@@ -163,6 +163,8 @@ var (
 	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
 	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
 	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
+	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
+	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -178,6 +180,7 @@ func New(collector workspaceinventory.Collector) *Model {
 		m.sidebarWidth = savedWidth
 	}
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -1027,6 +1030,9 @@ func fitCompactLine(line string, width int) string {
 }
 
 func (m *Model) Commands() []struct{ Key, Name string } {
+	if !m.PreviewInteractive() {
+		return []struct{ Key, Name string }{{"enter", "Type"}, {"p", "Pin"}, {"r", "Refresh"}}
+	}
 	return []struct{ Key, Name string }{{"enter", "Open"}, {"r", "Refresh"}}
 }
 

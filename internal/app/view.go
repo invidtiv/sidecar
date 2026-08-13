@@ -1013,6 +1013,7 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "enter", label: "Type"},
 			footerHint{keys: "/", label: "Filter"},
 			footerHint{keys: "s", label: "Sort"},
+			footerHint{keys: "p", label: "Pin"},
 			footerHint{keys: "r", label: "Refresh"},
 			footerHint{keys: "\\", label: "Sidebar"},
 			footerHint{keys: "esc", label: "Close"},

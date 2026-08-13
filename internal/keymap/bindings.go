@@ -71,6 +71,7 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
+		{Key: "p", Command: "pin", Context: "global-workspaces"},
 		{Key: "r", Command: "refresh", Context: "global-workspaces"},
 		{Key: "j", Command: "cursor-down", Context: "global-workspaces"},
 		{Key: "k", Command: "cursor-up", Context: "global-workspaces"},

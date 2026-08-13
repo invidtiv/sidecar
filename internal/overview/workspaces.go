@@ -64,9 +64,33 @@ func (m *Model) syncWorkspaces() {
 	}
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
+	if !m.loading {
+		m.pruneGonePins()
+	}
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+}
+
+func (m *Model) pruneGonePins() {
+	ids := m.workspaces.PinnedIDs()
+	if len(ids) == 0 {
+		return
+	}
+	kept := make([]string, 0, len(ids))
+	dropped := false
+	for _, id := range ids {
+		if _, ok := m.catalog[id]; ok {
+			kept = append(kept, id)
+			continue
+		}
+		dropped = true
+	}
+	if !dropped {
+		return
+	}
+	m.workspaces.SetPinned(kept)
+	_ = savePinnedWorkspaceIDs(kept)
 }
 
 // listItem projects one catalog row into the shared list component's display
@@ -377,6 +401,8 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "s":
 		m.openViewFlyout()
 		return true, nil
+	case "p":
+		return true, m.toggleWorkspacePin()
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "esc":
@@ -405,6 +431,33 @@ func (m *Model) WorkspaceFocusContext() string {
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
+
+func (m *Model) toggleWorkspacePin() tea.Cmd {
+	item, ok := m.workspaces.Selected()
+	if !ok {
+		return nil
+	}
+	ids := m.workspaces.TogglePin(item.ID)
+	if !m.loading {
+		ids = m.knownPinnedIDs(ids)
+		m.workspaces.SetPinned(ids)
+	}
+	_ = savePinnedWorkspaceIDs(ids)
+	return nil
+}
+
+func (m *Model) knownPinnedIDs(ids []string) []string {
+	if len(m.catalog) == 0 {
+		return ids
+	}
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := m.catalog[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
 
 // toggleWorkspaceSidebar shows or hides the list. It is a layout toggle only:
 // hiding fills the tab with the preview and leaves the keyboard on the list, so

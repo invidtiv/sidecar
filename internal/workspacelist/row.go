@@ -80,6 +80,7 @@ type RowPresentation struct {
 	BeforeProvider []RowField
 	Provider       string
 	AfterProvider  []RowField
+	Pinned         bool
 }
 
 // RenderRow renders one or two physical lines. Narrow rows retain the status
@@ -148,6 +149,13 @@ func renderRowFields(row RowPresentation, selected bool) []string {
 			glyph = styles.Muted.Render(glyph)
 		}
 		fields = append(fields, glyph)
+	}
+	if row.Pinned {
+		mark := "*"
+		if !selected {
+			mark = styles.Muted.Render(mark)
+		}
+		fields = append(fields, mark)
 	}
 	fields = append(fields, renderFields(row.BeforeProvider, selected)...)
 	if row.Provider != "" {
