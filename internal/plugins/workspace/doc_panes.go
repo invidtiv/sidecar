@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 type docPane struct {
@@ -635,10 +636,10 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !p.docVisible() {
 		return "", false
 	}
-	doc, _ := p.activeDocPane()
 	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
 	if !fits {
 		if p.docFocused() {
+			doc, _ := p.activeDocPane()
 			if absolute, ok := p.previewContentBox(); ok {
 				p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: width, H: height})
 			}
@@ -647,54 +648,81 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		}
 		return "", false
 	}
-	if len(leaves) != 2 || len(dividers) != 1 {
-		return "", false
-	}
-	var terminal, document string
+
+	// Every leaf and divider is drawn onto the box LayoutPanes gave it. Joining
+	// the blocks back together instead would re-derive that geometry in string
+	// space at every level of nesting, and the levels only have to disagree by a
+	// cell for a divider to walk sideways.
+	canvas := ui.NewCanvas(width, height)
 	for _, placement := range leaves {
-		switch placement.Node.Kind {
-		case PaneTerminal:
-			// The terminal leaf is the one leaf whose header the frame does not
-			// draw yet: the terminal panel puts a second surface, with a second
-			// header row, inside this one leaf. M1 absorbs the panel into the tree
-			// and each surface becomes a leaf the frame can head itself.
-			terminal = p.renderPreviewContentLegacy(placement.Box.W, placement.Box.H)
-		case PaneDoc:
-			document = composePaneLeaf(
-				p.docPaneHeaderRow(doc, placement.Box),
-				p.renderDocPaneBody(doc, placement.Box))
-			if absolute, ok := p.previewContentBox(); ok {
-				p.registerDocPaneRegions(doc, placement.Node.ID, Box{
-					X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
-					W: placement.Box.W, H: placement.Box.H,
-				})
-			}
+		canvas.Blit(placement.Box, p.renderPaneLeaf(placement))
+	}
+	for _, split := range dividers {
+		canvas.Blit(split.Box, p.renderPaneTreeDivider(split))
+	}
+	p.registerPaneTreeRegions(leaves, dividers)
+	return canvas.String(), true
+}
+
+// renderPaneLeaf draws one placed leaf: the header row the frame owns, then the
+// leaf's body under it. A leaf whose content is missing draws nothing and the
+// canvas leaves its box blank, rather than shifting its neighbours into it.
+func (p *Plugin) renderPaneLeaf(placement Placement) string {
+	if placement.Node.Kind == PaneDoc {
+		doc := p.docs[placement.Node.DocID]
+		if doc == nil || doc.view == nil {
+			return ""
+		}
+		return composePaneLeaf(
+			p.docPaneHeaderRow(doc, placement.Box),
+			p.renderDocPaneBody(doc, placement.Box))
+	}
+	// The terminal leaf is the one leaf whose header the frame does not draw
+	// yet: the terminal panel puts a second surface, with a second header row,
+	// inside this one leaf. M1 absorbs the panel into the tree and each surface
+	// becomes a leaf the frame can head itself.
+	return p.renderPreviewContentLegacy(placement.Box.W, placement.Box.H)
+}
+
+func (p *Plugin) renderPaneTreeDivider(split Divider) string {
+	if split.Axis == SplitRows {
+		return renderPaneTreeDividerH(split.Box.W, p.docFocused())
+	}
+	return renderPaneTreeDividerV(split.Box.H, p.docFocused())
+}
+
+// registerPaneTreeRegions registers hit regions from the same placements the
+// canvas drew from, so a click cannot land on geometry the frame did not draw.
+func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider) {
+	absolute, ok := p.previewContentBox()
+	if !ok {
+		return
+	}
+	for _, placement := range leaves {
+		if placement.Node.Kind != PaneDoc {
+			continue
+		}
+		if doc := p.docs[placement.Node.DocID]; doc != nil && doc.view != nil {
+			p.registerDocPaneRegions(doc, placement.Node.ID, Box{
+				X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
+				W: placement.Box.W, H: placement.Box.H,
+			})
 		}
 	}
-	if absolute, ok := p.previewContentBox(); ok {
-		for _, split := range dividers {
-			hit := split.Box
-			if split.Axis == SplitCols {
-				hit.W = dividerHitWidth
-				hit.X--
-			} else {
-				hit.H = dividerHitWidth
-				hit.Y--
-			}
-			p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
-				absolute.X+hit.X, absolute.Y+hit.Y, hit.W, hit.H, split.SplitID)
+	// Dividers arrive with each split before its children's, and three-cell hit
+	// targets overlap once splits nest. Keeping that order registers the
+	// innermost divider last, which is the one HitMap.Test's reverse scan
+	// returns for a point two dividers both claim.
+	for _, split := range dividers {
+		hit := split.Box
+		if split.Axis == SplitCols {
+			hit.W = dividerHitWidth
+			hit.X--
+		} else {
+			hit.H = dividerHitWidth
+			hit.Y--
 		}
+		p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
+			absolute.X+hit.X, absolute.Y+hit.Y, hit.W, hit.H, split.SplitID)
 	}
-	if dividers[0].Axis == SplitRows {
-		divider := renderPaneTreeDividerH(width, p.docFocused())
-		if leaves[0].Node.Kind == PaneTerminal {
-			return lipgloss.JoinVertical(lipgloss.Left, terminal, divider, document), true
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, document, divider, terminal), true
-	}
-	divider := renderPaneTreeDividerV(height, p.docFocused())
-	if leaves[0].Node.Kind == PaneTerminal {
-		return lipgloss.JoinHorizontal(lipgloss.Top, terminal, divider, document), true
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, document, divider, terminal), true
 }

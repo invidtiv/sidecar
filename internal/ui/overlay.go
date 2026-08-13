@@ -36,8 +36,26 @@ func clipOverlayLine(line string, width int) string {
 }
 
 func normalizeOverlayLine(line string, width int) string {
-	line = clipOverlayLine(line, width)
-	if lineWidth := ansi.StringWidth(line); lineWidth < width {
+	return fitLineWidth(clipOverlayLine(line, width), width)
+}
+
+// fitLineWidth clips and pads one line to exactly width cells, counting cells
+// rather than bytes. A line already that wide is returned untouched: the
+// compositor's inputs are styled content, and re-truncating a line that fits
+// would rewrite the escape sequences it arrived with.
+func fitLineWidth(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lineWidth := ansi.StringWidth(line)
+	if lineWidth == width {
+		return line
+	}
+	if lineWidth > width {
+		line = ansi.Truncate(line, width, "")
+		lineWidth = ansi.StringWidth(line)
+	}
+	if lineWidth < width {
 		line += strings.Repeat(" ", width-lineWidth)
 	}
 	return line
