@@ -237,7 +237,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		now = time.Now()
 	}
 	matched, total := m.Counts()
-	sections := Grouped(m.visible, m.sortMode)
+	sections := GroupedAt(m.visible, m.sortMode, now, nil)
 	// A project whose inventory could not be read is a row, not a leftover. Its
 	// lines are reserved out of the body before the item viewport is sized, so a
 	// catalog longer than the pane — the normal multi-project case — cannot make
@@ -255,8 +255,8 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
 		title := ""
-		if m.sortMode == SortActivity && section.Group != "" {
-			title = SectionTitle(string(section.Group), len(section.Items))
+		if section.Title != "" {
+			title = SectionTitle(section.Title, len(section.Items))
 		}
 		s := SidebarSection{Title: title}
 		for _, item := range section.Items {

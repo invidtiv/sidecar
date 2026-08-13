@@ -242,6 +242,24 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 	}
 }
 
+func TestProjectAndRecentSortsRenderSectionHeadings(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+	m.workspaces.SetSort(workspacelist.SortProject)
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "sidecar (2)") || !strings.Contains(list, "braid (1)") {
+		t.Fatalf("project sort lost per-project headings:\n%s", list)
+	}
+
+	now := time.Now()
+	m.collector.Now = func() time.Time { return now }
+	m.workspaces.SetSort(workspacelist.SortRecent)
+	list = ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
+	if !strings.Contains(list, "New (") && !strings.Contains(list, "Today (") {
+		t.Fatalf("recent sort lost time-bucket headings:\n%s", list)
+	}
+}
+
 func TestPerProjectFailureIsAVisibleRowNotASilentGap(t *testing.T) {
 	m := catalogModel(t)
 	m.projectErrors["braid"] = errStub{"not a Git repository"}
