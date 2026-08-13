@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 type docPane struct {
@@ -21,16 +22,8 @@ type docPane struct {
 	view    *docview.Model
 }
 
-func docPaneTarget(rel string, resolvedInsideSelectedSurface bool) bool {
-	if !resolvedInsideSelectedSurface {
-		return false
-	}
-	switch strings.ToLower(filepath.Ext(rel)) {
-	case ".md", ".markdown":
-		return true
-	default:
-		return false
-	}
+func docPaneTarget(path string) bool {
+	return strings.TrimSpace(path) != ""
 }
 
 func (p *Plugin) selectedTerminalRoot() (string, bool) {
@@ -117,6 +110,7 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 		} else {
 			cmd = doc.view.Load(leaf.DocID, root, rel, line, epoch)
 		}
+		applyDocRenderMode(doc.view, rel, line)
 		p.saveSelectionState()
 		return cmd
 	}
@@ -154,8 +148,20 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	} else {
 		load = viewer.Load(docID, root, rel, line, epoch)
 	}
+	applyDocRenderMode(viewer, rel, line)
 	p.saveSelectionState()
 	return tea.Batch(load, p.resizeDocTerminalCmd())
+}
+
+func applyDocRenderMode(view *docview.Model, path string, line int) {
+	if view == nil {
+		return
+	}
+	if !terminallink.Markdown(path) || line > 0 {
+		view.SetRendered(false)
+		return
+	}
+	view.SetRendered(true)
 }
 
 func clonePaneTree(node *PaneNode) *PaneNode {

@@ -14,7 +14,6 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -41,6 +40,15 @@ func TestIssueSpanIsDetectedButNotActivatedOrDecorated(t *testing.T) {
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("issue click opened a document pane")
 	}
+}
+
+func mustEvalSymlink(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 func TestDetectTerminalLinksFindsSafeURLAndPathLine(t *testing.T) {
@@ -247,7 +255,7 @@ func containsOSCIntroducerAtRuneBoundary(value string) bool {
 	return false
 }
 
-func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testing.T) {
+func TestResolveTerminalPathAcceptsAnyRegularFileOnThisMachine(t *testing.T) {
 	base := t.TempDir()
 	inside := filepath.Join(base, "internal", "foo.go")
 	if err := os.MkdirAll(filepath.Dir(inside), 0o755); err != nil {
@@ -270,18 +278,30 @@ func TestResolveTerminalPathStaysInsideWorkspaceAndRejectsSymlinkEscape(t *testi
 	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := resolveTerminalPath(base, outside); ok {
-		t.Fatal("absolute path outside workspace was accepted")
+	outsideResolved, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	display, abs, ok := resolveTerminalPath(base, outside)
+	if !ok || abs != outsideResolved || display != outsideResolved {
+		t.Fatalf("outside resolution = display %q abs %q ok=%v", display, abs, ok)
 	}
 	link := filepath.Join(base, "escape.go")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := resolveTerminalPath(base, "escape.go"); ok {
-		t.Fatal("symlink escape outside workspace was accepted")
+	display, abs, ok = resolveTerminalPath(base, "escape.go")
+	if !ok || abs != outsideResolved {
+		t.Fatalf("symlink to a regular file was refused: display %q abs %q ok=%v", display, abs, ok)
 	}
-	if _, _, ok := resolveTerminalPath(base, "../secret.go"); ok {
-		t.Fatal("parent traversal outside workspace was accepted")
+	if _, _, ok := resolveTerminalPath(base, filepath.Join(outsideDir, "missing.go")); ok {
+		t.Fatal("missing path was accepted")
+	}
+	if _, _, ok := resolveTerminalPath(base, outsideDir); ok {
+		t.Fatal("directory was accepted")
+	}
+	if _, _, ok := resolveTerminalPath(base, "internal/foo.go\x00"); ok {
+		t.Fatal("control character token was accepted")
 	}
 }
 
@@ -329,7 +349,7 @@ func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing
 		{"path line overlap", "docs/overlap.md:12", nil},
 		{"dangling", "missing.md", nil},
 		{"directory", "directory.md", nil},
-		{"outside absolute", outside, nil},
+		{"outside absolute", outside, []string{mustEvalSymlink(t, outside)}},
 		{"url overlap", "https://example.test/docs/guide.markdown", nil},
 		{"numeric suffix", "README.md5", nil},
 		{"identifier suffix", "README.mdfoo", nil},
@@ -491,10 +511,6 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	outPath := filepath.Join(t.TempDir(), "outside.md")
-	if err := os.WriteFile(outPath, []byte("outside"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	buffer := tty.NewOutputBuffer(20)
 	buffer.Update("README.md")
 	p := newSelectionTestPlugin()
@@ -510,14 +526,14 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outPath, path); err != nil {
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
-		t.Fatal("click activated cached link after path escaped selected root")
+		t.Fatal("click activated cached link after path became a directory")
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
-		t.Fatal("escaping click created a document pane")
+		t.Fatal("directory click created a document pane")
 	}
 }
 
@@ -1028,10 +1044,6 @@ func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {
 	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	buffer := tty.NewOutputBuffer(20)
 	buffer.Update("README.md")
 	p := newSelectionTestPlugin()
@@ -1045,11 +1057,11 @@ func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, path); err != nil {
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd != nil {
-		t.Fatal("unsafe swapped link activated")
+		t.Fatal("directory swapped link activated")
 	}
 	if p.terminalDocProjection.buffer != nil {
 		t.Fatal("refused link captured terminal projection")
@@ -1097,7 +1109,41 @@ func TestActivateTerminalLinkMapsClickThroughViewportCoordinates(t *testing.T) {
 	}
 }
 
-func TestOpenTerminalPathSequencesWorktreeSwitchBeforeNavigation(t *testing.T) {
+func TestBareGoPathAndLineOpenRawDocPane(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update("see main.go then main.go:37")
+	p := docPaneTestPlugin(t, root, true)
+	p.shells[0].Agent.OutputBuf = buffer
+	links := p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, "see main.go then main.go:37")
+	if len(links) != 2 {
+		t.Fatalf("links = %#v", links)
+	}
+	var bare, lined bool
+	for _, link := range links {
+		if link.Value == "main.go" && link.Line == 0 {
+			bare = true
+		}
+		if link.Value == "main.go" && link.Line == 37 {
+			lined = true
+		}
+	}
+	if !bare || !lined {
+		t.Fatalf("expected bare and :line file spans: %#v", links)
+	}
+	if cmd := p.openTerminalPath("main.go", 37); cmd == nil {
+		t.Fatal("main.go:37 did not open a preview")
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view.Title() != "main.go" || doc.view.Rendered() {
+		t.Fatalf("raw go preview = %#v rendered=%v", doc, doc != nil && doc.view.Rendered())
+	}
+}
+
+func TestOpenTerminalPathPreviewsOtherWorktreeFileInPlace(t *testing.T) {
 	mainDir := t.TempDir()
 	worktreeDir := t.TempDir()
 	path := filepath.Join(worktreeDir, "internal", "foo.go")
@@ -1107,40 +1153,33 @@ func TestOpenTerminalPathSequencesWorktreeSwitchBeforeNavigation(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package internal"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := New()
-	p.ctx = &plugin.Context{WorkDir: mainDir}
+	p := docPaneTestPlugin(t, mainDir, true)
 	p.worktrees = []*Worktree{{Name: "feature", Path: worktreeDir}}
 
-	cmd := p.openTerminalPath("internal/foo.go", 37)
+	cmd := p.openTerminalPath(path, 37)
 	if cmd == nil {
-		t.Fatal("valid worktree path returned no command")
+		t.Fatal("outside worktree file returned no preview command")
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view.Title() != mustEvalSymlink(t, path) {
+		t.Fatalf("previewed doc = %#v", doc)
+	}
+	if doc.view.Rendered() {
+		t.Fatal("non-markdown preview opened rendered")
 	}
 	msg := cmd()
-	sequence := reflect.ValueOf(msg)
-	if sequence.Kind() != reflect.Slice || sequence.Len() != 3 {
-		t.Fatalf("path command = %T len=%d, want three-command sequence", msg, sequence.Len())
+	if _, ok := msg.(app.SwitchWorktreeMsg); ok {
+		t.Fatal("previewing another worktree switched project")
 	}
-	commands := make([]tea.Cmd, sequence.Len())
-	for i := range commands {
-		commands[i] = sequence.Index(i).Interface().(tea.Cmd)
-	}
-	switchMsg, ok := commands[0]().(app.SwitchWorktreeMsg)
-	if !ok {
-		t.Fatalf("first sequence message = %T, want SwitchWorktreeMsg", commands[0]())
-	}
-	resolvedWorktree, err := filepath.EvalSymlinks(worktreeDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if switchMsg.WorktreePath != resolvedWorktree {
-		t.Fatalf("switch path = %q, want %q", switchMsg.WorktreePath, resolvedWorktree)
-	}
-	if _, ok := commands[1]().(app.FocusPluginByIDMsg); !ok {
-		t.Fatalf("second sequence message = %T, want FocusPluginByIDMsg", commands[1]())
-	}
-	navigate, ok := commands[2]().(filebrowser.NavigateToFileMsg)
-	if !ok || navigate.Path != "internal/foo.go" || navigate.Line != 37 {
-		t.Fatalf("third sequence message = %#v, want file navigation at line 37", commands[2]())
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if child == nil {
+				continue
+			}
+			if _, switched := child().(app.SwitchWorktreeMsg); switched {
+				t.Fatal("preview batch switched project")
+			}
+		}
 	}
 }
 

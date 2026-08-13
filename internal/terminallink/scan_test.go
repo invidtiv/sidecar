@@ -1,6 +1,8 @@
 package terminallink
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,6 +95,36 @@ func TestScanBareMarkdownUsesResolverAndSkipsMisses(t *testing.T) {
 	spans := Scan("please read README.md and missing.md", resolve)
 	if len(spans) != 1 || spans[0].Kind != KindFile || spans[0].Value != "README.md" || spans[0].Extra.Raw != "README.md" {
 		t.Fatalf("bare spans = %#v", spans)
+	}
+}
+
+func TestScanBareCodeAndHomePaths(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "dot.go"), []byte("package dot"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = orig })
+
+	resolve := func(raw string) (string, Extra, bool) {
+		display, _, ok := ResolveFile(home, raw)
+		return display, Extra{Raw: raw}, ok
+	}
+	spans := Scan("see main.go and ~/dot.go and missing.go", resolve)
+	if len(spans) != 1 || spans[0].Kind != KindFile || spans[0].Extra.Raw != "~/dot.go" {
+		t.Fatalf("spans = %#v", spans)
+	}
+	spans = Scan("main.go:37", resolve)
+	if len(spans) != 0 {
+		t.Fatalf("missing path:line = %#v", spans)
+	}
+	if err := os.WriteFile(filepath.Join(home, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spans = Scan("main.go:37", resolve)
+	if len(spans) != 1 || spans[0].Value != "main.go" || spans[0].Extra.Line != 37 {
+		t.Fatalf("path:line = %#v", spans)
 	}
 }
 

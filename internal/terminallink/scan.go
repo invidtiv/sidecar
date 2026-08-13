@@ -37,17 +37,18 @@ type Span struct {
 
 // Resolver reports whether a file token exists. value is what the host should
 // store (typically a path relative to the selected root). ok=false drops the
-// span. A nil Resolver skips existence-gated file spans (bare markdown).
+// span. A nil Resolver skips existence-gated file spans (bare paths).
 type Resolver func(raw string) (value string, extra Extra, ok bool)
 
 var (
 	urlPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
-	// path:line — same token set the project plugin shipped before the extract.
+	// path:line, including absolute and ~/ prefixes.
 	pathLinePattern = regexp.MustCompile(
-		`(?:^|[\s(\[])((?:\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
+		`(?:^|[\s(\[])((?:~/|\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
 	)
-	bareMarkdownPattern = regexp.MustCompile(
-		`(?:^|[\s(\x5b` + "`" + `])((?:\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.(?i:md|markdown)[.,;!?)}\x5d` + "`" + `]*)`,
+	// Bare path with a suffix. Existence is the host Resolver's job.
+	bareFilePattern = regexp.MustCompile(
+		`(?:^|[\s(\x5b` + "`" + `])((?:~/|\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.[A-Za-z0-9_+-]+[.,;!?)}\x5d` + "`" + `]*)`,
 	)
 	// Current td id shape. Title matching is out of scope until a split binds
 	// this kind to a td pane — not to the issue-preview modal.
@@ -58,14 +59,15 @@ var (
 //
 // line may still contain ANSI; it is stripped before matching. Overlaps are
 // resolved first-kind-wins in this order: url, path:line, resolved bare
-// markdown, issue.
+// files, issue. File tokens need a suffix. Bare files (and, when a Resolver
+// is supplied, path:line) are existence-gated.
 func Scan(line string, resolve Resolver) []Span {
 	plain := ansi.Strip(line)
 	var spans []Span
 	spans = append(spans, scanURLs(plain)...)
-	spans = append(spans, scanPathLines(plain, spans)...)
+	spans = append(spans, scanPathLines(plain, spans, resolve)...)
 	if resolve != nil {
-		spans = append(spans, scanBareMarkdown(plain, spans, resolve)...)
+		spans = append(spans, scanBareFiles(plain, spans, resolve)...)
 	}
 	spans = append(spans, scanIssues(plain, spans)...)
 	return spans
@@ -89,49 +91,63 @@ func scanURLs(plain string) []Span {
 	return spans
 }
 
-func scanPathLines(plain string, existing []Span) []Span {
+func scanPathLines(plain string, existing []Span, resolve Resolver) []Span {
 	var spans []Span
 	for _, loc := range pathLinePattern.FindAllStringSubmatchIndex(plain, -1) {
 		if len(loc) < 6 || loc[2] < 0 || loc[4] < 0 {
 			continue
 		}
 		start, end := loc[2], loc[3]
-		if overlaps(plain, existing, spans, start, end) {
+		path := plain[start:end]
+		if containsControl(path) || overlaps(plain, existing, spans, start, end) {
 			continue
 		}
 		lineNo, err := strconv.Atoi(plain[loc[4]:loc[5]])
 		if err != nil {
 			continue
 		}
+		value := path
+		extra := Extra{Line: lineNo}
+		if resolve != nil {
+			resolved, resolvedExtra, ok := resolve(path)
+			if !ok {
+				continue
+			}
+			value = resolved
+			extra = resolvedExtra
+			extra.Line = lineNo
+			if extra.Raw == "" {
+				extra.Raw = path
+			}
+		}
 		spans = append(spans, Span{
 			Kind:     KindFile,
 			StartCol: colAt(plain, start),
 			EndCol:   colAt(plain, end) - 1,
-			Value:    plain[start:end],
-			Extra:    Extra{Line: lineNo},
+			Value:    value,
+			Extra:    extra,
 		})
 	}
 	return spans
 }
 
-func scanBareMarkdown(plain string, existing []Span, resolve Resolver) []Span {
+func scanBareFiles(plain string, existing []Span, resolve Resolver) []Span {
 	var spans []Span
-	for _, loc := range bareMarkdownPattern.FindAllStringSubmatchIndex(plain, -1) {
+	for _, loc := range bareFilePattern.FindAllStringSubmatchIndex(plain, -1) {
 		if len(loc) < 4 || loc[2] < 0 {
 			continue
 		}
 		start, end := loc[2], loc[3]
 		value := strings.TrimRight(plain[start:end], ".,;!?)]}`")
 		end = start + len(value)
-		// The regexp deliberately stops at the markdown extension so it can
-		// retain punctuation for trimming. Require the next byte to be an
-		// actual token boundary; otherwise README.md5 and markdowned prose
-		// would borrow a valid prefix and become surprising links.
+		// The regexp stops at the suffix so it can retain punctuation for
+		// trimming. Require the next byte to be a token boundary; otherwise
+		// README.md5 and similar prefixes would become surprising links.
 		matchEnd := loc[3]
-		if matchEnd < len(plain) && !isBareMarkdownRightBoundary(plain[matchEnd]) {
+		if matchEnd < len(plain) && !isBareFileRightBoundary(plain[matchEnd]) {
 			continue
 		}
-		if value == "" || overlaps(plain, existing, spans, start, end) {
+		if value == "" || containsControl(value) || overlaps(plain, existing, spans, start, end) {
 			continue
 		}
 		resolved, extra, ok := resolve(value)
@@ -169,7 +185,7 @@ func scanIssues(plain string, existing []Span) []Span {
 	return spans
 }
 
-func isBareMarkdownRightBoundary(next byte) bool {
+func isBareFileRightBoundary(next byte) bool {
 	return next == ' ' || next == '\t' || next == '\r' || next == '\n' ||
 		next == ')' || next == ']' || next == '}' || next == '`'
 }

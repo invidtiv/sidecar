@@ -386,32 +386,80 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 		p.clearTerminalSelection()
 		return openInBrowser(link.Value), true
 	}
+	if link.Kind != terminalPathLink {
+		return nil, false
+	}
+	raw := link.Raw
+	if raw == "" {
+		raw = link.Value
+	}
+	root := link.Root
+	if root == "" {
+		root = context.root
+	}
 	if link.Root != "" {
 		fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
 		if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
 			p.invalidateTerminalLinkSurface(context.surface)
 			return nil, false
 		}
-		rel, _, valid := resolveTerminalPathFromResolvedBase(link.Root, link.Raw)
-		if !valid {
-			return nil, false
-		}
-		file, err := openContainedRegularFile(link.Root, rel)
-		if err != nil {
-			return nil, false
-		}
-		surface := strings.TrimSuffix(context.surface, ":panel")
-		cmd := p.openDocPaneFileForSurface(link.Root, surface, rel, link.Line, file)
+		root = fresh.root
+	}
+	if root == "" {
+		cmd := p.openTerminalPath(raw, link.Line)
 		if cmd != nil {
 			p.clearTerminalSelection()
 		}
 		return cmd, cmd != nil
 	}
-	cmd := p.openTerminalPath(link.Value, link.Line)
+	display, abs, ok := resolveTerminalPathFromResolvedBase(root, raw)
+	if !ok {
+		return nil, false
+	}
+	surface := strings.TrimSuffix(context.surface, ":panel")
+	cmd := p.openResolvedFilePreview(root, surface, display, abs, link.Line)
 	if cmd != nil {
 		p.clearTerminalSelection()
 	}
 	return cmd, cmd != nil
+}
+
+func (p *Plugin) openResolvedFilePreview(root, surface, display, abs string, line int) tea.Cmd {
+	var file *os.File
+	var err error
+	if display != "" && !filepath.IsAbs(filepath.FromSlash(display)) {
+		file, err = openContainedRegularFile(root, display)
+	} else {
+		file, err = terminallink.OpenRegular(abs)
+	}
+	if err != nil {
+		return nil
+	}
+	if p.paneRoot == nil {
+		_ = file.Close()
+		return p.openFileBrowserIfCurrentProject(root, display, line)
+	}
+	return p.openDocPaneFileForSurface(root, surface, display, line, file)
+}
+
+func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int) tea.Cmd {
+	if p.ctx == nil || display == "" || filepath.IsAbs(filepath.FromSlash(display)) {
+		return nil
+	}
+	ctxResolved, err := filepath.EvalSymlinks(p.ctx.WorkDir)
+	if err != nil {
+		ctxResolved = filepath.Clean(p.ctx.WorkDir)
+	}
+	rootResolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+	if filepath.Clean(rootResolved) != filepath.Clean(ctxResolved) {
+		return nil
+	}
+	return tea.Batch(app.FocusPlugin("file-browser"), func() tea.Msg {
+		return filebrowser.NavigateToFileMsg{Path: filepath.ToSlash(display), Line: line}
+	})
 }
 
 func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {
@@ -424,32 +472,16 @@ func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {
 			base = wt.Path
 		}
 	}
-	baseResolved, err := filepath.EvalSymlinks(base)
-	if err != nil {
-		return nil
-	}
-	rel, _, ok := resolveTerminalPath(baseResolved, raw)
+	display, abs, ok := resolveTerminalPath(base, raw)
 	if !ok {
 		return nil
 	}
-	if p.paneRoot != nil && docPaneTarget(rel, true) {
-		return p.openDocPane(filepath.Clean(baseResolved), filepath.ToSlash(rel), line)
-	}
-	navigate := func() tea.Msg {
-		return filebrowser.NavigateToFileMsg{Path: filepath.ToSlash(rel), Line: line}
-	}
-	ctxResolved, err := filepath.EvalSymlinks(p.ctx.WorkDir)
+	baseResolved, err := filepath.EvalSymlinks(base)
 	if err != nil {
-		ctxResolved = filepath.Clean(p.ctx.WorkDir)
+		baseResolved = filepath.Clean(base)
 	}
-	if filepath.Clean(baseResolved) != filepath.Clean(ctxResolved) {
-		return tea.Sequence(
-			app.SwitchWorktree(baseResolved),
-			app.FocusPlugin("file-browser"),
-			navigate,
-		)
-	}
-	return tea.Batch(app.FocusPlugin("file-browser"), navigate)
+	_, surface, _ := p.selectedTerminalSurface()
+	return p.openResolvedFilePreview(filepath.Clean(baseResolved), surface, display, abs, line)
 }
 
 func resolveTerminalPath(base, raw string) (relative, absolute string, ok bool) {
@@ -461,21 +493,5 @@ func resolveTerminalPath(base, raw string) (relative, absolute string, ok bool) 
 }
 
 func resolveTerminalPathFromResolvedBase(baseResolved, raw string) (relative, absolute string, ok bool) {
-	target := raw
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(baseResolved, target)
-	}
-	targetResolved, err := filepath.EvalSymlinks(filepath.Clean(target))
-	if err != nil {
-		return "", "", false
-	}
-	rel, err := filepath.Rel(baseResolved, targetResolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", false
-	}
-	info, err := os.Stat(targetResolved)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", "", false
-	}
-	return filepath.ToSlash(rel), targetResolved, true
+	return terminallink.ResolveFile(baseResolved, raw)
 }

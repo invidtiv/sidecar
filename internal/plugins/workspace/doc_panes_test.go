@@ -334,20 +334,20 @@ func TestDocPaneNarrowRefusalAndFocusedLeafFallback(t *testing.T) {
 	}
 }
 
-func TestDocPaneTargetOnlyAcceptsMarkdownInsideSelectedSurface(t *testing.T) {
+func TestDocPaneTargetAcceptsAnyReadablePath(t *testing.T) {
 	for _, tc := range []struct {
-		path   string
-		inside bool
-		want   bool
+		path string
+		want bool
 	}{
-		{"README.md", true, true},
-		{"notes.MARKDOWN", true, true},
-		{"README.md", false, false},
-		{"main.go", true, false},
-		{"archive.md.txt", true, false},
+		{"README.md", true},
+		{"notes.MARKDOWN", true},
+		{"main.go", true},
+		{"archive.json", true},
+		{"", false},
+		{"   ", false},
 	} {
-		if got := docPaneTarget(tc.path, tc.inside); got != tc.want {
-			t.Errorf("docPaneTarget(%q, %v) = %v, want %v", tc.path, tc.inside, got, tc.want)
+		if got := docPaneTarget(tc.path); got != tc.want {
+			t.Errorf("docPaneTarget(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }
