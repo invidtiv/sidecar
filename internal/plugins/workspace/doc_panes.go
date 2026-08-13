@@ -258,7 +258,18 @@ func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
 	doc.view.SetResult(msg)
 }
 
+// docVisible reports whether the document split is on screen. Diff and Task
+// replace that split without clearing paneFocus, so a still-selected doc leaf
+// is not the keyboard owner while those tabs are showing.
+func (p *Plugin) docVisible() bool {
+	doc, _ := p.activeDocPane()
+	return doc != nil && (p.shellSelected || p.previewTab == PreviewTabOutput)
+}
+
 func (p *Plugin) docFocused() bool {
+	if !p.docVisible() {
+		return false
+	}
 	leaf := FindPane(p.paneRoot, p.paneFocus)
 	return p.activePane == PanePreview && leaf != nil && leaf.Split == nil && leaf.Kind == PaneDoc
 }
@@ -599,10 +610,10 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
-	doc, _ := p.activeDocPane()
-	if doc == nil || !(p.shellSelected || p.previewTab == PreviewTabOutput) {
+	if !p.docVisible() {
 		return "", false
 	}
+	doc, _ := p.activeDocPane()
 	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
 	if !fits {
 		if p.docFocused() {

@@ -262,6 +262,50 @@ func docPaneRegion(p *Plugin, id string) *mouse.Region {
 	return nil
 }
 
+func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
+	p := docPaneTestPlugin(t, root, false)
+	open := p.openTerminalPath("README.md", 0)
+	for _, child := range open().(tea.BatchMsg) {
+		if msg, ok := child().(docview.LoadedMsg); ok {
+			p.applyDocLoaded(msg)
+		}
+	}
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil || !doc.view.Rendered() || !p.taskMarkdownMode {
+		t.Fatalf("opened doc = %#v rendered=%v task=%v", doc, doc != nil && doc.view.Rendered(), p.taskMarkdownMode)
+	}
+	if p.FocusContext() != "workspace-doc" {
+		t.Fatalf("output context = %q, want workspace-doc", p.FocusContext())
+	}
+
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionPreviewTab, Data: int(PreviewTabTask)},
+	})
+	if p.previewTab != PreviewTabTask || p.paneFocus != leaf.ID {
+		t.Fatalf("task click tab=%v focus=%d, want Task with doc leaf %d", p.previewTab, p.paneFocus, leaf.ID)
+	}
+	if p.FocusContext() == "workspace-doc" {
+		t.Fatal("hidden document kept workspace-doc focus context")
+	}
+
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !doc.view.Rendered() {
+		t.Fatal("task-tab m toggled the hidden document")
+	}
+	if p.taskMarkdownMode {
+		t.Fatal("task-tab m did not toggle task markdown to raw")
+	}
+
+	p.previewTab = PreviewTabOutput
+	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if doc.view.Rendered() || p.taskMarkdownMode {
+		t.Fatalf("output m should toggle the visible doc only: doc=%v task=%v", doc.view.Rendered(), p.taskMarkdownMode)
+	}
+}
+
 func TestDocumentCommandsDescribeCurrentMode(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
