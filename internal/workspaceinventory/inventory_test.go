@@ -234,6 +234,152 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	}
 }
 
+func TestResolveWorktreePanesIgnoresChromeAndPrefersWorkspaceSession(t *testing.T) {
+	root := "/repo"
+	workspace := Workspace{Path: root, Name: "repo"}
+	cases := []struct {
+		name    string
+		panes   []Pane
+		wantIDs []string
+	}{
+		{
+			name: "worktree plus term panel prefers ws",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-ws-repo", Path: root},
+				{ID: "%2", Session: "sidecar-tp-repo", Path: root},
+			},
+			wantIDs: []string{"%1"},
+		},
+		{
+			name: "worktree plus two editors and shells prefers ws",
+			panes: []Pane{
+				{ID: "%10", Session: "sidecar-edit-1", Path: root},
+				{ID: "%11", Session: "sidecar-edit-2", Path: root},
+				{ID: "%12", Session: "sidecar-sh-repo-1", Path: root},
+				{ID: "%13", Session: "sidecar-sh-repo-2", Path: root},
+				{ID: "%14", Session: "sidecar-ws-repo", Path: root},
+			},
+			wantIDs: []string{"%14"},
+		},
+		{
+			name: "two unmanaged panes stay rivals",
+			panes: []Pane{
+				{ID: "%1", Session: "scratch-a", Path: root},
+				{ID: "%2", Session: "scratch-b", Path: root},
+			},
+			wantIDs: []string{"%1", "%2"},
+		},
+		{
+			name: "shells are never the worktree pane",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-sh-repo-1", Path: root},
+				{ID: "%2", Session: "sidecar-ws-repo", Path: root},
+			},
+			wantIDs: []string{"%2"},
+		},
+		{
+			name: "two live worktree sessions stay ambiguous",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-ws-one", Path: root},
+				{ID: "%2", Session: "sidecar-ws-two", Path: root},
+			},
+			wantIDs: []string{"%1", "%2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveWorktreePanes(workspace, tc.panes)
+			if len(got) != len(tc.wantIDs) {
+				t.Fatalf("panes = %#v, want ids %v", got, tc.wantIDs)
+			}
+			for i, id := range tc.wantIDs {
+				if got[i].ID != id {
+					t.Fatalf("pane %d = %#v, want %s", i, got[i], id)
+				}
+			}
+		})
+	}
+}
+
+func TestWorktreeChromeDoesNotMakeOutputAmbiguous(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtState, err := projectdir.WorktreeDirWithBase(stateBase, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtState, "agent"), []byte("codex"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"sidecar-sh-repo-1","displayName":"Shell 1","namespace":"` + tmuxenv.Namespace() + `","agentType":"claude"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	var captured []string
+	collector := Collector{Runner: runner, Capture: func(id string, _ int) (string, error) {
+		captured = append(captured, id)
+		return "• Working (1s • esc to interrupt)", nil
+	}}
+	panes := []Pane{
+		{ID: "%ws", Session: "sidecar-ws-repo", Path: root, Command: "grok"},
+		{ID: "%tp", Session: "sidecar-tp-repo", Path: root, Command: "zsh"},
+		{ID: "%e1", Session: "sidecar-edit-1", Path: root, Command: "nvim"},
+		{ID: "%e2", Session: "sidecar-edit-2", Path: root, Command: "nvim"},
+		{ID: "%sh", Session: "sidecar-sh-repo-1", Path: root, Command: "claude"},
+	}
+	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, panes)
+	if result.Err != nil {
+		t.Fatalf("collect: %v", result.Err)
+	}
+	worktree, shell, ok := worktreeAndShell(result)
+	if !ok {
+		t.Fatalf("workspaces = %#v, want one worktree and one shell", result.Workspaces)
+	}
+	if worktree.Ambiguous || !worktree.Live || worktree.PaneID != "%ws" || worktree.TmuxName != "sidecar-ws-repo" {
+		t.Fatalf("worktree = %#v, want live pane %%ws", worktree)
+	}
+	if worktree.Presentation.Freshness == agentstatus.FreshnessUnavailable {
+		t.Fatalf("worktree presentation unavailable: %#v", worktree.Presentation)
+	}
+	if shell.PaneID != "%sh" || shell.TmuxName != "sidecar-sh-repo-1" {
+		t.Fatalf("shell = %#v, want its own session", shell)
+	}
+	if len(captured) != 2 || !containsString(captured, "%ws") || !containsString(captured, "%sh") {
+		t.Fatalf("captured = %v, want worktree %%ws and shell %%sh", captured)
+	}
+}
+
+func worktreeAndShell(result ProjectResult) (worktree, shell Workspace, ok bool) {
+	for _, workspace := range result.Workspaces {
+		switch workspace.Kind {
+		case KindWorktree:
+			worktree = workspace
+		case KindShell:
+			shell = workspace
+		}
+	}
+	return worktree, shell, worktree.ID != "" && shell.ID != ""
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCollectorMatchesLiveSiblingWorktreeWithoutConfiguredOwner(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)
