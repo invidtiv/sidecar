@@ -593,7 +593,17 @@ func (m *Model) pinPreviewToLive() {
 	m.jumpPreviewWindow(0)
 }
 
-func (m *Model) previewMaxOffset() int { return m.previewWindow().layout.MaxOffset }
+// previewMaxOffset is how far back this surface's window can sit, taken from
+// the drawn window off its live edge. Reading the current layout's bound
+// instead answered a following window with the untrimmed grid's number, so a
+// jump to the oldest row landed one notch short of it (td-bbbbfe).
+func (m *Model) previewMaxOffset() int {
+	window := m.previewWindow()
+	if !window.ok {
+		return 0
+	}
+	return tty.WindowBound(window.input)
+}
 
 // previewRows is the body height of the preview box at the last rendered size.
 func (m *Model) previewRows() int {

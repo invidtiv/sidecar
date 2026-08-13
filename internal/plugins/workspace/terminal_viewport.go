@@ -103,6 +103,15 @@ func calculateTerminalViewportLayout(in terminalViewportInput) terminalViewportL
 	return tty.FitViewport(in.viewport())
 }
 
+// terminalWindowBound is how far back a named surface's window can be placed,
+// taken from the window the render path actually draws. Both of this plugin's
+// terminal surfaces route their bound through it, and it is the shared rule
+// that answers — a second derivation beside the drawn layout is how the primary
+// surface and the panel came to disagree with their own renderers (td-bbbbfe).
+func (p *Plugin) terminalWindowBound(termPanel bool) int {
+	return tty.WindowBound(p.terminalWindowInputFor(termPanel).viewport())
+}
+
 func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) terminalViewportResult {
 	layout := calculateTerminalViewportLayout(in)
 	if in.Buffer == nil || layout.EffectiveCount == 0 {

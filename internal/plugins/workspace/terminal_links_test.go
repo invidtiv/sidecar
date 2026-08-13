@@ -902,8 +902,11 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	p.docs = make(map[int]*docPane)
 	p.terminalHistory = make(map[string]terminalHistoryState)
 	// The reader has scrolled back off the live grid, so the rows they clicked
-	// are the transcript above it rather than the pane's current frame.
-	p.previewScroll = 1
+	// are the transcript above it rather than the pane's current frame. Two
+	// notches, because the 4-row pane is letterboxed into this viewport and the
+	// window is counted back from where the live edge draws it: the same drawn
+	// window this fixture always meant, named in the corrected offset (td-bbbbfe).
+	p.previewScroll = 2
 
 	if cmd := p.handleMouseClick(actionAt(12, 5)); cmd == nil {
 		t.Fatal("scrolled Claude link did not activate")

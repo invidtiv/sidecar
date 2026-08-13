@@ -290,19 +290,22 @@ func (p *Plugin) revealTerminalSearchMatch() {
 		base = absoluteBase
 	}
 	localLine := match.Line - base
+	// Both numbers come off the drawn window: centring a match mixes a bound
+	// with a height, and taking them from two derivations of one surface puts
+	// the match off centre wherever the two disagree (td-bbbbfe). No panel drawn
+	// means no viewport to centre in; the clamp then pins the scroll to the top
+	// of the (empty) range.
 	if search.TermPanel {
 		p.thawTermPanelWindow()
 		maxScroll := p.termPanelMaxScroll()
-		// No panel drawn means no viewport to centre the match in; the clamp
-		// below then pins the scroll to the top of the (empty) range.
-		_, height, _ := p.calculateTermPanelDimensions()
+		height := p.terminalViewportLayoutFor(true).DisplayHeight
 		start := min(max(localLine-height/2, 0), maxScroll)
 		p.termPanelScroll = maxScroll - start
 		return
 	}
 	p.thawPreviewWindow()
 	maxScroll := p.previewMaxScroll()
-	height := p.getPreviewVisibleHeight()
+	height := p.terminalViewportLayoutFor(false).DisplayHeight
 	start := min(max(localLine-height/2, 0), maxScroll)
 	p.previewScroll = maxScroll - start
 }

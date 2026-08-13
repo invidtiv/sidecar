@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -224,9 +225,14 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 	if bound == 0 {
 		t.Fatal("the fixture has no scrollback to walk back through")
 	}
-	if untrimmed := p.getMaxScrollOffset(); bound >= untrimmed {
-		t.Fatalf("bound = %d, want fewer rows than the untrimmed count allows (%d) — "+
-			"the fixture's blank tail is not being trimmed, so it proves nothing", bound, untrimmed)
+	// The bound is the live edge's own start, so the offset the window is placed
+	// by and the bound it is clamped to are one measurement of one window. A
+	// count-based bound is a different number — here the fixture's blank tail
+	// and its letterboxed pane both move it — and mixing the two is what left a
+	// dead notch at each end (td-bbbbfe).
+	if liveStart := p.terminalViewportLayoutFor(false).Start; liveStart != bound {
+		t.Fatalf("live edge starts at %d but the bound is %d — offset 0 and the bound "+
+			"are not measured off the same window", liveStart, bound)
 	}
 
 	// Walk back further than any bound could allow.
@@ -685,5 +691,44 @@ func TestPinningViewportClearsSelection(t *testing.T) {
 	p.pinInteractiveViewportToLive()
 	if !p.selection.HasSelection() {
 		t.Fatal("selection cleared even though the viewport was already live")
+	}
+}
+
+// The terminal panel's bound is the bound of the window the panel draws, taken
+// from the drawn layout like every other surface's. It used to hand-roll the
+// trim off the panel's own dimensions, which is a second derivation of one
+// window: a pane letterboxed into the panel box put the two several rows apart,
+// so the first notch off the live edge jumped instead of stepping (td-bbbbfe).
+func TestPanelBoundIsTheDrawnPanelWindow(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	// A pane shorter than the panel box, with history loaded above it: the
+	// geometry the two derivations disagreed about.
+	rows := make([]string, 0, 120)
+	for i := range 120 {
+		rows = append(rows, fmt.Sprintf("panel row %03d", i))
+	}
+	panel := tty.NewOutputBuffer(400)
+	panel.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
+		Output: strings.Join(rows, "\n"), BaseLine: 500, Absolute: true,
+		PaneHeight: 3,
+	}))
+	p.termPanelOutput = panel
+
+	bound := p.termPanelMaxScroll()
+	p.termPanelScroll = 0
+	live := p.terminalViewportLayoutFor(true).Start
+	if live != bound {
+		t.Fatalf("panel live edge starts at %d but its bound is %d — the panel's window "+
+			"and its bound are not one measurement", live, bound)
+	}
+
+	p.scrollTermPanelWindow(1)
+	if got := p.terminalViewportLayoutFor(true).Start; got != live-1 {
+		t.Fatalf("one notch back off the panel's live edge started at %d, want %d", got, live-1)
+	}
+
+	p.scrollTermPanelWindow(bound)
+	if got := p.terminalViewportLayoutFor(true).Start; got != 0 {
+		t.Fatalf("at the panel's bound the window starts at %d, want the oldest row 0", got)
 	}
 }

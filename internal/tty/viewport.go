@@ -34,18 +34,20 @@ type ViewportInput struct {
 // A window that is not mirroring a live grid is a scrollback window, and
 // tmux's trailing blank rows are padding rather than content there. A live
 // grid's blank rows are the application's own — full-screen programs draw
-// chrome against them — so they stay addressable. FitViewport applies the same
-// exemption while following a known live grid, which is why a host must not
-// add a second condition of its own: the two surfaces would then answer a
-// scrolled-back pane differently.
+// chrome against them — so they stay addressable, which is why FitViewport
+// exempts any buffer with a known live grid from this answer regardless of
+// where its window currently sits. A host must not add a second condition of
+// its own: the two surfaces would then answer a scrolled-back pane differently.
 //
 // What this costs a watched pane the user has scrolled back on: nothing that
 // moves the rows. A scrollback window is placed by an explicit Start (or by a
 // distance back from the live bottom), so trimming changes EffectiveCount,
 // MaxOffset and where the window may stop — never which buffer line lands on
 // which screen row at a given offset. The visible effect is that the window
-// cannot be scrolled into the pane's trailing blank padding, which is the
-// behaviour every surface wants of a history window.
+// cannot be scrolled into blank padding below the last row there is anything to
+// see on, which is the behaviour every surface wants of a history window. A
+// live grid gets that for free from its own bound: no window sits below the
+// live edge, so its trailing rows are exactly as reachable as they are now.
 func TrimsTrailingRows(interactive bool) bool { return !interactive }
 
 // ShouldOverlayCursor reports whether a surface may draw the pane's cursor.
@@ -188,33 +190,43 @@ func FitViewport(in ViewportInput) Viewport {
 		layout.PaneTop = max(lineCount-in.PaneHeight, 0)
 	}
 
-	// Live-grid follow: geometry is known and we are pinned to the live edge.
-	// Full-screen programs (Grok, Claude, …) keep intentional blank rows in the
-	// pane. Trimming them shrinks EffectiveCount so MaxOffset walks Start up
-	// into history — painting the previous bottom chrome under the header until
-	// interactive mode (which never trims) re-aligns it.
-	liveGridFollow := in.Follow && (paneKnown || in.PaneHeight > 0)
+	// A live grid is a buffer whose tail is a pane tmux is still drawing into,
+	// which is knowable without asking where the window currently sits.
+	//
+	// Full-screen programs (Grok, Claude, …) keep intentional blank rows in that
+	// pane, so trimming them is wrong for the whole buffer rather than only
+	// while following: the trim used to be lifted at the live edge alone, which
+	// left offset 0 placed by the untrimmed grid and offset 1 by the trimmed
+	// count — one notch back jumped by however many blank rows the pane ended
+	// with (measured at 38 rows on a watched agent pane, td-bbbbfe). Nothing is
+	// lost by keeping them: a window can never sit below the live edge, so the
+	// pane's trailing padding is exactly as reachable as it is on screen now.
+	liveGrid := paneKnown || in.PaneHeight > 0
 
 	layout.EffectiveCount = lineCount
-	if in.TrimTrailing && !liveGridFollow {
+	if in.TrimTrailing && !liveGrid {
 		layout.EffectiveCount = max(in.Buffer.LastNonEmptyLine()+1, 0)
 		if layout.PaneTop > layout.EffectiveCount {
 			layout.PaneTop = layout.EffectiveCount
 		}
 	}
+
+	// MaxOffset is the live-edge start, which makes it both the window's origin
+	// and its bound: offset 0 is the live edge, offset N is N rows back from it,
+	// and the furthest back a window can go is the top of the buffer. Deriving
+	// the two from one number is what keeps the first notch off the live edge
+	// worth exactly one scroll step on every surface (td-bbbbfe).
 	layout.MaxOffset = max(layout.EffectiveCount-layout.DisplayHeight, 0)
+	if liveGrid {
+		// A pane shorter than the viewport is letterboxed at the live edge —
+		// it starts at PaneTop and render pads below it — so that, not a window
+		// full of history, is where offset 0 sits.
+		if paneRows := lineCount - layout.PaneTop; paneRows <= layout.DisplayHeight {
+			layout.MaxOffset = max(layout.PaneTop, 0)
+		}
+	}
 
 	switch {
-	case liveGridFollow:
-		// Pin to the live grid rather than MaxOffset of a (possibly trimmed)
-		// effective count. When the pane is taller than the viewport, show its
-		// bottom; when shorter, show from PaneTop and let render pad.
-		paneRows := lineCount - layout.PaneTop
-		if paneRows <= layout.DisplayHeight {
-			layout.Start = layout.PaneTop
-		} else {
-			layout.Start = max(lineCount-layout.DisplayHeight, layout.PaneTop)
-		}
 	case in.Follow:
 		layout.Start = layout.MaxOffset
 	case in.OffsetFromBottom:
@@ -230,22 +242,37 @@ func FitViewport(in ViewportInput) Viewport {
 	// set. Deliberately not gated on the cursor being *visible*: a full-screen
 	// app that hides it (less, some TUIs) still has a live row, and anchoring on
 	// the pane's tail instead would clip exactly what the user is looking at.
+	//
+	// This is the one adjustment that moves the live edge without moving the
+	// bound, so it is deliberately confined to the window that follows: applying
+	// it to a scrolled-back window instead would slide history under the reader
+	// every time the application moved its cursor.
 	if fit.ClippedHeight && in.Follow && in.Interactive {
 		cursorLine := layout.PaneTop + in.CursorRow
 		layout.Start = min(layout.Start, max(cursorLine-layout.DisplayHeight+1, 0))
 	}
-	// Live-grid follow reads from the full buffer so blank final pane rows stay
-	// addressable; scrollback browsing still ends at EffectiveCount after trim.
-	endBound := layout.EffectiveCount
-	if liveGridFollow {
-		endBound = lineCount
-	}
-	layout.End = min(layout.Start+layout.DisplayHeight, endBound)
+	layout.End = min(layout.Start+layout.DisplayHeight, layout.EffectiveCount)
 	layout.AbsoluteStart = in.AbsoluteBase + layout.Start
 	if !paneKnown && in.PaneHeight <= 0 {
 		layout.PaneTop = layout.Start
 	}
 	return layout
+}
+
+// WindowBound is the furthest back a surface's window can be placed, in rows
+// back from its live edge. It is the one derivation every host asks — the
+// global preview, the project's primary surface and its terminal panel — so
+// that a bound and the window it bounds can never come from two different
+// measurements of the same surface.
+//
+// It is measured off the drawn layout rather than off a line count, because the
+// drawn window is what a reader can actually reach: a pane letterboxed into a
+// taller viewport, or one whose trailing rows are trimmed, stops somewhere a
+// count does not know about. Taking it off the live edge is deliberate — that
+// is the only state a bound is asked about, and it is where offset 0 sits.
+func WindowBound(in ViewportInput) int {
+	in.Follow = false
+	return max(FitViewport(in).MaxOffset, 0)
 }
 
 // PaneCoordsAt maps a position inside a drawn viewport, relative to its first

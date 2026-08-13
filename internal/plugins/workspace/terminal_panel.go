@@ -301,19 +301,22 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 	return previewWidth, max(outputBox-terminalHeaderRows, 1)
 }
 
+// termPanelMaxScroll is how far back the panel's window can sit, in rows from
+// its live edge. It is the bound of the window the render path draws: the panel
+// used to hand-roll the trim off its own dimensions instead, which is a second
+// derivation of one window and disagrees with the drawn one wherever a
+// letterboxed or clipped pane does (td-bbbbfe).
 func (p *Plugin) termPanelMaxScroll() int {
+	// No panel drawn means no window to bound. The bound's own input falls back
+	// to the preview's size when the panel surface has no geometry, which would
+	// answer for a surface that is not on screen.
 	if p.termPanelOutput == nil {
 		return 0
 	}
-	_, height, ok := p.calculateTermPanelDimensions()
-	if !ok {
+	if _, _, ok := p.calculateTermPanelDimensions(); !ok {
 		return 0
 	}
-	lineCount := p.termPanelOutput.LineCount()
-	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
-		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
-	}
-	return max(lineCount-height, 0)
+	return p.terminalWindowBound(true)
 }
 
 // thawTermPanelWindow hands a panel window pinned to an absolute start — by a
