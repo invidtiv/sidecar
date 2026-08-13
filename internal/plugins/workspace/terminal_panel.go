@@ -381,6 +381,25 @@ func (p *Plugin) releaseTermPanelGesturePin() {
 	p.releaseTermPanelWindowPin()
 }
 
+// thawTermPanelGesturePin is the panel's half of the freeze a pointer gesture
+// owes at its end, and the same answer the primary surface gives in
+// thawPreviewGesturePin: the rows the gesture left on screen stay there, held
+// as a distance from the live bottom, so a pin taken at the live edge resumes
+// following from offset 0 while a gesture that walked the window back through
+// scrollback keeps where it walked to. Releasing instead resumes from whatever
+// offset the surface held before the gesture froze it, which snaps the window
+// back with nothing on screen to explain the jump. A document's pin is not the
+// gesture's to end: it outlives the selection the click made. That guard is
+// also what makes thawTermPanelWindow's doc-projection release harmless here —
+// a panel projection always implies a doc-owned pin, which has already
+// returned above.
+func (p *Plugin) thawTermPanelGesturePin() {
+	if p.termPanelFreezeDoc {
+		return
+	}
+	p.thawTermPanelWindow()
+}
+
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
 // tmux pane to match the current split dimensions.
 func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {

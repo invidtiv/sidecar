@@ -432,8 +432,10 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 		return nil
 	}
 	// A click that selected nothing leaves no reader holding the panel's rows, so
-	// the pin the gesture was armed with ends with the gesture.
-	p.releaseTermPanelGesturePin()
+	// the pin the gesture was armed with ends with the gesture — handed back as a
+	// distance from the live bottom, the same half the primary surface just paid
+	// above, so a gesture that scrolled the window keeps the rows it scrolled to.
+	p.thawTermPanelGesturePin()
 
 	switch resolution {
 	case tty.ClickActivate:
@@ -538,8 +540,9 @@ func (p *Plugin) clearTerminalSelection() {
 	p.selection.Clear()
 	p.pointer.ResetUnit()
 	// The panel window a gesture pinned was holding those rows still for this
-	// selection; nothing is reading them now.
-	p.releaseTermPanelGesturePin()
+	// selection; nothing is reading them now, so it goes back to following output
+	// from where it stands rather than snapping to the offset behind the pin.
+	p.thawTermPanelGesturePin()
 }
 
 // clearTerminalSelectionOnScroll is what every scroll made outside a pointer

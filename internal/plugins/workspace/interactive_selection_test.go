@@ -1314,3 +1314,91 @@ func TestSelectAllResetsWordGestureBeforeShiftClick(t *testing.T) {
 		t.Errorf("shift-click ended at %+v, want the clicked cell (line 4, col 18)", p.selection.End)
 	}
 }
+
+// A gesture that walked the panel window back through scrollback and then
+// selected nothing hands those rows back as a distance from the live bottom,
+// the same half the primary surface pays in thawPreviewGesturePin. Releasing
+// the pin instead resumed from the offset behind it and snapped the window back
+// to where the gesture started (td-e0a220).
+func TestEmptyPanelGestureThawsTheWindowItScrolled(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+
+	// Arming the gesture pins the panel to the window it was armed on, then the
+	// edge auto-scroll body walks that window back through the scrollback.
+	p.prepareTerminalSelectionSource(true)
+	if !p.termPanelFreeze.Active() {
+		t.Fatal("test premise: arming the panel gesture pinned no window")
+	}
+	armed := p.termPanelFreeze.Start()
+	p.scrollTerminalSelectionViewport(-5)
+	scrolled := p.termPanelFreeze.Start()
+	if scrolled >= armed {
+		t.Fatalf("test premise: the gesture did not move the window (%d -> %d)", armed, scrolled)
+	}
+
+	p.finishInteractiveSelection()
+
+	if p.termPanelFreeze.Active() {
+		t.Fatal("the empty release left the gesture pin holding the panel window")
+	}
+	want := tty.ThawOffsetFrom(scrolled, p.termPanelMaxScroll())
+	if want == 0 {
+		t.Fatal("test premise: the scrolled window is indistinguishable from the live edge")
+	}
+	if p.termPanelScroll != want {
+		t.Fatalf("empty panel gesture left scroll %d, want the rows it scrolled to at %d",
+			p.termPanelScroll, want)
+	}
+}
+
+// The other half of the same rule: a pin taken at the live edge thaws to offset
+// zero, so a click that selects nothing leaves the panel following output
+// (td-ac8c74).
+func TestEmptyPanelGestureAtTheLiveEdgeResumesFollowing(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+
+	p.prepareTerminalSelectionSource(true)
+	p.finishInteractiveSelection()
+
+	if p.termPanelFreeze.Active() || p.termPanelScroll != 0 {
+		t.Fatalf("live-edge gesture left frozen %v scroll %d, want a following window",
+			p.termPanelFreeze.Active(), p.termPanelScroll)
+	}
+}
+
+// Clearing a selection outside a gesture — a scroll away from it, leaving
+// interactive mode — ends the panel pin the same way, so the rows on screen
+// survive the clear instead of snapping back to the pre-gesture offset.
+func TestClearingATerminalSelectionThawsThePanelPin(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+	p.prepareTerminalSelectionSource(true)
+	p.scrollTerminalSelectionViewport(-5)
+	pinned := p.termPanelFreeze.Start()
+
+	p.clearTerminalSelection()
+
+	want := tty.ThawOffsetFrom(pinned, p.termPanelMaxScroll())
+	if p.termPanelFreeze.Active() || p.termPanelScroll != want {
+		t.Fatalf("clear left frozen %v scroll %d, want the thawed offset %d",
+			p.termPanelFreeze.Active(), p.termPanelScroll, want)
+	}
+}
+
+// A document's pin outlives the selection a click made, so neither path ends it.
+func TestPanelDocPinSurvivesAnEmptyGesture(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+	p.pinTermPanelWindow(20, true)
+
+	p.selectionTermPanel = true
+	p.finishInteractiveSelection()
+	p.clearTerminalSelection()
+
+	if !p.termPanelFreeze.Active() || p.termPanelFreeze.Start() != 20 || !p.termPanelFreezeDoc {
+		t.Fatalf("gesture end dropped the document's pin: active %v start %d doc %v",
+			p.termPanelFreeze.Active(), p.termPanelFreeze.Start(), p.termPanelFreezeDoc)
+	}
+}
