@@ -84,6 +84,7 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 		Task:         item.TaskID,
 		Provider:     item.Provider,
 		TmuxName:     item.TmuxName,
+		Kind:         string(item.Kind),
 	}
 	if row.Project == "" {
 		row.Project = item.ProjectName

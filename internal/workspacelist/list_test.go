@@ -16,10 +16,10 @@ import (
 func items() []Item {
 	base := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	return []Item{
-		{ID: "a", Name: "modal look and feel", Project: "sidecar", ProjectOrder: 0, Branch: "modal-look-and-feel", Task: "td-71de3d", Provider: "codex", Status: "working", Group: GroupWorking, ChangedAt: base},
-		{ID: "b", Name: "Kanban scrolling", Project: "sidecar", ProjectOrder: 0, Provider: "shell", Status: "live", Group: GroupLive, ChangedAt: base.Add(-time.Hour)},
-		{ID: "c", Name: "réponse", Project: "braid", ProjectOrder: 1, Branch: "feature/RÉPONSE", Provider: "claude", Status: "needs attention", Group: GroupNeedsAttention, ChangedAt: base.Add(-2 * time.Hour)},
-		{ID: "d", Name: "old worktree", Project: "td", ProjectOrder: 2, Status: "no session", Group: GroupNoSession},
+		{ID: "a", Name: "modal look and feel", Project: "sidecar", ProjectOrder: 0, Branch: "modal-look-and-feel", Task: "td-71de3d", Provider: "codex", Status: "working", Kind: KindWorktree, Group: GroupWorking, ChangedAt: base},
+		{ID: "b", Name: "Kanban scrolling", Project: "sidecar", ProjectOrder: 0, Provider: "shell", Status: "live", Kind: KindShell, Group: GroupLive, ChangedAt: base.Add(-time.Hour)},
+		{ID: "c", Name: "réponse", Project: "braid", ProjectOrder: 1, Branch: "feature/RÉPONSE", Provider: "claude", Status: "needs attention", Kind: KindWorktree, Group: GroupNeedsAttention, ChangedAt: base.Add(-2 * time.Hour)},
+		{ID: "d", Name: "old worktree", Project: "td", ProjectOrder: 2, Status: "no session", Kind: KindWorktree, Group: GroupNoSession},
 	}
 }
 
@@ -449,5 +449,46 @@ func TestFilterSeparatesIdenticallyNamedShellsByTmuxName(t *testing.T) {
 		if strings.Contains(rendered, row.TmuxName) {
 			t.Fatalf("the tmux session name became visible in the row: %q", rendered)
 		}
+	}
+}
+
+func TestGlobalRenderRowIsProjectNameAgeThenKindAndAgent(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	var m Model
+	item := Item{
+		ID: "a", Name: "review td-196c42", Project: "sidecar", ProjectKey: "sidecar",
+		Provider: "grok", Status: "working", Detail: "td-196c42", Kind: KindWorktree,
+		Marker: RowMarker{Icon: "●", Lane: "working"}, ChangedAt: now.Add(-time.Minute),
+	}
+	lines := m.renderRow(item, false, true, 56, now)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
+	if !strings.Contains(line1, "sidecar review td-196c42") || !strings.Contains(line1, "1m") {
+		t.Fatalf("line 1 = %q, want project + name + age", line1)
+	}
+	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "grok") {
+		t.Fatalf("line 2 = %q, want kind glyph + agent", line2)
+	}
+	for _, status := range []string{"working", "live", "idle", "ambiguous panes", "no session"} {
+		if strings.Contains(line1, status) || strings.Contains(line2, status) {
+			t.Fatalf("status text %q leaked onto the row:\n%s\n%s", status, line1, line2)
+		}
+	}
+
+	shell := item
+	shell.Kind = KindShell
+	shell.Name = "Shell 2"
+	shell.Project = "braid"
+	shell.Status = "live"
+	shell.Detail = ""
+	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
+	got := ansi.Strip(strings.Join(m.renderRow(shell, false, true, 56, now), "\n"))
+	if !strings.Contains(got, "braid Shell 2") || !strings.Contains(got, "❯") {
+		t.Fatalf("shell row = %q", got)
+	}
+	if strings.Contains(got, "live") {
+		t.Fatalf("shell row repeated status text: %q", got)
 	}
 }

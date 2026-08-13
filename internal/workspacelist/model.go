@@ -315,26 +315,30 @@ func (m *Model) failureLines(rows, width int) []string {
 	return append(out, fit(styles.Muted.Render(fmt.Sprintf("⚠ +%d more projects unavailable", remaining)), width))
 }
 
-// renderRow draws one item. Two lines where the width supports it: name and
-// relative age, then the textual project identity with provider and status.
-// Project colour reinforces identity but is never the only differentiator —
-// the project name is always spelled out.
+// renderRow draws one global list item. Two lines where the width supports it:
+// project + name with relative age, then kind glyph + agent. Status lives in
+// the gutter marker and is not repeated as text. Project colour reinforces
+// the project word but is never the only differentiator.
 func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time) []string {
-	project := RowField{Text: item.Project, Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project)}
-	after := make([]RowField, 0, 2)
-	if item.Status != "" {
-		after = append(after, RowField{Text: item.Status, Rendered: styles.Muted.Render(item.Status)})
+	namePrefix := RowField{}
+	if item.Project != "" {
+		namePrefix = RowField{
+			Text:     item.Project + " ",
+			Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project) + " ",
+		}
 	}
+	after := make([]RowField, 0, 1)
 	if item.Detail != "" {
 		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
 	}
 	return RenderRow(RowPresentation{
-		Marker:         item.Marker,
-		Name:           item.Name,
-		Age:            RelativeAge(item.ChangedAt, now),
-		BeforeProvider: []RowField{project},
-		Provider:       item.Provider,
-		AfterProvider:  after,
+		Marker:        item.Marker,
+		Kind:          item.Kind,
+		Name:          item.Name,
+		NamePrefix:    namePrefix,
+		Age:           RelativeAge(item.ChangedAt, now),
+		Provider:      item.Provider,
+		AfterProvider: after,
 	}, width, selected, focused)
 }
 

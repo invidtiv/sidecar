@@ -834,9 +834,9 @@ func spineGlyph(kind workspaceinventory.Kind) string {
 
 func kindGlyph(kind workspaceinventory.Kind) string {
 	if kind == workspaceinventory.KindShell {
-		return "❯"
+		return workspacelist.KindGlyph(workspacelist.KindShell)
 	}
-	return "⑂"
+	return workspacelist.KindGlyph(workspacelist.KindWorktree)
 }
 
 // cardLines builds the three styled content rows for a live workspace card.

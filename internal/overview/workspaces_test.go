@@ -45,12 +45,33 @@ func catalogModel(t *testing.T) *Model {
 func TestGlobalRowsProjectStatusProviderProjectDetailAndAge(t *testing.T) {
 	m := catalogModel(t)
 	m.collector.Now = func() time.Time { return time.Now() }
-	m.sidebarWidth = 60
-	view := ansi.Strip(m.WorkspacesView(120, 24))
-	for _, want := range []string{"◆ modal", "▶ codex", "sidecar", "needs input", "modal-look", "1m", "● pipeline", "claude", "braid"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("global row lost %q:\n%s", want, view)
+	list := ansi.Strip(m.renderWorkspaceList(0, 0, 60, 22))
+	for _, want := range []string{"◆", "sidecar modal", "1m", "▶", "codex", "modal-look", "●", "braid pipeline", "claude", "⑂", "❯"} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("global row lost %q:\n%s", want, list)
 		}
+	}
+	for _, status := range []string{"needs input", "working", "live", "idle", "ambiguous panes", "no session"} {
+		if strings.Contains(list, status) {
+			t.Fatalf("global list repeated status text %q:\n%s", status, list)
+		}
+	}
+}
+
+func TestListItemCarriesPresentationKind(t *testing.T) {
+	wt := listItem(workspaceinventory.Item{Kind: workspaceinventory.KindWorktree, Name: "topic"}, "sidecar", 0, false)
+	if wt.Kind != workspacelist.KindWorktree {
+		t.Fatalf("worktree kind = %q", wt.Kind)
+	}
+	sh := listItem(workspaceinventory.Item{Kind: workspaceinventory.KindShell, Name: "Shell 1"}, "sidecar", 0, false)
+	if sh.Kind != workspacelist.KindShell {
+		t.Fatalf("shell kind = %q", sh.Kind)
+	}
+	if workspacelist.KindGlyph(wt.Kind) != kindGlyph(workspaceinventory.KindWorktree) {
+		t.Fatal("list worktree glyph drifted from the Agents board")
+	}
+	if workspacelist.KindGlyph(sh.Kind) != kindGlyph(workspaceinventory.KindShell) {
+		t.Fatal("list shell glyph drifted from the Agents board")
 	}
 }
 

@@ -135,9 +135,11 @@ type Item struct {
 	Provider     string
 	// TmuxName is an identity key, never rendered. It is searchable so two
 	// shells sharing a display name inside one project can be told apart.
-	TmuxName  string
-	Status    string
-	Detail    string
+	TmuxName string
+	Status   string
+	Detail   string
+	// Kind is a presentation string ("worktree" / "shell"), not a catalog type.
+	Kind      string
 	Marker    RowMarker
 	Group     Group
 	ChangedAt time.Time
