@@ -1117,6 +1117,46 @@ func (p *Plugin) rebuildNestedShells(defs []ShellDefinition, paneID func(string)
 	}
 }
 
+// dropNestedShell forgets a shell that belongs to a sibling worktree rather
+// than the current one. The nest is a projection of the same project manifest,
+// so removing the manifest entry and rebuilding is the whole of it — there is
+// no second list to keep in step. Reports whether the name was a nested row,
+// so callers can tell "not mine" from "removed".
+func (p *Plugin) dropNestedShell(tmuxName string) bool {
+	parent, shell := p.findNestedShell(tmuxName)
+	if shell == nil {
+		return false
+	}
+	if shell.Agent != nil {
+		shell.Agent.OutputBuf = nil
+		shell.Agent = nil
+	}
+	delete(p.managedSessions, tmuxName)
+	globalPaneCache.remove(tmuxName)
+	globalActiveRegistry.remove(tmuxName)
+	if p.shellManifest != nil {
+		_ = p.shellManifest.RemoveShell(tmuxName)
+	}
+	dir := filepath.Clean(p.worktrees[parent].Path)
+	remaining := make([]*ShellSession, 0, len(p.nestedByWorkDir[dir]))
+	for _, candidate := range p.nestedByWorkDir[dir] {
+		if candidate.TmuxName != tmuxName {
+			remaining = append(remaining, candidate)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(p.nestedByWorkDir, dir)
+	} else {
+		p.nestedByWorkDir[dir] = remaining
+	}
+	// The cursor lands on the worktree the row hung under, which is the nearest
+	// thing left to it.
+	if p.selectedNestedTmux == tmuxName {
+		p.selectWorktreeAt(parent)
+	}
+	return true
+}
+
 func (p *Plugin) rebuildNestedShellsFromState() {
 	var defs []ShellDefinition
 	if p.shellManifest != nil {

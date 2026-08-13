@@ -787,10 +787,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Create a shell directly, skipping the type selector modal
 		return p.createDefaultShell(false)
 	case "D":
-		// Check if deleting a shell session
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
+		// Any selected shell answers D, including one nested under a sibling
+		// worktree: the row is a shell wherever it is drawn, and reaching it
+		// should not require switching into that worktree first.
+		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeConfirmDeleteShell
-			p.deleteConfirmShell = p.shells[p.selectedShellIdx]
+			p.deleteConfirmShell = shell
 			p.deleteShellModal = nil
 			p.deleteShellModalWidth = 0
 			return nil
@@ -1112,12 +1114,10 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.StopAgent(wt)
 		}
 	case "ctrl+k":
-		// Kill selected shell session (K is global Overview / Kanban)
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			shell := p.shells[p.selectedShellIdx]
-			if shell.Agent != nil {
-				return p.killShellSessionByName(shell.TmuxName)
-			}
+		// Kill selected shell session (K is global Overview / Kanban).
+		// Nested rows answer this for the same reason they answer D.
+		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
+			return p.killShellSessionByName(shell.TmuxName)
 		}
 	case "R":
 		// Rename selected shell session

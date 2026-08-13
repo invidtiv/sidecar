@@ -399,3 +399,57 @@ func TestEmptyWorktreeHasNoNest(t *testing.T) {
 		t.Fatalf("empty worktree grew %d nested rows", emptyChildren)
 	}
 }
+
+// D on a nested row is the shell's own delete, not the parent worktree's. A
+// shell reachable in the list is a shell that can be closed there; needing `W`
+// to switch into its worktree first would make the nest a view-only projection.
+func TestNestedShellAnswersDeleteWithoutSwitchingWorktrees(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
+	p.selectNestedShell(parent, session)
+
+	p.handleListKeys(keyPressFor("D"))
+
+	if p.viewMode != ViewModeConfirmDeleteShell {
+		t.Fatalf("view mode = %v, want the shell delete confirmation", p.viewMode)
+	}
+	if p.deleteConfirmShell == nil || p.deleteConfirmShell.TmuxName != session {
+		t.Fatalf("confirming deletion of %#v, want the nested shell", p.deleteConfirmShell)
+	}
+	if p.deleteConfirmWorktree != nil {
+		t.Fatalf("D armed the parent worktree's deletion: %#v", p.deleteConfirmWorktree)
+	}
+
+	// Confirming kills the session; the row leaves the nest when the kill lands.
+	installSuccessfulFakeTmux(t)
+	if cmd := p.executeShellDelete(); cmd == nil {
+		t.Fatal("confirming produced no kill")
+	} else {
+		cmd()
+	}
+	updated, _ := p.Update(ShellKilledMsg{SessionName: session})
+	p = updated.(*Plugin)
+	if _, still := p.findNestedShell(session); still != nil {
+		t.Fatal("the killed nested shell is still in the list")
+	}
+	if p.selectedNestedTmux != "" || p.shellSelected || p.selectedIdx != parent {
+		t.Fatalf("selection after delete: nested=%q shell=%v idx=%d, want the parent worktree",
+			p.selectedNestedTmux, p.shellSelected, p.selectedIdx)
+	}
+}
+
+// The same holds when a nested shell exits on its own.
+func TestNestedShellThatDiesLeavesTheNest(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, _ := p.findNestedShell(session)
+	p.selectNestedShell(parent, session)
+
+	updated, _ := p.Update(ShellSessionDeadMsg{TmuxName: session})
+	p = updated.(*Plugin)
+	if _, still := p.findNestedShell(session); still != nil {
+		t.Fatal("a dead nested shell stayed in the list")
+	}
+}

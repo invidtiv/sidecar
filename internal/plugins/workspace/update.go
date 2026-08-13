@@ -1196,6 +1196,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				break
 			}
 		}
+		// The killed session may be a shell nested under a sibling worktree,
+		// which is not in this list at all.
+		if removedIdx < 0 && p.dropNestedShell(msg.SessionName) {
+			p.saveSelectionState()
+			cmds = append(cmds, p.loadSelectedContent())
+		}
 		// Adjust selection if needed
 		if p.shellSelected && removedIdx >= 0 {
 			if removedIdx < p.selectedShellIdx {
@@ -1250,6 +1256,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 				break
 			}
+		}
+		// A nested shell can die on its own too, and its row is not in p.shells.
+		if removedIdx < 0 && p.dropNestedShell(msg.TmuxName) {
+			p.saveSelectionState()
+			return p, p.loadSelectedContent()
 		}
 		// Adjust selection if needed
 		if p.shellSelected && removedIdx >= 0 {
