@@ -937,18 +937,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
-		// td-f88fdd: Check if this is recreation of an orphaned shell
-		var existingShell *ShellSession
-		var existingIdx int
+		existingShell := p.findShellByName(msg.SessionName)
+		existingIdx := -1
 		for i, s := range p.shells {
 			if s.TmuxName == msg.SessionName {
-				existingShell = s
 				existingIdx = i
 				break
 			}
 		}
+		parentIdx, nested := p.findNestedShell(msg.SessionName)
+		// Recreate of a sibling must not become a current-worktree row or
+		// rewrite its WorkDir (td-4819be / td-8d18de).
+		belongsHere := p.ctx != nil && shellDiscoveryPattern(p.ctx.WorkDir).MatchString(msg.SessionName)
 
-		// Determine agent type for display - use chosen agent if set, otherwise AgentShell
 		displayAgentType := AgentShell
 		if msg.AgentType != AgentNone && msg.AgentType != "" {
 			displayAgentType = msg.AgentType
@@ -956,8 +957,30 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			displayAgentType = existingShell.ChosenAgent
 		}
 
-		if existingShell != nil {
-			// td-f88fdd: Recreated orphaned shell - update existing entry
+		switch {
+		case nested != nil && !belongsHere:
+			nested.IsOrphaned = false
+			if msg.AgentType != AgentNone && msg.AgentType != "" {
+				nested.ChosenAgent = msg.AgentType
+			}
+			nested.SkipPerms = msg.SkipPerms
+			nested.Agent = &Agent{
+				Type:        displayAgentType,
+				TmuxSession: msg.SessionName,
+				TmuxPane:    msg.PaneID,
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
+				StartedAt:   time.Now(),
+			}
+			if existingIdx >= 0 {
+				p.shells = append(p.shells[:existingIdx], p.shells[existingIdx+1:]...)
+			}
+			p.managedSessions[msg.SessionName] = true
+			if !msg.KeepSelection {
+				p.selectNestedShell(parentIdx, nested.TmuxName)
+				p.saveSelectionState()
+			}
+		case existingIdx >= 0:
+			existingShell = p.shells[existingIdx]
 			existingShell.IsOrphaned = false
 			if existingShell.WorkDir == "" && p.ctx != nil {
 				existingShell.WorkDir = p.ctx.WorkDir
@@ -970,18 +993,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				StartedAt:   time.Now(),
 			}
 			p.managedSessions[msg.SessionName] = true
-
-			// td-f88fdd: Update manifest to reflect shell is no longer orphaned
 			if p.shellManifest != nil {
 				_ = p.shellManifest.UpdateShell(shellToDefinition(existingShell))
 			}
-
 			if !msg.KeepSelection {
 				p.selectTopShellAt(existingIdx)
 				p.saveSelectionState()
 			}
-		} else {
-			// Create new shell session entry
+		default:
 			workDir := ""
 			if p.ctx != nil {
 				workDir = p.ctx.WorkDir
@@ -991,26 +1010,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				TmuxName: msg.SessionName,
 				WorkDir:  workDir,
 				Agent: &Agent{
-					Type:        displayAgentType, // td-2ba8a3: Show chosen agent type
+					Type:        displayAgentType,
 					TmuxSession: msg.SessionName,
-					TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
+					TmuxPane:    msg.PaneID,
 					OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 					StartedAt:   time.Now(),
 				},
 				CreatedAt:   time.Now(),
-				ChosenAgent: msg.AgentType, // td-317b64: Track chosen agent
-				SkipPerms:   msg.SkipPerms, // td-317b64: Track skip perms setting
+				ChosenAgent: msg.AgentType,
+				SkipPerms:   msg.SkipPerms,
 			}
 			p.shells = append(p.shells, shell)
 			p.managedSessions[msg.SessionName] = true
-
-			// Save to manifest for persistence and cross-instance sync (td-f88fdd)
 			if p.shellManifest != nil {
 				_ = p.shellManifest.AddShell(shellToDefinition(shell))
 			}
-
-			// Auto-select and focus the new shell, unless it was created on the
-			// user's behalf rather than at their request.
 			if !msg.KeepSelection {
 				p.selectTopShellAt(len(p.shells) - 1)
 				p.saveSelectionState()

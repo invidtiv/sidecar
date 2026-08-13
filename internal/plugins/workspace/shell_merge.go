@@ -82,6 +82,12 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 		seen[definition.TmuxName] = true
 		running := in.Running[definition.TmuxName]
 		if shell, ok := existing[definition.TmuxName]; ok {
+			// Same visibility split as a fresh definition. A leaked sibling
+			// pointer in Existing must not stay on this workDir's Shells list
+			// as a fake offline row (td-4819be / td-8d18de).
+			if !running && !visible.MatchString(definition.TmuxName) {
+				continue
+			}
 			shell.Name = definition.DisplayName
 			shell.ChosenAgent = definitionToAgentType(definition.AgentType)
 			shell.SkipPerms = definition.SkipPerms

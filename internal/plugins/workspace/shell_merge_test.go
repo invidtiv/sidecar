@@ -267,3 +267,31 @@ func TestMergeHidesSiblingWorktreeEntries(t *testing.T) {
 		t.Fatalf("Dropped = %v, want nothing removed from the shared file", result.Dropped)
 	}
 }
+
+// TestMergeHidesLeakedExistingSibling is the td-4819be defense: a sibling that
+// leaked into Existing (ShellCreatedMsg used to append it) must not remain as
+// an orphaned top-Shells row. It stays in the manifest.
+func TestMergeHidesLeakedExistingSibling(t *testing.T) {
+	leaked := mergeTestShell("sidecar-sh-sidecar-agent-status-1", "Sibling's")
+	leaked.WorkDir = "/tmp/x/sidecar-agent-status"
+	leaked.IsOrphaned = true
+	result := mergeShellState(shellMergeInput{
+		Existing: []*ShellSession{
+			mergeTestShell("sidecar-sh-sidecar-1", "Mine"),
+			leaked,
+		},
+		Manifest: []ShellDefinition{
+			{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "Mine", WorkDir: "/tmp/x/sidecar"},
+			{TmuxName: "sidecar-sh-sidecar-agent-status-1", DisplayName: "Sibling's", WorkDir: "/tmp/x/sidecar-agent-status"},
+		},
+		WorkDir: "/tmp/x/sidecar",
+	})
+
+	assertNames(t, "shells", shellNames(result.Shells), []string{"sidecar-sh-sidecar-1"})
+	if len(result.Dropped) != 0 {
+		t.Fatalf("Dropped = %v, want the sibling left in the shared file", result.Dropped)
+	}
+	if leaked.WorkDir != "/tmp/x/sidecar-agent-status" {
+		t.Fatalf("merge rewrote sibling WorkDir to %q", leaked.WorkDir)
+	}
+}

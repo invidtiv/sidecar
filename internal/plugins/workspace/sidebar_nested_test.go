@@ -183,6 +183,63 @@ func TestNewShellPersistsWorkDir(t *testing.T) {
 	}
 }
 
+func TestShellCreatedMsgDoesNotAdoptNestedSibling(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	current := p.ctx.WorkDir
+	sibling := p.worktrees[1].Path
+	name := "sidecar-sh-sidecar-feature-1"
+
+	path := filepath.Join(t.TempDir(), "shells.json")
+	manifest := &ShellManifest{Version: manifestVersion, path: path, Shells: []ShellDefinition{
+		{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "here", WorkDir: current},
+		{TmuxName: name, DisplayName: "sibling", WorkDir: sibling},
+	}}
+	if err := manifest.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	p.shellManifest = manifest
+
+	p.Update(ShellCreatedMsg{SessionName: name, DisplayName: "sibling", PaneID: "%9"})
+
+	for _, shell := range p.shells {
+		if shell.TmuxName == name {
+			t.Fatalf("sibling leaked into top Shells with WorkDir=%q", shell.WorkDir)
+		}
+	}
+	if len(p.shells) != 1 || p.shells[0].TmuxName != "sidecar-sh-sidecar-1" {
+		t.Fatalf("top Shells = %v, want only the current workDir shell", shellNames(p.shells))
+	}
+
+	reloaded, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := reloaded.FindShell(name)
+	if def == nil || def.WorkDir != sibling {
+		t.Fatalf("persisted sibling = %+v, want WorkDir %q", def, sibling)
+	}
+
+	_, nested := p.findNestedShell(name)
+	if nested == nil {
+		t.Fatal("sibling is no longer a nested row")
+	}
+	if nested.WorkDir != sibling {
+		t.Fatalf("nested WorkDir = %q, want %q", nested.WorkDir, sibling)
+	}
+
+	leaked := &ShellSession{Name: "sibling", TmuxName: name, WorkDir: sibling, IsOrphaned: true}
+	result := mergeShellState(shellMergeInput{
+		Existing: append(append([]*ShellSession{}, p.shells...), leaked),
+		Manifest: reloaded.Shells,
+		WorkDir:  current,
+	})
+	for _, shell := range result.Shells {
+		if shell.TmuxName == name {
+			t.Fatalf("merge orphaned the sibling into top Shells: %+v", shell)
+		}
+	}
+}
+
 func TestShellToDefinitionKeepsWorkDir(t *testing.T) {
 	got := shellToDefinition(&ShellSession{
 		Name: "review", TmuxName: "sidecar-sh-feature-1", WorkDir: "/wt/feature",
