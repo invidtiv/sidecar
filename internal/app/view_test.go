@@ -6,9 +6,14 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func TestGetRepoNameBounds_EmptyRepoName(t *testing.T) {
@@ -76,6 +81,35 @@ func TestGetRepoNameBounds_LongRepoName(t *testing.T) {
 	width := end - start
 	if width < len(longName) {
 		t.Errorf("bounds width (%d) should be >= repo name length (%d)", width, len(longName))
+	}
+}
+
+func TestGetScopeBounds_OnlyInGlobal(t *testing.T) {
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	m := Model{
+		cfg:      cfg,
+		registry: plugin.NewRegistry(nil),
+		ui:       &UIState{},
+		intro:    IntroModel{RepoName: "sidecar", Done: true},
+		overview: overview.New(workspaceinventory.Collector{}),
+		width:    120,
+	}
+	if _, _, ok := m.getScopeBounds(); ok {
+		t.Fatal("project scope should not expose Overview pill bounds")
+	}
+	m.scope = ScopeGlobal
+	start, end, ok := m.getScopeBounds()
+	if !ok || end <= start {
+		t.Fatalf("global scope bounds = %d-%d ok=%v", start, end, ok)
+	}
+	if _, _, repoOK := m.getRepoNameBounds(); repoOK {
+		t.Fatal("global scope should not keep repo-name switcher bounds")
+	}
+	header := m.renderHeader()
+	if !strings.Contains(header, styles.BarChipActive.Render("Overview")) {
+		t.Fatalf("global header is missing the Overview pill: %q", ansi.Strip(header))
 	}
 }
 

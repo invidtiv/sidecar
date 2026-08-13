@@ -264,6 +264,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleOverview()
 			}
 
+			if start, end, ok := m.getScopeBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+				return m, m.toggleOverview()
+			}
+
 			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				m.showProjectSwitcher = true
 				m.activeContext = "project-switcher"

@@ -169,6 +169,9 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	if !strings.Contains(ansi.Strip(projectTitle), "one") {
 		t.Fatalf("project title = %q, want the project name", ansi.Strip(projectTitle))
 	}
+	if strings.Contains(projectTitle, styles.BarChipActive.Render("one")) {
+		t.Fatal("project repo name should stay subtitle text, not a filled pill")
+	}
 	for i, tab := range projectTabs {
 		if tab.ref.scope != ScopeProject || tab.ref.plugin != i {
 			t.Fatalf("project tab %d = %#v, want the plugin at that index", i, tab.ref)
@@ -184,6 +187,9 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	title, tabs, _, _ := m.headerLayout()
 	if !strings.Contains(ansi.Strip(title), "Overview") {
 		t.Fatalf("global title = %q, want Overview", ansi.Strip(title))
+	}
+	if !strings.Contains(title, styles.BarChipActive.Render("Overview")) {
+		t.Fatalf("global title is missing the Overview pill: %q", ansi.Strip(title))
 	}
 	// The global space owns its own tabs, and only its own. Tasks is absent
 	// because its feature is off in this fixture.

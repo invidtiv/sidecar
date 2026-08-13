@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -172,6 +173,12 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	// project plugin tabs belong to the space the user is not in.
 	if !strings.Contains(plainHeader, "Agents") || !strings.Contains(plainHeader, "Workspaces") {
 		t.Fatalf("narrow global header omitted its own tabs: %q", plainHeader)
+	}
+	if strings.Contains(lines[0], styles.Subtitle.Render(" / Overview")) {
+		t.Fatal("global Overview is still muted subtitle text")
+	}
+	if !strings.Contains(lines[0], styles.BarChipActive.Render("Overview")) {
+		t.Fatal("global Overview is not a filled breadcrumb pill")
 	}
 	for _, projectTab := range []string{"td", "git", "files", "conversations"} {
 		if strings.Contains(plainHeader, projectTab) {
@@ -517,15 +524,63 @@ func TestOverviewHeaderTabClickInvalidatesPendingNavigation(t *testing.T) {
 
 func TestOverviewHeaderMouseOpensSwitcher(t *testing.T) {
 	cfg := config.Default()
-	m := Model{cfg: cfg, registry: plugin.NewRegistry(nil), keymap: keymap.NewRegistry(), ui: &UIState{}, intro: IntroModel{RepoName: "repo", Done: true}, overview: overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}}), scope: ScopeGlobal, width: 120, height: 40, ready: true}
+	m := Model{cfg: cfg, registry: plugin.NewRegistry(nil), keymap: keymap.NewRegistry(), ui: &UIState{}, intro: IntroModel{RepoName: "repo", Done: true}, overview: overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}}), width: 120, height: 40, ready: true}
 	start, end, ok := m.getRepoNameBounds()
 	if !ok {
-		t.Fatal("Overview header has no switcher bounds")
+		t.Fatal("project header has no switcher bounds")
 	}
 	updatedModel, _ := m.Update(tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft})
 	updated := updatedModel.(Model)
-	if !updated.showProjectSwitcher || updated.projectSwitcherCursor != 0 {
-		t.Fatalf("Overview header click: open=%v cursor=%d", updated.showProjectSwitcher, updated.projectSwitcherCursor)
+	if !updated.showProjectSwitcher || updated.inGlobalScope() {
+		t.Fatalf("project header click: open=%v global=%v", updated.showProjectSwitcher, updated.inGlobalScope())
+	}
+}
+
+func TestOverviewPillClickTogglesToProject(t *testing.T) {
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	if m.overview == nil {
+		t.Fatal("overview should be constructed when feature defaults on")
+	}
+	m.intro.Active, m.intro.Done = false, true
+	m.width, m.height, m.ready = 120, 40, true
+	m.scope = ScopeGlobal
+	m.updateContext()
+
+	start, end, ok := m.getScopeBounds()
+	if !ok || end <= start {
+		t.Fatalf("scope bounds = %d-%d ok=%v", start, end, ok)
+	}
+	if _, _, repoOK := m.getRepoNameBounds(); repoOK {
+		t.Fatal("global Overview still exposes project-switcher bounds")
+	}
+
+	updated, _ := m.Update(tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("Overview pill click did not return to the project")
+	}
+	if m.showProjectSwitcher {
+		t.Fatal("Overview pill click opened the project switcher")
+	}
+
+	// Logo and K still toggle the same way.
+	logoStart, logoEnd, ok := m.getLogoBounds()
+	if !ok {
+		t.Fatal("logo bounds vanished in project scope")
+	}
+	updated, _ = m.Update(tea.MouseClickMsg{X: (logoStart + logoEnd) / 2, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("logo click did not reopen Overview")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("K did not leave Overview")
 	}
 }
 
