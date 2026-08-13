@@ -936,33 +936,54 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 	return true, p.scrollInteractiveViewport(move.Rows)
 }
 
+// scrollTerminalWindowByWheel places one coalesced wheel notch on a terminal
+// surface — the panel or the primary one — and is the whole of what a local
+// notch does to that surface, so the passive panel, interactive mode and the
+// watched preview all answer the same way (td-c3649a).
+//
+// The order inside it is load-bearing. Thawing comes first, before the
+// selection is answered: while a window is pinned to an absolute start the
+// surface reads a document projection rather than its live buffer, and that
+// snapshot carries no absolute coordinates, so a selection asked about it is
+// dropped for a reason that stops being true one statement later. Thawing first
+// also hands a gesture's pin back as a distance from the live bottom, where
+// clearing the selection ahead of it releases that pin outright and leaves the
+// placement below resuming from a stale offset.
+func (p *Plugin) scrollTerminalWindowByWheel(termPanel bool, rows int) tea.Cmd {
+	if termPanel {
+		p.thawTermPanelWindow()
+		p.clearTerminalSelectionOnScroll(true)
+		p.scrollTermPanelWindowRows(rows)
+		if rows > 0 && p.termPanelScroll == 0 {
+			p.cancelTerminalHistoryIntent(true)
+		}
+		if rows < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
+			return p.loadOlderTerminalHistory(true, -rows)
+		}
+		return nil
+	}
+
+	p.releaseTerminalDocProjection(false)
+	p.thawPreviewWindow()
+	p.clearTerminalSelectionOnScroll(false)
+	p.scrollPreviewWindowRows(rows)
+	if rows > 0 && p.previewScroll == 0 {
+		p.cancelTerminalHistoryIntent(false)
+	}
+	if rows < 0 && p.previewScroll == p.previewMaxScroll() {
+		return p.loadOlderTerminalHistory(false, -rows)
+	}
+	return nil
+}
+
 // scrollInteractiveViewportByWheel moves the interactive window by a coalesced
 // notch. A notch counts rendered rows down the screen where the scrollback keys
 // count rows back through scrollback; that is the only difference between them.
 // Where the window lands — including the clamp to what the surface has measured
 // — is the shared rule's, and it is the same answer for every local wheel path.
 func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
-		p.clearTerminalSelectionOnScroll(true)
-		p.scrollTermPanelWindowRows(delta)
-		if delta > 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -delta)
-		}
-		return nil
-	}
-
-	p.clearTerminalSelectionOnScroll(false)
-	p.scrollPreviewWindowRows(delta)
-	if delta > 0 && p.previewScroll == 0 {
-		p.cancelTerminalHistoryIntent(false)
-	}
-	if delta < 0 && p.previewScroll == p.previewMaxScroll() {
-		return p.loadOlderTerminalHistory(false, -delta)
-	}
-	return nil
+	return p.scrollTerminalWindowByWheel(
+		p.interactiveState != nil && p.interactiveState.TermPanel, delta)
 }
 
 // scrollInteractiveViewport moves whichever pane interactive mode is pointed at

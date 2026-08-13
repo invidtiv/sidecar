@@ -1185,18 +1185,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionTermPanelContent:
 		// Scroll the panel under the pointer, whether or not it holds focus.
-		// Where the notch lands is the shared window rule's: writing the
-		// arithmetic here is what let this path walk past the top of the loaded
-		// buffer and step over the history-load trigger below.
-		p.clearTerminalSelectionOnScroll(true)
-		p.scrollTermPanelWindowRows(delta)
-		if delta > 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -delta)
-		}
-		return nil
+		// What a notch does to a terminal surface — thaw, answer the selection,
+		// place the window, reach for history at the bound — is the shared local
+		// wheel rule's; writing any of it here is what let this path walk past
+		// the top of the loaded buffer and step over the history-load trigger.
+		return p.scrollTerminalWindowByWheel(true, delta)
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
 		// Scroll file/commit list in diff tab
 		return p.scrollDiffTabFileList(delta)
@@ -1355,15 +1348,7 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 		if delta, flush = p.wheel.Add(delta, p.now()); !flush {
 			return nil
 		}
-		p.clearTerminalSelectionOnScroll(false)
-		p.scrollPreviewWindowRows(delta)
-		if delta > 0 && p.previewScroll == 0 {
-			p.cancelTerminalHistoryIntent(false)
-		}
-		if delta < 0 && p.previewScroll == p.previewMaxScroll() {
-			return p.loadOlderTerminalHistory(false, -delta)
-		}
-		return nil
+		return p.scrollTerminalWindowByWheel(false, delta)
 	}
 
 	maxOffset := p.getMaxScrollOffset()
