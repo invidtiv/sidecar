@@ -716,6 +716,15 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.termPanelFocused = false
 			}
 		}
+	case regionDocMode:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+			}
+		}
+		p.toggleDocRenderMode()
 	case regionDocClose:
 		return p.closeDocPane()
 	case regionPaneTreeDivider:
@@ -1193,7 +1202,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionDocPane:
+	case regionDocPane, regionDocMode:
 		if leafID, ok := action.Region.Data.(int); ok {
 			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
 				if doc := p.docs[leaf.DocID]; doc != nil {

@@ -593,7 +593,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	rowClick := kind == string(workspacelist.RegionRow) &&
 		(action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick)
-	docClick := kind == previewDocRegionKind || kind == previewDocCloseKind
+	docClick := isPreviewDocRegion(kind)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
@@ -648,7 +648,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	}
-	if kind, ok := action.Region.Data.(string); ok && (kind == previewDocRegionKind || kind == previewDocCloseKind) {
+	if kind, ok := action.Region.Data.(string); ok && isPreviewDocRegion(kind) {
 		return m.handlePreviewDocMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok {

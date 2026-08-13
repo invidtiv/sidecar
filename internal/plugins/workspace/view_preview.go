@@ -613,11 +613,11 @@ func (p *Plugin) renderTaskContent(width, height int) string {
 	task := p.cachedTask
 	var lines []string
 
-	// Mode indicator
-	modeHint := dimText("[m] raw")
+	mode := "Raw"
 	if p.taskMarkdownMode {
-		modeHint = dimText("[m] rendered")
+		mode = "Rendered"
 	}
+	modeHint := dimText("[m] " + mode)
 
 	// Header
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Task: %s", task.ID))+"  "+modeHint)

@@ -579,7 +579,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// A focused list filter owns the keyboard while the sidebar has focus. It is
 	// asked after the doc-pane keys deliberately: a focused document keeps its
-	// own q/r/+/- context, and the two focuses are mutually exclusive, so
+	// own q/m/+/- context, and the two focuses are mutually exclusive, so
 	// neither steals the other's keys.
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
 		if handled, cmd := p.handleFilterKey(msg); handled {

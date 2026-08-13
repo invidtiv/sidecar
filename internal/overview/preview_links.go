@@ -21,12 +21,17 @@ import (
 
 const (
 	previewDocRegionKind = "global-preview-doc"
+	previewDocModeKind   = "global-preview-doc-mode"
 	previewDocCloseKind  = "global-preview-doc-close"
 	previewDocModelID    = 1
 	previewDocMinWidth   = markdown.MinWidthForMarkdown
 	previewTermMinWidth  = 12
 	previewDocSplitRatio = 50
 )
+
+func isPreviewDocRegion(kind string) bool {
+	return kind == previewDocRegionKind || kind == previewDocModeKind || kind == previewDocCloseKind
+}
 
 // previewDoc is the terminal-adjacent file preview on the global surface.
 // It reuses docview; it is not the issue-preview modal.
@@ -254,7 +259,13 @@ func (m *Model) registerPreviewDocRegions(box termpreview.Box) {
 	m.workspacesMouse.HitMap.AddRect(previewDocRegionKind, docBox.X, docBox.Y, docBox.W, docBox.H, previewDocRegionKind)
 	chips := previewDocHeaderChips(m.preview.doc, docBox.W)
 	for index, chip := range termpreview.LayoutChips(chips, docBox.W, 0) {
-		if index == len(chips)-1 && chip.Drawn {
+		if !chip.Drawn {
+			continue
+		}
+		switch index {
+		case len(chips) - 2:
+			m.workspacesMouse.HitMap.AddRect(previewDocModeKind, docBox.X+chip.Col, docBox.Y, chip.Width, 1, previewDocModeKind)
+		case len(chips) - 1:
 			m.workspacesMouse.HitMap.AddRect(previewDocCloseKind, docBox.X+chip.Col, docBox.Y, chip.Width, 1, previewDocCloseKind)
 		}
 	}
@@ -265,6 +276,14 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 	if kind == previewDocCloseKind {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.closePreviewDoc()
+		}
+		return nil
+	}
+	if kind == previewDocModeKind {
+		if (action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick) && m.preview.doc != nil {
+			m.preview.doc.view.ToggleRenderMode()
+			m.preview.doc.focused = true
+			m.preview.focus = focusPreview
 		}
 		return nil
 	}
@@ -294,8 +313,11 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	if m.preview.doc.focused {
 		switch key {
-		case "r":
+		case "m":
 			m.preview.doc.view.ToggleRenderMode()
+			return true, nil
+		case "r":
+			// Refresh rebuilds the preview and would drop this document.
 			return true, nil
 		case "enter", interactiveEnterKeyAlt:
 			m.preview.doc.focused = false
@@ -336,7 +358,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	header := termpreview.HeaderRow(previewDocHeaderChips(doc, box.W), styles.Muted.Render("q close · r "+action), box.W, 0, termpreview.TruncateANSI)
+	header := termpreview.HeaderRow(previewDocHeaderChips(doc, box.W), styles.Muted.Render("q close · m "+action), box.W, 0, termpreview.TruncateANSI)
 	body := doc.view.View()
 	if contentHeight <= 0 {
 		return header

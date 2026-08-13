@@ -118,6 +118,7 @@ const (
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
 	regionDocPane          = "doc-pane"
+	regionDocMode          = "doc-mode"
 	regionDocClose         = "doc-close"
 	regionPaneTreeDivider  = "pane-tree-divider"
 
@@ -755,7 +756,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
-		ctx.Keymap.RegisterPluginBinding("r", "render", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("m", "render", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-doc")

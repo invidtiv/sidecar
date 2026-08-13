@@ -276,9 +276,8 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeDocPane()
-	case "r":
-		doc.view.ToggleRenderMode()
-		p.saveSelectionState()
+	case "m":
+		p.toggleDocRenderMode()
 		return true, nil
 	case "+":
 		return true, p.resizeFocusedDoc(5)
@@ -551,8 +550,17 @@ func (p *Plugin) renderDocPane(doc *docPane, box Box) string {
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · r "+action), box.W, 0)
+	header := p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · m "+action), box.W, 0)
 	return header + "\n" + doc.view.View()
+}
+
+func (p *Plugin) toggleDocRenderMode() {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view == nil {
+		return
+	}
+	doc.view.ToggleRenderMode()
+	p.saveSelectionState()
 }
 
 func paneTreeDividerStyle(focused bool) lipgloss.Style {
@@ -578,7 +586,13 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
 	chips := p.docHeaderChips(doc, box.W)
 	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
-		if index == len(chips)-1 && chip.Drawn {
+		if !chip.Drawn {
+			continue
+		}
+		switch index {
+		case len(chips) - 2:
+			p.mouseHandler.HitMap.AddRect(regionDocMode, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
+		case len(chips) - 1:
 			p.mouseHandler.HitMap.AddRect(regionDocClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
 		}
 	}

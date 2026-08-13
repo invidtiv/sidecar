@@ -174,6 +174,50 @@ func TestGlobalPreviewLiveBufferFileClickOpensDoc(t *testing.T) {
 	}
 }
 
+func TestGlobalPreviewDocModeChipAndMToggle(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{
+		X:      previewNeedleAction(t, m, "README.md").X,
+		Y:      previewNeedleAction(t, m, "README.md").Y,
+		Button: tea.MouseLeft,
+	}))
+	if m.preview.doc == nil || !m.preview.doc.view.Rendered() {
+		t.Fatalf("opened doc = %#v", m.preview.doc)
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "Rendered") || strings.Contains(view, "r raw") || strings.Contains(view, "r render") {
+		t.Fatalf("doc header/hint = %q", view)
+	}
+
+	var mode mouse.Region
+	found := false
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, ok := region.Data.(string); ok && kind == previewDocModeKind {
+			mode = region
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("rendered mode chip has no hit region")
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{
+		X: mode.Rect.X, Y: mode.Rect.Y, Button: tea.MouseLeft,
+	}))
+	if m.preview.doc.view.Rendered() {
+		t.Fatal("mode chip click did not toggle to raw")
+	}
+
+	handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !handled || !m.preview.doc.view.Rendered() {
+		t.Fatalf("m did not restore rendered: handled=%v rendered=%v", handled, m.preview.doc.view.Rendered())
+	}
+	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if !handled || m.preview.doc == nil || !m.preview.doc.view.Rendered() {
+		t.Fatalf("r should be absorbed without toggling or closing: handled=%v doc=%#v", handled, m.preview.doc)
+	}
+}
+
 func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	action := previewNeedleAction(t, m, "README.md")
