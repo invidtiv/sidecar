@@ -1,0 +1,157 @@
+package workspace
+
+import (
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
+)
+
+// Content is what one pane-tree leaf shows. The tree places boxes and the frame
+// composes them; neither learns what is inside one. A bottom-relative offset, a
+// freeze, a tmux geometry lease are the content's business alone — the
+// structure layer never sees a *tty.Model.
+//
+// The contract is four methods on purpose. Capability beyond it — update,
+// focus, keys, pointers, scrolling, persistence — arrives as an optional
+// interface when its first real implementation does, not before: a document
+// leaf has no native cursor and no transport to gate, and a mandatory method
+// invites a wrong stub.
+type Content interface {
+	// Kind is the stable persistence key and registry key for this content.
+	Kind() string
+	// Title is the content's identity for a header row.
+	Title() string
+	// SetSize gives the content its box. The command is how a content asserts
+	// geometry it owns beyond this process, such as a live tmux pane.
+	SetSize(Size) tea.Cmd
+	// View draws exactly Size.Height rows of exactly Size.Width columns.
+	View(Render) string
+}
+
+// Content kinds are the keys a leaf is persisted under as well as the keys the
+// adapter is chosen by, so a leaf cannot be written under one name and restored
+// as another.
+const (
+	contentKindTerminal = "terminal"
+	contentKindDoc      = "doc"
+)
+
+// Size is the box a content draws into. It is the leaf's whole box, header row
+// included: the terminal leaf's header is still drawn by the legacy renderer
+// from inside its box, so each content spends its own header row. M1 absorbs
+// the terminal panel into the tree, and this becomes the box below the row the
+// frame draws.
+type Size struct {
+	Width, Height int
+}
+
+// Render is what the frame knows about a placed leaf and the content does not.
+// It carries no theme: styles are process-global in internal/styles, so a
+// content reads them there rather than through a copy that can go stale.
+type Render struct {
+	// Focused is true when this leaf owns the preview's keyboard focus.
+	Focused bool
+	// Zoomed is true when the box could not hold the whole tree and this leaf
+	// was given all of it.
+	Zoomed bool
+	// Origin is the leaf's box in plugin-local coordinates, which is what hit
+	// math needs; the size handed to SetSize is content-local.
+	Origin mouse.Rect
+}
+
+// paneContent adapts a leaf to the content contract. It is the one place that
+// maps a leaf kind to an implementation, so nothing in the render path asks
+// what kind of leaf it is drawing. A leaf whose content is gone has none, and
+// the canvas leaves its box blank rather than letting a neighbour spread into
+// it.
+func (p *Plugin) paneContent(node *PaneNode) Content {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == PaneDoc {
+		doc := p.docs[node.DocID]
+		if doc == nil || doc.view == nil {
+			return nil
+		}
+		return &docContent{p: p, doc: doc}
+	}
+	return &terminalContent{p: p}
+}
+
+// terminalContent is the terminal leaf. Its header row is drawn from inside its
+// body, not by the frame, because the terminal panel still puts a second
+// surface with a second header inside this one leaf; M1 makes each surface a
+// leaf the frame can head itself.
+type terminalContent struct {
+	p    *Plugin
+	size Size
+}
+
+func (c *terminalContent) Kind() string { return contentKindTerminal }
+
+// Title is the selection this terminal is showing, which is the name the
+// sidebar chose it by.
+func (c *terminalContent) Title() string {
+	if c.p.selectingShell() {
+		shell := c.p.getSelectedShell()
+		if shell == nil || shell.Name == "" {
+			return "Shell"
+		}
+		return shell.Name
+	}
+	if wt := c.p.selectedWorktree(); wt != nil {
+		return wt.Name
+	}
+	return ""
+}
+
+// SetSize records the box and nothing else. A live tmux pane is resized from
+// docTerminalResizeCmds, on the state change that moved the box; a resize
+// returned here would put a SIGWINCH into the agent on every frame.
+func (c *terminalContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *terminalContent) View(Render) string {
+	return c.p.renderPreviewContentLegacy(c.size.Width, c.size.Height)
+}
+
+// docContent is the document leaf: the pane's own header row above a document
+// viewport. The header is the pane's, not the viewer's — a leaf that decided
+// for itself whether it spent its box's first row would put its body on a
+// different relative row than its neighbours', which is the property
+// termpreview.HeaderRows exists to state.
+type docContent struct {
+	p    *Plugin
+	doc  *docPane
+	size Size
+}
+
+func (c *docContent) Kind() string { return contentKindDoc }
+
+func (c *docContent) Title() string { return c.doc.view.Title() }
+
+// SetSize hands the viewer the box below the header row, which is the same
+// subtraction termpreview.SurfaceIn makes for a terminal leaf.
+func (c *docContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	c.doc.view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	return nil
+}
+
+func (c *docContent) View(render Render) string {
+	return composePaneLeaf(
+		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
+		c.doc.view.View())
+}
+
+// composePaneLeaf joins a leaf's header row to the body under it. An empty
+// header is a leaf that owes no header row; an empty body still costs the join
+// its newline, because a leaf with no box left under its header has spent that
+// row all the same.
+func composePaneLeaf(header, body string) string {
+	if header == "" {
+		return body
+	}
+	return header + "\n" + body
+}

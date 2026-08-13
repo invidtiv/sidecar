@@ -346,7 +346,7 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 		return nil
 	}
 	if doc, _ := p.activeDocPane(); doc != nil && (filepath.Clean(doc.root) != root || doc.surface != surface) {
-		return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: "terminal"}
+		return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: contentKindTerminal}
 	}
 	layout := p.encodePaneNode(p.paneRoot)
 	if layout == nil {
@@ -372,7 +372,7 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		}}
 	}
 	if node.Kind == PaneTerminal {
-		return &state.PaneLayoutJSON{Kind: "terminal"}
+		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
 	}
 	doc := p.docs[node.DocID]
 	if doc == nil || doc.view == nil || doc.view.Title() == "" {
@@ -382,7 +382,7 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 	if doc.view.Rendered() {
 		mode = "rendered"
 	}
-	return &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: doc.view.Title(), Mode: mode}}}
+	return &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: doc.view.Title(), Mode: mode}}}
 }
 
 func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
@@ -450,13 +450,13 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		return &PaneNode{ID: id, Split: &PaneSplit{Axis: axis, Ratio: clampPaneRatio(saved.Split.Ratio), A: a, B: b}}
 	}
 	switch saved.Kind {
-	case "terminal":
+	case contentKindTerminal:
 		*terminalCount++
 		if *terminalCount > 1 {
 			return nil
 		}
 		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
-	case "doc":
+	case contentKindDoc:
 		if len(saved.Tabs) == 0 {
 			return nil
 		}
@@ -536,14 +536,14 @@ func (p *Plugin) cycleDocumentFocus(reverse bool) {
 	p.termPanelFocused = false
 }
 
-func (p *Plugin) docHeaderChips(doc *docPane, width int) []string {
+func (p *Plugin) docHeaderChips(doc *docPane, width int, focused bool) []string {
 	// Keep each chip whole so the shared header layout can drop it cleanly at
 	// narrow widths. Bound the path before styling so a deep path does not crowd
 	// out the mode and close affordances.
 	pathBudget := maxInt(width/2, 8)
 	path := p.truncateCache.Truncate(doc.view.Title(), pathBudget, "…")
 	pathStyle := styles.BarChip
-	if p.paneFocus == doc.leafID {
+	if focused {
 		pathStyle = styles.BarChipActive
 	}
 	mode := "Rendered"
@@ -557,35 +557,15 @@ func (p *Plugin) docHeaderChips(doc *docPane, width int) []string {
 	}
 }
 
-// docPaneHeaderRow is the doc leaf's header row. The frame draws it, not the
-// leaf: a leaf that decided for itself whether it spent its box's first row
-// would put its body on a different relative row than its neighbours', which is
-// the property termpreview.HeaderRows exists to state.
-func (p *Plugin) docPaneHeaderRow(doc *docPane, box Box) string {
+// docPaneHeaderRow is the doc leaf's header row, drawn above the viewer rather
+// than by it. focused is the frame's answer, so the chip a click lands on and
+// the chip the leaf drew cannot disagree about which leaf holds focus.
+func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
 	action := "raw"
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	return p.terminalHeader(p.docHeaderChips(doc, box.W), dimText("q close · m "+action), box.W, 0)
-}
-
-// renderDocPaneBody draws the doc leaf below the frame's header row. It is the
-// box minus that row — the same subtraction termpreview.SurfaceIn makes for a
-// terminal leaf.
-func (p *Plugin) renderDocPaneBody(doc *docPane, box Box) string {
-	doc.view.SetSize(box.W, maxInt(box.H-terminalHeaderRows, 0))
-	return doc.view.View()
-}
-
-// composePaneLeaf joins the header row the frame drew to the body the leaf
-// drew. An empty header is a leaf the frame owes no header row; an empty body
-// still costs the join its newline, because a leaf with no box left under its
-// header has spent that row all the same.
-func composePaneLeaf(header, body string) string {
-	if header == "" {
-		return body
-	}
-	return header + "\n" + body
+	return p.terminalHeader(p.docHeaderChips(doc, width, focused), dimText("q close · m "+action), width, 0)
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -618,7 +598,7 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 
 func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
-	chips := p.docHeaderChips(doc, box.W)
+	chips := p.docHeaderChips(doc, box.W, p.paneFocus == leafID)
 	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
 		if !chip.Drawn {
 			continue
@@ -640,6 +620,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	origin, placed := p.previewContentBox()
 	if layout.Zoomed {
 		// The zoomed leaf is drawn from here only when it is a document the
 		// preview owns: a terminal leaf, or a doc leaf still holding paneFocus
@@ -647,12 +628,12 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		if !p.docFocused() {
 			return "", false
 		}
-		doc, _ := p.activeDocPane()
-		zoomed := layout.Leaves[0].Box
-		if absolute, ok := p.previewContentBox(); ok {
-			p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: zoomed.W, H: zoomed.H})
+		zoomed := layout.Leaves[0]
+		if doc := p.docs[zoomed.Node.DocID]; placed && doc != nil {
+			p.registerDocPaneRegions(doc, zoomed.Node.ID,
+				Box{X: origin.X, Y: origin.Y, W: zoomed.Box.W, H: zoomed.Box.H})
 		}
-		return composePaneLeaf(p.docPaneHeaderRow(doc, zoomed), p.renderDocPaneBody(doc, zoomed)), true
+		return p.renderPaneLeaf(zoomed, origin, true), true
 	}
 
 	// Every leaf and divider is drawn onto the box LayoutPanes gave it. Joining
@@ -661,7 +642,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// cell for a divider to walk sideways.
 	canvas := ui.NewCanvas(width, height)
 	for _, placement := range layout.Leaves {
-		canvas.Blit(placement.Box, p.renderPaneLeaf(placement))
+		canvas.Blit(placement.Box, p.renderPaneLeaf(placement, origin, false))
 	}
 	for _, split := range layout.Dividers {
 		canvas.Blit(split.Box, p.renderPaneTreeDivider(split))
@@ -670,24 +651,32 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	return canvas.String(), true
 }
 
-// renderPaneLeaf draws one placed leaf: the header row the frame owns, then the
-// leaf's body under it. A leaf whose content is missing draws nothing and the
-// canvas leaves its box blank, rather than shifting its neighbours into it.
-func (p *Plugin) renderPaneLeaf(placement Placement) string {
-	if placement.Node.Kind == PaneDoc {
-		doc := p.docs[placement.Node.DocID]
-		if doc == nil || doc.view == nil {
-			return ""
-		}
-		return composePaneLeaf(
-			p.docPaneHeaderRow(doc, placement.Box),
-			p.renderDocPaneBody(doc, placement.Box))
+// renderPaneLeaf draws one placed leaf through the content contract, so the
+// compose path never asks what kind of leaf it is drawing. A leaf with no
+// content draws nothing and the canvas leaves its box blank, rather than
+// shifting its neighbours into it.
+//
+// origin is the preview content box, which turns the leaf's box into the
+// plugin-local rectangle a pointer is tested against.
+//
+// Sizing inside a frame is what the document viewer already required, and both
+// contents answer nil: a live terminal is resized from the state change that
+// moved its box, not from a render. The first content that answers a command
+// moves sizing ahead of the frame, into the update path that can dispatch it.
+func (p *Plugin) renderPaneLeaf(placement Placement, origin Box, zoomed bool) string {
+	content := p.paneContent(placement.Node)
+	if content == nil {
+		return ""
 	}
-	// The terminal leaf is the one leaf whose header the frame does not draw
-	// yet: the terminal panel puts a second surface, with a second header row,
-	// inside this one leaf. M1 absorbs the panel into the tree and each surface
-	// becomes a leaf the frame can head itself.
-	return p.renderPreviewContentLegacy(placement.Box.W, placement.Box.H)
+	_ = content.SetSize(Size{Width: placement.Box.W, Height: placement.Box.H})
+	return content.View(Render{
+		Focused: p.paneFocus == placement.Node.ID,
+		Zoomed:  zoomed,
+		Origin: Box{
+			X: origin.X + placement.Box.X, Y: origin.Y + placement.Box.Y,
+			W: placement.Box.W, H: placement.Box.H,
+		},
+	})
 }
 
 func (p *Plugin) renderPaneTreeDivider(split Divider) string {
