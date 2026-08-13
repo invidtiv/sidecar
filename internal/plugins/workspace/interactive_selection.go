@@ -169,12 +169,15 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 		p.selection.Clear()
 		// The anchor unit's span is in the old surface's coordinates.
 		p.pointer.ResetUnit()
+		// A panel pin belongs to the selection being dropped here, so it goes with
+		// it — before the new source reads the panel's window back.
+		p.releaseTermPanelGesturePin()
 	}
 	p.selectionTermPanel = termPanel
 	if termPanel && !p.selection.Anchor.Valid() {
 		// Pin the panel before anything hit-tests against it: a gesture reads the
 		// rows it was armed on, whatever output arrives underneath.
-		p.termPanelFreeze.Freeze(p.terminalSelectionViewportLayout().Start)
+		p.pinTermPanelWindow(p.terminalSelectionViewportLayout().Start, false)
 	}
 }
 
@@ -318,9 +321,10 @@ func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 	p.terminalDocProjection = freeze.projection
 	if freeze.termPanel {
 		// The clicked window wins over anything an earlier gesture pinned: this is
-		// the context the document was opened from.
-		p.termPanelFreeze.Release()
-		p.termPanelFreeze.Freeze(freeze.start)
+		// the context the document was opened from, and it outlives the selection
+		// the click made.
+		p.releaseTermPanelWindowPin()
+		p.pinTermPanelWindow(freeze.start, true)
 		return
 	}
 	p.previewOffset = freeze.start
@@ -388,7 +392,7 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 // so a gesture that outlived an intervening thaw still holds its own rows.
 func (p *Plugin) freezeTerminalSelectionViewport() {
 	if p.selectionTermPanel {
-		p.termPanelFreeze.Freeze(p.terminalSelectionViewportLayout().Start)
+		p.pinTermPanelWindow(p.terminalSelectionViewportLayout().Start, false)
 		return
 	}
 	if !p.autoScrollOutput {
@@ -453,6 +457,9 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 		}
 		return nil
 	}
+	// A click that selected nothing leaves no reader holding the panel's rows, so
+	// the pin the gesture was armed with ends with the gesture.
+	p.releaseTermPanelGesturePin()
 
 	switch resolution {
 	case tty.ClickActivate:
@@ -544,6 +551,9 @@ func (p *Plugin) selectTerminalUnit(action mouse.MouseAction, unit tty.Selection
 func (p *Plugin) clearTerminalSelection() {
 	p.selection.Clear()
 	p.pointer.ResetUnit()
+	// The panel window a gesture pinned was holding those rows still for this
+	// selection; nothing is reading them now.
+	p.releaseTermPanelGesturePin()
 }
 
 // clearTerminalSelectionOnScroll is what every scroll made outside a pointer

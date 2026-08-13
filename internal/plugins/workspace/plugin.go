@@ -281,6 +281,7 @@ type Plugin struct {
 	termPanelOutput       *tty.OutputBuffer // Captured output from the terminal session
 	termPanelScroll       int               // Rows back from the live bottom; 0 follows output
 	termPanelFreeze       tty.WindowFreeze  // Pins the panel to an absolute start while a gesture or a document holds it
+	termPanelFreezeDoc    bool              // Whether that pin belongs to a document activation rather than a pointer gesture
 	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 	terminalDocProjection terminalDocProjection
 

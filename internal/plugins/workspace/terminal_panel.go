@@ -326,6 +326,41 @@ func (p *Plugin) thawTermPanelWindow() {
 	if offset, thawed := p.termPanelFreeze.ThawFrom(p.termPanelMaxScroll()); thawed {
 		p.termPanelScroll = offset
 	}
+	p.termPanelFreezeDoc = false
+}
+
+// pinTermPanelWindow holds the panel window at an absolute start and records who
+// is holding it. The two owners are not released by the same events: a pointer
+// gesture's pin lives exactly as long as the selection reading those rows, while
+// a document activation's outlives that selection, because the document is meant
+// to keep showing the context it was opened from. Whether this pin takes at all
+// is the shared freeze's rule — a second freeze inside one gesture keeps the
+// first, and its owner with it.
+func (p *Plugin) pinTermPanelWindow(start int, doc bool) {
+	if p.termPanelFreeze.Active() {
+		return
+	}
+	p.termPanelFreeze.Freeze(start)
+	p.termPanelFreezeDoc = doc
+}
+
+// releaseTermPanelWindowPin drops the pin whoever placed it, for a jump that
+// chooses its own window rather than resuming from the pinned one.
+func (p *Plugin) releaseTermPanelWindowPin() {
+	p.termPanelFreeze.Release()
+	p.termPanelFreezeDoc = false
+}
+
+// releaseTermPanelGesturePin drops a pin a pointer gesture placed, once the
+// selection it was reading is gone — the gesture's half of the freeze/thaw
+// obligation. A pin left behind by a selection that no longer exists holds the
+// panel off the live edge with nothing on screen to explain why, which reads as
+// a pane that went quiet. A document's pin is not this one's to drop.
+func (p *Plugin) releaseTermPanelGesturePin() {
+	if p.termPanelFreezeDoc {
+		return
+	}
+	p.releaseTermPanelWindowPin()
 }
 
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
@@ -532,7 +567,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
-	p.termPanelFreeze.Release()
+	p.releaseTermPanelWindowPin()
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -548,7 +583,7 @@ func (p *Plugin) cleanupTermPanelSession() {
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil
-	p.termPanelFreeze.Release()
+	p.releaseTermPanelWindowPin()
 }
 
 // enforceLineWidths ensures every line in content is exactly targetWidth

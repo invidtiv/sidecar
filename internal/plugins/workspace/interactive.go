@@ -238,7 +238,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	}
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
-	p.termPanelFreeze.Release()
+	p.releaseTermPanelWindowPin()
 	p.interactiveState = &InteractiveState{
 		Active:        true,
 		TargetPane:    paneID,
@@ -863,7 +863,7 @@ func (p *Plugin) pinInteractiveViewportToLive() {
 		if p.termPanelScroll != 0 || p.termPanelFreeze.Active() {
 			p.clearTerminalSelection()
 			// A jump chooses its own window, so the pin is dropped rather than thawed.
-			p.termPanelFreeze.Release()
+			p.releaseTermPanelWindowPin()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		}
@@ -907,7 +907,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 	switch {
 	case move.ToOldest:
 		if termPanel {
-			p.termPanelFreeze.Release()
+			p.releaseTermPanelWindowPin()
 			p.termPanelScroll = p.termPanelMaxScroll()
 			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
 		}
@@ -916,7 +916,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
 	case move.ToLive:
 		if termPanel {
-			p.termPanelFreeze.Release()
+			p.releaseTermPanelWindowPin()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 			return true, nil
