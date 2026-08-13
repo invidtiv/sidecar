@@ -1,0 +1,30 @@
+ Sidecar / sidecar                     td     git     files     workspaces                     16:55
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  CURRENT WORK                                                                                    │
+│ No current work                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  BOARD: All Issues [backlog] (1-6 of 79)                                                         │
+│   • [BLK] ■ td-3b15ee P1 Coalescing stdin reader to prevent split mouse escape s...              │
+│   • [REV] ✗ td-8492c5 P1 Fix HistorySnapshot.Output race with appendLoadedHistory                │
+│   • [REV] ✗ td-3ca6f1 P1 Show live agents from untyped shell manifests in Overview               │
+│   • [REV] ■ td-847b0c P1 Overview: drop refreshing flash; show agent icons on ka...              │
+│   • [REV] ✗ td-0818ef P1 Fix intermittent workspace terminal focus geometry drift                │
+│   • [RDY] ✗ td-f98f10 P1 bug: closeTabsForPath has incorrect activeTab adjustmen...              │
+│   ↓ 73 more below                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  ACTIVITY LOG (1-4 of 50)                                                                        │
+│ Time  Sess       Type  Issue       Message                                                       │
+│ 15:38 ses_817230 [ACT] lg-b98a1f5a created issue                                                 │
+│ 15:38 ses_817230 [LOG] td-651ca2   Closed • Leaving a live pane places the window differen...    │
+│ 15:38 ses_817230 [ACT] td-651ca2   closed • Leaving a live pane places the window differen...    │
+│ 15:38 ses_817230 [ACT] cm-1d8395ba created issue                                                 │
+│   ↓ 46 more below                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter  Details   /  Search   a  Approve   R  Review   c  Closed   F  Filter              ↻ 16:55:04

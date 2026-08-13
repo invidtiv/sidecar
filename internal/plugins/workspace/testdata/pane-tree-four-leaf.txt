@@ -1,0 +1,24 @@
+Shell t to attach • E for interactive • Ctrl-b Ctr│ upper-right.md   Rendered   ×    q close · m raw
+No output yet                                     │                                                 
+                                                  │   upper                                         
+                                                  │                                                 
+                                                  │  upper body                                     
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+──────────────────────────────────────────────────│─────────────────────────────────────────────────
+ under-terminal.md   Rendered   ×  q close · m raw│ lower-right.md   Rendered   ×    q close · m raw
+                                                  │                                                 
+   under                                          │   lower                                         
+                                                  │                                                 
+  under body                                      │  lower body                                     
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 

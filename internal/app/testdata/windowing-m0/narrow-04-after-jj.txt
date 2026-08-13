@@ -1,0 +1,30 @@
+ Sidecar / sidecar                     td     git     files     workspaces                     16:55
+
+╭─────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────╮
+│ Workspaces                    New   │││  Output   Diff   Task                                    │
+│ Shells (1)                     +    │││ No agent running                                         │
+│  ⚠ Install                          │││ Press 's' to start an agent                              │
+│    ◆ claude  offline                │││                                                          │
+│                                     │││                                                          │
+│ Workspaces (2)                 +    │││                                                          │
+│  ⏸ ⑂ sidecar                        │││                                                          │
+│      main  main  +968 -5            │││                                                          │
+│  ⏸ ⑂ sidecar-grok-conversations     │││                                                          │
+│      branch grok-conversations  —   │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+│                                     │││                                                          │
+╰─────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban   \  Sidebar   D  Delete   r  Refresh      ↻ 16:55:04

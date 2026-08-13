@@ -1,0 +1,50 @@
+ Sidecar / sidecar                                                                       td     git     files     workspaces                                                                       16:54
+
+╭─────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                                            New   │││                                                                                                                      │
+│ Workspaces (2)                                                              │││ Main Worktree                                                                                                        │
+│  ⏸ ⑂ sidecar                                                                │││                                                                                                                      │
+│      main  main  +968 -5                                                    │││ This is your primary working directory.                                                                              │
+│  ⏸ ⑂ sidecar-grok-conversations                                             │││ Workspaces branch off from here as isolated environments.                                                            │
+│      branch grok-conversations  —                                           │││                                                                                                                      │
+│                                                                             │││ ──────────────────────────────────────────────────                                                                   │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││ Press 'n' to create a new workspace                                                                                  │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││ Each workspace gets its own directory, branch, and                                                                   │
+│                                                                             │││ optional AI agent. Work on multiple features in                                                                      │
+│                                                                             │││ parallel without switching branches.                                                                                 │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││ Press 'ctrl+n' for a new shell                                                                                       │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││ Shells are plain terminals in this directory, for                                                                    │
+│                                                                             │││ quick tasks that don't need their own workspace.                                                                     │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban   \  Sidebar   r  Refresh   /  Filter   T  Task   s  Start   O  Git   ctrl+t  Term   1-4  plugins   ?  help   q  quit                          ↻ 16:54:39

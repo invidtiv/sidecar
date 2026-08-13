@@ -1,0 +1,50 @@
+ Sidecar / sidecar                                                                       td     git     files     workspaces                                                                       16:54
+
+╭─────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Git main                                                │││ docs/plans/active/preview-pane-tree-and-doc-panes.md [unified]                                                                           │
+│                                                         │││                                                                                                                                          │
+│ Modified (1)                                   +6/-5    │││ @@ -588,11 +588,12 @@ prefix, splits, `Neighbor` navigation, per-leaf resize debounce and per-leaf pol                                   │
+│ M …s/active/preview-pane-tree-and-doc-panes.md +6/-5    │││  588  588 │ generations. All of the tiling plan's §1.2 (tmux sizing), §2.2 (per-tile PTY                                                 │
+│                                                         │││  589  589 │ sizing, one-workspace-per-tile Policy 1) and §4 (risks) apply unchanged.                                                     │
+│ Untracked (2)                                           │││  590  590 │                                                                                                                              │
+│ ? docs/plans/active/workspace-doc-pane-tabs.md          │││  591      │ **Phase 8 — tabs in panes, and shared adoption.**                                                                            │
+│ ? ▶ internal/ (3)                                       │││  592      │ Move `LoadPreview` into `docview`; lift filebrowser's `tabs.go` model into a                                                 │
+│                                                         │││  593      │ `docview.TabGroup` per §3.8; give doc panes a tab strip; have the file browser's                                             │
+│ ─────────────────────────────────────────────────────── │││  594      │ preview pane become a `docview`-backed pane so multiple markdown files can be                                                │
+│ Recent Commits (1692) ↑8                                │││  595      │ open in one panel there. Doc panes in other plugins follow from the same seam.                                               │
+│ ↑ 8bff48b refactor: give a leaf's contents one cont…  ┃ │││       591 │ **Phase 8 — tabs in panes, and the shared file viewer.**                                                                     │
+│ ↑ 9090d4e refactor: make zoom one layout rule, not …  ┃ │││       592 │ See [workspace-doc-pane-tabs.md](workspace-doc-pane-tabs.md). Workspace is                                                   │
+│ ↑ 09d749e refactor: compose the pane tree on a canv…  ┃ │││       593 │ the first host (per-surface restore, several files, left-truncated path                                                      │
+│ ↑ c9808d1 refactor: let the frame own a leaf's head…  ┃ │││       594 │ tabs). The viewer then grows the rest of the Files preview (wrap, info,                                                      │
+│ ↑ 1e87cfb refactor: give boxes and hit regions one …  ┃ │││       595 │ reveal, search) and Files hosts that same viewer. §3.8's boundary holds:                                                     │
+│ ↑ 6060206 docs: add the workspace windowing-system …  ┃ │││       596 │ `docview.Model` is one document; the pane tree does not know about tabs.                                                     │
+│ ↑ af52cb7 test: measure the leave bound in the stat…  ┃ │││  596  597 │                                                                                                                              │
+│ ↑ d33e07f fix: leave a live pane through one window…  ┃ │││  597  598 │ ---                                                                                                                          │
+│   db8c342 release: prepare v0.98.0 publication        ┃ │││                                                                                                                                          │
+│   80045a5 Merge branch 'global-workspace' (PR #267)   ┃ │││                                                                                                                                          │
+│   68d378f fix: make the branch green on a clean CI …  ┃ │││                                                                                                                                          │
+│   656c3a2 fix: let a nested shell be closed where i…  ┃ │││                                                                                                                                          │
+│   40ddfd7 fix: a click on the global left pane give…  ┃ │││                                                                                                                                          │
+│   e201c82 feat: put kind, project, name and age on …  ┃ │││                                                                                                                                          │
+│   89ce68b Merge branch 'main' into global-workspace   ┃ │││                                                                                                                                          │
+│   c693f3e fix: complete nested shell projection par…  ┃ │││                                                                                                                                          │
+│   67d67c2 fix: make nested workspace shells interac…  ┃ │││                                                                                                                                          │
+│   d3f9772 fix: restore current project from global …  ┃ │││                                                                                                                                          │
+│   0cac2b7 fix: transfer terminal ownership across g…  ┃ │││                                                                                                                                          │
+│   4d3fc8e refactor: share tty model with global wat…  ┃ │││                                                                                                                                          │
+│   0a278b9 fix: match the merged capture stub to the…  ┃ │││                                                                                                                                          │
+│   bcf48d8 Merge branch 'workspace-polish' into glob…  ┃ │││                                                                                                                                          │
+│   f80e6e4 fix: do not steal Task-tab m while a hidd…  ┃ │││                                                                                                                                          │
+│   a714935 feat: toggle markdown rendered vs raw wit…  ┃ │││                                                                                                                                          │
+│   9ae62bc feat: click terminal file links in the gl…  ┃ │││                                                                                                                                          │
+│   592493e feat: preview any local file an agent men…  │ │││                                                                                                                                          │
+│   3048e5a feat: extract a shared terminal link scan…  │ │││                                                                                                                                          │
+│   11b4b01 fix: do not adopt nested sibling shells a…  │ │││                                                                                                                                          │
+│   4afe05e feat: nest child shells under parent work…  │ │││                                                                                                                                          │
+│   d899eab fix: open-in-git switches to the target p…  │ │││                                                                                                                                          │
+│   c187d63 fix: let q type in the global Rename Shel…  │ │││                                                                                                                                          │
+│   61f7a49 feat: jump from global Diff to the projec…  │ │││                                                                                                                                          │
+│   61a4bd9 feat: show Output and Diff on global Work…  │ │││                                                                                                                                          │
+│   3238186 feat: rename shells from the global Works…  │ │││                                                                                                                                          │
+╰─────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ s  Stage   u  Unstage   c  Commit   d, enter  Diff   S  Stage all   U  Unstage all   P  Push   A  Amend   D  Discard   b  Branch   f  Fetch   L  Pull   h  History   z  Stash   Z  Pop       ↻ 16:54:39

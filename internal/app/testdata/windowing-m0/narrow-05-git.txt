@@ -1,0 +1,30 @@
+ Sidecar / sidecar                     td     git     files     workspaces                     16:55
+
+╭───────────────────────────╮ ╭────────────────────────────────────────────────────────────────────╮
+│ Git main                  │││ …s/plans/active/preview-pane-tree-and-doc-panes.md [unified]       │
+│                           │││                                                                    │
+│ Modified (1)     +6/-5    │││ @@ -588,11 +588,12 @@ prefix, splits, `Neighbor` na...             │
+│ M …-doc-panes.md +6/-5    │││  588  588 │ generations. All of the tiling plan's §1.2 (tmux si... │
+│                           │││  589  589 │ sizing, one-workspace-per-tile Policy 1) and §4 (ri... │
+│ Untracked (2)             │││  590  590 │                                                        │
+│ ? …ce-doc-pane-tabs.md    │││  591      │ **Phase 8 — tabs in panes, and shared adoption.**      │
+│ ? ▶ internal/ (3)         │││  592      │ Move `LoadPreview` into `docview`; lift filebrowser... │
+│                           │││  593      │ `docview.TabGroup` per §3.8; give doc panes a tab s... │
+│ ───────────────────────── │││  594      │ preview pane become a `docview`-backed pane so mult... │
+│ Recent Commits (1692) ↑8  │││  595      │ open in one panel there. Doc panes in other plugins... │
+│ ↑ 8bff48b refactor: g…  ┃ │││       591 │ **Phase 8 — tabs in panes, and the shared file view... │
+│ ↑ 9090d4e refactor: m…  ┃ │││       592 │ See [workspace-doc-pane-tabs.md](workspace-doc-pane... │
+│ ↑ 09d749e refactor: c…  ┃ │││       593 │ the first host (per-surface restore, several files,... │
+│ ↑ c9808d1 refactor: l…  ┃ │││       594 │ tabs). The viewer then grows the rest of the Files ... │
+│ ↑ 1e87cfb refactor: g…  ┃ │││       595 │ reveal, search) and Files hosts that same viewer. §... │
+│ ↑ 6060206 docs: add t…  │ │││       596 │ `docview.Model` is one document; the pane tree does... │
+│ ↑ af52cb7 test: measu…  │ │││  596  597 │                                                        │
+│ ↑ d33e07f fix: leave …  │ │││  597  598 │ ---                                                    │
+│   db8c342 release: pr…  │ │││                                                                    │
+│   80045a5 Merge branc…  │ │││                                                                    │
+│   68d378f fix: make t…  │ │││                                                                    │
+│   656c3a2 fix: let a …  │ │││                                                                    │
+│   40ddfd7 fix: a clic…  │ │││                                                                    │
+│   e201c82 feat: put k…  │ │││                                                                    │
+╰───────────────────────────╯ ╰────────────────────────────────────────────────────────────────────╯
+ s  Stage   u  Unstage   c  Commit   d, enter  Diff   S  Stage all   U  Unstage all       ↻ 16:55:04

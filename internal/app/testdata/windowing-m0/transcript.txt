@@ -1,0 +1,76 @@
+M0 invisibility proof — compositor and seam
+docs/plans/active/workspace-windowing-system.md, M0 ship criterion
+
+M0 changes how the workspace preview is composed, not what it draws: the box
+type, the frame's ownership of a leaf's header row, the canvas blit that
+replaced the two-leaf joins, the content contract, one zoom rule, hit regions
+registered from the placements the canvas drew from, and one floors authority.
+The claim the milestone makes is that none of it reaches a cell. This directory
+is that claim measured against a real Sidecar process rather than asserted.
+
+Method
+------
+Two binaries, one built at db8c342 (the tree M0 started from) and one at the
+head of M0, driven through the same key sequence at two sizes, on private tmux
+servers and private state trees. The captures below are the M0 binary's
+ANSI-stripped pane text with trailing spaces removed; the comparison itself was
+made on the raw captures, escape sequences included, so a styling change would
+have shown even where the glyphs agreed.
+
+Every state matched byte for byte at both sizes. The only masked difference is
+the header and footer clock, which advances between two runs by construction.
+No transcript in this repository was re-recorded, because nothing M0 did made
+one stale.
+
+Isolation (`./scripts/tmux-drive.sh paths` before each run)
+  outer server  -L sidecar-drive
+  base run dir  /private/tmp/sidecar-m0-base-501
+  head run dir  /private/tmp/sidecar-m0-head-501
+  inner tmux    <run dir>/tmux/tmux-501/default
+  state home    <run dir>/state
+  config        <run dir>/config/config.json
+  SIDECAR_ISOLATED_STATE=1
+The machine's default tmux server was never started, stopped, or sent a command.
+
+Reproduce
+---------
+  mkdir -p /tmp/sidecar-m0-base-src
+  git archive db8c342 | tar -x -C /tmp/sidecar-m0-base-src
+  (cd /tmp/sidecar-m0-base-src && go build -o sidecar-base ./cmd/sidecar)
+  go build -o /tmp/sidecar-m0-head/sidecar ./cmd/sidecar
+
+  # once per binary, with SIDECAR_DRIVE_RUN_DIR and SIDECAR_BIN set to it:
+  ./scripts/tmux-drive.sh start 200 50     -> wide-01-startup
+  ./scripts/tmux-drive.sh keys 4           -> wide-02-workspaces
+  ./scripts/tmux-drive.sh keys j           -> wide-03-after-j
+  ./scripts/tmux-drive.sh keys j           -> wide-04-after-jj
+  ./scripts/tmux-drive.sh keys 2           -> wide-05-git
+  ./scripts/tmux-drive.sh stop
+  # then the same sequence at 100x30 for the narrow-* captures
+
+  diff <(sed 's/[0-9][0-9]:[0-9][0-9]/CLOCK/g' base/<state>.txt) \
+       <(sed 's/[0-9][0-9]:[0-9][0-9]/CLOCK/g' head/<state>.txt)
+
+What each state exercises
+-------------------------
+  01-startup      App chrome and the td plugin: the frame M0 did not touch,
+                  present so a difference anywhere would be attributable.
+  02-workspaces   The workspace sidebar beside the preview box. The preview is
+                  the terminal leaf of a one-leaf pane tree, so this is the
+                  path where terminalLeafBox now reads Zoomed and the floors
+                  from one authority instead of its own literal.
+  03-after-j      Selection moves to a shell; the preview follows it. The
+                  terminal surface is composed from the leaf box.
+  04-after-jj     Selection on a workspace with no agent: the same leaf box
+                  with a different content.
+  05-git          Leaving the plugin, to catch a change that only shows once
+                  the workspace view has been built and torn down.
+
+Not covered here
+----------------
+A document pane open beside the terminal is the composition M0 rewrote, and it
+cannot be reached headlessly: a doc leaf is born from a markdown path in live
+agent output. That path is covered instead by the cell-exact goldens over a
+three-leaf and a nested four-leaf tree in
+internal/plugins/workspace/pane_compositor_test.go, which assert every composed
+cell, each divider's own box, and every leaf and divider hit region.

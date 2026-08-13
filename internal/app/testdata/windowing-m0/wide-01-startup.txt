@@ -1,0 +1,50 @@
+ Sidecar / sidecar                                                                       td     git     files     workspaces                                                                       16:54
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  CURRENT WORK                                                                                                                                                                                        │
+│ No current work                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  BOARD: All Issues [backlog] (1-14 of 79)                                                                                                                                                            │
+│   • [BLK] ■ td-3b15ee P1 Coalescing stdin reader to prevent split mouse escape sequences                                                                                                             │
+│   • [REV] ✗ td-8492c5 P1 Fix HistorySnapshot.Output race with appendLoadedHistory                                                                                                                    │
+│   • [REV] ✗ td-3ca6f1 P1 Show live agents from untyped shell manifests in Overview                                                                                                                   │
+│   • [REV] ■ td-847b0c P1 Overview: drop refreshing flash; show agent icons on kanban cards                                                                                                           │
+│   • [REV] ✗ td-0818ef P1 Fix intermittent workspace terminal focus geometry drift                                                                                                                    │
+│   • [RDY] ✗ td-f98f10 P1 bug: closeTabsForPath has incorrect activeTab adjustment when removing multiple tabs                                                                                        │
+│   • [RDY] ■ td-871ec1 P1 Persist codex/pi session metadata cache across launches                                                                                                                     │
+│   • [RDY] ✗ td-a33774 P1 bug: Go CI red on main after the embedded-terminal merge (lint + leaked async tmux sends)                                                                                   │
+│   • [RDY] ■ td-3cc0d9 P1 Invert the shadow comparator's fail-quiet attribution default                                                                                                               │
+│   • [RDY] ■ td-fc18f6 P1 Follow x/vt #935: grapheme-safe incremental writes                                                                                                                          │
+│   • [RDY] ● td-393e81 P1 Update Tasks with Sidecar auto-update when plugin is enabled                                                                                                                │
+│   • [REV] ✗ td-3615a6 P2 Make screenmodel import guard independent of local go.work                                                                                                                  │
+│   • [RDY] ■ td-f1a8e180 P2 Add y/Y yank shortcuts to git diff view                                                                                                                                   │
+│   • [RDY] ■ td-6f14718b P2 Add undo/reset functionality                                                                                                                                              │
+│   ↓ 65 more below                                                                                                                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  ACTIVITY LOG (1-11 of 50)                                                                                                                                                                           │
+│ Time  Sess       Type  Issue       Message                                                                                                                                                           │
+│ 15:38 ses_817230 [ACT] lg-b98a1f5a created issue                                                                                                                                                     │
+│ 15:38 ses_817230 [LOG] td-651ca2   Closed • Leaving a live pane places the window differently on each surface                                                                                        │
+│ 15:38 ses_817230 [ACT] td-651ca2   closed • Leaving a live pane places the window differently on each surface                                                                                        │
+│ 15:38 ses_817230 [ACT] cm-1d8395ba created issue                                                                                                                                                     │
+│ 15:38 ses_817230 [CMT] td-651ca2   Verified against current code, plus a small closing fix.                                                                                                          │
+│                                                                                                                                                                                                      │
+│                                    Criterion 1 (both surfaces place the window the same way): the project surface already... • Leav...                                                               │
+│ 15:28 ses_ce01d0 [ACT] lg-308f95c5 created issue                                                                                                                                                     │
+│ 15:28 ses_ce01d0 [LOG] td-20a054   Closed • Re-record the app proof transcripts after the kanban casing change                                                                                       │
+│ 15:28 ses_ce01d0 [ACT] td-20a054   closed • Re-record the app proof transcripts after the kanban casing change                                                                                       │
+│ 15:28 ses_ce01d0 [ACT] lg-242d1e6e created issue                                                                                                                                                     │
+│ 15:28 ses_ce01d0 [LOG] td-30299a   Closed • Review the two files an agent reconstructed from memory                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter  Details   /  Search   a  Approve   R  Review   c  Closed   F  Filter   b  Boards   r  Refresh   v  View   C  Close   O  Reopen   x  Delete   h  Handoffs   S  Sort   T  Type          ↻ 16:54:39
