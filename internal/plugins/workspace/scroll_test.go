@@ -393,6 +393,9 @@ func TestGetPreviewVisibleHeight(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Plugin{height: tt.height, previewTab: tt.tab, shellSelected: tt.shell}
+			if tt.shell {
+				p.shells = []*ShellSession{{TmuxName: "shell"}}
+			}
 			got := p.getPreviewVisibleHeight()
 			if got != tt.want {
 				t.Errorf("getPreviewVisibleHeight() = %d, want %d", got, tt.want)

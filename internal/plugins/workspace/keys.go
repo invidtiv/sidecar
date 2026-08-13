@@ -592,7 +592,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.releaseTerminalDocProjection(false)
 		}
 	}
-	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
 		}
@@ -626,7 +626,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			if !p.termPanelFocused {
 				p.termPanelFocused = true
 				return nil
@@ -663,7 +663,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			if p.termPanelFocused {
 				p.termPanelFocused = false
 				return nil
@@ -711,7 +711,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.loadSelectedContent()
 		}
 		// Terminal panel focused: scroll to top of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			p.thawTermPanelWindow()
 			if p.termPanelOutput != nil {
 				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
@@ -751,7 +751,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			p.thawTermPanelWindow()
 			p.termPanelScroll = 0
 			return nil
@@ -832,7 +832,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			// Right layout: move focus from agent to terminal panel
 			p.thawTermPanelWindow()
 			p.termPanelFocused = true
@@ -861,12 +861,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Enter interactive mode (tmux input passthrough) - feature gated
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal to attach to.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
-			if p.selectedNestedTmux != "" {
-				return p.ensureShellAndAttach(p.getSelectedShell())
-			}
+		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
 			// Handle orphaned worktrees: start new agent instead of silently returning nil
-			if !p.shellSelected {
+			if !p.selectingShell() {
 				wt := p.selectedWorktree()
 				if wt != nil && wt.IsOrphaned && wt.Agent == nil {
 					wt.IsOrphaned = false
@@ -913,7 +910,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
 			p.releaseTerminalDocProjection(false)
@@ -1218,8 +1215,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Unhandled key in preview pane - flash to indicate attach is needed
 		// Only flash on the Output tab where there's a terminal to attach to.
 		// Diff and Task tabs have no interactive terminal.
-		if p.activePane == PanePreview && p.previewTab == PreviewTabOutput {
-			canAttach := p.shellSelected || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
+		if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			canAttach := p.selectingShell() || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
 			if canAttach {
 				p.flashPreviewTime = time.Now()
 			}

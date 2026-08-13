@@ -41,7 +41,7 @@ type TermPanelSessionCreatedMsg struct {
 
 // termPanelSessionName returns the tmux session name for the current worktree/shell's terminal panel.
 func (p *Plugin) termPanelSessionName() string {
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell != nil {
 			return termPanelSessionPrefix + sanitizeName(shell.TmuxName)
@@ -57,7 +57,10 @@ func (p *Plugin) termPanelSessionName() string {
 
 // termPanelWorkDir returns the working directory for the terminal panel session.
 func (p *Plugin) termPanelWorkDir() string {
-	if p.shellSelected {
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.WorkDir != "" {
+			return shell.WorkDir
+		}
 		return p.ctx.WorkDir
 	}
 	wt := p.selectedWorktree()

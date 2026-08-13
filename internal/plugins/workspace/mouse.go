@@ -677,7 +677,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Entering interactive mode here would resize and reframe the terminal
 		// before drag tracking is armed, so an immediate click-drag selection
 		// jumps or disappears.
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			if !action.Shift && !action.Alt {
 				if cmd, ok := p.activateTerminalLink(action); ok {
 					return cmd
@@ -1033,7 +1033,7 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			p.termPanelFocused = false
 			return p.selectTerminalWord(action)
 		}
@@ -1166,7 +1166,7 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalLine(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			p.activePane = PanePreview
 			p.termPanelFocused = false
 			return p.selectTerminalLine(action)

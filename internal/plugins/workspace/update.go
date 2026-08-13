@@ -766,7 +766,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
@@ -783,7 +783,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeList && !p.shellSelected {
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeList && !p.selectingShell() {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName && wt.Agent != nil {
 				target := wt.Agent.TmuxPane
 				if target == "" {
@@ -829,7 +829,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling in interactive mode for fast response
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -910,7 +910,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -1123,7 +1123,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.viewMode == ViewModeInteractive {
 			return p, nil
 		}
-		if p.shellSelected {
+		if p.selectingShell() {
 			if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 				return p, p.pollShellSessionByName(shell.TmuxName)
 			}
@@ -1356,7 +1356,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
@@ -1373,7 +1373,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.shellSelected {
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.selectingShell() {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				if resizeCmd := p.maybeResizeVisiblePane(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1394,7 +1394,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		selectedShell := p.getSelectedShell()
 		isSelectedShell := selectedShell != nil && selectedShell.TmuxName == msg.TmuxName
-		isVisibleOnScreen := isSelectedShell && p.shellSelected &&
+		isVisibleOnScreen := isSelectedShell && p.selectingShell() &&
 			(p.viewMode == ViewModeList || p.viewMode == ViewModeInteractive)
 
 		if !isVisibleOnScreen {
@@ -1411,7 +1411,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())

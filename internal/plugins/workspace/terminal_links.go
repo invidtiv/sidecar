@@ -48,7 +48,7 @@ func (p *Plugin) terminalLinkTarget(termPanel bool) string {
 	if termPanel {
 		return p.termPanelSession + "\x00" + p.termPanelPaneID
 	}
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 			return shell.Agent.TmuxSession + "\x00" + shell.Agent.TmuxPane
 		}
@@ -169,10 +169,13 @@ func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bo
 	}
 	rawRoot := p.ctx.WorkDir
 	surface := ""
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.TmuxName == "" {
 			return terminalLinkSurfaceContext{}
+		}
+		if shell.WorkDir != "" {
+			rawRoot = shell.WorkDir
 		}
 		surface = "shell:" + shell.TmuxName
 	} else {
@@ -366,7 +369,11 @@ func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {
 		return nil
 	}
 	base := p.ctx.WorkDir
-	if !p.shellSelected {
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.WorkDir != "" {
+			base = shell.WorkDir
+		}
+	} else {
 		if wt := p.selectedWorktree(); wt != nil {
 			base = wt.Path
 		}

@@ -1194,7 +1194,7 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 // shellOutputVisibleFor reports whether a shell's live output is actually being
 // viewed. Selection alone is insufficient while another plugin is focused.
 func (p *Plugin) shellOutputVisibleFor(tmuxName string) bool {
-	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) || p.previewTab != PreviewTabOutput {
+	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) {
 		return false
 	}
 	shell := p.getSelectedShell()
@@ -1226,7 +1226,7 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
-	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 		var h int
 		if p.termPanelVisible {
 			_, h = p.calculateAgentPaneDimensions()
@@ -1240,7 +1240,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 	// Terminal surfaces spend one row on their own header; Diff and Task keep
 	// the standalone tab row and the blank spacer under it.
 	chrome := previewTabRows
-	if p.previewTab == PreviewTabOutput || p.shellSelected {
+	if p.previewTab == PreviewTabOutput || p.selectingShell() {
 		chrome = terminalHeaderRows
 	}
 	h := p.height - panelBorderWidth - chrome
@@ -1283,7 +1283,7 @@ func (p *Plugin) getMaxScrollOffset() int {
 // a document by an absolute line from its top, a terminal by a distance back
 // from its live bottom.
 func (p *Plugin) previewShowsTerminal() bool {
-	return p.previewTab == PreviewTabOutput || p.shellSelected
+	return p.previewTab == PreviewTabOutput || p.selectingShell()
 }
 
 // previewMaxScroll is the furthest back the primary terminal's window can sit,
@@ -1789,7 +1789,7 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 	}
 
 	// If shell is selected, poll shell output immediately
-	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil && p.previewTab == PreviewTabOutput {
+	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 		cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
 	}
 

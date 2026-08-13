@@ -849,14 +849,9 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 }
 
 func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
-	// Find the shell by TmuxName
-	var shell *ShellSession
-	for _, s := range p.shells {
-		if s.TmuxName == tmuxName {
-			shell = s
-			break
-		}
-	}
+	// Find the shell by TmuxName across both the current worktree's top-level
+	// shells and sibling-worktree shells nested in the workspace list.
+	shell := p.findShellByName(tmuxName)
 	if shell == nil || shell.Agent == nil {
 		return nil
 	}
@@ -871,7 +866,6 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
-		p.shellSelected &&
 		selectedShell != nil &&
 		selectedShell.TmuxName == tmuxName
 	if interactiveCapture {

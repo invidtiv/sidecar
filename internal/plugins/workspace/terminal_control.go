@@ -175,7 +175,7 @@ func (p *Plugin) terminalOutputSurfaceVisible() bool {
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {
 		return false
 	}
-	return p.shellSelected || p.previewTab == PreviewTabOutput
+	return p.selectingShell() || p.previewTab == PreviewTabOutput
 }
 
 func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
@@ -200,10 +200,10 @@ func (p *Plugin) desiredPrimaryTerminal() (workspaceTerminalTarget, bool) {
 	}
 	width, height := p.calculateAgentPaneDimensions()
 	width = p.terminalContentWidth(width)
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.IsOrphaned || shell.Agent == nil ||
-			shell.Agent.TmuxSession == "" || shell.Agent.TmuxPane == "" {
+			shell.Agent.TmuxSession == "" {
 			return workspaceTerminalTarget{}, false
 		}
 		return workspaceTerminalTarget{

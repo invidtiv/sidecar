@@ -39,10 +39,13 @@ func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 		return "", "", false
 	}
 	root = p.ctx.WorkDir
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.TmuxName == "" {
 			return "", "", false
+		}
+		if shell.WorkDir != "" {
+			root = shell.WorkDir
 		}
 		identity = "shell:" + shell.TmuxName
 	} else {
@@ -263,7 +266,7 @@ func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
 // is not the keyboard owner while those tabs are showing.
 func (p *Plugin) docVisible() bool {
 	doc, _ := p.activeDocPane()
-	return doc != nil && (p.shellSelected || p.previewTab == PreviewTabOutput)
+	return doc != nil && (p.selectingShell() || p.previewTab == PreviewTabOutput)
 }
 
 func (p *Plugin) docFocused() bool {

@@ -35,7 +35,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 func (p *Plugin) nativeTerminalActive() bool {
 	return p.focused && p.activePane == PanePreview &&
 		p.viewMode == ViewModeInteractive && p.interactiveState != nil &&
-		p.interactiveState.Active && (p.shellSelected || p.previewTab == PreviewTabOutput)
+		p.interactiveState.Active && (p.selectingShell() || p.previewTab == PreviewTabOutput)
 }
 
 // PreferredMouseMode keeps hover-rich all-motion reporting for ordinary
@@ -65,7 +65,7 @@ func (p *Plugin) nativeTerminalGeometry(termPanel bool) (*tty.OutputBuffer, int,
 	}
 
 	var buffer *tty.OutputBuffer
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 			buffer = shell.Agent.OutputBuf
 		}

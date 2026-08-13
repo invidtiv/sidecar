@@ -67,7 +67,7 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 			TermPanel: true,
 		}, true
 	}
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.Agent == nil || shell.Agent.OutputBuf == nil {
 			return terminalHistorySource{}, false

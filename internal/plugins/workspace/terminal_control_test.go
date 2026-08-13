@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/tty"
@@ -151,6 +152,92 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 
 	if wt.Agent.OutputBuf != model.State.OutputBuf || wt.Agent.OutputBuf.String() != "fallback visible" {
 		t.Fatalf("workspace did not render shared fallback buffer: %q", wt.Agent.OutputBuf.String())
+	}
+}
+
+func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.panelTerminal = p.newWorkspaceTerminal()
+	p.previewTab = PreviewTabDiff // Shell surfaces ignore the worktree tab state.
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	if shell == nil {
+		t.Fatal("nested shell fixture missing")
+	}
+	shell.Agent = &Agent{
+		Type: AgentShell, TmuxSession: session,
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectNestedShell(parent, session)
+
+	target, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("session-only nested shell did not request the primary terminal")
+	}
+	if target.Session != session || target.Pane != "" || target.Source != "shell" || target.SourceID != session {
+		t.Fatalf("nested terminal target = %#v", target)
+	}
+
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, target)
+	if model.GetTarget() != session {
+		t.Fatalf("session-only model target = %q, want %q", model.GetTarget(), session)
+	}
+	if shell.Agent.OutputBuf != model.State.OutputBuf {
+		t.Fatal("nested shell did not adopt the tty.Model presentation buffer")
+	}
+	applyFallbackCapture(model, "nested live frame")
+	p.syncTerminalModels()
+
+	view := ansi.Strip(p.renderShellOutput(100, 20))
+	if !strings.Contains(view, "nested live frame") || strings.Contains(view, "No output yet") {
+		t.Fatalf("nested shell output did not render model frame:\n%s", view)
+	}
+}
+
+func TestNestedShellSwitchRejectsPriorTerminalFrame(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.panelTerminal = p.newWorkspaceTerminal()
+	const nestedSession = "sidecar-sh-sidecar-feature-1"
+	parent, nested := p.findNestedShell(nestedSession)
+	nested.Agent = &Agent{
+		Type: AgentShell, TmuxSession: nestedSession, TmuxPane: "%8",
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectNestedShell(parent, nestedSession)
+	nestedTarget, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("nested shell did not request terminal")
+	}
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, nestedTarget)
+	oldScope, oldPoll := model.Scope(), model.State.PollGeneration
+	applyFallbackCapture(model, "nested current")
+	p.syncTerminalModels()
+
+	top := p.shells[0]
+	top.Agent = &Agent{
+		Type: AgentShell, TmuxSession: top.TmuxName, TmuxPane: "%9",
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectTopShellAt(0)
+	topTarget, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("top shell did not request terminal after nested selection")
+	}
+	model = openTestTerminal(t, p, workspaceTerminalPrimary, topTarget)
+	model.Update(tty.CaptureResultMsg{
+		Scope: oldScope, PollGeneration: oldPoll, Target: "%8", Output: "STALE NESTED FRAME",
+	})
+	applyFallbackCapture(model, "top current")
+	p.syncTerminalModels()
+
+	view := ansi.Strip(p.renderShellOutput(100, 20))
+	if !strings.Contains(view, "top current") || strings.Contains(view, "STALE NESTED FRAME") || strings.Contains(view, "nested current") {
+		t.Fatalf("shell switch rendered stale nested content:\n%s", view)
+	}
+	if p.primaryTerminalTarget.SourceID != top.TmuxName {
+		t.Fatalf("primary target after switch = %#v", p.primaryTerminalTarget)
 	}
 }
 

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
@@ -17,6 +19,12 @@ func nestedSidebarPlugin(t *testing.T) *Plugin {
 	p := New()
 	workDirA := filepath.Join(t.TempDir(), "sidecar")
 	workDirB := filepath.Join(t.TempDir(), "sidecar-feature")
+	if err := os.MkdirAll(workDirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDirB, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	p.ctx = &plugin.Context{WorkDir: workDirA, ProjectRoot: workDirA, Epoch: 3}
 	p.width, p.height = 140, 40
 	p.focused = true
@@ -117,41 +125,112 @@ func TestNestedShellKeyboardAndMouseSelect(t *testing.T) {
 	}
 }
 
-func TestNestedShellEnterAttachesByTmuxName(t *testing.T) {
+func TestNestedShellInteractionAndAttachTargetTmuxSession(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
 	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	if shell == nil {
+		t.Fatal("nested shell fixture missing")
+	}
+	shell.Agent = &Agent{
+		Type: AgentShell, TmuxSession: session, TmuxPane: "%9",
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
 	var attached string
 	p.attachSession = func(sessionName, displayName string) tea.Cmd {
 		attached = sessionName
 		return nil
 	}
-	p.selectNestedShell(1, "sidecar-sh-sidecar-feature-1")
-	cmd := p.handleListKeys(key("enter"))
-	if cmd != nil {
-		cmd()
+	p.selectNestedShell(parent, session)
+	p.handleListKeys(key("enter"))
+	if attached != "" {
+		t.Fatalf("Enter full-attached nested shell %q instead of entering embedded interaction", attached)
 	}
-	if attached != "sidecar-sh-sidecar-feature-1" {
-		t.Fatalf("enter attached %q, want sidecar-sh-sidecar-feature-1", attached)
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
+		t.Fatalf("Enter did not activate embedded interaction: mode=%v state=%#v", p.viewMode, p.interactiveState)
+	}
+	if p.interactiveState.TargetSession != session || p.interactiveState.TargetPane != "%9" {
+		t.Fatalf("embedded target = %#v", p.interactiveState)
+	}
+	attachLiveTerminal(p, false)
+	if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommandTree(p.handleInteractiveKeys(keyPressForText("NESTED_INPUT")))
+	tty.WaitForPendingSends()
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "paste-buffer") || !strings.Contains(string(logged), "-t %9") {
+		t.Fatalf("embedded input missed nested pane: %s", logged)
 	}
 
+	p.exitInteractiveMode()
 	attached = ""
-	cmd = p.handleListKeys(key("t"))
+	cmd := p.handleListKeys(key("t"))
 	if cmd != nil {
 		cmd()
 	}
-	if attached != "sidecar-sh-sidecar-feature-1" {
-		t.Fatalf("t attached %q, want sidecar-sh-sidecar-feature-1", attached)
+	if attached != session {
+		t.Fatalf("t attached %q, want %s", attached, session)
 	}
 
 	attached = ""
 	cmd = p.handleMouseDoubleClick(mouse.MouseAction{
 		Type:   mouse.ActionDoubleClick,
-		Region: &mouse.Region{ID: regionWorktreeItem, Data: nestedShellHit{TmuxName: "sidecar-sh-sidecar-feature-1"}},
+		Region: &mouse.Region{ID: regionWorktreeItem, Data: nestedShellHit{TmuxName: session}},
 	})
 	if cmd != nil {
 		cmd()
 	}
-	if attached != "sidecar-sh-sidecar-feature-1" {
+	if attached != session {
 		t.Fatalf("double-click attached %q", attached)
+	}
+}
+
+func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.Update("nested output")
+	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9", OutputBuf: buffer}
+	p.selectNestedShell(parent, session)
+	p.previewTab = PreviewTabDiff // A shell surface is terminal-shaped regardless of the old worktree tab.
+
+	if !p.previewShowsTerminal() || p.liveTerminalOutputBuffer(false) != buffer {
+		t.Fatal("nested selection did not use the ordinary terminal buffer/window")
+	}
+	if p.captureShellSessionByName(session, 1) == nil {
+		t.Fatal("nested shell was invisible to semantic/fallback capture lookup")
+	}
+	history, ok := p.terminalHistoryFor(false)
+	if !ok || history.Key != terminalHistoryKey("shell", session) || history.Target != "%9" || history.Buffer != buffer {
+		t.Fatalf("nested history source = %#v, ok=%v", history, ok)
+	}
+	wantRoot, err := filepath.EvalSymlinks(shell.WorkDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, identity, ok := p.selectedTerminalSurface()
+	if !ok || root != filepath.Clean(wantRoot) || identity != "shell:"+session {
+		t.Fatalf("nested terminal surface = root %q identity %q ok=%v", root, identity, ok)
+	}
+	links := p.terminalLinkSurfaceContext(false)
+	if !links.ok || links.rawRoot != filepath.Clean(shell.WorkDir) || links.surface != "shell:"+session {
+		t.Fatalf("nested link context = %#v", links)
+	}
+	if got := p.termPanelWorkDir(); got != shell.WorkDir {
+		t.Fatalf("nested terminal panel cwd = %q, want %q", got, shell.WorkDir)
+	}
+
+	p.activePane = PanePreview
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, TargetSession: session, TargetPane: "%9"}
+	if !p.nativeTerminalActive() {
+		t.Fatal("nested embedded terminal did not enable native cursor/mouse mode")
 	}
 }
 

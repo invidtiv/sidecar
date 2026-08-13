@@ -106,33 +106,24 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 
 	// Determine target based on current selection
 	var sessionName, paneID string
-
-	if p.selectedNestedTmux != "" {
-		shell := p.getSelectedShell()
-		if shell == nil {
-			return nil
-		}
-		// Nested sibling shells attach by session name. Never recreate them
-		// in this workDir — that would steal a sibling's session identity.
-		return p.ensureShellAndAttach(shell)
-	}
-	if p.shellSelected {
+	selectedShell := p.getSelectedShell()
+	if selectedShell != nil {
 		// Shell session
-		if p.selectedShellIdx < 0 || p.selectedShellIdx >= len(p.shells) {
-			return nil
-		}
-		shell := p.shells[p.selectedShellIdx]
-
-		// td-f88fdd: Handle orphaned shells - recreate before entering interactive mode
-		if shell.IsOrphaned {
+		// Only a top-level shell belongs to this worktree's recreation lifecycle.
+		// Nested sibling shells are live projections and must never be recreated
+		// from the current workDir.
+		if p.shellSelected && selectedShell.IsOrphaned {
 			return p.recreateOrphanedShell(p.selectedShellIdx)
 		}
 
-		if shell.Agent == nil {
+		if selectedShell.Agent == nil {
 			return nil
 		}
-		sessionName = shell.TmuxName
-		paneID = shell.Agent.TmuxPane
+		sessionName = selectedShell.Agent.TmuxSession
+		if sessionName == "" {
+			sessionName = selectedShell.TmuxName
+		}
+		paneID = selectedShell.Agent.TmuxPane
 	} else {
 		// Worktree
 		wt := p.selectedWorktree()
@@ -190,7 +181,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// Invalidate existing poll timers to prevent duplicate poll chains (td-97327e).
 	// Without this, entering interactive mode creates a second poll chain that runs
 	// in parallel with the existing one, causing 200% CPU usage.
-	if p.shellSelected {
+	if selectedShell != nil {
 		p.pollScheduler.Invalidate(shellPollKey(sessionName))
 	} else {
 		if wt := p.selectedWorktree(); wt != nil {
@@ -501,7 +492,7 @@ func (p *Plugin) liveTerminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
 	if termPanel {
 		return p.termPanelOutput
 	}
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 			return shell.Agent.OutputBuf
 		}
@@ -789,10 +780,8 @@ func (p *Plugin) attachFromInteractive() tea.Cmd {
 			return TmuxAttachFinishedMsg{Err: err}
 		})
 	}
-	if p.shellSelected {
-		if idx := p.selectedShellIdx; idx >= 0 && idx < len(p.shells) {
-			return p.ensureShellAndAttachByIndex(idx)
-		}
+	if shell := p.getSelectedShell(); shell != nil {
+		return p.ensureShellAndAttach(shell)
 	} else {
 		if wt := p.selectedWorktree(); wt != nil && wt.Agent != nil {
 			p.attachedSession = wt.Name
@@ -1046,7 +1035,7 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 	if p.width <= 0 || p.height <= 0 {
 		return 0, 0, false
 	}
-	if !p.shellSelected && p.previewTab != PreviewTabOutput {
+	if !p.selectingShell() && p.previewTab != PreviewTabOutput {
 		return 0, 0, false
 	}
 
@@ -1104,8 +1093,8 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 
 	// Use existing shell or worktree polling mechanism
 	// Worktrees use scheduleInteractivePoll to skip stagger (td-8856c9)
-	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, interval)
+	if shell := p.getSelectedShell(); shell != nil {
+		return p.scheduleShellPollByName(shell.TmuxName, interval)
 	}
 	if wt := p.selectedWorktree(); wt != nil {
 		return p.scheduleInteractivePoll(wt.Name, interval)
@@ -1134,8 +1123,8 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 	}
 
 	// Schedule with 0ms delay for immediate capture (td-8856c9: no stagger for worktrees)
-	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		return p.scheduleShellPollByName(p.shells[p.selectedShellIdx].TmuxName, delay)
+	if shell := p.getSelectedShell(); shell != nil {
+		return p.scheduleShellPollByName(shell.TmuxName, delay)
 	}
 	if wt := p.selectedWorktree(); wt != nil {
 		return p.scheduleInteractivePoll(wt.Name, delay)
