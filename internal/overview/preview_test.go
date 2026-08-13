@@ -143,6 +143,55 @@ func press(t *testing.T, m *Model, k string) {
 	m.WorkspacesView(previewWide, previewTall)
 }
 
+// hasCaptureFreshness is the header text this surface used to tick every poll
+// and must not show again: "captured now" or "captured Ns ago".
+func hasCaptureFreshness(view string) bool {
+	return strings.Contains(view, "captured now") ||
+		(strings.Contains(view, "captured ") && strings.Contains(view, "s ago"))
+}
+
+func TestPreviewHintsKeepStatusAndDropFreshness(t *testing.T) {
+	agent := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindWorktree, Live: true, PaneID: "%1",
+		Presentation: agentstatus.Presentation{Label: "needs input"},
+	}
+	if got := previewHints(agent, false); got != "needs input" {
+		t.Fatalf("unfocused agent hints = %q, want the presentation label only", got)
+	}
+	if got := previewHints(agent, true); got != "needs input · i to type" {
+		t.Fatalf("focused agent hints = %q, want status and the type hint", got)
+	}
+
+	live := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindShell, Live: true, PaneID: "%2",
+	}
+	if got := previewHints(live, false); got != "live" {
+		t.Fatalf("live shell hints = %q, want the live label only", got)
+	}
+	if got := previewHints(live, true); got != "live · i to type" {
+		t.Fatalf("focused live shell hints = %q, want live and the type hint", got)
+	}
+
+	ended := workspaceinventory.Workspace{
+		Kind: workspaceinventory.KindWorktree, Live: false, PaneID: "%9",
+		Presentation: agentstatus.Presentation{Label: "paused"},
+	}
+	if got := previewHints(ended, true); got != "paused · no live pane" {
+		t.Fatalf("ended session hints = %q, want status and the no-pane hint", got)
+	}
+
+	for _, got := range []string{
+		previewHints(agent, false),
+		previewHints(agent, true),
+		previewHints(live, true),
+		previewHints(ended, false),
+	} {
+		if hasCaptureFreshness(got) {
+			t.Fatalf("previewHints still reports capture freshness: %q", got)
+		}
+	}
+}
+
 func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	m, recorder := previewModel(t)
 
@@ -157,6 +206,12 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	if !strings.Contains(view, "alpha") {
 		t.Fatalf("preview header lost its identity:\n%s", view)
 	}
+	if !strings.Contains(view, "needs input") {
+		t.Fatalf("preview header lost the agent status:\n%s", view)
+	}
+	if hasCaptureFreshness(view) {
+		t.Fatalf("preview header still reports capture freshness:\n%s", view)
+	}
 	// The way in is advertised only where it works. With the list focused "i" is
 	// a list key, so offering it here would describe a keystroke that does
 	// nothing.
@@ -164,8 +219,12 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 		t.Fatalf("the watched preview advertises a key the focused list does not answer:\n%s", view)
 	}
 	press(t, m, "right")
-	if focused := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); !strings.Contains(focused, "i to type") {
+	focused := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(focused, "i to type") {
 		t.Fatalf("a focused preview does not say how to hand the pane its keyboard:\n%s", focused)
+	}
+	if !strings.Contains(focused, "needs input") || hasCaptureFreshness(focused) {
+		t.Fatalf("focusing the preview lost status or reintroduced freshness:\n%s", focused)
 	}
 	press(t, m, "left")
 
@@ -273,6 +332,12 @@ func TestUnavailableItemsExplainThemselvesAndCaptureNothing(t *testing.T) {
 		view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
 		if !strings.Contains(view, tc.want) {
 			t.Fatalf("item %q did not say why it has no preview (%q):\n%s", tc.id, tc.want, view)
+		}
+		if !strings.Contains(view, "no live pane") {
+			t.Fatalf("item %q did not keep the no-pane hint:\n%s", tc.id, view)
+		}
+		if hasCaptureFreshness(view) {
+			t.Fatalf("item %q still reports capture freshness:\n%s", tc.id, view)
 		}
 		// The reason is not the whole answer: the metadata is what the pane is
 		// for when there is no output to show.

@@ -1,7 +1,6 @@
 package overview
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -812,7 +811,7 @@ func (m *Model) renderPreview(width, height int) string {
 
 	hints := m.interactiveHints()
 	if !m.PreviewInteractive() {
-		hints = previewHints(workspace, m.preview.capture, m.PreviewFocused(), m.now())
+		hints = previewHints(workspace, m.PreviewFocused())
 	}
 	message := m.preview.reason
 	if message != "" {
@@ -898,21 +897,14 @@ func previewChip(name string, focused bool) string {
 }
 
 // previewHints is the header's right region while the pane is being watched:
-// what the item is doing, how fresh the reading is, and — when there is a live
-// pane behind it and this surface can act on it — how to hand the keyboard over.
-func previewHints(workspace workspaceinventory.Workspace, capture previewCapture, focused bool, now time.Time) string {
-	parts := make([]string, 0, 3)
+// what the item is doing, and — when there is a live pane behind it and this
+// surface can act on it — how to hand the keyboard over.
+func previewHints(workspace workspaceinventory.Workspace, focused bool) string {
+	parts := make([]string, 0, 2)
 	if workspace.HasAgent() && workspace.Presentation.Label != "" {
 		parts = append(parts, workspace.Presentation.Label)
 	} else if workspace.Live {
 		parts = append(parts, "live")
-	}
-	if !capture.CapturedAt.IsZero() {
-		if age := now.Sub(capture.CapturedAt); age >= time.Second {
-			parts = append(parts, fmt.Sprintf("captured %ds ago", int(age.Seconds())))
-		} else {
-			parts = append(parts, "captured now")
-		}
 	}
 	if _, unavailable := previewUnavailable(workspace); unavailable {
 		parts = append(parts, "no live pane")
