@@ -146,7 +146,6 @@ func TestNoCursorIsDrawnOverScrolledBackHistory(t *testing.T) {
 // follows the new rows while the anchor keeps naming the old ones.
 func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
 	m, _, _ := interactiveModel(t)
-	run(t, m, m.focusPreviewPane())
 	run(t, m, m.applyPreview(previewMsg{
 		Generation:  m.preview.generation,
 		WorkspaceID: m.preview.workspaceID,

@@ -488,10 +488,9 @@ func TestPasteReachesTheLivePane(t *testing.T) {
 // i is find-TD-task, not a way into the pane.
 func TestInteractiveEnterKeysAreDiscoverableOnBothSurfaces(t *testing.T) {
 	contexts := map[string]map[string]bool{
-		"global-workspaces":         {},
-		"global-workspaces-preview": {},
-		"workspace-list":            {},
-		"workspace-preview":         {},
+		"global-workspaces": {},
+		"workspace-list":    {},
+		"workspace-preview": {},
 	}
 	for _, binding := range keymap.DefaultBindings() {
 		if binding.Command != "interactive" {
@@ -509,7 +508,7 @@ func TestInteractiveEnterKeysAreDiscoverableOnBothSurfaces(t *testing.T) {
 			t.Fatalf("%s binds interactive to %v, want %q", context, keys, interactiveEnterKeyAlt)
 		}
 	}
-	if !contexts["global-workspaces"]["enter"] || !contexts["global-workspaces-preview"]["enter"] {
+	if !contexts["global-workspaces"]["enter"] {
 		t.Fatal("global Workspaces does not bind enter to interactive")
 	}
 }

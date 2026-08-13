@@ -260,3 +260,11 @@ func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultBindings_DoNotAdvertiseGlobalWorkspacesPreview(t *testing.T) {
+	for _, b := range DefaultBindings() {
+		if b.Context == "global-workspaces-preview" {
+			t.Fatalf("default bindings still advertise watched-preview: %+v", b)
+		}
+	}
+}

@@ -1682,7 +1682,7 @@ func (m *Model) consumesTextInput() bool {
 // Root contexts are plugin top-level views (not sub-views like detail/diff/commit).
 func isRootContext(ctx string) bool {
 	switch ctx {
-	case "global", "", "overview", "global-workspaces", "global-workspaces-preview":
+	case "global", "", "overview", "global-workspaces":
 		return true
 	// Plugin root contexts where 'q' is not used for navigation
 	case "conversations", "conversations-sidebar", "conversations-main":

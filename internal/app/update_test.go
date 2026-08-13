@@ -140,7 +140,7 @@ func TestIsRootContext(t *testing.T) {
 		{"workspace-preview", true},
 		{"overview", true},
 		{"global-workspaces", true},
-		{"global-workspaces-preview", true},
+		{"global-workspaces-preview", false},
 		{"td-monitor", true},
 
 		// Non-root contexts (sub-views)

@@ -580,7 +580,7 @@ func TestPaletteRunsPluginCommandHandlers(t *testing.T) {
 // The Workspaces list and leftover preview chrome no longer take "i", so
 // the palette and help advertise it as find-TD-task again.
 func TestTheIssueLookupAdvertisesIOnWorkspaces(t *testing.T) {
-	for _, context := range []string{"workspace-list", "workspace-preview", "global-workspaces", "global-workspaces-preview"} {
+	for _, context := range []string{"workspace-list", "workspace-preview", "global-workspaces"} {
 		t.Run(context, func(t *testing.T) {
 			p := newRouterPlugin()
 			m := routerTestModel(t, p)

@@ -95,7 +95,6 @@ func TestDraggingOverThePreviewSelectsInsteadOfActivating(t *testing.T) {
 // as every terminal does.
 func TestDoubleAndTripleClickTakeTheWordAndTheLine(t *testing.T) {
 	m, _, _ := interactiveModel(t)
-	run(t, m, m.focusPreviewPane())
 	x, y := previewAt(t, m)
 
 	pointerDown(t, m, x+9, y)
@@ -117,7 +116,6 @@ func TestDoubleAndTripleClickTakeTheWordAndTheLine(t *testing.T) {
 // armed nor a click on its way to the application.
 func TestALostReleaseCancelsTheClick(t *testing.T) {
 	m, _, _ := interactiveModel(t)
-	run(t, m, m.focusPreviewPane())
 	x, y := previewAt(t, m)
 
 	pointerDown(t, m, x+2, y)
@@ -185,22 +183,26 @@ func TestClickingALiveMouseAwarePaneReachesTheApplication(t *testing.T) {
 func TestTerminalChordsFollowTheConfiguration(t *testing.T) {
 	m, _, _ := interactiveModel(t)
 	m.SetTerminalConfig(tty.Config{CopyKey: "alt+y", PasteKey: "alt+p"})
-	run(t, m, m.focusPreviewPane())
+	enterInteractive(t, m)
 	previewAt(t, m)
 
-	if handled, _ := m.WorkspacesKey(key("alt+c")); handled {
-		t.Fatal("the unconfigured default copy chord was answered")
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
+	if !handled {
+		t.Fatal("interactive mode dropped the unconfigured copy chord")
+	}
+	if cmd != nil {
+		t.Fatal("the unconfigured default copy chord copied")
 	}
 
-	handled, _ := m.WorkspacesKey(ctrlKey('a'))
+	handled, _ = m.WorkspacesKey(ctrlKey('a'))
 	if !handled {
 		t.Fatal("ctrl+a did not select the output")
 	}
-	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "pane %1 output\nsecond line" {
-		t.Fatalf("ctrl+a selected %q, want every line the buffer holds", got)
+	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "live pane body" {
+		t.Fatalf("ctrl+a selected %q, want the live pane buffer", got)
 	}
 
-	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'y', Mod: tea.ModAlt})
+	handled, cmd = m.WorkspacesKey(tea.KeyPressMsg{Code: 'y', Mod: tea.ModAlt})
 	if !handled || cmd == nil {
 		t.Fatal("the configured copy chord did not copy the selection")
 	}

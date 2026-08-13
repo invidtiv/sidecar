@@ -524,24 +524,6 @@ func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return true, nil
 }
 
-// focusPreviewPane moves focus right. On a narrow tab there is no room for two
-// panes, so the preview takes the whole width instead of sharing it.
-//
-// Focusing captures only when there is nothing on screen yet. The faster
-// focused cadence takes effect at the next tick rather than by cancelling the
-// one already in flight: moving focus back and forth must not be a way to run
-// captures faster than the cadence allows.
-func (m *Model) focusPreviewPane() tea.Cmd {
-	m.preview.focus = focusPreview
-	if m.previewNarrow() {
-		m.preview.full = true
-	}
-	if m.preview.reason == "" && m.previewBuffer() == nil {
-		return m.previewSelect()
-	}
-	return nil
-}
-
 // focusList moves focus back to the list. Leaving the preview leaves any live
 // terminal with it: the keyboard cannot be in two places, and a pane that kept
 // its subscription while the user browsed elsewhere would be a reader nobody is

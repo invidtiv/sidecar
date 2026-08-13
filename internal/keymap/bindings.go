@@ -89,22 +89,6 @@ func DefaultBindings() []Binding {
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
 
-		// Sidebar-hidden preview chrome. Enter / E start typing; i stays
-		// find-TD-task. There is no watched-preview keyboard mode: l / → do
-		// not move focus here.
-		{Key: "enter", Command: "interactive", Context: "global-workspaces-preview"},
-		{Key: "E", Command: "interactive", Context: "global-workspaces-preview"},
-		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces-preview"},
-		{Key: "h", Command: "focus-list", Context: "global-workspaces-preview"},
-		{Key: "left", Command: "focus-list", Context: "global-workspaces-preview"},
-		{Key: "j", Command: "scroll-preview-down", Context: "global-workspaces-preview"},
-		{Key: "k", Command: "scroll-preview-up", Context: "global-workspaces-preview"},
-		{Key: "g", Command: "preview-top", Context: "global-workspaces-preview"},
-		{Key: "G", Command: "preview-live", Context: "global-workspaces-preview"},
-		{Key: "r", Command: "refresh", Context: "global-workspaces-preview"},
-		{Key: "esc", Command: "close-overview", Context: "global-workspaces-preview"},
-		{Key: "K", Command: "toggle-overview", Context: "global-workspaces-preview"},
-
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface
 		// around it are listed: the ways out and the terminal's own selection and
