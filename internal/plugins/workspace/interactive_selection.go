@@ -120,18 +120,18 @@ func (p *Plugin) extendSelectionDragTo(x, y int) bool {
 // scrollTerminalSelectionViewport moves the surface the selection is anchored in
 // by delta rendered rows, positive downwards, clamped to the buffer. A window a
 // gesture is holding is placed from an absolute start on either surface, so one
-// rule — the shared freeze's — covers both, counting in the same direction the
-// bottom-relative offsets do.
+// rule — the shared window's — covers both, and reconciling rendered rows with
+// a window counted back from the live bottom happens there rather than here.
 func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
 	if delta == 0 {
 		return
 	}
 	layout := p.terminalSelectionViewportLayout()
 	if p.selectionTermPanel {
-		p.termPanelFreeze.Scroll(-delta, layout.MaxOffset)
+		p.termPanelScroll = tty.ScrollWindowRows(&p.termPanelFreeze, p.termPanelScroll, delta, layout.MaxOffset)
 		return
 	}
-	p.previewFreeze.Scroll(-delta, layout.MaxOffset)
+	p.previewScroll = tty.ScrollWindowRows(&p.previewFreeze, p.previewScroll, delta, layout.MaxOffset)
 }
 
 // prepareInteractiveDrag arms the pointer over a terminal surface. want is what

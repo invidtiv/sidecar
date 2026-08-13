@@ -542,24 +542,13 @@ func (m *Model) focusList() tea.Cmd {
 // scrollPreview moves the window delta rows back through scrollback, negative
 // towards the live edge.
 func (m *Model) scrollPreview(delta int) {
-	if delta == 0 {
-		return
-	}
-	maxOffset := m.previewMaxOffset()
-	if m.preview.freeze.Active() {
-		m.preview.freeze.Scroll(delta, maxOffset)
-		return
-	}
-	m.preview.offset = min(max(m.preview.offset+delta, 0), maxOffset)
+	m.preview.offset = tty.ScrollWindow(&m.preview.freeze, m.preview.offset, delta, m.previewMaxOffset())
 }
 
 // previewScrollAnchor is where the window sits, in whichever coordinate it is
 // currently placed by. Callers use it to tell whether a scroll moved anything.
 func (m *Model) previewScrollAnchor() int {
-	if m.preview.freeze.Active() {
-		return m.preview.freeze.Start()
-	}
-	return m.preview.offset
+	return tty.WindowAnchor(&m.preview.freeze, m.preview.offset)
 }
 
 // freezePreviewWindow pins the window to the rows the user can see, before a
@@ -585,8 +574,12 @@ func (m *Model) jumpPreviewWindow(offset int) {
 }
 
 // scrollPreviewRows moves the window by delta rendered rows, positive downwards,
-// which is the direction the shared edge-scroll rule reports.
-func (m *Model) scrollPreviewRows(delta int) { m.scrollPreview(-delta) }
+// which is the direction the shared edge-scroll rule reports. Reconciling that
+// with a window counted back from the live bottom is the shared rule's, not this
+// surface's.
+func (m *Model) scrollPreviewRows(delta int) {
+	m.preview.offset = tty.ScrollWindowRows(&m.preview.freeze, m.preview.offset, delta, m.previewMaxOffset())
+}
 
 // pinPreviewToLive returns the window to the live edge, dropping a selection
 // anchored to rows the jump leaves behind. It is what an application taking the
@@ -651,12 +644,11 @@ func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
 		// tab and another in the project's.
 		TrimTrailing: tty.TrimsTrailingRows(interactive),
 	}
-	if m.preview.freeze.Active() {
-		input.Offset = m.preview.freeze.Start()
-	} else {
-		input.Offset, input.OffsetFromBottom = m.preview.offset, true
-		input.Follow = m.preview.offset == 0
-	}
+	// Where the window sits — pinned to an absolute start for a gesture, or a
+	// distance back from the live bottom that follows output at zero — is the
+	// shared rule's answer, the same one the project surfaces place theirs by.
+	placement := tty.PlaceWindow(&m.preview.freeze, m.preview.offset)
+	input.Offset, input.OffsetFromBottom, input.Follow = placement.Offset, placement.FromBottom, placement.Follow
 	if interactive {
 		input.Interactive = true
 		input.PaneWidth, input.PaneHeight = m.preview.terminal.PaneSize()

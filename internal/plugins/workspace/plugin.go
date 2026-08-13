@@ -1162,10 +1162,16 @@ func (p *Plugin) previewMaxScroll() int {
 // coordinate the reader can no longer see.
 func (p *Plugin) scrollPreviewWindow(delta int) {
 	p.thawPreviewWindow()
-	if delta == 0 {
-		return
-	}
-	p.previewScroll = min(max(p.previewScroll+delta, 0), p.previewMaxScroll())
+	p.previewScroll = tty.ScrollWindow(&p.previewFreeze, p.previewScroll, delta, p.previewMaxScroll())
+}
+
+// scrollPreviewWindowRows is scrollPreviewWindow for a caller counting rendered
+// rows down the screen — a wheel notch — rather than rows back through
+// scrollback. The two directions are opposite, and reconciling them is the
+// shared rule's rather than each call site's.
+func (p *Plugin) scrollPreviewWindowRows(rows int) {
+	p.thawPreviewWindow()
+	p.previewScroll = tty.ScrollWindowRows(&p.previewFreeze, p.previewScroll, rows, p.previewMaxScroll())
 }
 
 // jumpPreviewWindow places the primary terminal's window at an explicit

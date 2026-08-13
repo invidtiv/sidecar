@@ -149,3 +149,55 @@ func TestLeavingInteractiveModeKeepsTheLoadedScrollback(t *testing.T) {
 		t.Fatalf("the loaded scrollback did not survive the exit: %q", got)
 	}
 }
+
+// Leaving a live pane leaves the window where the reader put it, on this surface
+// as on the global preview's (td-2e3738). This side used to snap to the live
+// edge — drift from the two window models rather than a decision — which threw
+// away the scrollback position of a reader who left the mode precisely to read
+// what they had scrolled back to.
+func TestLeavingALivePaneKeepsTheReadersWindow(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 120, 40
+	givePaneScrollableOutput(p, 120)
+	if p.previewMaxScroll() < 10 {
+		t.Fatalf("the fixture cannot sit off the live edge (bound %d)", p.previewMaxScroll())
+	}
+
+	p.jumpPreviewWindow(10)
+	p.leaveInteractiveMode()
+
+	if p.viewMode == ViewModeInteractive {
+		t.Fatal("the mode did not end")
+	}
+	if p.previewScroll != 10 {
+		t.Fatalf("window = %d rows back, want the 10 the reader left it at", p.previewScroll)
+	}
+}
+
+// A window a gesture pinned is handed back to the bottom-relative model when the
+// mode ends, rather than kept pinned: the gesture is over, and a window left
+// pinned has stopped following output for good.
+func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.width, p.height = 120, 40
+	givePaneScrollableOutput(p, 120)
+
+	p.freezeTerminalSelectionViewport()
+	if !p.previewFreeze.Active() {
+		t.Fatal("the window was not pinned to begin with")
+	}
+	p.scrollTerminalSelectionViewport(-20)
+	pinned := p.previewFreeze.Start()
+
+	p.leaveInteractiveMode()
+
+	if p.previewFreeze.Active() {
+		t.Fatal("the window stayed pinned after the mode that pinned it ended")
+	}
+	if want := p.previewMaxScroll() - pinned; p.previewScroll != want {
+		t.Fatalf("window = %d rows back, want the %d the pinned rows sit at", p.previewScroll, want)
+	}
+	if p.previewScroll == 0 {
+		t.Fatal("a window left in scrollback was dragged back to the live edge")
+	}
+}

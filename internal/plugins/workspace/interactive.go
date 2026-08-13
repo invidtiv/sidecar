@@ -735,11 +735,22 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 }
 
 // leaveInteractiveMode is the component's OnExit hook and the plugin's own way
-// out. The window returns to the live edge: a mode left with the viewport in
-// scrollback would show output older than what the pane now holds.
+// out. The window stays where the reader left it — the shared rule's answer,
+// and the same one the global preview gives (td-2e3738). This surface used to
+// snap it to the live edge, which was drift from the two window models rather
+// than a decision: leaving the mode does not replace the buffer, so the rows on
+// screen are the ones the reader was reading, and the window keeps following
+// output from there as soon as it is back at zero.
 func (p *Plugin) leaveInteractiveMode() tea.Cmd {
+	termPanel := p.interactiveState != nil && p.interactiveState.TermPanel
 	p.exitInteractiveMode()
-	p.resetPreviewScroll()
+	if termPanel {
+		p.termPanelScroll = tty.LeaveLiveWindow(&p.termPanelFreeze, p.termPanelScroll, p.termPanelMaxScroll())
+		p.termPanelFreezeDoc = false
+	} else {
+		p.previewScroll = tty.LeaveLiveWindow(&p.previewFreeze, p.previewScroll, p.previewWindowBound())
+		p.previewFreezeDoc = false
+	}
 	return p.pollSelectedAgentNowIfVisible()
 }
 
@@ -932,8 +943,7 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.clearTerminalSelectionOnScroll(true)
-		p.thawTermPanelWindow()
-		p.termPanelScroll = min(max(p.termPanelScroll-delta, 0), p.termPanelMaxScroll())
+		p.scrollTermPanelWindowRows(delta)
 		if delta > 0 && p.termPanelScroll == 0 {
 			p.cancelTerminalHistoryIntent(true)
 		}
@@ -944,9 +954,7 @@ func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
 	}
 
 	p.clearTerminalSelectionOnScroll(false)
-	// A wheel notch counts up the screen; the window counts back from the live
-	// bottom. That single negation is the whole translation.
-	p.scrollPreviewWindow(-delta)
+	p.scrollPreviewWindowRows(delta)
 	if delta > 0 && p.previewScroll == 0 {
 		p.cancelTerminalHistoryIntent(false)
 	}
@@ -964,8 +972,7 @@ func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
 func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.clearTerminalSelectionOnScroll(true)
-		p.thawTermPanelWindow()
-		p.termPanelScroll = min(max(p.termPanelScroll+delta, 0), p.termPanelMaxScroll())
+		p.scrollTermPanelWindow(delta)
 		if delta < 0 && p.termPanelScroll == 0 {
 			p.cancelTerminalHistoryIntent(true)
 		}

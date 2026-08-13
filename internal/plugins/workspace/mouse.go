@@ -1357,7 +1357,7 @@ func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 			return nil
 		}
 		p.clearTerminalSelectionOnScroll(false)
-		p.scrollPreviewWindow(-delta)
+		p.scrollPreviewWindowRows(delta)
 		if delta > 0 && p.previewScroll == 0 {
 			p.cancelTerminalHistoryIntent(false)
 		}

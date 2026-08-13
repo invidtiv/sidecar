@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // Every embedded terminal in the preview pane sits in the same vertical stack:
@@ -252,10 +253,8 @@ func (p *Plugin) terminalScrollState(termPanel bool) (follow bool, offset int, o
 	if termPanel {
 		freeze, scroll = &p.termPanelFreeze, p.termPanelScroll
 	}
-	if freeze.Active() {
-		return false, freeze.Start(), false
-	}
-	return scroll == 0, scroll, true
+	placement := tty.PlaceWindow(freeze, scroll)
+	return placement.Follow, placement.Offset, placement.FromBottom
 }
 
 // interactiveDescribes reports whether the live interactive state is the one

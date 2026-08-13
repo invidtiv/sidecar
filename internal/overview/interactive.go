@@ -483,7 +483,9 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 	m.clearPreviewSelectionOnScroll()
 	before := m.previewScrollAnchor()
-	m.scrollPreview(-delta)
+	// A notch counts up the screen and the window counts back from the live
+	// bottom; the shared rule owns that reconciliation.
+	m.scrollPreviewRows(delta)
 	if delta < 0 && m.previewScrollAnchor() == before {
 		return m.notePreviewScrollbackLimit()
 	}

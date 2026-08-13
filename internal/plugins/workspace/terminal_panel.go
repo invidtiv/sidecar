@@ -329,6 +329,24 @@ func (p *Plugin) thawTermPanelWindow() {
 	p.termPanelFreezeDoc = false
 }
 
+// scrollTermPanelWindow moves the panel's window delta rows back through
+// scrollback, negative towards the live edge. Scrolling is an explicit
+// navigation of this surface, so it thaws first, and where the window lands is
+// the shared rule's — the primary surface and the global preview place theirs
+// by the same one.
+func (p *Plugin) scrollTermPanelWindow(delta int) {
+	p.thawTermPanelWindow()
+	p.termPanelScroll = tty.ScrollWindow(&p.termPanelFreeze, p.termPanelScroll, delta, p.termPanelMaxScroll())
+}
+
+// scrollTermPanelWindowRows is scrollTermPanelWindow for a caller counting
+// rendered rows down the screen — a wheel notch — which is the opposite
+// direction. Reconciling the two is the shared rule's, not this call site's.
+func (p *Plugin) scrollTermPanelWindowRows(rows int) {
+	p.thawTermPanelWindow()
+	p.termPanelScroll = tty.ScrollWindowRows(&p.termPanelFreeze, p.termPanelScroll, rows, p.termPanelMaxScroll())
+}
+
 // pinTermPanelWindow holds the panel window at an absolute start and records who
 // is holding it. The two owners are not released by the same events: a pointer
 // gesture's pin lives exactly as long as the selection reading those rows, while
