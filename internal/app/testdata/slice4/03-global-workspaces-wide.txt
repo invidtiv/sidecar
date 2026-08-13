@@ -1,0 +1,50 @@
+ Sidecar / Overview                                                                              Agents     Workspaces                                                                             03:02
+
+Workspaces                                                                 Activity│gamma gamma                                                                                                read-only
+/ filter…                                                                          │No live session for this workspace
+NO SESSION 5                                                                       │
+ alpha                                                                             │project  gamma
+   alpha · no session · main                                                       │kind     worktree
+ feature                                                                           │branch   main
+   alpha · no session · feature                                                    │path     /private/tmp/sidecar-drive-slice4-501/fixture/gamma
+ beta                                                                              │
+   beta · no session · main                                                        │
+ feature                                                                           │
+   beta · no session · feature                                                     │
+ gamma                                                                             │
+   gamma · no session · main                                                       │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+ jk  Move   enter  Open   →  Preview   /  Filter   s  Sort   r  Refresh   esc  Close   1-2  tabs   ?  help                                                                                    ↻ 03:01:48

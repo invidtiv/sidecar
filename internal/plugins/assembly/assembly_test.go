@@ -29,103 +29,12 @@ func initFeatures(t *testing.T, flags map[string]bool) {
 	features.Init(cfg)
 }
 
-func entriesFor(ids ...string) []Entry {
-	out := make([]Entry, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, Entry{ID: id})
-	}
-	return out
-}
-
-// insertTasks covers every enabled/disabled combination of the two anchors.
-func TestInsertTasks_AnchorCombinations(t *testing.T) {
-	tests := []struct {
-		name     string
-		base     []Entry
-		position string
-		want     string
-	}{
-		{
-			name:     "both anchors, default position",
-			base:     entriesFor("git-status", IDWorkspace, IDNotes),
-			position: config.TasksPositionAfterWorkspaces,
-			want:     "git-status,workspace-manager,tasks,notes",
-		},
-		{
-			name:     "both anchors, after-notes",
-			base:     entriesFor("git-status", IDWorkspace, IDNotes),
-			position: config.TasksPositionAfterNotes,
-			want:     "git-status,workspace-manager,notes,tasks",
-		},
-		{
-			name:     "notes disabled, default position",
-			base:     entriesFor("git-status", IDWorkspace),
-			position: config.TasksPositionAfterWorkspaces,
-			want:     "git-status,workspace-manager,tasks",
-		},
-		{
-			name:     "notes disabled, after-notes falls back to workspaces",
-			base:     entriesFor("git-status", IDWorkspace),
-			position: config.TasksPositionAfterNotes,
-			want:     "git-status,workspace-manager,tasks",
-		},
-		{
-			name:     "workspaces absent, default position falls back to notes",
-			base:     entriesFor("git-status", IDNotes, "conversations"),
-			position: config.TasksPositionAfterWorkspaces,
-			want:     "git-status,notes,tasks,conversations",
-		},
-		{
-			name:     "workspaces absent, after-notes",
-			base:     entriesFor("git-status", IDNotes, "conversations"),
-			position: config.TasksPositionAfterNotes,
-			want:     "git-status,notes,tasks,conversations",
-		},
-		{
-			name:     "no anchors, default position appends last",
-			base:     entriesFor("git-status", "conversations"),
-			position: config.TasksPositionAfterWorkspaces,
-			want:     "git-status,conversations,tasks",
-		},
-		{
-			name:     "no anchors, after-notes appends last",
-			base:     entriesFor("git-status", "conversations"),
-			position: config.TasksPositionAfterNotes,
-			want:     "git-status,conversations,tasks",
-		},
-		{
-			name:     "empty base",
-			base:     nil,
-			position: config.TasksPositionAfterWorkspaces,
-			want:     "tasks",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := join(insertTasks(tc.base, tc.position))
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestInsertTasks_DoesNotMutateBase(t *testing.T) {
-	base := entriesFor("git-status", IDWorkspace, IDNotes)
-	before := join(base)
-	insertTasks(base, config.TasksPositionAfterWorkspaces)
-	if join(base) != before {
-		t.Errorf("base mutated: %q", join(base))
-	}
-}
-
 func TestConversationsWanted(t *testing.T) {
 	tests := []struct {
-		name           string
-		flags          map[string]bool
-		configEnabled  bool
-		want           bool
+		name          string
+		flags         map[string]bool
+		configEnabled bool
+		want          bool
 	}{
 		{
 			name:          "default flag off, config enabled",
@@ -203,83 +112,65 @@ func TestPlan_ConversationsFlagOnConfigOff(t *testing.T) {
 	}
 }
 
-func TestPlan_TasksFlagOff(t *testing.T) {
-	initFeatures(t, nil)
-	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,workspace-manager"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+// Tasks is a global tab owned by the app shell, not a project plugin: no
+// combination of its feature flag, its configured position, or the plugins
+// around it may put it back in the project tab order, where registry.Reinit
+// would rebuild it on every project switch.
+func TestPlan_NeverPlansTasks(t *testing.T) {
+	positions := []string{config.TasksPositionAfterWorkspaces, config.TasksPositionAfterNotes}
+	for _, flag := range []bool{false, true} {
+		for _, position := range positions {
+			initFeatures(t, map[string]bool{
+				features.TasksPlugin.Name: flag,
+				features.NotesPlugin.Name: true,
+			})
+			cfg := config.Default()
+			cfg.Plugins.Tasks.Position = position
+			got := join(Plan(cfg))
+			if strings.Contains(got, "tasks") {
+				t.Fatalf("tasks planned as a project plugin (flag=%v position=%q): %q", flag, position, got)
+			}
+			want := "td-monitor,git-status,file-browser,workspace-manager,notes"
+			if got != want {
+				t.Fatalf("plan (flag=%v position=%q) = %q, want %q", flag, position, got, want)
+			}
+		}
 	}
 }
 
-func TestPlan_TasksAfterWorkspacesByDefault(t *testing.T) {
-	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
-	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,workspace-manager,tasks"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestPlan_TasksAfterNotesWhenConfigured(t *testing.T) {
-	initFeatures(t, map[string]bool{
-		features.TasksPlugin.Name: true,
-		features.NotesPlugin.Name: true,
-	})
-	cfg := config.Default()
-	cfg.Plugins.Tasks.Position = config.TasksPositionAfterNotes
-	got := join(Plan(cfg))
-	want := "td-monitor,git-status,file-browser,workspace-manager,notes,tasks"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestPlan_TasksBeforeNotesByDefault(t *testing.T) {
-	initFeatures(t, map[string]bool{
-		features.TasksPlugin.Name: true,
-		features.NotesPlugin.Name: true,
-	})
-	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,workspace-manager,tasks,notes"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// Disabling preceding plugins shifts the Tasks tab: the shortcut number is
-// derived state, never a fixed promise.
+// Disabling preceding plugins shifts the tabs after them: the shortcut number
+// is derived state, never a fixed promise.
 func TestPlan_TabIndexIsDerived(t *testing.T) {
-	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
+	initFeatures(t, map[string]bool{features.NotesPlugin.Name: true})
 
 	full := Plan(config.Default())
-	// Default: td, git, files, workspace, tasks — conversations off by flag.
-	if got := indexOf(full, IDTasks); got != 4 {
-		t.Fatalf("tasks index with default plugins = %d, want 4", got)
+	// Default: td, git, files, workspace, notes — conversations off by flag.
+	if got := indexOf(full, IDNotes); got != 4 {
+		t.Fatalf("notes index with default plugins = %d, want 4", got)
 	}
 
-	// With conversations enabled, tasks shifts right by one.
+	// With conversations enabled, notes shifts right by one.
 	initFeatures(t, map[string]bool{
-		features.TasksPlugin.Name:         true,
+		features.NotesPlugin.Name:         true,
 		features.ConversationsPlugin.Name: true,
 	})
 	withConv := Plan(config.Default())
-	if got := indexOf(withConv, IDTasks); got != 5 {
-		t.Fatalf("tasks index with conversations = %d, want 5", got)
+	if got := indexOf(withConv, IDNotes); got != 5 {
+		t.Fatalf("notes index with conversations = %d, want 5", got)
 	}
 
-	initFeatures(t, map[string]bool{features.TasksPlugin.Name: true})
+	initFeatures(t, map[string]bool{features.NotesPlugin.Name: true})
 	cfg := config.Default()
 	cfg.Plugins.TDMonitor.Enabled = false
 	cfg.Plugins.GitStatus.Enabled = false
 	cfg.Plugins.FileBrowser.Enabled = false
 	cfg.Plugins.Conversations.Enabled = false
 	trimmed := Plan(cfg)
-	if got := join(trimmed); got != "workspace-manager,tasks" {
+	if got := join(trimmed); got != "workspace-manager,notes" {
 		t.Fatalf("trimmed plan = %q", got)
 	}
-	if got := indexOf(trimmed, IDTasks); got != 1 {
-		t.Errorf("tasks index with plugins disabled = %d, want 1", got)
+	if got := indexOf(trimmed, IDNotes); got != 1 {
+		t.Errorf("notes index with plugins disabled = %d, want 1", got)
 	}
 }
 
@@ -294,7 +185,6 @@ func TestPlan_NilConfigUsesDefaults(t *testing.T) {
 // promised, or tab order would diverge from what the registry sees.
 func TestPlan_EntryIDsMatchPluginIDs(t *testing.T) {
 	initFeatures(t, map[string]bool{
-		features.TasksPlugin.Name:         true,
 		features.NotesPlugin.Name:         true,
 		features.ConversationsPlugin.Name: true,
 	})

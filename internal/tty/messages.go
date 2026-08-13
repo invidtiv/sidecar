@@ -1,5 +1,26 @@
 package tty
 
+import tea "charm.land/bubbletea/v2"
+
+// IsTerminalMessage reports whether msg is one of the messages an embedded
+// Model's own commands produce. Every one of them carries a MessageScope, so a
+// host may hand each of them to more than one Model: the activation that owns
+// the scope acts on it and the others ignore it.
+//
+// It exists because a host that is not a plugin — the global Workspaces browser
+// is routed by message type rather than broadcast — cannot otherwise recognise
+// the control-plane messages, which are deliberately unexported.
+func IsTerminalMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case SessionDeadMsg, PasteResultMsg, EscapeTimerMsg, PaneResizedMsg,
+		CaptureResultMsg, PollTickMsg, deferredResizeMsg,
+		terminalControlMsg, terminalControlRetryMsg, paneResolvedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 // MessageScope identifies one activation of one Model. Bubble Tea broadcasts
 // messages to every plugin, so terminal messages must be scoped to prevent a
 // capture or session failure from one consumer affecting another.
@@ -35,6 +56,13 @@ type PaneResizedMsg struct {
 	Scope MessageScope
 }
 
+// deferredResizeMsg re-runs a resize that arrived inside the debounce window.
+// It carries no dimensions: the model holds the size it owes the pane, so a
+// retry always asserts the newest one rather than a stale request.
+type deferredResizeMsg struct {
+	Scope MessageScope
+}
+
 // CaptureResultMsg delivers async tmux capture results.
 // Used to avoid blocking the UI thread on tmux subprocess calls.
 type CaptureResultMsg struct {
@@ -50,6 +78,13 @@ type CaptureResultMsg struct {
 	CursorVisible bool
 	PaneHeight    int
 	PaneWidth     int
+
+	// MouseReporting is tmux's #{mouse_any_flag}, read with the capture. It
+	// travels with the poll because it is the polling path's only source for it:
+	// the capture's own bytes never carry the DECSET sequences that turn
+	// tracking on, so who owns a click would otherwise mean one thing under
+	// control mode and another under the fallback.
+	MouseReporting bool
 }
 
 // PollTickMsg is sent to trigger a poll for output updates.

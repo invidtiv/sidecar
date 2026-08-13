@@ -8,20 +8,13 @@
 // "tasks_plugin" feature flag, not with a plugin config key:
 //
 //	{
-//	  "features": { "flags": { "tasks_plugin": true } },
-//	  "plugins":  { "tasks":  { "position": "after-workspaces" } }
+//	  "features": { "flags": { "tasks_plugin": true } }
 //	}
 //
-// "position" is the anchor the Tasks tab is inserted after — either
-// "after-workspaces" (the default) or "after-notes". Any other value is
-// coerced back to the default by Validate. When the configured anchor is not
-// registered, placement falls back to the other anchor, and then to the end of
-// the tab list; see internal/plugins/assembly.
-//
-// The resulting tab shortcut number is derived state. Tasks is not "tab N":
-// disabling td-monitor, git-status, file-browser, conversations, or notes
-// shifts it. Read the position from the registered plugin order, never from a
-// hardcoded index.
+// Tasks is a tab of the global space — [Agents] [Workspaces] [Tasks], reached
+// with K or the Sidecar brand — not a project plugin, so it is not part of the
+// project tab order and "plugins.tasks.position" no longer moves it. The field
+// is still accepted and validated so older configs keep loading.
 //
 // There is deliberately no Tasks store or JSONL path here. The embedded Tasks
 // package performs its own normal configuration resolution.

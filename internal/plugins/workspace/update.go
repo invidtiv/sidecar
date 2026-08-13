@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -60,10 +61,20 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case terminalSearchHistoryLoadedMsg:
 		p.applyTerminalSearchHistory(msg)
 		return p, nil
+	case docview.LoadedMsg:
+		p.applyDocLoaded(msg)
+		return p, nil
 
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
 		p.height = msg.Height
+		// Background project plugins still receive layout so returning to the
+		// project has current dimensions, but only the visible/focused Workspaces
+		// surface owns tmux geometry. Global Workspaces may be displaying this same
+		// pane with a different split while the project surface is covered.
+		if !p.focused {
+			return p, nil
+		}
 		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
 			// Poll captures cursor atomically - no separate query needed
 			resizeCmds := []tea.Cmd{p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate()}
@@ -143,6 +154,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.worktrees = msg.Worktrees
 			p.conflicts = msg.Conflicts
 			p.worktreesLoaded = true
+			p.rebuildNestedShellsFromState()
+			if cmd := p.backfillWorkDirsCmd(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 
 			// Restore selection by finding the worktree with the same name
 			if selectedKey != "" {
@@ -251,6 +266,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
 				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
 			}
+			// Opening/applying a snapshot selects the first item without a
+			// cursor-change event. Load that commit if it is the current item.
+			cmds = append(cmds, p.loadSelectedDiffTabCommit())
 		}
 
 	case DiffErrorMsg:
@@ -354,8 +372,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Auto-focus newly created worktree (same pattern as click selection)
 			p.shellSelected = false
 			p.selectedIdx = len(p.worktrees) - 1
-			p.previewOffset = 0
-			p.autoScrollOutput = true
+			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
 
@@ -586,8 +603,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.viewMode = ViewModeList
 					p.shellSelected = false
 					p.selectedIdx = i
-					p.previewOffset = 0
-					p.autoScrollOutput = true
+					p.resetPreviewScroll()
 					p.saveSelectionState()
 					p.ensureVisible()
 					p.clearFetchPRState()
@@ -607,8 +623,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Auto-focus newly fetched worktree
 			p.shellSelected = false
 			p.selectedIdx = len(p.worktrees) - 1
-			p.previewOffset = 0
-			p.autoScrollOutput = true
+			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
 			p.clearFetchPRState()
@@ -751,14 +766,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
-				p.updateMouseReportingMode(msg.Output)
-				if msg.HasCursor {
-					p.setPaneMouseReporting(msg.MouseReporting)
-				}
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -772,7 +783,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeList && !p.shellSelected {
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeList && !p.selectingShell() {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName && wt.Agent != nil {
 				target := wt.Agent.TmuxPane
 				if target == "" {
@@ -818,7 +829,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling in interactive mode for fast response
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -870,16 +881,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			wt.Agent.WaitingFor = msg.WaitingFor
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
-		// An app can toggle mouse tracking without changing a single rendered
-		// cell — Claude Code sitting idle at its prompt is the common case — so
-		// the flag has to be refreshed on unchanged polls too, or wheel notches
-		// would keep scrolling local scrollback until the app next redraws.
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && msg.HasCursor && p.viewMode == ViewModeInteractive && !p.shellSelected &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
-				p.setPaneMouseReporting(msg.MouseReporting)
-			}
-		}
 		// Content unchanged - use longer interval based on current status
 		interval := pollIntervalIdle
 		if p.primaryTerminalOwns("agent", msg.WorkspaceName) {
@@ -909,7 +910,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
-		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.shellSelected &&
+		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -943,18 +944,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
-		// td-f88fdd: Check if this is recreation of an orphaned shell
-		var existingShell *ShellSession
-		var existingIdx int
+		existingShell := p.findShellByName(msg.SessionName)
+		existingIdx := -1
 		for i, s := range p.shells {
 			if s.TmuxName == msg.SessionName {
-				existingShell = s
 				existingIdx = i
 				break
 			}
 		}
+		parentIdx, nested := p.findNestedShell(msg.SessionName)
+		// Recreate of a sibling must not become a current-worktree row or
+		// rewrite its WorkDir (td-4819be / td-8d18de).
+		belongsHere := p.ctx != nil && shellDiscoveryPattern(p.ctx.WorkDir).MatchString(msg.SessionName)
 
-		// Determine agent type for display - use chosen agent if set, otherwise AgentShell
 		displayAgentType := AgentShell
 		if msg.AgentType != AgentNone && msg.AgentType != "" {
 			displayAgentType = msg.AgentType
@@ -962,9 +964,34 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			displayAgentType = existingShell.ChosenAgent
 		}
 
-		if existingShell != nil {
-			// td-f88fdd: Recreated orphaned shell - update existing entry
+		switch {
+		case nested != nil && !belongsHere:
+			nested.IsOrphaned = false
+			if msg.AgentType != AgentNone && msg.AgentType != "" {
+				nested.ChosenAgent = msg.AgentType
+			}
+			nested.SkipPerms = msg.SkipPerms
+			nested.Agent = &Agent{
+				Type:        displayAgentType,
+				TmuxSession: msg.SessionName,
+				TmuxPane:    msg.PaneID,
+				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
+				StartedAt:   time.Now(),
+			}
+			if existingIdx >= 0 {
+				p.shells = append(p.shells[:existingIdx], p.shells[existingIdx+1:]...)
+			}
+			p.managedSessions[msg.SessionName] = true
+			if !msg.KeepSelection {
+				p.selectNestedShell(parentIdx, nested.TmuxName)
+				p.saveSelectionState()
+			}
+		case existingIdx >= 0:
+			existingShell = p.shells[existingIdx]
 			existingShell.IsOrphaned = false
+			if existingShell.WorkDir == "" && p.ctx != nil {
+				existingShell.WorkDir = p.ctx.WorkDir
+			}
 			existingShell.Agent = &Agent{
 				Type:        displayAgentType,
 				TmuxSession: msg.SessionName,
@@ -973,52 +1000,46 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				StartedAt:   time.Now(),
 			}
 			p.managedSessions[msg.SessionName] = true
-
-			// td-f88fdd: Update manifest to reflect shell is no longer orphaned
 			if p.shellManifest != nil {
 				_ = p.shellManifest.UpdateShell(shellToDefinition(existingShell))
 			}
-
 			if !msg.KeepSelection {
-				p.shellSelected = true
-				p.selectedShellIdx = existingIdx
+				p.selectTopShellAt(existingIdx)
 				p.saveSelectionState()
 			}
-		} else {
-			// Create new shell session entry
+		default:
+			workDir := ""
+			if p.ctx != nil {
+				workDir = p.ctx.WorkDir
+			}
 			shell := &ShellSession{
 				Name:     msg.DisplayName,
 				TmuxName: msg.SessionName,
+				WorkDir:  workDir,
 				Agent: &Agent{
-					Type:        displayAgentType, // td-2ba8a3: Show chosen agent type
+					Type:        displayAgentType,
 					TmuxSession: msg.SessionName,
-					TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
+					TmuxPane:    msg.PaneID,
 					OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 					StartedAt:   time.Now(),
 				},
 				CreatedAt:   time.Now(),
-				ChosenAgent: msg.AgentType, // td-317b64: Track chosen agent
-				SkipPerms:   msg.SkipPerms, // td-317b64: Track skip perms setting
+				ChosenAgent: msg.AgentType,
+				SkipPerms:   msg.SkipPerms,
 			}
 			p.shells = append(p.shells, shell)
 			p.managedSessions[msg.SessionName] = true
-
-			// Save to manifest for persistence and cross-instance sync (td-f88fdd)
 			if p.shellManifest != nil {
 				_ = p.shellManifest.AddShell(shellToDefinition(shell))
 			}
-
-			// Auto-select and focus the new shell, unless it was created on the
-			// user's behalf rather than at their request.
 			if !msg.KeepSelection {
-				p.shellSelected = true
-				p.selectedShellIdx = len(p.shells) - 1
+				p.selectTopShellAt(len(p.shells) - 1)
 				p.saveSelectionState()
 			}
 		}
 		if !msg.KeepSelection {
 			p.activePane = PaneSidebar
-			p.autoScrollOutput = true
+			p.jumpPreviewWindow(0)
 		}
 
 		// Resize pane to match preview width immediately
@@ -1080,6 +1101,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case deferredPaneResizeMsg:
+		// The window has closed; assert the geometry the surface holds now against
+		// the pane size last observed with the output.
+		if p.interactiveState == nil {
+			return p, nil
+		}
+		// Cleared before the liveness guard: the retry has arrived either way,
+		// and a flag left set describes one still to come, which is what stops
+		// the next burst from arming its own.
+		p.interactiveState.ResizeRetryPending = false
+		if !p.interactiveState.Active {
+			return p, nil
+		}
+		return p, p.maybeResizeInteractivePane(p.interactiveState.PaneWidth, p.interactiveState.PaneHeight)
+
 	case paneResizedMsg:
 		// Pane was resized to match preview dimensions - trigger fresh poll so
 		// captured content reflects the new width/wrapping.
@@ -1087,7 +1123,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.viewMode == ViewModeInteractive {
 			return p, nil
 		}
-		if p.shellSelected {
+		if p.selectingShell() {
 			if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 				return p, p.pollShellSessionByName(shell.TmuxName)
 			}
@@ -1098,6 +1134,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case shellAttachAfterCreateMsg:
 		// Attach to shell after it was created
 		return p, p.attachToShellByIndex(msg.Index)
+
+	case shellAttachByNameMsg:
+		return p, p.attachToShellSession(p.findShellByName(msg.TmuxName))
 
 	case shellResumeInjectedMsg:
 		// Resume command was injected into shell - enter interactive mode (td-aa4136)
@@ -1122,8 +1161,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.worktrees = append(p.worktrees, msg.Worktree)
 		p.shellSelected = false
 		p.selectedIdx = len(p.worktrees) - 1
-		p.previewOffset = 0
-		p.autoScrollOutput = true
+		p.resetPreviewScroll()
 		p.saveSelectionState()
 		p.ensureVisible()
 
@@ -1157,6 +1195,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 				break
 			}
+		}
+		// The killed session may be a shell nested under a sibling worktree,
+		// which is not in this list at all.
+		if removedIdx < 0 && p.dropNestedShell(msg.SessionName) {
+			p.saveSelectionState()
+			cmds = append(cmds, p.loadSelectedContent())
 		}
 		// Adjust selection if needed
 		if p.shellSelected && removedIdx >= 0 {
@@ -1212,6 +1256,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 				break
 			}
+		}
+		// A nested shell can die on its own too, and its row is not in p.shells.
+		if removedIdx < 0 && p.dropNestedShell(msg.TmuxName) {
+			p.saveSelectionState()
+			return p, p.loadSelectedContent()
 		}
 		// Adjust selection if needed
 		if p.shellSelected && removedIdx >= 0 {
@@ -1270,7 +1319,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.shellManifest = msg.Manifest
 		cmds = append(cmds, p.applyManifestSync(msg))
 		// Reload content if a shell is selected
-		if p.shellSelected {
+		if p.selectingShell() {
 			cmds = append(cmds, p.loadSelectedContent())
 		}
 		return p, tea.Batch(cmds...)
@@ -1318,14 +1367,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
-				p.updateMouseReportingMode(msg.Output)
-				if msg.HasCursor {
-					p.setPaneMouseReporting(msg.MouseReporting)
-				}
 				// Use cursor position captured atomically with output (no separate query needed)
 				if msg.HasCursor && p.interactiveState != nil && p.interactiveState.Active {
 					p.interactiveState.CursorRow = msg.CursorRow
@@ -1339,7 +1384,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 		}
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.shellSelected {
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeList && p.selectingShell() {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				if resizeCmd := p.maybeResizeVisiblePane(msg.TmuxName, msg.PaneWidth, msg.PaneHeight, false); resizeCmd != nil {
 					cmds = append(cmds, resizeCmd)
@@ -1360,7 +1405,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		selectedShell := p.getSelectedShell()
 		isSelectedShell := selectedShell != nil && selectedShell.TmuxName == msg.TmuxName
-		isVisibleOnScreen := isSelectedShell && p.shellSelected &&
+		isVisibleOnScreen := isSelectedShell && p.selectingShell() &&
 			(p.viewMode == ViewModeList || p.viewMode == ViewModeInteractive)
 
 		if !isVisibleOnScreen {
@@ -1377,7 +1422,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
-		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.shellSelected &&
+		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
 			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())
@@ -1952,15 +1997,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.interactiveState.CursorVisible = msg.Visible
 		}
 
-	case escapeTimerMsg:
-		// Handle escape delay timer for interactive mode double-escape detection
-		if p.viewMode == ViewModeInteractive {
-			cmd := p.handleEscapeTimer()
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-
 	case InteractiveSessionDeadMsg:
 		// Session ended externally - show notification (td-a1c8456f)
 		p.exitInteractiveMode()
@@ -1972,22 +2008,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				cmds = append(cmds, func() tea.Msg { return ShellSessionDeadMsg{TmuxName: shell.TmuxName} })
 			}
 		}
-
-	case interactiveClickSentMsg:
-		if p.interactiveState == nil || !p.interactiveState.Active ||
-			p.interactiveState != msg.Interaction ||
-			p.interactiveState.TargetSession != msg.SessionName {
-			break
-		}
-		if msg.Err != nil {
-			p.exitInteractiveMode()
-			if tty.IsSessionDeadError(msg.Err) {
-				p.toastMessage = "Session ended"
-				p.toastTime = time.Now()
-			}
-			break
-		}
-		p.interactiveState.LastKeyTime = time.Now()
 
 	case InteractivePasteResultMsg:
 		if msg.SessionDead {
@@ -2032,8 +2052,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		// v2: bracketed paste arrives as a dedicated message. Forward to tmux
-		// when in interactive mode.
+		// v2: bracketed paste arrives as a dedicated message. A focused list
+		// filter is a text input and takes the paste first; otherwise it goes
+		// to tmux when in interactive mode.
+		if handled, cmd := p.handleFilterPaste(msg.Content); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
 		if cmd := p.handleInteractivePaste(msg.Content); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -2067,6 +2094,16 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	var commands []tea.Cmd
 	if len(p.worktrees) > 0 || len(p.shells) > 0 {
 		p.restoreSelectionState()
+		// A destination the user chose in the global browser outranks the
+		// project's persisted selection. Shell discovery and the worktree
+		// refresh race, so without this the arm that finished second could
+		// restore the saved workspace over the one the user just opened.
+		// Re-applying here is a no-op once the selection has been consumed.
+		p.applyPendingWorkspaceSelection()
+		if p.paneRestoreCmd != nil {
+			commands = append(commands, p.paneRestoreCmd)
+			p.paneRestoreCmd = nil
+		}
 	}
 
 	// Restore terminal panel only after selection is final, since its session

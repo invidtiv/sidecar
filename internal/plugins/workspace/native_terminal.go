@@ -19,34 +19,13 @@ func (p *Plugin) Cursor() *tea.Cursor {
 
 	// Same buffer window and pane geometry the content render uses, or the
 	// cursor desyncs from the pixels it is supposed to sit on.
-	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
-		p.selectionTermPanel && p.selection.Anchor.Valid())
-	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
-	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
-	cursorX, cursorY, visible := terminalViewportCursorPosition(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		Interactive:      true,
-		CursorRow:        p.interactiveState.CursorRow,
-		CursorCol:        p.interactiveState.CursorCol,
-		CursorVisible:    p.interactiveState.CursorVisible,
-		PaneHeight:       paneHeight,
-		PaneWidth:        paneWidth,
-		NativeCursor:     true,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
-	})
+	input := p.terminalWindowInput(termPanel, buffer, width, height)
+	input.NativeCursor = true
+	cursorX, cursorY, visible := terminalViewportCursorPosition(input)
 	if !visible {
 		return nil
 	}
-	cursor := tea.NewCursor(x+cursorX, y+cursorY)
-	cursor.Shape = tea.CursorBlock
-	cursor.Blink = true
+	cursor := tty.PlaceCursor(x+cursorX, y+cursorY)
 	if cursor.X < 0 || cursor.X >= p.width || cursor.Y < 0 || cursor.Y >= p.height {
 		return nil
 	}
@@ -56,7 +35,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 func (p *Plugin) nativeTerminalActive() bool {
 	return p.focused && p.activePane == PanePreview &&
 		p.viewMode == ViewModeInteractive && p.interactiveState != nil &&
-		p.interactiveState.Active && (p.shellSelected || p.previewTab == PreviewTabOutput)
+		p.interactiveState.Active && (p.selectingShell() || p.previewTab == PreviewTabOutput)
 }
 
 // PreferredMouseMode keeps hover-rich all-motion reporting for ordinary
@@ -86,7 +65,7 @@ func (p *Plugin) nativeTerminalGeometry(termPanel bool) (*tty.OutputBuffer, int,
 	}
 
 	var buffer *tty.OutputBuffer
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 			buffer = shell.Agent.OutputBuf
 		}

@@ -8,9 +8,60 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/tty"
 )
+
+func TestLosingFocusClosesVisibleTerminalModelsAndHiddenResizeDoesNotOwnGeometry(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.width, p.height = 100, 30
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, workspaceTerminalTarget{
+		Session: "project", Pane: "%1", Source: "agent", SourceID: "worktree",
+	})
+	if !model.IsActive() {
+		t.Fatal("test premise: project terminal did not open")
+	}
+
+	p.SetFocused(false)
+	if model.IsActive() || p.primaryTerminalTarget != (workspaceTerminalTarget{}) {
+		t.Fatalf("covered project retained terminal ownership: active=%v target=%+v", model.IsActive(), p.primaryTerminalTarget)
+	}
+	_, cmd := p.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		t.Fatal("covered project scheduled tmux geometry work on resize")
+	}
+	if p.width != 120 || p.height != 40 {
+		t.Fatalf("covered project lost return geometry: %dx%d", p.width, p.height)
+	}
+}
+
+func TestRegainingFocusReconcilesTheSelectedTerminalOnce(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.width, p.height = 100, 30
+	p.sidebarVisible = false
+	p.worktrees = []*Worktree{{
+		Key: "worktree", Name: "worktree",
+		Agent: &Agent{TmuxSession: "project", TmuxPane: "%1"},
+	}}
+	p.SetFocused(false)
+	p.SetFocused(true)
+
+	_, _ = p.Update(app.PluginFocusedMsg{})
+	if p.primaryTerminal == nil || !p.primaryTerminal.IsActive() {
+		t.Fatal("returning to project focus did not reopen the selected terminal")
+	}
+	if got := p.primaryTerminalTarget; got.Session != "project" || got.Pane != "%1" {
+		t.Fatalf("restored terminal target = %+v", got)
+	}
+	firstGeneration := p.primaryTerminal.Scope().Generation
+	_, _ = p.Update(app.PluginFocusedMsg{})
+	if got := p.primaryTerminal.Scope().Generation; got != firstGeneration {
+		t.Fatalf("duplicate focus notification reopened terminal: generation %d -> %d", firstGeneration, got)
+	}
+}
 
 func TestTerminalCaptureTraceIsOptInAndMetadataOnly(t *testing.T) {
 	var output bytes.Buffer
@@ -104,6 +155,92 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 	}
 }
 
+func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.panelTerminal = p.newWorkspaceTerminal()
+	p.previewTab = PreviewTabDiff // Shell surfaces ignore the worktree tab state.
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	if shell == nil {
+		t.Fatal("nested shell fixture missing")
+	}
+	shell.Agent = &Agent{
+		Type: AgentShell, TmuxSession: session,
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectNestedShell(parent, session)
+
+	target, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("session-only nested shell did not request the primary terminal")
+	}
+	if target.Session != session || target.Pane != "" || target.Source != "shell" || target.SourceID != session {
+		t.Fatalf("nested terminal target = %#v", target)
+	}
+
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, target)
+	if model.GetTarget() != session {
+		t.Fatalf("session-only model target = %q, want %q", model.GetTarget(), session)
+	}
+	if shell.Agent.OutputBuf != model.State.OutputBuf {
+		t.Fatal("nested shell did not adopt the tty.Model presentation buffer")
+	}
+	applyFallbackCapture(model, "nested live frame")
+	p.syncTerminalModels()
+
+	view := ansi.Strip(p.renderShellOutput(100, 20))
+	if !strings.Contains(view, "nested live frame") || strings.Contains(view, "No output yet") {
+		t.Fatalf("nested shell output did not render model frame:\n%s", view)
+	}
+}
+
+func TestNestedShellSwitchRejectsPriorTerminalFrame(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.panelTerminal = p.newWorkspaceTerminal()
+	const nestedSession = "sidecar-sh-sidecar-feature-1"
+	parent, nested := p.findNestedShell(nestedSession)
+	nested.Agent = &Agent{
+		Type: AgentShell, TmuxSession: nestedSession, TmuxPane: "%8",
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectNestedShell(parent, nestedSession)
+	nestedTarget, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("nested shell did not request terminal")
+	}
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, nestedTarget)
+	oldScope, oldPoll := model.Scope(), model.State.PollGeneration
+	applyFallbackCapture(model, "nested current")
+	p.syncTerminalModels()
+
+	top := p.shells[0]
+	top.Agent = &Agent{
+		Type: AgentShell, TmuxSession: top.TmuxName, TmuxPane: "%9",
+		OutputBuf: tty.NewOutputBuffer(outputBufferCap),
+	}
+	p.selectTopShellAt(0)
+	topTarget, wanted := p.desiredPrimaryTerminal()
+	if !wanted {
+		t.Fatal("top shell did not request terminal after nested selection")
+	}
+	model = openTestTerminal(t, p, workspaceTerminalPrimary, topTarget)
+	model.Update(tty.CaptureResultMsg{
+		Scope: oldScope, PollGeneration: oldPoll, Target: "%8", Output: "STALE NESTED FRAME",
+	})
+	applyFallbackCapture(model, "top current")
+	p.syncTerminalModels()
+
+	view := ansi.Strip(p.renderShellOutput(100, 20))
+	if !strings.Contains(view, "top current") || strings.Contains(view, "STALE NESTED FRAME") || strings.Contains(view, "nested current") {
+		t.Fatalf("shell switch rendered stale nested content:\n%s", view)
+	}
+	if p.primaryTerminalTarget.SourceID != top.TmuxName {
+		t.Fatalf("primary target after switch = %#v", p.primaryTerminalTarget)
+	}
+}
+
 func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T) {
 	for _, primaryKind := range []string{"worktree-agent", "project-shell"} {
 		t.Run(primaryKind, func(t *testing.T) {
@@ -187,7 +324,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			assertOnlyPanelTarget("paste")
 
 			clearLog()
-			p.interactiveState.MouseReportingEnabled = true
+			panel.State.MouseReportingEnabled = true
 			p.interactiveState.PaneWidth = 40
 			p.interactiveState.PaneHeight = 10
 			var mouseX, mouseY int
@@ -207,10 +344,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			if cmd == nil {
 				t.Fatal("panel mouse click produced no command")
 			}
-			result, ok := cmd().(interactiveClickSentMsg)
-			if !ok || result.Err != nil || result.SessionName != "%2" {
-				t.Fatalf("panel mouse result = %#v", result)
-			}
+			runCommandTree(cmd)
 			assertOnlyPanelTarget("mouse")
 		})
 	}

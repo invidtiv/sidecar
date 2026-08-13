@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -18,9 +19,14 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 const (
@@ -74,7 +80,10 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg:
+	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
+		previewDocLoadedMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
+		renameShellDoneMsg:
 		return true
 	default:
 		return false
@@ -115,19 +124,59 @@ type Model struct {
 	firstResult        bool
 	maxActive          int
 	pollScheduled      bool
+	configuredPaths    []string
 	board              kanban.Component
 	cards              map[string]workspaceinventory.Workspace
 	agentCount         int
 	compactScroll      int
 	mouse              *mouse.Handler
+	workspaces         workspacelist.Model
+	workspacesMouse    *mouse.Handler
+	sidebarWidth       int
+	sidebarVisible     bool
+	catalog            map[string]workspaceinventory.Workspace
+	preview            previewState
+	previewTab         workspacediff.Tab
+	diff               workspacediff.View
+	task               workspacediff.TaskView
+	previewExtrasID    string
+	terminalConfig     tty.Config
 	width              int
 	height             int
+
+	// showIdleWorktrees is the global-list visibility flag. Off by default;
+	// the sort/filter fly-out is the only control that turns it on.
+	showIdleWorktrees bool
+	viewFlyout        *modal.Modal
+	viewFlyoutOpen    bool
+	viewFlyoutWidth   int
+	viewFlyoutSortIdx int
+	viewFlyoutMouse   *mouse.Handler
+
+	renameOpen       bool
+	renameWorkspace  workspaceinventory.Workspace
+	renameInput      textinput.Model
+	renameError      string
+	renameModal      *modal.Modal
+	renameModalWidth int
+	renameMouse      *mouse.Handler
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
 var ActivityStorePath = func() string {
 	return filepath.Join(config.StateDir(), activitystore.FileName)
 }
+
+// Sidebar preference access is overridable so interaction tests can prove a
+// drag release without reading or writing the developer's real state file.
+var (
+	loadWorkspaceSidebarWidth = state.GetWorkspaceSidebarWidth
+	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
+	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
+	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
+	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
+	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
+)
 
 func New(collector workspaceinventory.Collector) *Model {
 	collector = collector.WithDefaults()
@@ -137,7 +186,12 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
+		m.sidebarWidth = savedWidth
+	}
+	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -157,6 +211,34 @@ func (m *Model) persistActivity() {
 
 func (m *Model) Start(projects []Project) tea.Cmd {
 	return m.start(projects, "refresh")
+}
+
+// Ensure starts collection only when the shared catalog has nothing live
+// behind it. The Agents board and the global Workspaces list are two
+// projections of one cache: whichever becomes visible first starts the cycle,
+// and the other reuses its results, its trackers, and its poll. A second
+// collector here would double every project's tmux and Git fan-out for a view
+// that already has the data.
+func (m *Model) Ensure(projects []Project) tea.Cmd {
+	if m.cancel == nil || !sameConfiguredProjects(m.configuredPaths, projects) {
+		return m.start(projects, "refresh")
+	}
+	if m.loading || m.pollScheduled {
+		return nil
+	}
+	return m.start(projects, "refresh")
+}
+
+func sameConfiguredProjects(paths []string, projects []Project) bool {
+	if len(paths) != len(projects) {
+		return false
+	}
+	for i, project := range projects {
+		if paths[i] != project.Path {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
@@ -182,6 +264,10 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 		m.syncBoard()
 	}
 	m.cycleStart, m.configured, m.firstResult, m.maxActive = time.Now(), len(projects), false, 0
+	m.configuredPaths = m.configuredPaths[:0]
+	for _, project := range projects {
+		m.configuredPaths = append(m.configuredPaths, project.Path)
+	}
 	m.tracef("cycle generation=%d reason=%s configured=%d start", m.generation, reason, len(projects))
 	generation := m.generation
 	ctx := m.ctx
@@ -208,6 +294,10 @@ func (m *Model) Stop() {
 	m.generation++
 	m.requestID++
 	m.loading = false
+	// Stopping the cycle stops the preview with it: a tab nobody is looking at
+	// has no reason to retain a pane's producer or memory-only output.
+	m.preview.visible = false
+	m.releasePreview()
 }
 
 // RequestNavigation binds a card activation to the current Overview lifecycle
@@ -302,10 +392,30 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			m.applyStatusResult(msg.Result)
 		}
 		m.syncBoard()
+		// The list's selection can move when incremental results arrive (the
+		// first result selects a row at all), so the preview follows it here
+		// rather than waiting for the user to press a key.
+		preview := m.previewSync()
 		if len(m.pendingInventory) > 0 || len(m.pending) > 0 || m.active > 0 {
-			return m.dispatchProjects()
+			return tea.Batch(m.dispatchProjects(), preview)
 		}
-		return m.finishPhase()
+		return tea.Batch(m.finishPhase(), preview)
+	case previewAutoScrollTickMsg:
+		return m.advancePreviewAutoScroll(msg)
+	case previewDocLoadedMsg:
+		m.applyPreviewDocLoaded(msg)
+		return nil
+	case workspacediff.SnapshotMsg:
+		return m.applyDiffSnapshot(msg)
+	case workspacediff.CommitDetailMsg:
+		m.applyCommitDetail(msg)
+		return nil
+	case workspacediff.TaskMsg:
+		m.applyTask(msg)
+		return nil
+	case renameShellDoneMsg:
+		m.applyRenameShell(msg)
+		return nil
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)
@@ -648,13 +758,26 @@ type cardOrder struct {
 	changedAt time.Time
 }
 
+// boardLane is a shared lane as this board draws it: the theme's lane colours,
+// and CellReady, under which a lane with no cards is left blank rather than
+// carrying an empty-cell mark. Loading and error states are set over it per
+// refresh.
+func boardLane(lane agentstatus.LaneID) kanban.Lane {
+	built := kanban.AgentLane(lane, kanban.ThemeLanePalette)
+	built.State = kanban.CellReady
+	return built
+}
+
 func (m *Model) syncBoard() {
+	// The lanes are the shared definition's — the project board draws the same
+	// ones — in this board's own colours and cell state. The count is left to
+	// the Kanban component, which appends its own.
 	lanes := []kanban.Lane{
-		{ID: "working", Label: "WORKING", HeaderColor: styles.LaneColor("working"), State: kanban.CellReady},
-		{ID: "blocked", Label: "NEEDS ATTENTION", HeaderColor: styles.LaneColor("blocked"), State: kanban.CellReady},
-		{ID: "done", Label: "DONE", HeaderColor: styles.LaneColor("done"), State: kanban.CellReady},
-		{ID: "idle", Label: "IDLE", HeaderColor: styles.LaneColor("idle"), State: kanban.CellReady},
-		{ID: "paused", Label: "PAUSED", HeaderColor: styles.LaneColor("paused"), State: kanban.CellReady},
+		boardLane(agentstatus.LaneWorking),
+		boardLane(agentstatus.LaneBlocked),
+		boardLane(agentstatus.LaneDone),
+		boardLane(agentstatus.LaneIdle),
+		boardLane(agentstatus.LanePaused),
 	}
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	order := make(map[string]cardOrder)
@@ -676,9 +799,11 @@ func (m *Model) syncBoard() {
 			continue
 		}
 		for _, workspace := range result.Workspaces {
-			// Untyped shell definitions are live-discovery candidates, not cards.
-			// RefreshProjectStatus retains them only after identifying an agent.
-			if workspace.Kind == workspaceinventory.KindShell && strings.TrimSpace(workspace.Provider) == "" {
+			// The board is the agent-only projection of the shared catalog.
+			// Untyped shell definitions are live-discovery candidates, and plain
+			// worktrees have no agent semantics at all; both belong to the
+			// Workspaces list, not to a Kanban lane.
+			if !workspace.HasAgent() {
 				continue
 			}
 			m.cards[workspace.ID] = workspace
@@ -708,6 +833,9 @@ func (m *Model) syncBoard() {
 		}
 	}
 	m.board.SetBoard(kanban.Board{Lanes: lanes})
+	// One collection, two projections: the list is rebuilt from the same
+	// results map, in the same pass, so the tabs cannot disagree.
+	m.syncWorkspaces()
 }
 
 // spineGlyph is the per-kind left accent every content line carries: solid
@@ -722,9 +850,9 @@ func spineGlyph(kind workspaceinventory.Kind) string {
 
 func kindGlyph(kind workspaceinventory.Kind) string {
 	if kind == workspaceinventory.KindShell {
-		return "❯"
+		return workspacelist.KindGlyph(workspacelist.KindShell)
 	}
-	return "⑂"
+	return workspacelist.KindGlyph(workspacelist.KindWorktree)
 }
 
 // cardLines builds the three styled content rows for a live workspace card.
@@ -770,22 +898,22 @@ func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time
 		{Text: " " + status, Foreground: statusColor, Bold: workspace.Presentation.Lane == agentstatus.LaneDone},
 	}}
 
-	detail := choose(workspace.TaskID, workspace.Branch)
-	if workspace.Kind == workspaceinventory.KindShell {
-		// Session name only — the "tmux" qualifier was repeated on every shell
-		// card and added no information beyond the name itself.
-		detail = workspace.TmuxName
+	// A shell has neither task nor branch; its detail line stays empty rather
+	// than carrying the tmux session name, which is an identity key only.
+	parts := make([]string, 0, 2)
+	if detail := choose(workspace.TaskID, workspace.Branch); detail != "" {
+		parts = append(parts, detail)
 	}
 	switch {
 	case stale:
-		detail += " · stale"
+		parts = append(parts, "stale")
 	case workspace.Presentation.Freshness != "" && workspace.Presentation.Freshness != agentstatus.FreshnessCurrent:
-		detail += " · " + string(workspace.Presentation.Freshness)
+		parts = append(parts, string(workspace.Presentation.Freshness))
 	}
-	line3 := kanban.Line{Spans: []kanban.Span{
-		{Text: spine, Foreground: hue},
-		{Text: " " + detail, Foreground: styles.TextMuted},
-	}}
+	line3 := kanban.Line{Spans: []kanban.Span{{Text: spine, Foreground: hue}}}
+	if len(parts) > 0 {
+		line3.Spans = append(line3.Spans, kanban.Span{Text: " " + strings.Join(parts, " · "), Foreground: styles.TextMuted})
+	}
 	return []kanban.Line{line1, line2, line3}
 }
 
@@ -915,6 +1043,19 @@ func fitCompactLine(line string, width int) string {
 }
 
 func (m *Model) Commands() []struct{ Key, Name string } {
+	if m.RenameShellOpen() {
+		return []struct{ Key, Name string }{{"enter", "Rename"}, {"esc", "Cancel"}}
+	}
+	if !m.PreviewInteractive() {
+		cmds := []struct{ Key, Name string }{{"enter", "Type"}, {"p", "Pin"}, {"r", "Refresh"}}
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			cmds = append(cmds, struct{ Key, Name string }{"R", "Rename"})
+		}
+		if m.canOpenInGit() {
+			cmds = append(cmds, struct{ Key, Name string }{"O", "Git"})
+		}
+		return cmds
+	}
 	return []struct{ Key, Name string }{{"enter", "Open"}, {"r", "Refresh"}}
 }
 

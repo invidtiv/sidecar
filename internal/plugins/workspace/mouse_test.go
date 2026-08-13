@@ -260,8 +260,6 @@ func TestPreviewPaneClickEntersInteractiveMode(t *testing.T) {
 
 func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T) {
 	p := newPreviewClickTestPlugin()
-	p.previewOffset = 0 // stale/ignored while following, as in the real app
-	p.autoScrollOutput = true
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row\n", 50))
 	renderedStart := p.terminalSelectionViewportLayout().Start
 	if renderedStart == 0 {
@@ -284,8 +282,9 @@ func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T)
 	if !p.selection.HasSelection() {
 		t.Fatal("immediate click-drag did not create a selection")
 	}
-	if p.previewOffset != renderedStart {
-		t.Fatalf("selection froze viewport at %d, want rendered live start %d", p.previewOffset, renderedStart)
+	if p.previewFreeze.Start() != renderedStart {
+		t.Fatalf("selection froze viewport at %d, want rendered live start %d",
+			p.previewFreeze.Start(), renderedStart)
 	}
 }
 
@@ -464,11 +463,16 @@ func TestScrollFallbackUsesRenderedPreviewSplit(t *testing.T) {
 					Agent: &Agent{OutputBuf: markerBuffer("SECOND", 100)},
 				})
 				p.shells[0].Agent.OutputBuf = markerBuffer("FIRST", 100)
-				p.autoScrollOutput = false
+				// A window already back in scrollback, so a notch towards the
+				// live edge has somewhere to move it.
+				p.previewScroll = 5
 
 				p.handleMouseScroll(mouse.MouseAction{Delta: 1, X: pos.x})
 				gotSidebar := p.selectedShellIdx == 1
-				gotPreview := p.previewOffset > 0
+				// A notch the preview took moves its window one row towards the
+				// live bottom; one the sidebar took resets it to the live edge
+				// with the selection, which is not the same answer.
+				gotPreview := p.previewScroll == 4
 				if gotSidebar != pos.wantSidebar || gotPreview == pos.wantSidebar {
 					t.Fatalf("x=%d split=%+v: sidebar scrolled=%v preview scrolled=%v, want sidebar=%v",
 						pos.x, split, gotSidebar, gotPreview, pos.wantSidebar)
@@ -569,11 +573,11 @@ func newMouseReportingTestPlugin() *Plugin {
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 50))
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{
-		Active:                true,
-		TargetSession:         "shell-1",
-		TargetPane:            "%1",
-		MouseReportingEnabled: true,
+		Active:        true,
+		TargetSession: "shell-1",
+		TargetPane:    "%1",
 	}
+	attachLiveTerminal(p, true)
 	return p
 }
 
@@ -597,8 +601,8 @@ func TestMouseReportingPaneDragSelectsLocallyAndForwardsNothing(t *testing.T) {
 	if cmd != nil {
 		t.Error("a completed selection still forwarded the click to the app")
 	}
-	if p.pendingClickResolution != clickResolutionNone {
-		t.Errorf("pendingClickResolution = %v after a drag, want none", p.pendingClickResolution)
+	if p.pointer.Resolution != tty.ClickNone {
+		t.Errorf("pendingClickResolution = %v after a drag, want none", p.pointer.Resolution)
 	}
 }
 
@@ -607,8 +611,8 @@ func TestMouseReportingPaneClickWithoutMotionForwards(t *testing.T) {
 	p := newMouseReportingTestPlugin()
 
 	p.handleMouseClick(previewClickAction(false, false))
-	if p.pendingClickResolution != clickResolutionForward {
-		t.Fatalf("pendingClickResolution = %v, want forward", p.pendingClickResolution)
+	if p.pointer.Resolution != tty.ClickForward {
+		t.Fatalf("pendingClickResolution = %v, want forward", p.pointer.Resolution)
 	}
 	if cmd := p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane}); cmd == nil {
 		t.Fatal("a click without motion did not forward to the app")
@@ -616,7 +620,7 @@ func TestMouseReportingPaneClickWithoutMotionForwards(t *testing.T) {
 	if p.selection.HasSelection() {
 		t.Error("a forwarded click left a selection behind")
 	}
-	if p.pendingClickResolution != clickResolutionNone {
+	if p.pointer.Resolution != tty.ClickNone {
 		t.Error("the forwarded click stayed pending")
 	}
 }
@@ -665,7 +669,7 @@ func TestMouseReportingPaneDoubleClickStillSelectsWords(t *testing.T) {
 		t.Fatalf("double-click over a mouse-reporting pane selected %+v..%+v, want the word terminal",
 			p.selection.Start, p.selection.End)
 	}
-	if p.pendingClickResolution != clickResolutionNone {
+	if p.pointer.Resolution != tty.ClickNone {
 		t.Error("the double-click left the app's click pending")
 	}
 

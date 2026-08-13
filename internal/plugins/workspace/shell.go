@@ -194,9 +194,6 @@ type (
 		// RowsJoined says the capture was taken with -J, so it carries no usable
 		// history/pane split.
 		RowsJoined bool
-		// MouseReporting is tmux's #{mouse_any_flag} for the pane. Only
-		// meaningful when HasCursor is set.
-		MouseReporting bool
 	}
 
 	// RenameShellDoneMsg signals shell rename operation completed
@@ -216,6 +213,11 @@ type (
 	// shellAttachAfterCreateMsg triggers attachment after shell creation
 	shellAttachAfterCreateMsg struct {
 		Index int // Index of the shell to attach to
+	}
+
+	// shellAttachByNameMsg attaches to a session by TmuxName after recreate.
+	shellAttachByNameMsg struct {
+		TmuxName string
 	}
 )
 
@@ -360,6 +362,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	})
 
 	p.shells = result.Shells
+	p.rebuildNestedShells(p.shellManifest.Shells, func(name string) string { return sync.PaneIDs[name] })
 
 	// Only shells that vanished from the manifest *and* are not running here
 	// reach Dropped, i.e. an explicit delete elsewhere.
@@ -380,10 +383,9 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	// Adjust selection if needed
 	if p.shellSelected && p.selectedShellIdx >= len(p.shells) {
 		if len(p.shells) > 0 {
-			p.selectedShellIdx = len(p.shells) - 1
+			p.selectTopShellAt(len(p.shells) - 1)
 		} else if len(p.worktrees) > 0 {
-			p.shellSelected = false
-			p.selectedIdx = 0
+			p.selectWorktreeAt(0)
 		}
 	}
 
@@ -391,6 +393,9 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	// Heal the file: put back the live sessions the writer did not know about.
 	// This converges rather than ping-pongs — the peer instance re-reads a
 	// superset manifest, finds nothing missing, and writes nothing.
+	if cmd := p.backfillWorkDirsCmd(); cmd != nil {
+		commands = append(commands, cmd)
+	}
 	if len(result.Restored) > 0 {
 		manifest := p.shellManifest
 		restored := result.Restored
@@ -725,20 +730,22 @@ func (p *Plugin) attachToShellByIndex(idx int) tea.Cmd {
 	if idx < 0 || idx >= len(p.shells) {
 		return nil
 	}
+	return p.attachToShellSession(p.shells[idx])
+}
 
-	shell := p.shells[idx]
+func (p *Plugin) attachToShellSession(shell *ShellSession) tea.Cmd {
+	if shell == nil || shell.TmuxName == "" {
+		return nil
+	}
+	if p.attachSession != nil {
+		return p.attachSession(shell.TmuxName, shell.Name)
+	}
 	sessionName := shell.TmuxName
-	displayName := shell.Name
-
-	target := ""
+	target := sessionName
 	if shell.Agent != nil && shell.Agent.TmuxPane != "" {
 		target = shell.Agent.TmuxPane
-	} else {
-		target = sessionName
 	}
-
-	// Resize to full terminal before attaching so no dot borders appear
-	return p.attachWithResize(target, sessionName, displayName, func(err error) tea.Msg {
+	return p.attachWithResize(target, sessionName, shell.Name, func(err error) tea.Msg {
 		return ShellDetachedMsg{Err: err}
 	})
 }
@@ -748,17 +755,25 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 	if idx < 0 || idx >= len(p.shells) {
 		return nil
 	}
+	return p.ensureShellAndAttach(p.shells[idx])
+}
 
-	shell := p.shells[idx]
+func (p *Plugin) ensureShellAndAttach(shell *ShellSession) tea.Cmd {
+	if shell == nil || shell.TmuxName == "" {
+		return nil
+	}
+	if p.attachSession != nil {
+		return p.attachSession(shell.TmuxName, shell.Name)
+	}
 	sessionName := shell.TmuxName
-
-	// If session already exists, attach directly
 	if sessionExists(sessionName) {
-		return p.attachToShellByIndex(idx)
+		return p.attachToShellSession(shell)
 	}
 
-	// Session doesn't exist but we have a record - recreate it
-	workDir := p.ctx.WorkDir
+	workDir := shell.WorkDir
+	if workDir == "" && p.ctx != nil {
+		workDir = p.ctx.WorkDir
+	}
 	previewWidth, previewHeight := p.calculatePreviewDimensions()
 	return tea.Sequence(
 		func() tea.Msg {
@@ -774,7 +789,6 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 				}
 			}
 			tty.SetWindowSizeManual(sessionName)
-			// Capture pane ID for interactive mode support
 			paneID := getPaneID(sessionName)
 			return ShellCreatedMsg{SessionName: sessionName, DisplayName: shell.Name, PaneID: paneID}
 		},
@@ -786,7 +800,7 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 					Err:         fmt.Errorf("shell session failed to become ready"),
 				}
 			}
-			return shellAttachAfterCreateMsg{Index: idx}
+			return shellAttachByNameMsg{TmuxName: sessionName}
 		},
 	)
 }
@@ -835,14 +849,9 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 }
 
 func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
-	// Find the shell by TmuxName
-	var shell *ShellSession
-	for _, s := range p.shells {
-		if s.TmuxName == tmuxName {
-			shell = s
-			break
-		}
-	}
+	// Find the shell by TmuxName across both the current worktree's top-level
+	// shells and sibling-worktree shells nested in the workspace list.
+	shell := p.findShellByName(tmuxName)
 	if shell == nil || shell.Agent == nil {
 		return nil
 	}
@@ -857,7 +866,6 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
-		p.shellSelected &&
 		selectedShell != nil &&
 		selectedShell.TmuxName == tmuxName
 	if interactiveCapture {
@@ -995,7 +1003,6 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
-			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
@@ -1038,15 +1045,26 @@ func (p *Plugin) findShellByName(tmuxName string) *ShellSession {
 			return s
 		}
 	}
+	if _, shell := p.findNestedShell(tmuxName); shell != nil {
+		return shell
+	}
 	return nil
 }
 
 // getSelectedShell returns the currently selected shell, or nil if none.
 func (p *Plugin) getSelectedShell() *ShellSession {
-	if !p.shellSelected || p.selectedShellIdx < 0 || p.selectedShellIdx >= len(p.shells) {
-		return nil
+	if p.shellSelected {
+		if p.selectedShellIdx < 0 || p.selectedShellIdx >= len(p.shells) {
+			return nil
+		}
+		return p.shells[p.selectedShellIdx]
 	}
-	return p.shells[p.selectedShellIdx]
+	if p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell != nil {
+			return shell
+		}
+	}
+	return nil
 }
 
 // handleResumeConversation processes ResumeConversationMsg from conversations plugin (td-aa4136).

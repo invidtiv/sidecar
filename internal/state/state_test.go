@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -586,6 +587,35 @@ func TestSetWorkspaceState_ShellSelection(t *testing.T) {
 	}
 }
 
+func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
+	want := State{Workspace: map[string]WorkspaceState{"/repo": {
+		ShellTmuxName: "shell-1",
+		PaneLayout: &PaneLayoutJSON{Root: "/repo", Surface: "shell:shell-1", Split: &PaneSplitJSON{
+			Axis: "cols", Ratio: 63,
+			A: &PaneLayoutJSON{Kind: "terminal"},
+			B: &PaneLayoutJSON{Kind: "doc", Active: 0, Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
+		}},
+	}}}
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got State
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	layout := got.Workspace["/repo"].PaneLayout
+	if layout == nil || layout.Root != "/repo" || layout.Surface != "shell:shell-1" || layout.Split == nil || layout.Split.Ratio != 63 ||
+		layout.Split.B == nil || len(layout.Split.B.Tabs) != 1 || layout.Split.B.Tabs[0].Mode != "raw" {
+		t.Fatalf("pane layout round trip = %#v", layout)
+	}
+
+	var malformed State
+	if err := json.Unmarshal([]byte(`{"workspace":{"/repo":{"paneLayout":{"split":{"axis":7}}}}}`), &malformed); err == nil {
+		t.Fatal("malformed pane layout JSON unexpectedly decoded")
+	}
+}
+
 func TestGetLastWorktreePath_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()
@@ -652,6 +682,230 @@ func TestSetLastWorktreePath(t *testing.T) {
 	_ = json.Unmarshal(data, &loaded)
 	if loaded.LastWorktreePath["/main/repo"] != "/worktrees/feature-billing" {
 		t.Errorf("persisted path = %q, want /worktrees/feature-billing", loaded.LastWorktreePath["/main/repo"])
+	}
+}
+
+func TestGetLastGlobalTab_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetLastGlobalTab(); got != "" {
+		t.Errorf("GetLastGlobalTab() with nil current = %q, want empty", got)
+	}
+}
+
+func TestGetLastGlobalTab_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{LastGlobalTab: "workspaces"}
+	if got := GetLastGlobalTab(); got != "workspaces" {
+		t.Errorf("GetLastGlobalTab() = %q, want workspaces", got)
+	}
+}
+
+func TestSetLastGlobalTab(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetLastGlobalTab("workspaces"); err != nil {
+		t.Fatalf("SetLastGlobalTab() failed: %v", err)
+	}
+	if current.LastGlobalTab != "workspaces" {
+		t.Errorf("current.LastGlobalTab = %q, want workspaces", current.LastGlobalTab)
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if loaded.LastGlobalTab != "workspaces" {
+		t.Errorf("saved LastGlobalTab = %q, want workspaces", loaded.LastGlobalTab)
+	}
+}
+
+func TestSetLastGlobalTab_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetLastGlobalTab("tasks"); err != nil {
+		t.Fatalf("SetLastGlobalTab() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetLastGlobalTab() should initialize current state")
+	}
+	if current.LastGlobalTab != "tasks" {
+		t.Errorf("LastGlobalTab = %q, want tasks", current.LastGlobalTab)
+	}
+}
+
+func TestGetShowIdleWorktrees_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetShowIdleWorktrees(); got {
+		t.Error("GetShowIdleWorktrees() with nil current = true, want false")
+	}
+}
+
+func TestGetShowIdleWorktrees_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{ShowIdleWorktrees: true}
+	if got := GetShowIdleWorktrees(); !got {
+		t.Error("GetShowIdleWorktrees() = false, want true")
+	}
+}
+
+func TestSetShowIdleWorktrees(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetShowIdleWorktrees(true); err != nil {
+		t.Fatalf("SetShowIdleWorktrees() failed: %v", err)
+	}
+	if !current.ShowIdleWorktrees {
+		t.Error("current.ShowIdleWorktrees = false, want true")
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if !loaded.ShowIdleWorktrees {
+		t.Error("saved ShowIdleWorktrees = false, want true")
+	}
+	if !strings.Contains(string(data), `"showIdleWorktrees"`) {
+		t.Fatalf("persisted JSON should name showIdleWorktrees:\n%s", data)
+	}
+}
+
+func TestSetShowIdleWorktrees_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetShowIdleWorktrees(true); err != nil {
+		t.Fatalf("SetShowIdleWorktrees() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetShowIdleWorktrees() should initialize current state")
+	}
+	if !current.ShowIdleWorktrees {
+		t.Error("ShowIdleWorktrees = false, want true")
+	}
+}
+
+func TestGetPinnedWorkspaceIDs_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetPinnedWorkspaceIDs(); got != nil {
+		t.Errorf("GetPinnedWorkspaceIDs() with nil current = %v, want nil", got)
+	}
+}
+
+func TestGetPinnedWorkspaceIDs_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{PinnedWorkspaceIDs: []string{"a", "b"}}
+	got := GetPinnedWorkspaceIDs()
+	if strings.Join(got, ",") != "a,b" {
+		t.Errorf("GetPinnedWorkspaceIDs() = %v, want [a b]", got)
+	}
+	got[0] = "mutated"
+	if current.PinnedWorkspaceIDs[0] != "a" {
+		t.Error("GetPinnedWorkspaceIDs() exposed the stored slice")
+	}
+}
+
+func TestSetPinnedWorkspaceIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetPinnedWorkspaceIDs([]string{"s1", "", "s2", "s1"}); err != nil {
+		t.Fatalf("SetPinnedWorkspaceIDs() failed: %v", err)
+	}
+	if got := strings.Join(current.PinnedWorkspaceIDs, ","); got != "s1,s2" {
+		t.Errorf("current.PinnedWorkspaceIDs = %s, want s1,s2", got)
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if got := strings.Join(loaded.PinnedWorkspaceIDs, ","); got != "s1,s2" {
+		t.Errorf("saved PinnedWorkspaceIDs = %s, want s1,s2", got)
+	}
+	if !strings.Contains(string(data), `"pinnedWorkspaceIDs"`) {
+		t.Fatalf("persisted JSON should name pinnedWorkspaceIDs:\n%s", data)
+	}
+}
+
+func TestSetPinnedWorkspaceIDs_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetPinnedWorkspaceIDs([]string{"s1"}); err != nil {
+		t.Fatalf("SetPinnedWorkspaceIDs() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetPinnedWorkspaceIDs() should initialize current state")
+	}
+	if got := strings.Join(current.PinnedWorkspaceIDs, ","); got != "s1" {
+		t.Errorf("PinnedWorkspaceIDs = %s, want s1", got)
 	}
 }
 

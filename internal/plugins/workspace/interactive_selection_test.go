@@ -11,18 +11,30 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-// newSelectionTestPlugin creates a Plugin with interactive state configured for selection tests.
-// The pane starts at Y=2, has 1 row of content offset (tab bar), and shows lines 0-9.
+// newSelectionTestPlugin puts a live terminal with ten selectable rows on
+// screen. The window is the one the surface draws — there is no second cached
+// one to hit-test against — so the pane starts at Y=2 and its first buffer line
+// is drawn below the border and the header row.
 func newSelectionTestPlugin() *Plugin {
 	p := &Plugin{
-		viewMode:     ViewModeInteractive,
-		mouseHandler: mouse.NewHandler(),
+		viewMode:      ViewModeInteractive,
+		mouseHandler:  mouse.NewHandler(),
+		width:         100,
+		height:        30,
+		sidebarWidth:  40,
+		previewTab:    PreviewTabOutput,
+		shellSelected: true,
+		shells: []*ShellSession{{
+			TmuxName: "shell-1",
+			Agent:    &Agent{OutputBuf: tty.NewOutputBuffer(100)},
+		}},
 		interactiveState: &InteractiveState{
-			Active:       true,
-			VisibleStart: 0,
-			VisibleEnd:   10,
+			Active:        true,
+			TargetSession: "shell-1",
+			TargetPane:    "%1",
 		},
 	}
+	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 10))
 	p.selection.Clear() // initialize sentinels
 	return p
 }
@@ -47,7 +59,7 @@ func TestPrepareInteractiveDrag_NoSelection(t *testing.T) {
 
 	// Y=6: contentRow = 6-2-1 = 3, outputRow = 3-1 = 2, lineIdx = 0+2 = 2
 	action := actionAt(10, 6)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	if p.selection.HasSelection() {
 		t.Error("click without drag should not create selection")
@@ -68,7 +80,7 @@ func TestDragAfterClick_CreatesSelection(t *testing.T) {
 
 	// Click at line 2 (Y=6)
 	action := actionAt(10, 6)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag to line 4 (Y=8)
 	dragAction := mouse.MouseAction{
@@ -101,7 +113,7 @@ func TestDragUpward_FromAnchor(t *testing.T) {
 
 	// Click at line 4 (Y=8)
 	action := actionAt(10, 8)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag up to line 1 (Y=5)
 	dragAction := mouse.MouseAction{
@@ -131,7 +143,7 @@ func TestFinishInteractiveSelection_UnstartedClears(t *testing.T) {
 
 	// Click without drag
 	action := actionAt(10, 6)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Finish without any drag motion
 	p.finishInteractiveSelection()
@@ -152,7 +164,7 @@ func TestFinishInteractiveSelection_AfterDrag(t *testing.T) {
 
 	// Click and drag
 	action := actionAt(10, 6)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 	dragAction := mouse.MouseAction{
 		Type: mouse.ActionDrag,
 		X:    10,
@@ -187,7 +199,7 @@ func TestClearInteractiveSelection_ResetsSentinels(t *testing.T) {
 
 	// Create a valid selection
 	action := actionAt(10, 6)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 	dragAction := mouse.MouseAction{
 		Type: mouse.ActionDrag,
 		X:    10,
@@ -231,7 +243,7 @@ func TestDragToSameLine_SelectsSingleLine(t *testing.T) {
 
 	// Click at line 3 (Y=7: contentRow=7-2-1=4, outputRow=4-1=3, lineIdx=3)
 	action := actionAt(10, 7)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag to same line (different X, same Y)
 	dragAction := mouse.MouseAction{
@@ -265,7 +277,7 @@ func TestPrepareInteractiveDrag_InvalidY(t *testing.T) {
 
 	// Click above content area (Y=2 -> border row)
 	action := actionAt(10, 2)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	if p.selection.Anchor.Valid() {
 		t.Errorf("anchor should be invalid for invalid Y, got %+v", p.selection.Anchor)
@@ -274,13 +286,9 @@ func TestPrepareInteractiveDrag_InvalidY(t *testing.T) {
 
 func TestPrepareInteractiveDrag_NilRegion(t *testing.T) {
 	p := &Plugin{
-		viewMode:     ViewModeInteractive,
-		mouseHandler: mouse.NewHandler(),
-		interactiveState: &InteractiveState{
-			Active:       true,
-			VisibleStart: 0,
-			VisibleEnd:   10,
-		},
+		viewMode:         ViewModeInteractive,
+		mouseHandler:     mouse.NewHandler(),
+		interactiveState: &InteractiveState{Active: true},
 	}
 	p.selection.Clear()
 
@@ -290,7 +298,7 @@ func TestPrepareInteractiveDrag_NilRegion(t *testing.T) {
 		Y:      6,
 		Region: nil,
 	}
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	if p.selection.Anchor.Valid() {
 		t.Errorf("anchor should remain invalid for nil region, got %+v", p.selection.Anchor)
@@ -503,7 +511,7 @@ func TestCharacterLevelDrag_SameLineRightward(t *testing.T) {
 
 	// Click at col 5 on line 0 (Y=4: contentRow=4-2-1=1, outputRow=1-1=0, lineIdx=0)
 	action := actionAt(5, 4)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag to col 10
 	dragAction := mouse.MouseAction{
@@ -538,7 +546,7 @@ func TestCharacterLevelDrag_SameLineBackward(t *testing.T) {
 
 	// Click at col 10
 	action := actionAt(10, 4)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag backward to col 3
 	dragAction := mouse.MouseAction{
@@ -574,7 +582,7 @@ func TestCharacterLevelDrag_MultiLineDown(t *testing.T) {
 
 	// Click at (5, line 1) -> Y=5: contentRow=5-2-1=2, outputRow=2-1=1, lineIdx=1
 	action := actionAt(5, 5)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag to (3, line 3) -> Y=7
 	dragAction := mouse.MouseAction{
@@ -609,7 +617,7 @@ func TestCharacterLevelDrag_DirectionReversal(t *testing.T) {
 
 	// Click at col 8
 	action := actionAt(8, 4)
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 
 	// Drag right to col 12
 	dragAction := mouse.MouseAction{
@@ -717,7 +725,7 @@ func TestAltDragCreatesRectangularSelection(t *testing.T) {
 
 	start := actionAt(1, 4)
 	start.Alt = true
-	p.prepareInteractiveDrag(start)
+	p.prepareInteractiveDrag(start, tty.ClickNone)
 	p.handleInteractiveSelectionDrag(mouse.MouseAction{
 		Type: mouse.ActionDrag,
 		X:    3 + panelOverhead/2,
@@ -746,7 +754,7 @@ func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
 
 	extend := actionAt(4, 5)
 	extend.Shift = true
-	p.prepareInteractiveDrag(extend)
+	p.prepareInteractiveDrag(extend, tty.ClickNone)
 	if p.selection.Start != (ui.SelectionPoint{Line: 0, Col: 2}) ||
 		p.selection.End != (ui.SelectionPoint{Line: 1, Col: 4}) {
 		t.Fatalf("extended selection = %+v..%+v", p.selection.Start, p.selection.End)
@@ -755,16 +763,15 @@ func TestShiftClickExtendsExistingTerminalSelection(t *testing.T) {
 
 func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
 	p := newSelectionTestPlugin()
-	p.autoScrollOutput = true
 	buf := tty.NewOutputBuffer(100)
 	buf.Write("follow me")
 	p.shellSelected = true
 	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buf}}}
 	p.selectedShellIdx = 0
 
-	p.prepareInteractiveDrag(actionAt(2, 4))
+	p.prepareInteractiveDrag(actionAt(2, 4), tty.ClickNone)
 	p.finishInteractiveSelection()
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("click without drag disabled follow mode")
 	}
 }
@@ -792,7 +799,7 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
 		},
 	}
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 	if p.selection.HasSelection() {
 		t.Fatalf("agent selection was extended into panel coordinates: %+v..%+v",
 			p.selection.Start, p.selection.End)
@@ -801,12 +808,12 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
 			p.selectionTermPanel, p.selection.Anchor)
 	}
-	if p.termPanelSelectionOffset == 0 {
+	if p.termPanelFreeze.Start() == 0 {
 		t.Fatal("panel selection reused the stale zero offset instead of freezing its live viewport")
 	}
-	if p.selection.Anchor.Line < p.termPanelSelectionOffset {
+	if p.selection.Anchor.Line < p.termPanelFreeze.Start() {
 		t.Fatalf("panel anchor line %d precedes frozen viewport %d",
-			p.selection.Anchor.Line, p.termPanelSelectionOffset)
+			p.selection.Anchor.Line, p.termPanelFreeze.Start())
 	}
 }
 
@@ -835,12 +842,12 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 	if !p.selectionTermPanel || !p.selection.HasSelection() {
 		t.Fatal("double-click did not create a terminal-panel selection")
 	}
-	if p.termPanelSelectionOffset == 0 {
+	if p.termPanelFreeze.Start() == 0 {
 		t.Fatal("double-click reused stale panel offset zero")
 	}
-	if p.selection.Start.Line < p.termPanelSelectionOffset {
+	if p.selection.Start.Line < p.termPanelFreeze.Start() {
 		t.Fatalf("selected line %d precedes panel viewport %d",
-			p.selection.Start.Line, p.termPanelSelectionOffset)
+			p.selection.Start.Line, p.termPanelFreeze.Start())
 	}
 }
 
@@ -863,6 +870,9 @@ func TestWordSelectionMapsVisualColumnAfterWideGlyph(t *testing.T) {
 func newTerminalDragTestPlugin() *Plugin {
 	p := newPreviewClickTestPlugin()
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 200))
+	// The window starts at the oldest row the buffer holds, so a gesture over it
+	// names rows these tests can assert by absolute line.
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset
 	return p
 }
 
@@ -918,7 +928,7 @@ func TestDragOutsideContentClampsInsteadOfStalling(t *testing.T) {
 // Dragging past an edge is how a selection reaches text that is not on screen.
 func TestDragPastEdgeScrollsSelectionThroughScrollback(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 50
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 50
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	start := p.terminalSelectionViewportLayout().Start
@@ -932,8 +942,8 @@ func TestDragPastEdgeScrollsSelectionThroughScrollback(t *testing.T) {
 		t.Errorf("selection start = %d, want the newly revealed top row %d", p.selection.Start.Line, up)
 	}
 	// One motion event must not skip a screenful the user never had a chance to see.
-	if start-up > selectionDragScrollStep {
-		t.Errorf("one motion event scrolled %d rows, want at most %d", start-up, selectionDragScrollStep)
+	if start-up > tty.DragScrollStep {
+		t.Errorf("one motion event scrolled %d rows, want at most %d", start-up, tty.DragScrollStep)
 	}
 
 	for range 4 {
@@ -1088,13 +1098,13 @@ func TestSingleCharWordSurvivesDragEnd(t *testing.T) {
 // to keep scrolling on its own, and has to stop at the buffer edge.
 func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
 		t.Fatal("a drag past the top edge scheduled no auto-scroll tick")
 	}
-	generation := p.selectionGeneration
+	generation := p.pointer.Generation()
 	start := p.terminalSelectionViewportLayout().Start
 
 	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: generation}); cmd == nil {
@@ -1122,11 +1132,11 @@ func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 
 func TestSelectionAutoScrollStopsWhenGestureEnds(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
-	generation := p.selectionGeneration
+	generation := p.pointer.Generation()
 
 	p.handleMouseDragEnd(mouse.MouseAction{DragStartID: regionPreviewPane})
 	before := p.terminalSelectionViewportLayout().Start
@@ -1152,8 +1162,8 @@ func TestSelectionEdgeScrollRows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := selectionEdgeScrollRows(tt.outputRow, 10, 5); got != tt.want {
-				t.Errorf("selectionEdgeScrollRows(%d, 10, 5) = %d, want %d", tt.outputRow, got, tt.want)
+			if got := tty.EdgeScrollRows(tt.outputRow, 10, 5); got != tt.want {
+				t.Errorf("tty.EdgeScrollRows(%d, 10, 5) = %d, want %d", tt.outputRow, got, tt.want)
 			}
 		})
 	}
@@ -1180,33 +1190,33 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a panel drag past the top edge scheduled no auto-scroll tick")
 	}
-	before := p.termPanelSelectionOffset
-	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+	before := p.termPanelFreeze.Start()
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd == nil {
 		t.Fatal("the panel tick did not re-arm while the pointer was still past the edge")
 	}
-	if p.termPanelSelectionOffset >= before {
-		t.Errorf("panel offset = %d, want less than %d", p.termPanelSelectionOffset, before)
+	if p.termPanelFreeze.Start() >= before {
+		t.Errorf("panel offset = %d, want less than %d", p.termPanelFreeze.Start(), before)
 	}
-	if p.selection.Start.Line != p.termPanelSelectionOffset {
+	if p.selection.Start.Line != p.termPanelFreeze.Start() {
 		t.Errorf("panel selection start = %d, want the newly revealed top row %d",
-			p.selection.Start.Line, p.termPanelSelectionOffset)
+			p.selection.Start.Line, p.termPanelFreeze.Start())
 	}
 
-	for range selectionAutoScrollMaxRun {
+	for range tty.AutoScrollMaxRun {
 		// Fresh motion at the same position keeps the hold budget alive; the run
 		// under test is the buffer edge, not the lost-release bound.
 		p.handleMouseDrag(mouse.MouseAction{
 			Type: mouse.ActionDrag, X: 14, Y: 0, DragStartID: regionTermPanelContent, Region: panelRegion,
 		})
-		if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+		if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd == nil {
 			break
 		}
 	}
-	if p.termPanelSelectionOffset != 0 {
+	if p.termPanelFreeze.Start() != 0 {
 		t.Fatalf("panel auto-scroll stopped at %d, want the top of the panel buffer",
-			p.termPanelSelectionOffset)
+			p.termPanelFreeze.Start())
 	}
-	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd != nil {
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd != nil {
 		t.Error("panel auto-scroll re-armed at the buffer edge")
 	}
 }
@@ -1215,11 +1225,11 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 // scrolls the pane under the modal all the way to line zero.
 func TestSelectionAutoScrollStopsUnderAModal(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewOffset = 60
+	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
-	generation := p.selectionGeneration
+	generation := p.pointer.Generation()
 
 	p.viewMode = ViewModeConfirmDelete
 	before := p.terminalSelectionViewportLayout().Start
@@ -1242,23 +1252,24 @@ func TestSelectionAutoScrollSelfLimitsWithoutMotion(t *testing.T) {
 	// Deep enough scrollback that an unbounded chain would keep going.
 	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(1000)
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 900))
-	p.previewOffset = p.terminalSelectionViewportLayout().MaxOffset
+	// From the live bottom, so the chain has the whole buffer to run through.
+	p.previewScroll = 0
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
-	generation := p.selectionGeneration
+	generation := p.pointer.Generation()
 
 	ticks := 0
-	for range selectionAutoScrollMaxRun * 4 {
+	for range tty.AutoScrollMaxRun * 4 {
 		_, cmd := p.update(selectionAutoScrollTickMsg{generation: generation})
 		if cmd == nil {
 			break
 		}
 		ticks++
 	}
-	if ticks > selectionAutoScrollMaxRun {
+	if ticks > tty.AutoScrollMaxRun {
 		t.Fatalf("auto-scroll ran %d ticks with no fresh motion, want at most %d",
-			ticks, selectionAutoScrollMaxRun)
+			ticks, tty.AutoScrollMaxRun)
 	}
 	if p.terminalSelectionViewportLayout().Start == 0 {
 		t.Fatal("the unbounded chain reached the top of the buffer")
@@ -1268,16 +1279,16 @@ func TestSelectionAutoScrollSelfLimitsWithoutMotion(t *testing.T) {
 	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
 		t.Fatal("fresh motion past the edge did not restart the auto-scroll chain")
 	}
-	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.selectionGeneration}); cmd == nil {
+	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd == nil {
 		t.Error("the restarted chain gave up immediately")
 	}
 }
 
 func TestSelectionAutoScrollHoldExpired(t *testing.T) {
-	if selectionAutoScrollHoldExpired(selectionAutoScrollMaxRun) {
+	if tty.AutoScrollHoldExpired(tty.AutoScrollMaxRun) {
 		t.Error("the run expired one tick early")
 	}
-	if !selectionAutoScrollHoldExpired(selectionAutoScrollMaxRun + 1) {
+	if !tty.AutoScrollHoldExpired(tty.AutoScrollMaxRun + 1) {
 		t.Error("the run never expired")
 	}
 }
@@ -1301,5 +1312,93 @@ func TestSelectAllResetsWordGestureBeforeShiftClick(t *testing.T) {
 	}
 	if p.selection.End != (ui.SelectionPoint{Line: 4, Col: 18}) {
 		t.Errorf("shift-click ended at %+v, want the clicked cell (line 4, col 18)", p.selection.End)
+	}
+}
+
+// A gesture that walked the panel window back through scrollback and then
+// selected nothing hands those rows back as a distance from the live bottom,
+// the same half the primary surface pays in thawPreviewGesturePin. Releasing
+// the pin instead resumed from the offset behind it and snapped the window back
+// to where the gesture started (td-e0a220).
+func TestEmptyPanelGestureThawsTheWindowItScrolled(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+
+	// Arming the gesture pins the panel to the window it was armed on, then the
+	// edge auto-scroll body walks that window back through the scrollback.
+	p.prepareTerminalSelectionSource(true)
+	if !p.termPanelFreeze.Active() {
+		t.Fatal("test premise: arming the panel gesture pinned no window")
+	}
+	armed := p.termPanelFreeze.Start()
+	p.scrollTerminalSelectionViewport(-5)
+	scrolled := p.termPanelFreeze.Start()
+	if scrolled >= armed {
+		t.Fatalf("test premise: the gesture did not move the window (%d -> %d)", armed, scrolled)
+	}
+
+	p.finishInteractiveSelection()
+
+	if p.termPanelFreeze.Active() {
+		t.Fatal("the empty release left the gesture pin holding the panel window")
+	}
+	want := tty.ThawOffsetFrom(scrolled, p.termPanelMaxScroll())
+	if want == 0 {
+		t.Fatal("test premise: the scrolled window is indistinguishable from the live edge")
+	}
+	if p.termPanelScroll != want {
+		t.Fatalf("empty panel gesture left scroll %d, want the rows it scrolled to at %d",
+			p.termPanelScroll, want)
+	}
+}
+
+// The other half of the same rule: a pin taken at the live edge thaws to offset
+// zero, so a click that selects nothing leaves the panel following output
+// (td-ac8c74).
+func TestEmptyPanelGestureAtTheLiveEdgeResumesFollowing(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+
+	p.prepareTerminalSelectionSource(true)
+	p.finishInteractiveSelection()
+
+	if p.termPanelFreeze.Active() || p.termPanelScroll != 0 {
+		t.Fatalf("live-edge gesture left frozen %v scroll %d, want a following window",
+			p.termPanelFreeze.Active(), p.termPanelScroll)
+	}
+}
+
+// Clearing a selection outside a gesture — a scroll away from it, leaving
+// interactive mode — ends the panel pin the same way, so the rows on screen
+// survive the clear instead of snapping back to the pre-gesture offset.
+func TestClearingATerminalSelectionThawsThePanelPin(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+	p.prepareTerminalSelectionSource(true)
+	p.scrollTerminalSelectionViewport(-5)
+	pinned := p.termPanelFreeze.Start()
+
+	p.clearTerminalSelection()
+
+	want := tty.ThawOffsetFrom(pinned, p.termPanelMaxScroll())
+	if p.termPanelFreeze.Active() || p.termPanelScroll != want {
+		t.Fatalf("clear left frozen %v scroll %d, want the thawed offset %d",
+			p.termPanelFreeze.Active(), p.termPanelScroll, want)
+	}
+}
+
+// A document's pin outlives the selection a click made, so neither path ends it.
+func TestPanelDocPinSurvivesAnEmptyGesture(t *testing.T) {
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 0
+	p.pinTermPanelWindow(20, true)
+
+	p.selectionTermPanel = true
+	p.finishInteractiveSelection()
+	p.clearTerminalSelection()
+
+	if !p.termPanelFreeze.Active() || p.termPanelFreeze.Start() != 20 || !p.termPanelFreezeDoc {
+		t.Fatalf("gesture end dropped the document's pin: active %v start %d doc %v",
+			p.termPanelFreeze.Active(), p.termPanelFreeze.Start(), p.termPanelFreezeDoc)
 	}
 }

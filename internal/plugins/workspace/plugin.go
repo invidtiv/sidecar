@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -21,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 const (
@@ -46,6 +48,7 @@ const (
 	regionPaneDivider  = "pane-divider"
 	regionWorktreeItem = "workspace-item"
 	regionPreviewTab   = "preview-tab"
+	regionListFilter   = "workspace-list-filter"
 	// Agent choice modal IDs (modal library)
 	agentChoiceListID    = "agent-choice-list"
 	agentChoiceConfirmID = "agent-choice-confirm"
@@ -115,6 +118,10 @@ const (
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
+	regionDocPane          = "doc-pane"
+	regionDocMode          = "doc-mode"
+	regionDocClose         = "doc-close"
+	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -147,6 +154,9 @@ type Plugin struct {
 	primaryTerminalTarget workspaceTerminalTarget
 	panelTerminalTarget   workspaceTerminalTarget
 	applicationFocused    bool
+	terminalLinkMemo      terminalLinkMemo
+	terminalPathResolver  func(string, string) (string, string, bool)
+	terminalRootResolver  func(string) (string, error)
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -163,19 +173,47 @@ type Plugin struct {
 	managedSessions map[string]bool
 
 	// View state
-	viewMode         ViewMode
-	activePane       FocusPane
-	previewTab       PreviewTab
-	selectedIdx      int
-	scrollOffset     int       // Sidebar list scroll offset
-	visibleCount     int       // Number of visible list items
-	previewOffset    int       // Scroll offset: absolute line from top (0 = first line) for all tabs
-	autoScrollOutput bool      // Auto-scroll output to follow agent (paused when user scrolls up)
-	sidebarWidth     int       // Persisted sidebar width
-	sidebarVisible   bool      // Whether sidebar is visible (toggled with \)
+	viewMode     ViewMode
+	activePane   FocusPane
+	previewTab   PreviewTab
+	selectedIdx  int
+	scrollOffset int // Sidebar list scroll offset
+	visibleCount int // Number of visible list items
+	// previewOffset is the document tabs' scroll position: an absolute line
+	// from the top of the rendered content. The terminal surfaces do not use
+	// it — a window over a live buffer is placed from the live bottom instead,
+	// which is previewScroll below.
+	previewOffset int
+	// previewScroll is the primary terminal surface's window: rows back from
+	// the live bottom, where zero is live. Following output is derived from it
+	// rather than tracked beside it, so the two cannot disagree.
+	previewScroll int
+	// previewFreeze holds that window still at an absolute start while a
+	// pointer gesture reads its rows or a document keeps the context it was
+	// opened from. previewFreezeDoc says which of the two is holding it: a
+	// gesture's pin ends with the gesture, a document's outlives it.
+	previewFreeze    tty.WindowFreeze
+	previewFreezeDoc bool
+	sidebarWidth     int  // Persisted sidebar width
+	sidebarVisible   bool // Whether sidebar is visible (toggled with \)
+
+	// listFilter is the shared `/` filter over the sidebar list. The component
+	// is internal/workspacelist, the same one the global Workspaces browser
+	// uses, so both lists agree on matching, counts, and escape behaviour.
+	listFilter       workspacelist.Filter
 	flashPreviewTime time.Time // When preview flash was triggered
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
+
+	// Preview pane tree state. A nil root retains the legacy path while the
+	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
+	// document registry and load-request state arrive with the open-doc journey.
+	paneRoot        *PaneNode
+	paneFocus       int
+	paneNextID      int
+	paneDragSplitID int
+	paneRestoreCmd  tea.Cmd
+	docs            map[int]*docPane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -186,17 +224,7 @@ type Plugin struct {
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
 	selectionTermPanel            bool
-	pendingClickResolution        clickResolution // what a release without motion means
-	pendingClickX                 int             // ... and where the button went down
-	pendingClickY                 int
-	selectionUnit                 selectionUnit     // granularity the live gesture extends by
-	selectionUnitStart            ui.SelectionPoint // anchor unit's far edges, kept whole in both directions
-	selectionUnitEnd              ui.SelectionPoint
-	selectionDragX                int    // last pointer position of the live selection drag
-	selectionDragY                int    // ... which the edge auto-scroll tick re-reads
-	selectionGeneration           uint64 // invalidates auto-scroll ticks once a gesture ends
-	selectionAutoScrollPending    bool
-	selectionAutoScrollTicks      int // ticks since the last real drag motion
+	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]terminalHistoryState
 	paneGeometry                  map[string]paneGeometry
@@ -255,15 +283,17 @@ type Plugin struct {
 	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
 
 	// Terminal panel state (Ctrl+T toggle)
-	termPanelVisible         bool              // Whether the terminal panel is shown
-	termPanelLayout          TermPanelLayout   // Bottom or right split
-	termPanelSize            int               // Split size in percentage (0 = use default 50%)
-	termPanelSession         string            // Tmux session name for the terminal panel
-	termPanelPaneID          string            // Tmux pane ID for resize operations
-	termPanelOutput          *tty.OutputBuffer // Captured output from the terminal session
-	termPanelScroll          int               // Scroll offset in terminal panel output
-	termPanelSelectionOffset int               // Absolute viewport start frozen while selecting panel text
-	termPanelFocused         bool              // Whether the terminal panel sub-pane is focused (vs agent output)
+	termPanelVisible      bool              // Whether the terminal panel is shown
+	termPanelLayout       TermPanelLayout   // Bottom or right split
+	termPanelSize         int               // Split size in percentage (0 = use default 50%)
+	termPanelSession      string            // Tmux session name for the terminal panel
+	termPanelPaneID       string            // Tmux pane ID for resize operations
+	termPanelOutput       *tty.OutputBuffer // Captured output from the terminal session
+	termPanelScroll       int               // Rows back from the live bottom; 0 follows output
+	termPanelFreeze       tty.WindowFreeze  // Pins the panel to an absolute start while a gesture or a document holds it
+	termPanelFreezeDoc    bool              // Whether that pin belongs to a document activation rather than a pointer gesture
+	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
+	terminalDocProjection terminalDocProjection
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
@@ -410,14 +440,14 @@ type Plugin struct {
 	autoShellChecked bool
 
 	// Interactive mode state (feature-gated behind tmux_interactive_input)
-	interactiveState   *InteractiveState
-	lastScrollTime     time.Time // For scroll debouncing (td-e2ce50)
-	lastMouseEventTime time.Time // For suppressing split-CSI "[" near mouse activity
-	scrollBurstCount   int       // Consecutive scroll events for burst detection
-	scrollBurstStarted time.Time // When current burst started
-	pendingScrollDelta int       // Wheel delta accumulated while burst debounce is active
-	mouseFragment      string    // Incomplete split SGR mouse input awaiting its next chunk
-	mouseFragmentTime  time.Time // Last update to mouseFragment
+	interactiveState *InteractiveState
+	// wheel coalesces a trackpad flick, so this surface takes the same amount of
+	// one as every other terminal surface does. clock is the time it and its
+	// cooldowns read: a field, because the burst takes the time from its caller
+	// so a whole flick can be driven a notch at a time without sleeping. nil is
+	// the wall clock.
+	wheel tty.WheelBurst
+	clock func() time.Time
 
 	// Sidebar header hover state
 	hoverNewButton            bool
@@ -425,9 +455,17 @@ type Plugin struct {
 	hoverWorkspacesPlusButton bool
 
 	// Multiple shell sessions (not tied to git worktrees)
-	shells           []*ShellSession // All shell sessions for this project
-	selectedShellIdx int             // Currently selected shell index
-	shellSelected    bool            // True when any shell is selected (vs a worktree)
+	shells           []*ShellSession // Current workDir shells (top Shells section)
+	selectedShellIdx int             // Currently selected top-section shell index
+	shellSelected    bool            // True when a top-section shell is selected
+	// nestedByWorkDir is the nest projection of the full manifest, keyed by
+	// parent worktree path. Current workDir shells stay out of this map.
+	nestedByWorkDir map[string][]*ShellSession
+	// selectedNestedTmux is set when a sibling shell row is selected.
+	selectedNestedTmux string
+	// attachSession replaces tmux attach when set. Tests use it so Enter never
+	// talks to the user's tmux server.
+	attachSession func(sessionName, displayName string) tea.Cmd
 
 	// Type selector modal state (shell vs worktree)
 	typeSelectorIdx        int             // 0=Shell, 1=Worktree
@@ -481,7 +519,6 @@ func New() *Plugin {
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
-		autoScrollOutput:    true, // Auto-scroll to follow agent output
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
 		terminalHistory:     make(map[string]terminalHistoryState),
@@ -513,7 +550,18 @@ func (p *Plugin) SetFocused(f bool) {
 	if !f && p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}
+	// Focus is also the visibility contract for the project surface. Global
+	// Workspaces can watch the same pane with its own tty.Model, so a covered
+	// project preview must close its subscriptions synchronously before the
+	// global model opens; waiting for another Update leaves both models able to
+	// resize and consume frames for the same pane.
+	if !f {
+		p.stopTerminalModels()
+	}
 	p.focused = f
+	if f {
+		p.setTerminalFocus(p.applicationFocused)
+	}
 }
 
 func (p *Plugin) SetPendingWorkspaceSelection(selection plugin.PendingWorkspaceSelection) {
@@ -530,20 +578,29 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 	case plugin.WorkspaceSelectionWorktree:
 		for i, wt := range p.worktrees {
 			if workspaceinventory.CanonicalPath(wt.Path) == workspaceinventory.CanonicalPath(target.Path) {
-				p.shellSelected, p.selectedIdx = false, i
+				p.selectWorktreeAt(i)
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
+				p.finishNavigatedSelection()
 				return true
 			}
 		}
 	case plugin.WorkspaceSelectionShell:
 		for i, shell := range p.shells {
 			if shell.TmuxName == target.Key {
-				p.shellSelected, p.selectedShellIdx = true, i
+				p.selectTopShellAt(i)
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
+				p.finishNavigatedSelection()
 				return true
 			}
+		}
+		if parent, shell := p.findNestedShell(target.Key); shell != nil {
+			p.selectNestedShell(parent, shell.TmuxName)
+			p.pendingOverviewSelection = nil
+			p.selectKanbanFromList()
+			p.finishNavigatedSelection()
+			return true
 		}
 	}
 	if p.worktreesLoaded && !p.shellStartupLoading {
@@ -552,6 +609,29 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		p.toastTime = time.Now()
 	}
 	return false
+}
+
+// finishNavigatedSelection applies this plugin's own selection-change rule to a
+// selection that arrived from the global browser, so an arriving destination is
+// indistinguishable from one the user picked here.
+//
+// Doc panes belong to the selected terminal surface root. Landing on the item
+// that owns an open document keeps it — including the one restoreSelectionState
+// just rebuilt from the persisted PaneLayout. Landing on any other item in the
+// project collapses the doc subtree through resetDocPanesForSelection, exactly
+// as moving the cursor locally does, and persists the collapsed layout so a
+// document cannot come back attached to the wrong workspace.
+//
+// The rule lives here on purpose: no global code path reads, rewrites, or
+// prunes a project's pane layout. It hands over an identity and nothing else.
+func (p *Plugin) finishNavigatedSelection() {
+	if !p.resetDocPanesForSelection() {
+		return
+	}
+	// The restored layout described the workspace we just navigated away from,
+	// so its pending document load has nothing left to fill.
+	p.paneRestoreCmd = nil
+	p.saveSelectionState()
 }
 
 // Init initializes the plugin with context.
@@ -565,6 +645,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.invalidateShellStartup()
 	p.stopTerminalModels()
 	p.ctx = ctx
+	// Filter state is in-memory and per consumer: a project or worktree switch
+	// starts from an unfiltered list rather than restoring a query whose origin
+	// the user can no longer see.
+	p.resetListFilter()
 	p.operationCtx, p.operationCancel = context.WithCancel(context.Background())
 	p.repoSnapshot = nil
 	p.refreshOperationID = ""
@@ -572,6 +656,18 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.resetLifecycleState()
 	p.resetTerminalModels()
 	p.applicationFocused = true
+	p.paneRoot = nil
+	p.paneFocus = 0
+	p.paneNextID = 1
+	p.paneDragSplitID = 0
+	p.paneRestoreCmd = nil
+	p.docs = make(map[int]*docPane)
+	p.terminalDocProjection = terminalDocProjection{}
+	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
+		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
+		p.paneFocus = p.paneNextID
+		p.paneNextID++
+	}
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
@@ -595,8 +691,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset shell state before initializing for new project (critical for project switching)
 	p.shells = make([]*ShellSession, 0)
+	p.nestedByWorkDir = nil
 	p.selectedShellIdx = 0
 	p.shellSelected = false
+	p.selectedNestedTmux = ""
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
@@ -656,6 +754,24 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding(p.getInteractiveCopyKey(), "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(superCopyKey, "copy", "workspace-interactive")
 		ctx.Keymap.RegisterPluginBinding(p.getInteractivePasteKey(), "paste", "workspace-interactive")
+
+		// The shared `/` filter is its own text-input context. It is registered
+		// beside workspace-doc deliberately: the two contexts are never active
+		// at once, so neither claims the other's keys.
+		ctx.Keymap.RegisterPluginBinding("/", "filter-list", "workspace-list")
+		ctx.Keymap.RegisterPluginBinding("enter", "filter-accept", "workspace-filter")
+		ctx.Keymap.RegisterPluginBinding("esc", "filter-clear", "workspace-filter")
+
+		// Document panes are a distinct focus context: their navigation must not
+		// fall through to terminal scrolling or workspace refresh.
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("m", "render", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-doc")
 	}
 
 	// Load saved sidebar width
@@ -821,26 +937,27 @@ func (p *Plugin) saveSelectionState() {
 		return
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	hooks := p.shellStartupHooks.withDefaults()
+	wtState := hooks.getWorkspaceState(p.ctx.ProjectRoot)
 	wtState.WorkspaceName = ""
 	wtState.ShellTmuxName = ""
 
-	if p.shellSelected {
-		// Shell is selected - save shell TmuxName
-		if p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			wtState.ShellTmuxName = p.shells[p.selectedShellIdx].TmuxName
-		}
-	} else {
-		// Worktree is selected - save worktree name
-		if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-			wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
-		}
+	if shell := p.getSelectedShell(); shell != nil {
+		wtState.ShellTmuxName = shell.TmuxName
+	} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
+		wtState.WorkspaceName = p.worktrees[p.selectedIdx].Name
+	}
+	// A disabled feature must not consume or overwrite its dormant state. The
+	// nil paneRoot is the Init-time feature boundary and preserves PaneLayout
+	// verbatim through ordinary selection saves.
+	if p.paneRoot != nil {
+		wtState.PaneLayout = p.persistedPaneLayout()
 	}
 
 	// td-f88fdd: Shell display names now persisted in shells.json manifest
 	// Only save selection state (which worktree/shell is selected)
-	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" {
-		_ = state.SetWorkspaceState(p.ctx.ProjectRoot, wtState)
+	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" || wtState.PaneLayout != nil {
+		_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
 
@@ -851,9 +968,10 @@ func (p *Plugin) restoreSelectionState() bool {
 		return false
 	}
 
-	wtState := state.GetWorkspaceState(p.ctx.ProjectRoot)
+	wtState := p.shellStartupHooks.withDefaults().getWorkspaceState(p.ctx.ProjectRoot)
 
-	// No saved state
+	// No saved selection. A layout is meaningful only after its terminal root
+	// has been selected, so never restore it independently.
 	if wtState.WorkspaceName == "" && wtState.ShellTmuxName == "" {
 		return false
 	}
@@ -862,10 +980,21 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.ShellTmuxName != "" {
 		for i, shell := range p.shells {
 			if shell.TmuxName == wtState.ShellTmuxName {
-				p.shellSelected = true
-				p.selectedShellIdx = i
+				p.selectTopShellAt(i)
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
+				p.saveSelectionState()
 				return true
 			}
+		}
+		if parent, shell := p.findNestedShell(wtState.ShellTmuxName); shell != nil {
+			p.selectNestedShell(parent, shell.TmuxName)
+			if p.paneRoot != nil {
+				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+			}
+			p.saveSelectionState()
+			return true
 		}
 		// Shell no longer exists, fall through to try worktree
 	}
@@ -874,8 +1003,11 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.WorkspaceName != "" {
 		for i, wt := range p.worktrees {
 			if wt.Name == wtState.WorkspaceName {
-				p.shellSelected = false
-				p.selectedIdx = i
+				p.selectWorktreeAt(i)
+				if p.paneRoot != nil {
+					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
+				}
+				p.saveSelectionState()
 				return true
 			}
 		}
@@ -894,15 +1026,172 @@ func isDefaultShellName(name string) bool {
 }
 
 // selectedWorktree returns the currently selected worktree.
-// Returns nil if shell entry is selected (shell is not a worktree).
+// Returns nil if a shell (top-section or nested) is selected.
 func (p *Plugin) selectedWorktree() *Worktree {
 	if p.shellSelected {
 		return nil
+	}
+	if p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell != nil {
+			return nil
+		}
 	}
 	if p.selectedIdx < 0 || p.selectedIdx >= len(p.worktrees) {
 		return nil
 	}
 	return p.worktrees[p.selectedIdx]
+}
+
+func (p *Plugin) selectTopShellAt(idx int) {
+	p.shellSelected = true
+	p.selectedShellIdx = idx
+	p.selectedNestedTmux = ""
+}
+
+func (p *Plugin) selectWorktreeAt(idx int) {
+	p.shellSelected = false
+	p.selectedIdx = idx
+	p.selectedNestedTmux = ""
+}
+
+func (p *Plugin) selectNestedShell(parentIdx int, tmuxName string) {
+	p.shellSelected = false
+	p.selectedIdx = parentIdx
+	p.selectedNestedTmux = tmuxName
+}
+
+func (p *Plugin) selectingShell() bool {
+	return p.getSelectedShell() != nil
+}
+
+func (p *Plugin) currentWorkDir() string {
+	if p.ctx == nil {
+		return ""
+	}
+	return p.ctx.WorkDir
+}
+
+func (p *Plugin) isCurrentWorkDir(path string) bool {
+	return sameWorkDir(path, p.currentWorkDir())
+}
+
+func (p *Plugin) worktreePaths() []string {
+	paths := make([]string, 0, len(p.worktrees))
+	for _, wt := range p.worktrees {
+		if wt != nil && wt.Path != "" {
+			paths = append(paths, wt.Path)
+		}
+	}
+	return paths
+}
+
+func (p *Plugin) findNestedShell(tmuxName string) (parentIdx int, shell *ShellSession) {
+	if tmuxName == "" {
+		return -1, nil
+	}
+	for i, wt := range p.worktrees {
+		for _, candidate := range p.nestedByWorkDir[filepath.Clean(wt.Path)] {
+			if candidate != nil && candidate.TmuxName == tmuxName {
+				return i, candidate
+			}
+		}
+	}
+	return -1, nil
+}
+
+func (p *Plugin) rebuildNestedShells(defs []ShellDefinition, paneID func(string) string) {
+	current := p.currentWorkDir()
+	grouped := groupManifestShellsByWorkDir(defs, p.worktreePaths(), current, paneID)
+	nested := make(map[string][]*ShellSession, len(grouped))
+	for dir, shells := range grouped {
+		if sameWorkDir(dir, current) {
+			continue
+		}
+		nested[filepath.Clean(dir)] = shells
+	}
+	p.nestedByWorkDir = nested
+	if p.selectedNestedTmux != "" {
+		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell == nil {
+			p.selectedNestedTmux = ""
+		}
+	}
+}
+
+// dropNestedShell forgets a shell that belongs to a sibling worktree rather
+// than the current one. The nest is a projection of the same project manifest,
+// so removing the manifest entry and rebuilding is the whole of it — there is
+// no second list to keep in step. Reports whether the name was a nested row,
+// so callers can tell "not mine" from "removed".
+func (p *Plugin) dropNestedShell(tmuxName string) bool {
+	parent, shell := p.findNestedShell(tmuxName)
+	if shell == nil {
+		return false
+	}
+	if shell.Agent != nil {
+		shell.Agent.OutputBuf = nil
+		shell.Agent = nil
+	}
+	delete(p.managedSessions, tmuxName)
+	globalPaneCache.remove(tmuxName)
+	globalActiveRegistry.remove(tmuxName)
+	if p.shellManifest != nil {
+		_ = p.shellManifest.RemoveShell(tmuxName)
+	}
+	dir := filepath.Clean(p.worktrees[parent].Path)
+	remaining := make([]*ShellSession, 0, len(p.nestedByWorkDir[dir]))
+	for _, candidate := range p.nestedByWorkDir[dir] {
+		if candidate.TmuxName != tmuxName {
+			remaining = append(remaining, candidate)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(p.nestedByWorkDir, dir)
+	} else {
+		p.nestedByWorkDir[dir] = remaining
+	}
+	// The cursor lands on the worktree the row hung under, which is the nearest
+	// thing left to it.
+	if p.selectedNestedTmux == tmuxName {
+		p.selectWorktreeAt(parent)
+	}
+	return true
+}
+
+func (p *Plugin) rebuildNestedShellsFromState() {
+	var defs []ShellDefinition
+	if p.shellManifest != nil {
+		defs = p.shellManifest.Shells
+	}
+	p.rebuildNestedShells(defs, nil)
+}
+
+func (p *Plugin) backfillWorkDirsCmd() tea.Cmd {
+	if p.shellManifest == nil {
+		return nil
+	}
+	inferred := make(map[string]string)
+	current := p.currentWorkDir()
+	paths := p.worktreePaths()
+	var defs []ShellDefinition
+	if p.shellManifest != nil {
+		defs = p.shellManifest.Shells
+	}
+	for _, def := range defs {
+		if strings.TrimSpace(def.WorkDir) != "" {
+			continue
+		}
+		if dir := inferDefinitionWorkDir(def, paths, current); dir != "" {
+			inferred[def.TmuxName] = dir
+		}
+	}
+	if len(inferred) == 0 {
+		return nil
+	}
+	manifest := p.shellManifest
+	return func() tea.Msg {
+		_ = manifest.BackfillWorkDirs(inferred)
+		return nil
+	}
 }
 
 // AckDwell is how long a session's output must stay selected before its
@@ -946,7 +1235,7 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 // shellOutputVisibleFor reports whether a shell's live output is actually being
 // viewed. Selection alone is insufficient while another plugin is focused.
 func (p *Plugin) shellOutputVisibleFor(tmuxName string) bool {
-	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) || p.previewTab != PreviewTabOutput {
+	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) {
 		return false
 	}
 	shell := p.getSelectedShell()
@@ -963,7 +1252,7 @@ func (p *Plugin) backgroundPollInterval() time.Duration {
 
 // getOutputLineCount returns the line count of the currently visible output buffer.
 func (p *Plugin) getOutputLineCount() int {
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil && shell.Agent.OutputBuf != nil {
 			return shell.Agent.OutputBuf.LineCount()
 		}
@@ -978,7 +1267,7 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
-	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 		var h int
 		if p.termPanelVisible {
 			_, h = p.calculateAgentPaneDimensions()
@@ -992,7 +1281,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 	// Terminal surfaces spend one row on their own header; Diff and Task keep
 	// the standalone tab row and the blank spacer under it.
 	chrome := previewTabRows
-	if p.previewTab == PreviewTabOutput || p.shellSelected {
+	if p.previewTab == PreviewTabOutput || p.selectingShell() {
 		chrome = terminalHeaderRows
 	}
 	h := p.height - panelBorderWidth - chrome
@@ -1002,12 +1291,14 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 	return h
 }
 
-// getMaxScrollOffset returns the maximum scroll offset for the current preview content.
-// offset=0 means top of content; maxOffset means the furthest the user can scroll down.
+// getMaxScrollOffset returns the maximum scroll offset for the current preview
+// content: how far a document's absolute offset can move from the top of its
+// content, which is the same number of rows a terminal window can sit back from
+// its live bottom (previewMaxScroll reads it that way round).
 func (p *Plugin) getMaxScrollOffset() int {
 	var contentHeight int
 	switch {
-	case p.shellSelected:
+	case p.selectingShell():
 		contentHeight = p.getOutputLineCount()
 	default:
 		switch p.previewTab {
@@ -1027,9 +1318,126 @@ func (p *Plugin) getMaxScrollOffset() int {
 	return maxOffset
 }
 
-// scrollToBottom sets previewOffset to show the latest content.
-func (p *Plugin) scrollToBottom() {
-	p.previewOffset = p.getMaxScrollOffset()
+// previewShowsTerminal reports whether the preview pane is drawing the primary
+// terminal rather than a document: the Output tab, or any shell selection.
+// Every scroll path asks it, because the two are placed by different models —
+// a document by an absolute line from its top, a terminal by a distance back
+// from its live bottom.
+func (p *Plugin) previewShowsTerminal() bool {
+	return p.previewTab == PreviewTabOutput || p.selectingShell()
+}
+
+// previewMaxScroll is the furthest back the primary terminal's window can sit,
+// in rows from the live bottom. It is the bound of the window the render path
+// actually draws, not the raw line count: a trimmed tail or a letterboxed pane
+// puts the two several rows apart, and a count-based bound then lets the window
+// walk past the oldest row that can be shown — a dead zone at the top of
+// scrollback, and a scrollback-history load that only fires after the reader
+// pushes through it.
+func (p *Plugin) previewMaxScroll() int {
+	return p.previewWindowBound()
+}
+
+// scrollPreviewWindow moves the primary terminal's window delta rows back
+// through scrollback, negative towards the live edge — the same direction the
+// global preview and the shared scrollback rule count in, so no call site has
+// to invert anything.
+//
+// Scrolling is an explicit navigation of this surface, so it thaws first: a
+// window a gesture or a document pinned to an absolute start is handed back to
+// the distance-from-bottom model where it stands, rather than being moved in a
+// coordinate the reader can no longer see.
+func (p *Plugin) scrollPreviewWindow(delta int) {
+	p.thawPreviewWindow()
+	p.previewScroll = tty.ScrollWindow(&p.previewFreeze, p.previewScroll, delta, p.previewMaxScroll())
+}
+
+// scrollPreviewWindowRows is scrollPreviewWindow for a caller counting rendered
+// rows down the screen — a wheel notch — rather than rows back through
+// scrollback. The two directions are opposite, and reconciling them is the
+// shared rule's rather than each call site's.
+func (p *Plugin) scrollPreviewWindowRows(rows int) {
+	p.thawPreviewWindow()
+	p.previewScroll = tty.ScrollWindowRows(&p.previewFreeze, p.previewScroll, rows, p.previewMaxScroll())
+}
+
+// jumpPreviewWindow places the primary terminal's window at an explicit
+// distance back from the live bottom, which ends any pin: a jump chooses its
+// own window rather than resuming from the one a gesture was reading.
+func (p *Plugin) jumpPreviewWindow(offset int) {
+	p.releasePreviewWindowPin()
+	p.previewScroll = max(offset, 0)
+}
+
+// resetPreviewScroll puts the preview back where a new selection or a newly
+// opened tab starts it: documents at the top of their content, the terminal
+// window at the live bottom.
+func (p *Plugin) resetPreviewScroll() {
+	p.previewOffset = 0
+	p.jumpPreviewWindow(0)
+}
+
+// pinPreviewWindow holds the primary terminal's window at an absolute start and
+// records who is holding it. The two owners are not released by the same
+// events: a pointer gesture's pin ends with the gesture, while a document
+// activation's outlives it, because the document is meant to keep showing the
+// context it was opened from. Whether this pin takes at all is the shared
+// freeze's rule — a second freeze inside one gesture keeps the first.
+func (p *Plugin) pinPreviewWindow(start int, doc bool) {
+	if p.previewFreeze.Active() {
+		return
+	}
+	p.previewFreeze.Freeze(start)
+	p.previewFreezeDoc = doc
+}
+
+// releasePreviewWindowPin drops the pin whoever placed it, for a jump that
+// chooses its own window rather than resuming from the pinned one.
+func (p *Plugin) releasePreviewWindowPin() {
+	p.previewFreeze.Release()
+	p.previewFreezeDoc = false
+}
+
+// thawPreviewWindow hands a window pinned to an absolute start back to the
+// distance-from-bottom model without moving the rows on screen, so it follows
+// new output again from exactly where it was left. Where it resumes from is the
+// shared rule's. Every explicit navigation of this surface calls it: a window
+// pinned and never released has stopped following output for good, which reads
+// as an agent that went quiet.
+func (p *Plugin) thawPreviewWindow() {
+	if !p.previewFreeze.Active() {
+		return
+	}
+	if offset, thawed := p.previewFreeze.ThawFrom(p.previewWindowBound()); thawed {
+		p.previewScroll = offset
+	}
+	p.previewFreezeDoc = false
+}
+
+// thawPreviewGesturePin is the half of the freeze a pointer gesture owes at its
+// end. A document activation's pin is not the gesture's to release: it outlives
+// the selection the click made, because the document is meant to keep showing
+// the context it was opened from, and only an explicit navigation ends it.
+func (p *Plugin) thawPreviewGesturePin() {
+	if p.previewFreezeDoc {
+		return
+	}
+	p.thawPreviewWindow()
+}
+
+// previewWindowBound is the furthest back this surface's window can be placed,
+// taken from the window the render path actually draws. Freeze and thaw both
+// read it there: taking the start from the rendered layout and the bound from
+// the line count is two derivations of one window, and they disagree wherever
+// interactive mode's untrimmed rows or a pane shorter than the viewport do — so
+// releasing a drag moved the window the gesture had been holding still.
+//
+// It is measured as a window off the live edge, because that is the only state
+// a bound is ever asked about: a window following the live grid is placed by
+// the grid, not by an offset, and its untrimmed count would otherwise let the
+// first step back name a row the trimmed window cannot draw.
+func (p *Plugin) previewWindowBound() int {
+	return p.terminalWindowBound(false)
 }
 
 // pollSelectedAgentNowIfVisible triggers an immediate poll for visible output.
@@ -1286,111 +1694,83 @@ func (p *Plugin) toggleSidebar() {
 }
 
 // moveCursor moves the selection cursor.
-// Navigation order: shells[0], shells[1], ..., worktrees[0], worktrees[1], ...
+// Navigation order: current shells, then each worktree and its nested children.
 func (p *Plugin) moveCursor(delta int) {
 	oldShellSelected := p.shellSelected
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
+	oldNested := p.selectedNestedTmux
 
-	shellCount := len(p.shells)
-	worktreeCount := len(p.worktrees)
-
-	if p.shellSelected {
-		// Currently on a shell entry
-		newShellIdx := p.selectedShellIdx + delta
-		if newShellIdx < 0 {
-			// Already at first shell, stay there
-			newShellIdx = 0
-		} else if newShellIdx >= shellCount {
-			// Moving past last shell -> go to first worktree (if any)
-			if worktreeCount > 0 {
-				p.shellSelected = false
-				p.selectedIdx = 0
-			} else {
-				// No worktrees, stay on last shell
-				newShellIdx = shellCount - 1
-			}
-		}
-		if p.shellSelected {
-			p.selectedShellIdx = newShellIdx
-		}
-	} else if worktreeCount == 0 {
-		// No worktrees exist, select shell if any
-		if shellCount > 0 {
-			p.shellSelected = true
-			p.selectedShellIdx = 0
-		}
-	} else {
-		// Currently on a worktree
-		newIdx := p.selectedIdx + delta
-		if newIdx < 0 {
-			// Moving up from first worktree -> go to last shell (if any)
-			if shellCount > 0 {
-				p.shellSelected = true
-				p.selectedShellIdx = shellCount - 1
-			} else {
-				// No shells, stay on first worktree
-				p.selectedIdx = 0
-			}
-		} else if newIdx >= worktreeCount {
-			// Already at last worktree, stay there
-			p.selectedIdx = worktreeCount - 1
-		} else {
-			// Normal worktree navigation
-			p.selectedIdx = newIdx
-		}
+	items := p.visibleSidebarItems()
+	current := p.sharedSidebarSelectionIndex()
+	if current < 0 && len(items) > 0 {
+		current = 0
+	}
+	next := workspacelist.MoveIndex(current, delta, len(items))
+	if next >= 0 && next < len(items) {
+		p.selectSidebarItem(items[next])
 	}
 
-	// Reset preview scroll state when changing selection
 	selectionChanged := p.shellSelected != oldShellSelected ||
+		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
 	if selectionChanged {
-		// Selection alone no longer acknowledges: the poll handlers clear the
-		// done marker once the selection has been held long enough to read.
-		p.selectionSince = time.Now()
-		p.previewOffset = 0
-		p.autoScrollOutput = true
-		p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
-		p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
-		p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
-		p.commitStatusList = nil // Clear stale commit list from previous worktree
-		p.commitStatusWorktree = ""
-		p.diffTabCursor = 0 // Reset diff tab file selection
-		p.diffTabScroll = 0
-		p.diffTabDiffScroll = 0
-		p.diffTabHorizScroll = 0
-		p.diffTabFocus = DiffTabFocusFileList
-		p.diffTabParsedDiff = nil
-		p.commitDetail = nil
-		p.commitFileCursor = 0
-		p.commitFileScroll = 0
-		p.commitFileDiffRaw = ""
-		p.commitFileParsed = nil
-		// Exit interactive mode when switching selection (td-fc758e88)
-		p.exitInteractiveMode()
-		// Persist selection to disk
-		p.saveSelectionState()
+		p.applySelectionChange()
 	}
 	p.ensureVisible()
+}
+
+// applySelectionChange resets the per-selection preview, diff, and task state.
+func (p *Plugin) applySelectionChange() {
+	// Selection alone no longer acknowledges: the poll handlers clear the
+	// done marker once the selection has been held long enough to read.
+	p.selectionSince = time.Now()
+	p.resetPreviewScroll()
+	p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
+	p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
+	p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
+	p.commitStatusList = nil // Clear stale commit list from previous worktree
+	p.commitStatusWorktree = ""
+	p.diffTabCursor = 0 // Reset diff tab file selection
+	p.diffTabScroll = 0
+	p.diffTabDiffScroll = 0
+	p.diffTabHorizScroll = 0
+	p.diffTabFocus = DiffTabFocusFileList
+	p.diffTabParsedDiff = nil
+	p.commitDetail = nil
+	p.commitFileCursor = 0
+	p.commitFileScroll = 0
+	p.commitFileDiffRaw = ""
+	p.commitFileParsed = nil
+	// Exit interactive mode when switching selection (td-fc758e88)
+	p.exitInteractiveMode()
+	// Persist selection to disk
+	p.saveSelectionState()
 }
 
 // ensureVisible adjusts scroll to keep selected item visible.
 // Accounts for shells (which appear before worktrees in the sidebar).
 func (p *Plugin) ensureVisible() {
-	// Calculate effective position in the combined list (shells + worktrees)
-	var effectivePos int
-	if p.shellSelected {
-		effectivePos = p.selectedShellIdx
-	} else {
-		effectivePos = len(p.shells) + p.selectedIdx
+	position := p.sharedSidebarSelectionIndex()
+	if position >= 0 {
+		if position < p.scrollOffset {
+			p.scrollOffset = position
+		} else if p.visibleCount > 0 && position >= p.scrollOffset+p.visibleCount {
+			p.scrollOffset = position - p.visibleCount + 1
+		}
 	}
+	p.clampScrollOffset(p.sharedSidebarRowCount())
+}
 
-	if effectivePos < p.scrollOffset {
-		p.scrollOffset = effectivePos
-	}
-	if p.visibleCount > 0 && effectivePos >= p.scrollOffset+p.visibleCount {
-		p.scrollOffset = effectivePos - p.visibleCount + 1
+// clampScrollOffset keeps the offset inside the rows currently drawn. A query
+// that shrinks the list must never leave the offset past its end, which would
+// render an empty sidebar under a filter row still counting matches.
+func (p *Plugin) clampScrollOffset(total int) {
+	if p.visibleCount > 0 {
+		if maxOffset := max(0, total-p.visibleCount); p.scrollOffset > maxOffset {
+			p.scrollOffset = maxOffset
+		}
 	}
 	// Guard against negative scroll offset (can happen with empty worktree list)
 	if p.scrollOffset < 0 {
@@ -1402,9 +1782,8 @@ func (p *Plugin) ensureVisible() {
 func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 	prevTab := p.previewTab
 	p.previewTab = PreviewTab((int(p.previewTab) + delta + 3) % 3)
-	p.previewOffset = 0
+	p.resetPreviewScroll()
 	p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-	p.autoScrollOutput = true  // Reset auto-scroll when switching tabs
 
 	if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
 		p.clearTerminalSelection()
@@ -1437,7 +1816,13 @@ func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
 // loadSelectedContent loads content based on the active preview tab.
 // Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
+	p.terminalDocProjection = terminalDocProjection{}
 	var cmds []tea.Cmd
+	if p.resetDocPanesForSelection() {
+		// The selection owns the terminal root. Persist the collapsed terminal
+		// immediately so an old worktree's document cannot return after restart.
+		p.saveSelectionState()
+	}
 
 	// Resize selected pane to match preview width so capture output is correct
 	if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
@@ -1445,7 +1830,7 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 	}
 
 	// If shell is selected, poll shell output immediately
-	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil && p.previewTab == PreviewTabOutput {
+	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 		cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
 	}
 
@@ -1501,4 +1886,12 @@ func (p *Plugin) loadTaskDetailsIfNeeded() tea.Cmd {
 		return p.loadTaskDetails(wt.TaskID)
 	}
 	return nil
+}
+
+// now is the clock every wheel-burst decision reads.
+func (p *Plugin) now() time.Time {
+	if p.clock != nil {
+		return p.clock()
+	}
+	return time.Now()
 }

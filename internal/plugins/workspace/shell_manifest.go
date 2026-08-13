@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -389,7 +390,33 @@ func shellToDefinition(shell *ShellSession) ShellDefinition {
 		CreatedAt:   shell.CreatedAt,
 		AgentType:   agentType,
 		SkipPerms:   shell.SkipPerms,
+		WorkDir:     shell.WorkDir,
 	}
+}
+
+// BackfillWorkDirs writes inferred parent worktree paths onto definitions that
+// still lack WorkDir. Existing non-empty values are left untouched.
+func (m *ShellManifest) BackfillWorkDirs(byTmux map[string]string) error {
+	if m == nil || len(byTmux) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		changed := false
+		for i, s := range shells {
+			if strings.TrimSpace(s.WorkDir) != "" {
+				continue
+			}
+			dir := strings.TrimSpace(byTmux[s.TmuxName])
+			if dir == "" {
+				continue
+			}
+			shells[i].WorkDir = dir
+			changed = true
+		}
+		return shells, changed
+	})
 }
 
 // definitionToAgentType converts a string agent type to AgentType.

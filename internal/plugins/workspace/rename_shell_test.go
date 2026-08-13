@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -61,6 +62,22 @@ func TestRenameShellModalUsesSharedValidation(t *testing.T) {
 				t.Fatalf("modal error = %q, shared error = %v", p.renameShellError, sharedErr)
 			}
 		})
+	}
+}
+
+// Two shells may carry the same display name, so only the delete confirmation —
+// the irreversible one — spends a line on the session that identifies them.
+func TestOnlyTheDeleteConfirmationNamesTheSession(t *testing.T) {
+	shell := &ShellSession{TmuxName: "sidecar-sh-sidecar-2", Name: "backend"}
+	p := &Plugin{deleteConfirmShell: shell, renameShellSession: shell}
+
+	deleteInfo := ansi.Strip(p.deleteShellInfoSection().Render(50, "", "").Content)
+	if !strings.Contains(deleteInfo, "backend") || !strings.Contains(deleteInfo, shell.TmuxName) {
+		t.Fatalf("delete confirmation = %q, want the display name and the session that disambiguates it", deleteInfo)
+	}
+	renameInfo := ansi.Strip(p.renameShellInfoSection().Render(50, "", "").Content)
+	if strings.Contains(renameInfo, shell.TmuxName) {
+		t.Fatalf("rename modal = %q, must not show the tmux session name", renameInfo)
 	}
 }
 

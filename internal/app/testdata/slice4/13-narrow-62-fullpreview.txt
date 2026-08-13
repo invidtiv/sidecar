@@ -1,0 +1,26 @@
+ Sidecar / Overview         Agents     Workspaces        03:05
+
+▸ feature beta                                       read-only
+No live session for this workspace
+
+project  beta
+kind     worktree
+branch   feature
+path     /private/tmp/sidecar-drive-slice4-501/fixture/worktre
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ jk  Scroll   gG  Top/Live   ←  List                ↻ 03:05:25

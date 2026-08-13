@@ -41,10 +41,14 @@ func (f *fakeTerminalControlSubscription) Resize(w, h int) {
 func (f *fakeTerminalControlSubscription) Close() { f.closed++ }
 
 type fakeTerminalInputCall struct {
-	kind   string
-	target string
-	keys   []KeySpec
-	text   string
+	kind    string
+	target  string
+	keys    []KeySpec
+	text    string
+	up      bool
+	col     int
+	row     int
+	notches int
 }
 
 type fakeTerminalInputSender struct{ calls []fakeTerminalInputCall }
@@ -68,6 +72,9 @@ func (f *fakeTerminalInputSender) PasteClipboard(_ MessageScope, target string) 
 }
 func (f *fakeTerminalInputSender) SendMouse(_ MessageScope, target string, col, row int) tea.Cmd {
 	return f.record(fakeTerminalInputCall{kind: "mouse", target: target})
+}
+func (f *fakeTerminalInputSender) SendWheel(_ MessageScope, target string, up bool, col, row, notches int) tea.Cmd {
+	return f.record(fakeTerminalInputCall{kind: "wheel", target: target, up: up, col: col, row: row, notches: notches})
 }
 
 func newContractTerminal(source terminalControlSource) *Model {
@@ -438,7 +445,7 @@ func TestTerminalContractAllInputTargetsDisplayedPane(t *testing.T) {
 	m.State.EscapeTimerPending = true
 	m.Update(EscapeTimerMsg{Scope: m.Scope()})
 	m.State.MouseReportingEnabled = true
-	m.Update(tea.MouseClickMsg{X: 2, Y: 3, Button: tea.MouseLeft})
+	m.SendClick(3, 4)
 
 	if len(input.calls) != 7 {
 		t.Fatalf("input calls = %#v", input.calls)

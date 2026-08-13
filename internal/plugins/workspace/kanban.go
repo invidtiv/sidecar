@@ -140,14 +140,6 @@ func (p *Plugin) kanbanColumnItemCount(col int, columns map[kanbanLane][]*Worktr
 	return n
 }
 
-func (p *Plugin) kanbanShellAt(row int) *ShellSession {
-	shells := p.plainKanbanShells()
-	if row < 0 || row >= len(shells) {
-		return nil
-	}
-	return shells[row]
-}
-
 // plainKanbanShells are shells without a supported live agent identity. Agent
 // shells live in the activity lanes with worktrees (same model as Overview).
 func (p *Plugin) plainKanbanShells() []*ShellSession {
@@ -191,6 +183,23 @@ func shellKanbanCardID(shell *ShellSession) string {
 	return "shell:" + id
 }
 
+// workspaceLanePalette is this board's lane hues. They are the ones the project
+// board has always drawn, and they are stated here rather than taken from the
+// theme's lane colours because the global browser's palette is a different one:
+// sharing what a lane is must not re-theme a surface that already had an answer.
+func workspaceLanePalette(lane agentstatus.LaneID) color.Color {
+	switch lane {
+	case kanbanLaneWorking:
+		return styles.StatusCompleted.GetForeground()
+	case kanbanLaneBlocked:
+		return styles.StatusModified.GetForeground()
+	case kanbanLaneDone:
+		return styles.Secondary
+	default:
+		return styles.TextMuted
+	}
+}
+
 func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 	lanes := make([]boardkanban.Lane, 0, kanbanColumnCount())
 	shells := boardkanban.Lane{ID: "shells", Label: "Shells", HeaderColor: styles.Muted.GetForeground()}
@@ -199,20 +208,6 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 	}
 	lanes = append(lanes, shells)
 	columns := p.getKanbanColumns()
-	labels := map[kanbanLane]string{
-		kanbanLaneWorking: "● Working",
-		kanbanLaneBlocked: "◆ Blocked",
-		kanbanLaneDone:    "✓ Done",
-		kanbanLaneIdle:    "○ Idle",
-		kanbanLanePaused:  "⏸ Paused",
-	}
-	colors := map[kanbanLane]color.Color{
-		kanbanLaneWorking: styles.StatusCompleted.GetForeground(),
-		kanbanLaneBlocked: styles.StatusModified.GetForeground(),
-		kanbanLaneDone:    styles.Secondary,
-		kanbanLaneIdle:    styles.TextMuted,
-		kanbanLanePaused:  styles.TextMuted,
-	}
 	agentShellsByLane := make(map[kanbanLane][]*ShellSession, len(kanbanLaneOrder))
 	for _, shell := range p.shells {
 		if lane, ok := shellKanbanActivityLane(shell); ok {
@@ -220,7 +215,9 @@ func (p *Plugin) workspaceKanbanBoard() boardkanban.Board {
 		}
 	}
 	for _, laneID := range kanbanLaneOrder {
-		lane := boardkanban.Lane{ID: boardkanban.LaneID(laneID), Label: labels[laneID], HeaderColor: colors[laneID]}
+		// Wording and glyph are the shared definition's; the global board draws
+		// the same lanes from it. The hues stay this board's own.
+		lane := boardkanban.AgentLane(laneID, workspaceLanePalette)
 		for _, wt := range columns[laneID] {
 			lane.Cards = append(lane.Cards, boardkanban.Card{ID: "worktree:" + wt.IdentityKey(), Title: wt.Name, Detail: wt.TaskID})
 		}
@@ -266,8 +263,7 @@ func (p *Plugin) syncKanbanToList() {
 	if shell := p.selectedKanbanShell(); shell != nil {
 		for i, s := range p.shells {
 			if s == shell || (s.TmuxName != "" && s.TmuxName == shell.TmuxName) || s.Name == shell.Name {
-				p.shellSelected = true
-				p.selectedShellIdx = i
+				p.selectTopShellAt(i)
 				return
 			}
 		}
@@ -279,8 +275,7 @@ func (p *Plugin) syncKanbanToList() {
 	}
 	for i, w := range p.worktrees {
 		if w.IdentityKey() == wt.IdentityKey() {
-			p.shellSelected = false
-			p.selectedIdx = i
+			p.selectWorktreeAt(i)
 			return
 		}
 	}
@@ -289,10 +284,10 @@ func (p *Plugin) syncKanbanToList() {
 func (p *Plugin) applyKanbanSelectionChange(oldShellSelected bool, oldShellIdx, oldWorktreeIdx int) bool {
 	selectionChanged := p.shellSelected != oldShellSelected ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx) ||
+		p.selectedNestedTmux != ""
 	if selectionChanged {
-		p.previewOffset = 0
-		p.autoScrollOutput = true
+		p.resetPreviewScroll()
 		p.taskLoading = false
 		p.exitInteractiveMode()
 		p.saveSelectionState()
@@ -312,14 +307,6 @@ func (p *Plugin) moveKanbanRow(delta int) {
 	p.kanban.MoveRow(delta)
 	next := p.kanban.Selection()
 	p.kanbanCol, p.kanbanRow = next.Column, next.Row
-}
-
-func (p *Plugin) getKanbanWorktree(col, row int) *Worktree {
-	card, ok := p.workspaceKanbanBoard().CardAt(boardkanban.Selection{Column: col, Row: row})
-	if !ok || !strings.HasPrefix(card.ID, "worktree:") {
-		return nil
-	}
-	return p.kanbanWorktreeByID(card.ID)
 }
 
 func (p *Plugin) syncListToKanban() {

@@ -32,6 +32,17 @@ type State struct {
 
 	// Worktree state: maps main repo path -> last active worktree path
 	LastWorktreePath map[string]string `json:"lastWorktreePath,omitempty"`
+
+	// Last selected global tab ("agents", "workspaces", or "tasks").
+	LastGlobalTab string `json:"lastGlobalTab,omitempty"`
+
+	// ShowIdleWorktrees reveals "no session" rows on the global Workspaces list.
+	// Fresh state leaves this off so the list is sessions by default.
+	ShowIdleWorktrees bool `json:"showIdleWorktrees,omitempty"`
+
+	// PinnedWorkspaceIDs is the ordered catalog IDs pinned to the top of the
+	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
+	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -59,6 +70,30 @@ type WorkspaceState struct {
 	WorkspaceName     string            `json:"workspaceName,omitempty"`     // Name of selected workspace
 	ShellTmuxName     string            `json:"shellTmuxName,omitempty"`     // TmuxName of selected shell (empty = workspace selected)
 	ShellDisplayNames map[string]string `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
+	PaneLayout        *PaneLayoutJSON   `json:"paneLayout,omitempty"`        // Structural document-pane layout for the selected terminal root
+}
+
+// PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
+// tabs are a list from the first version so adding tab UI later is additive.
+type PaneLayoutJSON struct {
+	Root    string           `json:"root,omitempty"`
+	Surface string           `json:"surface,omitempty"`
+	Kind    string           `json:"kind,omitempty"`
+	Split   *PaneSplitJSON   `json:"split,omitempty"`
+	Tabs    []PaneDocTabJSON `json:"tabs,omitempty"`
+	Active  int              `json:"active,omitempty"`
+}
+
+type PaneSplitJSON struct {
+	Axis  string          `json:"axis"`
+	Ratio int             `json:"ratio"`
+	A     *PaneLayoutJSON `json:"a"`
+	B     *PaneLayoutJSON `json:"b"`
+}
+
+type PaneDocTabJSON struct {
+	Path string `json:"path"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // NotesState holds persistent notes plugin state.
@@ -533,6 +568,86 @@ func SetLastWorktreePath(mainRepoPath, worktreePath string) error {
 	current.LastWorktreePath[mainRepoPath] = worktreePath
 	mu.Unlock()
 	return Save()
+}
+
+// GetLastGlobalTab returns the saved global tab ID, or empty if none is saved.
+func GetLastGlobalTab() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastGlobalTab
+}
+
+// SetLastGlobalTab saves the last selected global tab ID.
+func SetLastGlobalTab(tab string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.LastGlobalTab = tab
+	mu.Unlock()
+	return Save()
+}
+
+// GetShowIdleWorktrees reports whether the global list should include idle
+// worktrees. A missing or fresh state is off.
+func GetShowIdleWorktrees() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return false
+	}
+	return current.ShowIdleWorktrees
+}
+
+// SetShowIdleWorktrees saves the global idle-worktree visibility preference.
+func SetShowIdleWorktrees(show bool) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.ShowIdleWorktrees = show
+	mu.Unlock()
+	return Save()
+}
+
+// GetPinnedWorkspaceIDs returns the saved global pin order, or nil if none.
+func GetPinnedWorkspaceIDs() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || len(current.PinnedWorkspaceIDs) == 0 {
+		return nil
+	}
+	return append([]string(nil), current.PinnedWorkspaceIDs...)
+}
+
+// SetPinnedWorkspaceIDs saves the global Workspaces pin order.
+func SetPinnedWorkspaceIDs(ids []string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.PinnedWorkspaceIDs = uniquePinnedIDs(ids)
+	mu.Unlock()
+	return Save()
+}
+
+func uniquePinnedIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // ClearLastWorktreePath removes the saved worktree path for a main repo.

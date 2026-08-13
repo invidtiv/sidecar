@@ -18,6 +18,8 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -494,10 +496,10 @@ func TestOverviewCancellationStopsPollAndTraceIsPrivacySafe(t *testing.T) {
 
 func TestOverviewStopDiscardsGenerationLocalTrackers(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	collector := workspaceinventory.Collector{Capture: func(string, int) (string, error) {
+	collector := workspaceinventory.Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		output := outputs[0]
 		outputs = outputs[1:]
-		return output, nil
+		return output, tty.PaneState{}, nil
 	}}
 	m := New(collector)
 	m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -629,5 +631,44 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	got, ok := cmd().(NavigateMsg)
 	if !ok || got.Workspace.ID != workspace.ID || got.Workspace.Path != workspace.Path {
 		t.Fatalf("double-click navigation = %#v", cmd())
+	}
+}
+
+// The board words and colours nothing itself: every lane is the shared
+// definition the project board draws the same lanes from, so a rename or a
+// re-theme cannot land on one board alone.
+func TestBoardLanesComeFromTheSharedLaneDefinition(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	m.syncBoard()
+	// Stated as literals, not read back from boardLane: a test that builds its
+	// expectation from the production helper passes a rename or a re-theme
+	// through silently, which is what the shared table exists to catch.
+	wantLabel := map[kanban.LaneID]string{
+		kanban.LaneID(agentstatus.LaneWorking): "● Working",
+		kanban.LaneID(agentstatus.LaneBlocked): "◆ Blocked",
+		kanban.LaneID(agentstatus.LaneDone):    "✓ Done",
+		kanban.LaneID(agentstatus.LaneIdle):    "○ Idle",
+		kanban.LaneID(agentstatus.LanePaused):  "⏸ Paused",
+	}
+	lanes := m.board.Board().Lanes
+	if len(lanes) != len(wantLabel) {
+		t.Fatalf("lanes = %d, want %d", len(lanes), len(wantLabel))
+	}
+	for _, lane := range lanes {
+		if lane.Label != wantLabel[lane.ID] {
+			t.Fatalf("lane %q label = %q, want %q", lane.ID, lane.Label, wantLabel[lane.ID])
+		}
+		// This board draws the theme's lane hues, which the project board does
+		// not; pinning the source keeps the two boards' palettes independent.
+		if want := styles.LaneColor(string(lane.ID)); lane.HeaderColor != want {
+			t.Fatalf("lane %q hue = %v, want the theme's %v", lane.ID, lane.HeaderColor, want)
+		}
+	}
+	// The component appends its own count, so the label plus " N" has to fit
+	// the narrowest column the board lays out or the heading truncates.
+	for _, lane := range lanes {
+		if width := ansi.StringWidth(lane.Label + " 0"); width > minColumnWidth {
+			t.Fatalf("lane %q header needs %d columns, have %d", lane.ID, width, minColumnWidth)
+		}
 	}
 }

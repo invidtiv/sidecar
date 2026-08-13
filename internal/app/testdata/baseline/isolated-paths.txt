@@ -1,0 +1,7 @@
+launch repo:   /Users/marcus/code/sidecar-global-workspace
+run dir:       /private/tmp/sidecar-drive-slice0-501
+inner socket:  /private/tmp/sidecar-drive-slice0-501/tmux/tmux-501/default
+state home:    /private/tmp/sidecar-drive-slice0-501/state
+cache home:    /private/tmp/sidecar-drive-slice0-501/cache
+config:        /private/tmp/sidecar-drive-slice0-501/config/config.json
+manifest:      /private/tmp/sidecar-drive-slice0-501/state/sidecar/projects/<slug>/shells.json

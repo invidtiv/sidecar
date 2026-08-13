@@ -168,8 +168,12 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 	state.HistorySize = msg.Capture.HistorySize
 	state.Exhausted = newBase == 0
 	p.terminalHistory[msg.Source.Key] = state
-	if !msg.Source.TermPanel && !p.autoScrollOutput {
-		p.previewOffset += added
+	// A window placed from the live bottom rides the renumbering out; only one
+	// pinned to an absolute row has to be shifted by the rows just prepended.
+	if msg.Source.TermPanel {
+		p.termPanelFreeze.Rebase(added)
+	} else {
+		p.previewFreeze.Rebase(added)
 	}
 	p.recomputeTerminalSearch()
 	if !p.terminalSearch.InputActive {
@@ -286,18 +290,24 @@ func (p *Plugin) revealTerminalSearchMatch() {
 		base = absoluteBase
 	}
 	localLine := match.Line - base
+	// Both numbers come off the drawn window: centring a match mixes a bound
+	// with a height, and taking them from two derivations of one surface puts
+	// the match off centre wherever the two disagree (td-bbbbfe). No panel drawn
+	// means no viewport to centre in; the clamp then pins the scroll to the top
+	// of the (empty) range.
 	if search.TermPanel {
+		p.thawTermPanelWindow()
 		maxScroll := p.termPanelMaxScroll()
-		// No panel drawn means no viewport to centre the match in; the clamp
-		// below then pins the scroll to the top of the (empty) range.
-		_, height, _ := p.calculateTermPanelDimensions()
+		height := p.terminalViewportLayoutFor(true).DisplayHeight
 		start := min(max(localLine-height/2, 0), maxScroll)
 		p.termPanelScroll = maxScroll - start
 		return
 	}
-	height := p.getPreviewVisibleHeight()
-	p.previewOffset = min(max(localLine-height/2, 0), p.getMaxScrollOffset())
-	p.autoScrollOutput = false
+	p.thawPreviewWindow()
+	maxScroll := p.previewMaxScroll()
+	height := p.terminalViewportLayoutFor(false).DisplayHeight
+	start := min(max(localLine-height/2, 0), maxScroll)
+	p.previewScroll = maxScroll - start
 }
 
 func (p *Plugin) terminalSearchMatches(termPanel bool) *terminalSearchMatches {

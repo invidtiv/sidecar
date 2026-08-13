@@ -57,10 +57,7 @@ type AgentOutputMsg struct {
 	HasHistory    bool
 	// RowsJoined says the capture was taken with -J, so it carries no usable
 	// history/pane split.
-	RowsJoined bool
-	// MouseReporting is tmux's #{mouse_any_flag} for the pane, captured with the
-	// cursor metadata. Only meaningful when HasCursor is set.
-	MouseReporting bool
+	RowsJoined     bool
 	Activity       agentactivity.Result
 	CapturedAt     time.Time
 	PaneTitle      string
@@ -321,13 +318,11 @@ type cursorPositionMsg struct {
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
 type paneResizedMsg struct{}
 
-// interactiveClickSentMsg reports asynchronous click forwarding back to the
-// event loop, where interactive state may be mutated safely.
-type interactiveClickSentMsg struct {
-	SessionName string
-	Interaction *InteractiveState
-	Err         error
-}
+// deferredPaneResizeMsg re-asserts a pane's geometry once the shared resize
+// budget has recovered. A resize that arrived inside the window is owed, not
+// dropped: the debounce bounds how often tmux is asked, never whether the pane
+// is ever given the size it is drawn at.
+type deferredPaneResizeMsg struct{}
 
 // FetchPRListMsg delivers the list of open PRs from gh CLI.
 type FetchPRListMsg struct {

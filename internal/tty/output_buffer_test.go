@@ -53,6 +53,22 @@ func TestOutputBuffer_Update(t *testing.T) {
 	}
 }
 
+func TestOutputBufferRevisionAdvancesOnlyForAcceptedContent(t *testing.T) {
+	buf := NewOutputBuffer(10)
+	if got := buf.Revision(); got != 0 {
+		t.Fatalf("initial revision = %d, want 0", got)
+	}
+	if !buf.Update("one") || buf.Revision() != 1 {
+		t.Fatalf("first accepted update revision = %d", buf.Revision())
+	}
+	if buf.Update("one") || buf.Revision() != 1 {
+		t.Fatalf("duplicate update advanced revision to %d", buf.Revision())
+	}
+	if !buf.Update("two") || buf.Revision() != 2 {
+		t.Fatalf("second accepted update revision = %d", buf.Revision())
+	}
+}
+
 func TestOutputBuffer_Capacity(t *testing.T) {
 	buf := NewOutputBuffer(3)
 

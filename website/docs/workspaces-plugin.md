@@ -243,6 +243,48 @@ Real-time streaming of agent terminal output. Shows exactly what the agent sees�
 | `g` | Jump to top |
 | `G` | Jump to bottom (resumes auto-scroll) |
 
+#### Read referenced markdown beside the terminal
+
+Document panes are enabled by default. To turn them off for a launch, run
+`sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
+`~/.config/sidecar/config.json`:
+
+```json
+{
+  "features": {
+    "flags": {
+      "workspace_doc_panes": false
+    }
+  }
+}
+```
+
+Click a markdown `path:line` shown in a selected workspace
+or project shell terminal, such as `docs/guide.md:24`. The document opens beside
+the terminal in Workspaces and starts at that source line. Other file types keep
+opening in Files. A bare path such as `docs/guide.md` is not clickable yet; it
+must include `:line` in this preview.
+
+The active pane is marked in its header. Click a pane or use `tab` and
+`shift+tab` to move focus. Document focus provides these commands:
+
+| Key | Action |
+|-----|--------|
+| `j`, `↓` / `k`, `↑` | Scroll by one line |
+| `ctrl+d` / `ctrl+u` | Scroll by half a page |
+| `g` / `G` | Jump to the start / end |
+| `r` | Switch between rendered and raw markdown |
+| `+` / `-` | Grow / shrink the document pane |
+| `q`, `esc` | Close the document and return focus to the terminal |
+
+You can also click the close chip in the document header or drag the divider.
+The open document, render mode, and split ratio are remembered for that selected
+workspace or shell. Switching terminal selections never carries a document into
+another workspace.
+
+`shift`-drag and `alt`-drag remain terminal text-selection gestures; neither is
+an override for opening links. Use an unmodified click to follow `path:line`.
+
 **What you'll see:**
 - Agent initialization and model selection
 - Tool calls and file operations
@@ -609,6 +651,9 @@ Press `m` to start a multi-step merge:
 | `esc` | Return to sidebar |
 | `\` | Toggle sidebar visibility |
 
+When a document is open, this cycle includes sidebar, terminal, and document.
+The document header and adjacent divider show which inner pane has focus.
+
 ## Mouse Support
 
 - **Click workspace**: Select
@@ -629,6 +674,7 @@ The plugin remembers state across restarts and automatically reconnects to runni
 | Sidebar width | User config |
 | Diff view mode | User config |
 | Active tab | User config |
+| Open document, render mode, and document split | Per-project workspace state |
 | Agent type | `.sidecar-agent` in workspace dir |
 | Agent start command override | `.sidecar-agent-start` in workspace dir |
 | Task link | `.sidecar-task` in workspace dir |
@@ -778,6 +824,19 @@ All keyboard shortcuts by context:
 | `tab` | Focus sidebar |
 | `esc` | Focus sidebar |
 | `\` | Toggle sidebar |
+
+### Document Context (`workspace-doc`, opt-in preview)
+
+| Key | Action |
+|-----|--------|
+| `j`, `↓` | Scroll down |
+| `k`, `↑` | Scroll up |
+| `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
+| `g`, `G` | Jump to start / end |
+| `m` | Toggle rendered / raw markdown |
+| `+`, `-` | Grow / shrink document pane |
+| `tab`, `shift+tab` | Move focus between panes |
+| `q`, `esc` | Close document pane |
 
 ### Create Modal (`workspace-create`)
 

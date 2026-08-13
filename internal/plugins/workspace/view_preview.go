@@ -10,22 +10,30 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // renderPreviewContent renders the preview pane content (no borders).
 func (p *Plugin) renderPreviewContent(width, height int) string {
+	if content, ok := p.renderDocumentSplit(width, height); ok {
+		return content
+	}
+	return p.renderPreviewContentLegacy(width, height)
+}
+
+func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 	var lines []string
 
 	// Show welcome guide only when no worktree AND no shell is selected
 	wt := p.selectedWorktree()
-	if wt == nil && !p.shellSelected {
+	if wt == nil && !p.selectingShell() {
 		return p.truncateAllLines(p.renderWelcomeGuide(width, height), width)
 	}
 
 	// When shell is selected, show shell content directly without tabs
 	// (Output/Diff/Task tabs are not relevant for the project shell). The shell's
 	// name is the left region of the terminal's own header row instead.
-	if p.shellSelected {
+	if p.selectingShell() {
 		if p.termPanelVisible {
 			return p.renderShellWithTermPanel(width, height)
 		}
@@ -170,17 +178,7 @@ func (p *Plugin) truncateAllLines(content string, maxWidth int) string {
 // previewTabChips renders the Output / Diff / Task pills as separate chips, so
 // the header row can drop whole chips rather than clip one in half.
 func (p *Plugin) previewTabChips() []string {
-	tabs := []string{"Output", "Diff", "Task"}
-	rendered := make([]string, 0, len(tabs))
-
-	for i, tab := range tabs {
-		style := styles.BarChip
-		if PreviewTab(i) == p.previewTab {
-			style = styles.BarChipActive
-		}
-		rendered = append(rendered, styles.RenderPillWithStyle(tab, style, nil))
-	}
-	return rendered
+	return workspacediff.TabChips(workspacediff.Tab(p.previewTab))
 }
 
 // previewTabsVisible reports whether the preview is in a state that draws the
@@ -188,11 +186,11 @@ func (p *Plugin) previewTabChips() []string {
 // guide nor the main-worktree view is a tab; anything else — including the
 // Output tab's no-agent and orphaned states — puts them on its first row.
 func (p *Plugin) previewTabsVisible() bool {
-	if p.shellSelected {
+	if p.selectingShell() {
 		return false
 	}
 	wt := p.selectedWorktree()
-	return wt != nil && !wt.IsMain
+	return wt != nil && workspacediff.TabsVisible(false, wt.IsMain)
 }
 
 // renderTabs renders the standalone tab row the Diff and Task tabs still use.
@@ -209,6 +207,21 @@ func (p *Plugin) paneFocusChip(label string, focused bool) string {
 		return lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("▸ " + label)
 	}
 	return dimText(label)
+}
+
+func (p *Plugin) primaryTerminalFocused() bool {
+	if p.activePane != PanePreview || p.termPanelFocused {
+		return false
+	}
+	if _, doc := p.activeDocPane(); doc != nil {
+		return p.paneFocus == terminalLeafID(p.paneRoot)
+	}
+	return p.termPanelVisible
+}
+
+func (p *Plugin) primaryTerminalFocusVisible() bool {
+	_, doc := p.activeDocPane()
+	return p.termPanelVisible || doc != nil
 }
 
 // terminalHeader renders a surface's single header row at the plugin's
@@ -237,10 +250,32 @@ func (p *Plugin) interactiveHintFloor() int {
 	return ansi.StringWidth(p.interactiveExitHint())
 }
 
+// terminalLiveEdgeKey is the chord this surface answers to put a scrolled-back
+// window back on the live edge, in the state the pane is in.
+//
+// While the pane is live every unshifted key belongs to it, so the way back is
+// the shifted chord the component's key hook maps. A watched pane never reaches
+// that hook — its keys are the surface's own — and answers the plain
+// jump-to-bottom key instead. Naming the shifted chord there would advertise a
+// key nothing answers, which reads as a pane stuck in history.
+func terminalLiveEdgeKey(interactive bool) string {
+	if interactive {
+		return tty.LiveEdgeKey
+	}
+	return watchedLiveEdgeKey
+}
+
+// watchedLiveEdgeKey is the jump-to-bottom key the preview answers while the
+// pane is only being watched (keys.go, "G").
+const watchedLiveEdgeKey = "G"
+
 // renderCapturedTerminal draws one embedded terminal: its header row — identity
 // chips left, hints right — and then the viewport, which runs from the next row
 // to the bottom of the surface.
 func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
+		buffer = projected
+	}
 	interactive := p.interactiveDescribes(termPanel)
 	// While interactive the exit key leads the hints and is what the row must
 	// keep; the chips give way for it instead of the other way round.
@@ -278,76 +313,34 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 
-	var cursorRow, cursorCol int
-	var cursorVisible bool
-	// Rendering derives from the pane's observed geometry, not the size sidecar
-	// last requested (td-73fa86). Interactive mode has a fresher copy on the
-	// interactive state; list view relies on the per-pane cache.
-	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, interactive)
-	if interactive {
-		row, col, _, _, visible, _ := p.getCursorPosition()
-		cursorRow, cursorCol, cursorVisible = row, col, visible
-		if p.interactiveState.MouseReportingEnabled {
-			hint += " " + dimText("app mouse • ⇧drag select")
-		}
-	}
-
-	follow, offset, offsetFromBottom := p.terminalScrollState(termPanel,
-		p.selectionTermPanel && p.selection.Anchor.Valid())
-	// Trim trailing blanks for scrollback browsing of sparse shell output.
-	// calculateTerminalViewportLayout ignores this while following a known live
-	// grid so full-screen TUI chrome stays aligned (blank final pane rows).
-	trimTrailing := p.autoScrollOutput && !interactive
-	if termPanel {
-		trimTrailing = !interactive
-	}
-	absoluteBase, totalItems, loadingOlder := p.terminalHistorySummary(termPanel, buffer)
-	var selection *ui.SelectionState
+	// The window itself — the buffer, the pane geometry it is fitted to, and
+	// where it sits in scrollback — is the surface's one derivation, shared with
+	// hit testing and the native cursor. Only decoration is added here.
+	input := p.terminalWindowInput(termPanel, buffer, width, height)
+	input.NativeCursor = interactive
 	if p.selectionTermPanel == termPanel {
-		selection = &p.selection
+		input.Selection = &p.selection
 	}
-	result := renderTerminalViewport(terminalViewportInput{
-		Buffer:           buffer,
-		Width:            width,
-		Height:           height,
-		Offset:           offset,
-		OffsetFromBottom: offsetFromBottom,
-		Follow:           follow,
-		TrimTrailing:     trimTrailing,
-		Interactive:      interactive,
-		Selection:        selection,
-		CursorRow:        cursorRow,
-		CursorCol:        cursorCol,
-		CursorVisible:    cursorVisible,
-		PaneHeight:       paneHeight,
-		PaneWidth:        paneWidth,
-		NativeCursor:     interactive,
-		AbsoluteBase:     absoluteBase,
-		TotalItems:       totalItems,
-		LoadingOlder:     loadingOlder,
-		SearchMatches:    p.terminalSearchMatches(termPanel),
-	}, p.truncateCache)
+	input.SearchMatches = p.terminalSearchMatches(termPanel)
+	input.LinkResolver = p.terminalLinkResolver(termPanel, buffer)
+	result := renderTerminalViewport(input, p.truncateCache)
 	if result.Content == "" {
 		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
-	// A pane larger than this viewport is clipped, so say so rather than let the
-	// missing columns/rows look like corruption (td-73fa86). Gated on the pane's
-	// own fit: the scrollbar column is chrome, not a mismatch, and would
-	// otherwise make the banner permanent.
-	if result.Layout.PaneClipped {
-		if indicator := tty.PaneSizeIndicator(paneWidth, paneHeight,
-			result.Layout.DisplayWidth, result.Layout.DisplayHeight); indicator != "" {
-			hint += " " + dimText(indicator)
-		}
-	}
-	if linesBack := result.Layout.MaxOffset - result.Layout.Start; linesBack > 0 {
-		hint += " " + dimText(fmt.Sprintf("▲ %d lines back • ⇧End live", linesBack))
-	}
-	if loadingOlder {
-		hint += " " + dimText("loading older history…")
-	} else if result.Layout.Start == 0 && absoluteBase > 0 {
-		hint += " " + dimText(fmt.Sprintf("▲ %d older lines available", absoluteBase))
-	}
+	// What the header states about the drawn window — that it is off the live
+	// edge and how to get back, that older lines exist above it, that the pane is
+	// clipped, that the application has the mouse — is the shared derivation's.
+	// The global browser states the same facts from the same one. This header
+	// clips from the right rather than dropping notes, so it takes them all.
+	hint = tty.AppendStatus(hint, tty.WindowStatus(tty.WindowStatusInput{
+		Layout:         result.Layout,
+		AbsoluteBase:   input.AbsoluteBase,
+		LoadingOlder:   input.LoadingOlder,
+		MouseReporting: interactive && p.interactiveState.MouseReportingEnabled,
+		PaneWidth:      input.PaneWidth,
+		PaneHeight:     input.PaneHeight,
+		LiveEdgeKey:    terminalLiveEdgeKey(interactive),
+	}), 0, dimText)
 	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
 		if p.terminalSearch.InputActive {
 			hint += " " + dimText("/"+p.terminalSearch.Query+"▌")
@@ -399,9 +392,9 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 		// Interactive mode targeting this agent pane - show exit hint with
 		// highlight. The exit key leads, so the header's hint floor keeps it.
 		hint = p.interactiveExitHint() + dimText(" • "+p.getInteractiveAttachKey()+" attach")
-	case p.termPanelVisible && p.activePane == PanePreview:
+	case p.primaryTerminalFocusVisible() && p.activePane == PanePreview:
 		// Split with the terminal panel: say which child has focus.
-		agentFocused := !p.termPanelFocused
+		agentFocused := p.primaryTerminalFocused()
 		chips = append(chips, p.paneFocusChip("Agent", agentFocused))
 		if agentFocused {
 			hint = dimText("enter interactive")
@@ -462,7 +455,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	if name == "" {
 		name = "Shell"
 	}
-	shellFocused := p.termPanelVisible && !p.termPanelFocused && p.activePane == PanePreview
+	shellFocused := p.primaryTerminalFocused()
 	chips := []string{p.paneFocusChip(name, shellFocused)}
 
 	// Hint depends on mode - interactive mode shows exit hints
@@ -606,7 +599,10 @@ func (p *Plugin) renderTaskContent(width, height int) string {
 	}
 
 	if wt.TaskID == "" {
-		return dimText("No linked task\nPress 't' to link a task")
+		view, _ := workspacediff.RenderTask(workspacediff.TaskView{}, workspacediff.TaskRenderOpts{
+			EmptyHint: "Press 't' to link a task", Width: width, Height: height,
+		})
+		return view
 	}
 
 	// Check if we're loading or don't have cached details for this task
@@ -617,11 +613,11 @@ func (p *Plugin) renderTaskContent(width, height int) string {
 	task := p.cachedTask
 	var lines []string
 
-	// Mode indicator
-	modeHint := dimText("[m] raw")
+	mode := "Raw"
 	if p.taskMarkdownMode {
-		modeHint = dimText("[m] rendered")
+		mode = "Rendered"
 	}
+	modeHint := dimText("[m] " + mode)
 
 	// Header
 	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Task: %s", task.ID))+"  "+modeHint)

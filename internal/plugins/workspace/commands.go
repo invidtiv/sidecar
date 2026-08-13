@@ -7,6 +7,21 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.viewMode == ViewModeList && p.docFocused() {
+		renderName := "Raw"
+		if doc, _ := p.activeDocPane(); doc != nil && !doc.view.Rendered() {
+			renderName = "Render"
+		}
+		return []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Close document pane", Context: "workspace-doc", Priority: 1},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 2},
+			{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 3},
+			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 4},
+			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 5},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 6},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 7},
+		}
+	}
 	switch p.viewMode {
 	case ViewModeInteractive:
 		return []plugin.Command{
@@ -144,7 +159,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			}
 			// Tab commands only shown when a worktree is selected (not shell)
 			// Shell has no tabs - it shows primer/output directly
-			if !p.shellSelected {
+			if !p.selectingShell() {
 				cmds = append(cmds,
 					plugin.Command{ID: "prev-tab", Name: "Tab←", Description: "Previous preview tab", Context: "workspace-preview", Priority: 3},
 					plugin.Command{ID: "next-tab", Name: "Tab→", Description: "Next preview tab", Context: "workspace-preview", Priority: 4},
@@ -195,7 +210,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Workspace: needs agent and Output tab; Shell: always shows output
 			if features.IsEnabled(features.TmuxInteractiveInput.Name) {
 				hasActiveSession := false
-				if p.shellSelected {
+				if p.selectingShell() {
 					if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 						hasActiveSession = true
 					}
@@ -209,7 +224,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if p.previewTab == PreviewTabOutput || p.shellSelected {
+			if p.previewTab == PreviewTabOutput || p.selectingShell() {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"
@@ -230,6 +245,15 @@ func (p *Plugin) Commands() []plugin.Command {
 			return cmds
 		}
 
+		// Filter focus is its own context: while a query is being typed the only
+		// commands that apply are the ones that end or accept it.
+		if p.filterFocused() && p.activePane == PaneSidebar {
+			return []plugin.Command{
+				{ID: "filter-accept", Name: "Select", Description: "Keep the selected match and return to the list", Context: "workspace-filter", Priority: 1},
+				{ID: "filter-clear", Name: "Clear", Description: "Clear the query, then exit the filter", Context: "workspace-filter", Priority: 2},
+			}
+		}
+
 		// Sidebar list commands - reorganized with unique priorities
 		// Priority 1-4: Base commands (always visible)
 		// Priority 5-8: Worktree-specific commands
@@ -241,10 +265,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 4},
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
+			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
 		}
 
 		// Shell-specific commands when shell is selected
-		if p.shellSelected {
+		if p.selectingShell() {
 			shell := p.getSelectedShell()
 			if shell == nil || shell.Agent == nil {
 				cmds = append(cmds,
@@ -369,6 +394,14 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeFilePicker:
 		return "workspace-file-picker"
 	default:
+		if p.docFocused() {
+			return "workspace-doc"
+		}
+		if p.filterFocused() && p.activePane == PaneSidebar {
+			// A dedicated text-input context: while the query has focus, app
+			// shortcuts must not take printable characters or pastes from it.
+			return "workspace-filter"
+		}
 		if p.activePane == PanePreview {
 			return "workspace-preview"
 		}
@@ -379,6 +412,9 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
+	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
+		return true
+	}
 	switch p.viewMode {
 	case ViewModeInteractive,
 		ViewModeCreate,

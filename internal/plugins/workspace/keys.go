@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -567,22 +568,52 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
-	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+	if msg.String() == "tab" || msg.String() == "shift+tab" {
+		if _, leaf := p.activeDocPane(); leaf != nil {
+			p.cycleDocumentFocus(msg.String() == "shift+tab")
+			return nil
+		}
+	}
+	if handled, cmd := p.handleDocKey(msg); handled {
+		return cmd
+	}
+	// A focused list filter owns the keyboard while the sidebar has focus. It is
+	// asked after the doc-pane keys deliberately: a focused document keeps its
+	// own q/m/+/- context, and the two focuses are mutually exclusive, so
+	// neither steals the other's keys.
+	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
+		if handled, cmd := p.handleFilterKey(msg); handled {
+			return cmd
+		}
+	}
+	if p.activePane == PanePreview && !p.termPanelFocused {
+		switch msg.String() {
+		case "j", "down", "k", "up", "g", "G", "ctrl+d", "ctrl+u":
+			p.releaseTerminalDocProjection(false)
+		}
+	}
+	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
 		}
-		switch msg.String() {
-		case "ctrl+a":
+		config := p.terminalConfig()
+		switch {
+		case config.IsSelectAllChord(msg):
 			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
 			return nil
-		default:
-			if p.isTerminalCopyChord(msg) {
-				return p.copyInteractiveSelectionCmd()
-			}
+		case config.IsCopyChord(msg):
+			return p.copyInteractiveSelectionCmd()
 		}
 	}
 
 	switch msg.String() {
+	case "/":
+		// Explicit filter entry. Only from the sidebar, and never in kanban or
+		// from the preview, where `/` belongs to terminal search.
+		if p.viewMode != ViewModeKanban && p.activePane == PaneSidebar && !p.docFocused() {
+			p.focusListFilter()
+			return nil
+		}
 	case "j", "down":
 		if p.viewMode == ViewModeKanban {
 			// Kanban mode: move cursor down within column (no selection change)
@@ -595,12 +626,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			if !p.termPanelFocused {
 				p.termPanelFocused = true
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll down
+			p.thawTermPanelWindow()
 			if p.termPanelScroll > 0 {
 				p.termPanelScroll--
 			}
@@ -610,17 +642,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Scroll down: increase offset (toward bottom of content)
-		maxOffset := p.getMaxScrollOffset()
-		if p.previewOffset < maxOffset {
-			p.previewOffset++
+		// Scroll down: a terminal window moves towards its live bottom, a
+		// document's offset towards the end of its content.
+		if p.previewShowsTerminal() {
+			p.scrollPreviewWindow(-1)
+			return nil
 		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			if p.previewOffset >= maxOffset {
-				p.autoScrollOutput = true
-			} else {
-				p.autoScrollOutput = false
-			}
+		if maxOffset := p.getMaxScrollOffset(); p.previewOffset < maxOffset {
+			p.previewOffset++
 		}
 	case "k", "up":
 		if p.viewMode == ViewModeKanban {
@@ -634,7 +663,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			if p.termPanelFocused {
 				p.termPanelFocused = false
 				return nil
@@ -645,12 +674,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Scroll up: decrease offset (toward top of content)
+		// Scroll up: a terminal window moves back through scrollback, a
+		// document's offset towards the top of its content.
+		if p.previewShowsTerminal() {
+			p.scrollPreviewWindow(1)
+			return nil
+		}
 		if p.previewOffset > 0 {
 			p.previewOffset--
-		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
 		}
 	case "g":
 		if p.viewMode == ViewModeKanban {
@@ -659,16 +690,19 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if p.activePane == PaneSidebar {
+			if p.filterActive() {
+				p.selectFirstVisible()
+				p.scrollOffset = 0
+				return p.loadSelectedContent()
+			}
 			// Jump to top = select first shell if any, otherwise first worktree
 			if len(p.shells) > 0 {
-				p.shellSelected = true
-				p.selectedShellIdx = 0
+				p.selectTopShellAt(0)
 				// Exit interactive mode when switching selection (td-fc758e88)
 				p.exitInteractiveMode()
 				p.saveSelectionState()
 			} else if len(p.worktrees) > 0 {
-				p.shellSelected = false
-				p.selectedIdx = 0
+				p.selectWorktreeAt(0)
 				// Exit interactive mode when switching selection (td-fc758e88)
 				p.exitInteractiveMode()
 				p.saveSelectionState()
@@ -677,7 +711,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.loadSelectedContent()
 		}
 		// Terminal panel focused: scroll to top of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			p.thawTermPanelWindow()
 			if p.termPanelOutput != nil {
 				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
 			}
@@ -687,11 +722,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Go to top (first line) - pause auto-scroll
-		p.previewOffset = 0
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
+		// Go to top: the oldest rows the surface holds.
+		if p.previewShowsTerminal() {
+			p.jumpPreviewWindow(p.previewMaxScroll())
+			return nil
 		}
+		p.previewOffset = 0
 	case "G":
 		if p.viewMode == ViewModeKanban {
 			// Kanban mode: jump cursor to bottom of current column
@@ -703,21 +739,20 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if p.activePane == PaneSidebar {
-			// Jump to bottom = select last worktree (not shell)
-			if len(p.worktrees) > 0 {
-				p.shellSelected = false
-				p.selectedIdx = len(p.worktrees) - 1
-				// Exit interactive mode when switching selection (td-fc758e88)
-				p.exitInteractiveMode()
-				p.saveSelectionState()
-				p.ensureVisible()
+			if p.filterActive() {
+				p.selectLastVisible()
 				return p.loadSelectedContent()
 			}
-			// No worktrees, stay on shell
+			// Jump to the last visible sidebar row (worktree or nested child).
+			if p.sharedSidebarRowCount() > 0 {
+				p.selectLastVisible()
+				return p.loadSelectedContent()
+			}
 			return nil
 		}
 		// Terminal panel focused: scroll to bottom of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			p.thawTermPanelWindow()
 			p.termPanelScroll = 0
 			return nil
 		}
@@ -725,11 +760,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Go to bottom (newest content) - resume auto-scroll
-		p.previewOffset = p.getMaxScrollOffset()
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = true
+		// Go to bottom: the newest content, which for a terminal is the live
+		// edge it follows from.
+		if p.previewShowsTerminal() {
+			p.jumpPreviewWindow(0)
+			return nil
 		}
+		p.previewOffset = p.getMaxScrollOffset()
 	case "n":
 		// In diff tab: handle internally (next change navigation)
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
@@ -750,10 +787,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Create a shell directly, skipping the type selector modal
 		return p.createDefaultShell(false)
 	case "D":
-		// Check if deleting a shell session
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
+		// Any selected shell answers D, including one nested under a sibling
+		// worktree: the row is a shell wherever it is drawn, and reaching it
+		// should not require switching into that worktree first.
+		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeConfirmDeleteShell
-			p.deleteConfirmShell = p.shells[p.selectedShellIdx]
+			p.deleteConfirmShell = shell
 			p.deleteShellModal = nil
 			p.deleteShellModalWidth = 0
 			return nil
@@ -795,8 +834,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			// Right layout: move focus from agent to terminal panel
+			p.thawTermPanelWindow()
 			p.termPanelFocused = true
 		} else if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
@@ -823,9 +863,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Enter interactive mode (tmux input passthrough) - feature gated
 		// Only from Output tab or sidebar — Diff/Task tabs have no terminal to attach to.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
 			// Handle orphaned worktrees: start new agent instead of silently returning nil
-			if !p.shellSelected {
+			if !p.selectingShell() {
 				wt := p.selectedWorktree()
 				if wt != nil && wt.IsOrphaned && wt.Agent == nil {
 					wt.IsOrphaned = false
@@ -841,12 +881,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "t":
 		// Attach to tmux session
-		// Shell entry: attach to selected shell session
-		if p.shellSelected {
-			if p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-				return p.ensureShellAndAttachByIndex(p.selectedShellIdx)
-			}
-			return nil
+		// Shell entry: attach to selected shell session by TmuxName
+		if shell := p.getSelectedShell(); shell != nil {
+			return p.ensureShellAndAttach(shell)
 		}
 		wt := p.selectedWorktree()
 		if wt == nil {
@@ -875,9 +912,10 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.shellSelected) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
+			p.releaseTerminalDocProjection(false)
 			return nil
 		}
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
@@ -939,15 +977,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 
 	case "\\":
-		p.toggleSidebar()
-		resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
-		if p.termPanelVisible {
-			resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
-		}
-		if !p.sidebarVisible {
-			resizeCmds = append(resizeCmds, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
-		}
-		return tea.Batch(resizeCmds...)
+		return p.toggleSidebarCmd()
 	case "tab", "shift+tab":
 		// Switch focus between panes (consistent with other plugins)
 		if p.activePane == PaneSidebar && p.sidebarVisible {
@@ -976,13 +1006,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "r":
 		return func() tea.Msg { return RefreshMsg{} }
-	case "i", "E":
-		// Alternate shortcuts for interactive mode (enter is primary). "E" is
-		// what the preview hint and the command palette advertise; it was listed
-		// in the keymap but never handled here, so it did nothing and the keys
-		// typed after it were read as workspace bindings (td-10c761).
-		// Only from Output tab or sidebar — Diff/Task tabs have no terminal.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+	case tty.EnterInteractiveKeyAlt:
+		// E is the explicit type key. i is Sidecar's find-TD-task shortcut
+		// (td-ba46ea); enter remains the primary way in.
+		// Worktree Diff/Task tabs have no terminal. A shell always does, even if
+		// its selection inherited the worktree's previous tab value.
+		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
 			if p.termPanelFocused && p.termPanelVisible {
 				return p.enterTermPanelInteractiveMode()
 			}
@@ -1010,8 +1039,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "z":
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			p.cycleDiffScope()
-			return nil
+			return p.cycleDiffScope()
 		}
 	case "ctrl+d":
 		// Page down in preview pane (unified: increase offset toward bottom)
@@ -1025,20 +1053,17 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				if p.termPanelScroll > pageSize {
-					p.termPanelScroll -= pageSize
-				} else {
-					p.termPanelScroll = 0
-				}
+				p.scrollTermPanelWindow(-pageSize)
+				return nil
+			}
+			if p.previewShowsTerminal() {
+				p.scrollPreviewWindow(-pageSize)
 				return nil
 			}
 			maxOffset := p.getMaxScrollOffset()
 			p.previewOffset += pageSize
 			if p.previewOffset > maxOffset {
 				p.previewOffset = maxOffset
-			}
-			if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
-				p.autoScrollOutput = true
 			}
 		}
 	case "ctrl+u":
@@ -1053,15 +1078,16 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				p.termPanelScroll += pageSize
+				p.scrollTermPanelWindow(pageSize)
+				return nil
+			}
+			if p.previewShowsTerminal() {
+				p.scrollPreviewWindow(pageSize)
 				return nil
 			}
 			p.previewOffset -= pageSize
 			if p.previewOffset < 0 {
 				p.previewOffset = 0
-			}
-			if p.previewTab == PreviewTabOutput || p.shellSelected {
-				p.autoScrollOutput = false
 			}
 		}
 	// Agent control keys
@@ -1088,17 +1114,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.StopAgent(wt)
 		}
 	case "ctrl+k":
-		// Kill selected shell session (K is global Overview / Kanban)
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			shell := p.shells[p.selectedShellIdx]
-			if shell.Agent != nil {
-				return p.killShellSessionByName(shell.TmuxName)
-			}
+		// Kill selected shell session (K is global Overview / Kanban).
+		// Nested rows answer this for the same reason they answer D.
+		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
+			return p.killShellSessionByName(shell.TmuxName)
 		}
 	case "R":
 		// Rename selected shell session
-		if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-			shell := p.shells[p.selectedShellIdx]
+		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeRenameShell
 			p.renameShellSession = shell
 			p.renameShellInput = textinput.New()
@@ -1193,14 +1216,29 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Unhandled key in preview pane - flash to indicate attach is needed
 		// Only flash on the Output tab where there's a terminal to attach to.
 		// Diff and Task tabs have no interactive terminal.
-		if p.activePane == PanePreview && p.previewTab == PreviewTabOutput {
-			canAttach := p.shellSelected || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
+		if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			canAttach := p.selectingShell() || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
 			if canAttach {
 				p.flashPreviewTime = time.Now()
 			}
 		}
 	}
 	return nil
+}
+
+// toggleSidebarCmd is the single non-interactive transition used by list,
+// preview and document focus. Keeping its resize/toast side effects together
+// prevents one pane from hiding a sidebar it cannot later restore.
+func (p *Plugin) toggleSidebarCmd() tea.Cmd {
+	p.toggleSidebar()
+	resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
+	if p.termPanelVisible {
+		resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
+	}
+	if !p.sidebarVisible {
+		resizeCmds = append(resizeCmds, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+	}
+	return tea.Batch(resizeCmds...)
 }
 
 // handleCreateKeys handles keys in create modal.
@@ -2140,7 +2178,7 @@ func (p *Plugin) cycleDiffTabViewMode() tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) cycleDiffScope() {
+func (p *Plugin) cycleDiffScope() tea.Cmd {
 	p.diffScope = (p.diffScope + 1) % 3
 	p.diffTabCursor, p.diffTabScroll, p.diffTabDiffScroll, p.diffTabHorizScroll = 0, 0, 0, 0
 	p.diffTabFocus = DiffTabFocusFileList
@@ -2149,29 +2187,11 @@ func (p *Plugin) cycleDiffScope() {
 	}
 	p.fullFileDiff, p.diffTabParsedDiff, p.commitDetail = nil, nil, nil
 	p.applyDiffScope()
+	return p.loadSelectedDiffTabCommit()
 }
 
 func (p *Plugin) applyDiffScope() {
-	p.diffContent, p.diffRaw = "", ""
-	p.multiFileDiff = nil
-	p.commitStatusList = nil
-	if p.diffSnapshot == nil {
-		return
-	}
-	switch p.diffScope {
-	case DiffScopeCommits:
-		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
-	case DiffScopeAggregate:
-		// Aggregate is deliberately rendered as two labelled raw sections so
-		// committed and uncommitted changes cannot be mistaken for each other.
-	default:
-		p.diffContent, p.diffRaw = p.diffSnapshot.WorkingTree, p.diffSnapshot.WorkingTree
-		p.multiFileDiff = gitstatus.ParseMultiFileDiff(p.diffRaw)
-		// Commits are listed below the files so a clean worktree still shows the
-		// branch's work. Both come from the same pinned snapshot, so the two
-		// sections can never describe different revisions.
-		p.commitStatusList = append([]CommitStatusInfo(nil), p.diffSnapshot.Commits...)
-	}
+	p.applySharedDiffScope()
 }
 
 // onDiffTabCursorChanged resets diff pane state when cursor changes in the file list.
@@ -2192,21 +2212,42 @@ func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 		if p.diffViewMode == DiffViewFullFile {
 			return p.loadFullFileDiffForWorkspace()
 		}
-	} else {
-		// Cursor on a commit — auto-load commit detail for preview
-		p.diffTabParsedDiff = nil
-		commitIdx := p.diffTabCursor - fileCount
-		if commitIdx >= 0 && commitIdx < len(p.commitStatusList) {
-			commit := p.commitStatusList[commitIdx]
-			p.commitDetail = nil
-			p.commitFileCursor = 0
-			p.commitFileScroll = 0
-			p.commitFileDiffRaw = ""
-			p.commitFileParsed = nil
-			return p.loadCommitDetail(commit.Hash)
-		}
+		return nil
 	}
-	return nil
+	return p.loadSelectedDiffTabCommit()
+}
+
+// loadSelectedDiffTabCommit loads the commit under the cursor.
+// Snapshot/scope populate can leave the cursor on a commit without a move,
+// so this does not require onDiffTabCursorChanged. Skip if that commit is
+// already loaded to avoid a second fetch on refresh or a no-op move-back.
+func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
+	commit, ok := p.asDiffView().SelectedCommit()
+	if !ok {
+		return nil
+	}
+	if commitDetailMatchesListHash(p.commitDetail, commit.Hash) {
+		return nil
+	}
+	p.diffTabParsedDiff = nil
+	p.commitDetail = nil
+	p.commitFileCursor = 0
+	p.commitFileScroll = 0
+	p.commitFileDiffRaw = ""
+	p.commitFileParsed = nil
+	return p.loadCommitDetail(commit.Hash)
+}
+
+// commitDetailMatchesListHash reports whether a loaded commit is the list row.
+// The list stores git %h; GetCommitDetail stores %H in Hash and %h in ShortHash.
+func commitDetailMatchesListHash(detail *gitstatus.Commit, listHash string) bool {
+	if detail == nil || listHash == "" {
+		return false
+	}
+	if detail.Hash == listHash || detail.ShortHash == listHash {
+		return true
+	}
+	return strings.HasPrefix(detail.Hash, listHash)
 }
 
 // handleCommitFilesKey handles keys when viewing files within a commit.

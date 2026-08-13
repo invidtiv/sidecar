@@ -26,6 +26,14 @@ func TestMapKeyToTmux_Printable(t *testing.T) {
 	}
 }
 
+func TestMapKeyToTmux_BackslashRemainsLiteral(t *testing.T) {
+	msg := tea.KeyPressMsg{Code: '\\', Text: "\\"}
+	key, useLiteral := tty.MapKeyToTmux(msg)
+	if key != "\\" || !useLiteral {
+		t.Fatalf("backslash mapped to %q literal=%v, want literal backslash", key, useLiteral)
+	}
+}
+
 // TestMapKeyToTmux_MultiRune tests multi-character input
 func TestMapKeyToTmux_MultiRune(t *testing.T) {
 	msg := tea.KeyPressMsg{Code: 'h', Text: "hello"}
@@ -470,53 +478,6 @@ func TestExitInteractiveMode_WhenStateInactive(t *testing.T) {
 }
 
 // ============================================================================
-// handleEscapeTimer Tests (td-2e75f54f)
-// ============================================================================
-
-// TestHandleEscapeTimer_NilState tests timer with nil interactiveState
-func TestHandleEscapeTimer_NilState(t *testing.T) {
-	p := &Plugin{
-		interactiveState: nil,
-	}
-
-	// Should return nil and not panic
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when interactiveState is nil")
-	}
-}
-
-// TestHandleEscapeTimer_InactiveState tests timer with inactive state
-func TestHandleEscapeTimer_InactiveState(t *testing.T) {
-	p := &Plugin{
-		interactiveState: &InteractiveState{
-			Active:        false,
-			EscapePressed: true, // Even with pending escape, inactive should return nil
-		},
-	}
-
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when state is inactive")
-	}
-}
-
-// TestHandleEscapeTimer_NoPendingEscape tests timer fires with no pending escape
-func TestHandleEscapeTimer_NoPendingEscape(t *testing.T) {
-	p := &Plugin{
-		interactiveState: &InteractiveState{
-			Active:        true,
-			EscapePressed: false,
-		},
-	}
-
-	cmd := p.handleEscapeTimer()
-	if cmd != nil {
-		t.Error("expected nil command when no escape is pending")
-	}
-}
-
-// ============================================================================
 // handleInteractiveKeys Tests (td-2e75f54f)
 // ============================================================================
 
@@ -567,15 +528,15 @@ func TestHandleInteractiveKeys_FirstEscapeSetsFlag(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: false,
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
 
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 	cmd := p.handleInteractiveKeys(msg)
 
 	// Should set EscapePressed flag and start timer
-	if !p.interactiveState.EscapePressed {
+	if !terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be true after first Escape")
 	}
 	if cmd == nil {
@@ -594,9 +555,10 @@ func TestHandleInteractiveKeys_DoubleEscapeExits(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: true, // First escape already pressed
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // First escape already pressed
 
 	msg := tea.KeyPressMsg{Code: tea.KeyEscape}
 	p.handleInteractiveKeys(msg)
@@ -614,19 +576,17 @@ func TestHandleInteractiveKeys_NonEscapeClearsPendingEscape(t *testing.T) {
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test",
-			EscapePressed: true, // Pending escape
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // Pending escape
 
-	// Note: We can't fully test this without mocking tmux commands
-	// The actual sendKeyToTmux will fail, which will exit interactive mode
-	// But we can verify the flag is cleared before the call
 	msg := tea.KeyPressMsg{Code: 'a', Text: "a"}
 	_ = p.handleInteractiveKeys(msg)
 
-	// The EscapePressed flag should be cleared
-	// (state might be nil if tmux command failed)
-	if p.interactiveState != nil && p.interactiveState.EscapePressed {
+	// The held escape goes out ahead of the key that ended the window, so
+	// nothing is left pending behind it.
+	if terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be false after non-escape key")
 	}
 }
@@ -657,8 +617,8 @@ func TestPollingDecayConstants(t *testing.T) {
 // TestDoubleEscapeDelayConstant tests double escape delay is reasonable
 func TestDoubleEscapeDelayConstant(t *testing.T) {
 	// Per spec: 150ms delay for double-escape
-	if doubleEscapeDelay.Milliseconds() != 150 {
-		t.Errorf("doubleEscapeDelay should be 150ms, got %v", doubleEscapeDelay)
+	if tty.DoubleEscapeDelay.Milliseconds() != 150 {
+		t.Errorf("tty.DoubleEscapeDelay should be 150ms, got %v", tty.DoubleEscapeDelay)
 	}
 }
 
@@ -672,9 +632,6 @@ func TestInteractiveState_Initialization(t *testing.T) {
 
 	if state.Active {
 		t.Error("expected Active to be false by default")
-	}
-	if state.EscapePressed {
-		t.Error("expected EscapePressed to be false by default")
 	}
 	if state.TargetPane != "" {
 		t.Error("expected TargetPane to be empty by default")
@@ -786,8 +743,8 @@ func TestViewModeInteractiveAllowsDoubleClick(t *testing.T) {
 func TestGetInteractiveExitKey_Default(t *testing.T) {
 	p := &Plugin{ctx: nil}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s', got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s', got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 
@@ -795,8 +752,8 @@ func TestGetInteractiveExitKey_Default(t *testing.T) {
 func TestGetInteractiveExitKey_NilConfig(t *testing.T) {
 	p := &Plugin{ctx: &plugin.Context{}}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s' with nil config, got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s' with nil config, got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 
@@ -806,8 +763,8 @@ func TestGetInteractiveExitKey_EmptyConfigKey(t *testing.T) {
 	cfg.Plugins.Workspace.InteractiveExitKey = ""
 	p := &Plugin{ctx: &plugin.Context{Config: cfg}}
 	key := p.getInteractiveExitKey()
-	if key != defaultExitKey {
-		t.Errorf("expected default key '%s' with empty config, got '%s'", defaultExitKey, key)
+	if key != tty.DefaultConfig().ExitKey {
+		t.Errorf("expected default key '%s' with empty config, got '%s'", tty.DefaultConfig().ExitKey, key)
 	}
 }
 
@@ -849,30 +806,32 @@ func TestGetInteractiveExitKey_VariousKeys(t *testing.T) {
 	}
 }
 
-// TestForwardScrollToTmux_ScrollUp tests that scroll up pauses auto-scroll (top-down offset)
+// TestForwardScrollToTmux_ScrollUp tests that a notch the application does not
+// claim steps this surface's own window back through scrollback.
 func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
-	// previewOffset=5 means we're 5 lines from top; scroll up decreases it
-	p := &Plugin{autoScrollOutput: true, previewOffset: 5}
-	p.forwardScrollToTmux(mouse.MouseAction{}, -1)
-	if p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=false after scroll up")
+	p := &Plugin{
+		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		terminalHistory: make(map[string]terminalHistoryState),
 	}
-	if p.previewOffset != 4 {
-		t.Errorf("expected previewOffset=4, got %d", p.previewOffset)
+	givePaneScrollableOutput(p, 120)
+	p.forwardScrollToTmux(mouse.MouseAction{}, -1)
+	if p.previewScroll != 1 {
+		t.Errorf("expected the window 1 row back from the live bottom, got %d", p.previewScroll)
 	}
 }
 
-// TestForwardScrollToTmux_ScrollDown tests that scroll down resumes auto-scroll at bottom (top-down offset)
+// TestForwardScrollToTmux_ScrollDown tests that scrolling back down returns the
+// window to the live bottom it follows from.
 func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
-	// With no content loaded, maxOffset=0. previewOffset=0 is already at bottom.
-	// Scroll down should enable auto-scroll when at max offset.
-	p := &Plugin{autoScrollOutput: false, previewOffset: 0, height: 10}
-	p.forwardScrollToTmux(mouse.MouseAction{}, 1)
-	if !p.autoScrollOutput {
-		t.Error("expected autoScrollOutput=true after scrolling to bottom (maxOffset=0)")
+	p := &Plugin{
+		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		terminalHistory: make(map[string]terminalHistoryState),
 	}
-	if p.previewOffset != 0 {
-		t.Errorf("expected previewOffset=0 (clamped to maxOffset), got %d", p.previewOffset)
+	givePaneScrollableOutput(p, 120)
+	p.previewScroll = 1
+	p.forwardScrollToTmux(mouse.MouseAction{}, 1)
+	if p.previewScroll != 0 {
+		t.Errorf("expected the window back at the live bottom, got %d rows back", p.previewScroll)
 	}
 }
 
@@ -901,21 +860,6 @@ func TestDetectBracketedPasteMode_DisabledOnly(t *testing.T) {
 	}
 }
 
-func TestDetectMouseReportingMode_EnabledOnly(t *testing.T) {
-	output := "some output" + tty.MouseModeEnable1006 + "more output"
-	if !tty.DetectMouseReportingMode(output) {
-		t.Error("expected mouse reporting to be detected as enabled")
-	}
-}
-
-func TestDetectMouseReportingMode_DisabledOnly(t *testing.T) {
-	output := "some output" + tty.MouseModeEnable1006 + tty.MouseModeDisable1006
-	if tty.DetectMouseReportingMode(output) {
-		t.Error("expected mouse reporting to be detected as disabled")
-	}
-}
-
-// TestDetectBracketedPasteMode_EnabledThenDisabled tests detection when enable followed by disable
 func TestDetectBracketedPasteMode_EnabledThenDisabled(t *testing.T) {
 	output := "some output\x1b[?2004henabled\x1b[?2004ldisabled"
 	if tty.DetectBracketedPasteMode(output) {
@@ -1037,6 +981,7 @@ func TestHandleInteractiveKeys_DropsPartialMouseSequence(t *testing.T) {
 			TargetSession: "test-session",
 		},
 	}
+	attachLiveTerminal(p, false)
 
 	// Simulate a partial mouse sequence arriving as KeyRunes
 	msg := tea.KeyPressMsg{Code: '[', Text: "[<65;83;33M"}
@@ -1062,17 +1007,18 @@ func TestHandleInteractiveKeys_CancelsPendingEscapeForMouseSequence(t *testing.T
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "test-session",
-			EscapePressed: true, // ESC arrived first (split-read)
-			EscapeTime:    time.Now(),
 		},
 	}
+	terminal := attachLiveTerminal(p, false)
+	terminal.State.EscapePressed = true // ESC arrived first (split-read)
+	terminal.State.EscapeTime = time.Now()
 
 	// Partial mouse sequence arrives as the next message
 	msg := tea.KeyPressMsg{Code: '[', Text: "[<65;83;33M"}
 	cmd := p.handleInteractiveKeys(msg)
 
 	// EscapePressed must be cleared — it was part of the mouse sequence
-	if p.interactiveState.EscapePressed {
+	if terminal.State.EscapePressed {
 		t.Error("expected EscapePressed to be cleared after partial mouse sequence")
 	}
 	// Should remain in interactive mode
@@ -1261,6 +1207,9 @@ func copyChordTestPlugin(configuredCopyKey string) *Plugin {
 		cfg.Plugins.Workspace.InteractiveCopyKey = configuredCopyKey
 		p.ctx = &plugin.Context{Config: cfg}
 	}
+	// The component is already open, as reconciliation leaves it: a key that
+	// reaches the pane is then the only work the plugin can return.
+	attachLiveTerminal(p, false)
 	return p
 }
 

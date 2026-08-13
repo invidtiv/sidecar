@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 )
 
 func authoritativeRepo(t *testing.T) string {
@@ -482,5 +483,206 @@ func TestCleanWorktreeStillListsBranchCommitsInWorkingTreeScope(t *testing.T) {
 	}
 	if n := p.diffTabFileCount(); n != 0 {
 		t.Errorf("clean working tree produced %d phantom file entries, want 0", n)
+	}
+}
+
+const sampleWorkingTreeDiff = `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1 +1,2 @@
+ line
++added
+`
+
+func testDiffPlugin(t *testing.T) *Plugin {
+	t.Helper()
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1}
+	p.worktrees = []*Worktree{{Key: "wt", Name: "wt", Path: t.TempDir()}}
+	p.selectedIdx = 0
+	return p
+}
+
+func commitDetailHashFromCmd(t *testing.T, cmd tea.Cmd) (string, bool) {
+	t.Helper()
+	if cmd == nil {
+		return "", false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var hash string
+		found := false
+		for _, child := range batch {
+			if h, ok := commitDetailHashFromCmd(t, child); ok {
+				if found {
+					t.Fatalf("multiple CommitDetailLoadedMsg in batch")
+				}
+				hash, found = h, true
+			}
+		}
+		return hash, found
+	}
+	loaded, ok := msg.(CommitDetailLoadedMsg)
+	if !ok {
+		return "", false
+	}
+	return loaded.CommitHash, true
+}
+
+func TestDiffLoadedMsgLoadsFirstCommitWithoutCursorMove(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.diffScope = DiffScopeWorkingTree
+	p.diffTabCursor = 0
+
+	_, cmd := p.update(DiffLoadedMsg{
+		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
+		WorkspaceName:  "wt",
+		Snapshot: &DiffSnapshot{
+			State: LoadStateReady,
+			Commits: []CommitStatusInfo{
+				{Hash: "aaa1111", Subject: "first"},
+				{Hash: "bbb2222", Subject: "second"},
+			},
+		},
+	})
+
+	if p.diffTabCursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.diffTabCursor)
+	}
+	if n := p.diffTabFileCount(); n != 0 {
+		t.Fatalf("file count = %d, want 0 so cursor sits on first commit", n)
+	}
+	hash, ok := commitDetailHashFromCmd(t, cmd)
+	if !ok {
+		t.Fatal("applying snapshot with cursor on first commit did not issue loadCommitDetail")
+	}
+	if hash != "aaa1111" {
+		t.Fatalf("loaded hash = %q, want first commit aaa1111", hash)
+	}
+
+	// Moving to another commit and back still loads, even without another snapshot.
+	p.diffTabCursor = 1
+	hash, ok = commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(0))
+	if !ok || hash != "bbb2222" {
+		t.Fatalf("move to second commit: hash=%q ok=%v, want bbb2222", hash, ok)
+	}
+	p.diffTabCursor = 0
+	hash, ok = commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(1))
+	if !ok || hash != "aaa1111" {
+		t.Fatalf("move back to first commit: hash=%q ok=%v, want aaa1111", hash, ok)
+	}
+}
+
+func TestDiffLoadedMsgDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.diffScope = DiffScopeWorkingTree
+
+	_, cmd := p.update(DiffLoadedMsg{
+		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
+		WorkspaceName:  "wt",
+		Snapshot: &DiffSnapshot{
+			State:       LoadStateReady,
+			WorkingTree: sampleWorkingTreeDiff,
+			Commits:     []CommitStatusInfo{{Hash: "aaa1111", Subject: "first"}},
+		},
+	})
+
+	if p.diffTabCursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.diffTabCursor)
+	}
+	if n := p.diffTabFileCount(); n == 0 {
+		t.Fatal("expected working-tree files so cursor sits on a file")
+	}
+	if hash, ok := commitDetailHashFromCmd(t, cmd); ok {
+		t.Fatalf("file-under-cursor issued loadCommitDetail for %q", hash)
+	}
+}
+
+const (
+	testCommitShortHash = "aaa1111"
+	testCommitFullHash  = "aaa1111bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func TestLoadSelectedDiffTabCommitSkipsAlreadyLoadedHash(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.commitStatusList = []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}}
+	p.diffTabCursor = 0
+	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash, ShortHash: testCommitShortHash}
+	p.commitFileCursor = 2
+
+	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
+		t.Fatal("already-loaded commit under cursor should not refetch")
+	}
+	if p.commitFileCursor != 2 {
+		t.Fatalf("skip reset commitFileCursor to %d, want 2", p.commitFileCursor)
+	}
+
+	// ShortHash can be empty; list %h is still a prefix of detail %H.
+	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash}
+	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
+		t.Fatal("full-hash prefix of list short hash should skip")
+	}
+
+	// A later cursor move onto a different commit still loads.
+	p.commitStatusList = append(p.commitStatusList, CommitStatusInfo{Hash: "bbb2222", Subject: "second"})
+	p.diffTabCursor = 1
+	hash, ok := commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(0))
+	if !ok || hash != "bbb2222" {
+		t.Fatalf("move after skip: hash=%q ok=%v, want bbb2222", hash, ok)
+	}
+}
+
+func TestDiffLoadedMsgPreservesCommitFileCursor(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.diffScope = DiffScopeWorkingTree
+	p.diffTabCursor = 0
+	p.commitDetail = &gitstatus.Commit{
+		Hash:      testCommitFullHash,
+		ShortHash: testCommitShortHash,
+		Files:     []gitstatus.CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
+	}
+	p.commitFileCursor = 2
+
+	_, cmd := p.update(DiffLoadedMsg{
+		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
+		WorkspaceName:  "wt",
+		Snapshot: &DiffSnapshot{
+			State:   LoadStateReady,
+			Commits: []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}},
+		},
+	})
+
+	if p.commitDetail == nil || p.commitDetail.Hash != testCommitFullHash {
+		t.Fatal("refresh cleared commitDetail for the already-loaded commit")
+	}
+	if p.commitFileCursor != 2 {
+		t.Fatalf("commitFileCursor = %d, want 2 after DiffLoadedMsg", p.commitFileCursor)
+	}
+	if hash, ok := commitDetailHashFromCmd(t, cmd); ok {
+		t.Fatalf("refresh issued loadCommitDetail for %q", hash)
+	}
+}
+
+func TestCycleDiffScopeLoadsFirstCommit(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.diffSnapshot = &DiffSnapshot{
+		State:       LoadStateReady,
+		WorkingTree: sampleWorkingTreeDiff,
+		Commits: []CommitStatusInfo{
+			{Hash: "aaa1111", Subject: "first"},
+		},
+	}
+	p.diffScope = DiffScopeWorkingTree
+	p.applyDiffScope()
+	if p.diffTabFileCount() == 0 {
+		t.Fatal("working-tree scope should list files before cycling")
+	}
+
+	hash, ok := commitDetailHashFromCmd(t, p.cycleDiffScope())
+	if !ok || hash != "aaa1111" {
+		t.Fatalf("cycle to commits: hash=%q ok=%v, want aaa1111", hash, ok)
+	}
+	if p.diffScope != DiffScopeCommits {
+		t.Fatalf("scope = %v, want DiffScopeCommits", p.diffScope)
 	}
 }

@@ -7,28 +7,6 @@ import (
 	"testing"
 )
 
-func TestIsBinary(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected bool
-	}{
-		{"text", []byte("hello world"), false},
-		{"binary with null", []byte("hello\x00world"), true},
-		{"empty", []byte{}, false},
-		{"binary at start", []byte{0, 1, 2, 3}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isBinary(tt.data)
-			if result != tt.expected {
-				t.Errorf("isBinary(%v) = %v, want %v", tt.data, result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestLoadPreview(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -111,8 +89,8 @@ func TestLoadPreview_Image(t *testing.T) {
 func TestLoadPreview_LargeFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create large file (> maxPreviewSize)
-	largeContent := strings.Repeat("x", maxPreviewSize+1000)
+	// Create large file (> 500KB loader cap)
+	largeContent := strings.Repeat("x", 500*1024+1000)
 	testFile := filepath.Join(tmpDir, "large.txt")
 	if err := os.WriteFile(testFile, []byte(largeContent), 0644); err != nil {
 		t.Fatal(err)

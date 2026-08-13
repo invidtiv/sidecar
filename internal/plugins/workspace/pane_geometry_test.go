@@ -151,7 +151,6 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 		Agent:    &Agent{OutputBuf: buffer, TmuxSession: "sidecar-shell"},
 	}}
 	p.selectedShellIdx = 0
-	p.autoScrollOutput = true
 
 	// Without geometry the viewport is used as-is.
 	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
@@ -187,7 +186,6 @@ func TestRenderCapturedTerminalScrollbarIsNotAMismatch(t *testing.T) {
 		Agent:    &Agent{OutputBuf: buffer, TmuxSession: "sidecar-shell"},
 	}}
 	p.selectedShellIdx = 0
-	p.autoScrollOutput = true
 
 	// Viewport 30x3 renders 30x2 after the hint line, and the pane is exactly
 	// that — but 12 lines of scrollback put a scrollbar on screen.
@@ -214,7 +212,6 @@ func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
 	p.viewMode = ViewModeInteractive
 	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
-	p.autoScrollOutput = true
 
 	// 4 lines of scrollback followed by the pane's 35 rows.
 	buffer := tty.NewOutputBuffer(200)

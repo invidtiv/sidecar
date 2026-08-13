@@ -28,6 +28,15 @@ type Config struct {
 	// PasteKey is the keybinding to paste clipboard (default: "alt+v").
 	PasteKey string
 
+	// SelectAllKey is the keybinding to select every line of output
+	// (default: "ctrl+a"). The empty-copy notice names it, so a surface that
+	// hard-codes the chord can tell the user to press a key it no longer binds.
+	SelectAllKey string
+
+	// CopyOnSelect copies a finished selection without a copy chord, the way
+	// xterm does.
+	CopyOnSelect bool
+
 	// ScrollbackLines is the number of scrollback lines to capture
 	// (default: DefaultScrollbackLines).
 	ScrollbackLines int
@@ -40,6 +49,7 @@ func DefaultConfig() Config {
 		AttachKey:       "ctrl+]",
 		CopyKey:         "alt+c",
 		PasteKey:        "alt+v",
+		SelectAllKey:    "ctrl+a",
 		ScrollbackLines: DefaultScrollbackLines,
 	}
 }
@@ -77,10 +87,6 @@ type State struct {
 	// Terminal mode state (updated from captured output)
 	BracketedPasteEnabled bool
 	MouseReportingEnabled bool
-
-	// Visible buffer range for selection mapping
-	VisibleStart int
-	VisibleEnd   int
 
 	// Resize debouncing
 	LastResizeAt time.Time
@@ -134,6 +140,87 @@ type Model struct {
 	// Callbacks for plugin integration
 	OnExit   func() tea.Cmd // Called when user exits interactive mode
 	OnAttach func() tea.Cmd // Called when user requests full tmux attach
+
+	// OnSessionEnded is called instead of OnExit when the terminal ends because
+	// the pane died rather than because the user left it. A host that says
+	// nothing about that difference shows a mode ending by itself, which reads
+	// as a dropped keystroke. Nil falls back to OnExit.
+	OnSessionEnded func() tea.Cmd
+
+	// OnKey is the host's first look at a live key press: the chords that act on
+	// the surface around the pane rather than on the pane itself — its own
+	// panel toggles, its scrollback, its selection. Returning true stops the key
+	// before any of it becomes input, and before the double-escape window sees
+	// it. A host that answers a key here must not also answer it outside the
+	// component, or the pane receives it twice.
+	OnKey func(tea.KeyPressMsg) (tea.Cmd, bool)
+
+	// BeforeSend runs for a key that is about to reach the pane, and only for
+	// those: a held escape, a dropped mouse fragment and anything OnKey claimed
+	// never arrive here. It is where a host pins its viewport to the live edge
+	// and records that the user is typing.
+	BeforeSend func(tea.KeyPressMsg)
+
+	// ExitAction is what leaving the mode does to the terminal behind it.
+	ExitAction ExitAction
+
+	fragment MouseFragment
+
+	// resizeRetryPending records that a deferred assertion is already armed, so
+	// a burst of sizes arriving inside one debounce window schedules one retry
+	// rather than one per size. It must be cleared on every path that can drop
+	// the retry message, or the model believes a retry it will never receive is
+	// still coming and swallows every resize after it.
+	resizeRetryPending bool
+
+	// nowFn is the model's clock for the resize debounce. Tests drive a burst
+	// through the window without wall-clock time passing inside it; nil is
+	// time.Now.
+	nowFn func() time.Time
+}
+
+// ExitAction separates ending input ownership from closing the terminal.
+type ExitAction uint8
+
+const (
+	// ExitClosesTerminal ends the mode and the terminal together. A host that
+	// only shows the pane while the user is typing into it has nothing left to
+	// draw afterwards.
+	ExitClosesTerminal ExitAction = iota
+
+	// ExitReleasesInput ends input ownership alone: the buffer, its loaded
+	// scrollback and its feed survive. A host that keeps drawing the pane after
+	// the user leaves it requires this — closing here drops the scrollback the
+	// user just read, and the host's next reconciliation reopens the pane with
+	// an empty buffer on the same update, which reads as the output vanishing.
+	ExitReleasesInput
+)
+
+// Hooks are the host's answers to everything the component decides for itself:
+// the chords the surface around the pane owns, the moment a key is about to
+// reach it, and the ways the mode can end. They are set together because a host
+// that wires some of them re-implements the rest outside the component, which is
+// how two surfaces embedding the same terminal come to answer the same key
+// differently.
+type Hooks struct {
+	OnKey          func(tea.KeyPressMsg) (tea.Cmd, bool)
+	BeforeSend     func(tea.KeyPressMsg)
+	OnExit         func() tea.Cmd
+	OnAttach       func() tea.Cmd
+	OnSessionEnded func() tea.Cmd
+	ExitAction     ExitAction
+}
+
+// SetHooks adopts a host's whole contract with the component. ExitAction is
+// carried with the callbacks rather than defaulted, so a host states what
+// leaving the mode does to the terminal behind it.
+func (m *Model) SetHooks(h Hooks) {
+	m.OnKey = h.OnKey
+	m.BeforeSend = h.BeforeSend
+	m.OnExit = h.OnExit
+	m.OnAttach = h.OnAttach
+	m.OnSessionEnded = h.OnSessionEnded
+	m.ExitAction = h.ExitAction
 }
 
 // New creates a new tty Model with the given configuration.
@@ -152,6 +239,9 @@ func New(config *Config) *Model {
 		}
 		if config.PasteKey != "" {
 			cfg.PasteKey = config.PasteKey
+		}
+		if config.SelectAllKey != "" {
+			cfg.SelectAllKey = config.SelectAllKey
 		}
 		if config.ScrollbackLines > 0 {
 			cfg.ScrollbackLines = config.ScrollbackLines
@@ -190,6 +280,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	}
 	m.visible = true
 	m.modelLive = false
+	m.resizeRetryPending = false
 	m.recoveryPending = false
 	m.fallbackEstablished = false
 	m.consecutiveRecoveryBlanks = 0
@@ -271,11 +362,51 @@ func (m *Model) Exit() {
 // Close releases the current target and rejects all queued deliveries.
 func (m *Model) Close() { m.Exit() }
 
+// endDeadSession closes a terminal whose pane is gone. There is no transport
+// left to keep, so this closes whatever the host's ExitAction says about the
+// ways out the user chooses.
+func (m *Model) endDeadSession() tea.Cmd {
+	m.Exit()
+	if m.OnSessionEnded != nil {
+		return m.OnSessionEnded()
+	}
+	if m.OnExit != nil {
+		return m.OnExit()
+	}
+	return nil
+}
+
+// ReleaseInput ends the component's ownership of the keyboard for a host that
+// took the mode away from outside — a click landing off every terminal region,
+// a focus change. Every way out must close the double-escape window and drop a
+// half-read mouse report, or a timer scheduled by the last escape still reaches
+// a model the host believes it has left.
+func (m *Model) ReleaseInput() { m.releaseInput() }
+
+// releaseInput ends the component's ownership of the keyboard: the double-escape
+// window closes, a half-read mouse report is dropped, and nothing typed reaches
+// the pane until a host hands the keyboard back. Whether the terminal behind it
+// closes with the mode is [Model.ExitAction]'s answer, not this one's.
+func (m *Model) releaseInput() {
+	m.fragment.Reset()
+	if m.State != nil {
+		m.State.EscapePressed = false
+		m.State.EscapeTimerPending = false
+	}
+	if m.ExitAction == ExitReleasesInput {
+		return
+	}
+	m.Exit()
+}
+
 // Update handles messages in interactive mode.
 // Returns the updated model and any commands to execute.
 // Plugins should call this when they receive messages and interactive mode is active.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	if !m.IsActive() {
+		// An inactive model answers nothing, so a retry aimed at it is dropped
+		// here. The flag goes with it: it describes a message still in flight.
+		m.resizeRetryPending = false
 		return nil
 	}
 
@@ -309,6 +440,16 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		}
 		return m.handlePollTick(msg)
 
+	case deferredResizeMsg:
+		// Cleared before the ownership guard: a retry this model will not act on
+		// is a retry it no longer has, and leaving the flag set here wedges every
+		// later resize behind a message that already came and went.
+		m.resizeRetryPending = false
+		if !m.owns(msg.Scope) {
+			return nil
+		}
+		return m.assertDimensions()
+
 	case PaneResizedMsg:
 		if !m.owns(msg.Scope) {
 			return nil
@@ -340,21 +481,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if !m.owns(msg.Scope) {
 			return nil
 		}
-		m.Exit()
-		if m.OnExit != nil {
-			return m.OnExit()
-		}
-		return nil
+		return m.endDeadSession()
 
 	case PasteResultMsg:
 		if !m.owns(msg.Scope) {
 			return nil
 		}
 		if msg.SessionDead {
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
-			}
+			return m.endDeadSession()
 		}
 		return nil
 	}
@@ -473,10 +607,7 @@ func (m *Model) Cursor() *tea.Cursor {
 		return nil
 	}
 	col := min(max(m.State.CursorCol-fit.ColOffset, 0), fit.Width-1)
-	cursor := tea.NewCursor(col, row)
-	cursor.Shape = tea.CursorBlock
-	cursor.Blink = true
-	return cursor
+	return PlaceCursor(col, row)
 }
 
 // PreferredMouseMode reports the mode suitable for an active embedded
@@ -544,75 +675,78 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
+	// The host's own acts come first, including ahead of the ways out: a host
+	// that is typing into its own field — a search box over the pane — owns
+	// every key while it is, exit chord included.
+	if m.OnKey != nil {
+		if cmd, handled := m.OnKey(msg); handled {
+			return cmd
+		}
+	}
+
 	// Check for exit key
 	if msg.String() == m.Config.ExitKey {
-		m.Exit()
+		m.releaseInput()
 		if m.OnExit != nil {
 			return m.OnExit()
 		}
 		return nil
 	}
 
-	// Check for attach key
-	if msg.String() == m.Config.AttachKey {
-		m.Exit()
+	// Check for attach key. An empty AttachKey is a host with no attach path:
+	// the chord belongs to the pane like any other key.
+	if m.Config.AttachKey != "" && msg.String() == m.Config.AttachKey {
+		m.releaseInput()
 		if m.OnAttach != nil {
 			return m.OnAttach()
 		}
 		return nil
 	}
 
-	// Double-escape exit handling
-	if msg.Code == tea.KeyEscape {
-		if m.State.EscapePressed {
-			// Second Escape within window: exit
-			m.State.EscapePressed = false
-			m.State.EscapeTimerPending = false
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
-			}
-			return nil
-		}
-		// First Escape: mark pending and start delay timer
-		m.State.EscapePressed = true
-		m.State.EscapeTime = time.Now()
-		if !m.State.EscapeTimerPending {
-			m.State.EscapeTimerPending = true
-			scope := m.Scope()
-			return tea.Tick(DoubleEscapeDelay, func(t time.Time) tea.Msg {
-				return EscapeTimerMsg{Scope: scope}
-			})
-		}
+	now := time.Now()
+	// Reassembling a report split across reads reads state the one-key gate
+	// cannot: the fragment held from the previous read.
+	if len(msg.Text) > 0 && m.fragment.Consume(msg.Text, m.State.EscapePressed, m.State.EscapeTime, now) {
+		m.State.EscapePressed = false
 		return nil
 	}
 
-	// Filter partial SGR mouse sequences (td-e2ce50: use lenient check for truncated sequences)
-	// Catches even very short fragments like "[<" that occur when terminal splits mouse events.
-	// Multi-char fragments like "[<35;10;20M" are caught by LooksLikeMouseFragment.
-	if len(msg.Text) > 0 {
-		if LooksLikeMouseFragment(msg.Text) {
-			m.State.EscapePressed = false
-			return nil // Drop mouse sequence fragments
+	switch GateKey(KeyGateInput{
+		Msg:           msg,
+		EscapePressed: m.State.EscapePressed,
+		EscapeAt:      m.State.EscapeTime,
+		LastMouseAt:   m.State.LastMouseEventTime,
+		Now:           now,
+	}) {
+	case KeyGateExitDoubleEscape:
+		m.releaseInput()
+		if m.OnExit != nil {
+			return m.OnExit()
 		}
-	}
+		return nil
 
-	// Suppress bare "[" that leaks from split SGR mouse sequences.
-	// See the detailed comment in workspace/interactive.go handleInteractiveKeys
-	// for the full explanation. Two gates:
-	//   1. ESC gate: EscapePressed && <5ms since ESC — the ESC was delivered as
-	//      a separate keypress and "[" is its CSI continuation.
-	//   2. Mouse gate: <10ms since last tea.MouseMsg — Bubble Tea consumed the
-	//      ESC internally but "[" leaked as a rune. Successfully-parsed mouse
-	//      events and the leaked "[" come from the same terminal output burst.
-	if msg.Text == "[" {
-		escGate := m.State.EscapePressed &&
-			time.Since(m.State.EscapeTime) < 5*time.Millisecond
-		mouseGate := time.Since(m.State.LastMouseEventTime) < 10*time.Millisecond
-		if escGate || mouseGate {
-			m.State.EscapePressed = false
+	case KeyGateHoldEscape:
+		// Hold the escape rather than forwarding it: the second half of a double
+		// escape may still be on its way, and the timer forwards it if it is not.
+		m.State.EscapePressed = true
+		m.State.EscapeTime = now
+		if m.State.EscapeTimerPending {
 			return nil
 		}
+		m.State.EscapeTimerPending = true
+		scope := m.Scope()
+		return tea.Tick(DoubleEscapeDelay, func(t time.Time) tea.Msg {
+			return EscapeTimerMsg{Scope: scope}
+		})
+
+	case KeyGateDrop:
+		if msg.Text == "[" {
+			// The bracket opened a report whose remainder is still to come, so it
+			// is held for the reassembly above rather than dropped outright.
+			m.fragment.Hold("[", now)
+		}
+		m.State.EscapePressed = false
+		return nil
 	}
 
 	// Handle pending escape before processing new key
@@ -621,6 +755,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.State.EscapePressed {
 		m.State.EscapePressed = false
 		pendingEscape = true
+	}
+
+	if m.BeforeSend != nil {
+		m.BeforeSend(msg)
 	}
 
 	// Paste key
@@ -671,6 +809,33 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// SendUnknownSequence forwards an unparsed CSI sequence — kitty CSI u or
+// modifyOtherKeys, which Bubble Tea does not turn into a KeyPressMsg — to the
+// pane as the key it actually is, so modified keys like shift+enter reach the
+// application running there.
+//
+// It is a method rather than a case in Update because a host that already
+// forwards these itself would otherwise send each of them twice; the caller
+// decides which of the two paths owns the sequence.
+func (m *Model) SendUnknownSequence(msg tea.Msg) tea.Cmd {
+	if !m.IsActive() {
+		return nil
+	}
+	raw := ExtractUnknownCSIBytes(msg)
+	if raw == nil {
+		return nil
+	}
+	csiu := NormalizeToCSIu(raw)
+	if csiu == "" {
+		return nil
+	}
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{Value: csiu, Literal: true}),
+		m.schedulePoll(KeystrokeDebounce),
+	)
+}
+
 // handlePaste forwards bracketed-paste content (delivered as a tea.PasteMsg in
 // v2) to the tmux session; tmux applies the target app's bracketed paste mode.
 func (m *Model) handlePaste(content string) tea.Cmd {
@@ -685,32 +850,100 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleMouse processes mouse input in interactive mode.
-func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	// Record every mouse event (including motion) for split-CSI suppression.
-	// See the "[" gate comment in handleKey.
+// handleMouse records mouse activity in interactive mode.
+//
+// It deliberately forwards nothing. A pointer event only becomes the pane's
+// after a host has hit-tested it, routed it through PaneCoords, and decided the
+// gesture was not a local selection; a second path here would send raw viewport
+// coordinates to a clipped pane and forward drags the host had already claimed.
+func (m *Model) handleMouse(tea.MouseMsg) tea.Cmd {
+	m.NoteMouseActivity()
+	return nil
+}
+
+// NoteMouseActivity records that a mouse event reached this host, which is what
+// the bare-"[" gate in handleKey reads. Hosts that route pointer events
+// themselves must call it, or a split SGR sequence leaks into the pane as a
+// literal bracket.
+func (m *Model) NoteMouseActivity() {
+	if m.State == nil {
+		return
+	}
 	m.State.LastMouseEventTime = time.Now()
+}
 
-	if !m.IsActive() || !m.State.MouseReportingEnabled {
+// LastMouseActivity is when a mouse event last reached this terminal. A host
+// that runs the shared key gate itself reads it from here rather than keeping a
+// clock of its own, or the two would disagree about the same bracket.
+func (m *Model) LastMouseActivity() time.Time {
+	if m.State == nil {
+		return time.Time{}
+	}
+	return m.State.LastMouseEventTime
+}
+
+// Buffer is the captured output the terminal is drawing, so a host can render
+// its own window over it — scrolled back, with a selection highlighted — instead
+// of only the live tail View draws.
+func (m *Model) Buffer() *OutputBuffer {
+	if !m.IsActive() {
 		return nil
 	}
+	return m.State.OutputBuf
+}
 
-	// Only handle left-button click (press) events. In v2 a press is a
-	// MouseClickMsg; release/wheel/motion are distinct types we ignore here.
-	click, ok := msg.(tea.MouseClickMsg)
-	if !ok {
+// PaneMouseReporting reports that the application running in the pane has asked
+// for mouse events. It is the whole of "does this notch or click belong to the
+// app or to the surface showing it".
+func (m *Model) PaneMouseReporting() bool {
+	return m.IsActive() && m.State.MouseReportingEnabled
+}
+
+// PaneSize is the pane's observed grid, which can differ from the viewport it is
+// drawn in: another client may be driving the same session.
+func (m *Model) PaneSize() (width, height int) {
+	if !m.IsActive() {
+		return 0, 0
+	}
+	return m.State.PaneWidth, m.State.PaneHeight
+}
+
+// CursorState is the pane's own cursor, in pane coordinates.
+func (m *Model) CursorState() (row, col int, visible bool) {
+	if !m.IsActive() {
+		return 0, 0, false
+	}
+	return m.State.CursorRow, m.State.CursorCol, m.State.CursorVisible
+}
+
+// SendClick forwards a press and release at 1-indexed pane coordinates to the
+// application running in the pane, and polls straight away so the frame it draws
+// in response is not held back by the idle cadence.
+func (m *Model) SendClick(col, row int) tea.Cmd {
+	if !m.IsActive() {
 		return nil
 	}
-	mouse := click.Mouse()
-	if mouse.Button != tea.MouseLeft {
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendMouse(m.Scope(), m.inputTarget(), col, row),
+		m.schedulePoll(0),
+	)
+}
+
+// SendWheelNotches forwards whole wheel notches at 1-indexed pane coordinates.
+//
+// The wheel is the user's most recent input, so it counts as activity: the poll
+// cadence decays to its slow tier on idle time, and a scroll that did not reset
+// it would be repainted at that tier.
+func (m *Model) SendWheelNotches(up bool, col, row, notches int) tea.Cmd {
+	if !m.IsActive() || notches <= 0 {
 		return nil
 	}
-
-	// Convert to pane-relative coordinates
-	col := mouse.X + 1
-	row := mouse.Y + 1
-
-	return m.input.SendMouse(m.Scope(), m.inputTarget(), col, row)
+	m.State.LastKeyTime = time.Now()
+	return tea.Batch(
+		m.input.SendWheel(m.Scope(), m.inputTarget(), up, col, row, notches),
+		m.schedulePoll(0),
+	)
 }
 
 // handleEscapeTimer processes the escape delay timer firing.
@@ -746,9 +979,8 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 
 	if msg.Err != nil {
 		if IsSessionDeadError(msg.Err) {
-			m.Exit()
-			if m.OnExit != nil {
-				return m.OnExit()
+			if cmd := m.endDeadSession(); cmd != nil {
+				return cmd
 			}
 		}
 		// A transient capture failure must not strand a dead-control recovery.
@@ -790,11 +1022,14 @@ func (m *Model) handleCaptureResult(msg CaptureResultMsg) tea.Cmd {
 	m.State.PaneHeight = msg.PaneHeight
 	m.State.PaneWidth = msg.PaneWidth
 
-	// Update terminal mode state
+	// Update terminal mode state. Mouse tracking is taken from the flag the
+	// capture carried, and taken on every poll: an application turns tracking on
+	// and off without redrawing a cell, so a mode read only when the screen
+	// changed goes stale exactly when it matters.
 	if changed {
 		m.State.BracketedPasteEnabled = DetectBracketedPasteMode(msg.Output)
-		m.State.MouseReportingEnabled = DetectMouseReportingMode(msg.Output)
 	}
+	m.State.MouseReportingEnabled = msg.MouseReporting
 
 	// Control-death recovery is deliberately sequenced after this accepted
 	// capture. This guarantees the fallback screen becomes visible before a
@@ -827,7 +1062,7 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	scope := msg.Scope
 	pollGeneration := msg.Generation
 	return func() tea.Msg {
-		output, row, col, paneHeight, paneWidth, visible, err := m.capture.Capture(target, m.Config.ScrollbackLines)
+		output, state, err := m.capture.Capture(target, m.Config.ScrollbackLines)
 		if err != nil {
 			return CaptureResultMsg{
 				Scope:          scope,
@@ -842,11 +1077,12 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 			PollGeneration: pollGeneration,
 			Target:         target,
 			Output:         output,
-			CursorRow:      row,
-			CursorCol:      col,
-			CursorVisible:  visible,
-			PaneHeight:     paneHeight,
-			PaneWidth:      paneWidth,
+			CursorRow:      state.CursorRow,
+			CursorCol:      state.CursorCol,
+			CursorVisible:  state.CursorVisible,
+			PaneHeight:     state.PaneHeight,
+			PaneWidth:      state.PaneWidth,
+			MouseReporting: state.MouseReporting,
 		}
 	}
 }
@@ -873,6 +1109,38 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 	})
 }
 
+// ResizeDebounce bounds how often a resize is asserted against tmux while a
+// layout is still moving — a window drag delivers one size per frame.
+const ResizeDebounce = 500 * time.Millisecond
+
+// ResizeWait is how long a host must hold off asserting geometry, given when it
+// last did. Zero means assert now. Every surface that resizes a pane asks here:
+// a second literal budget beside this one is how two surfaces come to answer the
+// same layout change at different rates.
+//
+// Waiting is not dropping. A caller that gets a positive wait still owes the
+// pane the newest geometry and must schedule exactly one deferred assertion for
+// it — one, however many sizes arrive inside the window, or a burst becomes a
+// chain of resizes spaced a debounce apart, which is what the budget exists to
+// prevent.
+func ResizeWait(last, now time.Time) time.Duration {
+	if last.IsZero() {
+		return 0
+	}
+	if wait := ResizeDebounce - now.Sub(last); wait > 0 {
+		return wait
+	}
+	return 0
+}
+
+// now reads the model's clock.
+func (m *Model) now() time.Time {
+	if m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
+}
+
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	if width == m.Width && height == m.Height {
@@ -881,7 +1149,18 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 
 	m.Width = width
 	m.Height = height
+	return m.assertDimensions()
+}
 
+// assertDimensions gives the pane the size the model holds, or defers doing
+// so until the debounce window closes.
+//
+// The debounce bounds how often tmux is asked; it must not decide whether the
+// pane is ever given the size. Two layout changes inside one window — ctrl+t
+// then alt+t, a window resize followed by a panel toggle — would otherwise leave
+// the pane at the first one's geometry with nothing left to correct it, because
+// the model already believes it asked for the second.
+func (m *Model) assertDimensions() tea.Cmd {
 	if !m.IsActive() {
 		return nil
 	}
@@ -889,17 +1168,28 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 		return m.restartControlForResize()
 	}
 
-	// Debounce resize
-	if !m.State.LastResizeAt.IsZero() && time.Since(m.State.LastResizeAt) < 500*time.Millisecond {
-		return nil
-	}
-	m.State.LastResizeAt = time.Now()
-
 	target := m.GetTarget()
 	scope := m.Scope()
 	if target == "" {
 		return nil
 	}
+
+	if wait := ResizeWait(m.State.LastResizeAt, m.now()); wait > 0 {
+		// One retry stands for the whole burst: it reads the geometry the model
+		// holds when it fires, which is the newest by then. Arming a second would
+		// chain a resize per size the window passed through.
+		if m.resizeRetryPending {
+			return nil
+		}
+		m.resizeRetryPending = true
+		return tea.Tick(wait, func(time.Time) tea.Msg {
+			return deferredResizeMsg{Scope: scope}
+		})
+	}
+	// Recorded here, where the resize is actually issued: a deferred call that
+	// consumed the budget would push its own retry out of reach.
+	m.State.LastResizeAt = m.now()
+	width, height := m.Width, m.Height
 
 	return func() tea.Msg {
 		// Check if resize is needed

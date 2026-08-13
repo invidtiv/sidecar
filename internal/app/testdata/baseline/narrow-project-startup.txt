@@ -1,0 +1,30 @@
+ Sidecar / sidecar [global-workspace]        td     git     files
+
+╭──────────────────────────────────────────────────────────────────────╮
+│  CURRENT WORK                                                        │
+│                                                                      │
+│                                                                      │
+│ IN PROGRESS:                                                         │
+│   ◆ td-98028c P1 Preview pane tree and document panes through ...    │
+│   ■ td-df7c6a P1 Graduate doc panes after integrated isolated ...    │
+╰──────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────╮
+│  BOARD: All Issues [swimlanes] (1-6 of 69)                           │
+│ ★ REVIEWABLE (7):                                                    │
+│ [REV] ✗ td-8c122a P1 Detect Codex background terminal work as ...    │
+│ [REV] ■ td-847b0c P1 Overview: drop refreshing flash; show age...    │
+│ [REV] ✗ td-0818ef P1 Fix intermittent workspace terminal focus...    │
+│ [REV] ✗ td-3ca6f1 P1 Show live agents from untyped shell manif...    │
+│ [REV] ✗ td-8492c5 P1 Fix HistorySnapshot.Output race with appe...    │
+│   ▼ more below                                                       │
+╰──────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────╮
+│  ACTIVITY LOG (1-4 of 50)                                            │
+│ Time  Sess       Type  Issue       Message                           │
+│ 22:07 ses_ca1ff4 [ACT] lg-41fc6926 created issue                     │
+│ 22:07 ses_ca1ff4 [LOG] td-7dd76f   Tracing exact ... • Pres...       │
+│ 22:07 ses_ca1ff4 [ACT] lg-fa054b0d created issue                     │
+│ 22:07 ses_ca1ff4 [LOG] td-7dd76f   Started work • Preserve liv...    │
+│   ↓ 46 more below                                                    │
+╰──────────────────────────────────────────────────────────────────────╯
+ enter  Details   /  Search   a  Approve   R  Review          ↻ 22:18:37

@@ -18,7 +18,6 @@ func nativeWorkspacePlugin() *Plugin {
 	p.viewMode = ViewModeInteractive
 	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = false
-	p.autoScrollOutput = true
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.Write("zero\none\ntwo")
 	p.worktrees = []*Worktree{{
@@ -51,11 +50,11 @@ func TestWorkspaceNativeCursorFullPreviewAndSuppression(t *testing.T) {
 		t.Fatalf("workspace painted a cursor while native cursor owns it: %q", rendered)
 	}
 
-	p.autoScrollOutput = false
+	p.previewScroll = 1
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("off-live Cursor() = %#v, want nil", cursor)
 	}
-	p.autoScrollOutput = true
+	p.previewScroll = 0
 	p.activePane = PaneSidebar
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("sidebar-focused Cursor() = %#v, want nil", cursor)
@@ -77,7 +76,6 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.sidebarWidth = 40
 	p.shellSelected = true
 	p.selectedShellIdx = 0
-	p.autoScrollOutput = true
 	p.termPanelVisible = true
 	p.termPanelSize = 50
 	p.termPanelSession = "panel-session"

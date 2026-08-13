@@ -64,8 +64,8 @@ func TestApplyTerminalHistoryPrependsAndReplaysPendingScroll(t *testing.T) {
 	if !ok || start != 0 || end != 1220 {
 		t.Fatalf("absolute range = [%d,%d) ok=%v, want [0,1220)", start, end, ok)
 	}
-	if p.previewOffset != 580 {
-		t.Fatalf("preview offset = %d, want 580 after preserving old content and replaying 20-line scroll", p.previewOffset)
+	if p.previewScroll != 20 {
+		t.Fatalf("preview scroll = %d, want the 20-line scroll replayed, unmoved by the prepend", p.previewScroll)
 	}
 	state := p.terminalHistory[terminalHistoryKey("shell", "shell-1")]
 	if state.Loading || !state.Exhausted {
@@ -176,8 +176,8 @@ func TestTerminalHistoryAccumulatesScrollIntentWhileLoading(t *testing.T) {
 		},
 		RequestGen: state.RequestGen,
 	})
-	if p.previewOffset != 579 {
-		t.Fatalf("preview offset = %d, want 579 after replaying accumulated 21-line intent", p.previewOffset)
+	if p.previewScroll != 21 {
+		t.Fatalf("preview scroll = %d, want the accumulated 21-line intent replayed", p.previewScroll)
 	}
 }
 
@@ -186,7 +186,6 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 	p := New()
 	p.shellSelected = true
-	p.autoScrollOutput = true
 	p.shells = []*ShellSession{{
 		TmuxName: "shell-1",
 		Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buffer},
@@ -198,8 +197,7 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 	}
 	oldGen := p.terminalHistory[key].RequestGen
 	p.cancelTerminalHistoryIntent(false)
-	p.previewOffset = p.getMaxScrollOffset()
-	p.autoScrollOutput = true
+	p.jumpPreviewWindow(0)
 
 	p.applyTerminalHistory(terminalHistoryLoadedMsg{
 		Source: terminalHistorySource{Key: key, Target: "shell-1", Buffer: buffer},
@@ -212,8 +210,8 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 		RequestGen: oldGen,
 	})
 	start, _, _ := buffer.AbsoluteRange()
-	if start != 600 || !p.autoScrollOutput {
-		t.Fatalf("late response changed live view: base=%d follow=%v", start, p.autoScrollOutput)
+	if start != 600 || p.previewScroll != 0 {
+		t.Fatalf("late response changed live view: base=%d scroll=%d", start, p.previewScroll)
 	}
 }
 

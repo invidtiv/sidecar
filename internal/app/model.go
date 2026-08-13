@@ -112,9 +112,11 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 }
 
 // TabBounds represents the X position range of a tab for mouse hit testing.
+// The tab is identified by its typed reference, not by a bare index, so a hit
+// region can only ever activate a tab of the scope that painted it.
 type TabBounds struct {
 	Start, End int
-	Plugin     int
+	Tab        tabRef
 }
 
 type projectAddState struct {
@@ -322,10 +324,14 @@ type Model struct {
 	// Intro animation
 	intro IntroModel
 
-	// Overview is an app-owned destination, not a project plugin. It is only
-	// constructed while the default-off feature is enabled.
-	overview       *overview.Model
-	overviewActive bool
+	// Scope state. The app owns the current project and project plugin; these
+	// three fields own the global space that can be shown over it. Overview is
+	// an app-owned destination, not a project plugin, and is only constructed
+	// while its feature is enabled.
+	overview    *overview.Model
+	scope       AppScope
+	globalTab   GlobalTab
+	globalTasks *globalTasksHost
 }
 
 // New creates a new application model.
@@ -362,8 +368,26 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
 	}
+	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
+		m.globalTab = tab
+	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
+		// One resolution of the user's terminal settings, handed to every surface
+		// that hosts a terminal: the browser's live pane answers the chords the
+		// project plugin answers. The bindings are registered here for the same
+		// reason the plugin registers its own — the default table cannot read the
+		// user's config.
+		terminal := TerminalConfig(cfg)
+		m.overview.SetTerminalConfig(terminal)
+		km.RegisterPluginBinding(terminal.ExitKey, "exit-interactive", "global-workspaces-terminal")
+		km.RegisterPluginBinding(terminal.CopyKey, "copy-selection", "global-workspaces-terminal")
+		km.RegisterPluginBinding(terminal.PasteKey, "paste", "global-workspaces-terminal")
+	}
+	if features.IsEnabled(features.TasksPlugin.Name) {
+		// Tasks is a global tab, so its host is built here rather than
+		// registered as a project plugin. Constructing it does no I/O.
+		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
 	}
 	return m
 }
@@ -391,6 +415,13 @@ func (m Model) Init() tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+
+	// The global Tasks host starts alongside them and outlives them: it is not
+	// in the registry, so a later project switch cannot stop or rebuild it. Its
+	// model is built by the returned command, i.e. after the first frame.
+	if cmd := m.globalTasks.start(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	return tea.Batch(cmds...)
@@ -526,7 +557,7 @@ func (m *Model) initProjectSwitcher() {
 
 	// Set cursor to current project if found
 	for i, destination := range m.projectSwitcherFiltered {
-		if m.overviewActive && destination.Kind == destinationOverview {
+		if m.inGlobalScope() && destination.Kind == destinationOverview {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -534,7 +565,7 @@ func (m *Model) initProjectSwitcher() {
 		if m.overview != nil {
 			matchesCurrent = matchesCurrent || destination.Path == m.ui.ProjectRoot
 		}
-		if !m.overviewActive && destination.Kind == destinationProject && matchesCurrent {
+		if !m.inGlobalScope() && destination.Kind == destinationProject && matchesCurrent {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -546,7 +577,7 @@ func (m *Model) initProjectSwitcher() {
 func (m *Model) projectSwitcherDestinations(query string) []projectSwitcherDestination {
 	projects := filterProjects(m.cfg.Projects.List, query)
 	result := make([]projectSwitcherDestination, 0, len(projects)+1)
-	if m.overview != nil {
+	if m.globalScopeAvailable() {
 		result = append(result, projectSwitcherDestination{Kind: destinationOverview, Name: "Overview"})
 	}
 	for i := range projects {
@@ -614,12 +645,21 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
 	m.resetProjectSwitcher()
-	if destination.Kind == destinationOverview && m.overview != nil {
-		m.overviewActive = true
-		m.updateContext()
-		return m.overview.Start(m.overviewProjects())
+	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
+		return m.enterOverview()
 	}
-	m.exitOverview()
+	// The switcher can name the project already covered by global scope. That is
+	// a return, not a switch: switchProjectWithSelection deliberately no-ops for
+	// this path, so leaving with restore=false would strand the active plugin
+	// unfocused and its terminal closed. Restore through the ordinary scope exit
+	// and keep the useful notice without adding a second command beside the one
+	// PluginFocused reconciliation the return requires.
+	if m.inGlobalScope() && destination.Kind == destinationProject && destination.Path == m.ui.WorkDir {
+		focus := m.exitOverview()
+		m.ShowToast("Already on this project", 2*time.Second)
+		return focus
+	}
+	m.leaveOverview(false)
 	m.updateContext()
 	return m.switchProject(destination.Path)
 }
@@ -635,34 +675,64 @@ func (m *Model) overviewProjects() []overview.Project {
 	return selected
 }
 
-// exitOverview closes the Overview and hands keyboard focus back to the plugin
-// underneath. It restores the context itself so no caller can leave the app
-// stuck on "overview" after the board is gone.
-func (m *Model) exitOverview() {
-	if m.overviewActive && m.overview != nil {
-		m.overview.Stop()
+// enterOverview switches to the global space on its last-used tab. The project,
+// worktree, and active plugin identity remain in place, but the covered project
+// surface loses focus before a global surface starts. That focus transition is
+// the visibility contract terminal-owning plugins use to close their models, so
+// only the visible scope can resize or consume a pane.
+func (m *Model) enterOverview() tea.Cmd {
+	if !m.globalScopeAvailable() {
+		return nil
 	}
-	wasActive := m.overviewActive
-	m.overviewActive = false
-	if wasActive {
-		m.updateContext()
+	if m.inGlobalScope() {
+		return m.startVisibleGlobalTab()
 	}
+	if current := m.ActivePlugin(); current != nil {
+		current.SetFocused(false)
+	}
+	m.scope = ScopeGlobal
+	m.ensureVisibleGlobalTab()
+	m.updateContext()
+	return m.startVisibleGlobalTab()
 }
 
-// toggleOverview opens or closes the cross-project agent overview. No-op when
-// the feature is disabled (m.overview is nil).
-func (m *Model) toggleOverview() tea.Cmd {
-	if m.overview == nil {
-		return nil
+// exitOverview leaves the global space and hands keyboard focus back to the
+// project plugin underneath. It restores the context itself so no caller can
+// leave the app stuck on a global context after the space is gone.
+func (m *Model) exitOverview() tea.Cmd { return m.leaveOverview(true) }
+
+// leaveOverview is the common scope transition. restoreProject focuses the
+// covered plugin and emits the ordinary focus notification when the user is
+// returning to it. Callers that immediately switch plugin/project pass false so
+// the hidden old surface cannot reopen a terminal during the handoff.
+func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
+	wasGlobal := m.inGlobalScope()
+	if wasGlobal && m.overview != nil {
+		m.overview.Stop()
 	}
-	if m.overviewActive {
-		m.exitOverview()
+	m.scope = ScopeProject
+	if wasGlobal {
+		if current := m.ActivePlugin(); current != nil && restoreProject {
+			current.SetFocused(true)
+		}
 		m.updateContext()
+		if restoreProject {
+			return PluginFocused()
+		}
+	}
+	return nil
+}
+
+// toggleOverview moves between the global and project spaces. No-op when the
+// global space has no tab to show.
+func (m *Model) toggleOverview() tea.Cmd {
+	if !m.globalScopeAvailable() {
 		return nil
 	}
-	m.overviewActive = true
-	m.updateContext()
-	return m.overview.Start(m.overviewProjects())
+	if m.inGlobalScope() {
+		return m.exitOverview()
+	}
+	return m.enterOverview()
 }
 
 func (m *Model) switchProjectWithInventory(projectPath string, inventory []WorktreeInfo) tea.Cmd {
@@ -698,8 +768,16 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		normalizedProject, _ := normalizePath(projectPath)
 		normalizedTargetMain, _ := normalizePath(targetMainRepo)
 
-		// Only restore saved worktree if switching to the main repo path
-		if restoreLastWorktree && normalizedProject == normalizedTargetMain {
+		// Only restore saved worktree if switching to the main repo path.
+		// A pending worktree selection is an exact destination the user picked
+		// in the global browser — including the main worktree of a project
+		// whose last visit was somewhere else. Restoring that remembered
+		// worktree here would open a neighbour of the item they chose, so an
+		// explicit destination outranks the memory. A shell selection names no
+		// worktree at all: shells are project-scoped and resolve identically
+		// from any worktree, so the remembered worktree still wins there.
+		if restoreLastWorktree && normalizedProject == normalizedTargetMain &&
+			(pending == nil || pending.Kind != plugin.WorkspaceSelectionWorktree) {
 			if savedWorktree := state.GetLastWorktreePath(normalizedTargetMain); savedWorktree != "" {
 				// Don't restore if the saved worktree is where we're coming FROM
 				// (user is explicitly leaving that worktree)
@@ -799,8 +877,35 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	)
 }
 
+// openInGitSwitchMsg switches to a checkout from the global list without
+// using the current project's cached worktree inventory.
+type openInGitSwitchMsg struct {
+	Path string
+}
+
+// openInGitFromOverview leaves global and opens the Git plugin on the
+// checkout the mini-diff showed. A missing path stays in global.
+func (m *Model) openInGitFromOverview(path string) tea.Cmd {
+	if path == "" || !WorktreeExists(path) {
+		return func() tea.Msg {
+			return ToastMsg{Message: "Worktree no longer exists", Duration: 3 * time.Second, IsError: true}
+		}
+	}
+	normalizedPath, _ := normalizePath(path)
+	normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
+	if normalizedPath == normalizedWorkDir {
+		return FocusPlugin("git-status")
+	}
+	// Sequence, not Batch: switch re-inits plugins and deadlocks if
+	// FocusPlugin forks beside it. FocusPluginByIDMsg exits global.
+	return tea.Sequence(
+		func() tea.Msg { return openInGitSwitchMsg{Path: path} },
+		FocusPlugin("git-status"),
+	)
+}
+
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
-	m.exitOverview()
+	m.leaveOverview(false)
 	kind := plugin.WorkspaceSelectionWorktree
 	target := workspace.ProjectRoot
 	key := workspace.Key
@@ -822,7 +927,10 @@ func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea
 		m.updateContext()
 		return m.FocusPluginByID(workspacePluginID)
 	}
-	return m.switchProjectWithSelection(target, nil, &pending, false)
+	// Worktree cards name an exact destination, so the remembered worktree must
+	// not override it. Shells are project-scoped and still open in whichever
+	// worktree the project was last visited in.
+	return m.switchProjectWithSelection(target, nil, &pending, kind == plugin.WorkspaceSelectionShell)
 }
 
 // previewProjectTheme applies the theme for the currently selected project in the switcher.
@@ -1142,6 +1250,48 @@ func (m *Model) clearThemeSwitcherModal() {
 	m.themeSwitcherModal = nil
 	m.themeSwitcherModalWidth = 0
 	m.themeSwitcherMouseHandler = nil
+}
+
+// openIssueInput opens the issue lookup modal and reports that it took the
+// keyboard. It is the one entry point, so the palette reaches the same modal as
+// the key — which is what keeps the capability reachable from the contexts that
+// bind "i" for themselves.
+func (m *Model) openIssueInput() bool {
+	if m.hasModal() {
+		return false
+	}
+	m.showIssueInput = true
+	m.activeContext = "issue-input"
+	m.initIssueInput()
+	return true
+}
+
+// runHostCommand runs a command sidecar's own key handler implements, naming it
+// by the ID the default bindings advertise. It reports whether the ID was one of
+// them.
+func (m *Model) runHostCommand(id string) bool {
+	switch id {
+	case "open-issue":
+		return m.openIssueInput()
+	}
+	return false
+}
+
+// runGlobalWorkspacesCommand runs a palette-selected command the global
+// Workspaces list answers itself. Keys are handled in overview.WorkspacesKey;
+// the palette has no keymap handler, so it lands here.
+func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
+	if !m.globalWorkspacesVisible() || m.overview == nil || m.overview.PreviewInteractive() {
+		return nil
+	}
+	switch id {
+	case "rename-shell":
+		return m.overview.OpenRenameShell()
+	case "open-in-git":
+		return m.overview.OpenSelectedInGit()
+	default:
+		return nil
+	}
 }
 
 // initIssueInput initializes the issue input modal.

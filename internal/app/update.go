@@ -19,7 +19,6 @@ import (
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
@@ -115,9 +114,31 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// The Overview owns keyboard focus while it is open, so a paste must not
-	// reach a hidden plugin (an interactive tmux pane would run it).
-	if m.overviewActive {
+	if m.globalWorkspacesVisible() && m.overview.RenameShellOpen() && m.overview.RenameShellPaste(msg.Content) {
+		return m, nil
+	}
+
+	// A focused global filter is a text input and takes the paste, exactly as
+	// it takes typed characters.
+	if m.globalWorkspacesFilterFocused() && m.overview.WorkspacesPaste(msg.Content) {
+		// A paste can change what the filter matches, and therefore what is
+		// selected; the preview follows the selection.
+		return m, m.overview.WorkspacesPreviewCmd()
+	}
+
+	// A pane the global browser is typing into is a real terminal and takes the
+	// paste, exactly as it takes typed characters.
+	if m.globalWorkspacesVisible() {
+		if handled, cmd := m.overview.WorkspacesTerminalPaste(msg.Content); handled {
+			return m, cmd
+		}
+	}
+
+	// A global view that sidecar draws itself owns keyboard focus, so a paste
+	// must not reach a hidden project plugin (an interactive tmux pane would
+	// run it). The hosted Tasks tab is a real surface and gets its own pastes,
+	// routed to the focused surface by forwardKeyToPlugin.
+	if m.globalOverlayOwnsKeys() {
 		return m, nil
 	}
 
@@ -188,6 +209,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		// The global Tasks host lays out against the same content box.
+		if cmd := m.globalTasks.update(adjustedMsg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// So does the Workspaces browser, whose live pane is sized against the
+		// box the new geometry gives it.
+		if m.overview != nil {
+			if cmd := m.overview.WorkspacesResize(msg.Width, adjustedHeight); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		// First real frame: name the terminal after the project.
 		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -236,6 +268,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleOverview()
 			}
 
+			if start, end, ok := m.getScopeBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+				return m, m.toggleOverview()
+			}
+
 			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				m.showProjectSwitcher = true
 				m.activeContext = "project-switcher"
@@ -254,19 +290,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Check if click is on a tab
+			// Check if click is on a tab. The bounds carry the typed tab of the
+			// scope that painted them, so a click activates that tab and only
+			// that tab.
 			tabBounds := m.getTabBounds()
 			for _, bounds := range tabBounds {
 				if mi.X >= bounds.Start && mi.X < bounds.End {
-					m.exitOverview()
-					return m, m.SetActivePlugin(bounds.Plugin)
+					return m, m.activateTab(bounds.Tab)
 				}
 			}
 			return m, nil
 		}
 
-		if m.overviewActive && m.overview != nil {
-			return m, m.overview.Update(offsetMouseY(msg, -headerHeight))
+		if m.inGlobalScope() {
+			cmd := m.globalMouse(offsetMouseY(msg, -headerHeight))
+			m.updateContext()
+			return m, cmd
 		}
 
 		// Forward mouse events to active plugin with Y offset for app header (2 lines)
@@ -334,8 +373,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RefreshMsg:
 		m.ui.MarkRefresh()
-		if m.overviewActive && m.overview != nil {
-			return m, m.overview.Start(m.overviewProjects())
+		if m.inGlobalScope() {
+			if m.globalTasksFocused() {
+				return m, m.globalTasks.update(msg)
+			}
+			return m, (&m).startVisibleGlobalTab()
 		}
 		// Refresh active plugin
 		if p := m.ActivePlugin(); p != nil {
@@ -377,17 +419,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FocusPluginByIDMsg:
 		// Switch to requested plugin
-		m.exitOverview()
+		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case overview.OpenInGitMsg:
+		return m, m.openInGitFromOverview(msg.Path)
+
+	case openInGitSwitchMsg:
+		// Nil inventory, same as navigateFromOverview: resolve ProjectRoot
+		// from the target checkout, not the current project's worktree cache.
+		pending := plugin.PendingWorkspaceSelection{
+			Kind: plugin.WorkspaceSelectionWorktree,
+			Key:  msg.Path,
+			Path: msg.Path,
+		}
+		return m, m.switchProjectWithSelection(msg.Path, nil, &pending, false)
+
 	case overview.NavigateMsg:
-		if m.overview == nil || !m.overviewActive || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
+		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
 			return m, nil
 		}
 		return m, m.overview.Validate(msg)
 
 	case overview.ValidationMsg:
-		if m.overview == nil || !m.overviewActive || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
+		if !m.globalCatalogNavigable() || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -469,6 +524,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handler := m.pluginCommandHandler(msg.CommandID, msg.Context); handler != nil {
 			return m, handler()
 		}
+		// Sidecar's own globals are answered inside handleKeyMsg rather than by a
+		// registered keymap handler, so the palette resolves them here. They must
+		// not be registered with the keymap instead: findCommand falls back to the
+		// global context whenever the focused context's binding has no handler, so
+		// a registered global would fire for every context that rebinds its key.
+		if (&m).runHostCommand(msg.CommandID) {
+			return m, nil
+		}
+		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
+			return m, cmd
+		}
 		return m, nil
 
 	case version.ProductStatusMsg:
@@ -519,10 +585,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Unparsed terminal input (CSI u / modifyOtherKeys sequences) is keyboard
-	// input in disguise: while the Overview holds focus it must not reach a
-	// hidden interactive pane, same as a regular key press.
-	if m.overviewActive && tty.ExtractUnknownCSIBytes(msg) != nil {
+	// input in disguise: while a global view sidecar draws itself holds focus,
+	// it must not reach a hidden interactive pane, same as a regular key press.
+	if m.globalOverlayOwnsKeys() && tty.ExtractUnknownCSIBytes(msg) != nil {
+		// Unless a global surface is itself driving a terminal, in which case the
+		// sequence is that pane's input and is delivered as the key it encodes.
+		if m.globalWorkspacesVisible() {
+			if handled, cmd := m.overview.WorkspacesTerminalKeySequence(msg); handled {
+				return m, cmd
+			}
+		}
 		return m, nil
+	}
+
+	// An embedded terminal's own messages are scope-tagged, so the global
+	// Workspaces browser is offered every one of them alongside the plugins:
+	// whichever activation owns the scope acts on it and the rest ignore it.
+	if m.overview != nil && tty.IsTerminalMessage(msg) {
+		if cmd := m.overview.WorkspacesTerminalMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Forward other messages to ALL plugins (not just active)
@@ -535,6 +617,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+	// The global Tasks host is not in the registry, so it is forwarded here.
+	// This is what keeps its file watch, ticks, and agent queue running while
+	// any other tab — global or project — is visible.
+	if cmd := m.globalTasks.update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	m.updateContext()
 
@@ -552,6 +640,9 @@ func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+	if cmd := m.globalTasks.update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
 }
@@ -638,11 +729,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, nil
 		case ModalNone:
-			// No modal: Esc closes the Overview and returns to the plugin.
-			if m.overviewActive {
-				m.exitOverview()
-				m.updateContext()
-				return m, nil
+			// No modal: Esc leaves the global space and returns to the project
+			// plugin underneath — unless the focused global surface wants esc
+			// itself. The hosted Tasks tab is a real surface whose overlays,
+			// pickers, and prompts close on esc through precedence level 2; this
+			// branch runs before that level, so without the guard esc would yank
+			// the user out of the global space and leave the overlay open.
+			if m.inGlobalScope() && !m.globalSurfaceWantsEsc() {
+				return m, m.exitOverview()
 			}
 		}
 	}
@@ -652,10 +746,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch action {
 		case "quit":
 			// Save active plugin before quitting
-			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
-			}
-			m.registry.Stop()
+			m.shutdown()
 			return m, tea.Quit
 		case "cancel":
 			m.showQuitConfirm = false
@@ -669,15 +760,27 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleUpdateModalKey(msg)
 	}
 
+	// The global Workspaces browser answers for its own keys before sidecar's
+	// global switch runs. It has to be here rather than beside the Agents board
+	// below: while its filter has focus every printable key is query text, and
+	// the tab/number/quit switches further down would otherwise take "q", "1",
+	// and "`" out of the middle of a search.
+	if !m.hasModal() && m.globalWorkspacesVisible() {
+		if handled, cmd := m.overview.WorkspacesKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
+	}
+
 	// Interactive/inline edit mode: forward ALL keys to plugin including ctrl+c
 	// This ensures characters like `, ~, ?, !, @, q, 1-5 reach tmux instead of triggering app shortcuts
 	// Ctrl+C is forwarded to tmux (to interrupt running processes) instead of showing quit dialog
 	// User can exit interactive mode with Ctrl+\ first, then quit normally
 	// An open modal takes keyboard focus away from the pane; the plugin keeps its
 	// mode, so focus returns to it when the modal closes.
-	// The Overview covers the plugin pane and owns keyboard focus, so a plugin
+	// A global view covers the plugin pane and owns keyboard focus, so a plugin
 	// left in interactive/text-input mode underneath it must not swallow keys.
-	if !m.hasModal() && !m.overviewActive &&
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() &&
 		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
 		// Forward ALL keys to plugin (exit keys and ctrl+c handled by plugin)
 		return m.forwardKeyToPlugin(msg)
@@ -687,7 +790,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// context. Forward all keys to the plugin except ctrl+c.
 	// Uses plugin runtime capability first, then app-level fallback contexts.
 	// Skipped while a modal is open so the modal's own input gets the keys.
-	if !m.hasModal() && !m.overviewActive && (m.consumesTextInput() || m.pluginBlocksGlobalKeys()) {
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() && (m.consumesTextInput() || m.pluginBlocksGlobalKeys()) {
 		// ctrl+c shows quit confirmation
 		if msg.String() == "ctrl+c" {
 			if !m.hasModal() {
@@ -731,12 +834,6 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "q":
-		// In the Overview, q closes the overlay rather than quitting the app.
-		if !m.hasModal() && m.overviewActive {
-			m.exitOverview()
-			m.updateContext()
-			return m, nil
-		}
 		if !m.hasModal() && m.quitKeyExits() {
 			m.initQuitModal()
 			m.showQuitConfirm = true
@@ -873,7 +970,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		allProjects := m.cfg.Projects.List
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			// No projects configured - handle y for LLM prompt, ctrl+a for add, close on q/@
 			switch msg.String() {
 			case "y":
@@ -1294,7 +1391,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.overviewActive && m.overview != nil {
+	if m.agentsBoardVisible() && m.overview != nil {
 		switch msg.String() {
 		case "left", "h", "right", "l", "up", "k", "down", "j", "enter", "r":
 			return m, m.overview.Update(msg)
@@ -1304,31 +1401,30 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Plugin switching
+	// Tab switching. Cycling and the number row move between the tabs of the
+	// active scope only: in the global space they step across Agents /
+	// Workspaces / Tasks, in project space across the plugin tabs. Neither
+	// silently crosses the boundary — K, q, and the brand are the toggle.
 	switch msg.String() {
 	case "`", "]":
-		// Backtick cycles to next plugin (except in text input contexts)
+		// Backtick cycles to the next tab (except in text input contexts)
 		if m.consumesTextInput() {
 			break
 		}
-		m.exitOverview()
-		return m, m.NextPlugin()
+		return m, m.cycleTabs(1)
 	case "~", "[":
-		// Tilde cycles to previous plugin (except in text input contexts)
+		// Tilde cycles to the previous tab (except in text input contexts)
 		if m.consumesTextInput() {
 			break
 		}
-		m.exitOverview()
-		return m, m.PrevPlugin()
+		return m, m.cycleTabs(-1)
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		// Number keys for direct plugin switching
+		// Number keys for direct tab switching.
 		// Block in text input contexts (user is typing numbers)
 		if m.consumesTextInput() {
 			break
 		}
-		idx := int([]rune(msg.Text)[0] - '1')
-		m.exitOverview()
-		return m, m.SetActivePlugin(idx)
+		return m, m.selectTabByNumber(int([]rune(msg.Text)[0] - '1'))
 	}
 
 	// Toggles
@@ -1338,11 +1434,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.showPalette {
 			// Open palette with current context
 			pluginCtx := "global"
-			if p := m.ActivePlugin(); p != nil {
+			if p := m.focusedSurface(); p != nil {
 				pluginCtx = p.ID()
 			}
 			m.palette.SetSize(m.width, m.height)
-			m.palette.Open(m.keymap, m.registry.Plugins(), m.activeContext, pluginCtx)
+			// surfacePlugins includes the global Tasks host, so its commands
+			// stay reachable now that it is not a registry plugin.
+			m.palette.Open(m.keymap, m.surfacePlugins(), m.activeContext, pluginCtx)
 			m.activeContext = "palette"
 		} else {
 			m.updateContext()
@@ -1416,10 +1514,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "i":
-		if !m.hasModal() {
-			m.showIssueInput = true
-			m.activeContext = "issue-input"
-			m.initIssueInput()
+		// A context that binds "i" for itself answers before the issue modal,
+		// or the binding help advertises could never fire. Workspaces no longer
+		// takes the key — Enter / E / click start typing — so find-TD-task
+		// stays reachable on those lists.
+		if _, bound := m.keymap.CommandForContextKey(m.activeContext, "i"); bound {
+			break
+		}
+		if m.openIssueInput() {
 			return m, nil
 		}
 	case "r":
@@ -1437,9 +1539,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// The Overview covers the plugin pane: unhandled keys stop here instead of
-	// reaching a plugin the user cannot see.
-	if m.overviewActive {
+	// A global view sidecar draws itself covers the plugin pane: unhandled keys
+	// stop here instead of reaching a plugin the user cannot see.
+	if m.globalOverlayOwnsKeys() {
 		return m, nil
 	}
 
@@ -1457,8 +1559,24 @@ func (m *Model) updateContext() {
 		m.activeContext = ctx
 		return
 	}
-	if m.overviewActive {
-		m.activeContext = "overview"
+	if m.inGlobalScope() {
+		// The visible global tab owns the context. Tasks reports its own, so a
+		// Tasks overlay keeps sidecar's globals off its keyboard.
+		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+			m.activeContext = host.FocusContext()
+			return
+		}
+		if m.globalWorkspacesFilterFocused() {
+			// A focused filter is a text-input context, so sidecar's printable
+			// shortcuts stay off the query.
+			m.activeContext = "global-workspaces-filter"
+			return
+		}
+		if m.globalWorkspacesVisible() && m.overview != nil {
+			m.activeContext = m.overview.WorkspaceFocusContext()
+			return
+		}
+		m.activeContext = m.globalTab.context()
 		return
 	}
 	if p := m.ActivePlugin(); p != nil {
@@ -1472,7 +1590,7 @@ func (m *Model) updateContext() {
 // A handler declared for the selected context wins over one declared elsewhere.
 func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
 	var fallback func() tea.Cmd
-	for _, p := range m.registry.Plugins() {
+	for _, p := range m.surfacePlugins() {
 		for _, cmd := range p.Commands() {
 			if cmd.ID != commandID || cmd.Handler == nil {
 				continue
@@ -1497,10 +1615,10 @@ func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
 // conversations, workspace, notes, or td-monitor. Their keys still reach the
 // global switch first and fall through to the plugin exactly as before.
 func (m *Model) activeKeyRouter() plugin.KeyRouter {
-	if m.hasModal() || m.overviewActive {
+	if m.hasModal() {
 		return nil
 	}
-	p := m.ActivePlugin()
+	p := m.focusedSurface()
 	if p == nil {
 		return nil
 	}
@@ -1514,10 +1632,10 @@ func (m *Model) activeKeyRouter() plugin.KeyRouter {
 // pluginBlocksGlobalKeys reports that the active plugin has an overlay owning
 // the keyboard (precedence level 2).
 func (m *Model) pluginBlocksGlobalKeys() bool {
-	if m.hasModal() || m.overviewActive {
+	if m.hasModal() {
 		return false
 	}
-	p := m.ActivePlugin()
+	p := m.focusedSurface()
 	blocker, ok := p.(plugin.GlobalKeyBlocker)
 	return ok && blocker.BlocksGlobalKeys()
 }
@@ -1546,9 +1664,15 @@ func (m *Model) quitKeyExits() bool {
 	return isRootContext(m.activeContext)
 }
 
-// forwardKeyToPlugin hands a key to the active plugin (precedence level 5, and
-// the delivery mechanism for levels 2 and 3).
+// forwardKeyToPlugin hands a key to the focused surface (precedence level 5,
+// and the delivery mechanism for levels 2 and 3). That is the global Tasks host
+// while its tab is visible, and the active project plugin otherwise.
 func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.globalTasksFocused() {
+		cmd := m.globalTasks.update(msg)
+		m.updateContext()
+		return m, cmd
+	}
 	p := m.ActivePlugin()
 	if p == nil {
 		return m, nil
@@ -1565,12 +1689,10 @@ func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
 // consumesTextInput returns true when the active context should treat printable
 // keys as text input (block app-level navigation shortcuts).
 func (m *Model) consumesTextInput() bool {
-	// The Overview overlays the plugin pane and takes keyboard focus, so a
+	// A global view overlays the plugin pane and takes keyboard focus, so a
 	// plugin sitting in a text-input mode underneath it does not consume keys.
-	if m.overviewActive {
-		return false
-	}
-	if p := m.ActivePlugin(); p != nil {
+	// focusedSurface answers nil for exactly that case.
+	if p := m.focusedSurface(); p != nil {
 		if c, ok := p.(plugin.TextInputConsumer); ok && c.ConsumesTextInput() {
 			return true
 		}
@@ -1582,7 +1704,7 @@ func (m *Model) consumesTextInput() bool {
 // Root contexts are plugin top-level views (not sub-views like detail/diff/commit).
 func isRootContext(ctx string) bool {
 	switch ctx {
-	case "global", "", "overview":
+	case "global", "", "overview", "global-workspaces":
 		return true
 	// Plugin root contexts where 'q' is not used for navigation
 	case "conversations", "conversations-sidebar", "conversations-main":
@@ -1608,6 +1730,8 @@ func isTextInputContext(ctx string) bool {
 	switch ctx {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
+		"global-workspaces-filter",
+		"global-workspaces-rename",
 		"issue-input":
 		return true
 	default:
@@ -1860,10 +1984,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case UpdateModalComplete:
 		// Handle 'q' specially for quit
 		if key == "q" {
-			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
-			}
-			m.registry.Stop()
+			m.shutdown()
 			return m, tea.Quit
 		}
 		// Route to modal for Tab/Shift+Tab/Enter/Esc
@@ -1873,10 +1994,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			action, cmd := m.updateCompleteModal.HandleKey(msg)
 			switch action {
 			case "quit":
-				if activePlugin := m.ActivePlugin(); activePlugin != nil {
-					_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
-				}
-				m.registry.Stop()
+				m.shutdown()
 				return m, tea.Quit
 			case "cancel":
 				m.updateModalState = UpdateModalClosed
@@ -1983,10 +2101,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		action := m.updateCompleteModal.HandleMouse(msg, m.updateCompleteMouseHandler)
 		switch action {
 		case "quit":
-			if activePlugin := m.ActivePlugin(); activePlugin != nil {
-				_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
-			}
-			m.registry.Stop()
+			m.shutdown()
 			return m, tea.Quit
 		case "cancel":
 			m.updateModalState = UpdateModalClosed
@@ -2019,10 +2134,7 @@ func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch action {
 	case "quit":
 		// Save active plugin before quitting
-		if activePlugin := m.ActivePlugin(); activePlugin != nil {
-			_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
-		}
-		m.registry.Stop()
+		m.shutdown()
 		return m, tea.Quit
 	case "cancel":
 		m.showQuitConfirm = false

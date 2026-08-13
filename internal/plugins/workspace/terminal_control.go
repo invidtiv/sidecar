@@ -82,13 +82,30 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 func (p *Plugin) newWorkspaceTerminal() *tty.Model {
-	config := tty.DefaultConfig()
-	config.ExitKey = p.getInteractiveExitKey()
-	config.AttachKey = p.getInteractiveAttachKey()
-	config.CopyKey = p.getInteractiveCopyKey()
-	config.PasteKey = p.getInteractivePasteKey()
+	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
-	return tty.New(&config)
+	model := tty.New(&config)
+	model.SetHooks(p.terminalHooks())
+	return model
+}
+
+// terminalHooks is everything this surface owns about a live pane, said once, to
+// the component that owns the rest. It is one value rather than field-by-field
+// assignment so a hook cannot be added to one embedding host and forgotten in
+// the other — the global browser states its contract the same way.
+func (p *Plugin) terminalHooks() tty.Hooks {
+	return tty.Hooks{
+		OnKey:          p.interactiveKey,
+		BeforeSend:     p.beforeInteractiveSend,
+		OnExit:         p.leaveInteractiveMode,
+		OnAttach:       p.attachFromInteractive,
+		OnSessionEnded: p.noteSessionEnded,
+		// This surface draws the pane whether or not the user is typing into it,
+		// so leaving the mode releases the keyboard and nothing else: closing here
+		// would drop the loaded scrollback the user just read and reconciliation
+		// would reopen the pane with an empty buffer on the same update.
+		ExitAction: tty.ExitReleasesInput,
+	}
 }
 
 func (p *Plugin) resetTerminalModels() {
@@ -113,6 +130,18 @@ func (p *Plugin) stopTerminalModels() {
 	}
 	p.primaryTerminalTarget = workspaceTerminalTarget{}
 	p.panelTerminalTarget = workspaceTerminalTarget{}
+}
+
+// noteTerminalMouseActivity records a mouse event against both terminal
+// surfaces. It is deliberately not scoped to whichever one is live: the gate it
+// feeds asks whether a mouse event reached this host at all.
+func (p *Plugin) noteTerminalMouseActivity() {
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.NoteMouseActivity()
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.NoteMouseActivity()
+	}
 }
 
 func (p *Plugin) setTerminalFocus(focused bool) {
@@ -146,7 +175,7 @@ func (p *Plugin) terminalOutputSurfaceVisible() bool {
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {
 		return false
 	}
-	return p.shellSelected || p.previewTab == PreviewTabOutput
+	return p.selectingShell() || p.previewTab == PreviewTabOutput
 }
 
 func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
@@ -171,10 +200,10 @@ func (p *Plugin) desiredPrimaryTerminal() (workspaceTerminalTarget, bool) {
 	}
 	width, height := p.calculateAgentPaneDimensions()
 	width = p.terminalContentWidth(width)
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.IsOrphaned || shell.Agent == nil ||
-			shell.Agent.TmuxSession == "" || shell.Agent.TmuxPane == "" {
+			shell.Agent.TmuxSession == "" {
 			return workspaceTerminalTarget{}, false
 		}
 		return workspaceTerminalTarget{
@@ -261,6 +290,9 @@ func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspace
 		return
 	}
 	if role == workspaceTerminalPanel {
+		if p.termPanelOutput != model.State.OutputBuf {
+			p.releaseTerminalDocProjection(true)
+		}
 		p.termPanelOutput = model.State.OutputBuf
 		return
 	}
@@ -268,11 +300,17 @@ func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspace
 	case "agent":
 		if wt := p.findWorktree(target.SourceID); wt != nil && wt.Agent != nil &&
 			wt.Agent.TmuxSession == target.Session {
+			if wt.Agent.OutputBuf != model.State.OutputBuf {
+				p.releaseTerminalDocProjection(false)
+			}
 			wt.Agent.OutputBuf = model.State.OutputBuf
 		}
 	case "shell":
 		if shell := p.findShellByName(target.SourceID); shell != nil && shell.Agent != nil &&
 			shell.Agent.TmuxSession == target.Session {
+			if shell.Agent.OutputBuf != model.State.OutputBuf {
+				p.releaseTerminalDocProjection(false)
+			}
 			shell.Agent.OutputBuf = model.State.OutputBuf
 		}
 	}
@@ -310,7 +348,6 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 	p.interactiveState.PaneWidth = state.PaneWidth
 	p.interactiveState.BracketedPasteEnabled = state.BracketedPasteEnabled
 	p.interactiveState.MouseReportingEnabled = state.MouseReportingEnabled
-	p.interactiveState.PaneMouseReporting = state.MouseReportingEnabled
 	p.interactiveState.LastKeyTime = state.LastKeyTime
 }
 

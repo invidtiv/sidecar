@@ -1,14 +1,14 @@
 package workspace
 
 import (
-	"time"
-
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
@@ -26,10 +26,10 @@ func (p *Plugin) isModalViewMode() bool {
 func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab,
+		regionWorktreeItem, regionPreviewTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
-		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent,
+		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
 		regionDiffTabPreviewFile, regionDiffTabFileListPane:
@@ -41,10 +41,10 @@ func isBackgroundRegion(regionID string) bool {
 
 // handleMouse processes mouse input.
 func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
-	// Record the time of every mouse event, including motion. This is used by
-	// handleInteractiveKeys to suppress bare "[" runes that arrive shortly after
-	// mouse activity — see the split-CSI comment in handleInteractiveKeys.
-	p.lastMouseEventTime = time.Now()
+	// Every mouse event counts as activity for the terminals, routed to one of
+	// them or not: the shared key gate reads that clock to tell the bracket of a
+	// split SGR report from a typed one, and the component owns it.
+	p.noteTerminalMouseActivity()
 
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
@@ -99,22 +99,17 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// A release can be lost when the pointer leaves the window or focus changes.
 	// The mouse handler cancels that stale drag on the next button-less motion;
 	// cancel the paired click-to-activate intent at the same boundary.
-	lostRelease := action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging()
-	if lostRelease {
-		// Neither activation nor a forwarded click survives a release the app
-		// never saw.
-		p.pendingClickResolution = clickResolutionNone
-	}
-	lostTerminalRelease := lostRelease &&
-		(dragSourceBefore == regionPreviewPane || dragSourceBefore == regionTermPanelContent)
-	if lostTerminalRelease {
-		if p.selection.Anchor.Valid() {
+	if action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging() {
+		// Drop what the press armed and end the gesture: an edge scroll tick still
+		// in flight belongs to a gesture that is over, and neither activation nor a
+		// forwarded click survives a release the app never saw.
+		p.pointer.Abandon()
+		if p.terminalPointerIntent(mouse.ActionHover, "", dragSourceBefore, true) == tty.PointerAbandon &&
+			p.selection.Anchor.Valid() {
 			// A release outside the window never reaches Bubble Tea. Close the local
 			// selection gesture at the same point the shared handler abandons its drag.
 			return p.finishInteractiveSelection()
 		}
-		// No anchor to finish, but the gesture is over: stop any edge auto-scroll.
-		p.beginSelectionGesture()
 	}
 
 	switch action.Type {
@@ -593,6 +588,26 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	return nil
 }
 
+// notePressAwayFromTerminal answers a button going down anywhere but a
+// terminal: it ends the gesture the press armed and the mode it was armed in,
+// so a divider, a row and the sidebar all leave the pane identically. Ending
+// only one of them would leave a live pane holding the keyboard behind a
+// divider drag, or fire the armed click under a selection the user moved away
+// from. Which actions put a button down is the shared layer's, or a surface
+// answers a double click differently from a single one.
+func (p *Plugin) notePressAwayFromTerminal(action mouse.MouseAction) {
+	if action.Region == nil || !tty.PressesTerminal(action.Type) {
+		return
+	}
+	if !tty.PressLeavesTerminal(action.Region.ID, regionPreviewPane, regionTermPanelContent) {
+		return
+	}
+	p.pointer.Abandon()
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+}
+
 // handleMouseClick handles single click events.
 func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if action.Region == nil {
@@ -605,9 +620,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() && isBackgroundRegion(action.Region.ID) {
 		return nil
 	}
-	if action.Region.ID != regionPreviewPane && action.Region.ID != regionTermPanelContent {
-		p.pendingClickResolution = clickResolutionNone
-	}
+	p.notePressAwayFromTerminal(action)
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
 	if p.viewMode == ViewModeInteractive {
@@ -624,7 +637,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if p.interactiveState != nil && p.interactiveState.Active {
 				return p.prepareInteractiveTerminalGesture(action)
 			}
-			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
+			return p.forwardClickToTmux(action.X, action.Y)
 		case regionPreviewPane:
 			p.activePane = PanePreview
 			if p.interactiveState != nil && p.interactiveState.TermPanel {
@@ -637,11 +650,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if p.interactiveState != nil && p.interactiveState.Active {
 				return p.prepareInteractiveTerminalGesture(action)
 			}
-			return tea.Batch(p.forwardClickToTmux(action.X, action.Y), p.pollInteractivePaneImmediate())
-		default:
-			// Click outside both panes — exit interactive mode
-			p.exitInteractiveMode()
-			// Continue to handle the click normally
+			return p.forwardClickToTmux(action.X, action.Y)
 		}
 	}
 
@@ -659,19 +668,22 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.activePane = PaneSidebar
 	case regionPreviewPane:
 		p.activePane = PanePreview
+		p.paneFocus = terminalLeafID(p.paneRoot)
 		if p.termPanelVisible {
 			p.termPanelFocused = false
 		}
 		// Keep the passive viewport stable through the whole pointer gesture.
 		// A release without motion makes the terminal live; motion selects text.
-		// Entering here used to resize/reframe the terminal before drag tracking
-		// was armed, which made immediate click-drag selection jump or disappear.
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		// Entering interactive mode here would resize and reframe the terminal
+		// before drag tracking is armed, so an immediate click-drag selection
+		// jumps or disappears.
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			if !action.Shift && !action.Alt {
 				if cmd, ok := p.activateTerminalLink(action); ok {
 					return cmd
 				}
 			}
+			p.releaseTerminalDocProjection(false)
 			return p.prepareTerminalClickOrDrag(action)
 		}
 	case regionPaneDivider:
@@ -687,29 +699,74 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
 		p.activePane = PanePreview
+		p.paneFocus = terminalLeafID(p.paneRoot)
 		p.termPanelFocused = true
 		if !action.Shift && !action.Alt {
 			if cmd, ok := p.activateTerminalLink(action); ok {
 				return cmd
 			}
 		}
+		p.thawTermPanelWindow()
 		return p.prepareTerminalClickOrDrag(action)
+	case regionDocPane:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+			}
+		}
+	case regionDocMode:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+			}
+		}
+		p.toggleDocRenderMode()
+	case regionDocClose:
+		return p.closeDocPane()
+	case regionPaneTreeDivider:
+		if splitID, ok := action.Region.Data.(int); ok {
+			if split := FindPane(p.paneRoot, splitID); split != nil && split.Split != nil {
+				p.paneDragSplitID = splitID
+				p.mouseHandler.StartDrag(action.X, action.Y, regionPaneTreeDivider, split.Split.Ratio)
+			}
+		}
 	case regionTermPanelDivider:
 		// Start drag for terminal panel resizing (percentage-based).
 		startSize := p.termPanelEffectiveSize()
 		p.mouseHandler.StartDrag(action.X, action.Y, regionTermPanelDivider, startSize)
+	case regionListFilter:
+		// Clicking the filter row focuses the query, the same as `/`.
+		p.activePane = PaneSidebar
+		p.focusListFilter()
 	case regionWorktreeItem:
 		// Click on worktree or shell entry - select it
+		if hit, ok := action.Region.Data.(nestedShellHit); ok {
+			parent, shell := p.findNestedShell(hit.TmuxName)
+			if shell != nil {
+				if p.shellSelected || p.selectedNestedTmux != hit.TmuxName {
+					p.selectNestedShell(parent, hit.TmuxName)
+					p.resetPreviewScroll()
+					p.taskLoading = false
+					p.exitInteractiveMode()
+					p.saveSelectionState()
+				}
+				p.ensureVisible()
+				p.activePane = PaneSidebar
+				return p.loadSelectedContent()
+			}
+		}
 		if idx, ok := action.Region.Data.(int); ok {
 			if idx < 0 {
 				// Shell entry clicked (negative index: -1 -> shells[0], -2 -> shells[1], etc.)
 				shellIdx := -(idx + 1)
 				if shellIdx >= 0 && shellIdx < len(p.shells) {
-					if !p.shellSelected || p.selectedShellIdx != shellIdx {
-						p.shellSelected = true
-						p.selectedShellIdx = shellIdx
-						p.previewOffset = 0
-						p.autoScrollOutput = true
+					if !p.shellSelected || p.selectedShellIdx != shellIdx || p.selectedNestedTmux != "" {
+						p.selectTopShellAt(shellIdx)
+						p.resetPreviewScroll()
 						p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 						// Exit interactive mode when switching selection (td-fc758e88)
 						p.exitInteractiveMode()
@@ -720,11 +777,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
 				// Worktree clicked
-				if p.shellSelected || p.selectedIdx != idx {
-					p.shellSelected = false
-					p.selectedIdx = idx
-					p.previewOffset = 0
-					p.autoScrollOutput = true
+				if p.shellSelected || p.selectedNestedTmux != "" || p.selectedIdx != idx {
+					p.selectWorktreeAt(idx)
+					p.resetPreviewScroll()
 					p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 					// Exit interactive mode when switching selection (td-fc758e88)
 					p.exitInteractiveMode()
@@ -740,9 +795,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		if idx, ok := action.Region.Data.(int); ok && idx >= 0 && idx <= 2 {
 			prevTab := p.previewTab
 			p.previewTab = PreviewTab(idx)
-			p.previewOffset = 0
+			p.resetPreviewScroll()
 			p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-			p.autoScrollOutput = true
 			if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
 				p.clearTerminalSelection()
 			}
@@ -971,31 +1025,39 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	p.notePressAwayFromTerminal(action)
+
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
 		p.termPanelFocused = true
 		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			p.termPanelFocused = false
 			return p.selectTerminalWord(action)
 		}
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
+		if hit, ok := action.Region.Data.(nestedShellHit); ok {
+			parent, shell := p.findNestedShell(hit.TmuxName)
+			if shell != nil {
+				p.selectNestedShell(parent, hit.TmuxName)
+				p.saveSelectionState()
+				return p.ensureShellAndAttach(shell)
+			}
+		}
 		if idx, ok := action.Region.Data.(int); ok {
 			if idx < 0 {
 				// Double-click on shell entry (negative index: -1 -> shells[0], -2 -> shells[1], etc.)
 				shellIdx := -(idx + 1)
 				if shellIdx >= 0 && shellIdx < len(p.shells) {
-					p.shellSelected = true
-					p.selectedShellIdx = shellIdx
+					p.selectTopShellAt(shellIdx)
 					p.saveSelectionState()
 					return p.ensureShellAndAttachByIndex(shellIdx)
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
-				p.shellSelected = false
-				p.selectedIdx = idx
+				p.selectWorktreeAt(idx)
 				p.saveSelectionState()
 				wt := p.worktrees[idx]
 				if wt.Agent != nil {
@@ -1097,13 +1159,14 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 	if p.isModalViewMode() || action.Region == nil {
 		return nil
 	}
+	p.notePressAwayFromTerminal(action)
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
 		p.termPanelFocused = true
 		return p.selectTerminalLine(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
+		if p.previewTab == PreviewTabOutput || p.selectingShell() {
 			p.activePane = PanePreview
 			p.termPanelFocused = false
 			return p.selectTerminalLine(action)
@@ -1119,21 +1182,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	// A wheel action always carries its distance in lines (mouse.WheelScrollLines
+	// per notch); a second normalization here would be a second answer to how far
+	// one notch travels.
 	delta := action.Delta
-	if delta == 0 {
-		if action.Type == mouse.ActionScrollUp {
-			delta = -1
-		} else {
-			delta = 1
-		}
-	}
-
-	// In interactive mode the wheel belongs to the pane: either the app running
-	// there gets it as a mouse report, or it scrolls the captured output. Exit
-	// interactive mode first to scroll the sidebar.
-	if p.viewMode == ViewModeInteractive {
-		return p.forwardScrollToTmux(action, delta)
-	}
 
 	// Determine which pane based on region or position
 	regionID := ""
@@ -1141,22 +1193,31 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		regionID = action.Region.ID
 	}
 
+	// Whether a notch is placed by region or stays with the pointer is the shared
+	// rule's answer, argued there.
+	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
+		return p.forwardScrollToTmux(action, delta)
+	}
+
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionTermPanelContent:
-		// Scroll terminal panel output directly (position-based, not focus-based)
-		p.termPanelScroll -= delta
-		if p.termPanelScroll < 0 {
-			p.termPanelScroll = 0
-		}
-		if delta > 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if delta < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -delta)
+	case regionDocPane, regionDocMode:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+				if doc := p.docs[leaf.DocID]; doc != nil {
+					doc.view.Scroll(delta)
+				}
+			}
 		}
 		return nil
+	case regionTermPanelContent:
+		// Scroll the panel under the pointer, whether or not it holds focus.
+		// What a notch does to a terminal surface — thaw, answer the selection,
+		// place the window, reach for history at the bound — is the shared local
+		// wheel rule's; writing any of it here is what let this path walk past
+		// the top of the loaded buffer and step over the history-load trigger.
+		return p.scrollTerminalWindowByWheel(true, delta)
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
 		// Scroll file/commit list in diff tab
 		return p.scrollDiffTabFileList(delta)
@@ -1181,6 +1242,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	case regionPreviewPane:
+		p.releaseTerminalDocProjection(false)
 		return p.scrollPreview(delta)
 	case regionKanbanCard, regionKanbanColumn:
 		// Scroll the lane under the pointer, not whichever lane happened to
@@ -1213,14 +1275,16 @@ func (p *Plugin) scrollSidebar(delta int) tea.Cmd {
 	oldShellSelected := p.shellSelected
 	oldShellIdx := p.selectedShellIdx
 	oldWorktreeIdx := p.selectedIdx
+	oldNested := p.selectedNestedTmux
 
 	// Delegate to moveCursor which handles multi-shell navigation properly
 	p.moveCursor(delta)
 
 	// Check if selection actually changed
 	selectionChanged := p.shellSelected != oldShellSelected ||
+		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
-		(!p.shellSelected && p.selectedIdx != oldWorktreeIdx)
+		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
 
 	if selectionChanged {
 		return p.loadSelectedContent()
@@ -1303,65 +1367,22 @@ func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
 
 // scrollPreview scrolls the preview pane content.
 func (p *Plugin) scrollPreview(delta int) tea.Cmd {
-	// Unified scroll: delta < 0 = scroll up (toward top), delta > 0 = scroll down (toward bottom)
-	// Output tab uses burst debouncing for trackpad scroll smoothness.
-	if p.previewTab == PreviewTabOutput || p.shellSelected {
-		now := time.Now()
-
-		// Detect and handle scroll bursts (fast trackpad scrolling)
-		timeSinceLastScroll := now.Sub(p.lastScrollTime)
-		if timeSinceLastScroll < scrollBurstTimeout {
-			p.scrollBurstCount++
-		} else {
-			// Burst ended, reset
-			p.scrollBurstCount = 1
-			p.scrollBurstStarted = now
-		}
-
-		// During burst mode, use more aggressive debouncing
-		debounceInterval := scrollDebounceInterval
-		if p.scrollBurstCount > scrollBurstThreshold {
-			debounceInterval = scrollBurstDebounce
-		}
-
-		p.pendingScrollDelta += delta
-		if timeSinceLastScroll < debounceInterval {
+	p.releaseTerminalDocProjection(false)
+	// Unified scroll: delta < 0 = scroll up (toward older content), delta > 0 =
+	// scroll down (toward newer). A terminal's window is placed from its live
+	// bottom, so a notch up is a step back through scrollback; a document's
+	// offset is an absolute line from the top, so a notch up is a smaller one.
+	if p.previewShowsTerminal() {
+		// The Output tab uses burst debouncing for trackpad scroll smoothness.
+		var flush bool
+		if delta, flush = p.wheel.Add(delta, p.now()); !flush {
 			return nil
 		}
-		p.lastScrollTime = now
-		delta = p.pendingScrollDelta
-		p.pendingScrollDelta = 0
+		return p.scrollTerminalWindowByWheel(false, delta)
 	}
 
-	// Unified offset: 0 = top of content, higher = further down
 	maxOffset := p.getMaxScrollOffset()
-	if delta < 0 {
-		// Scroll UP: move toward top of content
-		if (p.previewTab == PreviewTabOutput || p.shellSelected) &&
-			p.autoScrollOutput && maxOffset >= p.previewOffset {
-			p.previewOffset = maxOffset
-		}
-		p.previewOffset += delta
-		if p.previewOffset < 0 {
-			p.previewOffset = 0
-		}
-		if p.previewTab == PreviewTabOutput || p.shellSelected {
-			p.autoScrollOutput = false
-			if p.previewOffset == 0 {
-				return p.loadOlderTerminalHistory(false, -delta)
-			}
-		}
-	} else {
-		// Scroll DOWN: move toward bottom of content
-		p.previewOffset += delta
-		if p.previewOffset > maxOffset {
-			p.previewOffset = maxOffset
-		}
-		if (p.previewTab == PreviewTabOutput || p.shellSelected) && p.previewOffset >= maxOffset {
-			p.autoScrollOutput = true
-			p.cancelTerminalHistoryIntent(false)
-		}
-	}
+	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
 	return nil
 }
 
@@ -1401,16 +1422,7 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 	case regionPaneDivider:
 		// Calculate new sidebar width based on drag
 		startValue := p.mouseHandler.DragStartValue()
-		newWidth := startValue + (action.DragDX * 100 / p.width) // Convert px delta to %
-
-		// Clamp to reasonable bounds (10% - 60%)
-		if newWidth < 10 {
-			newWidth = 10
-		}
-		if newWidth > 60 {
-			newWidth = 60
-		}
-		p.sidebarWidth = newWidth
+		p.sidebarWidth = workspacelist.ResizePercent(startValue, action.DragDX, p.width)
 	case regionDiffTabDivider:
 		// Calculate new diff tab file list width based on drag (pixel-based)
 		startValue := p.mouseHandler.DragStartValue()
@@ -1452,7 +1464,24 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			}
 			p.termPanelSize = newSize
 		}
+	case regionPaneTreeDivider:
+		split := FindPane(p.paneRoot, p.paneDragSplitID)
+		content, ok := p.previewContentBox()
+		if split == nil || split.Split == nil || !ok {
+			return nil
+		}
+		startValue := p.mouseHandler.DragStartValue()
+		newRatio := startValue
+		if split.Split.Axis == SplitRows && content.H > 0 {
+			newRatio += action.DragDY * 100 / content.H
+		} else if split.Split.Axis == SplitCols && content.W > 0 {
+			newRatio += action.DragDX * 100 / content.W
+		}
+		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
 	case regionPreviewPane, regionTermPanelContent:
+		if p.terminalPointerIntent(mouse.ActionDrag, "", dragRegion, false) != tty.PointerDrag {
+			return nil
+		}
 		if !p.selection.Anchor.Valid() && !p.anchorDragFromOrigin(action) {
 			return nil
 		}
@@ -1461,13 +1490,28 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 	return nil
 }
 
+// terminalPointerIntent asks the shared layer what a pointer action over this
+// surface's terminals means. Which regions draw one is this plugin's to name;
+// what the action means over them is not.
+func (p *Plugin) terminalPointerIntent(action mouse.ActionType, region, gestureRegion string, lostRelease bool) tty.PointerIntent {
+	terminal := func(id string) bool {
+		return id == regionPreviewPane || id == regionTermPanelContent
+	}
+	return tty.PointerIntentFor(tty.PointerIntentInput{
+		Action:       action,
+		OverTerminal: terminal(region),
+		FromTerminal: terminal(gestureRegion),
+		LostRelease:  lostRelease,
+	})
+}
+
 // handleMouseDragEnd handles the end of a drag operation.
 func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// Guard: ignore drag-end when a modal is open (td-f63097). The release is
 	// swallowed, so drop the click resolution it would have carried out too —
 	// the same boundary where the auto-scroll tick abandons its gesture.
 	if p.isModalViewMode() {
-		p.pendingClickResolution = clickResolutionNone
+		p.pointer.Resolution = tty.ClickNone
 		return nil
 	}
 
@@ -1475,13 +1519,18 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
 	}
-	terminalGesture := dragSource == regionPreviewPane || dragSource == regionTermPanelContent
-	if terminalGesture && (p.selection.Anchor.Valid() || p.pendingClickResolution != clickResolutionNone) {
+	if p.terminalPointerIntent(mouse.ActionDragEnd, "", dragSource, false) == tty.PointerFinish &&
+		(p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {
 		return p.finishInteractiveSelection()
 	}
 
 	// Persist widths based on what was being dragged
 	switch dragSource {
+	case regionPaneTreeDivider:
+		p.saveSelectionState()
+		p.paneDragSplitID = 0
+		p.lastDragRegion = ""
+		return p.resizeDocTerminalCmd()
 	case regionDiffTabDivider:
 		_ = state.SetDiffTabFileListWidth(p.diffTabListWidth)
 	case regionTermPanelDivider:

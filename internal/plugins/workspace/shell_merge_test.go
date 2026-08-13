@@ -133,6 +133,40 @@ func TestMergeAdoptsDiscoveredSession(t *testing.T) {
 	if !result.Restored[0].CreatedAt.Equal(time.Unix(500, 0)) {
 		t.Fatalf("adopted CreatedAt = %v, want injected clock", result.Restored[0].CreatedAt)
 	}
+	if result.Restored[0].WorkDir != "/tmp/x/sidecar" {
+		t.Fatalf("adopted WorkDir = %q, want the current workDir", result.Restored[0].WorkDir)
+	}
+	if adopted.WorkDir != "/tmp/x/sidecar" {
+		t.Fatalf("adopted session WorkDir = %q, want the current workDir", adopted.WorkDir)
+	}
+}
+
+func TestInferDefinitionWorkDirUsesExplicitThenPattern(t *testing.T) {
+	def := ShellDefinition{TmuxName: "sidecar-sh-feature-1", WorkDir: "/repos/feature"}
+	if got := inferDefinitionWorkDir(def, []string{"/repos/main", "/repos/feature"}, "/repos/main"); got != "/repos/feature" {
+		t.Fatalf("explicit WorkDir = %q", got)
+	}
+	def.WorkDir = ""
+	if got := inferDefinitionWorkDir(def, []string{"/repos/main", "/repos/feature"}, "/repos/main"); got != "/repos/feature" {
+		t.Fatalf("inferred WorkDir = %q, want /repos/feature", got)
+	}
+	if got := inferDefinitionWorkDir(ShellDefinition{TmuxName: "sidecar-sh-main-1"}, nil, "/repos/main"); got != "/repos/main" {
+		t.Fatalf("empty-as-current = %q", got)
+	}
+}
+
+func TestGroupManifestShellsByWorkDirSeparatesNestFromShells(t *testing.T) {
+	groups := groupManifestShellsByWorkDir([]ShellDefinition{
+		{TmuxName: "sidecar-sh-main-1", DisplayName: "Mine", WorkDir: "/repos/main"},
+		{TmuxName: "sidecar-sh-feature-1", DisplayName: "Sibling", WorkDir: "/repos/feature"},
+	}, []string{"/repos/main", "/repos/feature"}, "/repos/main", nil)
+
+	if len(groups["/repos/feature"]) != 1 || groups["/repos/feature"][0].TmuxName != "sidecar-sh-feature-1" {
+		t.Fatalf("feature group = %+v", groups["/repos/feature"])
+	}
+	if len(groups["/repos/main"]) != 1 || groups["/repos/main"][0].TmuxName != "sidecar-sh-main-1" {
+		t.Fatalf("main group = %+v", groups["/repos/main"])
+	}
 }
 
 func TestMergeStampsNamespaceOnRestored(t *testing.T) {
@@ -231,5 +265,33 @@ func TestMergeHidesSiblingWorktreeEntries(t *testing.T) {
 	assertNames(t, "shells", shellNames(result.Shells), []string{"sidecar-sh-sidecar-1"})
 	if len(result.Dropped) != 0 {
 		t.Fatalf("Dropped = %v, want nothing removed from the shared file", result.Dropped)
+	}
+}
+
+// TestMergeHidesLeakedExistingSibling is the td-4819be defense: a sibling that
+// leaked into Existing (ShellCreatedMsg used to append it) must not remain as
+// an orphaned top-Shells row. It stays in the manifest.
+func TestMergeHidesLeakedExistingSibling(t *testing.T) {
+	leaked := mergeTestShell("sidecar-sh-sidecar-agent-status-1", "Sibling's")
+	leaked.WorkDir = "/tmp/x/sidecar-agent-status"
+	leaked.IsOrphaned = true
+	result := mergeShellState(shellMergeInput{
+		Existing: []*ShellSession{
+			mergeTestShell("sidecar-sh-sidecar-1", "Mine"),
+			leaked,
+		},
+		Manifest: []ShellDefinition{
+			{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "Mine", WorkDir: "/tmp/x/sidecar"},
+			{TmuxName: "sidecar-sh-sidecar-agent-status-1", DisplayName: "Sibling's", WorkDir: "/tmp/x/sidecar-agent-status"},
+		},
+		WorkDir: "/tmp/x/sidecar",
+	})
+
+	assertNames(t, "shells", shellNames(result.Shells), []string{"sidecar-sh-sidecar-1"})
+	if len(result.Dropped) != 0 {
+		t.Fatalf("Dropped = %v, want the sibling left in the shared file", result.Dropped)
+	}
+	if leaked.WorkDir != "/tmp/x/sidecar-agent-status" {
+		t.Fatalf("merge rewrote sibling WorkDir to %q", leaked.WorkDir)
 	}
 }

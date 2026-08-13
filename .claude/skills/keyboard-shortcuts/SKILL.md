@@ -76,11 +76,37 @@ swallowed rather than leaking to the hidden plugin.
 | `j` / `k` / `up` / `down` | Move within a lane |
 | `enter` | Open the selected workspace (switches project) |
 | `r` | Refresh the board |
-| `esc` / `q` / `K` | Close the Overview |
+| `esc` / `K` | Close the Overview |
+| `q` | Quit Sidecar (confirmation modal) |
 
 Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `#`, `W`, `?`, `!`,
-`^`, `i`, `ctrl+c`. Plugin-switching keys (`` ` ``, `~`, `1-9`) close the Overview first.
-`q` closes the Overview instead of quitting the app.
+`^`, `i`, `ctrl+c`, `q`. Plugin-switching keys (`` ` ``, `~`, `1-9`) close the Overview first.
+`esc` on the Agents board or Workspaces list leaves the global space. `q` opens Sidecar's quit modal.
+
+## Global Workspaces (`global-workspaces` context)
+
+Two keyboard states only: **list (browse)** and **interactive (type)**. There is no watched-preview focus. `l` / `→` do not move focus to the preview.
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` / arrows / `g` / `G` | Move selection; preview follows; not typing |
+| `,` / `.` | Previous / next preview tab (Output / Diff / Task) on a non-main worktree. Shells and the main worktree have no tab row |
+| `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
+| click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
+| click a list row | Select it; preview follows; not typing |
+| click another row while typing | Switch session and stay typing |
+| double-click a row | Open that identity in its owning project |
+| wheel on terminal | Scroll only; do not activate |
+| `ctrl+\` / `esc esc` | Stop typing and land on the list |
+| `i` | Find TD task (`open-issue`). Not interactive |
+| `/` | Filter |
+| `s` | Sort |
+| `\` | Toggle sidebar |
+| `esc` | Leave the global space (or clear the filter first) |
+| `q` | Quit Sidecar (confirmation modal) |
+| `K` | Toggle the global space |
+
+`ctrl+]` attach stays project-only. While typing, `i` and `q` go to the pane.
 
 ## Sidebar Controls (All Two-Pane Plugins)
 
@@ -221,6 +247,7 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 |---------|------|
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
+| `workspace-doc` | Markdown document beside terminal (opt-in preview) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -238,7 +265,8 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 | `m` | merge-workflow | Start merge workflow |
 | `T` | link-task | Link/unlink task |
 | `s` | start-agent | Start agent |
-| `enter` | interactive | Enter interactive mode |
+| `enter` / `E` | interactive | Enter interactive mode |
+| `i` | open-issue | Find TD task (global; not interactive) |
 | `t` | attach | Attach to tmux |
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
@@ -255,6 +283,25 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 | `alt+c` | copy |
 | `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |
+
+### Document Pane
+
+An unmodified click on a resolvable markdown `path:line` in workspace or shell
+terminal output opens the document beside that terminal. Document panes are
+enabled by default; `--disable-feature=workspace_doc_panes` opts out for a launch.
+Bare markdown paths are added in the Phase 6 delivery.
+`shift`-drag and `alt`-drag remain terminal selection gestures.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `j` / `down` | scroll-down | Scroll down |
+| `k` / `up` | scroll-up | Scroll up |
+| `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
+| `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
+| `r` | render | Toggle rendered/raw markdown |
+| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize document pane |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between panes |
+| `q` / `esc` | close | Close document pane |
 
 ## TD Monitor Plugin
 

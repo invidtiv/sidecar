@@ -1,0 +1,26 @@
+ Sidecar / beta    td     git     files     workspaces   03:06
+
+╭───────────────────╮ ╭──────────────────────────────────────╮
+│ Workspaces   New  │││                                      │
+│                   │││ Main Worktree                        │
+│  ◉ beta           │││                                      │
+│    main  main     │││ This is your primary working directo │
+│  ⏸ worktrees…     │││ Workspaces branch off from here as i │
+│    branch feat…   │││                                      │
+│                   │││ ────────────────────────────────     │
+│                   │││                                      │
+│                   │││ Press 'n' to create a new workspace  │
+│                   │││                                      │
+│                   │││ Each workspace gets its own director │
+│                   │││ optional AI agent. Work on multiple  │
+│                   │││ parallel without switching branches. │
+│                   │││                                      │
+│                   │││ Press 'ctrl+n' for a new shell       │
+│                   │││                                      │
+│                   │││ Shells are plain terminals in this d │
+│                   │││ quick tasks that don't need their ow │
+│                   │││                                      │
+│                   │││                                      │
+│                   │││                                      │
+╰───────────────────╯ ╰──────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban      ↻ 03:05:25

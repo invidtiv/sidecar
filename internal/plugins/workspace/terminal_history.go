@@ -67,7 +67,7 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 			TermPanel: true,
 		}, true
 	}
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell == nil || shell.Agent == nil || shell.Agent.OutputBuf == nil {
 			return terminalHistorySource{}, false
@@ -187,16 +187,18 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	}
 
 	if msg.Source.TermPanel {
+		// A pinned window names an absolute row, which the prepend just renumbered.
+		p.termPanelFreeze.Rebase(added)
 		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
 		if scrollLines > added && !state.Exhausted {
 			return p.loadOlderTerminalHistory(true, scrollLines-added)
 		}
 		return nil
 	}
-	// Prepending shifts the old local coordinates down by added lines. Replay
-	// the user's pending upward movement in that shifted coordinate space.
-	p.previewOffset = max(p.previewOffset+added-scrollLines, 0)
-	p.autoScrollOutput = false
+	// A window placed from the live bottom is not renumbered by a prepend, so
+	// only the user's pending upward movement is replayed here.
+	p.previewFreeze.Rebase(added)
+	p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
 	if scrollLines > added && !state.Exhausted {
 		return p.loadOlderTerminalHistory(false, scrollLines-added)
 	}
@@ -248,22 +250,19 @@ func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
 // scrollback. Only the total and loading flag depend on finding matching
 // history state for this buffer.
 func (p *Plugin) terminalHistorySummary(termPanel bool, buffer *tty.OutputBuffer) (base, total int, loading bool) {
-	if buffer == nil {
-		return 0, 0, false
-	}
-	base, end, absolute := buffer.AbsoluteRange()
-	if !absolute {
-		// Relative buffer: local indices already are the coordinate space.
-		return 0, buffer.LineCount(), false
+	base, total = tty.BufferBase(buffer)
+	if !tty.BufferAbsolute(buffer) {
+		// Relative buffer: local indices already are the coordinate space, and
+		// tracked history is counted in absolute lines it cannot be measured in.
+		return base, total, false
 	}
 	source, ok := p.terminalHistoryFor(termPanel)
 	if !ok || source.Buffer != buffer {
 		// No tracked history for this buffer — its own range is still the truth.
-		return base, end, false
+		return base, total, false
 	}
 	state := p.terminalHistory[source.Key]
-	total = max(end, state.HistorySize)
-	return base, total, state.Loading
+	return base, max(total, state.HistorySize), state.Loading
 }
 
 func (m terminalHistoryLoadedMsg) String() string {

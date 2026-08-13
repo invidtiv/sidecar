@@ -65,6 +65,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	if !m.ready || m.hasModal() {
 		return tea.MouseModeAllMotion
 	}
+	// A global terminal being typed into is the same case as a plugin's: cell
+	// motion, so the pane's own application gets clean clicks.
+	if m.globalWorkspacesVisible() && m.overview.PreviewInteractive() {
+		return tea.MouseModeCellMotion
+	}
 	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {
 		switch mode := provider.PreferredMouseMode(); mode {
 		case tea.MouseModeCellMotion, tea.MouseModeAllMotion:
@@ -76,8 +81,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
-		m.width < minWidth || m.height < minHeight || m.overviewActive {
+		m.width < minWidth || m.height < minHeight {
 		return nil
+	}
+	if m.inGlobalScope() {
+		return m.placeContentCursor(m.globalCursor())
 	}
 	active := m.ActivePlugin()
 	if active == nil || !active.IsFocused() {
@@ -87,7 +95,22 @@ func (m Model) pluginCursor() *tea.Cursor {
 	if !ok {
 		return nil
 	}
-	local := provider.Cursor()
+	return m.placeContentCursor(provider.Cursor())
+}
+
+// globalCursor is the only cursor the global space draws: the Workspaces
+// browser's embedded terminal while the user is typing into it. Every other
+// global surface is a reader and reports none.
+func (m Model) globalCursor() *tea.Cursor {
+	if !m.globalWorkspacesVisible() {
+		return nil
+	}
+	return m.overview.WorkspacesCursor()
+}
+
+// placeContentCursor moves a surface-local cursor into screen coordinates and
+// drops one the content area does not contain.
+func (m Model) placeContentCursor(local *tea.Cursor) *tea.Cursor {
 	if local == nil {
 		return nil
 	}
@@ -244,7 +267,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		var b strings.Builder
 
 		// No projects configured
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.Muted.Render("No projects configured"))
 			return modal.RenderedSection{Content: b.String()}
 		}
@@ -282,7 +305,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			destination := projects[i]
 			isCursor := i == m.projectSwitcherCursor
 			isOverview := destination.Kind == destinationOverview
-			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.overviewActive)
+			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.inGlobalScope())
 			itemID := projectSwitcherItemID(i)
 			isHovered := itemID == hoverID
 
@@ -399,7 +422,7 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 		b.WriteString("\n")
 
 		// No projects configured
-		if len(allProjects) == 0 && m.overview == nil {
+		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -554,12 +577,19 @@ func (m Model) renderHeader() string {
 	}
 	header := title + strings.Repeat(" ", spacing/2) + strings.Join(tabTexts, " ") + strings.Repeat(" ", spacing-(spacing/2)) + clock
 	header = ansi.Truncate(header, m.width, "")
-	return styles.Header.Width(m.width).MaxWidth(m.width).Render(header)
+	return m.headerBarStyle().Width(m.width).MaxWidth(m.width).Render(header)
+}
+
+func (m Model) headerBarStyle() lipgloss.Style {
+	if m.inGlobalScope() {
+		return styles.HeaderGlobal
+	}
+	return styles.Header
 }
 
 type headerTab struct {
-	plugin int
-	text   string
+	ref  tabRef
+	text string
 }
 
 // headerLayout keeps the header on the one physical row assumed by
@@ -569,7 +599,7 @@ type headerTab struct {
 func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spacing int) {
 	// Check if we're in a worktree for the indicator
 	worktreeIndicator := ""
-	if !m.overviewActive {
+	if !m.inGlobalScope() {
 		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
 			// Show worktree branch name as indicator
 			branchName := wtInfo.Branch
@@ -581,11 +611,9 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 	}
 
 	// Calculate final title width (with repo name and worktree indicator) - used for tab positioning
+	destination := m.headerDestinationSuffix()
 	finalTitleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	activeName := m.activeDestinationName()
-	if activeName != "" {
-		finalTitleWidth += lipgloss.Width(styles.Subtitle.Render(" / " + activeName))
-	}
+	finalTitleWidth += lipgloss.Width(destination)
 	finalTitleWidth += lipgloss.Width(worktreeIndicator)
 	finalTitleWidth += 1 // trailing space
 
@@ -595,20 +623,17 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		titleContent := styles.BarTitle.Render(" "+m.intro.View()) + m.intro.RepoNameView() + worktreeIndicator + " "
 		title = lipgloss.NewStyle().Width(finalTitleWidth).Render(titleContent)
 	} else {
-		// Static title with repo name and worktree indicator
-		repoSuffix := ""
-		if activeName != "" {
-			repoSuffix = styles.Subtitle.Render(" / " + activeName)
-		}
-		title = styles.BarTitle.Render(" Sidecar") + repoSuffix + worktreeIndicator + " "
+		title = styles.BarTitle.Render(" Sidecar") + destination + worktreeIndicator + " "
 	}
 
-	// Plugin tabs (themed)
-	plugins := m.registry.Plugins()
-	for i, p := range plugins {
-		isActive := !m.overviewActive && i == m.activePlugin
-		tab := styles.RenderTab(p.Name(), i, len(plugins), isActive, false)
-		tabs = append(tabs, headerTab{plugin: i, text: tab})
+	// Tabs owned by the active scope: the global space's own tabs, or the
+	// project's plugin tabs. Never both — a project tab row behind an active
+	// global view is exactly the ambiguity this replaces.
+	visible := m.visibleTabs()
+	active := m.activeTab()
+	for i, ref := range visible {
+		tab := styles.RenderTab(m.tabLabel(ref), i, len(visible), ref.same(active), false)
+		tabs = append(tabs, headerTab{ref: ref, text: tab})
 	}
 
 	// Clock (conditional on config)
@@ -633,9 +658,12 @@ func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spa
 		clock = ""
 	}
 	for totalWidth() > m.width && len(tabs) > 0 {
+		// Drop inactive tabs from the right. The active tab of the active scope
+		// is protected: whichever space owns the screen keeps saying where the
+		// user is, however narrow the terminal gets.
 		remove := -1
 		for i := len(tabs) - 1; i >= 0; i-- {
-			if m.overviewActive || tabs[i].plugin != m.activePlugin {
+			if !tabs[i].ref.same(active) {
 				remove = i
 				break
 			}
@@ -675,17 +703,38 @@ func (m Model) getTabBounds() []TabBounds {
 	x := tabStartX
 	for _, tab := range tabs {
 		w := lipgloss.Width(tab.text)
-		bounds = append(bounds, TabBounds{Start: x, End: x + w, Plugin: tab.plugin})
+		bounds = append(bounds, TabBounds{Start: x, End: x + w, Tab: tab.ref})
 		x += w + 1 // +1 for space between tabs
 	}
 
 	return bounds
 }
 
+func (m Model) headerDestinationParts() (sep, name string) {
+	activeName := m.activeDestinationName()
+	if activeName == "" {
+		return "", ""
+	}
+	sep = styles.Subtitle.Render(" / ")
+	if m.inGlobalScope() {
+		name = styles.BarChipActive.Render(activeName)
+	} else {
+		name = styles.Subtitle.Render(activeName)
+	}
+	return sep, name
+}
+
+func (m Model) headerDestinationSuffix() string {
+	sep, name := m.headerDestinationParts()
+	return sep + name
+}
+
 // getLogoBounds returns the X bounds for the "Sidecar" brand in the header.
-// Clicking it opens the cross-project overview when that feature is enabled.
+// Clicking it toggles the global space, so it is live whenever that space has
+// a tab to show — the cross-project Overview tabs, the hosted Tasks tab, or
+// both.
 func (m Model) getLogoBounds() (start, end int, ok bool) {
-	if m.overview == nil {
+	if !m.globalScopeAvailable() {
 		return 0, 0, false
 	}
 	// Leading space is part of the painted brand (" Sidecar").
@@ -699,8 +748,33 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 	return 0, end, true
 }
 
+// getScopeBounds returns the X bounds for the global Overview pill. Clicking
+// it is the same toggle as the brand logo / K.
+func (m Model) getScopeBounds() (start, end int, ok bool) {
+	if !m.inGlobalScope() || !m.globalScopeAvailable() {
+		return 0, 0, false
+	}
+	sep, name := m.headerDestinationParts()
+	if name == "" {
+		return 0, 0, false
+	}
+	start = lipgloss.Width(styles.BarTitle.Render(" Sidecar")) + lipgloss.Width(sep)
+	end = start + lipgloss.Width(name)
+	if m.width > 0 {
+		title, _, _, _ := m.headerLayout()
+		end = min(end, max(start, lipgloss.Width(title)-1))
+		if end <= start {
+			return 0, 0, false
+		}
+	}
+	return start, end, true
+}
+
 // getRepoNameBounds returns the X bounds for the repo name in the header.
 func (m Model) getRepoNameBounds() (start, end int, ok bool) {
+	if m.inGlobalScope() {
+		return 0, 0, false
+	}
 	name := m.activeDestinationName()
 	if name == "" {
 		return 0, 0, false
@@ -727,7 +801,7 @@ func (m Model) getRepoNameBounds() (start, end int, ok bool) {
 
 // getWorktreeIndicatorBounds returns the X bounds for the worktree indicator in the header.
 func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		return 0, 0, false
 	}
 	wtInfo := m.currentWorktreeInfo()
@@ -756,8 +830,8 @@ func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
-	if m.overviewActive && m.overview != nil {
-		return m.overview.View(width, height)
+	if m.inGlobalScope() {
+		return m.renderGlobalContent(width, height)
 	}
 	p := m.ActivePlugin()
 	if p == nil {
@@ -773,6 +847,40 @@ func (m Model) renderContent(width, height int) string {
 	// Height() only pads short content; MaxHeight() also truncates tall content.
 	// This prevents plugin content from pushing the header off-screen.
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+}
+
+// renderGlobalContent renders the visible global tab.
+func (m Model) renderGlobalContent(width, height int) string {
+	switch m.globalTab {
+	case GlobalTasks:
+		if host := m.globalTasksPlugin(); host != nil {
+			return host.View(width, height)
+		}
+	case GlobalWorkspaces:
+		if m.overview != nil {
+			return m.overview.WorkspacesView(width, height)
+		}
+		return m.renderGlobalWorkspacesPlaceholder(width, height)
+	}
+	if m.overview != nil {
+		return m.overview.View(width, height)
+	}
+	return ""
+}
+
+// renderGlobalWorkspacesPlaceholder is the honest empty state for a build with
+// no cross-project catalog behind the tab at all. With the Overview model
+// present, the tab renders the shared workspace list instead.
+func (m Model) renderGlobalWorkspacesPlaceholder(width, height int) string {
+	message := strings.Join([]string{
+		styles.Title.Render("Workspaces"),
+		"",
+		styles.Muted.Render("Every configured project's shells and worktrees will be browsable here."),
+		styles.Muted.Render("Nothing is being collected for this tab yet."),
+		"",
+		styles.Muted.Render("Use the project Workspaces tab for the current project."),
+	}, "\n")
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, message)
 }
 
 // renderFooter renders the bottom bar with key hints and status.
@@ -837,7 +945,7 @@ func (m Model) renderFooter() string {
 // pluginFooterStatus asks the active plugin for a condition that must stay
 // visible in the host footer.
 func (m Model) pluginFooterStatus() (string, bool) {
-	p := m.ActivePlugin()
+	p := m.focusedSurface()
 	if p == nil {
 		return "", false
 	}
@@ -853,18 +961,87 @@ type footerHint struct {
 	label string
 }
 
+// typingFooterHints answers for a pane the user is typing into, on either
+// surface. Such a footer advertises only the ways out: every other key is on its
+// way to the pane — the tab numbers, the help key and ctrl+c included — so the
+// global hints are not appended to it.
+func (m Model) typingFooterHints() ([]footerHint, bool) {
+	if m.inGlobalScope() {
+		if m.globalTab == GlobalWorkspaces && m.overview != nil && m.overview.PreviewInteractive() {
+			return []footerHint{
+				{keys: m.overview.InteractiveExitKey(), label: "Stop typing"},
+				{keys: "esc esc", label: "Stop typing"},
+			}, true
+		}
+		return nil, false
+	}
+	if m.activeContext == "workspace-interactive" {
+		if p := m.ActivePlugin(); p != nil {
+			return m.pluginFooterHints(p, m.activeContext), true
+		}
+	}
+	return nil, false
+}
+
 func (m Model) footerHints() []footerHint {
-	// Plugin-specific hints first - they're more contextually relevant
+	if hints, typing := m.typingFooterHints(); typing {
+		return hints
+	}
+	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
-	if m.overviewActive && m.overview != nil {
+	switch {
+	case m.globalTasksFocused():
+		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
+	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+		if m.overview != nil && m.overview.RenameShellOpen() {
+			hints = append(hints,
+				footerHint{keys: "enter", label: "Rename"},
+				footerHint{keys: "esc", label: "Cancel"},
+			)
+			break
+		}
+		// Two states only: the list browses, Enter / click / E type. Leftover
+		// preview-only chrome (hidden sidebar) still scrolls and can start typing.
+		if m.overview != nil && m.overview.PreviewFocused() && !m.overview.PreviewInteractive() {
+			if m.overview.PreviewCanType() {
+				hints = append(hints, footerHint{keys: "enter / click", label: "Type"})
+			}
+			hints = append(hints,
+				footerHint{keys: "jk", label: "Scroll"},
+				footerHint{keys: "gG", label: "Top/Live"},
+				footerHint{keys: "←", label: "List"},
+				footerHint{keys: "r", label: "Refresh"},
+				footerHint{keys: "\\", label: "Sidebar"},
+			)
+			break
+		}
+		hints = append(hints,
+			footerHint{keys: "jk", label: "Move"},
+			footerHint{keys: "enter", label: "Type"},
+			footerHint{keys: "/", label: "Filter"},
+			footerHint{keys: "s", label: "Sort"},
+			footerHint{keys: "p", label: "Pin"},
+			footerHint{keys: "r", label: "Refresh"},
+			footerHint{keys: "\\", label: "Sidebar"},
+			footerHint{keys: "esc", label: "Close"},
+		)
+		if m.overview != nil && m.overview.SelectedShell() {
+			hints = append(hints, footerHint{keys: "R", label: "Rename"})
+		}
+		if m.overview != nil && m.overview.CanOpenInGit() {
+			hints = append(hints, footerHint{keys: "O", label: "Git"})
+		}
+	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},
 			footerHint{keys: "enter", label: "Open"},
 			footerHint{keys: "r", label: "Refresh"},
 			footerHint{keys: "esc", label: "Close"},
 		)
-	} else if p := m.ActivePlugin(); p != nil {
-		hints = m.pluginFooterHints(p, m.activeContext)
+	case !m.inGlobalScope():
+		if p := m.ActivePlugin(); p != nil {
+			hints = m.pluginFooterHints(p, m.activeContext)
+		}
 	}
 	// Then essential global hints
 	hints = append(hints, m.globalFooterHints()...)
@@ -872,7 +1049,7 @@ func (m Model) footerHints() []footerHint {
 }
 
 func (m Model) activeDestinationName() string {
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		return "Overview"
 	}
 	return m.intro.RepoName
@@ -893,14 +1070,18 @@ func (m Model) globalFooterHints() []footerHint {
 
 	var hints []footerHint
 
-	// Plugin switching hints (consolidated for brevity)
-	hints = append(hints, footerHint{keys: "1-5", label: "plugins"})
+	// Tab switching hints (consolidated for brevity). The advertised range is
+	// the active scope's own tab count, so the global space never promises a
+	// number that would reach a project plugin.
+	if count := len(m.visibleTabs()); count > 1 {
+		label := "plugins"
+		if m.inGlobalScope() {
+			label = "tabs"
+		}
+		hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", min(count, 9)), label: label})
+	}
 
 	for _, spec := range specs {
-		// In the Overview, q closes the overlay rather than quitting.
-		if spec.id == "quit" && m.overviewActive {
-			continue
-		}
 		keys := keysByCmd[spec.id]
 		if len(keys) == 0 {
 			continue
@@ -1032,24 +1213,44 @@ func (m *Model) helpGlobalSection() modal.Section {
 	}, nil)
 }
 
-// helpPluginSection renders the active plugin bindings section.
+// helpPluginSection renders the bindings of the surface that owns the screen:
+// the visible global tab in global scope, the active plugin in project scope.
+// Help must describe what the keys do here, not what they would do in the space
+// the user is not in.
 func (m *Model) helpPluginSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p := m.ActivePlugin(); p != nil {
-			ctx := p.FocusContext()
-			if ctx != "global" && ctx != "" {
-				bindings := m.keymap.BindingsForContext(ctx)
-				if len(bindings) > 0 {
-					var b strings.Builder
-					b.WriteString(styles.Title.Render(p.Name()))
-					b.WriteString("\n")
-					m.renderBindingSection(&b, ctx)
-					return modal.RenderedSection{Content: b.String()}
-				}
-			}
+		title, ctx := m.helpSurface()
+		if title == "" || ctx == "global" || ctx == "" {
+			return modal.RenderedSection{}
 		}
-		return modal.RenderedSection{}
+		bindings := m.keymap.BindingsForContext(ctx)
+		if len(bindings) == 0 {
+			return modal.RenderedSection{}
+		}
+		var b strings.Builder
+		b.WriteString(styles.Title.Render(title))
+		b.WriteString("\n")
+		m.renderBindingSection(&b, ctx)
+		return modal.RenderedSection{Content: b.String()}
 	}, nil)
+}
+
+// helpSurface names the surface help should document and the keymap context it
+// reads its bindings from.
+func (m *Model) helpSurface() (title, context string) {
+	if m.inGlobalScope() {
+		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+			return host.Name(), host.FocusContext()
+		}
+		if m.globalWorkspacesVisible() {
+			return m.globalTab.Name(), m.overview.WorkspaceFocusContext()
+		}
+		return m.globalTab.Name(), m.globalTab.context()
+	}
+	if p := m.ActivePlugin(); p != nil {
+		return p.Name(), p.FocusContext()
+	}
+	return "", ""
 }
 
 // renderHelpModal renders the help modal.
@@ -1081,9 +1282,16 @@ func (m Model) renderBindingSection(b *strings.Builder, context string) {
 		// Find all keys for this command
 		var keys []string
 		for _, b2 := range bindings {
-			if b2.Command == binding.Command {
-				keys = append(keys, b2.Key)
+			if b2.Command != binding.Command {
+				continue
 			}
+			// A global key the focused context binds for itself does something
+			// else there. The command keeps its line, because the palette can
+			// still run it, but help must not promise the key.
+			if context == "global" && m.contextShadowsGlobalKey(b2.Key) {
+				continue
+			}
+			keys = append(keys, b2.Key)
 		}
 
 		keyStr := formatBindingKeys(keys)
@@ -1093,6 +1301,17 @@ func (m Model) renderBindingSection(b *strings.Builder, context string) {
 		padded := fmt.Sprintf("%-11s", keyStr)
 		fmt.Fprintf(b, "  %s %s\n", styles.Muted.Render(padded), cmdName)
 	}
+}
+
+// contextShadowsGlobalKey reports that the focused context binds this key
+// itself, which is the same lookup handleKeyMsg makes before answering a global
+// key.
+func (m Model) contextShadowsGlobalKey(key string) bool {
+	if m.activeContext == "" || m.activeContext == "global" {
+		return false
+	}
+	_, bound := m.keymap.CommandForContextKey(m.activeContext, key)
+	return bound
 }
 
 // formatBindingKeys formats multiple keys into a display string.

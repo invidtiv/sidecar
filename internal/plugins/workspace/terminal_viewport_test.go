@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -276,18 +277,15 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	agentBuffer := testTerminalBuffer("0\n1\n2\n3\n4\n5")
 	panelBuffer := testTerminalBuffer("a\nb\nc\nd\ne")
 	state := &InteractiveState{
-		Active:       true,
-		VisibleStart: 91,
-		VisibleEnd:   99,
-		PaneHeight:   3,
-		PaneWidth:    20,
+		Active:     true,
+		PaneHeight: 3,
+		PaneWidth:  20,
 	}
 	p := &Plugin{
 		viewMode:         ViewModeInteractive,
 		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
-		previewOffset:    2,
-		autoScrollOutput: true,
+		previewScroll:    2,
 		termPanelOutput:  panelBuffer,
 		termPanelScroll:  99,
 		interactiveState: state,
@@ -298,7 +296,7 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	}
 	p.selection.Clear()
 	beforeState := *state
-	beforePreviewOffset := p.previewOffset
+	beforePreviewScroll := p.previewScroll
 	beforePanelScroll := p.termPanelScroll
 
 	_ = p.renderOutputContent(20, 4)
@@ -312,8 +310,8 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	if *state != beforeState {
 		t.Fatalf("panel render mutated interactive state: got %+v want %+v", *state, beforeState)
 	}
-	if p.previewOffset != beforePreviewOffset {
-		t.Fatalf("render mutated previewOffset: got %d want %d", p.previewOffset, beforePreviewOffset)
+	if p.previewScroll != beforePreviewScroll {
+		t.Fatalf("render mutated previewScroll: got %d want %d", p.previewScroll, beforePreviewScroll)
 	}
 	if p.termPanelScroll != beforePanelScroll {
 		t.Fatalf("render mutated termPanelScroll: got %d want %d", p.termPanelScroll, beforePanelScroll)
@@ -333,7 +331,6 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 		viewMode:         ViewModeInteractive,
 		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
-		autoScrollOutput: true,
 		interactiveState: &InteractiveState{Active: true},
 		worktrees: []*Worktree{{
 			Agent: &Agent{OutputBuf: buffer},
@@ -344,11 +341,12 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 	if !handled {
 		t.Fatal("shift+PageUp was forwarded instead of scrolling sidecar")
 	}
-	if p.autoScrollOutput {
+	if p.previewScroll == 0 {
 		t.Fatal("shift+PageUp did not leave live-follow mode")
 	}
-	if p.previewOffset >= p.getMaxScrollOffset() {
-		t.Fatalf("shift+PageUp did not move back: offset=%d max=%d", p.previewOffset, p.getMaxScrollOffset())
+	if p.previewScroll > p.previewMaxScroll() {
+		t.Fatalf("shift+PageUp moved past the buffer: scroll=%d max=%d",
+			p.previewScroll, p.previewMaxScroll())
 	}
 }
 
@@ -364,8 +362,8 @@ func TestTerminalPanelSelectionMapsFromPanelViewport(t *testing.T) {
 	}
 	p.selection.ViewRect = mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
 
-	layout := p.interactiveViewportLayout()
-	line, ok := p.interactiveLineIndexAtY(6) // first row after the panel hint
+	layout := p.terminalSelectionViewportLayout()
+	line, _, ok := p.interactiveCharAtXY(11, 6) // first row after the panel hint
 	if !ok {
 		t.Fatal("terminal-panel output row did not map to its buffer")
 	}
@@ -485,7 +483,6 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 		width:            80,
 		height:           20,
 		viewMode:         ViewModeInteractive,
-		autoScrollOutput: true,
 		termPanelVisible: true,
 		termPanelOutput:  panel,
 		mouseHandler:     handler,
@@ -499,16 +496,16 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 		Region: &mouse.Region{ID: regionTermPanelContent, Rect: rect},
 	}
 
-	p.prepareInteractiveDrag(action)
+	p.prepareInteractiveDrag(action, tty.ClickNone)
 	if !p.selection.Anchor.Valid() {
 		t.Fatal("panel selection did not establish an anchor")
 	}
-	if !p.autoScrollOutput {
+	if p.previewScroll != 0 || p.previewFreeze.Active() {
 		t.Fatal("panel selection disabled independent agent auto-follow")
 	}
-	frozen := p.interactiveViewportLayout()
+	frozen := p.terminalSelectionViewportLayout()
 	panel.Write("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11")
-	afterAppend := p.interactiveViewportLayout()
+	afterAppend := p.terminalSelectionViewportLayout()
 	if afterAppend.Start != frozen.Start {
 		t.Fatalf("panel selection viewport moved on append: start %d -> %d", frozen.Start, afterAppend.Start)
 	}
@@ -1134,11 +1131,11 @@ func TestTerminalViewportDetectsCanvasCarriedAcrossRows(t *testing.T) {
 // The row counts here are the ones measured off live panes: a Grok canvas
 // covers every row, a Claude Code diff covered 19 of 55.
 func TestCanvasRowShareSeparatesCanvasFromDiffHighlighting(t *testing.T) {
-	if got := canvasRowShare(55); got <= 19 {
+	if got := termpreview.CanvasRowShare(55); got <= 19 {
 		t.Errorf("a 19-of-55 diff still reaches the canvas threshold (%d)", got)
 	}
 	for _, rows := range []int{43, 56} {
-		if got := canvasRowShare(rows); got > rows {
+		if got := termpreview.CanvasRowShare(rows); got > rows {
 			t.Errorf("a canvas covering all %d rows cannot reach the threshold (%d)", rows, got)
 		}
 	}
@@ -1155,7 +1152,7 @@ func TestTerminalViewportDoesNotTreatFullPaneDiffAsCanvas(t *testing.T) {
 	buffer := tty.NewOutputBuffer(100)
 	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
 
-	if bg := terminalCanvasBackground(buffer, 0, len(rows)); bg != "" {
+	if bg := termpreview.CanvasBackground(buffer, 0, len(rows)); bg != "" {
 		t.Errorf("a fully green diff was promoted to canvas %q", bg)
 	}
 }

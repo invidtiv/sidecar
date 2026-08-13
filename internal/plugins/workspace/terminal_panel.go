@@ -41,7 +41,7 @@ type TermPanelSessionCreatedMsg struct {
 
 // termPanelSessionName returns the tmux session name for the current worktree/shell's terminal panel.
 func (p *Plugin) termPanelSessionName() string {
-	if p.shellSelected {
+	if p.selectingShell() {
 		shell := p.getSelectedShell()
 		if shell != nil {
 			return termPanelSessionPrefix + sanitizeName(shell.TmuxName)
@@ -57,7 +57,10 @@ func (p *Plugin) termPanelSessionName() string {
 
 // termPanelWorkDir returns the working directory for the terminal panel session.
 func (p *Plugin) termPanelWorkDir() string {
-	if p.shellSelected {
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.WorkDir != "" {
+			return shell.WorkDir
+		}
 		return p.ctx.WorkDir
 	}
 	wt := p.selectedWorktree()
@@ -118,6 +121,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		p.ctx.Logger.Debug("termPanel: switching session", "old", p.termPanelSession, "new", sessionName)
 	}
 	p.termPanelSession = sessionName
+	p.releaseTerminalDocProjection(true)
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -300,19 +304,106 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 	return previewWidth, max(outputBox-terminalHeaderRows, 1)
 }
 
+// termPanelMaxScroll is how far back the panel's window can sit, in rows from
+// its live edge. It is the bound of the window the render path draws: the panel
+// used to hand-roll the trim off its own dimensions instead, which is a second
+// derivation of one window and disagrees with the drawn one wherever a
+// letterboxed or clipped pane does (td-bbbbfe).
 func (p *Plugin) termPanelMaxScroll() int {
+	// No panel drawn means no window to bound. The bound's own input falls back
+	// to the preview's size when the panel surface has no geometry, which would
+	// answer for a surface that is not on screen.
 	if p.termPanelOutput == nil {
 		return 0
 	}
-	_, height, ok := p.calculateTermPanelDimensions()
-	if !ok {
+	if _, _, ok := p.calculateTermPanelDimensions(); !ok {
 		return 0
 	}
-	lineCount := p.termPanelOutput.LineCount()
-	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
-		lineCount = p.termPanelOutput.LastNonEmptyLine() + 1
+	return p.terminalWindowBound(true)
+}
+
+// thawTermPanelWindow hands a panel window pinned to an absolute start — by a
+// pointer gesture or by document activation — back to the distance-from-bottom
+// model without moving the rows on screen. Where it resumes following from is
+// the shared rule's. Closing a document deliberately does not call this: the
+// first explicit panel navigation owns the transition.
+func (p *Plugin) thawTermPanelWindow() {
+	p.releaseTerminalDocProjection(true)
+	if offset, thawed := p.termPanelFreeze.ThawFrom(p.termPanelMaxScroll()); thawed {
+		p.termPanelScroll = offset
 	}
-	return max(lineCount-height, 0)
+	p.termPanelFreezeDoc = false
+}
+
+// scrollTermPanelWindow moves the panel's window delta rows back through
+// scrollback, negative towards the live edge. Scrolling is an explicit
+// navigation of this surface, so it thaws first, and where the window lands is
+// the shared rule's — the primary surface and the global preview place theirs
+// by the same one.
+func (p *Plugin) scrollTermPanelWindow(delta int) {
+	p.thawTermPanelWindow()
+	p.termPanelScroll = tty.ScrollWindow(&p.termPanelFreeze, p.termPanelScroll, delta, p.termPanelMaxScroll())
+}
+
+// scrollTermPanelWindowRows is scrollTermPanelWindow for a caller counting
+// rendered rows down the screen — a wheel notch — which is the opposite
+// direction. Reconciling the two is the shared rule's, not this call site's.
+func (p *Plugin) scrollTermPanelWindowRows(rows int) {
+	p.thawTermPanelWindow()
+	p.termPanelScroll = tty.ScrollWindowRows(&p.termPanelFreeze, p.termPanelScroll, rows, p.termPanelMaxScroll())
+}
+
+// pinTermPanelWindow holds the panel window at an absolute start and records who
+// is holding it. The two owners are not released by the same events: a pointer
+// gesture's pin lives exactly as long as the selection reading those rows, while
+// a document activation's outlives that selection, because the document is meant
+// to keep showing the context it was opened from. Whether this pin takes at all
+// is the shared freeze's rule — a second freeze inside one gesture keeps the
+// first, and its owner with it.
+func (p *Plugin) pinTermPanelWindow(start int, doc bool) {
+	if p.termPanelFreeze.Active() {
+		return
+	}
+	p.termPanelFreeze.Freeze(start)
+	p.termPanelFreezeDoc = doc
+}
+
+// releaseTermPanelWindowPin drops the pin whoever placed it, for a jump that
+// chooses its own window rather than resuming from the pinned one.
+func (p *Plugin) releaseTermPanelWindowPin() {
+	p.termPanelFreeze.Release()
+	p.termPanelFreezeDoc = false
+}
+
+// releaseTermPanelGesturePin drops a pin a pointer gesture placed, once the
+// selection it was reading is gone — the gesture's half of the freeze/thaw
+// obligation. A pin left behind by a selection that no longer exists holds the
+// panel off the live edge with nothing on screen to explain why, which reads as
+// a pane that went quiet. A document's pin is not this one's to drop.
+func (p *Plugin) releaseTermPanelGesturePin() {
+	if p.termPanelFreezeDoc {
+		return
+	}
+	p.releaseTermPanelWindowPin()
+}
+
+// thawTermPanelGesturePin is the panel's half of the freeze a pointer gesture
+// owes at its end, and the same answer the primary surface gives in
+// thawPreviewGesturePin: the rows the gesture left on screen stay there, held
+// as a distance from the live bottom, so a pin taken at the live edge resumes
+// following from offset 0 while a gesture that walked the window back through
+// scrollback keeps where it walked to. Releasing instead resumes from whatever
+// offset the surface held before the gesture froze it, which snaps the window
+// back with nothing on screen to explain the jump. A document's pin is not the
+// gesture's to end: it outlives the selection the click made. That guard is
+// also what makes thawTermPanelWindow's doc-projection release harmless here —
+// a panel projection always implies a doc-owned pin, which has already
+// returned above.
+func (p *Plugin) thawTermPanelGesturePin() {
+	if p.termPanelFreezeDoc {
+		return
+	}
+	p.thawTermPanelWindow()
 }
 
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
@@ -331,6 +422,9 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 		return nil
 	}
 	w = p.terminalContentWidth(w)
+	if cmd, owned := p.resizeThroughTerminal(target, w, h); owned {
+		return cmd
+	}
 	return func() tea.Msg {
 		tty.ResizeTmuxPane(target, w, h)
 		return nil
@@ -402,8 +496,9 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 	// prepended as a row after these regions registered, leaving them a row high
 	// for its duration; it now lives in the header's right region and shifts
 	// nothing.
-	previewContentX := p.previewSplit().ContentX
-	previewContentY := p.previewContentY()
+	terminalBox, _ := p.terminalLeafBox()
+	previewContentX := terminalBox.X
+	previewContentY := terminalBox.Y
 
 	if p.termPanelLayout == TermPanelRight {
 		// Right layout: output | divider | terminal.
@@ -455,8 +550,9 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	outputBox, termBox, fits := p.termPanelSplitBoxes()
 
-	previewContentX := p.previewSplit().ContentX
-	previewContentY := p.previewContentY()
+	terminalBox, _ := p.terminalLeafBox()
+	previewContentX := terminalBox.X
+	previewContentY := terminalBox.Y
 
 	if p.termPanelLayout == TermPanelRight {
 		// Guard: if total exceeds width, fall back to shell-only
@@ -511,8 +607,10 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	}
 	// Switch to new session (old session preserved for later reuse)
 	p.termPanelSession = newSession
+	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
+	p.releaseTermPanelWindowPin()
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
 	} else {
@@ -524,9 +622,11 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.
 // Sessions are preserved so they can be reattached on next launch (like agent sessions).
 func (p *Plugin) cleanupTermPanelSession() {
+	p.releaseTerminalDocProjection(true)
 	p.termPanelSession = ""
 	p.termPanelPaneID = ""
 	p.termPanelOutput = nil
+	p.releaseTermPanelWindowPin()
 }
 
 // enforceLineWidths ensures every line in content is exactly targetWidth

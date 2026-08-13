@@ -105,6 +105,9 @@ type Definition struct {
 	CreatedAt time.Time `json:"createdAt"`
 	AgentType string    `json:"agentType,omitempty"`
 	SkipPerms bool      `json:"skipPerms,omitempty"`
+	// WorkDir is the parent worktree path this shell was created in. Empty on
+	// pre-td-4819be manifests; callers infer or treat empty as current workDir.
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 type manifest struct {

@@ -1,0 +1,30 @@
+ Sidecar / Overview       td     git     files     workspaces      22:18
+
+Agent Overview  0 projects · 0 agents
+ No agent-backed workspaces found
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ hjkl  Move   enter  Open   r  Refresh   esc  Close           ↻ 22:18:37

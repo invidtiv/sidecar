@@ -1,9 +1,11 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/palette"
@@ -97,6 +99,18 @@ func routerTestModel(t *testing.T, p plugin.Plugin) Model {
 	}
 	m.updateContext()
 	return m
+}
+
+func TestWorkspaceInteractiveKeepsBareBackslashForTheTerminal(t *testing.T) {
+	p := newRouterPlugin()
+	p.id = "workspace-manager"
+	p.context = "workspace-interactive"
+	m := routerTestModel(t, p)
+	keymap.RegisterDefaults(m.keymap)
+	m.updateContext()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	wantOnlyPluginKey(t, p, "\\")
 }
 
 // TestKeyPrecedence walks every level of the documented precedence order and
@@ -261,7 +275,7 @@ func TestKeyPrecedence(t *testing.T) {
 			key:   tea.KeyPressMsg{Code: 'K', Text: "K"},
 			setup: func(m *Model, p *routerTestPlugin) { p.claims["K"] = true },
 			check: func(t *testing.T, m *Model, p *routerTestPlugin) {
-				if m.overviewActive {
+				if m.inGlobalScope() {
 					t.Fatal("K opened the Overview over a plugin that claims it")
 				}
 				wantOnlyPluginKey(t, p, "K")
@@ -560,6 +574,54 @@ func TestPaletteRunsPluginCommandHandlers(t *testing.T) {
 	}
 	if m.showPalette {
 		t.Fatal("palette stayed open after running a command")
+	}
+}
+
+// The Workspaces list and leftover preview chrome no longer take "i", so
+// the palette and help advertise it as find-TD-task again.
+func TestTheIssueLookupAdvertisesIOnWorkspaces(t *testing.T) {
+	for _, context := range []string{"workspace-list", "workspace-preview", "global-workspaces"} {
+		t.Run(context, func(t *testing.T) {
+			p := newRouterPlugin()
+			m := routerTestModel(t, p)
+			keymap.RegisterDefaults(m.keymap)
+			m.activeContext = context
+
+			var entry palette.PaletteEntry
+			for _, e := range palette.BuildEntries(m.keymap, m.surfacePlugins(), context, "global") {
+				if e.CommandID == "open-issue" {
+					entry = e
+				}
+			}
+			if entry.CommandID == "" {
+				t.Fatal("the palette does not offer the issue lookup at all")
+			}
+			if entry.Key != "i" {
+				t.Fatalf("the palette advertises %q for the issue lookup, want i", entry.Key)
+			}
+
+			var help strings.Builder
+			m.renderBindingSection(&help, "global")
+			var found bool
+			for _, line := range strings.Split(ansi.Strip(help.String()), "\n") {
+				if !strings.Contains(line, formatCommandName("open-issue")) {
+					continue
+				}
+				found = true
+				if !strings.Contains(line, "i") {
+					t.Fatalf("help does not advertise i for the issue lookup: %q", line)
+				}
+			}
+			if !found {
+				t.Fatal("help does not list the issue lookup")
+			}
+
+			m.showPalette = true
+			updated, _ := m.Update(palette.CommandSelectedMsg{CommandID: "open-issue", Context: "global"})
+			if !updated.(Model).showIssueInput {
+				t.Fatal("the palette could not open the issue lookup")
+			}
+		})
 	}
 }
 
@@ -892,5 +954,63 @@ func TestBracketsUnderAPluginOverlayWithoutKeyRouterReachThePlugin(t *testing.T)
 	}
 	if len(p.seen) != 1 {
 		t.Fatalf("plugin saw %d messages, want the bracket", len(p.seen))
+	}
+}
+
+// i is Sidecar's find-TD-task shortcut on the Workspaces list and leftover
+// preview chrome. It must not be swallowed as "enter interactive".
+func TestIssueLookupOpensFromTheProjectWorkspacesList(t *testing.T) {
+	for _, context := range []string{"workspace-list", "workspace-preview"} {
+		t.Run(context, func(t *testing.T) {
+			p := newRouterPlugin()
+			p.id = "workspace-manager"
+			p.context = context
+			m := routerTestModel(t, p)
+			keymap.RegisterDefaults(m.keymap)
+			m.updateContext()
+
+			m.handleKeyMsg(tea.KeyPressMsg{Code: 'i', Text: "i"})
+			if !m.showIssueInput {
+				t.Fatal("\"i\" did not open the issue modal from the Workspaces list")
+			}
+		})
+	}
+}
+
+func TestIssueModalStillOpensWhereNoContextBindsTheKey(t *testing.T) {
+	p := newRouterPlugin()
+	p.context = "tasks-list"
+	m := routerTestModel(t, p)
+	keymap.RegisterDefaults(m.keymap)
+	m.updateContext()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if !m.showIssueInput {
+		t.Fatal("\"i\" no longer opens the issue modal")
+	}
+}
+
+// A pane being typed into gets a footer of exits only. The tab numbers and the
+// help key are going to the pane, so advertising them would be a lie.
+func TestTypingFooterAdvertisesOnlyTheWaysOut(t *testing.T) {
+	p := newRouterPlugin()
+	p.id = "workspace-manager"
+	p.context = "workspace-interactive"
+	p.commands = []plugin.Command{
+		{ID: "exit-interactive", Name: "Exit", Description: "Exit interactive mode", Context: "workspace-interactive", Priority: 1},
+	}
+	m := routerTestModel(t, p)
+	keymap.RegisterDefaults(m.keymap)
+	m.keymap.RegisterPluginBinding("ctrl+\\", "exit-interactive", "workspace-interactive")
+	m.updateContext()
+
+	hints := m.footerHints()
+	if len(hints) == 0 {
+		t.Fatal("the interactive footer offers no way out at all")
+	}
+	for _, hint := range hints {
+		if hint.label == "help" || hint.label == "plugins" || hint.label == "tabs" {
+			t.Fatalf("the interactive footer advertises %q, a key that goes to the pane: %#v", hint.label, hints)
+		}
 	}
 }

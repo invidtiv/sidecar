@@ -21,7 +21,6 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/plugins/notes"
-	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/plugins/tdmonitor"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 )
@@ -34,7 +33,6 @@ const (
 	IDConversations = "conversations"
 	IDWorkspace     = "workspace-manager"
 	IDNotes         = "notes"
-	IDTasks         = "tasks"
 )
 
 // Entry is one plugin slot in tab order. New is deferred so Plan stays free of
@@ -90,38 +88,11 @@ func Plan(cfg *config.Config) []Entry {
 		base = append(base, Entry{IDNotes, func() plugin.Plugin { return notes.New() }})
 	}
 
-	if !features.IsEnabled(features.TasksPlugin.Name) {
-		return base
-	}
-	return insertTasks(base, cfg.Plugins.Tasks.Position)
-}
-
-// insertTasks places the Tasks entry after the configured anchor.
-//
-// Fallback rule, in order:
-//  1. the configured anchor, when it is present;
-//  2. the other anchor, when it is present (a user who asked for after-notes
-//     with notes disabled gets the default placement rather than a tab that
-//     wanders to whatever happens to be last);
-//  3. the end of the list, when neither anchor is present.
-func insertTasks(base []Entry, position string) []Entry {
-	entry := Entry{IDTasks, func() plugin.Plugin { return tasks.New() }}
-
-	anchors := []string{IDWorkspace, IDNotes}
-	if position == config.TasksPositionAfterNotes {
-		anchors = []string{IDNotes, IDWorkspace}
-	}
-
-	for _, anchor := range anchors {
-		if idx := indexOf(base, anchor); idx >= 0 {
-			out := make([]Entry, 0, len(base)+1)
-			out = append(out, base[:idx+1]...)
-			out = append(out, entry)
-			out = append(out, base[idx+1:]...)
-			return out
-		}
-	}
-	return append(append([]Entry(nil), base...), entry)
+	// Tasks is deliberately absent: it is a global tab owned by the app shell
+	// (internal/app/scope.go), not a project plugin. Registering it here would
+	// put its store, session, and agent queue back under registry.Reinit, which
+	// rebuilt the whole Tasks model on every project switch.
+	return base
 }
 
 func indexOf(entries []Entry, id string) int {

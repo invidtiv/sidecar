@@ -372,6 +372,11 @@ var (
 
 	Header = lipgloss.NewStyle().
 		Background(BgSecondary)
+
+	// HeaderGlobal tints the top bar in the cross-project space so the mode
+	// is visible in peripheral vision even after the clock is dropped.
+	HeaderGlobal = lipgloss.NewStyle().
+			Background(BgTertiary)
 )
 
 // Modal styles

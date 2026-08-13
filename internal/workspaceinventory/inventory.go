@@ -40,8 +40,91 @@ type Workspace struct {
 	Kind                                     Kind
 	Key, Name, Path, Branch, TaskID          string
 	TmuxName, PaneID, Provider, Namespace    string
-	Presentation                             agentstatus.Presentation
-	ObservedAt                               time.Time
+	// Plain marks a workspace collected with no agent evidence at all: a Git
+	// worktree with no recorded agent. It is the catalog's honest answer to
+	// "is there an agent here?", and it is what keeps the Agents projection
+	// identical to what it collected before the catalog carried plain rows.
+	Plain bool
+	// IsMain is explicit inventory identity, resolved while collecting Git's
+	// worktree list. Presentation callers must not guess it from a name.
+	IsMain bool
+	// Live and Ambiguous describe session health, which is not the same
+	// question as agent activity: a plain shell or an agentless worktree can
+	// own a live pane while having no agent semantics at all. Keeping them
+	// separate is what lets the catalog carry plain workspaces without
+	// fabricating an agentstatus value for them.
+	Live, Ambiguous bool
+	Presentation    agentstatus.Presentation
+	ObservedAt      time.Time
+}
+
+// HasAgent reports durable or detected agent evidence. A worktree earns it
+// from its recorded `agent` file; a shell earns it from a configured agent
+// type or from live identification, which is why an unidentified shell can
+// still become an agent on a later status poll. Everything else is plain.
+func (w Workspace) HasAgent() bool {
+	if w.Kind == KindShell {
+		return strings.TrimSpace(w.Provider) != ""
+	}
+	return !w.Plain
+}
+
+// Item is the read-only catalog row shared by the Agents board and the global
+// Workspaces browser. Agent is nil for plain shells and worktrees: they are
+// given presentation buckets by the list projection rather than a fabricated
+// semantic state.
+type Item struct {
+	ID                      string
+	ProjectKey, ProjectName string
+	ProjectRoot             string
+	Kind                    Kind
+	Key, Name, Path, Branch string
+	TaskID                  string
+	Provider                string
+	PaneID, TmuxName        string
+	Live, Ambiguous         bool
+	IsMain                  bool
+	Agent                   *agentstatus.Presentation
+	ObservedAt              time.Time
+}
+
+// Item projects one collected workspace into its catalog row.
+func (w Workspace) Item() Item {
+	item := Item{
+		ID: w.ID, ProjectKey: w.ProjectKey, ProjectName: w.ProjectName, ProjectRoot: w.ProjectRoot,
+		Kind: w.Kind, Key: w.Key, Name: w.Name, Path: w.Path, Branch: w.Branch, TaskID: w.TaskID,
+		Provider: w.Provider, PaneID: w.PaneID, TmuxName: w.TmuxName,
+		Live: w.Live, Ambiguous: w.Ambiguous, IsMain: w.IsMain, ObservedAt: w.ObservedAt,
+	}
+	if w.HasAgent() {
+		presentation := w.Presentation
+		item.Agent = &presentation
+	}
+	return item
+}
+
+// Catalog projects a whole project result: every durable shell and Git
+// worktree it holds, agent-backed or not.
+func Catalog(result ProjectResult) []Item {
+	items := make([]Item, 0, len(result.Workspaces))
+	for _, workspace := range result.Workspaces {
+		items = append(items, workspace.Item())
+	}
+	return items
+}
+
+// AgentWorkspaces is the agent-only projection the Kanban board consumes. It
+// excludes exactly the items with no agent evidence and changes nothing else,
+// so the board keeps the full shared semantic matrix it had before the catalog
+// carried plain workspaces.
+func AgentWorkspaces(workspaces []Workspace) []Workspace {
+	agents := make([]Workspace, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		if workspace.HasAgent() {
+			agents = append(agents, workspace)
+		}
+	}
+	return agents
 }
 
 type ProjectResult struct {
@@ -78,6 +161,15 @@ func (c Collector) ValidateWorkspace(ctx context.Context, workspace Workspace) e
 		if !found {
 			return fmt.Errorf("worktree is no longer available")
 		}
+		// A plain worktree — the main worktree, or one nobody has run an agent
+		// in — is a real destination for the global browser, and it has no
+		// agent identity to recheck. Demanding one here would refuse to open
+		// exactly the rows the catalog added. Git's own worktree list above is
+		// the whole identity for those, and it is the same fact the project's
+		// Workspaces plugin resolves the pending selection against.
+		if !workspace.HasAgent() {
+			return nil
+		}
 		stateDir, ok := lookupWorktree(workspace.ProjectRoot, workspace.Path)
 		if !ok {
 			return fmt.Errorf("worktree agent identity is no longer available")
@@ -113,9 +205,15 @@ func (ExecRunner) Output(ctx context.Context, name string, args ...string) ([]by
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// CaptureFunc reads one pane: its capture text and the geometry observed with
+// it. The geometry travels with the capture because a capture's rows alone
+// cannot say where the live grid starts, and a consumer that has to ask
+// separately pairs rows from one instant with a height from another.
+type CaptureFunc func(target string, lines int) (string, tty.PaneState, error)
+
 type Collector struct {
 	Runner             Runner
-	Capture            func(string, int) (string, error)
+	Capture            CaptureFunc
 	Now                func() time.Time
 	DoneTTL            time.Duration
 	trackers           *trackerStore
@@ -151,7 +249,7 @@ func (c Collector) defaults() Collector {
 		c.Runner = ExecRunner{}
 	}
 	if c.Capture == nil {
-		c.Capture = tty.CapturePaneOutput
+		c.Capture = tty.CapturePaneWithState
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -291,8 +389,9 @@ func (c Collector) CollectProject(ctx context.Context, name, root string, allRoo
 	result = c.RefreshProjectStatus(ctx, result, allRoots, panes)
 	// One-shot inventory callers receive only agent workspaces. Stateful
 	// consumers such as Overview use RefreshProjectStatus directly and retain
-	// hidden candidates so a later poll can notice an agent started in a shell.
-	result.Workspaces = slices.DeleteFunc(result.Workspaces, undetectedShell)
+	// hidden candidates so a later poll can notice an agent started in a shell,
+	// and retain plain workspaces because the global browser lists them.
+	result.Workspaces = slices.DeleteFunc(result.Workspaces, func(w Workspace) bool { return !w.HasAgent() })
 	return result
 }
 
@@ -325,20 +424,28 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 		result.Err = fmt.Errorf("configured project is not a Git repository: %w", err)
 		return result
 	}
+	// Every Git worktree is catalogued, including the main worktree and
+	// worktrees with no agent and no session. Sidecar's recorded agent/task
+	// metadata upgrades a row when it exists; its absence demotes the row to a
+	// plain workspace rather than hiding it. The Agents projection filters
+	// these out again, so the board sees exactly what it saw before.
 	for _, wt := range parseWorktrees(string(out)) {
-		stateDir, ok := lookupWorktree(root, wt.Path)
-		if !ok {
-			continue
+		provider, taskID := "", ""
+		if stateDir, ok := lookupWorktree(root, wt.Path); ok {
+			if agentBytes, err := readRegularFile(filepath.Join(stateDir, "agent")); err == nil {
+				provider = strings.TrimSpace(string(agentBytes))
+			}
+			if provider != "" {
+				taskBytes, _ := readRegularFile(filepath.Join(stateDir, "task"))
+				taskID = strings.TrimSpace(string(taskBytes))
+			}
 		}
-		agentBytes, err := readRegularFile(filepath.Join(stateDir, "agent"))
-		if err != nil || strings.TrimSpace(string(agentBytes)) == "" {
-			continue
-		}
-		provider := strings.TrimSpace(string(agentBytes))
-		taskBytes, _ := readRegularFile(filepath.Join(stateDir, "task"))
-		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: strings.TrimSpace(string(taskBytes)), Provider: provider, ObservedAt: now}
+		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, IsMain: canonical(wt.Path) == result.ProjectKey, ObservedAt: now}
 		workspace.ID = workspace.ProjectKey + ":worktree:" + workspace.Key
-		workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(provider), Orphaned: true, CapturedAt: now, Now: now})
+		workspace.Plain = provider == ""
+		if workspace.HasAgent() {
+			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(provider), Orphaned: true, CapturedAt: now, Now: now})
+		}
 		result.Workspaces = append(result.Workspaces, workspace)
 	}
 
@@ -372,7 +479,7 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 		var matches []Pane
 		switch workspace.Kind {
 		case KindWorktree:
-			matches = panesForPath(workspace.Path, allRoots, panes, c.reservedSessions)
+			matches = resolveWorktreePanes(*workspace, panesForPath(workspace.Path, allRoots, panes, c.reservedSessions))
 		case KindShell:
 			if workspace.Namespace != "" && workspace.Namespace == tmuxenv.Namespace() {
 				matches = panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
@@ -383,15 +490,26 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 	return result
 }
 
-func undetectedShell(workspace Workspace) bool {
-	return workspace.Kind == KindShell && strings.TrimSpace(workspace.Provider) == ""
-}
-
 func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) {
 	c.observeContext(context.Background(), workspace, matches, now)
 }
 
 func (c Collector) observeContext(ctx context.Context, workspace *Workspace, matches []Pane, now time.Time) {
+	workspace.Live, workspace.Ambiguous = false, false
+	switch {
+	case len(matches) > 1:
+		workspace.Ambiguous = true
+	case len(matches) == 1:
+		workspace.PaneID, workspace.TmuxName = matches[0].ID, matches[0].Session
+		workspace.Live = !matches[0].Dead
+	}
+	// A worktree with no recorded agent is a plain workspace. It gets pane
+	// correlation — that is what "live" means — but no capture and no
+	// agentstatus value: fabricating one would put a fake semantic state on the
+	// board and in the list.
+	if workspace.Kind == KindWorktree && workspace.Plain {
+		return
+	}
 	input := agentstatus.Input{ProviderSupported: supported(workspace.Provider), CapturedAt: now, Now: now, StaleAfter: time.Minute, DoneTTL: c.DoneTTL}
 	if len(matches) == 0 {
 		input.Orphaned = true
@@ -402,7 +520,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		workspace.PaneID, workspace.TmuxName = pane.ID, pane.Session
 		if pane.Dead {
 			input.Orphaned = true
-		} else if output, err := c.capturePane(ctx, pane.ID, 80); err != nil {
+		} else if output, _, err := c.capturePane(ctx, pane.ID, 80); err != nil {
 			input.Err = true
 		} else {
 			select {
@@ -439,7 +557,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 	workspace.Presentation = agentstatus.Resolve(input)
 }
 
-func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (string, error) {
+func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (string, tty.PaneState, error) {
 	if c.captures == nil {
 		return c.Capture(paneID, lines)
 	}
@@ -447,7 +565,7 @@ func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (s
 	case c.captures <- struct{}{}:
 		defer func() { <-c.captures }()
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return "", tty.PaneState{}, ctx.Err()
 	}
 	if c.metrics != nil {
 		c.metrics.captures.Add(1)
@@ -547,6 +665,59 @@ func canonicalOwner(path string, roots []string) string {
 		}
 	}
 	return owner
+}
+
+const (
+	worktreeSessionPrefix  = "sidecar-ws-"
+	termPanelSessionPrefix = "sidecar-tp-"
+	editorSessionPrefix    = "sidecar-edit-"
+	shellSessionPrefix     = "sidecar-sh-"
+)
+
+// resolveWorktreePanes picks the Output / type target for a worktree row.
+// Sidecar chrome (term panels, inline editors) and project shells are not
+// rivals. A live sidecar-ws-* session wins when it is the only such session;
+// leftover unmanaged or extra worktree sessions stay Ambiguous.
+func resolveWorktreePanes(workspace Workspace, matches []Pane) []Pane {
+	remaining := make([]Pane, 0, len(matches))
+	for _, pane := range matches {
+		if worktreeChromeSession(pane.Session) {
+			continue
+		}
+		remaining = append(remaining, pane)
+	}
+	if preferred := preferredWorktreePane(workspace, remaining); preferred != nil {
+		return []Pane{*preferred}
+	}
+	return remaining
+}
+
+func worktreeChromeSession(session string) bool {
+	return strings.HasPrefix(session, termPanelSessionPrefix) ||
+		strings.HasPrefix(session, editorSessionPrefix) ||
+		strings.HasPrefix(session, shellSessionPrefix)
+}
+
+func preferredWorktreePane(workspace Workspace, matches []Pane) *Pane {
+	expected := workspace.TmuxName
+	if !strings.HasPrefix(expected, worktreeSessionPrefix) {
+		expected = ""
+	}
+	var live []Pane
+	for i := range matches {
+		pane := &matches[i]
+		if !strings.HasPrefix(pane.Session, worktreeSessionPrefix) || pane.Dead {
+			continue
+		}
+		if expected != "" && pane.Session == expected {
+			return pane
+		}
+		live = append(live, *pane)
+	}
+	if len(live) == 1 {
+		return &live[0]
+	}
+	return nil
 }
 
 func panesForPath(path string, roots []string, panes []Pane, ignoredSessions map[string]bool) []Pane {

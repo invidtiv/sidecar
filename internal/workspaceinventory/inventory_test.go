@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 type fakeRunner struct {
@@ -101,7 +102,10 @@ func TestTwoProjectInventoryIsReadOnlyAndExcludesPlainShells(t *testing.T) {
 		"%4\tagent-two\t" + rootTwo + "\tclaude\tClaude\t0",
 	}, "\n")}
 	captures := 0
-	collector := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "› Write tests for @filename", nil }}
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		captures++
+		return "› Write tests for @filename", tty.PaneState{}, nil
+	}}
 	panes, err := collector.ListPanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -147,11 +151,11 @@ func TestCollectorDiscoversAgentStartedInUntypedShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
-	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, tty.PaneState, error) {
 		if target == "%1" {
-			return "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", nil
+			return "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 		}
-		return "$ ", nil
+		return "$ ", tty.PaneState{}, nil
 	}}
 	panes := []Pane{
 		{ID: "%1", Session: "dynamic-agent", Path: root, Command: "node"},
@@ -186,18 +190,20 @@ func TestStatusPollDiscoversAgentStartedAfterUntypedShellWasPlain(t *testing.T) 
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	output := "$ "
-	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { return output, nil }}.WithDefaults()
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { return output, tty.PaneState{}, nil }}.WithDefaults()
 	inventory := base.CollectProjectInventory(context.Background(), "sidecar", root)
 	collector := base.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory}))
 
 	first := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "zsh"}})
-	if len(first.Workspaces) != 1 || first.Workspaces[0].Provider != "" {
+	firstShell, ok := shellNamed(first, "late-agent")
+	if !ok || firstShell.Provider != "" {
 		t.Fatalf("plain candidate was not retained internally: %#v", first.Workspaces)
 	}
 
 	output = "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)"
 	second := collector.RefreshProjectStatus(context.Background(), first, []string{root}, []Pane{{ID: "%1", Session: "late-agent", Path: root, Command: "node"}})
-	if len(second.Workspaces) != 1 || second.Workspaces[0].Provider != "codex" || second.Workspaces[0].Presentation.Lane != agentstatus.LaneWorking {
+	secondShell, ok := shellNamed(second, "late-agent")
+	if !ok || secondShell.Provider != "codex" || secondShell.Presentation.Lane != agentstatus.LaneWorking {
 		t.Fatalf("late agent was not discovered by status poll: %#v", second.Workspaces)
 	}
 }
@@ -222,14 +228,160 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	captures := 0
-	collector := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "", nil }}
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "", tty.PaneState{}, nil }}
 	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, []Pane{{ID: "%1", Path: root}, {ID: "%2", Path: root}})
-	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable {
+	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable || !result.Workspaces[0].IsMain {
 		t.Fatalf("ambiguous result = %#v", result)
 	}
 	if captures != 0 {
 		t.Fatalf("ambiguous panes captured %d times", captures)
 	}
+}
+
+func TestResolveWorktreePanesIgnoresChromeAndPrefersWorkspaceSession(t *testing.T) {
+	root := "/repo"
+	workspace := Workspace{Path: root, Name: "repo"}
+	cases := []struct {
+		name    string
+		panes   []Pane
+		wantIDs []string
+	}{
+		{
+			name: "worktree plus term panel prefers ws",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-ws-repo", Path: root},
+				{ID: "%2", Session: "sidecar-tp-repo", Path: root},
+			},
+			wantIDs: []string{"%1"},
+		},
+		{
+			name: "worktree plus two editors and shells prefers ws",
+			panes: []Pane{
+				{ID: "%10", Session: "sidecar-edit-1", Path: root},
+				{ID: "%11", Session: "sidecar-edit-2", Path: root},
+				{ID: "%12", Session: "sidecar-sh-repo-1", Path: root},
+				{ID: "%13", Session: "sidecar-sh-repo-2", Path: root},
+				{ID: "%14", Session: "sidecar-ws-repo", Path: root},
+			},
+			wantIDs: []string{"%14"},
+		},
+		{
+			name: "two unmanaged panes stay rivals",
+			panes: []Pane{
+				{ID: "%1", Session: "scratch-a", Path: root},
+				{ID: "%2", Session: "scratch-b", Path: root},
+			},
+			wantIDs: []string{"%1", "%2"},
+		},
+		{
+			name: "shells are never the worktree pane",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-sh-repo-1", Path: root},
+				{ID: "%2", Session: "sidecar-ws-repo", Path: root},
+			},
+			wantIDs: []string{"%2"},
+		},
+		{
+			name: "two live worktree sessions stay ambiguous",
+			panes: []Pane{
+				{ID: "%1", Session: "sidecar-ws-one", Path: root},
+				{ID: "%2", Session: "sidecar-ws-two", Path: root},
+			},
+			wantIDs: []string{"%1", "%2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveWorktreePanes(workspace, tc.panes)
+			if len(got) != len(tc.wantIDs) {
+				t.Fatalf("panes = %#v, want ids %v", got, tc.wantIDs)
+			}
+			for i, id := range tc.wantIDs {
+				if got[i].ID != id {
+					t.Fatalf("pane %d = %#v, want %s", i, got[i], id)
+				}
+			}
+		})
+	}
+}
+
+func TestWorktreeChromeDoesNotMakeOutputAmbiguous(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtState, err := projectdir.WorktreeDirWithBase(stateBase, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtState, "agent"), []byte("codex"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"sidecar-sh-repo-1","displayName":"Shell 1","namespace":"` + tmuxenv.Namespace() + `","agentType":"claude"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	var captured []string
+	collector := Collector{Runner: runner, Capture: func(id string, _ int) (string, tty.PaneState, error) {
+		captured = append(captured, id)
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
+	}}
+	panes := []Pane{
+		{ID: "%ws", Session: "sidecar-ws-repo", Path: root, Command: "grok"},
+		{ID: "%tp", Session: "sidecar-tp-repo", Path: root, Command: "zsh"},
+		{ID: "%e1", Session: "sidecar-edit-1", Path: root, Command: "nvim"},
+		{ID: "%e2", Session: "sidecar-edit-2", Path: root, Command: "nvim"},
+		{ID: "%sh", Session: "sidecar-sh-repo-1", Path: root, Command: "claude"},
+	}
+	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, panes)
+	if result.Err != nil {
+		t.Fatalf("collect: %v", result.Err)
+	}
+	worktree, shell, ok := worktreeAndShell(result)
+	if !ok {
+		t.Fatalf("workspaces = %#v, want one worktree and one shell", result.Workspaces)
+	}
+	if worktree.Ambiguous || !worktree.Live || worktree.PaneID != "%ws" || worktree.TmuxName != "sidecar-ws-repo" {
+		t.Fatalf("worktree = %#v, want live pane %%ws", worktree)
+	}
+	if worktree.Presentation.Freshness == agentstatus.FreshnessUnavailable {
+		t.Fatalf("worktree presentation unavailable: %#v", worktree.Presentation)
+	}
+	if shell.PaneID != "%sh" || shell.TmuxName != "sidecar-sh-repo-1" {
+		t.Fatalf("shell = %#v, want its own session", shell)
+	}
+	if len(captured) != 2 || !containsString(captured, "%ws") || !containsString(captured, "%sh") {
+		t.Fatalf("captured = %v, want worktree %%ws and shell %%sh", captured)
+	}
+}
+
+func worktreeAndShell(result ProjectResult) (worktree, shell Workspace, ok bool) {
+	for _, workspace := range result.Workspaces {
+		switch workspace.Kind {
+		case KindWorktree:
+			worktree = workspace
+		case KindShell:
+			shell = workspace
+		}
+	}
+	return worktree, shell, worktree.ID != "" && shell.ID != ""
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCollectorMatchesLiveSiblingWorktreeWithoutConfiguredOwner(t *testing.T) {
@@ -259,11 +411,11 @@ func TestCollectorMatchesLiveSiblingWorktreeWithoutConfiguredOwner(t *testing.T)
 		"branch refs/heads/terminal-cutover",
 		"",
 	}, "\n")}}
-	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, error) {
+	collector := Collector{Runner: runner, Capture: func(target string, _ int) (string, tty.PaneState, error) {
 		if target != "%40" {
 			t.Fatalf("captured pane %q, want %%40", target)
 		}
-		return "• Working (1s • esc to interrupt)", nil
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}
 	result := collector.CollectProject(context.Background(), "sidecar", projectRoot, []string{projectRoot}, []Pane{{
 		ID: "%40", Session: "sidecar-ws-sidecar-terminal-cutover", Path: worktree, Command: "node",
@@ -290,10 +442,10 @@ func TestPanesForPathDoesNotClaimNestedConfiguredProject(t *testing.T) {
 
 func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	collector := Collector{Capture: func(string, int) (string, error) {
+	collector := Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		out := outputs[0]
 		outputs = outputs[1:]
-		return out, nil
+		return out, tty.PaneState{}, nil
 	}}.WithDefaults()
 	pane := []Pane{{ID: "%1", Session: "agent", Path: "/tmp/repo", Command: "codex"}}
 	first := Workspace{ID: "repo:worktree:one", Provider: "codex"}
@@ -309,9 +461,9 @@ func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 }
 
 func TestRefreshCollectorBoundsMatchedPaneCaptures(t *testing.T) {
-	collector := (Collector{Capture: func(string, int) (string, error) {
+	collector := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		time.Sleep(10 * time.Millisecond)
-		return "› ready", nil
+		return "› ready", tty.PaneState{}, nil
 	}}).ForRefresh(2)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -332,8 +484,8 @@ func TestRefreshCollectorBoundsMatchedPaneCaptures(t *testing.T) {
 func TestLiveStatusRefreshReusesInventoryWithoutGitOrMetadataReads(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
-	collector := (Collector{Runner: runner, Capture: func(string, int) (string, error) {
-		return "• Working (1s • esc to interrupt)", nil
+	collector := (Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}).ForRefresh(2)
 	previous := ProjectResult{ProjectKey: canonical(root), ProjectRoot: root, Workspaces: []Workspace{{
 		ID: "repo:worktree:agent", ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Path: root, Provider: "codex",
@@ -445,7 +597,7 @@ func TestLegacyAgentShellSessionIsReservedFromWorktreeCapture(t *testing.T) {
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	captures := 0
-	base := Collector{Runner: runner, Capture: func(string, int) (string, error) { captures++; return "working", nil }}.WithDefaults()
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "working", tty.PaneState{}, nil }}.WithDefaults()
 	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
 	claims := BuildShellClaims([]ProjectResult{inventory})
 	result := base.ForRefresh(4, claims).RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "legacy-agent", Path: root, Command: "codex"}})
@@ -463,14 +615,14 @@ func TestCanceledCaptureCannotMutateSharedTracker(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls int64
-	base := (Collector{Capture: func(string, int) (string, error) {
+	base := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		call := atomic.AddInt64(&calls, 1)
 		if call == 1 {
 			close(started)
 			<-release
-			return "› Write tests for @filename", nil
+			return "› Write tests for @filename", tty.PaneState{}, nil
 		}
-		return "• Working (1s • esc to interrupt)", nil
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}).WithDefaults()
 	oldCollector := base.ForRefresh(1)
 	oldCtx, cancel := context.WithCancel(context.Background())
@@ -500,7 +652,9 @@ func TestCanceledLocalTrackerApplyCannotReachCommittedState(t *testing.T) {
 	applyLocked := make(chan struct{})
 	releaseApply := make(chan struct{})
 	base := (Collector{
-		Capture: func(string, int) (string, error) { return "› Write tests for @filename", nil },
+		Capture: func(string, int) (string, tty.PaneState, error) {
+			return "› Write tests for @filename", tty.PaneState{}, nil
+		},
 		beforeTrackerApply: func() {
 			close(applyLocked)
 			<-releaseApply
@@ -528,10 +682,10 @@ func TestCanceledLocalTrackerApplyCannotReachCommittedState(t *testing.T) {
 
 func TestSuccessfulRefreshCommitsTrackerContinuity(t *testing.T) {
 	outputs := []string{"• Working (1s • esc to interrupt)", "› Write tests for @filename"}
-	base := (Collector{Capture: func(string, int) (string, error) {
+	base := (Collector{Capture: func(string, int) (string, tty.PaneState, error) {
 		output := outputs[0]
 		outputs = outputs[1:]
-		return output, nil
+		return output, tty.PaneState{}, nil
 	}}).WithDefaults()
 	first := base.ForRefresh(1)
 	working := Workspace{ID: "same-agent", Provider: "codex"}
@@ -639,4 +793,141 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// shellNamed finds one shell row in a result. The catalog now also carries
+// plain worktrees, so a test about a shell has to name the shell.
+func shellNamed(result ProjectResult, tmuxName string) (Workspace, bool) {
+	for _, workspace := range result.Workspaces {
+		if workspace.Kind == KindShell && workspace.Key == tmuxName {
+			return workspace, true
+		}
+	}
+	return Workspace{}, false
+}
+
+// TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus covers slice 2
+// item 1: the read-only inventory became an all-workspace catalog, and the
+// Agents projection over it is exactly what the board collected before.
+func TestCatalogIncludesPlainWorkspacesWithoutFabricatingAgentStatus(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	linked := filepath.Join(t.TempDir(), "repo-topic")
+	for _, dir := range []string{root, linked} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The main worktree carries a recorded agent; the linked worktree carries
+	// nothing at all and has no session.
+	worktreeState, err := projectdir.WorktreeDirWithBase(stateBase, root, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeState, "agent"), []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"plain-shell","displayName":"Shell 1","namespace":"` + tmuxenv.Namespace() + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, stateBase)
+
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\nworktree " + linked + "\nbranch refs/heads/topic\n"}}
+	captures := 0
+	base := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "$ ", tty.PaneState{}, nil }}.WithDefaults()
+	inventory := base.CollectProjectInventory(context.Background(), "repo", root)
+	collector := base.ForRefresh(2, BuildShellClaims([]ProjectResult{inventory}))
+	result := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{
+		{ID: "%1", Session: "plain-shell", Path: root, Command: "zsh"},
+	})
+
+	catalog := Catalog(result)
+	if len(catalog) != 3 {
+		t.Fatalf("catalog = %#v, want main worktree, linked worktree, and the plain shell", catalog)
+	}
+	byName := map[string]Item{}
+	for _, item := range catalog {
+		byName[item.Name] = item
+	}
+	main, linkedItem, shell := byName[filepath.Base(root)], byName[filepath.Base(linked)], byName["Shell 1"]
+	if main.Agent == nil || main.Provider != "codex" {
+		t.Fatalf("agent worktree lost its status: %#v", main)
+	}
+	if linkedItem.Agent != nil || linkedItem.Provider != "" || linkedItem.Live || linkedItem.Branch != "topic" {
+		t.Fatalf("plain worktree was given a fabricated agent state: %#v", linkedItem)
+	}
+	if shell.Agent != nil {
+		t.Fatalf("an unidentified shell is not an agent: %#v", shell)
+	}
+	if !shell.Live || shell.PaneID != "%1" {
+		t.Fatalf("plain shell lost its session health: %#v", shell)
+	}
+
+	// The plain worktree costs no pane capture: correlation is enough to know
+	// whether it is live, and capturing it would be work for a row with no
+	// agent semantics.
+	if captures != 1 {
+		t.Fatalf("captures = %d, want only the shell's discovery capture", captures)
+	}
+
+	// The Agents projection is the agent-only subset.
+	agents := AgentWorkspaces(result.Workspaces)
+	if len(agents) != 1 || agents[0].Provider != "codex" {
+		t.Fatalf("agent projection = %#v", agents)
+	}
+
+	// Cataloguing is read-only.
+	if after := snapshotTree(t, stateBase); !reflect.DeepEqual(before, after) {
+		t.Fatalf("catalog collection mutated Sidecar state\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// Slice 4 item 1 of docs/plans/active/global-overview-workspaces.md: the global
+// browser opens plain rows too, so validation must recheck what a plain
+// workspace actually has — Git's own worktree list — instead of demanding the
+// agent identity it was never collected with.
+func TestValidateWorkspaceAcceptsAPlainWorktreeAndStillGuardsAgentIdentity(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := filepath.Join(t.TempDir(), "repo")
+	worktree := filepath.Join(t.TempDir(), "topic")
+	for _, path := range []string{root, worktree} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n\nworktree " + worktree + "\nbranch refs/heads/topic\n"}}
+	collector := Collector{Runner: runner}
+
+	// The main worktree and an agentless linked worktree both validate with no
+	// recorded agent anywhere in state.
+	for _, path := range []string{root, worktree} {
+		plain := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(path), Path: path, Plain: true}
+		if err := collector.ValidateWorkspace(context.Background(), plain); err != nil {
+			t.Fatalf("plain worktree %q rejected: %v", path, err)
+		}
+	}
+	if after := snapshotTree(t, stateBase); len(after) != 0 {
+		t.Fatalf("validating a plain worktree wrote state: %v", after)
+	}
+
+	// A worktree Git no longer lists is refused whether or not it had an agent.
+	missing := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(root) + "-gone", Path: root + "-gone", Plain: true}
+	if err := collector.ValidateWorkspace(context.Background(), missing); err == nil || !strings.Contains(err.Error(), "no longer available") {
+		t.Fatalf("removed plain worktree validation = %v", err)
+	}
+
+	// An agent-backed worktree keeps its stricter identity check.
+	agent := Workspace{ProjectKey: canonical(root), ProjectRoot: root, Kind: KindWorktree, Key: canonical(worktree), Path: worktree}
+	if err := collector.ValidateWorkspace(context.Background(), agent); err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("agent worktree without a recorded agent = %v", err)
+	}
 }

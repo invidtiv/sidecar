@@ -6,6 +6,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // ViewMode represents the current view state.
@@ -47,45 +48,35 @@ const (
 	PreviewTabTask                     // TD task info
 )
 
-// DiffViewMode specifies the diff rendering mode.
-type DiffViewMode int
-
-const (
-	DiffViewUnified    DiffViewMode = iota // Line-by-line unified view
-	DiffViewSideBySide                     // Side-by-side split view
-	DiffViewFullFile                       // Full-file side-by-side view (like VS Code diff)
+// Diff view types live in workspacediff so the global preview can use the
+// same model without constructing a Plugin.
+type (
+	DiffViewMode = workspacediff.ViewMode
+	DiffScope    = workspacediff.Scope
+	LoadState    = workspacediff.LoadState
+	DiffTabFocus = workspacediff.Focus
 )
 
-// DiffScope names the three distinct questions answered by the Diff tab.
-// Keeping this separate from DiffViewMode avoids confusing data selection
-// (working tree/commits/aggregate) with presentation (unified/split/full-file).
-type DiffScope int
-
 const (
-	DiffScopeWorkingTree DiffScope = iota
-	DiffScopeCommits
-	DiffScopeAggregate
-)
+	DiffViewUnified    = workspacediff.ViewUnified
+	DiffViewSideBySide = workspacediff.ViewSideBySide
+	DiffViewFullFile   = workspacediff.ViewFullFile
 
-type LoadState int
+	DiffScopeWorkingTree = workspacediff.ScopeWorkingTree
+	DiffScopeCommits     = workspacediff.ScopeCommits
+	DiffScopeAggregate   = workspacediff.ScopeAggregate
 
-const (
-	LoadStateUnknown LoadState = iota
-	LoadStateLoading
-	LoadStateClean
-	LoadStateReady
-	LoadStateTruncated
-	LoadStateError
-)
+	LoadStateUnknown   = workspacediff.LoadStateUnknown
+	LoadStateLoading   = workspacediff.LoadStateLoading
+	LoadStateClean     = workspacediff.LoadStateClean
+	LoadStateReady     = workspacediff.LoadStateReady
+	LoadStateTruncated = workspacediff.LoadStateTruncated
+	LoadStateError     = workspacediff.LoadStateError
 
-// DiffTabFocus represents which sub-pane is focused within the diff tab.
-type DiffTabFocus int
-
-const (
-	DiffTabFocusFileList    DiffTabFocus = iota // File list navigation (files + commits)
-	DiffTabFocusDiff                            // Per-file diff viewing
-	DiffTabFocusCommitFiles                     // Commit file list (drilled into a commit)
-	DiffTabFocusCommitDiff                      // Commit file diff viewing
+	DiffTabFocusFileList    = workspacediff.FocusFileList
+	DiffTabFocusDiff        = workspacediff.FocusDiff
+	DiffTabFocusCommitFiles = workspacediff.FocusCommitFiles
+	DiffTabFocusCommitDiff  = workspacediff.FocusCommitDiff
 )
 
 // TermPanelLayout represents the terminal panel split orientation.
@@ -321,6 +312,7 @@ func (w *Worktree) IdentityKey() string {
 type ShellSession struct {
 	Name        string // Display name (e.g., "Shell 1")
 	TmuxName    string // tmux session name (e.g., "sidecar-sh-project-1")
+	WorkDir     string // Parent worktree path; persisted on the definition
 	Agent       *Agent // Reuses Agent struct for tmux state
 	CreatedAt   time.Time
 	ChosenAgent AgentType // td-317b64: Agent type selected at creation (AgentNone for plain shell)
@@ -372,13 +364,6 @@ type InteractiveState struct {
 	// LastKeyTime tracks when the last key was sent for polling decay.
 	LastKeyTime time.Time
 
-	// EscapePressed tracks if a single Escape was recently pressed
-	// (for double-escape exit detection with 150ms delay).
-	EscapePressed bool
-
-	// EscapeTime is when the first Escape was pressed.
-	EscapeTime time.Time
-
 	// CursorRow and CursorCol track the cached cursor position for overlay rendering.
 	// Updated asynchronously via cursorPositionMsg from poll handler (td-648af4).
 	CursorRow int
@@ -397,37 +382,24 @@ type InteractiveState struct {
 	// PaneWidth tracks the tmux pane width for display width alignment.
 	PaneWidth int
 
-	// VisibleStart and VisibleEnd track the buffer line range currently visible.
-	// Used for interactive selection mapping.
-	VisibleStart int
-	VisibleEnd   int
-
 	// BracketedPasteEnabled tracks whether the target app has enabled
 	// bracketed paste mode (ESC[?2004h). Updated from captured output.
 	BracketedPasteEnabled bool
 
-	// MouseReportingEnabled tracks whether the target app has enabled
-	// mouse reporting (1000/1002/1003/1006/1015). Updated from captured output.
-	//
-	// Note: the capture path (`capture-pane -e`) emits rendering escapes only, so
-	// DECSET mode sequences never reach it and this stays false there; the
-	// emulator path does see them and sets it. Click handling reads it only to
-	// resolve a release that never moved — motion always selects locally, or an
-	// app with mouse tracking on (Claude Code, grok) would eat every drag. Wheel
-	// routing uses PaneMouseReporting instead.
+	// MouseReportingEnabled tracks whether the application in the target pane has
+	// asked for mouse events. It is mirrored from the terminal component and read
+	// only to describe the surface: who owns a click or a notch is that
+	// component's PaneMouseReporting, so the two can never disagree.
 	MouseReportingEnabled bool
-
-	// PaneMouseReporting is tmux's #{mouse_any_flag} for the target pane: the
-	// app has enabled at least one mouse tracking mode and expects wheel notches
-	// as mouse reports rather than having the viewer scroll its own scrollback.
-	PaneMouseReporting bool
-
-	// EscapeTimerPending tracks if an escape timer is already in flight.
-	// Prevents duplicate timers from accumulating (td-83dc22).
-	EscapeTimerPending bool
 
 	// LastResizeAt tracks the last time we attempted to resize the tmux pane.
 	LastResizeAt time.Time
+
+	// ResizeRetryPending records that a deferred assertion of the pane's
+	// geometry is already armed. A layout still moving delivers one size per
+	// frame; without this each of them would arm its own retry and the burst
+	// would become a chain of resizes spaced a debounce window apart.
+	ResizeRetryPending bool
 }
 
 // GitStats holds file change statistics.
@@ -455,12 +427,7 @@ type WorktreeChanges struct {
 }
 
 // CommitStatusInfo holds commit information with merge/push status.
-type CommitStatusInfo struct {
-	Hash    string // Short commit hash
-	Subject string // Commit subject line
-	Pushed  bool   // Is commit pushed to remote?
-	Merged  bool   // Is commit merged to base branch?
-}
+type CommitStatusInfo = workspacediff.CommitInfo
 
 // validateManagedSessionsMsg triggers periodic validation of managedSessions.
 type validateManagedSessionsMsg struct{}

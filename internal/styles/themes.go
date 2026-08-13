@@ -1251,6 +1251,9 @@ func rebuildStyles() {
 	Header = lipgloss.NewStyle().
 		Background(BgSecondary)
 
+	HeaderGlobal = lipgloss.NewStyle().
+		Background(BgTertiary)
+
 	// Modal styles
 	ModalOverlay = lipgloss.NewStyle().
 		Background(BgOverlay)

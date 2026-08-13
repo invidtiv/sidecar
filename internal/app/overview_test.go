@@ -20,6 +20,8 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -29,6 +31,13 @@ type navigationPlugin struct {
 	inits     int
 	keyInputs int
 	pending   *plugin.PendingWorkspaceSelection
+	// terminal lifecycle counters model a project Workspaces Output surface:
+	// focus owns the terminal; background size/messages must not reach it.
+	terminalOpen    bool
+	terminalResizes int
+	terminalMsgs    int
+	focusChanges    []bool
+	focusNotices    int
 }
 
 func (p *navigationPlugin) ID() string                 { return p.id }
@@ -41,11 +50,31 @@ func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		p.keyInputs++
 	}
+	if _, ok := msg.(plugin.PluginFocusedMsg); ok {
+		p.focusNotices++
+		if p.focused {
+			p.terminalOpen = true
+		}
+	}
+	if p.terminalOpen {
+		if _, ok := msg.(tea.WindowSizeMsg); ok {
+			p.terminalResizes++
+		}
+		if tty.IsTerminalMessage(msg) {
+			p.terminalMsgs++
+		}
+	}
 	return p, nil
 }
-func (p *navigationPlugin) View(int, int) string       { return "" }
-func (p *navigationPlugin) IsFocused() bool            { return p.focused }
-func (p *navigationPlugin) SetFocused(f bool)          { p.focused = f }
+func (p *navigationPlugin) View(int, int) string { return "" }
+func (p *navigationPlugin) IsFocused() bool      { return p.focused }
+func (p *navigationPlugin) SetFocused(f bool) {
+	p.focused = f
+	if !f {
+		p.terminalOpen = false
+	}
+	p.focusChanges = append(p.focusChanges, f)
+}
 func (p *navigationPlugin) Commands() []plugin.Command { return nil }
 func (p *navigationPlugin) FocusContext() string       { return p.id }
 func (p *navigationPlugin) SetPendingWorkspaceSelection(s plugin.PendingWorkspaceSelection) {
@@ -112,7 +141,7 @@ func TestLogoClickAndKToggleOverview(t *testing.T) {
 	x := (start + end) / 2
 	updated, cmd := m.Update(tea.MouseClickMsg{X: x, Y: 0, Button: tea.MouseLeft})
 	m = asAppModel(t, updated)
-	if !m.overviewActive {
+	if !m.inGlobalScope() {
 		t.Fatal("logo click did not open overview")
 	}
 	if cmd == nil {
@@ -122,21 +151,21 @@ func TestLogoClickAndKToggleOverview(t *testing.T) {
 	// K toggles closed (handleKeyMsg returns *Model)
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		t.Fatal("K did not close overview")
 	}
 
 	// K opens again
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if !m.overviewActive || cmd == nil {
+	if !m.inGlobalScope() || cmd == nil {
 		t.Fatal("K did not reopen overview")
 	}
 
 	// Clicking logo while open toggles closed
 	updated, _ = m.Update(tea.MouseClickMsg{X: x, Y: 0, Button: tea.MouseLeft})
 	m = asAppModel(t, updated)
-	if m.overviewActive {
+	if m.inGlobalScope() {
 		t.Fatal("logo click while open should close overview")
 	}
 }
@@ -151,7 +180,7 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	}
 	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.intro.Active = false
 	m.width, m.height, m.ready = 72, 30, true
 	panes := m.overview.Start(nil)()
@@ -169,26 +198,51 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 		t.Fatalf("header width = %d, want 72: %q", got, lines[0])
 	}
 	plainHeader := ansi.Strip(lines[0])
-	if !strings.Contains(plainHeader, "td") || !strings.Contains(plainHeader, "git") || !strings.Contains(plainHeader, "files") || !strings.Contains(plainHeader, "conversations") {
-		t.Fatalf("narrow header omitted discoverable tabs: %q", plainHeader)
+	// The global space owns the tab row: its own tabs, and only its own. The
+	// project plugin tabs belong to the space the user is not in.
+	if !strings.Contains(plainHeader, "Agents") || !strings.Contains(plainHeader, "Workspaces") {
+		t.Fatalf("narrow global header omitted its own tabs: %q", plainHeader)
 	}
-	if strings.Contains(plainHeader, "workspaces") || len(m.getTabBounds()) != 4 {
-		t.Fatalf("narrow header did not deterministically omit the final inactive tab: %q bounds=%#v", plainHeader, m.getTabBounds())
+	if strings.Contains(lines[0], styles.Subtitle.Render(" / Overview")) {
+		t.Fatal("global Overview is still muted subtitle text")
 	}
+	if !strings.Contains(lines[0], styles.BarChipActive.Render("Overview")) {
+		t.Fatal("global Overview is not a filled breadcrumb pill")
+	}
+	for _, projectTab := range []string{"td", "git", "files", "conversations"} {
+		if strings.Contains(plainHeader, projectTab) {
+			t.Fatalf("global header still shows the project tab %q: %q", projectTab, plainHeader)
+		}
+	}
+	if got := len(m.getTabBounds()); got != 2 {
+		t.Fatalf("global tab bounds = %d, want one per global tab: %#v", got, m.getTabBounds())
+	}
+	// Project space keeps its existing full-tab layout, wide and narrow.
 	wide := m
+	wide.scope = ScopeProject
 	wide.width = 140
 	if header := ansi.Strip(wide.renderHeader()); !strings.Contains(header, "workspaces") || len(wide.getTabBounds()) != 5 {
 		t.Fatalf("wide header changed existing full-tab layout: %q bounds=%#v", header, wide.getTabBounds())
 	}
+	narrowProject := wide
+	narrowProject.width = 64
+	narrowHeader := ansi.Strip(narrowProject.renderHeader())
+	if !strings.Contains(narrowHeader, "td") || !strings.Contains(narrowHeader, "git") || !strings.Contains(narrowHeader, "files") || !strings.Contains(narrowHeader, "conversations") {
+		t.Fatalf("narrow project header omitted discoverable tabs: %q", narrowHeader)
+	}
+	if strings.Contains(narrowHeader, "workspaces") || len(narrowProject.getTabBounds()) != 4 {
+		t.Fatalf("narrow project header did not deterministically omit the final inactive tab: %q bounds=%#v",
+			narrowHeader, narrowProject.getTabBounds())
+	}
 	active := m
-	active.overviewActive = false
+	active.scope = ScopeProject
 	active.activePlugin = 4
 	active.intro.RepoName = strings.Repeat("x", 50)
 	active.width = 60
 	var activeBounds TabBounds
 	foundActive := false
 	for _, bounds := range active.getTabBounds() {
-		if bounds.Plugin == 4 {
+		if bounds.Tab.scope == ScopeProject && bounds.Tab.plugin == 4 {
 			activeBounds, foundActive = bounds, true
 		}
 	}
@@ -218,7 +272,7 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 		t.Fatalf("compact content mouse local Y = %d, want 1", got)
 	}
 	updatedModel, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft})
-	if !updatedModel.(Model).overviewActive {
+	if !updatedModel.(Model).inGlobalScope() {
 		t.Fatal("content-row click was misrouted as wrapped header")
 	}
 }
@@ -249,7 +303,7 @@ func TestOverviewPinnedFilteredAndActivationIsLazy(t *testing.T) {
 	}
 	workDir, projectRoot, pluginIndex := m.ui.WorkDir, m.ui.ProjectRoot, m.activePlugin
 	cmd := m.activateProjectSwitcherDestination(m.projectSwitcherFiltered[0])
-	if cmd == nil || !m.overviewActive {
+	if cmd == nil || !m.inGlobalScope() {
 		t.Fatal("Overview activation did not start its loading command")
 	}
 	if runner.calls != 0 {
@@ -276,7 +330,7 @@ func TestProjectSwitcherLinkedWorktreeCursorFlagParity(t *testing.T) {
 	if m.projectSwitcherCursor != 2 {
 		t.Fatalf("enabled linked-worktree cursor = %d, want configured main after pinned Overview", m.projectSwitcherCursor)
 	}
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.initProjectSwitcher()
 	if m.projectSwitcherCursor != 0 {
 		t.Fatalf("active Overview cursor = %d, want pinned Overview", m.projectSwitcherCursor)
@@ -313,7 +367,7 @@ func TestValidatedCrossProjectNavigationFocusesWorkspaceWithoutInput(t *testing.
 	}
 	m := New(reg, km, cfg, "", source, source, "git")
 	m.overview = overview.New(workspaceinventory.Collector{})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	workspace := workspaceinventory.Workspace{ProjectKey: workspaceinventory.CanonicalPath(target), ProjectRoot: target, Kind: workspaceinventory.KindWorktree, Key: workspaceinventory.CanonicalPath(target), Path: target}
 	navigation := overviewNavigation(t, m.overview, workspace)
 	initialGitInits, initialWorkspaceInits := gitPlugin.inits, workspacePlugin.inits
@@ -378,7 +432,7 @@ func TestOverviewWorktreeNavigationScope(t *testing.T) {
 			}
 			m := New(reg, km, cfg, "", source, source, workspacePluginID)
 			m.overview = overview.New(workspaceinventory.Collector{})
-			m.overviewActive = true
+			m.scope = ScopeGlobal
 			cardPath := worktree
 			if tt.card == "main" {
 				cardPath = main
@@ -431,7 +485,7 @@ func TestOverviewShellNavigationLeavesLinkedWorktreeScope(t *testing.T) {
 	}
 	m := New(reg, km, cfg, "", worktree, main, workspacePluginID)
 	m.overview = overview.New(workspaceinventory.Collector{})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	workspace := workspaceinventory.Workspace{ProjectRoot: main, Kind: workspaceinventory.KindShell, Key: "shell", Path: main, TmuxName: "shell"}
 
 	if cmd := m.navigateFromOverview(workspace); cmd == nil {
@@ -451,7 +505,7 @@ func TestOverviewNavigationDoesNotMutateBeforeValidation(t *testing.T) {
 	cfg := config.Default()
 	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", source, source, "")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	workspace := workspaceinventory.Workspace{
 		ProjectKey:  workspaceinventory.CanonicalPath(target),
 		ProjectRoot: target,
@@ -465,8 +519,8 @@ func TestOverviewNavigationDoesNotMutateBeforeValidation(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("navigation did not schedule validation")
 	}
-	if updated.ui.WorkDir != source || updated.ui.ProjectRoot != source || !updated.overviewActive {
-		t.Fatalf("navigation mutated before validation: work=%q root=%q overview=%v", updated.ui.WorkDir, updated.ui.ProjectRoot, updated.overviewActive)
+	if updated.ui.WorkDir != source || updated.ui.ProjectRoot != source || !updated.inGlobalScope() {
+		t.Fatalf("navigation mutated before validation: work=%q root=%q overview=%v", updated.ui.WorkDir, updated.ui.ProjectRoot, updated.inGlobalScope())
 	}
 }
 
@@ -482,13 +536,13 @@ func TestStaleValidationDoesNotMutateProjectOrReinit(t *testing.T) {
 	}
 	m := New(reg, km, cfg, "", source, source, workspacePluginID)
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	initialInits := p.inits
 	navigation := overviewNavigation(t, m.overview, workspaceinventory.Workspace{})
 	updatedModel, cmd := m.Update(overviewValidation(navigation, errors.New("worktree disappeared")))
 	updated := updatedModel.(Model)
-	if updated.ui.WorkDir != source || updated.ui.ProjectRoot != source || !updated.overviewActive || p.inits != initialInits {
-		t.Fatalf("stale navigation mutated state: work=%q root=%q overview=%v inits=%d", updated.ui.WorkDir, updated.ui.ProjectRoot, updated.overviewActive, p.inits)
+	if updated.ui.WorkDir != source || updated.ui.ProjectRoot != source || !updated.inGlobalScope() || p.inits != initialInits {
+		t.Fatalf("stale navigation mutated state: work=%q root=%q overview=%v inits=%d", updated.ui.WorkDir, updated.ui.ProjectRoot, updated.inGlobalScope(), p.inits)
 	}
 	if cmd == nil {
 		t.Fatal("stale validation did not return toast")
@@ -498,18 +552,34 @@ func TestStaleValidationDoesNotMutateProjectOrReinit(t *testing.T) {
 	}
 }
 
+// Both ways of leaving the Agents board end its lifecycle: returning to the
+// project, and switching to another global tab. A card activation in flight
+// from the old lifecycle must not act afterwards.
 func TestOverviewExitBeforeNavigateMsgIgnoresLateActivation(t *testing.T) {
-	m, p, source := newOverviewRaceModel(t)
-	target := newOverviewGitRepo(t, "target")
-	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
-	initialInits := p.inits
+	cases := []struct {
+		name        string
+		key         tea.KeyPressMsg
+		staysGlobal bool
+	}{
+		{"esc returns to the project", tea.KeyPressMsg{Code: tea.KeyEsc}, false},
+		{"2 switches to another global tab", tea.KeyPressMsg{Code: '2', Text: "2"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p, source := newOverviewRaceModel(t)
+			target := newOverviewGitRepo(t, "target")
+			navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
+			initialInits := p.inits
 
-	exitedModel, _ := m.handleKeyMsg(tea.KeyPressMsg{Code: '1', Text: "1"})
-	exited := *exitedModel.(*Model)
-	updatedModel, cmd := exited.Update(navigation)
-	updated := updatedModel.(Model)
-	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
-		t.Fatalf("late NavigateMsg mutated after numeric exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+			exitedModel, _ := m.handleKeyMsg(tc.key)
+			exited := *exitedModel.(*Model)
+			updatedModel, cmd := exited.Update(navigation)
+			updated := updatedModel.(Model)
+			if cmd != nil || updated.inGlobalScope() != tc.staysGlobal || updated.ui.WorkDir != source || p.inits != initialInits {
+				t.Fatalf("late NavigateMsg mutated after exit: cmd=%v global=%v work=%q inits=%d",
+					cmd != nil, updated.inGlobalScope(), updated.ui.WorkDir, p.inits)
+			}
+		})
 	}
 }
 
@@ -528,8 +598,8 @@ func TestOverviewExitBeforeValidationMsgIgnoresLateResult(t *testing.T) {
 	exited := exitedModel.(Model)
 	updatedModel, cmd := exited.Update(overviewValidation(navigation, nil))
 	updated := updatedModel.(Model)
-	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
-		t.Fatalf("late ValidationMsg mutated after tab exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	if cmd != nil || updated.inGlobalScope() || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("late ValidationMsg mutated after tab exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.inGlobalScope(), updated.ui.WorkDir, p.inits)
 	}
 }
 
@@ -558,41 +628,94 @@ func TestOverviewNewerActivationSupersedesOlderValidation(t *testing.T) {
 	}
 	updatedModel, cmd := m.Update(overviewValidation(first, nil))
 	updated := updatedModel.(Model)
-	if cmd != nil || !updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
-		t.Fatalf("older validation won race: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	if cmd != nil || !updated.inGlobalScope() || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("older validation won race: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.inGlobalScope(), updated.ui.WorkDir, p.inits)
 	}
 }
 
-func TestOverviewHeaderTabExitInvalidatesPendingNavigation(t *testing.T) {
+// Clicking a different global tab in the header ends the board's lifecycle the
+// same way a key does, and leaves the project underneath untouched.
+func TestOverviewHeaderTabClickInvalidatesPendingNavigation(t *testing.T) {
 	m, p, source := newOverviewRaceModel(t)
 	target := newOverviewGitRepo(t, "target")
 	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
 	m.width, m.height, m.ready = 120, 40, true
 	bounds := m.getTabBounds()
-	if len(bounds) == 0 {
-		t.Fatal("missing tab bounds")
+	if len(bounds) < 2 || bounds[1].Tab.scope != ScopeGlobal || bounds[1].Tab.global != GlobalWorkspaces {
+		t.Fatalf("expected the global tab row in the header: %#v", bounds)
 	}
 	initialInits := p.inits
-	updatedModel, _ := m.Update(tea.MouseClickMsg{X: bounds[0].Start, Y: 0, Button: tea.MouseLeft})
+	updatedModel, _ := m.Update(tea.MouseClickMsg{X: bounds[1].Start, Y: 0, Button: tea.MouseLeft})
 	exited := updatedModel.(Model)
+	if !exited.inGlobalScope() || exited.globalTab != GlobalWorkspaces {
+		t.Fatalf("tab click left the global space: global=%v tab=%v", exited.inGlobalScope(), exited.globalTab)
+	}
 	updatedModel, cmd := exited.Update(navigation)
 	updated := updatedModel.(Model)
-	if cmd != nil || updated.overviewActive || updated.ui.WorkDir != source || p.inits != initialInits {
-		t.Fatalf("late navigation mutated after header exit: cmd=%v active=%v work=%q inits=%d", cmd != nil, updated.overviewActive, updated.ui.WorkDir, p.inits)
+	if cmd != nil || updated.ui.WorkDir != source || p.inits != initialInits {
+		t.Fatalf("late navigation mutated after tab click: cmd=%v work=%q inits=%d", cmd != nil, updated.ui.WorkDir, p.inits)
 	}
 }
 
 func TestOverviewHeaderMouseOpensSwitcher(t *testing.T) {
 	cfg := config.Default()
-	m := Model{cfg: cfg, registry: plugin.NewRegistry(nil), keymap: keymap.NewRegistry(), ui: &UIState{}, intro: IntroModel{RepoName: "repo", Done: true}, overview: overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}}), overviewActive: true, width: 120, height: 40, ready: true}
+	m := Model{cfg: cfg, registry: plugin.NewRegistry(nil), keymap: keymap.NewRegistry(), ui: &UIState{}, intro: IntroModel{RepoName: "repo", Done: true}, overview: overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}}), width: 120, height: 40, ready: true}
 	start, end, ok := m.getRepoNameBounds()
 	if !ok {
-		t.Fatal("Overview header has no switcher bounds")
+		t.Fatal("project header has no switcher bounds")
 	}
 	updatedModel, _ := m.Update(tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft})
 	updated := updatedModel.(Model)
-	if !updated.showProjectSwitcher || updated.projectSwitcherCursor != 0 {
-		t.Fatalf("Overview header click: open=%v cursor=%d", updated.showProjectSwitcher, updated.projectSwitcherCursor)
+	if !updated.showProjectSwitcher || updated.inGlobalScope() {
+		t.Fatalf("project header click: open=%v global=%v", updated.showProjectSwitcher, updated.inGlobalScope())
+	}
+}
+
+func TestOverviewPillClickTogglesToProject(t *testing.T) {
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	if m.overview == nil {
+		t.Fatal("overview should be constructed when feature defaults on")
+	}
+	m.intro.Active, m.intro.Done = false, true
+	m.width, m.height, m.ready = 120, 40, true
+	m.scope = ScopeGlobal
+	m.updateContext()
+
+	start, end, ok := m.getScopeBounds()
+	if !ok || end <= start {
+		t.Fatalf("scope bounds = %d-%d ok=%v", start, end, ok)
+	}
+	if _, _, repoOK := m.getRepoNameBounds(); repoOK {
+		t.Fatal("global Overview still exposes project-switcher bounds")
+	}
+
+	updated, _ := m.Update(tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("Overview pill click did not return to the project")
+	}
+	if m.showProjectSwitcher {
+		t.Fatal("Overview pill click opened the project switcher")
+	}
+
+	// Logo and K still toggle the same way.
+	logoStart, logoEnd, ok := m.getLogoBounds()
+	if !ok {
+		t.Fatal("logo bounds vanished in project scope")
+	}
+	updated, _ = m.Update(tea.MouseClickMsg{X: (logoStart + logoEnd) / 2, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("logo click did not reopen Overview")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("K did not leave Overview")
 	}
 }
 
@@ -602,6 +725,9 @@ func newOverviewGitRepo(t *testing.T, name string) string {
 	if out, err := exec.Command("git", "init", "-q", "-b", "main", path).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
+	// CI runners have no global git identity, so commits here must carry one.
+	runOverviewGit(t, path, "config", "user.name", "Sidecar Test")
+	runOverviewGit(t, path, "config", "user.email", "sidecar@example.test")
 	return path
 }
 
@@ -624,6 +750,7 @@ func runOverviewGit(t *testing.T, repo string, args ...string) {
 
 func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {
 	t.Helper()
+	isolateAppState(t)
 	source := newOverviewGitRepo(t, "source")
 	cfg := config.Default()
 	km := keymap.NewRegistry()
@@ -635,7 +762,7 @@ func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {
 	}
 	m := New(reg, km, cfg, "", source, source, "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.overview.Start(nil)
 	return m, p, source
 }
@@ -686,6 +813,7 @@ func (p *textInputPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 	t.Helper()
+	isolateAppState(t)
 	cfg := config.Default()
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
@@ -699,7 +827,7 @@ func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	m.intro.Active, m.intro.Done = false, true
 	m.width, m.height, m.ready = 120, 40, true
-	m.overviewActive = true
+	m.scope = ScopeGlobal
 	m.updateContext()
 	return m, shell
 }
@@ -707,7 +835,6 @@ func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
 	keys := map[string]tea.KeyPressMsg{
 		"esc": {Code: tea.KeyEsc},
-		"q":   {Code: 'q', Text: "q"},
 		"K":   {Code: 'k', Text: "K", Mod: tea.ModShift},
 	}
 	for name, key := range keys {
@@ -715,7 +842,7 @@ func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
 			m, shell := overviewModelOverTextInput(t)
 			updated, _ := m.Update(key)
 			m = asAppModel(t, updated)
-			if m.overviewActive {
+			if m.inGlobalScope() {
 				t.Fatalf("%s did not close the overview", name)
 			}
 			if m.showQuitConfirm {
@@ -725,6 +852,21 @@ func TestOverviewExitKeysWorkOverInteractivePlugin(t *testing.T) {
 				t.Fatalf("%s leaked to the covered plugin (%d key inputs)", name, shell.keyInputs)
 			}
 		})
+	}
+}
+
+func TestQOpensQuitModalFromTheAgentsBoard(t *testing.T) {
+	m, shell := overviewModelOverTextInput(t)
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() {
+		t.Fatal("q left the global space instead of opening the quit modal")
+	}
+	if !m.showQuitConfirm {
+		t.Fatal("q did not open the quit modal from the Agents board")
+	}
+	if shell.keyInputs != 0 {
+		t.Fatalf("q leaked to the covered plugin (%d key inputs)", shell.keyInputs)
 	}
 }
 
@@ -756,12 +898,20 @@ func TestOverviewGlobalShortcutsWorkOverInteractivePlugin(t *testing.T) {
 			t.Fatal("? did not open the command palette")
 		}
 	})
-	t.Run("plugin-switch-exits-overview", func(t *testing.T) {
-		m, _ := overviewModelOverTextInput(t)
-		updated, _ := m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	t.Run("numbers move between global tabs only", func(t *testing.T) {
+		m, shell := overviewModelOverTextInput(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 		m = asAppModel(t, updated)
-		if m.overviewActive {
-			t.Fatal("focusing a plugin should leave the overview")
+		if !m.inGlobalScope() || m.globalTab != GlobalWorkspaces {
+			t.Fatalf("2 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
+		}
+		updated, _ = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+		m = asAppModel(t, updated)
+		if !m.inGlobalScope() || m.globalTab != GlobalAgents {
+			t.Fatalf("1 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
+		}
+		if shell.keyInputs != 0 {
+			t.Fatalf("global tab numbers leaked to the covered plugin (%d key inputs)", shell.keyInputs)
 		}
 	})
 }
@@ -779,7 +929,7 @@ func TestOverviewSwallowsUnhandledKeys(t *testing.T) {
 	if shell.keyInputs != 0 {
 		t.Fatalf("overview leaked %d keys to the covered plugin", shell.keyInputs)
 	}
-	if !m.overviewActive {
+	if !m.inGlobalScope() {
 		t.Fatal("unhandled keys should not close the overview")
 	}
 }
@@ -798,7 +948,7 @@ func TestOverviewSwallowsPasteAndUnknownSequences(t *testing.T) {
 	if shell.others != 0 {
 		t.Fatalf("unknown CSI sequence leaked to the covered plugin (%d messages)", shell.others)
 	}
-	if !m.overviewActive {
+	if !m.inGlobalScope() {
 		t.Fatal("paste/sequence handling should not close the overview")
 	}
 }
@@ -808,14 +958,85 @@ func TestExitOverviewRestoresPluginContext(t *testing.T) {
 	if m.activeContext != "overview" {
 		t.Fatalf("activeContext = %q, want overview", m.activeContext)
 	}
-	// Out-of-range plugin index: SetActivePlugin returns early without
-	// recomputing the context, so exitOverview must restore it itself.
+	// A number with no global tab behind it does nothing at all: it must not
+	// fall through to the project's plugin list.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
 	m = asAppModel(t, updated)
-	if m.overviewActive {
-		t.Fatal("plugin switch should close the overview")
+	if !m.inGlobalScope() || m.activeContext != "overview" {
+		t.Fatalf("out-of-range number left the global space: global=%v context=%q", m.inGlobalScope(), m.activeContext)
+	}
+	// Leaving the space restores the covered plugin's own context.
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("esc should leave the global space")
 	}
 	if m.activeContext == "overview" {
 		t.Fatal("activeContext still overview after the board closed")
+	}
+}
+
+// The chord that leaves interactive mode is the user's configured one on both
+// surfaces, and it is registered so help and the palette name the key the
+// browser actually answers.
+func TestConfiguredInteractiveExitKeyReachesTheWorkspacesBrowser(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Plugins.Workspace.InteractiveExitKey = "ctrl+q"
+
+	km := keymap.NewRegistry()
+	m := New(plugin.NewRegistry(nil), km, cfg, "", "/tmp/one", "/tmp/one", "")
+
+	if got := m.overview.InteractiveExitKey(); got != "ctrl+q" {
+		t.Fatalf("browser exit key = %q, want the configured chord", got)
+	}
+	var bound []string
+	for _, binding := range km.BindingsForContext("global-workspaces-terminal") {
+		if binding.Command == "exit-interactive" {
+			bound = append(bound, binding.Key)
+		}
+	}
+	if len(bound) != 1 || bound[0] != "ctrl+q" {
+		t.Fatalf("exit-interactive is bound to %v, want only the configured chord", bound)
+	}
+}
+
+// The two surfaces that host a terminal resolve one configuration, so the chords
+// they answer for the same act cannot drift apart. Everything below reads the
+// same TerminalConfig the project Workspaces plugin reads, which it calls
+// directly from p.terminalConfig.
+func TestBothTerminalSurfacesAnswerOneResolvedConfiguration(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Plugins.Workspace.InteractiveExitKey = "ctrl+q"
+	cfg.Plugins.Workspace.InteractiveCopyKey = "alt+y"
+	cfg.Plugins.Workspace.InteractivePasteKey = "alt+p"
+	cfg.Plugins.Workspace.InteractiveAttachKey = "ctrl+g"
+	cfg.Plugins.Workspace.CopyOnSelect = true
+
+	shared := TerminalConfig(cfg)
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	browser := m.overview.TerminalConfig()
+
+	for _, tc := range []struct{ act, want, got string }{
+		{"exit", shared.ExitKey, browser.ExitKey},
+		{"copy", shared.CopyKey, browser.CopyKey},
+		{"paste", shared.PasteKey, browser.PasteKey},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("the browser answers %q for %s, want the resolved %q", tc.got, tc.act, tc.want)
+		}
+	}
+	if !browser.CopyOnSelect {
+		t.Error("copy-on-select is configured but the browser does not honour it")
+	}
+	// The one act the two surfaces deliberately differ on, and the reason: the
+	// browser has no attach path, so the chord stays the pane's input.
+	if browser.AttachKey != "" || shared.AttachKey != "ctrl+g" {
+		t.Errorf("attach chords = browser %q, plugin %q", browser.AttachKey, shared.AttachKey)
 	}
 }

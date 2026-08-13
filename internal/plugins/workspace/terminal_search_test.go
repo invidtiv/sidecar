@@ -63,11 +63,22 @@ func TestTerminalSearchInputAndNavigationAreConsumed(t *testing.T) {
 	if !handled || p.terminalSearch.InputActive || len(p.terminalSearch.Matches) != 2 {
 		t.Fatalf("completed search state = %#v", p.terminalSearch)
 	}
-	firstOffset := p.previewOffset
+	firstScroll := p.previewScroll
 	handled, _ = p.handleTerminalSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"}, false)
-	if !handled || p.terminalSearch.Current != 1 || p.previewOffset <= firstOffset {
-		t.Fatalf("next match did not advance: current=%d offset=%d first=%d",
-			p.terminalSearch.Current, p.previewOffset, firstOffset)
+	// The later match is nearer the live bottom, so the window sits fewer rows
+	// back from it.
+	if !handled || p.terminalSearch.Current != 1 || p.previewScroll >= firstScroll {
+		t.Fatalf("next match did not advance: current=%d scroll=%d first=%d",
+			p.terminalSearch.Current, p.previewScroll, firstScroll)
+	}
+}
+
+func TestTerminalSearchKeepsBackslashLiteral(t *testing.T) {
+	p := terminalSearchPlugin("path\\to\\file", 0)
+	p.beginTerminalSearch()
+	handled, _ := p.handleTerminalSearchKey(tea.KeyPressMsg{Code: '\\', Text: "\\"}, false)
+	if !handled || p.terminalSearch.Query != "\\" {
+		t.Fatalf("backslash handled=%v query=%q, want literal input", handled, p.terminalSearch.Query)
 	}
 }
 
@@ -99,8 +110,7 @@ func TestTerminalViewportHighlightsSearchMatch(t *testing.T) {
 
 func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
-	p.autoScrollOutput = false
-	p.previewOffset = 10
+	p.previewScroll = 10
 	key := terminalHistoryKey("shell", "search-shell")
 	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
 
@@ -129,14 +139,13 @@ func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 	if len(p.terminalSearch.Matches) != 1 || p.terminalSearch.Matches[0].Line != 10 {
 		t.Fatalf("full-history matches = %#v, want absolute line 10", p.terminalSearch.Matches)
 	}
-	if p.previewOffset != 610 {
-		t.Fatalf("viewport offset = %d, want 610 preserving pre-prepend content", p.previewOffset)
+	if p.previewScroll != 10 {
+		t.Fatalf("viewport scroll = %d, want the prepend to leave a bottom-relative window alone", p.previewScroll)
 	}
 }
 
 func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
-	p.autoScrollOutput = true
 	key := terminalHistoryKey("shell", "search-shell")
 	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
 	if p.beginTerminalSearch() == nil {
@@ -163,9 +172,9 @@ func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing
 		SearchGen:  searchGen,
 	})
 	start, _, _ := p.shells[0].Agent.OutputBuf.AbsoluteRange()
-	if start != 600 || !p.autoScrollOutput || p.terminalSearch.Query != "" {
-		t.Fatalf("late cleared search changed state: base=%d follow=%v search=%#v",
-			start, p.autoScrollOutput, p.terminalSearch)
+	if start != 600 || p.previewScroll != 0 || p.terminalSearch.Query != "" {
+		t.Fatalf("late cleared search changed state: base=%d scroll=%d search=%#v",
+			start, p.previewScroll, p.terminalSearch)
 	}
 }
 

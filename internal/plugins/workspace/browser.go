@@ -1,34 +1,14 @@
 package workspace
 
 import (
-	"os/exec"
-	"runtime"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 // openInBrowser opens the URL in the default browser.
 func openInBrowser(url string) tea.Cmd {
-	safeURL, ok := safeHTTPURL(url)
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("open", safeURL)
-		case "windows":
-			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", safeURL)
-		case "linux":
-			cmd = exec.Command("xdg-open", safeURL)
-		default:
-			return nil
-		}
-		_ = cmd.Start()
-		return nil
-	}
+	return terminallink.OpenHTTP(url)
 }
 
 // openInGitTab opens the selected worktree in the git status tab.

@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 // Modal style functions - return fresh styles using current theme colors.
@@ -143,10 +142,9 @@ func (p *Plugin) renderListView(width, height int) string {
 		// Register hit region for full-width preview (uses outer dimensions)
 		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, split.PreviewWidth, paneHeight, nil)
 
-		p.registerPreviewTabRegions(split)
-
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
+		p.registerPreviewTabRegions(split)
 
 		if p.previewFlashActive() {
 			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
@@ -171,12 +169,13 @@ func (p *Plugin) renderListView(width, height int) string {
 	// 2. Divider region (high priority - for drag)
 	p.mouseHandler.HitMap.AddRect(regionPaneDivider, sidebarW, 0, dividerHitWidth, paneHeight, nil)
 
-	// 3. Preview tab hit regions (highest priority for tabs)
-	p.registerPreviewTabRegions(split)
-
 	// Render content for each pane using pre-calculated content widths
 	sidebarContent := p.renderSidebarContent(sidebarContentW, innerHeight)
 	previewContent := p.renderPreviewContent(previewContentW, innerHeight)
+
+	// Preview tabs are registered after document bodies and their divider, so
+	// the visible chips remain the highest-priority targets.
+	p.registerPreviewTabRegions(split)
 
 	flashActive := p.previewFlashActive()
 
@@ -200,459 +199,102 @@ func (p *Plugin) renderListView(width, height int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 }
 
-// renderSidebarContent renders the worktree list sidebar content (no borders).
-func (p *Plugin) renderSidebarContent(width, height int) string {
-	var lines []string
-
-	// Header with [New] button
-	titleText := "Workspaces"
-	buttonText := "New"
-	buttonStyle := styles.Button
-	if p.hoverNewButton {
-		buttonStyle = styles.ButtonHover
-	}
-	styledButton := styles.RenderPillWithStyle(buttonText, buttonStyle, nil)
-	buttonWidth := lipgloss.Width(styledButton)
-
-	// Calculate spacing between title and button
-	titleWidth := lipgloss.Width(titleText)
-	spacing := width - titleWidth - buttonWidth
-	if spacing < 1 {
-		spacing = 1
-	}
-
-	header := styles.Title.Render(titleText) + strings.Repeat(" ", spacing) + styledButton
-	lines = append(lines, header)
-
-	// Register hit region for the button (X position = 2 for panel padding + spacing + titleWidth)
-	// The button is at the right edge of the sidebar content
-	buttonX := 2 + titleWidth + spacing // 2 for left border+padding
-	p.mouseHandler.HitMap.AddRect(regionCreateWorktreeButton, buttonX, 1, buttonWidth, 1, nil)
-
-	// Show warnings from delete operation if any
-	if len(p.deleteWarnings) > 0 {
-		warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
-		for _, w := range p.deleteWarnings {
-			// Truncate warning to fit width
-			if lipgloss.Width(w) > width-2 {
-				w = ansi.Truncate(w, max(1, width-3), "…")
-			}
-			lines = append(lines, warningStyle.Render("⚠ "+w))
-		}
-	}
-
-	// Show toast message if active (td-a1c8456f: session disconnect notification)
-	if p.toastMessage != "" && !p.toastTime.IsZero() && time.Since(p.toastTime) < flashDuration {
-		toastStyle := lipgloss.NewStyle().Foreground(styles.Warning).Bold(true)
-		msg := p.toastMessage
-		if len(msg) > width-4 {
-			msg = msg[:width-7] + "..."
-		}
-		lines = append(lines, toastStyle.Render("⚠ "+msg))
-	}
-
-	lines = append(lines, "") // Empty line after header/warnings
-
-	// Track Y position for hit regions (add 3 for border + header + empty line)
-	currentY := 3
-
-	// Calculate visible items (each item is 2 lines)
-	contentHeight := height - 2 // header + empty line
-	itemHeight := 2             // Each worktree item takes 2 lines
-
-	// === Render shells section ===
-	if len(p.shells) > 0 {
-		// Shells subheader with [+] button (right-aligned)
-		shellsTitle := styles.Muted.Render("Shells")
-		shellsTitleWidth := lipgloss.Width(shellsTitle)
-		shellsPlusStyle := styles.Button
-		if p.hoverShellsPlusButton {
-			shellsPlusStyle = styles.ButtonHover
-		}
-		shellsPlusBtn := styles.RenderPillWithStyle("+", shellsPlusStyle, nil)
-		shellsPlusBtnWidth := lipgloss.Width(shellsPlusBtn)
-		// Right-align button with fill spacing
-		spacing := width - shellsTitleWidth - shellsPlusBtnWidth
-		if spacing < 1 {
-			spacing = 1
-		}
-		shellsHeader := shellsTitle + strings.Repeat(" ", spacing) + shellsPlusBtn
-		lines = append(lines, shellsHeader)
-		// Register hit region for shells [+] button (right-aligned)
-		shellsPlusBtnX := 2 + shellsTitleWidth + spacing // 2 for left border+padding
-		p.mouseHandler.HitMap.AddRect(regionShellsPlusButton, shellsPlusBtnX, currentY, shellsPlusBtnWidth, 1, nil)
-		currentY++
-
-		// Render each shell entry (width-1 to match worktree items, leaving room for scrollbar)
-		shellItemWidth := width - 1
-		for i, shell := range p.shells {
-			selected := p.shellSelected && i == p.selectedShellIdx
-			shellLine := p.renderShellEntryForSession(shell, selected, shellItemWidth)
-			lines = append(lines, shellLine)
-			// Register hit region with negative index: -1 -> shells[0], -2 -> shells[1], etc.
-			p.mouseHandler.HitMap.AddRect(regionWorktreeItem, 0, currentY, shellItemWidth, itemHeight, -(i + 1))
-			currentY += itemHeight
-		}
-
-		// Add separator line after shells
-		lines = append(lines, styles.Muted.Render(strings.Repeat("─", width)))
-		currentY++
-	}
-
-	// Calculate shell section height (subheader + shells*2 + separator)
-	shellSectionHeight := 0
-	if len(p.shells) > 0 {
-		shellSectionHeight = 1 + len(p.shells)*itemHeight + 1
-	}
-
-	// Adjust visible count for shell section
-	p.visibleCount = (contentHeight - shellSectionHeight) / itemHeight
-
-	// Render worktree items
-	if len(p.worktrees) == 0 {
-		// No worktrees exist - show empty state message (unless shell is selected or shells exist)
-		if !p.shellSelected && len(p.shells) == 0 {
-			// Calculate vertical centering for empty state
-			emptyStateHeight := 2 // "No workspaces" + "Press 'n'..."
-			emptyStartY := (contentHeight - emptyStateHeight) / 2
-			if emptyStartY < 0 {
-				emptyStartY = 0
-			}
-
-			// Add padding lines before empty state message
-			for i := 0; i < emptyStartY; i++ {
-				lines = append(lines, "")
-			}
-
-			// Center the text horizontally
-			msg1 := "No workspaces"
-			msg2 := "Press 'n' to create one"
-			pad1 := (width - len(msg1)) / 2
-			pad2 := (width - len(msg2)) / 2
-			if pad1 < 0 {
-				pad1 = 0
-			}
-			if pad2 < 0 {
-				pad2 = 0
-			}
-
-			lines = append(lines, styles.Muted.Render(strings.Repeat(" ", pad1)+msg1))
-			lines = append(lines, styles.Muted.Render(strings.Repeat(" ", pad2)+msg2))
-		}
-		// When shell is selected and no worktrees, just show the shell entries (already rendered above)
-	} else {
-		// Worktrees subheader with [+] button (right-aligned, only if we have shells above)
-		if len(p.shells) > 0 {
-			workspacesTitle := styles.Muted.Render("Workspaces")
-			workspacesTitleWidth := lipgloss.Width(workspacesTitle)
-			workspacesPlusStyle := styles.Button
-			if p.hoverWorkspacesPlusButton {
-				workspacesPlusStyle = styles.ButtonHover
-			}
-			workspacesPlusBtn := styles.RenderPillWithStyle("+", workspacesPlusStyle, nil)
-			workspacesPlusBtnWidth := lipgloss.Width(workspacesPlusBtn)
-			// Right-align button with fill spacing
-			spacing := width - workspacesTitleWidth - workspacesPlusBtnWidth
-			if spacing < 1 {
-				spacing = 1
-			}
-			workspacesHeader := workspacesTitle + strings.Repeat(" ", spacing) + workspacesPlusBtn
-			lines = append(lines, workspacesHeader)
-			// Register hit region for worktrees [+] button (right-aligned)
-			workspacesPlusBtnX := 2 + workspacesTitleWidth + spacing // 2 for left border+padding
-			p.mouseHandler.HitMap.AddRect(regionWorkspacesPlusButton, workspacesPlusBtnX, currentY, workspacesPlusBtnWidth, 1, nil)
-			currentY++
-		}
-
-		// Guard against negative scrollOffset
-		if p.scrollOffset < 0 {
-			p.scrollOffset = 0
-		}
-
-		// Render worktree items at reduced width to leave room for scrollbar
-		worktreeItemWidth := width - 1
-		var worktreeLines []string
-		for i := p.scrollOffset; i < len(p.worktrees) && i < p.scrollOffset+p.visibleCount; i++ {
-			wt := p.worktrees[i]
-			// Only show as selected if not shellSelected AND index matches
-			selected := !p.shellSelected && i == p.selectedIdx
-			line := p.renderWorktreeItem(wt, selected, worktreeItemWidth)
-
-			// Register hit region with ABSOLUTE index
-			p.mouseHandler.HitMap.AddRect(regionWorktreeItem, 0, currentY, worktreeItemWidth, itemHeight, i)
-
-			worktreeLines = append(worktreeLines, line)
-			currentY += itemHeight
-		}
-
-		// Build scrollbar alongside worktree content
-		worktreeContent := strings.Join(worktreeLines, "\n")
-		trackHeight := p.visibleCount * itemHeight
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(p.worktrees),
-			ScrollOffset: p.scrollOffset,
-			VisibleItems: p.visibleCount,
-			TrackHeight:  trackHeight,
-		})
-		worktreeWithScrollbar := lipgloss.JoinHorizontal(lipgloss.Top, worktreeContent, scrollbar)
-		lines = append(lines, worktreeWithScrollbar)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
 // renderWorktreeItem renders a single worktree list item.
 func (p *Plugin) renderWorktreeItem(wt *Worktree, selected bool, width int) string {
-	// Keep selection visible even when preview pane is active (dimmed style)
-	isSelected := selected
-	isActiveFocus := selected && p.activePane == PaneSidebar
+	return p.renderWorktreeItemKind(wt, selected, width, "")
+}
 
-	// Status indicator - use special icon for main worktree
-	var statusIcon string
+func (p *Plugin) renderWorktreeSidebarItem(wt *Worktree, selected bool, width int) string {
+	return p.renderWorktreeItemKind(wt, selected, width, workspacelist.KindWorktree)
+}
+
+func (p *Plugin) renderWorktreeItemKind(wt *Worktree, selected bool, width int, kind string) string {
 	resolvedStatus := agentStatusPresentation(wt)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(wt.Agent)
-	if resolvedStatus.Health {
-		hasActivity = false
-	}
-	if hasActivity {
-		statusIcon = activityIcon
-	} else if wt.IsMain {
-		statusIcon = "◉" // Bullseye icon for main/primary worktree
-	} else {
-		statusIcon = wt.Status.Icon()
+	marker := workspacelist.RowMarker{}
+	switch {
+	case resolvedStatus.Health:
+		marker.Icon, marker.Tone = resolvedStatus.Icon, healthMarkerTone(resolvedStatus.Icon)
+	case hasActivity:
+		marker.Icon, marker.Style, marker.HasStyle = activityIcon, activityStyle, true
+	case wt.IsMain:
+		marker.Icon, marker.Tone = "◉", workspacelist.MarkerMain
+	default:
+		marker.Icon = wt.Status.Icon()
+		marker.Tone = worktreeMarkerTone(wt.Status)
 	}
 
-	// Check for conflicts
 	hasConflict := p.hasConflict(wt.IdentityKey(), p.conflicts)
-	conflictIcon := ""
-	if hasConflict {
-		conflictIcon = " ⚠"
-	}
-
-	// Check for orphaned (session crashed)
-	orphanedIcon := ""
-	if wt.IsOrphaned {
-		orphanedIcon = " ⚠"
-	}
-
-	// Check for PR
 	hasPR := wt.PRURL != ""
-	prIcon := ""
-	if hasPR {
-		prIcon = " PR"
-	}
-
-	// Name and time
 	name := wt.Name
-	// Strip repo prefix from non-main worktrees when configured
 	if !wt.IsMain && p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.SidebarDisplay.HideRepoPrefix {
 		repoName := filepath.Base(p.ctx.ProjectRoot)
 		if repoName != "" && strings.HasPrefix(name, repoName+"-") {
 			name = name[len(repoName)+1:]
 		}
 	}
-	timeStr := formatRelativeTime(wt.UpdatedAt)
 
-	// Calculate max name width to prevent wrapping
-	// Line structure: " [icon] [name][prIcon][conflictIcon][orphanedIcon]  [time]"
-	// Reserve: 4 (leading space + icon + space) + icons + time + 2 (min padding)
-	iconWidth := 4 // " X " where X is status icon
-	prWidth := 0
-	if hasPR {
-		prWidth = 3 // " PR"
-	}
-	conflictWidth := 0
-	if hasConflict {
-		conflictWidth = 2 // " ⚠"
-	}
-	orphanedWidth := 0
-	if wt.IsOrphaned {
-		orphanedWidth = 2 // " ⚠"
-	}
-	timeWidth := lipgloss.Width(timeStr)
-	minPadding := 2
-	maxNameWidth := width - iconWidth - prWidth - conflictWidth - orphanedWidth - timeWidth - minPadding
-	if maxNameWidth < 8 {
-		maxNameWidth = 8 // Minimum name width
-	}
-	// Truncate name if too long (use runes for proper Unicode handling)
-	if lipgloss.Width(name) > maxNameWidth {
-		name = ansi.Truncate(name, maxNameWidth, "…")
-	}
-
-	// Sidebar display settings
 	var sdCfg config.SidebarDisplayConfig
 	if p.ctx.Config != nil {
 		sdCfg = p.ctx.Config.Plugins.Workspace.SidebarDisplay
 	}
-
-	// Stats if available
 	statsStr := ""
 	if !sdCfg.HideStats && wt.Stats != nil && (wt.Stats.Additions > 0 || wt.Stats.Deletions > 0) {
 		statsStr = fmt.Sprintf("+%d -%d", wt.Stats.Additions, wt.Stats.Deletions)
 	}
 
-	// Build second line parts. Selected rows stay plain so ListItemSelected
-	// can paint a uniform background; unselected rows use the themed agent chip.
-	parts := p.worktreeStateLabels(wt)
-	if wt.IsMain {
-		// For root workspace, show branch name instead of agent
-		parts = append(parts, wt.Branch)
-	} else if !sdCfg.HideAgent {
-		if wt.Agent != nil {
-			parts = append(parts, styles.AgentLabel(string(wt.Agent.Type)))
-		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			parts = append(parts, styles.AgentLabel(string(wt.ChosenAgentType)))
-		} else {
-			parts = append(parts, "—")
-		}
-	}
-	if hasActivity {
-		parts = append(parts, activityText)
-	}
-	if !sdCfg.HideTask && wt.TaskID != "" {
-		parts = append(parts, wt.TaskID)
-	}
-	if statsStr != "" {
-		parts = append(parts, statsStr)
-	}
-	if hasConflict {
-		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
-		if len(conflictFiles) > 0 {
-			parts = append(parts, fmt.Sprintf("⚠ %d overlapping dirty files", len(conflictFiles)))
-		}
-	}
-	if wt.IsOrphaned {
-		parts = append(parts, "⚠ session ended")
-	}
-
-	// When selected, use plain text to ensure consistent background
-	if isSelected {
-		// Build plain text lines
-		line1 := fmt.Sprintf(" %s %s%s%s%s", statusIcon, name, prIcon, conflictIcon, orphanedIcon)
-		line1Width := lipgloss.Width(line1)
-		if line1Width < width-timeWidth-2 {
-			line1 = line1 + strings.Repeat(" ", width-line1Width-timeWidth-1) + timeStr
-		}
-		line2 := "   " + strings.Join(parts, "  ")
-		// Truncate line2 to prevent wrapping
-		line2Width := lipgloss.Width(line2)
-		if line2Width > width {
-			if width > 1 {
-				line2 = ansi.Truncate(line2, width, "…")
-			}
-			line2Width = width
-		}
-		// Pad line2 to full width for consistent background
-		if line2Width < width {
-			line2 = line2 + strings.Repeat(" ", width-line2Width)
-		}
-		content := line1 + "\n" + line2
-
-		// Use bright style when sidebar is focused, dimmed when preview is focused
-		if isActiveFocus {
-			return styles.ListItemSelected.Width(width).Render(content)
-		}
-		// Dimmed selection style (when preview pane is active)
-		dimmedSelectedStyle := lipgloss.NewStyle().
-			Background(styles.BgSecondary).
-			Foreground(styles.TextSecondary).
-			Width(width)
-		return dimmedSelectedStyle.Render(content)
-	}
-
-	// Not selected - use colored styles for visual interest
-	var statusStyle lipgloss.Style
-	if hasActivity {
-		statusStyle = activityStyle
-	} else if wt.IsMain {
-		// Primary/cyan color for main worktree to stand out
-		statusStyle = lipgloss.NewStyle().Foreground(styles.Primary)
-	} else {
-		switch wt.Status {
-		case StatusActive:
-			statusStyle = styles.StatusCompleted // Green
-		case StatusWaiting:
-			statusStyle = styles.StatusModified // Yellow/orange (warning)
-		case StatusDone:
-			statusStyle = styles.StatusCompleted // Green
-		case StatusError:
-			statusStyle = styles.StatusDeleted // Red
-		default:
-			statusStyle = styles.Muted // Gray for paused
-		}
-	}
-	icon := statusStyle.Render(statusIcon)
-
-	// Apply conflict style
-	styledConflictIcon := ""
-	if hasConflict {
-		styledConflictIcon = styles.StatusModified.Render(" ⚠")
-	}
-
-	// Apply orphaned style (session ended)
-	styledOrphanedIcon := ""
-	if wt.IsOrphaned {
-		styledOrphanedIcon = styles.StatusModified.Render(" ⚠")
-	}
-
-	// Apply PR style
-	styledPRIcon := ""
+	nameMeta := make([]workspacelist.RowField, 0, 3)
 	if hasPR {
-		styledPRIcon = lipgloss.NewStyle().Foreground(styles.Secondary).Render(" PR")
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: " PR", Rendered: lipgloss.NewStyle().Foreground(styles.Secondary).Render(" PR")})
+	}
+	if hasConflict {
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: " ⚠", Rendered: styles.StatusModified.Render(" ⚠")})
+	}
+	if wt.IsOrphaned {
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: " ⚠", Rendered: styles.StatusModified.Render(" ⚠")})
 	}
 
-	// For non-selected, style parts individually — agent chip matches the
-	// Agent Overview board (colour + raised fill via styles.RenderAgentChip).
-	styledParts := make([]string, 0, len(parts)+4)
+	before := make([]workspacelist.RowField, 0, 8)
 	for _, label := range p.worktreeStateLabels(wt) {
-		styledParts = append(styledParts, dimText(label))
+		before = append(before, workspacelist.RowField{Text: label, Rendered: dimText(label)})
 	}
+	provider := ""
 	if wt.IsMain {
-		// For root workspace, show branch name instead of agent
-		styledParts = append(styledParts, wt.Branch)
+		before = append(before, workspacelist.PlainField(wt.Branch))
 	} else if !sdCfg.HideAgent {
 		if wt.Agent != nil {
-			styledParts = append(styledParts, styles.RenderAgentChip(string(wt.Agent.Type)))
+			provider = string(wt.Agent.Type)
 		} else if wt.ChosenAgentType != "" && wt.ChosenAgentType != AgentNone {
-			styledParts = append(styledParts, styles.RenderAgentChip(string(wt.ChosenAgentType)))
+			provider = string(wt.ChosenAgentType)
 		} else {
-			styledParts = append(styledParts, "—")
+			before = append(before, workspacelist.PlainField("—"))
 		}
 	}
+	after := make([]workspacelist.RowField, 0, 6)
 	if hasActivity {
-		styledParts = append(styledParts, dimText(activityText))
+		after = append(after, workspacelist.RowField{Text: activityText, Rendered: dimText(activityText)})
 	}
 	if !sdCfg.HideTask && wt.TaskID != "" {
-		styledParts = append(styledParts, wt.TaskID)
+		after = append(after, workspacelist.PlainField(wt.TaskID))
 	}
 	if statsStr != "" {
-		styledParts = append(styledParts, statsStr)
+		after = append(after, workspacelist.PlainField(statsStr))
 	}
 	if hasConflict {
 		conflictFiles := p.getConflictingFiles(wt.IdentityKey(), p.conflicts)
 		if len(conflictFiles) > 0 {
-			styledParts = append(styledParts, styles.StatusModified.Render(fmt.Sprintf("⚠ %d dirty overlaps", len(conflictFiles))))
+			label := fmt.Sprintf("⚠ %d dirty overlaps", len(conflictFiles))
+			after = append(after, workspacelist.RowField{Text: label, Rendered: styles.StatusModified.Render(label)})
 		}
 	}
 	if wt.IsOrphaned {
-		styledParts = append(styledParts, styles.StatusModified.Render("⚠ session ended"))
+		after = append(after, workspacelist.RowField{Text: "⚠ session ended", Rendered: styles.StatusModified.Render("⚠ session ended")})
 	}
-
-	// Build lines with styled elements
-	line1 := fmt.Sprintf(" %s %s%s%s%s", icon, name, styledPRIcon, styledConflictIcon, styledOrphanedIcon)
-	line1Width := ansi.StringWidth(line1)
-	if line1Width < width-timeWidth-2 {
-		line1 = line1 + strings.Repeat(" ", width-line1Width-timeWidth-1) + timeStr
-	}
-	line2 := "   " + strings.Join(styledParts, "  ")
-	// Truncate line2 to prevent wrapping
-	if ansi.StringWidth(line2) > width {
-		line2 = ansi.Truncate(line2, width-1, "…")
-	}
-
-	content := line1 + "\n" + line2
-	return styles.ListItemNormal.Width(width).Render(content)
+	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
+		Marker: marker, Kind: kind, Name: name, Age: formatRelativeTime(wt.UpdatedAt), NameMeta: nameMeta,
+		BeforeProvider: before, Provider: provider, AfterProvider: after,
+	}, width, selected, selected && p.activePane == PaneSidebar)
+	return strings.Join(lines, "\n")
 }
 
 func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
@@ -706,159 +348,95 @@ func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
 
 // renderShellEntryForSession renders a shell entry for a specific shell session.
 func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, width int) string {
-	isActiveFocus := selected && p.activePane == PaneSidebar
-
-	// Determine icon based on session state and agent status
-	var statusIcon string
-	var statusStyle lipgloss.Style
-
-	// td-f88fdd: Handle orphaned shells (manifest entry exists but tmux session is gone)
-	resolvedStatus := shellAgentStatusPresentation(shell)
-	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
-	if resolvedStatus.Health {
-		statusIcon = "◌" // Empty circle for orphaned
-		statusStyle = styles.Muted
-	} else if hasActivity {
-		statusIcon = activityIcon
-		statusStyle = activityStyle
-	} else if shell.Agent != nil {
-		// Live session with no semantic activity: process is up but not busy.
-		// ◎ + green = "live" (quieter than working's filled ● / activity glyphs).
-		// Reserve "running" for a future real workload signal (e.g. dev servers).
-		statusIcon = "◎"
-		statusStyle = styles.StatusCompleted // Green
-	} else {
-		statusIcon = "○"
-		statusStyle = styles.Muted
-	}
-
-	// Use shell display name
-	displayName := shell.Name
-
-	// Second line: agent chip (overview style) + status. Plain text when
-	// selected so the full-row selection background stays uniform; themed
-	// chip when not selected.
-	statusText := shellStatusLine(shell, resolvedStatus, hasActivity, activityText, selected)
-
-	// Calculate layout
-	maxNameWidth := width - 4 - 2 // icon + padding
-	nameRunes := []rune(displayName)
-	if len(nameRunes) > maxNameWidth {
-		displayName = string(nameRunes[:maxNameWidth-1]) + "…"
-	}
-
-	// Build lines
-	if selected {
-		// Selected style
-		line1 := fmt.Sprintf(" %s %s", statusIcon, displayName)
-		line1Width := lipgloss.Width(line1)
-		if line1Width < width {
-			line1 = line1 + strings.Repeat(" ", width-line1Width)
-		}
-		line2 := "   " + statusText
-		line2Width := lipgloss.Width(line2)
-		if line2Width > width {
-			line2Runes := []rune(line2)
-			if width > 1 {
-				line2 = string(line2Runes[:width-1]) + "…"
-			}
-			line2Width = width
-		}
-		if line2Width < width {
-			line2 = line2 + strings.Repeat(" ", width-line2Width)
-		}
-		content := line1 + "\n" + line2
-
-		if isActiveFocus {
-			return styles.ListItemSelected.Width(width).Render(content)
-		}
-		// Dimmed selection style
-		dimmedSelectedStyle := lipgloss.NewStyle().
-			Background(styles.BgSecondary).
-			Foreground(styles.TextSecondary).
-			Width(width)
-		return dimmedSelectedStyle.Render(content)
-	}
-
-	// Not selected - use styled icon
-	icon := statusStyle.Render(statusIcon)
-	line1 := fmt.Sprintf(" %s %s", icon, displayName)
-	line2 := "   " + statusText
-	// Truncate line2 to prevent wrapping
-	if ansi.StringWidth(line2) > width {
-		line2 = ansi.Truncate(line2, width-1, "…")
-	}
-	content := line1 + "\n" + line2
-	return styles.ListItemNormal.Width(width).Render(content)
+	return p.renderShellEntry(shell, selected, width, 0, "")
 }
 
-// shellStatusLine builds the agent + status second line for a shell entry.
-// When selected is true the agent is plain AgentLabel text (selection paints
-// the row). When false it uses the themed RenderAgentChip fill + colour.
-func shellStatusLine(shell *ShellSession, resolvedStatus agentstatus.Presentation, hasActivity bool, activityText string, selected bool) string {
-	agentChip := func(provider AgentType) string {
-		if provider == AgentNone || provider == "" {
-			return ""
-		}
-		if selected {
-			// Icon + name only — ListItemSelected supplies the row fill.
-			label := styles.AgentLabel(string(provider))
-			if label == "" {
-				return string(provider)
-			}
-			return label
-		}
-		if chip := styles.RenderAgentChip(string(provider)); chip != "" {
-			return chip
-		}
-		return string(provider)
+func (p *Plugin) renderNestedShellEntry(shell *ShellSession, selected bool, width int) string {
+	return p.renderShellEntry(shell, selected, width, 2, workspacelist.KindShell)
+}
+
+func (p *Plugin) renderShellEntry(shell *ShellSession, selected bool, width int, indent int, kind string) string {
+	if indent > 0 {
+		width = max(1, width-indent)
 	}
-	suffix := func(chip, status string) string {
-		if chip == "" {
-			if selected {
-				return "shell · " + status
-			}
-			return dimText("shell · " + status)
-		}
-		if selected {
-			return chip + " · " + status
-		}
-		return chip + dimText(" · "+status)
+	content := p.renderShellEntryKind(shell, selected, width, kind)
+	if indent <= 0 {
+		return content
+	}
+	pad := strings.Repeat(" ", indent)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = pad + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width int, kind string) string {
+	resolvedStatus := shellAgentStatusPresentation(shell)
+	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
+	marker := workspacelist.RowMarker{}
+	switch {
+	case resolvedStatus.Health:
+		marker.Icon, marker.Tone = resolvedStatus.Icon, healthMarkerTone(resolvedStatus.Icon)
+	case hasActivity:
+		marker.Icon, marker.Style, marker.HasStyle = activityIcon, activityStyle, true
+	case shell.Agent != nil:
+		marker.Icon, marker.Tone = "◎", workspacelist.MarkerLive
+	default:
+		marker.Icon, marker.Tone = "○", workspacelist.MarkerMuted
 	}
 
-	if resolvedStatus.Health {
-		if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-			return suffix(agentChip(shell.ChosenAgent), "offline")
-		}
-		return suffix("", "offline")
-	}
-	if shell.Agent != nil {
-		// Prefer the live type when Identify has a real provider. "shell" is a
-		// demotion / discovery miss — fall back to ChosenAgent so a Cursor
-		// session that launched as `agent`/`node` does not permanently read as
-		// "shell · live" before the next screen-backed poll upgrades it.
-		provider := shell.Agent.Type
+	provider := AgentNone
+	status := "no session"
+	switch {
+	case resolvedStatus.Health:
+		provider, status = shell.ChosenAgent, "offline"
+	case shell.Agent != nil:
+		provider = shell.Agent.Type
 		if provider == AgentShell || provider == AgentNone || provider == "" {
 			provider = shell.ChosenAgent
 		}
-		chip := agentChip(provider)
-		if chip == "" {
-			// Live session with no identifiable agent type.
-			if hasActivity {
-				return suffix("", activityText)
-			}
-			return suffix("", "live")
-		}
 		if hasActivity {
-			return suffix(chip, activityText)
+			status = activityText
+		} else {
+			status = "live"
 		}
-		// Live but quiet: "live", not "running" — see the ◎ icon rationale above.
-		return suffix(chip, "live")
+	case shell.ChosenAgent != AgentNone && shell.ChosenAgent != "":
+		provider, status = shell.ChosenAgent, "stopped"
 	}
-	if shell.ChosenAgent != AgentNone && shell.ChosenAgent != "" {
-		return suffix(agentChip(shell.ChosenAgent), "stopped")
+	before := []workspacelist.RowField(nil)
+	if provider == AgentNone || provider == "" {
+		before = append(before, workspacelist.RowField{Text: "shell", Rendered: dimText("shell")})
 	}
-	return suffix("", "no session")
+	after := []workspacelist.RowField{{Text: status, Rendered: dimText(status)}}
+	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
+		Marker: marker, Kind: kind, Name: shell.Name, BeforeProvider: before,
+		Provider: string(provider), AfterProvider: after,
+	}, width, selected, selected && p.activePane == PaneSidebar)
+	return strings.Join(lines, "\n")
+}
+
+func healthMarkerTone(icon string) workspacelist.MarkerTone {
+	if icon == "✗" {
+		return workspacelist.MarkerError
+	}
+	if icon == "⚠" {
+		return workspacelist.MarkerWarning
+	}
+	return workspacelist.MarkerMuted
+}
+
+func worktreeMarkerTone(status WorktreeStatus) workspacelist.MarkerTone {
+	switch status {
+	case StatusActive, StatusDone:
+		return workspacelist.MarkerLive
+	case StatusWaiting:
+		return workspacelist.MarkerWarning
+	case StatusError:
+		return workspacelist.MarkerError
+	default:
+		return workspacelist.MarkerMuted
+	}
 }
 
 func activityPresentation(agent *Agent) (icon, text string, style lipgloss.Style, ok bool) {

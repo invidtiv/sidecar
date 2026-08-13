@@ -961,7 +961,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
 		!p.interactiveState.TermPanel &&
-		!p.shellSelected
+		!p.selectingShell()
 	if interactiveCapture {
 		if selected := p.selectedWorktree(); selected == nil || selected.IdentityKey() != worktreeName {
 			interactiveCapture = false
@@ -1146,7 +1146,6 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
-			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,
