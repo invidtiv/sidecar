@@ -21,26 +21,34 @@ const (
 // previewTabHit is the chip index stored on the tab-row region.
 type previewTabHit int
 
-// previewTabsVisible is the same rule as the project plugin: chips only for a
-// selected non-main worktree. Shells and the main worktree have no tab row.
-func (m *Model) previewTabsVisible() bool {
+// previewTabSet is which chips this row may show. Global shells get Output+Diff;
+// topic worktrees keep Output+Diff+Task; the main worktree stays tabless.
+func (m *Model) previewTabSet() workspacediff.TabSet {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
-		return false
+		return workspacediff.TabSetNone
 	}
-	return workspacediff.TabsVisible(workspace.Kind == workspaceinventory.KindShell, workspace.IsMain)
+	return workspacediff.GlobalTabsFor(workspace.Kind == workspaceinventory.KindShell, workspace.IsMain)
+}
+
+func (m *Model) previewTabsVisible() bool {
+	return m.previewTabSet().Visible()
+}
+
+func (m *Model) previewTabChips() []string {
+	return workspacediff.TabChipsFor(m.previewTab, m.previewTabSet())
 }
 
 func (m *Model) cyclePreviewTab(delta int) tea.Cmd {
 	if !m.previewTabsVisible() {
 		return nil
 	}
-	m.previewTab = workspacediff.CycleTab(m.previewTab, delta)
+	m.previewTab = workspacediff.CycleTabIn(m.previewTab, delta, m.previewTabSet())
 	return m.ensurePreviewExtras()
 }
 
 func (m *Model) setPreviewTab(tab workspacediff.Tab) tea.Cmd {
-	if !m.previewTabsVisible() {
+	if !m.previewTabSet().Contains(tab) {
 		m.previewTab = workspacediff.TabOutput
 		return nil
 	}
@@ -61,8 +69,9 @@ func (m *Model) ensureOutputTab() tea.Cmd {
 	return nil
 }
 
-// ensurePreviewExtras loads Diff/Task for the selected worktree. Switching
+// ensurePreviewExtras loads Diff/Task for the selected row. Switching
 // rows rebuilds the model; the same row is a no-op if already loaded.
+// Shells load Diff from ProjectRoot (the main checkout), not a worktree path.
 func (m *Model) ensurePreviewExtras() tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || !m.previewTabsVisible() {
@@ -70,21 +79,34 @@ func (m *Model) ensurePreviewExtras() tea.Cmd {
 		m.previewTab = workspacediff.TabOutput
 		return nil
 	}
+	if !m.previewTabSet().Contains(m.previewTab) {
+		m.previewTab = workspacediff.TabOutput
+	}
 	if workspace.ID != m.previewExtrasID {
 		m.resetPreviewExtras()
 		m.previewExtrasID = workspace.ID
 	}
 	switch m.previewTab {
 	case workspacediff.TabDiff:
+		path := previewDiffPath(workspace)
 		if m.diff.State != workspacediff.LoadStateUnknown && m.diff.State != workspacediff.LoadStateError {
-			return m.diff.LoadSelectedCommit(workspace.Path, workspace.ID)
+			return m.diff.LoadSelectedCommit(path, workspace.ID)
 		}
 		m.diff.State = workspacediff.LoadStateLoading
-		return workspacediff.LoadSnapshotCmd(workspace.Path, "", workspace.ID)
+		return workspacediff.LoadSnapshotCmd(path, "", workspace.ID)
 	case workspacediff.TabTask:
 		return m.loadPreviewTask(workspace)
 	}
 	return nil
+}
+
+// previewDiffPath is the checkout workspacediff should read. Shells have no
+// worktree of their own; the mini-diff is the project's main checkout.
+func previewDiffPath(workspace workspaceinventory.Workspace) string {
+	if workspace.Kind == workspaceinventory.KindShell {
+		return workspace.ProjectRoot
+	}
+	return workspace.Path
 }
 
 func (m *Model) resetPreviewExtras() {
@@ -115,7 +137,7 @@ func (m *Model) applyDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
 		m.diff.Error = msg.Err.Error()
 		return nil
 	}
-	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, workspace.Path, workspace.ID)
+	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, previewDiffPath(workspace), workspace.ID)
 }
 
 func (m *Model) applyCommitDetail(msg workspacediff.CommitDetailMsg) {
@@ -150,7 +172,7 @@ func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
 	if m.previewTab == workspacediff.TabOutput && m.PreviewInteractive() {
 		hintFloor = len([]rune(m.interactiveHints()))
 	}
-	for i, placement := range termpreview.LayoutChips(workspacediff.TabChips(m.previewTab), box.W, hintFloor) {
+	for i, placement := range termpreview.LayoutChips(m.previewTabChips(), box.W, hintFloor) {
 		if !placement.Drawn {
 			continue
 		}
@@ -167,7 +189,7 @@ func (m *Model) renderPreviewWithTabs(width, height int) string {
 	}
 
 	var lines []string
-	lines = append(lines, termpreview.HeaderRow(workspacediff.TabChips(m.previewTab), "", width, 0, termpreview.TruncateANSI))
+	lines = append(lines, termpreview.HeaderRow(m.previewTabChips(), "", width, 0, termpreview.TruncateANSI))
 	lines = append(lines, "")
 	contentHeight := height - previewTabRows
 	if contentHeight < 1 {
@@ -223,7 +245,7 @@ func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []str
 	if m.previewTabsVisible() && !m.PreviewInteractive() {
 		// Same chips as the project plugin: Output / Diff / Task. While
 		// typing, the chips yield so the header can still name the live edge.
-		return workspacediff.TabChips(m.previewTab)
+		return m.previewTabChips()
 	}
 	chips := []string{previewChip(workspace.Name, m.PreviewFocused())}
 	if workspace.ProjectName != "" {
