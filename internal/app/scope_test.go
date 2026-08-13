@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -179,6 +180,77 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 	}
 	if runner.calls != 2 {
 		t.Fatalf("re-entry collector calls = %d, want exactly one more shared cycle", runner.calls)
+	}
+}
+
+func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
+	isolateAppState(t)
+	m, _ := newScopeBaselineModel(t, "git")
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if m.globalTab != GlobalWorkspaces {
+		t.Fatalf("setup: tab = %v, want Workspaces", m.globalTab)
+	}
+	if got := state.GetLastGlobalTab(); got != "workspaces" {
+		t.Fatalf("persisted tab = %q, want workspaces", got)
+	}
+
+	// A new Model is what a Sidecar relaunch constructs.
+	restarted, _ := newScopeBaselineModel(t, "git")
+	if restarted.inGlobalScope() {
+		t.Fatal("restart landed in the global space")
+	}
+	if restarted.globalTab != GlobalWorkspaces {
+		t.Fatalf("New() did not restore the persisted tab: %v", restarted.globalTab)
+	}
+
+	updated, _ = restarted.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	restarted = asAppModel(t, updated)
+	if !restarted.inGlobalScope() || restarted.globalTab != GlobalWorkspaces {
+		t.Fatalf("K after restart: global=%v tab=%v", restarted.inGlobalScope(), restarted.globalTab)
+	}
+}
+
+func TestPersistedGlobalTabFallsBackWhenFeatureDisabled(t *testing.T) {
+	isolateAppState(t)
+	if err := state.SetLastGlobalTab("workspaces"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = false
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+
+	registry := plugin.NewRegistry(nil)
+	for _, name := range []string{"files", "workspaces", "git", "notes"} {
+		if err := registry.Register(&navigationPlugin{id: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
+	m.intro.Active, m.intro.Done = false, true
+	m.width, m.height, m.ready = 140, 40, true
+	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
+	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: m.keymap}}
+	m.updateContext()
+
+	if m.overview != nil {
+		t.Fatal("the Overview model was built while its feature is disabled")
+	}
+	if m.globalTab != GlobalWorkspaces {
+		t.Fatalf("New() did not load the persisted tab: %v", m.globalTab)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.globalTab != GlobalTasks {
+		t.Fatalf("disabled persisted tab did not fall back: global=%v tab=%v",
+			m.inGlobalScope(), m.globalTab)
 	}
 }
 

@@ -368,6 +368,9 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
 	}
+	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
+		m.globalTab = tab
+	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
 		// One resolution of the user's terminal settings, handed to every surface

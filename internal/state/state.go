@@ -32,6 +32,9 @@ type State struct {
 
 	// Worktree state: maps main repo path -> last active worktree path
 	LastWorktreePath map[string]string `json:"lastWorktreePath,omitempty"`
+
+	// Last selected global tab ("agents", "workspaces", or "tasks").
+	LastGlobalTab string `json:"lastGlobalTab,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -555,6 +558,27 @@ func SetLastWorktreePath(mainRepoPath, worktreePath string) error {
 		current.LastWorktreePath = make(map[string]string)
 	}
 	current.LastWorktreePath[mainRepoPath] = worktreePath
+	mu.Unlock()
+	return Save()
+}
+
+// GetLastGlobalTab returns the saved global tab ID, or empty if none is saved.
+func GetLastGlobalTab() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastGlobalTab
+}
+
+// SetLastGlobalTab saves the last selected global tab ID.
+func SetLastGlobalTab(tab string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.LastGlobalTab = tab
 	mu.Unlock()
 	return Save()
 }

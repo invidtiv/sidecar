@@ -46,6 +46,31 @@ func (t GlobalTab) Name() string {
 	return ""
 }
 
+// persistID is the stable state.json value for a global tab.
+func (t GlobalTab) persistID() string {
+	switch t {
+	case GlobalAgents:
+		return "agents"
+	case GlobalWorkspaces:
+		return "workspaces"
+	case GlobalTasks:
+		return "tasks"
+	}
+	return ""
+}
+
+func parseGlobalTabID(id string) (GlobalTab, bool) {
+	switch id {
+	case "agents":
+		return GlobalAgents, true
+	case "workspaces":
+		return GlobalWorkspaces, true
+	case "tasks":
+		return GlobalTasks, true
+	}
+	return 0, false
+}
+
 // context is the keymap context the tab owns while it is visible. The Tasks tab
 // is absent: its context is reported by the Tasks model itself.
 func (t GlobalTab) context() string {
@@ -204,6 +229,7 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 	}
 	previous := m.globalTab
 	m.globalTab = tab
+	_ = state.SetLastGlobalTab(tab.persistID())
 	if catalogTab(previous) && !catalogTab(tab) && m.overview != nil {
 		// Leaving the catalog entirely (for Tasks): stop collecting rather than
 		// polling projects behind a tab nobody is looking at. Moving between

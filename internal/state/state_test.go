@@ -684,6 +684,77 @@ func TestSetLastWorktreePath(t *testing.T) {
 	}
 }
 
+func TestGetLastGlobalTab_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetLastGlobalTab(); got != "" {
+		t.Errorf("GetLastGlobalTab() with nil current = %q, want empty", got)
+	}
+}
+
+func TestGetLastGlobalTab_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{LastGlobalTab: "workspaces"}
+	if got := GetLastGlobalTab(); got != "workspaces" {
+		t.Errorf("GetLastGlobalTab() = %q, want workspaces", got)
+	}
+}
+
+func TestSetLastGlobalTab(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetLastGlobalTab("workspaces"); err != nil {
+		t.Fatalf("SetLastGlobalTab() failed: %v", err)
+	}
+	if current.LastGlobalTab != "workspaces" {
+		t.Errorf("current.LastGlobalTab = %q, want workspaces", current.LastGlobalTab)
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if loaded.LastGlobalTab != "workspaces" {
+		t.Errorf("saved LastGlobalTab = %q, want workspaces", loaded.LastGlobalTab)
+	}
+}
+
+func TestSetLastGlobalTab_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetLastGlobalTab("tasks"); err != nil {
+		t.Fatalf("SetLastGlobalTab() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetLastGlobalTab() should initialize current state")
+	}
+	if current.LastGlobalTab != "tasks" {
+		t.Errorf("LastGlobalTab = %q, want tasks", current.LastGlobalTab)
+	}
+}
+
 func TestSetLastWorktreePath_InitializesNilState(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalPath := path

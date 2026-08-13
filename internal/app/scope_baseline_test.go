@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -43,9 +44,28 @@ import (
 //   - Overview selection, scrolling, activation and collection cadence —
 //     internal/overview/model_test.go and visual_test.go.
 
+// isolateAppState points sidecar state at a temp directory so tests that
+// persist preferences cannot write the real state.json. Cleanup clears the
+// remembered tab so a later New() does not restore another test's last switch.
+func isolateAppState(t *testing.T) {
+	t.Helper()
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.SetLastGlobalTab("") })
+}
+
 // scopeBaselineModel builds an app model on four registered plugins with the
 // Overview constructed but not yet entered.
 func scopeBaselineModel(t *testing.T, active string) (Model, map[string]*navigationPlugin) {
+	t.Helper()
+	isolateAppState(t)
+	return newScopeBaselineModel(t, active)
+}
+
+// newScopeBaselineModel is scopeBaselineModel without resetting persisted
+// state, so a restart can be simulated by constructing a second model.
+func newScopeBaselineModel(t *testing.T, active string) (Model, map[string]*navigationPlugin) {
 	t.Helper()
 	cfg := config.Default()
 	features.Init(cfg)

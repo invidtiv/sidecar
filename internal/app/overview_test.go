@@ -540,6 +540,7 @@ func newOverviewGitRepo(t *testing.T, name string) string {
 
 func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {
 	t.Helper()
+	isolateAppState(t)
 	source := newOverviewGitRepo(t, "source")
 	cfg := config.Default()
 	km := keymap.NewRegistry()
@@ -602,6 +603,7 @@ func (p *textInputPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 	t.Helper()
+	isolateAppState(t)
 	cfg := config.Default()
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
