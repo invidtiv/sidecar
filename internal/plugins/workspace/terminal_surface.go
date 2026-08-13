@@ -147,18 +147,14 @@ func (p *Plugin) terminalLeafBox() (Box, bool) {
 		return content, ok
 	}
 
-	leaves, _, fits := LayoutPanes(p.paneRoot, content, paneTreeFloors())
-	if !fits {
-		// A tree that cannot satisfy every leaf floor renders only its focused
-		// leaf in the full content box. Phase 1's only reachable tree is the
-		// single terminal, but keeping the fallback here prevents narrow windows
-		// from escaping the geometry authority when document leaves arrive.
-		if focused := FindPane(p.paneRoot, p.paneFocus); focused != nil && focused.Split == nil && focused.Kind == PaneTerminal {
-			return content, true
-		}
+	// A box too small for the tree is the layout's own answer — the focused leaf
+	// alone in the whole box — so a terminal that is not the zoomed leaf has no
+	// box here, exactly as it has no pixels in the split renderer.
+	layout, ok := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
+	if !ok {
 		return Box{}, false
 	}
-	for _, placement := range leaves {
+	for _, placement := range layout.Leaves {
 		if placement.Node != nil && placement.Node.Kind == PaneTerminal {
 			return placement.Box, true
 		}

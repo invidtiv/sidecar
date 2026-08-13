@@ -85,6 +85,34 @@ func LayoutPanes(root *PaneNode, box Box, floors Floors) (leaves []Placement, di
 	return leaves, dividers, true
 }
 
+// PaneLayout is one placement of a pane tree in a box. Zoomed means the box
+// could not satisfy every leaf's floor and the focused leaf holds all of it:
+// Leaves is that one leaf and Dividers is empty.
+type PaneLayout struct {
+	Leaves   []Placement
+	Dividers []Divider
+	Zoomed   bool
+}
+
+// LayoutPaneTree places root in box, degrading to the focused leaf alone rather
+// than to a partial layout. It is the one authority on that degradation: the
+// terminal sizers and the split renderer both read Zoomed from here, so a box
+// too small for the tree cannot mean one thing to the geometry and another to
+// the pixels.
+//
+// ok is false when there is nothing to draw: no tree, or a box the tree does
+// not fit while focus names something that is not a leaf of it.
+func LayoutPaneTree(root *PaneNode, box Box, floors Floors, focus int) (PaneLayout, bool) {
+	if leaves, dividers, fits := LayoutPanes(root, box, floors); fits {
+		return PaneLayout{Leaves: leaves, Dividers: dividers}, true
+	}
+	focused := FindPane(root, focus)
+	if focused == nil || focused.Split != nil {
+		return PaneLayout{}, false
+	}
+	return PaneLayout{Leaves: []Placement{{Node: focused, Box: box}}, Zoomed: true}, true
+}
+
 func layoutPaneNode(node *PaneNode, box Box, floors Floors, leaves []Placement, dividers []Divider) ([]Placement, []Divider) {
 	if node.Split == nil {
 		return append(leaves, Placement{Node: node, Box: box}), dividers

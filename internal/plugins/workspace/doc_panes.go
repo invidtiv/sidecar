@@ -636,17 +636,23 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !p.docVisible() {
 		return "", false
 	}
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
-	if !fits {
-		if p.docFocused() {
-			doc, _ := p.activeDocPane()
-			if absolute, ok := p.previewContentBox(); ok {
-				p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: width, H: height})
-			}
-			zoomed := Box{W: width, H: height}
-			return composePaneLeaf(p.docPaneHeaderRow(doc, zoomed), p.renderDocPaneBody(doc, zoomed)), true
-		}
+	layout, ok := LayoutPaneTree(p.paneRoot, Box{W: width, H: height}, paneTreeFloors(), p.paneFocus)
+	if !ok {
 		return "", false
+	}
+	if layout.Zoomed {
+		// The zoomed leaf is drawn from here only when it is a document the
+		// preview owns: a terminal leaf, or a doc leaf still holding paneFocus
+		// while the sidebar has the keyboard, is the legacy renderer's box.
+		if !p.docFocused() {
+			return "", false
+		}
+		doc, _ := p.activeDocPane()
+		zoomed := layout.Leaves[0].Box
+		if absolute, ok := p.previewContentBox(); ok {
+			p.registerDocPaneRegions(doc, doc.leafID, Box{X: absolute.X, Y: absolute.Y, W: zoomed.W, H: zoomed.H})
+		}
+		return composePaneLeaf(p.docPaneHeaderRow(doc, zoomed), p.renderDocPaneBody(doc, zoomed)), true
 	}
 
 	// Every leaf and divider is drawn onto the box LayoutPanes gave it. Joining
@@ -654,13 +660,13 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// space at every level of nesting, and the levels only have to disagree by a
 	// cell for a divider to walk sideways.
 	canvas := ui.NewCanvas(width, height)
-	for _, placement := range leaves {
+	for _, placement := range layout.Leaves {
 		canvas.Blit(placement.Box, p.renderPaneLeaf(placement))
 	}
-	for _, split := range dividers {
+	for _, split := range layout.Dividers {
 		canvas.Blit(split.Box, p.renderPaneTreeDivider(split))
 	}
-	p.registerPaneTreeRegions(leaves, dividers)
+	p.registerPaneTreeRegions(layout.Leaves, layout.Dividers)
 	return canvas.String(), true
 }
 
