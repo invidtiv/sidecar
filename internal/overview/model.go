@@ -1051,6 +1051,9 @@ func (m *Model) Commands() []struct{ Key, Name string } {
 		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
 			cmds = append(cmds, struct{ Key, Name string }{"R", "Rename"})
 		}
+		if m.canOpenInGit() {
+			cmds = append(cmds, struct{ Key, Name string }{"O", "Git"})
+		}
 		return cmds
 	}
 	return []struct{ Key, Name string }{{"enter", "Open"}, {"r", "Refresh"}}

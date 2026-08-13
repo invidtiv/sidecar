@@ -93,6 +93,8 @@ func DefaultBindings() []Binding {
 		{Key: ".", Command: "next-tab", Context: "global-workspaces"},
 		// Display-name write, not create/destroy. Worktrees ignore the key.
 		{Key: "R", Command: "rename-shell", Context: "global-workspaces"},
+		// Navigation: leave global and open the project's Git plugin.
+		{Key: "O", Command: "open-in-git", Context: "global-workspaces"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface

@@ -1028,6 +1028,9 @@ func (m Model) footerHints() []footerHint {
 		if m.overview != nil && m.overview.SelectedShell() {
 			hints = append(hints, footerHint{keys: "R", label: "Rename"})
 		}
+		if m.overview != nil && m.overview.CanOpenInGit() {
+			hints = append(hints, footerHint{keys: "O", label: "Git"})
+		}
 	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},

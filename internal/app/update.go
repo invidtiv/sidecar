@@ -422,6 +422,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.exitOverview()
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case overview.OpenInGitMsg:
+		if msg.Path == "" {
+			return m, nil
+		}
+		// Sequence, not Batch: SwitchWorktree re-inits plugins and deadlocks
+		// if FocusPlugin forks beside it. FocusPluginByIDMsg exits global.
+		return m, tea.Sequence(
+			SwitchWorktree(msg.Path),
+			FocusPlugin("git-status"),
+		)
+
 	case overview.NavigateMsg:
 		if !m.globalCatalogNavigable() || !m.overview.IsCurrentNavigation(msg.Generation, msg.RequestID) {
 			return m, nil

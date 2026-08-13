@@ -324,7 +324,7 @@ func TestGlobalBrowserListOffersNoMutatingPath(t *testing.T) {
 	// The discoverable command set — what help and the palette offer for this
 	// tab — carries the same boundary as the keys below. rename-shell is a
 	// display-name write (same as `sidecar shell rename`), not create/destroy.
-	allowed := map[string]bool{"rename-shell": true}
+	allowed := map[string]bool{"rename-shell": true, "open-in-git": true}
 	var registered int
 	for _, binding := range keymap.DefaultBindings() {
 		if binding.Context != "global-workspaces" && binding.Context != "global-workspaces-filter" {

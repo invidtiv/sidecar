@@ -416,6 +416,8 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, m.OpenRenameShell()
 		}
 		return false, nil
+	case "O":
+		return true, m.OpenSelectedInGit()
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "esc":
@@ -627,6 +629,12 @@ func regionKind(region *mouse.Region) (string, bool) {
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over captured output moves that
 	// output, not the list underneath it.
+	if _, ok := action.Region.Data.(previewGitHit); ok {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.OpenSelectedInGit()
+		}
+		return nil
+	}
 	if tab, ok := action.Region.Data.(previewTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.setPreviewTab(workspacediff.Tab(tab))

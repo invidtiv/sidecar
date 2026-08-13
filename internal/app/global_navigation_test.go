@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -375,6 +376,51 @@ var stateBase string
 
 // writeShellManifest gives a project one durable shell so the shell identity
 // validates the way a collected one does.
+func TestOpenInGitMsgSequencesSwitchThenFocusGit(t *testing.T) {
+	m, _, _ := globalNavigationModel(t)
+	if !m.inGlobalScope() {
+		t.Fatal("premise: should start in global")
+	}
+	updated, cmd := m.Update(overview.OpenInGitMsg{Path: "/tmp/feature"})
+	m = asAppModel(t, updated)
+	if cmd == nil {
+		t.Fatal("OpenInGitMsg produced no command")
+	}
+	msg := cmd()
+	seq := reflect.ValueOf(msg)
+	if seq.Kind() != reflect.Slice || seq.Len() != 2 {
+		t.Fatalf("OpenInGit sequence = %T len=%d, want two-command Sequence", msg, seq.Len())
+	}
+	first := seq.Index(0).Interface().(tea.Cmd)()
+	switchMsg, ok := first.(SwitchWorktreeMsg)
+	if !ok {
+		t.Fatalf("first sequence message = %T, want SwitchWorktreeMsg", first)
+	}
+	if switchMsg.WorktreePath != "/tmp/feature" {
+		t.Fatalf("switch path = %q", switchMsg.WorktreePath)
+	}
+	second := seq.Index(1).Interface().(tea.Cmd)()
+	focus, ok := second.(FocusPluginByIDMsg)
+	if !ok {
+		t.Fatalf("second sequence message = %T, want FocusPluginByIDMsg", second)
+	}
+	if focus.PluginID != "git-status" {
+		t.Fatalf("focus plugin = %q, want git-status", focus.PluginID)
+	}
+}
+
+func TestFocusPluginByIDMsgLeavesGlobal(t *testing.T) {
+	m, _, _ := globalNavigationModel(t)
+	if !m.inGlobalScope() {
+		t.Fatal("premise: should start in global")
+	}
+	updated, _ := m.Update(FocusPluginByIDMsg{PluginID: "git"})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() {
+		t.Fatal("FocusPluginByIDMsg left the app in global")
+	}
+}
+
 func writeShellManifest(t *testing.T, root, tmuxName string) {
 	t.Helper()
 	projectState, err := projectdir.ResolveWithBase(stateBase, root)
