@@ -2,6 +2,56 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.98.0] - 2026-08-13
+
+### Features
+
+- **A global scope that spans every project.** Sidecar now has a second space
+  above the per-project one, with its own tabs — Overview, Workspaces, and a
+  hosted Tasks — reached without switching projects first. One shared workspace
+  catalog feeds it, so every project's worktrees and shells appear in a single
+  list that filters, sorts, and groups. Sorts carry section headers (Project /
+  Recent), rows show kind, project, name, and age on one line, idle worktrees
+  hide by default behind a sort/filter fly-out, chosen rows pin to the top, and
+  the last global tab survives a restart. The header breadcrumb names the global
+  Overview so the current space is never ambiguous.
+- **Global workspaces are live, not just listed.** Selecting one previews its
+  terminal read-only; entering hands it the keyboard, so an agent running in
+  another project can be watched and driven from one place. Each row carries
+  Output, Diff, and Task tabs, shells can be renamed in place, and Diff jumps
+  to the target project's Git plugin with that project's checkout selected.
+- **Document panes ship enabled.** Markdown mentioned by an agent opens beside
+  the terminal in a real pane tree, with panes that persist and resize across
+  restarts, `m` (and a clickable chip) toggling rendered against raw, and any
+  local file an agent prints — not only markdown, not only paths inside the
+  worktree — openable straight from the terminal by clicking its link.
+- **Child shells nest under their parent worktree in the project sidebar**, so a
+  worktree and the shells opened inside it read as one group.
+
+### Bug Fixes
+
+- **Terminal windowing is now one rule instead of several.** Placement,
+  freezing, wheel notches, and selection geometry moved onto a single shared
+  bottom-relative window model in `internal/tty`, fixing a family of drift bugs:
+  panels that resized to the wrong height, a pin left frozen by an empty
+  gesture, a notch that thawed a window mid-selection, clipped primary previews,
+  and term-panel or editor chrome being mistaken for a worktree pane.
+- Backslash hides the sidebar without dropping into the watched preview, `q`
+  types normally in the global Rename Shell modal, Enter closes the View
+  fly-out after applying a sort, and the Task tab's `m` no longer fires while a
+  hidden doc pane holds focus.
+- Workspace diffs load the first commit without moving the cursor, compare short
+  against full hashes correctly when skipping commits, and no longer gate the
+  global preview on capture freshness.
+
+### Dependencies
+
+- td updated to v0.57.0: reopening an issue now supersedes the stale approval,
+  the review buckets that were classified but never drawn are painted, and the
+  monitor's kanban stops crushing card width with empty columns.
+- Tasks embedding updated to v1.8.0, bringing the redesigned Projects view,
+  urgency bands, and the shared row vocabulary.
+
 ## [v0.97.0] - 2026-08-11
 
 ### Features
