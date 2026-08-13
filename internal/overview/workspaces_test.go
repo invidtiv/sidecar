@@ -139,7 +139,7 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 			t.Fatalf("fly-out is missing %q:\n%s", want, view)
 		}
 	}
-	// j moves the highlight; enter applies that mode without cycling.
+	// j moves the highlight; enter applies that mode and closes the fly-out.
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'j', Text: "j"}); !handled {
 		t.Fatal("j was not handled in the fly-out")
 	}
@@ -149,11 +149,40 @@ func TestSortAndFilterKeysDriveTheGlobalList(t *testing.T) {
 	if m.workspaces.Sort() != workspacelist.SortProject {
 		t.Fatalf("enter applied %s, want Project", m.workspaces.Sort().Label())
 	}
-	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
-		t.Fatal("esc did not close the fly-out")
+	if m.ViewFlyoutOpen() {
+		t.Fatal("enter on a sort left the fly-out open; the user should not need Done")
 	}
 	if view := ansi.Strip(m.WorkspacesView(60, 24)); !strings.Contains(view, "Project") {
 		t.Fatalf("list header did not keep the chosen sort:\n%s", view)
+	}
+
+	// Esc still dismisses without requiring Done.
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 's', Text: "s"}); !handled || !m.ViewFlyoutOpen() {
+		t.Fatal("`s` did not reopen the view fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
+		t.Fatal("esc did not close the fly-out")
+	}
+
+	// Enter on the idle checkbox toggles and leaves the fly-out open.
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 's', Text: "s"}); !handled || !m.ViewFlyoutOpen() {
+		t.Fatal("`s` did not reopen the view fly-out for the idle checkbox")
+	}
+	beforeIdle := m.showIdleWorktrees
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyTab}); !handled {
+		t.Fatal("tab was not handled in the fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter}); !handled {
+		t.Fatal("enter on the idle checkbox was not handled")
+	}
+	if m.showIdleWorktrees == beforeIdle {
+		t.Fatal("enter on the idle checkbox did not toggle show idle worktrees")
+	}
+	if !m.ViewFlyoutOpen() {
+		t.Fatal("enter on the idle checkbox closed the fly-out")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEsc}); !handled || m.ViewFlyoutOpen() {
+		t.Fatal("esc did not close the fly-out after the idle toggle")
 	}
 
 	// `/` focuses the filter; typed characters are query text, and even keys
