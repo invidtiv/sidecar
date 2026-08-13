@@ -24,6 +24,7 @@ func workspacesEmptyText(showIdle bool) string {
 func (m *Model) ViewFlyoutOpen() bool { return m.viewFlyoutOpen }
 
 func (m *Model) openViewFlyout() {
+	m.closeRenameShell()
 	m.viewFlyoutOpen = true
 	m.viewFlyoutSortIdx = sortIndex(m.workspaces.Sort())
 	m.viewFlyout = nil

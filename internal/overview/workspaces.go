@@ -27,12 +27,14 @@ import (
 //
 // The list itself is a reader. Creation, deletion, attach, Git lifecycle, and
 // Task actions stay in the owning project's Workspaces plugin, where their
-// validation and refusal rules live. The one thing the browser does drive is an
-// existing live pane: Enter, a click in the pane, or E hands the keyboard to
-// the pane behind the selected row (internal/overview/interactive.go), which
-// creates nothing and destroys nothing — it types into a session that is
-// already there. The list stays the browse surface; there is no watched-preview
-// keyboard mode.
+// validation and refusal rules live. Renaming a shell display name is the one
+// write that belongs here: it is the same shellstate persist the project
+// plugin and `sidecar shell rename` already do, aimed at the owning project's
+// shells.json. The other thing the browser drives is an existing live pane:
+// Enter, a click in the pane, or E hands the keyboard to the pane behind the
+// selected row (internal/overview/interactive.go), which creates nothing and
+// destroys nothing — it types into a session that is already there. The list
+// stays the browse surface; there is no watched-preview keyboard mode.
 
 // syncWorkspaces rebuilds the list projection from the same results map the
 // board uses. It is called from syncBoard so the two projections can never
@@ -255,6 +257,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 		m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
 		view = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 	}
+	if m.renameOpen {
+		return m.overlayRenameShell(view, width, height)
+	}
 	if m.viewFlyoutOpen {
 		return m.overlayViewFlyout(view, width, height)
 	}
@@ -339,6 +344,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.PreviewInteractive() {
 		return m.previewKey(msg)
 	}
+	if m.renameOpen {
+		return m.handleRenameShellKey(msg)
+	}
 	// The fly-out is an overlay, not a third browse mode. Esc / backdrop close
 	// it and leave the list as the rest state. "/" still focuses the filter.
 	if m.viewFlyoutOpen {
@@ -403,6 +411,11 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	case "p":
 		return true, m.toggleWorkspacePin()
+	case "R":
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			return true, m.OpenRenameShell()
+		}
+		return false, nil
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "esc":
@@ -426,6 +439,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func (m *Model) WorkspaceFocusContext() string {
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
+	}
+	if m.renameOpen {
+		return "global-workspaces-rename"
 	}
 	return "global-workspaces"
 }
@@ -508,6 +524,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	mouseMsg, ok := msg.(tea.MouseMsg)
 	if !ok {
 		return nil
+	}
+	if m.renameOpen {
+		return m.handleRenameShellMouse(mouseMsg)
 	}
 	if m.viewFlyoutOpen {
 		return m.handleViewFlyoutMouse(mouseMsg)
@@ -743,6 +762,7 @@ func (m *Model) WorkspacesSummary() string {
 // internal/keymap under the "global-workspaces", "global-workspaces-terminal"
 // and "global-workspaces-filter" contexts, which is what makes it discoverable
 // in help and the palette rather than only in footer hints — and what makes
-// the boundary (no create, delete or attach anywhere; typing only via Enter /
-// click / E) a single documented fact instead of a second list beside the
-// keys this file actually answers.
+// the boundary (no create, delete or attach anywhere; rename-shell is a
+// display-name write, not create/destroy; typing only via Enter / click / E)
+// a single documented fact instead of a second list beside the keys this
+// file actually answers.

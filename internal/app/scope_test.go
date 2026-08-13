@@ -598,7 +598,7 @@ func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
 	if strings.TrimSpace(rendered) == "" {
 		t.Fatal("the help modal renders an empty section for the global Workspaces tab")
 	}
-	for _, want := range []string{"enter", "/", "s", "p", "r", "\\"} {
+	for _, want := range []string{"enter", "/", "s", "p", "r", "\\", "R"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("help does not document %q:\n%s", want, rendered)
 		}

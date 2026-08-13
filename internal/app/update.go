@@ -114,6 +114,10 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.globalWorkspacesVisible() && m.overview.RenameShellOpen() && m.overview.RenameShellPaste(msg.Content) {
+		return m, nil
+	}
+
 	// A focused global filter is a text input and takes the paste, exactly as
 	// it takes typed characters.
 	if m.globalWorkspacesFilterFocused() && m.overview.WorkspacesPaste(msg.Content) {
@@ -514,6 +518,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a registered global would fire for every context that rebinds its key.
 		if (&m).runHostCommand(msg.CommandID) {
 			return m, nil
+		}
+		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
@@ -1713,6 +1720,7 @@ func isTextInputContext(ctx string) bool {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
 		"global-workspaces-filter",
+		"global-workspaces-rename",
 		"issue-input":
 		return true
 	default:

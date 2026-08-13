@@ -1213,6 +1213,21 @@ func (m *Model) runHostCommand(id string) bool {
 	return false
 }
 
+// runGlobalWorkspacesCommand runs a palette-selected command the global
+// Workspaces list answers itself. Keys are handled in overview.WorkspacesKey;
+// the palette has no keymap handler, so it lands here.
+func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
+	if !m.globalWorkspacesVisible() || m.overview == nil || m.overview.PreviewInteractive() {
+		return nil
+	}
+	switch id {
+	case "rename-shell":
+		return m.overview.OpenRenameShell()
+	default:
+		return nil
+	}
+}
+
 // initIssueInput initializes the issue input modal.
 func (m *Model) initIssueInput() {
 	ti := textinput.New()

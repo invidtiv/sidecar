@@ -993,6 +993,13 @@ func (m Model) footerHints() []footerHint {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+		if m.overview != nil && m.overview.RenameShellOpen() {
+			hints = append(hints,
+				footerHint{keys: "enter", label: "Rename"},
+				footerHint{keys: "esc", label: "Cancel"},
+			)
+			break
+		}
 		// Two states only: the list browses, Enter / click / E type. Leftover
 		// preview-only chrome (hidden sidebar) still scrolls and can start typing.
 		if m.overview != nil && m.overview.PreviewFocused() && !m.overview.PreviewInteractive() {
@@ -1018,6 +1025,9 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "\\", label: "Sidebar"},
 			footerHint{keys: "esc", label: "Close"},
 		)
+		if m.overview != nil && m.overview.SelectedShell() {
+			hints = append(hints, footerHint{keys: "R", label: "Rename"})
+		}
 	case m.inGlobalScope() && m.overview != nil:
 		hints = append(hints,
 			footerHint{keys: "hjkl", label: "Move"},
