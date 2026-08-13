@@ -203,7 +203,7 @@ func (m *Model) activateTab(ref tabRef) tea.Cmd {
 	if ref.scope == ScopeGlobal {
 		return m.setGlobalTab(ref.global)
 	}
-	m.exitOverview()
+	m.leaveOverview(false)
 	return m.SetActivePlugin(ref.plugin)
 }
 

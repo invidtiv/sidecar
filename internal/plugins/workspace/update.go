@@ -68,6 +68,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
 		p.height = msg.Height
+		// Background project plugins still receive layout so returning to the
+		// project has current dimensions, but only the visible/focused Workspaces
+		// surface owns tmux geometry. Global Workspaces may be displaying this same
+		// pane with a different split while the project surface is covered.
+		if !p.focused {
+			return p, nil
+		}
 		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
 			// Poll captures cursor atomically - no separate query needed
 			resizeCmds := []tea.Cmd{p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate()}

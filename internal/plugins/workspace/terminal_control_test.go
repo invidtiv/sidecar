@@ -8,9 +8,59 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/tty"
 )
+
+func TestLosingFocusClosesVisibleTerminalModelsAndHiddenResizeDoesNotOwnGeometry(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.width, p.height = 100, 30
+	model := openTestTerminal(t, p, workspaceTerminalPrimary, workspaceTerminalTarget{
+		Session: "project", Pane: "%1", Source: "agent", SourceID: "worktree",
+	})
+	if !model.IsActive() {
+		t.Fatal("test premise: project terminal did not open")
+	}
+
+	p.SetFocused(false)
+	if model.IsActive() || p.primaryTerminalTarget != (workspaceTerminalTarget{}) {
+		t.Fatalf("covered project retained terminal ownership: active=%v target=%+v", model.IsActive(), p.primaryTerminalTarget)
+	}
+	_, cmd := p.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd != nil {
+		t.Fatal("covered project scheduled tmux geometry work on resize")
+	}
+	if p.width != 120 || p.height != 40 {
+		t.Fatalf("covered project lost return geometry: %dx%d", p.width, p.height)
+	}
+}
+
+func TestRegainingFocusReconcilesTheSelectedTerminalOnce(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.width, p.height = 100, 30
+	p.sidebarVisible = false
+	p.worktrees = []*Worktree{{
+		Key: "worktree", Name: "worktree",
+		Agent: &Agent{TmuxSession: "project", TmuxPane: "%1"},
+	}}
+	p.SetFocused(false)
+	p.SetFocused(true)
+
+	_, _ = p.Update(app.PluginFocusedMsg{})
+	if p.primaryTerminal == nil || !p.primaryTerminal.IsActive() {
+		t.Fatal("returning to project focus did not reopen the selected terminal")
+	}
+	if got := p.primaryTerminalTarget; got.Session != "project" || got.Pane != "%1" {
+		t.Fatalf("restored terminal target = %+v", got)
+	}
+	firstGeneration := p.primaryTerminal.Scope().Generation
+	_, _ = p.Update(app.PluginFocusedMsg{})
+	if got := p.primaryTerminal.Scope().Generation; got != firstGeneration {
+		t.Fatalf("duplicate focus notification reopened terminal: generation %d -> %d", firstGeneration, got)
+	}
+}
 
 func TestTerminalCaptureTraceIsOptInAndMetadataOnly(t *testing.T) {
 	var output bytes.Buffer

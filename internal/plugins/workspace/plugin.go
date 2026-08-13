@@ -549,7 +549,18 @@ func (p *Plugin) SetFocused(f bool) {
 	if !f && p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}
+	// Focus is also the visibility contract for the project surface. Global
+	// Workspaces can watch the same pane with its own tty.Model, so a covered
+	// project preview must close its subscriptions synchronously before the
+	// global model opens; waiting for another Update leaves both models able to
+	// resize and consume frames for the same pane.
+	if !f {
+		p.stopTerminalModels()
+	}
 	p.focused = f
+	if f {
+		p.setTerminalFocus(p.applicationFocused)
+	}
 }
 
 func (p *Plugin) SetPendingWorkspaceSelection(selection plugin.PendingWorkspaceSelection) {

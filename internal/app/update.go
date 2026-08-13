@@ -419,7 +419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FocusPluginByIDMsg:
 		// Switch to requested plugin
-		m.exitOverview()
+		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
 	case overview.OpenInGitMsg:
@@ -736,9 +736,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// branch runs before that level, so without the guard esc would yank
 			// the user out of the global space and leave the overlay open.
 			if m.inGlobalScope() && !m.globalSurfaceWantsEsc() {
-				m.exitOverview()
-				m.updateContext()
-				return m, nil
+				return m, m.exitOverview()
 			}
 		}
 	}

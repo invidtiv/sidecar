@@ -648,7 +648,7 @@ func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDe
 	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
 	}
-	m.exitOverview()
+	m.leaveOverview(false)
 	m.updateContext()
 	return m.switchProject(destination.Path)
 }
@@ -665,11 +665,19 @@ func (m *Model) overviewProjects() []overview.Project {
 }
 
 // enterOverview switches to the global space on its last-used tab. The project,
-// worktree, and active project plugin underneath are left exactly as they are,
-// so leaving again restores the precise destination the user came from.
+// worktree, and active plugin identity remain in place, but the covered project
+// surface loses focus before a global surface starts. That focus transition is
+// the visibility contract terminal-owning plugins use to close their models, so
+// only the visible scope can resize or consume a pane.
 func (m *Model) enterOverview() tea.Cmd {
 	if !m.globalScopeAvailable() {
 		return nil
+	}
+	if m.inGlobalScope() {
+		return m.startVisibleGlobalTab()
+	}
+	if current := m.ActivePlugin(); current != nil {
+		current.SetFocused(false)
 	}
 	m.scope = ScopeGlobal
 	m.ensureVisibleGlobalTab()
@@ -680,15 +688,28 @@ func (m *Model) enterOverview() tea.Cmd {
 // exitOverview leaves the global space and hands keyboard focus back to the
 // project plugin underneath. It restores the context itself so no caller can
 // leave the app stuck on a global context after the space is gone.
-func (m *Model) exitOverview() {
+func (m *Model) exitOverview() tea.Cmd { return m.leaveOverview(true) }
+
+// leaveOverview is the common scope transition. restoreProject focuses the
+// covered plugin and emits the ordinary focus notification when the user is
+// returning to it. Callers that immediately switch plugin/project pass false so
+// the hidden old surface cannot reopen a terminal during the handoff.
+func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 	wasGlobal := m.inGlobalScope()
 	if wasGlobal && m.overview != nil {
 		m.overview.Stop()
 	}
 	m.scope = ScopeProject
 	if wasGlobal {
+		if current := m.ActivePlugin(); current != nil && restoreProject {
+			current.SetFocused(true)
+		}
 		m.updateContext()
+		if restoreProject {
+			return PluginFocused()
+		}
 	}
+	return nil
 }
 
 // toggleOverview moves between the global and project spaces. No-op when the
@@ -698,9 +719,7 @@ func (m *Model) toggleOverview() tea.Cmd {
 		return nil
 	}
 	if m.inGlobalScope() {
-		m.exitOverview()
-		m.updateContext()
-		return nil
+		return m.exitOverview()
 	}
 	return m.enterOverview()
 }
@@ -875,7 +894,7 @@ func (m *Model) openInGitFromOverview(path string) tea.Cmd {
 }
 
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
-	m.exitOverview()
+	m.leaveOverview(false)
 	kind := plugin.WorkspaceSelectionWorktree
 	target := workspace.Path
 	key := workspace.Key

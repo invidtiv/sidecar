@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -29,6 +30,12 @@ type navigationPlugin struct {
 	inits     int
 	keyInputs int
 	pending   *plugin.PendingWorkspaceSelection
+	// terminal lifecycle counters model a project Workspaces Output surface:
+	// focus owns the terminal; background size/messages must not reach it.
+	terminalOpen    bool
+	terminalResizes int
+	terminalMsgs    int
+	focusChanges    []bool
 }
 
 func (p *navigationPlugin) ID() string                 { return p.id }
@@ -41,11 +48,28 @@ func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		p.keyInputs++
 	}
+	if _, ok := msg.(plugin.PluginFocusedMsg); ok && p.focused {
+		p.terminalOpen = true
+	}
+	if p.terminalOpen {
+		if _, ok := msg.(tea.WindowSizeMsg); ok {
+			p.terminalResizes++
+		}
+		if tty.IsTerminalMessage(msg) {
+			p.terminalMsgs++
+		}
+	}
 	return p, nil
 }
-func (p *navigationPlugin) View(int, int) string       { return "" }
-func (p *navigationPlugin) IsFocused() bool            { return p.focused }
-func (p *navigationPlugin) SetFocused(f bool)          { p.focused = f }
+func (p *navigationPlugin) View(int, int) string { return "" }
+func (p *navigationPlugin) IsFocused() bool      { return p.focused }
+func (p *navigationPlugin) SetFocused(f bool) {
+	p.focused = f
+	if !f {
+		p.terminalOpen = false
+	}
+	p.focusChanges = append(p.focusChanges, f)
+}
 func (p *navigationPlugin) Commands() []plugin.Command { return nil }
 func (p *navigationPlugin) FocusContext() string       { return p.id }
 func (p *navigationPlugin) SetPendingWorkspaceSelection(s plugin.PendingWorkspaceSelection) {

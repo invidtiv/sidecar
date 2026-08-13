@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -157,6 +158,66 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 	quitting := asAppModel(t, updated)
 	if !quitting.inGlobalScope() || !quitting.showQuitConfirm {
 		t.Fatalf("q from Overview: global=%v quit=%v", quitting.inGlobalScope(), quitting.showQuitConfirm)
+	}
+}
+
+// A project Workspaces Output pane and global Workspaces can name the same tmux
+// pane with different geometry. Crossing the scope boundary must therefore
+// transfer terminal ownership, not merely change which pixels are rendered.
+func TestGlobalScopeSuspendsAndRestoresTheCoveredProjectTerminal(t *testing.T) {
+	m, plugins := scopeBaselineModel(t, "workspaces")
+	m.globalTab = GlobalWorkspaces
+	project := plugins["workspaces"]
+	project.SetFocused(true) // the startup focus transition in the real app
+	_, _ = project.Update(plugin.PluginFocusedMsg{})
+	inits := totalInits(plugins)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || project.focused || project.terminalOpen {
+		t.Fatalf("global entry kept covered project ownership: global=%v focused=%v terminal=%v",
+			m.inGlobalScope(), project.focused, project.terminalOpen)
+	}
+
+	// Window geometry and terminal deliveries are still broadcast for ordinary
+	// background plugin state, but the covered terminal must act on neither.
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 111, Height: 35})
+	m = asAppModel(t, updated)
+	updated, _ = m.Update(tty.SessionDeadMsg{})
+	m = asAppModel(t, updated)
+	if project.terminalResizes != 0 || project.terminalMsgs != 0 {
+		t.Fatalf("covered project terminal handled global traffic: resizes=%d messages=%d",
+			project.terminalResizes, project.terminalMsgs)
+	}
+
+	updated, focusCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = asAppModel(t, updated)
+	if m.inGlobalScope() || !project.focused || project.terminalOpen {
+		t.Fatalf("project return focus state before notification is wrong: global=%v focused=%v terminal=%v",
+			m.inGlobalScope(), project.focused, project.terminalOpen)
+	}
+	if focusCmd == nil {
+		t.Fatal("project return emitted no focus notification for lifecycle reconciliation")
+	}
+	updated, _ = m.Update(focusCmd())
+	m = asAppModel(t, updated)
+	if !project.terminalOpen {
+		t.Fatal("project focus notification did not restore terminal ownership")
+	}
+	if got := totalInits(plugins); got != inits {
+		t.Fatalf("scope ownership transfer reinitialized plugins: %d -> %d", inits, got)
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 112, Height: 36})
+	m = asAppModel(t, updated)
+	updated, _ = m.Update(tty.SessionDeadMsg{})
+	_ = asAppModel(t, updated)
+	if project.terminalResizes != 1 || project.terminalMsgs != 1 {
+		t.Fatalf("restored project terminal missed traffic: resizes=%d messages=%d",
+			project.terminalResizes, project.terminalMsgs)
+	}
+	if got := project.focusChanges; len(got) < 3 || got[len(got)-2] || !got[len(got)-1] {
+		t.Fatalf("focus ownership transitions = %v, want false then true", got)
 	}
 }
 
