@@ -190,6 +190,57 @@ func TestNestedShellInteractionAndAttachTargetTmuxSession(t *testing.T) {
 	}
 }
 
+func TestNestedShellExplicitEEntersFromInheritedWorktreeTabs(t *testing.T) {
+	for _, tab := range []PreviewTab{PreviewTabDiff, PreviewTabTask} {
+		t.Run(map[PreviewTab]string{PreviewTabDiff: "diff", PreviewTabTask: "task"}[tab], func(t *testing.T) {
+			installSuccessfulFakeTmux(t)
+			p := nestedSidebarPlugin(t)
+			const session = "sidecar-sh-sidecar-feature-1"
+			parent, shell := p.findNestedShell(session)
+			shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
+			p.selectNestedShell(parent, session)
+			p.activePane = PanePreview
+			p.previewTab = tab
+
+			p.handleListKeys(keyPressFor("E"))
+
+			if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||
+				p.interactiveState.TargetSession != session || p.interactiveState.TargetPane != "%9" {
+				t.Fatalf("E from inherited %v tab did not enter nested terminal: mode=%v state=%#v",
+					tab, p.viewMode, p.interactiveState)
+			}
+		})
+	}
+}
+
+func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
+	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
+	p.selectNestedShell(parent, session)
+	p.activePane = PanePreview
+	p.previewTab = PreviewTabDiff
+
+	ids := commandIDs(p.Commands())
+	for _, want := range []string{"interactive", "toggle-terminal"} {
+		if !ids[want] {
+			t.Errorf("nested shell commands missing %q: %v", want, ids)
+		}
+	}
+	for _, unwanted := range []string{"prev-tab", "next-tab", "toggle-diff-scope", "toggle-diff-view"} {
+		if ids[unwanted] {
+			t.Errorf("nested shell advertised worktree-only command %q: %v", unwanted, ids)
+		}
+	}
+
+	p.termPanelVisible = true
+	ids = commandIDs(p.Commands())
+	if !ids["switch-terminal-layout"] {
+		t.Fatalf("visible nested terminal panel omitted layout command: %v", ids)
+	}
+}
+
 func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {
 	p := nestedSidebarPlugin(t)
 	const session = "sidecar-sh-sidecar-feature-1"
@@ -224,6 +275,9 @@ func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {
 	}
 	if got := p.termPanelWorkDir(); got != shell.WorkDir {
 		t.Fatalf("nested terminal panel cwd = %q, want %q", got, shell.WorkDir)
+	}
+	if got := p.terminalProjectionIdentity(false); !strings.HasPrefix(got, "shell:"+session+"\x00") {
+		t.Fatalf("nested projection identity = %q", got)
 	}
 
 	p.activePane = PanePreview

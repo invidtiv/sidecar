@@ -1007,8 +1007,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case tty.EnterInteractiveKeyAlt:
 		// E is the explicit type key. i is Sidecar's find-TD-task shortcut
 		// (td-ba46ea); enter remains the primary way in.
-		// Only from Output tab or sidebar — Diff/Task tabs have no terminal.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput {
+		// Worktree Diff/Task tabs have no terminal. A shell always does, even if
+		// its selection inherited the worktree's previous tab value.
+		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
 			if p.termPanelFocused && p.termPanelVisible {
 				return p.enterTermPanelInteractiveMode()
 			}

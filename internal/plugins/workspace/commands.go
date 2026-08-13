@@ -159,7 +159,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			}
 			// Tab commands only shown when a worktree is selected (not shell)
 			// Shell has no tabs - it shows primer/output directly
-			if !p.shellSelected {
+			if !p.selectingShell() {
 				cmds = append(cmds,
 					plugin.Command{ID: "prev-tab", Name: "Tab←", Description: "Previous preview tab", Context: "workspace-preview", Priority: 3},
 					plugin.Command{ID: "next-tab", Name: "Tab→", Description: "Next preview tab", Context: "workspace-preview", Priority: 4},
@@ -210,7 +210,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Workspace: needs agent and Output tab; Shell: always shows output
 			if features.IsEnabled(features.TmuxInteractiveInput.Name) {
 				hasActiveSession := false
-				if p.shellSelected {
+				if p.selectingShell() {
 					if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 						hasActiveSession = true
 					}
@@ -224,7 +224,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if p.previewTab == PreviewTabOutput || p.shellSelected {
+			if p.previewTab == PreviewTabOutput || p.selectingShell() {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"

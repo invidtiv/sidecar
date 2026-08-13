@@ -346,7 +346,7 @@ func (p *Plugin) terminalProjectionIdentity(termPanel bool) string {
 	if termPanel {
 		return "panel:" + p.termPanelSession + "\x00" + p.termPanelPaneID
 	}
-	if p.shellSelected {
+	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil {
 			return "shell:" + shell.TmuxName + "\x00" + p.terminalLinkTarget(false)
 		}
