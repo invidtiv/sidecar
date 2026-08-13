@@ -1061,12 +1061,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				p.thawTermPanelWindow()
-				if p.termPanelScroll > pageSize {
-					p.termPanelScroll -= pageSize
-				} else {
-					p.termPanelScroll = 0
-				}
+				p.scrollTermPanelWindow(-pageSize)
 				return nil
 			}
 			if p.previewShowsTerminal() {
@@ -1091,8 +1086,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			// Terminal panel focused: scroll terminal panel
 			if p.termPanelFocused && p.termPanelVisible {
-				p.thawTermPanelWindow()
-				p.termPanelScroll += pageSize
+				p.scrollTermPanelWindow(pageSize)
 				return nil
 			}
 			if p.previewShowsTerminal() {

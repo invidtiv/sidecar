@@ -94,7 +94,11 @@ func TestHandleMouseScrollHonorsFullWheelDelta(t *testing.T) {
 }
 
 func TestHandleMouseScrollHonorsFullWheelDeltaInTerminalPanel(t *testing.T) {
-	p := &Plugin{viewMode: ViewModeList, termPanelScroll: 10}
+	// The panel needs a buffer to move over: a notch is now placed by the shared
+	// window rule, which does not step past the top of what is loaded, so a
+	// fixture with no output at all has nowhere for the delta to land.
+	p := passiveWheelPanelPlugin(t)
+	p.termPanelScroll = 10
 	region := &mouse.Region{ID: regionTermPanelContent}
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -3, Region: region})

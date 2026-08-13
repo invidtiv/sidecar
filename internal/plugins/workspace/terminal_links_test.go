@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -838,13 +839,28 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	}
 
 	// Recreate the frozen state and prove a wheel gesture first translates the
-	// same visible row, then applies the requested upward movement.
+	// same visible row, then applies the requested upward movement. The four-row
+	// panel above has nowhere to move under the shared window rule, so the
+	// gesture is replayed over a buffer with rows above the window: where the
+	// notch lands is that rule's, and it stops at the loaded top (td-c3649a).
+	history := make([]string, 0, 80)
+	for i := range 80 {
+		history = append(history, fmt.Sprintf("history row %02d", i))
+	}
+	panel.ApplySnapshot(tty.PaneSnapshot{
+		Output: strings.Join(history, "\n"), BaseLine: 50, Absolute: true,
+		PaneRows: len(history),
+	})
+	pinned := p.termPanelMaxScroll() / 2
+	if pinned <= 0 {
+		t.Fatal("test premise: the panel has no rows above its window to pin over")
+	}
 	p.termPanelFreeze.Release()
-	p.termPanelFreeze.Freeze(frozenStart)
+	p.termPanelFreeze.Freeze(pinned)
 	p.thawTermPanelWindow()
 	before := p.termPanelScroll
 	p.termPanelFreeze.Release()
-	p.termPanelFreeze.Freeze(frozenStart)
+	p.termPanelFreeze.Freeze(pinned)
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, Region: action.Region})
 	if p.termPanelFreeze.Active() || p.termPanelScroll <= before {
 		t.Fatalf("wheel did not release and move panel: frozen %v scroll %d, translated %d",

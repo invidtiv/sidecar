@@ -937,9 +937,10 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 }
 
 // scrollInteractiveViewportByWheel moves the interactive window by a coalesced
-// notch. It is the wheel's own placement, not the scrollback keys': a notch
-// leaves the window wherever it lands, including past a max offset the surface
-// has not measured yet, where a key-driven jump would clamp to what is loaded.
+// notch. A notch counts rendered rows down the screen where the scrollback keys
+// count rows back through scrollback; that is the only difference between them.
+// Where the window lands — including the clamp to what the surface has measured
+// — is the shared rule's, and it is the same answer for every local wheel path.
 func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
 	if p.interactiveState != nil && p.interactiveState.TermPanel {
 		p.clearTerminalSelectionOnScroll(true)

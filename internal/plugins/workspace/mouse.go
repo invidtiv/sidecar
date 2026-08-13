@@ -1184,13 +1184,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	case regionTermPanelContent:
-		// Scroll terminal panel output directly (position-based, not focus-based)
-		p.thawTermPanelWindow()
+		// Scroll the panel under the pointer, whether or not it holds focus.
+		// Where the notch lands is the shared window rule's: writing the
+		// arithmetic here is what let this path walk past the top of the loaded
+		// buffer and step over the history-load trigger below.
 		p.clearTerminalSelectionOnScroll(true)
-		p.termPanelScroll -= delta
-		if p.termPanelScroll < 0 {
-			p.termPanelScroll = 0
-		}
+		p.scrollTermPanelWindowRows(delta)
 		if delta > 0 && p.termPanelScroll == 0 {
 			p.cancelTerminalHistoryIntent(true)
 		}
