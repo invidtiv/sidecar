@@ -2265,7 +2265,7 @@ func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
 		return nil
 	}
 	commit := p.commitStatusList[commitIdx]
-	if p.commitDetail != nil && p.commitDetail.Hash == commit.Hash {
+	if commitDetailMatchesListHash(p.commitDetail, commit.Hash) {
 		return nil
 	}
 	p.diffTabParsedDiff = nil
@@ -2275,6 +2275,18 @@ func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
 	p.commitFileDiffRaw = ""
 	p.commitFileParsed = nil
 	return p.loadCommitDetail(commit.Hash)
+}
+
+// commitDetailMatchesListHash reports whether a loaded commit is the list row.
+// The list stores git %h; GetCommitDetail stores %H in Hash and %h in ShortHash.
+func commitDetailMatchesListHash(detail *gitstatus.Commit, listHash string) bool {
+	if detail == nil || listHash == "" {
+		return false
+	}
+	if detail.Hash == listHash || detail.ShortHash == listHash {
+		return true
+	}
+	return strings.HasPrefix(detail.Hash, listHash)
 }
 
 // handleCommitFilesKey handles keys when viewing files within a commit.

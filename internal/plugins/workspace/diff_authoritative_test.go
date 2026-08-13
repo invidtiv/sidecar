@@ -598,14 +598,29 @@ func TestDiffLoadedMsgDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 	}
 }
 
+const (
+	testCommitShortHash = "aaa1111"
+	testCommitFullHash  = "aaa1111bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
 func TestLoadSelectedDiffTabCommitSkipsAlreadyLoadedHash(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.commitStatusList = []CommitStatusInfo{{Hash: "aaa1111", Subject: "first"}}
+	p.commitStatusList = []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}}
 	p.diffTabCursor = 0
-	p.commitDetail = &gitstatus.Commit{Hash: "aaa1111"}
+	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash, ShortHash: testCommitShortHash}
+	p.commitFileCursor = 2
 
 	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
 		t.Fatal("already-loaded commit under cursor should not refetch")
+	}
+	if p.commitFileCursor != 2 {
+		t.Fatalf("skip reset commitFileCursor to %d, want 2", p.commitFileCursor)
+	}
+
+	// ShortHash can be empty; list %h is still a prefix of detail %H.
+	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash}
+	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
+		t.Fatal("full-hash prefix of list short hash should skip")
 	}
 
 	// A later cursor move onto a different commit still loads.
@@ -614,6 +629,37 @@ func TestLoadSelectedDiffTabCommitSkipsAlreadyLoadedHash(t *testing.T) {
 	hash, ok := commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(0))
 	if !ok || hash != "bbb2222" {
 		t.Fatalf("move after skip: hash=%q ok=%v, want bbb2222", hash, ok)
+	}
+}
+
+func TestDiffLoadedMsgPreservesCommitFileCursor(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.diffScope = DiffScopeWorkingTree
+	p.diffTabCursor = 0
+	p.commitDetail = &gitstatus.Commit{
+		Hash:      testCommitFullHash,
+		ShortHash: testCommitShortHash,
+		Files:     []gitstatus.CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
+	}
+	p.commitFileCursor = 2
+
+	_, cmd := p.update(DiffLoadedMsg{
+		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
+		WorkspaceName:  "wt",
+		Snapshot: &DiffSnapshot{
+			State:   LoadStateReady,
+			Commits: []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}},
+		},
+	})
+
+	if p.commitDetail == nil || p.commitDetail.Hash != testCommitFullHash {
+		t.Fatal("refresh cleared commitDetail for the already-loaded commit")
+	}
+	if p.commitFileCursor != 2 {
+		t.Fatalf("commitFileCursor = %d, want 2 after DiffLoadedMsg", p.commitFileCursor)
+	}
+	if hash, ok := commitDetailHashFromCmd(t, cmd); ok {
+		t.Fatalf("refresh issued loadCommitDetail for %q", hash)
 	}
 }
 
