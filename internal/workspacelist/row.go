@@ -83,8 +83,12 @@ type RowPresentation struct {
 	Pinned         bool
 }
 
-// RenderRow renders one or two physical lines. Narrow rows retain the status
-// marker and name first, then add secondary identity only while space remains.
+// RenderRow renders one or two physical lines. Line one carries the row's
+// whole identity — kind glyph, project, name, and its age — so a reader can
+// scan shells and worktrees apart without dropping to the second line. Line
+// two is agent detail alone and collapses to nothing when there is none.
+// Narrow rows retain the status marker and name first, then add secondary
+// identity only while space remains.
 func RenderRow(row RowPresentation, width int, selected, focused bool) []string {
 	if width <= 0 {
 		return []string{""}
@@ -95,7 +99,7 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 	}
 
 	line1 := rowLineOne(row, width, selected)
-	line2 := "   " + strings.Join(renderRowFields(row, selected), "  ")
+	line2 := strings.Repeat(" ", rowIndent(row)) + strings.Join(renderRowFields(row, selected), "  ")
 	if strings.TrimSpace(ansi.Strip(line2)) == "" {
 		line2 = ""
 	}
@@ -108,7 +112,10 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 	}
 }
 
-func rowLineOne(row RowPresentation, width int, selected bool) string {
+// rowPrefix is the gutter: the status marker, then the kind glyph that tells a
+// shell from a worktree. Both lines share its width so agent detail hangs
+// under the name rather than under the marker.
+func rowPrefix(row RowPresentation, selected bool) string {
 	icon := row.Marker.Icon
 	if icon == "" {
 		icon = "○"
@@ -117,6 +124,24 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 		icon = markerStyle(row.Marker).Render(icon)
 	}
 	prefix := " " + icon + " "
+	if glyph := KindGlyph(row.Kind); glyph != "" {
+		if !selected {
+			glyph = styles.Muted.Render(glyph)
+		}
+		prefix += glyph + " "
+	}
+	return prefix
+}
+
+func rowIndent(row RowPresentation) int {
+	if KindGlyph(row.Kind) != "" {
+		return 5
+	}
+	return 3
+}
+
+func rowLineOne(row RowPresentation, width int, selected bool) string {
+	prefix := rowPrefix(row, selected)
 	namePrefix := renderField(row.NamePrefix, selected)
 	meta := renderFields(row.NameMeta, selected)
 	metaText := ""
@@ -143,13 +168,8 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 }
 
 func renderRowFields(row RowPresentation, selected bool) []string {
+	// The kind glyph belongs to line one; this line is agent identity only.
 	fields := make([]string, 0, 1+len(row.BeforeProvider)+1+len(row.AfterProvider))
-	if glyph := KindGlyph(row.Kind); glyph != "" {
-		if !selected {
-			glyph = styles.Muted.Render(glyph)
-		}
-		fields = append(fields, glyph)
-	}
 	if row.Pinned {
 		mark := "*"
 		if !selected {
@@ -194,14 +214,7 @@ func renderField(field RowField, selected bool) string {
 }
 
 func narrowRow(row RowPresentation, width int, selected bool) string {
-	icon := row.Marker.Icon
-	if icon == "" {
-		icon = "○"
-	}
-	if !selected {
-		icon = markerStyle(row.Marker).Render(icon)
-	}
-	prefix := " " + icon + " "
+	prefix := rowPrefix(row, selected)
 	secondary := narrowSecondary(row, selected)
 	if secondary == "" || width < ansi.StringWidth(prefix)+8 {
 		return fit(prefix+row.Name, width)

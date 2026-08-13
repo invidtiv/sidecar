@@ -627,7 +627,7 @@ func TestFilterSeparatesIdenticallyNamedShellsByTmuxName(t *testing.T) {
 	}
 }
 
-func TestGlobalRenderRowIsProjectNameAgeThenKindAndAgent(t *testing.T) {
+func TestGlobalRenderRowIsKindProjectNameAgeThenAgent(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	var m Model
 	item := Item{
@@ -640,11 +640,11 @@ func TestGlobalRenderRowIsProjectNameAgeThenKindAndAgent(t *testing.T) {
 		t.Fatalf("lines = %d, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
-	if !strings.Contains(line1, "sidecar review td-196c42") || !strings.Contains(line1, "1m") {
-		t.Fatalf("line 1 = %q, want project + name + age", line1)
+	if !strings.Contains(line1, "⑂ sidecar review td-196c42") || !strings.Contains(line1, "1m") {
+		t.Fatalf("line 1 = %q, want kind glyph + project + name + age", line1)
 	}
-	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "grok") {
-		t.Fatalf("line 2 = %q, want kind glyph + agent", line2)
+	if strings.Contains(line2, "⑂") || !strings.Contains(line2, "grok") {
+		t.Fatalf("line 2 = %q, want the agent alone", line2)
 	}
 	for _, status := range []string{"working", "live", "idle", "ambiguous panes", "no session"} {
 		if strings.Contains(line1, status) || strings.Contains(line2, status) {
@@ -659,8 +659,9 @@ func TestGlobalRenderRowIsProjectNameAgeThenKindAndAgent(t *testing.T) {
 	shell.Status = "live"
 	shell.Detail = ""
 	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
-	got := ansi.Strip(strings.Join(m.renderRow(shell, false, true, 56, now), "\n"))
-	if !strings.Contains(got, "braid Shell 2") || !strings.Contains(got, "❯") {
+	shellLines := m.renderRow(shell, false, true, 56, now)
+	got := ansi.Strip(strings.Join(shellLines, "\n"))
+	if !strings.Contains(ansi.Strip(shellLines[0]), "❯ braid Shell 2") {
 		t.Fatalf("shell row = %q", got)
 	}
 	if strings.Contains(got, "live") {

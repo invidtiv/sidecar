@@ -62,7 +62,7 @@ func TestKindGlyphMatchesTheAgentsBoardPair(t *testing.T) {
 	}
 }
 
-func TestTwoLineRowPutsProjectNameAgeThenKindAndAgent(t *testing.T) {
+func TestTwoLineRowPutsKindProjectNameAgeThenAgent(t *testing.T) {
 	row := RowPresentation{
 		Marker:     RowMarker{Icon: "●", Lane: "working"},
 		Kind:       KindWorktree,
@@ -87,17 +87,21 @@ func TestTwoLineRowPutsProjectNameAgeThenKindAndAgent(t *testing.T) {
 	if !strings.Contains(line1, "1m") {
 		t.Fatalf("line 1 lost age: %q", line1)
 	}
-	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● ") {
-		t.Fatalf("line 1 lost outdented status marker: %q", line1)
+	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● ⑂ sidecar") {
+		t.Fatalf("line 1 lost the marker + kind gutter before the project: %q", line1)
 	}
-	if !strings.Contains(line2, "⑂") {
-		t.Fatalf("line 2 lost worktree glyph: %q", line2)
+	if strings.Contains(line2, "⑂") {
+		t.Fatalf("kind glyph belongs on line 1, not line 2: %q", line2)
 	}
 	if !strings.Contains(line2, "grok") {
 		t.Fatalf("line 2 lost agent: %q", line2)
 	}
-	if idxGlyph, idxAgent := strings.Index(line2, "⑂"), strings.Index(line2, "grok"); idxGlyph < 0 || idxAgent < idxGlyph {
-		t.Fatalf("kind glyph must precede the agent on line 2: %q", line2)
+	if idxName, idxAge := strings.Index(line1, "review"), strings.Index(line1, "1m"); idxAge < idxName {
+		t.Fatalf("age must be right of the name on line 1: %q", line1)
+	}
+	// Agent detail hangs under the name, clear of the gutter it shares with line 1.
+	if !strings.HasPrefix(line2, "     ") {
+		t.Fatalf("line 2 is not indented under the name: %q", line2)
 	}
 
 	shell := row
@@ -106,16 +110,19 @@ func TestTwoLineRowPutsProjectNameAgeThenKindAndAgent(t *testing.T) {
 	shell.NamePrefix = PlainField("braid ")
 	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
 	shell.AfterProvider = nil
+	shell.Provider = ""
 	got := ansi.Strip(strings.Join(RenderRow(shell, 56, false, true), "\n"))
-	if !strings.Contains(got, "braid Shell 2") {
-		t.Fatalf("shell line 1 lost project+name: %q", got)
+	shellLines := strings.Split(got, "\n")
+	if !strings.Contains(shellLines[0], "❯ braid Shell 2") {
+		t.Fatalf("shell line 1 lost kind glyph + project + name: %q", shellLines[0])
 	}
-	if !strings.Contains(got, "❯") {
-		t.Fatalf("shell line 2 lost kind glyph: %q", got)
+	// Nothing but the kind and identity: an agentless shell owes no second line.
+	if len(shellLines) > 1 && strings.TrimSpace(shellLines[1]) != "" {
+		t.Fatalf("agentless shell drew a second line: %q", shellLines[1])
 	}
 }
 
-func TestPinnedMarkSitsOnLineTwoAndDoesNotStealTheMarker(t *testing.T) {
+func TestPinnedMarkSitsOnLineTwoAndDoesNotStealTheMarker(t *testing.T) { //nolint:dupword
 	row := RowPresentation{
 		Marker: RowMarker{Icon: "●", Lane: "working"},
 		Kind:   KindWorktree,
@@ -127,15 +134,15 @@ func TestPinnedMarkSitsOnLineTwoAndDoesNotStealTheMarker(t *testing.T) {
 		t.Fatalf("lines = %d, want 2", len(lines))
 	}
 	line1, line2 := ansi.Strip(lines[0]), ansi.Strip(lines[1])
-	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● review") {
-		t.Fatalf("pin stole the status marker: %q", line1)
+	if !strings.HasPrefix(strings.TrimRight(line1, " "), " ● ⑂ review") {
+		t.Fatalf("pin stole the marker or kind gutter: %q", line1)
 	}
-	if !strings.Contains(line2, "⑂") || !strings.Contains(line2, "*") {
-		t.Fatalf("line 2 lost kind or pin mark: %q", line2)
+	if !strings.Contains(line2, "*") {
+		t.Fatalf("line 2 lost the pin mark: %q", line2)
 	}
 }
 
-func TestKindGlyphIsTheFirstNarrowSecondary(t *testing.T) {
+func TestKindGlyphStaysInTheGutterWhenNarrow(t *testing.T) {
 	row := RowPresentation{
 		Marker:        RowMarker{Icon: "●", Lane: "working"},
 		Kind:          KindWorktree,
@@ -145,11 +152,8 @@ func TestKindGlyphIsTheFirstNarrowSecondary(t *testing.T) {
 		AfterProvider: []RowField{PlainField("working")},
 	}
 	plain := ansi.Strip(strings.Join(RenderRow(row, 20, false, true), "\n"))
-	if !strings.HasPrefix(plain, " ● ") || !strings.Contains(plain, "feature") {
+	if !strings.HasPrefix(plain, " ● ⑂ ") || !strings.Contains(plain, "feat") {
 		t.Fatalf("narrow row lost gutter+name: %q", plain)
-	}
-	if !strings.Contains(plain, "⑂") {
-		t.Fatalf("narrow row dropped the kind glyph first: %q", plain)
 	}
 	if strings.Contains(plain, "sidecar") {
 		t.Fatalf("narrow row promoted project over name: %q", plain)
