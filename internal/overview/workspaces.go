@@ -376,17 +376,17 @@ func (m *Model) WorkspaceFocusContext() string {
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
 
-// toggleWorkspaceSidebar shows or hides the list. Restoring it moves focus back
-// to the list, which ends interactive mode. Hiding it leaves focus on the
-// preview, so any live pane is resized to the wider box it will be drawn in.
+// toggleWorkspaceSidebar shows or hides the list. It is a layout toggle only:
+// hiding fills the tab with the preview and leaves the keyboard on the list, so
+// j/k still browse, enter still types, and esc still leaves global. Restoring
+// the sidebar also ends interactive mode if a pane was being typed into.
 func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
 	m.sidebarVisible = !m.sidebarVisible
 	if m.sidebarVisible {
 		return m.focusList()
 	}
 	m.preview.full = true
-	cmd := m.focusPreviewPane()
-	return tea.Batch(cmd, m.syncTerminalGeometry(), appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+	return tea.Batch(m.syncTerminalGeometry(), appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
 }
 
 // WorkspacesResize adopts a new tab size ahead of the frame that will use it,

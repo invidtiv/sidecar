@@ -287,18 +287,12 @@ func (m *Model) forwardToTerminal(msg tea.Msg) tea.Cmd {
 // application running in it), while motion selects text instead. Deciding on
 // mouse-down would mean a drag that starts on the terminal could never select.
 //
-// Focus moves in the same press that arms the click, so one click into the
-// terminal both brings the keyboard here and starts typing — the project surface
-// answers a click that way, and a click that only moved focus would leave the
-// second one to be swallowed as a double click's word selection.
+// A press does not take the keyboard. Click-to-type focuses on release via
+// enterPreviewInteractive; a drag-select must not rest in watched-preview.
 func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
-	focus := tea.Cmd(nil)
-	if !m.PreviewFocused() {
-		focus = m.focusPreviewPane()
-	}
 	geometry, ok := m.previewGeometry()
 	if !ok || action.Region == nil {
-		return focus
+		return nil
 	}
 
 	want := tty.ResolveClick(tty.ClickIntent{
@@ -318,7 +312,7 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 		// One terminal is drawn here, so every gesture is in the same source.
 		SameSource: true,
 	})
-	return focus
+	return nil
 }
 
 // dragPreview extends the live selection, scrolling the window when the pointer

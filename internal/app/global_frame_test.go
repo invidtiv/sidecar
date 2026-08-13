@@ -66,8 +66,8 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 	}
 }
 
-// The footer follows the two-state model: the list advertises Type, and leftover
-// preview-only chrome (hidden sidebar) advertises scrolling and the way back.
+// The footer follows the two-state model: the list advertises Type. Hiding the
+// sidebar is layout only, so the table stays the list's.
 func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 	m := globalFrameModel(t)
 	m.width, m.height, m.ready = 160, 40, true
@@ -78,13 +78,13 @@ func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 	}
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 	m = asAppModel(t, updated)
-	preview := footerLabels(m)
-	if !containsHint(preview, "Scroll") || !containsHint(preview, "List") {
-		t.Fatalf("preview footer = %v", preview)
+	hidden := footerLabels(m)
+	if !containsHint(hidden, "Type") || !containsHint(hidden, "Filter") || containsHint(hidden, "Scroll") {
+		t.Fatalf("hidden-sidebar footer = %v, want the list table", hidden)
 	}
 	for _, forbidden := range []string{"Attach", "Interactive", "Delete", "New"} {
-		if containsHint(list, forbidden) || containsHint(preview, forbidden) {
-			t.Fatalf("the read-only browser advertised %q: list=%v preview=%v", forbidden, list, preview)
+		if containsHint(list, forbidden) || containsHint(hidden, forbidden) {
+			t.Fatalf("the read-only browser advertised %q: list=%v hidden=%v", forbidden, list, hidden)
 		}
 	}
 }

@@ -71,7 +71,6 @@ func TestClickingThePreviewStartsTyping(t *testing.T) {
 // is never dropped into a live pane mid-gesture.
 func TestDraggingOverThePreviewSelectsInsteadOfActivating(t *testing.T) {
 	m, _, _ := interactiveModel(t)
-	run(t, m, m.focusPreviewPane())
 	x, y := previewAt(t, m)
 
 	pointerDown(t, m, x, y)
@@ -80,6 +79,9 @@ func TestDraggingOverThePreviewSelectsInsteadOfActivating(t *testing.T) {
 
 	if m.PreviewInteractive() {
 		t.Fatal("a drag activated the pane, so the selection it made is unreachable")
+	}
+	if m.PreviewFocused() {
+		t.Fatal("a drag-select from the list left the keyboard on a watched preview")
 	}
 	if !m.preview.selection.HasSelection() {
 		t.Fatal("dragging across the preview selected nothing")

@@ -212,21 +212,24 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	if hasCaptureFreshness(view) {
 		t.Fatalf("preview header still reports capture freshness:\n%s", view)
 	}
-	// The list is the browse surface. The type hint belongs on leftover
-	// preview-only chrome (hidden sidebar), not on the list-focused split.
+	// The list is the browse surface. Hiding the sidebar does not move the
+	// keyboard onto the preview, so the type hint stays off.
 	if strings.Contains(view, "i to type") {
 		t.Fatalf("the preview still advertises i as a way in:\n%s", view)
 	}
 	if strings.Contains(view, "enter to type") {
-		t.Fatalf("the list-focused preview advertises a type hint that belongs on preview chrome:\n%s", view)
+		t.Fatalf("the list-focused preview advertises a type hint:\n%s", view)
 	}
 	press(t, m, "\\")
-	focused := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(focused, "enter to type") {
-		t.Fatalf("a focused preview does not say how to hand the pane its keyboard:\n%s", focused)
+	hidden := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("hiding the sidebar moved the keyboard: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
 	}
-	if !strings.Contains(focused, "needs input") || hasCaptureFreshness(focused) {
-		t.Fatalf("focusing the preview lost status or reintroduced freshness:\n%s", focused)
+	if strings.Contains(hidden, "enter to type") {
+		t.Fatalf("a hidden-sidebar preview advertises a watched-preview type hint:\n%s", hidden)
+	}
+	if !strings.Contains(hidden, "needs input") || hasCaptureFreshness(hidden) {
+		t.Fatalf("hiding the sidebar lost status or reintroduced freshness:\n%s", hidden)
 	}
 	press(t, m, "\\")
 
@@ -444,15 +447,14 @@ func TestWheelOverThePreviewScrollsTheCaptureNotTheList(t *testing.T) {
 		t.Fatal("the wheel over the preview moved the list")
 	}
 
-	// Clicking the preview focuses it; clicking a row hands focus back.
+	// A press on the preview does not enter watched-preview. Activation is
+	// click-release, and that starts typing rather than leaving a third state.
 	m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	if !m.PreviewFocused() {
-		t.Fatal("clicking the preview did not focus it")
-	}
-	m.WorkspacesView(previewWide, previewTall)
-	m.WorkspacesMouse(tea.MouseClickMsg{X: 2, Y: 4, Button: tea.MouseLeft})
 	if m.PreviewFocused() {
-		t.Fatal("clicking a list row left focus on the preview")
+		t.Fatal("a press on the preview entered watched-preview")
+	}
+	if m.PreviewInteractive() {
+		t.Fatal("a press without release started typing")
 	}
 }
 
@@ -581,82 +583,87 @@ func TestNarrowTabShowsOneFullWidthPaneAtATime(t *testing.T) {
 		}
 	}
 
-	// There is no watched-preview focus. Hiding the sidebar is how the
-	// preview takes the tab without typing.
+	// Hiding the sidebar fills the tab with the preview. The keyboard stays
+	// on the list: esc is not consumed here (it leaves global at the app).
 	handled, cmd := m.WorkspacesKey(key("\\"))
 	if !handled {
 		t.Fatal("backslash was not handled in the narrow layout")
 	}
 	run(t, m, cmd)
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("hiding the sidebar stole the keyboard: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
+	}
 	preview := ansi.Strip(m.WorkspacesView(narrow, tall))
-	if !strings.Contains(preview, "enter to type") || strings.Contains(preview, "delta") {
-		t.Fatalf("hiding the sidebar did not open a full-width preview:\n%s", preview)
+	if layout := m.workspacesLayout(); !layout.previewOnly {
+		t.Fatalf("hiding the sidebar did not open a full-width preview: %#v\n%s", layout, preview)
 	}
 
 	handled, _ = m.WorkspacesKey(key("esc"))
-	if !handled || m.PreviewFocused() {
-		t.Fatal("esc did not return the narrow layout to its list")
+	if handled {
+		t.Fatal("esc after hiding the sidebar was consumed as return-to-list")
 	}
-	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") || strings.Contains(back, "enter to type") {
+	press(t, m, "\\")
+	if !m.WorkspaceSidebarVisible() || m.PreviewFocused() {
+		t.Fatal("backslash did not restore the narrow layout to its list")
+	}
+	if back := ansi.Strip(m.WorkspacesView(narrow, tall)); !strings.Contains(back, "delta") {
 		t.Fatalf("narrow layout did not return to the list:\n%s", back)
 	}
 }
 
-func TestGlobalBackslashHidesAndRestoresSidebarFromListAndPreview(t *testing.T) {
-	for _, startPreview := range []bool{false, true} {
-		name := "list"
-		if startPreview {
-			name = "preview"
-		}
-		t.Run(name, func(t *testing.T) {
-			m, _ := previewModel(t)
-			run(t, m, m.SetWorkspacesVisible(true))
-			m.WorkspacesView(previewWide, previewTall)
-			if startPreview {
-				run(t, m, m.focusPreviewPane())
-			}
-			handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
-			if !handled || cmd == nil || m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces-preview" {
-				t.Fatalf("hide handled=%v cmd=%v visible=%v context=%q", handled, cmd != nil, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
-			}
-			view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-			if strings.Contains(view, "Activity") {
-				t.Fatalf("hidden sidebar still rendered list:\n%s", view)
-			}
-			handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
-			if !handled || !m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces" {
-				t.Fatalf("restore handled=%v visible=%v context=%q", handled, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
-			}
-		})
+func TestGlobalBackslashHidesAndRestoresSidebarWithoutTakingTheKeyboard(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.WorkspacesView(previewWide, previewTall)
+	selected := m.workspaces.SelectedID()
+
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	if !handled || cmd == nil || m.WorkspaceSidebarVisible() {
+		t.Fatalf("hide handled=%v cmd=%v visible=%v", handled, cmd != nil, m.WorkspaceSidebarVisible())
+	}
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("hiding the sidebar entered watched-preview: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if strings.Contains(view, "Activity") {
+		t.Fatalf("hidden sidebar still rendered list:\n%s", view)
+	}
+
+	// j/k still browse the hidden list. They do not scroll a watched preview.
+	press(t, m, "j")
+	if m.workspaces.SelectedID() == selected || m.PreviewFocused() {
+		t.Fatalf("j after hiding the sidebar did not browse: selected=%q focused=%v", m.workspaces.SelectedID(), m.PreviewFocused())
+	}
+
+	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: '\\', Text: "\\"})
+	if !handled || !m.WorkspaceSidebarVisible() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("restore handled=%v visible=%v context=%q", handled, m.WorkspaceSidebarVisible(), m.WorkspaceFocusContext())
 	}
 }
 
-// Every way back to the list restores the sidebar, not just backslash. Focus on
-// a list nothing draws would move an invisible cursor while the preview kept the
-// keys help advertises.
-func TestLeavingTheHiddenSidebarPreviewRedrawsTheList(t *testing.T) {
+// After hiding the sidebar the keyboard is still the list's: esc is not a
+// return-to-list chord (the app uses it to leave global), and h/left do not
+// resurrect watched-preview chrome.
+func TestHiddenSidebarKeepsListKeys(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.WorkspacesView(previewWide, previewTall)
+	press(t, m, "\\")
+	if m.WorkspaceSidebarVisible() || m.PreviewFocused() {
+		t.Fatalf("test premise: visible=%v previewFocused=%v", m.WorkspaceSidebarVisible(), m.PreviewFocused())
+	}
+
 	for _, back := range []string{"esc", "h", "left"} {
-		t.Run(back, func(t *testing.T) {
-			m, _ := previewModel(t)
-			run(t, m, m.SetWorkspacesVisible(true))
-			m.WorkspacesView(previewWide, previewTall)
-			press(t, m, "\\")
-			if m.WorkspaceSidebarVisible() {
-				t.Fatal("test premise: backslash did not hide the sidebar")
-			}
-
-			press(t, m, back)
-
-			if !m.WorkspaceSidebarVisible() || m.PreviewFocused() {
-				t.Fatalf("%q left visible=%v previewFocused=%v", back, m.WorkspaceSidebarVisible(), m.PreviewFocused())
-			}
-			if got := m.WorkspaceFocusContext(); got != "global-workspaces" {
-				t.Fatalf("%q advertises %q while the list has focus", back, got)
-			}
-			if view := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); !strings.Contains(view, "alpha") {
-				t.Fatalf("%q left the focused list undrawn:\n%s", back, view)
-			}
-		})
+		handled, _ := m.WorkspacesKey(key(back))
+		if handled {
+			t.Fatalf("%q was consumed after hiding the sidebar", back)
+		}
+		if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+			t.Fatalf("%q moved the keyboard: focused=%v context=%q", back, m.PreviewFocused(), m.WorkspaceFocusContext())
+		}
+		if m.WorkspaceSidebarVisible() {
+			t.Fatalf("%q restored the sidebar", back)
+		}
 	}
 }
 

@@ -663,6 +663,22 @@ func TestShrinkingTheWindowWhileTypingKeepsThePaneOnScreen(t *testing.T) {
 	}
 }
 
+func TestEnterStillTypesAfterHidingTheSidebar(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	press(t, m, "\\")
+	if m.WorkspaceSidebarVisible() || m.PreviewFocused() {
+		t.Fatal("test premise: backslash hid the sidebar and left the list")
+	}
+
+	press(t, m, "enter")
+	if !m.PreviewInteractive() {
+		t.Fatal("enter after hiding the sidebar did not start typing")
+	}
+	if terminal.target != (tty.Target{Session: "sc-alpha", Pane: "%1"}) {
+		t.Fatalf("the terminal opened %+v, want the selected row", terminal.target)
+	}
+}
+
 func TestEnterOnADeadRowStaysOnTheList(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	m.workspaces.SelectID("d")

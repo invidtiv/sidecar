@@ -633,20 +633,20 @@ func TestGlobalWorkspaceContextFollowsMouseFocusAndSidebarToggle(t *testing.T) {
 		t.Fatalf("initial context = %q", m.activeContext)
 	}
 
-	// A preview click is routed through app.Update, which must refresh context
-	// after Overview changes focus.
+	// A preview press from the list does not enter watched-preview. Context
+	// stays on the list until a completed click starts typing.
 	split := m.overview.WorkspacesView(m.width, 20)
 	_ = split
 	previewX := m.width - 5
 	updated, _ := m.Update(tea.MouseClickMsg{X: previewX, Y: headerHeight + 5, Button: tea.MouseLeft})
 	m = asAppModel(t, updated)
-	if m.activeContext != "global-workspaces-preview" {
-		t.Fatalf("context after preview click = %q", m.activeContext)
+	if m.activeContext != "global-workspaces" {
+		t.Fatalf("context after preview press = %q", m.activeContext)
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 	m = asAppModel(t, updated)
-	if m.overview.WorkspaceSidebarVisible() || m.activeContext != "global-workspaces-preview" {
+	if m.overview.WorkspaceSidebarVisible() || m.activeContext != "global-workspaces" {
 		t.Fatalf("hidden visible=%v context=%q", m.overview.WorkspaceSidebarVisible(), m.activeContext)
 	}
 	updated, _ = m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
@@ -784,11 +784,9 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 	}
 }
 
-// Slice 3: escape belongs to the focused preview before it belongs to sidecar's
-// scope exit. With the preview focused — the only state the narrow layout has
-// once it goes full-width — esc returns focus to the list; only an esc pressed
-// with the list focused leaves the global space.
-func TestEscapeReturnsPreviewFocusToTheListBeforeLeavingTheGlobalSpace(t *testing.T) {
+// Hiding the sidebar is a layout toggle. The keyboard stays on the list, so
+// esc still leaves the global space (or clears a filter first).
+func TestEscapeLeavesGlobalAfterHidingTheWorkspacesSidebar(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	if cmd := m.Init(); cmd != nil {
@@ -800,27 +798,18 @@ func TestEscapeReturnsPreviewFocusToTheListBeforeLeavingTheGlobalSpace(t *testin
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '\\', Text: "\\"})
 	m = asAppModel(t, updated)
-	if !m.overview.PreviewFocused() {
-		t.Fatal("hiding the sidebar did not move focus to the preview")
+	if m.overview.PreviewFocused() || m.overview.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("hiding the sidebar moved the keyboard: focused=%v context=%q",
+			m.overview.PreviewFocused(), m.overview.WorkspaceFocusContext())
 	}
-	if !m.globalSurfaceWantsEsc() {
-		t.Fatal("the focused preview does not claim esc, so scope exit takes it first")
-	}
-
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m = asAppModel(t, updated)
-	if !m.inGlobalScope() || m.globalTab != GlobalWorkspaces {
-		t.Fatalf("esc on a focused preview left the global space: scope=%v tab=%v", m.scope, m.globalTab)
-	}
-	if m.overview.PreviewFocused() {
-		t.Fatal("esc did not return focus to the list")
+	if m.globalSurfaceWantsEsc() {
+		t.Fatal("a hidden sidebar claimed esc, so scope exit cannot leave global")
 	}
 
-	// List focused again: now esc means what it means everywhere else.
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asAppModel(t, updated)
 	if m.inGlobalScope() {
-		t.Fatal("esc with the list focused should return to the project")
+		t.Fatal("esc after hiding the sidebar should return to the project")
 	}
 }
 
