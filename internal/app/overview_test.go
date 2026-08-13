@@ -36,6 +36,7 @@ type navigationPlugin struct {
 	terminalResizes int
 	terminalMsgs    int
 	focusChanges    []bool
+	focusNotices    int
 }
 
 func (p *navigationPlugin) ID() string                 { return p.id }
@@ -48,8 +49,11 @@ func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		p.keyInputs++
 	}
-	if _, ok := msg.(plugin.PluginFocusedMsg); ok && p.focused {
-		p.terminalOpen = true
+	if _, ok := msg.(plugin.PluginFocusedMsg); ok {
+		p.focusNotices++
+		if p.focused {
+			p.terminalOpen = true
+		}
 	}
 	if p.terminalOpen {
 		if _, ok := msg.(tea.WindowSizeMsg); ok {

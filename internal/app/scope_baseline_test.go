@@ -221,6 +221,62 @@ func TestGlobalScopeSuspendsAndRestoresTheCoveredProjectTerminal(t *testing.T) {
 	}
 }
 
+func TestSelectingTheCoveredProjectFromGlobalRestoresItsTerminalOnce(t *testing.T) {
+	m, plugins := scopeBaselineModel(t, "workspaces")
+	project := plugins["workspaces"]
+	project.SetFocused(true)
+	_, _ = project.Update(plugin.PluginFocusedMsg{})
+	beforeNotices := project.focusNotices
+	inits := totalInits(plugins)
+
+	// Use the real entry transition: directly assigning ScopeGlobal would skip
+	// the suspension this regression exists to protect.
+	_ = m.enterOverview()
+	if !m.inGlobalScope() || project.focused || project.terminalOpen {
+		t.Fatalf("entry did not suspend covered project: global=%v focused=%v terminal=%v",
+			m.inGlobalScope(), project.focused, project.terminalOpen)
+	}
+	m.initProjectSwitcher()
+	var current projectSwitcherDestination
+	for _, destination := range m.projectSwitcherFiltered {
+		if destination.Kind == destinationProject && destination.Path == m.ui.WorkDir {
+			current = destination
+			break
+		}
+	}
+	if current.Path == "" {
+		t.Fatal("switcher did not contain the covered project")
+	}
+
+	focusCmd := m.activateProjectSwitcherDestination(current)
+	if m.inGlobalScope() || !project.focused || project.terminalOpen {
+		t.Fatalf("selection did not begin project restoration: global=%v focused=%v terminal=%v",
+			m.inGlobalScope(), project.focused, project.terminalOpen)
+	}
+	if focusCmd == nil {
+		t.Fatal("covered-project selection emitted no focus reconciliation")
+	}
+	msg := focusCmd()
+	if _, ok := msg.(plugin.PluginFocusedMsg); !ok {
+		t.Fatalf("covered-project selection emitted %T, want exactly PluginFocusedMsg", msg)
+	}
+	updated, more := m.Update(msg)
+	m = asAppModel(t, updated)
+	if more != nil {
+		t.Fatalf("focus reconciliation produced extra work: %T", more())
+	}
+	if !project.terminalOpen || project.focusNotices != beforeNotices+1 {
+		t.Fatalf("terminal restoration: open=%v notices=%d want=%d",
+			project.terminalOpen, project.focusNotices, beforeNotices+1)
+	}
+	if m.statusMsg != "Already on this project" {
+		t.Fatalf("same-project notice = %q", m.statusMsg)
+	}
+	if got := totalInits(plugins); got != inits {
+		t.Fatalf("same-project return reinitialized plugins: %d -> %d", inits, got)
+	}
+}
+
 func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	projectTitle, projectTabs, _, _ := m.headerLayout()
@@ -391,8 +447,8 @@ func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 
 func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	m, plugins := scopeBaselineModel(t, "git")
-	m.scope = ScopeGlobal
-	m.updateContext()
+	plugins["git"].SetFocused(true)
+	_ = m.enterOverview()
 	m.initProjectSwitcher()
 	if len(m.projectSwitcherFiltered) != 3 || m.projectSwitcherCursor != 0 {
 		t.Fatalf("switcher from Overview: destinations=%d cursor=%d",
@@ -404,7 +460,7 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	// The pinned Overview destination re-enters the global space and starts a
 	// fresh collection without touching the project underneath.
 	cmd := m.activateProjectSwitcherDestination(destinations[0])
-	if cmd == nil || !m.inGlobalScope() || m.showProjectSwitcher {
+	if !m.inGlobalScope() || m.showProjectSwitcher {
 		t.Fatalf("Overview destination: cmd=%v active=%v modal=%v",
 			cmd != nil, m.inGlobalScope(), m.showProjectSwitcher)
 	}
@@ -427,8 +483,11 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("project destination produced no command")
 	}
-	if _, ok := cmd().(ToastMsg); !ok {
-		t.Fatal("switching to the current project should report it, not re-switch")
+	if _, ok := cmd().(plugin.PluginFocusedMsg); !ok {
+		t.Fatal("switching to the current project should restore focus, not re-switch")
+	}
+	if m.statusMsg != "Already on this project" {
+		t.Fatal("switching to the current project lost its notice")
 	}
 	if m.activePlugin != 2 || m.activeContext != "git" {
 		t.Fatalf("project destination changed the plugin: plugin=%d context=%q", m.activePlugin, m.activeContext)

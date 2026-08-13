@@ -648,6 +648,17 @@ func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDe
 	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
 	}
+	// The switcher can name the project already covered by global scope. That is
+	// a return, not a switch: switchProjectWithSelection deliberately no-ops for
+	// this path, so leaving with restore=false would strand the active plugin
+	// unfocused and its terminal closed. Restore through the ordinary scope exit
+	// and keep the useful notice without adding a second command beside the one
+	// PluginFocused reconciliation the return requires.
+	if m.inGlobalScope() && destination.Kind == destinationProject && destination.Path == m.ui.WorkDir {
+		focus := m.exitOverview()
+		m.ShowToast("Already on this project", 2*time.Second)
+		return focus
+	}
 	m.leaveOverview(false)
 	m.updateContext()
 	return m.switchProject(destination.Path)
