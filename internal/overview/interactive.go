@@ -12,13 +12,11 @@ import (
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
-// Typing into a pane from the global browser is not a second way to talk to
-// tmux. Reading a pane here is still the collector's one Capture; driving one is
-// internal/tty's embeddable terminal — the exact component the project
-// Workspaces plugin drives, with the same exit key, the same double-escape, the
-// same control-mode client and the same key mapping. This file is only the
-// wiring: which selection is eligible, where the terminal is drawn, and how the
-// user gets in and out.
+// Watching and typing into a pane from the global browser use internal/tty's
+// embeddable terminal — the exact component the project Workspaces plugin
+// drives, with the same control-mode producer, exit key, double-escape, geometry,
+// and key mapping. This file is only the wiring: which selection is eligible,
+// where the terminal is drawn, and whether the keyboard belongs to it.
 //
 // Creating a shell from the global space remains out of scope: nothing here
 // starts a session, and a selection with no live pane is refused rather than
@@ -60,7 +58,7 @@ func (m *Model) TerminalConfig() tty.Config {
 	// an attach chord that only exited would be an undocumented third way out and
 	// a keystroke stolen from the pane.
 	config.AttachKey = ""
-	config.ScrollbackLines = previewCaptureLines
+	config.ScrollbackLines = previewScrollbackLines
 	return config
 }
 
@@ -72,16 +70,14 @@ func (m *Model) InteractiveExitKey() string { return m.TerminalConfig().ExitKey 
 // never has to reach a real tmux server.
 type previewTerminal interface {
 	Open(tty.Target) tea.Cmd
+	Close()
 	Update(tea.Msg) tea.Cmd
 	SetDimensions(width, height int) tea.Cmd
 	SendUnknownSequence(tea.Msg) tea.Cmd
 	IsActive() bool
 
-	// ReleaseInput is every way out this surface takes on its own initiative.
-	// Exit closes the terminal without ending input ownership, which leaves a
-	// half-read SGR mouse report held for the next session to receive the tail
-	// of; releasing drops the fragment and closes the double-escape window, and
-	// closes the terminal too under this surface's ExitAction.
+	// ReleaseInput drops keyboard-specific state without closing the watched
+	// producer. Close releases the selected target and its control subscription.
 	ReleaseInput()
 	Exit()
 
@@ -113,6 +109,59 @@ var newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTermina
 	return model
 }
 
+// syncPreviewTerminal reconciles the one resource-bearing preview with the one
+// pane actually visible on the Output surface. The catalog remains metadata:
+// list collection never opens a model for any other row.
+func (m *Model) syncPreviewTerminal() tea.Cmd {
+	if !m.preview.visible || (m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput) {
+		m.closePreviewTerminal()
+		return nil
+	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.ID != m.preview.workspaceID {
+		m.closePreviewTerminal()
+		return nil
+	}
+	if reason, unavailable := previewUnavailable(workspace); unavailable {
+		m.preview.reason = reason
+		m.closePreviewTerminal()
+		return nil
+	}
+
+	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
+	if m.preview.terminal == nil {
+		m.preview.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooks())
+	}
+	if m.previewTerminalActive() && m.preview.terminalTarget == desired {
+		m.preview.buffer = m.preview.terminal.Buffer()
+		return m.syncTerminalGeometry()
+	}
+
+	m.closePreviewTerminal()
+	m.preview.reason = ""
+	m.preview.terminalTarget = desired
+	var cmds []tea.Cmd
+	if width, height, ok := m.previewTerminalSize(); ok {
+		cmds = append(cmds, m.preview.terminal.SetDimensions(width, height))
+	}
+	cmds = append(cmds, m.preview.terminal.Open(desired))
+	m.preview.buffer = m.preview.terminal.Buffer()
+	m.tracef("preview terminal open workspace=%s pane=%s", workspace.ID, workspace.PaneID)
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) closePreviewTerminal() {
+	if m.preview.interactive && m.preview.terminal != nil {
+		m.preview.terminal.ReleaseInput()
+	}
+	if m.preview.terminal != nil && m.preview.terminal.IsActive() {
+		m.preview.terminal.Close()
+	}
+	m.preview.interactive = false
+	m.preview.terminalTarget = tty.Target{}
+	m.preview.buffer = nil
+}
+
 // previewTerminalHooks is everything this surface owns about a live pane, said
 // once, to the component that owns the rest. Answering any of it outside the
 // component instead — a chord read before the key is forwarded, a mode ending
@@ -131,13 +180,14 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 			// A pane that died under a keystroke or a forwarded click ends the mode
 			// inside the component. The project surface raises the same toast, and a
 			// mode that ends by itself with no notice reads as a dropped keystroke.
+			m.preview.terminalTarget = tty.Target{}
+			m.preview.reason = "The session for this workspace has ended"
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList(),
 				appmsg.ShowToast("Session ended", 3*time.Second))
 		},
-		// The terminal is closed with the mode: the browser holds a reference to
-		// the buffer it filled (see enterPreviewInteractive), so the rows the user
-		// was reading survive the close and the next capture lands in them.
-		ExitAction: tty.ExitClosesTerminal,
+		// Watching continues after keyboard ownership ends, exactly as in the
+		// project Workspaces preview.
+		ExitAction: tty.ExitReleasesInput,
 	}
 }
 
@@ -160,19 +210,23 @@ func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
 	}
 }
 
-// releasePreviewKeyboard is the component's OnExit hook: give the keyboard back
-// and resume the read-only capture cadence for whatever is selected now. What is
-// on screen stays there until the replacement capture lands, so leaving the mode
-// is not a moment of blank pane and a lost scroll position.
+// releasePreviewKeyboard gives the keyboard back while the same tty.Model keeps
+// producing the watched pane.
 func (m *Model) releasePreviewKeyboard() tea.Cmd {
 	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
-	return m.bindPreview(true)
+	m.preview.interactive = false
+	m.clearPreviewSelection()
+	return nil
 }
 
 // PreviewInteractive reports that the focused preview is forwarding keys to a
 // live pane. The app asks so the keymap context, the footer hints, the mouse
 // mode and the native cursor all follow the same fact.
 func (m *Model) PreviewInteractive() bool {
+	return m.preview.interactive && m.previewTerminalActive()
+}
+
+func (m *Model) previewTerminalActive() bool {
 	return m.preview.terminal != nil && m.preview.terminal.IsActive()
 }
 
@@ -207,11 +261,13 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		m.preview.reason = reason
 		return appmsg.ShowToast(reason, 3*time.Second)
 	}
-	if m.preview.terminal == nil {
-		m.preview.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooks())
+	open := m.syncPreviewTerminal()
+	if !m.previewTerminalActive() {
+		return open
 	}
 
 	m.preview.focus = focusPreview
+	m.preview.interactive = true
 	if m.previewNarrow() {
 		m.preview.full = true
 	}
@@ -219,25 +275,8 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	// The selection names lines of the capture buffer the live one is about to
 	// replace, so it cannot survive the handover.
 	m.clearPreviewSelection()
-	// The capture poll and the terminal are two readers of one pane, and only
-	// one of them may be running. Bumping the generation drops whatever capture
-	// is in flight; previewInterval stops arming new ones while the terminal is
-	// live.
-	m.preview.generation++
-	m.preview.scheduled = false
-
 	var cmds []tea.Cmd
-	if width, height, ok := m.previewTerminalSize(); ok {
-		cmds = append(cmds, m.preview.terminal.SetDimensions(width, height))
-	}
-	cmds = append(cmds, m.preview.terminal.Open(tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}))
-	// The live buffer becomes the preview's own for the length of this
-	// activation. The component drops its state the moment the mode ends, and
-	// the capture poll is suspended while it is live, so without this reference
-	// leaving the mode falls back to the capture taken before entry — the pane
-	// jumps backwards in time to whatever it showed before the user typed. Held
-	// here, the rows the user was just reading stay on screen until the
-	// replacement capture lands in them.
+	cmds = append(cmds, open)
 	if buffer := m.preview.terminal.Buffer(); buffer != nil {
 		m.preview.buffer = buffer
 	}
@@ -510,12 +549,9 @@ func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 // notePreviewScrollbackLimit says out loud that this surface does not read
 // further back.
 //
-// The browser deliberately does not extend its capture window at the top: it
-// holds one bounded capture per selected pane so that watching a whole machine's
-// workspaces stays cheap, and lazily loading history here would make every
-// scrolled-back preview a second reader of a pane the owning project already
-// reads in full. Rather than let the window dead-end silently, say where the
-// full buffer is.
+// The browser deliberately does not extend its model window at the top. It owns
+// only the selected visible pane; rather than let the bounded history dead-end
+// silently, say where the full project buffer is.
 func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 	if m.preview.scrollbackLimitShown {
 		return nil
@@ -523,7 +559,7 @@ func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 	m.preview.scrollbackLimitShown = true
 	return appmsg.ShowToast(fmt.Sprintf(
 		"Showing the last %d lines — open the workspace in its project for the full buffer",
-		previewCaptureLines), 3*time.Second)
+		previewScrollbackLines), 3*time.Second)
 }
 
 // WorkspacesTerminalMsg offers the browser's terminal one of the terminal
@@ -531,10 +567,10 @@ func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 // them to this surface and to the plugins alike and each activation keeps only
 // its own.
 func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
-	if !m.PreviewInteractive() || !tty.IsTerminalMessage(msg) {
+	if !m.previewTerminalActive() || !tty.IsTerminalMessage(msg) {
 		return nil
 	}
-	return m.forwardToTerminal(msg)
+	return m.preview.terminal.Update(msg)
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
@@ -613,7 +649,7 @@ func (m *Model) previewSurface() (termpreview.Surface, bool) {
 // new size: an idle pane under control mode emits nothing to ride along with.
 // SetDimensions is a no-op when nothing moved.
 func (m *Model) syncTerminalGeometry() tea.Cmd {
-	if !m.PreviewInteractive() {
+	if !m.previewTerminalActive() {
 		return nil
 	}
 	width, height, ok := m.previewTerminalSize()

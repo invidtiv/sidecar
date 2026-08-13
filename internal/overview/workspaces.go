@@ -603,8 +603,8 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		return cmd
 	}
 	// Last, so a region that hands the keyboard back itself — the sidebar,
-	// sort header, chrome — rebinds the capture cadence to the selection this
-	// same event moved rather than to the one it is leaving.
+	// sort header, chrome — reconciles the producer to the selection this same
+	// event moved rather than to the one it is leaving.
 	return tea.Batch(cmd, m.focusList())
 }
 
@@ -634,7 +634,7 @@ func regionKind(region *mouse.Region) (string, bool) {
 // workspacesRegionMouse routes a mouse event to the region it landed on, after
 // the gesture-level decisions above have been made.
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
-	// The preview owns its own wheel: scrolling over captured output moves that
+	// The preview owns its own wheel: scrolling over terminal output moves that
 	// output, not the list underneath it.
 	if _, ok := action.Region.Data.(previewGitHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
@@ -707,7 +707,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		switch region.Kind {
 		case workspacelist.RegionRow:
 			// The selection moves before focus does: giving the keyboard back
-			// rebinds the capture cadence, and it has to bind to the row the
+			// rebinds the terminal producer, and it has to bind to the row the
 			// click landed on rather than to the one it is leaving.
 			wasTyping := m.PreviewInteractive()
 			m.workspaces.SelectID(region.ID)

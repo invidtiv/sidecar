@@ -8,11 +8,9 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 )
 
-// Leaving the pane must not blank it. The replacement capture is a round trip
-// away, and a browser that dropped what it had shows "no output captured" over a
-// pane that plainly has output — and forgets where the reader had scrolled to.
-// The project surface keeps its loaded scrollback across the same handover.
-func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T) {
+// Leaving the pane must not blank it: keyboard ownership changes while the
+// same producer and loaded scrollback remain in place.
+func TestLeavingInteractiveKeepsTheOutputProducer(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	run(t, m, m.previewSelect())
 	if m.previewBuffer() == nil {
@@ -28,11 +26,7 @@ func TestLeavingInteractiveKeepsTheOutputUntilTheReplacementArrives(t *testing.T
 	live := m.previewBuffer().Lines()
 	m.jumpPreviewWindow(2)
 
-	// The capture the exit starts is deliberately left in flight: what the
-	// browser draws in the meantime is the whole question.
-	if cmd := terminal.hooks.OnExit(); cmd == nil {
-		t.Fatal("leaving the mode started no replacement capture")
-	}
+	terminal.hooks.OnExit()
 
 	if m.PreviewInteractive() {
 		t.Fatal("the mode did not end")
@@ -64,10 +58,10 @@ func TestBindingADifferentItemStillReplacesTheContent(t *testing.T) {
 	if got, _ := m.SelectedWorkspace(); got.ID != "b" {
 		t.Fatalf("the selection is %q, want the other item", got.ID)
 	}
-	m.bindPreview(true)
+	run(t, m, m.bindPreview(true))
 
-	if m.previewBuffer() != nil {
-		t.Fatal("the preview kept another pane's output when the selection moved")
+	if m.previewBuffer() == nil || strings.Contains(m.previewBuffer().String(), "live pane body") {
+		t.Fatal("the preview did not replace another pane's producer when the selection moved")
 	}
 }
 
@@ -133,8 +127,8 @@ func TestLeavingInteractiveKeepsShowingWhatWasOnScreen(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	run(t, m, m.previewSelect())
 	before := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(before, "pane %1 output") {
-		t.Fatalf("the watched preview never drew its capture:\n%s", before)
+	if !strings.Contains(before, "live pane body") {
+		t.Fatalf("the watched preview never drew its producer:\n%s", before)
 	}
 
 	press(t, m, "enter")
@@ -144,11 +138,7 @@ func TestLeavingInteractiveKeepsShowingWhatWasOnScreen(t *testing.T) {
 		t.Fatalf("the live pane never drew what was typed into it:\n%s", live)
 	}
 
-	// The replacement capture is deliberately left in flight: what the browser
-	// draws in the meantime is the whole question.
-	if cmd := terminal.hooks.OnExit(); cmd == nil {
-		t.Fatal("leaving the mode started no replacement capture")
-	}
+	terminal.hooks.OnExit()
 	if m.PreviewInteractive() {
 		t.Fatal("the mode did not end")
 	}
@@ -157,7 +147,7 @@ func TestLeavingInteractiveKeepsShowingWhatWasOnScreen(t *testing.T) {
 	if !strings.Contains(after, "TYPED IN LIVE PANE") || !strings.Contains(after, "second live line") {
 		t.Fatalf("leaving the pane dropped what the user was looking at:\n%s", after)
 	}
-	if strings.Contains(after, "pane %1 output") {
-		t.Fatalf("leaving the pane redrew the capture taken before entry:\n%s", after)
+	if strings.Contains(after, "live pane body") {
+		t.Fatalf("leaving the pane redrew an older frame:\n%s", after)
 	}
 }

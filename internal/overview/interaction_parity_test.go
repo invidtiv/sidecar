@@ -48,7 +48,7 @@ func TestAWheelOverTheListStaysWithTheLivePane(t *testing.T) {
 // once the pane has any scrollback.
 func TestAHighlightIsDrawnOnTheRowItCoversInAPaneWithHistory(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
-	terminal.buffer = tty.NewOutputBuffer(previewCaptureLines)
+	terminal.buffer = tty.NewOutputBuffer(previewScrollbackLines)
 	terminal.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
 		Output:     paneBody(40),
 		BaseLine:   500,
@@ -124,7 +124,7 @@ func TestPressingAwayFromThePreviewEndsTheGestureAndTheMode(t *testing.T) {
 // coordinates: it names the same rows wherever the window goes.
 func TestScrollingKeepsAnAbsoluteSelection(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
-	terminal.buffer = tty.NewOutputBuffer(previewCaptureLines)
+	terminal.buffer = tty.NewOutputBuffer(previewScrollbackLines)
 	terminal.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
 		Output:     paneBody(60),
 		BaseLine:   500,
@@ -200,7 +200,7 @@ func TestACarriedBackgroundReachesEveryRowItCovers(t *testing.T) {
 	for range 9 {
 		rows = append(rows, "beta")
 	}
-	terminal.buffer = tty.NewOutputBuffer(previewCaptureLines)
+	terminal.buffer = tty.NewOutputBuffer(previewScrollbackLines)
 	terminal.buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n")})
 	enterInteractive(t, m)
 

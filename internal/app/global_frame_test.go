@@ -232,8 +232,8 @@ func TestFirstFrameIsTheProjectAndCostsTheGlobalSpaceNothing(t *testing.T) {
 	if lipgloss.Height(view) != m.height {
 		t.Fatalf("first frame height = %d, want %d", lipgloss.Height(view), m.height)
 	}
-	if m.overview.PreviewMetrics().Captures != 0 || m.overview.WorkspacesPreviewVisible() {
-		t.Fatalf("startup started preview work: %#v visible=%v", m.overview.PreviewMetrics(), m.overview.WorkspacesPreviewVisible())
+	if m.overview.WorkspacesPreviewActive() || m.overview.WorkspacesPreviewVisible() {
+		t.Fatalf("startup started preview work: active=%v visible=%v", m.overview.WorkspacesPreviewActive(), m.overview.WorkspacesPreviewVisible())
 	}
 }
 

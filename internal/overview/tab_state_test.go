@@ -47,8 +47,8 @@ func TestEachGlobalTabKeepsItsViewStateAcrossSpaceToggles(t *testing.T) {
 	// back starts a new one. Neither may reset what the user set up.
 	for range 2 {
 		m.Stop()
-		if m.PreviewMetrics().Captures == 0 {
-			t.Fatal("the fixture never captured anything")
+		if m.previewTerminalActive() {
+			t.Fatal("stopping the global space retained the watched terminal")
 		}
 		m.Ensure(m.projects) // the command is the app's to run; the state is what matters here
 		m.SetWorkspacesVisible(true)

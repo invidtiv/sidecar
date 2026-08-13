@@ -29,7 +29,7 @@ func TestTheBrowsersTerminalIsBuiltWithTheHostContract(t *testing.T) {
 			t.Errorf("%s is unwired, so this surface answers it outside the component", name)
 		}
 	}
-	if model.ExitAction != tty.ExitClosesTerminal {
+	if model.ExitAction != tty.ExitReleasesInput {
 		t.Errorf("ExitAction = %v, want the browser's stated choice", model.ExitAction)
 	}
 }
@@ -145,13 +145,8 @@ func TestNoCursorIsDrawnOverScrolledBackHistory(t *testing.T) {
 // renumbered by every capture, so a window still placed against the live bottom
 // follows the new rows while the anchor keeps naming the old ones.
 func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
-	m, _, _ := interactiveModel(t)
-	run(t, m, m.applyPreview(previewMsg{
-		Generation:  m.preview.generation,
-		WorkspaceID: m.preview.workspaceID,
-		PaneID:      "%1",
-		Output:      paneBody(60),
-	}))
+	m, _, terminal := interactiveModel(t)
+	terminal.buffer.ApplySnapshot(tty.PaneSnapshot{Output: paneBody(60)})
 	x, y := previewAt(t, m)
 
 	pointerDown(t, m, x, y+2)
@@ -163,13 +158,8 @@ func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
 		t.Fatal("test premise: the drag anchored on no buffer row")
 	}
 
-	// A poll lands mid-drag at the focused cadence and renumbers the buffer.
-	run(t, m, m.applyPreview(previewMsg{
-		Generation:  m.preview.generation,
-		WorkspaceID: m.preview.workspaceID,
-		PaneID:      "%1",
-		Output:      paneBody(60) + "\n" + strings.Join([]string{"fresh 0", "fresh 1", "fresh 2"}, "\n"),
-	}))
+	// A control-mode frame lands mid-drag and renumbers the buffer.
+	terminal.buffer.ApplySnapshot(tty.PaneSnapshot{Output: paneBody(60) + "\n" + strings.Join([]string{"fresh 0", "fresh 1", "fresh 2"}, "\n")})
 	m.WorkspacesView(previewWide, previewTall)
 
 	after, ok := tty.LineTextAt(m.previewBuffer(), anchor.Line)

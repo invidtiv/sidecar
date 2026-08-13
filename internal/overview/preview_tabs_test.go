@@ -225,7 +225,7 @@ func TestChipClickDoesNotType(t *testing.T) {
 	if m.previewTab != workspacediff.TabDiff {
 		t.Fatalf("chip click tab = %v, want Diff", m.previewTab)
 	}
-	if m.PreviewInteractive() || terminal.opens != 0 {
+	if m.PreviewInteractive() || terminal.opens != 1 || terminal.IsActive() {
 		t.Fatal("clicking the Diff chip started typing")
 	}
 	if m.WorkspaceFocusContext() != "global-workspaces" {

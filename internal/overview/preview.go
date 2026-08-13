@@ -18,35 +18,20 @@ import (
 // terminal-adjacent docview when the user clicks a file link. It is not a
 // workspace plugin instance and does not open the issue-preview modal.
 //
-// The box has two states, and they differ only in where the output comes from.
-// Watching is deliberately cheap: exactly one capture in flight at a time — for
-// the selected pane and nothing else — started by a selection change and
-// repeated only while the tab is visible. No control-mode client, no watcher,
-// and none of them per project. A capture that arrives for a superseded
-// generation or a pane the cursor has already left is dropped. Typing
-// (internal/overview/interactive.go) hands the same pane to internal/tty's
-// embedded terminal, which owns the live feed for as long as the user is in it;
-// the capture cadence stands down meanwhile so one pane never has two readers.
+// The selected visible pane is always produced by the same tty.Model component
+// the project Workspaces plugin uses. Watching and typing are therefore two
+// input-ownership states over one control-mode emulator, not two presentation
+// pipelines. Inventory remains cheap and read-only: no terminal is opened for
+// list rows, hidden tabs, or unselected panes.
 //
-// Both states put their output in the same kind of buffer and draw it through
-// the same window, which is why selection, the wheel and copy behave identically
-// in each. Nothing captured is persisted: the buffer lives in memory for as long
-// as the tab is on screen and is released when it is not, so a pane's contents
-// never reach config, state, or diagnostics.
+// Nothing is persisted: the model and its bounded buffer live only while the
+// selected Output preview is visible. Leaving the tab or selecting a row with no
+// live pane closes the control subscription and releases the buffer.
 
 const (
-	// previewCaptureLines is the scrollback each capture asks tmux for. It is
-	// bounded on purpose: the preview is for recognising a workspace, not for
-	// reading its history, and the owning project's Workspaces plugin is one
-	// Enter away when the full buffer is what the user wants.
-	previewCaptureLines = 200
-
-	// previewFocusedPoll / previewVisiblePoll are the adaptive cadences. A
-	// focused preview is what the user is reading, so it refreshes fastest; a
-	// visible-but-unfocused one tracks the board's own live cadence. Anything
-	// hidden, or with no live pane behind it, does not poll at all.
-	previewFocusedPoll = 2 * time.Second
-	previewVisiblePoll = livePollEvery
+	// Match the project Workspaces terminal's initial bounded live/history
+	// window. tty.Model owns the seed, alt-screen split, and subsequent frames.
+	previewScrollbackLines = tty.DefaultScrollbackLines
 
 	// The default share and the floors below it match the project plugin's outer
 	// split: neither pane may be squeezed into an unreadable column.
@@ -66,32 +51,8 @@ const (
 	focusPreview
 )
 
-// previewMsg is one completed capture, tagged with everything needed to reject
-// it: the generation it was started under and the exact workspace and pane it
-// was started for.
-type previewMsg struct {
-	Generation  int
-	WorkspaceID string
-	PaneID      string
-	Output      string
-	// Pane is the geometry tmux reported for the pane at the instant of the
-	// capture. Without it the rows say nothing about where the live grid starts,
-	// which is what a full-screen application needs for its background fill and
-	// its intentional blank rows to survive the window rules.
-	Pane tty.PaneState
-	Err  error
-	At   time.Time
-}
-
-// previewPollMsg is the adaptive refresh tick for an unchanged live pane.
-type previewPollMsg struct {
-	Generation  int
-	WorkspaceID string
-}
-
 // previewState is the whole of the global preview: which item it is showing,
-// what was captured, how far back the reader has scrolled, and whether anyone
-// is looking at it.
+// how far back the reader has scrolled, and whether anyone is looking at it.
 type previewState struct {
 	visible bool
 	focus   previewFocus
@@ -100,25 +61,19 @@ type previewState struct {
 	// than sharing it.
 	full bool
 
-	// generation supersedes in-flight captures. Every selection change, refresh,
-	// and visibility change bumps it, so a slow capture cannot paint over a pane
-	// the user has already moved off.
+	// generation scopes asynchronous document loads to the selected row.
 	generation  int
 	workspaceID string
-	capture     previewCapture
 	reason      string
 	// offset is rows scrolled back from the live bottom. Zero follows output.
 	offset int
 	// freeze holds the window still for the duration of a pointer gesture. The
 	// rule, and the offset the window resumes following from, are the shared
 	// layer's — the project surface freezes its own panes by the same one.
-	freeze      tty.WindowFreeze
-	scheduled   bool
-	requestedAt time.Time
+	freeze tty.WindowFreeze
 
-	// buffer is the captured output while the pane is being watched. It is the
-	// same kind of buffer the live terminal keeps, so selection, the wheel and
-	// copy work identically in both states rather than only while typing.
+	// buffer aliases terminal.Buffer while that model owns the visible target.
+	// Keeping the alias makes the viewport independent of input ownership.
 	buffer *tty.OutputBuffer
 
 	// selection, pointer and wheel are the shared interaction layer's state: what
@@ -132,50 +87,26 @@ type previewState struct {
 	// rest of this pane's history is.
 	scrollbackLimitShown bool
 
-	// terminal is the embedded terminal the preview hands the keyboard to. It is
-	// built on first use and reused afterwards, so a browser nobody has typed in
-	// still costs nothing.
+	// terminal is the single producer for the selected visible pane. interactive
+	// says whether keys are also routed to it; terminalTarget scopes its lifetime.
 	terminal             previewTerminal
+	terminalTarget       tty.Target
+	interactive          bool
 	interactiveHintShown bool
 
 	// doc is the optional file preview beside the terminal. Issue ids are not
 	// activated here.
 	doc *previewDoc
-
-	metrics PreviewMetrics
 }
-
-// previewCapture is the identity of the last capture the box accepted. The
-// contents live in the buffer beside it; this is what late captures are rejected
-// against and what the header hints are phrased from.
-type previewCapture struct {
-	PaneID     string
-	CapturedAt time.Time
-	Err        error
-	// Pane is the geometry observed with the accepted capture. It clears with
-	// the capture it describes, so a stale height can never outlive the rows it
-	// was read beside.
-	Pane tty.PaneState
-}
-
-// PreviewMetrics is what the cadence was tuned against: how many captures the
-// preview actually ran, how many late ones it threw away, and how long the
-// newest selection waited for its first frame. It is read by tests and by the
-// trace log; it is not persisted.
-type PreviewMetrics struct {
-	Captures    int
-	Rejected    int
-	Polls       int
-	LastLatency time.Duration
-}
-
-// PreviewMetrics returns a copy of the preview's work counters.
-func (m *Model) PreviewMetrics() PreviewMetrics { return m.preview.metrics }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
 // looking at it. It exists so the app can prove that scope and tab changes
-// actually reach the thing that decides whether to capture a pane.
+// actually reach terminal reconciliation.
 func (m *Model) WorkspacesPreviewVisible() bool { return m.preview.visible }
+
+// WorkspacesPreviewActive reports whether the visible-selection terminal owns a
+// live target. It is diagnostic state for lifecycle tests, not another surface.
+func (m *Model) WorkspacesPreviewActive() bool { return m.previewTerminalActive() }
 
 func (m *Model) now() time.Time {
 	if m.collector.Now != nil {
@@ -184,10 +115,9 @@ func (m *Model) now() time.Time {
 	return time.Now()
 }
 
-// SetWorkspacesVisible tells the preview whether anyone is looking at it. It is
-// the switch behind "polls only while the global Workspaces tab is visible":
-// becoming visible captures the selected pane immediately, and becoming hidden
-// cancels the in-flight capture, stops the poll, and drops the captured output.
+// SetWorkspacesVisible tells the preview whether anyone is looking at it.
+// Becoming visible opens one model for the selected Output pane; becoming
+// hidden closes that model and its control subscription.
 func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 	if m.preview.visible == visible {
 		return nil
@@ -207,25 +137,18 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 	return m.previewSelect()
 }
 
-// releasePreview cancels whatever the preview was doing and forgets what it
-// captured. Captured terminal contents are memory-only, and a tab nobody is
-// looking at has no reason to keep holding them — including the live terminal's
-// buffer and its control-mode subscription.
+// releasePreview closes the selected terminal and forgets its memory-only state.
 func (m *Model) releasePreview() {
-	if m.preview.terminal != nil {
-		m.preview.terminal.ReleaseInput()
-	}
+	m.closePreviewTerminal()
 	m.preview.generation++
 	m.preview.workspaceID = ""
 	m.resetPreviewContent()
 	m.preview.reason = ""
-	m.preview.scheduled = false
 }
 
 // resetPreviewContent drops the captured output and everything anchored to it.
 // A selection names buffer lines, so it cannot outlive the buffer it named.
 func (m *Model) resetPreviewContent() {
-	m.preview.capture = previewCapture{}
 	m.preview.buffer = nil
 	m.preview.offset = 0
 	m.preview.freeze = tty.WindowFreeze{}
@@ -235,10 +158,8 @@ func (m *Model) resetPreviewContent() {
 	m.preview.doc = nil
 }
 
-// previewSync starts a capture when the selection has moved to a different
-// item. It is called after every interaction and after every inventory
-// increment, so the preview follows the cursor without the list needing to know
-// that a preview exists.
+// previewSync reconciles the one visible terminal when selection or tab state
+// changes. Inventory rows themselves never allocate terminal resources.
 func (m *Model) previewSync() tea.Cmd {
 	if !m.preview.visible {
 		return nil
@@ -251,40 +172,26 @@ func (m *Model) previewSync() tea.Cmd {
 		return nil
 	}
 	if selected.ID == m.preview.workspaceID {
-		return m.ensurePreviewExtras()
+		return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
 	}
 	return m.previewSelect()
 }
 
-// previewSelect binds the preview to the current selection and captures it
-// straight away. Every caller is a path the user can feel — a selection change,
-// the tab becoming visible, an explicit refresh — so none of them waits out a
-// poll interval before showing anything.
+// previewSelect binds the preview to the current selection straight away.
 func (m *Model) previewSelect() tea.Cmd { return m.bindPreview(false) }
 
-// bindPreview binds the preview to the current selection and captures it.
-//
-// keepContent asks for what is already drawn to stay on screen until the
-// replacement capture arrives, and is honoured only while the selection is still
-// the item that content came from. Dropping the buffer first leaves a pane that
-// plainly has output reading "no output captured" for a round trip and forgets
-// where the window was scrolled to — the project surface keeps its loaded
-// scrollback across the same handover.
+// bindPreview binds the preview to the current selection. keepContent preserves
+// the current window when keyboard ownership changes without changing target.
 func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	workspace, selected := m.SelectedWorkspace()
 	keep := keepContent && selected && workspace.ID == m.preview.workspaceID
 
-	// Binding the preview to a selection ends any live terminal: it is attached
-	// to the pane the user was typing in, and it must not keep the keyboard —
-	// or its control-mode subscription — while the browser shows another item.
-	if m.preview.terminal != nil {
+	if m.preview.terminal != nil && m.preview.interactive {
 		m.preview.terminal.ReleaseInput()
 	}
+	m.preview.interactive = false
 	m.preview.generation++
-	m.preview.scheduled = false
 	if keep {
-		// The selection was made over the terminal's own buffer, which the
-		// handover replaces, so it cannot survive it even though the rows do.
 		m.clearPreviewSelection()
 	} else {
 		m.resetPreviewContent()
@@ -293,21 +200,21 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 
 	if !selected {
 		m.preview.workspaceID = ""
+		m.closePreviewTerminal()
 		return nil
 	}
 	m.preview.workspaceID = workspace.ID
 	extras := m.ensurePreviewExtras()
 
-	// An item with no single live pane behind it is not captured at all. There
-	// is nothing to read, and guessing among several panes is exactly what the
-	// catalog refuses to do — and there is no replacement coming for kept
-	// content to wait for.
+	// An item with no single live pane behind it opens no model. There is nothing
+	// to read, and guessing among several panes is exactly what the catalog refuses.
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
+		m.closePreviewTerminal()
 		m.resetPreviewContent()
 		return extras
 	}
-	return tea.Batch(extras, m.capturePreviewCmd(workspace))
+	return tea.Batch(extras, m.syncPreviewTerminal())
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live
@@ -322,111 +229,6 @@ func previewUnavailable(workspace workspaceinventory.Workspace) (string, bool) {
 		return "The session for this workspace has ended", true
 	}
 	return "", false
-}
-
-// capturePreviewCmd captures exactly one pane: the selected one. The capture
-// function is the collector's, so a test injects it in one place and the
-// browser never opens a second way to talk to tmux.
-func (m *Model) capturePreviewCmd(workspace workspaceinventory.Workspace) tea.Cmd {
-	capture := m.collector.Capture
-	if capture == nil {
-		return nil
-	}
-	generation, id, pane := m.preview.generation, workspace.ID, workspace.PaneID
-	m.preview.requestedAt = m.now()
-	m.preview.metrics.Captures++
-	m.tracef("preview generation=%d capture workspace=%s pane=%s", generation, id, pane)
-	return func() tea.Msg {
-		output, state, err := capture(pane, previewCaptureLines)
-		return previewMsg{Generation: generation, WorkspaceID: id, PaneID: pane, Output: output, Pane: state, Err: err, At: time.Now()}
-	}
-}
-
-// applyPreview accepts a capture if it is still the one the surface asked for.
-func (m *Model) applyPreview(msg previewMsg) tea.Cmd {
-	if msg.Generation != m.preview.generation || msg.WorkspaceID != m.preview.workspaceID {
-		m.preview.metrics.Rejected++
-		m.tracef("preview generation=%d drained stale_generation=%d workspace=%s", m.preview.generation, msg.Generation, msg.WorkspaceID)
-		return nil
-	}
-	m.preview.metrics.LastLatency = m.now().Sub(m.preview.requestedAt)
-	if msg.Err != nil {
-		m.preview.capture = previewCapture{PaneID: msg.PaneID, Err: msg.Err, CapturedAt: msg.At}
-		m.preview.reason = "Could not read this pane: " + msg.Err.Error()
-		return m.schedulePreviewPoll()
-	}
-	m.preview.reason = ""
-	m.preview.capture = previewCapture{PaneID: msg.PaneID, CapturedAt: msg.At, Pane: msg.Pane}
-	if m.preview.buffer == nil {
-		m.preview.buffer = tty.NewOutputBuffer(previewCaptureLines)
-	}
-	// The same call the live terminal makes with its own captures, so a watched
-	// pane and a driven one are one kind of content behind one kind of window.
-	// Stating the split is what tells the window that the capture's tail is a
-	// live grid rather than history (td-c3644b).
-	m.preview.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
-		Output:     msg.Output,
-		PaneHeight: msg.Pane.PaneHeight,
-	}))
-	return m.schedulePreviewPoll()
-}
-
-// schedulePreviewPoll arms the next refresh, or nothing at all. This is the
-// whole of the adaptive cadence: hidden previews and previews with no live pane
-// behind them schedule no work, and a visible one refreshes faster while it has
-// focus than while it is merely on screen.
-func (m *Model) schedulePreviewPoll() tea.Cmd {
-	interval := m.previewInterval()
-	if interval == 0 || m.preview.scheduled {
-		return nil
-	}
-	generation, id := m.preview.generation, m.preview.workspaceID
-	m.preview.scheduled = true
-	return tea.Tick(interval, func(time.Time) tea.Msg {
-		return previewPollMsg{Generation: generation, WorkspaceID: id}
-	})
-}
-
-// previewInterval is the cadence the preview is currently owed, and zero for
-// "do no work at all": hidden, nothing selected, or an item with no live pane
-// behind it.
-func (m *Model) previewInterval() time.Duration {
-	if !m.preview.visible || m.preview.workspaceID == "" || m.preview.reason != "" {
-		return 0
-	}
-	// A live terminal is already following this pane. Capturing it as well would
-	// give one pane two readers and paint the terminal's own frames over with
-	// staler ones.
-	if m.PreviewInteractive() {
-		return 0
-	}
-	if m.preview.focus == focusPreview {
-		return previewFocusedPoll
-	}
-	return previewVisiblePoll
-}
-
-// pollPreview re-captures an unchanged selection.
-func (m *Model) pollPreview(msg previewPollMsg) tea.Cmd {
-	if msg.Generation != m.preview.generation || msg.WorkspaceID != m.preview.workspaceID {
-		m.preview.metrics.Rejected++
-		return nil
-	}
-	m.preview.scheduled = false
-	if !m.preview.visible {
-		return nil
-	}
-	workspace, ok := m.SelectedWorkspace()
-	if !ok {
-		return nil
-	}
-	if reason, unavailable := previewUnavailable(workspace); unavailable {
-		m.preview.reason = reason
-		m.resetPreviewContent()
-		return nil
-	}
-	m.preview.metrics.Polls++
-	return m.capturePreviewCmd(workspace)
 }
 
 // PreviewFocused reports that the preview owns the keyboard.
@@ -633,12 +435,10 @@ func (m *Model) previewRows() int {
 	return max(1, m.height-termpreview.HeaderRows)
 }
 
-// previewBuffer is the captured output the box is drawing: the live terminal's
-// own buffer while the user is typing into it, and the browser's capture buffer
-// while it is being watched. One kind of content behind one kind of window is
-// what lets selection, the wheel and copy behave the same in both states.
+// previewBuffer is the selected tty.Model's output regardless of whether the
+// keyboard is currently routed to it.
 func (m *Model) previewBuffer() *tty.OutputBuffer {
-	if m.PreviewInteractive() {
+	if m.previewTerminalActive() {
 		return m.preview.terminal.Buffer()
 	}
 	return m.preview.buffer
@@ -691,15 +491,12 @@ func (m *Model) previewViewportInput(width, height int) tty.ViewportInput {
 	return input
 }
 
-// previewPaneSize is the geometry of the pane behind the box: the live
-// terminal's while the user is typing into it, and the geometry observed with
-// the last accepted capture while it is being watched. One answer for both
-// states is what keeps a pane drawn the same way whether or not it is driven.
+// previewPaneSize comes from the same model in watched and interactive states.
 func (m *Model) previewPaneSize() (width, height int) {
-	if m.PreviewInteractive() {
+	if m.previewTerminalActive() {
 		return m.preview.terminal.PaneSize()
 	}
-	return m.preview.capture.Pane.PaneWidth, m.preview.capture.Pane.PaneHeight
+	return 0, 0
 }
 
 func (m *Model) previewWindow() previewWindow {
@@ -837,8 +634,8 @@ func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout
 	notes := tty.WindowStatus(tty.WindowStatusInput{
 		Layout:       layout,
 		AbsoluteBase: input.AbsoluteBase,
-		// The browser holds one bounded capture per pane and never extends it at
-		// the top, so there is no older history to offer or to be loading.
+		// The browser holds one bounded model for the selected pane and does not
+		// extend it at the top, so there is no older history to offer or load.
 		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
 		PaneWidth:      input.PaneWidth,
 		PaneHeight:     input.PaneHeight,

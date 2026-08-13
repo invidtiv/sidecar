@@ -60,19 +60,19 @@ func (m *Model) cyclePreviewTab(delta int) tea.Cmd {
 		return nil
 	}
 	m.previewTab = workspacediff.CycleTabIn(m.previewTab, delta, m.previewTabSet())
-	return m.ensurePreviewExtras()
+	return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
 }
 
 func (m *Model) setPreviewTab(tab workspacediff.Tab) tea.Cmd {
 	if !m.previewTabSet().Contains(tab) {
 		m.previewTab = workspacediff.TabOutput
-		return nil
+		return m.syncPreviewTerminal()
 	}
 	if m.previewTab == tab {
-		return m.ensurePreviewExtras()
+		return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
 	}
 	m.previewTab = tab
-	return m.ensurePreviewExtras()
+	return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
 }
 
 // ensureOutputTab is what Enter uses: Diff/Task are views of the row, so
@@ -82,7 +82,7 @@ func (m *Model) ensureOutputTab() tea.Cmd {
 		return nil
 	}
 	m.previewTab = workspacediff.TabOutput
-	return nil
+	return m.syncPreviewTerminal()
 }
 
 // ensurePreviewExtras loads Diff/Task for the selected row. Switching

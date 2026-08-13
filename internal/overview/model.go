@@ -80,7 +80,7 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg, previewMsg, previewPollMsg, previewAutoScrollTickMsg,
+	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
 		previewDocLoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
 		renameShellDoneMsg:
@@ -295,7 +295,7 @@ func (m *Model) Stop() {
 	m.requestID++
 	m.loading = false
 	// Stopping the cycle stops the preview with it: a tab nobody is looking at
-	// has no reason to keep capturing a pane or to keep what it captured.
+	// has no reason to retain a pane's producer or memory-only output.
 	m.preview.visible = false
 	m.releasePreview()
 }
@@ -400,10 +400,6 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 			return tea.Batch(m.dispatchProjects(), preview)
 		}
 		return tea.Batch(m.finishPhase(), preview)
-	case previewMsg:
-		return m.applyPreview(msg)
-	case previewPollMsg:
-		return m.pollPreview(msg)
 	case previewAutoScrollTickMsg:
 		return m.advancePreviewAutoScroll(msg)
 	case previewDocLoadedMsg:

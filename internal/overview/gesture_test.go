@@ -86,7 +86,7 @@ func TestDraggingOverThePreviewSelectsInsteadOfActivating(t *testing.T) {
 	if !m.preview.selection.HasSelection() {
 		t.Fatal("dragging across the preview selected nothing")
 	}
-	if got := strings.Join(m.previewSelectionLines(), "\n"); !strings.HasPrefix(got, "pane %") {
+	if got := strings.Join(m.previewSelectionLines(), "\n"); !strings.HasPrefix(got, "live pa") {
 		t.Fatalf("selected %q, want the run of text under the drag", got)
 	}
 }
@@ -97,17 +97,17 @@ func TestDoubleAndTripleClickTakeTheWordAndTheLine(t *testing.T) {
 	m, _, _ := interactiveModel(t)
 	x, y := previewAt(t, m)
 
-	pointerDown(t, m, x+9, y)
-	pointerDown(t, m, x+9, y)
-	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "output" {
+	pointerDown(t, m, x+11, y)
+	pointerDown(t, m, x+11, y)
+	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "body" {
 		t.Fatalf("double click selected %q, want the word under the pointer", got)
 	}
 	if m.PreviewInteractive() {
 		t.Fatal("a double click also activated the pane under the selection")
 	}
 
-	pointerDown(t, m, x+9, y)
-	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "pane %1 output" {
+	pointerDown(t, m, x+11, y)
+	if got := strings.Join(m.previewSelectionLines(), "\n"); got != "live pane body" {
 		t.Fatalf("triple click selected %q, want the whole line", got)
 	}
 }
@@ -140,8 +140,8 @@ func TestClickingAwayFromALivePaneGivesTheKeyboardBack(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 	dividerX := m.previewSplit(previewWide).SidebarWidth
 	click(t, m, dividerX, 5)
-	if m.PreviewInteractive() || terminal.IsActive() {
-		t.Fatal("clicking away from the pane kept its keyboard")
+	if m.PreviewInteractive() || !terminal.IsActive() {
+		t.Fatal("clicking away did not release the keyboard while keeping the watched producer")
 	}
 	if m.PreviewFocused() {
 		t.Fatal("clicking away left focus on a watched preview")
@@ -257,12 +257,11 @@ func rowAt(t *testing.T, m *Model, id string) (int, int) {
 
 // Clicking a different row while typing captures the row that was clicked. The
 // keyboard is handed back as part of the same event, and that hand-back rebinds
-// the capture cadence — so it has to see the new selection, not the old one.
-func TestClickingAnotherRowWhileTypingCapturesThatRow(t *testing.T) {
-	m, recorder, _ := interactiveModel(t)
+// the terminal producer — so it has to see the new selection, not the old one.
+func TestClickingAnotherRowWhileTypingRebindsThatRow(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
 	enterInteractive(t, m)
 	previewAt(t, m)
-	before := len(recorder.panes())
 
 	x, y := rowAt(t, m, "b")
 	click(t, m, x, y)
@@ -270,14 +269,8 @@ func TestClickingAnotherRowWhileTypingCapturesThatRow(t *testing.T) {
 	if m.workspaces.SelectedID() != "b" {
 		t.Fatalf("selection = %q, want the clicked row", m.workspaces.SelectedID())
 	}
-	captured := recorder.panes()[before:]
-	if len(captured) == 0 {
-		t.Fatal("the clicked row was never captured")
-	}
-	for _, pane := range captured {
-		if pane != "%2" {
-			t.Fatalf("captures after the click = %v, want only the clicked row's %%2", captured)
-		}
+	if terminal.target != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
+		t.Fatalf("producer target after click = %+v, want the clicked row", terminal.target)
 	}
 }
 

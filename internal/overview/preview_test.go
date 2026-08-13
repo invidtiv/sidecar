@@ -1,7 +1,6 @@
 package overview
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,7 +73,33 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 	now := time.Now()
 	m := New(workspaceinventory.Collector{})
 	recorder := &captureRecorder{output: map[string]string{}, state: map[string]tty.PaneState{}}
-	m.collector.Capture = recorder.capture
+	originalTerminal := newPreviewTerminal
+	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
+		terminal := newFakeTerminal("")
+		terminal.config = config
+		terminal.hooks = hooks
+		terminal.onOpen = func(target tty.Target, terminal *fakeTerminal) {
+			recorder.mu.Lock()
+			recorder.calls = append(recorder.calls, target.Pane)
+			output, ok := recorder.output[target.Pane]
+			if !ok {
+				output = "pane " + target.Pane + " output\nsecond line"
+			}
+			state := recorder.state[target.Pane]
+			recorder.mu.Unlock()
+			if state.PaneWidth > 0 {
+				terminal.paneW = state.PaneWidth
+			}
+			if state.PaneHeight > 0 {
+				terminal.paneH = state.PaneHeight
+			}
+			terminal.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
+				Output: output, PaneHeight: terminal.paneH,
+			}))
+		}
+		return terminal
+	}
+	t.Cleanup(func() { newPreviewTerminal = originalTerminal })
 	m.projects = []Project{{Name: "sidecar", Path: "/tmp/sidecar", Key: "sidecar"}}
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar", Workspaces: []workspaceinventory.Workspace{
 		{ID: "a", ProjectKey: "sidecar", ProjectName: "sidecar", Kind: workspaceinventory.KindWorktree, Name: "alpha", Branch: "alpha-branch",
@@ -114,11 +139,6 @@ func run(t *testing.T, m *Model, cmd tea.Cmd) tea.Cmd {
 			next = append(next, run(t, m, sub))
 		}
 		return tea.Batch(next...)
-	}
-	if _, poll := msg.(previewPollMsg); poll {
-		// Poll ticks are delivered explicitly by the tests that mean to; running
-		// them here would sleep out the real cadence.
-		return nil
 	}
 	return m.Update(msg)
 }
@@ -262,32 +282,20 @@ func TestSelectionCapturesExactlyTheSelectedPaneImmediately(t *testing.T) {
 	if got := recorder.panes(); len(got) != 2 {
 		t.Fatalf("rendering captured panes: %v", got)
 	}
-	if m.PreviewMetrics().Captures != 2 {
-		t.Fatalf("capture metric = %d, want 2", m.PreviewMetrics().Captures)
-	}
 }
 
-func TestLateCaptureForASupersededSelectionIsDropped(t *testing.T) {
-	m, _ := previewModel(t)
+func TestSelectionRebindsTheSingleTerminalProducer(t *testing.T) {
+	m, recorder := previewModel(t)
+	recorder.output["%1"] = "ALPHA OUTPUT"
+	recorder.output["%2"] = "BRAVO OUTPUT"
 	run(t, m, m.SetWorkspacesVisible(true))
-
-	stale := previewMsg{Generation: m.preview.generation, WorkspaceID: "a", PaneID: "%1", Output: "STALE OUTPUT", At: time.Now()}
-	press(t, m, "j") // now on bravo, generation bumped
-
-	m.Update(stale)
+	press(t, m, "j")
 	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if strings.Contains(view, "STALE OUTPUT") {
-		t.Fatalf("a capture for a superseded selection painted over the current one:\n%s", view)
+	if !strings.Contains(view, "BRAVO OUTPUT") || strings.Contains(view, "ALPHA OUTPUT") {
+		t.Fatalf("selection did not rebind the producer to bravo:\n%s", view)
 	}
-	if m.PreviewMetrics().Rejected != 1 {
-		t.Fatalf("rejected metric = %d, want the stale capture counted", m.PreviewMetrics().Rejected)
-	}
-
-	// A capture for the right generation but the wrong item is equally refused:
-	// identity, not timing, is what decides.
-	m.Update(previewMsg{Generation: m.preview.generation, WorkspaceID: "a", PaneID: "%1", Output: "WRONG ITEM", At: time.Now()})
-	if strings.Contains(ansi.Strip(m.WorkspacesView(previewWide, previewTall)), "WRONG ITEM") {
-		t.Fatal("a capture for another workspace was accepted")
+	if m.preview.terminalTarget != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
+		t.Fatalf("terminal target = %+v, want bravo", m.preview.terminalTarget)
 	}
 }
 
@@ -300,10 +308,6 @@ func TestHiddenTabDoesNoWorkAndKeepsNothing(t *testing.T) {
 	if got := recorder.panes(); len(got) != 0 {
 		t.Fatalf("hidden tab captured %v", got)
 	}
-	if interval := m.previewInterval(); interval != 0 {
-		t.Fatalf("hidden preview scheduled work every %s", interval)
-	}
-
 	run(t, m, m.SetWorkspacesVisible(true))
 	if len(recorder.panes()) != 1 {
 		t.Fatalf("becoming visible did not capture once: %v", recorder.panes())
@@ -317,11 +321,8 @@ func TestHiddenTabDoesNoWorkAndKeepsNothing(t *testing.T) {
 	if m.preview.generation == generation {
 		t.Fatal("hiding did not supersede the in-flight capture")
 	}
-	if m.preview.buffer != nil || m.preview.workspaceID != "" {
-		t.Fatalf("hidden preview retained %+v", m.preview.capture)
-	}
-	if cmd := m.pollPreview(previewPollMsg{Generation: generation, WorkspaceID: "a"}); cmd != nil {
-		t.Fatal("a poll survived the tab being hidden")
+	if m.preview.buffer != nil || m.preview.workspaceID != "" || m.previewTerminalActive() {
+		t.Fatal("hidden preview retained its terminal producer")
 	}
 	if got := recorder.panes(); len(got) != 1 {
 		t.Fatalf("hidden tab kept capturing: %v", got)
@@ -358,26 +359,12 @@ func TestUnavailableItemsExplainThemselvesAndCaptureNothing(t *testing.T) {
 		if !strings.Contains(view, "project") || !strings.Contains(view, "sidecar") {
 			t.Fatalf("item %q showed no metadata:\n%s", tc.id, view)
 		}
-		if m.previewInterval() != 0 {
-			t.Fatalf("item %q with no live pane is still being polled", tc.id)
+		if m.previewTerminalActive() {
+			t.Fatalf("item %q with no live pane still owns a terminal", tc.id)
 		}
 	}
 	if got := recorder.panes(); len(got) != captured {
 		t.Fatalf("unavailable items were captured anyway: %v", got)
-	}
-}
-
-func TestCaptureFailureIsReportedNotDrawnAsEmptyOutput(t *testing.T) {
-	m, recorder := previewModel(t)
-	recorder.err = errors.New("no server running")
-	run(t, m, m.SetWorkspacesVisible(true))
-
-	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(view, "Could not read this pane") || !strings.Contains(view, "no server running") {
-		t.Fatalf("failed capture was not explained:\n%s", view)
-	}
-	if m.previewInterval() != 0 {
-		t.Fatal("a pane that cannot be read is still being polled at the live cadence")
 	}
 }
 
@@ -676,39 +663,18 @@ func TestGlobalFilterKeepsBackslashLiteral(t *testing.T) {
 	}
 }
 
-func TestAdaptivePollingCapturesOnlyTheSelectedPaneWhileVisible(t *testing.T) {
+func TestVisiblePreviewKeepsOneControlProducerAndNeverPollsInventoryCapture(t *testing.T) {
 	m, recorder := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 
-	if !m.preview.scheduled {
-		t.Fatal("an applied capture did not arm the next refresh")
+	if !m.previewTerminalActive() {
+		t.Fatal("visible selected pane has no control producer")
 	}
-	if got := m.previewInterval(); got != previewVisiblePoll {
-		t.Fatalf("visible cadence = %s, want %s", got, previewVisiblePoll)
+	for range 20 {
+		m.WorkspacesView(previewWide, previewTall)
 	}
-
-	// A tick for the current generation re-captures the same pane, once.
-	run(t, m, m.pollPreview(previewPollMsg{Generation: m.preview.generation, WorkspaceID: "a"}))
-	if got := recorder.panes(); len(got) != 2 || got[1] != "%1" {
-		t.Fatalf("poll captured %v, want a second read of %%1", got)
-	}
-	if m.PreviewMetrics().Polls != 1 {
-		t.Fatalf("poll metric = %d, want 1", m.PreviewMetrics().Polls)
-	}
-
-	// A tick left over from a superseded generation does nothing.
-	stale := m.preview.generation - 1
-	if cmd := m.pollPreview(previewPollMsg{Generation: stale, WorkspaceID: "a"}); cmd != nil {
-		t.Fatal("a superseded poll tick started a capture")
-	}
-	if got := recorder.panes(); len(got) != 2 {
-		t.Fatalf("stale poll captured: %v", got)
-	}
-
-	// Selection latency is measured, so the cadence can be tuned against
-	// something rather than guessed at.
-	if m.PreviewMetrics().LastLatency < 0 {
-		t.Fatalf("latency metric = %s", m.PreviewMetrics().LastLatency)
+	if got := recorder.panes(); len(got) != 1 || got[0] != "%1" {
+		t.Fatalf("idle rendering reopened or polled pane: %v", got)
 	}
 }
 
@@ -743,37 +709,16 @@ func TestCapturedOutputIsNeverPersisted(t *testing.T) {
 	}
 }
 
-// Slice 3 item 4: measure before tuning. These are the numbers the cadence was
-// chosen against — what one selection costs, what an idle tab costs, and where
-// the capture actually runs.
-func TestPreviewWorkIsMeasuredAndBounded(t *testing.T) {
+func TestPreviewProducerIsVisibleSelectionScoped(t *testing.T) {
 	m, recorder := previewModel(t)
 
-	// The capture runs inside the command, not inside Update: the event loop is
-	// never blocked on tmux, however slow the pane is to answer.
 	m.preview.visible = true
 	cmd := m.previewSelect()
-	if cmd == nil {
-		t.Fatal("selecting a live item produced no capture command")
-	}
-	if got := recorder.panes(); len(got) != 0 {
-		t.Fatalf("the update loop captured %v itself", got)
-	}
 	run(t, m, cmd)
 	if got := recorder.panes(); len(got) != 1 {
-		t.Fatalf("running the command captured %v, want one read", got)
+		t.Fatalf("selected producer opened %v, want one target", got)
 	}
 
-	// One selection costs exactly one capture, and the poll it arms is the
-	// unfocused cadence.
-	if m.PreviewMetrics().Captures != 1 || m.PreviewMetrics().Polls != 0 {
-		t.Fatalf("selection cost = %+v, want one capture and no polls", m.PreviewMetrics())
-	}
-	if previewFocusedPoll >= previewVisiblePoll {
-		t.Fatalf("focused cadence %s is not faster than the visible cadence %s", previewFocusedPoll, previewVisiblePoll)
-	}
-
-	// Ten frames of an idle visible tab cost nothing: only ticks capture.
 	before := len(recorder.panes())
 	for range 10 {
 		m.WorkspacesView(previewWide, previewTall)
@@ -782,19 +727,12 @@ func TestPreviewWorkIsMeasuredAndBounded(t *testing.T) {
 		t.Fatalf("idle rendering ran %d extra captures", got-before)
 	}
 
-	// Ten ticks of a hidden tab cost nothing either.
-	generation := m.preview.generation
 	run(t, m, m.SetWorkspacesVisible(false))
-	for range 10 {
-		if cmd := m.pollPreview(previewPollMsg{Generation: generation, WorkspaceID: "a"}); cmd != nil {
-			t.Fatal("a hidden tab answered a poll tick with a capture")
-		}
-	}
 	if got := len(recorder.panes()); got != before {
-		t.Fatalf("hidden tab ran %d captures", got-before)
+		t.Fatalf("hidden tab opened %d extra terminals", got-before)
 	}
-	if m.PreviewMetrics().LastLatency > time.Second {
-		t.Fatalf("selection latency = %s, far past the frame budget", m.PreviewMetrics().LastLatency)
+	if m.previewTerminalActive() {
+		t.Fatal("hidden tab retained the terminal")
 	}
 }
 
@@ -804,7 +742,7 @@ func TestPreviewWorkIsMeasuredAndBounded(t *testing.T) {
 // that many rows higher — painting the pane's previous bottom chrome under the
 // header while the live grid's own bottom fell off the end (td-c3644b).
 func TestAWatchedFullScreenPaneIsDrawnFromItsLiveGridNotItsHistory(t *testing.T) {
-	m, recorder := previewModel(t)
+	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	m.WorkspacesView(previewWide, previewTall)
 	paneHeight := m.previewRows()
@@ -821,11 +759,15 @@ func TestAWatchedFullScreenPaneIsDrawnFromItsLiveGridNotItsHistory(t *testing.T)
 	grid[paneHeight-4] = "INPUT BOX"
 	// tmux terminates its capture, so the pane's last row is a real blank row
 	// rather than the tail of the row above it.
-	recorder.output["%1"] = strings.Join(append(history, grid...), "\n") + "\n"
-	recorder.state["%1"] = tty.PaneState{PaneWidth: m.previewSplit(previewWide).ContentWidth - 1, PaneHeight: paneHeight}
-
-	// Recapture the same pane with its geometry attached.
-	run(t, m, m.pollPreview(previewPollMsg{Generation: m.preview.generation, WorkspaceID: "a"}))
+	terminal, ok := m.preview.terminal.(*fakeTerminal)
+	if !ok {
+		t.Fatal("test preview did not use the terminal seam")
+	}
+	terminal.paneW = m.previewSplit(previewWide).ContentWidth - 1
+	terminal.paneH = paneHeight
+	terminal.buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
+		Output: strings.Join(append(history, grid...), "\n") + "\n", PaneHeight: paneHeight,
+	}))
 
 	window := m.previewWindow()
 	if !window.ok {

@@ -66,7 +66,7 @@ func TestGitChipClickJumpsWithoutTyping(t *testing.T) {
 	if got.Path != "/tmp/sidecar-alpha" {
 		t.Fatalf("chip git path = %q", got.Path)
 	}
-	if m.PreviewInteractive() || terminal.opens != 0 {
+	if m.PreviewInteractive() || terminal.opens != 1 || terminal.IsActive() {
 		t.Fatal("clicking Git started typing")
 	}
 }

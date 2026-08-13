@@ -40,6 +40,8 @@ type fakeTerminal struct {
 	mouseNoted int
 	released   int
 	exits      int
+	closes     int
+	onOpen     func(tty.Target, *fakeTerminal)
 }
 
 type fakeWheel struct {
@@ -67,6 +69,9 @@ func (f *fakeTerminal) Open(target tty.Target) tea.Cmd {
 	f.target = target
 	f.active = true
 	f.opens++
+	if f.onOpen != nil {
+		f.onOpen(target, f)
+	}
 	return nil
 }
 
@@ -82,7 +87,9 @@ func (f *fakeTerminal) Update(msg tea.Msg) tea.Cmd {
 		}
 		key := msg.String()
 		if key == f.config.ExitKey {
-			f.active = false
+			if f.hooks.ExitAction == tty.ExitClosesTerminal {
+				f.active = false
+			}
 			if f.hooks.OnExit != nil {
 				return f.hooks.OnExit()
 			}
@@ -137,6 +144,7 @@ func (f *fakeTerminal) NoteMouseActivity() { f.mouseNoted++ }
 
 func (f *fakeTerminal) SetDimensions(width, height int) tea.Cmd {
 	f.dims = append(f.dims, [2]int{width, height})
+	f.paneW, f.paneH = width, height
 	return nil
 }
 
@@ -149,11 +157,15 @@ func (f *fakeTerminal) IsActive() bool { return f.active }
 
 func (f *fakeTerminal) Exit() { f.exits++; f.active = false }
 
+func (f *fakeTerminal) Close() { f.closes++; f.active = false }
+
 // ReleaseInput records that the host left through the seam that also drops a
 // half-read mouse report, which is the only way out this surface may take.
 func (f *fakeTerminal) ReleaseInput() {
 	f.released++
-	f.active = false
+	if f.hooks.ExitAction == tty.ExitClosesTerminal {
+		f.active = false
+	}
 }
 
 // interactiveModel is the preview fixture with the terminal seam replaced, so
@@ -162,6 +174,11 @@ func interactiveModel(t *testing.T) (*Model, *captureRecorder, *fakeTerminal) {
 	t.Helper()
 	m, recorder := previewModel(t)
 	terminal := newFakeTerminal("live pane body")
+	terminal.onOpen = func(target tty.Target, terminal *fakeTerminal) {
+		if target.Pane != "%1" {
+			terminal.buffer.ApplySnapshot(tty.PaneSnapshot{Output: "pane " + target.Pane + " output"})
+		}
+	}
 	original := newPreviewTerminal
 	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
 		terminal.config = config
@@ -197,9 +214,6 @@ func TestPreviewHandsTheKeyboardToTheSelectedLivePane(t *testing.T) {
 	}
 	if len(recorder.panes()) != captures {
 		t.Fatalf("entering captured a pane as well: %v", recorder.panes())
-	}
-	if interval := m.previewInterval(); interval != 0 {
-		t.Fatalf("the capture cadence is still armed at %s, so one pane has two readers", interval)
 	}
 	width, height, ok := m.previewTerminalSize()
 	if !ok {
@@ -245,6 +259,7 @@ func TestPreviewRefusesToTypeIntoAnItemWithNoLivePane(t *testing.T) {
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			m, _, terminal := interactiveModel(t)
+			opens := terminal.opens
 			m.workspaces.SelectID(tc.id)
 			run(t, m, m.previewSync())
 			enterInteractive(t, m)
@@ -252,7 +267,7 @@ func TestPreviewRefusesToTypeIntoAnItemWithNoLivePane(t *testing.T) {
 			if m.PreviewInteractive() {
 				t.Fatalf("%q handed the keyboard to an item with no live pane", tc.id)
 			}
-			if terminal.opens != 0 {
+			if terminal.opens != opens {
 				t.Fatalf("%q opened a terminal anyway", tc.id)
 			}
 			if !strings.Contains(m.preview.reason, tc.reason) {
@@ -303,6 +318,10 @@ func TestLivePaneTakesEveryKeyIncludingCtrlC(t *testing.T) {
 func TestTheConfiguredExitKeyIsTheOneTheSurfaceAnswers(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	m.SetTerminalConfig(tty.Config{ExitKey: "ctrl+q"})
+	m.closePreviewTerminal()
+	m.preview.terminal = nil
+	run(t, m, m.syncPreviewTerminal())
+	terminal = m.preview.terminal.(*fakeTerminal)
 	enterInteractive(t, m)
 
 	if terminal.config.ExitKey != "ctrl+q" {
@@ -332,12 +351,12 @@ func TestTheConfiguredExitKeyIsTheOneTheSurfaceAnswers(t *testing.T) {
 }
 
 // The terminal component owns the ways out, and reports them through the OnExit
-// hook this surface registered. The browser gives the keyboard back there and
-// goes back to capturing the selection.
-func TestTheExitKeyGivesTheKeyboardBackAndResumesCapture(t *testing.T) {
-	m, recorder, _ := interactiveModel(t)
+// hook this surface registered. The browser gives the keyboard back while the
+// same producer continues watching the selection.
+func TestTheExitKeyGivesTheKeyboardBackAndKeepsTheProducer(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
 	enterInteractive(t, m)
-	captures := len(recorder.panes())
+	opens := terminal.opens
 
 	handled, cmd := m.WorkspacesKey(ctrlKey('\\'))
 	if !handled {
@@ -357,11 +376,8 @@ func TestTheExitKeyGivesTheKeyboardBackAndResumesCapture(t *testing.T) {
 	if m.workspaces.SelectedID() == "" {
 		t.Fatal("exit lost the session the list was showing")
 	}
-	if len(recorder.panes()) <= captures {
-		t.Fatalf("leaving did not resume the capture cadence: %v", recorder.panes())
-	}
-	if interval := m.previewInterval(); interval != previewVisiblePoll {
-		t.Fatalf("cadence after leaving is %s, want the list's visible cadence", interval)
+	if !terminal.IsActive() || terminal.opens != opens {
+		t.Fatalf("leaving replaced the watched producer: active=%v opens=%d want=%d", terminal.IsActive(), terminal.opens, opens)
 	}
 }
 
@@ -382,8 +398,8 @@ func TestLeavingTheSelectionOrTheTabEndsInteractiveMode(t *testing.T) {
 		enterInteractive(t, m)
 		m.workspaces.SelectID("b")
 		run(t, m, m.previewSync())
-		if m.PreviewInteractive() || terminal.IsActive() {
-			t.Fatal("selecting another row kept the previous pane's keyboard")
+		if m.PreviewInteractive() || !terminal.IsActive() || terminal.target.Pane != "%2" {
+			t.Fatal("selecting another row did not rebind a watched producer without keeping its keyboard")
 		}
 	})
 	t.Run("visibility", func(t *testing.T) {
@@ -438,11 +454,9 @@ func TestInteractivePreviewDrawsTheLiveBodyAndPlacesTheCursor(t *testing.T) {
 func TestOnlyTerminalMessagesReachTheBrowsersTerminal(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 
-	if cmd := m.WorkspacesTerminalMsg(tty.CaptureResultMsg{Output: "ignored"}); cmd != nil {
-		t.Fatal("a terminal message was accepted with no live pane")
-	}
-	if terminal.buffer.String() != "live pane body" {
-		t.Fatal("a terminal message reached an inactive terminal")
+	run(t, m, m.WorkspacesTerminalMsg(tty.CaptureResultMsg{Output: "watched frame"}))
+	if terminal.buffer.String() != "watched frame" {
+		t.Fatal("a terminal frame did not reach the watched producer")
 	}
 
 	enterInteractive(t, m)
@@ -450,7 +464,7 @@ func TestOnlyTerminalMessagesReachTheBrowsersTerminal(t *testing.T) {
 	if got := terminal.buffer.String(); got != "fresh frame" {
 		t.Fatalf("the live terminal did not receive its own message: %q", got)
 	}
-	run(t, m, m.WorkspacesTerminalMsg(previewPollMsg{}))
+	run(t, m, m.WorkspacesTerminalMsg(struct{}{}))
 	if got := terminal.buffer.String(); got != "fresh frame" {
 		t.Fatal("a message that is not the terminal's was forwarded to it")
 	}
@@ -680,6 +694,7 @@ func TestEnterStillTypesAfterHidingTheSidebar(t *testing.T) {
 
 func TestEnterOnADeadRowStaysOnTheList(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
+	opens := terminal.opens
 	m.workspaces.SelectID("d")
 	run(t, m, m.previewSync())
 
@@ -689,7 +704,7 @@ func TestEnterOnADeadRowStaysOnTheList(t *testing.T) {
 	}
 	run(t, m, cmd)
 
-	if m.PreviewInteractive() || terminal.opens != 0 {
+	if m.PreviewInteractive() || terminal.opens != opens {
 		t.Fatal("enter on a dead row started typing")
 	}
 	if request, ok := navigation(t, cmd); ok {
@@ -718,6 +733,7 @@ func TestRightAndLDoNotFocusAWatchedPreview(t *testing.T) {
 
 func TestClickingAListRowDoesNotStartTyping(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
+	opens := terminal.opens
 	m.WorkspacesView(previewWide, previewTall)
 	x, y, ok := rowPoint(m, "b")
 	if !ok {
@@ -726,7 +742,7 @@ func TestClickingAListRowDoesNotStartTyping(t *testing.T) {
 
 	click(t, m, x, y)
 
-	if m.PreviewInteractive() || terminal.opens != 0 {
+	if m.PreviewInteractive() || terminal.opens != opens+1 {
 		t.Fatal("a single click on a list row started typing")
 	}
 	if m.workspaces.SelectedID() != "b" {
@@ -739,6 +755,7 @@ func TestClickingAListRowDoesNotStartTyping(t *testing.T) {
 
 func TestWheelOverTheTerminalDoesNotStartTyping(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
+	opens := terminal.opens
 	m.WorkspacesView(previewWide, previewTall)
 	surface, ok := m.previewSurface()
 	if !ok {
@@ -748,7 +765,7 @@ func TestWheelOverTheTerminalDoesNotStartTyping(t *testing.T) {
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: surface.X + 2, Y: surface.Y + 3, Button: tea.MouseWheelUp}))
 
-	if m.PreviewInteractive() || terminal.opens != 0 {
+	if m.PreviewInteractive() || terminal.opens != opens {
 		t.Fatal("a wheel notch over the terminal started typing")
 	}
 	if m.PreviewFocused() {
