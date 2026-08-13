@@ -169,8 +169,11 @@ func TestLeavingALivePaneKeepsTheReadersWindow(t *testing.T) {
 	if p.viewMode == ViewModeInteractive {
 		t.Fatal("the mode did not end")
 	}
-	if p.previewScroll != 10 {
-		t.Fatalf("window = %d rows back, want the 10 the reader left it at", p.previewScroll)
+	// Asserted against the shared rule rather than against a number this side
+	// chose for itself: the answer belongs to tty.LeaveLiveWindow, and both
+	// hosts' tests read it from there (td-651ca2).
+	if want := tty.LeaveLiveWindow(&tty.WindowFreeze{}, 10, p.previewMaxScroll()); p.previewScroll != want {
+		t.Fatalf("window = %d rows back, want the %d the shared leave rule places", p.previewScroll, want)
 	}
 }
 

@@ -211,11 +211,15 @@ func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
 }
 
 // releasePreviewKeyboard gives the keyboard back while the same tty.Model keeps
-// producing the watched pane.
+// producing the watched pane. Where that leaves the window is the shared rule's
+// answer — the reader's own position, thawing a pin the ended gesture no longer
+// owns — and asking tty.LeaveLiveWindow for it is what keeps this surface and
+// the project workspace's leaveInteractiveMode the same one (td-651ca2).
 func (m *Model) releasePreviewKeyboard() tea.Cmd {
 	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
 	m.preview.interactive = false
 	m.clearPreviewSelection()
+	m.preview.offset = tty.LeaveLiveWindow(&m.preview.freeze, m.preview.offset, m.previewMaxOffset())
 	return nil
 }
 

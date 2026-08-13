@@ -37,12 +37,47 @@ func TestLeavingInteractiveKeepsTheOutputProducer(t *testing.T) {
 	if got := m.previewBuffer().Lines(); len(got) != len(live) {
 		t.Fatalf("buffer = %d lines, want the %d it was still drawing", len(got), len(live))
 	}
-	if m.preview.offset != 2 {
-		t.Fatalf("scroll position = %d, want the 2 rows back the reader was at", m.preview.offset)
+	// Where the window lands is tty.LeaveLiveWindow's answer, not this
+	// surface's: it is asserted against the shared rule so the two hosts cannot
+	// drift back into two answers (td-651ca2).
+	if want := tty.LeaveLiveWindow(&tty.WindowFreeze{}, 2, m.previewMaxOffset()); m.preview.offset != want {
+		t.Fatalf("scroll position = %d, want the %d the shared leave rule places", m.preview.offset, want)
 	}
 	view := m.WorkspacesView(previewWide, previewTall)
 	if strings.Contains(ansi.Strip(view), "No output captured") {
 		t.Fatalf("the preview reads as empty over a pane with output:\n%s", view)
+	}
+}
+
+// A window a gesture pinned is handed back to the bottom-relative model when the
+// mode ends, on this surface as on the project workspace's: the same shared rule
+// answers both, so neither keeps a pin whose gesture is over (td-651ca2).
+func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
+	m, _, terminal := interactiveModel(t)
+	run(t, m, m.previewSelect())
+	enterInteractive(t, m)
+	run(t, m, terminal.Update(tty.CaptureResultMsg{Output: longPaneOutput(40)}))
+	m.WorkspacesView(previewWide, previewTall)
+
+	m.freezePreviewWindow()
+	if !m.preview.freeze.Active() {
+		t.Fatal("the window was not pinned to begin with")
+	}
+	m.scrollPreview(20)
+	pinned := m.preview.freeze.Start()
+	bound := m.previewMaxOffset()
+
+	terminal.hooks.OnExit()
+
+	if m.preview.freeze.Active() {
+		t.Fatal("the window stayed pinned after the mode that pinned it ended")
+	}
+	want := tty.ThawOffsetFrom(pinned, bound)
+	if want == 0 {
+		t.Fatalf("the fixture never left the live edge (pin %d, bound %d)", pinned, bound)
+	}
+	if m.preview.offset != want {
+		t.Fatalf("window = %d rows back, want the %d the thawed pin sits at", m.preview.offset, want)
 	}
 }
 
