@@ -330,9 +330,9 @@ func TestWorktreeChromeDoesNotMakeOutputAmbiguous(t *testing.T) {
 	}
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	var captured []string
-	collector := Collector{Runner: runner, Capture: func(id string, _ int) (string, error) {
+	collector := Collector{Runner: runner, Capture: func(id string, _ int) (string, tty.PaneState, error) {
 		captured = append(captured, id)
-		return "• Working (1s • esc to interrupt)", nil
+		return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
 	}}
 	panes := []Pane{
 		{ID: "%ws", Session: "sidecar-ws-repo", Path: root, Command: "grok"},
