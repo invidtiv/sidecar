@@ -25,8 +25,7 @@ func TestEachGlobalTabKeepsItsViewStateAcrossSpaceToggles(t *testing.T) {
 
 	// Give the Workspaces tab a filter, a sort, a selection, and a scroll
 	// position, and the Agents tab a card that is not the first one.
-	press(t, m, "s")
-	press(t, m, "s")
+	m.workspaces.SetSort(workspacelist.SortRecent)
 	press(t, m, "/")
 	for _, r := range "sidecar" {
 		m.WorkspacesKey(tea.KeyPressMsg{Code: r, Text: string(r)})

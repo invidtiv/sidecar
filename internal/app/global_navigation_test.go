@@ -321,7 +321,14 @@ func TestGlobalTabViewStateSurvivesSpaceToggles(t *testing.T) {
 	m, _, _ := globalNavigationModel(t)
 
 	// Filter and sort the browser, then leave and come back the way a user does.
-	for _, k := range []tea.KeyPressMsg{{Code: 's', Text: "s"}, {Code: '/', Text: "/"}} {
+	// s opens the view fly-out; j + enter picks Project without cycling.
+	for _, k := range []tea.KeyPressMsg{
+		{Code: 's', Text: "s"},
+		{Code: 'j', Text: "j"},
+		{Code: tea.KeyEnter},
+		{Code: tea.KeyEsc},
+		{Code: '/', Text: "/"},
+	} {
 		updated, _ := m.Update(k)
 		m = asAppModel(t, updated)
 	}

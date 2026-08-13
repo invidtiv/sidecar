@@ -54,14 +54,18 @@ func (m *Model) syncWorkspaces() {
 		}
 		for _, workspace := range result.Workspaces {
 			m.catalog[workspace.ID] = workspace
-			items = append(items, listItem(workspace.Item(), project.Name, order, m.stale[key]))
+			item := listItem(workspace.Item(), project.Name, order, m.stale[key])
+			if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
+				continue
+			}
+			items = append(items, item)
 		}
 	}
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
-	m.workspaces.SetEmptyText("No shells or worktrees found in the configured projects")
+	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
 }
 
 // listItem projects one catalog row into the shared list component's display
@@ -201,28 +205,32 @@ func (m *Model) WorkspacesView(width, height int) string {
 	}
 	m.workspacesMouse.Clear()
 	layout := m.workspacesLayout()
+	var view string
 	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
-		return styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
-	}
-	if layout.listOnly {
+		view = styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
+	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
-		return styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
+		view = styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
+	} else {
+		split := layout.split
+		m.addSidebarRegion(0, split.SidebarWidth, height)
+		m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
+		list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
+		preview := m.renderPreview(layout.box.W, layout.box.H)
+
+		leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
+		rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
+		divider := ui.RenderDivider(height)
+		// Register the forgiving three-column divider target last, above both pane
+		// regions and any list row that reaches the content edge.
+		m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
+		view = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 	}
-
-	split := layout.split
-	m.addSidebarRegion(0, split.SidebarWidth, height)
-	m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-	list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
-	preview := m.renderPreview(layout.box.W, layout.box.H)
-
-	leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
-	rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
-	divider := ui.RenderDivider(height)
-	// Register the forgiving three-column divider target last, above both pane
-	// regions and any list row that reaches the content edge.
-	m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
+	if m.viewFlyoutOpen {
+		return m.overlayViewFlyout(view, width, height)
+	}
+	return view
 }
 
 // renderWorkspaceList draws the list and registers its regions at an x offset,
@@ -303,6 +311,17 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.PreviewInteractive() {
 		return m.previewKey(msg)
 	}
+	// The fly-out is an overlay, not a third browse mode. Esc / backdrop close
+	// it and leave the list as the rest state. "/" still focuses the filter.
+	if m.viewFlyoutOpen {
+		if key == "/" {
+			m.closeViewFlyout()
+			cmd := m.focusList()
+			m.workspaces.FocusFilter()
+			return true, cmd
+		}
+		return m.handleViewFlyoutKey(msg)
+	}
 	if m.workspaces.Filter().Focused() {
 		// ctrl+c is the host's, even mid-query. It is one of sidecar's two ways
 		// out, and every other text-input surface hands it back (internal/app's
@@ -342,8 +361,8 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.workspaces.FocusFilter()
 		return true, cmd
 	case "s":
-		m.workspaces.CycleSort()
-		return true, m.previewSync()
+		m.openViewFlyout()
+		return true, nil
 	case "r":
 		return true, tea.Batch(m.Start(m.projects), m.previewSelect())
 	case "esc":
@@ -367,9 +386,6 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func (m *Model) WorkspaceFocusContext() string {
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
-	}
-	if m.PreviewFocused() {
-		return "global-workspaces-preview"
 	}
 	return "global-workspaces"
 }
@@ -395,8 +411,8 @@ func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
 func (m *Model) WorkspacesResize(width, height int) tea.Cmd {
 	m.width, m.height = width, height
 	// A window narrow enough to drop the preview would leave the keyboard
-	// pointed at a box that is no longer drawn, so a focused preview takes the
-	// whole tab instead — the arrangement focusPreviewPane makes when narrow.
+	// pointed at a box that is no longer drawn, so an interactive preview
+	// takes the whole tab instead.
 	if m.PreviewFocused() && m.previewNarrow() {
 		m.preview.full = true
 	}
@@ -422,11 +438,14 @@ func (m *Model) navigateWorkspaces(key string) bool {
 // WorkspacesMouse routes a mouse event to the list using the regions the last
 // render registered.
 func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
-	if m.workspacesMouse == nil {
-		return nil
-	}
 	mouseMsg, ok := msg.(tea.MouseMsg)
 	if !ok {
+		return nil
+	}
+	if m.viewFlyoutOpen {
+		return m.handleViewFlyoutMouse(mouseMsg)
+	}
+	if m.workspacesMouse == nil {
 		return nil
 	}
 	// Every mouse event counts as mouse activity for the live pane, whether or
@@ -585,7 +604,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			}
 			focus = m.focusList()
 		case workspacelist.RegionSort:
-			m.workspaces.CycleSort()
+			m.openViewFlyout()
 		case workspacelist.RegionFilter:
 			focus = m.focusList()
 			m.workspaces.FocusFilter()
@@ -637,9 +656,9 @@ func (m *Model) WorkspacesSummary() string {
 }
 
 // The browser's command set is not declared here. It is registered in
-// internal/keymap under the "global-workspaces", "global-workspaces-preview",
-// "global-workspaces-terminal" and "global-workspaces-filter" contexts, which is
-// what makes it discoverable in help and the palette rather than only in footer
-// hints — and what makes the boundary (no create, delete or attach anywhere;
-// typing only via Enter / click / E) a single documented fact instead of a
-// second list beside the keys this file actually answers.
+// internal/keymap under the "global-workspaces", "global-workspaces-terminal"
+// and "global-workspaces-filter" contexts, which is what makes it discoverable
+// in help and the palette rather than only in footer hints — and what makes
+// the boundary (no create, delete or attach anywhere; typing only via Enter /
+// click / E) a single documented fact instead of a second list beside the
+// keys this file actually answers.

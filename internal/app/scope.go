@@ -465,10 +465,14 @@ func (m *Model) globalSurfaceWantsEsc() bool {
 	if m.globalWorkspacesFilterActive() {
 		return true
 	}
-	// The preview answers esc too: while watching it returns focus to the list,
-	// the same as left/h, and while typing it goes to the pane (a second one
-	// leaves the mode). Only an esc pressed with the list focused means "leave
-	// the global space".
+	// The sort/filter fly-out is a modal overlay: esc closes it and returns
+	// to the list. It is not a third browse mode, but it must still keep
+	// scope-exit from stealing the key.
+	if m.globalWorkspacesVisible() && m.overview != nil && m.overview.ViewFlyoutOpen() {
+		return true
+	}
+	// While typing, esc belongs to the pane (a second one leaves the mode).
+	// Only an esc pressed with the list focused means "leave the global space".
 	if m.globalWorkspacesPreviewFocused() {
 		return true
 	}

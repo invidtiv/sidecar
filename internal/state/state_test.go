@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -752,6 +753,80 @@ func TestSetLastGlobalTab_InitializesNilState(t *testing.T) {
 	}
 	if current.LastGlobalTab != "tasks" {
 		t.Errorf("LastGlobalTab = %q, want tasks", current.LastGlobalTab)
+	}
+}
+
+func TestGetShowIdleWorktrees_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetShowIdleWorktrees(); got {
+		t.Error("GetShowIdleWorktrees() with nil current = true, want false")
+	}
+}
+
+func TestGetShowIdleWorktrees_Set(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = &State{ShowIdleWorktrees: true}
+	if got := GetShowIdleWorktrees(); !got {
+		t.Error("GetShowIdleWorktrees() = false, want true")
+	}
+}
+
+func TestSetShowIdleWorktrees(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetShowIdleWorktrees(true); err != nil {
+		t.Fatalf("SetShowIdleWorktrees() failed: %v", err)
+	}
+	if !current.ShowIdleWorktrees {
+		t.Error("current.ShowIdleWorktrees = false, want true")
+	}
+
+	data, _ := os.ReadFile(stateFile)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if !loaded.ShowIdleWorktrees {
+		t.Error("saved ShowIdleWorktrees = false, want true")
+	}
+	if !strings.Contains(string(data), `"showIdleWorktrees"`) {
+		t.Fatalf("persisted JSON should name showIdleWorktrees:\n%s", data)
+	}
+}
+
+func TestSetShowIdleWorktrees_InitializesNilState(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = nil
+
+	if err := SetShowIdleWorktrees(true); err != nil {
+		t.Fatalf("SetShowIdleWorktrees() failed: %v", err)
+	}
+	if current == nil {
+		t.Error("SetShowIdleWorktrees() should initialize current state")
+	}
+	if !current.ShowIdleWorktrees {
+		t.Error("ShowIdleWorktrees = false, want true")
 	}
 }
 

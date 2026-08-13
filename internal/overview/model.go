@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
@@ -133,6 +134,15 @@ type Model struct {
 	terminalConfig     tty.Config
 	width              int
 	height             int
+
+	// showIdleWorktrees is the global-list visibility flag. Off by default;
+	// the sort/filter fly-out is the only control that turns it on.
+	showIdleWorktrees bool
+	viewFlyout        *modal.Modal
+	viewFlyoutOpen    bool
+	viewFlyoutWidth   int
+	viewFlyoutSortIdx int
+	viewFlyoutMouse   *mouse.Handler
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -145,6 +155,8 @@ var ActivityStorePath = func() string {
 var (
 	loadWorkspaceSidebarWidth = state.GetWorkspaceSidebarWidth
 	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
+	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
+	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -155,11 +167,11 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
-	m.workspaces.SetEmptyText("No shells or worktrees found in the configured projects")
+	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}

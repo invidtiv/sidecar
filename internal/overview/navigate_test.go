@@ -134,11 +134,10 @@ func TestActivationFollowsTheCursorThroughSortAndFilter(t *testing.T) {
 	// list beneath it, so activation opens the item the user is looking at.
 	m.workspaces.SelectID("d")
 	m.WorkspacesView(previewWide, previewTall)
-	press(t, m, "s")
-	press(t, m, "s")
+	m.workspaces.SetSort(workspacelist.SortRecent)
 	request, ok := activate(t, m)
 	if !ok || request.Workspace.ID != "d" {
-		t.Fatalf("after two sort cycles activation opened %#v, want d", request.Workspace)
+		t.Fatalf("after a sort change activation opened %#v, want d", request.Workspace)
 	}
 
 	// Filtering to one row and activating opens that row, not the one that
@@ -247,6 +246,7 @@ func TestDuplicateDisplayNamesOpenTheirOwnProject(t *testing.T) {
 			Kind: workspaceinventory.KindWorktree, Name: "feature", Key: "/repos/braid/feature", Path: "/repos/braid/feature",
 			Branch: "feature", Plain: true, ObservedAt: now},
 	}}
+	m.showIdleWorktrees = true
 	m.syncBoard()
 	m.workspaces.SetSort(workspacelist.SortName)
 	m.WorkspacesView(previewWide, previewTall)

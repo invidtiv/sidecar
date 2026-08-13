@@ -83,6 +83,7 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 			Provider: "codex", PaneID: "%9", TmuxName: "sc-echo", Live: false, Path: "/tmp/sidecar-echo",
 			Presentation: agentstatus.Presentation{Lane: agentstatus.LanePaused, Label: "paused", ChangedAt: now.Add(-time.Hour)}},
 	}}
+	m.showIdleWorktrees = true
 	m.syncBoard()
 	m.workspaces.SetSort(workspacelist.SortName)
 	m.workspaces.SelectID("a")
@@ -372,7 +373,7 @@ func TestCaptureFailureIsReportedNotDrawnAsEmptyOutput(t *testing.T) {
 	}
 }
 
-func TestPreviewFocusScrollsOutputAndNeverMovesTheList(t *testing.T) {
+func TestListKeysMoveTheListNotThePreview(t *testing.T) {
 	m, recorder := previewModel(t)
 	lines := make([]string, 0, 80)
 	for i := range 80 {
@@ -382,45 +383,15 @@ func TestPreviewFocusScrollsOutputAndNeverMovesTheList(t *testing.T) {
 	run(t, m, m.SetWorkspacesVisible(true))
 
 	selected := m.workspaces.SelectedID()
-	run(t, m, m.focusPreviewPane())
-	if !m.PreviewFocused() {
-		t.Fatal("focusPreviewPane did not move focus to the preview")
-	}
-
-	press(t, m, "k")
-	press(t, m, "k")
-	if m.preview.offset != 2 {
-		t.Fatalf("preview offset = %d after two scrolls back, want 2", m.preview.offset)
-	}
-	if m.workspaces.SelectedID() != selected {
-		t.Fatal("scrolling the preview moved the list selection")
-	}
-	press(t, m, "g")
-	if m.preview.offset != m.previewMaxOffset() || m.preview.offset == 0 {
-		t.Fatalf("g did not reach the top of the capture: offset %d max %d", m.preview.offset, m.previewMaxOffset())
-	}
-	press(t, m, "G")
+	press(t, m, "j")
 	if m.preview.offset != 0 {
-		t.Fatalf("G did not return to live output: offset %d", m.preview.offset)
+		t.Fatal("list navigation scrolled the preview")
 	}
-
-	// A focused preview refreshes faster than one that is merely on screen.
-	if got := m.previewInterval(); got != previewFocusedPoll {
-		t.Fatalf("focused cadence = %s, want %s", got, previewFocusedPoll)
+	if m.workspaces.SelectedID() == selected {
+		t.Fatal("j did not move the list")
 	}
-	press(t, m, "left")
-	if m.PreviewFocused() {
-		t.Fatal("left did not return focus to the list")
-	}
-	if got := m.previewInterval(); got != previewVisiblePoll {
-		t.Fatalf("unfocused cadence = %s, want %s", got, previewVisiblePoll)
-	}
-
-	// Focus moves and scrolling are the whole key vocabulary of a watched pane:
-	// nothing it answers reaches a terminal until the user asks for the
-	// keyboard, and the selection is untouched throughout.
-	if m.workspaces.SelectedID() != selected {
-		t.Fatalf("selection changed to %q during preview navigation", m.workspaces.SelectedID())
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("j entered a watched-preview state: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
 	}
 }
 
@@ -495,18 +466,17 @@ func TestWorkspaceListWheelMovesSelectionLikeTheProjectSidebar(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSidebarHoverDoesNotStealPreviewFocus(t *testing.T) {
+func TestWorkspaceSidebarHoverDoesNotStealListFocus(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
-	run(t, m, m.focusPreviewPane())
 
 	selected := m.workspaces.SelectedID()
 	// The outer border belongs only to the broad sidebar fallback region, so
 	// this proves blank-space hover does not inherit row-click focus behavior.
 	m.WorkspacesMouse(tea.MouseMotionMsg(tea.Mouse{X: 0, Y: 4}))
 
-	if !m.PreviewFocused() {
-		t.Fatal("hovering over sidebar blank space stole focus from the preview")
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("hovering over sidebar blank space moved the keyboard: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
 	}
 	if got := m.workspaces.SelectedID(); got != selected {
 		t.Fatalf("hover changed selection to %q, want %q", got, selected)
@@ -516,17 +486,16 @@ func TestWorkspaceSidebarHoverDoesNotStealPreviewFocus(t *testing.T) {
 func TestWorkspaceSidebarWheelUpdatesSelectionAndPreviewWithoutStealingFocus(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
-	run(t, m, m.focusPreviewPane())
 
 	// Use the outer border to exercise the broad sidebar region rather than a
-	// row. Like project Workspaces, the wheel moves the cursor and its preview
-	// while keyboard focus remains on the preview pane.
+	// row. The wheel moves the cursor and its preview; the keyboard stays on
+	// the list.
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{
 		X: 0, Y: 4, Button: tea.MouseWheelDown,
 	})))
 
-	if !m.PreviewFocused() {
-		t.Fatal("wheel over sidebar blank space stole focus from the preview")
+	if m.PreviewFocused() || m.WorkspaceFocusContext() != "global-workspaces" {
+		t.Fatalf("wheel over sidebar blank space moved the keyboard: focused=%v context=%q", m.PreviewFocused(), m.WorkspaceFocusContext())
 	}
 	if got := m.workspaces.SelectedID(); got != "d" {
 		t.Fatalf("one wheel notch selected %q, want d after the shared three-row step", got)
@@ -670,17 +639,19 @@ func TestHiddenSidebarKeepsListKeys(t *testing.T) {
 // The same disagreement reached through the window size: a preview focused at a
 // width that cannot hold two panes takes the whole tab, whether or not anyone is
 // typing into it.
-func TestShrinkingTheWindowKeepsTheFocusedPreviewOnScreen(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
+func TestShrinkingTheWindowKeepsAnInteractivePreviewOnScreen(t *testing.T) {
+	m, _, _ := interactiveModel(t)
+	enterInteractive(t, m)
 	m.WorkspacesView(previewWide, previewTall)
-	run(t, m, m.focusPreviewPane())
 
 	narrow := globalListMinWidth + globalDividerWidth + globalPreviewMinWidth - 1
 	run(t, m, m.WorkspacesResize(narrow, previewTall))
 
 	if layout := m.workspacesLayout(); !layout.previewOnly || !layout.previewDrawn {
-		t.Fatalf("narrow focused layout = %#v, want the preview filling the tab", layout)
+		t.Fatalf("narrow interactive layout = %#v, want the preview filling the tab", layout)
+	}
+	if !m.PreviewInteractive() {
+		t.Fatal("shrinking the window ended typing")
 	}
 }
 

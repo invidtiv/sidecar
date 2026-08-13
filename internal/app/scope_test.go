@@ -269,7 +269,7 @@ func TestGlobalWorkspacesTabIsAnHonestEmptyList(t *testing.T) {
 	if !strings.Contains(content, "Workspaces") || !strings.Contains(content, "Activity") {
 		t.Fatalf("global Workspaces list header is missing:\n%s", content)
 	}
-	if !strings.Contains(content, "No shells or worktrees") {
+	if !strings.Contains(content, "no sessions") {
 		t.Fatalf("empty list is not honest about being empty:\n%s", content)
 	}
 	if m.activeContext != "global-workspaces" {

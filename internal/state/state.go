@@ -35,6 +35,10 @@ type State struct {
 
 	// Last selected global tab ("agents", "workspaces", or "tasks").
 	LastGlobalTab string `json:"lastGlobalTab,omitempty"`
+
+	// ShowIdleWorktrees reveals "no session" rows on the global Workspaces list.
+	// Fresh state leaves this off so the list is sessions by default.
+	ShowIdleWorktrees bool `json:"showIdleWorktrees,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -579,6 +583,28 @@ func SetLastGlobalTab(tab string) error {
 		current = &State{}
 	}
 	current.LastGlobalTab = tab
+	mu.Unlock()
+	return Save()
+}
+
+// GetShowIdleWorktrees reports whether the global list should include idle
+// worktrees. A missing or fresh state is off.
+func GetShowIdleWorktrees() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return false
+	}
+	return current.ShowIdleWorktrees
+}
+
+// SetShowIdleWorktrees saves the global idle-worktree visibility preference.
+func SetShowIdleWorktrees(show bool) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.ShowIdleWorktrees = show
 	mu.Unlock()
 	return Save()
 }
