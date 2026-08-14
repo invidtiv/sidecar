@@ -1,0 +1,24 @@
+Shell t to attach • E for interactive • Ctrl-b d t│ clicked.md   Rendered   ×        q close · m raw
+No output yet                                     │                                                 
+                                                  │   clicked                                       
+                                                  │                                                 
+                                                  │  file body                                      
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │─────────────────────────────────────────────────
+                                                  │ td-1a2b3c: Issue td-1a2b3c   ×                  
+                                                  │td-1a2b3c: Issue td-1a2b3c                       
+                                                  │[open]  task  P2                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │  Body of td-1a2b3c.                             
+                                                  │                                                 
+                                                  │  Paragraph 1 of td-1a2b3c.                      
+                                                  │                                                 
+                                                  │  Paragraph 2 of td-1a2b3c.                      
+                                                  │                                                 

@@ -727,6 +727,18 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.toggleDocRenderMode()
 	case regionDocClose:
 		return p.closeDocPane()
+	case regionIssuePane:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+			}
+		}
+	case regionIssueClose:
+		if leafID, ok := action.Region.Data.(int); ok {
+			return p.closeIssuePane(leafID)
+		}
 	case regionPaneTreeDivider:
 		if splitID, ok := action.Region.Data.(int); ok {
 			if split := FindPane(p.paneRoot, splitID); split != nil && split.Split != nil {
@@ -1205,8 +1217,20 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	case regionDocPane, regionDocMode:
 		if leafID, ok := action.Region.Data.(int); ok {
 			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
-				if doc := p.docs[leaf.DocID]; doc != nil {
+				if doc := p.docs[leaf.ContentID]; doc != nil {
 					doc.view.Scroll(delta)
+				}
+			}
+		}
+		return nil
+	case regionIssuePane, regionIssueClose:
+		// The issue component scrolls in rendered rows, the same units the
+		// document viewer answers a notch in, so the wheel reaches it by the
+		// same path rather than a second one.
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
+				if issue := p.issues[leaf.ContentID]; issue != nil {
+					issue.view.Scroll(delta)
 				}
 			}
 		}

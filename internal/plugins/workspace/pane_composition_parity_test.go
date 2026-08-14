@@ -54,7 +54,7 @@ func (p *Plugin) canvasComposition(width, height int, leaves []Placement, divide
 }
 
 // Both axes are measured because a rows-axis terminal-plus-document tree is
-// restorable from persisted JSON (supportedDocPaneTree accepts it on either
+// restorable from persisted JSON (supportedPaneTree accepts it on either
 // axis), and the vertical joins were the ordering the shipped journey exercised
 // least.
 func TestTwoLeafPaneCompositionMatchesTheJoinsItReplaced(t *testing.T) {
@@ -91,7 +91,7 @@ func TestTwoLeafPaneCompositionMatchesTheJoinsItReplaced(t *testing.T) {
 							compositorDocLeaf(t, p, root, 2, "one.md", "# one\n\nbody\n")
 
 							terminal := &PaneNode{ID: 1, Kind: PaneTerminal}
-							document := &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2}
+							document := &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
 							first, second := terminal, document
 							if !terminalFirst {
 								first, second = document, terminal

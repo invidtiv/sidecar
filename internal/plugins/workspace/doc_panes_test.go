@@ -627,7 +627,11 @@ func TestRestorePaneLayoutPrunesStaleTabsAndRejectsOtherRoot(t *testing.T) {
 	}
 }
 
-func TestRestorePaneLayoutRejectsUnsupportedNestedTree(t *testing.T) {
+// A nested stack beside the terminal used to be refused on restore, from a
+// renderer that could compose exactly two leaves. The compositor places any
+// tree the layout returns, so the refusal now costs the user the layout they
+// left rather than protecting anything.
+func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "one.md", "one")
 	writeDocPaneFixture(t, root, "two.md", "two")
@@ -645,9 +649,43 @@ func TestRestorePaneLayoutRejectsUnsupportedNestedTree(t *testing.T) {
 			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "two.md"}}},
 		}},
 	}}
-	p.restorePaneLayout(layout)
-	if p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal || len(p.docs) != 0 {
-		t.Fatalf("unsupported nested tree was retained: root=%#v docs=%d", p.paneRoot, len(p.docs))
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("nested stack restored without scheduling its loads")
+	}
+	if p.paneRoot.Split == nil || p.paneRoot.Split.B.Split == nil || len(p.docs) != 2 {
+		t.Fatalf("nested stack was not restored: root=%#v docs=%d", p.paneRoot, len(p.docs))
+	}
+	if p.paneFocus != terminalLeafID(p.paneRoot) {
+		t.Fatalf("restored focus = %d, want the terminal leaf", p.paneFocus)
+	}
+}
+
+// A leaf of a kind this build has never heard of is what the restore guard is
+// still for: it would size a terminal against a box nothing draws into.
+func TestRestorePaneLayoutRejectsUnknownLeafKind(t *testing.T) {
+	root := t.TempDir()
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	unknown := &PaneNode{ID: 3, Kind: PaneKind(99)}
+	if supportedPaneTree(&PaneNode{ID: 1, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: &PaneNode{ID: 2, Kind: PaneTerminal}, B: unknown}}) {
+		t.Fatal("a leaf of an unknown kind was accepted")
+	}
+	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal"},
+		B: &state.PaneLayoutJSON{Kind: "hologram"},
+	}}
+	// The decoder drops the leaf it cannot build and the split collapses onto
+	// the terminal, which is the layout the user can still work in.
+	if cmd := p.restorePaneLayout(layout); cmd != nil {
+		t.Fatal("an unknown leaf scheduled a load")
+	}
+	if p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal {
+		t.Fatalf("unknown leaf did not collapse to the terminal: root=%#v", p.paneRoot)
 	}
 }
 

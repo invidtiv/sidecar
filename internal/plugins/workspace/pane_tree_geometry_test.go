@@ -132,7 +132,7 @@ func TestInitRebuildsFeatureGatedPaneTreeState(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 
 	p := New()
-	p.paneRoot = &PaneNode{ID: 99, Kind: PaneDoc, DocID: 7}
+	p.paneRoot = &PaneNode{ID: 99, Kind: PaneDoc, ContentID: 7}
 	p.paneFocus = 99
 	p.paneNextID = 100
 	if err := p.Init(&plugin.Context{Config: cfg, Epoch: 1}); err != nil {

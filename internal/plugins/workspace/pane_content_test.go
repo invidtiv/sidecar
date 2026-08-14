@@ -18,7 +18,7 @@ func docPaneSplitTree(t *testing.T, p *Plugin, root, rel string) (terminal, leaf
 	doc = &docPane{leafID: 2, root: root, surface: "shell:test-shell", view: viewer}
 	p.docs = map[int]*docPane{2: doc}
 	terminal = &PaneNode{ID: 1, Kind: PaneTerminal}
-	leaf = &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2}
+	leaf = &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
 	p.paneRoot = &PaneNode{ID: 9, Split: &PaneSplit{Axis: SplitCols, Ratio: 50, A: terminal, B: leaf}}
 	p.paneFocus = 2
 	p.paneNextID = 10
@@ -58,7 +58,7 @@ func TestPaneContentAdaptsEveryLeafKind(t *testing.T) {
 
 			// A leaf whose content is gone has none: the canvas leaves its box
 			// blank rather than letting a neighbour spread into it.
-			delete(p.docs, leaf.DocID)
+			delete(p.docs, leaf.ContentID)
 			if got := p.paneContent(leaf); got != nil {
 				t.Fatalf("document leaf without a document adapted to %#v", got)
 			}

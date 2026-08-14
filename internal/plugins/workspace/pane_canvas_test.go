@@ -17,8 +17,8 @@ func nestedDocPaneTree(t *testing.T, p *Plugin, root string) {
 	p.paneRoot = &PaneNode{ID: 10, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
 		A: &PaneNode{ID: 1, Kind: PaneTerminal},
 		B: &PaneNode{ID: 11, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
-			A: &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2},
-			B: &PaneNode{ID: 3, Kind: PaneDoc, DocID: 3},
+			A: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
+			B: &PaneNode{ID: 3, Kind: PaneDoc, ContentID: 3},
 		}},
 	}}
 	p.paneFocus = 2

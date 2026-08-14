@@ -13,6 +13,7 @@ type PaneKind int
 const (
 	PaneTerminal PaneKind = iota
 	PaneDoc
+	PaneIssue
 )
 
 // SplitAxis identifies how a split divides its box.
@@ -24,10 +25,13 @@ const (
 )
 
 // PaneNode is a leaf when Split is nil and an internal node otherwise.
+// ContentID names the content a leaf hosts and nothing about it: the structure
+// layer holds an identity the content registry answers, never a document, an
+// issue, or a transport.
 type PaneNode struct {
-	ID    int
-	Kind  PaneKind
-	DocID int
+	ID        int
+	Kind      PaneKind
+	ContentID int
 
 	Split *PaneSplit
 }
@@ -68,6 +72,7 @@ type PaneFloor struct {
 type Floors struct {
 	Terminal PaneFloor
 	Doc      PaneFloor
+	Issue    PaneFloor
 }
 
 // LayoutPanes places every leaf and divider inside box. A false fits result
@@ -149,10 +154,14 @@ func paneMinimum(node *PaneNode, floors Floors) PaneFloor {
 		return PaneFloor{}
 	}
 	if node.Split == nil {
-		if node.Kind == PaneDoc {
+		switch node.Kind {
+		case PaneDoc:
 			return nonNegativeFloor(floors.Doc)
+		case PaneIssue:
+			return nonNegativeFloor(floors.Issue)
+		default:
+			return nonNegativeFloor(floors.Terminal)
 		}
-		return nonNegativeFloor(floors.Terminal)
 	}
 
 	a := paneMinimum(node.Split.A, floors)

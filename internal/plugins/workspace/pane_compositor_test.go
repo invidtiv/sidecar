@@ -37,8 +37,8 @@ func threeLeafPaneTree(t *testing.T, p *Plugin, root string) {
 	p.paneRoot = &PaneNode{ID: 10, Split: &PaneSplit{Axis: SplitRows, Ratio: 40,
 		A: &PaneNode{ID: 1, Kind: PaneTerminal},
 		B: &PaneNode{ID: 11, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
-			A: &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2},
-			B: &PaneNode{ID: 3, Kind: PaneDoc, DocID: 3},
+			A: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
+			B: &PaneNode{ID: 3, Kind: PaneDoc, ContentID: 3},
 		}},
 	}}
 	p.paneFocus = 2
@@ -55,11 +55,11 @@ func fourLeafPaneTree(t *testing.T, p *Plugin, root string) {
 	p.paneRoot = &PaneNode{ID: 10, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
 		A: &PaneNode{ID: 11, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
 			A: &PaneNode{ID: 1, Kind: PaneTerminal},
-			B: &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2},
+			B: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
 		}},
 		B: &PaneNode{ID: 12, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
-			A: &PaneNode{ID: 3, Kind: PaneDoc, DocID: 3},
-			B: &PaneNode{ID: 4, Kind: PaneDoc, DocID: 4},
+			A: &PaneNode{ID: 3, Kind: PaneDoc, ContentID: 3},
+			B: &PaneNode{ID: 4, Kind: PaneDoc, ContentID: 4},
 		}},
 	}}
 	p.paneFocus = 2
@@ -147,19 +147,25 @@ func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers
 		return mouse.Rect{}, false
 	}
 	for _, placement := range leaves {
-		if placement.Node.Kind != PaneDoc {
+		region := ""
+		switch placement.Node.Kind {
+		case PaneDoc:
+			region = regionDocPane
+		case PaneIssue:
+			region = regionIssuePane
+		default:
 			continue
 		}
 		want := mouse.Rect{
 			X: origin.X + placement.Box.X, Y: origin.Y + placement.Box.Y,
 			W: placement.Box.W, H: placement.Box.H,
 		}
-		got, found := find(regionDocPane, placement.Node.ID)
+		got, found := find(region, placement.Node.ID)
 		if !found {
-			t.Fatalf("doc leaf %d was drawn without a hit region", placement.Node.ID)
+			t.Fatalf("content leaf %d was drawn without a hit region", placement.Node.ID)
 		}
 		if got != want {
-			t.Fatalf("doc leaf %d region = %+v, want the box it was drawn in %+v",
+			t.Fatalf("content leaf %d region = %+v, want the box it was drawn in %+v",
 				placement.Node.ID, got, want)
 		}
 	}
@@ -304,13 +310,13 @@ func fiveLeafPaneTree(t *testing.T, p *Plugin, root string) {
 		A: &PaneNode{ID: 11, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
 			A: &PaneNode{ID: 1, Kind: PaneTerminal},
 			B: &PaneNode{ID: 13, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
-				A: &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2},
-				B: &PaneNode{ID: 3, Kind: PaneDoc, DocID: 3},
+				A: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
+				B: &PaneNode{ID: 3, Kind: PaneDoc, ContentID: 3},
 			}},
 		}},
 		B: &PaneNode{ID: 12, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
-			A: &PaneNode{ID: 4, Kind: PaneDoc, DocID: 4},
-			B: &PaneNode{ID: 5, Kind: PaneDoc, DocID: 5},
+			A: &PaneNode{ID: 4, Kind: PaneDoc, ContentID: 4},
+			B: &PaneNode{ID: 5, Kind: PaneDoc, ContentID: 5},
 		}},
 	}}
 	p.paneFocus = 2

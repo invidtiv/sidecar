@@ -120,7 +120,7 @@ func TestLayoutPanesNestedSplitsPreserveEveryCell(t *testing.T) {
 
 func TestPaneTreeMutatorsPreserveLeafIDsAndCollapseOnClose(t *testing.T) {
 	root := &PaneNode{ID: 1, Kind: PaneTerminal}
-	newLeaf := &PaneNode{ID: 2, Kind: PaneDoc, DocID: 8}
+	newLeaf := &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 8}
 	root, focus := SplitLeaf(root, 1, SplitCols, newLeaf)
 	if focus != 2 || root.Split == nil {
 		t.Fatalf("split focus/root = %d/%+v", focus, root)

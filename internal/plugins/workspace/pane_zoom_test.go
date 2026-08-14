@@ -9,7 +9,7 @@ import (
 // zoomed leaf.
 func zoomTestTree() (root, terminal, doc *PaneNode) {
 	terminal = &PaneNode{ID: 1, Kind: PaneTerminal}
-	doc = &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2}
+	doc = &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
 	root = &PaneNode{ID: 10, Split: &PaneSplit{Axis: SplitCols, Ratio: 50, A: terminal, B: doc}}
 	return root, terminal, doc
 }

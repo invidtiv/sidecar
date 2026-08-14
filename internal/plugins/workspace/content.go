@@ -34,6 +34,7 @@ type Content interface {
 const (
 	contentKindTerminal = "terminal"
 	contentKindDoc      = "doc"
+	contentKindIssue    = "issue"
 )
 
 // Size is the box a content draws into. It is the leaf's whole box, header row
@@ -68,14 +69,22 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 	if node == nil {
 		return nil
 	}
-	if node.Kind == PaneDoc {
-		doc := p.docs[node.DocID]
+	switch node.Kind {
+	case PaneDoc:
+		doc := p.docs[node.ContentID]
 		if doc == nil || doc.view == nil {
 			return nil
 		}
 		return &docContent{p: p, doc: doc}
+	case PaneIssue:
+		issue := p.issues[node.ContentID]
+		if issue == nil || issue.view == nil {
+			return nil
+		}
+		return &issueContent{p: p, issue: issue}
+	default:
+		return &terminalContent{p: p}
 	}
-	return &terminalContent{p: p}
 }
 
 // terminalContent is the terminal leaf. Its header row is drawn from inside its
@@ -153,6 +162,33 @@ func (c *docContent) View(render Render) string {
 	return composePaneLeaf(
 		c.p.docPaneHeaderRow(c.doc, c.Title(), c.size.Width, render.Focused),
 		c.doc.view.View())
+}
+
+// issueContent is the td issue leaf: the pane's own header row above the issue
+// component. It spends its box exactly as the document leaf does, because the
+// row the frame draws is the pane's rather than the viewer's, and two leaves
+// side by side must put their bodies on the same relative row.
+type issueContent struct {
+	p     *Plugin
+	issue *issuePane
+	size  Size
+}
+
+func (c *issueContent) Kind() string { return contentKindIssue }
+
+// Title is the issue's headline, which is its ID until the fetch lands.
+func (c *issueContent) Title() string { return c.issue.view.Title() }
+
+func (c *issueContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	c.issue.view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	return nil
+}
+
+func (c *issueContent) View(render Render) string {
+	return composePaneLeaf(
+		c.p.issuePaneHeaderRow(c.Title(), c.size.Width, render.Focused),
+		c.issue.view.View())
 }
 
 // composePaneLeaf joins a leaf's header row to the body under it. An empty

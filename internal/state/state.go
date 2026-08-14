@@ -82,6 +82,8 @@ type PaneLayoutJSON struct {
 	Split   *PaneSplitJSON   `json:"split,omitempty"`
 	Tabs    []PaneDocTabJSON `json:"tabs,omitempty"`
 	Active  int              `json:"active,omitempty"`
+	// Issue is an issue leaf's durable target: the td ID a restore re-fetches.
+	Issue string `json:"issue,omitempty"`
 }
 
 type PaneSplitJSON struct {

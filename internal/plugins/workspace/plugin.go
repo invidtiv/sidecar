@@ -121,6 +121,8 @@ const (
 	regionDocPane          = "doc-pane"
 	regionDocMode          = "doc-mode"
 	regionDocClose         = "doc-close"
+	regionIssuePane        = "issue-pane"
+	regionIssueClose       = "issue-close"
 	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -219,6 +221,7 @@ type Plugin struct {
 	// documents as how a content asserts geometry it owns beyond this process.
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
+	issues       map[int]*issuePane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -667,6 +670,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneDragSplitID = 0
 	p.paneRestoreCmd = nil
 	p.docs = make(map[int]*docPane)
+	p.issues = make(map[int]*issuePane)
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}

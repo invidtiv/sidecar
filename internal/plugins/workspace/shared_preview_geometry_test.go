@@ -28,13 +28,13 @@ func paneTrees(t *testing.T) map[string]*PaneNode {
 			Axis:  SplitCols,
 			Ratio: 60,
 			A:     &PaneNode{ID: 1, Kind: PaneTerminal},
-			B:     &PaneNode{ID: 2, Kind: PaneDoc, DocID: 1},
+			B:     &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 1},
 		}},
 		"terminal above doc": {ID: 3, Split: &PaneSplit{
 			Axis:  SplitRows,
 			Ratio: 55,
 			A:     &PaneNode{ID: 1, Kind: PaneTerminal},
-			B:     &PaneNode{ID: 2, Kind: PaneDoc, DocID: 1},
+			B:     &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 1},
 		}},
 	}
 }
