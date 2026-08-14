@@ -544,8 +544,12 @@ func DefaultBindings() []Binding {
 		{Key: "a", Command: "show-archived", Context: "notes-list"},
 		{Key: "u", Command: "undo", Context: "notes-list"},
 		{Key: "r", Command: "refresh", Context: "notes-list"},
+		// enter is the built-in editor; e is vim in the right pane; E leaves
+		// for $EDITOR. Three editors, three explicit keys — nothing infers one
+		// from a config value.
 		{Key: "enter", Command: "edit-note", Context: "notes-list"},
-		{Key: "e", Command: "edit-note", Context: "notes-list"},
+		{Key: "e", Command: "vim-edit", Context: "notes-list"},
+		{Key: "E", Command: "external-editor", Context: "notes-list"},
 		{Key: "/", Command: "search", Context: "notes-list"},
 		{Key: "T", Command: "to-task", Context: "notes-list"},
 		{Key: "I", Command: "show-info", Context: "notes-list"},
@@ -568,7 +572,9 @@ func DefaultBindings() []Binding {
 		// Notes preview context (read-only view)
 		{Key: "alt+c", Command: "copy-note", Context: "notes-preview"},
 		{Key: "enter", Command: "edit-note", Context: "notes-preview"},
-		{Key: "e", Command: "edit-note", Context: "notes-preview"},
+		{Key: "i", Command: "edit-note", Context: "notes-preview"},
+		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
+		{Key: "E", Command: "external-editor", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},

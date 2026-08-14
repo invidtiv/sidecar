@@ -134,7 +134,9 @@ Sidecar puts your entire software engineering workflow into a single, unified te
 ## 8. Notes & Scratchpad Plugin
 
 - **Project Scratchpad:** Project-scoped note-taking engine for quick thoughts, scratch code, and agent instructions (`notes_plugin`).
-- **Inline Note Editor:** Multi-line text editor with mouse text selection and instant disk save.
+- **Inline Note Editor:** Multi-line text editor with mouse text selection and instant disk save. Opened by clicking a note or pressing `enter` (`i` from the preview); needs no tmux.
+- **Editor in the Right Pane:** `e` runs `$EDITOR` inside the notes pane rather than taking over the screen.
+- **External Editor:** `E` opens the note in `$EDITOR`, leaving Sidecar until you exit.
 - **Search & Conversion Modals:**
   - Quick note search modal (`/`).
   - Convert notes directly into actionable TD tasks or worktree specs.
