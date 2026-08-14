@@ -96,6 +96,27 @@ func DefaultBindings() []Binding {
 		// Navigation: leave global and open the project's Git plugin.
 		{Key: "O", Command: "open-in-git", Context: "global-workspaces"},
 
+		// Rename prompt. Enter confirms; esc cancels. The query is a text input.
+		{Key: "enter", Command: "confirm", Context: "global-workspaces-rename"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-rename"},
+
+		// Focused document leaf beside the selected terminal. q closes the
+		// pane; it must not be a root context or Sidecar would quit instead.
+		{Key: "q", Command: "close", Context: "global-workspaces-doc"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-doc"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-doc"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-doc"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-doc"},
+		{Key: "m", Command: "render", Context: "global-workspaces-doc"},
+		{Key: "Y", Command: "yank-path", Context: "global-workspaces-doc"},
+
+		// Focused td issue leaf. y/Y match td monitor and the project issue pane.
+		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
+		{Key: "y", Command: "yank-issue", Context: "global-workspaces-issue"},
+		{Key: "Y", Command: "yank-issue-key", Context: "global-workspaces-issue"},
+		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-issue"},
+
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface
 		// around it are listed: the ways out and the terminal's own selection and

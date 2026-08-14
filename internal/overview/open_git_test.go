@@ -92,7 +92,7 @@ func TestListCommandsAdvertiseGit(t *testing.T) {
 	m.workspaces.SelectID("a")
 	var found bool
 	for _, cmd := range m.Commands() {
-		if cmd.Key == "O" && cmd.Name == "Git" {
+		if cmd.ID == "open-in-git" && cmd.Name == "Git" {
 			found = true
 		}
 	}

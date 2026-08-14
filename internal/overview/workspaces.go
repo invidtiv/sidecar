@@ -479,10 +479,11 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// WorkspaceFocusContext distinguishes the list from a pane being typed into
-// (and the leftover preview-only layout when the sidebar is hidden), so
-// binding, footer and help discovery follow mouse/keyboard focus. There is no
-// watched-preview keyboard mode: the only way onto the pane is typing.
+// WorkspaceFocusContext is the keymap, footer, and help context for this tab.
+// List, filter, rename, typing, and a focused document or issue leaf each have
+// their own. There is no watched-preview context: hiding the sidebar is layout
+// only, and the keyboard stays on the list until the user types or focuses a
+// content leaf.
 func (m *Model) WorkspaceFocusContext() string {
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
@@ -490,7 +491,26 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.renameOpen {
 		return "global-workspaces-rename"
 	}
+	if m.WorkspacesFilterFocused() {
+		return "global-workspaces-filter"
+	}
+	if m.issuePaneFocused() {
+		return "global-workspaces-issue"
+	}
+	if m.docPaneFocused() {
+		return "global-workspaces-doc"
+	}
 	return "global-workspaces"
+}
+
+func (m *Model) issuePaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.issue != nil && m.preview.issue.focused
+}
+
+func (m *Model) docPaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.doc != nil && m.preview.doc.focused
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -851,11 +871,9 @@ func (m *Model) WorkspacesSummary() string {
 	return fmt.Sprintf("%d workspaces", total)
 }
 
-// The browser's command set is not declared here. It is registered in
-// internal/keymap under the "global-workspaces", "global-workspaces-terminal"
-// and "global-workspaces-filter" contexts, which is what makes it discoverable
-// in help and the palette rather than only in footer hints — and what makes
-// the boundary (no create, delete or attach anywhere; rename-shell is a
-// display-name write, not create/destroy; typing only via Enter / click / E)
-// a single documented fact instead of a second list beside the keys this
-// file actually answers.
+// The browser's command set is declared in Commands() and registered in
+// internal/keymap under each WorkspaceFocusContext. Help, the palette, and
+// the host footer all read that pair, so a focused document or issue leaf
+// cannot advertise the list's keys. The list itself stays a reader: no
+// create, delete, or attach. rename-shell is a display-name write, not
+// create/destroy. Typing into a live pane is Enter / click / E.

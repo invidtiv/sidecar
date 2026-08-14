@@ -11,7 +11,6 @@ import (
 	"golang.org/x/term"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -1370,19 +1369,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "y":
 			if d := m.previewIssueData(); d != nil {
-				text := d.ID + ": " + d.Title + "\n\n" + d.Description
-				if err := clipboard.WriteAll(text); err != nil {
-					return m, ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-				}
-				return m, ShowToast("Yanked issue details", 2*time.Second)
+				return m, issueview.CopyMarkdown(d)
 			}
-		case "Y":
+		case "Y", "shift+y":
 			if d := m.previewIssueData(); d != nil {
-				id := d.ID
-				if err := clipboard.WriteAll(id); err != nil {
-					return m, ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-				}
-				return m, ShowToast("Yanked: "+id, 2*time.Second)
+				return m, issueview.CopyID(d)
 			}
 		}
 
@@ -1603,13 +1594,9 @@ func (m *Model) updateContext() {
 			m.activeContext = host.FocusContext()
 			return
 		}
-		if m.globalWorkspacesFilterFocused() {
-			// A focused filter is a text-input context, so sidecar's printable
-			// shortcuts stay off the query.
-			m.activeContext = "global-workspaces-filter"
-			return
-		}
 		if m.globalWorkspacesVisible() && m.overview != nil {
+			// Includes the filter, rename prompt, a focused document or
+			// issue leaf, and typing. Those contexts are not the list's.
 			m.activeContext = m.overview.WorkspaceFocusContext()
 			return
 		}

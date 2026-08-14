@@ -194,6 +194,10 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeIssuePane(leaf.ID)
+	case "y":
+		return true, p.yankFocusedIssue(false)
+	case "Y", "shift+y":
+		return true, p.yankFocusedIssue(true)
 	default:
 		beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
 		_, cmd := issue.view.HandleKey(msg)
@@ -250,4 +254,19 @@ func (p *Plugin) registerIssuePaneRegions(title string, leafID int, box Box) {
 
 func issueViewLocal(actionX, actionY int, box Box) (int, int) {
 	return actionX - box.X, actionY - box.Y - terminalHeaderRows
+}
+
+func (p *Plugin) yankFocusedIssue(idOnly bool) tea.Cmd {
+	issue, _ := p.focusedIssuePane()
+	if issue == nil || issue.view == nil {
+		return nil
+	}
+	data := issue.view.Data()
+	if data == nil {
+		return nil
+	}
+	if idOnly {
+		return issueview.CopyID(data)
+	}
+	return issueview.CopyMarkdown(data)
 }

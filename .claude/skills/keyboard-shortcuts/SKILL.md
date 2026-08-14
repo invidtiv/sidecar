@@ -83,9 +83,11 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 `^`, `i`, `ctrl+c`, `q`. Plugin-switching keys (`` ` ``, `~`, `1-9`) close the Overview first.
 `esc` on the Agents board or Workspaces list leaves the global space. `q` opens Sidecar's quit modal.
 
-## Global Workspaces (`global-workspaces` context)
+## Global Workspaces
 
-Two keyboard states only: **list (browse)** and **interactive (type)**. There is no watched-preview focus. `l` / `→` do not move focus to the preview.
+Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`.
+
+The list is browse-only. There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
 
 | Key | Action |
 |-----|--------|
@@ -108,6 +110,23 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | `K` | Toggle the global space |
 
 `ctrl+]` attach stays project-only and is off unless `tmux_full_attach` is enabled. While typing, `i` and `q` go to the pane.
+
+### Focused document (`global-workspaces-doc`)
+
+Same tab keys as the project document pane: `q`/`esc` close, `x` close tab, `{`/`}` cycle tabs, `m` toggle render, `Y` yank path.
+
+### Focused issue (`global-workspaces-issue`)
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `enter` | open-item | Open selected parent or subtask |
+| `y` | yank-issue | Copy issue as markdown |
+| `Y` | yank-issue-key | Copy issue ID |
+| `q` / `esc` | close | Close the issue pane |
+
+### Project issue pane (`workspace-issue`)
+
+Same `y` / `Y` yank pair, plus `tab` / `shift+tab` to cycle panes and `\` to toggle the sidebar.
 
 ## Sidebar Controls (All Two-Pane Plugins)
 
@@ -249,6 +268,7 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
 | `workspace-doc` | File tabs beside the terminal (hide with `q`) |
+| `workspace-issue` | td issue leaf beside the terminal (hide with `q`) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |

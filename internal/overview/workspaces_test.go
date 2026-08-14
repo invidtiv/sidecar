@@ -650,7 +650,7 @@ func TestListFocusedCommandsAdvertisePin(t *testing.T) {
 	m := catalogModel(t)
 	var found bool
 	for _, cmd := range m.Commands() {
-		if cmd.Key == "p" && cmd.Name == "Pin" {
+		if cmd.ID == "pin" && cmd.Name == "Pin" {
 			found = true
 		}
 	}

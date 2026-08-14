@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -23,6 +25,7 @@ import (
 func globalFrameModel(t *testing.T) Model {
 	t.Helper()
 	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
 	m.scope, m.globalTab = ScopeGlobal, GlobalWorkspaces
 	m.updateContext()
 	return m
@@ -94,6 +97,27 @@ func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 		if containsHint(list, forbidden) || containsHint(hidden, forbidden) {
 			t.Fatalf("the read-only browser advertised %q: list=%v hidden=%v", forbidden, list, hidden)
 		}
+	}
+}
+
+func TestGlobalWorkspacesFooterFollowsIssueContext(t *testing.T) {
+	m := globalFrameModel(t)
+	hints := m.commandFooterHints([]plugin.Command{
+		{ID: "open-item", Name: "Open", Context: "global-workspaces-issue", Priority: 1},
+		{ID: "yank-issue", Name: "Yank", Context: "global-workspaces-issue", Priority: 2},
+		{ID: "yank-issue-key", Name: "YankID", Context: "global-workspaces-issue", Priority: 3},
+		{ID: "close", Name: "Close", Context: "global-workspaces-issue", Priority: 4},
+		{ID: "pin", Name: "Pin", Context: "global-workspaces", Priority: 4},
+	}, "global-workspaces-issue")
+	labels := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		labels = append(labels, hint.label)
+	}
+	if !containsHint(labels, "Yank") || !containsHint(labels, "YankID") || !containsHint(labels, "Close") {
+		t.Fatalf("issue footer = %v, want Yank / YankID / Close", labels)
+	}
+	if containsHint(labels, "Pin") {
+		t.Fatalf("issue footer leaked the list: %v", labels)
 	}
 }
 

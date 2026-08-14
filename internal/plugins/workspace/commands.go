@@ -37,10 +37,12 @@ func (p *Plugin) Commands() []plugin.Command {
 	if p.viewMode == ViewModeList && p.issueFocused() {
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: "workspace-issue", Priority: 1},
-			{ID: "close", Name: "Close", Description: "Close issue pane", Context: "workspace-issue", Priority: 2},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 3},
-			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 4},
-			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 5},
+			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: "workspace-issue", Priority: 2},
+			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: "workspace-issue", Priority: 3},
+			{ID: "close", Name: "Close", Description: "Close issue pane", Context: "workspace-issue", Priority: 4},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 5},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 6},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 7},
 		}
 	}
 	switch p.viewMode {

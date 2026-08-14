@@ -496,6 +496,25 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 		}
 	}
 
+	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); !handled || cmd == nil {
+		t.Fatalf("y on a loaded issue: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'Y', Text: "Y"}); !handled || cmd == nil {
+		t.Fatalf("Y on a loaded issue: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	var yank, yankID bool
+	for _, cmd := range p.Commands() {
+		switch cmd.ID {
+		case "yank-issue":
+			yank = true
+		case "yank-issue-key":
+			yankID = true
+		}
+	}
+	if !yank || !yankID {
+		t.Fatalf("workspace-issue Commands() omitted yank: %#v", p.Commands())
+	}
+
 	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'q'}); cmd == nil {
 		t.Fatal("q did not close the issue leaf back onto its sibling")
 	}

@@ -1055,28 +1055,6 @@ func fitCompactLine(line string, width int) string {
 	return line
 }
 
-func (m *Model) Commands() []struct{ Key, Name string } {
-	if m.RenameShellOpen() {
-		return []struct{ Key, Name string }{{"enter", "Rename"}, {"esc", "Cancel"}}
-	}
-	if m.PreviewFocused() && m.preview.doc != nil && m.preview.doc.focused && !m.PreviewInteractive() {
-		return []struct{ Key, Name string }{
-			{"q", "Close"}, {"x", "Tab×"}, {"{", "Tab←"}, {"}", "Tab→"}, {"m", "Raw"},
-		}
-	}
-	if !m.PreviewInteractive() {
-		cmds := []struct{ Key, Name string }{{"enter", "Type"}, {"p", "Pin"}, {"r", "Refresh"}}
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
-			cmds = append(cmds, struct{ Key, Name string }{"R", "Rename"})
-		}
-		if m.canOpenInGit() {
-			cmds = append(cmds, struct{ Key, Name string }{"O", "Git"})
-		}
-		return cmds
-	}
-	return []struct{ Key, Name string }{{"enter", "Open"}, {"r", "Refresh"}}
-}
-
 func clean(path string) string { return workspaceinventory.CanonicalPath(path) }
 
 func normalizeProject(project Project) Project {

@@ -235,7 +235,7 @@ func TestListCommandsAdvertiseRenameOnlyForAShell(t *testing.T) {
 	m.workspaces.SelectID("c")
 	var found bool
 	for _, cmd := range m.Commands() {
-		if cmd.Key == "R" && cmd.Name == "Rename" {
+		if cmd.ID == "rename-shell" && cmd.Name == "Rename" {
 			found = true
 		}
 	}

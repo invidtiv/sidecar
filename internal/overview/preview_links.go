@@ -534,6 +534,11 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, m.cyclePreviewDocTab(-1)
 		case "}":
 			return true, m.cyclePreviewDocTab(1)
+		case "Y", "shift+y":
+			if view := m.preview.doc.view(); view != nil {
+				return true, docview.YankPath(view.Title())
+			}
+			return true, nil
 		case "r":
 			// Refresh rebuilds the preview and would drop this document.
 			return true, nil

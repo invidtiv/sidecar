@@ -649,6 +649,23 @@ func TestGlobalPreviewDocTabClickSelectsFile(t *testing.T) {
 	}
 }
 
+func TestGlobalPreviewIssueQReturnsToTheList(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	if m.preview.issue == nil || !m.PreviewFocused() {
+		t.Fatal("issue did not take preview focus")
+	}
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	run(t, m, cmd)
+	if !handled || m.preview.issue != nil || m.PreviewFocused() {
+		t.Fatalf("q handled=%v issue=%#v focused=%v", handled, m.preview.issue, m.PreviewFocused())
+	}
+	if got := m.WorkspaceFocusContext(); got != ctxGlobalWorkspaces {
+		t.Fatalf("after q context = %q, want the list", got)
+	}
+}
+
 func TestGlobalPreviewDocQClosesAndDropsStaleLoad(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	first := m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))

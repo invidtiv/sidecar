@@ -110,8 +110,9 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 	}
 	if m.preview.doc != nil {
 		m.focusPreviewPane(panelayout.Document)
+		return m.syncTerminalGeometry()
 	}
-	return m.syncTerminalGeometry()
+	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
 func previewIssueHeaderChips(issue *previewIssue, width int, focused bool) []string {
@@ -207,6 +208,10 @@ func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return true, m.closePreviewIssue()
+	case "y":
+		return true, m.yankPreviewIssue(false)
+	case "Y", "shift+y":
+		return true, m.yankPreviewIssue(true)
 	}
 	issue.focused = true
 	issue.view.SetActive(true)
@@ -218,4 +223,19 @@ func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// A focused issue is its own input context. Do not let an unowned key
 	// refresh, navigate, or type into the terminal behind the visible card.
 	return true, nil
+}
+
+func (m *Model) yankPreviewIssue(idOnly bool) tea.Cmd {
+	issue := m.preview.issue
+	if issue == nil || issue.view == nil {
+		return nil
+	}
+	data := issue.view.Data()
+	if data == nil {
+		return nil
+	}
+	if idOnly {
+		return issueview.CopyID(data)
+	}
+	return issueview.CopyMarkdown(data)
 }
