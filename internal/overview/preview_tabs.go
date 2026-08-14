@@ -296,13 +296,17 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 }
 
 func (m *Model) renderOutputPreview(width, height int) string {
-	if m.preview.doc != nil {
+	if m.previewSecondaryOpen() {
 		box := termpreview.Box{W: width, H: height}
-		termBox, docBox, split := m.previewDocLayout(box)
+		termBox, secondaryBox, split := m.previewSecondaryLayout(box)
 		if split {
 			term := m.renderOutputTerminal(termBox.W, termBox.H)
-			document := m.renderPreviewDoc(m.preview.doc, docBox)
-			return joinPreviewDoc(term, document, height, m.preview.doc.focused)
+			if m.preview.issue != nil {
+				issue := m.renderPreviewIssue(m.preview.issue, secondaryBox)
+				return joinPreviewSecondary(term, issue, height, m.preview.issue.focused)
+			}
+			document := m.renderPreviewDoc(m.preview.doc, secondaryBox)
+			return joinPreviewSecondary(term, document, height, m.preview.doc.focused)
 		}
 	}
 	return m.renderOutputTerminal(width, height)

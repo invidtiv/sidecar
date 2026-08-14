@@ -12,13 +12,13 @@ No output yet                                     │
                                                   │
                                                   │─────────────────────────────────────────────────
                                                   │ td-1a2b3c: Issue td-1a2b3c   ×           q close
-                                                  │OPEN ───────────────────────────────── td-1a2b3c┃
-                                                  │Issue td-1a2b3c                                 ┃
-                                                  │■ task  P2                                      ┃
-                                                  │                                                ┃
-                                                  │DESCRIPTION ───────────────────────────────── 18│
-                                                  │  Body of td-1a2b3c.                            │
-                                                  │                                                │
-                                                  │  Paragraph 1 of td-1a2b3c.                     │
-                                                  │                                                │
-                                                  │  Paragraph 2 of td-1a2b3c.                     │
+                                                  │ OPEN ─────────────────────────────── td-1a2b3c┃
+                                                  │ Issue td-1a2b3c                               ┃
+                                                  │ ■ task  P2                                    ┃
+                                                  │                                               ┃
+                                                  │ DESCRIPTION ─────────────────────────────── 18│
+                                                  │   Body of td-1a2b3c.                          │
+                                                  │                                               │
+                                                  │   Paragraph 1 of td-1a2b3c.                   │
+                                                  │                                               │
+                                                  │   Paragraph 2 of td-1a2b3c.                   │

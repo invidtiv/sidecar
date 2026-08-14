@@ -81,7 +81,7 @@ type pollMsg struct{ Generation int }
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
-		previewDocLoadedMsg, previewHistoryLoadedMsg,
+		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
 		renameShellDoneMsg:
 		return true
@@ -143,6 +143,14 @@ type Model struct {
 	terminalConfig     tty.Config
 	width              int
 	height             int
+
+	// A coalesced terminal wheel event that was held changed no visible state.
+	// Reuse the preceding Workspaces frame once rather than rebuilding it.
+	reuseWorkspacesViewOnce bool
+	workspacesViewCache     string
+	workspacesViewCacheW    int
+	workspacesViewCacheH    int
+	workspacesViewCacheOK   bool
 
 	// showIdleWorktrees is the global-list visibility flag. Off by default;
 	// the sort/filter fly-out is the only control that turns it on.
@@ -404,6 +412,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.advancePreviewAutoScroll(msg)
 	case previewDocLoadedMsg:
 		m.applyPreviewDocLoaded(msg)
+		return nil
+	case previewIssueLoadedMsg:
+		m.applyPreviewIssueLoaded(msg)
 		return nil
 	case previewHistoryLoadedMsg:
 		return m.applyPreviewHistory(msg)

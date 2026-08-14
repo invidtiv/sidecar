@@ -228,6 +228,12 @@ func (m *Model) workspacesLayout() workspacesLayout {
 // columns.
 func (m *Model) WorkspacesView(width, height int) string {
 	m.width, m.height = width, height
+	if m.reuseWorkspacesViewOnce && m.workspacesViewCacheOK &&
+		m.workspacesViewCacheW == width && m.workspacesViewCacheH == height {
+		m.reuseWorkspacesViewOnce = false
+		return m.workspacesViewCache
+	}
+	m.reuseWorkspacesViewOnce = false
 	if m.workspacesMouse == nil {
 		m.workspacesMouse = mouse.NewHandler()
 	}
@@ -258,11 +264,15 @@ func (m *Model) WorkspacesView(width, height int) string {
 		view = lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 	}
 	if m.renameOpen {
-		return m.overlayRenameShell(view, width, height)
+		view = m.overlayRenameShell(view, width, height)
 	}
 	if m.viewFlyoutOpen {
-		return m.overlayViewFlyout(view, width, height)
+		view = m.overlayViewFlyout(view, width, height)
 	}
+	m.workspacesViewCache = view
+	m.workspacesViewCacheW = width
+	m.workspacesViewCacheH = height
+	m.workspacesViewCacheOK = true
 	return view
 }
 
@@ -304,9 +314,10 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 }
 
 func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
-	termBox, _, _ := m.previewDocLayout(box)
+	termBox, _, _ := m.previewSecondaryLayout(box)
 	m.registerPreviewTabRegions(termBox)
 	m.registerPreviewDocRegions(box)
+	m.registerPreviewIssueRegions(box)
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -593,13 +604,13 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if region, ok := action.Region.Data.(workspacelist.Region); ok && region.Kind == workspacelist.RegionRow {
 		kind = string(region.Kind)
 	}
-	docClick := isPreviewDocRegion(kind)
+	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
 	cmd := m.workspacesRegionMouse(action)
-	if !pressAway || docClick {
+	if !pressAway || secondaryClick {
 		return cmd
 	}
 	// Last, so a region that hands the keyboard back itself — the sidebar,
@@ -650,6 +661,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewDocRegion(kind) {
 		return m.handlePreviewDocMouse(action)
+	}
+	if kind, ok := action.Region.Data.(string); ok && isPreviewIssueRegion(kind) {
+		return m.handlePreviewIssueMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch kind {

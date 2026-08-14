@@ -198,7 +198,7 @@ func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bo
 			return terminalLinkSurfaceContext{}
 		}
 		rawRoot = wt.Path
-		surface = "workspace:" + stablePathKey(wt.Path)
+		surface = workspaceSurfaceIdentity(wt)
 	}
 	if termPanel {
 		surface += ":panel"

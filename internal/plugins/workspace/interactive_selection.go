@@ -368,7 +368,7 @@ func (p *Plugin) terminalProjectionIdentity(termPanel bool) string {
 		return ""
 	}
 	if wt := p.selectedWorktree(); wt != nil {
-		return "workspace:" + stablePathKey(wt.Path) + "\x00" + p.terminalLinkTarget(false)
+		return workspaceSurfaceIdentity(wt) + "\x00" + p.terminalLinkTarget(false)
 	}
 	return ""
 }

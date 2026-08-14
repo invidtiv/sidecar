@@ -2,6 +2,7 @@ package issueview
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -91,6 +92,34 @@ func TestModelRendersStandaloneAtItsSize(t *testing.T) {
 	}
 }
 
+func TestModelInsetsContentAndHitGeometryByOneColumn(t *testing.T) {
+	for _, width := range []int{7, 60} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			m := New(nil)
+			m.SetSize(width, 24)
+			apply(t, m, sample(), nil)
+
+			lines := rows(t, m.View(), width, 24)
+			for i, line := range lines {
+				plain := ansi.Strip(line)
+				if plain[0] != ' ' || plain[len(plain)-1] != ' ' {
+					t.Fatalf("row %d lacks one-column outer inset: %q", i, plain)
+				}
+			}
+
+			wantHitWidth := width - 2
+			if m.needsScrollbar() {
+				wantHitWidth--
+			}
+			for _, hit := range m.Hits() {
+				if hit.X != 1 || hit.W != wantHitWidth {
+					t.Fatalf("hit %+v, want x=1 width=%d", hit, wantHitWidth)
+				}
+			}
+		})
+	}
+}
+
 func TestModelRendersLoadingAndError(t *testing.T) {
 	m := New(nil)
 	m.SetSize(40, 4)
@@ -126,6 +155,31 @@ func TestModelIgnoresStaleResults(t *testing.T) {
 	}
 	if m.Title() != Heading(sample()) {
 		t.Errorf("title is %q", m.Title())
+	}
+}
+
+func TestPendingScrollIsAppliedOnlyByTheCurrentLoadGeneration(t *testing.T) {
+	m := New(nil)
+	m.SetSize(40, 3)
+	first := result(t, m, sample(), nil)
+	m.SetPendingScroll(4)
+
+	secondData := sample()
+	secondData.ID = "td-second"
+	secondData.Description = strings.Repeat("line\n\n", 20)
+	second := result(t, m, secondData, nil)
+	m.SetPendingScroll(3)
+	if m.SetResult(first) {
+		t.Fatal("stale generation consumed pending scroll")
+	}
+	if got := m.ScrollOffset(); got != 3 {
+		t.Fatalf("pending scroll after stale result = %d, want 3", got)
+	}
+	if !m.SetResult(second) {
+		t.Fatal("current generation was rejected")
+	}
+	if got := m.ScrollOffset(); got != 3 {
+		t.Fatalf("restored scroll = %d, want 3", got)
 	}
 }
 
@@ -220,33 +274,48 @@ func TestActiveDownSelectsSubtasksAndEnterOpensThem(t *testing.T) {
 	}
 }
 
-func TestClickSelectsSubtask(t *testing.T) {
+func TestClickOpensParentAndSubtaskAndBodyClickOnlyActivates(t *testing.T) {
 	m := New(nil)
 	m.SetSize(60, 22)
-	apply(t, m, sample(), nil)
-	_ = m.View() // populate hits
-
-	var child Hit
-	found := false
-	for _, h := range m.Hits() {
-		if h.Kind == HitChild && h.ID == "td-ae3a2a" {
-			child = h
-			found = true
-			break
+	for _, tc := range []struct {
+		id   string
+		kind HitKind
+	}{
+		{id: "td-parent1", kind: HitParent},
+		{id: "td-ae3a2a", kind: HitChild},
+	} {
+		apply(t, m, sample(), nil)
+		_ = m.View() // populate hits from the rendered rows
+		var target Hit
+		found := false
+		for _, h := range m.Hits() {
+			if h.Kind == tc.kind && h.ID == tc.id {
+				target = h
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no hit for %s: %+v", tc.id, m.Hits())
+		}
+		kind, cmd := m.HandleClick(target.X, target.Y)
+		if kind != tc.kind || cmd != nil {
+			t.Fatalf("click %s = %v cmd=%v", tc.id, kind, cmd != nil)
+		}
+		if !m.Active() {
+			t.Fatal("click did not activate the card")
+		}
+		if m.SelectedID() != tc.id || m.IssueID() != tc.id {
+			t.Fatalf("click selected/opened %q/%q, want %s", m.SelectedID(), m.IssueID(), tc.id)
 		}
 	}
-	if !found {
-		t.Fatalf("no hit for td-ae3a2a: %+v", m.Hits())
-	}
-	kind, cmd := m.HandleClick(1, child.Y)
-	if kind != HitChild || cmd != nil {
-		t.Fatalf("click = %v cmd=%v", kind, cmd != nil)
-	}
-	if !m.Active() {
-		t.Fatal("click did not activate the card")
-	}
-	if m.SelectedID() != "td-ae3a2a" {
-		t.Fatalf("click selected %q, want td-ae3a2a", m.SelectedID())
+
+	apply(t, m, sample(), nil)
+	m.SetActive(false)
+	_ = m.View()
+	kind, cmd := m.HandleClick(0, 0)
+	if kind != HitBody || cmd != nil || m.IssueID() != sample().ID || !m.Active() {
+		t.Fatalf("padding/body click = kind %v cmd=%v issue=%q active=%v", kind, cmd != nil, m.IssueID(), m.Active())
 	}
 }
 

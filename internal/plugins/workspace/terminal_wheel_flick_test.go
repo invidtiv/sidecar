@@ -99,6 +99,40 @@ func TestCrossingBetweenTerminalSurfacesEndsTheFlickItLeaves(t *testing.T) {
 	}
 }
 
+func TestHeldWheelReusesOneProjectWorkspacesFrameOnBothTerminalSurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		region string
+	}{
+		{name: "primary preview", region: regionPreviewPane},
+		{name: "terminal panel", region: regionTermPanelContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := flickWheelPlugin(t, tty.WheelDebounceInterval/3)
+
+			// The first notch applies immediately and must take a normal render.
+			flickOver(p, tc.region, 1)
+			if p.reuseHeldWheelViewOnce {
+				t.Fatal("first immediate notch requested cached-frame reuse")
+			}
+
+			p.wheelViewCache = "already rendered"
+			p.wheelViewCacheW, p.wheelViewCacheH = p.width, p.height
+			p.wheelViewCacheOK = true
+			flickOver(p, tc.region, 1)
+			if !p.reuseHeldWheelViewOnce {
+				t.Fatal("held notch did not request cached-frame reuse")
+			}
+			if got := p.View(p.width, p.height); got != "already rendered" {
+				t.Fatalf("held notch rebuilt the Workspaces view, got %q", got)
+			}
+			if p.reuseHeldWheelViewOnce {
+				t.Fatal("cached-frame reuse was not consumed after one View")
+			}
+		})
+	}
+}
+
 // A notch is the reader reading this pane, forwarded or not: the surface's own
 // capture cadence decays from that clock, so a locally scrolled pane must be
 // repainted at the active tier rather than the idle one.

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -372,31 +373,44 @@ func TestDocPaneTabStripOverflowKeepsActiveFilename(t *testing.T) {
 	}
 }
 
-func TestDocPaneTabClickSelectsTab(t *testing.T) {
-	root := t.TempDir()
-	writeDocPaneFixture(t, root, "README.md", "# readme\n")
-	writeDocPaneFixture(t, root, "main.go", "package main\n")
-	p := docPaneTestPlugin(t, root, true)
-	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
-	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
-	doc := p.activeDocPaneOrNil()
-	if doc.view().Title() != "main.go" {
-		t.Fatalf("active = %q, want main.go", doc.view().Title())
-	}
+func TestDocPaneTabRawCoordinateClickSelectsTab(t *testing.T) {
+	for _, width := range []int{48, 100} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# readme\n")
+			writeDocPaneFixture(t, root, "main.go", "package main\n")
+			p := docPaneTestPlugin(t, root, true)
+			p.width, p.height = width, 20
+			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+			doc := p.activeDocPaneOrNil()
+			if doc.view().Title() != "main.go" {
+				t.Fatalf("active = %q, want main.go", doc.view().Title())
+			}
 
-	if _, ok := p.renderDocumentSplit(100, 12); !ok {
-		t.Fatal("document split was not rendered")
-	}
-	tab := docPaneTabRegion(p, 0)
-	if tab == nil {
-		t.Fatal("README tab has no hit region")
-	}
-	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, Region: tab})
-	if doc.view().Title() != "README.md" {
-		t.Fatalf("click did not select README: %q", doc.view().Title())
-	}
-	if docPaneRegion(p, "doc-close") != nil {
-		t.Fatal("header registered a close hit region")
+			p.mouseHandler.Clear()
+			_ = p.renderListView(width, p.height)
+			drawn := docPaneTabRegion(p, 0)
+			if drawn == nil {
+				t.Fatal("README tab has no rendered hit region")
+			}
+			x, y := drawn.Rect.X+drawn.Rect.W/2, drawn.Rect.Y
+			resolved := p.mouseHandler.HitMap.Test(x, y)
+			if resolved == nil || resolved.ID != regionDocTab {
+				t.Fatalf("raw coordinate (%d,%d) resolves to %#v, want %s", x, y, resolved, regionDocTab)
+			}
+			if hit, ok := resolved.Data.(docTabHit); !ok || hit.Index != 0 {
+				t.Fatalf("raw coordinate (%d,%d) resolves to %#v, want tab 0", x, y, resolved.Data)
+			}
+
+			_ = p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+			if doc.view().Title() != "README.md" {
+				t.Fatalf("raw click did not select README: %q", doc.view().Title())
+			}
+			if docPaneRegion(p, "doc-close") != nil {
+				t.Fatal("header registered a close hit region")
+			}
+		})
 	}
 }
 
@@ -929,12 +943,102 @@ func TestKillingSelectedShellDoesNotWipeTheNextSurface(t *testing.T) {
 	p = updated.(*Plugin)
 	p.saveSelectionState()
 	bLayout := workspacePaneLayout(saved, "shell:test-shell-b")
+	if workspacePaneLayout(saved, "shell:test-shell") != nil {
+		t.Fatalf("killing A retained its owned layout: %#v", saved.PaneLayouts)
+	}
 	if !layoutHasDocPath(bLayout, "main.go") {
 		t.Fatalf("killing A wiped B: %#v", saved.PaneLayouts)
 	}
 	doc, _ := p.activeDocPane()
 	if doc == nil || doc.view().Title() != "main.go" || doc.surface != "shell:test-shell-b" {
 		t.Fatalf("live tree after killing A = %#v, want B's main.go", doc)
+	}
+}
+
+func TestManifestSyncPreservesPaneLayoutsByShellIdentity(t *testing.T) {
+	for _, selected := range []string{"removed A", "surviving B after earlier removal"} {
+		t.Run(selected, func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# A\n")
+			writeDocPaneFixture(t, root, "main.go", "package main\n")
+			p, saved := persistDocPanePlugin(t, root)
+			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+			p.selectTopShellAt(1)
+			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+			if selected == "removed A" {
+				p.selectTopShellAt(0)
+			}
+			p.saveSelectionState()
+
+			manifest := &ShellManifest{Version: manifestVersion, Shells: []ShellDefinition{{
+				TmuxName: "test-shell-b", DisplayName: "Shell B", WorkDir: root,
+			}}}
+			p.shellManifest = manifest
+			p.applyManifestSync(shellManifestSyncMsg{
+				Manifest: manifest,
+				Running:  map[string]bool{"test-shell-b": true},
+				PaneIDs:  map[string]string{"test-shell-b": "%903"},
+			})
+
+			if !p.shellSelected || p.selectedShellIdx != 0 || p.getSelectedShell() == nil || p.getSelectedShell().TmuxName != "test-shell-b" {
+				t.Fatalf("selection after sync = shell:%v index:%d selected:%#v", p.shellSelected, p.selectedShellIdx, p.getSelectedShell())
+			}
+			doc, _ := p.activeDocPane()
+			if doc == nil || doc.surface != "shell:test-shell-b" || doc.view().Title() != "main.go" {
+				t.Fatalf("live tree after sync = %#v, want B's main.go", doc)
+			}
+			if workspacePaneLayout(*saved, "shell:test-shell") != nil {
+				t.Fatalf("dropped A layout survived: %#v", saved.PaneLayouts)
+			}
+
+			// Stop is the exact path that exposed the identity bug: it must save
+			// B's restored/live tree back under B, never A's tree or terminal-only.
+			p.Stop()
+			bLayout := workspacePaneLayout(*saved, "shell:test-shell-b")
+			if !layoutHasDocPath(bLayout, "main.go") || layoutHasDocPath(bLayout, "README.md") {
+				t.Fatalf("Stop corrupted B after manifest sync: %#v", saved.PaneLayouts)
+			}
+		})
+	}
+}
+
+func TestRemovingSelectedWorktreeForgetsOnlyItsOwnedSurfacesAndRetargets(t *testing.T) {
+	rootA, rootB := t.TempDir(), t.TempDir()
+	p := docPaneTestPlugin(t, rootA, false)
+	p.ctx.ProjectRoot = rootA
+	p.worktrees = []*Worktree{
+		{Key: "A-key", Name: "A", Path: rootA},
+		{Key: "B-key", Name: "B", Path: rootB},
+	}
+	p.selectedIdx = 0
+	p.paneLayoutSurface = workspaceSurfaceIdentity(p.worktrees[0])
+	ownedNested := "shell:nested-A"
+	siblingShell := "shell:unrelated"
+	p.nestedByWorkDir = map[string][]*ShellSession{
+		filepath.Clean(rootA): {{TmuxName: "nested-A", WorkDir: rootA}},
+	}
+	saved := state.WorkspaceState{PaneLayouts: map[string]*state.PaneLayoutJSON{
+		workspaceSurfaceIdentity(p.worktrees[0]):       {Surface: workspaceSurfaceIdentity(p.worktrees[0]), Kind: contentKindTerminal, Open: true},
+		legacyWorkspaceSurfaceIdentity(p.worktrees[0]): {Surface: legacyWorkspaceSurfaceIdentity(p.worktrees[0]), Kind: contentKindTerminal, Open: true},
+		workspaceSurfaceIdentity(p.worktrees[1]):       {Root: rootB, Surface: workspaceSurfaceIdentity(p.worktrees[1]), Kind: contentKindTerminal, Open: true},
+		ownedNested:                                    {Surface: ownedNested, Kind: contentKindTerminal, Open: true},
+		siblingShell:                                   {Surface: siblingShell, Kind: contentKindTerminal, Open: true},
+	}}
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.removeWorktreeByName("A")
+	if len(p.worktrees) != 1 || p.selectedWorktree() != p.worktrees[0] || p.worktrees[0].Name != "B" {
+		t.Fatalf("retarget after removal: index=%d worktrees=%#v", p.selectedIdx, p.worktrees)
+	}
+	for _, removed := range []string{"workspace:A-key", legacyWorkspaceSurfaceIdentity(&Worktree{Path: rootA}), ownedNested} {
+		if saved.PaneLayouts[removed] != nil {
+			t.Fatalf("removed owner retained %q: %#v", removed, saved.PaneLayouts)
+		}
+	}
+	if saved.PaneLayouts["workspace:B-key"] == nil || saved.PaneLayouts[siblingShell] == nil {
+		t.Fatalf("removing A damaged siblings: %#v", saved.PaneLayouts)
 	}
 }
 
@@ -1314,6 +1418,47 @@ func TestDocPaneTabsPersistAcrossShellSwitch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSurfaceRekeysLegacySymlinkIdentityOnRestore(t *testing.T) {
+	realRoot := t.TempDir()
+	writeDocPaneFixture(t, realRoot, "README.md", "# canonical\n")
+	resolvedRoot, err := filepath.EvalSymlinks(realRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "checkout")
+	if err := os.Symlink(realRoot, link); err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, link, false)
+	p.ctx.ProjectRoot = realRoot
+	canonical := workspaceSurfaceIdentity(p.worktrees[0])
+	legacy := legacyWorkspaceSurfaceIdentity(p.worktrees[0])
+	if canonical == legacy {
+		t.Fatalf("test needs distinct identities, both were %q", canonical)
+	}
+	saved := state.WorkspaceState{WorkspaceName: p.worktrees[0].Name, PaneLayouts: map[string]*state.PaneLayoutJSON{
+		legacy: {
+			Root: resolvedRoot, Surface: legacy, Open: true,
+			Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+				B: &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}},
+			},
+		},
+	}}
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.restoreIncomingPaneLayoutHonoringOpen()
+	if saved.PaneLayouts[legacy] != nil || saved.PaneLayouts[canonical] == nil || saved.PaneLayouts[canonical].Surface != canonical {
+		t.Fatalf("surface migration = %#v", saved.PaneLayouts)
+	}
+	if p.activeDocPaneOrNil() == nil {
+		root, surface, ok := p.selectedTerminalSurface()
+		t.Fatalf("canonical restore did not rebuild the document: root=%q surface=%q ok=%v layout=%#v tree=%#v", root, surface, ok, saved.PaneLayouts[canonical], p.paneRoot)
+	}
+}
+
 func TestRestorePaneLayoutLoadsOnlyActiveTab(t *testing.T) {
 	root := t.TempDir()
 	resolvedRoot, err := filepath.EvalSymlinks(root)
@@ -1397,6 +1542,34 @@ func TestDocPanePersistsScrollOnEveryTab(t *testing.T) {
 	tabs, active := firstDocLeafTabs(workspacePaneLayout(saved, "shell:test-shell"))
 	if len(tabs) != 2 || active != 1 || tabs[0].Scroll != 3 {
 		t.Fatalf("persisted scroll = %#v active=%d", tabs, active)
+	}
+}
+
+func TestDocScrollMutationAndStopPersistTheLatestOffset(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "one\ntwo\nthree\nfour\nfive\nsix\n")
+	p, saved := persistDocPanePlugin(t, root)
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	doc, leaf := p.activeDocPane()
+	doc.view().SetRendered(false)
+	doc.view().SetSize(40, 2)
+	p.paneFocus = leaf.ID
+
+	if handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'j'}); !handled {
+		t.Fatal("j was not handled")
+	}
+	tabs, _ := firstDocLeafTabs(workspacePaneLayout(*saved, "shell:test-shell"))
+	if len(tabs) != 1 || tabs[0].Scroll != 1 {
+		t.Fatalf("keyboard scroll persisted as %#v", tabs)
+	}
+
+	// A final model mutation can happen after the last input save. Stop is the
+	// quit and project-switch boundary that must capture it.
+	doc.view().Scroll(2)
+	p.Stop()
+	tabs, _ = firstDocLeafTabs(workspacePaneLayout(*saved, "shell:test-shell"))
+	if len(tabs) != 1 || tabs[0].Scroll != 3 {
+		t.Fatalf("Stop persisted scroll as %#v", tabs)
 	}
 }
 

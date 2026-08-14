@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,13 +159,17 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 	p.issues = make(map[int]*issuePane)
 	compositorDocLeaf(t, p, resolved, 2, "clicked.md", "# clicked\n")
 	p.attachIssuePane(3, resolved, "shell:test-shell", "td-1a2b3c")
+	issueData := &issueview.Data{ID: "td-1a2b3c", Title: "Persist me", Description: strings.Repeat("line\n\n", 20)}
+	p.issues[3].view.SetSize(40, 3)
+	p.issues[3].view.SetData(issueData)
+	p.issues[3].view.Scroll(4)
 
 	layout := p.persistedPaneLayout()
 	if layout == nil || layout.Split == nil || layout.Split.B.Split == nil {
 		t.Fatalf("persisted layout lost the stack: %#v", layout)
 	}
 	saved := layout.Split.B.Split.B
-	if saved.Kind != contentKindIssue || saved.Issue != "td-1a2b3c" {
+	if saved.Kind != contentKindIssue || saved.Issue != "td-1a2b3c" || saved.Scroll != 4 {
 		t.Fatalf("persisted issue leaf = %#v, want kind %q targeting td-1a2b3c", saved, contentKindIssue)
 	}
 
@@ -180,7 +185,7 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 	if issue == nil || leaf == nil {
 		t.Fatal("the issue leaf was not restored")
 	}
-	if issue.view.IssueID() != "td-1a2b3c" || !issue.view.Loading() {
+	if issue.view.IssueID() != "td-1a2b3c" || issue.view.ScrollOffset() != 4 || !issue.view.Loading() {
 		t.Fatalf("restored issue = %q loading=%v, want td-1a2b3c re-fetching",
 			issue.view.IssueID(), issue.view.Loading())
 	}
@@ -341,6 +346,100 @@ func TestIssuePaneAnswersTheWheelAndItsCloseChip(t *testing.T) {
 	}
 	if doc, _ := p.activeDocPane(); doc == nil {
 		t.Fatal("closing the issue leaf took its sibling with it")
+	}
+}
+
+func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
+	for _, width := range []int{72, 100} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			stubTd(t)
+			root := t.TempDir()
+			p := docPaneTestPlugin(t, root, true)
+			p.width, p.height = width, 24
+			steelThreadPaneTree(t, p, root)
+			issue := p.issues[3]
+			issue.view.SetData(&issueview.Data{
+				ID: "td-parent", Title: "Parent", Status: "open", Type: "epic",
+				Children: []issueview.Ref{{ID: "td-child", Title: "Child", Status: "open", Type: "task"}},
+			})
+
+			p.mouseHandler.Clear()
+			_ = p.renderListView(width, p.height)
+			var child issueview.Hit
+			found := false
+			for _, hit := range issue.view.Hits() {
+				if hit.Kind == issueview.HitChild && hit.ID == "td-child" {
+					child, found = hit, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("rendered issue has no child hit: %+v", issue.view.Hits())
+			}
+			var pane *mouse.Region
+			for _, region := range p.mouseHandler.HitMap.Regions() {
+				if region.ID == regionIssuePane {
+					copy := region
+					pane = &copy
+					break
+				}
+			}
+			if pane == nil {
+				t.Fatal("rendered issue has no pane hit region")
+			}
+			x := pane.Rect.X + child.X
+			y := pane.Rect.Y + terminalHeaderRows + child.Y
+			resolved := p.mouseHandler.HitMap.Test(x, y)
+			if resolved == nil || resolved.ID != regionIssuePane {
+				t.Fatalf("raw child coordinate (%d,%d) resolves to %#v", x, y, resolved)
+			}
+
+			action := p.mouseHandler.HandleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+			if action.Type != mouse.ActionClick || action.Region == nil || action.Region.ID != regionIssuePane {
+				t.Fatalf("raw click action = %#v, want an issue-pane click", action)
+			}
+			cmd := p.handleMouseClick(action)
+			if cmd == nil || issue.view.IssueID() != "td-child" {
+				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+				t.Fatalf("raw child click local=(%d,%d) target=%+v remaining=%+v cmd=%v issue=%q, want a td-child load",
+					lx, ly, child, issue.view.Hits(), cmd != nil, issue.view.IssueID())
+			}
+			deliverLoads(t, p, cmd)
+			if issue.view.Data() == nil || issue.view.Data().ID != "td-child" {
+				t.Fatalf("loaded issue = %#v, want td-child", issue.view.Data())
+			}
+
+			// The loaded child's parent row occupies the same rendered row as the
+			// parent's child row. Bubble Tea now emits the double-click event for
+			// that same raw cell; it must not replay navigation back to the parent.
+			issue.view.SetData(&issueview.Data{
+				ID: "td-child", Title: "Child", Status: "open", Type: "task",
+				ParentID: "td-parent",
+				Parent:   &issueview.Ref{ID: "td-parent", Title: "Parent", Status: "open", Type: "epic"},
+			})
+			p.mouseHandler.Clear()
+			_ = p.renderListView(width, p.height)
+			parentAtSameCell := false
+			for _, hit := range issue.view.Hits() {
+				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == pane.Rect.X+hit.X {
+					parentAtSameCell = true
+					break
+				}
+			}
+			if !parentAtSameCell {
+				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view.Hits())
+			}
+			double := p.mouseHandler.HandleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+			if double.Type != mouse.ActionDoubleClick {
+				t.Fatalf("second raw event = %#v, want double click", double)
+			}
+			if cmd := p.handleMouseDoubleClick(double); cmd != nil {
+				t.Fatal("issue double-click scheduled a second navigation")
+			}
+			if issue.view.IssueID() != "td-child" || issue.view.Data() == nil || issue.view.Data().ID != "td-child" {
+				t.Fatalf("double-click navigated to %#v / %q", issue.view.Data(), issue.view.IssueID())
+			}
+		})
 	}
 }
 

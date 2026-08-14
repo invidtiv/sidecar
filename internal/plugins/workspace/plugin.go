@@ -271,6 +271,15 @@ type Plugin struct {
 	// Mouse support
 	mouseHandler *mouse.Handler
 
+	// A held terminal wheel event changes only the shared burst bookkeeping.
+	// Reuse the last same-dimension frame exactly once for that event; every
+	// other message still takes the ordinary render path.
+	reuseHeldWheelViewOnce bool
+	wheelViewCache         string
+	wheelViewCacheW        int
+	wheelViewCacheH        int
+	wheelViewCacheOK       bool
+
 	// Async state
 	refreshing  bool
 	lastRefresh time.Time
@@ -661,6 +670,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
 	p.stopTerminalModels()
+	p.reuseHeldWheelViewOnce = false
+	p.wheelViewCacheOK = false
 	p.ctx = ctx
 	// Filter state is in-memory and per consumer: a project or worktree switch
 	// starts from an unfiltered list rather than restoring a query whose origin
@@ -859,6 +870,9 @@ func (p *Plugin) Start() tea.Cmd {
 
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
+	// Registry reinitialization calls Stop before replacing the project context,
+	// so this is both the quit and project-switch durability boundary.
+	p.saveSelectionState()
 	if p.operationCancel != nil {
 		p.operationCancel()
 		p.operationCancel = nil
@@ -1263,6 +1277,7 @@ func (p *Plugin) dropNestedShell(tmuxName string) bool {
 	if p.selectedNestedTmux == tmuxName {
 		p.selectWorktreeAt(parent)
 	}
+	p.forgetPaneSurfaces("shell:" + tmuxName)
 	remaining := make([]*ShellSession, 0, len(p.nestedByWorkDir[dir]))
 	for _, candidate := range p.nestedByWorkDir[dir] {
 		if candidate.TmuxName != tmuxName {
@@ -1592,10 +1607,59 @@ func (p *Plugin) pollAllAgentStatusesNow() tea.Cmd {
 func (p *Plugin) removeWorktreeByName(name string) {
 	for i, wt := range p.worktrees {
 		if wt.Name == name {
-			p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
+			p.removeWorktreeAt(i)
 			return
 		}
 	}
+}
+
+func (p *Plugin) removeWorktreeByIdentity(key string) {
+	for i, wt := range p.worktrees {
+		if wt.IdentityKey() == key {
+			p.removeWorktreeAt(i)
+			return
+		}
+	}
+}
+
+func (p *Plugin) removeWorktreeAt(index int) {
+	if index < 0 || index >= len(p.worktrees) {
+		return
+	}
+	wt := p.worktrees[index]
+	selectedRemoved := !p.shellSelected && p.selectedIdx == index
+	p.forgetWorktreePaneLayout(wt)
+	if nested := p.nestedByWorkDir[filepath.Clean(wt.Path)]; len(nested) > 0 {
+		for _, shell := range nested {
+			if shell != nil {
+				p.forgetPaneSurfaces("shell:" + shell.TmuxName)
+			}
+		}
+		delete(p.nestedByWorkDir, filepath.Clean(wt.Path))
+	}
+	p.worktrees = append(p.worktrees[:index], p.worktrees[index+1:]...)
+
+	if selectedRemoved {
+		switch {
+		case len(p.worktrees) > 0:
+			dest := min(index, len(p.worktrees)-1)
+			p.retargetAfterSelectedSurfaceGone(func() { p.applyWorktreeSelection(dest) })
+		case len(p.shells) > 0:
+			dest := min(p.selectedShellIdx, len(p.shells)-1)
+			p.retargetAfterSelectedSurfaceGone(func() { p.applyTopShellSelection(dest) })
+		default:
+			p.shellSelected = false
+			p.selectedNestedTmux = ""
+			p.selectedIdx = -1
+			if p.paneRoot != nil {
+				p.resetPaneTreeToTerminal()
+				p.paneLayoutSurface = ""
+			}
+		}
+	} else if p.selectedIdx > index {
+		p.selectedIdx--
+	}
+	p.saveSelectionState()
 }
 
 // isKnownAgentType reports whether agentType is a recognized, non-empty agent type.

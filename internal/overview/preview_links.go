@@ -20,13 +20,13 @@ import (
 )
 
 const (
-	previewDocRegionKind = "global-preview-doc"
-	previewDocModeKind   = "global-preview-doc-mode"
-	previewDocCloseKind  = "global-preview-doc-close"
-	previewDocModelID    = 1
-	previewDocMinWidth   = markdown.MinWidthForMarkdown
-	previewTermMinWidth  = 12
-	previewDocSplitRatio = 50
+	previewDocRegionKind       = "global-preview-doc"
+	previewDocModeKind         = "global-preview-doc-mode"
+	previewDocCloseKind        = "global-preview-doc-close"
+	previewDocModelID          = 1
+	previewSecondaryMinWidth   = markdown.MinWidthForMarkdown
+	previewTermMinWidth        = 12
+	previewSecondarySplitRatio = 50
 )
 
 func isPreviewDocRegion(kind string) bool {
@@ -74,15 +74,12 @@ func (m *Model) decoratePreviewLine(line string, _ int) string {
 	return terminallink.Decorate(line, m.decoratedPreviewSpans(line))
 }
 
-// decoratedPreviewSpans keeps the kinds this surface activates. A td issue is
-// scanned here and opened nowhere — the pane tree that hosts one belongs to the
-// workspace plugin — so decorating it would promise a click this surface has no
-// answer for.
+// decoratedPreviewSpans keeps exactly the kinds this surface activates.
 func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
 	spans := m.previewLinkSpans(line)
 	bound := make([]terminallink.Span, 0, len(spans))
 	for _, span := range spans {
-		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile {
+		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue {
 			bound = append(bound, span)
 		}
 	}
@@ -105,7 +102,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
 	for _, span := range m.previewLinkSpans(line) {
-		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile {
+		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue {
 			continue
 		}
 		if cell.Col >= span.StartCol && cell.Col <= span.EndCol {
@@ -129,6 +126,13 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		return terminallink.OpenHTTP(span.Value), true
 	case terminallink.KindFile:
 		cmd := m.openPreviewDoc(span)
+		if cmd == nil {
+			return nil, false
+		}
+		m.clearPreviewSelection()
+		return cmd, true
+	case terminallink.KindIssue:
+		cmd := m.openPreviewIssue(span.Value)
 		if cmd == nil {
 			return nil, false
 		}
@@ -162,6 +166,7 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 		return nil
 	}
 	wasInteractive := m.PreviewInteractive()
+	m.preview.issue = nil
 	if m.preview.doc == nil {
 		m.preview.doc = &previewDoc{view: docview.New(nil)}
 	}
@@ -227,31 +232,39 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 }
 
 func (m *Model) previewDocFits(box termpreview.Box) bool {
-	return box.W >= previewTermMinWidth+previewDocDividerWidth+previewDocMinWidth && box.H >= 3
+	return m.previewSecondaryFits(box)
 }
 
-const previewDocDividerWidth = 1
+const previewSecondaryDividerWidth = 1
 
-func (m *Model) previewDocLayout(box termpreview.Box) (termBox, docBox termpreview.Box, split bool) {
-	if m.preview.doc == nil || !m.previewDocFits(box) {
+func (m *Model) previewSecondaryOpen() bool {
+	return m.preview.doc != nil || m.preview.issue != nil
+}
+
+func (m *Model) previewSecondaryFits(box termpreview.Box) bool {
+	return box.W >= previewTermMinWidth+previewSecondaryDividerWidth+previewSecondaryMinWidth && box.H >= 3
+}
+
+func (m *Model) previewSecondaryLayout(box termpreview.Box) (termBox, secondaryBox termpreview.Box, split bool) {
+	if !m.previewSecondaryOpen() || !m.previewSecondaryFits(box) {
 		return box, termpreview.Box{}, false
 	}
-	available := box.W - previewDocDividerWidth
-	termW := available * previewDocSplitRatio / 100
+	available := box.W - previewSecondaryDividerWidth
+	termW := available * previewSecondarySplitRatio / 100
 	if termW < previewTermMinWidth {
 		termW = previewTermMinWidth
 	}
-	docW := available - termW
-	if docW < previewDocMinWidth {
-		docW = previewDocMinWidth
-		termW = available - docW
+	secondaryW := available - termW
+	if secondaryW < previewSecondaryMinWidth {
+		secondaryW = previewSecondaryMinWidth
+		termW = available - secondaryW
 	}
 	if termW < previewTermMinWidth {
 		return box, termpreview.Box{}, false
 	}
 	termBox = termpreview.Box{X: box.X, Y: box.Y, W: termW, H: box.H}
-	docBox = termpreview.Box{X: box.X + termW + previewDocDividerWidth, Y: box.Y, W: docW, H: box.H}
-	return termBox, docBox, true
+	secondaryBox = termpreview.Box{X: box.X + termW + previewSecondaryDividerWidth, Y: box.Y, W: secondaryW, H: box.H}
+	return termBox, secondaryBox, true
 }
 
 func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
@@ -259,7 +272,7 @@ func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
 	if !ok {
 		return termpreview.Box{}, false
 	}
-	term, _, _ := m.previewDocLayout(box)
+	term, _, _ := m.previewSecondaryLayout(box)
 	return term, true
 }
 
@@ -267,7 +280,7 @@ func (m *Model) registerPreviewDocRegions(box termpreview.Box) {
 	if m.preview.doc == nil {
 		return
 	}
-	_, docBox, split := m.previewDocLayout(box)
+	_, docBox, split := m.previewSecondaryLayout(box)
 	if !split {
 		return
 	}
@@ -392,6 +405,6 @@ func renderPreviewDocDivider(height int, focused bool) string {
 	return style.Render(strings.TrimSuffix(strings.Repeat("│\n", height), "\n"))
 }
 
-func joinPreviewDoc(term, document string, height int, focused bool) string {
-	return lipgloss.JoinHorizontal(lipgloss.Top, term, renderPreviewDocDivider(height, focused), document)
+func joinPreviewSecondary(term, secondary string, height int, focused bool) string {
+	return lipgloss.JoinHorizontal(lipgloss.Top, term, renderPreviewDocDivider(height, focused), secondary)
 }

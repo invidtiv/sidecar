@@ -667,6 +667,52 @@ func TestMigratePaneLayoutsCopiesLegacySlot(t *testing.T) {
 	}
 }
 
+func TestRekeyPaneLayoutMigratesLegacySurfaceWithoutOverwritingCanonical(t *testing.T) {
+	legacy := &PaneLayoutJSON{Root: "/repo", Surface: "workspace:old", Kind: "terminal"}
+	s := WorkspaceState{PaneLayouts: map[string]*PaneLayoutJSON{
+		"workspace:old": legacy,
+		"shell:sibling": {Surface: "shell:sibling", Kind: "terminal"},
+	}}
+	got, changed := RekeyPaneLayout(&s, "workspace:old", "workspace:canonical")
+	if !changed || got != legacy || got.Surface != "workspace:canonical" {
+		t.Fatalf("rekey = %#v changed=%v", got, changed)
+	}
+	if s.PaneLayouts["workspace:old"] != nil || s.PaneLayouts["workspace:canonical"] != legacy || s.PaneLayouts["shell:sibling"] == nil {
+		t.Fatalf("rekey map = %#v", s.PaneLayouts)
+	}
+
+	canonical := &PaneLayoutJSON{Surface: "workspace:canonical", Kind: "doc"}
+	s.PaneLayouts["workspace:old"] = legacy
+	s.PaneLayouts["workspace:canonical"] = canonical
+	got, changed = RekeyPaneLayout(&s, "workspace:old", "workspace:canonical")
+	if !changed || got != canonical || s.PaneLayouts["workspace:old"] != nil {
+		t.Fatalf("canonical winner = %#v changed=%v map=%#v", got, changed, s.PaneLayouts)
+	}
+}
+
+func TestForgetPaneLayoutsPreservesSiblingsAndWritesLastEntryRemoval(t *testing.T) {
+	legacy := &PaneLayoutJSON{Surface: "shell:A", Kind: "terminal"}
+	s := WorkspaceState{
+		PaneLayout: legacy,
+		PaneLayouts: map[string]*PaneLayoutJSON{
+			"shell:A": legacy,
+			"shell:B": {Surface: "shell:B", Kind: "terminal"},
+		},
+	}
+	if !ForgetPaneLayouts(&s, "shell:A") {
+		t.Fatal("forget reported no change")
+	}
+	if s.PaneLayout != nil || s.PaneLayouts["shell:A"] != nil || s.PaneLayouts["shell:B"] == nil {
+		t.Fatalf("forget A = %#v", s)
+	}
+	if !ForgetPaneLayouts(&s, "shell:B") || s.PaneLayouts != nil {
+		t.Fatalf("last entry was not removed: %#v", s.PaneLayouts)
+	}
+	if ForgetPaneLayouts(&s, "shell:missing") {
+		t.Fatal("missing surface reported a change")
+	}
+}
+
 func TestGetLastWorktreePath_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()

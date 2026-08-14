@@ -410,9 +410,18 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 		inTreePane = action.X < p.treeWidth
 	}
 
-	delta := 3
-	if action.Type == mouse.ActionScrollUp {
-		delta = -3
+	surface := regionPreviewPane
+	if inTreePane {
+		surface = regionTreePane
+	}
+	now := time.Now()
+	if p.wheelNow != nil {
+		now = p.wheelNow()
+	}
+	delta, flush := p.wheelBursts.For(surface).Add(action.Delta, now)
+	if !flush {
+		p.reuseViewOnce = true
+		return p, nil
 	}
 
 	if inTreePane {
@@ -424,7 +433,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 			p.treeCursor = p.tree.Len() - 1
 		}
 		p.ensureTreeCursorVisible()
-		return p, p.loadPreviewForCursor()
+		return p, p.schedulePreviewForCursor()
 	}
 
 	// Scroll preview pane

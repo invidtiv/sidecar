@@ -61,8 +61,9 @@ func TestIssuePreviewModalMatchesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != string(want) {
-		t.Errorf("modal rendering changed\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	wantView := strings.TrimSuffix(string(want), "\n")
+	if got != wantView {
+		t.Errorf("modal rendering changed\n--- got ---\n%s\n--- want ---\n%s", got, wantView)
 	}
 }
 

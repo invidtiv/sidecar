@@ -874,6 +874,7 @@ func (p *Plugin) wheelTerminal(termPanel bool, action mouse.MouseAction, delta i
 		// Every notch the application has not claimed moves this surface's own
 		// window, which is what makes the wheel work over a plain shell.
 		ScrollLocal: func(rows int) tea.Cmd { return p.scrollTerminalWindowByWheel(termPanel, rows) },
+		OnHold:      func() { p.reuseHeldWheelViewOnce = true },
 	}.Handle(tty.WheelGesture{
 		Delta: delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: p.now(),

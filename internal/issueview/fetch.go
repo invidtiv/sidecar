@@ -88,6 +88,7 @@ func loadIssue(workDir, issueID string) (*Data, error) {
 func showIssue(workDir, issueID string) (*Data, error) {
 	cmd := exec.Command("td", "show", issueID, "-f", "json")
 	cmd.Dir = workDir
+	configureReadOnlyTd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := extractTdError(string(out)); msg != "" {
@@ -110,6 +111,7 @@ func showIssue(workDir, issueID string) (*Data, error) {
 func showTree(workDir, issueID string) (*treeNode, error) {
 	cmd := exec.Command("td", "tree", issueID, "--json", "--depth", "1")
 	cmd.Dir = workDir
+	configureReadOnlyTd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -119,6 +121,19 @@ func showTree(workDir, issueID string) (*treeNode, error) {
 		return nil, err
 	}
 	return &node, nil
+}
+
+// configureReadOnlyTd keeps preview reads local and cheap. td's default
+// process hooks may start background sync and record analytics on every show
+// and tree invocation; one issue card can run three of those processes. Cmd's
+// existing environment is retained so PATH and project-specific configuration
+// still resolve normally, while the preview-owned overrides win if callers had
+// either variable set already.
+func configureReadOnlyTd(cmd *exec.Cmd) {
+	cmd.Env = append(cmd.Environ(),
+		"TD_SYNC_AUTO_START=0",
+		"TD_ANALYTICS=false",
+	)
 }
 
 // attachTree fills children from the issue's own tree and, when the issue

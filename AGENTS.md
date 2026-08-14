@@ -19,6 +19,13 @@ Run `td usage` or `td <command> --help`.
 
 <!-- td-agent-instructions:end -->
 
+## Commit completed work by default
+
+Unless the user explicitly asks not to commit, create a focused commit once the
+requested work is complete, verified, and reviewed. Stage only files that belong
+to the task, preserve unrelated dirty or staged changes, and do not push unless
+the user asks.
+
 ## Keep the current shell name useful
 
 When working inside a Sidecar project shell, keep its display name aligned with

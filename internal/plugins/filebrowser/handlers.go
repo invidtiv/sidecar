@@ -94,14 +94,14 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		if p.treeCursor < p.tree.Len()-1 {
 			p.treeCursor++
 			p.ensureTreeCursorVisible()
-			return p, p.loadPreviewForCursor()
+			return p, p.schedulePreviewForCursor()
 		}
 
 	case "k", "up":
 		if p.treeCursor > 0 {
 			p.treeCursor--
 			p.ensureTreeCursorVisible()
-			return p, p.loadPreviewForCursor()
+			return p, p.schedulePreviewForCursor()
 		}
 
 	case "l", "right":
@@ -1361,11 +1361,46 @@ func (p *Plugin) ensureTreeCursorVisible() {
 
 // loadPreviewForCursor loads the preview for the file at the current tree cursor.
 func (p *Plugin) loadPreviewForCursor() tea.Cmd {
+	p.treePreviewGen++
 	node := p.tree.GetNode(p.treeCursor)
 	if node == nil || node.IsDir {
 		return nil
 	}
 	return p.openTab(node.Path, TabOpenPreview)
+}
+
+// schedulePreviewForCursor leaves the existing preview in place while the tree
+// cursor is moving. Only the newest generation can activate a tab after the
+// quiet period, so key repeat and trackpad inertia load the landing file once.
+func (p *Plugin) schedulePreviewForCursor() tea.Cmd {
+	p.treePreviewGen++
+	gen := p.treePreviewGen
+	node := p.tree.GetNode(p.treeCursor)
+	if node == nil || node.IsDir {
+		return nil
+	}
+	path := node.Path
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
+	return tea.Tick(treePreviewQuiet, func(time.Time) tea.Msg {
+		return treePreviewQuietMsg{Gen: gen, Epoch: epoch, Path: path}
+	})
+}
+
+func (p *Plugin) handleTreePreviewQuiet(msg treePreviewQuietMsg) (plugin.Plugin, tea.Cmd) {
+	if msg.Gen != p.treePreviewGen {
+		return p, nil
+	}
+	if p.ctx != nil && msg.Epoch != p.ctx.Epoch {
+		return p, nil
+	}
+	node := p.tree.GetNode(p.treeCursor)
+	if node == nil || node.IsDir || filepath.Clean(node.Path) != filepath.Clean(msg.Path) {
+		return p, nil
+	}
+	return p, p.openTab(msg.Path, TabOpenPreview)
 }
 
 // openBlameView opens the blame view for the specified file.

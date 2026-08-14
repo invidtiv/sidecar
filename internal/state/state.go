@@ -88,7 +88,8 @@ type PaneLayoutJSON struct {
 	// record that still has a split is treated as open by MigratePaneLayouts.
 	Open bool `json:"open,omitempty"`
 	// Issue is an issue leaf's durable target: the td ID a restore re-fetches.
-	Issue string `json:"issue,omitempty"`
+	Issue  string `json:"issue,omitempty"`
+	Scroll int    `json:"scroll,omitempty"`
 }
 
 // MigratePaneLayouts copies a legacy single-slot PaneLayout into PaneLayouts
@@ -119,6 +120,74 @@ func (s WorkspaceState) PaneLayoutFor(surface string) *PaneLayoutJSON {
 		return nil
 	}
 	return s.PaneLayouts[surface]
+}
+
+// RekeyPaneLayout moves a saved surface to its canonical identity. If both
+// identities exist, the canonical record wins and the duplicate legacy key is
+// dropped. The returned bool reports whether the state needs writing.
+func RekeyPaneLayout(s *WorkspaceState, legacySurface, canonicalSurface string) (*PaneLayoutJSON, bool) {
+	if s == nil || canonicalSurface == "" {
+		return nil, false
+	}
+	MigratePaneLayouts(s)
+	if s.PaneLayouts == nil {
+		return nil, false
+	}
+	canonical := s.PaneLayouts[canonicalSurface]
+	if legacySurface == "" || legacySurface == canonicalSurface {
+		return canonical, false
+	}
+	legacy := s.PaneLayouts[legacySurface]
+	if canonical != nil {
+		if legacy != nil {
+			delete(s.PaneLayouts, legacySurface)
+			return canonical, true
+		}
+		return canonical, false
+	}
+	if legacy == nil {
+		return nil, false
+	}
+	delete(s.PaneLayouts, legacySurface)
+	legacy.Surface = canonicalSurface
+	s.PaneLayouts[canonicalSurface] = legacy
+	return legacy, true
+}
+
+// ForgetPaneLayouts removes only the named surfaces, including a matching
+// legacy single-slot record. It reports whether anything changed so callers
+// can avoid unrelated state writes while still writing a last-entry removal.
+func ForgetPaneLayouts(s *WorkspaceState, surfaces ...string) bool {
+	if s == nil || len(surfaces) == 0 {
+		return false
+	}
+	wanted := make(map[string]struct{}, len(surfaces))
+	for _, surface := range surfaces {
+		if surface != "" {
+			wanted[surface] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return false
+	}
+	MigratePaneLayouts(s)
+	changed := false
+	for surface := range wanted {
+		if _, ok := s.PaneLayouts[surface]; ok {
+			delete(s.PaneLayouts, surface)
+			changed = true
+		}
+	}
+	if len(s.PaneLayouts) == 0 && s.PaneLayouts != nil {
+		s.PaneLayouts = nil
+	}
+	if s.PaneLayout != nil {
+		if _, ok := wanted[s.PaneLayout.Surface]; ok {
+			s.PaneLayout = nil
+			changed = true
+		}
+	}
+	return changed
 }
 
 type PaneSplitJSON struct {

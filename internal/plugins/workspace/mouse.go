@@ -753,10 +753,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.paneFocus = leafID
 				p.termPanelFocused = false
 				if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
-					issue.view.SetActive(true)
-					issue.view.SetFocused(true)
 					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+					beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
 					_, cmd := issue.view.HandleClick(lx, ly)
+					if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
+						p.saveSelectionState()
+					}
 					return cmd
 				}
 			}
@@ -1180,13 +1182,11 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 				p.activePane = PanePreview
 				p.paneFocus = leafID
 				p.termPanelFocused = false
-				if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
-					issue.view.SetActive(true)
-					issue.view.SetFocused(true)
-					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-					_, _ = issue.view.HandleClick(lx, ly)
-					return issue.view.OpenSelection()
-				}
+				// Bubble Tea emits the first click and then a double-click event at
+				// the same cell. The first click is the sole issue navigation;
+				// replaying it here can open the child and then its newly rendered
+				// parent when both rows occupy the same coordinate.
+				return nil
 			}
 		}
 	case regionKanbanCard:
@@ -1275,7 +1275,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
 			if doc := p.docs[leaf.ContentID]; doc != nil {
 				if view := doc.view(); view != nil {
+					before := view.ScrollOffset()
 					view.Scroll(delta)
+					if view.ScrollOffset() != before {
+						p.saveSelectionState()
+					}
 				}
 			}
 		}
@@ -1287,7 +1291,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if leafID, ok := action.Region.Data.(int); ok {
 			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
 				if issue := p.issues[leaf.ContentID]; issue != nil {
+					before := issue.view.ScrollOffset()
 					issue.view.Scroll(delta)
+					if issue.view.ScrollOffset() != before {
+						p.saveSelectionState()
+					}
 				}
 			}
 		}

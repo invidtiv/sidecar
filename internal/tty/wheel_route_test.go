@@ -99,3 +99,27 @@ func TestWheelHandlerRefusesToForwardWithoutWritesEnabled(t *testing.T) {
 		t.Fatalf("noted %d, want the notch counted as the reader reading the pane", noted)
 	}
 }
+
+func TestWheelHandlerNotifiesHostOnlyWhenABurstEventIsHeld(t *testing.T) {
+	var burst WheelBurst
+	held := 0
+	handler := WheelHandler{
+		Burst:       &burst,
+		ScrollLocal: func(int) tea.Cmd { return nil },
+		OnHold:      func() { held++ },
+	}
+	at := time.Now()
+
+	handler.Handle(WheelGesture{Delta: -3, Now: at})
+	if held != 0 {
+		t.Fatalf("first immediate notch notified hold %d times, want 0", held)
+	}
+	handler.Handle(WheelGesture{Delta: -3, Now: at.Add(WheelDebounceInterval / 2)})
+	if held != 1 {
+		t.Fatalf("held notch notified %d times, want 1", held)
+	}
+	handler.Handle(WheelGesture{Delta: -3, Now: at.Add(WheelDebounceInterval)})
+	if held != 1 {
+		t.Fatalf("flushed notch notified hold %d times, want still 1", held)
+	}
+}

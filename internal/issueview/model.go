@@ -10,7 +10,10 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-const tabStopWidth = 8
+const (
+	tabStopWidth             = 8
+	horizontalContentPadding = 1
+)
 
 // LoadedMsg is the result of a Model load. Its identity fields ensure a result
 // can only be applied to the model, request, and plugin epoch that issued it.
@@ -73,6 +76,9 @@ type Model struct {
 	height int
 	scroll int
 
+	pendingScroll    int
+	hasPendingScroll bool
+
 	loading bool
 	data    *Data
 	err     error
@@ -113,6 +119,7 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.issueID = issueID
 	m.workDir = workDir
 	m.scroll = 0
+	m.hasPendingScroll = false
 	m.cursor = -1
 	m.hover = -1
 	m.loading = true
@@ -146,6 +153,10 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.cursor = -1
 	m.hover = -1
 	m.invalidateRender()
+	if m.hasPendingScroll {
+		m.scroll = m.pendingScroll
+		m.hasPendingScroll = false
+	}
 	m.clampScroll()
 	return true
 }
@@ -273,7 +284,7 @@ func (m *Model) View() string {
 					Kind:   kind,
 					Index:  r.childIdx,
 					ID:     m.hitID(r),
-					X:      0,
+					X:      m.leftPadding(),
 					Y:      i,
 					W:      bodyWidth,
 					H:      1,
@@ -282,22 +293,23 @@ func (m *Model) View() string {
 			}
 		}
 		painted := paintRow(line, bodyWidth, selected, hovered, m.active)
-		if useBar {
-			out[i] = painted
-		} else {
-			out[i] = fitLine(painted, m.width)
-		}
+		out[i] = painted
 	}
-	if !useBar {
-		return strings.Join(out, "\n")
+	if useBar {
+		bar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(m.ensureRows()),
+			ScrollOffset: m.scroll,
+			VisibleItems: m.height,
+			TrackHeight:  m.height,
+		})
+		out = strings.Split(lipglossJoin(out, bar), "\n")
 	}
-	bar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   len(m.ensureRows()),
-		ScrollOffset: m.scroll,
-		VisibleItems: m.height,
-		TrackHeight:  m.height,
-	})
-	return lipglossJoin(out, bar)
+	for i := range out {
+		out[i] = strings.Repeat(" ", m.leftPadding()) +
+			fitLine(out[i], m.innerWidth()) +
+			strings.Repeat(" ", m.rightPadding())
+	}
+	return strings.Join(out, "\n")
 }
 
 func lipglossJoin(body []string, bar string) string {
@@ -394,15 +406,23 @@ func (m *Model) handleKeyString(key string) (bool, tea.Cmd) {
 	}
 }
 
-// HandleClick selects the row at view-local (x, y) and activates the card.
-// A click on empty chrome still activates so the next arrow key can navigate.
+// HandleClick selects and opens a parent or child row at view-local (x, y).
+// A click on empty chrome still only activates the card so the next arrow key
+// can navigate; hosts do not need a separate double-click path for issue rows.
 func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
-	m.active = true
-	m.focused = true
+	// Resolve the row against the frame that was clicked before changing focus:
+	// activation can add an ACTIONS row, which invalidates this frame's hits.
+	var clicked *Hit
 	if hit := m.hitAt(x, y); hit != nil {
-		m.cursor = hit.Cursor
+		copy := *hit
+		clicked = &copy
+	}
+	m.SetActive(true)
+	m.SetFocused(true)
+	if clicked != nil {
+		m.cursor = clicked.Cursor
 		m.ensureCursorVisible()
-		return hit.Kind, nil
+		return clicked.Kind, m.OpenSelection()
 	}
 	return HitBody, nil
 }
@@ -607,14 +627,32 @@ func (m *Model) contentWidth() int {
 	// Reserve the scrollbar column whenever the box is wide enough. The
 	// track is a spacer when everything fits, so the card does not reflow
 	// the first time content crosses the viewport.
-	w := m.width
-	if m.width >= 8 && m.height > 0 {
+	w := m.innerWidth()
+	if m.needsScrollbar() {
 		w--
 	}
 	if w < 0 {
 		return 0
 	}
 	return w
+}
+
+func (m *Model) innerWidth() int {
+	return max(m.width-m.leftPadding()-m.rightPadding(), 0)
+}
+
+func (m *Model) leftPadding() int {
+	if m.width <= 0 {
+		return 0
+	}
+	return horizontalContentPadding
+}
+
+func (m *Model) rightPadding() int {
+	if m.width <= horizontalContentPadding {
+		return 0
+	}
+	return horizontalContentPadding
 }
 
 func (m *Model) needsScrollbar() bool {
@@ -664,6 +702,22 @@ func (m *Model) ensureRows() []row {
 func (m *Model) Scroll(delta int) {
 	m.scroll += delta
 	m.clampScroll()
+}
+
+// ScrollOffset is the current (or still-pending restore) viewport offset.
+func (m *Model) ScrollOffset() int {
+	if m.hasPendingScroll {
+		return m.pendingScroll
+	}
+	return m.scroll
+}
+
+// SetPendingScroll remembers an offset for the current load generation. A
+// stale result cannot consume it because SetResult rejects stale generations
+// before applying or clearing this value.
+func (m *Model) SetPendingScroll(offset int) {
+	m.pendingScroll = max(offset, 0)
+	m.hasPendingScroll = true
 }
 
 // IssueID returns the issue this model is targeting.

@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -67,13 +68,36 @@ func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 			return "", "", false
 		}
 		root = wt.Path
-		identity = "workspace:" + stablePathKey(wt.Path)
+		identity = workspaceSurfaceIdentity(wt)
 	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", "", false
 	}
 	return filepath.Clean(resolved), identity, true
+}
+
+func workspaceSurfaceIdentity(wt *Worktree) string {
+	if wt == nil {
+		return ""
+	}
+	key := wt.IdentityKey()
+	if wt.Key == "" {
+		if canonical, err := projectdir.WorktreeKey(wt.Path); err == nil {
+			key = canonical
+		}
+	}
+	if key == "" {
+		key = stablePathKey(wt.Path)
+	}
+	return "workspace:" + key
+}
+
+func legacyWorkspaceSurfaceIdentity(wt *Worktree) string {
+	if wt == nil || wt.Path == "" {
+		return ""
+	}
+	return "workspace:" + stablePathKey(wt.Path)
 }
 
 func (p *Plugin) activeDocPane() (*docPane, *PaneNode) {
@@ -405,7 +429,7 @@ func (p *Plugin) hiddenLayoutFor(surface string) *state.PaneLayoutJSON {
 	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasDocTabs(p.hiddenPaneLayout) {
 		return p.hiddenPaneLayout
 	}
-	layout := p.readWorkspaceState().PaneLayouts[surface]
+	layout := p.savedPaneLayoutForCurrentSurface(surface)
 	if layout == nil || state.PaneLayoutOpen(layout) || !paneLayoutHasDocTabs(layout) {
 		return nil
 	}
@@ -639,7 +663,11 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.resizeFocusedDoc(-5)
 	default:
 		if view := doc.view(); view != nil {
+			before := view.ScrollOffset()
 			view.HandleKey(msg)
+			if view.ScrollOffset() != before {
+				p.saveSelectionState()
+			}
 		}
 		// A focused document is its own input context. Absorb keys it does not
 		// own so they cannot trigger workspace actions behind the pane.
@@ -771,6 +799,34 @@ func (p *Plugin) readWorkspaceState() state.WorkspaceState {
 	return wt
 }
 
+func (p *Plugin) savedPaneLayoutForCurrentSurface(surface string) *state.PaneLayoutJSON {
+	wtState := p.readWorkspaceState()
+	legacy := ""
+	if wt := p.selectedWorktree(); wt != nil {
+		legacy = legacyWorkspaceSurfaceIdentity(wt)
+	}
+	layout, changed := state.RekeyPaneLayout(&wtState, legacy, surface)
+	if changed {
+		wtState.PaneLayout = nil
+		p.writeWorkspaceState(wtState)
+	}
+	return layout
+}
+
+func (p *Plugin) forgetPaneSurfaces(surfaces ...string) {
+	wtState := p.readWorkspaceState()
+	if state.ForgetPaneLayouts(&wtState, surfaces...) {
+		p.writeWorkspaceState(wtState)
+	}
+}
+
+func (p *Plugin) forgetWorktreePaneLayout(wt *Worktree) {
+	if wt == nil {
+		return
+	}
+	p.forgetPaneSurfaces(workspaceSurfaceIdentity(wt), legacyWorkspaceSurfaceIdentity(wt))
+}
+
 func (p *Plugin) writeWorkspaceState(wt state.WorkspaceState) {
 	if p.ctx == nil {
 		return
@@ -840,7 +896,7 @@ func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
 		return
 	}
 	p.paneLayoutSurface = surface
-	layout := p.readWorkspaceState().PaneLayouts[surface]
+	layout := p.savedPaneLayoutForCurrentSurface(surface)
 	if layout == nil {
 		p.paneRestoreCmd = nil
 		return
@@ -886,7 +942,7 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		if issue == nil || issue.view == nil || issue.view.IssueID() == "" {
 			return nil
 		}
-		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: issue.view.IssueID()}
+		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: issue.view.IssueID(), Scroll: issue.view.ScrollOffset()}
 	}
 	doc := p.docs[node.ContentID]
 	tabs, active := encodeDocTabs(doc)
@@ -1022,6 +1078,7 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		}
 		id := p.nextPaneID()
 		if load := p.attachIssuePane(id, root, savedRootSurface(p, root), issueID); load != nil {
+			p.issues[id].view.SetPendingScroll(saved.Scroll)
 			*loads = append(*loads, load)
 		}
 		return &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}

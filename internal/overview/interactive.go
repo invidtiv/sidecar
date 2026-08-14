@@ -554,6 +554,7 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 			return m.preview.terminal.SendWheelNotches(up, col, row, notches)
 		},
 		ScrollLocal: m.scrollPreviewByWheel,
+		OnHold:      func() { m.reuseWorkspacesViewOnce = true },
 	}.Handle(tty.WheelGesture{
 		Delta: action.Delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: m.now(),

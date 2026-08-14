@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,12 +9,34 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
+
+func stubPreviewTd(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = show ]; then\n" +
+		"  if [ \"$2\" = td-acde12 ]; then parent=',\"parent_id\":\"td-196c42\"'; else parent=''; fi\n" +
+		`  printf '{"id":"%s","title":"Issue %s","status":"open","type":"task","priority":"P2"%s}\n' "$2" "$2" "$parent"` + "\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"if [ \"$2\" = td-196c42 ]; then\n" +
+		`  printf '{"id":"td-196c42","title":"Parent","status":"open","type":"epic","priority":"P1","children":[{"id":"td-acde12","title":"Child issue","status":"open","type":"task","priority":"P2","children":[]}]}\n'` + "\n" +
+		"else\n" +
+		`  printf '{"id":"%s","title":"Child issue","status":"open","type":"task","priority":"P2","children":[]}\n' "$2"` + "\n" +
+		"fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "td"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 func linkPreviewModel(t *testing.T, kind workspaceinventory.Kind) *Model {
 	t.Helper()
@@ -113,7 +136,8 @@ func TestGlobalPreviewUnderlinesAndOpensFileLinks(t *testing.T) {
 	}
 }
 
-func TestGlobalPreviewURLAndIssueAreNotFileActivation(t *testing.T) {
+func TestGlobalPreviewURLAndIssueActivationStayDistinct(t *testing.T) {
+	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	urlAction := previewNeedleAction(t, m, "https://")
 	cmd, claimed := m.activatePreviewLinkAt(urlAction, false)
@@ -125,17 +149,253 @@ func TestGlobalPreviewURLAndIssueAreNotFileActivation(t *testing.T) {
 	}
 
 	issueAction := previewNeedleAction(t, m, "td-196c42")
-	if cmd, claimed := m.activatePreviewLinkAt(issueAction, false); claimed || cmd != nil {
-		t.Fatal("issue id was activated")
+	cmd, claimed = m.activatePreviewLinkAt(issueAction, false)
+	if !claimed || cmd == nil {
+		t.Fatal("issue id was not activated")
 	}
+	run(t, m, cmd)
 	if m.preview.doc != nil {
-		t.Fatal("issue id opened a doc pane")
+		t.Fatal("issue id opened the document slot")
+	}
+	if m.preview.issue == nil || m.preview.issue.view.Data() == nil || m.preview.issue.view.Data().ID != "td-196c42" {
+		t.Fatalf("issue preview = %#v", m.preview.issue)
 	}
 
 	spans := terminallink.Scan("review td-196c42", nil)
 	if len(spans) != 1 || spans[0].Kind != terminallink.KindIssue {
 		t.Fatalf("scanner issue span = %#v", spans)
 	}
+}
+
+func TestGlobalIssuePreviewRawChildClickUsesRenderedCoordinates(t *testing.T) {
+	for _, width := range []int{80, 120} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			stubPreviewTd(t)
+			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+			m.WorkspacesView(width, previewTall)
+			run(t, m, m.openPreviewIssue("td-196c42"))
+			m.WorkspacesView(width, previewTall)
+			issue := m.preview.issue
+			if issue == nil || issue.view.Data() == nil {
+				t.Fatalf("issue did not load: %#v", issue)
+			}
+
+			var child issueview.Hit
+			found := false
+			for _, hit := range issue.view.Hits() {
+				if hit.Kind == issueview.HitChild && hit.ID == "td-acde12" {
+					child, found = hit, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("rendered issue has no child hit: %+v", issue.view.Hits())
+			}
+			var region *mouse.Region
+			for _, candidate := range m.workspacesMouse.HitMap.Regions() {
+				if kind, ok := candidate.Data.(string); ok && kind == previewIssueRegionKind {
+					copy := candidate
+					region = &copy
+					break
+				}
+			}
+			if region == nil {
+				t.Fatal("rendered issue has no mouse region")
+			}
+			x := region.Rect.X + child.X
+			y := region.Rect.Y + termpreview.HeaderRows + child.Y
+			resolved := m.workspacesMouse.HitMap.Test(x, y)
+			if resolved == nil || resolved.ID != previewIssueRegionKind {
+				t.Fatalf("raw coordinate (%d,%d) resolves to %#v", x, y, resolved)
+			}
+
+			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
+			if issue.view.Data() == nil || issue.view.Data().ID != "td-acde12" {
+				t.Fatalf("raw child click loaded %#v, want td-acde12", issue.view.Data())
+			}
+
+			m.WorkspacesView(width, previewTall)
+			parentAtSameCell := false
+			for _, hit := range issue.view.Hits() {
+				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == region.Rect.X+hit.X {
+					parentAtSameCell = true
+					break
+				}
+			}
+			if !parentAtSameCell {
+				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view.Hits())
+			}
+			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
+			if issue.view.Data() == nil || issue.view.Data().ID != "td-acde12" || issue.view.IssueID() != "td-acde12" {
+				t.Fatalf("double-click replay navigated to %#v / %q", issue.view.Data(), issue.view.IssueID())
+			}
+		})
+	}
+}
+
+func TestGlobalIssuePreviewHasSharedPaddingAndOneSecondarySlot(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	issue := m.preview.issue
+	if issue == nil {
+		t.Fatal("issue did not open")
+	}
+	rendered := m.renderPreviewIssue(issue, termpreview.Box{W: 32, H: 10})
+	lines := strings.Split(ansi.Strip(rendered), "\n")
+	for row, line := range lines[1:] {
+		if ansi.StringWidth(line) != 32 || line[0] != ' ' || line[len(line)-1] != ' ' {
+			t.Fatalf("issue body row %d does not keep the shared inset/width: %q", row, line)
+		}
+	}
+
+	action := previewNeedleAction(t, m, "README.md")
+	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, action)))
+	if m.preview.doc == nil || m.preview.issue != nil {
+		t.Fatalf("opening doc did not replace issue: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
+	}
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	if m.preview.issue == nil || m.preview.doc != nil {
+		t.Fatalf("opening issue did not replace doc: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
+	}
+}
+
+func TestGlobalIssuePreviewWheelKeyboardAndCloseChip(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	issue := m.preview.issue
+	data := *issue.view.Data()
+	data.Description = strings.Repeat("scrollable issue body\n\n", 30)
+	issue.view.SetData(&data)
+	m.WorkspacesView(previewWide, previewTall)
+
+	var body, close mouse.Region
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		kind, _ := region.Data.(string)
+		switch kind {
+		case previewIssueRegionKind:
+			body = region
+		case previewIssueCloseKind:
+			close = region
+		}
+	}
+	if body.ID == "" || close.ID == "" {
+		t.Fatalf("issue regions missing: body=%#v close=%#v", body, close)
+	}
+	before := issue.view.View()
+	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: body.Rect.X + 2, Y: body.Rect.Y + 3, Button: tea.MouseWheelDown}))
+	if issue.view.View() == before {
+		t.Fatal("wheel over issue did not scroll the issue")
+	}
+	before = issue.view.View()
+	handled, _ := m.WorkspacesKey(key("j"))
+	if !handled || issue.view.View() == before {
+		t.Fatalf("issue keyboard scroll handled=%v changed=%v", handled, issue.view.View() != before)
+	}
+	handled, _ = m.WorkspacesKey(key("q"))
+	if !handled || m.preview.issue != nil {
+		t.Fatalf("q handled=%v issue=%#v", handled, m.preview.issue)
+	}
+
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	m.WorkspacesView(previewWide, previewTall)
+	close = mouse.Region{}
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, _ := region.Data.(string); kind == previewIssueCloseKind {
+			close = region
+			break
+		}
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: close.Rect.X, Y: close.Rect.Y, Button: tea.MouseLeft}))
+	if m.preview.issue != nil {
+		t.Fatal("close chip left issue open")
+	}
+}
+
+func TestGlobalIssuePreviewDoesNotStealOverlayKeys(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	m.openViewFlyout()
+	if !m.viewFlyoutOpen {
+		t.Fatal("sort flyout did not open")
+	}
+	handled, _ := m.WorkspacesKey(key("esc"))
+	if !handled || m.viewFlyoutOpen {
+		t.Fatalf("overlay esc handled=%v open=%v", handled, m.viewFlyoutOpen)
+	}
+	if m.preview.issue == nil {
+		t.Fatal("issue stole esc from the overlay and closed")
+	}
+}
+
+func TestGlobalIssuePreviewRejectsStaleSelectionAndVisibilityResults(t *testing.T) {
+	for _, change := range []string{"selection", "visibility"} {
+		t.Run(change, func(t *testing.T) {
+			stubPreviewTd(t)
+			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+			result := m.results["sidecar"]
+			other := result.Workspaces[0]
+			other.ID, other.Name = "b", "beta"
+			result.Workspaces = append(result.Workspaces, other)
+			m.results["sidecar"] = result
+			m.syncBoard()
+			m.workspaces.SelectID("a")
+			run(t, m, m.previewSync())
+			stale := previewIssueResult(t, m.openPreviewIssue("td-196c42"))
+
+			switch change {
+			case "selection":
+				m.workspaces.SelectID("b")
+				run(t, m, m.previewSync())
+				if m.preview.workspaceID != "b" {
+					t.Fatalf("selection did not rebind preview: %q", m.preview.workspaceID)
+				}
+			case "visibility":
+				run(t, m, m.SetWorkspacesVisible(false))
+			}
+
+			m.Update(stale)
+			if m.preview.issue != nil {
+				t.Fatalf("stale %s result restored %#v", change, m.preview.issue)
+			}
+		})
+	}
+}
+
+func previewIssueResult(t *testing.T, cmd tea.Cmd) previewIssueLoadedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("issue open returned no command")
+	}
+	msg := cmd()
+	if loaded, ok := msg.(previewIssueLoadedMsg); ok {
+		return loaded
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("issue open message = %T, want batch", msg)
+	}
+	for _, sub := range batch {
+		if sub == nil {
+			continue
+		}
+		if loaded, ok := sub().(previewIssueLoadedMsg); ok {
+			return loaded
+		}
+	}
+	t.Fatal("issue batch had no loaded result")
+	return previewIssueLoadedMsg{}
+}
+
+func mustPreviewSpan(t *testing.T, m *Model, action mouse.MouseAction) terminallink.Span {
+	t.Helper()
+	span, ok := m.previewLinkAt(action)
+	if !ok {
+		t.Fatalf("no link at %#v", action)
+	}
+	return span
 }
 
 func TestGlobalPreviewShiftClickDoesNotOpenDoc(t *testing.T) {
@@ -232,16 +492,13 @@ func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
 	}
 }
 
-// Decorate underlines every kind it is handed; the host chooses what to hand
-// it. This surface opens no td pane, so an underlined td id here would be a
-// dead link — and nothing but decoratedPreviewSpans stands between the two.
-func TestGlobalPreviewLeavesTdIdsUndecorated(t *testing.T) {
+func TestGlobalPreviewDecoratesEveryActivatedLinkKind(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	decorated := m.decoratePreviewLine("see README.md then review td-196c42", 0)
 	if !strings.Contains(decorated, "\x1b[4mREADME.md\x1b[24m") {
 		t.Fatalf("the file this surface does open was not underlined: %q", decorated)
 	}
-	if !strings.Contains(decorated, "review td-196c42") {
-		t.Fatalf("the td id this surface opens nowhere was decorated: %q", decorated)
+	if !strings.Contains(decorated, "\x1b[4mtd-196c42\x1b[24m") {
+		t.Fatalf("the issue this surface opens was not underlined: %q", decorated)
 	}
 }

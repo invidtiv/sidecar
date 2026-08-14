@@ -96,6 +96,9 @@ func (p *Plugin) openTab(path string, mode TabOpenMode) tea.Cmd {
 	if path == "" {
 		return nil
 	}
+	// A direct activation supersedes a quiet-period tree preview, including one
+	// queued for a selection the user has already left.
+	p.treePreviewGen++
 
 	p.normalizeActiveTab()
 

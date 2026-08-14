@@ -35,6 +35,10 @@ const (
 	// Directory cache limits (for path auto-complete)
 	dirCacheMaxDirs    = 10000 // Max directories to cache
 	dirCacheMaxResults = 5     // Max suggestions to show
+
+	// treePreviewQuiet keeps cursor movement live while avoiding a preview tab,
+	// watcher, and file load for every event in a wheel or key-repeat burst.
+	treePreviewQuiet = 80 * time.Millisecond
 )
 
 // FileOpMode represents the current file operation mode.
@@ -123,6 +127,14 @@ type (
 	// the user is no longer pointing at.
 	DragSpringLoadMsg struct {
 		Gen uint64
+	}
+	// treePreviewQuietMsg activates only the file where a tree movement burst
+	// came to rest. Generation and epoch keep an old timer from changing a newer
+	// selection or project.
+	treePreviewQuietMsg struct {
+		Gen   uint64
+		Epoch uint64
+		Path  string
 	}
 	// GitInfoMsg contains git status for a file.
 	GitInfoMsg = docview.GitInfoMsg
@@ -287,6 +299,20 @@ type Plugin struct {
 
 	// Mouse support
 	mouseHandler *mouse.Handler
+	wheelBursts  tty.WheelBursts
+	wheelNow     func() time.Time
+
+	// A held wheel event changed no visible state. Reuse exactly the preceding
+	// same-dimension frame once instead of rebuilding both panes and hit maps.
+	reuseViewOnce bool
+	viewCache     string
+	viewCacheW    int
+	viewCacheH    int
+	viewCacheOK   bool
+
+	// treePreviewGen owns the one quiet-period preview activation in flight.
+	// Every newer selection or direct tab activation invalidates the old timer.
+	treePreviewGen uint64
 
 	// State restoration flag
 	stateRestored bool
@@ -377,6 +403,10 @@ func (p *Plugin) Icon() string { return pluginIcon }
 func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Reject editor start/exit messages still queued from the previous project.
 	p.inlineEditActivation++
+	p.treePreviewGen++
+	p.wheelBursts = tty.WheelBursts{}
+	p.reuseViewOnce = false
+	p.viewCacheOK = false
 	if p.inlineEditor != nil {
 		p.inlineEditor.Close()
 	}
@@ -427,6 +457,8 @@ func (p *Plugin) Start() tea.Cmd {
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
 	p.stopped = true
+	p.treePreviewGen++
+	p.wheelBursts = tty.WheelBursts{}
 	if p.watcher != nil {
 		p.watcher.Stop()
 		p.watcher = nil
@@ -787,6 +819,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p.handleWatchStarted(msg)
 	case WatchEventMsg:
 		return p.handleWatchEvent(msg)
+	case treePreviewQuietMsg:
+		return p.handleTreePreviewQuiet(msg)
 	}
 
 	// Handle exit confirmation dialog first
@@ -1219,10 +1253,20 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
+	if p.reuseViewOnce && p.viewCacheOK && p.viewCacheW == width && p.viewCacheH == height {
+		p.reuseViewOnce = false
+		return p.viewCache
+	}
+	p.reuseViewOnce = false
 	content := p.renderView()
 	// Constrain output to allocated height to prevent header scrolling off-screen.
 	// MaxHeight truncates content that exceeds the allocated space.
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	view := lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	p.viewCache = view
+	p.viewCacheW = width
+	p.viewCacheH = height
+	p.viewCacheOK = true
+	return view
 }
 
 // IsFocused returns whether the plugin is focused.

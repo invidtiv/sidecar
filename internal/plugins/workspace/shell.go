@@ -354,6 +354,17 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	if p.shellManifest == nil {
 		return nil
 	}
+	// The merge replaces the slice. Preserve a top-shell selection by its
+	// durable tmux identity, never by the numeric row that happened to contain
+	// it before the replacement.
+	wasTopShellSelected := p.shellSelected
+	selectedTmux := ""
+	selectedIndex := p.selectedShellIdx
+	if wasTopShellSelected {
+		if shell := p.getSelectedShell(); shell != nil {
+			selectedTmux = shell.TmuxName
+		}
+	}
 
 	result := mergeShellState(shellMergeInput{
 		Existing:  p.shells,
@@ -373,6 +384,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		delete(p.managedSessions, name)
 		globalPaneCache.remove(name)
 		globalActiveRegistry.remove(name)
+		p.forgetPaneSurfaces("shell:" + name)
 	}
 	if p.managedSessions == nil {
 		p.managedSessions = make(map[string]bool)
@@ -383,12 +395,38 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		}
 	}
 
-	// Adjust selection if needed
-	if p.shellSelected && p.selectedShellIdx >= len(p.shells) {
-		if len(p.shells) > 0 {
-			p.selectTopShellAt(len(p.shells) - 1)
-		} else if len(p.worktrees) > 0 {
-			p.selectWorktreeAt(0)
+	// Re-resolve the old selection by identity. If it survived at a different
+	// index, only the index changes and its live pane tree stays attached. If it
+	// disappeared, retarget without storing: the outgoing owner is gone, so the
+	// old tree must never be encoded under whichever surface shifted into its
+	// row.
+	if wasTopShellSelected {
+		selectedShellIndex := -1
+		for i, shell := range p.shells {
+			if shell != nil && shell.TmuxName == selectedTmux {
+				selectedShellIndex = i
+				break
+			}
+		}
+		if selectedShellIndex >= 0 {
+			p.applyTopShellSelection(selectedShellIndex)
+		} else {
+			switch {
+			case len(p.shells) > 0:
+				dest := min(max(selectedIndex, 0), len(p.shells)-1)
+				p.retargetAfterSelectedSurfaceGone(func() { p.applyTopShellSelection(dest) })
+			case len(p.worktrees) > 0:
+				p.retargetAfterSelectedSurfaceGone(func() { p.applyWorktreeSelection(0) })
+			default:
+				p.shellSelected = false
+				p.selectedShellIdx = 0
+				p.selectedIdx = -1
+				if p.paneRoot != nil {
+					p.resetPaneTreeToTerminal()
+					p.paneLayoutSurface = ""
+				}
+			}
+			p.saveSelectionState()
 		}
 	}
 

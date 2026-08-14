@@ -61,6 +61,10 @@ type WheelHandler struct {
 	// makes the wheel work over a plain shell, and it answers every notch the
 	// application has not claimed.
 	ScrollLocal func(delta int) tea.Cmd
+	// OnHold tells the host that this event changed only Burst bookkeeping. A
+	// host with an expensive View can reuse the frame it just drew once, because
+	// no terminal, viewport, selection, or routing state changed for this event.
+	OnHold func()
 }
 
 // Handle routes one wheel event. It returns nil while the burst is still
@@ -69,6 +73,9 @@ type WheelHandler struct {
 func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 	delta, flush := h.Burst.Add(g.Delta, g.Now)
 	if !flush {
+		if h.OnHold != nil {
+			h.OnHold()
+		}
 		return nil
 	}
 	// The reader is reading this pane whoever ends up owning the notch: a local

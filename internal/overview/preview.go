@@ -14,9 +14,9 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-// The global Workspaces preview is one terminal box, with an optional
-// terminal-adjacent docview when the user clicks a file link. It is not a
-// workspace plugin instance and does not open the issue-preview modal.
+// The global Workspaces preview is one terminal box, with one optional
+// terminal-adjacent document or issue when the user clicks a link. It is not a
+// workspace plugin instance and owns no persistent pane layout.
 //
 // The selected visible pane is always produced by the same tty.Model component
 // the project Workspaces plugin uses. Watching and typing are therefore two
@@ -98,9 +98,10 @@ type previewState struct {
 	interactive          bool
 	interactiveHintShown bool
 
-	// doc is the optional file preview beside the terminal. Issue ids are not
-	// activated here.
-	doc *previewDoc
+	// Exactly one memory-only secondary preview may sit beside the terminal.
+	// Opening a document replaces an issue and vice versa.
+	doc   *previewDoc
+	issue *previewIssue
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -163,6 +164,7 @@ func (m *Model) resetPreviewContent() {
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
 	m.preview.doc = nil
+	m.preview.issue = nil
 }
 
 // previewSync reconciles the one visible terminal when selection or tab state
@@ -260,6 +262,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// input, and a surface that answered them out here as well would send them
 		// to the pane twice.
 		return true, m.forwardToTerminal(msg)
+	}
+	if handled, cmd := m.previewIssueKey(msg); handled {
+		return true, cmd
 	}
 	if handled, cmd := m.previewDocKey(msg); handled {
 		return true, cmd

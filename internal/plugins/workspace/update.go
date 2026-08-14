@@ -478,13 +478,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createDeleteResult = &msg.Result
 		if msg.Result.WorktreeRemoved {
 			if p.createSetupResult != nil && p.createSetupResult.Worktree != nil {
-				key := p.createSetupResult.Worktree.IdentityKey()
-				for i, wt := range p.worktrees {
-					if wt.IdentityKey() == key {
-						p.worktrees = append(p.worktrees[:i], p.worktrees[i+1:]...)
-						break
-					}
-				}
+				created := p.createSetupResult.Worktree
+				key := created.IdentityKey()
+				p.removeWorktreeByIdentity(key)
 			}
 			if p.createPlan != nil {
 				if err := p.clearPendingCreation(p.createPlan); err != nil {
@@ -1219,6 +1215,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			cmds = append(cmds, p.loadSelectedContent())
 		}
 		if removedIdx >= 0 {
+			p.forgetPaneSurfaces("shell:" + msg.SessionName)
 			p.retargetAfterKilledTopShell(removedIdx)
 			p.saveSelectionState()
 			if len(p.shells) > 0 || len(p.worktrees) > 0 {
@@ -1261,6 +1258,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, p.loadSelectedContent()
 		}
 		if removedIdx >= 0 {
+			p.forgetPaneSurfaces("shell:" + msg.TmuxName)
 			p.retargetAfterKilledTopShell(removedIdx)
 			p.saveSelectionState()
 			if len(p.shells) > 0 || len(p.worktrees) > 0 {

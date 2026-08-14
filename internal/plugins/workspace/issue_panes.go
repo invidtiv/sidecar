@@ -195,7 +195,11 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "q", "esc":
 		return true, p.closeIssuePane(leaf.ID)
 	default:
+		beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
 		_, cmd := issue.view.HandleKey(msg)
+		if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
+			p.saveSelectionState()
+		}
 		return true, cmd
 	}
 }

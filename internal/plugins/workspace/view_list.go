@@ -45,47 +45,58 @@ func (p *Plugin) View(width, height int) string {
 
 	p.width = width
 	p.height = height
+	if p.reuseHeldWheelViewOnce && p.wheelViewCacheOK &&
+		p.wheelViewCacheW == width && p.wheelViewCacheH == height {
+		p.reuseHeldWheelViewOnce = false
+		return p.wheelViewCache
+	}
+	p.reuseHeldWheelViewOnce = false
 
 	// CRITICAL: Clear hit regions at start of each render
 	p.mouseHandler.Clear()
 
+	var view string
 	switch p.viewMode {
 	case ViewModeCreate:
-		return p.renderCreateModal(width, height)
+		view = p.renderCreateModal(width, height)
 	case ViewModeKanban:
-		return p.renderKanbanView(width, height)
+		view = p.renderKanbanView(width, height)
 	case ViewModeTaskLink:
-		return p.renderTaskLinkModal(width, height)
+		view = p.renderTaskLinkModal(width, height)
 	case ViewModeMerge:
-		return p.renderMergeModal(width, height)
+		view = p.renderMergeModal(width, height)
 	case ViewModeAgentConfig:
-		return p.renderAgentConfigModal(width, height)
+		view = p.renderAgentConfigModal(width, height)
 	case ViewModeAgentChoice:
-		return p.renderAgentChoiceModal(width, height)
+		view = p.renderAgentChoiceModal(width, height)
 	case ViewModeConfirmDelete:
-		return p.renderConfirmDeleteModal(width, height)
+		view = p.renderConfirmDeleteModal(width, height)
 	case ViewModeConfirmDeleteShell:
-		return p.renderConfirmDeleteShellModal(width, height)
+		view = p.renderConfirmDeleteShellModal(width, height)
 	case ViewModeCommitForMerge:
-		return p.renderCommitForMergeModal(width, height)
+		view = p.renderCommitForMergeModal(width, height)
 	case ViewModePromptPicker:
-		return p.renderPromptPickerModal(width, height)
+		view = p.renderPromptPickerModal(width, height)
 	case ViewModeTypeSelector:
-		return p.renderTypeSelectorModal(width, height)
+		view = p.renderTypeSelectorModal(width, height)
 	case ViewModeRenameShell:
-		return p.renderRenameShellModal(width, height)
+		view = p.renderRenameShellModal(width, height)
 	case ViewModeFetchPR:
-		return p.renderFetchPRModal(width, height)
+		view = p.renderFetchPRModal(width, height)
 	case ViewModeFilePicker:
 		background := p.renderListView(width, height)
-		return p.renderFilePickerModal(background)
+		view = p.renderFilePickerModal(background)
 	default:
-		view := p.renderListView(width, height)
+		view = p.renderListView(width, height)
 		if p.docInfo != nil {
-			return ui.OverlayModal(view, p.docInfo.Render(width, height, p.mouseHandler), width, height)
+			view = ui.OverlayModal(view, p.docInfo.Render(width, height, p.mouseHandler), width, height)
 		}
-		return view
 	}
+	p.wheelViewCache = view
+	p.wheelViewCacheW = width
+	p.wheelViewCacheH = height
+	p.wheelViewCacheOK = true
+	return view
 }
 
 // registerPreviewTabRegions puts click targets over the Output/Diff/Task chips,
