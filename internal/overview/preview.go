@@ -29,8 +29,11 @@ import (
 // live pane closes the control subscription and releases the buffer.
 
 const (
-	// Match the project Workspaces terminal's initial bounded live/history
-	// window. tty.Model owns the seed, alt-screen split, and subsequent frames.
+	// The initial bounded live/history window this surface captures. tty.Model
+	// owns the seed, alt-screen split, and subsequent frames. It bounds the
+	// capture, not how far back the reader can go: older ranges are read lazily
+	// by the shared reach (preview_history.go), which ends where tmux's history
+	// does.
 	previewScrollbackLines = tty.DefaultScrollbackLines
 
 	// The default share and the floors below it match the project plugin's outer
@@ -83,9 +86,10 @@ type previewState struct {
 	pointer   tty.Pointer
 	wheel     tty.WheelBurst
 
-	// scrollbackLimitShown records that the reader has been told once where the
-	// rest of this pane's history is.
-	scrollbackLimitShown bool
+	// history is the surface's reach into the pane's older scrollback: the
+	// shared layer's request state, adopted rather than restated, so this
+	// surface reads exactly as far back as the project plugin's does.
+	history tty.HistoryReach
 
 	// terminal is the single producer for the selected visible pane. interactive
 	// says whether keys are also routed to it; terminalTarget scopes its lifetime.
@@ -152,6 +156,9 @@ func (m *Model) resetPreviewContent() {
 	m.preview.buffer = nil
 	m.preview.offset = 0
 	m.preview.freeze = tty.WindowFreeze{}
+	// The reach names lines of the buffer being dropped, and a read in flight for
+	// the old pane must not land on the new one.
+	m.preview.history = tty.HistoryReach{}
 	m.preview.selection.Clear()
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
@@ -334,14 +341,17 @@ func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch {
 	case move.ToOldest:
 		m.jumpPreviewWindow(m.previewMaxOffset())
-		return true, m.notePreviewScrollbackLimit()
+		return true, m.reachOlderPreviewHistory(tty.HistoryChunkLines)
 	case move.ToLive:
 		m.jumpPreviewWindow(0)
+		m.preview.history.Cancel()
 	default:
 		before := m.previewScrollAnchor()
 		m.scrollPreview(move.Rows)
+		// A move that ran out of loaded buffer reaches for the history behind it,
+		// exactly as a wheel notch at the same bound does.
 		if move.Rows > 0 && m.previewScrollAnchor() == before {
-			return true, m.notePreviewScrollbackLimit()
+			return true, m.reachOlderPreviewHistory(move.Rows)
 		}
 	}
 	return true, nil
@@ -413,6 +423,8 @@ func (m *Model) pinPreviewToLive() {
 	}
 	m.clearPreviewSelection()
 	m.jumpPreviewWindow(0)
+	// A jump this large abandons the window a pending read was reaching for.
+	m.preview.history.Cancel()
 }
 
 // previewMaxOffset is how far back this surface's window can sit, taken from

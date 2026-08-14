@@ -32,6 +32,7 @@ type fakeTerminal struct {
 	sequences  []string
 	dims       [][2]int
 	buffer     *tty.OutputBuffer
+	history    tty.HistoryInfo
 	reporting  bool
 	paneW      int
 	paneH      int
@@ -126,6 +127,24 @@ func (f *fakeTerminal) Buffer() *tty.OutputBuffer {
 }
 
 func (f *fakeTerminal) PaneSize() (int, int) { return f.paneW, f.paneH }
+
+// History and PrependHistory are the pane's scrollback as the component reports
+// and extends it. The fake keeps tmux's own count separate from what the buffer
+// holds, which is the disagreement the reach exists to close.
+func (f *fakeTerminal) History() tty.HistoryInfo {
+	info := f.history
+	if start, end, ok := f.buffer.AbsoluteRange(); ok {
+		info.LoadedStart, info.LoadedEnd = start, end
+	}
+	return info
+}
+
+func (f *fakeTerminal) PrependHistory(content string, baseLine int) bool {
+	if !f.active || !f.history.HasHistory {
+		return false
+	}
+	return f.buffer.PrependSnapshot(content, baseLine)
+}
 
 func (f *fakeTerminal) CursorState() (int, int, bool) { return f.cursorRow, f.cursorCol, true }
 

@@ -973,7 +973,7 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
-	p.terminalHistory = make(map[string]terminalHistoryState)
+	p.terminalHistory = make(map[string]tty.HistoryReach)
 	// The reader has scrolled back off the live grid, so the rows they clicked
 	// are the transcript above it rather than the pane's current frame. Two
 	// notches, because the 4-row pane is letterboxed into this viewport and the

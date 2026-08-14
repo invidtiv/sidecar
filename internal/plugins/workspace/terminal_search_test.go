@@ -112,7 +112,7 @@ func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
 	p.previewScroll = 10
 	key := terminalHistoryKey("shell", "search-shell")
-	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
 
 	if cmd := p.beginTerminalSearch(); cmd == nil {
 		t.Fatal("search did not request unvisited history")
@@ -147,7 +147,7 @@ func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
 	key := terminalHistoryKey("shell", "search-shell")
-	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search did not request unvisited history")
 	}
@@ -181,7 +181,7 @@ func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing
 func TestClearTerminalSearchCancelsStoredSourceAfterSelectionSwitch(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
 	keyA := terminalHistoryKey("shell", "search-shell")
-	p.terminalHistory[keyA] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[keyA] = tty.HistoryReach{HistorySize: 1200}
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search on shell A did not start history load")
 	}
@@ -205,7 +205,7 @@ func TestClearTerminalSearchCancelsStoredSourceAfterSelectionSwitch(t *testing.T
 func TestBeginTerminalSearchCancelsPreviousSourceLoad(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
 	keyA := terminalHistoryKey("shell", "search-shell")
-	p.terminalHistory[keyA] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[keyA] = tty.HistoryReach{HistorySize: 1200}
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search on shell A did not start history load")
 	}
@@ -219,7 +219,7 @@ func TestBeginTerminalSearchCancelsPreviousSourceLoad(t *testing.T) {
 		Agent:    &Agent{TmuxSession: "shell-b", OutputBuf: bufferB},
 	})
 	keyB := terminalHistoryKey("shell", "shell-b")
-	p.terminalHistory[keyB] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[keyB] = tty.HistoryReach{HistorySize: 1200}
 	p.selectedShellIdx = 1
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search on shell B did not start history load")

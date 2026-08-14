@@ -81,7 +81,7 @@ type pollMsg struct{ Generation int }
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
-		previewDocLoadedMsg,
+		previewDocLoadedMsg, previewHistoryLoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
 		renameShellDoneMsg:
 		return true
@@ -405,6 +405,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case previewDocLoadedMsg:
 		m.applyPreviewDocLoaded(msg)
 		return nil
+	case previewHistoryLoadedMsg:
+		return m.applyPreviewHistory(msg)
 	case workspacediff.SnapshotMsg:
 		return m.applyDiffSnapshot(msg)
 	case workspacediff.CommitDetailMsg:

@@ -2,18 +2,18 @@ package workspace
 
 import (
 	"fmt"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
-type terminalHistoryState struct {
-	HistorySize   int
-	Loading       bool
-	Exhausted     bool
-	PendingScroll int
-	RequestGen    uint64
-}
+// The reach itself — one request per bound-hit, a pending scroll coalesced onto
+// it, a superseded result ignored, a hard stop at tmux's oldest line — is the
+// shared layer's (tty.HistoryReach). What is left here is the adapter: which
+// buffer and which tmux target a surface is reading, and rebasing the absolute
+// coordinates a prepend renumbered.
 
 type terminalHistorySource struct {
 	Key       string
@@ -23,11 +23,10 @@ type terminalHistorySource struct {
 }
 
 type terminalHistoryLoadedMsg struct {
-	Source      terminalHistorySource
-	Capture     tty.CaptureRange
-	ScrollLines int
-	RequestGen  uint64
-	Err         error
+	Source     terminalHistorySource
+	Capture    tty.CaptureRange
+	RequestGen uint64
+	Err        error
 }
 
 func terminalHistoryKey(kind, target string) string {
@@ -39,12 +38,11 @@ func (p *Plugin) recordTerminalHistory(kind, target string, historySize int) {
 		return
 	}
 	if p.terminalHistory == nil {
-		p.terminalHistory = make(map[string]terminalHistoryState)
+		p.terminalHistory = make(map[string]tty.HistoryReach)
 	}
 	key := terminalHistoryKey(kind, target)
 	state := p.terminalHistory[key]
-	state.HistorySize = historySize
-	state.Exhausted = historySize == 0
+	state.Record(historySize)
 	p.terminalHistory[key] = state
 	if p.terminalSearch.SourceKey == key && p.terminalSearch.Query != "" {
 		p.recomputeTerminalSearch()
@@ -98,58 +96,55 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 }
 
 // loadOlderTerminalHistory fetches only the range immediately preceding the
-// currently loaded buffer. scrollLines is replayed after the async prepend.
+// currently loaded buffer. scrollLines is replayed after the async prepend, and
+// a reader who has run out of tmux history is told so rather than left pushing
+// against a bound with no explanation.
 func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.Cmd {
 	source, ok := p.terminalHistoryFor(termPanel)
-	if !ok || scrollLines <= 0 {
+	if !ok {
 		return nil
 	}
 	state := p.terminalHistory[source.Key]
-	state.PendingScroll += scrollLines
-	if state.Loading {
-		p.terminalHistory[source.Key] = state
-		return nil
-	}
 	base, _, absolute := source.Buffer.AbsoluteRange()
-	if !absolute || base <= 0 || state.Exhausted {
-		state.PendingScroll = 0
-		p.terminalHistory[source.Key] = state
-		return nil
-	}
-	start := max(base-historyLoadChunk, 0)
-	end := base - 1
-	historySize := state.HistorySize
-	if historySize <= 0 {
-		return nil
-	}
-	state.Loading = true
-	state.RequestGen++
-	requestGen := state.RequestGen
+	request, outcome := state.Request(base, absolute, scrollLines)
 	p.terminalHistory[source.Key] = state
-	relativeStart := start - historySize
-	relativeEnd := end - historySize
+	switch outcome {
+	case tty.HistoryRequested:
+	case tty.HistoryEnded:
+		return p.noteTerminalHistoryEnd(source.Key)
+	default:
+		return nil
+	}
 	return func() tea.Msg {
-		capture, err := tty.CapturePaneRange(source.Target, relativeStart, relativeEnd)
+		capture, err := tty.CapturePaneRange(source.Target, request.Start, request.End)
 		return terminalHistoryLoadedMsg{
 			Source:     source,
 			Capture:    capture,
-			RequestGen: requestGen,
+			RequestGen: request.Generation,
 			Err:        err,
 		}
 	}
 }
 
-func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
-	state := p.terminalHistory[msg.Source.Key]
-	if msg.RequestGen != 0 && msg.RequestGen != state.RequestGen {
+// noteTerminalHistoryEnd says out loud that tmux has no more history for this
+// pane. It is the same sentence the global browser says, because it is a fact
+// about the pane rather than about the surface reading it.
+func (p *Plugin) noteTerminalHistoryEnd(key string) tea.Cmd {
+	state := p.terminalHistory[key]
+	told := state.NoteEnd()
+	p.terminalHistory[key] = state
+	if !told {
 		return nil
 	}
-	state.Loading = false
-	scrollLines := state.PendingScroll
-	if scrollLines == 0 {
-		scrollLines = msg.ScrollLines
+	return appmsg.ShowToast(tty.HistoryExhaustedNotice, 3*time.Second)
+}
+
+func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
+	state := p.terminalHistory[msg.Source.Key]
+	scrollLines, ok := state.Accept(msg.RequestGen)
+	if !ok {
+		return nil
 	}
-	state.PendingScroll = 0
 	if msg.Err != nil {
 		p.terminalHistory[msg.Source.Key] = state
 		if p.ctx != nil && p.ctx.Logger != nil {
@@ -179,8 +174,8 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	}
 	newBase, _, _ := current.Buffer.AbsoluteRange()
 	added := oldBase - newBase
-	state.HistorySize = msg.Capture.HistorySize
-	state.Exhausted = newBase == 0
+	state.Settle(newBase, msg.Capture.HistorySize)
+	remainder, more := state.Remainder(scrollLines, added)
 	p.terminalHistory[msg.Source.Key] = state
 	if p.terminalSearch.SourceKey == msg.Source.Key && p.terminalSearch.Query != "" {
 		p.recomputeTerminalSearch()
@@ -190,8 +185,8 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 		// A pinned window names an absolute row, which the prepend just renumbered.
 		p.termPanelFreeze.Rebase(added)
 		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
-		if scrollLines > added && !state.Exhausted {
-			return p.loadOlderTerminalHistory(true, scrollLines-added)
+		if more {
+			return p.loadOlderTerminalHistory(true, remainder)
 		}
 		return nil
 	}
@@ -199,8 +194,8 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	// only the user's pending upward movement is replayed here.
 	p.previewFreeze.Rebase(added)
 	p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
-	if scrollLines > added && !state.Exhausted {
-		return p.loadOlderTerminalHistory(false, scrollLines-added)
+	if more {
+		return p.loadOlderTerminalHistory(false, remainder)
 	}
 	return nil
 }
@@ -233,9 +228,7 @@ func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
 		return
 	}
 	state := p.terminalHistory[key]
-	state.PendingScroll = 0
-	state.Loading = false
-	state.RequestGen++
+	state.Cancel()
 	p.terminalHistory[key] = state
 }
 

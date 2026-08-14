@@ -1,0 +1,111 @@
+package overview
+
+import (
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/tty"
+)
+
+// How far back this surface reads is not this surface's decision. The order of
+// a lazy read — one request per bound-hit, a pending scroll coalesced onto it, a
+// superseded result ignored, a hard stop at tmux's oldest line — is
+// tty.HistoryReach's, the same one the project Workspaces plugin adopts. What is
+// here is the adapter: which pane is being read, where the rows go, and what a
+// window placed from the live bottom owes the reader once they land.
+//
+// Before this, the browser dead-ended at its initial capture and said so. It now
+// ends where tmux's history does, which is where the project surface ends.
+
+// capturePreviewHistory is the tmux read the reach opens. It is a variable so
+// the order can be proved without a tmux server behind it.
+var capturePreviewHistory = tty.CapturePaneRange
+
+// previewHistoryLoadedMsg carries one completed read. Target and Generation
+// scope it: a result for a pane the preview has moved off, or for a request
+// something has since superseded, is not applied to whatever is on screen now.
+type previewHistoryLoadedMsg struct {
+	Target     tty.Target
+	Capture    tty.CaptureRange
+	Generation uint64
+	Err        error
+}
+
+// reachOlderPreviewHistory asks for the range immediately older than the
+// window's oldest loaded line. scrollLines is what the reader is owed once those
+// rows land.
+func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
+	buffer := m.previewBuffer()
+	if !m.previewTerminalActive() || buffer == nil {
+		return nil
+	}
+	// The pane's own report of how much history it holds is the origin the
+	// relative coordinates of a capture are measured from, so it is read at the
+	// moment of the request rather than remembered from an older frame.
+	if info := m.preview.terminal.History(); info.HasHistory {
+		m.preview.history.Record(info.HistorySize)
+	}
+	base, _, absolute := buffer.AbsoluteRange()
+	request, outcome := m.preview.history.Request(base, absolute, scrollLines)
+	switch outcome {
+	case tty.HistoryRequested:
+	case tty.HistoryEnded:
+		return m.notePreviewScrollbackLimit()
+	default:
+		return nil
+	}
+	target, pane := m.previewHistoryTarget()
+	if pane == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		capture, err := capturePreviewHistory(pane, request.Start, request.End)
+		return previewHistoryLoadedMsg{
+			Target:     target,
+			Capture:    capture,
+			Generation: request.Generation,
+			Err:        err,
+		}
+	}
+}
+
+// previewHistoryTarget is the pane being read, and the tmux address to read it
+// by. capture-pane takes a pane where there is one; the session is the fallback
+// for a target named only by its session.
+func (m *Model) previewHistoryTarget() (tty.Target, string) {
+	target := m.preview.terminalTarget
+	if target.Pane != "" {
+		return target, target.Pane
+	}
+	return target, target.Session
+}
+
+// applyPreviewHistory merges a completed read into the pane's buffer and
+// replays the movement waiting on it.
+func (m *Model) applyPreviewHistory(msg previewHistoryLoadedMsg) tea.Cmd {
+	if msg.Target != m.preview.terminalTarget || !m.previewTerminalActive() {
+		return nil
+	}
+	scrollLines, ok := m.preview.history.Accept(msg.Generation)
+	if !ok || msg.Err != nil {
+		return nil
+	}
+	buffer := m.previewBuffer()
+	if buffer == nil {
+		return nil
+	}
+	oldBase, _, absolute := buffer.AbsoluteRange()
+	if !absolute || !m.preview.terminal.PrependHistory(msg.Capture.Output, msg.Capture.StartLine) {
+		return nil
+	}
+	newBase, _, _ := buffer.AbsoluteRange()
+	added := oldBase - newBase
+	m.preview.history.Settle(newBase, msg.Capture.HistorySize)
+	// A window placed from the live bottom is not renumbered by a prepend; only
+	// a gesture's pin, which names an absolute row, is. So only the reader's own
+	// pending movement is replayed here.
+	m.preview.freeze.Rebase(added)
+	m.scrollPreview(scrollLines)
+	if remainder, more := m.preview.history.Remainder(scrollLines, added); more {
+		return m.reachOlderPreviewHistory(remainder)
+	}
+	return nil
+}

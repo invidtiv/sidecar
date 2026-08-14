@@ -114,26 +114,20 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	searchGen := p.terminalSearch.Generation
 	base, _, absolute := source.Buffer.AbsoluteRange()
 	state := p.terminalHistory[source.Key]
-	if !absolute || base <= 0 || state.HistorySize <= 0 {
+	// Searching is user-initiated and covers the complete tmux history, not only
+	// ranges previously visited by scrolling. The reach supersedes any bounded
+	// load; its generation will be ignored if it completes later.
+	request, ok := state.RequestAll(base, absolute)
+	p.terminalHistory[source.Key] = state
+	if !ok {
 		return nil
 	}
-	// Searching is user-initiated and should cover the complete tmux history,
-	// not only ranges previously visited by scrolling. Supersede any bounded
-	// load; its generation will be ignored if it completes later.
-	state.PendingScroll = 0
-	state.Loading = true
-	state.RequestGen++
-	requestGen := state.RequestGen
-	p.terminalHistory[source.Key] = state
-	relativeEnd := base - state.HistorySize - 1
-	oldest := max(base-tty.HistoryLimit, 0)
-	relativeStart := oldest - state.HistorySize
 	return func() tea.Msg {
-		capture, err := tty.CapturePaneRange(source.Target, relativeStart, relativeEnd)
+		capture, err := tty.CapturePaneRange(source.Target, request.Start, request.End)
 		return terminalSearchHistoryLoadedMsg{
 			Source:     source,
 			Capture:    capture,
-			RequestGen: requestGen,
+			RequestGen: request.Generation,
 			SearchGen:  searchGen,
 			Err:        err,
 		}
@@ -145,10 +139,9 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 		return
 	}
 	state := p.terminalHistory[msg.Source.Key]
-	if msg.RequestGen != state.RequestGen {
+	if _, ok := state.Accept(msg.RequestGen); !ok {
 		return
 	}
-	state.Loading = false
 	if msg.Err != nil {
 		p.terminalHistory[msg.Source.Key] = state
 		return
@@ -165,8 +158,7 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 	}
 	newBase, _, _ := current.Buffer.AbsoluteRange()
 	added := oldBase - newBase
-	state.HistorySize = msg.Capture.HistorySize
-	state.Exhausted = newBase == 0
+	state.Settle(newBase, msg.Capture.HistorySize)
 	p.terminalHistory[msg.Source.Key] = state
 	// A window placed from the live bottom rides the renumbering out; only one
 	// pinned to an absolute row has to be shifted by the rows just prepended.

@@ -35,7 +35,7 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	p.termPanelSession = "panel-session"
 	p.termPanelPaneID = "%2"
 	p.termPanelOutput = panel
-	p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)] = tty.HistoryReach{HistorySize: 1200}
 	if p.termPanelMaxScroll() <= 0 {
 		t.Fatal("test premise: the panel fixture has nothing to scroll back through")
 	}

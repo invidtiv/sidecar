@@ -276,7 +276,10 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		TargetSession: sessionName,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true,
-		OutputBuf:     NewOutputBuffer(m.Config.ScrollbackLines),
+		// The buffer holds what the reach can load, not only what the seed
+		// captured: ScrollbackLines bounds the capture, and a buffer sized to it
+		// would trim every older row a host prepended.
+		OutputBuf: NewOutputBuffer(max(m.Config.ScrollbackLines, HistoryBufferLines)),
 	}
 	m.visible = true
 	m.modelLive = false

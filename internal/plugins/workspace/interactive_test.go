@@ -811,7 +811,7 @@ func TestGetInteractiveExitKey_VariousKeys(t *testing.T) {
 func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 	p := &Plugin{
 		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
-		terminalHistory: make(map[string]terminalHistoryState),
+		terminalHistory: make(map[string]tty.HistoryReach),
 	}
 	givePaneScrollableOutput(p, 120)
 	p.wheelTerminal(false, mouse.MouseAction{}, -1)
@@ -825,7 +825,7 @@ func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
 	p := &Plugin{
 		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
-		terminalHistory: make(map[string]terminalHistoryState),
+		terminalHistory: make(map[string]tty.HistoryReach),
 	}
 	givePaneScrollableOutput(p, 120)
 	p.previewScroll = 1

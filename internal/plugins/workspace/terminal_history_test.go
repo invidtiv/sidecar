@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -15,6 +19,111 @@ func numberedTerminalLines(start, count int) string {
 		lines[i] = fmt.Sprintf("line-%04d", start+i)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// watchedReachPlugin is a list-mode plugin whose preview shows a pane holding
+// more history than the capture that seeded it: 620 lines loaded from absolute
+// 600, with 1200 above the grid in tmux. It is the global browser's fixture,
+// stated in this surface's terms.
+func watchedReachPlugin(t *testing.T) *Plugin {
+	t.Helper()
+	buffer := tty.NewOutputBuffer(outputBufferCap)
+	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
+
+	p := New()
+	p.width, p.height = 120, 40
+	p.sidebarWidth = 40
+	p.viewMode = ViewModeList
+	p.previewTab = PreviewTabOutput
+	p.shellSelected = true
+	p.shells = []*ShellSession{{
+		TmuxName: "shell-1",
+		Agent:    &Agent{TmuxSession: "shell-1", TmuxPane: "%1", OutputBuf: buffer},
+	}}
+	p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = tty.HistoryReach{HistorySize: 1200}
+	// The wheel is coalesced by the shared burst, so the fixture spaces its
+	// notches: each reads a clock a debounce window later than the last.
+	at := time.Now()
+	p.clock = func() time.Time {
+		at = at.Add(2 * tty.WheelDebounceInterval)
+		return at
+	}
+	return p
+}
+
+// How far back a surface reads is a property of the layer, not of the surface.
+// A watched preview at the bound asks for the chunk behind it, and once that
+// lands the window reaches tmux's oldest line — the same row the global browser
+// lands on in internal/overview's
+// TestAWatchedGlobalPreviewReachesTmuxsOldestLine.
+func TestAWatchedPreviewReachesTmuxsOldestLine(t *testing.T) {
+	p := watchedReachPlugin(t)
+	source, ok := p.terminalHistoryFor(false)
+	if !ok {
+		t.Fatal("the fixture's preview has no history source")
+	}
+
+	p.jumpPreviewWindow(p.previewMaxScroll())
+	cmd := p.handleMouseScroll(mouse.MouseAction{
+		Type: mouse.ActionScrollUp, Delta: -5, Region: &mouse.Region{ID: regionPreviewPane}})
+	if cmd == nil {
+		t.Fatal("a watched window at the bound never reached for the history behind it")
+	}
+	state := p.terminalHistory[source.Key]
+	if !state.Loading {
+		t.Fatal("the read was never recorded against the preview")
+	}
+
+	p.applyTerminalHistory(terminalHistoryLoadedMsg{
+		Source: source,
+		Capture: tty.CaptureRange{
+			Output:      numberedTerminalLines(0, 600),
+			HistorySize: 1200,
+			StartLine:   0,
+			EndLine:     600,
+		},
+		RequestGen: state.RequestGen,
+	})
+
+	base, _, absolute := source.Buffer.AbsoluteRange()
+	if !absolute || base != 0 {
+		t.Fatalf("buffer base = %d absolute=%v, want the pane's oldest line", base, absolute)
+	}
+	p.jumpPreviewWindow(p.previewMaxScroll())
+	layout := p.terminalViewportLayoutFor(false)
+	if layout.AbsoluteStart != 0 {
+		t.Fatalf("the oldest window starts at absolute %d, want line 0", layout.AbsoluteStart)
+	}
+	if first := source.Buffer.Lines()[layout.Start]; first != "line-0000" {
+		t.Fatalf("the oldest window's first row is %q, want line-0000", first)
+	}
+}
+
+// At tmux's oldest line there is nothing left to read, and the reader is told so
+// in the words the global browser uses, once.
+func TestTheEndOfTmuxsHistoryIsSaidOnce(t *testing.T) {
+	p := watchedReachPlugin(t)
+	source, _ := p.terminalHistoryFor(false)
+	// The buffer already holds everything tmux has.
+	source.Buffer.UpdateSnapshot(numberedTerminalLines(0, 1220), 0)
+	notch := func() tea.Cmd {
+		t.Helper()
+		p.jumpPreviewWindow(p.previewMaxScroll())
+		return p.handleMouseScroll(mouse.MouseAction{
+			Type: mouse.ActionScrollUp, Delta: -5, Region: &mouse.Region{ID: regionPreviewPane}})
+	}
+
+	cmd := notch()
+	if cmd == nil {
+		t.Fatal("the end of this pane's history was never mentioned")
+	}
+	toast, ok := cmd().(appmsg.ToastMsg)
+	if !ok || toast.Message != tty.HistoryExhaustedNotice {
+		t.Fatalf("message at the end of history = %#v, want %q", cmd(), tty.HistoryExhaustedNotice)
+	}
+	if again := notch(); again != nil {
+		t.Fatalf("the end of history was announced twice: %#v", again())
+	}
 }
 
 func TestParseCapturedCursorIncludesAbsoluteHistoryMetadata(t *testing.T) {
@@ -40,9 +149,10 @@ func TestApplyTerminalHistoryPrependsAndReplaysPendingScroll(t *testing.T) {
 			OutputBuf:   buffer,
 		},
 	}}
-	p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = terminalHistoryState{
-		HistorySize: 1200,
-		Loading:     true,
+	p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = tty.HistoryReach{
+		HistorySize:   1200,
+		Loading:       true,
+		PendingScroll: 20,
 	}
 
 	p.applyTerminalHistory(terminalHistoryLoadedMsg{
@@ -57,7 +167,6 @@ func TestApplyTerminalHistoryPrependsAndReplaysPendingScroll(t *testing.T) {
 			StartLine:   0,
 			EndLine:     600,
 		},
-		ScrollLines: 20,
 	})
 
 	start, end, ok := buffer.AbsoluteRange()
@@ -134,7 +243,7 @@ func TestTerminalHistorySummaryMatchesSearchCoordinates(t *testing.T) {
 				TmuxName: "shell-1",
 				Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buffer},
 			}}
-			p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = terminalHistoryState{HistorySize: 1200}
+			p.terminalHistory[terminalHistoryKey("shell", "shell-1")] = tty.HistoryReach{HistorySize: 1200}
 		}
 		base, _, _ := p.terminalHistorySummary(false, buffer)
 		if base != wantBase {
@@ -153,7 +262,7 @@ func TestTerminalHistoryAccumulatesScrollIntentWhileLoading(t *testing.T) {
 		Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buffer},
 	}}
 	key := terminalHistoryKey("shell", "shell-1")
-	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
 
 	if cmd := p.loadOlderTerminalHistory(false, 1); cmd == nil {
 		t.Fatal("first history intent did not start a request")
@@ -191,7 +300,7 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 		Agent:    &Agent{TmuxSession: "shell-1", OutputBuf: buffer},
 	}}
 	key := terminalHistoryKey("shell", "shell-1")
-	p.terminalHistory[key] = terminalHistoryState{HistorySize: 1200}
+	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
 	if p.loadOlderTerminalHistory(false, 20) == nil {
 		t.Fatal("history request did not start")
 	}

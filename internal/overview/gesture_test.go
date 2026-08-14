@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -300,10 +299,11 @@ func TestTypingSnapsAScrolledBackPreviewToTheLiveEdge(t *testing.T) {
 	}
 }
 
-// The browser holds one bounded capture per pane and deliberately does not read
-// further back, so the reader is told where the rest of the buffer is rather
-// than left at a window that silently stops moving.
-func TestReachingTheTopOfTheCaptureSaysWhereTheRestIs(t *testing.T) {
+// A pane whose lines are not tmux's coordinates cannot say where its history
+// ends, so the window stops at the top of what was captured and claims nothing.
+// Reaching, and the notice at the real end of history, are
+// preview_history_test.go's subject.
+func TestReachingTheTopOfAnUnnumberedCaptureClaimsNothing(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	terminal.buffer.ApplySnapshot(tty.PaneSnapshot{Output: paneBody(60)})
 	enterInteractive(t, m)
@@ -312,19 +312,11 @@ func TestReachingTheTopOfTheCaptureSaysWhereTheRestIs(t *testing.T) {
 	x, y := previewAt(t, m)
 	m.preview.offset = m.previewMaxOffset()
 	settleWheel()
-	cmd := m.WorkspacesMouse(tea.MouseWheelMsg{X: x + 2, Y: y + 2, Button: tea.MouseWheelUp})
-	if cmd == nil {
-		t.Fatal("the window dead-ended at the top of the capture without saying so")
-	}
-	toast, ok := cmd().(appmsg.ToastMsg)
-	if !ok || !strings.Contains(toast.Message, "open the workspace in its project") {
-		t.Fatalf("message at the top of the capture = %#v", cmd())
-	}
-
-	// Said once: a reader who keeps scrolling is not told again.
-	settleWheel()
 	if cmd := m.WorkspacesMouse(tea.MouseWheelMsg{X: x + 2, Y: y + 2, Button: tea.MouseWheelUp}); cmd != nil {
-		t.Fatal("the capture limit was announced twice")
+		t.Fatalf("a buffer with no absolute coordinates answered %#v at its top", cmd())
+	}
+	if m.preview.offset != m.previewMaxOffset() {
+		t.Fatalf("the window moved past the top of the capture to %d", m.preview.offset)
 	}
 }
 

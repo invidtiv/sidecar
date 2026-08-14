@@ -1,7 +1,6 @@
 package overview
 
 import (
-	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -90,6 +89,12 @@ type previewTerminal interface {
 	PaneSize() (width, height int)
 	CursorState() (row, col int, visible bool)
 
+	// The pane as history: how much of it tmux holds, and where an older range
+	// this surface read goes. Which range to read, and when, is the shared
+	// reach's; the component owns the buffer it lands in.
+	History() tty.HistoryInfo
+	PrependHistory(content string, baseLine int) bool
+
 	// The pane as a mouse target. Whether a click or a notch belongs to the
 	// application is the shared layer's rule; delivering it is the component's.
 	PaneMouseReporting() bool
@@ -165,6 +170,9 @@ func (m *Model) closePreviewTerminal() {
 	m.preview.interactive = false
 	m.preview.terminalTarget = tty.Target{}
 	m.preview.buffer = nil
+	// The reach belongs to the pane being released: a read still in flight is
+	// for a target this surface no longer holds.
+	m.preview.history = tty.HistoryReach{}
 }
 
 // previewTerminalHooks is everything this surface owns about a live pane, said
@@ -562,33 +570,36 @@ func (m *Model) notePreviewInput() {
 }
 
 // scrollPreviewByWheel moves this surface's own window by a coalesced notch, and
-// says where the buffer ends when a scroll up had nowhere left to go.
+// reaches for older history when a scroll up had nowhere left to go.
 func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 	m.clearPreviewSelectionOnScroll()
 	before := m.previewScrollAnchor()
 	// A notch counts up the screen and the window counts back from the live
 	// bottom; the shared rule owns that reconciliation.
 	m.scrollPreviewRows(delta)
+	if delta > 0 && m.preview.offset == 0 {
+		// Back at the live edge: whatever older history the reader was reaching
+		// for is no longer where they are looking.
+		m.preview.history.Cancel()
+	}
 	if delta < 0 && m.previewScrollAnchor() == before {
-		return m.notePreviewScrollbackLimit()
+		return m.reachOlderPreviewHistory(-delta)
 	}
 	return nil
 }
 
-// notePreviewScrollbackLimit says out loud that this surface does not read
-// further back.
+// notePreviewScrollbackLimit says out loud that tmux has no more history for
+// this pane.
 //
-// The browser deliberately does not extend its model window at the top. It owns
-// only the selected visible pane; rather than let the bounded history dead-end
-// silently, say where the full project buffer is.
+// It used to mean that this surface gave up at its own capture bound, which was
+// a fact about the browser rather than about the pane. The reach now ends where
+// tmux's history ends, so what is left to say is the same thing the project
+// surface says, in the same words.
 func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
-	if m.preview.scrollbackLimitShown {
+	if !m.preview.history.NoteEnd() {
 		return nil
 	}
-	m.preview.scrollbackLimitShown = true
-	return appmsg.ShowToast(fmt.Sprintf(
-		"Showing the last %d lines — open the workspace in its project for the full buffer",
-		previewScrollbackLines), 3*time.Second)
+	return appmsg.ShowToast(tty.HistoryExhaustedNotice, 3*time.Second)
 }
 
 // WorkspacesTerminalMsg offers the browser's terminal one of the terminal

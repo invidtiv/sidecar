@@ -31,9 +31,11 @@ const (
 	pluginIcon = "W"
 
 	// Output buffer capacity (lines). The live capture remains small; older
-	// ranges are fetched lazily as the user reaches the loaded boundary.
-	outputBufferCap  = tty.HistoryLimit + 512
-	historyLoadChunk = 600
+	// ranges are fetched lazily as the user reaches the loaded boundary. Both
+	// numbers are the shared layer's, so this surface reaches exactly as far
+	// back as the global browser does.
+	outputBufferCap  = tty.HistoryBufferLines
+	historyLoadChunk = tty.HistoryChunkLines
 
 	// Pane layout constants
 	dividerWidth    = 1 // Visual divider width
@@ -234,7 +236,7 @@ type Plugin struct {
 	selectionTermPanel            bool
 	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
-	terminalHistory               map[string]terminalHistoryState
+	terminalHistory               map[string]tty.HistoryReach
 	paneGeometry                  map[string]paneGeometry
 	paneMouseReports              map[string]bool
 	terminalSearch                terminalSearchState
@@ -530,7 +532,7 @@ func New() *Plugin {
 		sidebarVisible:      true, // Sidebar visible by default
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
-		terminalHistory:     make(map[string]terminalHistoryState),
+		terminalHistory:     make(map[string]tty.HistoryReach),
 		markdownRenderer:    mdRenderer,
 		taskMarkdownMode:    true,  // Default to rendered mode
 		shellSelected:       false, // Start with first worktree selected, not shell
@@ -696,7 +698,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
 	p.pollScheduler.Reset()
-	p.terminalHistory = make(map[string]terminalHistoryState)
+	p.terminalHistory = make(map[string]tty.HistoryReach)
 	p.paneGeometry = make(map[string]paneGeometry)
 	p.paneMouseReports = make(map[string]bool)
 
