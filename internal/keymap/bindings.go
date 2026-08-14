@@ -545,14 +545,13 @@ func DefaultBindings() []Binding {
 		{Key: "u", Command: "undo", Context: "notes-list"},
 		{Key: "r", Command: "refresh", Context: "notes-list"},
 		{Key: "enter", Command: "edit-note", Context: "notes-list"},
+		{Key: "e", Command: "edit-note", Context: "notes-list"},
 		{Key: "/", Command: "search", Context: "notes-list"},
 		{Key: "T", Command: "to-task", Context: "notes-list"},
 		{Key: "I", Command: "show-info", Context: "notes-list"},
 		{Key: "y", Command: "yank-content", Context: "notes-list"},
 		{Key: "Y", Command: "yank-title", Context: "notes-list"},
 		{Key: "esc", Command: "back-to-active", Context: "notes-list"},
-		{Key: "e", Command: "vim-edit", Context: "notes-list"},
-		{Key: "E", Command: "external-editor", Context: "notes-list"},
 
 		// Notes info modal context
 		{Key: "esc", Command: "close", Context: "notes-info"},
@@ -568,14 +567,13 @@ func DefaultBindings() []Binding {
 
 		// Notes preview context (read-only view)
 		{Key: "alt+c", Command: "copy-note", Context: "notes-preview"},
-		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
-		{Key: "E", Command: "external-editor", Context: "notes-preview"},
+		{Key: "enter", Command: "edit-note", Context: "notes-preview"},
+		{Key: "e", Command: "edit-note", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},
 		{Key: "esc", Command: "back", Context: "notes-editor"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-editor"},
-		{Key: "E", Command: "external-editor", Context: "notes-editor"},
 		{Key: "alt+c", Command: "copy-note", Context: "notes-editor"},
 		{Key: "up", Command: "cursor-up", Context: "notes-editor"},
 		{Key: "down", Command: "cursor-down", Context: "notes-editor"},

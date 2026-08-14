@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
@@ -35,19 +36,17 @@ type InlineEditExitedMsg struct {
 // enterInlineEditMode starts inline editing for the selected note.
 // Creates a tmux session running the user's editor and delegates to tty.Model.
 func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
-	// Check feature flag
-	if !features.IsEnabled(features.TmuxInlineEdit.Name) {
-		return p.openInExternalEditor()
-	}
-
 	if p.store == nil {
+		return nil
+	}
+	if p.inlineEditMode && p.inlineEditNoteID == noteID && p.inlineEditor != nil && p.inlineEditor.IsActive() {
 		return nil
 	}
 
 	// Get note path (creates temp file with content)
 	notePath := p.store.NotePath(noteID)
 	if notePath == "" {
-		return nil
+		return inlineEditUnavailableToast("note file unavailable")
 	}
 
 	editor := tty.ResolveEditor()
@@ -58,12 +57,14 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	editorHeight := p.calculateInlineEditorHeight()
 	p.inlineEditActivation++
 	activation := p.inlineEditActivation
-	epoch := p.ctx.Epoch
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
 
 	return func() tea.Msg {
 		if !tty.EditorAvailable() {
-			// Fall back to external editor
-			return nil
+			return inlineEditUnavailableToast("tmux not found")()
 		}
 
 		session, err := tty.StartEditorSession(tty.EditorSessionOptions{
@@ -75,11 +76,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 			CursorAtEnd: true,
 		})
 		if err != nil {
-			return msg.ToastMsg{
-				Message:  fmt.Sprintf("Failed to start editor: %v", err),
-				Duration: 3 * time.Second,
-				IsError:  true,
-			}
+			return inlineEditUnavailableToast(err.Error())()
 		}
 
 		return InlineEditStartedMsg{
@@ -91,6 +88,29 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 			Epoch:       epoch,
 		}
 	}
+}
+
+func inlineEditUnavailableToast(reason string) tea.Cmd {
+	return func() tea.Msg {
+		return msg.ToastMsg{
+			Message:  fmt.Sprintf("Failed to start editor: %s", reason),
+			Duration: 3 * time.Second,
+			IsError:  true,
+		}
+	}
+}
+
+// editSelectedNote starts the right-pane tty editor for the selected Active note.
+func (p *Plugin) editSelectedNote() tea.Cmd {
+	if p.viewFilter != FilterActive {
+		return nil
+	}
+	note := p.getSelectedNote()
+	if note == nil {
+		return nil
+	}
+	p.loadNoteIntoEditor()
+	return p.enterInlineEditMode(note.ID)
 }
 
 // handleInlineEditStarted processes the InlineEditStartedMsg and activates the tty model.
@@ -115,7 +135,7 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	// Configure the tty model callbacks
 	activation, epoch := msg.Activation, msg.Epoch
 	noteID, notePath := msg.NoteID, msg.NotePath
-	p.inlineEditor.OnExit = func() tea.Cmd {
+	exit := func() tea.Cmd {
 		return func() tea.Msg {
 			return InlineEditExitedMsg{
 				NoteID:     noteID,
@@ -124,6 +144,12 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 				Epoch:      epoch,
 			}
 		}
+	}
+	p.inlineEditor.OnExit = exit
+	p.inlineEditor.OnSessionEnded = exit
+	p.applyInlineEditorAttachKey()
+	p.inlineEditor.OnAttach = func() tea.Cmd {
+		return p.attachToInlineEditSession()
 	}
 
 	// Enter interactive mode on the tty model
@@ -230,6 +256,8 @@ func (p *Plugin) calculateInlineEditorWidth() int {
 }
 
 // calculateInlineEditorHeight returns the content height for the inline editor.
+// Subtract one row for the "Editing:" header only — an extra empty-line
+// deduction left a blank row under vim (td-4a5f77).
 func (p *Plugin) calculateInlineEditorHeight() int {
 	paneHeight := p.height
 	if paneHeight < 4 {
@@ -557,19 +585,50 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 	return p2, saveCmd
 }
 
-// isInlineEditSupported checks if inline editing can be used for notes.
+func fullTmuxAttachEnabled() bool {
+	return features.IsEnabled(features.TmuxFullAttach.Name)
+}
+
+func (p *Plugin) applyInlineEditorAttachKey() {
+	if p.inlineEditor == nil {
+		return
+	}
+	if !fullTmuxAttachEnabled() {
+		p.inlineEditor.Config.AttachKey = ""
+		return
+	}
+	key := tty.DefaultConfig().AttachKey
+	if p.ctx != nil {
+		if resolved := app.TerminalConfig(p.ctx.Config).AttachKey; resolved != "" {
+			key = resolved
+		}
+	}
+	p.inlineEditor.Config.AttachKey = key
+}
+
+// attachToInlineEditSession attaches to the inline edit tmux session when the
+// full-attach preference is on. Off by default so ctrl+] stays with the pane.
+func (p *Plugin) attachToInlineEditSession() tea.Cmd {
+	if !fullTmuxAttachEnabled() || p.inlineEditSession == "" {
+		return nil
+	}
+
+	sessionName := p.inlineEditSession
+	p.exitInlineEditMode()
+
+	return func() tea.Msg {
+		return AttachToTmuxMsg{SessionName: sessionName}
+	}
+}
+
+// AttachToTmuxMsg requests the app to suspend and attach to a tmux session.
+type AttachToTmuxMsg struct {
+	SessionName string
+}
+
+// isInlineEditSupported checks if the right-pane tty editor can start.
 func (p *Plugin) isInlineEditSupported() bool {
-	// Check feature flag
-	if !features.IsEnabled(features.TmuxInlineEdit.Name) {
-		return false
-	}
-
-	// Check if tmux is available
-	if !tty.EditorAvailable() {
-		return false
-	}
-
-	return true
+	return tty.EditorAvailable()
 }
 
 // isInlineEditSessionAlive checks if the tmux session for inline editing still exists.
@@ -609,6 +668,10 @@ func (p *Plugin) handleTtyMessages(msg tea.Msg) (bool, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Click-away (list / other note) is handled in handleMouse. Forwarding
+		// here swallowed the press and left :wq / click-away hanging (td-bb475e).
+		return false, nil
 	case tty.EscapeTimerMsg, tty.CaptureResultMsg, tty.PollTickMsg, tty.PaneResizedMsg, tty.SessionDeadMsg, tty.PasteResultMsg:
 		cmd := p.inlineEditor.Update(msg)
 		return true, cmd

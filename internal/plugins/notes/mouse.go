@@ -178,30 +178,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	case regionEditorPane:
 		p.activePane = PaneEditor
 		p.selection.Clear()
-		// Enter edit mode when clicking editor pane (only for Active notes)
+		// Enter the right-pane tty when clicking the editor pane (Active notes).
 		if p.viewFilter == FilterActive {
-			// Check if default editor is vim/nvim - use tty.Model inline editor
-			if p.isDefaultEditorVim() {
-				note := p.getSelectedNote()
-				if note != nil && p.isInlineEditSupported() {
-					return p, p.enterInlineEditMode(note.ID)
-				}
+			if cmd := p.editSelectedNote(); cmd != nil {
+				return p, cmd
 			}
-			wasPreview := p.previewMode
-			p.previewMode = false
-			var cmd tea.Cmd
-			if wasPreview {
-				cmd = p.editorTextarea.Focus()
-			}
-			// Position cursor at click location
-			clickedRow := p.screenYToEditorLine(action.Y)
-			clickedCol := p.screenXToEditorCol(action.X)
-			p.setTextareaCursorPosition(clickedRow, clickedCol)
-			p.trackTextareaScroll()
-			// Prepare drag-to-select (use regionEditorLine for drag dispatch)
-			p.selection.PrepareDrag(clickedRow, clickedCol, action.Region.Rect)
-			p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, 0)
-			return p, cmd
 		}
 		return p, nil
 
@@ -209,26 +190,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		if lineIdx, ok := action.Region.Data.(int); ok {
 			p.activePane = PaneEditor
 			if p.viewFilter == FilterActive {
-				if p.isDefaultEditorVim() {
-					note := p.getSelectedNote()
-					if note != nil && p.isInlineEditSupported() {
-						return p, p.enterInlineEditMode(note.ID)
-					}
+				if cmd := p.editSelectedNote(); cmd != nil {
+					return p, cmd
 				}
-				wasPreview := p.previewMode
-				p.previewMode = false
-				var cmd tea.Cmd
-				if wasPreview {
-					cmd = p.editorTextarea.Focus()
-				}
-				// Position cursor at clicked line and column
-				col := p.screenXToEditorCol(action.X)
-				p.setTextareaCursorPosition(lineIdx, col)
-				p.trackTextareaScroll()
-				// Prepare drag-to-select (same as preview mode)
-				p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
-				p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, lineIdx)
-				return p, cmd
 			}
 			// Preview mode: position cursor and prepare selection
 			p.previewCursorLine = lineIdx
