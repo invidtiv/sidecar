@@ -21,30 +21,45 @@ import (
 
 const (
 	previewDocRegionKind       = "global-preview-doc"
-	previewDocModeKind         = "global-preview-doc-mode"
-	previewDocCloseKind        = "global-preview-doc-close"
-	previewDocModelID          = 1
+	previewDocTabKind          = "global-preview-doc-tab"
 	previewSecondaryMinWidth   = markdown.MinWidthForMarkdown
 	previewTermMinWidth        = 12
 	previewSecondarySplitRatio = 50
 )
 
 func isPreviewDocRegion(kind string) bool {
-	return kind == previewDocRegionKind || kind == previewDocModeKind || kind == previewDocCloseKind
+	return kind == previewDocRegionKind || kind == previewDocTabKind
 }
 
+// previewDocTabHit is the tab stored on the document header region.
+type previewDocTabHit int
+
 // previewDoc is the terminal-adjacent file preview on the global surface.
-// It reuses docview; it is not the issue-preview modal.
+// It reuses docview.Tabs; it is not the issue-preview modal.
 type previewDoc struct {
-	view    *docview.Model
+	tabs    docview.Tabs
 	root    string
-	path    string
 	surface string
 	focused bool
+	nextID  int
+}
+
+func (d *previewDoc) view() *docview.Model {
+	if d == nil {
+		return nil
+	}
+	return d.tabs.ActiveView()
+}
+
+func (d *previewDoc) allocID() int {
+	d.nextID++
+	return d.nextID
 }
 
 type previewDocLoadedMsg struct {
 	docview.LoadedMsg
+	Generation  int
+	WorkspaceID string
 }
 
 func (m *Model) previewResolveRoot() string {
@@ -165,24 +180,130 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 	if err != nil {
 		return nil
 	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
 	wasInteractive := m.PreviewInteractive()
 	m.preview.issue = nil
-	if m.preview.doc == nil {
-		m.preview.doc = &previewDoc{view: docview.New(nil)}
+	if m.preview.doc == nil || m.preview.doc.surface != workspace.ID {
+		m.preview.doc = &previewDoc{}
 	}
 	m.preview.doc.root = root
-	m.preview.doc.path = display
 	m.preview.doc.surface = workspace.ID
 	m.preview.doc.focused = true
-	load := m.preview.doc.view.LoadFile(previewDocModelID, file, display, span.Extra.Line, uint64(m.preview.generation))
-	applyPreviewDocRenderMode(m.preview.doc.view, display, span.Extra.Line)
 	m.preview.focus = focusPreview
+
+	var load tea.Cmd
+	if idx := m.preview.doc.tabs.IndexOf(display); idx >= 0 {
+		load = m.selectPreviewDocTab(idx, span.Extra.Line, file)
+		file = nil
+	} else {
+		viewer := docview.New(nil)
+		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, span.Extra.Line, uint64(m.preview.generation))
+		file = nil
+		applyPreviewDocRenderMode(viewer, display, span.Extra.Line)
+		m.preview.doc.tabs.Append(viewer)
+	}
+
 	var cmds []tea.Cmd
 	if wasInteractive {
 		cmds = append(cmds, m.exitPreviewInteractive())
 	}
-	cmds = append(cmds, wrapPreviewDocLoad(load), m.syncTerminalGeometry())
+	cmds = append(cmds, wrapPreviewDocLoad(load, m.preview.generation, workspace.ID), m.syncTerminalGeometry())
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) selectPreviewDocTab(idx, line int, file *os.File) tea.Cmd {
+	doc := m.preview.doc
+	if doc == nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil
+	}
+	doc.tabs.Select(idx)
+	view := doc.view()
+	if view == nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil
+	}
+	if !view.NeedsLoad() {
+		if line > 0 {
+			view.ApplyLine(line)
+		}
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil
+	}
+	rel := view.Title()
+	rendered := view.Rendered()
+	wrap := view.Wrap()
+	var cmd tea.Cmd
+	if file != nil {
+		cmd = view.LoadFile(doc.allocID(), file, rel, line, uint64(m.preview.generation))
+	} else {
+		cmd = view.Load(doc.allocID(), doc.root, rel, line, uint64(m.preview.generation))
+	}
+	if line > 0 {
+		applyPreviewDocRenderMode(view, rel, line)
+	} else {
+		view.SetRendered(rendered)
+	}
+	view.SetWrap(wrap)
+	return cmd
+}
+
+func (m *Model) clickPreviewDocTab(index int) tea.Cmd {
+	if m.preview.doc == nil {
+		return nil
+	}
+	m.preview.doc.focused = true
+	m.preview.focus = focusPreview
+	if index == m.preview.doc.tabs.Active {
+		return nil
+	}
+	return wrapPreviewDocLoad(m.selectPreviewDocTab(index, 0, nil), m.preview.generation, m.preview.doc.surface)
+}
+
+func (m *Model) cyclePreviewDocTab(delta int) tea.Cmd {
+	if m.preview.doc == nil || len(m.preview.doc.tabs.Items) < 2 {
+		return nil
+	}
+	m.preview.doc.tabs.Cycle(delta)
+	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.generation, m.preview.doc.surface)
+}
+
+func (m *Model) closePreviewDocTab() tea.Cmd {
+	if m.preview.doc == nil {
+		return nil
+	}
+	if len(m.preview.doc.tabs.Items) <= 1 {
+		return m.closePreviewDoc()
+	}
+	m.preview.doc.tabs.CloseActive()
+	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.generation, m.preview.doc.surface)
+}
+
+func (m *Model) ensurePreviewDocTabLoaded() tea.Cmd {
+	doc := m.preview.doc
+	if doc == nil {
+		return nil
+	}
+	view := doc.view()
+	if view == nil || !view.NeedsLoad() {
+		return nil
+	}
+	rendered := view.Rendered()
+	wrap := view.Wrap()
+	cmd := view.Load(doc.allocID(), doc.root, view.Title(), 0, uint64(m.preview.generation))
+	view.SetRendered(rendered)
+	view.SetWrap(wrap)
+	return cmd
 }
 
 func openPreviewFile(root, display, abs string) (*os.File, error) {
@@ -192,24 +313,32 @@ func openPreviewFile(root, display, abs string) (*os.File, error) {
 	return terminallink.OpenRegular(abs)
 }
 
-func wrapPreviewDocLoad(cmd tea.Cmd) tea.Cmd {
+func wrapPreviewDocLoad(cmd tea.Cmd, generation int, workspaceID string) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		msg := cmd()
 		if loaded, ok := msg.(docview.LoadedMsg); ok {
-			return previewDocLoadedMsg{LoadedMsg: loaded}
+			return previewDocLoadedMsg{LoadedMsg: loaded, Generation: generation, WorkspaceID: workspaceID}
 		}
 		return msg
 	}
 }
 
 func (m *Model) applyPreviewDocLoaded(msg previewDocLoadedMsg) {
-	if m.preview.doc == nil || m.preview.doc.view == nil {
+	doc := m.preview.doc
+	if doc == nil ||
+		msg.Generation != m.preview.generation ||
+		msg.WorkspaceID != m.preview.workspaceID ||
+		doc.surface != msg.WorkspaceID {
 		return
 	}
-	m.preview.doc.view.SetResult(msg.LoadedMsg)
+	for _, item := range doc.tabs.Items {
+		if item.View != nil && item.View.SetResult(msg.LoadedMsg) {
+			return
+		}
+	}
 }
 
 func applyPreviewDocRenderMode(view *docview.Model, path string, line int) {
@@ -228,7 +357,8 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 		return nil
 	}
 	m.preview.doc = nil
-	return m.syncTerminalGeometry()
+	m.preview.generation++
+	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
 func (m *Model) previewDocFits(box termpreview.Box) bool {
@@ -285,36 +415,25 @@ func (m *Model) registerPreviewDocRegions(box termpreview.Box) {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(previewDocRegionKind, docBox.X, docBox.Y, docBox.W, docBox.H, previewDocRegionKind)
-	chips := previewDocHeaderChips(m.preview.doc, docBox.W)
-	for index, chip := range termpreview.LayoutChips(chips, docBox.W, 0) {
-		if !chip.Drawn {
-			continue
-		}
-		switch index {
-		case len(chips) - 2:
-			m.workspacesMouse.HitMap.AddRect(previewDocModeKind, docBox.X+chip.Col, docBox.Y, chip.Width, 1, previewDocModeKind)
-		case len(chips) - 1:
-			m.workspacesMouse.HitMap.AddRect(previewDocCloseKind, docBox.X+chip.Col, docBox.Y, chip.Width, 1, previewDocCloseKind)
-		}
+	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, docBox.W, m.preview.doc.focused).Tabs {
+		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+tab.Col, docBox.Y, tab.Width, 1, previewDocTabHit(tab.Index))
 	}
 }
 
 func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
-	kind, _ := regionKind(action.Region)
-	if kind == previewDocCloseKind {
+	if tab, ok := action.Region.Data.(previewDocTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.closePreviewDoc()
+			return m.clickPreviewDocTab(int(tab))
+		}
+		if m.preview.doc != nil && m.preview.doc.view() != nil {
+			switch action.Type {
+			case mouse.ActionScrollUp, mouse.ActionScrollDown:
+				m.preview.doc.view().Scroll(action.Delta)
+			}
 		}
 		return nil
 	}
-	if kind == previewDocModeKind {
-		if (action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick) && m.preview.doc != nil {
-			m.preview.doc.view.ToggleRenderMode()
-			m.preview.doc.focused = true
-			m.preview.focus = focusPreview
-		}
-		return nil
-	}
+	kind, _ := regionKind(action.Region)
 	if kind != previewDocRegionKind || m.preview.doc == nil {
 		return nil
 	}
@@ -323,10 +442,10 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 		m.preview.doc.focused = true
 		m.preview.focus = focusPreview
 		return nil
-	case mouse.ActionScrollUp:
-		m.preview.doc.view.Scroll(action.Delta)
-	case mouse.ActionScrollDown:
-		m.preview.doc.view.Scroll(action.Delta)
+	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		if view := m.preview.doc.view(); view != nil {
+			view.Scroll(action.Delta)
+		}
 	}
 	return nil
 }
@@ -336,14 +455,21 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	key := msg.String()
-	if key == "q" || key == "esc" {
-		return true, m.closePreviewDoc()
-	}
 	if m.preview.doc.focused {
 		switch key {
+		case "q", "esc":
+			return true, m.closePreviewDoc()
 		case "m":
-			m.preview.doc.view.ToggleRenderMode()
+			if view := m.preview.doc.view(); view != nil {
+				view.ToggleRenderMode()
+			}
 			return true, nil
+		case "x":
+			return true, m.closePreviewDocTab()
+		case "{":
+			return true, m.cyclePreviewDocTab(-1)
+		case "}":
+			return true, m.cyclePreviewDocTab(1)
 		case "r":
 			// Refresh rebuilds the preview and would drop this document.
 			return true, nil
@@ -351,43 +477,24 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.preview.doc.focused = false
 			return true, m.enterPreviewInteractive()
 		}
-		if m.preview.doc.view.HandleKey(msg) {
+		if view := m.preview.doc.view(); view != nil && view.HandleKey(msg) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-func previewDocHeaderChips(doc *previewDoc, width int) []string {
-	pathBudget := max(width/2, 8)
-	path := doc.view.Title()
-	if ansiWidth := lipgloss.Width(path); ansiWidth > pathBudget {
-		path = termpreview.TruncateANSI(path, pathBudget)
-	}
-	pathStyle := styles.BarChip
-	if doc.focused {
-		pathStyle = styles.BarChipActive
-	}
-	mode := "Rendered"
-	if !doc.view.Rendered() {
-		mode = "Raw"
-	}
-	return []string{
-		styles.RenderPillWithStyle(path, pathStyle, nil),
-		styles.RenderPillWithStyle(mode, styles.BarChip, nil),
-		styles.RenderPillWithStyle("×", styles.BarChip, nil),
-	}
-}
-
 func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
+	view := doc.view()
 	contentHeight := max(box.H-termpreview.HeaderRows, 0)
-	doc.view.SetSize(box.W, contentHeight)
-	action := "raw"
-	if !doc.view.Rendered() {
-		action = "render"
+	if view != nil {
+		view.SetSize(box.W, contentHeight)
 	}
-	header := termpreview.HeaderRow(previewDocHeaderChips(doc, box.W), styles.Muted.Render("q close · m "+action), box.W, 0, termpreview.TruncateANSI)
-	body := doc.view.View()
+	header := docview.LayoutTabStrip(doc.tabs, box.W, doc.focused).Row
+	body := ""
+	if view != nil {
+		body = view.View()
+	}
 	if contentHeight <= 0 {
 		return header
 	}

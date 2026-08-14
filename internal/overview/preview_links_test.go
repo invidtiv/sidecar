@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -126,7 +127,7 @@ func TestGlobalPreviewUnderlinesAndOpensFileLinks(t *testing.T) {
 			if m.PreviewInteractive() {
 				t.Fatal("a file link click started typing")
 			}
-			if m.preview.doc == nil || m.preview.doc.view.Title() != "README.md" {
+			if m.preview.doc == nil || m.preview.doc.view().Title() != "README.md" {
 				t.Fatalf("doc = %#v", m.preview.doc)
 			}
 			if !strings.Contains(ansi.Strip(m.WorkspacesView(previewWide, previewTall)), "Hello from preview") {
@@ -429,53 +430,126 @@ func TestGlobalPreviewLiveBufferFileClickOpensDoc(t *testing.T) {
 	if m.PreviewInteractive() {
 		t.Fatal("file click left the preview typing")
 	}
-	if m.preview.doc == nil || m.preview.doc.view.Title() != "README.md" {
+	if m.preview.doc == nil || m.preview.doc.view().Title() != "README.md" {
 		t.Fatalf("live buffer click doc = %#v", m.preview.doc)
 	}
 }
 
-func TestGlobalPreviewDocModeChipAndMToggle(t *testing.T) {
+func TestGlobalPreviewDocTabStripAndMToggle(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{
 		X:      previewNeedleAction(t, m, "README.md").X,
 		Y:      previewNeedleAction(t, m, "README.md").Y,
 		Button: tea.MouseLeft,
 	}))
-	if m.preview.doc == nil || !m.preview.doc.view.Rendered() {
+	if m.preview.doc == nil || !m.preview.doc.view().Rendered() {
 		t.Fatalf("opened doc = %#v", m.preview.doc)
 	}
 	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(view, "Rendered") || strings.Contains(view, "r raw") || strings.Contains(view, "r render") {
-		t.Fatalf("doc header/hint = %q", view)
-	}
-
-	var mode mouse.Region
-	found := false
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		if kind, ok := region.Data.(string); ok && kind == previewDocModeKind {
-			mode = region
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("rendered mode chip has no hit region")
-	}
-	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{
-		X: mode.Rect.X, Y: mode.Rect.Y, Button: tea.MouseLeft,
-	}))
-	if m.preview.doc.view.Rendered() {
-		t.Fatal("mode chip click did not toggle to raw")
+	if !strings.Contains(view, "README.md") || strings.Contains(view, "Rendered") || strings.Contains(view, "q close") {
+		t.Fatalf("doc header is not a path-only tab strip: %q", view)
 	}
 
 	handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if !handled || !m.preview.doc.view.Rendered() {
-		t.Fatalf("m did not restore rendered: handled=%v rendered=%v", handled, m.preview.doc.view.Rendered())
+	if !handled || m.preview.doc.view().Rendered() {
+		t.Fatalf("m did not toggle to raw: handled=%v rendered=%v", handled, m.preview.doc.view().Rendered())
+	}
+	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !handled || !m.preview.doc.view().Rendered() {
+		t.Fatalf("m did not restore rendered: handled=%v rendered=%v", handled, m.preview.doc.view().Rendered())
 	}
 	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	if !handled || m.preview.doc == nil || !m.preview.doc.view.Rendered() {
+	if !handled || m.preview.doc == nil || !m.preview.doc.view().Rendered() {
 		t.Fatalf("r should be absorbed without toggling or closing: handled=%v doc=%#v", handled, m.preview.doc)
 	}
+}
+
+func TestGlobalPreviewDocTabClickSelectsFile(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, m.openPreviewDoc(terminallink.Span{
+		Kind: terminallink.KindFile, Value: "main.go", Extra: terminallink.Extra{Raw: "main.go"},
+	}))
+	if m.preview.doc == nil || m.preview.doc.view().Title() != "main.go" {
+		t.Fatalf("second open = %#v", m.preview.doc)
+	}
+	if len(m.preview.doc.tabs.Items) != 2 {
+		t.Fatalf("tabs = %d, want 2", len(m.preview.doc.tabs.Items))
+	}
+
+	m.WorkspacesView(previewWide, previewTall)
+	x, y, ok := visualPreviewDocTabPoint(t, m, 0)
+	if !ok {
+		t.Fatal("README tab is not drawn")
+	}
+	resolved := m.workspacesMouse.HitMap.Test(x, y)
+	if hit, isTab := resolved.Data.(previewDocTabHit); !isTab || int(hit) != 0 {
+		t.Fatalf("visual README tab at (%d,%d) resolves to %#v", x, y, resolved)
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
+	if m.preview.doc.view().Title() != "README.md" {
+		t.Fatalf("clicking README selected %q", m.preview.doc.view().Title())
+	}
+	if !m.preview.doc.focused || !m.PreviewFocused() {
+		t.Fatal("tab click handed the keyboard back to the list")
+	}
+
+	handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '}', Text: "}"})
+	if !handled || m.preview.doc.view().Title() != "main.go" {
+		t.Fatalf("} did not select main.go: handled=%v title=%q", handled, m.preview.doc.view().Title())
+	}
+	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if !handled || m.preview.doc == nil || m.preview.doc.view().Title() != "README.md" {
+		t.Fatalf("x did not leave README: handled=%v title=%q", handled, titleOrEmpty(m.preview.doc))
+	}
+	handled, _ = m.WorkspacesKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if !handled || m.preview.doc != nil || m.PreviewFocused() {
+		t.Fatalf("last x did not close the pane: handled=%v doc=%#v focused=%v", handled, m.preview.doc, m.PreviewFocused())
+	}
+}
+
+func TestGlobalPreviewDocQClosesAndDropsStaleLoad(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	first := m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
+	if m.preview.doc == nil {
+		t.Fatal("doc did not open")
+	}
+	generation := m.preview.generation
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if !handled || m.preview.doc != nil || m.PreviewFocused() || m.preview.generation == generation {
+		t.Fatalf("q handled=%v doc=%#v focused=%v generation %d→%d", handled, m.preview.doc, m.PreviewFocused(), generation, m.preview.generation)
+	}
+	run(t, m, cmd)
+	run(t, m, first)
+	if m.preview.doc != nil {
+		t.Fatal("stale load after q restored the document")
+	}
+}
+
+func visualPreviewDocTabPoint(t *testing.T, m *Model, index int) (x, y int, ok bool) {
+	t.Helper()
+	box, hasBox := m.previewBox()
+	if !hasBox || m.preview.doc == nil {
+		return 0, 0, false
+	}
+	_, docBox, split := m.previewSecondaryLayout(box)
+	if !split {
+		return 0, 0, false
+	}
+	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, docBox.W, m.preview.doc.focused).Tabs {
+		if tab.Index != index {
+			continue
+		}
+		return docBox.X + tab.Col + tab.Width/2, docBox.Y, true
+	}
+	return 0, 0, false
+}
+
+func titleOrEmpty(doc *previewDoc) string {
+	if doc == nil || doc.view() == nil {
+		return ""
+	}
+	return doc.view().Title()
 }
 
 func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {

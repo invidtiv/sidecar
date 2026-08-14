@@ -1059,6 +1059,11 @@ func (m *Model) Commands() []struct{ Key, Name string } {
 	if m.RenameShellOpen() {
 		return []struct{ Key, Name string }{{"enter", "Rename"}, {"esc", "Cancel"}}
 	}
+	if m.preview.doc != nil && m.preview.doc.focused && !m.PreviewInteractive() {
+		return []struct{ Key, Name string }{
+			{"q", "Close"}, {"x", "Tab×"}, {"{", "Tab←"}, {"}", "Tab→"}, {"m", "Raw"},
+		}
+	}
 	if !m.PreviewInteractive() {
 		cmds := []struct{ Key, Name string }{{"enter", "Type"}, {"p", "Pin"}, {"r", "Refresh"}}
 		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {

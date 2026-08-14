@@ -93,6 +93,7 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | `,` / `.` | Previous / next preview tab (Output / Diff / Task) on a non-main worktree. Shells and the main worktree have no tab row |
 | `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
 | click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
+| click a file tab | Select that file in the document preview. `{` / `}` also cycle when the document is focused |
 | click a list row | Select it; preview follows; not typing |
 | click another row while typing | Switch session and stay typing |
 | double-click a row | Open that identity in its owning project |
@@ -289,11 +290,14 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 
 An unmodified click on a resolvable file path in workspace or shell terminal
 output opens it beside that terminal. A second click appends a tab; a path
-that is already open is focused (and `path:line` jumps). The header is only
-the tab strip: each label is the relative path, left-truncated so the
-filename end always wins. Document panes are enabled by default;
-`--disable-feature=workspace_doc_panes` opts out for a launch.
-`shift`-drag and `alt`-drag remain terminal selection gestures.
+that is already open is focused (and `path:line` jumps). Click a drawn tab
+to select it. The header is only the tab strip: each label is the relative
+path, left-truncated so the filename end always wins. Document panes are
+enabled by default; `--disable-feature=workspace_doc_panes` opts out for a
+launch. `shift`-drag and `alt`-drag remain terminal selection gestures.
+
+The global Workspaces view uses the same tab strip and the same click / `{`
+/ `}` / `x` keys. Those tabs stay in memory for the selected row.
 
 `q` / `esc` hide the pane and remember the tab set for this shell or
 workspace. `x` on the last tab forgets the set. Switching surfaces or

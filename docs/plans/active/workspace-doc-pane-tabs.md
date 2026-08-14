@@ -110,10 +110,10 @@ registry entry is a tab group, not one model.
 
 ### 1.6 Global Workspaces is a different surface
 
-`internal/overview/preview_links.go` has its own single `previewDoc` with
-the same mode/close chips. It is not a pane tree and has no per-shell
-persist. This plan does not add tabs or restore there. The shared viewer
-can be hosted there later. Do not block on that.
+`internal/overview/preview_links.go` is not a pane tree and has no
+per-shell persist. File tabs and click-to-select on that surface landed
+later in [workspace-file-tab-clicks.md](workspace-file-tab-clicks.md);
+they stay memory-only for the selected row.
 
 ---
 

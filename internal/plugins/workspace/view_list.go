@@ -115,11 +115,16 @@ func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
 	// On the Output tab the chips are the terminal's own header row, laid out at
 	// that surface's width and behind its hint floor; Diff and Task draw their
 	// standalone tab row across the whole preview on the same first content row.
-	row, width, hintFloor := p.previewContentY(), split.ContentWidth, 0
+	row, width, originX, hintFloor := p.previewContentY(), split.ContentWidth, split.ContentX, 0
 	if p.previewTab == PreviewTabOutput {
-		if surface := p.terminalSurfaceGeometry(false); surface.OK {
-			row, width = surface.HeaderY, surface.Width
+		surface := p.terminalSurfaceGeometry(false)
+		if !surface.OK {
+			// The terminal is not on screen (zoomed document, or no box yet).
+			// Falling back to the full preview would paint Output/Diff/Task
+			// targets on top of the file tabs.
+			return
 		}
+		row, width, originX = surface.HeaderY, surface.Width, surface.X
 		if p.interactiveDescribes(false) {
 			hintFloor = p.interactiveHintFloor()
 		}
@@ -130,7 +135,7 @@ func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
 			continue
 		}
 		p.mouseHandler.HitMap.AddRect(regionPreviewTab,
-			split.ContentX+placement.Col, row, placement.Width, 1, i)
+			originX+placement.Col, row, placement.Width, 1, i)
 	}
 }
 

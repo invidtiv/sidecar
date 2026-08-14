@@ -253,9 +253,13 @@ highlighted source.
 
 A second click adds a tab instead of replacing the file. Clicking a path
 that is already open focuses that tab (and jumps to the line when the link
-has one). The header is only the tab strip: each label is the relative path,
-left-truncated so the filename always survives (`…/workspace/plugin.go`).
-There is no Raw chip, close chip, or in-header hint.
+has one). Click a drawn tab to select it; `{` / `}` still cycle. The header
+is only the tab strip: each label is the relative path, left-truncated so
+the filename always survives (`…/workspace/plugin.go`). There is no Raw
+chip, close chip, or in-header hint.
+
+The same tabs work on the global Workspaces view. Those stay in memory for
+the selected row; they are not restored after a relaunch.
 
 Document panes are enabled by default. To turn them off for a launch, run
 `sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in

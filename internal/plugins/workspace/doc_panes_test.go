@@ -427,6 +427,106 @@ func docPaneTabRegion(p *Plugin, index int) *mouse.Region {
 	return nil
 }
 
+func clickDrawnDocTab(t *testing.T, p *Plugin, index int) {
+	t.Helper()
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil {
+		t.Fatal("no document pane")
+	}
+	pane := docPaneRegion(p, regionDocPane)
+	if pane == nil {
+		t.Fatal("document pane has no hit region")
+	}
+	strip := layoutDocTabStrip(doc, pane.Rect.W, p.paneFocus == leaf.ID)
+	var tab *docTabPlacement
+	for i := range strip.Tabs {
+		if strip.Tabs[i].Index == index {
+			tab = &strip.Tabs[i]
+			break
+		}
+	}
+	if tab == nil {
+		t.Fatalf("tab %d is not drawn: %+v", index, strip.Tabs)
+	}
+	x := pane.Rect.X + tab.Col + tab.Width/2
+	y := pane.Rect.Y
+	resolved := p.mouseHandler.HitMap.Test(x, y)
+	if resolved == nil || resolved.ID != regionDocTab {
+		t.Fatalf("visual tab %d at (%d,%d) resolves to %#v, want %s", index, x, y, resolved, regionDocTab)
+	}
+	if hit, ok := resolved.Data.(docTabHit); !ok || hit.Index != index {
+		t.Fatalf("visual tab %d at (%d,%d) resolves to %#v", index, x, y, resolved.Data)
+	}
+	_ = p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+}
+
+func TestDocPaneVisualTabClickSelectsOnShellAndWorktree(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shell bool
+		side  bool
+		width int
+	}{
+		{"shell full preview", true, false, 100},
+		{"shell with sidebar", true, true, 120},
+		{"worktree chips overlay", false, true, 120},
+		{"worktree narrow", false, true, 80},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# readme\n")
+			writeDocPaneFixture(t, root, "main.go", "package main\n")
+			p := docPaneTestPlugin(t, root, tc.shell)
+			p.sidebarVisible = tc.side
+			p.width, p.height = tc.width, 24
+			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+			doc := p.activeDocPaneOrNil()
+			if doc.view().Title() != "main.go" {
+				t.Fatalf("active = %q, want main.go", doc.view().Title())
+			}
+
+			_ = p.View(tc.width, p.height)
+			clickDrawnDocTab(t, p, 0)
+			if doc.view().Title() != "README.md" {
+				t.Fatalf("clicking README selected %q", doc.view().Title())
+			}
+			_ = p.View(tc.width, p.height)
+			clickDrawnDocTab(t, p, 1)
+			if doc.view().Title() != "main.go" {
+				t.Fatalf("clicking main.go selected %q", doc.view().Title())
+			}
+		})
+	}
+}
+
+func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	writeDocPaneFixture(t, root, "main.go", "package main\n")
+	p := docPaneTestPlugin(t, root, false)
+	p.sidebarVisible = false
+	p.width, p.height = 120, 24
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+	if p.previewTab != PreviewTabOutput || !p.previewTabsVisible() {
+		t.Fatalf("premise: worktree Output chips should exist: tab=%v visible=%v", p.previewTab, p.previewTabsVisible())
+	}
+
+	p.width, p.height = 40, 24
+	_ = p.View(p.width, p.height)
+	if p.terminalSurfaceGeometry(false).OK {
+		t.Fatal("expected the split to zoom away from the terminal")
+	}
+	if docPaneRegion(p, regionPreviewTab) != nil {
+		t.Fatal("zoomed document still registered Output/Diff/Task chip targets")
+	}
+	clickDrawnDocTab(t, p, 0)
+	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
+		t.Fatalf("zoomed file-tab click selected %q", got)
+	}
+}
+
 func TestDocumentCommandsDescribeCurrentMode(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
