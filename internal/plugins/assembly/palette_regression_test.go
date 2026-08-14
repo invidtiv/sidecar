@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -22,6 +23,11 @@ import (
 // no such entry appears is the only way to be sure the Tasks fix did not
 // quietly rewrite six other palettes.
 func TestKeylessEntriesDoNotLeakIntoOtherPlugins(t *testing.T) {
+	// Sibling assembly tests call features.Init with notes on. Reset to
+	// code defaults so this assertion is about Plan(Default()), not leftover
+	// singleton state.
+	features.Init(config.Default())
+
 	dir := t.TempDir()
 
 	km := keymap.NewRegistry()
@@ -46,5 +52,25 @@ func TestKeylessEntriesDoNotLeakIntoOtherPlugins(t *testing.T) {
 	sort.Strings(offenders)
 	if len(offenders) > 0 {
 		t.Errorf("plugins that bind nothing gained %d inert palette rows: %v", len(offenders), offenders)
+	}
+
+	// Notes is off by default. Enabling it must not start advertising a
+	// keyless edit-note row on every other tab's palette.
+	initFeatures(t, map[string]bool{features.NotesPlugin.Name: true})
+	notesReg := plugin.NewRegistry(pctx)
+	for _, entry := range Plan(config.Default()) {
+		if err := notesReg.Register(entry.New()); err != nil {
+			t.Fatalf("register %s: %v", entry.ID, err)
+		}
+	}
+	var notesOffenders []string
+	for _, e := range palette.BuildEntries(km, notesReg.Plugins(), "global", "global") {
+		if e.Key == "" {
+			notesOffenders = append(notesOffenders, e.Context+"/"+e.CommandID)
+		}
+	}
+	sort.Strings(notesOffenders)
+	if len(notesOffenders) > 0 {
+		t.Errorf("enabling notes leaked %d inert palette rows: %v", len(notesOffenders), notesOffenders)
 	}
 }

@@ -1451,7 +1451,7 @@ func (p *Plugin) Commands() []plugin.Command {
 	if p.activePane == PaneEditor && p.editorNote != nil {
 		if p.previewMode {
 			return []plugin.Command{
-				{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1, Handler: p.editSelectedNote},
+				{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
 				{ID: "switch-pane", Name: "List", Description: "Switch to list pane", Category: plugin.CategoryNavigation, Context: "notes-preview", Priority: 2},
 			}
 		}
@@ -1486,7 +1486,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Full editing commands only in Active view
 		cmds = append(cmds,
 			plugin.Command{ID: "new-note", Name: "New", Description: "Create new note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 4},
-			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5, Handler: p.editSelectedNote},
+			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
 			plugin.Command{ID: "delete-note", Name: "Delete", Description: "Delete selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "toggle-pin", Name: "Pin", Description: "Toggle pin on note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 9},
 			plugin.Command{ID: "archive-note", Name: "Archive", Description: "Archive selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 10},

@@ -822,20 +822,27 @@ func TestEnterAndEStartInlineTTY(t *testing.T) {
 func TestEditCommandStartsInlineTTY(t *testing.T) {
 	installNotesFakeTmux(t)
 	p, noteID := newNotesEditorHarness(t)
-	var handler func() tea.Cmd
+	var found bool
 	for _, cmd := range p.Commands() {
-		if cmd.ID == "edit-note" && cmd.Handler != nil {
-			handler = cmd.Handler
+		if cmd.ID == "edit-note" {
+			found = true
+			if cmd.Handler != nil {
+				t.Fatal("edit-note must not carry a Handler; it leaks a keyless palette row into other plugins")
+			}
 			break
 		}
 	}
-	if handler == nil {
-		t.Fatal("edit-note command has no handler")
+	if !found {
+		t.Fatal("edit-note command missing")
 	}
-	got := handler()()
+	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter returned no command")
+	}
+	got := cmd()
 	started, ok := got.(InlineEditStartedMsg)
 	if !ok {
-		t.Fatalf("edit-note produced %T, want InlineEditStartedMsg", got)
+		t.Fatalf("enter produced %T, want InlineEditStartedMsg", got)
 	}
 	if started.NoteID != noteID {
 		t.Fatalf("started note = %q, want %q", started.NoteID, noteID)
