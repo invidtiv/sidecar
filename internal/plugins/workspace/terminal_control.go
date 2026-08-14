@@ -57,7 +57,9 @@ type workspaceTerminalTarget struct {
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	var cmds []tea.Cmd
+	// Whatever the last render's leaf sizing answered is dispatched here, the
+	// first update that has a runtime to dispatch it with.
+	cmds := p.takePaneSizeCmds()
 	switch msg.(type) {
 	case tea.FocusMsg:
 		p.applicationFocused = true

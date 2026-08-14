@@ -54,6 +54,11 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
+	// launchedInsideTmux was derived from TMUX before this ran, at package
+	// initialisation, and it reaches rendered cells: the detach hint doubles the
+	// prefix key inside tmux. Clearing it here is what keeps a golden from
+	// depending on where the test runner was launched.
+	launchedInsideTmux = false
 
 	// Axis 2, Sidecar state. Set for the whole package so no individual test
 	// can opt out by forgetting to override. Tests that call

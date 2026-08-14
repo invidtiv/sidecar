@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -281,13 +282,117 @@ func TestPaneTreeDrawsFocusOnlyIntoTheFocusedLeafsHeader(t *testing.T) {
 	}
 	for _, leafID := range []int{2, 3} {
 		other := 5 - leafID
-		active := p.docHeaderChips(p.docs[leafID], paneChipWidthFor(t, p, leafID, width, height), true)[0]
+		doc := p.docs[leafID]
+		active := p.docHeaderChips(doc, doc.view.Title(), paneChipWidthFor(t, p, leafID, width, height), true)[0]
 		if !strings.Contains(styled[leafID], active) {
 			t.Fatalf("leaf %d holds focus but its path chip is not the active one", leafID)
 		}
 		if strings.Contains(styled[other], active) {
 			t.Fatalf("leaf %d drew the active path chip while leaf %d held focus", leafID, other)
 		}
+	}
+}
+
+// fiveLeafPaneTree nests three levels: the root's column split, a row split in
+// each half, and a column split inside the left half's lower half. Its deepest
+// divider's hit target overlaps its parent's, which overlaps the root's — the
+// shape the four-leaf tree cannot produce, where one level of nesting makes
+// "each split before the splits inside it" and "innermost last" the same order.
+func fiveLeafPaneTree(t *testing.T, p *Plugin, root string) {
+	t.Helper()
+	p.paneRoot = &PaneNode{ID: 10, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: &PaneNode{ID: 11, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
+			A: &PaneNode{ID: 1, Kind: PaneTerminal},
+			B: &PaneNode{ID: 13, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+				A: &PaneNode{ID: 2, Kind: PaneDoc, DocID: 2},
+				B: &PaneNode{ID: 3, Kind: PaneDoc, DocID: 3},
+			}},
+		}},
+		B: &PaneNode{ID: 12, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
+			A: &PaneNode{ID: 4, Kind: PaneDoc, DocID: 4},
+			B: &PaneNode{ID: 5, Kind: PaneDoc, DocID: 5},
+		}},
+	}}
+	p.paneFocus = 2
+	p.paneNextID = 14
+	p.docs = make(map[int]*docPane)
+	compositorDocLeaf(t, p, root, 2, "lower-left.md", "# lower left\n\nbody\n")
+	compositorDocLeaf(t, p, root, 3, "lower-middle.md", "# lower middle\n\nbody\n")
+	compositorDocLeaf(t, p, root, 4, "upper-right.md", "# upper right\n\nbody\n")
+	compositorDocLeaf(t, p, root, 5, "lower-right.md", "# lower right\n\nbody\n")
+}
+
+// splitsInside is the split IDs a split encloses, itself excluded.
+func splitsInside(node *PaneNode) []int {
+	if node == nil || node.Split == nil {
+		return nil
+	}
+	return append(append([]int{node.Split.A.ID}, splitsInside(node.Split.A)...),
+		append([]int{node.Split.B.ID}, splitsInside(node.Split.B)...)...)
+}
+
+func findPaneSplit(node *PaneNode, id int) *PaneNode {
+	if node == nil || node.Split == nil {
+		return nil
+	}
+	if node.ID == id {
+		return node
+	}
+	if found := findPaneSplit(node.Split.A, id); found != nil {
+		return found
+	}
+	return findPaneSplit(node.Split.B, id)
+}
+
+// Where two dividers' three-cell targets overlap, the click belongs to the
+// enclosed split — the one the pointer is nearer inside — and it gets there
+// because the enclosing split was registered first and HitMap.Test scans in
+// reverse. Registering the other way round would hand every contested cell to
+// the outermost divider, which is the drag a user would never mean.
+func TestNestedDividerTargetsResolveToTheEnclosedSplit(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	fiveLeafPaneTree(t, p, root)
+
+	const width, height = 160, 30
+	composePaneTree(t, p, width, height)
+	origin, ok := p.previewContentBox()
+	if !ok {
+		t.Fatal("preview content box is unplaced")
+	}
+	_, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	if !fits || len(dividers) != 4 {
+		t.Fatalf("layout = %d dividers fits=%v, want 4", len(dividers), fits)
+	}
+
+	contested := 0
+	for outer := range dividers {
+		enclosed := splitsInside(findPaneSplit(p.paneRoot, dividers[outer].SplitID))
+		for inner := outer + 1; inner < len(dividers); inner++ {
+			a, b := paneDividerHitBox(dividers[outer]), paneDividerHitBox(dividers[inner])
+			overlap := Box{X: max(a.X, b.X), Y: max(a.Y, b.Y)}
+			overlap.W = min(a.X+a.W, b.X+b.W) - overlap.X
+			overlap.H = min(a.Y+a.H, b.Y+b.H) - overlap.Y
+			if overlap.W <= 0 || overlap.H <= 0 {
+				continue
+			}
+			contested++
+			if !slices.Contains(enclosed, dividers[inner].SplitID) {
+				t.Fatalf("splits %d and %d contest a cell but neither encloses the other",
+					dividers[outer].SplitID, dividers[inner].SplitID)
+			}
+			hit := p.mouseHandler.HitMap.Test(origin.X+overlap.X, origin.Y+overlap.Y)
+			if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != dividers[inner].SplitID {
+				t.Fatalf("cell (%d,%d) contested by splits %d and %d resolves to %#v, want the enclosed %d",
+					overlap.X, overlap.Y, dividers[outer].SplitID, dividers[inner].SplitID,
+					hit, dividers[inner].SplitID)
+			}
+		}
+	}
+	// Three levels of nesting is what makes the ordering testable at all: with
+	// none of the targets overlapping, any registration order would pass.
+	if contested < 3 {
+		t.Fatalf("only %d divider targets overlap; the tree does not exercise the ordering", contested)
 	}
 }
 

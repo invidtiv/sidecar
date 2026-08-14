@@ -169,11 +169,13 @@ func TestLeavingALivePaneKeepsTheReadersWindow(t *testing.T) {
 	if p.viewMode == ViewModeInteractive {
 		t.Fatal("the mode did not end")
 	}
-	// Asserted against the shared rule rather than against a number this side
-	// chose for itself: the answer belongs to tty.LeaveLiveWindow, and both
-	// hosts' tests read it from there (td-651ca2).
-	if want := tty.LeaveLiveWindow(&tty.WindowFreeze{}, 10, p.previewMaxScroll()); p.previewScroll != want {
-		t.Fatalf("window = %d rows back, want the %d the shared leave rule places", p.previewScroll, want)
+	// The answer belongs to tty.LeaveLiveWindow, but the number is written here
+	// rather than read back from it: a host held to the shared rule cannot be
+	// allowed to compute its own expectation from that rule, or a regression
+	// that snapped both sides to the live edge would pass on both. The rule's
+	// value is pinned once, in tty's TestLeaveLiveWindowKeepsTheReadersWindow.
+	if p.previewScroll != 10 {
+		t.Fatalf("window = %d rows back, want the 10 the reader left it at", p.previewScroll)
 	}
 }
 

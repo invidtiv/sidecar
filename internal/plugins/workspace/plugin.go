@@ -213,7 +213,12 @@ type Plugin struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneRestoreCmd  tea.Cmd
-	docs            map[int]*docPane
+	// paneSizeCmds holds what a leaf's SetSize answered during a render until
+	// the next update can dispatch it. A render has no runtime to hand a command
+	// to, and dropping one would swallow the exact signal the content contract
+	// documents as how a content asserts geometry it owns beyond this process.
+	paneSizeCmds []tea.Cmd
+	docs         map[int]*docPane
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.

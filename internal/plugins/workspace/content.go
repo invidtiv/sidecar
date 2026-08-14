@@ -3,6 +3,7 @@ package workspace
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // Content is what one pane-tree leaf shows. The tree places boxes and the frame
@@ -112,8 +113,14 @@ func (c *terminalContent) SetSize(size Size) tea.Cmd {
 	return nil
 }
 
+// View draws the legacy preview and holds it to the box it was given. The
+// legacy renderer answers its states in their own shape — a header row and two
+// lines of "no agent running" is three ragged rows for any box — and a leaf that
+// hands back less than its rectangle is a leaf whose neighbours are placed by
+// the width of its longest line. The frame's compositor would clip and pad it
+// anyway; doing it here is what makes the contract true rather than survivable.
 func (c *terminalContent) View(Render) string {
-	return c.p.renderPreviewContentLegacy(c.size.Width, c.size.Height)
+	return ui.FitBlock(c.p.renderPreviewContentLegacy(c.size.Width, c.size.Height), c.size.Width, c.size.Height)
 }
 
 // docContent is the document leaf: the pane's own header row above a document
@@ -139,9 +146,12 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 	return nil
 }
 
+// View draws the header row from the contract's own Title, so the identity the
+// header states and the identity the tree persists and the frame reports are
+// one string rather than three reads of the same field.
 func (c *docContent) View(render Render) string {
 	return composePaneLeaf(
-		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
+		c.p.docPaneHeaderRow(c.doc, c.Title(), c.size.Width, render.Focused),
 		c.doc.view.View())
 }
 

@@ -37,11 +37,14 @@ func TestLeavingInteractiveKeepsTheOutputProducer(t *testing.T) {
 	if got := m.previewBuffer().Lines(); len(got) != len(live) {
 		t.Fatalf("buffer = %d lines, want the %d it was still drawing", len(got), len(live))
 	}
-	// Where the window lands is tty.LeaveLiveWindow's answer, not this
-	// surface's: it is asserted against the shared rule so the two hosts cannot
-	// drift back into two answers (td-651ca2).
-	if want := tty.LeaveLiveWindow(&tty.WindowFreeze{}, 2, m.previewMaxOffset()); m.preview.offset != want {
-		t.Fatalf("scroll position = %d, want the %d the shared leave rule places", m.preview.offset, want)
+	// Where the window lands is tty.LeaveLiveWindow's answer, and the number is
+	// written here rather than read back from that function: a host asked to
+	// prove it kept the reader's window must not compute its expectation from
+	// the rule it is being held to, or a rule that snapped to the live edge
+	// would produce its own passing answer. The rule's own value is pinned in
+	// TestLeaveLiveWindowKeepsTheReadersWindow; this is the host obeying it.
+	if m.preview.offset != 2 {
+		t.Fatalf("scroll position = %d, want the 2 rows back the reader was at", m.preview.offset)
 	}
 	view := m.WorkspacesView(previewWide, previewTall)
 	if strings.Contains(ansi.Strip(view), "No output captured") {

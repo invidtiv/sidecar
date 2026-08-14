@@ -103,7 +103,7 @@ func TestDocContentDrawsItsHeaderAboveTheViewerBox(t *testing.T) {
 	if !split {
 		t.Fatalf("document leaf drew no body under its header: %q", got)
 	}
-	if want := p.docPaneHeaderRow(doc, width, false); header != want {
+	if want := p.docPaneHeaderRow(doc, content.Title(), width, false); header != want {
 		t.Fatalf("header row = %q, want %q", header, want)
 	}
 	if cells := ansi.StringWidth(header); cells != width {
@@ -147,7 +147,9 @@ func TestPaneLeafTakesFocusFromTheFrame(t *testing.T) {
 }
 
 // The terminal leaf keeps its whole box: its header row is drawn from inside
-// its body by the legacy renderer until M1 absorbs the panel into the tree.
+// its body by the legacy renderer until M1 absorbs the panel into the tree. The
+// legacy renderer draws it in the box it was given, cell for cell — nothing is
+// dropped or moved by the leaf holding itself to that rectangle.
 func TestTerminalLeafDrawsTheLegacyPreviewInItsWholeBox(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
@@ -155,10 +157,71 @@ func TestTerminalLeafDrawsTheLegacyPreviewInItsWholeBox(t *testing.T) {
 
 	origin, _ := p.previewContentBox()
 	box := Box{W: 60, H: 18}
-	if got, want := p.renderPaneLeaf(Placement{Node: terminal, Box: box}, origin, false),
-		p.renderPreviewContentLegacy(box.W, box.H); got != want {
-		t.Fatal("the terminal leaf was drawn against a different box than the legacy preview")
+	got := p.renderPaneLeaf(Placement{Node: terminal, Box: box}, origin, false)
+	legacy := strings.Split(p.renderPreviewContentLegacy(box.W, box.H), "\n")
+	for row, line := range strings.Split(got, "\n") {
+		want := ""
+		if row < len(legacy) {
+			want = legacy[row]
+		}
+		if trim(line) != trim(want) {
+			t.Fatalf("row %d = %q, want the legacy preview's %q", row, trim(line), trim(want))
+		}
 	}
+}
+
+// Every content owes its frame exactly the rectangle it was sized to. The
+// legacy preview answers several of its states in their own shape — a header
+// row over two lines of "no agent running" is three ragged rows whatever the
+// box — and a leaf that hands back less than its box is a leaf whose neighbours
+// get placed by the width of its longest line. The compositor would clip and
+// pad it anyway; the contract is that it never has to.
+func TestEveryContentDrawsExactlyItsBox(t *testing.T) {
+	for name, state := range map[string]struct {
+		shell bool
+		setup func(p *Plugin)
+	}{
+		"shell with a live agent":     {shell: true},
+		"shell with no agent":         {shell: true, setup: func(p *Plugin) { p.shells[0].Agent = nil }},
+		"workspace with a live agent": {},
+		"workspace with no agent":     {setup: func(p *Plugin) { p.worktrees[0].Agent = nil }},
+		"workspace on the diff tab":   {setup: func(p *Plugin) { p.previewTab = PreviewTabDiff }},
+		"workspace with an orphan tree": {setup: func(p *Plugin) {
+			p.worktrees[0].Agent = nil
+			p.worktrees[0].IsOrphaned = true
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			p := docPaneTestPlugin(t, root, state.shell)
+			if state.setup != nil {
+				state.setup(p)
+			}
+			terminal, leaf, _ := docPaneSplitTree(t, p, root, "one.md")
+			for _, box := range []Box{{W: 80, H: 24}, {W: 40, H: 10}, {W: 31, H: 4}} {
+				for _, node := range []*PaneNode{terminal, leaf} {
+					content := p.paneContent(node)
+					content.SetSize(Size{Width: box.W, Height: box.H})
+					rows := strings.Split(content.View(Render{}), "\n")
+					if len(rows) != box.H {
+						t.Fatalf("%s leaf in %dx%d drew %d rows", content.Kind(), box.W, box.H, len(rows))
+					}
+					for row, line := range rows {
+						if cells := ansi.StringWidth(line); cells != box.W {
+							t.Fatalf("%s leaf in %dx%d drew row %d %d cells wide: %q",
+								content.Kind(), box.W, box.H, row, cells, ansi.Strip(line))
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// trim drops the padding a row was held to its box with, so two renderings are
+// compared on their cells rather than on where each stopped.
+func trim(row string) string {
+	return strings.TrimRight(ansi.Strip(row), " ")
 }
 
 // A box too small for the tree gives the box to the focused leaf, so which

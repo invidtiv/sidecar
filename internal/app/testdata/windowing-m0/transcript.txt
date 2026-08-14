@@ -5,8 +5,14 @@ M0 changes how the workspace preview is composed, not what it draws: the box
 type, the frame's ownership of a leaf's header row, the canvas blit that
 replaced the two-leaf joins, the content contract, one zoom rule, hit regions
 registered from the placements the canvas drew from, and one floors authority.
-The claim the milestone makes is that none of it reaches a cell. This directory
-is that claim measured against a real Sidecar process rather than asserted.
+The claim the milestone makes is that none of it reaches a cell, with one
+deliberate exception recorded under "The one thing that moved" below.
+
+This directory is the part of that claim a real Sidecar process can be driven
+through. It reaches the one-leaf pane tree only. The composition M0 actually
+rewrote — a document pane beside the terminal — cannot be reached headlessly and
+is measured in Go instead; both halves are named here rather than one standing
+in for the other.
 
 Method
 ------
@@ -17,10 +23,10 @@ ANSI-stripped pane text with trailing spaces removed; the comparison itself was
 made on the raw captures, escape sequences included, so a styling change would
 have shown even where the glyphs agreed.
 
-Every state matched byte for byte at both sizes. The only masked difference is
-the header and footer clock, which advances between two runs by construction.
-No transcript in this repository was re-recorded, because nothing M0 did made
-one stale.
+Every state below matched byte for byte at both sizes. The only masked
+difference is the header and footer clock, which advances between two runs by
+construction. No transcript in this repository was re-recorded, because none of
+them holds a state whose cells M0 moved.
 
 Isolation (`./scripts/tmux-drive.sh paths` before each run)
   outer server  -L sidecar-drive
@@ -66,11 +72,41 @@ What each state exercises
   05-git          Leaving the plugin, to catch a change that only shows once
                   the workspace view has been built and torn down.
 
-Not covered here
-----------------
-A document pane open beside the terminal is the composition M0 rewrote, and it
-cannot be reached headlessly: a doc leaf is born from a markdown path in live
-agent output. That path is covered instead by the cell-exact goldens over a
-three-leaf and a nested four-leaf tree in
-internal/plugins/workspace/pane_compositor_test.go, which assert every composed
-cell, each divider's own box, and every leaf and divider hit region.
+What this cannot reach, and where that half is measured
+-------------------------------------------------------
+A doc leaf is born from a markdown path in live agent output, so no key sequence
+puts a document beside the terminal. Two Go tests carry that half of the claim:
+
+  TestTwoLeafPaneCompositionMatchesTheJoinsItReplaced
+  (internal/plugins/workspace/pane_composition_parity_test.go) reproduces the
+  deleted lipgloss joins over the same leaf blocks the canvas composes and holds
+  the two to the same string, across both axes, both child orders, both focus
+  states, four sizes and six preview content states — 192 configurations, the
+  shape the product ships.
+
+  The cell-exact goldens over a three-leaf, a nested four-leaf and a
+  three-deep five-leaf tree in
+  internal/plugins/workspace/pane_compositor_test.go assert every composed cell,
+  each divider's own box, and every leaf and divider hit region, for trees the
+  two-leaf renderer could not compose at all.
+
+The one thing that moved
+------------------------
+The canvas holds every leaf to the rectangle the layout gave it. The joins
+placed the divider at the widest line — or the last row — of the block beside
+it, because that is what lipgloss joins do. So wherever the terminal leaf
+rendered short of its box (no agent attached, an orphaned worktree, the welcome
+guide, the Diff and Task tabs, or output simply narrower than the pane), the
+pre-M0 divider and the document beside it hugged that content instead of
+standing where the split put them.
+
+Measured over the parity test's own 192 configurations with the leaf renderers
+restored to their pre-M0 shape: 148 of 192 disagree, on both axes. As shipped:
+0 of 192. One example, 140x36, a workspace with no agent, a 50/50 column split —
+the divider stood at column 24 and now stands at column 70, which is where the
+ratio puts it.
+
+This is the one place M0 changes what a user sees, and the change is from a
+divider placed by the length of a line to a divider placed by the layout. None
+of the captures in this directory holds a document pane, which is why none of
+them was re-recorded.

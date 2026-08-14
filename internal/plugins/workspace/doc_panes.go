@@ -536,12 +536,15 @@ func (p *Plugin) cycleDocumentFocus(reverse bool) {
 	p.termPanelFocused = false
 }
 
-func (p *Plugin) docHeaderChips(doc *docPane, width int, focused bool) []string {
+// docHeaderChips renders the doc leaf's header chips. title is the content's
+// own answer rather than a second read of the viewer, so the row the frame
+// draws and the regions it registers cannot name the leaf differently.
+func (p *Plugin) docHeaderChips(doc *docPane, title string, width int, focused bool) []string {
 	// Keep each chip whole so the shared header layout can drop it cleanly at
 	// narrow widths. Bound the path before styling so a deep path does not crowd
 	// out the mode and close affordances.
 	pathBudget := maxInt(width/2, 8)
-	path := p.truncateCache.Truncate(doc.view.Title(), pathBudget, "…")
+	path := p.truncateCache.Truncate(title, pathBudget, "…")
 	pathStyle := styles.BarChip
 	if focused {
 		pathStyle = styles.BarChipActive
@@ -560,12 +563,12 @@ func (p *Plugin) docHeaderChips(doc *docPane, width int, focused bool) []string 
 // docPaneHeaderRow is the doc leaf's header row, drawn above the viewer rather
 // than by it. focused is the frame's answer, so the chip a click lands on and
 // the chip the leaf drew cannot disagree about which leaf holds focus.
-func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
+func (p *Plugin) docPaneHeaderRow(doc *docPane, title string, width int, focused bool) string {
 	action := "raw"
 	if !doc.view.Rendered() {
 		action = "render"
 	}
-	return p.terminalHeader(p.docHeaderChips(doc, width, focused), dimText("q close · m "+action), width, 0)
+	return p.terminalHeader(p.docHeaderChips(doc, title, width, focused), dimText("q close · m "+action), width, 0)
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -596,9 +599,9 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 	return paneTreeDividerStyle(focused).Render(strings.Repeat("─", maxInt(width, 0)))
 }
 
-func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
+func (p *Plugin) registerDocPaneRegions(doc *docPane, title string, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
-	chips := p.docHeaderChips(doc, box.W, p.paneFocus == leafID)
+	chips := p.docHeaderChips(doc, title, box.W, p.paneFocus == leafID)
 	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
 		if !chip.Drawn {
 			continue
@@ -621,6 +624,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		return "", false
 	}
 	origin, placed := p.previewContentBox()
+	canvas := ui.NewCanvas(width, height)
 	if layout.Zoomed {
 		// The zoomed leaf is drawn from here only when it is a document the
 		// preview owns: a terminal leaf, or a doc leaf still holding paneFocus
@@ -629,18 +633,23 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 			return "", false
 		}
 		zoomed := layout.Leaves[0]
-		if doc := p.docs[zoomed.Node.DocID]; placed && doc != nil {
-			p.registerDocPaneRegions(doc, zoomed.Node.ID,
+		doc, content := p.docs[zoomed.Node.DocID], p.paneContent(zoomed.Node)
+		if placed && doc != nil && content != nil {
+			p.registerDocPaneRegions(doc, content.Title(), zoomed.Node.ID,
 				Box{X: origin.X, Y: origin.Y, W: zoomed.Box.W, H: zoomed.Box.H})
 		}
-		return p.renderPaneLeaf(zoomed, origin, true), true
+		// One leaf is still composed, not returned: the clip-and-pad the
+		// compositor guarantees is what makes the leaf's box the leaf's box, and
+		// a lone leaf that keeps its own shape is the one placement nothing
+		// holds to it.
+		canvas.Blit(zoomed.Box, p.renderPaneLeaf(zoomed, origin, true))
+		return canvas.String(), true
 	}
 
 	// Every leaf and divider is drawn onto the box LayoutPanes gave it. Joining
 	// the blocks back together instead would re-derive that geometry in string
 	// space at every level of nesting, and the levels only have to disagree by a
 	// cell for a divider to walk sideways.
-	canvas := ui.NewCanvas(width, height)
 	for _, placement := range layout.Leaves {
 		canvas.Blit(placement.Box, p.renderPaneLeaf(placement, origin, false))
 	}
@@ -661,14 +670,17 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 //
 // Sizing inside a frame is what the document viewer already required, and both
 // contents answer nil: a live terminal is resized from the state change that
-// moved its box, not from a render. The first content that answers a command
-// moves sizing ahead of the frame, into the update path that can dispatch it.
+// moved its box, not from a render. A content that does answer one is asserting
+// geometry beyond this process, and a render has nothing to dispatch it with, so
+// the frame holds it for the next update rather than dropping it — the earliest
+// a frame-time answer can reach the runtime. The first content that answers one
+// in production moves sizing ahead of the frame entirely.
 func (p *Plugin) renderPaneLeaf(placement Placement, origin Box, zoomed bool) string {
 	content := p.paneContent(placement.Node)
 	if content == nil {
 		return ""
 	}
-	_ = content.SetSize(Size{Width: placement.Box.W, Height: placement.Box.H})
+	p.sizePaneContent(content, Size{Width: placement.Box.W, Height: placement.Box.H})
 	return content.View(Render{
 		Focused: p.paneFocus == placement.Node.ID,
 		Zoomed:  zoomed,
@@ -677,6 +689,24 @@ func (p *Plugin) renderPaneLeaf(placement Placement, origin Box, zoomed bool) st
 			W: placement.Box.W, H: placement.Box.H,
 		},
 	})
+}
+
+// sizePaneContent gives a content its box and keeps what it answered. A command
+// here is a content asserting geometry it owns beyond this process, and the
+// render path has no runtime to dispatch one with, so it is queued for the next
+// update instead of discarded.
+func (p *Plugin) sizePaneContent(content Content, size Size) {
+	if cmd := content.SetSize(size); cmd != nil {
+		p.paneSizeCmds = append(p.paneSizeCmds, cmd)
+	}
+}
+
+// takePaneSizeCmds empties the queue as it hands it over: a geometry assertion
+// dispatched on every update after the render that made it is a resize storm.
+func (p *Plugin) takePaneSizeCmds() []tea.Cmd {
+	cmds := p.paneSizeCmds
+	p.paneSizeCmds = nil
+	return cmds
 }
 
 func (p *Plugin) renderPaneTreeDivider(split Divider) string {
@@ -697,27 +727,44 @@ func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider)
 		if placement.Node.Kind != PaneDoc {
 			continue
 		}
-		if doc := p.docs[placement.Node.DocID]; doc != nil && doc.view != nil {
-			p.registerDocPaneRegions(doc, placement.Node.ID, Box{
-				X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
-				W: placement.Box.W, H: placement.Box.H,
-			})
+		// The title a region is registered under is the content's own, the same
+		// answer the header row was drawn from, so a chip cannot be hit-tested at
+		// a width it was never rendered at.
+		content := p.paneContent(placement.Node)
+		doc := p.docs[placement.Node.DocID]
+		if content == nil || doc == nil {
+			continue
 		}
+		p.registerDocPaneRegions(doc, content.Title(), placement.Node.ID, Box{
+			X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
+			W: placement.Box.W, H: placement.Box.H,
+		})
 	}
-	// Dividers arrive with each split before its children's, and three-cell hit
-	// targets overlap once splits nest. Keeping that order registers the
-	// innermost divider last, which is the one HitMap.Test's reverse scan
-	// returns for a point two dividers both claim.
+	// Dividers arrive in LayoutPanes' order, each split before the splits inside
+	// it, and three-cell hit targets overlap once splits nest. Two targets can
+	// only overlap when one split encloses the other, because sibling subtrees
+	// are held apart by the divider between them — so registering the enclosing
+	// split first is what leaves the enclosed one last, and HitMap.Test's
+	// reverse scan returns it for a point both claim.
 	for _, split := range dividers {
-		hit := split.Box
-		if split.Axis == SplitCols {
-			hit.W = dividerHitWidth
-			hit.X--
-		} else {
-			hit.H = dividerHitWidth
-			hit.Y--
-		}
+		hit := paneDividerHitBox(split)
 		p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
 			absolute.X+hit.X, absolute.Y+hit.Y, hit.W, hit.H, split.SplitID)
 	}
+}
+
+// paneDividerHitBox widens a divider's one-cell box into the target a pointer is
+// tested against, in the tree's own coordinates. A divider is a cell wide and a
+// drag has to be startable on it, so the target reaches one cell into the leaf
+// before it.
+func paneDividerHitBox(split Divider) Box {
+	hit := split.Box
+	if split.Axis == SplitCols {
+		hit.W = dividerHitWidth
+		hit.X--
+	} else {
+		hit.H = dividerHitWidth
+		hit.Y--
+	}
+	return hit
 }
