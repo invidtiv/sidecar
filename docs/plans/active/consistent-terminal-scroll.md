@@ -1,6 +1,8 @@
 # Consistent terminal scroll, focused or not
 
-**Status:** designed, not started
+**Status:** shipped — all four slices landed (`05c45cb`, `2a437cc`, `3f87054`, `4ce9cca`), plus the
+review follow-up that answers the header's "app mouse" fact from the pane and routes the shifted
+watched keys. The proof transcript is §7.
 **Scope:** `internal/tty` (where the rule belongs), `internal/plugins/workspace`, `internal/overview`
 **Verified against:** `cb10aac`. Every file:line below was re-read in the tree at that commit.
 **Epic:** `td-de1ab2` (finish the shared terminal interaction surface). Folds `td-7425ad` and `td-290b9e`.
@@ -299,3 +301,40 @@ preview. Plus the recorded proof transcript.
 No change to whether hovering focuses a pane. No new keybindings. No change to the window-position
 model (bottom-relative, `0` = live) settled by `td-6b3fe5`. No change to what a *click* over a pane
 means.
+
+## 7. Proof
+
+Driven end to end through `scripts/tmux-drive.sh` on its private sockets (outer `-L sidecar-drive`,
+inner `TMUX_TMPDIR` under `/tmp/sc-scrollproof`), against a stand-in agent CLI holding the pane:
+alternate screen (`?1049h`), SGR mouse reporting (`?1000h ?1006h`), and a transcript of its own
+whose first row states where it is — `VIEW-TOP: nnn`. tmux confirms the fixture
+(`mouse_any_flag=1 alternate_on=1`), so the wheel over this pane is genuinely the application's.
+
+One notch is one SGR report delivered to sidecar's own input at the same screen cell in every run
+(`\e[<65;100;10M`), five of them, 600ms apart so no two coalesce. What the notch did is read from
+the application, not from sidecar: the pane's own first row.
+
+| Surface | State | Header's mouse note | Application after five notches |
+|---|---|---|---|
+| project workspaces preview | watched | `app mouse • ⌥wheel scrolls back` | `VIEW-TOP: 027` |
+| project workspaces preview | live (`E`) | `app mouse • ⇧drag select` | `VIEW-TOP: 027` |
+| global overview preview | watched | `app mouse • ⌥wheel scrolls back` | `VIEW-TOP: 027` |
+| global overview preview | live (`enter`) | `app mouse • ⇧drag select` | `VIEW-TOP: 027` |
+
+Same pane, same gesture, four states, one landing row — acceptance criterion 1, and the reported
+bug closed: before slice 1 the watched rows moved sidecar's window across the app's live frame and
+left `VIEW-TOP` at `000`.
+
+`alt`+wheel, watched, on the global preview (`\e[<72;100;10M` ×3): the application stayed at
+`VIEW-TOP: 027` and sidecar's own window moved — the header read `▲ 1 lines back • end live`.
+Criterion 3, and the escape hatch the watched note now names.
+
+The shifted navigation keys on a *watched* project preview, over a pane with 300 lines of ordinary
+shell scrollback: `⇧PgUp` → `▲ 43 lines back • G live`, `⇧Home` → `▲ 260 lines back`, `⇧End` → the
+live edge. Criterion 5; these did nothing at all before the review follow-up, because this surface
+dispatches on a key's name and never named their shifted forms.
+
+The executable form of the same claim, run on every build, is
+`internal/tty/wheel_state_test.go`, `internal/plugins/workspace/terminal_wheel_state_parity_test.go`
+(both terminal surfaces) and `internal/overview/wheel_state_parity_test.go`: one notch, watched
+against live, compared outcome for outcome rather than against a number written twice.

@@ -613,6 +613,17 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 
+	// The shifted form of a navigation key is the window's and nothing else's
+	// here, so it is claimed before the switch below, which dispatches on a key's
+	// name and never names those forms. The bare forms still carry this surface's
+	// own meanings — the sidebar cursor, the terminal panel's focus — and reach
+	// the same rule from inside the switch once those have had their say.
+	if tty.IsScrollbackKey(tty.ScrollbackLive, msg) {
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
+		}
+	}
+
 	switch msg.String() {
 	case "/":
 		// Explicit filter entry. Only from the sidebar, and never in kanban or

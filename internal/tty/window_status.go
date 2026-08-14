@@ -29,11 +29,17 @@ type WindowStatusInput struct {
 	// LoadingOlder reports a fetch of older history already in flight, which
 	// replaces the offer of it.
 	LoadingOlder bool
-	// MouseReporting reports that the application in the pane has the mouse, so
-	// selecting text needs the shift modifier.
+	// MouseReporting reports that the application in the pane has the mouse. It
+	// is a fact about the pane, answered whether or not the pane holds the
+	// keyboard, because that is when a wheel notch is forwarded to it.
 	MouseReporting bool
-	PaneWidth      int
-	PaneHeight     int
+	// PaneLive reports that this surface is typing into the pane, which is what
+	// decides how the reader is told to take the mouse back: a live pane owes
+	// them the modifier that still selects text, a watched one the modifier that
+	// still scrolls this surface's own window.
+	PaneLive   bool
+	PaneWidth  int
+	PaneHeight int
 
 	// LiveEdgeKey is the chord this surface answers to return to the live edge in
 	// the state it is in — every unshifted key belongs to a live pane, so it is
@@ -81,7 +87,15 @@ func WindowStatus(in WindowStatusInput) []StatusNote {
 		})
 	}
 	if in.MouseReporting {
-		notes = append(notes, StatusNote{Text: "app mouse • ⇧drag select", Compact: "⇧drag"})
+		// The one state this note has to explain is the watched one: a notch over
+		// a pane nobody is typing into is still the application's, so the window
+		// the reader is looking at does not move and nothing else on the header
+		// says why. Naming the escape hatch is the whole point of the note there.
+		note := StatusNote{Text: "app mouse • ⌥wheel scrolls back", Compact: "⌥wheel"}
+		if in.PaneLive {
+			note = StatusNote{Text: "app mouse • ⇧drag select", Compact: "⇧drag"}
+		}
+		notes = append(notes, note)
 	}
 	return notes
 }

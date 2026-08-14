@@ -265,3 +265,69 @@ func TestTerminalSearchUnicodeCaseFoldMapsVisualColumns(t *testing.T) {
 		t.Fatalf("Unicode fold columns = %d..%d, want 2..7", match.StartCol, match.EndCol)
 	}
 }
+
+// A scroll that hits the bound while the search's full-history read is running
+// is coalesced onto the reach rather than starting a second read of the same
+// range — so this is the only place those rows are still owed. The search path
+// used to admit the read and drop them: the reader's window stayed where it was
+// while the lines they scrolled for sat loaded underneath it.
+func TestSearchHistoryReplaysAScrollCoalescedOntoIt(t *testing.T) {
+	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
+	key := terminalHistoryKey("shell", "search-shell")
+	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
+	if p.beginTerminalSearch() == nil {
+		t.Fatal("search did not request unvisited history")
+	}
+	p.previewScroll = p.previewMaxScroll()
+
+	// The bound, reached while the search read is in flight.
+	if cmd := p.loadOlderTerminalHistory(false, 20); cmd != nil {
+		t.Fatal("a second read was opened while one was already running")
+	}
+	if p.terminalHistory[key].PendingScroll != 20 {
+		t.Fatalf("pending scroll = %d, want the 20 rows coalesced onto the reach",
+			p.terminalHistory[key].PendingScroll)
+	}
+
+	before := p.previewScroll
+	p.applyTerminalSearchHistory(terminalSearchHistoryLoadedMsg{
+		Source: terminalHistorySource{
+			Key:    key,
+			Target: "search-shell",
+			Buffer: p.shells[0].Agent.OutputBuf,
+		},
+		Capture: tty.CaptureRange{
+			Output:      numberedTerminalLines(0, 600),
+			HistorySize: 1200,
+			StartLine:   0,
+			EndLine:     600,
+		},
+		RequestGen: p.terminalHistory[key].RequestGen,
+		SearchGen:  p.terminalSearch.Generation,
+	})
+
+	if p.previewScroll != before+20 {
+		t.Fatalf("window at %d rows back, want %d — the rows the reader scrolled for",
+			p.previewScroll, before+20)
+	}
+}
+
+// Terminal search opens over whatever buffer the surface holds, including on a
+// plugin that never ran Init and so holds no reach state at all. Storing the
+// reach before deciding whether a read was opened made the first `/` over such a
+// pane a nil-map write.
+func TestTerminalSearchOverAPluginWithNoReachStateDoesNotPanic(t *testing.T) {
+	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
+	p.terminalHistory = nil
+
+	if cmd := p.beginTerminalSearch(); cmd != nil {
+		t.Fatal("a pane whose history size nothing has reported opened a read anyway")
+	}
+	if p.terminalHistory != nil {
+		t.Fatal("a refused read started holding reach state")
+	}
+	// And the search itself opened, over the buffer the surface already has.
+	if !p.terminalSearch.InputActive {
+		t.Fatal("the search never opened")
+	}
+}

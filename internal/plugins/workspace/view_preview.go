@@ -332,11 +332,16 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	// clipped, that the application has the mouse — is the shared derivation's.
 	// The global browser states the same facts from the same one. This header
 	// clips from the right rather than dropping notes, so it takes them all.
+	//
+	// Who has the mouse is asked of the pane, not of the keyboard. It is the one
+	// note a watched surface needs most: a forwarded notch moves the application
+	// and not this window, and nothing else on the row says why.
 	hint = tty.AppendStatus(hint, tty.WindowStatus(tty.WindowStatusInput{
 		Layout:         result.Layout,
 		AbsoluteBase:   input.AbsoluteBase,
 		LoadingOlder:   input.LoadingOlder,
-		MouseReporting: interactive && p.interactiveState.MouseReportingEnabled,
+		MouseReporting: p.paneMouseReporting(termPanel),
+		PaneLive:       interactive,
 		PaneWidth:      input.PaneWidth,
 		PaneHeight:     input.PaneHeight,
 		LiveEdgeKey:    terminalLiveEdgeKey(interactive),

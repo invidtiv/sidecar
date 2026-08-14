@@ -103,3 +103,50 @@ func TestAWatchedScrollbackKeyReachesForHistoryAtTheBound(t *testing.T) {
 		t.Fatalf("no read is in flight for the watched pane: source %v", ok)
 	}
 }
+
+// The shared rule accepts the shifted form of a navigation key in either state —
+// shift is what a live pane requires, not what a watched pane refuses — so the
+// keys a reader uses on a live pane keep working when they let go of it. This
+// surface dispatches on a key's *name*, and "shift+end" is a name no case here
+// ever spelled: the whole shifted set was inert while watching, on the surface
+// where the global browser answered it.
+func TestWatchedPreviewAnswersTheShiftedNavigationKeys(t *testing.T) {
+	p := watchedTerminalPlugin(t, 300)
+	page := p.terminalSurfaceRows(false) - 1
+	bound := p.previewMaxScroll()
+
+	for _, step := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+		want int
+	}{
+		{"shift+up", tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}, 1},
+		{"shift+down", tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}, 0},
+		{"shift+pgup", tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift}, page},
+		{"shift+pgdown", tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift}, 0},
+		{"shift+home", tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModShift}, bound},
+		{"shift+end", tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModShift}, 0},
+	} {
+		p.handleKeyPress(step.msg)
+		if p.previewScroll != step.want {
+			t.Fatalf("%s left the watched window %d rows back, want %d", step.name, p.previewScroll, step.want)
+		}
+	}
+}
+
+// A key claimed by the watched set releases the terminal's document projection,
+// because a projection has no window to move. A shifted key that was claimed
+// there and then dispatched nowhere dropped what the reader was looking at and
+// moved nothing in its place.
+func TestAShiftedWatchedKeyThatDropsTheProjectionMovesTheWindow(t *testing.T) {
+	p := watchedTerminalPlugin(t, 300)
+	p.terminalDocProjection = terminalDocProjection{buffer: tty.NewOutputBuffer(outputBufferCap)}
+
+	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift})
+	if p.terminalDocProjection.buffer != nil {
+		t.Fatal("the projection survived a key that moves the window")
+	}
+	if p.previewScroll != 1 {
+		t.Fatalf("the window moved %d rows after the projection was dropped, want 1", p.previewScroll)
+	}
+}

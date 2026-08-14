@@ -118,10 +118,15 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	// ranges previously visited by scrolling. The reach supersedes any bounded
 	// load; its generation will be ignored if it completes later.
 	request, ok := state.RequestAll(base, absolute)
-	p.terminalHistory[source.Key] = state
 	if !ok {
 		return nil
 	}
+	// A reader can search before any capture has recorded a reach for this pane,
+	// and the request state is what admits the result of the read now in flight.
+	if p.terminalHistory == nil {
+		p.terminalHistory = make(map[string]tty.HistoryReach)
+	}
+	p.terminalHistory[source.Key] = state
 	return func() tea.Msg {
 		capture, err := tty.CapturePaneRange(source.Target, request.Start, request.End)
 		return terminalSearchHistoryLoadedMsg{
@@ -134,43 +139,54 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	}
 }
 
-func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) {
+func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) tea.Cmd {
 	if msg.SearchGen != p.terminalSearch.Generation {
-		return
+		return nil
 	}
 	state := p.terminalHistory[msg.Source.Key]
-	if _, ok := state.Accept(msg.RequestGen); !ok {
-		return
+	// A scroll that hit the bound while this read was in flight was coalesced
+	// onto the reach rather than starting a second read of the same range, so
+	// this is the only place those rows are still owed to the reader.
+	scrollLines, ok := state.Accept(msg.RequestGen)
+	if !ok {
+		return nil
 	}
 	if msg.Err != nil {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	current, ok := p.terminalHistoryFor(msg.Source.TermPanel)
 	if !ok || current.Key != msg.Source.Key || current.Buffer != msg.Source.Buffer {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	oldBase, _, absolute := current.Buffer.AbsoluteRange()
 	if !absolute || !current.Buffer.PrependSnapshot(msg.Capture.Output, msg.Capture.StartLine) {
 		p.terminalHistory[msg.Source.Key] = state
-		return
+		return nil
 	}
 	newBase, _, _ := current.Buffer.AbsoluteRange()
 	added := oldBase - newBase
 	state.Settle(newBase, msg.Capture.HistorySize)
+	remainder, more := state.Remainder(scrollLines, added)
 	p.terminalHistory[msg.Source.Key] = state
 	// A window placed from the live bottom rides the renumbering out; only one
 	// pinned to an absolute row has to be shifted by the rows just prepended.
 	if msg.Source.TermPanel {
 		p.termPanelFreeze.Rebase(added)
+		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
 	} else {
 		p.previewFreeze.Rebase(added)
+		p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
 	}
 	p.recomputeTerminalSearch()
 	if !p.terminalSearch.InputActive {
 		p.revealTerminalSearchMatch()
 	}
+	if more {
+		return p.loadOlderTerminalHistory(msg.Source.TermPanel, remainder)
+	}
+	return nil
 }
 
 func (p *Plugin) clearTerminalSearch() {

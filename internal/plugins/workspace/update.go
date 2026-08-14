@@ -60,8 +60,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case terminalHistoryLoadedMsg:
 		return p, p.applyTerminalHistory(msg)
 	case terminalSearchHistoryLoadedMsg:
-		p.applyTerminalSearchHistory(msg)
-		return p, nil
+		return p, p.applyTerminalSearchHistory(msg)
 	case docview.LoadedMsg:
 		p.applyDocLoaded(msg)
 		return p, nil

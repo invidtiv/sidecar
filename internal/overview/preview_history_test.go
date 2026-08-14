@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -147,5 +148,27 @@ func TestASupersededPreviewReadIsRefused(t *testing.T) {
 	}
 	if m.preview.offset != 0 {
 		t.Fatalf("a superseded read moved the window to %d", m.preview.offset)
+	}
+}
+
+// A reach in flight is said the same way on both surfaces. The header used to
+// offer "▲ N older lines available" for as long as the read was running, because
+// this surface never told the shared derivation a read was open — the same pane,
+// at the same bound, with a different header in each place it is drawn.
+func TestTheGlobalHeaderSaysAReadIsInFlight(t *testing.T) {
+	m, _, _ := watchedHistoryModel(t)
+	m.jumpPreviewWindow(m.previewMaxOffset())
+	// The reach, unrun: the read is in flight exactly while its command has not
+	// been delivered, which is the state the header has to describe.
+	if cmd := m.reachOlderPreviewHistory(20); cmd == nil {
+		t.Fatal("the reach never opened a read")
+	}
+
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "loading older history") && !strings.Contains(view, "loading…") {
+		t.Fatalf("the header never says a read of older history is running:\n%s", view)
+	}
+	if strings.Contains(view, "older lines available") {
+		t.Fatalf("the header still offers history it is already reading:\n%s", view)
 	}
 }

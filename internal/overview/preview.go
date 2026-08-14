@@ -636,9 +636,14 @@ func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout
 	notes := tty.WindowStatus(tty.WindowStatusInput{
 		Layout:       layout,
 		AbsoluteBase: input.AbsoluteBase,
-		// The browser holds one bounded model for the selected pane and does not
-		// extend it at the top, so there is no older history to offer or load.
-		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
+		// The reach is the shared one, so a read of older history is in flight
+		// here exactly as it is on the project surface, and is said the same way.
+		LoadingOlder: m.preview.history.Loading,
+		// Who has the mouse is a property of the pane, asked whether or not this
+		// surface holds the keyboard: a watched notch is forwarded too, and this
+		// is the note that explains a window that did not move.
+		MouseReporting: m.previewTerminalActive() && m.preview.terminal.PaneMouseReporting(),
+		PaneLive:       m.PreviewInteractive(),
 		PaneWidth:      input.PaneWidth,
 		PaneHeight:     input.PaneHeight,
 		LiveEdgeKey:    m.previewLiveEdgeKey(),

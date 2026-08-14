@@ -69,7 +69,7 @@ func TestHeaderNotesLeadWithTheWindowBeingOffTheLiveEdge(t *testing.T) {
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
 	p.previewScroll = 10
-	p.interactiveState.MouseReportingEnabled = true
+	p.recordPaneMouseReporting("shell", "sc-one", true)
 
 	view := ansi.Strip(p.renderShellOutput(200, 40))
 	back := strings.Index(view, "lines back")
@@ -79,5 +79,32 @@ func TestHeaderNotesLeadWithTheWindowBeingOffTheLiveEdge(t *testing.T) {
 	}
 	if back > mouse {
 		t.Fatalf("the header states the mouse before the window is off the live edge:\n%s", view)
+	}
+}
+
+// Who has the mouse is a property of the pane, so it is stated whether or not
+// the pane holds the keyboard — and the watched state is the one that needs it
+// most. A notch there is forwarded to the application, this surface's window does
+// not move, and the header is the only place the reader can learn both that the
+// application took it and how to take it back.
+func TestWatchedHeaderStatesTheAppHasTheMouseAndHowToScrollAnyway(t *testing.T) {
+	p := newInteractiveInputTestPlugin()
+	p.viewMode = ViewModeList
+	p.interactiveState = nil
+	p.width, p.height = 120, 40
+	givePaneScrollableOutput(p, 120)
+	p.recordPaneMouseReporting("shell", "sc-one", true)
+
+	view := ansi.Strip(p.renderShellOutput(200, 40))
+	if !strings.Contains(view, "app mouse") {
+		t.Fatalf("the watched header never says the application has the mouse:\n%s", view)
+	}
+	if !strings.Contains(view, "⌥wheel") {
+		t.Fatalf("the watched header never names the modifier that still scrolls this window:\n%s", view)
+	}
+	// ⇧drag is the live pane's answer: a watched surface takes no drag selection
+	// from the application, so naming it there would advertise nothing.
+	if strings.Contains(view, "⇧drag") {
+		t.Fatalf("the watched header names the live pane's modifier:\n%s", view)
 	}
 }

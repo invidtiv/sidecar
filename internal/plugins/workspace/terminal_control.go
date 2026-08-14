@@ -338,6 +338,11 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 		p.recordTerminalHistory(target.Source, historyID, history.HistorySize)
 	}
 	p.recordPaneGeometry(target.Source, historyID, model.State.PaneWidth, model.State.PaneHeight)
+	// A model closes whenever its surface stops being drawn — a hidden panel, a
+	// split too small to host one — and the pane it was reading is still the pane
+	// a notch over that surface lands on. Who owns the notch has to outlive the
+	// component that observed it, for every pane identity a surface can hold.
+	p.recordPaneMouseReporting(target.Source, historyID, model.PaneMouseReporting())
 	if p.interactiveState == nil || !p.interactiveState.Active ||
 		(p.interactiveState.TermPanel != (role == workspaceTerminalPanel)) {
 		return
