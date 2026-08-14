@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -953,28 +954,162 @@ func TestSimpleEditorNeedsNoTmux(t *testing.T) {
 	}
 }
 
+// TestUnsavedBufferSurvivesHandoffToTheOtherEditors is the data-loss guard.
+// Leaving the built-in editor does not save, and autosave is debounced a full
+// second. Both other editors materialise the note from the store, so without a
+// flush they read the pre-edit copy and write it straight back over the buffer.
+func TestUnsavedBufferSurvivesHandoffToTheOtherEditors(t *testing.T) {
+	installNotesFakeTmux(t)
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"e-in-pane", tea.KeyPressMsg{Code: 'e', Text: "e"}},
+		{"E-external", tea.KeyPressMsg{Code: 'E', Text: "E"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, noteID := newNotesEditorHarness(t)
+
+			// Type into the built-in editor, then leave without waiting for the
+			// debounced autosave — the exact keystroke-wide window.
+			p.activePane = PaneEditor
+			p.previewMode = false
+			p.editorNote = &p.notes[0]
+			p.editorTextarea.SetValue("edited but not yet autosaved")
+			p.editorDirty = true
+			p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+			p.Update(tc.key)
+
+			got, err := p.store.Get(noteID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Content != "edited but not yet autosaved" {
+				t.Fatalf("store content = %q, want the unsaved buffer; the edit was lost", got.Content)
+			}
+			if p.editorDirty {
+				t.Error("buffer still marked dirty after a successful flush")
+			}
+		})
+	}
+}
+
 // TestNotesAttachKeyAlwaysEmpty pins that notes has no full-screen tmux
 // experience at all: the embedded pane is the whole vim editor, so ctrl+] has
 // nothing to hand a suspended Sidecar off to and must stay inert. This is not
 // preference-gated — enabling tmux_full_attach elsewhere must not revive it.
 func TestNotesAttachKeyAlwaysEmpty(t *testing.T) {
 	installNotesFakeTmux(t)
-	p := New()
-	if p.inlineEditor.Config.AttachKey != "" {
-		t.Fatalf("inline editor AttachKey = %q, want empty", p.inlineEditor.Config.AttachKey)
-	}
 
+	// Flag on for the whole test: if anything in the notes path consults it,
+	// this is the configuration where a full-screen attach would come back.
 	cfg := config.Default()
 	cfg.Features.Flags[features.TmuxFullAttach.Name] = true
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
 
-	p.clearInlineEditorAttachKey()
+	p, noteID := newNotesEditorHarness(t)
+	if p.inlineEditor.Config.AttachKey != "" {
+		t.Fatalf("inline editor AttachKey = %q, want empty", p.inlineEditor.Config.AttachKey)
+	}
+
+	// Drive the one place OnAttach is wired, rather than asserting on a bare
+	// New() that never reaches it.
+	notePath := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(notePath, []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p.handleInlineEditStarted(InlineEditStartedMsg{
+		SessionName: "sidecar-note-edit-test",
+		NoteID:      noteID,
+		NotePath:    notePath,
+		Editor:      "vim",
+		Activation:  p.inlineEditActivation,
+		Epoch:       p.ctx.Epoch,
+	})
+
 	if p.inlineEditor.Config.AttachKey != "" {
 		t.Fatalf("tmux_full_attach revived the notes attach chord: %q", p.inlineEditor.Config.AttachKey)
 	}
 	if p.inlineEditor.OnAttach != nil {
-		t.Fatal("notes inline editor still has an OnAttach hook")
+		t.Fatal("notes inline editor wired an OnAttach hook; notes has no full-screen path")
+	}
+}
+
+// TestSearchEnterOpensTheMatchedNote pins the note identity through the filter
+// teardown: cursor indexes the filtered list, so clearing the filter without
+// re-anchoring opens whatever sits at the same offset in the full list.
+func TestSearchEnterOpensTheMatchedNote(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, _ := newNotesEditorHarness(t)
+	p.notes = []Note{
+		{ID: "nt-a", Title: "alpha", Content: "alpha body"},
+		{ID: "nt-b", Title: "beta", Content: "beta body"},
+		{ID: "nt-c", Title: "gamma", Content: "gamma body"},
+	}
+	p.cursor = 0
+
+	p.searchMode = true
+	for _, r := range "gam" {
+		p.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if len(p.filteredNotes) != 1 {
+		t.Fatalf("filtered %d notes, want the single gamma match", len(p.filteredNotes))
+	}
+	p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if p.editorNote == nil {
+		t.Fatal("search enter loaded no note")
+	}
+	if p.editorNote.ID != "nt-c" {
+		t.Fatalf("search enter opened %q, want nt-c (the matched note)", p.editorNote.ID)
+	}
+}
+
+// TestExternalEditorWriteBack covers the one path in this change that writes to
+// the store from a file: $EDITOR saves while Sidecar is suspended, and the
+// refresh on resume is what reads it back.
+func TestExternalEditorWriteBack(t *testing.T) {
+	p, noteID := newNotesEditorHarness(t)
+
+	cmd := p.openInExternalEditor()
+	if cmd == nil {
+		t.Fatal("openInExternalEditor returned no command")
+	}
+	open, ok := cmd().(plugin.OpenFileMsg)
+	if !ok {
+		t.Fatalf("openInExternalEditor produced %T, want plugin.OpenFileMsg", cmd())
+	}
+	if p.pendingInlineEditID != noteID {
+		t.Fatalf("pendingInlineEditID = %q, want %q", p.pendingInlineEditID, noteID)
+	}
+
+	// Stand in for the external editor writing the file.
+	if err := os.WriteFile(open.Path, []byte("written by $EDITOR"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, back := p.Update(app.RefreshMsg{})
+	if back == nil {
+		t.Fatal("refresh after $EDITOR scheduled no read-back")
+	}
+	if got := back(); got == nil {
+		t.Fatal("read-back produced no message")
+	}
+
+	note, err := p.store.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.Content != "written by $EDITOR" {
+		t.Fatalf("store content = %q, want the $EDITOR write", note.Content)
+	}
+	if p.pendingInlineEditID != "" || p.pendingInlineEditPath != "" {
+		t.Error("pending external-edit state outlived the read-back")
+	}
+	if _, err := os.Stat(open.Path); !os.IsNotExist(err) {
+		t.Error("read-back left the temp file behind")
 	}
 }
 
@@ -1086,6 +1221,6 @@ func assertNotOpenFileMsg(t *testing.T, name string, cmd tea.Cmd) {
 	}
 	got := cmd()
 	if _, ok := got.(plugin.OpenFileMsg); ok {
-		t.Fatalf("%s produced plugin.OpenFileMsg; notes must not suspend into $EDITOR", name)
+		t.Fatalf("%s produced plugin.OpenFileMsg; only E may suspend into $EDITOR", name)
 	}
 }

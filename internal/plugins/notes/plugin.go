@@ -545,6 +545,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.loadNotes()
 
+	case app.ErrorMsg:
+		// $EDITOR never launched, so only the error arrives and no refresh ever
+		// comes to consume the pending read-back. Drop it with its temp file
+		// rather than leaving both to outlive the attempt.
+		if p.pendingInlineEditPath != "" {
+			_ = os.Remove(p.pendingInlineEditPath)
+		}
+		p.pendingInlineEditID = ""
+		p.pendingInlineEditPath = ""
+		return p, nil
+
 	case tea.KeyPressMsg:
 		// Handle inline editor first if in inline edit mode
 		if p.inlineEditMode {
@@ -1148,13 +1159,33 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	}
 }
 
+// flushPendingEditorSave writes an unsaved built-in-editor buffer to the store
+// synchronously. Both other editors materialise the note through NotePath, which
+// reads the store — so a debounced autosave still in flight would hand them
+// stale content and then write it back over the newer buffer. Leaving the
+// editor does not save (see the tab/esc cases), so this window is a keystroke
+// wide and the edit is simply lost.
+func (p *Plugin) flushPendingEditorSave() {
+	if !p.editorDirty || p.editorNote == nil || p.store == nil {
+		return
+	}
+	if err := p.store.UpdateContent(p.editorNote.ID, p.editorTextarea.Value()); err != nil {
+		return
+	}
+	p.editorDirty = false
+	// Retire the pending autosave tick; its content is now the older copy.
+	p.autoSaveID++
+}
+
 // openInExternalEditor opens the current note in $EDITOR. This is the one notes
-// path that still leaves Sidecar; vim in the embedded pane is on e.
+// path that still leaves Sidecar; the in-pane editor is on e.
 func (p *Plugin) openInExternalEditor() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil || p.store == nil {
 		return nil
 	}
+
+	p.flushPendingEditorSave()
 
 	// Get path to note file (creates temp file with note content)
 	notePath := p.store.NotePath(note.ID)
@@ -1167,15 +1198,10 @@ func (p *Plugin) openInExternalEditor() tea.Cmd {
 	p.pendingInlineEditPath = notePath
 
 	return func() tea.Msg {
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			editor = os.Getenv("VISUAL")
-		}
-		if editor == "" {
-			editor = "vim"
-		}
+		// Same resolution the in-pane editor uses, so e and E are provably the
+		// same program rather than two copies of the same fallback chain.
 		return plugin.OpenFileMsg{
-			Editor: editor,
+			Editor: tty.ResolveEditor(),
 			Path:   notePath,
 			LineNo: 0,
 		}
@@ -1263,6 +1289,18 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				}
 			} else if len(p.filteredNotes) > 0 {
 				note := p.getSelectedNote()
+				// cursor indexes the filtered list; clearing the filter below
+				// makes it index p.notes instead. Re-anchor it on the note the
+				// user actually picked or Enter opens whatever sits at the same
+				// offset in the unfiltered list.
+				if note != nil {
+					for i, n := range p.notes {
+						if n.ID == note.ID {
+							p.cursor = i
+							break
+						}
+					}
+				}
 				p.searchMode = false
 				p.searchQuery = ""
 				p.filteredNotes = nil
@@ -1567,12 +1605,19 @@ func (p *Plugin) Commands() []plugin.Command {
 	}
 	if p.activePane == PaneEditor && p.editorNote != nil {
 		if p.previewMode {
-			return []plugin.Command{
-				{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+			cmds := []plugin.Command{
 				{ID: "switch-pane", Name: "List", Description: "Switch to list pane", Category: plugin.CategoryNavigation, Context: "notes-preview", Priority: 2},
-				{ID: "vim-edit", Name: "Vim", Description: "Edit with vim in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 3},
-				{ID: "external-editor", Name: "Editor", Description: "Open in external editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
 			}
+			// Archived and deleted notes are read-only, and all three edit keys
+			// return nil there. Advertising them promises what the key will not do.
+			if p.viewFilter == FilterActive {
+				cmds = append(cmds,
+					plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+					plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 3},
+					plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
+				)
+			}
+			return cmds
 		}
 		cmds := []plugin.Command{
 			{ID: "switch-pane", Name: "List", Description: "Switch to list pane", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 1},
@@ -1606,8 +1651,8 @@ func (p *Plugin) Commands() []plugin.Command {
 		cmds = append(cmds,
 			plugin.Command{ID: "new-note", Name: "New", Description: "Create new note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 4},
 			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
-			plugin.Command{ID: "vim-edit", Name: "Vim", Description: "Edit with vim in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
-			plugin.Command{ID: "external-editor", Name: "Editor", Description: "Open in external editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
+			plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
+			plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
 			plugin.Command{ID: "delete-note", Name: "Delete", Description: "Delete selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "toggle-pin", Name: "Pin", Description: "Toggle pin on note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 9},
 			plugin.Command{ID: "archive-note", Name: "Archive", Description: "Archive selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 10},

@@ -107,6 +107,9 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	// The session below reads the note from the store; an unsaved buffer has to
+	// land first or it is overwritten by what vim reads and writes back.
+	p.flushPendingEditorSave()
 	p.loadNoteIntoEditor()
 	return p.enterInlineEditMode(note.ID)
 }

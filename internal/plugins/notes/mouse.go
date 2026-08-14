@@ -178,9 +178,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	case regionEditorPane:
 		p.activePane = PaneEditor
 		p.selection.Clear()
-		// Clicking into the note opens the built-in editor, never vim: a click
-		// is the default gesture, and vim is what e is for.
-		if p.viewFilter == FilterActive {
+		// Clicking into the note opens the built-in editor, never the in-pane
+		// $EDITOR: a click is the default gesture, and e is what the other is
+		// for. With no note loaded the pane is a placeholder — focusing a
+		// textarea over it would show a caret that the list keys then ignore.
+		if p.viewFilter == FilterActive && p.editorNote != nil {
 			wasPreview := p.previewMode
 			p.previewMode = false
 			var cmd tea.Cmd
