@@ -90,6 +90,9 @@ func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
 	model := tty.New(&config)
+	// tty.New treats an empty AttachKey as "use default". Honour the resolved
+	// empty chord so ctrl+] stays the pane's when full attach is off.
+	model.Config.AttachKey = config.AttachKey
 	model.SetHooks(p.terminalHooks())
 	return model
 }

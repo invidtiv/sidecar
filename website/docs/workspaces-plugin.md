@@ -63,7 +63,7 @@ Install agents as needed. The plugin gracefully handles missing CLIs—only inst
 
 ## Quick Start
 
-Press `n` to create your first workspace. Select a base branch, choose an agent (Claude Code, Cursor, etc.), and optionally pick a reusable prompt. The agent starts immediately in an isolated tmux session. Press `enter` to attach and interact, or watch output stream live in the preview pane.
+Press `n` to create your first workspace. Select a base branch, choose an agent (Claude Code, Cursor, etc.), and optionally pick a reusable prompt. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
 
 When done, press `m` to review the diff, create a GitHub PR, and clean up branches—all in one flow.
 
@@ -379,12 +379,9 @@ If no agent is running, opens a modal to select:
 
 ### Attaching to Agents
 
-| Key | Action |
-|-----|--------|
-| `t` | Attach to running agent |
-| `enter` | Enter interactive mode |
+Typing stays in Sidecar. Press `enter` to enter interactive mode and type into the pane.
 
-Press `t` to open the agent's tmux session for direct interaction. Press `ctrl+b` then `d` to detach back to sidecar. Press `enter` to enter interactive mode, which allows typing directly into the terminal while staying in sidecar.
+Full-screen `tmux attach-session` (`t`, `ctrl+]`, double-click) is off unless `features.flags.tmux_full_attach` is enabled. With that flag on, `t` opens the agent's tmux session; `ctrl+b` then `d` detaches back to Sidecar.
 
 ### Real-Time Output Streaming
 
@@ -475,10 +472,9 @@ Press `D` to delete a shell session. This terminates the underlying tmux session
 | Create shell | `ctrl+n` | Create new terminal session immediately |
 | Create shell (options) | `n` + select Shell | Create with a custom name or agent |
 | Rename shell | `R` | Change display name (50 char limit) |
-| Delete shell | `D` | Terminate tmux session |
+| Delete shell | `D` | Terminate tmux session (confirm) |
 | Interactive mode | `enter` | Enter interactive mode for typing |
-| Attach to shell | `t` | Full-screen tmux access |
-| Kill shell | `ctrl+k` | Force-terminate session |
+| Attach to shell | `t` | Full-screen tmux access (`tmux_full_attach`) |
 
 ## Workspace Operations
 
@@ -812,7 +808,7 @@ All keyboard shortcuts by context:
 | `Y` | Approve all |
 | `N` | Reject action |
 | `enter` | Interactive mode |
-| `t` | Attach to agent |
+| `t` | Attach to agent (`tmux_full_attach`) |
 | `[` | Previous tab |
 | `]` | Next tab |
 | `tab` | Focus preview |

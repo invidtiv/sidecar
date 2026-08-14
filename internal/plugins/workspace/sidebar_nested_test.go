@@ -126,6 +126,7 @@ func TestNestedShellKeyboardAndMouseSelect(t *testing.T) {
 }
 
 func TestNestedShellInteractionAndAttachTargetTmuxSession(t *testing.T) {
+	enableWorkspaceFeature(t, "tmux_full_attach")
 	logPath := installSuccessfulFakeTmux(t)
 	p := nestedSidebarPlugin(t)
 	const session = "sidecar-sh-sidecar-feature-1"
@@ -214,6 +215,7 @@ func TestNestedShellExplicitEEntersFromInheritedWorktreeTabs(t *testing.T) {
 }
 
 func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
+	enableWorkspaceFeature(t, "workspace_terminal_panel")
 	p := nestedSidebarPlugin(t)
 	const session = "sidecar-sh-sidecar-feature-1"
 	parent, shell := p.findNestedShell(session)

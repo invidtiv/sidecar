@@ -1,6 +1,7 @@
 package keymap
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -261,10 +262,47 @@ func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
 	}
 }
 
+func TestDefaultBindings_DoNotBindCtrlKKillShell(t *testing.T) {
+	for _, b := range DefaultBindings() {
+		if b.Key == "ctrl+k" && b.Command == "kill-shell" {
+			t.Fatalf("ctrl+k is still bound to kill-shell: %+v", b)
+		}
+	}
+}
+
 func TestDefaultBindings_DoNotAdvertiseGlobalWorkspacesPreview(t *testing.T) {
 	for _, b := range DefaultBindings() {
 		if b.Context == "global-workspaces-preview" {
 			t.Fatalf("default bindings still advertise watched-preview: %+v", b)
+		}
+	}
+}
+
+func TestDefaultBindings_NotesHaveNoFullScreenEditor(t *testing.T) {
+	var editKeys []string
+	for _, b := range DefaultBindings() {
+		if !strings.HasPrefix(b.Context, "notes-") {
+			continue
+		}
+		if b.Command == "vim-edit" || b.Command == "external-editor" {
+			t.Fatalf("notes still binds %q to %s: %+v", b.Key, b.Command, b)
+		}
+		if b.Command == "edit-note" {
+			editKeys = append(editKeys, b.Context+":"+b.Key)
+		}
+	}
+	want := []string{"notes-list:enter", "notes-list:e", "notes-preview:enter", "notes-preview:e"}
+	got := strings.Join(editKeys, ",")
+	for _, key := range want {
+		found := false
+		for _, have := range editKeys {
+			if have == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing notes edit binding %s in %s", key, got)
 		}
 	}
 }

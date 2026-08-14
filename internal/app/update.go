@@ -1506,7 +1506,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "K":
 		// Toggle cross-project Overview (Kanban). Blocked in text-input contexts
-		// above. Workspace kill-shell moved to ctrl+k so this can be global.
+		// above. Workspace shell delete is D (with confirm); this stays global.
 		if m.consumesTextInput() {
 			break
 		}

@@ -106,7 +106,7 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | `q` | Quit Sidecar (confirmation modal) |
 | `K` | Toggle the global space |
 
-`ctrl+]` attach stays project-only. While typing, `i` and `q` go to the pane.
+`ctrl+]` attach stays project-only and is off unless `tmux_full_attach` is enabled. While typing, `i` and `q` go to the pane.
 
 ## Sidebar Controls (All Two-Pane Plugins)
 
@@ -260,14 +260,14 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | `n` | new-workspace | Create new workspace |
 | `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
 | `v` | toggle-view | Toggle list/kanban |
-| `D` | delete-workspace | Delete workspace |
+| `D` | delete-workspace | Delete workspace / delete shell (confirm) |
 | `p` | push | Push branch |
 | `m` | merge-workflow | Start merge workflow |
 | `T` | link-task | Link/unlink task |
 | `s` | start-agent | Start agent |
 | `enter` / `E` | interactive | Enter interactive mode |
 | `i` | open-issue | Find TD task (global; not interactive) |
-| `t` | attach | Attach to tmux |
+| `t` | attach | Full tmux attach (`tmux_full_attach`, default off) |
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |
@@ -279,7 +279,8 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 | Key | Command |
 |-----|---------|
 | `ctrl+\` | exit |
-| `ctrl+]` | attach |
+| `ctrl+]` | attach (`tmux_full_attach`, default off) |
+| `ctrl+t` / `alt+t` | toggle / switch terminal panel (`workspace_terminal_panel`, default off) |
 | `alt+c` | copy |
 | `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |

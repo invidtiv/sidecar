@@ -1,4 +1,4 @@
-Shell t to attach • E for interactive • Ctrl-b d t│  clicked.md
+Shell                                             │  clicked.md
 No output yet                                     │
                                                   │   clicked
                                                   │

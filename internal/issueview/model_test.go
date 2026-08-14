@@ -187,13 +187,13 @@ func TestActiveArrowsWalkParentAndSiblings(t *testing.T) {
 	// Restore and walk siblings.
 	apply(t, m, sample(), nil)
 	m.SetActive(true)
-	_, cmd = m.handleKeyString("right")
+	m.handleKeyString("right")
 	if m.IssueID() != "td-sib3" {
 		t.Fatalf("right went to %q, want td-sib3", m.IssueID())
 	}
 	apply(t, m, sample(), nil)
 	m.SetActive(true)
-	_, cmd = m.handleKeyString("left")
+	m.handleKeyString("left")
 	if m.IssueID() != "td-sib1" {
 		t.Fatalf("left went to %q, want td-sib1", m.IssueID())
 	}

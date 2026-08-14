@@ -29,9 +29,24 @@ func TestWindowStatusStatesTheWindowFactsInPriorityOrder(t *testing.T) {
 	for _, note := range notes {
 		joined += note.Text + " | " + note.Compact + " | "
 	}
-	for _, want := range []string{"120x40, showing 80x24", "app mouse"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("status %q is missing %q", joined, want)
+	if !strings.Contains(joined, "120x40, showing 80x24") {
+		t.Fatalf("status %q is missing the pane-size note", joined)
+	}
+	if strings.Contains(joined, "app mouse") || strings.Contains(joined, "drag") {
+		t.Fatalf("status %q still states a mouse-reporting note", joined)
+	}
+}
+
+func TestWindowStatusOmitsMouseReportingNotes(t *testing.T) {
+	notes := WindowStatus(WindowStatusInput{
+		Layout:         Viewport{Start: 0, MaxOffset: 0, DisplayWidth: 80, DisplayHeight: 24},
+		MouseReporting: true,
+		PaneLive:       true,
+	})
+	for _, note := range notes {
+		if strings.Contains(note.Text, "app mouse") || strings.Contains(note.Text, "drag") ||
+			strings.Contains(note.Compact, "drag") || strings.Contains(note.Compact, "wheel") {
+			t.Fatalf("status %+v still emits a mouse-reporting note", notes)
 		}
 	}
 }
@@ -61,16 +76,16 @@ func TestWindowStatusOffersOlderLinesOnlyAtTheTop(t *testing.T) {
 func TestAppendStatusDropsTheLeastImportantNoteFirst(t *testing.T) {
 	notes := []StatusNote{
 		{Text: "▲ 3 lines back • ⇧End live", Compact: "▲3 ⇧End"},
-		{Text: "app mouse • ⇧drag select", Compact: "⇧drag"},
+		{Text: "120x40, showing 80x24", Compact: "120x40"},
 	}
 	got := AppendStatus("typing", notes, 40, nil)
 	if !strings.Contains(got, "3 lines back") {
 		t.Fatalf("hint %q dropped the fact that the window is off the live edge", got)
 	}
-	if strings.Contains(got, "app mouse • ") {
+	if strings.Contains(got, "120x40, showing") {
 		t.Fatalf("hint %q kept a note in full that does not fit", got)
 	}
-	if !strings.Contains(got, "⇧drag") {
+	if !strings.Contains(got, "120x40") {
 		t.Fatalf("hint %q dropped a fact that fits compactly", got)
 	}
 	// Too narrow for even the compact form of the leading note, so nothing is
@@ -78,7 +93,7 @@ func TestAppendStatusDropsTheLeastImportantNoteFirst(t *testing.T) {
 	if got := AppendStatus("typing", notes, 8, nil); got != "typing" {
 		t.Fatalf("hint %q overran a header with no room", got)
 	}
-	if got := AppendStatus("typing", notes, 0, nil); !strings.Contains(got, "app mouse") {
+	if got := AppendStatus("typing", notes, 0, nil); !strings.Contains(got, "120x40, showing") {
 		t.Fatalf("an unbudgeted header dropped a note: %q", got)
 	}
 }

@@ -83,10 +83,12 @@ Feature state resolves in this order (first match wins):
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `tmux_interactive_input` | true | Write support for tmux panes |
+| `tmux_full_attach` | false | Suspend Sidecar and `tmux attach-session` |
 | `tmux_inline_edit` | true | Inline file editing via tmux in files plugin |
 | `notes_plugin` | false | Notes plugin for capturing quick notes |
 | `tasks_plugin` | false | Embedded Tasks plugin tab |
 | `conversations_plugin` | false | Conversations multi-agent history tab (off = no adapters / session I/O) |
+| `workspace_terminal_panel` | false | Workspace Ctrl+T / Alt+T split terminal panel |
 
 ## API Reference
 

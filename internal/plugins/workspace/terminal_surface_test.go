@@ -410,6 +410,7 @@ func TestRenderedHeaderKeepsChipsAtNarrowWidth(t *testing.T) {
 // terminal down one and left the term-panel hit regions a row high for its
 // duration. It now lives in the header's right region and costs nothing.
 func TestFlashHintRendersInHeaderAndAddsNoRow(t *testing.T) {
+	enableWorkspaceFeature(t, "tmux_full_attach")
 	p := surfacePlugin(false)
 	before := p.terminalSurfaceGeometry(false)
 	beforeRow, beforeCol := findMarker(t, p.View(p.width, p.height), "AGENT00")

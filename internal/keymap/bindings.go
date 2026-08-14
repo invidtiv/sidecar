@@ -16,7 +16,7 @@ func DefaultBindings() []Binding {
 		{Key: "W", Command: "switch-worktree", Context: "global"},
 		{Key: "#", Command: "switch-theme", Context: "global"},
 		{Key: "^", Command: "open-in", Context: "global"},
-		// K: Overview (Kanban board). Bare O is taken by open-in; kill-shell is ctrl+k.
+		// K: Overview (Kanban board). Bare O is taken by open-in. Shell delete is D.
 		{Key: "K", Command: "toggle-overview", Context: "global"},
 		{Key: "i", Command: "open-issue", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},
@@ -465,7 +465,6 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "approve", Context: "workspace-list"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-list"},
 		{Key: "N", Command: "reject", Context: "workspace-list"},
-		{Key: "ctrl+k", Command: "kill-shell", Context: "workspace-list"},
 		{Key: "O", Command: "open-in-git", Context: "workspace-list"},
 		{Key: "l", Command: "focus-right", Context: "workspace-list"},
 		{Key: "right", Command: "focus-right", Context: "workspace-list"},
@@ -546,14 +545,13 @@ func DefaultBindings() []Binding {
 		{Key: "u", Command: "undo", Context: "notes-list"},
 		{Key: "r", Command: "refresh", Context: "notes-list"},
 		{Key: "enter", Command: "edit-note", Context: "notes-list"},
+		{Key: "e", Command: "edit-note", Context: "notes-list"},
 		{Key: "/", Command: "search", Context: "notes-list"},
 		{Key: "T", Command: "to-task", Context: "notes-list"},
 		{Key: "I", Command: "show-info", Context: "notes-list"},
 		{Key: "y", Command: "yank-content", Context: "notes-list"},
 		{Key: "Y", Command: "yank-title", Context: "notes-list"},
 		{Key: "esc", Command: "back-to-active", Context: "notes-list"},
-		{Key: "e", Command: "vim-edit", Context: "notes-list"},
-		{Key: "E", Command: "external-editor", Context: "notes-list"},
 
 		// Notes info modal context
 		{Key: "esc", Command: "close", Context: "notes-info"},
@@ -569,14 +567,13 @@ func DefaultBindings() []Binding {
 
 		// Notes preview context (read-only view)
 		{Key: "alt+c", Command: "copy-note", Context: "notes-preview"},
-		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
-		{Key: "E", Command: "external-editor", Context: "notes-preview"},
+		{Key: "enter", Command: "edit-note", Context: "notes-preview"},
+		{Key: "e", Command: "edit-note", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},
 		{Key: "esc", Command: "back", Context: "notes-editor"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-editor"},
-		{Key: "E", Command: "external-editor", Context: "notes-editor"},
 		{Key: "alt+c", Command: "copy-note", Context: "notes-editor"},
 		{Key: "up", Command: "cursor-up", Context: "notes-editor"},
 		{Key: "down", Command: "cursor-down", Context: "notes-editor"},

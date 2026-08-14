@@ -730,14 +730,14 @@ func withShellNamingInstruction(baseCmd string, agentType AgentType) string {
 
 // attachToShellByIndex attaches to a specific shell session by index.
 func (p *Plugin) attachToShellByIndex(idx int) tea.Cmd {
-	if idx < 0 || idx >= len(p.shells) {
+	if !fullTmuxAttachEnabled() || idx < 0 || idx >= len(p.shells) {
 		return nil
 	}
 	return p.attachToShellSession(p.shells[idx])
 }
 
 func (p *Plugin) attachToShellSession(shell *ShellSession) tea.Cmd {
-	if shell == nil || shell.TmuxName == "" {
+	if !fullTmuxAttachEnabled() || shell == nil || shell.TmuxName == "" {
 		return nil
 	}
 	if p.attachSession != nil {
@@ -755,14 +755,14 @@ func (p *Plugin) attachToShellSession(shell *ShellSession) tea.Cmd {
 
 // ensureShellAndAttachByIndex creates shell session if needed, then attaches.
 func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
-	if idx < 0 || idx >= len(p.shells) {
+	if !fullTmuxAttachEnabled() || idx < 0 || idx >= len(p.shells) {
 		return nil
 	}
 	return p.ensureShellAndAttach(p.shells[idx])
 }
 
 func (p *Plugin) ensureShellAndAttach(shell *ShellSession) tea.Cmd {
-	if shell == nil || shell.TmuxName == "" {
+	if !fullTmuxAttachEnabled() || shell == nil || shell.TmuxName == "" {
 		return nil
 	}
 	if p.attachSession != nil {

@@ -79,6 +79,9 @@ func (p *Plugin) previewSplit() previewSplit {
 // border and adds a hint to the terminal header's right region; it never adds a
 // row, so no geometry depends on it.
 func (p *Plugin) previewFlashActive() bool {
+	if !fullTmuxAttachEnabled() {
+		return false
+	}
 	return !p.flashPreviewTime.IsZero() && time.Since(p.flashPreviewTime) < flashDuration
 }
 

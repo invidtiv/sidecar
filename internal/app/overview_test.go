@@ -1010,6 +1010,7 @@ func TestConfiguredInteractiveExitKeyReachesTheWorkspacesBrowser(t *testing.T) {
 func TestBothTerminalSurfacesAnswerOneResolvedConfiguration(t *testing.T) {
 	cfg := config.Default()
 	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	cfg.Features.Flags[features.TmuxFullAttach.Name] = true
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
 	cfg.Plugins.Workspace.InteractiveExitKey = "ctrl+q"

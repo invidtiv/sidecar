@@ -780,6 +780,9 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 
 // AttachToWorktreeDir creates a tmux session in the worktree directory and attaches to it.
 func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
+	if !fullTmuxAttachEnabled() {
+		return nil
+	}
 	sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
 
 	// Check if session already exists
@@ -1746,7 +1749,7 @@ func (p *Plugin) SendText(wt *Worktree, text string) tea.Cmd {
 
 // AttachToSession attaches to a tmux session using tea.ExecProcess.
 func (p *Plugin) AttachToSession(wt *Worktree) tea.Cmd {
-	if wt.Agent == nil {
+	if !fullTmuxAttachEnabled() || wt == nil || wt.Agent == nil {
 		return nil
 	}
 

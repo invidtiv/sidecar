@@ -351,7 +351,7 @@ type Plugin struct {
 
 // New creates a new File Browser plugin.
 func New() *Plugin {
-	return &Plugin{
+	p := &Plugin{
 		mouseHandler:  mouse.NewHandler(),
 		imageRenderer: image.New(),  // Detect terminal graphics protocol once
 		treeVisible:   true,         // Tree pane visible by default
@@ -360,6 +360,8 @@ func New() *Plugin {
 		dragDropIdx:   -1,
 		dragHoverIdx:  -1,
 	}
+	p.applyInlineEditorAttachKey()
+	return p
 }
 
 // ID returns the plugin identifier.
@@ -410,6 +412,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.treeWidth = saved
 	}
 	p.previewWrapEnabled = state.GetLineWrapEnabled()
+	p.applyInlineEditorAttachKey()
 	return nil
 }
 

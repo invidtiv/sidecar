@@ -83,16 +83,6 @@ type OpenFullIssueMsg struct {
 	IssueID string
 }
 
-// fetchIssuePreviewCmd fetches an issue through the shared component and
-// reports it in the app's own message type.
-func fetchIssuePreviewCmd(workDir, issueID string) tea.Cmd {
-	fetch := issueview.Fetch(workDir, issueID)
-	return func() tea.Msg {
-		msg, _ := fetch().(issueview.FetchedMsg)
-		return IssuePreviewResultMsg{Data: msg.Data, Error: msg.Error}
-	}
-}
-
 // issuePreviewModelID is reserved for the app's preview modal so a workspace
 // issue leaf can never have its load stolen by SetResult identity.
 const issuePreviewModelID = -1

@@ -177,7 +177,7 @@ Complete shortcut listings and context reference. For implementation patterns, s
 | `T` | link-task | Link/unlink task |
 | `s` | start-agent | Start agent |
 | `enter` | interactive | Enter interactive mode |
-| `t` | attach | Attach to tmux |
+| `t` | attach | Full tmux attach (`tmux_full_attach`, default off) |
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |

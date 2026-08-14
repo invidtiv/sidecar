@@ -74,6 +74,9 @@ func (p *Plugin) termPanelWorkDir() string {
 // When showing, it restores the last-used layout and focuses the terminal sub-pane.
 // Creates the tmux session if it doesn't exist.
 func (p *Plugin) toggleTermPanel() tea.Cmd {
+	if !terminalPanelEnabled() {
+		return nil
+	}
 	if p.termPanelVisible {
 		// Hide: exit interactive mode if targeting terminal panel
 		if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
@@ -135,7 +138,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 // switchTermPanelLayout toggles the terminal panel between bottom and right layouts.
 // Only works when the terminal panel is visible.
 func (p *Plugin) switchTermPanelLayout() tea.Cmd {
-	if !p.termPanelVisible {
+	if !terminalPanelEnabled() || !p.termPanelVisible {
 		return nil
 	}
 
