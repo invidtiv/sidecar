@@ -19,7 +19,7 @@ func TestInteractivePollContinuesDuringScrollBurst(t *testing.T) {
 		interactiveState: &InteractiveState{Active: true},
 		worktrees:        []*Worktree{{Name: "sidecar-test"}},
 	}
-	p.wheel.Add(-1, time.Now())
+	p.terminalWheel(false).Add(-1, time.Now())
 
 	if cmd := p.pollInteractivePane(); cmd == nil {
 		t.Fatal("adaptive poll returned nil during scroll; poll chain would terminate")
@@ -34,7 +34,7 @@ func TestInteractiveLiteralKeysSurviveRecentScroll(t *testing.T) {
 		t.Run(literal, func(t *testing.T) {
 			p := newInteractiveInputTestPlugin()
 			for range 4 {
-				p.wheel.Add(-1, time.Now())
+				p.terminalWheel(false).Add(-1, time.Now())
 			}
 
 			msg := tea.KeyPressMsg{Code: []rune(literal)[0], Text: literal}
@@ -121,13 +121,13 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	at := time.Now()
 	p.clock = func() time.Time { return at }
 	// Open the burst, so the notch under test arrives inside the debounce window.
-	p.wheel.Add(0, at)
+	p.terminalWheel(false).Add(0, at)
 
 	p.wheelTerminal(false, mouse.MouseAction{}, -3)
 	if p.previewScroll != 20 {
 		t.Fatalf("previewScroll = %d, want the debounced notch held back", p.previewScroll)
 	}
-	if got := p.wheel.Pending(); got != -3 {
+	if got := p.terminalWheel(false).Pending(); got != -3 {
 		t.Fatalf("held-back delta = %d, want the whole notch retained (-3)", got)
 	}
 
@@ -137,7 +137,7 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 		t.Fatalf("previewScroll = %d, want the held-back notch to arrive with the next one (26)",
 			p.previewScroll)
 	}
-	if got := p.wheel.Pending(); got != 0 {
+	if got := p.terminalWheel(false).Pending(); got != 0 {
 		t.Fatalf("delta left pending after a flush = %d", got)
 	}
 }

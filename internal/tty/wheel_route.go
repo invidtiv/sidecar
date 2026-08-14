@@ -52,6 +52,8 @@ type WheelHandler struct {
 	PinToLive func()
 	// NoteActivity records the notch as user input for the host's own poll
 	// cadence, which would otherwise repaint a scrolled pane at its idle tier.
+	// Every notch counts, forwarded or local: a pane being scrolled is a pane
+	// being read.
 	NoteActivity func()
 	// SendNotches delivers the notch to the application as wheel reports.
 	SendNotches func(up bool, col, row, notches int) tea.Cmd
@@ -68,6 +70,13 @@ func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 	delta, flush := h.Burst.Add(g.Delta, g.Now)
 	if !flush {
 		return nil
+	}
+	// The reader is reading this pane whoever ends up owning the notch: a local
+	// scroll needs the next capture as much as a forwarded one, and noting it only
+	// on the forwarded path leaves a pane being scrolled repainting at the idle
+	// tier.
+	if h.NoteActivity != nil {
+		h.NoteActivity()
 	}
 	// A host that may not write is not asked where the pane's cells are: with the
 	// capture joined there is no usable pane grid to answer from, and the notch is
@@ -94,9 +103,6 @@ func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 	}
 	if h.PinToLive != nil {
 		h.PinToLive()
-	}
-	if h.NoteActivity != nil {
-		h.NoteActivity()
 	}
 	if h.SendNotches == nil {
 		return nil

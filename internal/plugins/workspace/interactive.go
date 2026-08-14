@@ -840,7 +840,7 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 // back through scrollback, scroll down (delta > 0) moves toward live output.
 func (p *Plugin) wheelTerminal(termPanel bool, action mouse.MouseAction, delta int) tea.Cmd {
 	return tty.WheelHandler{
-		Burst: &p.wheel,
+		Burst: p.terminalWheel(termPanel),
 		// A forwarded notch is input, and input to a pane is gated exactly as
 		// typing is.
 		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
@@ -866,6 +866,17 @@ func (p *Plugin) wheelTerminal(termPanel bool, action mouse.MouseAction, delta i
 		Delta: delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: p.now(),
 	})
+}
+
+// terminalWheel is the flick over a named terminal surface. The two surfaces
+// scroll independently, so each coalesces its own: a flick that crosses between
+// them is two gestures, and asking here is what ends the one being left.
+func (p *Plugin) terminalWheel(termPanel bool) *tty.WheelBurst {
+	surface := "preview"
+	if termPanel {
+		surface = "panel"
+	}
+	return p.wheel.For(surface)
 }
 
 // sendTerminalWheelNotches delivers a claimed notch to the pane a surface is

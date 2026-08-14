@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// A notch the application owns pins the window, notes the activity and is sent
+// A notch the application owns notes the activity, pins the window and is sent
 // as a report — in that order, and never as a local scroll. Every host routes a
 // notch through this one path, so a surface cannot forward without pinning.
 func TestWheelHandlerForwardsAnOwnedNotchAndPinsTheWindow(t *testing.T) {
@@ -32,8 +32,8 @@ func TestWheelHandlerForwardsAnOwnedNotchAndPinsTheWindow(t *testing.T) {
 	now := time.Now()
 	handler.Handle(WheelGesture{Delta: -WheelNotches(1), X: 4, Y: 7, Now: now})
 	handler.Handle(WheelGesture{Delta: -3, X: 4, Y: 7, Now: now.Add(WheelBurstTimeout)})
-	if len(acts) < 3 || acts[len(acts)-3] != "pin" || acts[len(acts)-2] != "activity" || acts[len(acts)-1] != "send" {
-		t.Fatalf("acts = %v, want the window pinned and the activity noted before the send", acts)
+	if len(acts) < 3 || acts[len(acts)-3] != "activity" || acts[len(acts)-2] != "pin" || acts[len(acts)-1] != "send" {
+		t.Fatalf("acts = %v, want the activity noted and the window pinned before the send", acts)
 	}
 	for _, act := range acts {
 		if act == "local" {
@@ -43,14 +43,17 @@ func TestWheelHandlerForwardsAnOwnedNotchAndPinsTheWindow(t *testing.T) {
 }
 
 // Everything the application has not claimed scrolls the host's own window,
-// which is what makes the wheel work over a plain shell.
+// which is what makes the wheel work over a plain shell — and it is still the
+// reader reading this pane, so every notch counts as activity: a scrolled pane
+// repainted at the idle tier is the surface lagging behind the wheel.
 func TestWheelHandlerScrollsLocallyWhenTheApplicationHasNotClaimedTheWheel(t *testing.T) {
-	var scrolled int
+	var scrolled, noted int
 	var burst WheelBurst
 	handler := WheelHandler{
 		Burst:          &burst,
 		WritesEnabled:  true,
 		MouseReporting: func() bool { return false },
+		NoteActivity:   func() { noted++ },
 		SendNotches:    func(bool, int, int, int) tea.Cmd { t.Fatal("forwarded to a pane that wants no mouse"); return nil },
 		ScrollLocal:    func(delta int) tea.Cmd { scrolled += delta; return nil },
 	}
@@ -60,13 +63,16 @@ func TestWheelHandlerScrollsLocallyWhenTheApplicationHasNotClaimedTheWheel(t *te
 	if scrolled != -3 {
 		t.Fatalf("scrolled %d, want the whole coalesced flick (-3)", scrolled)
 	}
+	if noted != 2 {
+		t.Fatalf("noted %d local notches as activity, want every one of the 2 that landed", noted)
+	}
 }
 
 // A forwarded notch is input, so a host that may not write to the pane keeps
 // every notch for its own window — and is never even asked where the pane's
 // cells are, because a joined capture has no pane grid to answer from.
 func TestWheelHandlerRefusesToForwardWithoutWritesEnabled(t *testing.T) {
-	var scrolled int
+	var scrolled, noted int
 	var burst WheelBurst
 	handler := WheelHandler{
 		Burst:          &burst,
@@ -75,8 +81,10 @@ func TestWheelHandlerRefusesToForwardWithoutWritesEnabled(t *testing.T) {
 			t.Fatal("pane coordinates were computed for a host that may not write")
 			return 0, 0, false
 		},
-		PinToLive:    func() { t.Fatal("the window was pinned for a notch that never left") },
-		NoteActivity: func() { t.Fatal("input was noted for a notch that never left") },
+		PinToLive: func() { t.Fatal("the window was pinned for a notch that never left") },
+		// The notch is still the reader reading this pane, so it is still activity;
+		// what writes being off forbids is the send, not the cadence.
+		NoteActivity: func() { noted++ },
 		SendNotches: func(bool, int, int, int) tea.Cmd {
 			t.Fatal("a notch was forwarded with writes disabled")
 			return nil
@@ -86,5 +94,8 @@ func TestWheelHandlerRefusesToForwardWithoutWritesEnabled(t *testing.T) {
 	handler.Handle(WheelGesture{Delta: -3, X: 4, Y: 7, Now: time.Now()})
 	if scrolled != -3 {
 		t.Fatalf("scrolled %d, want the notch on the host's own window (-3)", scrolled)
+	}
+	if noted != 1 {
+		t.Fatalf("noted %d, want the notch counted as the reader reading the pane", noted)
 	}
 }

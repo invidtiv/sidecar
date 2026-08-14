@@ -35,12 +35,18 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 
 	// A watched plain shell has asked for nothing, so the notch is the window's,
 	// exactly as it has always been.
+	terminal.inputNoted = 0
 	notch(0)
 	if len(terminal.wheel) != 0 {
 		t.Fatalf("a notch reached a pane that never asked for mouse events: %+v", terminal.wheel)
 	}
 	if m.preview.offset == 0 {
 		t.Fatal("the wheel did nothing over a watched pane with no mouse reporting")
+	}
+	// A locally scrolled pane is being read too, and its capture cadence decays
+	// from this clock.
+	if terminal.inputNoted == 0 {
+		t.Fatal("a local notch left the pane being recaptured at its idle tier")
 	}
 
 	// Once the application asks for mouse events the notch is its own, in its

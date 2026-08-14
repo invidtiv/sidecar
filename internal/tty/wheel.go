@@ -147,6 +147,71 @@ func (b *WheelBurst) Remaining(now time.Time) (time.Duration, bool) {
 	return WheelBurstTimeout - elapsed, true
 }
 
+// WheelBursts holds one flick per terminal surface a host draws. Two surfaces
+// scroll independently, so the delta one of them is holding back belongs to it
+// alone: a gesture that crosses between them is two gestures, and the flick over
+// the surface being left is dropped rather than spent on the one the pointer
+// arrived at.
+//
+// A host with a single terminal surface needs one WheelBurst and not this.
+type WheelBursts struct {
+	bursts  map[string]*WheelBurst
+	current string
+}
+
+// For is the burst of the surface under the pointer, and asking for it is what
+// records the crossing — so a notch cannot reach a surface without the flick
+// over its neighbour ending.
+func (b *WheelBursts) For(surface string) *WheelBurst {
+	if b.bursts == nil {
+		b.bursts = make(map[string]*WheelBurst, 2)
+	}
+	if surface != b.current {
+		if leaving := b.bursts[b.current]; leaving != nil {
+			leaving.Reset()
+		}
+		b.current = surface
+	}
+	burst, ok := b.bursts[surface]
+	if !ok {
+		burst = &WheelBurst{}
+		b.bursts[surface] = burst
+	}
+	return burst
+}
+
+// Remaining is how much of the flick in progress is left, for a caller with no
+// surface of its own to name — a poll deferral, a cooldown. Only the surface the
+// pointer is over can have a flick running; the rest were dropped as it crossed.
+func (b *WheelBursts) Remaining(now time.Time) (time.Duration, bool) {
+	burst, ok := b.bursts[b.current]
+	if !ok {
+		return 0, false
+	}
+	return burst.Remaining(now)
+}
+
+// LastAt is when a notch last moved any of these surfaces, which is what a
+// snap-back cooldown measures against: the reader scrolled just now, whichever
+// surface they scrolled.
+func (b *WheelBursts) LastAt() time.Time {
+	var last time.Time
+	for _, burst := range b.bursts {
+		if at := burst.LastAt(); at.After(last) {
+			last = at
+		}
+	}
+	return last
+}
+
+// Reset drops every flick in progress, for a host whose surfaces have all
+// stopped being the one being scrolled.
+func (b *WheelBursts) Reset() {
+	for _, burst := range b.bursts {
+		burst.Reset()
+	}
+}
+
 // WheelNotches converts a scroll delta in lines back into whole wheel notches,
 // never rounding a real scroll down to nothing.
 //

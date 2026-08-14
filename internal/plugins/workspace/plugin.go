@@ -453,11 +453,12 @@ type Plugin struct {
 	// Interactive mode state (feature-gated behind tmux_interactive_input)
 	interactiveState *InteractiveState
 	// wheel coalesces a trackpad flick, so this surface takes the same amount of
-	// one as every other terminal surface does. clock is the time it and its
-	// cooldowns read: a field, because the burst takes the time from its caller
-	// so a whole flick can be driven a notch at a time without sleeping. nil is
-	// the wall clock.
-	wheel tty.WheelBurst
+	// one as every other terminal surface does — one flick per terminal surface,
+	// because the preview and the panel scroll independently. clock is the time it
+	// and its cooldowns read: a field, because the burst takes the time from its
+	// caller so a whole flick can be driven a notch at a time without sleeping.
+	// nil is the wall clock.
+	wheel tty.WheelBursts
 	clock func() time.Time
 
 	// Sidebar header hover state
