@@ -80,6 +80,13 @@ type FocusPluginByIDMsg struct {
 	PluginID string
 }
 
+// NavigateToFileMsg asks the Files plugin to open a path. Hosts send this
+// rather than importing filebrowser.
+type NavigateToFileMsg struct {
+	Path string // Relative path from workdir
+	Line int    // Optional 1-based line to reveal after loading
+}
+
 // SwitchWorktreeMsg requests switching to a different worktree.
 // Used by the worktree switcher modal and workspace plugin "Open in Git Tab" command.
 type SwitchWorktreeMsg struct {

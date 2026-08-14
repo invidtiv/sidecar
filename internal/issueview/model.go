@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -25,6 +26,39 @@ type LoadedMsg struct {
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
 func (m LoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
+type navKind int
+
+const (
+	navParent navKind = iota
+	navChild
+)
+
+type navItem struct {
+	kind     navKind
+	id       string
+	childIdx int
+}
+
+// HitKind names what a click or hover landed on.
+type HitKind int
+
+const (
+	HitNone HitKind = iota
+	HitParent
+	HitChild
+	HitBody
+)
+
+// Hit is one interactive rectangle in the last View, in view-local cells.
+type Hit struct {
+	Kind   HitKind
+	Index  int
+	ID     string
+	X, Y   int
+	W, H   int
+	Cursor int
+}
+
 // Model is one td issue in one content box.
 type Model struct {
 	renderer *markdown.Renderer
@@ -33,6 +67,7 @@ type Model struct {
 	requestGeneration uint64
 	epoch             uint64
 	issueID           string
+	workDir           string
 
 	width  int
 	height int
@@ -42,8 +77,22 @@ type Model struct {
 	data    *Data
 	err     error
 
-	renderWidth   int
-	renderedLines []string
+	// Interaction. Active is the modal's "tab here and press enter, or click"
+	// state: only then do arrows walk the epic. A workspace pane that already
+	// owns the keyboard sets this when the pane is focused.
+	active   bool
+	focused  bool
+	cursor   int // index into navItems(); -1 means the issue itself
+	hover    int
+	hints    []ActionHint
+	hits     []Hit
+	rows     []row
+	buildFor int
+}
+
+// ActionHint is one key/label pair drawn in the card's ACTIONS row.
+type ActionHint struct {
+	Key, Label string
 }
 
 // New creates an empty issue viewer. A nil renderer uses the default markdown
@@ -52,7 +101,7 @@ func New(renderer *markdown.Renderer) *Model {
 	if renderer == nil {
 		renderer, _ = markdown.NewRenderer()
 	}
-	return &Model{renderer: renderer, renderWidth: -1}
+	return &Model{renderer: renderer, cursor: -1, hover: -1, buildFor: -1}
 }
 
 // Load retargets the model at issueID and returns a command that fetches it.
@@ -62,7 +111,10 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.requestGeneration++
 	m.epoch = epoch
 	m.issueID = issueID
+	m.workDir = workDir
 	m.scroll = 0
+	m.cursor = -1
+	m.hover = -1
 	m.loading = true
 	m.data = nil
 	m.err = nil
@@ -91,10 +143,31 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.loading = false
 	m.data = msg.Data
 	m.err = msg.Error
+	m.cursor = -1
+	m.hover = -1
 	m.invalidateRender()
 	m.clampScroll()
 	return true
 }
+
+// SetData installs already-fetched data. Tests and hosts that fetched
+// themselves use this instead of going through Load.
+func (m *Model) SetData(d *Data) {
+	m.loading = false
+	m.data = d
+	m.err = nil
+	if d != nil {
+		m.issueID = d.ID
+	}
+	m.invalidateRender()
+	m.clampScroll()
+}
+
+// Data returns the current issue, or nil before a successful fetch.
+func (m *Model) Data() *Data { return m.data }
+
+// Err returns the last fetch error, if any.
+func (m *Model) Err() error { return m.err }
 
 // SetSize sets the content box dimensions. A width change invalidates rendered
 // markdown because wrapping depends on it.
@@ -109,46 +182,482 @@ func (m *Model) SetSize(width, height int) {
 	m.clampScroll()
 }
 
+// SetActive enables epic/subtask arrow navigation. Hosts that share those
+// keys with something else (the preview modal) only set this after the user
+// tabs to the card and presses enter, or clicks it.
+func (m *Model) SetActive(active bool) {
+	if m.active == active {
+		if !active {
+			m.hover = -1
+		}
+		return
+	}
+	m.active = active
+	if !active {
+		m.hover = -1
+	}
+	m.invalidateRender()
+}
+
+// Active reports whether arrow keys should navigate the epic.
+func (m *Model) Active() bool { return m.active }
+
+// SetFocused marks the card as the current tab stop. It is a visual cue
+// distinct from Active: focused-but-inactive still scrolls on arrows.
+func (m *Model) SetFocused(focused bool) {
+	if m.focused == focused {
+		return
+	}
+	m.focused = focused
+	m.invalidateRender()
+}
+
+// Focused reports whether the card is the current tab stop.
+func (m *Model) Focused() bool { return m.focused }
+
+// SetActionHints replaces the ACTIONS row. An empty list hides the section
+// unless the card can still show its own navigation hints.
+// ActionHints returns the host-supplied ACTIONS row.
+func (m *Model) ActionHints() []ActionHint { return append([]ActionHint(nil), m.hints...) }
+
+func (m *Model) SetActionHints(hints []ActionHint) {
+	if actionHintsEqual(m.hints, hints) {
+		return
+	}
+	m.hints = append([]ActionHint(nil), hints...)
+	m.invalidateRender()
+}
+
+func actionHintsEqual(a, b []ActionHint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // View returns exactly the configured number of rows, each no wider than the
 // configured width in terminal cells.
 func (m *Model) View() string {
 	if m.height <= 0 {
 		return ""
 	}
-	lines := m.lines()
-	rows := make([]string, m.height)
-	for i := range rows {
-		lineIndex := m.scroll + i
+	rows := m.visibleRows()
+	bodyWidth := m.contentWidth()
+	useBar := m.needsScrollbar()
+	m.hits = m.hits[:0]
+
+	out := make([]string, m.height)
+	for i := range out {
 		line := ""
-		if lineIndex < len(lines) {
-			line = lines[lineIndex]
+		selected, hovered := false, false
+		if i < len(rows) {
+			r := rows[i]
+			line = r.text
+			if r.cursor >= 0 && m.cursor == r.cursor {
+				selected = true
+			}
+			if r.cursor >= 0 && m.hover == r.cursor {
+				hovered = true
+			}
+			if r.kind == rowParent || r.kind == rowChild {
+				kind := HitParent
+				if r.kind == rowChild {
+					kind = HitChild
+				}
+				m.hits = append(m.hits, Hit{
+					Kind:   kind,
+					Index:  r.childIdx,
+					ID:     m.hitID(r),
+					X:      0,
+					Y:      i,
+					W:      bodyWidth,
+					H:      1,
+					Cursor: r.cursor,
+				})
+			}
 		}
-		rows[i] = fitLine(line, m.width)
+		painted := paintRow(line, bodyWidth, selected, hovered, m.active)
+		if useBar {
+			out[i] = painted
+		} else {
+			out[i] = fitLine(painted, m.width)
+		}
 	}
-	return strings.Join(rows, "\n")
+	if !useBar {
+		return strings.Join(out, "\n")
+	}
+	bar := ui.RenderScrollbar(ui.ScrollbarParams{
+		TotalItems:   len(m.ensureRows()),
+		ScrollOffset: m.scroll,
+		VisibleItems: m.height,
+		TrackHeight:  m.height,
+	})
+	return lipglossJoin(out, bar)
 }
 
-// HandleKey applies issue scrolling keys. It answers false for a key it does
-// not own, which is the host's cue that the key is still unspoken for — not its
-// cue to pass it to whatever is behind the pane.
-func (m *Model) HandleKey(k tea.KeyMsg) bool {
-	switch k.String() {
-	case "j", "down":
+func lipglossJoin(body []string, bar string) string {
+	barLines := strings.Split(bar, "\n")
+	for i := range body {
+		b := body[i]
+		s := " "
+		if i < len(barLines) {
+			s = barLines[i]
+		}
+		body[i] = b + s
+	}
+	return strings.Join(body, "\n")
+}
+
+func (m *Model) hitID(r row) string {
+	if m.data == nil {
+		return ""
+	}
+	if r.kind == rowParent {
+		if m.data.Parent != nil {
+			return m.data.Parent.ID
+		}
+		return m.data.ParentID
+	}
+	if r.kind == rowChild && r.childIdx >= 0 && r.childIdx < len(m.data.Children) {
+		return m.data.Children[r.childIdx].ID
+	}
+	return ""
+}
+
+// Hits returns the interactive rectangles from the last View, in view-local
+// cells. Hosts that want per-row regions register these; hosts that only
+// have a pane box can call HandleClick with local coordinates instead.
+func (m *Model) Hits() []Hit { return append([]Hit(nil), m.hits...) }
+
+// HandleKey applies issue keys. When the card is not active, arrows and j/k
+// only scroll. When it is active, arrows walk parent/subtasks/siblings and
+// enter opens the selected row; j/k, paging, and g/G still scroll.
+// A navigation key returns a Load command for the new issue.
+func (m *Model) HandleKey(k tea.KeyMsg) (bool, tea.Cmd) {
+	return m.handleKeyString(k.String())
+}
+
+func (m *Model) handleKeyString(key string) (bool, tea.Cmd) {
+	switch key {
+	case "j":
 		m.Scroll(1)
-	case "k", "up":
+		return true, nil
+	case "k":
 		m.Scroll(-1)
+		return true, nil
 	case "ctrl+d", "pgdown":
 		m.Scroll(max(m.height/2, 1))
+		return true, nil
 	case "ctrl+u", "pgup":
 		m.Scroll(-max(m.height/2, 1))
+		return true, nil
 	case "g", "home":
 		m.scroll = 0
+		return true, nil
 	case "G", "end":
 		m.scroll = m.maxScroll()
-	default:
-		return false
+		return true, nil
 	}
-	return true
+
+	if !m.active {
+		switch key {
+		case "down":
+			m.Scroll(1)
+			return true, nil
+		case "up":
+			m.Scroll(-1)
+			return true, nil
+		default:
+			return false, nil
+		}
+	}
+
+	switch key {
+	case "down":
+		m.moveCursor(1)
+		return true, nil
+	case "up":
+		return true, m.moveUp()
+	case "left":
+		return true, m.moveSibling(-1)
+	case "right":
+		return true, m.moveSibling(1)
+	case "enter":
+		return true, m.OpenSelection()
+	default:
+		return false, nil
+	}
+}
+
+// HandleClick selects the row at view-local (x, y) and activates the card.
+// A click on empty chrome still activates so the next arrow key can navigate.
+func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
+	m.active = true
+	m.focused = true
+	if hit := m.hitAt(x, y); hit != nil {
+		m.cursor = hit.Cursor
+		m.ensureCursorVisible()
+		return hit.Kind, nil
+	}
+	return HitBody, nil
+}
+
+// HandleHover updates the hover highlight from view-local coordinates.
+func (m *Model) HandleHover(x, y int) {
+	if hit := m.hitAt(x, y); hit != nil && hit.Cursor >= 0 {
+		m.hover = hit.Cursor
+		return
+	}
+	m.hover = -1
+}
+
+func (m *Model) hitAt(x, y int) *Hit {
+	for i := range m.hits {
+		h := &m.hits[i]
+		if y >= h.Y && y < h.Y+h.H && x >= h.X && x < h.X+h.W {
+			return h
+		}
+	}
+	return nil
+}
+
+// OpenSelection loads the selected parent or child. Nothing selected is a no-op.
+func (m *Model) OpenSelection() tea.Cmd {
+	items := m.navItems()
+	if m.cursor < 0 || m.cursor >= len(items) {
+		return nil
+	}
+	return m.navigateTo(items[m.cursor].id)
+}
+
+func (m *Model) moveCursor(delta int) {
+	items := m.navItems()
+	if len(items) == 0 {
+		if delta > 0 {
+			m.Scroll(1)
+		} else {
+			m.Scroll(-1)
+		}
+		return
+	}
+	if m.cursor < 0 {
+		if delta > 0 {
+			m.cursor = 0
+		} else {
+			m.cursor = len(items) - 1
+		}
+	} else {
+		m.cursor += delta
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		if m.cursor >= len(items) {
+			m.cursor = len(items) - 1
+		}
+	}
+	m.ensureCursorVisible()
+}
+
+// moveUp walks the selection toward the parent. From the parent row, or from
+// the issue itself when a parent exists and nothing is selected, it loads
+// the epic — that is the "keyboard goes up to the epic" path.
+func (m *Model) moveUp() tea.Cmd {
+	items := m.navItems()
+	if len(items) == 0 {
+		m.Scroll(-1)
+		return nil
+	}
+	if m.cursor < 0 {
+		if items[0].kind == navParent {
+			return m.navigateTo(items[0].id)
+		}
+		m.cursor = len(items) - 1
+		m.ensureCursorVisible()
+		return nil
+	}
+	if m.cursor == 0 && items[0].kind == navParent {
+		return m.navigateTo(items[0].id)
+	}
+	m.moveCursor(-1)
+	return nil
+}
+
+func (m *Model) moveSibling(delta int) tea.Cmd {
+	if m.data == nil || len(m.data.Siblings) < 2 {
+		return nil
+	}
+	idx := -1
+	for i, s := range m.data.Siblings {
+		if s.ID == m.issueID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil
+	}
+	next := idx + delta
+	n := len(m.data.Siblings)
+	next = (next%n + n) % n
+	if m.data.Siblings[next].ID == m.issueID {
+		return nil
+	}
+	return m.navigateTo(m.data.Siblings[next].ID)
+}
+
+func (m *Model) navigateTo(id string) tea.Cmd {
+	if id == "" || id == m.issueID || m.workDir == "" {
+		// Tests and hosts that injected data without Load still need a way
+		// to observe the destination. Reload is skipped; the host can read
+		// SelectedID and fetch itself. When workDir is known, Load it.
+		if id == "" || id == m.issueID {
+			return nil
+		}
+		m.issueID = id
+		return nil
+	}
+	return m.Load(m.modelID, m.workDir, id, m.epoch)
+}
+
+// SelectedID is the issue the cursor is on, or the current issue when
+// nothing is selected.
+func (m *Model) SelectedID() string {
+	items := m.navItems()
+	if m.cursor >= 0 && m.cursor < len(items) {
+		return items[m.cursor].id
+	}
+	return m.issueID
+}
+
+func (m *Model) navItems() []navItem {
+	if m.data == nil {
+		return nil
+	}
+	var items []navItem
+	if m.data.Parent != nil && m.data.Parent.ID != "" {
+		items = append(items, navItem{kind: navParent, id: m.data.Parent.ID})
+	} else if m.data.ParentID != "" {
+		items = append(items, navItem{kind: navParent, id: m.data.ParentID})
+	}
+	for i, c := range m.data.Children {
+		items = append(items, navItem{kind: navChild, id: c.ID, childIdx: i})
+	}
+	return items
+}
+
+func (m *Model) actionHints(width int) string {
+	var parts []string
+	if m.active {
+		if m.data != nil && (m.data.Parent != nil || m.data.ParentID != "") {
+			parts = append(parts, hint("↑", "epic"))
+		}
+		if m.data != nil && len(m.data.Siblings) > 1 {
+			parts = append(parts, hint("←→", "issues"))
+		}
+		if m.data != nil && len(m.data.Children) > 0 {
+			parts = append(parts, hint("↓", "tasks"), hint("↵", "open"))
+		}
+	} else if m.focused {
+		parts = append(parts, hint("↵", "activate"))
+	}
+	for _, h := range m.hints {
+		parts = append(parts, hint(h.Key, h.Label))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	line := strings.Join(parts, "  ")
+	if ansi.StringWidth(line) > width {
+		return ansi.Truncate(line, width, "")
+	}
+	return line
+}
+
+func hint(key, label string) string {
+	return styles.KeyHint.Render(key) + " " + styles.Muted.Render(label)
+}
+
+func (m *Model) ensureCursorVisible() {
+	rows := m.ensureRows()
+	target := -1
+	for i, r := range rows {
+		if r.cursor == m.cursor && m.cursor >= 0 {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		return
+	}
+	if target < m.scroll {
+		m.scroll = target
+	}
+	if target >= m.scroll+m.height {
+		m.scroll = target - m.height + 1
+	}
+	m.clampScroll()
+}
+
+func (m *Model) contentWidth() int {
+	// Reserve the scrollbar column whenever the box is wide enough. The
+	// track is a spacer when everything fits, so the card does not reflow
+	// the first time content crosses the viewport.
+	w := m.width
+	if m.width >= 8 && m.height > 0 {
+		w--
+	}
+	if w < 0 {
+		return 0
+	}
+	return w
+}
+
+func (m *Model) needsScrollbar() bool {
+	return m.width >= 8 && m.height > 0
+}
+
+func (m *Model) visibleRows() []row {
+	all := m.ensureRows()
+	if m.scroll > len(all) {
+		m.scroll = max(len(all)-m.height, 0)
+	}
+	end := m.scroll + m.height
+	if end > len(all) {
+		end = len(all)
+	}
+	if m.scroll < 0 || m.scroll > end {
+		return nil
+	}
+	return all[m.scroll:end]
+}
+
+func (m *Model) ensureRows() []row {
+	if m.loading {
+		return []row{
+			{kind: rowText, text: styles.Muted.Render("Loading issue…"), cursor: -1},
+			{kind: rowText, text: styles.Subtle.Render(m.issueID), cursor: -1},
+		}
+	}
+	if m.err != nil {
+		return []row{
+			{kind: rowText, text: styles.ToastError.Render(" Issue unavailable "), cursor: -1},
+			{kind: rowText, text: styles.Subtle.Render(m.issueID), cursor: -1},
+			{kind: rowText, text: styles.Muted.Render(m.err.Error()), cursor: -1},
+		}
+	}
+	if m.data == nil {
+		return []row{{kind: rowText, text: styles.Muted.Render("No issue"), cursor: -1}}
+	}
+	if m.buildFor != m.width || m.rows == nil {
+		m.rows = m.buildRows()
+		m.buildFor = m.width
+	}
+	return m.rows
 }
 
 // Scroll moves the viewport by delta rows and clamps it to the issue.
@@ -171,48 +680,14 @@ func (m *Model) Title() string {
 // Loading reports whether a fetch is outstanding.
 func (m *Model) Loading() bool { return m.loading }
 
-func (m *Model) lines() []string {
-	if m.loading {
-		return []string{"Loading issue…", m.issueID}
-	}
-	if m.err != nil {
-		return []string{"Issue unavailable", m.issueID, m.err.Error()}
-	}
-	if m.data == nil {
-		return []string{"No issue"}
-	}
-	if m.renderWidth != m.width {
-		m.renderedLines = m.build()
-		m.renderWidth = m.width
-	}
-	return m.renderedLines
-}
-
-func (m *Model) build() []string {
-	var lines []string
-	appendLine := func(s string) {
-		if s != "" {
-			lines = append(lines, s)
-		}
-	}
-	appendLine(Heading(m.data))
-	appendLine(StatusLine(m.data))
-	appendLine(ParentLine(m.data))
-	appendLine(LabelsLine(m.data))
-	if desc := Description(m.renderer, m.data, m.width); desc != "" {
-		lines = append(lines, "")
-		lines = append(lines, strings.Split(desc, "\n")...)
-	}
-	return lines
-}
-
 func (m *Model) invalidateRender() {
-	m.renderWidth = -1
-	m.renderedLines = nil
+	m.buildFor = -1
+	m.rows = nil
+	m.hits = nil
 }
 
 func (m *Model) maxScroll() int {
-	return max(len(m.lines())-m.height, 0)
+	return max(len(m.ensureRows())-m.height, 0)
 }
 
 func (m *Model) clampScroll() {

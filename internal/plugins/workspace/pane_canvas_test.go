@@ -28,7 +28,7 @@ func nestedDocPaneTree(t *testing.T, p *Plugin, root string) {
 		writeDocPaneFixture(t, root, rel, "# "+rel+"\n")
 		viewer := docview.New(nil)
 		viewer.Load(id, root, rel, 0, p.ctx.Epoch)
-		p.docs[id] = &docPane{leafID: id, root: root, surface: "shell:test-shell", view: viewer}
+		p.docs[id] = newDocPane(id, root, "shell:test-shell", viewer)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/docview"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -254,7 +255,9 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 			p.clearInfoModal()
 			p.gitStatus = "Loading..."
 			p.gitLastCommit = "Loading..."
-			return p, p.fetchGitInfo(node.Path)
+			if p.ctx != nil {
+				return p, docview.FetchGitInfo(p.ctx.WorkDir, node.Path)
+			}
 		}
 
 	case "B":
@@ -334,10 +337,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		// Copy relative path to system clipboard
 		node := p.tree.GetNode(p.treeCursor)
 		if node != nil && node != p.tree.Root {
-			if err := clipboard.WriteAll(node.Path); err != nil {
-				return p, appmsg.ShowToast("Failed to copy path", 2*time.Second)
-			}
-			return p, appmsg.ShowToast("Copied: "+node.Path, 2*time.Second)
+			return p, docview.YankPath(node.Path)
 		}
 
 	case "p":
@@ -601,7 +601,9 @@ func (p *Plugin) handlePreviewKey(key string) (plugin.Plugin, tea.Cmd) {
 			p.clearInfoModal()
 			p.gitStatus = "Loading..."
 			p.gitLastCommit = "Loading..."
-			return p, p.fetchGitInfo(p.previewFile)
+			if p.ctx != nil {
+				return p, docview.FetchGitInfo(p.ctx.WorkDir, p.previewFile)
+			}
 		}
 
 	case "y", "alt+c":
@@ -614,10 +616,7 @@ func (p *Plugin) handlePreviewKey(key string) (plugin.Plugin, tea.Cmd) {
 	case "Y":
 		// Copy file path to clipboard
 		if p.previewFile != "" {
-			if err := clipboard.WriteAll(p.previewFile); err != nil {
-				return p, appmsg.ShowToast("Failed to copy path", 2*time.Second)
-			}
-			return p, appmsg.ShowToast("Copied: "+p.previewFile, 2*time.Second)
+			return p, docview.YankPath(p.previewFile)
 		}
 
 	case "m":

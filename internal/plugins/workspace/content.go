@@ -72,7 +72,7 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 	switch node.Kind {
 	case PaneDoc:
 		doc := p.docs[node.ContentID]
-		if doc == nil || doc.view == nil {
+		if doc == nil || doc.view() == nil {
 			return nil
 		}
 		return &docContent{p: p, doc: doc}
@@ -145,23 +145,33 @@ type docContent struct {
 
 func (c *docContent) Kind() string { return contentKindDoc }
 
-func (c *docContent) Title() string { return c.doc.view.Title() }
+func (c *docContent) Title() string {
+	if view := c.doc.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
 
 // SetSize hands the viewer the box below the header row, which is the same
 // subtraction termpreview.SurfaceIn makes for a terminal leaf.
 func (c *docContent) SetSize(size Size) tea.Cmd {
 	c.size = size
-	c.doc.view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	if view := c.doc.view(); view != nil {
+		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
 	return nil
 }
 
-// View draws the header row from the contract's own Title, so the identity the
-// header states and the identity the tree persists and the frame reports are
-// one string rather than three reads of the same field.
+// View draws the tab strip above the viewer. Focus is the frame's answer, so
+// the active tab a click lands on matches the one the leaf drew.
 func (c *docContent) View(render Render) string {
+	body := ""
+	if view := c.doc.view(); view != nil {
+		body = view.View()
+	}
 	return composePaneLeaf(
-		c.p.docPaneHeaderRow(c.doc, c.Title(), c.size.Width, render.Focused),
-		c.doc.view.View())
+		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
+		body)
 }
 
 // issueContent is the td issue leaf: the pane's own header row above the issue

@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -254,11 +255,13 @@ type Model struct {
 
 	// Issue preview - preview phase
 	showIssuePreview         bool
+	issuePreviewView         *issueview.Model
 	issuePreviewData         *IssuePreviewData
 	issuePreviewLoading      bool
 	issuePreviewError        error
 	issuePreviewModal        *modal.Modal
 	issuePreviewModalWidth   int
+	issuePreviewModalHeight  int
 	issuePreviewMouseHandler *mouse.Handler
 
 	// Header/footer
@@ -1330,11 +1333,13 @@ func (m *Model) resetIssueInput() {
 // resetIssuePreview resets the issue preview modal state.
 func (m *Model) resetIssuePreview() {
 	m.showIssuePreview = false
+	m.issuePreviewView = nil
 	m.issuePreviewData = nil
 	m.issuePreviewLoading = false
 	m.issuePreviewError = nil
 	m.issuePreviewModal = nil
 	m.issuePreviewModalWidth = 0
+	m.issuePreviewModalHeight = 0
 	m.issuePreviewMouseHandler = nil
 }
 

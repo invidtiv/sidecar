@@ -138,6 +138,33 @@ func TestNarrowWidthUsesPlainWrap(t *testing.T) {
 	}
 }
 
+func TestWrapSplitsLongLineAndSurvivesLoad(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(8, 3)
+	m.SetWrap(true)
+	msg := loadFixture(t, m, "abcdefghijklmnop", 1)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	if !m.Wrap() {
+		t.Fatal("Load cleared wrap")
+	}
+	view := ansi.Strip(m.View())
+	rows := strings.Split(view, "\n")
+	if len(rows) != 3 {
+		t.Fatalf("row count = %d, want 3 (%q)", len(rows), view)
+	}
+	if strings.TrimSpace(rows[0]) != "abcdefgh" || strings.TrimSpace(rows[1]) != "ijklmnop" {
+		t.Fatalf("wrapped view = %q", view)
+	}
+
+	m.SetWrap(false)
+	truncated := strings.TrimSpace(strings.Split(ansi.Strip(m.View()), "\n")[0])
+	if truncated != "abcdefgh" {
+		t.Fatalf("truncated view = %q", truncated)
+	}
+}
+
 func TestMissingFileShowsError(t *testing.T) {
 	m := newTestModel(t)
 	m.SetSize(60, 2)
@@ -236,5 +263,41 @@ func TestSetResultRejectsStaleIdentityWithoutMutation(t *testing.T) {
 
 	if !m.SetResult(current) {
 		t.Fatal("current result was rejected")
+	}
+}
+
+func TestArmNeedsLoadAndPendingScroll(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(20, 2)
+	if !m.NeedsLoad() {
+		t.Fatal("new model should need a load")
+	}
+	m.Arm(3, "notes.md", 9)
+	if !m.NeedsLoad() || m.Title() != "notes.md" {
+		t.Fatalf("armed model = path %q needsLoad=%v", m.Title(), m.NeedsLoad())
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading document") || !strings.Contains(got, "notes.md") {
+		t.Fatalf("armed view = %q", got)
+	}
+
+	msg := loadFixture(t, m, "one\ntwo\nthree\nfour\nfive\n", 0)
+	m.SetRendered(false)
+	m.SetPendingScroll(3)
+	if m.ScrollOffset() != 3 {
+		t.Fatalf("pending scroll = %d", m.ScrollOffset())
+	}
+	if !m.SetResult(msg) {
+		t.Fatal("load result was rejected")
+	}
+	if m.NeedsLoad() {
+		t.Fatal("loaded model still reports NeedsLoad")
+	}
+	if m.ScrollOffset() != 3 {
+		t.Fatalf("restored scroll = %d", m.ScrollOffset())
+	}
+
+	m.ApplyLine(1)
+	if m.Rendered() || m.ScrollOffset() != 0 {
+		t.Fatalf("ApplyLine = rendered=%v scroll=%d", m.Rendered(), m.ScrollOffset())
 	}
 }

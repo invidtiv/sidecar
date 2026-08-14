@@ -64,6 +64,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case docview.LoadedMsg:
 		p.applyDocLoaded(msg)
 		return p, nil
+	case docview.GitInfoMsg:
+		if p.docInfo != nil {
+			p.docInfo.ApplyGit(msg)
+		}
+		return p, nil
+	case docview.RevealErrorMsg:
+		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 2*time.Second)
 	case issueview.LoadedMsg:
 		p.applyIssueLoaded(msg)
 		return p, nil
@@ -373,8 +380,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.worktrees = append(p.worktrees, msg.Worktree)
 
 			// Auto-focus newly created worktree (same pattern as click selection)
-			p.shellSelected = false
-			p.selectedIdx = len(p.worktrees) - 1
+			p.selectWorktreeAt(len(p.worktrees) - 1)
 			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
@@ -604,8 +610,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			for i, wt := range p.worktrees {
 				if wt.Branch == msg.Branch {
 					p.viewMode = ViewModeList
-					p.shellSelected = false
-					p.selectedIdx = i
+					p.selectWorktreeAt(i)
 					p.resetPreviewScroll()
 					p.saveSelectionState()
 					p.ensureVisible()
@@ -624,8 +629,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.viewMode = ViewModeList
 			p.worktrees = append(p.worktrees, msg.Worktree)
 			// Auto-focus newly fetched worktree
-			p.shellSelected = false
-			p.selectedIdx = len(p.worktrees) - 1
+			p.selectWorktreeAt(len(p.worktrees) - 1)
 			p.resetPreviewScroll()
 			p.saveSelectionState()
 			p.ensureVisible()
@@ -1172,8 +1176,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 		// Add worktree to list and select it
 		p.worktrees = append(p.worktrees, msg.Worktree)
-		p.shellSelected = false
-		p.selectedIdx = len(p.worktrees) - 1
+		p.selectWorktreeAt(len(p.worktrees) - 1)
 		p.resetPreviewScroll()
 		p.saveSelectionState()
 		p.ensureVisible()
@@ -1215,27 +1218,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.saveSelectionState()
 			cmds = append(cmds, p.loadSelectedContent())
 		}
-		// Adjust selection if needed
-		if p.shellSelected && removedIdx >= 0 {
-			if removedIdx < p.selectedShellIdx {
-				// Shell before selected one was removed, decrement to stay on same shell
-				p.selectedShellIdx--
-			} else if p.selectedShellIdx >= len(p.shells) {
-				// Selected shell was removed or index is now out of bounds
-				if len(p.shells) > 0 {
-					p.selectedShellIdx = len(p.shells) - 1
-				} else if len(p.worktrees) > 0 {
-					p.shellSelected = false
-					p.selectedIdx = 0
-				} else {
-					// No shells or worktrees left - reset selection state (td-782611)
-					p.shellSelected = false
-					p.selectedShellIdx = 0
-					p.selectedIdx = -1
-				}
-			}
+		if removedIdx >= 0 {
+			p.retargetAfterKilledTopShell(removedIdx)
 			p.saveSelectionState()
-			// Reload content for the newly selected item (if any remain)
 			if len(p.shells) > 0 || len(p.worktrees) > 0 {
 				cmds = append(cmds, p.loadSelectedContent())
 			}
@@ -1275,27 +1260,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.saveSelectionState()
 			return p, p.loadSelectedContent()
 		}
-		// Adjust selection if needed
-		if p.shellSelected && removedIdx >= 0 {
-			if removedIdx < p.selectedShellIdx {
-				// Shell before selected one was removed, decrement to stay on same shell
-				p.selectedShellIdx--
-			} else if p.selectedShellIdx >= len(p.shells) {
-				// Selected shell was removed or index is now out of bounds
-				if len(p.shells) > 0 {
-					p.selectedShellIdx = len(p.shells) - 1
-				} else if len(p.worktrees) > 0 {
-					p.shellSelected = false
-					p.selectedIdx = 0
-				} else {
-					// No shells or worktrees left - reset selection state (td-782611)
-					p.shellSelected = false
-					p.selectedShellIdx = 0
-					p.selectedIdx = -1
-				}
-			}
+		if removedIdx >= 0 {
+			p.retargetAfterKilledTopShell(removedIdx)
 			p.saveSelectionState()
-			// Reload content for the newly selected item (if any remain)
 			if len(p.shells) > 0 || len(p.worktrees) > 0 {
 				return p, p.loadSelectedContent()
 			}
@@ -2118,9 +2085,8 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 		// restore the saved workspace over the one the user just opened.
 		// Re-applying here is a no-op once the selection has been consumed.
 		p.applyPendingWorkspaceSelection()
-		if p.paneRestoreCmd != nil {
-			commands = append(commands, p.paneRestoreCmd)
-			p.paneRestoreCmd = nil
+		if cmd := p.takePaneRestoreCmd(); cmd != nil {
+			commands = append(commands, cmd)
 		}
 	}
 

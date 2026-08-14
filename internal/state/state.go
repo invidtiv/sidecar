@@ -67,10 +67,11 @@ type FileBrowserState struct {
 
 // WorkspaceState holds persistent workspace plugin state.
 type WorkspaceState struct {
-	WorkspaceName     string            `json:"workspaceName,omitempty"`     // Name of selected workspace
-	ShellTmuxName     string            `json:"shellTmuxName,omitempty"`     // TmuxName of selected shell (empty = workspace selected)
-	ShellDisplayNames map[string]string `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
-	PaneLayout        *PaneLayoutJSON   `json:"paneLayout,omitempty"`        // Structural document-pane layout for the selected terminal root
+	WorkspaceName     string                     `json:"workspaceName,omitempty"`     // Name of selected workspace
+	ShellTmuxName     string                     `json:"shellTmuxName,omitempty"`     // TmuxName of selected shell (empty = workspace selected)
+	ShellDisplayNames map[string]string          `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
+	PaneLayout        *PaneLayoutJSON            `json:"paneLayout,omitempty"`        // Read-only migrate into PaneLayouts
+	PaneLayouts       map[string]*PaneLayoutJSON `json:"paneLayouts,omitempty"`       // surface → layout
 }
 
 // PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
@@ -82,8 +83,42 @@ type PaneLayoutJSON struct {
 	Split   *PaneSplitJSON   `json:"split,omitempty"`
 	Tabs    []PaneDocTabJSON `json:"tabs,omitempty"`
 	Active  int              `json:"active,omitempty"`
+	// Open is true when restore should rebuild the split. False means this
+	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
+	// record that still has a split is treated as open by MigratePaneLayouts.
+	Open bool `json:"open,omitempty"`
 	// Issue is an issue leaf's durable target: the td ID a restore re-fetches.
 	Issue string `json:"issue,omitempty"`
+}
+
+// MigratePaneLayouts copies a legacy single-slot PaneLayout into PaneLayouts
+// when the map is empty. The legacy field is left for the writer to drop.
+func MigratePaneLayouts(s *WorkspaceState) {
+	if s == nil || len(s.PaneLayouts) > 0 || s.PaneLayout == nil || s.PaneLayout.Surface == "" {
+		return
+	}
+	// Legacy writes omitted Open. Those records still wanted the split back;
+	// hide is a later, explicit Open=false write into the map.
+	if s.PaneLayout.Split != nil {
+		s.PaneLayout.Open = true
+	}
+	s.PaneLayouts = map[string]*PaneLayoutJSON{s.PaneLayout.Surface: s.PaneLayout}
+}
+
+// PaneLayoutOpen reports whether restore should rebuild the split. Open=true
+// restores. Open=false is hide: tabs stay in the map, the live tree does not.
+func PaneLayoutOpen(l *PaneLayoutJSON) bool {
+	return l != nil && l.Open
+}
+
+// PaneLayoutFor returns the layout stored for surface, migrating a legacy
+// single-slot record first. The receiver is a copy; the stored state is not written.
+func (s WorkspaceState) PaneLayoutFor(surface string) *PaneLayoutJSON {
+	MigratePaneLayouts(&s)
+	if surface == "" || s.PaneLayouts == nil {
+		return nil
+	}
+	return s.PaneLayouts[surface]
 }
 
 type PaneSplitJSON struct {
@@ -94,8 +129,10 @@ type PaneSplitJSON struct {
 }
 
 type PaneDocTabJSON struct {
-	Path string `json:"path"`
-	Mode string `json:"mode,omitempty"`
+	Path   string `json:"path"`
+	Mode   string `json:"mode,omitempty"`
+	Wrap   bool   `json:"wrap,omitempty"`
+	Scroll int    `json:"scroll,omitempty"`
 }
 
 // NotesState holds persistent notes plugin state.

@@ -73,3 +73,6 @@ screenshots/
 .codex
 # Nightshift plan artifacts (keep out of version control)
 .nightshift-plan
+
+# Grok session scratch (reviews, local agent artifacts)
+.grok/

@@ -14,6 +14,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overview"
@@ -554,16 +555,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case IssuePreviewResultMsg:
-		m.issuePreviewLoading = false
-		if msg.Error != nil {
-			m.issuePreviewError = msg.Error
-		} else {
-			m.issuePreviewData = msg.Data
-		}
-		// Clear modal cache to trigger rebuild
-		m.issuePreviewModal = nil
-		m.issuePreviewModalWidth = 0
+		m.applyIssuePreviewData(msg.Data, msg.Error)
 		return m, nil
+
+	case issueview.LoadedMsg:
+		// The modal is one host of issueview. A workspace issue pane is
+		// another. Claiming every LoadedMsg here left those panes stuck on
+		// "Loading issue…" because the plugin never saw its own result.
+		if m.claimIssuePreviewLoad(msg) {
+			return m, nil
+		}
 
 	case IssueSearchResultMsg:
 		// Discard stale results
@@ -712,6 +713,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, nil
 		case ModalIssuePreview:
+			if m.issuePreviewView != nil && m.issuePreviewView.Active() {
+				m.issuePreviewView.SetActive(false)
+				return m, nil
+			}
 			m.resetIssuePreview()
 			m.resetIssueInput()
 			m.updateContext()
@@ -1303,30 +1308,55 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.issuePreviewModal == nil {
 			return m, nil
 		}
+		view := m.ensureIssuePreviewView()
+		key := msg.String()
 
-		// Shortcuts before modal.HandleKey (which consumes Enter/Esc/Tab)
-		switch msg.String() {
-		case "j", "down":
-			m.issuePreviewModal.ScrollBy(1)
+		// Enter on the card (or before buttons take it) activates rather than
+		// firing Open in TD. After that, arrows belong to the epic.
+		if key == "enter" && view != nil && !view.Active() &&
+			(m.issuePreviewModal.FocusedID() == "" || m.issuePreviewModal.FocusedID() == issueViewFocusID) {
+			view.SetActive(true)
+			view.SetFocused(true)
+			m.issuePreviewModal.SetFocus(issueViewFocusID)
 			return m, nil
-		case "k", "up":
-			m.issuePreviewModal.ScrollBy(-1)
-			return m, nil
-		case "ctrl+d":
-			m.issuePreviewModal.ScrollBy(10)
-			return m, nil
-		case "ctrl+u":
-			m.issuePreviewModal.ScrollBy(-10)
-			return m, nil
-		case "g":
-			m.issuePreviewModal.ScrollToTop()
-			return m, nil
-		case "G":
-			m.issuePreviewModal.ScrollToBottom()
-			return m, nil
+		}
+
+		if view != nil && view.Active() && m.issuePreviewModal.FocusedID() == issueViewFocusID {
+			handled, cmd := view.HandleKey(msg)
+			if handled {
+				return m, cmd
+			}
+		}
+
+		// Inactive (or unhandled): j/k/arrows scroll the card, not the modal
+		// chrome — the card owns its own viewport.
+		if view != nil && !view.Active() {
+			switch key {
+			case "j", "down":
+				view.Scroll(1)
+				return m, nil
+			case "k", "up":
+				view.Scroll(-1)
+				return m, nil
+			case "ctrl+d":
+				view.Scroll(10)
+				return m, nil
+			case "ctrl+u":
+				view.Scroll(-10)
+				return m, nil
+			case "g":
+				view.Scroll(-10000)
+				return m, nil
+			case "G":
+				view.Scroll(10000)
+				return m, nil
+			}
+		}
+
+		switch key {
 		case "o":
-			if m.issuePreviewData != nil {
-				issueID := m.issuePreviewData.ID
+			if d := m.previewIssueData(); d != nil {
+				issueID := d.ID
 				m.resetIssuePreview()
 				m.resetIssueInput()
 				m.updateContext()
@@ -1339,8 +1369,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.backToIssueInput()
 			return m, nil
 		case "y":
-			if m.issuePreviewData != nil {
-				d := m.issuePreviewData
+			if d := m.previewIssueData(); d != nil {
 				text := d.ID + ": " + d.Title + "\n\n" + d.Description
 				if err := clipboard.WriteAll(text); err != nil {
 					return m, ShowToast("Copy failed: "+err.Error(), 2*time.Second)
@@ -1348,8 +1377,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, ShowToast("Yanked issue details", 2*time.Second)
 			}
 		case "Y":
-			if m.issuePreviewData != nil {
-				id := m.issuePreviewData.ID
+			if d := m.previewIssueData(); d != nil {
+				id := d.ID
 				if err := clipboard.WriteAll(id); err != nil {
 					return m, ShowToast("Copy failed: "+err.Error(), 2*time.Second)
 				}
@@ -1358,11 +1387,19 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		action, cmd := m.issuePreviewModal.HandleKey(msg)
+		if key == "tab" || key == "shift+tab" {
+			if view != nil && m.issuePreviewModal.FocusedID() != issueViewFocusID {
+				view.SetActive(false)
+				view.SetFocused(false)
+			} else if view != nil {
+				view.SetFocused(true)
+			}
+		}
 		switch action {
 		case "open-in-td":
 			issueID := ""
-			if m.issuePreviewData != nil {
-				issueID = m.issuePreviewData.ID
+			if d := m.previewIssueData(); d != nil {
+				issueID = d.ID
 			}
 			m.resetIssuePreview()
 			m.resetIssueInput()
@@ -2315,8 +2352,14 @@ func (m *Model) issueInputSubmit() (tea.Model, tea.Cmd) {
 	m.issuePreviewError = nil
 	m.issuePreviewModal = nil
 	m.issuePreviewModalWidth = 0
+	m.issuePreviewModalHeight = 0
 	m.issuePreviewMouseHandler = mouse.NewHandler()
-	return m, fetchIssuePreviewCmd(m.ui.WorkDir, issueID)
+	workDir := ""
+	if m.ui != nil {
+		workDir = m.ui.WorkDir
+	}
+	m.issuePreviewView = issueview.New(nil)
+	return m, m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0)
 }
 
 // handleIssueInputMouse handles mouse events for the issue input modal.
@@ -2362,7 +2405,31 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Pre-render to sync hit regions and focusIDs on the modal, which may have
 	// been rebuilt (e.g. after data/error arrival cleared the cache).
 	m.issuePreviewModal.Render(m.width, m.height, m.issuePreviewMouseHandler)
+
+	view := m.ensureIssuePreviewView()
+	if view != nil {
+		switch ev := msg.(type) {
+		case tea.MouseWheelMsg:
+			if ev.Button == tea.MouseWheelDown {
+				view.Scroll(3)
+			} else {
+				view.Scroll(-3)
+			}
+			return m, nil
+		}
+	}
+
 	action := m.issuePreviewModal.HandleMouse(msg, m.issuePreviewMouseHandler)
+	if action == issueViewFocusID && view != nil {
+		view.SetActive(true)
+		view.SetFocused(true)
+		if r := findMouseRegion(m.issuePreviewMouseHandler, issueViewFocusID); r != nil {
+			mi := msg.Mouse()
+			_, cmd := view.HandleClick(mi.X-r.Rect.X, mi.Y-r.Rect.Y)
+			return m, cmd
+		}
+		return m, nil
+	}
 	switch action {
 	case "cancel":
 		m.resetIssuePreview()
@@ -2373,8 +2440,8 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "open-in-td":
 		issueID := ""
-		if m.issuePreviewData != nil {
-			issueID = m.issuePreviewData.ID
+		if d := m.previewIssueData(); d != nil {
+			issueID = d.ID
 		}
 		m.resetIssuePreview()
 		m.resetIssueInput()
@@ -2387,4 +2454,17 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func findMouseRegion(h *mouse.Handler, id string) *mouse.Region {
+	if h == nil || h.HitMap == nil {
+		return nil
+	}
+	for _, r := range h.HitMap.Regions() {
+		if r.ID == id {
+			reg := r
+			return &reg
+		}
+	}
+	return nil
 }

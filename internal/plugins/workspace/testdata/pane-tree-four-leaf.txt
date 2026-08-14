@@ -1,24 +1,24 @@
-Shell t to attach • E for interactive • Ctrl-b d t│ upper-right.md   Rendered   ×    q close · m raw
-No output yet                                     │                                                 
-                                                  │   upper                                         
-                                                  │                                                 
-                                                  │  upper body                                     
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
+Shell t to attach • E for interactive • Ctrl-b d t│  upper-right.md
+No output yet                                     │
+                                                  │   upper
+                                                  │
+                                                  │  upper body
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
 ──────────────────────────────────────────────────│─────────────────────────────────────────────────
- under-terminal.md   Rendered   ×  q close · m raw│ lower-right.md   Rendered   ×    q close · m raw
-                                                  │                                                 
-   under                                          │   lower                                         
-                                                  │                                                 
-  under body                                      │  lower body                                     
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
+  under-terminal.md                               │  lower-right.md
+                                                  │
+   under                                          │   lower
+                                                  │
+  under body                                      │  lower body
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │

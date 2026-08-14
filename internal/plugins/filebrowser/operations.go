@@ -6,9 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -80,27 +79,10 @@ func (p *Plugin) openFileAtCurrentLine(path string) tea.Cmd {
 
 // revealInFileManager reveals the file/directory in the system file manager.
 func (p *Plugin) revealInFileManager(path string) tea.Cmd {
-	return func() tea.Msg {
-		fullPath := filepath.Join(p.ctx.WorkDir, path)
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			// macOS: open -R reveals in Finder with file selected
-			cmd = exec.Command("open", "-R", fullPath)
-		case "windows":
-			// Windows: explorer /select, reveals in Explorer with file selected
-			cmd = exec.Command("explorer", "/select,", fullPath)
-		case "linux":
-			// Linux: xdg-open opens the parent directory
-			cmd = exec.Command("xdg-open", filepath.Dir(fullPath))
-		default:
-			return RevealErrorMsg{Err: fmt.Errorf("reveal not supported on %s", runtime.GOOS)}
-		}
-		if err := cmd.Start(); err != nil {
-			return RevealErrorMsg{Err: err}
-		}
+	if p.ctx == nil {
 		return nil
 	}
+	return docview.Reveal(p.ctx.WorkDir, path)
 }
 
 // validateDestPath checks that destination path is within workdir.
@@ -1262,6 +1244,9 @@ func (p *Plugin) copySelectedTextToClipboard() tea.Cmd {
 
 // copyFileContentsToClipboard copies the entire file contents to the system clipboard.
 func (p *Plugin) copyFileContentsToClipboard() tea.Cmd {
+	if p.ctx != nil && p.previewFile != "" {
+		return docview.YankContents(p.ctx.WorkDir, p.previewFile)
+	}
 	return func() tea.Msg {
 		if len(p.previewLines) == 0 {
 			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}

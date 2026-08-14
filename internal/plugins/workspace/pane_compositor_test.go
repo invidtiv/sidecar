@@ -26,7 +26,7 @@ func compositorDocLeaf(t *testing.T, p *Plugin, root string, leafID int, rel, bo
 	if !viewer.SetResult(loaded) {
 		t.Fatalf("document %s rejected its own load result", rel)
 	}
-	p.docs[leafID] = &docPane{leafID: leafID, root: root, surface: "shell:test-shell", view: viewer}
+	p.docs[leafID] = newDocPane(leafID, root, "shell:test-shell", viewer)
 }
 
 // threeLeafPaneTree is a terminal above two documents side by side: three
@@ -97,15 +97,33 @@ func composePaneTree(t *testing.T, p *Plugin, width, height int) []string {
 // glyph landed in is what the compositor decides.
 func assertPaneTreeGolden(t *testing.T, rows []string, name string) {
 	t.Helper()
-	got := ansi.Strip(strings.Join(rows, "\n")) + "\n"
+	got := trimGoldenRows(ansi.Strip(strings.Join(rows, "\n")) + "\n")
 	path := filepath.Join("testdata", name)
 	want, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != string(want) {
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if got != trimGoldenRows(string(want)) {
 		t.Fatalf("composed cells differ from %s\ngot:\n%s\nwant:\n%s", path, got, want)
 	}
+}
+
+// trimGoldenRows drops trailing spaces that pad a row out to its box. The
+// compositor already requires every row to be exactly width cells; keeping
+// those pads in the file makes git diff --check fail on an otherwise empty
+// header remainder.
+func trimGoldenRows(s string) string {
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // assertDividersDrawn requires each divider's own rune in every cell of the box
@@ -289,12 +307,16 @@ func TestPaneTreeDrawsFocusOnlyIntoTheFocusedLeafsHeader(t *testing.T) {
 	for _, leafID := range []int{2, 3} {
 		other := 5 - leafID
 		doc := p.docs[leafID]
-		active := p.docHeaderChips(doc, doc.view.Title(), paneChipWidthFor(t, p, leafID, width, height), true)[0]
+		tabs := layoutDocTabStrip(doc, paneChipWidthFor(t, p, leafID, width, height), true).Tabs
+		if len(tabs) == 0 {
+			t.Fatalf("leaf %d has no tab strip", leafID)
+		}
+		active := tabs[0].Rendered
 		if !strings.Contains(styled[leafID], active) {
-			t.Fatalf("leaf %d holds focus but its path chip is not the active one", leafID)
+			t.Fatalf("leaf %d holds focus but its active tab is not drawn", leafID)
 		}
 		if strings.Contains(styled[other], active) {
-			t.Fatalf("leaf %d drew the active path chip while leaf %d held focus", leafID, other)
+			t.Fatalf("leaf %d drew the focused tab while leaf %d held focus", leafID, other)
 		}
 	}
 }

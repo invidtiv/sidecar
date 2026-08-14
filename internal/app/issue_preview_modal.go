@@ -6,6 +6,7 @@ import (
 
 	"image/color"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/modal"
@@ -234,6 +235,53 @@ func (m *Model) renderIssuePreviewOverlay(content string) string {
 	return ui.OverlayModal(content, rendered, m.width, m.height)
 }
 
+const issueViewFocusID = "issue-view"
+
+func (m *Model) ensureIssuePreviewView() *issueview.Model {
+	if m.issuePreviewView == nil && m.issuePreviewData != nil {
+		m.issuePreviewView = issueview.New(nil)
+		m.issuePreviewView.SetData(m.issuePreviewData)
+	}
+	if m.issuePreviewView != nil && len(m.issuePreviewView.ActionHints()) == 0 {
+		m.issuePreviewView.SetActionHints([]issueview.ActionHint{
+			{Key: "o", Label: "open"},
+			{Key: "b", Label: "back"},
+			{Key: "y", Label: "yank"},
+			{Key: "esc", Label: "close"},
+		})
+	}
+	return m.issuePreviewView
+}
+
+func issuePreviewViewportHeight(screenH int) int {
+	// Match modal.desiredModalInnerHeight (screenH-6) minus buttons and footer.
+	h := screenH - 12
+	if h < 8 {
+		h = 8
+	}
+	if h > 36 {
+		h = 36
+	}
+	return h
+}
+
+func (m *Model) issuePreviewFooter() string {
+	var hintBuf strings.Builder
+	hintBuf.WriteString(styles.KeyHint.Render("enter"))
+	hintBuf.WriteString(styles.Muted.Render(" activate  "))
+	hintBuf.WriteString(styles.KeyHint.Render("j/k"))
+	hintBuf.WriteString(styles.Muted.Render(" scroll  "))
+	hintBuf.WriteString(styles.KeyHint.Render("o"))
+	hintBuf.WriteString(styles.Muted.Render(" open  "))
+	hintBuf.WriteString(styles.KeyHint.Render("b"))
+	hintBuf.WriteString(styles.Muted.Render(" back  "))
+	hintBuf.WriteString(styles.KeyHint.Render("y"))
+	hintBuf.WriteString(styles.Muted.Render(" yank  "))
+	hintBuf.WriteString(styles.KeyHint.Render("esc"))
+	hintBuf.WriteString(styles.Muted.Render(" close"))
+	return hintBuf.String()
+}
+
 func (m *Model) ensureIssuePreviewModal() {
 	// Use 80% of terminal width so the issue is comfortable to read
 	modalW := m.width * 4 / 5
@@ -244,14 +292,14 @@ func (m *Model) ensureIssuePreviewModal() {
 		modalW = 30
 	}
 
-	// Cache check -- also invalidate when data/error/loading changes
-	cacheKey := modalW
-	if m.issuePreviewModal != nil && m.issuePreviewModalWidth == cacheKey {
+	cacheH := m.height
+	if m.issuePreviewModal != nil && m.issuePreviewModalWidth == modalW && m.issuePreviewModalHeight == cacheH {
 		return
 	}
-	m.issuePreviewModalWidth = cacheKey
+	m.issuePreviewModalWidth = modalW
+	m.issuePreviewModalHeight = cacheH
 
-	if m.issuePreviewLoading {
+	if m.issuePreviewLoading && (m.issuePreviewView == nil || m.issuePreviewView.Loading()) {
 		m.issuePreviewModal = modal.New("Loading...",
 			modal.WithWidth(modalW),
 			modal.WithHints(false),
@@ -260,7 +308,7 @@ func (m *Model) ensureIssuePreviewModal() {
 		return
 	}
 
-	if m.issuePreviewError != nil {
+	if m.issuePreviewError != nil && (m.issuePreviewView == nil || m.issuePreviewView.Data() == nil) {
 		m.issuePreviewModal = modal.New("Issue Not Found",
 			modal.WithWidth(modalW),
 			modal.WithVariant(modal.VariantDanger),
@@ -274,51 +322,56 @@ func (m *Model) ensureIssuePreviewModal() {
 		return
 	}
 
-	if m.issuePreviewData == nil {
+	view := m.ensureIssuePreviewView()
+	if view == nil || (m.issuePreviewData == nil && view.Data() == nil && !view.Loading()) {
 		m.issuePreviewModal = nil
 		return
 	}
 
-	data := m.issuePreviewData
-
-	// Build fixed footer hint string
-	var hintBuf strings.Builder
-	hintBuf.WriteString(styles.KeyHint.Render("j/k"))
-	hintBuf.WriteString(styles.Muted.Render(" scroll  "))
-	hintBuf.WriteString(styles.KeyHint.Render("o"))
-	hintBuf.WriteString(styles.Muted.Render(" open  "))
-	hintBuf.WriteString(styles.KeyHint.Render("b"))
-	hintBuf.WriteString(styles.Muted.Render(" back  "))
-	hintBuf.WriteString(styles.KeyHint.Render("y"))
-	hintBuf.WriteString(styles.Muted.Render(" yank  "))
-	hintBuf.WriteString(styles.KeyHint.Render("Y"))
-	hintBuf.WriteString(styles.Muted.Render(" yank key  "))
-	hintBuf.WriteString(styles.KeyHint.Render("esc"))
-	hintBuf.WriteString(styles.Muted.Render(" close"))
-
-	// Build modal — the issue's own rendering comes from the shared component;
-	// the modal owns only its chrome.
-	b := modal.New(issueview.Heading(data),
+	viewH := issuePreviewViewportHeight(m.height)
+	b := modal.New("",
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
-		modal.WithCustomFooter(hintBuf.String()),
+		modal.WithCustomFooter(m.issuePreviewFooter()),
 	)
 
-	for _, line := range []string{
-		issueview.StatusLine(data),
-		issueview.ParentLine(data),
-		issueview.LabelsLine(data),
-	} {
-		if line != "" {
-			b = b.AddSection(modal.Text(line))
+	b = b.AddSection(modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		v := m.ensureIssuePreviewView()
+		if v == nil {
+			return modal.RenderedSection{Content: " "}
 		}
-	}
-
-	// Description — render as markdown, let modal scroll handle overflow
-	if desc := issueview.Description(nil, data, modalW-modal.ModalPadding); desc != "" {
-		b = b.AddSection(modal.Spacer())
-		b = b.AddSection(modal.Text(desc))
-	}
+		v.SetFocused(focusID == issueViewFocusID)
+		v.SetSize(contentWidth, viewH)
+		return modal.RenderedSection{
+			Content: v.View(),
+			Focusables: []modal.FocusableInfo{{
+				ID:      issueViewFocusID,
+				OffsetX: 0,
+				OffsetY: 0,
+				Width:   contentWidth,
+				Height:  viewH,
+			}},
+		}
+	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
+		v := m.ensureIssuePreviewView()
+		if v == nil {
+			return "", nil
+		}
+		key, ok := msg.(tea.KeyPressMsg)
+		if !ok {
+			return "", nil
+		}
+		if key.String() == "enter" && !v.Active() {
+			v.SetActive(true)
+			v.SetFocused(true)
+			return "", nil
+		}
+		if v.Active() {
+			_, cmd := v.HandleKey(key)
+			return "", cmd
+		}
+		return "", nil
+	}))
 
 	b = b.AddSection(modal.Spacer())
 	b = b.AddSection(modal.Buttons(

@@ -687,7 +687,7 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 		t.Fatal("click on styled Claude Update path did not activate")
 	}
 	doc, _ := p.activeDocPane()
-	if doc == nil || doc.view.Title() != rel {
+	if doc == nil || doc.view().Title() != rel {
 		t.Fatalf("click opened doc = %#v", doc)
 	}
 	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.docFocused() {
@@ -767,7 +767,7 @@ func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *te
 	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd == nil {
 		t.Fatal("interactive path:line did not activate")
 	}
-	if doc, _ := p.activeDocPane(); doc == nil || doc.view.Title() != "README.md" {
+	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "README.md" {
 		t.Fatalf("interactive path:line opened doc = %#v", doc)
 	}
 	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.previewFreeze.Active() {
@@ -1190,8 +1190,8 @@ func TestBareGoPathAndLineOpenRawDocPane(t *testing.T) {
 		t.Fatal("main.go:37 did not open a preview")
 	}
 	doc, _ := p.activeDocPane()
-	if doc == nil || doc.view.Title() != "main.go" || doc.view.Rendered() {
-		t.Fatalf("raw go preview = %#v rendered=%v", doc, doc != nil && doc.view.Rendered())
+	if doc == nil || doc.view().Title() != "main.go" || doc.view().Rendered() {
+		t.Fatalf("raw go preview = %#v rendered=%v", doc, doc != nil && doc.view().Rendered())
 	}
 }
 
@@ -1213,10 +1213,10 @@ func TestOpenTerminalPathPreviewsOtherWorktreeFileInPlace(t *testing.T) {
 		t.Fatal("outside worktree file returned no preview command")
 	}
 	doc, _ := p.activeDocPane()
-	if doc == nil || doc.view.Title() != mustEvalSymlink(t, path) {
+	if doc == nil || doc.view().Title() != mustEvalSymlink(t, path) {
 		t.Fatalf("previewed doc = %#v", doc)
 	}
-	if doc.view.Rendered() {
+	if doc.view().Rendered() {
 		t.Fatal("non-markdown preview opened rendered")
 	}
 	msg := cmd()

@@ -199,9 +199,7 @@ func (p *Plugin) selectCreatedWorktree(wt *Worktree) {
 		p.worktrees = append(p.worktrees, wt)
 		idx = len(p.worktrees) - 1
 	}
-	p.shellSelected = false
-	p.selectedNestedTmux = ""
-	p.selectedIdx = idx
+	p.selectWorktreeAt(idx)
 	p.resetPreviewScroll()
 	p.saveSelectionState()
 	p.ensureVisible()

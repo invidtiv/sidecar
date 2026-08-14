@@ -1,24 +1,24 @@
 Shell                                           t to attach • E for interactive • Ctrl-b d to detach
-No output yet                                                                                       
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
-                                                                                                    
+No output yet
+
+
+
+
+
+
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- left.md   Rendered   ×            q close · m raw│ right.md   Rendered   ×          q close · m raw
-                                                  │                                                 
-   left                                           │   right                                         
-                                                  │                                                 
-  left body                                       │  right body                                     
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
+  left.md                                         │  right.md
+                                                  │
+   left                                           │   right
+                                                  │
+  left body                                       │  right body
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │

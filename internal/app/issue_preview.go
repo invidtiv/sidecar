@@ -92,3 +92,37 @@ func fetchIssuePreviewCmd(workDir, issueID string) tea.Cmd {
 		return IssuePreviewResultMsg{Data: msg.Data, Error: msg.Error}
 	}
 }
+
+// issuePreviewModelID is reserved for the app's preview modal so a workspace
+// issue leaf can never have its load stolen by SetResult identity.
+const issuePreviewModelID = -1
+
+func (m *Model) previewIssueData() *IssuePreviewData {
+	if m.issuePreviewView != nil && m.issuePreviewView.Data() != nil {
+		return m.issuePreviewView.Data()
+	}
+	return m.issuePreviewData
+}
+
+func (m *Model) claimIssuePreviewLoad(msg issueview.LoadedMsg) bool {
+	if !m.showIssuePreview || m.issuePreviewView == nil {
+		return false
+	}
+	if !m.issuePreviewView.SetResult(msg) {
+		return false
+	}
+	m.applyIssuePreviewData(m.issuePreviewView.Data(), msg.Error)
+	return true
+}
+
+func (m *Model) applyIssuePreviewData(data *IssuePreviewData, err error) {
+	m.issuePreviewLoading = false
+	m.issuePreviewError = err
+	m.issuePreviewData = data
+	if m.issuePreviewView != nil && data != nil && err == nil && m.issuePreviewView.Data() == nil {
+		m.issuePreviewView.SetData(data)
+	}
+	m.issuePreviewModal = nil
+	m.issuePreviewModalWidth = 0
+	m.issuePreviewModalHeight = 0
+}

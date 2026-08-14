@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -79,14 +80,9 @@ type (
 		Epoch   uint64
 	}
 	// NavigateToFileMsg requests navigation to a specific file (from other plugins).
-	NavigateToFileMsg struct {
-		Path string // Relative path from workdir
-		Line int    // Optional 1-based line to reveal after loading
-	}
+	NavigateToFileMsg = app.NavigateToFileMsg
 	// RevealErrorMsg is sent when reveal in file manager fails.
-	RevealErrorMsg struct {
-		Err error
-	}
+	RevealErrorMsg = docview.RevealErrorMsg
 	// FileOpErrorMsg is sent when a file operation fails.
 	FileOpErrorMsg struct {
 		Err error
@@ -129,10 +125,7 @@ type (
 		Gen uint64
 	}
 	// GitInfoMsg contains git status for a file.
-	GitInfoMsg struct {
-		Status     string
-		LastCommit string
-	}
+	GitInfoMsg = docview.GitInfoMsg
 )
 
 // GetEpoch implements plugin.EpochMessage for staleness detection.

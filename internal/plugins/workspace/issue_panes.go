@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -136,10 +135,10 @@ func (p *Plugin) applyIssueLoaded(msg issueview.LoadedMsg) {
 	if issue == nil || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
 		return
 	}
-	root, surface, ok := p.selectedTerminalSurface()
-	if !ok || filepath.Clean(issue.root) != root || issue.surface != surface {
-		return
-	}
+	// The pane asked for this load. SetResult already rejects a stale
+	// generation or issue; dropping on a transient surface mismatch left
+	// the leaf stuck on "Loading issue…". A real selection change closes
+	// the leaf via resetDocPanesForSelection.
 	issue.view.SetResult(msg)
 }
 
@@ -180,14 +179,24 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if issue == nil {
 		return false, nil
 	}
+	// A focused issue pane is the active card: the pane already owns the
+	// keyboard, so arrows walk parent/siblings/subtasks instead of waiting
+	// for a second enter the way the preview modal must.
+	issue.view.SetActive(true)
+	issue.view.SetFocused(true)
 	switch msg.String() {
+	case "tab", "shift+tab":
+		// The pane cycle lives on the list keymap so issue, doc, and
+		// terminal stay one ring. Claiming Tab here made the issue leaf
+		// a dead end.
+		return false, nil
 	case "\\":
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeIssuePane(leaf.ID)
 	default:
-		issue.view.HandleKey(msg)
-		return true, nil
+		_, cmd := issue.view.HandleKey(msg)
+		return true, cmd
 	}
 }
 
@@ -233,4 +242,8 @@ func (p *Plugin) registerIssuePaneRegions(title string, leafID int, box Box) {
 			p.mouseHandler.HitMap.AddRect(regionIssueClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
 		}
 	}
+}
+
+func issueViewLocal(actionX, actionY int, box Box) (int, int) {
+	return actionX - box.X, actionY - box.Y - terminalHeaderRows
 }

@@ -243,7 +243,19 @@ Real-time streaming of agent terminal output. Shows exactly what the agent sees�
 | `g` | Jump to top |
 | `G` | Jump to bottom (resumes auto-scroll) |
 
-#### Read referenced markdown beside the terminal
+#### Open files beside the terminal
+
+An unmodified click on a resolvable file path in a selected workspace or
+project shell terminal opens it beside that terminal. `README.md` and
+`internal/plugins/workspace/plugin.go:37` are both links. Markdown with no
+line number opens rendered; anything else, including `path:line`, opens as
+highlighted source.
+
+A second click adds a tab instead of replacing the file. Clicking a path
+that is already open focuses that tab (and jumps to the line when the link
+has one). The header is only the tab strip: each label is the relative path,
+left-truncated so the filename always survives (`…/workspace/plugin.go`).
+There is no Raw chip, close chip, or in-header hint.
 
 Document panes are enabled by default. To turn them off for a launch, run
 `sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
@@ -259,31 +271,38 @@ Document panes are enabled by default. To turn them off for a launch, run
 }
 ```
 
-Click a markdown `path:line` shown in a selected workspace
-or project shell terminal, such as `docs/guide.md:24`. The document opens beside
-the terminal in Workspaces and starts at that source line. Other file types keep
-opening in Files. A bare path such as `docs/guide.md` is not clickable yet; it
-must include `:line` in this preview.
-
-The active pane is marked in its header. Click a pane or use `tab` and
-`shift+tab` to move focus. Document focus provides these commands:
+Click a pane or use `tab` and `shift+tab` to move focus. Document focus
+provides these commands:
 
 | Key | Action |
 |-----|--------|
 | `j`, `↓` / `k`, `↑` | Scroll by one line |
 | `ctrl+d` / `ctrl+u` | Scroll by half a page |
 | `g` / `G` | Jump to the start / end |
-| `r` | Switch between rendered and raw markdown |
-| `+` / `-` | Grow / shrink the document pane |
-| `q`, `esc` | Close the document and return focus to the terminal |
+| `x` | Close the active tab. The last tab closes the pane and forgets the set |
+| `{` / `}` | Previous / next tab |
+| `m` | Toggle rendered / raw markdown. No-op on other files |
+| `w` | Toggle line wrap |
+| `I` | File info |
+| `ctrl+r` | Reveal in the OS file manager |
+| `Y` | Copy the relative path |
+| `+` / `-` | Grow / shrink the split |
+| `tab` / `shift+tab` | Move focus between sidebar, terminal, and document |
+| `q`, `esc` | Hide the pane. The files stay remembered for this shell or workspace |
 
-You can also click the close chip in the document header or drag the divider.
-The open document, render mode, and split ratio are remembered for that selected
-workspace or shell. Switching terminal selections never carries a document into
-another workspace.
+`q` hides; `x` on the last file forgets. Switching to another shell and
+back, or relaunching onto the same surface, restores open files, the active
+tab, render mode, wrap, scroll, and split ratio. A surface with no
+remembered files stays a full-width terminal. Clicking a file while the
+pane is hidden reopens the remembered set and focuses (or appends) that
+path.
 
-`shift`-drag and `alt`-drag remain terminal text-selection gestures; neither is
-an override for opening links. Use an unmodified click to follow `path:line`.
+`,` / `.` stay Output / Diff / Task on worktrees and do not cycle document
+tabs. `m` on a focused document does not start a merge. Drag the divider to
+resize.
+
+`shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
+is an override for opening links. Use an unmodified click to follow a path.
 
 **What you'll see:**
 - Agent initialization and model selection
@@ -674,7 +693,7 @@ The plugin remembers state across restarts and automatically reconnects to runni
 | Sidebar width | User config |
 | Diff view mode | User config |
 | Active tab | User config |
-| Open document, render mode, and document split | Per-project workspace state |
+| Open tabs, wrap, render mode, and split (per shell / workspace) | Per-project workspace state |
 | Agent type | `.sidecar-agent` in workspace dir |
 | Agent start command override | `.sidecar-agent-start` in workspace dir |
 | Task link | `.sidecar-task` in workspace dir |
@@ -825,7 +844,11 @@ All keyboard shortcuts by context:
 | `esc` | Focus sidebar |
 | `\` | Toggle sidebar |
 
-### Document Context (`workspace-doc`, opt-in preview)
+### Document Context (`workspace-doc`)
+
+File tabs beside the selected workspace or shell terminal. `q` hides the
+pane and remembers the set; `x` on the last tab forgets it. Each surface
+restores its own tabs.
 
 | Key | Action |
 |-----|--------|
@@ -833,10 +856,16 @@ All keyboard shortcuts by context:
 | `k`, `↑` | Scroll up |
 | `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
 | `g`, `G` | Jump to start / end |
-| `m` | Toggle rendered / raw markdown |
-| `+`, `-` | Grow / shrink document pane |
-| `tab`, `shift+tab` | Move focus between panes |
-| `q`, `esc` | Close document pane |
+| `x` | Close the active tab. Last tab forgets the set |
+| `{`, `}` | Previous / next file tab |
+| `m` | Toggle rendered / raw markdown (markdown only) |
+| `w` | Toggle line wrap |
+| `I` | File info |
+| `ctrl+r` | Reveal in the OS file manager |
+| `Y` | Copy the relative path |
+| `+`, `-` | Grow / shrink the split |
+| `tab`, `shift+tab` | Move focus between sidebar, terminal, and document |
+| `q`, `esc` | Hide the pane. Tabs stay remembered for this surface |
 
 ### Create Modal (`workspace-create`)
 

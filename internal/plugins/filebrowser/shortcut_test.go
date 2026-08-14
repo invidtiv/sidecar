@@ -1,6 +1,10 @@
 package filebrowser
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/marcus/sidecar/internal/plugin"
+)
 
 func TestBracesCycleFileTabs(t *testing.T) {
 	p := &Plugin{
@@ -19,6 +23,27 @@ func TestBracesCycleFileTabs(t *testing.T) {
 	_, _ = p.handlePreviewKey("{")
 	if p.activeTab != 0 {
 		t.Fatalf("activeTab after { = %d, want 0", p.activeTab)
+	}
+}
+
+func TestPreviewPathActionsCallViewer(t *testing.T) {
+	dir := t.TempDir()
+	p := &Plugin{
+		ctx:         &plugin.Context{WorkDir: dir},
+		previewFile: "readme.md",
+		activePane:  PanePreview,
+	}
+	_, reveal := p.handlePreviewKey("ctrl+r")
+	if reveal == nil {
+		t.Fatal("ctrl+r should reveal via the shared viewer")
+	}
+	_, yank := p.handlePreviewKey("Y")
+	if yank == nil {
+		t.Fatal("Y should yank path via the shared viewer")
+	}
+	_, info := p.handlePreviewKey("I")
+	if !p.infoMode || info == nil {
+		t.Fatalf("I should open info via the shared viewer: mode=%v cmd=%v", p.infoMode, info != nil)
 	}
 }
 
