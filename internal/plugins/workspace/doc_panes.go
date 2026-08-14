@@ -338,13 +338,6 @@ func tabRowDistance(x int, r mouse.Rect) int {
 	return 0
 }
 
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	hit, ok := data.(docTabHit)
 	if !ok {

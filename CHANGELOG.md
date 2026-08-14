@@ -2,6 +2,22 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.99.1] - 2026-08-14
+
+### Features
+
+- File preview tabs are now clickable in both project and global Workspaces,
+  with global previews retaining multiple open files instead of replacing the
+  current one.
+
+### Bug Fixes
+
+- Project workspace tab clicks now select the intended file without being
+  stolen by the terminal preview or pane divider.
+- Global and project Workspaces once again share pane placement and resizing
+  behavior, including stacked file and issue panes, draggable nested dividers,
+  and per-workspace restoration of pane layouts and scroll positions.
+
 ## [v0.99.0] - 2026-08-14
 
 ### Features
