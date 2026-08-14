@@ -19,10 +19,14 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-func TestIssueSpanIsDetectedButNotActivatedOrDecorated(t *testing.T) {
+// A td id is a link only where there is a pane tree to open it in. Without one
+// — no tree, or a surface whose root did not resolve — it stays plain text and
+// a click on it is an ordinary terminal gesture, because an underline is a
+// promise and this host has no other route for the kind.
+func TestIssueSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
 	line := "review td-196c42"
 	if links := detectTerminalLinks(line); len(links) != 0 {
-		t.Fatalf("host must ignore issue spans: %#v", links)
+		t.Fatalf("an unbound host must ignore issue spans: %#v", links)
 	}
 	if got := decorateTerminalLinks(line, nil); strings.Contains(got, "\x1b[4m") {
 		t.Fatalf("issue id was decorated: %q", got)
@@ -35,11 +39,40 @@ func TestIssueSpanIsDetectedButNotActivatedOrDecorated(t *testing.T) {
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.docs = make(map[int]*docPane)
+	// No plugin context, so no terminal surface resolves and no leaf could be
+	// bound to one.
 	if cmd, ok := p.activateTerminalLink(actionAt(8, 4)); ok || cmd != nil {
-		t.Fatal("clicking a td issue id activated a host path")
+		t.Fatal("clicking a td issue id activated a host path with no surface")
 	}
-	if doc, _ := p.activeDocPane(); doc != nil {
-		t.Fatal("issue click opened a document pane")
+	if issue, _ := p.activeIssuePane(); issue != nil {
+		t.Fatal("issue click opened a pane with no surface to bind it to")
+	}
+}
+
+// With a tree and a resolved surface the same id is underlined by the same
+// resolver the click reads, so what the row promises and what the click opens
+// are one answer.
+func TestIssueSpanIsDecoratedWhereItIsClickable(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	line := "follow-up is td-1a2b3c"
+	buffer := p.shells[0].Agent.OutputBuf
+	buffer.Update(line)
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	if resolver == nil {
+		t.Fatal("a bound surface produced no link resolver")
+	}
+	links := resolver.links(line)
+	if len(links) != 1 || links[0].Kind != terminalIssueLink || links[0].Value != "td-1a2b3c" {
+		t.Fatalf("resolved links = %#v, want one issue link", links)
+	}
+	decorated := decorateTerminalLinks(line, resolver)
+	if ansi.Strip(decorated) != line || !strings.Contains(decorated, "\x1b[4m") {
+		t.Fatalf("issue decoration = %q", decorated)
+	}
+	if strings.Contains(decorated, "\x1b]8;;") {
+		t.Fatalf("issue id was given an OSC-8 hyperlink: %q", decorated)
 	}
 }
 

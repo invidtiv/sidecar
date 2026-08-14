@@ -181,19 +181,10 @@ func clonePaneTree(node *PaneNode) *PaneNode {
 }
 
 func terminalLeafID(root *PaneNode) int {
-	if root == nil {
-		return 0
+	if leaf := firstPaneLeafOfKind(root, PaneTerminal); leaf != nil {
+		return leaf.ID
 	}
-	if root.Split == nil {
-		if root.Kind == PaneTerminal {
-			return root.ID
-		}
-		return 0
-	}
-	if id := terminalLeafID(root.Split.A); id != 0 {
-		return id
-	}
-	return terminalLeafID(root.Split.B)
+	return 0
 }
 
 func (p *Plugin) closeDocPane() tea.Cmd {

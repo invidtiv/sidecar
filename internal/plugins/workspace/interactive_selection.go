@@ -238,7 +238,9 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	if !found {
 		return nil, false
 	}
-	documentTarget := link.Kind == terminalPathLink && p.paneRoot != nil && docPaneTarget(link.Value)
+	paneTarget := p.paneRoot != nil &&
+		(link.Kind == terminalIssueLink ||
+			(link.Kind == terminalPathLink && docPaneTarget(link.Value)))
 	// Preserve the exact live window containing the link before opening the
 	// document changes pane geometry. Claude commonly moves that transcript
 	// into history and publishes a sparse live grid after the resize; leaving
@@ -249,24 +251,37 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 		return nil, false
 	}
 	// URLs and non-document file navigation do not resize this surface.
-	// Bare markdown and authoritative path:line routes both create a doc pane.
-	if !documentTarget {
+	// Bare markdown and authoritative path:line routes both create a doc pane,
+	// and a td id creates an issue pane; all three move the terminal's box.
+	if !paneTarget {
 		return cmd, true
 	}
-	_, leaf := p.activeDocPane()
+	leaf := p.openedPaneLeaf(link.Kind)
 	if leaf == nil {
 		return cmd, true
 	}
 	p.applyTerminalViewportFreeze(freeze)
-	// A document pane is not keyboard-focusable while terminal input is live.
+	// A content pane is not keyboard-focusable while terminal input is live.
 	// Link activation transfers focus out of the terminal, so leave interactive
 	// routing now rather than retaining stale interactive geometry/input
-	// ownership beside the newly focused document.
+	// ownership beside the newly focused pane.
 	p.exitInteractiveMode()
 	p.activePane = PanePreview
 	p.paneFocus = leaf.ID
 	p.termPanelFocused = false
 	return cmd, true
+}
+
+// openedPaneLeaf returns the leaf a link of this kind opens into, so the click
+// path can hand it focus without asking a second time what kind of content it
+// just opened.
+func (p *Plugin) openedPaneLeaf(kind terminalLinkKind) *PaneNode {
+	if kind == terminalIssueLink {
+		_, leaf := p.activeIssuePane()
+		return leaf
+	}
+	_, leaf := p.activeDocPane()
+	return leaf
 }
 
 type terminalViewportFreeze struct {

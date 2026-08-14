@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/styles"
@@ -30,6 +32,89 @@ func (p *Plugin) activeIssuePane() (*issuePane, *PaneNode) {
 		}
 	}
 	return nil, nil
+}
+
+// activateIssueLink opens the clicked td id against the selected terminal
+// surface. The surface is the same answer a clicked file is bound to, so an
+// issue and a document opened from one terminal are collapsed together when
+// the selection moves on.
+func (p *Plugin) activateIssueLink(issueID string) (tea.Cmd, bool) {
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil, false
+	}
+	cmd := p.openIssuePaneForSurface(root, surface, issueID)
+	if cmd == nil {
+		return nil, false
+	}
+	p.clearTerminalSelection()
+	return cmd, true
+}
+
+// openIssuePaneForSurface opens issueID in the pane tree at the place
+// planIssueOpen names. The split is trialled on a clone first, exactly as a
+// document's is: a box that cannot hold the result leaves the terminal at the
+// size it already has rather than reflowing an agent for a pane that will not
+// be drawn.
+func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd {
+	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
+		return nil
+	}
+	plan, ok := planIssueOpen(p.paneRoot)
+	if !ok {
+		return nil
+	}
+	if plan.Retarget != 0 {
+		leaf := FindPane(p.paneRoot, plan.Retarget)
+		if leaf == nil || leaf.Split != nil {
+			return nil
+		}
+		load := p.attachIssuePane(leaf.ContentID, root, surface, issueID)
+		if load == nil {
+			return nil
+		}
+		p.paneFocus = leaf.ID
+		p.activePane = PanePreview
+		p.saveSelectionState()
+		return load
+	}
+
+	content, placed := p.previewContentBox()
+	if !placed {
+		return nil
+	}
+	id := p.paneNextID
+	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis,
+		&PaneNode{ID: id, Kind: PaneIssue, ContentID: id})
+	if trialFocus != id {
+		return nil
+	}
+	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+		p.toastMessage = issuePaneFitMessage(plan.Axis)
+		p.toastTime = time.Now()
+		return nil
+	}
+
+	newLeaf := &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
+	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
+	if focus != newLeaf.ID {
+		return nil
+	}
+	p.paneRoot, p.paneFocus = treeRoot, focus
+	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
+	p.activePane = PanePreview
+	load := p.attachIssuePane(newLeaf.ContentID, root, surface, issueID)
+	p.saveSelectionState()
+	return tea.Batch(load, p.resizeDocTerminalCmd())
+}
+
+// issuePaneFitMessage names the dimension the refused split needed, because
+// "wider" is not advice when the pane would have been stacked.
+func issuePaneFitMessage(axis SplitAxis) string {
+	if axis == SplitRows {
+		return "Issue pane needs a taller window; layout left unchanged"
+	}
+	return "Issue pane needs a wider window; layout left unchanged"
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its

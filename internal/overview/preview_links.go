@@ -71,7 +71,22 @@ func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 
 func (m *Model) decoratePreviewLine(line string, _ int) string {
 	line = terminallink.StripOSC8(line)
-	return terminallink.Decorate(line, m.previewLinkSpans(line))
+	return terminallink.Decorate(line, m.decoratedPreviewSpans(line))
+}
+
+// decoratedPreviewSpans keeps the kinds this surface activates. A td issue is
+// scanned here and opened nowhere — the pane tree that hosts one belongs to the
+// workspace plugin — so decorating it would promise a click this surface has no
+// answer for.
+func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
+	spans := m.previewLinkSpans(line)
+	bound := make([]terminallink.Span, 0, len(spans))
+	for _, span := range spans {
+		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile {
+			bound = append(bound, span)
+		}
+	}
+	return bound
 }
 
 func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool) {

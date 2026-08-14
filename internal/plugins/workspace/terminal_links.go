@@ -19,6 +19,7 @@ type terminalLinkKind int
 const (
 	terminalURLLink terminalLinkKind = iota + 1
 	terminalPathLink
+	terminalIssueLink
 )
 
 type terminalLink struct {
@@ -88,13 +89,15 @@ func safeHTTPURL(raw string) (string, bool) {
 }
 
 func detectTerminalLinks(line string) []terminalLink {
-	return activatableTerminalLinks(terminallink.Scan(line, nil))
+	return activatableTerminalLinks(terminallink.Scan(line, nil), false)
 }
 
-// activatableTerminalLinks keeps url and file spans. Issue spans are parsed
-// so a later split can bind them to a td pane; this host ignores the kind and
-// must not open the issue-preview modal.
-func activatableTerminalLinks(spans []terminallink.Span) []terminalLink {
+// activatableTerminalLinks keeps the spans this host can act on. Issue spans
+// are among them only when issues is true — a td id opens a leaf of the pane
+// tree, so without a tree there is nothing to open and an underline would
+// promise a click that goes nowhere. The issue-preview modal is not this
+// host's route and never was.
+func activatableTerminalLinks(spans []terminallink.Span, issues bool) []terminalLink {
 	links := make([]terminalLink, 0, len(spans))
 	for _, span := range spans {
 		switch span.Kind {
@@ -113,6 +116,16 @@ func activatableTerminalLinks(spans []terminallink.Span) []terminalLink {
 				Value:    span.Value,
 				Line:     span.Extra.Line,
 				Raw:      span.Extra.Raw,
+			})
+		case terminallink.KindIssue:
+			if !issues {
+				continue
+			}
+			links = append(links, terminalLink{
+				Kind:     terminalIssueLink,
+				StartCol: span.StartCol,
+				EndCol:   span.EndCol,
+				Value:    span.Value,
 			})
 		}
 	}
@@ -140,6 +153,8 @@ func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
 		case terminalPathLink:
 			span.Kind = terminallink.KindFile
 			span.Extra = terminallink.Extra{Line: link.Line, Raw: link.Raw}
+		case terminalIssueLink:
+			span.Kind = terminallink.KindIssue
 		default:
 			continue
 		}
@@ -241,7 +256,7 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 			return "", terminallink.Extra{}, false
 		}
 		return resolution.rel, terminallink.Extra{Raw: raw}, true
-	}))
+	}), true)
 	for i := range links {
 		if links[i].Kind == terminalPathLink && links[i].Raw != "" {
 			links[i].Root = context.root
@@ -283,6 +298,9 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 	if link.Kind == terminalURLLink {
 		p.clearTerminalSelection()
 		return openInBrowser(link.Value), true
+	}
+	if link.Kind == terminalIssueLink {
+		return p.activateIssueLink(link.Value)
 	}
 	if link.Kind != terminalPathLink {
 		return nil, false
