@@ -1,0 +1,50 @@
+ Sidecar / sidecar-steel-fixture                                                                td     git     files     workspaces                                                                19:03
+
+╭─────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                                            New   │││ Shell 1 t to attach • E for interactive • Ctrl-b Ctrl-b d │ clicked.md   Raw   ×                  q close · m render │
+│ Shells (1)                                                             +    │││ follow-up is td-1a2b3c\n"                                ││# clicked                                                 │
+│  ◎ Shell 1                                                                  │││ wrote clicked.md:1                                       ││                                                          │
+│    shell  live                                                              │││ follow-up is td-1a2b3c                                   ││file body from the fixture repo.                          │
+│                                                                             │││ sidecar-steel-fixture main ❯ printf "superseded by td-9f8││                                                          │
+│ Workspaces (1)                                                         +    │││ e7d\n"                                                   ┃│This document was opened by clicking its path in the shel │
+│  ⏸ ⑂ sidecar-steel-fixture                                                  │││ superseded by td-9f8e7d                                  ┃│                                                          │
+│      main  main                                                             │││ sidecar-steel-fixture main ❯                             ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│───────────────────────────────────────────────────────── │
+│                                                                             │││                                                          ┃│ td-9f8e7d: Issue td-9f8e7d   ×                           │
+│                                                                             │││                                                          ┃│td-9f8e7d: Issue td-9f8e7d                                │
+│                                                                             │││                                                          ┃│[open]  task  P2                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│  Body of td-9f8e7d.                                      │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│  The issue pane was opened by clicking this id in the    │
+│                                                                             │││                                                          ┃│  shell output.                                           │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+╰─────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ tab, shift+tab  Focus   \  Sidebar   E  Type   ctrl+t  Term   1-4  plugins   ?  help   q  quit                                                                                               ↻ 19:02:26

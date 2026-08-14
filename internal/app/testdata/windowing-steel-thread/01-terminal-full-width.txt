@@ -1,0 +1,50 @@
+ Sidecar / sidecar-steel-fixture                                                                td     git     files     workspaces                                                                19:00
+
+╭─────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                                            New   │││ Shell 1                                                  t to attach • E for interactive • Ctrl-b Ctrl-b d to detach │
+│ Shells (1)                                                             +    │││ sidecar-steel-fixture main ❯ printf "wrote clicked.md:1\nfollow-up is td-1a2b3c\n"                                   │
+│  ◎ Shell 1                                                                  │││ wrote clicked.md:1                                                                                                   │
+│    shell  live                                                              │││ follow-up is td-1a2b3c                                                                                               │
+│                                                                             │││ sidecar-steel-fixture main ❯                                                                                         │
+│ Workspaces (1)                                                         +    │││                                                                                                                      │
+│  ⏸ ⑂ sidecar-steel-fixture                                                  │││                                                                                                                      │
+│      main  main                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+│                                                                             │││                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ n  New   ctrl+n  Shell   F  Fetch   v  Kanban   \  Sidebar   r  Refresh   /  Filter   ctrl+k  Kill   1-4  plugins   ?  help   q  quit                                                        ↻ 18:59:57

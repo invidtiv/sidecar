@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -176,11 +178,55 @@ func clickTerminalLink(t *testing.T, p *Plugin, want string) tea.Cmd {
 	return nil
 }
 
+// deliverLoads runs cmd and hands any content load result back to the plugin,
+// the way the runtime would. A pane whose fetch is never delivered draws its
+// loading state, which is not the screen the journey is about.
+func deliverLoads(t *testing.T, p *Plugin, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, child := range msg {
+			deliverLoads(t, p, child)
+		}
+	case docview.LoadedMsg, issueview.LoadedMsg:
+		p.update(msg)
+	}
+}
+
+// paneLeafBoxes reads where the layout actually put each leaf, through the same
+// authority the terminal sizers read. A tree of the right shape is not the claim
+// the journey makes: the claim is a terminal column at full height beside a
+// stacked document and issue, and only the boxes say that.
+func paneLeafBoxes(t *testing.T, p *Plugin) (map[PaneKind]Box, Box) {
+	t.Helper()
+	content, ok := p.previewContentBox()
+	if !ok {
+		t.Fatal("preview content box is unplaced")
+	}
+	layout, ok := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
+	if !ok || layout.Zoomed {
+		t.Fatalf("layout ok=%v zoomed=%v, want every leaf in a box of its own", ok, layout.Zoomed)
+	}
+	boxes := make(map[PaneKind]Box, len(layout.Leaves))
+	for _, placement := range layout.Leaves {
+		if _, seen := boxes[placement.Node.Kind]; seen {
+			t.Fatalf("two leaves of kind %d; this journey has one of each", placement.Node.Kind)
+		}
+		boxes[placement.Node.Kind] = placement.Box
+	}
+	return boxes, content
+}
+
 // TestClickingAFileThenATdIssueBuildsTheSteelThread walks the journey this work
 // exists for, click by click: a terminal filling the preview, a clicked file
 // beside it, then a clicked td id below the file — terminal in the left column
-// at full height, document above issue in the right one. A second td click
-// retargets the issue leaf instead of growing the tree.
+// at full height, document above issue in the right one. Every stage is measured
+// as boxes and then as composed cells, because a tree of the right shape and a
+// screen of the right shape are two claims. A second td click retargets the
+// issue leaf instead of growing the tree.
 func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 	stubTd(t)
 	root := t.TempDir()
@@ -192,12 +238,33 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 		"superseded by td-9f8e7d",
 	}, "\n") + "\n")
 
-	if cmd := clickTerminalLink(t, p, "clicked.md"); cmd == nil {
+	// Where the journey starts: one terminal leaf holding the whole preview.
+	boxes, content := paneLeafBoxes(t, p)
+	if len(boxes) != 1 || boxes[PaneTerminal] != content {
+		t.Fatalf("before the first click the terminal holds %#v, want the whole content box %#v",
+			boxes[PaneTerminal], content)
+	}
+
+	fileCmd := clickTerminalLink(t, p, "clicked.md")
+	if fileCmd == nil {
 		t.Fatal("clicking the file opened nothing")
 	}
+	deliverLoads(t, p, fileCmd)
 	if p.paneRoot.Split == nil || p.paneRoot.Split.Axis != SplitCols ||
 		p.paneRoot.Split.A.Kind != PaneTerminal || p.paneRoot.Split.B.Kind != PaneDoc {
 		t.Fatalf("file click did not split the terminal into columns: %#v", p.paneRoot)
+	}
+	boxes, content = paneLeafBoxes(t, p)
+	terminalBox, docBox := boxes[PaneTerminal], boxes[PaneDoc]
+	if len(boxes) != 2 {
+		t.Fatalf("file click left %d leaves, want the terminal and the document", len(boxes))
+	}
+	if terminalBox.X != content.X || terminalBox.Y != content.Y || terminalBox.H != content.H {
+		t.Fatalf("terminal box %#v, want the left column at the full height of %#v", terminalBox, content)
+	}
+	if docBox.X != terminalBox.X+terminalBox.W+1 || docBox.Y != content.Y || docBox.H != content.H ||
+		docBox.X+docBox.W != content.X+content.W {
+		t.Fatalf("document box %#v, want the right column of %#v across the divider", docBox, content)
 	}
 
 	issueCmd := clickTerminalLink(t, p, "td-1a2b3c")
@@ -225,10 +292,72 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 	if !ok || len(batch) != 2 {
 		t.Fatalf("issue open command = %T, want the fetch plus one terminal resize", issueCmd())
 	}
+	loaded := false
 	for _, child := range batch {
-		if msg, ok := child().(interface{ GetEpoch() uint64 }); ok && msg.GetEpoch() != p.ctx.Epoch {
-			t.Fatalf("issue fetch carried epoch %d, want %d", msg.GetEpoch(), p.ctx.Epoch)
+		msg := child()
+		if epoched, ok := msg.(interface{ GetEpoch() uint64 }); ok && epoched.GetEpoch() != p.ctx.Epoch {
+			t.Fatalf("issue fetch carried epoch %d, want %d", epoched.GetEpoch(), p.ctx.Epoch)
 		}
+		// The fetch is delivered through the plugin's own update, so what the
+		// cells below show is what the runtime would have put there.
+		if result, ok := msg.(issueview.LoadedMsg); ok {
+			p.update(result)
+			loaded = true
+		}
+	}
+	if !loaded {
+		t.Fatal("the issue click scheduled no fetch to deliver")
+	}
+
+	boxes, content = paneLeafBoxes(t, p)
+	if len(boxes) != 3 {
+		t.Fatalf("the issue click left %d leaves, want terminal, document and issue", len(boxes))
+	}
+	stackedDoc, issueBox := boxes[PaneDoc], boxes[PaneIssue]
+	if boxes[PaneTerminal] != terminalBox {
+		t.Fatalf("the issue click moved the terminal from %#v to %#v; the left column is its own full-height column",
+			terminalBox, boxes[PaneTerminal])
+	}
+	if stackedDoc.X != docBox.X || stackedDoc.W != docBox.W || stackedDoc.Y != docBox.Y {
+		t.Fatalf("the issue click moved the document out of the right column: %#v -> %#v", docBox, stackedDoc)
+	}
+	if issueBox.X != stackedDoc.X || issueBox.W != stackedDoc.W {
+		t.Fatalf("issue box %#v, want the document's column %#v", issueBox, stackedDoc)
+	}
+	if issueBox.Y != stackedDoc.Y+stackedDoc.H+1 {
+		t.Fatalf("issue box starts at row %d, want the row below the document's divider at %d",
+			issueBox.Y, stackedDoc.Y+stackedDoc.H)
+	}
+	if issueBox.Y+issueBox.H != content.Y+content.H {
+		t.Fatalf("issue box ends at row %d, want the bottom of the content box at %d",
+			issueBox.Y+issueBox.H, content.Y+content.H)
+	}
+	if terminalBox.H <= stackedDoc.H {
+		t.Fatalf("terminal height %d is not above the stacked document's %d; the left column was split too",
+			terminalBox.H, stackedDoc.H)
+	}
+
+	// The boxes are the layout's answer; these are the cells. Each pane's own
+	// identity has to be inside its own rectangle, or the composition disagrees
+	// with the geometry the terminal is being sized from.
+	rows := composePaneTree(t, p, content.W, content.H)
+	within := func(box Box) string {
+		lines := make([]string, 0, box.H)
+		for row := 0; row < box.H; row++ {
+			cells := []rune(ansi.Strip(rows[box.Y-content.Y+row]))
+			lines = append(lines, string(cells[box.X-content.X:box.X-content.X+box.W]))
+		}
+		return strings.Join(lines, "\n")
+	}
+	documentCells, issueCells, terminalCells := within(stackedDoc), within(issueBox), within(terminalBox)
+	if !strings.Contains(documentCells, "clicked.md") || !strings.Contains(documentCells, "file body") {
+		t.Fatalf("document box does not hold the clicked file:\n%s", documentCells)
+	}
+	if !strings.Contains(issueCells, "td-1a2b3c") || !strings.Contains(issueCells, "Body of td-1a2b3c") {
+		t.Fatalf("issue box does not hold the clicked issue:\n%s", issueCells)
+	}
+	if strings.Contains(terminalCells, "Body of td-1a2b3c") || strings.Contains(terminalCells, "file body") {
+		t.Fatalf("the right column bled into the terminal's own column:\n%s", terminalCells)
 	}
 
 	if cmd := clickTerminalLink(t, p, "td-9f8e7d"); cmd == nil {

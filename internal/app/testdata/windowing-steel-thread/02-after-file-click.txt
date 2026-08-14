@@ -1,0 +1,50 @@
+ Sidecar / sidecar-steel-fixture                                                                td     git     files     workspaces                                                                19:01
+
+╭─────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                                            New   │││ Shell 1 t to attach • E for interactive • Ctrl-b Ctrl-b d │ clicked.md   Raw   ×                  q close · m render │
+│ Shells (1)                                                             +    │││ follow-up is td-1a2b3c\n"                                ││# clicked                                                 │
+│  ◎ Shell 1                                                                  │││ wrote clicked.md:1                                       ││                                                          │
+│    shell  live                                                              │││ follow-up is td-1a2b3c                                   ││file body from the fixture repo.                          │
+│                                                                             │││ sidecar-steel-fixture main ❯                             ││                                                          │
+│ Workspaces (1)                                                         +    │││                                                          ┃│This document was opened by clicking its path in the shel │
+│  ⏸ ⑂ sidecar-steel-fixture                                                  │││                                                          ┃│                                                          │
+│      main  main                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+│                                                                             │││                                                          ┃│                                                          │
+╰─────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ q, esc  Close   \  Sidebar   m  Render   +  Grow   -  Shrink   tab  Focus   shift+tab  Back   1-4  plugins   ?  help   q  quit                                                               ↻ 18:59:57

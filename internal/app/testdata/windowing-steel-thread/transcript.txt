@@ -1,0 +1,122 @@
+Steel-thread proof — a clicked file and a clicked td issue in a live Sidecar
+docs/plans/active/preview-pane-tree-and-doc-panes.md, and the click-placement
+default in internal/plugins/workspace/pane_placement.go
+
+The journey this work exists for, driven end to end in a real Sidecar process:
+a shell filling the preview, a file link clicked into a vertical split, a td id
+clicked into a horizontal split below that file — terminal in the left column at
+full height, document above issue in the right one. Then the same layout after a
+real quit and reopen, and a second td click landing in the issue leaf that is
+already open rather than growing the tree.
+
+Unlike the M0 proof, this one does reach the multi-leaf composition: the harness
+can inject SGR mouse reports on the host pane's stdin, so the clicks below are
+the user's clicks, parsed by the running binary's own mouse handling.
+
+Method
+------
+One binary, built at the head of this slice, driven on private tmux servers and
+a private state tree. Captures are the host pane's ANSI-stripped text with
+trailing spaces removed; the clicks are SGR mouse presses and releases sent with
+`tmux-drive.sh type`, at coordinates read out of the preceding capture — so each
+click lands on a cell the binary actually drew a link into.
+
+`td` is a five-line stub on the launched process's PATH answering
+`td show <id> -f json` from the id alone. The issue bodies below are therefore
+deterministic, and no real td database was read. Sidecar was launched through a
+wrapper that prepends the stub's directory to PATH, because the drive harness
+sets the launched command and not its environment.
+
+Isolation (`./scripts/tmux-drive.sh paths` before the run)
+  launch repo   /private/tmp/sidecar-steel-fixture  (a git repo holding clicked.md)
+  run dir       /private/tmp/sidecar-steel-501
+  outer server  -L sidecar-drive under that run dir's TMUX_TMPDIR
+  inner tmux    /private/tmp/sidecar-steel-501/tmux/tmux-501/default
+  state home    /private/tmp/sidecar-steel-501/state
+  config        /private/tmp/sidecar-steel-501/config/config.json
+  SIDECAR_ISOLATED_STATE=1
+The machine's default tmux server was never started, stopped, or sent a command.
+
+Reproduce
+---------
+  go build -o /tmp/sidecar-steel-bin/sidecar-real ./cmd/sidecar
+  # stub td and a PATH wrapper in /tmp/sidecar-steel-bin, then, with
+  # SIDECAR_DRIVE_RUN_DIR=/tmp/sidecar-steel-501,
+  # SIDECAR_DRIVE_REPO=/tmp/sidecar-steel-fixture and
+  # SIDECAR_BIN=/tmp/sidecar-steel-bin/sidecar-wrapped:
+  ./scripts/tmux-drive.sh start 200 50
+  ./scripts/tmux-drive.sh keys 4                       # workspaces
+  ./scripts/tmux-drive.sh keys C-n                     # a shell to click in
+  ./scripts/tmux-drive.sh inner-type %0 'printf "wrote clicked.md:1\nfollow-up is td-1a2b3c\n"'
+  ./scripts/tmux-drive.sh inner-keys %0 Enter          -> 01-terminal-full-width
+  ./scripts/tmux-drive.sh type $'\e[<0;92;6M'; ... $'\e[<0;92;6m'   -> 02-after-file-click
+  ./scripts/tmux-drive.sh type $'\e[<0;99;7M'; ... $'\e[<0;99;7m'   -> 03-after-issue-click
+  ./scripts/tmux-drive.sh keys C-c; ./scripts/tmux-drive.sh keys Enter   # quit for real
+  ./scripts/tmux-drive.sh start 200 50; ./scripts/tmux-drive.sh keys 4   -> 04-reopened-after-quit
+  ./scripts/tmux-drive.sh inner-type %0 'printf "superseded by td-9f8e7d\n"'
+  ./scripts/tmux-drive.sh inner-keys %0 Enter
+  ./scripts/tmux-drive.sh type $'\e[<0;100;10M'; ... $'\e[<0;100;10m'    -> 05-second-td-retargets
+  ./scripts/tmux-drive.sh stop
+
+What each capture shows
+-----------------------
+01-terminal-full-width
+  The starting state: one shell filling the whole preview, its output holding
+  both links — "wrote clicked.md:1" and "follow-up is td-1a2b3c". No pane tree
+  yet; the preview is the single terminal leaf.
+
+02-after-file-click
+  After clicking the cell at row 6, column 92 — inside "clicked.md". The
+  terminal now holds the left column and the document the right one, split
+  along columns. The document's header reads "clicked.md   Raw   ×" and its body
+  is the fixture file. This is the split that already worked before this work.
+
+03-after-issue-click
+  After clicking the cell at row 7, column 99 — inside "td-1a2b3c". This is the
+  steel thread. Measured on this capture's own cells:
+    - the vertical pane divider stands at column 140 on every content row,
+      4 through 48: the terminal's column is uninterrupted top to bottom;
+    - the horizontal divider is on row 26 and runs columns 142 through 198 —
+      inside the right column only. Column 140 on row 26 is still the vertical
+      divider, which is what "terminal at full height on the left" means as a
+      grid rather than as a tree shape;
+    - the document occupies the right column above that divider (header on
+      row 4), the issue below it (header on row 27, "td-1a2b3c: Issue td-1a2b3c",
+      then [open] task P2 and the stub's body).
+
+04-reopened-after-quit
+  The same three panes after Ctrl-C, Enter on the quit confirmation (a real
+  process exit) and a fresh start into the workspaces plugin. The layout, the
+  document and the issue all come back; the issue was re-fetched rather than
+  restored from a cached body, which is why its text is the stub's current
+  answer. 06-persisted-layout.json is the state this reopen read: the terminal
+  beside a rows-split of doc and issue, with the issue leaf carrying its td id
+  and the document leaf its path.
+
+05-second-td-retargets
+  After emitting "superseded by td-9f8e7d" in the same shell and clicking it.
+  The tree is unchanged — still three panes — and the existing issue leaf now
+  shows td-9f8e7d. This is the agreed default: a second issue click retargets
+  the issue leaf, mirroring how a second file click retargets the document pane.
+
+06-persisted-layout.json
+  The paneLayout the quit left in the private state tree, copied verbatim.
+
+What this proves, and what it does not
+--------------------------------------
+Proven visually, in a running binary: the three-leaf placement and its geometry,
+the issue leaf's rendering, the quit/reopen round trip, and the retarget default.
+
+Not proven here: the divider-drag recapture, which needs a drag gesture rather
+than a click and is measured in Go instead
+(TestDividerReleaseRecapturesTheTerminalWithoutActivation in
+internal/plugins/workspace/doc_panes_test.go, with the transport half in
+internal/tty/resize_debounce_test.go). The refusal path — a box too short for
+the stacked split — is also Go-only
+(TestAnIssuePaneThatWillNotFitLeavesTheLayoutAlone), since at 200x50 every split
+fits.
+
+The placement rule these captures exercise is a default, not a settled design:
+planIssueOpen is one pure function, and M1 of docs/plans/active/
+workspace-windowing-system.md replaces it outright rather than unpicking it from
+the click paths.

@@ -177,6 +177,81 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 	}
 }
 
+// The steel thread has to outlive the session that built it. This is the round
+// trip a quit and a reopen actually make: three leaves built by clicks, written
+// by the saves those clicks trigger, and read back by a second plugin that has
+// nothing but the state on disk — no hand-built tree at either end.
+func TestTheSteelThreadSurvivesQuitAndReopen(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n\nfile body\n")
+
+	var saved state.WorkspaceState
+	store := shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.shellStartupHooks = store
+	p.shells[0].Agent.OutputBuf.Update("wrote clicked.md:1\nfollow-up is td-1a2b3c\n")
+	deliverLoads(t, p, clickTerminalLink(t, p, "clicked.md"))
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-1a2b3c"))
+	before, _ := paneLeafBoxes(t, p)
+	if len(before) != 3 {
+		t.Fatalf("the clicks built %d leaves, want the steel thread's three", len(before))
+	}
+
+	// Quitting writes nothing of its own: what the reopen has to work from is
+	// whatever the session already saved.
+	if saved.ShellTmuxName != "test-shell" || saved.PaneLayout == nil {
+		t.Fatalf("the session left nothing to reopen: %#v", saved)
+	}
+
+	reopened := docPaneTestPlugin(t, root, true)
+	reopened.ctx.ProjectRoot = root
+	reopened.shellStartupHooks = store
+	if !reopened.restoreSelectionState() {
+		t.Fatal("the reopened session restored no selection")
+	}
+	if reopened.paneRestoreCmd == nil {
+		t.Fatal("the restored layout scheduled no loads")
+	}
+	deliverLoads(t, reopened, reopened.paneRestoreCmd)
+
+	after, content := paneLeafBoxes(t, reopened)
+	if len(after) != 3 || after[PaneTerminal] != before[PaneTerminal] ||
+		after[PaneDoc] != before[PaneDoc] || after[PaneIssue] != before[PaneIssue] {
+		t.Fatalf("reopened boxes %#v, want the ones the session was quit on %#v", after, before)
+	}
+	doc, _ := reopened.activeDocPane()
+	if doc == nil || doc.view.Title() != "clicked.md" {
+		t.Fatalf("reopened document = %#v, want the clicked file", doc)
+	}
+	issue, _ := reopened.activeIssuePane()
+	if issue == nil || issue.view.IssueID() != "td-1a2b3c" {
+		t.Fatalf("reopened issue = %#v, want td-1a2b3c", issue)
+	}
+
+	// The layout came back; so must the cells, in the boxes the layout gave.
+	rows := composePaneTree(t, reopened, content.W, content.H)
+	within := func(box Box) string {
+		lines := make([]string, 0, box.H)
+		for row := 0; row < box.H; row++ {
+			cells := []rune(ansi.Strip(rows[box.Y-content.Y+row]))
+			lines = append(lines, string(cells[box.X-content.X:box.X-content.X+box.W]))
+		}
+		return strings.Join(lines, "\n")
+	}
+	if cells := within(after[PaneDoc]); !strings.Contains(cells, "clicked.md") {
+		t.Fatalf("reopened document box does not hold the file:\n%s", cells)
+	}
+	if cells := within(after[PaneIssue]); !strings.Contains(cells, "td-1a2b3c") {
+		t.Fatalf("reopened issue box does not hold the issue:\n%s", cells)
+	}
+}
+
 // An issue leaf with no target left in the saved layout costs its own pane and
 // nothing else: the split collapses onto its sibling and the rest of the layout
 // is what the user left.

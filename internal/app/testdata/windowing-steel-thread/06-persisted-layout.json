@@ -1,0 +1,30 @@
+{
+  "root": "/private/tmp/sidecar-steel-fixture",
+  "surface": "shell:sidecar-sh-sidecar-steel-fixture-1",
+  "split": {
+    "axis": "cols",
+    "ratio": 50,
+    "a": {
+      "kind": "terminal"
+    },
+    "b": {
+      "split": {
+        "axis": "rows",
+        "ratio": 50,
+        "a": {
+          "kind": "doc",
+          "tabs": [
+            {
+              "path": "clicked.md",
+              "mode": "raw"
+            }
+          ]
+        },
+        "b": {
+          "kind": "issue",
+          "issue": "td-9f8e7d"
+        }
+      }
+    }
+  }
+}

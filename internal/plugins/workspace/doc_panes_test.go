@@ -871,6 +871,26 @@ func TestDividerReleaseRecapturesTheTerminalWithoutActivation(t *testing.T) {
 	if _, poll := p.update(msg); poll == nil {
 		t.Fatal("the geometry assertion scheduled no capture, so the terminal keeps drawing the old pane")
 	}
+
+	// A sizer reporting the new width is half the claim; the other half is the
+	// grid. The composition after the release has to place the terminal — and the
+	// divider beside it — at the dragged geometry, with no activation in between.
+	content, ok := p.previewContentBox()
+	if !ok {
+		t.Fatal("preview content box is unplaced after the release")
+	}
+	rows := composePaneTree(t, p, content.W, content.H)
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: content.W, H: content.H}, paneTreeFloors())
+	if !fits || len(dividers) != 1 {
+		t.Fatalf("post-release layout = %d dividers fits=%v, want one divider", len(dividers), fits)
+	}
+	for _, placement := range leaves {
+		if placement.Node.Kind == PaneTerminal && placement.Box.W != after.W {
+			t.Fatalf("the composed terminal is %d columns, want the released %d", placement.Box.W, after.W)
+		}
+	}
+	assertDividersDrawn(t, rows, dividers)
+
 	if p.viewMode != ViewModeList || p.interactiveState != nil {
 		t.Fatal("the divider gesture activated the terminal; the refresh must not need a click")
 	}
