@@ -649,6 +649,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	p.notePressAwayFromTerminal(action)
+	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
 	if p.viewMode == ViewModeInteractive {
@@ -1066,6 +1069,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	}
 
 	p.notePressAwayFromTerminal(action)
+	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	switch action.Region.ID {
 	case regionTermPanelContent:

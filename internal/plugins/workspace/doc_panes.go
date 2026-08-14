@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
@@ -280,6 +281,70 @@ func (p *Plugin) closeActiveDocTab() tea.Cmd {
 	return p.ensureActiveDocTabLoaded(doc)
 }
 
+// clickDocTabAt selects a file tab from a pointer position. The Files plugin
+// does this by testing the tab row first, because the preview pane region
+// covers the header and a one-cell miss becomes a terminal click. The same
+// steal happens here (plus the widened pane-tree divider), so a click on the
+// document header row — including one row of slop — picks the tab under X, or
+// the closest tab on that row. X is constrained to the document leaf so the
+// terminal header that shares the row keeps Output/Diff/Task.
+func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
+	if !p.docVisible() {
+		return nil, false
+	}
+	var tabs []mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionDocTab {
+			continue
+		}
+		if absInt(y-region.Rect.Y) > 1 {
+			continue
+		}
+		tabs = append(tabs, region)
+	}
+	if len(tabs) == 0 {
+		return nil, false
+	}
+	inDocHeader := false
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionDocPane {
+			continue
+		}
+		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && absInt(y-region.Rect.Y) <= 1 {
+			inDocHeader = true
+			break
+		}
+	}
+	if !inDocHeader {
+		return nil, false
+	}
+	best := tabs[0]
+	bestDist := tabRowDistance(x, best.Rect)
+	for _, region := range tabs[1:] {
+		if d := tabRowDistance(x, region.Rect); d < bestDist {
+			best, bestDist = region, d
+		}
+	}
+	return p.clickDocTab(best.Data), true
+}
+
+func tabRowDistance(x int, r mouse.Rect) int {
+	if x < r.X {
+		return r.X - x
+	}
+	if x >= r.X+r.W {
+		return x - (r.X + r.W) + 1
+	}
+	return 0
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	hit, ok := data.(docTabHit)
 	if !ok {
@@ -296,6 +361,10 @@ func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	p.activePane = PanePreview
 	p.paneFocus = hit.LeafID
 	p.termPanelFocused = false
+	p.pointer.Abandon()
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
 	if hit.Index == doc.tabs.Active {
 		return nil
 	}
@@ -1262,6 +1331,9 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 
 func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
+}
+
+func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
 	for _, tab := range layoutDocTabStrip(doc, box.W, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+tab.Col, box.Y, tab.Width, 1, docTabHit{LeafID: leafID, Index: tab.Index})
 	}
@@ -1286,8 +1358,9 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		}
 		zoomed := layout.Leaves[0]
 		if placed {
-			p.registerPaneLeafRegions(zoomed.Node,
-				Box{X: origin.X, Y: origin.Y, W: zoomed.Box.W, H: zoomed.Box.H})
+			box := Box{X: origin.X, Y: origin.Y, W: zoomed.Box.W, H: zoomed.Box.H}
+			p.registerPaneLeafRegions(zoomed.Node, box)
+			p.registerPaneTabRegions(zoomed.Node, box)
 		}
 		// One leaf is still composed, not returned: the clip-and-pad the
 		// compositor guarantees is what makes the leaf's box the leaf's box, and
@@ -1389,6 +1462,15 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 	}
 }
 
+func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
+	if node == nil || node.Split != nil || node.Kind != PaneDoc {
+		return
+	}
+	if doc := p.docs[node.ContentID]; doc != nil {
+		p.registerDocTabRegions(doc, node.ID, box)
+	}
+}
+
 // registerPaneTreeRegions registers hit regions from the same placements the
 // canvas drew from, so a click cannot land on geometry the frame did not draw.
 func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider) {
@@ -1412,6 +1494,14 @@ func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider)
 		hit := paneDividerHitBox(split)
 		p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
 			absolute.X+hit.X, absolute.Y+hit.Y, hit.W, hit.H, split.SplitID)
+	}
+	// File tabs are last so they win the one cell the column divider reaches
+	// into the document header — the cell a click on the leftmost tab lands on.
+	for _, placement := range leaves {
+		p.registerPaneTabRegions(placement.Node, Box{
+			X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
+			W: placement.Box.W, H: placement.Box.H,
+		})
 	}
 }
 

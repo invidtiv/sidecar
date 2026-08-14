@@ -500,6 +500,158 @@ func TestDocPaneVisualTabClickSelectsOnShellAndWorktree(t *testing.T) {
 	}
 }
 
+func TestDocPaneClickOnRenderedFilenameSelectsTab(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shell bool
+		side  bool
+		width int
+	}{
+		{"shell full preview", true, false, 100},
+		{"shell with sidebar", true, true, 140},
+		{"worktree with sidebar", false, true, 140},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# readme\n")
+			writeDocPaneFixture(t, root, "main.go", "package main\n")
+			p := docPaneTestPlugin(t, root, tc.shell)
+			p.sidebarVisible = tc.side
+			p.width, p.height = tc.width, 24
+			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+
+			view := p.View(tc.width, p.height)
+			x, y, ok := renderedFilenameCell(view, "README.md")
+			if !ok {
+				t.Fatalf("README.md not on the header row:\n%s", ansi.Strip(view))
+			}
+			resolved := p.mouseHandler.HitMap.Test(x, y)
+			if resolved == nil || resolved.ID != regionDocTab {
+				t.Fatalf("rendered README.md at (%d,%d) hits %#v, want %s\nheader=%q\nregions=%s",
+					x, y, resolved, regionDocTab, headerRow(view), dumpRegions(p, y))
+			}
+			_ = p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+			if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
+				t.Fatalf("clicking rendered README.md selected %q", got)
+			}
+		})
+	}
+}
+
+func headerRow(view string) string {
+	lines := strings.Split(view, "\n")
+	if len(lines) <= previewBorderRows {
+		return ""
+	}
+	return ansi.Strip(lines[previewBorderRows])
+}
+
+func renderedFilenameCell(view, name string) (x, y int, ok bool) {
+	lines := strings.Split(view, "\n")
+	if len(lines) <= previewBorderRows {
+		return 0, 0, false
+	}
+	plain := ansi.Strip(lines[previewBorderRows])
+	at := strings.LastIndex(plain, name)
+	if at < 0 {
+		return 0, 0, false
+	}
+	return ansi.StringWidth(plain[:at]) + ansi.StringWidth(name)/2, previewBorderRows, true
+}
+
+func dumpRegions(p *Plugin, y int) string {
+	var b strings.Builder
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if y < region.Rect.Y || y >= region.Rect.Y+region.Rect.H {
+			continue
+		}
+		fmt.Fprintf(&b, " %s[%d:%d] data=%#v", region.ID, region.Rect.X, region.Rect.X+region.Rect.W, region.Data)
+	}
+	return b.String()
+}
+
+func TestDocPaneTabRowClickWinsOverPreviewPaneAndDivider(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	writeDocPaneFixture(t, root, "main.go", "package main\n")
+	p := docPaneTestPlugin(t, root, false)
+	p.sidebarVisible = true
+	p.width, p.height = 140, 24
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+	view := p.View(p.width, p.height)
+	x, y, ok := renderedFilenameCell(view, "README.md")
+	if !ok {
+		t.Fatal("README.md not on the header row")
+	}
+
+	// The live steal: Test() names the preview pane or the widened divider,
+	// which used to start a terminal gesture and ignore the tab.
+	_ = p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		X:      x,
+		Y:      y,
+		Region: &mouse.Region{ID: regionPreviewPane},
+	})
+	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
+		t.Fatalf("preview-pane steal at (%d,%d) selected %q", x, y, got)
+	}
+
+	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+	_ = p.View(p.width, p.height)
+	tab := docPaneTabRegion(p, 0)
+	if tab == nil {
+		t.Fatal("README tab missing after re-render")
+	}
+	_ = p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		X:      tab.Rect.X,
+		Y:      tab.Rect.Y + 1,
+		Region: &mouse.Region{ID: regionPaneTreeDivider},
+	})
+	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
+		t.Fatalf("divider/off-by-one steal selected %q", got)
+	}
+}
+
+func TestDocPaneTabRowClickDoesNotStealPreviewChips(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	writeDocPaneFixture(t, root, "main.go", "package main\n")
+	p := docPaneTestPlugin(t, root, false)
+	p.sidebarVisible = true
+	p.width, p.height = 140, 24
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+	_ = p.View(p.width, p.height)
+
+	var chip *mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		idx, ok := region.Data.(int)
+		if region.ID == regionPreviewTab && ok && idx == int(PreviewTabDiff) {
+			copy := region
+			chip = &copy
+			break
+		}
+	}
+	if chip == nil {
+		t.Fatal("worktree Diff chip was not registered")
+	}
+	_ = p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		X:      chip.Rect.X + chip.Rect.W/2,
+		Y:      chip.Rect.Y,
+		Region: chip,
+	})
+	if p.previewTab != PreviewTabDiff {
+		t.Fatalf("preview tab = %v, want Diff", p.previewTab)
+	}
+	if got := p.activeDocPaneOrNil().view().Title(); got != "main.go" {
+		t.Fatalf("file tab changed to %q on a Diff chip click", got)
+	}
+}
+
 func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# readme\n")
