@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -135,6 +136,10 @@ type Plugin struct {
 	// Pending edit state (for auto-edit on new note)
 	pendingEditID string
 
+	// External editor state (for reading back content after $EDITOR exits)
+	pendingInlineEditID   string // Note ID being edited
+	pendingInlineEditPath string // Temp file path
+
 	// One-shot sync after out-of-band editor saves
 	pendingEditorSyncID string
 
@@ -190,7 +195,7 @@ func New() *Plugin {
 		mouseHandler: mouse.NewHandler(),
 		inlineEditor: tty.New(nil),
 	}
-	p.applyInlineEditorAttachKey()
+	p.clearInlineEditorAttachKey()
 	return p
 }
 
@@ -248,8 +253,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.previewCursorLine = 0
 	p.previewScrollOff = 0
 	p.previewWrapEnabled = state.GetLineWrapEnabled()
+	p.pendingInlineEditID = ""
+	p.pendingInlineEditPath = ""
 	p.pendingEditorSyncID = ""
-	p.applyInlineEditorAttachKey()
+	p.clearInlineEditorAttachKey()
 
 	// Initialize textarea
 	ta := textarea.New()
@@ -406,22 +413,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.notes = msg.Notes
 			p.loadErr = nil
 
-			// Auto-edit mode: if we just created a note, select it and open the
-			// right-pane tty. Stay on preview if the editor cannot start.
+			// Auto-edit mode: a note we just created opens in the simple editor
+			// with the cursor at the end, ready to type into.
 			if p.pendingEditID != "" {
-				editID := p.pendingEditID
-				p.pendingEditID = ""
 				for i, n := range p.notes {
-					if n.ID == editID {
+					if n.ID == p.pendingEditID {
 						p.cursor = i
-						p.loadNoteIntoEditor()
+						p.loadNoteIntoEditorAtEnd()
 						p.activePane = PaneEditor
-						if p.viewFilter == FilterActive {
-							return p, p.enterInlineEditMode(editID)
-						}
+						p.previewMode = false
 						break
 					}
 				}
+				p.pendingEditID = ""
 			} else if p.editorNote != nil {
 				// Follow the edited note if it moved position (due to updated_at sort)
 				for i, n := range p.notes {
@@ -534,6 +538,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case app.RefreshMsg:
+		// $EDITOR writes land while Sidecar is suspended; the refresh that
+		// follows the resume is where we read them back.
+		if p.pendingInlineEditID != "" && p.pendingInlineEditPath != "" {
+			return p, p.readBackInlineEdit()
+		}
 		return p, p.loadNotes()
 
 	case tea.KeyPressMsg:
@@ -768,15 +777,30 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	case "r":
 		// Refresh
 		return p, p.loadNotes()
-	case "enter", "e":
-		if p.viewFilter == FilterActive {
-			return p, p.editSelectedNote()
-		}
+	case "enter":
+		// The simple editor is what a plain Enter opens. Vim is on e and the
+		// external editor on E, so neither can capture the default path.
 		note := p.getSelectedNote()
 		if note != nil {
 			p.loadNoteIntoEditor()
 			p.activePane = PaneEditor
-			p.previewMode = true
+			// Editing is only offered in the Active view; archived notes read.
+			p.previewMode = p.viewFilter != FilterActive
+			if !p.previewMode {
+				p.editorTextarea.Focus()
+			}
+		}
+		return p, nil
+	case "e":
+		// Vim in the embedded right pane.
+		if p.viewFilter == FilterActive {
+			return p, p.editSelectedNote()
+		}
+		return p, nil
+	case "E":
+		// External $EDITOR.
+		if p.viewFilter == FilterActive {
+			return p, p.openInExternalEditor()
 		}
 		return p, nil
 	case "T":
@@ -833,6 +857,11 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		p.autoSaveID++
 		return p, p.saveEditorContent()
 
+	// Deliberately no "E" here. Before the notes rework this handler claimed
+	// it for the external editor, which meant a capital E could never be typed
+	// into a note. E reaches $EDITOR from the list and from preview; inside the
+	// simple editor every printable key belongs to the textarea.
+
 	case "alt+c":
 		return p, p.copyEditorContent()
 	}
@@ -875,9 +904,23 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		p.activePane = PaneList
 		return p, nil
 
-	case "enter", "i", "e":
+	case "enter", "i":
+		// Drop into the simple editor, same as Enter from the list.
+		if p.viewFilter == FilterActive {
+			p.previewMode = false
+			return p, p.editorTextarea.Focus()
+		}
+		return p, nil
+
+	case "e":
 		if p.viewFilter == FilterActive {
 			return p, p.editSelectedNote()
+		}
+		return p, nil
+
+	case "E":
+		if p.viewFilter == FilterActive {
+			return p, p.openInExternalEditor()
 		}
 		return p, nil
 
@@ -1034,6 +1077,30 @@ func (p *Plugin) loadNoteIntoEditor() {
 	p.editorTextarea.Blur()
 }
 
+// loadNoteIntoEditorAtEnd loads the currently selected note into the editor pane
+// with cursor positioned at the end of the content. Used for new notes.
+func (p *Plugin) loadNoteIntoEditorAtEnd() {
+	note := p.getSelectedNote()
+	if note == nil {
+		p.editorNote = nil
+		p.previewLines = nil
+		p.editorDirty = false
+		return
+	}
+
+	p.editorNote = note
+	p.editorTextarea.SetValue(note.Content)
+	p.previewLines = strings.Split(note.Content, "\n")
+	if len(p.previewLines) == 0 {
+		p.previewLines = []string{""}
+	}
+	p.previewCursorLine = 0
+	p.previewScrollOff = 0
+	p.editorDirty = false
+	p.previewMode = false // Immediately in edit mode for new notes
+	p.editorTextarea.Focus()
+}
+
 // updateTextareaDimensions updates the textarea dimensions based on current layout.
 func (p *Plugin) updateTextareaDimensions() {
 	if p.width == 0 || p.height == 0 {
@@ -1081,6 +1148,80 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	}
 }
 
+// openInExternalEditor opens the current note in $EDITOR. This is the one notes
+// path that still leaves Sidecar; vim in the embedded pane is on e.
+func (p *Plugin) openInExternalEditor() tea.Cmd {
+	note := p.getSelectedNote()
+	if note == nil || p.store == nil {
+		return nil
+	}
+
+	// Get path to note file (creates temp file with note content)
+	notePath := p.store.NotePath(note.ID)
+	if notePath == "" {
+		return nil
+	}
+
+	// Track the note being edited so we can read back changes after editor exits
+	p.pendingInlineEditID = note.ID
+	p.pendingInlineEditPath = notePath
+
+	return func() tea.Msg {
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = os.Getenv("VISUAL")
+		}
+		if editor == "" {
+			editor = "vim"
+		}
+		return plugin.OpenFileMsg{
+			Editor: editor,
+			Path:   notePath,
+			LineNo: 0,
+		}
+	}
+}
+
+// readBackInlineEdit reads the temp file content after $EDITOR exits and
+// updates the note. Activation stays zero: no inline session owns this write,
+// so isStaleNoteSaveResult judges it on epoch alone.
+func (p *Plugin) readBackInlineEdit() tea.Cmd {
+	noteID := p.pendingInlineEditID
+	notePath := p.pendingInlineEditPath
+
+	// Clear pending state
+	p.pendingInlineEditID = ""
+	p.pendingInlineEditPath = ""
+
+	if noteID == "" || notePath == "" || p.store == nil || p.ctx == nil {
+		return p.loadNotes()
+	}
+	epoch := p.ctx.Epoch
+
+	// External editor writes bypass textarea state; sync buffers on the next reload.
+	p.pendingEditorSyncID = noteID
+	store := p.store
+
+	return func() tea.Msg {
+		// Read back the edited content from temp file
+		content, err := os.ReadFile(notePath)
+		if err != nil {
+			// Failed to read, just reload notes
+			return NotesLoadedMsg{Err: err, Epoch: epoch}
+		}
+
+		// Clean up temp file
+		_ = os.Remove(notePath)
+
+		// Update note content in database
+		if err := store.UpdateContent(noteID, string(content)); err != nil {
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+		}
+
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+	}
+}
+
 // handleSearchKey processes keyboard input in search mode.
 func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
@@ -1113,13 +1254,13 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.scrollOff = 0
 				p.loadNoteIntoEditor()
 				p.activePane = PaneEditor
+				p.previewMode = p.viewFilter != FilterActive
+				if !p.previewMode {
+					p.editorTextarea.Focus()
+				}
 				if p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Debug("notes: exact match selected", "id", exactMatch.ID)
 				}
-				if p.viewFilter == FilterActive {
-					return p, p.enterInlineEditMode(exactMatch.ID)
-				}
-				p.previewMode = true
 			} else if len(p.filteredNotes) > 0 {
 				note := p.getSelectedNote()
 				p.searchMode = false
@@ -1128,13 +1269,13 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.scrollOff = 0
 				p.loadNoteIntoEditor()
 				p.activePane = PaneEditor
+				p.previewMode = p.viewFilter != FilterActive
+				if !p.previewMode {
+					p.editorTextarea.Focus()
+				}
 				if note != nil && p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Debug("notes: filtered match selected", "id", note.ID)
 				}
-				if note != nil && p.viewFilter == FilterActive {
-					return p, p.enterInlineEditMode(note.ID)
-				}
-				p.previewMode = true
 			} else {
 				// No matches - create new note with query as title
 				title := p.searchQuery
@@ -1427,8 +1568,10 @@ func (p *Plugin) Commands() []plugin.Command {
 	if p.activePane == PaneEditor && p.editorNote != nil {
 		if p.previewMode {
 			return []plugin.Command{
-				{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+				{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
 				{ID: "switch-pane", Name: "List", Description: "Switch to list pane", Category: plugin.CategoryNavigation, Context: "notes-preview", Priority: 2},
+				{ID: "vim-edit", Name: "Vim", Description: "Edit with vim in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 3},
+				{ID: "external-editor", Name: "Editor", Description: "Open in external editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
 			}
 		}
 		cmds := []plugin.Command{
@@ -1462,7 +1605,9 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Full editing commands only in Active view
 		cmds = append(cmds,
 			plugin.Command{ID: "new-note", Name: "New", Description: "Create new note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 4},
-			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
+			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
+			plugin.Command{ID: "vim-edit", Name: "Vim", Description: "Edit with vim in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
+			plugin.Command{ID: "external-editor", Name: "Editor", Description: "Open in external editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
 			plugin.Command{ID: "delete-note", Name: "Delete", Description: "Delete selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "toggle-pin", Name: "Pin", Description: "Toggle pin on note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 9},
 			plugin.Command{ID: "archive-note", Name: "Archive", Description: "Archive selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 10},

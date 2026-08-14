@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
@@ -767,14 +768,13 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	}
 }
 
-func TestNotesKeysDoNotOpenExternalEditor(t *testing.T) {
+func TestEnterAndClickStayInSidecar(t *testing.T) {
 	installNotesFakeTmux(t)
 	p, noteID := newNotesEditorHarness(t)
 
+	// Enter and ctrl+t never leave Sidecar. E deliberately does.
 	for _, key := range []tea.KeyPressMsg{
 		{Code: tea.KeyEnter},
-		{Code: 'e', Text: "e"},
-		{Code: 'E', Text: "E"},
 		{Code: 't', Mod: tea.ModCtrl},
 	} {
 		_, cmd := p.Update(key)
@@ -788,73 +788,140 @@ func TestNotesKeysDoNotOpenExternalEditor(t *testing.T) {
 	assertNotOpenFileMsg(t, "preview-enter", cmd)
 }
 
-func TestEnterAndEStartInlineTTY(t *testing.T) {
+// TestEnterOpensTheSimpleEditor pins the default gesture. Enter must land in
+// the built-in textarea, not vim: inferring vim from a config value is what
+// made the simple editor unreachable.
+func TestEnterOpensTheSimpleEditor(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, _ := newNotesEditorHarness(t)
+
+	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		if started, ok := cmd().(InlineEditStartedMsg); ok {
+			t.Fatalf("enter started vim (%s), want the built-in editor", started.NoteID)
+		}
+	}
+	if p.inlineEditMode {
+		t.Fatal("enter entered inline vim mode")
+	}
+	if p.previewMode {
+		t.Fatal("enter left the editor read-only, want edit mode")
+	}
+	if p.activePane != PaneEditor {
+		t.Fatal("enter did not focus the editor pane")
+	}
+}
+
+// TestClickOpensTheSimpleEditor is the same contract for the mouse.
+func TestClickOpensTheSimpleEditor(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, noteID := newNotesEditorHarness(t)
+	p.editorNote = &Note{ID: noteID, Content: "old project content"}
+	p.previewMode = true
+	_ = p.View(p.width, p.height)
+
+	p2, _ := p.handleMouseClick(mouse.MouseAction{
+		X: 40, Y: 3,
+		Region: &mouse.Region{ID: regionEditorPane, Rect: mouse.Rect{X: 30, Y: 1, W: 40, H: 20}},
+	})
+	if p2.inlineEditMode {
+		t.Fatal("clicking the note started vim, want the built-in editor")
+	}
+	if p2.previewMode {
+		t.Fatal("clicking the note left it read-only")
+	}
+}
+
+// TestCapitalEOpensExternalEditor pins the one notes path that still leaves
+// Sidecar. It is reachable only from the list and preview.
+func TestCapitalEOpensExternalEditor(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, _ := newNotesEditorHarness(t)
+
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	if cmd == nil {
+		t.Fatal("E returned no command")
+	}
+	if _, ok := cmd().(plugin.OpenFileMsg); !ok {
+		t.Fatalf("E produced %T, want plugin.OpenFileMsg", cmd())
+	}
+}
+
+// TestCapitalEIsTypableInTheSimpleEditor is the regression that kept E out of
+// the notes-editor context: the old binding made a capital E unwritable.
+func TestCapitalEIsTypableInTheSimpleEditor(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, _ := newNotesEditorHarness(t)
+	p.activePane = PaneEditor
+	p.previewMode = false
+	p.editorNote = &p.notes[0]
+	p.editorTextarea.SetValue("")
+	p.editorTextarea.Focus()
+
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	if cmd != nil {
+		if _, ok := cmd().(plugin.OpenFileMsg); ok {
+			t.Fatal("E in the simple editor opened $EDITOR instead of typing")
+		}
+	}
+	if got := p.editorTextarea.Value(); got != "E" {
+		t.Fatalf("textarea = %q, want %q", got, "E")
+	}
+}
+
+func TestEStartsInlineTTY(t *testing.T) {
 	logPath := installNotesFakeTmux(t)
-	for _, key := range []tea.KeyPressMsg{
-		{Code: tea.KeyEnter},
-		{Code: 'e', Text: "e"},
-	} {
-		t.Run(key.String(), func(t *testing.T) {
-			p, noteID := newNotesEditorHarness(t)
-			_, cmd := p.Update(key)
-			if cmd == nil {
-				t.Fatal("edit key returned no command")
-			}
-			got := cmd()
-			started, ok := got.(InlineEditStartedMsg)
-			if !ok {
-				t.Fatalf("edit key produced %T, want InlineEditStartedMsg", got)
-			}
-			if started.NoteID != noteID {
-				t.Fatalf("started note = %q, want %q", started.NoteID, noteID)
-			}
-		})
+	p, noteID := newNotesEditorHarness(t)
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("e returned no command")
+	}
+	got := cmd()
+	started, ok := got.(InlineEditStartedMsg)
+	if !ok {
+		t.Fatalf("e produced %T, want InlineEditStartedMsg", got)
+	}
+	if started.NoteID != noteID {
+		t.Fatalf("started note = %q, want %q", started.NoteID, noteID)
 	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), "new-session") {
-		t.Fatalf("enter/e did not start an editor session; log:\n%s", data)
+		t.Fatalf("e did not start an editor session; log:\n%s", data)
 	}
 }
 
-func TestEditCommandStartsInlineTTY(t *testing.T) {
+func TestNotesEditorCommandsAreAdvertised(t *testing.T) {
 	installNotesFakeTmux(t)
-	p, noteID := newNotesEditorHarness(t)
-	var found bool
+	p, _ := newNotesEditorHarness(t)
+	want := map[string]bool{"edit-note": false, "vim-edit": false, "external-editor": false}
 	for _, cmd := range p.Commands() {
-		if cmd.ID == "edit-note" {
-			found = true
-			if cmd.Handler != nil {
-				t.Fatal("edit-note must not carry a Handler; it leaks a keyless palette row into other plugins")
-			}
-			break
+		if _, ok := want[cmd.ID]; !ok {
+			continue
+		}
+		want[cmd.ID] = true
+		if cmd.Handler != nil {
+			t.Fatalf("%s must not carry a Handler; it leaks a keyless palette row into other plugins", cmd.ID)
 		}
 	}
-	if !found {
-		t.Fatal("edit-note command missing")
-	}
-	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("enter returned no command")
-	}
-	got := cmd()
-	started, ok := got.(InlineEditStartedMsg)
-	if !ok {
-		t.Fatalf("enter produced %T, want InlineEditStartedMsg", got)
-	}
-	if started.NoteID != noteID {
-		t.Fatalf("started note = %q, want %q", started.NoteID, noteID)
+	for id, found := range want {
+		if !found {
+			t.Errorf("%s command missing", id)
+		}
 	}
 }
 
+// TestUnavailableEditorToastsInsteadOfOpenFile covers e when tmux is missing.
+// It toasts rather than silently falling through; the simple editor on Enter
+// is the fallback a user actually has, and it needs no tmux at all.
 func TestUnavailableEditorToastsInsteadOfOpenFile(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	p, _ := newNotesEditorHarness(t)
-	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, cmd := p.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	if cmd == nil {
-		t.Fatal("enter returned no command when tmux is missing")
+		t.Fatal("e returned no command when tmux is missing")
 	}
 	got := cmd()
 	assertNotOpenFileMsg(t, "missing-tmux", func() tea.Msg { return got })
@@ -866,30 +933,48 @@ func TestUnavailableEditorToastsInsteadOfOpenFile(t *testing.T) {
 	}
 }
 
-func TestNotesAttachKeyEmptyByDefault(t *testing.T) {
+// TestSimpleEditorNeedsNoTmux is the capability this whole change restores:
+// with no tmux on PATH at all, a note is still editable.
+func TestSimpleEditorNeedsNoTmux(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	p, _ := newNotesEditorHarness(t)
+	p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if p.previewMode {
+		t.Fatal("enter left the note read-only with no tmux available")
+	}
+	if p.activePane != PaneEditor {
+		t.Fatal("enter did not focus the editor pane")
+	}
+	p.editorNote = &p.notes[0]
+	p.editorTextarea.SetValue("")
+	p.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := p.editorTextarea.Value(); got != "x" {
+		t.Fatalf("textarea = %q, want %q; notes are not editable without tmux", got, "x")
+	}
+}
+
+// TestNotesAttachKeyAlwaysEmpty pins that notes has no full-screen tmux
+// experience at all: the embedded pane is the whole vim editor, so ctrl+] has
+// nothing to hand a suspended Sidecar off to and must stay inert. This is not
+// preference-gated — enabling tmux_full_attach elsewhere must not revive it.
+func TestNotesAttachKeyAlwaysEmpty(t *testing.T) {
 	installNotesFakeTmux(t)
 	p := New()
-	p.inlineEditSession = "sidecar-note-edit-test"
 	if p.inlineEditor.Config.AttachKey != "" {
-		t.Fatalf("inline editor AttachKey = %q, want empty by default", p.inlineEditor.Config.AttachKey)
-	}
-	if cmd := p.attachToInlineEditSession(); cmd != nil {
-		t.Fatal("attachToInlineEditSession ran with tmux_full_attach off")
-	}
-	if p.inlineEditSession != "sidecar-note-edit-test" {
-		t.Fatal("gated attach exited the editor")
+		t.Fatalf("inline editor AttachKey = %q, want empty", p.inlineEditor.Config.AttachKey)
 	}
 
 	cfg := config.Default()
 	cfg.Features.Flags[features.TmuxFullAttach.Name] = true
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
-	p.applyInlineEditorAttachKey()
-	if p.inlineEditor.Config.AttachKey == "" {
-		t.Fatal("inline editor AttachKey stayed empty with tmux_full_attach on")
+
+	p.clearInlineEditorAttachKey()
+	if p.inlineEditor.Config.AttachKey != "" {
+		t.Fatalf("tmux_full_attach revived the notes attach chord: %q", p.inlineEditor.Config.AttachKey)
 	}
-	if cmd := p.attachToInlineEditSession(); cmd == nil {
-		t.Fatal("attachToInlineEditSession did nothing with tmux_full_attach on")
+	if p.inlineEditor.OnAttach != nil {
+		t.Fatal("notes inline editor still has an OnAttach hook")
 	}
 }
 
@@ -968,19 +1053,6 @@ func TestCtrlTIsNoOpInNotes(t *testing.T) {
 	}
 }
 
-func TestNotesCommandsHaveSingleEditAction(t *testing.T) {
-	p, _ := newNotesEditorHarness(t)
-	assertNoSecondEditorCommands(t, p.Commands())
-
-	p.activePane = PaneEditor
-	p.previewMode = true
-	p.editorNote = &Note{ID: "nt-1"}
-	assertNoSecondEditorCommands(t, p.Commands())
-
-	p.previewMode = false
-	assertNoSecondEditorCommands(t, p.Commands())
-}
-
 func TestInlineEditorHeightFillsPaneWithoutExtraRow(t *testing.T) {
 	p := &Plugin{height: 24}
 	inner := 24 - 2
@@ -1015,18 +1087,5 @@ func assertNotOpenFileMsg(t *testing.T, name string, cmd tea.Cmd) {
 	got := cmd()
 	if _, ok := got.(plugin.OpenFileMsg); ok {
 		t.Fatalf("%s produced plugin.OpenFileMsg; notes must not suspend into $EDITOR", name)
-	}
-}
-
-func assertNoSecondEditorCommands(t *testing.T, cmds []plugin.Command) {
-	t.Helper()
-	for _, cmd := range cmds {
-		switch cmd.ID {
-		case "vim-edit", "external-editor":
-			t.Fatalf("commands still advertise %q (%q)", cmd.ID, cmd.Name)
-		}
-		if cmd.Name == "Vim" || cmd.Name == "Editor" {
-			t.Fatalf("footer still names a second editor: %q", cmd.Name)
-		}
 	}
 }

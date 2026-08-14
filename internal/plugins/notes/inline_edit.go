@@ -8,8 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/marcus/sidecar/internal/app"
-	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
@@ -147,10 +145,8 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	}
 	p.inlineEditor.OnExit = exit
 	p.inlineEditor.OnSessionEnded = exit
-	p.applyInlineEditorAttachKey()
-	p.inlineEditor.OnAttach = func() tea.Cmd {
-		return p.attachToInlineEditSession()
-	}
+	p.clearInlineEditorAttachKey()
+	p.inlineEditor.OnAttach = nil
 
 	// Enter interactive mode on the tty model
 	width := p.calculateInlineEditorWidth()
@@ -585,45 +581,14 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 	return p2, saveCmd
 }
 
-func fullTmuxAttachEnabled() bool {
-	return features.IsEnabled(features.TmuxFullAttach.Name)
-}
-
-func (p *Plugin) applyInlineEditorAttachKey() {
+// clearInlineEditorAttachKey makes ctrl+] inert in the notes vim pane. Notes
+// has no full-screen tmux experience: the embedded pane is the whole editor,
+// so there is nothing to hand a suspended Sidecar off to.
+func (p *Plugin) clearInlineEditorAttachKey() {
 	if p.inlineEditor == nil {
 		return
 	}
-	if !fullTmuxAttachEnabled() {
-		p.inlineEditor.Config.AttachKey = ""
-		return
-	}
-	key := tty.DefaultConfig().AttachKey
-	if p.ctx != nil {
-		if resolved := app.TerminalConfig(p.ctx.Config).AttachKey; resolved != "" {
-			key = resolved
-		}
-	}
-	p.inlineEditor.Config.AttachKey = key
-}
-
-// attachToInlineEditSession attaches to the inline edit tmux session when the
-// full-attach preference is on. Off by default so ctrl+] stays with the pane.
-func (p *Plugin) attachToInlineEditSession() tea.Cmd {
-	if !fullTmuxAttachEnabled() || p.inlineEditSession == "" {
-		return nil
-	}
-
-	sessionName := p.inlineEditSession
-	p.exitInlineEditMode()
-
-	return func() tea.Msg {
-		return AttachToTmuxMsg{SessionName: sessionName}
-	}
-}
-
-// AttachToTmuxMsg requests the app to suspend and attach to a tmux session.
-type AttachToTmuxMsg struct {
-	SessionName string
+	p.inlineEditor.Config.AttachKey = ""
 }
 
 // isInlineEditSessionAlive checks if the tmux session for inline editing still exists.
