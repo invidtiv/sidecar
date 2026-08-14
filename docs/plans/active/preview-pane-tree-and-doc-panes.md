@@ -588,11 +588,12 @@ prefix, splits, `Neighbor` navigation, per-leaf resize debounce and per-leaf pol
 generations. All of the tiling plan's §1.2 (tmux sizing), §2.2 (per-tile PTY
 sizing, one-workspace-per-tile Policy 1) and §4 (risks) apply unchanged.
 
-**Phase 8 — tabs in panes, and shared adoption.**
-Move `LoadPreview` into `docview`; lift filebrowser's `tabs.go` model into a
-`docview.TabGroup` per §3.8; give doc panes a tab strip; have the file browser's
-preview pane become a `docview`-backed pane so multiple markdown files can be
-open in one panel there. Doc panes in other plugins follow from the same seam.
+**Phase 8 — tabs in panes, and the shared file viewer.**
+See [workspace-doc-pane-tabs.md](workspace-doc-pane-tabs.md). Workspace is
+the first host (per-surface restore, several files, left-truncated path
+tabs). The viewer then grows the rest of the Files preview (wrap, info,
+reveal, search) and Files hosts that same viewer. §3.8's boundary holds:
+`docview.Model` is one document; the pane tree does not know about tabs.
 
 ---
 
