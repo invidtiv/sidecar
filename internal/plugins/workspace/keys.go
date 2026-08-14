@@ -592,11 +592,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 	}
-	if p.activePane == PanePreview && !p.termPanelFocused {
-		switch msg.String() {
-		case "j", "down", "k", "up", "g", "G", "ctrl+d", "ctrl+u":
-			p.releaseTerminalDocProjection(false)
-		}
+	// A key that moves a window puts the surface back on its live buffer: the
+	// document projection it may be showing has no window to move. Which keys
+	// those are is the shared rule's, so the set here cannot drift from the set
+	// that scrolls.
+	if p.activePane == PanePreview && !p.termPanelFocused && tty.IsScrollbackKey(tty.ScrollbackWatched, msg) {
+		p.releaseTerminalDocProjection(false)
 	}
 	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
@@ -637,12 +638,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				p.termPanelFocused = true
 				return nil
 			}
-			// Already at terminal panel (bottom) — scroll down
-			p.thawTermPanelWindow()
-			if p.termPanelScroll > 0 {
-				p.termPanelScroll--
-			}
-			return nil
+			// Already at terminal panel (bottom) — scroll it.
 		}
 		// Diff tab: route to internal two-pane navigation
 		if p.previewTab == PreviewTabDiff {
@@ -650,9 +646,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Scroll down: a terminal window moves towards its live bottom, a
 		// document's offset towards the end of its content.
-		if p.previewShowsTerminal() {
-			p.scrollPreviewWindow(-1)
-			return nil
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
 		}
 		if maxOffset := p.getMaxScrollOffset(); p.previewOffset < maxOffset {
 			p.previewOffset++
@@ -682,9 +677,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Scroll up: a terminal window moves back through scrollback, a
 		// document's offset towards the top of its content.
-		if p.previewShowsTerminal() {
-			p.scrollPreviewWindow(1)
-			return nil
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
 		}
 		if p.previewOffset > 0 {
 			p.previewOffset--
@@ -716,22 +710,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.scrollOffset = 0
 			return p.loadSelectedContent()
 		}
-		// Terminal panel focused: scroll to top of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
-			p.thawTermPanelWindow()
-			if p.termPanelOutput != nil {
-				p.termPanelScroll = p.termPanelOutput.LineCount() // Will be clamped in render
-			}
-			return nil
-		}
 		// Diff tab: route to internal two-pane navigation
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
-		// Go to top: the oldest rows the surface holds.
-		if p.previewShowsTerminal() {
-			p.jumpPreviewWindow(p.previewMaxScroll())
-			return nil
+		// Go to top: the oldest rows the surface holds, and the older ones behind
+		// them that the same jump on a live pane reaches for.
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
 		}
 		p.previewOffset = 0
 	case "G":
@@ -756,23 +742,23 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// Terminal panel focused: scroll to bottom of terminal panel output
-		if p.activePane == PanePreview && p.termPanelFocused && p.termPanelVisible && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
-			p.thawTermPanelWindow()
-			p.termPanelScroll = 0
-			return nil
-		}
 		// Diff tab: route to internal two-pane navigation
 		if p.previewTab == PreviewTabDiff {
 			return p.handleDiffTabKey(msg)
 		}
 		// Go to bottom: the newest content, which for a terminal is the live
 		// edge it follows from.
-		if p.previewShowsTerminal() {
-			p.jumpPreviewWindow(0)
-			return nil
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
 		}
 		p.previewOffset = p.getMaxScrollOffset()
+	case "home", "end":
+		// The jumps a pager's keys make are the same jumps g and G make, and the
+		// shared rule maps both forms — so a reader who reaches for home on a
+		// watched pane lands where they land on a live one.
+		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+			return cmd
+		}
 	case "n":
 		// In diff tab: handle internally (next change navigation)
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
@@ -1047,50 +1033,34 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
 			return p.cycleDiffScope()
 		}
-	case "ctrl+d":
+	case "ctrl+d", "pgdown":
 		// Page down in preview pane (unified: increase offset toward bottom)
 		if p.activePane == PanePreview {
 			if p.previewTab == PreviewTabDiff {
 				return p.handleDiffTabKey(msg)
 			}
-			pageSize := p.height / 2
-			if pageSize < 5 {
-				pageSize = 5
+			// A terminal surface pages by its own drawn rows, which is the shared
+			// rule's business; a document has only this plugin's height to go on.
+			if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+				return cmd
 			}
-			// Terminal panel focused: scroll terminal panel
-			if p.termPanelFocused && p.termPanelVisible {
-				p.scrollTermPanelWindow(-pageSize)
-				return nil
-			}
-			if p.previewShowsTerminal() {
-				p.scrollPreviewWindow(-pageSize)
-				return nil
-			}
+			pageSize := max(p.height/2, 5)
 			maxOffset := p.getMaxScrollOffset()
 			p.previewOffset += pageSize
 			if p.previewOffset > maxOffset {
 				p.previewOffset = maxOffset
 			}
 		}
-	case "ctrl+u":
+	case "ctrl+u", "pgup":
 		// Page up in preview pane (unified: decrease offset toward top)
 		if p.activePane == PanePreview {
 			if p.previewTab == PreviewTabDiff {
 				return p.handleDiffTabKey(msg)
 			}
-			pageSize := p.height / 2
-			if pageSize < 5 {
-				pageSize = 5
+			if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
+				return cmd
 			}
-			// Terminal panel focused: scroll terminal panel
-			if p.termPanelFocused && p.termPanelVisible {
-				p.scrollTermPanelWindow(pageSize)
-				return nil
-			}
-			if p.previewShowsTerminal() {
-				p.scrollPreviewWindow(pageSize)
-				return nil
-			}
+			pageSize := max(p.height/2, 5)
 			p.previewOffset -= pageSize
 			if p.previewOffset < 0 {
 				p.previewOffset = 0

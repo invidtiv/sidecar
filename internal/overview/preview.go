@@ -270,35 +270,21 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.terminalKey(msg); handled {
 		return true, cmd
 	}
-	page := max(1, m.previewRows()/2)
+	// Everything a scrollback key does — j/k, the pager chords, the jumps — was
+	// answered above by the shared rule, in the same words the live pane answers
+	// it in. What is left here is the browser's own navigation.
 	switch key {
 	case "enter", interactiveEnterKeyAlt:
 		return true, m.enterPreviewInteractive()
 	case "left", "h", "esc":
 		return true, m.focusList()
-	case "j", "down":
-		m.scrollWatchedPreview(-1)
-	case "k", "up":
-		m.scrollWatchedPreview(1)
-	case "ctrl+d", "pgdown":
-		m.scrollWatchedPreview(-page)
-	case "ctrl+u", "pgup":
-		m.scrollWatchedPreview(page)
-	case "G", "end":
-		m.clearPreviewSelectionOnScroll()
-		m.jumpPreviewWindow(0)
-	case "g", "home":
-		m.clearPreviewSelectionOnScroll()
-		m.jumpPreviewWindow(m.previewMaxOffset())
-	default:
-		return false, nil
 	}
-	return true, nil
+	return false, nil
 }
 
-// scrollWatchedPreview moves the window with the keyboard, which is a scroll
-// made outside a pointer gesture: a selection anchored to the rows it leaves
-// behind would highlight rows the user never picked.
+// scrollWatchedPreview moves the window outside a pointer gesture: a selection
+// anchored to the rows it leaves behind would highlight rows the user never
+// picked.
 func (m *Model) scrollWatchedPreview(delta int) {
 	m.clearPreviewSelectionOnScroll()
 	m.scrollPreview(delta)
@@ -322,18 +308,21 @@ func (m *Model) terminalKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return handled, cmd
 }
 
-// previewScrollbackKey walks the window through scrollback while a pane is live.
-// Shift is the modifier because every unshifted key is the pane's.
+// previewScrollbackKey walks the window through scrollback, in either of the
+// preview's states. Which keys move a window is the shared rule's, and so is the
+// shift a live pane requires; this surface supplies only its drawn rows, so a
+// page is the same distance here as it is anywhere else the pane is read.
 func (m *Model) previewScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if !m.PreviewInteractive() {
-		return false, nil
+	state := tty.ScrollbackWatched
+	if m.PreviewInteractive() {
+		state = tty.ScrollbackLive
 	}
 	// Every key typed into a live pane comes through here, so the window's height
 	// is resolved only for the keys the shared rule claims.
-	if !tty.IsScrollbackKey(msg) {
+	if !tty.IsScrollbackKey(state, msg) {
 		return false, nil
 	}
-	move, ok := tty.MapScrollbackKey(msg, m.previewRows())
+	move, ok := tty.MapScrollbackKey(state, msg, m.previewRows())
 	if !ok {
 		return false, nil
 	}

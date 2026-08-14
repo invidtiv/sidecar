@@ -15,7 +15,7 @@ func TestResolveSurfaceChordAnswersOneSetInOneOrder(t *testing.T) {
 		Copy:      func() tea.Cmd { answered = append(answered, "copy"); return nil },
 		SelectAll: func() tea.Cmd { answered = append(answered, "select-all"); return nil },
 		Scrollback: func(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-			if !IsScrollbackKey(msg) {
+			if !IsScrollbackKey(ScrollbackLive, msg) {
 				return nil, false
 			}
 			answered = append(answered, "scrollback")

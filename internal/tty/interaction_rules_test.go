@@ -88,10 +88,17 @@ func TestIsScrollbackKeyMatchesTheKeysTheMoveClaims(t *testing.T) {
 		{Code: 'a', Text: "a"},
 		{Code: 'a', Text: "A", Mod: tea.ModShift},
 	}
-	for _, key := range keys {
-		_, want := MapScrollbackKey(key, 20)
-		if got := IsScrollbackKey(key); got != want {
-			t.Fatalf("IsScrollbackKey(%v) = %v, want %v", key, got, want)
+	keys = append(keys,
+		tea.KeyPressMsg{Code: 'j', Text: "j"},
+		tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl},
+		tea.KeyPressMsg{Code: tea.KeyPgUp},
+	)
+	for _, state := range []ScrollbackState{ScrollbackLive, ScrollbackWatched} {
+		for _, key := range keys {
+			_, want := MapScrollbackKey(state, key, 20)
+			if got := IsScrollbackKey(state, key); got != want {
+				t.Fatalf("IsScrollbackKey(%v, %v) = %v, want %v", state, key, got, want)
+			}
 		}
 	}
 }

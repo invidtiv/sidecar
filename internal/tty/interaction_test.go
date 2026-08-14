@@ -115,10 +115,10 @@ func TestMapScrollbackKeyNeedsShiftAndSizesPagesWithContext(t *testing.T) {
 	shift := func(code rune) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: code, Mod: tea.ModShift}
 	}
-	if _, ok := MapScrollbackKey(tea.KeyPressMsg{Code: tea.KeyUp}, 20); ok {
+	if _, ok := MapScrollbackKey(ScrollbackLive, tea.KeyPressMsg{Code: tea.KeyUp}, 20); ok {
 		t.Fatal("an unshifted key was taken from the pane")
 	}
-	if _, ok := MapScrollbackKey(shift('a'), 20); ok {
+	if _, ok := MapScrollbackKey(ScrollbackLive, shift('a'), 20); ok {
 		t.Fatal("shift+a was read as a scrollback key")
 	}
 
@@ -136,7 +136,7 @@ func TestMapScrollbackKeyNeedsShiftAndSizesPagesWithContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := MapScrollbackKey(shift(tt.code), 20)
+			got, ok := MapScrollbackKey(ScrollbackLive, shift(tt.code), 20)
 			if !ok || got != tt.want {
 				t.Errorf("MapScrollbackKey = %+v (ok=%v), want %+v", got, ok, tt.want)
 			}
@@ -144,8 +144,94 @@ func TestMapScrollbackKeyNeedsShiftAndSizesPagesWithContext(t *testing.T) {
 	}
 
 	// A surface with no room for a page still moves.
-	if got, _ := MapScrollbackKey(shift(tea.KeyPgUp), 1); got.Rows != 1 {
+	if got, _ := MapScrollbackKey(ScrollbackLive, shift(tea.KeyPgUp), 1); got.Rows != 1 {
 		t.Errorf("a one-row surface paged by %d rows, want 1", got.Rows)
+	}
+}
+
+// One rule answers both states. The navigation keys reach the same moves in
+// each; what differs is the shift a live pane requires, because while a pane is
+// taking input every unshifted key is its own.
+func TestMapScrollbackKeyAnswersBothStates(t *testing.T) {
+	const rows = 20
+	tests := []struct {
+		name    string
+		state   ScrollbackState
+		key     tea.KeyPressMsg
+		want    ScrollbackMove
+		claimed bool
+	}{
+		{"live takes a shifted page up", ScrollbackLive, tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift}, ScrollbackMove{Rows: 19}, true},
+		{"live leaves a bare page up to the pane", ScrollbackLive, tea.KeyPressMsg{Code: tea.KeyPgUp}, ScrollbackMove{}, false},
+		{"watched takes the same key bare", ScrollbackWatched, tea.KeyPressMsg{Code: tea.KeyPgUp}, ScrollbackMove{Rows: 19}, true},
+		{"watched takes it shifted too", ScrollbackWatched, tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift}, ScrollbackMove{Rows: 19}, true},
+		{"watched pages down by a page", ScrollbackWatched, tea.KeyPressMsg{Code: tea.KeyPgDown}, ScrollbackMove{Rows: -19}, true},
+		{"watched home is the oldest output", ScrollbackWatched, tea.KeyPressMsg{Code: tea.KeyHome}, ScrollbackMove{ToOldest: true}, true},
+		{"watched end is the live edge", ScrollbackWatched, tea.KeyPressMsg{Code: tea.KeyEnd}, ScrollbackMove{ToLive: true}, true},
+		{"watched k walks back one row", ScrollbackWatched, tea.KeyPressMsg{Code: 'k', Text: "k"}, ScrollbackMove{Rows: 1}, true},
+		{"watched j walks towards live", ScrollbackWatched, tea.KeyPressMsg{Code: 'j', Text: "j"}, ScrollbackMove{Rows: -1}, true},
+		{"watched g is the oldest output", ScrollbackWatched, tea.KeyPressMsg{Code: 'g', Text: "g"}, ScrollbackMove{ToOldest: true}, true},
+		{"watched G is the live edge", ScrollbackWatched, tea.KeyPressMsg{Code: 'g', Text: "G", Mod: tea.ModShift}, ScrollbackMove{ToLive: true}, true},
+		{"watched ctrl+u takes half the surface", ScrollbackWatched, tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, ScrollbackMove{Rows: 10}, true},
+		{"watched ctrl+d takes half the surface", ScrollbackWatched, tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}, ScrollbackMove{Rows: -10}, true},
+		// A letter is text the pane is owed, and shift only capitalises it.
+		{"live leaves k to the pane", ScrollbackLive, tea.KeyPressMsg{Code: 'k', Text: "k"}, ScrollbackMove{}, false},
+		{"live leaves K to the pane", ScrollbackLive, tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}, ScrollbackMove{}, false},
+		{"live leaves ctrl+d to the pane", ScrollbackLive, tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}, ScrollbackMove{}, false},
+		{"a watched pane still types nothing anywhere else", ScrollbackWatched, tea.KeyPressMsg{Code: 'a', Text: "a"}, ScrollbackMove{}, false},
+		{"alt+j is a chord, not a pager key", ScrollbackWatched, tea.KeyPressMsg{Code: 'j', Mod: tea.ModAlt}, ScrollbackMove{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := MapScrollbackKey(tt.state, tt.key, rows)
+			if ok != tt.claimed || got != tt.want {
+				t.Errorf("MapScrollbackKey = %+v (ok=%v), want %+v (ok=%v)", got, ok, tt.want, tt.claimed)
+			}
+		})
+	}
+}
+
+// The two sets differ by the shift a live pane requires and by nothing else: the
+// keys no pane types answer in both states, and each pager alias reaches a move
+// the navigation set already has.
+func TestScrollbackSetsDifferOnlyByShift(t *testing.T) {
+	const rows = 20
+	navigation := []rune{tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd}
+	for _, code := range navigation {
+		bare := tea.KeyPressMsg{Code: code}
+		shifted := tea.KeyPressMsg{Code: code, Mod: tea.ModShift}
+
+		live, liveOK := MapScrollbackKey(ScrollbackLive, shifted, rows)
+		if !liveOK {
+			t.Fatalf("a live pane refused %v", shifted)
+		}
+		if _, ok := MapScrollbackKey(ScrollbackLive, bare, rows); ok {
+			t.Fatalf("a live pane took the unshifted %v", bare)
+		}
+		watched, watchedOK := MapScrollbackKey(ScrollbackWatched, bare, rows)
+		if !watchedOK {
+			t.Fatalf("a watched pane refused %v", bare)
+		}
+		if live != watched {
+			t.Fatalf("%v moved by %+v live and %+v watched", bare, live, watched)
+		}
+	}
+
+	aliases := map[tea.KeyPressMsg]rune{
+		{Code: 'k', Text: "k"}:                    tea.KeyUp,
+		{Code: 'j', Text: "j"}:                    tea.KeyDown,
+		{Code: 'g', Text: "g"}:                    tea.KeyHome,
+		{Code: 'g', Text: "G", Mod: tea.ModShift}: tea.KeyEnd,
+	}
+	for alias, code := range aliases {
+		got, ok := MapScrollbackKey(ScrollbackWatched, alias, rows)
+		if !ok {
+			t.Fatalf("a watched pane refused %v", alias)
+		}
+		want, _ := MapScrollbackKey(ScrollbackWatched, tea.KeyPressMsg{Code: code}, rows)
+		if got != want {
+			t.Fatalf("%v moved by %+v, want %+v", alias, got, want)
+		}
 	}
 }
 

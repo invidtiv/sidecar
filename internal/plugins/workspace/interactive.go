@@ -936,21 +936,58 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 	// Every unshifted key is the pane's, and every key typed into a pane comes
 	// through here. Resolve the layout only for the keys the shared rule claims,
 	// or ordinary typing pays for a page size no one asked for.
-	if !tty.IsScrollbackKey(msg) {
+	if !tty.IsScrollbackKey(tty.ScrollbackLive, msg) {
 		return false, nil
 	}
-	pageSize := p.getPreviewVisibleHeight()
-	termPanel := p.interactiveState != nil && p.interactiveState.TermPanel
-	if termPanel {
-		if _, panelHeight, ok := p.calculateTermPanelDimensions(); ok {
-			pageSize = panelHeight
-		}
-	}
-	move, ok := tty.MapScrollbackKey(msg, pageSize)
+	termPanel := p.interactiveTermPanel()
+	move, ok := tty.MapScrollbackKey(tty.ScrollbackLive, msg, p.terminalSurfaceRows(termPanel))
 	if !ok {
 		return false, nil
 	}
+	return true, p.applyScrollbackMove(termPanel, move)
+}
 
+// handleWatchedScrollbackKey walks the window through scrollback while nobody is
+// typing into the pane. It is the same rule, the same placement and the same
+// reach the live keys and the wheel use; only the form of the key differs, and
+// that difference is the shared layer's to know.
+func (p *Plugin) handleWatchedScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if p.activePane != PanePreview || !p.previewShowsTerminal() {
+		return false, nil
+	}
+	termPanel := p.termPanelFocused && p.termPanelVisible
+	move, ok := tty.MapScrollbackKey(tty.ScrollbackWatched, msg, p.terminalSurfaceRows(termPanel))
+	if !ok {
+		return false, nil
+	}
+	return true, p.applyScrollbackMove(termPanel, move)
+}
+
+// terminalSurfaceRows is the drawn height of a named terminal surface, which is
+// what a page of scrollback is measured in. It is the rows on screen rather than
+// the plugin's own height: the two are several rows apart once the header, a
+// terminal-panel split or the pane tree around them is taken off, and a page
+// sized to the wrong one lands somewhere the reader was not looking.
+func (p *Plugin) terminalSurfaceRows(termPanel bool) int {
+	if surface := p.terminalSurfaceGeometry(termPanel); surface.OK && surface.Height > 0 {
+		return surface.Height
+	}
+	if termPanel {
+		if _, panelHeight, ok := p.calculateTermPanelDimensions(); ok {
+			return panelHeight
+		}
+	}
+	return p.getPreviewVisibleHeight()
+}
+
+// applyScrollbackMove places a scrollback move on a named terminal surface. Both
+// states share it, so a key at the bound reaches for older history exactly as a
+// wheel notch there does.
+func (p *Plugin) applyScrollbackMove(termPanel bool, move tty.ScrollbackMove) tea.Cmd {
+	// Every move here places a window, and a surface showing a document
+	// projection has none: it goes back to its live buffer first, the way the
+	// scroll paths do when they thaw.
+	p.releaseTerminalDocProjection(termPanel)
 	p.clearTerminalSelectionOnScroll(termPanel)
 
 	switch {
@@ -958,24 +995,24 @@ func (p *Plugin) handleInteractiveScrollbackKey(msg tea.KeyPressMsg) (bool, tea.
 		if termPanel {
 			p.releaseTermPanelWindowPin()
 			p.termPanelScroll = p.termPanelMaxScroll()
-			return true, p.loadOlderTerminalHistory(true, historyLoadChunk)
+			return p.loadOlderTerminalHistory(true, historyLoadChunk)
 		}
 		p.jumpPreviewWindow(p.previewMaxScroll())
-		return true, p.loadOlderTerminalHistory(false, historyLoadChunk)
+		return p.loadOlderTerminalHistory(false, historyLoadChunk)
 	case move.ToLive:
 		if termPanel {
 			p.releaseTermPanelWindowPin()
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
-			return true, nil
+			return nil
 		}
 		p.jumpPreviewWindow(0)
 		p.cancelTerminalHistoryIntent(false)
-		return true, nil
+		return nil
 	}
 	// Both surfaces count their window in rows back from the live bottom, which
 	// is the direction the shared move already counts in.
-	return true, p.scrollInteractiveViewport(move.Rows)
+	return p.scrollTerminalWindow(termPanel, move.Rows)
 }
 
 // scrollTerminalWindowByWheel places one coalesced wheel notch on a terminal
@@ -1018,13 +1055,13 @@ func (p *Plugin) scrollTerminalWindowByWheel(termPanel bool, rows int) tea.Cmd {
 	return nil
 }
 
-// scrollInteractiveViewport moves whichever pane interactive mode is pointed at
-// delta rows back through scrollback, negative towards the live edge, and
-// reaches for older history when the window runs out of loaded buffer. It is
-// the scrollback keys' placement: a key move lands inside what the surface has
-// measured, and it counts in the direction the shared move reports.
-func (p *Plugin) scrollInteractiveViewport(delta int) tea.Cmd {
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+// scrollTerminalWindow moves a named terminal surface delta rows back through
+// scrollback, negative towards the live edge, and reaches for older history when
+// the window runs out of loaded buffer. It is the scrollback keys' placement in
+// either state: a key move lands inside what the surface has measured, and it
+// counts in the direction the shared move reports.
+func (p *Plugin) scrollTerminalWindow(termPanel bool, delta int) tea.Cmd {
+	if termPanel {
 		p.clearTerminalSelectionOnScroll(true)
 		p.scrollTermPanelWindow(delta)
 		if delta < 0 && p.termPanelScroll == 0 {

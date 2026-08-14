@@ -104,6 +104,11 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 	if !ok {
 		return nil
 	}
+	// A reader can reach the bound before any capture has recorded a reach for
+	// this pane, and the request state is what remembers that they did.
+	if p.terminalHistory == nil {
+		p.terminalHistory = make(map[string]tty.HistoryReach)
+	}
 	state := p.terminalHistory[source.Key]
 	base, _, absolute := source.Buffer.AbsoluteRange()
 	request, outcome := state.Request(base, absolute, scrollLines)
@@ -224,7 +229,9 @@ func (p *Plugin) cancelTerminalHistoryIntent(termPanel bool) {
 }
 
 func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
-	if key == "" {
+	// No reach has been recorded for any pane yet, so there is nothing in flight
+	// to retire — and a cancellation is not a reason to start holding state.
+	if key == "" || p.terminalHistory == nil {
 		return
 	}
 	state := p.terminalHistory[key]
