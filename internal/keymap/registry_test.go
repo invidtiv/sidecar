@@ -261,6 +261,14 @@ func TestDefaultBindings_GlobalShortcuts(t *testing.T) {
 	}
 }
 
+func TestDefaultBindings_DoNotBindCtrlKKillShell(t *testing.T) {
+	for _, b := range DefaultBindings() {
+		if b.Key == "ctrl+k" && b.Command == "kill-shell" {
+			t.Fatalf("ctrl+k is still bound to kill-shell: %+v", b)
+		}
+	}
+}
+
 func TestDefaultBindings_DoNotAdvertiseGlobalWorkspacesPreview(t *testing.T) {
 	for _, b := range DefaultBindings() {
 		if b.Context == "global-workspaces-preview" {

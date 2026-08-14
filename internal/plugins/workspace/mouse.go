@@ -1056,6 +1056,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			if shell != nil {
 				p.selectNestedShell(parent, hit.TmuxName)
 				p.saveSelectionState()
+				if !fullTmuxAttachEnabled() {
+					return nil
+				}
 				return p.ensureShellAndAttach(shell)
 			}
 		}
@@ -1066,13 +1069,16 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 				if shellIdx >= 0 && shellIdx < len(p.shells) {
 					p.selectTopShellAt(shellIdx)
 					p.saveSelectionState()
+					if !fullTmuxAttachEnabled() {
+						return nil
+					}
 					return p.ensureShellAndAttachByIndex(shellIdx)
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
 				p.selectWorktreeAt(idx)
 				p.saveSelectionState()
 				wt := p.worktrees[idx]
-				if wt.Agent != nil {
+				if wt.Agent != nil && fullTmuxAttachEnabled() {
 					p.attachedSession = wt.Name
 					return p.AttachToSession(wt)
 				}
@@ -1155,6 +1161,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			p.kanbanCol, p.kanbanRow = col, row
 			p.syncKanbanToList()
 			p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
+			if !fullTmuxAttachEnabled() {
+				return nil
+			}
 			if shell := p.selectedKanbanShell(); shell != nil {
 				return p.ensureShellAndAttachByIndex(p.selectedShellIdx)
 			}

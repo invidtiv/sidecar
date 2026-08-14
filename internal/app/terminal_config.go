@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -10,22 +11,26 @@ import (
 // individual fields where they genuinely differ; nothing below re-reads config.
 func TerminalConfig(cfg *config.Config) tty.Config {
 	terminal := tty.DefaultConfig()
-	if cfg == nil {
-		return terminal
+	if cfg != nil {
+		workspace := cfg.Plugins.Workspace
+		if workspace.InteractiveExitKey != "" {
+			terminal.ExitKey = workspace.InteractiveExitKey
+		}
+		if workspace.InteractiveAttachKey != "" {
+			terminal.AttachKey = workspace.InteractiveAttachKey
+		}
+		if workspace.InteractiveCopyKey != "" {
+			terminal.CopyKey = workspace.InteractiveCopyKey
+		}
+		if workspace.InteractivePasteKey != "" {
+			terminal.PasteKey = workspace.InteractivePasteKey
+		}
+		terminal.CopyOnSelect = workspace.CopyOnSelect
 	}
-	workspace := cfg.Plugins.Workspace
-	if workspace.InteractiveExitKey != "" {
-		terminal.ExitKey = workspace.InteractiveExitKey
+	// Empty AttachKey is the pane's chord. tty.New treats empty as "use default",
+	// so hosts that honour this resolution must assign the field after New.
+	if !features.IsEnabled(features.TmuxFullAttach.Name) {
+		terminal.AttachKey = ""
 	}
-	if workspace.InteractiveAttachKey != "" {
-		terminal.AttachKey = workspace.InteractiveAttachKey
-	}
-	if workspace.InteractiveCopyKey != "" {
-		terminal.CopyKey = workspace.InteractiveCopyKey
-	}
-	if workspace.InteractivePasteKey != "" {
-		terminal.PasteKey = workspace.InteractivePasteKey
-	}
-	terminal.CopyOnSelect = workspace.CopyOnSelect
 	return terminal
 }

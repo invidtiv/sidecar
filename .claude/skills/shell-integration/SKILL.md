@@ -294,14 +294,14 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 ## Entry and Exit
 
 **Workspace Plugin:**
-- Enter: `i` when preview pane focused with output tab
+- Enter: `enter` / `E` when preview pane focused with output tab
 - Exit: `Ctrl+\` (instant) or double-Escape (150ms delay)
-- Attach: `Ctrl+]` (full tmux attach)
+- Attach: `Ctrl+]` / `t` only when `tmux_full_attach` is on (default off)
 
 **Filebrowser Plugin:**
 - Enter: `e` or `Enter` on a file (if inline edit enabled)
 - Exit: `Ctrl+\` or double-Escape
-- Attach: `Ctrl+]`
+- Attach: `Ctrl+]` only when `tmux_full_attach` is on (default off)
 
 ## Feature Flags
 
@@ -309,7 +309,9 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 {
   "features": {
     "tmux_interactive_input": true,
-    "tmux_inline_edit": true
+    "tmux_inline_edit": true,
+    "tmux_full_attach": false,
+    "workspace_terminal_panel": false
   }
 }
 ```

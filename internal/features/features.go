@@ -26,6 +26,21 @@ var (
 		Description: "Enable write support for tmux panes",
 	}
 
+	// TmuxFullAttach suspends Sidecar and runs `tmux attach-session`.
+	// Off by default so users stay in the embedded pane.
+	TmuxFullAttach = Feature{
+		Name:        "tmux_full_attach",
+		Default:     false,
+		Description: "Suspend Sidecar and attach to the full tmux session",
+	}
+
+	// WorkspaceTerminalPanel enables the Ctrl+T / Alt+T split terminal panel.
+	WorkspaceTerminalPanel = Feature{
+		Name:        "workspace_terminal_panel",
+		Default:     false,
+		Description: "Enable the workspace split terminal panel",
+	}
+
 	// TmuxInlineEdit enables inline file editing via tmux in the files plugin.
 	TmuxInlineEdit = Feature{
 		Name:        "tmux_inline_edit",
@@ -83,12 +98,14 @@ var (
 // allFeatures is the registry of all known features.
 var allFeatures = []Feature{
 	TmuxInteractiveInput,
+	TmuxFullAttach,
 	TmuxInlineEdit,
 	FilesAutoRefresh,
 	NotesPlugin,
 	TasksPlugin,
 	ConversationsPlugin,
 	WorkspaceDocPanes,
+	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 }
 

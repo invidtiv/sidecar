@@ -385,8 +385,8 @@ func (p *Plugin) executeAgentChoice() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
-	if idx == 0 {
-		// Attach to existing session
+	items := p.agentChoiceItems()
+	if idx >= 0 && idx < len(items) && items[idx].ID == "agent-choice-attach" {
 		return p.AttachToSession(wt)
 	}
 	// Restart agent: open config modal to choose options
@@ -883,6 +883,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.loadSelectedContent()
 		}
 	case "t":
+		if !fullTmuxAttachEnabled() {
+			return nil
+		}
 		// Attach to tmux session
 		// Shell entry: attach to selected shell session by TmuxName
 		if shell := p.getSelectedShell(); shell != nil {
@@ -1089,9 +1092,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.openAgentConfigModal(wt, false)
 			return nil
 		}
-		// Agent exists - show choice modal (attach or restart)
+		// Agent exists - show choice modal (attach and/or restart)
 		p.agentChoiceWorktree = wt
-		p.agentChoiceIdx = 0 // Default to attach
+		p.agentChoiceIdx = 0
 		p.viewMode = ViewModeAgentChoice
 		return nil
 	case "S":
@@ -1099,12 +1102,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		wt := p.selectedWorktree()
 		if wt != nil && wt.Agent != nil {
 			return p.StopAgent(wt)
-		}
-	case "ctrl+k":
-		// Kill selected shell session (K is global Overview / Kanban).
-		// Nested rows answer this for the same reason they answer D.
-		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
-			return p.killShellSessionByName(shell.TmuxName)
 		}
 	case "R":
 		// Rename selected shell session
@@ -1192,10 +1189,16 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.openInGitTab(wt)
 		}
 	case "ctrl+t":
+		if !terminalPanelEnabled() {
+			return nil
+		}
 		// Toggle terminal panel visibility (on/off with last layout)
 		p.ctx.Logger.Debug("termPanel: ctrl+t pressed", "currentlyVisible", p.termPanelVisible)
 		return p.toggleTermPanel()
 	case "alt+t":
+		if !terminalPanelEnabled() {
+			return nil
+		}
 		// Switch terminal panel layout direction (bottom ↔ right)
 		p.ctx.Logger.Debug("termPanel: alt+t pressed, switching layout")
 		return p.switchTermPanelLayout()
@@ -1203,7 +1206,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Unhandled key in preview pane - flash to indicate attach is needed
 		// Only flash on the Output tab where there's a terminal to attach to.
 		// Diff and Task tabs have no interactive terminal.
-		if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		if fullTmuxAttachEnabled() && p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 			canAttach := p.selectingShell() || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
 			if canAttach {
 				p.flashPreviewTime = time.Now()

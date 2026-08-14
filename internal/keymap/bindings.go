@@ -16,7 +16,7 @@ func DefaultBindings() []Binding {
 		{Key: "W", Command: "switch-worktree", Context: "global"},
 		{Key: "#", Command: "switch-theme", Context: "global"},
 		{Key: "^", Command: "open-in", Context: "global"},
-		// K: Overview (Kanban board). Bare O is taken by open-in; kill-shell is ctrl+k.
+		// K: Overview (Kanban board). Bare O is taken by open-in. Shell delete is D.
 		{Key: "K", Command: "toggle-overview", Context: "global"},
 		{Key: "i", Command: "open-issue", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},
@@ -465,7 +465,6 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "approve", Context: "workspace-list"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-list"},
 		{Key: "N", Command: "reject", Context: "workspace-list"},
-		{Key: "ctrl+k", Command: "kill-shell", Context: "workspace-list"},
 		{Key: "O", Command: "open-in-git", Context: "workspace-list"},
 		{Key: "l", Command: "focus-right", Context: "workspace-list"},
 		{Key: "right", Command: "focus-right", Context: "workspace-list"},

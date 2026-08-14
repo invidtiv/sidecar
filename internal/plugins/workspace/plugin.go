@@ -812,8 +812,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	if layout := state.GetTermPanelLayout(); layout == "right" {
 		p.termPanelLayout = TermPanelRight
 	}
-	// Restore terminal panel visibility from last session
-	if state.GetTermPanelVisible() {
+	// Restore terminal panel visibility from last session only when the
+	// split is still enabled. A previously visible panel must not come back
+	// after the default flipped off.
+	if restoreTermPanelVisible(state.GetTermPanelVisible()) {
 		p.termPanelVisible = true
 	}
 

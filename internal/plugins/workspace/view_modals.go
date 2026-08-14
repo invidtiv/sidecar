@@ -383,6 +383,14 @@ func (p *Plugin) renderPromptPickerModal(width, height int) string {
 	return ui.OverlayModal(background, modalContent, width, height)
 }
 
+func (p *Plugin) agentChoiceItems() []modal.ListItem {
+	items := make([]modal.ListItem, 0, 2)
+	if fullTmuxAttachEnabled() {
+		items = append(items, modal.ListItem{ID: "agent-choice-attach", Label: "Attach to session"})
+	}
+	return append(items, modal.ListItem{ID: "agent-choice-restart", Label: "Restart agent"})
+}
+
 // ensureAgentChoiceModal builds/rebuilds the agent choice modal.
 func (p *Plugin) ensureAgentChoiceModal() {
 	if p.agentChoiceWorktree == nil {
@@ -403,11 +411,7 @@ func (p *Plugin) ensureAgentChoiceModal() {
 	}
 	p.agentChoiceModalWidth = modalW
 
-	// Build list items for the options
-	items := []modal.ListItem{
-		{ID: "agent-choice-attach", Label: "Attach to session"},
-		{ID: "agent-choice-restart", Label: "Restart agent"},
-	}
+	items := p.agentChoiceItems()
 
 	title := fmt.Sprintf("Agent Running: %s", p.agentChoiceWorktree.Name)
 

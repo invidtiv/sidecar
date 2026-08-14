@@ -329,13 +329,9 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	}
 	// What the header states about the drawn window — that it is off the live
 	// edge and how to get back, that older lines exist above it, that the pane is
-	// clipped, that the application has the mouse — is the shared derivation's.
-	// The global browser states the same facts from the same one. This header
-	// clips from the right rather than dropping notes, so it takes them all.
-	//
-	// Who has the mouse is asked of the pane, not of the keyboard. It is the one
-	// note a watched surface needs most: a forwarded notch moves the application
-	// and not this window, and nothing else on the row says why.
+	// clipped — is the shared derivation's. The global browser states the same
+	// facts from the same one. This header clips from the right rather than
+	// dropping notes, so it takes them all.
 	hint = tty.AppendStatus(hint, tty.WindowStatus(tty.WindowStatusInput{
 		Layout:         result.Layout,
 		AbsoluteBase:   input.AbsoluteBase,
@@ -396,7 +392,10 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	case p.interactiveDescribes(false):
 		// Interactive mode targeting this agent pane - show exit hint with
 		// highlight. The exit key leads, so the header's hint floor keeps it.
-		hint = p.interactiveExitHint() + dimText(" • "+p.getInteractiveAttachKey()+" attach")
+		hint = p.interactiveExitHint()
+		if key := p.getInteractiveAttachKey(); key != "" {
+			hint += dimText(" • " + key + " attach")
+		}
 	case p.primaryTerminalFocusVisible() && p.activePane == PanePreview:
 		// Split with the terminal panel: say which child has focus.
 		agentFocused := p.primaryTerminalFocused()
@@ -405,13 +404,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 			hint = dimText("enter interactive")
 		}
 	default:
-		// Only show "E for interactive" hint if feature flag is enabled
-		detach := getTmuxDetachHint()
-		if features.IsEnabled(features.TmuxInteractiveInput.Name) {
-			hint = dimText(fmt.Sprintf("t to attach • E for interactive • %s to detach", detach))
-		} else {
-			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
-		}
+		hint = p.watchedAttachHint()
 	}
 	return p.renderCapturedTerminal(chips, hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
 }
@@ -474,15 +467,22 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 			hint = dimText("enter interactive")
 		}
 	default:
-		// Only show "E for interactive" hint if feature flag is enabled
-		detach := getTmuxDetachHint()
-		if features.IsEnabled(features.TmuxInteractiveInput.Name) {
-			hint = dimText(fmt.Sprintf("t to attach • E for interactive • %s to detach", detach))
-		} else {
-			hint = dimText(fmt.Sprintf("t to attach • %s to detach", detach))
-		}
+		hint = p.watchedAttachHint()
 	}
 	return p.renderCapturedTerminal(chips, hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
+}
+
+// watchedAttachHint is the watched-pane attach/detach copy. Empty when full
+// attach is off — do not replace it with an explanation.
+func (p *Plugin) watchedAttachHint() string {
+	if !fullTmuxAttachEnabled() {
+		return ""
+	}
+	detach := getTmuxDetachHint()
+	if features.IsEnabled(features.TmuxInteractiveInput.Name) {
+		return dimText(fmt.Sprintf("t to attach • E for interactive • %s to detach", detach))
+	}
+	return dimText(fmt.Sprintf("t to attach • %s to detach", detach))
 }
 
 func padLinesToHeight(lines []string, target int) []string {
@@ -542,9 +542,12 @@ func (p *Plugin) renderShellPrimer(width, height int) string {
 	// Quick start
 	prefix := getTmuxPrefix()
 	lines = append(lines, sectionStyle.Render("Quick Start"))
-	lines = append(lines, dimText("  Enter         Create and attach to shell"))
-	lines = append(lines, dimText("  ctrl+k        Kill shell session"))
-	lines = append(lines, dimText(fmt.Sprintf("  %s d      Detach (return to sidecar)", prefix)))
+	lines = append(lines, dimText("  Enter         Create and type in the shell"))
+	lines = append(lines, dimText("  D             Delete shell session"))
+	if fullTmuxAttachEnabled() {
+		lines = append(lines, dimText("  t             Attach to full tmux session"))
+		lines = append(lines, dimText(fmt.Sprintf("  %s d      Detach (return to sidecar)", prefix)))
+	}
 	lines = append(lines, "")
 	lines = append(lines, strings.Repeat("─", min(width-4, 50)))
 	lines = append(lines, "")

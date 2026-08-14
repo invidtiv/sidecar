@@ -259,9 +259,30 @@ func (p *Plugin) isInlineEditSessionAlive() bool {
 	return (tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}).IsAlive()
 }
 
+func fullTmuxAttachEnabled() bool {
+	return features.IsEnabled(features.TmuxFullAttach.Name)
+}
+
+func (p *Plugin) applyInlineEditorAttachKey() {
+	if p.inlineEditor == nil {
+		return
+	}
+	if !fullTmuxAttachEnabled() {
+		p.inlineEditor.Config.AttachKey = ""
+		return
+	}
+	key := tty.DefaultConfig().AttachKey
+	if p.ctx != nil {
+		if resolved := app.TerminalConfig(p.ctx.Config).AttachKey; resolved != "" {
+			key = resolved
+		}
+	}
+	p.inlineEditor.Config.AttachKey = key
+}
+
 // attachToInlineEditSession attaches to the inline edit tmux session in full-screen mode.
 func (p *Plugin) attachToInlineEditSession() tea.Cmd {
-	if p.inlineEditSession == "" {
+	if !fullTmuxAttachEnabled() || p.inlineEditSession == "" {
 		return nil
 	}
 

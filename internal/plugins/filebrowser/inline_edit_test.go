@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -36,6 +38,33 @@ func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "kill-session -t stale-editor") {
 		t.Fatalf("stale editor session was not cleaned up; log:\n%s", data)
+	}
+}
+
+func TestAttachToInlineEditSessionGatedByFullAttachFlag(t *testing.T) {
+	installFilebrowserFakeTmux(t)
+	p := New()
+	p.inlineEditSession = "sidecar-edit-test"
+	if p.inlineEditor.Config.AttachKey != "" {
+		t.Fatalf("inline editor AttachKey = %q, want empty by default", p.inlineEditor.Config.AttachKey)
+	}
+	if cmd := p.attachToInlineEditSession(); cmd != nil {
+		t.Fatal("attachToInlineEditSession ran with tmux_full_attach off")
+	}
+	if p.inlineEditSession != "sidecar-edit-test" {
+		t.Fatal("gated attach exited the editor")
+	}
+
+	cfg := config.Default()
+	cfg.Features.Flags[features.TmuxFullAttach.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	p.applyInlineEditorAttachKey()
+	if p.inlineEditor.Config.AttachKey == "" {
+		t.Fatal("inline editor AttachKey stayed empty with tmux_full_attach on")
+	}
+	if cmd := p.attachToInlineEditSession(); cmd == nil {
+		t.Fatal("attachToInlineEditSession did nothing with tmux_full_attach on")
 	}
 }
 

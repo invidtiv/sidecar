@@ -550,6 +550,9 @@ func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
 // attachWithResize resizes the tmux pane to full terminal, waits briefly for
 // tmux to process, then attaches. Centralizes resize-before-attach logic.
 func (p *Plugin) attachWithResize(target, sessionName, displayName string, onComplete func(error) tea.Msg) tea.Cmd {
+	if !fullTmuxAttachEnabled() {
+		return nil
+	}
 	c := exec.Command("tmux", "attach-session", "-t", sessionName)
 	termState, _ := term.GetState(int(os.Stdout.Fd()))
 	wrappedOnComplete := func(err error) tea.Msg {
@@ -686,6 +689,9 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	switch msg.String() {
 	case "ctrl+t":
+		if !terminalPanelEnabled() {
+			return nil, true
+		}
 		cmd := p.toggleTermPanel()
 		// If interactive mode survived the toggle (agent pane still active),
 		// keep focus on agent pane and resize the interactive pane.
@@ -695,6 +701,9 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return cmd, true
 	case "alt+t":
+		if !terminalPanelEnabled() {
+			return nil, true
+		}
 		cmd := p.switchTermPanelLayout()
 		if p.interactiveState != nil && p.interactiveState.Active {
 			return tea.Batch(cmd, p.resizeInteractivePaneCmd()), true
@@ -772,6 +781,9 @@ func (p *Plugin) noteSessionEnded() tea.Cmd {
 // attachFromInteractive is the component's OnAttach hook: leave the embedded
 // pane and hand the user the full tmux session (td-fd68d1).
 func (p *Plugin) attachFromInteractive() tea.Cmd {
+	if !fullTmuxAttachEnabled() {
+		return nil
+	}
 	isTermPanel := p.interactiveState != nil && p.interactiveState.TermPanel
 	p.exitInteractiveMode()
 	if isTermPanel && p.termPanelSession != "" {

@@ -1,4 +1,4 @@
-Shell                                           t to attach • E for interactive • Ctrl-b d to detach
+Shell                                                                                               
 No output yet                                                                                       
                                                                                                     
                                                                                                     

@@ -248,6 +248,7 @@ func TestKanbanRefreshPreservesSelectionByStableID(t *testing.T) {
 }
 
 func TestKanbanDoubleClickActivatesExactWorktree(t *testing.T) {
+	enableWorkspaceFeature(t, "tmux_full_attach")
 	p := &Plugin{
 		mouseHandler: mouse.NewHandler(),
 		worktrees: []*Worktree{

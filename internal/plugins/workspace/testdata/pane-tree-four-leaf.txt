@@ -1,4 +1,4 @@
-Shell t to attach • E for interactive • Ctrl-b d t│ upper-right.md   Rendered   ×    q close · m raw
+Shell                                             │ upper-right.md   Rendered   ×    q close · m raw
 No output yet                                     │                                                 
                                                   │   upper                                         
                                                   │                                                 

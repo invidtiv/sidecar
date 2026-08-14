@@ -201,9 +201,11 @@ func (p *Plugin) Commands() []plugin.Command {
 				} else {
 					cmds = append(cmds,
 						plugin.Command{ID: "start-agent", Name: "Agent", Description: "Agent options (attach/restart)", Context: "workspace-preview", Priority: 9},
-						plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-preview", Priority: 10},
 						plugin.Command{ID: "stop-agent", Name: "Stop", Description: "Stop agent", Context: "workspace-preview", Priority: 11},
 					)
+					if fullTmuxAttachEnabled() {
+						cmds = append(cmds, plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-preview", Priority: 10})
+					}
 					if wt.Status == StatusWaiting {
 						cmds = append(cmds,
 							plugin.Command{ID: "approve", Name: "Approve", Description: "Approve agent prompt", Context: "workspace-preview", Priority: 12},
@@ -230,7 +232,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if p.previewTab == PreviewTabOutput || p.selectingShell() {
+			if terminalPanelEnabled() && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"
@@ -277,18 +279,18 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Shell-specific commands when shell is selected
 		if p.selectingShell() {
 			shell := p.getSelectedShell()
-			if shell == nil || shell.Agent == nil {
-				cmds = append(cmds,
-					plugin.Command{ID: "attach-shell", Name: "Attach", Description: "Create and attach to shell", Context: "workspace-list", Priority: 10},
-					plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 11},
-				)
-			} else {
-				cmds = append(cmds,
-					plugin.Command{ID: "attach-shell", Name: "Attach", Description: "Attach to shell", Context: "workspace-list", Priority: 10},
-					plugin.Command{ID: "kill-shell", Name: "Kill", Description: "Kill shell session", Context: "workspace-list", Priority: 11},
-					plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 12},
-				)
+			if fullTmuxAttachEnabled() {
+				name := "Attach"
+				desc := "Create and attach to shell"
+				if shell != nil && shell.Agent != nil {
+					desc = "Attach to shell"
+				}
+				cmds = append(cmds, plugin.Command{ID: "attach-shell", Name: name, Description: desc, Context: "workspace-list", Priority: 10})
 			}
+			if shell != nil && shell.Agent != nil {
+				cmds = append(cmds, plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected shell", Context: "workspace-list", Priority: 11})
+			}
+			cmds = append(cmds, plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 12})
 			return cmds
 		}
 
@@ -302,9 +304,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			} else {
 				cmds = append(cmds,
 					plugin.Command{ID: "start-agent", Name: "Agent", Description: "Agent options (attach/restart)", Context: "workspace-list", Priority: 9},
-					plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-list", Priority: 10},
 					plugin.Command{ID: "stop-agent", Name: "Stop", Description: "Stop agent", Context: "workspace-list", Priority: 11},
 				)
+				if fullTmuxAttachEnabled() {
+					cmds = append(cmds, plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-list", Priority: 10})
+				}
 				if wt.Status == StatusWaiting {
 					cmds = append(cmds,
 						plugin.Command{ID: "approve", Name: "Approve", Description: "Approve agent prompt", Context: "workspace-list", Priority: 12},
@@ -335,22 +339,23 @@ func (p *Plugin) Commands() []plugin.Command {
 				)
 			}
 		}
-		// Terminal panel toggle (available from sidebar too)
-		termName := "Term"
-		if p.termPanelVisible {
-			termName = "Hide"
-		}
-		cmds = append(cmds,
-			plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 17},
-		)
-		if p.termPanelVisible {
-			layoutName := "Right"
-			if p.termPanelLayout == TermPanelRight {
-				layoutName = "Bottom"
+		if terminalPanelEnabled() {
+			termName := "Term"
+			if p.termPanelVisible {
+				termName = "Hide"
 			}
 			cmds = append(cmds,
-				plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-list", Priority: 18},
+				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 17},
 			)
+			if p.termPanelVisible {
+				layoutName := "Right"
+				if p.termPanelLayout == TermPanelRight {
+					layoutName = "Bottom"
+				}
+				cmds = append(cmds,
+					plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-list", Priority: 18},
+				)
+			}
 		}
 		return cmds
 	}
