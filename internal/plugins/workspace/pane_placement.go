@@ -10,32 +10,65 @@ type paneOpen struct {
 	Axis     SplitAxis
 }
 
-// planIssueOpen is the default placement heuristic for a clicked td issue, and
+// planPaneOpen is the default placement heuristic for clicked content, and
 // deliberately the whole of it: click-driven opening has no window manager
 // behind it yet, so the policy is one pure function that M1 of the windowing
-// plan replaces outright rather than unpicks from the click paths.
+// plan replaces outright rather than unpicks from the click paths. Every kind
+// of click asks it — a rule that lived in one click path would let the two
+// orders of the same two clicks build two different layouts.
 //
 // The rules, in order:
-//   - an issue leaf already exists: it is retargeted, the way a second file
-//     click retargets the document pane instead of growing the tree;
-//   - a document leaf exists: the issue splits it along rows — document above,
-//     issue below — so the terminal keeps its own column at full height;
-//   - otherwise the issue splits the terminal along columns, which is exactly
-//     the placement a file click gets.
+//   - a leaf of this kind already exists: it is retargeted, the way a second
+//     file click retargets the document pane instead of growing the tree;
+//   - another content leaf exists: the new leaf splits it along rows, taking
+//     the half below it, so the terminal keeps its own column at full height;
+//   - otherwise the new leaf splits the terminal along columns, which is the
+//     placement the first click into an untouched preview has always got.
 //
 // ok is false for a tree with no leaf this rule can name, which is a tree
 // nothing should be opened into.
-func planIssueOpen(root *PaneNode) (paneOpen, bool) {
-	if leaf := firstPaneLeafOfKind(root, PaneIssue); leaf != nil {
+func planPaneOpen(root *PaneNode, kind PaneKind) (paneOpen, bool) {
+	if kind == PaneTerminal {
+		return paneOpen{}, false
+	}
+	if leaf := firstPaneLeafOfKind(root, kind); leaf != nil {
 		return paneOpen{Retarget: leaf.ID}, true
 	}
-	if leaf := firstPaneLeafOfKind(root, PaneDoc); leaf != nil {
+	if leaf := firstContentPaneLeaf(root); leaf != nil {
 		return paneOpen{Split: leaf.ID, Axis: SplitRows}, true
 	}
 	if leaf := firstPaneLeafOfKind(root, PaneTerminal); leaf != nil {
 		return paneOpen{Split: leaf.ID, Axis: SplitCols}, true
 	}
 	return paneOpen{}, false
+}
+
+// paneFitMessage names the dimension a refused split needed, because "wider" is
+// not advice when the pane would have been stacked.
+func paneFitMessage(name string, axis SplitAxis) string {
+	if axis == SplitRows {
+		return name + " pane needs a taller window; layout left unchanged"
+	}
+	return name + " pane needs a wider window; layout left unchanged"
+}
+
+// firstContentPaneLeaf returns the first non-terminal leaf in placement order.
+// The kind-specific rule above has already run, so whatever this finds is
+// content of another kind: the leaf the new one stacks under.
+func firstContentPaneLeaf(node *PaneNode) *PaneNode {
+	if node == nil {
+		return nil
+	}
+	if node.Split == nil {
+		if node.Kind != PaneTerminal {
+			return node
+		}
+		return nil
+	}
+	if leaf := firstContentPaneLeaf(node.Split.A); leaf != nil {
+		return leaf
+	}
+	return firstContentPaneLeaf(node.Split.B)
 }
 
 // firstPaneLeafOfKind returns the first leaf of kind in placement order, which

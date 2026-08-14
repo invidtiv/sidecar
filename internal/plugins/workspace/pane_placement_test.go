@@ -14,52 +14,119 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 )
 
-// The placement rule is a pure function over the tree, so the three answers it
-// can give are three assertions and not three journeys.
-func TestPlanIssueOpenPlacesAnIssueByTheDefaultHeuristic(t *testing.T) {
+// The placement rule is a pure function over the tree, so its answers are
+// assertions and not journeys. Every kind of click asks it, which is what keeps
+// the two orders of the same two clicks from building two different layouts.
+func TestPlanPaneOpenPlacesClickedContentByTheDefaultHeuristic(t *testing.T) {
 	terminal := func() *PaneNode { return &PaneNode{ID: 1, Kind: PaneTerminal} }
+	beside := func(leaf *PaneNode) *PaneNode {
+		return &PaneNode{ID: 9, Split: &PaneSplit{Axis: SplitCols, Ratio: 50, A: terminal(), B: leaf}}
+	}
+	stacked := &PaneNode{ID: 5, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: terminal(),
+		B: &PaneNode{ID: 4, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
+			A: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
+			B: &PaneNode{ID: 3, Kind: PaneIssue, ContentID: 3},
+		}},
+	}}
 	tests := []struct {
 		name string
 		root *PaneNode
+		kind PaneKind
 		want paneOpen
 	}{
 		{
-			name: "no content leaf falls back to the split a file click gets",
+			name: "an issue with no content on screen falls back to the split a file click gets",
 			root: terminal(),
+			kind: PaneIssue,
+			want: paneOpen{Split: 1, Axis: SplitCols},
+		},
+		{
+			name: "the first file click splits the terminal into columns",
+			root: terminal(),
+			kind: PaneDoc,
 			want: paneOpen{Split: 1, Axis: SplitCols},
 		},
 		{
 			name: "a document leaf is stacked, document above and issue below",
-			root: &PaneNode{ID: 3, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
-				A: terminal(),
-				B: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
-			}},
+			root: beside(&PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}),
+			kind: PaneIssue,
+			want: paneOpen{Split: 2, Axis: SplitRows},
+		},
+		{
+			name: "an issue leaf is stacked too, so a file click after a td click opens no third column",
+			root: beside(&PaneNode{ID: 2, Kind: PaneIssue, ContentID: 2}),
+			kind: PaneDoc,
 			want: paneOpen{Split: 2, Axis: SplitRows},
 		},
 		{
 			name: "an issue leaf is retargeted rather than split again",
-			root: &PaneNode{ID: 5, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
-				A: terminal(),
-				B: &PaneNode{ID: 4, Split: &PaneSplit{Axis: SplitRows, Ratio: 50,
-					A: &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2},
-					B: &PaneNode{ID: 3, Kind: PaneIssue, ContentID: 3},
-				}},
-			}},
+			root: stacked,
+			kind: PaneIssue,
 			want: paneOpen{Retarget: 3},
+		},
+		{
+			name: "a document leaf is retargeted by the same rule",
+			root: stacked,
+			kind: PaneDoc,
+			want: paneOpen{Retarget: 2},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := planIssueOpen(tc.root)
+			got, ok := planPaneOpen(tc.root, tc.kind)
 			if !ok || got != tc.want {
-				t.Fatalf("planIssueOpen = %#v ok=%v, want %#v", got, ok, tc.want)
+				t.Fatalf("planPaneOpen = %#v ok=%v, want %#v", got, ok, tc.want)
 			}
 		})
 	}
 
-	if _, ok := planIssueOpen(nil); ok {
+	if _, ok := planPaneOpen(nil, PaneIssue); ok {
 		t.Fatal("a tree with no leaf named a placement")
+	}
+	if _, ok := planPaneOpen(terminal(), PaneTerminal); ok {
+		t.Fatal("a terminal is not content a click opens")
+	}
+}
+
+// The reverse of the steel thread's order: a td click first, then a file click.
+// The second click stacks in the right column rather than splitting the
+// terminal again, because both clicks read the same placement rule — three
+// columns at a minimum width of 72 is a layout neither click asked for.
+func TestClickingATdIssueThenAFileStacksTheRightColumn(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n\nfile body\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.shells[0].Agent.OutputBuf.Update("follow-up is td-1a2b3c\nwrote clicked.md:1\n")
+
+	if cmd := clickTerminalLink(t, p, "td-1a2b3c"); cmd == nil {
+		t.Fatal("clicking the td id opened nothing")
+	}
+	fileCmd := clickTerminalLink(t, p, "clicked.md")
+	if fileCmd == nil {
+		t.Fatal("clicking the file opened nothing")
+	}
+	deliverLoads(t, p, fileCmd)
+
+	stack := p.paneRoot.Split.B
+	if p.paneRoot.Split.Axis != SplitCols || p.paneRoot.Split.A.Kind != PaneTerminal {
+		t.Fatalf("the file click moved the terminal out of its own column: %#v", p.paneRoot)
+	}
+	if stack.Split == nil || stack.Split.Axis != SplitRows ||
+		stack.Split.A.Kind != PaneIssue || stack.Split.B.Kind != PaneDoc {
+		t.Fatalf("the file was not stacked below the issue: %#v", stack)
+	}
+	boxes, content := paneLeafBoxes(t, p)
+	if len(boxes) != 3 {
+		t.Fatalf("the two clicks left %d leaves, want terminal, issue and document", len(boxes))
+	}
+	if boxes[PaneTerminal].H != content.H || boxes[PaneTerminal].Y != content.Y {
+		t.Fatalf("terminal box %#v, want the left column at the full height of %#v", boxes[PaneTerminal], content)
+	}
+	if boxes[PaneDoc].X != boxes[PaneIssue].X || boxes[PaneDoc].W != boxes[PaneIssue].W {
+		t.Fatalf("document box %#v is not in the issue's column %#v", boxes[PaneDoc], boxes[PaneIssue])
 	}
 }
 

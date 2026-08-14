@@ -22,6 +22,12 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 7},
 		}
 	}
+	if p.viewMode == ViewModeList && p.issueFocused() {
+		return []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Close issue pane", Context: "workspace-issue", Priority: 1},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 2},
+		}
+	}
 	switch p.viewMode {
 	case ViewModeInteractive:
 		return []plugin.Command{
@@ -396,6 +402,12 @@ func (p *Plugin) FocusContext() string {
 	default:
 		if p.docFocused() {
 			return "workspace-doc"
+		}
+		// A focused issue leaf is its own context for the same reason: falling
+		// through to workspace-preview would hand the terminal's keys — and the
+		// host's root-context `q` quits Sidecar — to a pane drawn as focused.
+		if p.issueFocused() {
+			return "workspace-issue"
 		}
 		if p.filterFocused() && p.activePane == PaneSidebar {
 			// A dedicated text-input context: while the query has focus, app

@@ -117,6 +117,6 @@ the stacked split — is also Go-only
 fits.
 
 The placement rule these captures exercise is a default, not a settled design:
-planIssueOpen is one pure function, and M1 of docs/plans/active/
-workspace-windowing-system.md replaces it outright rather than unpicking it from
-the click paths.
+planPaneOpen is one pure function, asked by every kind of click, and M1 of
+docs/plans/active/workspace-windowing-system.md replaces it outright rather than
+unpicking it from the click paths.

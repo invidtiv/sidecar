@@ -231,3 +231,17 @@ func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
 		t.Fatalf("diff tab rendered the doc body: %q", view)
 	}
 }
+
+// Decorate underlines every kind it is handed; the host chooses what to hand
+// it. This surface opens no td pane, so an underlined td id here would be a
+// dead link — and nothing but decoratedPreviewSpans stands between the two.
+func TestGlobalPreviewLeavesTdIdsUndecorated(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	decorated := m.decoratePreviewLine("see README.md then review td-196c42", 0)
+	if !strings.Contains(decorated, "\x1b[4mREADME.md\x1b[24m") {
+		t.Fatalf("the file this surface does open was not underlined: %q", decorated)
+	}
+	if !strings.Contains(decorated, "review td-196c42") {
+		t.Fatalf("the td id this surface opens nowhere was decorated: %q", decorated)
+	}
+}

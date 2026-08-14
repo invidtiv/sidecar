@@ -781,6 +781,13 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-doc")
+
+		// An issue pane is a focus context of its own for the same reason. It
+		// has no render mode and no resize keys, so it binds only what it
+		// answers; the rest it absorbs rather than passing to the terminal.
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
 	}
 
 	// Load saved sidebar width

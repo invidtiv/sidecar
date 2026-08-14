@@ -367,12 +367,19 @@ func TestTerminalContractImmediateResizeAlsoReplacesGeneration(t *testing.T) {
 	deliverTerminalEvent(t, m)
 	first.OnModelFrame(seededFrameAt("editor", "%13", "stale", 80, 24))
 	pollGeneration := m.State.PollGeneration
+	resizedAt := m.State.LastResizeAt
 	cmd := m.ResizeAndPollImmediate(120, 50)
 	if cmd == nil || len(source.requests) != 2 || source.handles[0].closed != 1 || m.modelLive {
 		t.Fatalf("immediate resize boundary failed: cmd=%v requests=%d closed=%d live=%v", cmd != nil, len(source.requests), source.handles[0].closed, m.modelLive)
 	}
 	if m.State.PollGeneration != pollGeneration+1 {
 		t.Fatalf("immediate resize poll generation = %d, want %d", m.State.PollGeneration, pollGeneration+1)
+	}
+	// The boundary is half the contract. The other half is the geometry itself:
+	// tmux takes a new window size only from resize-window, so a restart alone
+	// leaves the pane letterboxed at the size it already had.
+	if !m.State.LastResizeAt.After(resizedAt) {
+		t.Fatal("the immediate resize replaced the transport without giving the pane its size")
 	}
 	deliverTerminalEvent(t, m)
 	if got := m.State.OutputBuf.String(); got != "initial" || m.modelLive {

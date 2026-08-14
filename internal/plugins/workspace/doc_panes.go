@@ -100,7 +100,19 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 		return nil
 	}
 	epoch := p.ctx.Epoch
-	if doc, leaf := p.activeDocPane(); doc != nil {
+	plan, planned := planPaneOpen(p.paneRoot, PaneDoc)
+	if !planned {
+		return nil
+	}
+	if plan.Retarget != 0 {
+		leaf := FindPane(p.paneRoot, plan.Retarget)
+		if leaf == nil {
+			return nil
+		}
+		doc := p.docs[leaf.ContentID]
+		if doc == nil {
+			return nil
+		}
 		doc.root = root
 		doc.surface = surface
 		p.paneFocus = leaf.ID
@@ -121,20 +133,19 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	newLeaf := &PaneNode{ID: docID, Kind: PaneDoc, ContentID: docID}
 	trial := clonePaneTree(p.paneRoot)
 	trialDoc := &PaneNode{ID: docID, Kind: PaneDoc, ContentID: docID}
-	trial, trialFocus := SplitLeaf(trial, terminalLeafID(trial), SplitCols, trialDoc)
+	trial, trialFocus := SplitLeaf(trial, plan.Split, plan.Axis, trialDoc)
 	if trialFocus != trialDoc.ID {
 		return nil
 	}
 	if content, ok := p.previewContentBox(); !ok {
 		return nil
 	} else if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
-		p.toastMessage = "Document pane needs a wider window; terminal left unchanged"
+		p.toastMessage = paneFitMessage("Document", plan.Axis)
 		p.toastTime = time.Now()
 		return nil
 	}
 
-	terminalID := terminalLeafID(p.paneRoot)
-	treeRoot, focus := SplitLeaf(p.paneRoot, terminalID, SplitCols, newLeaf)
+	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
 	if focus != newLeaf.ID {
 		return nil
 	}
@@ -594,8 +605,12 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		// costs its own pane, never the whole layout. Whether td still knows the
 		// issue is the fetch's answer, arriving as this leaf's "Issue
 		// unavailable" body rather than as a reason to reset the tree.
+		// The id is checked against the shape the click path can produce, not
+		// merely for emptiness: a state file is a file a hand can edit, and this
+		// string becomes an argv element of the fetch — a leading `-` would
+		// reach td as a flag.
 		issueID := strings.TrimSpace(saved.Issue)
-		if issueID == "" {
+		if !terminallink.IssueID(issueID) {
 			return nil
 		}
 		id := p.nextPaneID()

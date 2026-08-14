@@ -143,7 +143,11 @@ func TestIsRootContext(t *testing.T) {
 		{"global-workspaces-preview", false},
 		{"td-monitor", true},
 
-		// Non-root contexts (sub-views)
+		// Non-root contexts (sub-views). A focused document or issue pane is one
+		// of them: `q` closes the pane there, and a root context would quit
+		// Sidecar out from under it.
+		{"workspace-doc", false},
+		{"workspace-issue", false},
 		{"git-commit", false},
 		{"conversation-detail", false},
 		{"workspace-create", false},

@@ -3,6 +3,8 @@ package tty
 import (
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // debouncedModel is a live terminal that has just asserted a resize, which is
@@ -218,5 +220,76 @@ func TestControlOwnedResizeInsideTheWindowArmsTheRetry(t *testing.T) {
 	}
 	if _, ok := cmd().(deferredResizeMsg); !ok {
 		t.Fatal("a control-owned resize inside the window produced something other than a retry")
+	}
+}
+
+// The same defect at the component's other resize entrance. WindowSizeMsg takes
+// this path, and a control-owned pane here was resized by restarting the
+// transport and nothing else — td-73fa86's letterboxing through a second door.
+// The command is not run, for the reason the sibling test gives.
+func TestControlOwnedImmediateResizeIsGivenItsGeometryToo(t *testing.T) {
+	m := controlOwnedModel(t, 2*ResizeDebounce)
+	before := m.State.LastResizeAt
+
+	cmd := m.ResizeAndPollImmediate(60, 20)
+
+	if cmd == nil {
+		t.Fatal("an immediate resize told a control-owned pane nothing about its new size")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("immediate control-owned resize = %T of %d, want the transport restart plus the resize",
+			cmd(), len(batch))
+	}
+	if !m.State.LastResizeAt.After(before) {
+		t.Fatal("an immediate control-owned resize was never issued: restarting the transport is not a resize")
+	}
+	if m.modelLive {
+		t.Fatal("the immediate resize kept model-backed presentation across a geometry change")
+	}
+}
+
+// What the debounce window costs a control-owned pane, said out loud. The
+// transport restart sits inside the budget for the same reason the resize does
+// — a divider drag delivers a size per frame, and a stop/start per frame tears
+// down and re-seeds the pane model faster than it can publish one — so a size
+// arriving inside the window leaves the pane on its old geometry until the
+// retry. The guarantee is that the retry pays both debts, and that neither is
+// paid early: a future early return that stamps the clock without asserting
+// anything fails here rather than passing.
+func TestControlOwnedDeferredResizePaysBothDebtsWhenTheRetryFires(t *testing.T) {
+	m, clock := frozenDebouncedModel(t, 2*ResizeDebounce)
+	m.visible = true
+	m.subscription = &ControlSubscription{}
+
+	if cmd := m.SetDimensions(70, 22); cmd == nil {
+		t.Fatal("the first size, with the budget open, asserted nothing")
+	}
+	generation, asserted := m.controlGen, m.State.LastResizeAt
+	// That restart left the fixture without a transport — its handle carries no
+	// manager, so nothing re-seeds it — and its presentation provisional. A live
+	// pane has both back by the time the next size arrives, which is the state
+	// the deferred one has to be answered in.
+	m.subscription = &ControlSubscription{}
+	m.modelLive = true
+
+	if cmd := m.SetDimensions(60, 20); cmd == nil || !m.resizeRetryPending {
+		t.Fatalf("a size inside the window armed no retry (pending=%v)", m.resizeRetryPending)
+	}
+	if m.controlGen != generation || !m.State.LastResizeAt.Equal(asserted) {
+		t.Fatalf("a deferred resize spent the budget it was waiting on: gen=%d at=%v",
+			m.controlGen, m.State.LastResizeAt)
+	}
+
+	*clock = clock.Add(2 * ResizeDebounce)
+	if cmd := m.Update(deferredResizeMsg{Scope: m.Scope()}); cmd == nil {
+		t.Fatal("the retry asserted nothing, so the pane keeps the pre-drag geometry")
+	}
+	if m.controlGen == generation || m.modelLive {
+		t.Fatalf("the retry skipped the generation boundary: gen=%d live=%v", m.controlGen, m.modelLive)
+	}
+	if !m.State.LastResizeAt.After(asserted) || m.Width != 60 || m.Height != 20 {
+		t.Fatalf("the retry did not give the pane the newest geometry: %dx%d at %v",
+			m.Width, m.Height, m.State.LastResizeAt)
 	}
 }

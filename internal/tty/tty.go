@@ -1236,15 +1236,28 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	if !m.IsActive() {
 		return nil
 	}
-	if m.subscription != nil {
-		return m.restartControlForResize()
-	}
 
 	target := m.GetTarget()
 	scope := m.Scope()
 	if target == "" {
 		return nil
 	}
+
+	// A control-owned pane needs both halves, exactly as it does in
+	// assertDimensions: the generation boundary, so a frame queued before the
+	// resize cannot restore model-backed presentation, and the geometry itself,
+	// because tmux takes a new window size only from resize-window. Restarting
+	// the transport alone left the pane at its old size with every capture
+	// agreeing (td-73fa86).
+	var restart tea.Cmd
+	controlOwned := m.subscription != nil
+	if controlOwned {
+		restart = m.restartControlForResize()
+	}
+
+	// Recorded where the resize is issued, so a debounced assertion arriving
+	// behind this one waits on the resize that actually happened.
+	m.State.LastResizeAt = m.now()
 
 	// Resize command
 	resizeCmd := func() tea.Msg {
@@ -1254,6 +1267,12 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 		}
 		ResizeTmuxPane(target, width, height)
 		return PaneResizedMsg{Scope: scope}
+	}
+
+	if controlOwned {
+		// The restart schedules the reseeding poll itself. A second generation
+		// here would retire that one before it fired.
+		return tea.Batch(restart, resizeCmd)
 	}
 
 	// Immediate poll command

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -52,7 +53,7 @@ func (p *Plugin) activateIssueLink(issueID string) (tea.Cmd, bool) {
 }
 
 // openIssuePaneForSurface opens issueID in the pane tree at the place
-// planIssueOpen names. The split is trialled on a clone first, exactly as a
+// planPaneOpen names. The split is trialled on a clone first, exactly as a
 // document's is: a box that cannot hold the result leaves the terminal at the
 // size it already has rather than reflowing an agent for a pane that will not
 // be drawn.
@@ -60,7 +61,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
 		return nil
 	}
-	plan, ok := planIssueOpen(p.paneRoot)
+	plan, ok := planPaneOpen(p.paneRoot, PaneIssue)
 	if !ok {
 		return nil
 	}
@@ -90,7 +91,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 		return nil
 	}
 	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
-		p.toastMessage = issuePaneFitMessage(plan.Axis)
+		p.toastMessage = paneFitMessage("Issue", plan.Axis)
 		p.toastTime = time.Now()
 		return nil
 	}
@@ -106,15 +107,6 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	load := p.attachIssuePane(newLeaf.ContentID, root, surface, issueID)
 	p.saveSelectionState()
 	return tea.Batch(load, p.resizeDocTerminalCmd())
-}
-
-// issuePaneFitMessage names the dimension the refused split needed, because
-// "wider" is not advice when the pane would have been stacked.
-func issuePaneFitMessage(axis SplitAxis) string {
-	if axis == SplitRows {
-		return "Issue pane needs a taller window; layout left unchanged"
-	}
-	return "Issue pane needs a wider window; layout left unchanged"
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its
@@ -144,7 +136,59 @@ func (p *Plugin) applyIssueLoaded(msg issueview.LoadedMsg) {
 	if issue == nil || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
 		return
 	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok || filepath.Clean(issue.root) != root || issue.surface != surface {
+		return
+	}
 	issue.view.SetResult(msg)
+}
+
+// issueFocused is the issue leaf's own version of docFocused: not "a content
+// leaf holds focus" but "the focused leaf is an issue". A leaf drawn as focused
+// owns the keyboard, and without an answer here the keys under a highlighted
+// issue pane are still the agent terminal's — `q` would open the quit
+// confirmation, `enter` would start typing at the agent.
+func (p *Plugin) issueFocused() bool {
+	issue, _ := p.focusedIssuePane()
+	return issue != nil
+}
+
+// focusedIssuePane is the issue leaf holding preview focus, if that is what
+// holds it. It reads paneFocus rather than the first issue in the tree, so a
+// key can only ever reach the leaf the frame drew as focused.
+func (p *Plugin) focusedIssuePane() (*issuePane, *PaneNode) {
+	if !p.previewLeafFocused() {
+		return nil, nil
+	}
+	leaf := FindPane(p.paneRoot, p.paneFocus)
+	if leaf == nil || leaf.Kind != PaneIssue {
+		return nil, nil
+	}
+	issue := p.issues[leaf.ContentID]
+	if issue == nil {
+		return nil, nil
+	}
+	return issue, leaf
+}
+
+// handleIssueKey is the focused issue leaf's input context, the counterpart of
+// handleDocKey. It closes and scrolls, and absorbs everything else: a key this
+// pane does not own must not fall through to the terminal behind it, which is
+// the pane the user is not looking at.
+func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	issue, leaf := p.focusedIssuePane()
+	if issue == nil {
+		return false, nil
+	}
+	switch msg.String() {
+	case "\\":
+		return true, p.toggleSidebarCmd()
+	case "q", "esc":
+		return true, p.closeIssuePane(leaf.ID)
+	default:
+		issue.view.HandleKey(msg)
+		return true, nil
+	}
 }
 
 // closeIssuePane removes the issue leaf and gives its box back to its sibling.
@@ -174,11 +218,11 @@ func (p *Plugin) issueHeaderChips(title string, width int, focused bool) []strin
 	}
 }
 
-// issuePaneHeaderRow is the issue leaf's header row. It carries no key hints:
-// this leaf answers clicks and the wheel, and a hint naming a key nothing
-// handles reads as a pane that has stopped responding.
+// issuePaneHeaderRow is the issue leaf's header row. It names the one key the
+// leaf answers besides scrolling, the way the document's row names its own: a
+// focused pane that says nothing about how to leave it reads as stuck.
 func (p *Plugin) issuePaneHeaderRow(title string, width int, focused bool) string {
-	return p.terminalHeader(p.issueHeaderChips(title, width, focused), "", width, 0)
+	return p.terminalHeader(p.issueHeaderChips(title, width, focused), dimText("q close"), width, 0)
 }
 
 func (p *Plugin) registerIssuePaneRegions(title string, leafID int, box Box) {

@@ -577,6 +577,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
 	}
+	// A focused issue leaf owns the keyboard the same way a focused document
+	// does. The two focuses are mutually exclusive, so asking both in turn is
+	// one question: which content leaf, if any, the keys belong to.
+	if handled, cmd := p.handleIssueKey(msg); handled {
+		return cmd
+	}
 	// A focused list filter owns the keyboard while the sidebar has focus. It is
 	// asked after the doc-pane keys deliberately: a focused document keeps its
 	// own q/m/+/- context, and the two focuses are mutually exclusive, so

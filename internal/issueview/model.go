@@ -128,7 +128,9 @@ func (m *Model) View() string {
 	return strings.Join(rows, "\n")
 }
 
-// HandleKey applies issue scrolling keys.
+// HandleKey applies issue scrolling keys. It answers false for a key it does
+// not own, which is the host's cue that the key is still unspoken for — not its
+// cue to pass it to whatever is behind the pane.
 func (m *Model) HandleKey(k tea.KeyMsg) bool {
 	switch k.String() {
 	case "j", "down":
@@ -166,14 +168,8 @@ func (m *Model) Title() string {
 	return Heading(m.data)
 }
 
-// Data returns the loaded issue, nil while loading or after a failure.
-func (m *Model) Data() *Data { return m.data }
-
 // Loading reports whether a fetch is outstanding.
 func (m *Model) Loading() bool { return m.loading }
-
-// Err returns the failure from the last completed fetch, if any.
-func (m *Model) Err() error { return m.err }
 
 func (m *Model) lines() []string {
 	if m.loading {

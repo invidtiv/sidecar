@@ -175,3 +175,44 @@ func TestScanDoesNotImportWorkspaceOrOverview(t *testing.T) {
 		t.Fatal("issue kind must stay a data label, not an activation path")
 	}
 }
+
+// A td-shaped stem inside a filename is not an issue. The bare-file scan runs
+// first, so a path that resolves is already covered by a file span — but one
+// that does not (deleted, or outside the root) leaves the id exposed, and `\b`
+// is satisfied by the dot before the extension.
+func TestScanIssueRejectsATdStemInsideALongerToken(t *testing.T) {
+	for _, line := range []string{
+		"open td-a1b2c3.md",
+		"open docs/td-a1b2c3.md",
+		"open /tmp/td-a1b2c3",
+		"open notes-td-a1b2c3",
+		"open td-a1b2c3_draft",
+	} {
+		if spans := Scan(line, nil); len(spans) != 0 {
+			t.Fatalf("Scan(%q) = %#v, want no issue span", line, spans)
+		}
+	}
+	// A sentence's own punctuation still ends the token.
+	for _, line := range []string{"closed by td-a1b2c3.", "closed by td-a1b2c3, then"} {
+		spans := Scan(line, nil)
+		if len(spans) != 1 || spans[0].Kind != KindIssue || spans[0].Value != "td-a1b2c3" {
+			t.Fatalf("Scan(%q) = %#v, want the issue", line, spans)
+		}
+	}
+}
+
+// IssueID is the anchored form of the same shape, for a host holding a stored
+// id rather than a line of output.
+func TestIssueIDAcceptsOnlyTheShapeTheScannerProduces(t *testing.T) {
+	for _, value := range []string{"td-196c42", "td-196C42", "td-abcd"} {
+		if !IssueID(value) {
+			t.Fatalf("IssueID(%q) = false, want the shape a click produces", value)
+		}
+	}
+	for _, value := range []string{"", " ", "td-abc", "-td-196c42", "--force", "td-196c42.md",
+		"td-196c42 extra", "TD-196c42", "../td-196c42"} {
+		if IssueID(value) {
+			t.Fatalf("IssueID(%q) = true, want a refusal", value)
+		}
+	}
+}

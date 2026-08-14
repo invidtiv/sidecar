@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -34,9 +35,16 @@ func stubTd(t *testing.T) {
 // compositorIssueLeaf gives one leaf an issue whose fetch has already been
 // applied, so a golden cell is the issue's own text rather than the loading
 // state every issue leaf would otherwise share.
-func compositorIssueLeaf(t *testing.T, p *Plugin, root string, leafID int, issueID string) {
+func compositorIssueLeaf(t *testing.T, p *Plugin, leafID int, issueID string) {
 	t.Helper()
-	fetch := p.attachIssuePane(leafID, root, "shell:test-shell", issueID)
+	// Attached against the surface the plugin itself names, which is what every
+	// production entrance passes it: the delivery below is refused for a pane
+	// bound to any other one.
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		t.Fatalf("issue %s has no selected terminal surface to belong to", issueID)
+	}
+	fetch := p.attachIssuePane(leafID, root, surface, issueID)
 	if fetch == nil {
 		t.Fatalf("issue %s did not return a fetch", issueID)
 	}
@@ -70,7 +78,7 @@ func steelThreadPaneTree(t *testing.T, p *Plugin, root string) {
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	compositorDocLeaf(t, p, root, 2, "clicked.md", "# clicked\n\nfile body\n")
-	compositorIssueLeaf(t, p, root, 3, "td-1a2b3c")
+	compositorIssueLeaf(t, p, 3, "td-1a2b3c")
 }
 
 // issueLeafBox is the box the layout gave the issue leaf, which is where its
@@ -329,5 +337,101 @@ func TestIssuePaneAnswersTheWheelAndItsCloseChip(t *testing.T) {
 	}
 	if doc, _ := p.activeDocPane(); doc == nil {
 		t.Fatal("closing the issue leaf took its sibling with it")
+	}
+}
+
+// A focused issue leaf owns the keyboard. Without a context of its own the keys
+// under a pane drawn as focused are still the agent terminal's, and the host's
+// root-context rule makes `q` — the key that closes the document pane one click
+// earlier — open the quit confirmation instead.
+func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	steelThreadPaneTree(t, p, root)
+	_, leaf := p.activeIssuePane()
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+
+	if !p.issueFocused() || p.docFocused() {
+		t.Fatalf("focus answers: issue=%v doc=%v", p.issueFocused(), p.docFocused())
+	}
+	if got := p.FocusContext(); got != "workspace-issue" {
+		t.Fatalf("keymap context = %q, want the issue leaf's own context", got)
+	}
+
+	// Scrolling reaches the component the wheel reaches; nothing else escapes.
+	p.issues[leaf.ContentID].view.SetSize(40, 3)
+	before := p.issues[leaf.ContentID].view.View()
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: 'j'}); !handled {
+		t.Fatal("the focused issue leaf did not claim j")
+	}
+	if p.issues[leaf.ContentID].view.View() == before {
+		t.Fatal("j over a focused issue leaf scrolled nothing")
+	}
+	// Every other key is absorbed: routed through the plugin's own key path, it
+	// must leave the terminal, the selection and the tree exactly as they were.
+	tree, focus, offset := p.paneRoot, p.paneFocus, p.previewOffset
+	for _, key := range []tea.KeyPressMsg{
+		{Code: tea.KeyEnter}, {Code: 'a'}, {Code: 'n'}, {Code: 'r'}, {Code: tea.KeyRight}, {Code: tea.KeyDown},
+	} {
+		if handled, cmd := p.handleIssueKey(key); !handled || cmd != nil {
+			t.Fatalf("key %v escaped the focused issue leaf: handled=%v cmd=%v", key, handled, cmd != nil)
+		}
+		p.handleListKeys(key)
+		if p.viewMode != ViewModeList || p.interactiveState != nil {
+			t.Fatalf("key %v reached the terminal behind the pane: mode=%v interactive=%#v",
+				key, p.viewMode, p.interactiveState)
+		}
+		if p.paneRoot != tree || p.paneFocus != focus || p.activePane != PanePreview || p.previewOffset != offset {
+			t.Fatalf("key %v moved the workspace behind the pane: focus=%d pane=%v offset=%d",
+				key, p.paneFocus, p.activePane, p.previewOffset)
+		}
+	}
+
+	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'q'}); cmd == nil {
+		t.Fatal("q did not close the issue leaf back onto its sibling")
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil || len(p.issues) != 0 {
+		t.Fatalf("the issue leaf survived q: %#v", p.issues)
+	}
+	if doc, _ := p.activeDocPane(); doc == nil {
+		t.Fatal("q took the document leaf with it")
+	}
+}
+
+// The restore path is the other entrance to the fetch, and the only one whose
+// input is a file a hand can edit. It holds the id to the shape a click can
+// produce rather than passing an arbitrary string to `td show`, where a leading
+// dash would arrive as a flag.
+func TestRestoreRefusesAnIssueIDTheClickPathCouldNotHaveProduced(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, saved := range []string{"--force", "-f", "td-1a2b3c extra", "../etc/passwd", "td-xyz"} {
+		t.Run(saved, func(t *testing.T) {
+			p := docPaneTestPlugin(t, root, true)
+			layout := &state.PaneLayoutJSON{Root: resolved, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+				Axis: "cols", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+				B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+					Axis: "rows", Ratio: 50,
+					A: &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: "clicked.md"}}},
+					B: &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: saved},
+				}},
+			}}
+			if cmd := p.restorePaneLayout(layout); cmd == nil {
+				t.Fatal("the surviving document did not schedule its load")
+			}
+			if issue, _ := p.activeIssuePane(); issue != nil {
+				t.Fatalf("a malformed persisted id was fetched: %q", issue.view.IssueID())
+			}
+			if doc, _ := p.activeDocPane(); doc == nil {
+				t.Fatal("refusing the issue leaf took its sibling with it")
+			}
+		})
 	}
 }

@@ -53,7 +53,18 @@ var (
 	// Current td id shape. Title matching is out of scope until a split binds
 	// this kind to a td pane — not to the issue-preview modal.
 	issuePattern = regexp.MustCompile(`\btd-[0-9a-fA-F]{4,}\b`)
+	// The same shape anchored, for callers holding a stored id rather than a
+	// line of output.
+	issueIDPattern = regexp.MustCompile(`^td-[0-9a-fA-F]{4,}$`)
 )
+
+// IssueID reports whether value is a td id of the shape this package detects.
+// A host that restores an id from disk asks here rather than trusting the file:
+// the click path can only ever produce this shape, and the id becomes an argv
+// element of the fetch.
+func IssueID(value string) bool {
+	return issueIDPattern.MatchString(value)
+}
 
 // Scan finds URL, file, and issue spans in a terminal line.
 //
@@ -172,7 +183,7 @@ func scanIssues(plain string, existing []Span) []Span {
 	var spans []Span
 	for _, loc := range issuePattern.FindAllStringIndex(plain, -1) {
 		start, end := loc[0], loc[1]
-		if overlaps(plain, existing, spans, start, end) {
+		if overlaps(plain, existing, spans, start, end) || !issueTokenWhole(plain, start, end) {
 			continue
 		}
 		spans = append(spans, Span{
@@ -183,6 +194,42 @@ func scanIssues(plain string, existing []Span) []Span {
 		})
 	}
 	return spans
+}
+
+// issueTokenWhole reports whether the matched id is the whole token rather than
+// a stem inside a longer one. `\b` is satisfied by the `.` in td-a1b2c3.md, so
+// a file that failed to resolve — deleted, or outside the root, so no file span
+// covers it — would otherwise underline its first nine characters as an issue
+// and fetch something that was never an id.
+//
+// A trailing sentence period is not a continuation: only a `.` that is followed
+// by more of the token is.
+func issueTokenWhole(plain string, start, end int) bool {
+	if start > 0 && isIssueTokenByte(plain[start-1]) {
+		return false
+	}
+	if end >= len(plain) {
+		return true
+	}
+	next := plain[end]
+	if !isIssueTokenByte(next) {
+		return true
+	}
+	if next != '.' {
+		return false
+	}
+	return end+1 >= len(plain) || !isAlphanumeric(plain[end+1])
+}
+
+// isIssueTokenByte names the bytes that continue a path or filename token. The
+// alphanumerics cannot appear adjacent to a match — `\b` already excludes them —
+// so what this really names is the punctuation a token is built from.
+func isIssueTokenByte(b byte) bool {
+	return b == '.' || b == '/' || b == '-' || b == '_' || b == '~' || isAlphanumeric(b)
+}
+
+func isAlphanumeric(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 func isBareFileRightBoundary(next byte) bool {
