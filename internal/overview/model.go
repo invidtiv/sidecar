@@ -772,9 +772,9 @@ type cardOrder struct {
 }
 
 // boardLane is a shared lane as this board draws it: the theme's lane colours,
-// and CellReady, under which a lane with no cards is left blank rather than
-// carrying an empty-cell mark. Loading and error states are set over it per
-// refresh.
+// and CellReady as a sentinel meaning neither loading nor errored (syncBoard
+// converts card-less ready lanes to CellEmpty). Loading and error states are
+// set over it per refresh.
 func boardLane(lane agentstatus.LaneID) kanban.Lane {
 	built := kanban.AgentLane(lane, kanban.ThemeLanePalette)
 	built.State = kanban.CellReady

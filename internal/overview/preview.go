@@ -259,6 +259,8 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	m.preview.interactive = false
 	m.preview.generation++
 	if keep {
+		// A standing selection cannot survive the handover: subsequent relative
+		// captures re-base line offsets and invalidate absolute anchors.
 		m.clearPreviewSelection()
 	} else {
 		m.stashPreviewPanes()

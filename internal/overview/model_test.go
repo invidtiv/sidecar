@@ -634,15 +634,15 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	}
 }
 
-// The board words and colours nothing itself: every lane is the shared
-// definition the project board draws the same lanes from, so a rename or a
-// re-theme cannot land on one board alone.
+// Every lane comes from the shared lane definition that the project board
+// draws the same lanes from, so a rename cannot land on one board alone, while
+// this board draws the theme's lane hues to keep its palette independent.
 func TestBoardLanesComeFromTheSharedLaneDefinition(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
 	m.syncBoard()
 	// Stated as literals, not read back from boardLane: a test that builds its
-	// expectation from the production helper passes a rename or a re-theme
-	// through silently, which is what the shared table exists to catch.
+	// expectation from the production helper passes a rename through silently,
+	// which is what the shared table exists to catch.
 	wantLabel := map[kanban.LaneID]string{
 		kanban.LaneID(agentstatus.LaneWorking): "● Working",
 		kanban.LaneID(agentstatus.LaneBlocked): "◆ Blocked",

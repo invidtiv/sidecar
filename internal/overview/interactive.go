@@ -289,8 +289,8 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		m.preview.full = true
 	}
 	m.jumpPreviewWindow(0)
-	// The selection names lines of the capture buffer the live one is about to
-	// replace, so it cannot survive the handover.
+	// A standing selection cannot survive the handover: subsequent relative
+	// captures re-base line offsets and invalidate absolute anchors.
 	m.clearPreviewSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, open)
