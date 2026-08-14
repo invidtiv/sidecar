@@ -2,6 +2,45 @@
 
 All notable changes to sidecar are documented here.
 
+## [v0.99.0] - 2026-08-14
+
+### Features
+
+- **Workspace previews are now a real pane system.** A terminal can sit beside
+  nested document and td-issue panes, each placed and composed from one shared
+  rectangle model. Clicking a file or issue opens it in that tree, repeated
+  documents collect into tabs, focused panes can be closed or zoomed, and the
+  full in-workspace layout survives restart (external files remain
+  session-only). Small windows degrade to one focused pane without corrupting
+  the saved tree.
+- **Issues are useful inside the workspace, not only in a modal.** Issue panes
+  share the existing fetch and rendering core, show the full issue card, scroll
+  under mouse or keyboard control, and retarget in place when another td id is
+  clicked.
+- **Editing stays in Sidecar while each surface keeps the right editor.** Notes
+  regain their lightweight editor, workspace documents can edit notes in their
+  pane, and the file browser keeps its tmux-backed inline editor. Full tmux
+  attach and the experimental terminal split are now explicit opt-ins instead
+  of escape hatches that unexpectedly replace the Sidecar experience.
+
+### Bug Fixes
+
+- **Terminal scrolling now follows one rule everywhere.** Watched and live
+  panes share scrollback keys, wheel routing, history access, gesture pinning,
+  flick cadence, and shifted-key handling across project and global workspace
+  surfaces. The reader's viewport is preserved when interaction ends.
+- Pane geometry now reaches the tmux window even when a control-mode transport
+  owns it, so opening a document or dragging a divider resizes and redraws the
+  terminal immediately instead of waiting for a later click.
+- Notes editing no longer leaks its command into other palettes, file-browser
+  inline editing keeps its own input ownership, and preview/tab cleanup removes
+  stale panes without leaving the selection on missing content.
+
+### Dependencies
+
+- Tasks embedding updated to v1.8.2, adding bounded store-lock waits and
+  verifiable public-install provenance.
+
 ## [v0.98.0] - 2026-08-13
 
 ### Features

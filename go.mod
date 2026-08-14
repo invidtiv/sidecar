@@ -47,7 +47,7 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/makeworld-the-better-one/dither/v2 v2.4.0 // indirect
-	github.com/marcus/tasks v1.8.0
+	github.com/marcus/tasks v1.8.2
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sixel v0.0.5 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect

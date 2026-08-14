@@ -45,23 +45,41 @@ type FileDetails struct {
 // Reveal opens path in the OS file manager. path is root-relative.
 func Reveal(root, path string) tea.Cmd {
 	return func() tea.Msg {
-		fullPath := filepath.Join(root, path)
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("open", "-R", fullPath)
-		case "windows":
-			cmd = exec.Command("explorer", "/select,", fullPath)
-		case "linux":
-			cmd = exec.Command("xdg-open", filepath.Dir(fullPath))
-		default:
-			return RevealErrorMsg{Err: fmt.Errorf("reveal not supported on %s", runtime.GOOS)}
-		}
-		if err := cmd.Start(); err != nil {
+		err := revealPath(root, path, runtime.GOOS, func(name string, args ...string) ([]byte, error) {
+			return exec.Command(name, args...).CombinedOutput()
+		})
+		if err != nil {
 			return RevealErrorMsg{Err: err}
 		}
 		return nil
 	}
+}
+
+func revealPath(root, path, goos string, run func(string, ...string) ([]byte, error)) error {
+	return reveal(resolvePath(root, path), goos, run)
+}
+
+func reveal(fullPath, goos string, run func(string, ...string) ([]byte, error)) error {
+	var name string
+	var args []string
+	switch goos {
+	case "darwin":
+		name, args = "open", []string{"-R", fullPath}
+	case "windows":
+		name, args = "explorer", []string{"/select,", fullPath}
+	case "linux":
+		name, args = "xdg-open", []string{filepath.Dir(fullPath)}
+	default:
+		return fmt.Errorf("reveal not supported on %s", goos)
+	}
+	output, err := run(name, args...)
+	if err == nil {
+		return nil
+	}
+	if detail := strings.TrimSpace(string(output)); detail != "" {
+		return fmt.Errorf("reveal %s: %w: %s", fullPath, err, detail)
+	}
+	return fmt.Errorf("reveal %s: %w", fullPath, err)
 }
 
 // YankPath copies the relative path to the clipboard.
@@ -83,7 +101,7 @@ func YankContents(root, path string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		data, err := os.ReadFile(filepath.Join(root, path))
+		data, err := os.ReadFile(resolvePath(root, path))
 		if err != nil {
 			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
 		}
@@ -150,7 +168,7 @@ func Inspect(root, path string) FileDetails {
 		return FileDetails{}
 	}
 	d := FileDetails{Path: path, Where: filepath.Dir(path)}
-	info, err := os.Stat(filepath.Join(root, path))
+	info, err := os.Stat(resolvePath(root, path))
 	if err != nil {
 		d.Err = err
 		return d
@@ -166,6 +184,13 @@ func Inspect(root, path string) FileDetails {
 	d.Modified = info.ModTime().Format("Jan 2, 2006 at 15:04")
 	d.Permissions = info.Mode().String()
 	return d
+}
+
+func resolvePath(root, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(root, path)
 }
 
 func fileKind(name string, isDir bool) string {

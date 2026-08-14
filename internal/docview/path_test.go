@@ -1,11 +1,52 @@
 package docview
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRevealWaitsForTheHelperAndReportsItsFailure(t *testing.T) {
+	wantErr := errors.New("exit status 7")
+	called := false
+	err := reveal("/tmp/missing.md", "darwin", func(name string, args ...string) ([]byte, error) {
+		called = true
+		if name != "open" || len(args) != 2 || args[0] != "-R" || args[1] != "/tmp/missing.md" {
+			t.Fatalf("command = %q %#v", name, args)
+		}
+		return []byte("The file does not exist"), wantErr
+	})
+	if !called {
+		t.Fatal("reveal helper was not run")
+	}
+	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "The file does not exist") {
+		t.Fatalf("reveal error = %v, want helper exit and output", err)
+	}
+}
+
+func TestRevealReportsAnUnsupportedPlatformWithoutRunningAHelper(t *testing.T) {
+	err := reveal("/tmp/file", "plan9", func(string, ...string) ([]byte, error) {
+		t.Fatal("unsupported platform ran a helper")
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "plan9") {
+		t.Fatalf("reveal error = %v, want unsupported platform", err)
+	}
+}
+
+func TestRevealPreservesAnAbsolutePathOutsideTheWorkspace(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := revealPath(t.TempDir(), outside, "darwin", func(name string, args ...string) ([]byte, error) {
+		if name != "open" || len(args) != 2 || args[1] != outside {
+			t.Fatalf("command = %q %#v, want absolute path %q", name, args, outside)
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestInspectReadsFile(t *testing.T) {
 	dir := t.TempDir()
@@ -33,6 +74,17 @@ func TestInspectEmptyPath(t *testing.T) {
 	}
 	if got := RenderInfo(d, "", ""); !strings.Contains(got, "No file selected") {
 		t.Fatalf("empty RenderInfo = %q", got)
+	}
+}
+
+func TestInspectReadsAnAbsolutePathOutsideTheWorkspace(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := Inspect(t.TempDir(), outside)
+	if d.Err != nil || d.Name != "outside.md" || d.Path != outside {
+		t.Fatalf("Inspect absolute path = %#v", d)
 	}
 }
 
