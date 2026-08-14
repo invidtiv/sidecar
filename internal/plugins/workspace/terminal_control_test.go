@@ -331,7 +331,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			found := false
 			for y := 0; y < p.height && !found; y++ {
 				for x := 0; x < p.width; x++ {
-					if _, _, ok := p.interactiveMouseCoords(x, y); ok {
+					if _, _, ok := p.terminalMouseCoords(true, x, y); ok {
 						mouseX, mouseY, found = x, y, true
 						break
 					}

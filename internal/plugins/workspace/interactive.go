@@ -821,53 +821,95 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	return sendInteractiveKeysCmd(target, tty.KeySpec{Value: csiu, Literal: true})
 }
 
-// forwardScrollToTmux routes a wheel notch for the interactive pane.
+// wheelTerminal routes a wheel notch over one of this plugin's two terminal
+// surfaces, named by the caller: the pointer's surface while merely watching,
+// the pane holding the keyboard while it is live.
 //
 // When the app running in the pane has enabled mouse tracking, the notch is its
 // event: it is encoded as an SGR wheel report and sent to the pane, exactly as a
 // real terminal emulator would. Full-screen apps like Claude Code draw their own
 // scrollback inside the pane and keep tmux's history empty, so consuming the
 // notch locally would slide the viewport across the app's live frame and leave
-// the layout looking torn (the reported symptom).
+// the layout looking torn (the reported symptom). That is a property of the pane,
+// not of where the keyboard is, so the question is asked in both states — the
+// send is addressed to a pane and needs neither focus nor an attach.
 //
 // Otherwise the notch moves this surface's own window through the captured pane
 // output. No tmux subprocesses needed — we scroll through the already-captured
 // capture window (captureLineCount) of scrollback. Scroll up (delta < 0) steps
 // back through scrollback, scroll down (delta > 0) moves toward live output.
-func (p *Plugin) forwardScrollToTmux(action mouse.MouseAction, delta int) tea.Cmd {
-	terminal := p.activeInteractiveTerminal()
+func (p *Plugin) wheelTerminal(termPanel bool, action mouse.MouseAction, delta int) tea.Cmd {
 	return tty.WheelHandler{
-		Burst:          &p.wheel,
-		MouseReporting: func() bool { return terminal != nil && terminal.PaneMouseReporting() },
-		PaneCoords:     p.interactiveMouseCoords,
+		Burst: &p.wheel,
+		// A forwarded notch is input, and input to a pane is gated exactly as
+		// typing is.
+		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
+		MouseReporting: func() bool { return p.paneMouseReporting(termPanel) },
+		PaneCoords: func(x, y int) (int, int, bool) {
+			return p.terminalMouseCoords(termPanel, x, y)
+		},
 		// While the app owns the wheel it also owns what the pane shows, so the
-		// viewport is pinned to the live frame.
-		PinToLive: p.pinInteractiveViewportToLive,
+		// window is pinned to the live frame.
+		PinToLive: func() { p.pinTerminalWindowToLive(termPanel) },
 		// The wheel is the user's most recent input, so it counts as activity for
 		// this surface's own poll cadence as well as the component's: the cadence
 		// decays to a slow tier on idle time, and a scroll that did not reset it
 		// would be repainted at that tier.
-		NoteActivity: func() { p.interactiveState.LastKeyTime = time.Now() },
+		NoteActivity: func() { p.noteTerminalInputActivity(termPanel) },
 		SendNotches: func(up bool, col, row, notches int) tea.Cmd {
-			return terminal.SendWheelNotches(up, col, row, notches)
+			return p.sendTerminalWheelNotches(termPanel, up, col, row, notches)
 		},
 		// Every notch the application has not claimed moves this surface's own
 		// window, which is what makes the wheel work over a plain shell.
-		ScrollLocal: p.scrollInteractiveViewportByWheel,
+		ScrollLocal: func(rows int) tea.Cmd { return p.scrollTerminalWindowByWheel(termPanel, rows) },
 	}.Handle(tty.WheelGesture{
 		Delta: delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: p.now(),
 	})
 }
 
-// pinInteractiveViewportToLive returns the interactive viewport to the live edge
-// of the captured output, dropping any pending request for older history.
+// sendTerminalWheelNotches delivers a claimed notch to the pane a surface is
+// drawing. The component sends for the pane it produces; a pane no component
+// owns is addressed directly, through the same ordered queue keystrokes use so a
+// notch cannot overtake them.
+func (p *Plugin) sendTerminalWheelNotches(termPanel bool, up bool, col, row, notches int) tea.Cmd {
+	if model := p.terminalModelForSurface(termPanel); model != nil && model.IsActive() {
+		return model.SendWheelNotches(up, col, row, notches)
+	}
+	source, ok := p.terminalHistoryFor(termPanel)
+	if !ok || source.Target == "" {
+		return nil
+	}
+	target := source.Target
+	return func() tea.Msg {
+		<-tty.SendOrdered(target, func() error {
+			return tty.SendSGRWheel(target, up, col, row, notches)
+		})
+		return nil
+	}
+}
+
+// noteTerminalInputActivity records input this host delivered to a pane against
+// whichever clock the surface's frames come from: the plugin's own poll cadence
+// while it is driving a live pane, and the component's otherwise.
+func (p *Plugin) noteTerminalInputActivity(termPanel bool) {
+	if p.interactiveState != nil && p.interactiveState.Active &&
+		p.interactiveState.TermPanel == termPanel {
+		p.interactiveState.LastKeyTime = time.Now()
+	}
+	if model := p.terminalModelForSurface(termPanel); model != nil {
+		model.NoteInput()
+	}
+}
+
+// pinTerminalWindowToLive returns a named terminal surface's window to the live
+// edge of the captured output, dropping any pending request for older history.
 //
 // A selection is anchored to buffer lines, so a jump this large leaves it
 // highlighting rows the user never picked — the local scroll paths clear it for
-// the same reason. Nothing is touched when the viewport is already live.
-func (p *Plugin) pinInteractiveViewportToLive() {
-	if p.interactiveState != nil && p.interactiveState.TermPanel {
+// the same reason. Nothing is touched when the window is already live.
+func (p *Plugin) pinTerminalWindowToLive(termPanel bool) {
+	if termPanel {
 		if p.termPanelScroll != 0 || p.termPanelFreeze.Active() {
 			p.clearTerminalSelection()
 			// A jump chooses its own window, so the pin is dropped rather than thawed.
@@ -976,16 +1018,6 @@ func (p *Plugin) scrollTerminalWindowByWheel(termPanel bool, rows int) tea.Cmd {
 	return nil
 }
 
-// scrollInteractiveViewportByWheel moves the interactive window by a coalesced
-// notch. A notch counts rendered rows down the screen where the scrollback keys
-// count rows back through scrollback; that is the only difference between them.
-// Where the window lands — including the clamp to what the surface has measured
-// — is the shared rule's, and it is the same answer for every local wheel path.
-func (p *Plugin) scrollInteractiveViewportByWheel(delta int) tea.Cmd {
-	return p.scrollTerminalWindowByWheel(
-		p.interactiveState != nil && p.interactiveState.TermPanel, delta)
-}
-
 // scrollInteractiveViewport moves whichever pane interactive mode is pointed at
 // delta rows back through scrollback, negative towards the live edge, and
 // reaches for older history when the window runs out of loaded buffer. It is
@@ -1024,30 +1056,41 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 	if terminal == nil || !terminal.PaneMouseReporting() {
 		return nil
 	}
-	col, row, ok := p.interactiveMouseCoords(x, y)
+	col, row, ok := p.terminalMouseCoords(p.interactiveTermPanel(), x, y)
 	if !ok {
 		return nil
 	}
 	return terminal.SendClick(col, row)
 }
 
-func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
+// interactiveTermPanel names the surface interactive mode is targeting. It is
+// the one question the keyboard's position answers: which of the two surfaces a
+// live notch or click belongs to, wherever the pointer is.
+func (p *Plugin) interactiveTermPanel() bool {
+	return p.interactiveState != nil && p.interactiveState.TermPanel
+}
+
+// terminalMouseCoords maps a screen position onto the 1-indexed pane cell under
+// it, for the surface the caller names. The surface is a parameter because a
+// notch or a click is answered about the pane it landed on, whether or not that
+// pane holds the keyboard.
+func (p *Plugin) terminalMouseCoords(termPanel bool, x, y int) (col, row int, ok bool) {
 	if p.width <= 0 || p.height <= 0 {
 		return 0, 0, false
 	}
 	if !p.selectingShell() && p.previewTab != PreviewTabOutput {
 		return 0, 0, false
 	}
+	if termPanel && !p.termPanelVisible {
+		return 0, 0, false
+	}
 
-	// Origin and size of the surface interactive mode is targeting, taken from
-	// the one derivation the render path draws with. Re-deriving the terminal
-	// panel's offset from calculatePreviewDimensions instead lands a row off in
-	// the bottom layout — the split divides the container height — for every
-	// window height where the two floors disagree, and a click is forwarded to
-	// the wrong tmux row.
-	targetingTermPanel := p.interactiveState != nil && p.interactiveState.Active &&
-		p.interactiveState.TermPanel && p.termPanelVisible
-	surface := p.terminalSurfaceGeometry(targetingTermPanel)
+	// Origin and size of the named surface, taken from the one derivation the
+	// render path draws with. Re-deriving the terminal panel's offset from
+	// calculatePreviewDimensions instead lands a row off in the bottom layout —
+	// the split divides the container height — for every window height where the
+	// two floors disagree, and a click is forwarded to the wrong tmux row.
+	surface := p.terminalSurfaceGeometry(termPanel)
 	if !surface.OK {
 		return 0, 0, false
 	}
@@ -1056,12 +1099,12 @@ func (p *Plugin) interactiveMouseCoords(x, y int) (col, row int, ok bool) {
 	// reads the layout the render path produced rather than re-deriving one: a
 	// wider pane is drawn horizontally scrolled, a taller one starts partway
 	// down, and the scrollbar takes a column off both (td-73fa86).
-	paneWidth, paneHeight := p.resolvedPaneGeometry(targetingTermPanel, p.interactiveDescribes(targetingTermPanel))
+	paneWidth, paneHeight := p.resolvedPaneGeometry(termPanel, p.interactiveDescribes(termPanel))
 	if paneWidth <= 0 || paneHeight <= 0 {
 		paneWidth, paneHeight = surface.Width, surface.Height
 	}
 
-	return tty.PaneCoordsAt(p.terminalSelectionViewportLayout(),
+	return tty.PaneCoordsAt(p.terminalViewportLayoutFor(termPanel),
 		x-surface.X, y-surface.Y, paneWidth, paneHeight)
 }
 

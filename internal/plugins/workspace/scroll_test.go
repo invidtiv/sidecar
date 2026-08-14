@@ -684,14 +684,14 @@ func TestPinningViewportClearsSelection(t *testing.T) {
 		t.Fatal("test setup did not produce a selection")
 	}
 
-	p.pinInteractiveViewportToLive()
+	p.pinTerminalWindowToLive(false)
 	if p.selection.HasSelection() {
 		t.Fatal("selection survived the jump to the live edge")
 	}
 
 	// An already-live viewport is left alone, selection included.
 	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
-	p.pinInteractiveViewportToLive()
+	p.pinTerminalWindowToLive(false)
 	if !p.selection.HasSelection() {
 		t.Fatal("selection cleared even though the viewport was already live")
 	}

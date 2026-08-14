@@ -519,10 +519,11 @@ func (m *Model) previewGeometry() (tty.Geometry, bool) {
 }
 
 // previewPaneCoords maps a screen position to the 1-indexed pane coordinates
-// tmux's mouse protocol expects, and refuses everything that is not a live pane
-// cell.
+// tmux's mouse protocol expects, and refuses everything that is not a cell of
+// the pane being drawn. It answers about the pane, not about the keyboard: a
+// watched pane has cells at the same coordinates a live one does.
 func (m *Model) previewPaneCoords(x, y int) (col, row int, ok bool) {
-	if !m.PreviewInteractive() {
+	if !m.previewTerminalActive() {
 		return 0, 0, false
 	}
 	window := m.previewWindow()

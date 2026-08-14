@@ -872,6 +872,17 @@ func (m *Model) NoteMouseActivity() {
 	m.State.LastMouseEventTime = time.Now()
 }
 
+// NoteInput records user input the host is delivering to the pane. The capture
+// cadence decays from this clock, so a pane a reader is scrolling is repainted
+// at the active tier rather than the idle one. A host whose surface can deliver
+// input by any path of its own says so here rather than keeping a second clock.
+func (m *Model) NoteInput() {
+	if m.State == nil {
+		return
+	}
+	m.State.LastKeyTime = time.Now()
+}
+
 // LastMouseActivity is when a mouse event last reached this terminal. A host
 // that runs the shared key gate itself reads it from here rather than keeping a
 // clock of its own, or the two would disagree about the same bracket.

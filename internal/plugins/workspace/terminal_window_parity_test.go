@@ -109,7 +109,7 @@ func TestWheelOverLivePrimaryPaneDropsTheSelection(t *testing.T) {
 		t.Fatal("test premise: this buffer numbers its lines absolutely, so a scroll keeps the selection")
 	}
 
-	p.forwardScrollToTmux(mouse.MouseAction{
+	p.wheelTerminal(false, mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -mouse.WheelScrollLines, X: 60, Y: 8,
 	}, -mouse.WheelScrollLines)
 

@@ -1146,6 +1146,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			CaptureBase:    capture.CaptureBase,
 			HasHistory:     capture.Valid,
 			RowsJoined:     capture.RowsJoined,
+			MouseReporting: cursor.MouseReporting,
 			Activity:       activity,
 			CapturedAt:     capturedAt,
 			PaneTitle:      capture.PaneTitle,

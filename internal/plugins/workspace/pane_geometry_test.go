@@ -236,7 +236,7 @@ func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
 	}
 
 	// Content origin: border+padding across, border+hint down.
-	col, row, ok := p.interactiveMouseCoords(panelOverhead/2, 2)
+	col, row, ok := p.terminalMouseCoords(false, panelOverhead/2, 2)
 	if !ok {
 		t.Fatal("top-left content cell reported no hit")
 	}

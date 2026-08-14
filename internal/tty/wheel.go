@@ -31,11 +31,19 @@ const MaxWheelNotchesPerFlush = 10
 // WheelInput is one wheel event over a terminal surface. Delta is a line count,
 // negative upwards. InPane reports that the pointer position maps onto a cell of
 // the pane's grid; a notch over chrome is never the application's.
+//
+// MouseReporting and InPane are facts about the pane under the pointer, asked in
+// every state: whether the keyboard happens to be in that pane says nothing
+// about who drew what is on screen there.
 type WheelInput struct {
 	Delta          int
 	Shift, Alt     bool
 	MouseReporting bool
 	InPane         bool
+	// WritesEnabled says the host may write to the pane at all. A forwarded
+	// notch is input, gated exactly as typing is, so a host that cannot write
+	// keeps every notch for its own window.
+	WritesEnabled bool
 }
 
 // RouteWheel decides who owns a notch, and how many whole notches it is worth.
@@ -45,7 +53,7 @@ type WheelInput struct {
 // symmetry with click handling, though a shift+wheel is normally mapped to
 // horizontal scroll before it arrives.
 func RouteWheel(in WheelInput) (WheelRoute, int) {
-	if in.Delta == 0 || !in.MouseReporting || in.Shift || in.Alt || !in.InPane {
+	if !in.WritesEnabled || in.Delta == 0 || !in.MouseReporting || in.Shift || in.Alt || !in.InPane {
 		return WheelLocal, 0
 	}
 	return WheelPane, min(WheelNotches(in.Delta), MaxWheelNotchesPerFlush)

@@ -1208,7 +1208,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	// Whether a notch is placed by region or stays with the pointer is the shared
 	// rule's answer, argued there.
 	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
-		return p.forwardScrollToTmux(action, delta)
+		return p.wheelTerminal(p.interactiveTermPanel(), action, delta)
 	}
 
 	switch regionID {
@@ -1237,11 +1237,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionTermPanelContent:
 		// Scroll the panel under the pointer, whether or not it holds focus.
-		// What a notch does to a terminal surface — thaw, answer the selection,
-		// place the window, reach for history at the bound — is the shared local
-		// wheel rule's; writing any of it here is what let this path walk past
-		// the top of the loaded buffer and step over the history-load trigger.
-		return p.scrollTerminalWindowByWheel(true, delta)
+		// Who owns the notch — the application in the pane or this window — is
+		// the shared rule's answer, and it is the same answer here as when the
+		// panel holds the keyboard.
+		return p.wheelTerminal(true, action, delta)
 	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
 		// Scroll file/commit list in diff tab
 		return p.scrollDiffTabFileList(delta)
@@ -1266,8 +1265,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	case regionPreviewPane:
-		p.releaseTerminalDocProjection(false)
-		return p.scrollPreview(delta)
+		return p.wheelPreview(action, delta)
 	case regionKanbanCard, regionKanbanColumn:
 		// Scroll the lane under the pointer, not whichever lane happened to
 		// have keyboard focus before the wheel gesture.
@@ -1284,8 +1282,19 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		if p.sidebarVisible && action.X < split.SidebarWidth {
 			return p.scrollSidebar(delta)
 		}
-		return p.scrollPreview(delta)
+		return p.wheelPreview(action, delta)
 	}
+}
+
+// wheelPreview places a notch that landed on the preview. A terminal drawn there
+// is a pane and answers the pane's rule; anything else the preview shows is a
+// document, scrolled by its own offset.
+func (p *Plugin) wheelPreview(action mouse.MouseAction, delta int) tea.Cmd {
+	p.releaseTerminalDocProjection(false)
+	if p.previewShowsTerminal() {
+		return p.wheelTerminal(false, action, delta)
+	}
+	return p.scrollPreview(delta)
 }
 
 // scrollSidebar scrolls the sidebar list (shells + worktrees).
@@ -1389,22 +1398,12 @@ func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
 	return nil
 }
 
-// scrollPreview scrolls the preview pane content.
+// scrollPreview scrolls the document the preview is showing. A document's offset
+// is an absolute line from the top, so a notch up is a smaller one; a terminal's
+// window counts back from its live bottom and is placed by the wheel rule
+// instead.
 func (p *Plugin) scrollPreview(delta int) tea.Cmd {
 	p.releaseTerminalDocProjection(false)
-	// Unified scroll: delta < 0 = scroll up (toward older content), delta > 0 =
-	// scroll down (toward newer). A terminal's window is placed from its live
-	// bottom, so a notch up is a step back through scrollback; a document's
-	// offset is an absolute line from the top, so a notch up is a smaller one.
-	if p.previewShowsTerminal() {
-		// The Output tab uses burst debouncing for trackpad scroll smoothness.
-		var flush bool
-		if delta, flush = p.wheel.Add(delta, p.now()); !flush {
-			return nil
-		}
-		return p.scrollTerminalWindowByWheel(false, delta)
-	}
-
 	maxOffset := p.getMaxScrollOffset()
 	p.previewOffset = min(max(p.previewOffset+delta, 0), maxOffset)
 	return nil

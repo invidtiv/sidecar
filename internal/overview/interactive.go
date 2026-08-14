@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -95,6 +96,10 @@ type previewTerminal interface {
 	SendClick(col, row int) tea.Cmd
 	SendWheelNotches(up bool, col, row, notches int) tea.Cmd
 	NoteMouseActivity()
+
+	// NoteInput records input this surface delivered by a path of its own, on
+	// the clock the pane's capture cadence decays from.
+	NoteInput()
 }
 
 var _ previewTerminal = (*tty.Model)(nil)
@@ -520,12 +525,23 @@ func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 // wheelPreview routes a wheel notch. The application running in the pane owns it
 // only while it has asked for mouse reports; every other notch scrolls the window
 // the surface is drawing, which is what makes the wheel work over a plain shell.
+//
+// Whether the pane has the mouse is asked whether or not it holds the keyboard:
+// the send is addressed to a pane, not to a client, and a watched agent that
+// draws its own scrollback would otherwise have this surface's window dragged
+// across its live frame.
 func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 	return tty.WheelHandler{
-		Burst:          &m.preview.wheel,
-		MouseReporting: func() bool { return m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting() },
+		Burst: &m.preview.wheel,
+		// A forwarded notch is input, and input to a pane is gated exactly as
+		// typing is.
+		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
+		MouseReporting: func() bool { return m.previewTerminalActive() && m.preview.terminal.PaneMouseReporting() },
 		PaneCoords:     m.previewPaneCoords,
 		PinToLive:      m.pinPreviewToLive,
+		// The notch is user input, and the pane's capture cadence decays from the
+		// component's own clock: a pane being scrolled is being read.
+		NoteActivity: m.notePreviewInput,
 		SendNotches: func(up bool, col, row, notches int) tea.Cmd {
 			return m.preview.terminal.SendWheelNotches(up, col, row, notches)
 		},
@@ -534,6 +550,15 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 		Delta: action.Delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: m.now(),
 	})
+}
+
+// notePreviewInput records input this surface delivered to the pane against the
+// clock the component's capture cadence decays from.
+func (m *Model) notePreviewInput() {
+	if m.preview.terminal == nil {
+		return
+	}
+	m.preview.terminal.NoteInput()
 }
 
 // scrollPreviewByWheel moves this surface's own window by a coalesced notch, and

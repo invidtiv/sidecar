@@ -38,6 +38,7 @@ type fakeTerminal struct {
 	cursorRow  int
 	cursorCol  int
 	mouseNoted int
+	inputNoted int
 	released   int
 	exits      int
 	closes     int
@@ -141,6 +142,8 @@ func (f *fakeTerminal) SendWheelNotches(up bool, col, row, notches int) tea.Cmd 
 }
 
 func (f *fakeTerminal) NoteMouseActivity() { f.mouseNoted++ }
+
+func (f *fakeTerminal) NoteInput() { f.inputNoted++ }
 
 func (f *fakeTerminal) SetDimensions(width, height int) tea.Cmd {
 	f.dims = append(f.dims, [2]int{width, height})

@@ -531,7 +531,7 @@ func TestTermPanelBottomMouseRowMatchesRenderedRow(t *testing.T) {
 			}
 
 			for _, offset := range []int{0, 1, panelHeight - 1} {
-				col, row, ok := p.interactiveMouseCoords(surface.X, renderedRow+offset)
+				col, row, ok := p.terminalMouseCoords(true, surface.X, renderedRow+offset)
 				if !ok {
 					t.Fatalf("row offset %d reported no hit", offset)
 				}

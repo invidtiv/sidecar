@@ -123,7 +123,7 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	// Open the burst, so the notch under test arrives inside the debounce window.
 	p.wheel.Add(0, at)
 
-	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
+	p.wheelTerminal(false, mouse.MouseAction{}, -3)
 	if p.previewScroll != 20 {
 		t.Fatalf("previewScroll = %d, want the debounced notch held back", p.previewScroll)
 	}
@@ -132,7 +132,7 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	}
 
 	at = at.Add(2 * tty.WheelDebounceInterval)
-	p.forwardScrollToTmux(mouse.MouseAction{}, -3)
+	p.wheelTerminal(false, mouse.MouseAction{}, -3)
 	if p.previewScroll != 26 {
 		t.Fatalf("previewScroll = %d, want the held-back notch to arrive with the next one (26)",
 			p.previewScroll)

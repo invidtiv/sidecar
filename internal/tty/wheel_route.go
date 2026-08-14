@@ -25,20 +25,26 @@ type WheelGesture struct {
 	Now        time.Time
 }
 
-// WheelHandler is a host's answers about a wheel notch over a live pane. The
-// order of the acts — coalesce the flick, decide who owns the notch, pin the
-// window before forwarding, note the activity, send — is the shared rule; a host
-// supplies only what it alone can know: where the pane's grid is, how its own
-// window scrolls, and how it sends.
+// WheelHandler is a host's answers about a wheel notch over a terminal surface,
+// live or merely watched. The order of the acts — coalesce the flick, decide who
+// owns the notch, pin the window before forwarding, note the activity, send — is
+// the shared rule; a host supplies only what it alone can know: where the pane's
+// grid is, how its own window scrolls, and how it sends.
 type WheelHandler struct {
 	// Burst coalesces the flick so the distance travelled does not depend on how
 	// fast a surface happens to repaint.
 	Burst *WheelBurst
+	// WritesEnabled says the host may write to the pane at all. Left false, a
+	// notch never leaves the host, whatever the pane is running.
+	WritesEnabled bool
 	// MouseReporting reports that the application in the pane has asked for
 	// mouse events, which is the only condition under which it owns the wheel.
+	// It answers about the pane under the pointer in every state: a host may not
+	// answer it from whether that pane also holds the keyboard.
 	MouseReporting func() bool
 	// PaneCoords maps a screen position onto a cell of the pane's grid. A notch
-	// over chrome is never the application's.
+	// over chrome is never the application's. Like MouseReporting it is about the
+	// pane, not the mode, and must answer for a watched one too.
 	PaneCoords func(x, y int) (col, row int, ok bool)
 	// PinToLive returns the host's window to the live edge. While the
 	// application owns the wheel it owns what the pane shows, and a window left
@@ -63,7 +69,10 @@ func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 	if !flush {
 		return nil
 	}
-	reporting := h.MouseReporting != nil && h.MouseReporting()
+	// A host that may not write is not asked where the pane's cells are: with the
+	// capture joined there is no usable pane grid to answer from, and the notch is
+	// local either way.
+	reporting := h.WritesEnabled && h.MouseReporting != nil && h.MouseReporting()
 	var col, row int
 	inPane := false
 	if reporting && h.PaneCoords != nil {
@@ -75,6 +84,7 @@ func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 		Alt:            g.Alt,
 		MouseReporting: reporting,
 		InPane:         inPane,
+		WritesEnabled:  h.WritesEnabled,
 	})
 	if route != WheelPane {
 		if h.ScrollLocal == nil {

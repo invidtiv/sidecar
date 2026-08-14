@@ -15,6 +15,7 @@ func TestWheelHandlerForwardsAnOwnedNotchAndPinsTheWindow(t *testing.T) {
 	var burst WheelBurst
 	handler := WheelHandler{
 		Burst:          &burst,
+		WritesEnabled:  true,
 		MouseReporting: func() bool { return true },
 		PaneCoords:     func(x, y int) (int, int, bool) { return x, y, true },
 		PinToLive:      func() { acts = append(acts, "pin") },
@@ -48,6 +49,7 @@ func TestWheelHandlerScrollsLocallyWhenTheApplicationHasNotClaimedTheWheel(t *te
 	var burst WheelBurst
 	handler := WheelHandler{
 		Burst:          &burst,
+		WritesEnabled:  true,
 		MouseReporting: func() bool { return false },
 		SendNotches:    func(bool, int, int, int) tea.Cmd { t.Fatal("forwarded to a pane that wants no mouse"); return nil },
 		ScrollLocal:    func(delta int) tea.Cmd { scrolled += delta; return nil },
@@ -57,5 +59,32 @@ func TestWheelHandlerScrollsLocallyWhenTheApplicationHasNotClaimedTheWheel(t *te
 	handler.Handle(WheelGesture{Delta: -2, Now: now.Add(WheelBurstTimeout)})
 	if scrolled != -3 {
 		t.Fatalf("scrolled %d, want the whole coalesced flick (-3)", scrolled)
+	}
+}
+
+// A forwarded notch is input, so a host that may not write to the pane keeps
+// every notch for its own window — and is never even asked where the pane's
+// cells are, because a joined capture has no pane grid to answer from.
+func TestWheelHandlerRefusesToForwardWithoutWritesEnabled(t *testing.T) {
+	var scrolled int
+	var burst WheelBurst
+	handler := WheelHandler{
+		Burst:          &burst,
+		MouseReporting: func() bool { return true },
+		PaneCoords: func(x, y int) (int, int, bool) {
+			t.Fatal("pane coordinates were computed for a host that may not write")
+			return 0, 0, false
+		},
+		PinToLive:    func() { t.Fatal("the window was pinned for a notch that never left") },
+		NoteActivity: func() { t.Fatal("input was noted for a notch that never left") },
+		SendNotches: func(bool, int, int, int) tea.Cmd {
+			t.Fatal("a notch was forwarded with writes disabled")
+			return nil
+		},
+		ScrollLocal: func(delta int) tea.Cmd { scrolled += delta; return nil },
+	}
+	handler.Handle(WheelGesture{Delta: -3, X: 4, Y: 7, Now: time.Now()})
+	if scrolled != -3 {
+		t.Fatalf("scrolled %d, want the notch on the host's own window (-3)", scrolled)
 	}
 }

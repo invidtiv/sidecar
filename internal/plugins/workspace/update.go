@@ -761,6 +761,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			if !modelOwns {
 				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+				// Who owns a wheel notch is a property of the pane, so the one
+				// capture that observes the flag is where it is kept.
+				if msg.HasCursor {
+					p.recordPaneMouseReporting("agent", wt.Agent.TmuxSession, msg.MouseReporting)
+				}
 			}
 			wt.Agent.LastOutput = time.Now()
 			wt.Agent.WaitingFor = msg.WaitingFor
@@ -876,6 +881,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			if !modelOwns {
 				p.recordPaneGeometry("agent", wt.Agent.TmuxSession, msg.PaneWidth, msg.PaneHeight)
+				// Who owns a wheel notch is a property of the pane, so the one
+				// capture that observes the flag is where it is kept.
+				if msg.HasCursor {
+					p.recordPaneMouseReporting("agent", wt.Agent.TmuxSession, msg.MouseReporting)
+				}
 			}
 			wt.Agent.RecordUnchangedPoll()
 			// Update status from session file re-check (td-2fca7d v8).
@@ -1364,6 +1374,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			if !modelOwns {
 				p.recordPaneGeometry("shell", shell.TmuxName, msg.PaneWidth, msg.PaneHeight)
+				// Who owns a wheel notch is a property of the pane, so the one
+				// capture that observes the flag is where it is kept.
+				if msg.HasCursor {
+					p.recordPaneMouseReporting("shell", shell.TmuxName, msg.MouseReporting)
+				}
 			}
 			if changed {
 				shell.Agent.LastOutput = time.Now()

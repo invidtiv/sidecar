@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
@@ -37,6 +38,15 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)] = terminalHistoryState{HistorySize: 1200}
 	if p.termPanelMaxScroll() <= 0 {
 		t.Fatal("test premise: the panel fixture has nothing to scroll back through")
+	}
+	// The panel is coalesced by the shared burst like every other terminal
+	// surface, so the fixture spaces its notches: each one reads a clock a
+	// debounce window later than the last, which is a deliberate scroll rather
+	// than a flick. These tests are about where the window lands.
+	at := time.Now()
+	p.clock = func() time.Time {
+		at = at.Add(2 * tty.WheelDebounceInterval)
+		return at
 	}
 	return p
 }
