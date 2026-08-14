@@ -164,3 +164,59 @@ func TestDeferredResizeIgnoresForeignScopes(t *testing.T) {
 		t.Fatal("a retry for another activation was answered")
 	}
 }
+
+// controlOwnedModel is a live terminal whose pane is being streamed by a control
+// transport. The subscription handle carries no manager, so restarting it is
+// inert here: what is under test is whether the pane is still given the size,
+// not what the transport does about it.
+func controlOwnedModel(t *testing.T, since time.Duration) *Model {
+	t.Helper()
+	m := debouncedModel(t, since)
+	m.visible = true
+	m.subscription = &ControlSubscription{}
+	return m
+}
+
+// The defect this pins: a control-owned pane was resized by restarting the
+// transport and nothing else. That re-seeds the pane model at the size the model
+// holds and sizes the control client with it, but tmux takes a window's geometry
+// only from resize-window — so the pane kept its old size, every capture went on
+// reporting it, and the viewport letterboxed the terminal inside a box the user
+// had already dragged. It came right when something else asserted the geometry,
+// which in practice meant clicking into the pane.
+//
+// The command is deliberately not run: it addresses a bare tmux target, and this
+// package's tests share the machine's default server. LastResizeAt is the honest
+// marker either way — it is recorded only where the resize is issued.
+func TestControlOwnedPaneIsStillGivenItsGeometry(t *testing.T) {
+	m := controlOwnedModel(t, 2*ResizeDebounce)
+	before := m.State.LastResizeAt
+
+	cmd := m.SetDimensions(60, 20)
+
+	if cmd == nil {
+		t.Fatal("a control-owned pane was told nothing about its new size")
+	}
+	if !m.State.LastResizeAt.After(before) {
+		t.Fatal("a control-owned pane was never given the size: restarting the transport is not a resize")
+	}
+}
+
+// Waiting is not dropping, for a control-owned pane too. The budget bounds how
+// often tmux is asked; a size that arrives inside the window is still owed to the
+// pane, and the retry is the only thing left to pay it with.
+func TestControlOwnedResizeInsideTheWindowArmsTheRetry(t *testing.T) {
+	m := controlOwnedModel(t, 10*time.Millisecond)
+
+	cmd := m.SetDimensions(60, 20)
+
+	if cmd == nil {
+		t.Fatal("a control-owned resize inside the debounce window was dropped")
+	}
+	if !m.resizeRetryPending {
+		t.Fatal("a control-owned resize inside the window armed no retry, so the pane keeps the old geometry")
+	}
+	if _, ok := cmd().(deferredResizeMsg); !ok {
+		t.Fatal("a control-owned resize inside the window produced something other than a retry")
+	}
+}

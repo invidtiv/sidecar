@@ -783,3 +783,57 @@ func TestFeatureDisabledPreservesPaneLayoutForReenable(t *testing.T) {
 		t.Fatalf("re-enabled feature did not restore preserved layout: root=%#v doc=%#v", p.paneRoot, p.activeDocPaneOrNil())
 	}
 }
+
+// The reported journey: with a document beside the terminal, dragging the
+// divider moves the terminal's box, and the terminal has to be drawn and
+// captured at that box without the user clicking into it first. Activation was
+// the only thing correcting it, which is why the pane visibly jumped on the
+// click rather than on the release.
+//
+// The transport half of that defect is pinned in internal/tty, where a
+// control-owned pane was resized by restarting the transport and never given
+// the geometry. This pins the half this plugin owns: the release moves the box,
+// every sizer follows it, and the geometry assertion it emits is what schedules
+// the recapture — with the terminal still passive.
+func TestDividerReleaseRecapturesTheTerminalWithoutActivation(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# recapture\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.openTerminalPath("README.md", 0)
+
+	before, ok := p.terminalLeafBox()
+	if !ok {
+		t.Fatal("no terminal leaf before the drag")
+	}
+
+	splitID := p.paneRoot.ID
+	p.handleMouseClick(mouse.MouseAction{Region: &mouse.Region{ID: regionPaneTreeDivider, Data: splitID}, X: 70, Y: 5})
+	p.handleMouseDrag(mouse.MouseAction{DragStartID: regionPaneTreeDivider, DragDX: 14})
+	cmd := p.handleMouseDragEnd(mouse.MouseAction{
+		DragStartID: regionPaneTreeDivider,
+		Region:      &mouse.Region{ID: regionPreviewPane},
+	})
+
+	after, ok := p.terminalLeafBox()
+	if !ok || after.W == before.W {
+		t.Fatalf("release left the terminal's box at %d columns, want the dragged one", after.W)
+	}
+	if width, _ := p.calculateAgentPaneDimensions(); width != after.W {
+		t.Fatalf("the surface is sized at %d columns, want the leaf's %d", width, after.W)
+	}
+
+	if cmd == nil {
+		t.Fatal("release asserted no geometry for the terminal's new box")
+	}
+	msg := cmd()
+	if _, ok := msg.(paneResizedMsg); !ok {
+		t.Fatalf("release produced %T, want one pane-geometry assertion", msg)
+	}
+	if _, poll := p.update(msg); poll == nil {
+		t.Fatal("the geometry assertion scheduled no capture, so the terminal keeps drawing the old pane")
+	}
+	if p.viewMode != ViewModeList || p.interactiveState != nil {
+		t.Fatal("the divider gesture activated the terminal; the refresh must not need a click")
+	}
+}

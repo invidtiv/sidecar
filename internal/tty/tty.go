@@ -1160,12 +1160,20 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 // then alt+t, a window resize followed by a panel toggle — would otherwise leave
 // the pane at the first one's geometry with nothing left to correct it, because
 // the model already believes it asked for the second.
+//
+// A live control transport is not a second way to size a pane. Restarting it
+// re-seeds the pane model at the size the model holds and sizes the control
+// client with it, but tmux takes a new window geometry only from resize-window:
+// `refresh-client -C` sizes the client, and these sessions are window-size
+// manual so the window does not follow it. A control-owned pane that skipped
+// the assertion below therefore kept its old geometry, every capture went on
+// reporting that geometry, and the viewport letterboxed the terminal inside a
+// box the user had already resized — until some other path asserted it, which
+// in practice meant clicking into the pane (td-73fa86's failure mode, reached
+// from the other side).
 func (m *Model) assertDimensions() tea.Cmd {
 	if !m.IsActive() {
 		return nil
-	}
-	if m.subscription != nil {
-		return m.restartControlForResize()
 	}
 
 	target := m.GetTarget()
@@ -1191,7 +1199,15 @@ func (m *Model) assertDimensions() tea.Cmd {
 	m.State.LastResizeAt = m.now()
 	width, height := m.Width, m.Height
 
-	return func() tea.Msg {
+	// The transport restart is inside the budget for the same reason the resize
+	// is: a divider drag delivers a size per frame, and a stop/start per frame
+	// tears down and re-seeds the pane model faster than it can publish one.
+	var restart tea.Cmd
+	if m.subscription != nil {
+		restart = m.restartControlForResize()
+	}
+
+	resize := func() tea.Msg {
 		// Check if resize is needed
 		actualWidth, actualHeight, ok := QueryPaneSize(target)
 		if ok && actualWidth == width && actualHeight == height {
@@ -1200,6 +1216,10 @@ func (m *Model) assertDimensions() tea.Cmd {
 		ResizeTmuxPane(target, width, height)
 		return PaneResizedMsg{Scope: scope}
 	}
+	if restart == nil {
+		return resize
+	}
+	return tea.Batch(restart, resize)
 }
 
 // ResizeAndPollImmediate updates dimensions and triggers an immediate resize and poll.
