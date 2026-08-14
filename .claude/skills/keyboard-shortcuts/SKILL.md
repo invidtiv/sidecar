@@ -247,7 +247,7 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 |---------|------|
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
-| `workspace-doc` | Markdown document beside terminal (opt-in preview) |
+| `workspace-doc` | File tabs beside the terminal (hide with `q`) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -287,11 +287,19 @@ Two keyboard states only: **list (browse)** and **interactive (type)**. There is
 
 ### Document Pane
 
-An unmodified click on a resolvable markdown `path:line` in workspace or shell
-terminal output opens the document beside that terminal. Document panes are
-enabled by default; `--disable-feature=workspace_doc_panes` opts out for a launch.
-Bare markdown paths are added in the Phase 6 delivery.
+An unmodified click on a resolvable file path in workspace or shell terminal
+output opens it beside that terminal. A second click appends a tab; a path
+that is already open is focused (and `path:line` jumps). The header is only
+the tab strip: each label is the relative path, left-truncated so the
+filename end always wins. Document panes are enabled by default;
+`--disable-feature=workspace_doc_panes` opts out for a launch.
 `shift`-drag and `alt`-drag remain terminal selection gestures.
+
+`q` / `esc` hide the pane and remember the tab set for this shell or
+workspace. `x` on the last tab forgets the set. Switching surfaces or
+relaunching onto the same surface restores open files, the active tab,
+render mode, wrap, scroll, and split ratio. `,` / `.` stay Output/Diff/Task
+on worktrees and do not cycle document tabs.
 
 | Key | Command | Description |
 |-----|---------|-------------|
@@ -299,10 +307,16 @@ Bare markdown paths are added in the Phase 6 delivery.
 | `k` / `up` | scroll-up | Scroll up |
 | `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
 | `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
-| `r` | render | Toggle rendered/raw markdown |
-| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize document pane |
-| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between panes |
-| `q` / `esc` | close | Close document pane |
+| `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
+| `{` / `}` | prev-tab / next-tab | Previous / next file tab |
+| `m` | render | Toggle rendered/raw markdown (markdown only; no-op otherwise) |
+| `w` | toggle-wrap | Toggle line wrap |
+| `I` | info | File info modal |
+| `ctrl+r` | reveal | Reveal in the OS file manager |
+| `Y` | yank-path | Copy the relative path |
+| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the workspace split |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and document |
+| `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 
 ## TD Monitor Plugin
 

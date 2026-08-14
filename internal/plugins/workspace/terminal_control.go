@@ -60,6 +60,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Whatever the last render's leaf sizing answered is dispatched here, the
 	// first update that has a runtime to dispatch it with.
 	cmds := p.takePaneSizeCmds()
+	if cmd := p.takePaneRestoreCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	switch msg.(type) {
 	case tea.FocusMsg:
 		p.applicationFocused = true

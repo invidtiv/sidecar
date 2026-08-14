@@ -1,4 +1,7 @@
-// Package issueview fetches one td issue and renders it, either as the body of
-// a host's own chrome (the app's preview modal) or as a content-only viewer
-// sized by its host.
+// Package issueview fetches one td issue and renders it as a reusable card.
+//
+// Hosts size the card and decide when it is active. An active card walks
+// parent/child/sibling issues with the arrow keys; an inactive one only
+// scrolls, so a modal can share those keys with its own chrome until the
+// user tabs to the card and presses enter, or clicks it.
 package issueview

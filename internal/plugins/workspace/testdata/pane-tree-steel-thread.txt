@@ -1,24 +1,24 @@
-Shell                                             │ clicked.md   Rendered   ×        q close · m raw
-No output yet                                     │                                                 
-                                                  │   clicked                                       
-                                                  │                                                 
-                                                  │  file body                                      
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │                                                 
+Shell                                             │  clicked.md
+No output yet                                     │
+                                                  │   clicked
+                                                  │
+                                                  │  file body
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
+                                                  │
                                                   │─────────────────────────────────────────────────
                                                   │ td-1a2b3c: Issue td-1a2b3c   ×           q close
-                                                  │td-1a2b3c: Issue td-1a2b3c                       
-                                                  │[open]  task  P2                                 
-                                                  │                                                 
-                                                  │                                                 
-                                                  │  Body of td-1a2b3c.                             
-                                                  │                                                 
-                                                  │  Paragraph 1 of td-1a2b3c.                      
-                                                  │                                                 
-                                                  │  Paragraph 2 of td-1a2b3c.                      
-                                                  │                                                 
+                                                  │OPEN ───────────────────────────────── td-1a2b3c┃
+                                                  │Issue td-1a2b3c                                 ┃
+                                                  │■ task  P2                                      ┃
+                                                  │                                                ┃
+                                                  │DESCRIPTION ───────────────────────────────── 18│
+                                                  │  Body of td-1a2b3c.                            │
+                                                  │                                                │
+                                                  │  Paragraph 1 of td-1a2b3c.                     │
+                                                  │                                                │
+                                                  │  Paragraph 2 of td-1a2b3c.                     │

@@ -1,12 +1,14 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │                                                                              │
-│  td-abc123: Extract the issue preview into a component                       │
-│                                                                              │
-│  [in_progress]  task  P1  3p                                                 │
-│  Parent: td-parent1                                                          │
+│  IN PROGRESS ─────────────────────────────────────────────────── td-abc123   │
+│  Extract the issue preview into a component                                  │
+│  ■ task  P1  3pts  created 2026-08-10 18:42                                  │
 │  Labels: windowing, refactor                                                 │
 │                                                                              │
+│  PARENT ─────────────────────────────────────────────────────────────────    │
+│  ↑ ◆ td-parent1  Windowing epic                                              │
 │                                                                              │
+│  DESCRIPTION ─────────────────────────────────────────────────────────── 7   │
 │    ## Why                                                                    │
 │                                                                              │
 │    The modal owns fetch and render today.                                    │
@@ -14,7 +16,20 @@
 │    • move fetch                                                              │
 │    • move render                                                             │
 │                                                                              │
+│  SUBTASKS ──────────────────────────────────────────────────────────── 2/3   │
+│  ■ td-83cfc9  closed  Snapshot diff                                          │
+│  ● td-3d427b  closed  Icon registry                                          │
+│  ■ td-ae3a2a  open  Card gutter                                              │
+│                                                                              │
+│  RECENT LOGS ─────────────────────────────────────────────────────────── 2   │
+│  21:31  ses_2a31ff  Started work                                             │
+│  21:47  ses_2a31ff  Checks passing                                           │
+│                                                                              │
+│  ACTIONS ────────────────────────────────────────────────────────────────    │
+│   o  open   b  back   y  yank   esc  close                                   │
+│                                                                              │
+│                                                                              │
 │     Open in TD        Back        Close                                      │
-│   j/k  scroll   o  open   b  back   y  yank   Y  yank key   esc  close       │
+│   enter  activate   j/k  scroll   o  open   b  back   y  yank   esc  close   │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯

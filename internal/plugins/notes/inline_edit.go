@@ -626,11 +626,6 @@ type AttachToTmuxMsg struct {
 	SessionName string
 }
 
-// isInlineEditSupported checks if the right-pane tty editor can start.
-func (p *Plugin) isInlineEditSupported() bool {
-	return tty.EditorAvailable()
-}
-
 // isInlineEditSessionAlive checks if the tmux session for inline editing still exists.
 func (p *Plugin) isInlineEditSessionAlive() bool {
 	if p.inlineEditSession == "" {
@@ -641,17 +636,6 @@ func (p *Plugin) isInlineEditSessionAlive() bool {
 
 // handleInlineEditorKey processes keyboard input when inline editor is active.
 func (p *Plugin) handleInlineEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if !p.inlineEditMode || p.inlineEditor == nil {
-		return false, nil
-	}
-
-	// Delegate to tty model
-	cmd := p.inlineEditor.Update(msg)
-	return true, cmd
-}
-
-// handleInlineEditorMouse processes mouse input when inline editor is active.
-func (p *Plugin) handleInlineEditorMouse(msg tea.MouseMsg) (bool, tea.Cmd) {
 	if !p.inlineEditMode || p.inlineEditor == nil {
 		return false, nil
 	}

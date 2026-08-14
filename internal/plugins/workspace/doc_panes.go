@@ -16,11 +16,28 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
+// docPane is one document leaf's tab group. The pane tree points at this, not
+// at a single model.
 type docPane struct {
 	leafID  int
 	root    string
 	surface string
-	view    *docview.Model
+	tabs    docview.Tabs
+}
+
+func newDocPane(leafID int, root, surface string, view *docview.Model) *docPane {
+	d := &docPane{leafID: leafID, root: root, surface: surface}
+	if view != nil {
+		d.tabs.Append(view)
+	}
+	return d
+}
+
+func (d *docPane) view() *docview.Model {
+	if d == nil {
+		return nil
+	}
+	return d.tabs.ActiveView()
 }
 
 func docPaneTarget(path string) bool {
@@ -71,6 +88,11 @@ func (p *Plugin) activeDocPane() (*docPane, *PaneNode) {
 	return nil, nil
 }
 
+func (p *Plugin) activeDocPaneOrNil() *docPane {
+	doc, _ := p.activeDocPane()
+	return doc
+}
+
 func paneTreeFloors() Floors {
 	return Floors{
 		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
@@ -99,34 +121,49 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	if p.paneRoot == nil || p.ctx == nil {
 		return nil
 	}
+	rel = docview.NormalizeTabPath(rel)
+	if rel == "" || rel == "." {
+		return nil
+	}
+	reopen := p.reopenHiddenDocPane()
 	epoch := p.ctx.Epoch
 	plan, planned := planPaneOpen(p.paneRoot, PaneDoc)
 	if !planned {
-		return nil
+		return reopen
 	}
 	if plan.Retarget != 0 {
 		leaf := FindPane(p.paneRoot, plan.Retarget)
 		if leaf == nil {
-			return nil
+			return reopen
 		}
 		doc := p.docs[leaf.ContentID]
 		if doc == nil {
-			return nil
+			return reopen
 		}
 		doc.root = root
 		doc.surface = surface
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
+		if idx := doc.tabs.IndexOf(rel); idx >= 0 {
+			cmd, consumed := p.selectDocTab(doc, leaf.ContentID, idx, line, file)
+			if consumed {
+				file = nil
+			}
+			p.saveSelectionState()
+			return tea.Batch(reopen, cmd)
+		}
+		viewer := docview.New(nil)
 		var cmd tea.Cmd
 		if file != nil {
-			cmd = doc.view.LoadFile(leaf.ContentID, file, rel, line, epoch)
+			cmd = viewer.LoadFile(leaf.ContentID, file, rel, line, epoch)
 			file = nil
 		} else {
-			cmd = doc.view.Load(leaf.ContentID, root, rel, line, epoch)
+			cmd = viewer.Load(leaf.ContentID, root, rel, line, epoch)
 		}
-		applyDocRenderMode(doc.view, rel, line)
+		applyDocRenderMode(viewer, rel, line)
+		doc.tabs.Append(viewer)
 		p.saveSelectionState()
-		return cmd
+		return tea.Batch(reopen, cmd)
 	}
 
 	docID := p.paneNextID
@@ -135,25 +172,23 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	trialDoc := &PaneNode{ID: docID, Kind: PaneDoc, ContentID: docID}
 	trial, trialFocus := SplitLeaf(trial, plan.Split, plan.Axis, trialDoc)
 	if trialFocus != trialDoc.ID {
-		return nil
+		return reopen
 	}
 	if content, ok := p.previewContentBox(); !ok {
-		return nil
+		return reopen
 	} else if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Document", plan.Axis)
 		p.toastTime = time.Now()
-		return nil
+		return reopen
 	}
 
 	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
 	if focus != newLeaf.ID {
-		return nil
+		return reopen
 	}
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
 	viewer := docview.New(nil)
-	p.docs[docID] = &docPane{leafID: p.paneFocus, root: root, surface: surface, view: viewer}
-	p.activePane = PanePreview
 	var load tea.Cmd
 	if file != nil {
 		load = viewer.LoadFile(docID, file, rel, line, epoch)
@@ -162,8 +197,118 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 		load = viewer.Load(docID, root, rel, line, epoch)
 	}
 	applyDocRenderMode(viewer, rel, line)
+	p.docs[docID] = newDocPane(p.paneFocus, root, surface, viewer)
+	p.activePane = PanePreview
 	p.saveSelectionState()
-	return tea.Batch(load, p.resizeDocTerminalCmd())
+	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
+}
+
+func (p *Plugin) selectDocTab(doc *docPane, modelID, idx, line int, file *os.File) (tea.Cmd, bool) {
+	if doc == nil {
+		return nil, false
+	}
+	p.closeDocInfo()
+	doc.tabs.Select(idx)
+	view := doc.view()
+	if view == nil {
+		return nil, false
+	}
+	if !view.NeedsLoad() {
+		if line > 0 {
+			view.ApplyLine(line)
+		}
+		return nil, false
+	}
+	if p.ctx == nil {
+		return nil, false
+	}
+	rel := view.Title()
+	rendered := view.Rendered()
+	wrap := view.Wrap()
+	var cmd tea.Cmd
+	consumed := false
+	if file != nil {
+		cmd = view.LoadFile(modelID, file, rel, line, p.ctx.Epoch)
+		consumed = true
+	} else {
+		cmd = view.Load(modelID, doc.root, rel, line, p.ctx.Epoch)
+	}
+	if line > 0 {
+		applyDocRenderMode(view, rel, line)
+	} else {
+		view.SetRendered(rendered)
+	}
+	view.SetWrap(wrap)
+	return cmd, consumed
+}
+
+func (p *Plugin) closeActiveDocTab() tea.Cmd {
+	doc, _ := p.activeDocPane()
+	if doc == nil {
+		return nil
+	}
+	if len(doc.tabs.Items) <= 1 {
+		return p.closeDocPane()
+	}
+	p.closeDocInfo()
+	doc.tabs.CloseActive()
+	p.saveSelectionState()
+	return p.ensureActiveDocTabLoaded(doc)
+}
+
+func (p *Plugin) clickDocTab(data any) tea.Cmd {
+	hit, ok := data.(docTabHit)
+	if !ok {
+		return nil
+	}
+	leaf := FindPane(p.paneRoot, hit.LeafID)
+	if leaf == nil || leaf.Kind != PaneDoc {
+		return nil
+	}
+	doc := p.docs[leaf.ContentID]
+	if doc == nil {
+		return nil
+	}
+	p.activePane = PanePreview
+	p.paneFocus = hit.LeafID
+	p.termPanelFocused = false
+	if hit.Index == doc.tabs.Active {
+		return nil
+	}
+	cmd, _ := p.selectDocTab(doc, leaf.ContentID, hit.Index, 0, nil)
+	p.saveSelectionState()
+	return cmd
+}
+
+func (p *Plugin) cycleActiveDocTab(delta int) tea.Cmd {
+	doc, _ := p.activeDocPane()
+	if doc == nil || len(doc.tabs.Items) < 2 {
+		return nil
+	}
+	p.closeDocInfo()
+	doc.tabs.Cycle(delta)
+	p.saveSelectionState()
+	return p.ensureActiveDocTabLoaded(doc)
+}
+
+func (p *Plugin) ensureActiveDocTabLoaded(doc *docPane) tea.Cmd {
+	if doc == nil || p.ctx == nil {
+		return nil
+	}
+	view := doc.view()
+	if view == nil || !view.NeedsLoad() {
+		return nil
+	}
+	leaf := FindPane(p.paneRoot, doc.leafID)
+	if leaf == nil {
+		return nil
+	}
+	rendered := view.Rendered()
+	wrap := view.Wrap()
+	cmd := view.Load(leaf.ContentID, doc.root, view.Title(), 0, p.ctx.Epoch)
+	view.SetRendered(rendered)
+	view.SetWrap(wrap)
+	return cmd
 }
 
 func applyDocRenderMode(view *docview.Model, path string, line int) {
@@ -199,12 +344,85 @@ func terminalLeafID(root *PaneNode) int {
 }
 
 func (p *Plugin) closeDocPane() tea.Cmd {
+	p.closeDocInfo()
 	if !p.closeDocPaneState() {
+		return nil
+	}
+	p.hiddenPaneLayout = nil
+	p.activePane = PanePreview
+	p.saveSelectionState()
+	return p.resizeDocTerminalCmd()
+}
+
+// hideDocPane collapses the live split and remembers the tab set. q/esc hide;
+// last-x forgets through closeDocPane.
+func (p *Plugin) hideDocPane() tea.Cmd {
+	p.closeDocInfo()
+	doc, _ := p.activeDocPane()
+	if doc == nil {
+		return nil
+	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if ok {
+		if layout := p.encodePaneNode(p.paneRoot); layout != nil {
+			layout.Root = root
+			layout.Surface = surface
+			layout.Open = false
+			p.hiddenPaneLayout = layout
+		}
+	}
+	if !p.closeDocPaneState() {
+		p.hiddenPaneLayout = nil
 		return nil
 	}
 	p.activePane = PanePreview
 	p.saveSelectionState()
 	return p.resizeDocTerminalCmd()
+}
+
+// reopenHiddenDocPane rebuilds a hidden split at the last ratio so a file
+// click can focus or append against the remembered set.
+func (p *Plugin) reopenHiddenDocPane() tea.Cmd {
+	if p.activeDocPaneOrNil() != nil {
+		return nil
+	}
+	_, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil
+	}
+	layout := p.hiddenLayoutFor(surface)
+	if layout == nil {
+		return nil
+	}
+	p.hiddenPaneLayout = nil
+	return p.restorePaneLayout(layout)
+}
+
+func (p *Plugin) hiddenLayoutFor(surface string) *state.PaneLayoutJSON {
+	if surface == "" {
+		return nil
+	}
+	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasDocTabs(p.hiddenPaneLayout) {
+		return p.hiddenPaneLayout
+	}
+	layout := p.readWorkspaceState().PaneLayouts[surface]
+	if layout == nil || state.PaneLayoutOpen(layout) || !paneLayoutHasDocTabs(layout) {
+		return nil
+	}
+	return layout
+}
+
+func paneLayoutHasDocTabs(layout *state.PaneLayoutJSON) bool {
+	if layout == nil {
+		return false
+	}
+	if len(layout.Tabs) > 0 {
+		return true
+	}
+	if layout.Split == nil {
+		return false
+	}
+	return paneLayoutHasDocTabs(layout.Split.A) || paneLayoutHasDocTabs(layout.Split.B)
 }
 
 func (p *Plugin) closeDocPaneState() bool {
@@ -240,6 +458,7 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 // its link was clicked in, so a shell switch takes its documents and issues
 // with it rather than showing them against the wrong workspace.
 func (p *Plugin) resetDocPanesForSelection() bool {
+	p.closeDocInfo()
 	root, surface, selected := p.selectedTerminalSurface()
 	closed := false
 	for _, leafID := range p.contentLeafIDs() {
@@ -325,7 +544,11 @@ func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
 	if !ok || filepath.Clean(doc.root) != root || doc.surface != surface {
 		return
 	}
-	doc.view.SetResult(msg)
+	for _, item := range doc.tabs.Items {
+		if item.View != nil && item.View.SetResult(msg) {
+			return
+		}
+	}
 }
 
 // docVisible reports whether the pane split is on screen. It asks the tree for
@@ -368,6 +591,18 @@ func (p *Plugin) docFocused() bool {
 }
 
 func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if p.docInfo != nil {
+		switch msg.String() {
+		case "q", "esc", "I", "i":
+			p.closeDocInfo()
+			return true, nil
+		}
+		closed, cmd := p.docInfo.HandleKey(msg)
+		if closed {
+			p.closeDocInfo()
+		}
+		return true, cmd
+	}
 	if !p.docFocused() {
 		return false, nil
 	}
@@ -379,20 +614,76 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "\\":
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
-		return true, p.closeDocPane()
+		return true, p.hideDocPane()
+	case "x":
+		return true, p.closeActiveDocTab()
+	case "{":
+		return true, p.cycleActiveDocTab(-1)
+	case "}":
+		return true, p.cycleActiveDocTab(1)
 	case "m":
 		p.toggleDocRenderMode()
 		return true, nil
+	case "w":
+		p.toggleDocWrap()
+		return true, nil
+	case "I":
+		return true, p.openDocInfo()
+	case "ctrl+r":
+		return true, p.revealActiveDoc()
+	case "Y":
+		return true, p.yankActiveDocPath()
 	case "+":
 		return true, p.resizeFocusedDoc(5)
 	case "-":
 		return true, p.resizeFocusedDoc(-5)
 	default:
-		doc.view.HandleKey(msg)
+		if view := doc.view(); view != nil {
+			view.HandleKey(msg)
+		}
 		// A focused document is its own input context. Absorb keys it does not
 		// own so they cannot trigger workspace actions behind the pane.
 		return true, nil
 	}
+}
+
+func (p *Plugin) closeDocInfo() {
+	p.docInfo = nil
+}
+
+func (p *Plugin) toggleDocWrap() {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil {
+		return
+	}
+	doc.view().ToggleWrap()
+	p.saveSelectionState()
+}
+
+func (p *Plugin) openDocInfo() tea.Cmd {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil || doc.view().Title() == "" {
+		return nil
+	}
+	info, cmd := docview.OpenInfo(doc.root, doc.view().Title())
+	p.docInfo = info
+	return cmd
+}
+
+func (p *Plugin) revealActiveDoc() tea.Cmd {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil || doc.view().Title() == "" {
+		return nil
+	}
+	return docview.Reveal(doc.root, doc.view().Title())
+}
+
+func (p *Plugin) yankActiveDocPath() tea.Cmd {
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil || doc.view().Title() == "" {
+		return nil
+	}
+	return docview.YankPath(doc.view().Title())
 }
 
 func (p *Plugin) resizeFocusedDoc(delta int) tea.Cmd {
@@ -441,12 +732,25 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 	}
 	// A content leaf still holding another surface's target is a layout about to
 	// be collapsed; persist the terminal alone rather than a document or an issue
-	// that will come back attached to the wrong workspace.
+	// that will come back attached to the wrong workspace. Switch-away writes
+	// the previous surface before the index changes, so this is a safety net
+	// for a save that still races the selection.
 	for _, leafID := range p.contentLeafIDs() {
 		paneRoot, paneSurface, ok := p.contentLeafSurface(leafID)
 		if ok && (filepath.Clean(paneRoot) != root || paneSurface != surface) {
-			return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: contentKindTerminal}
+			return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: contentKindTerminal, Open: true}
 		}
+	}
+	return p.encodeSurfacePaneLayout(root, surface)
+}
+
+func (p *Plugin) encodeSurfacePaneLayout(root, surface string) *state.PaneLayoutJSON {
+	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasDocTabs(p.hiddenPaneLayout) {
+		layout := p.hiddenPaneLayout
+		layout.Root = root
+		layout.Surface = surface
+		layout.Open = false
+		return layout
 	}
 	layout := p.encodePaneNode(p.paneRoot)
 	if layout == nil {
@@ -454,7 +758,107 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 	}
 	layout.Root = root
 	layout.Surface = surface
+	layout.Open = true
 	return layout
+}
+
+func (p *Plugin) readWorkspaceState() state.WorkspaceState {
+	if p.ctx == nil {
+		return state.WorkspaceState{}
+	}
+	wt := p.shellStartupHooks.withDefaults().getWorkspaceState(p.ctx.ProjectRoot)
+	state.MigratePaneLayouts(&wt)
+	return wt
+}
+
+func (p *Plugin) writeWorkspaceState(wt state.WorkspaceState) {
+	if p.ctx == nil {
+		return
+	}
+	_ = p.shellStartupHooks.withDefaults().setWorkspaceState(p.ctx.ProjectRoot, wt)
+}
+
+func (p *Plugin) liveTreeRepresents(surface string) bool {
+	if surface == "" {
+		return false
+	}
+	hasContent := false
+	for _, leafID := range p.contentLeafIDs() {
+		_, paneSurface, ok := p.contentLeafSurface(leafID)
+		if !ok {
+			continue
+		}
+		hasContent = true
+		if paneSurface == surface {
+			return true
+		}
+	}
+	if hasContent {
+		return false
+	}
+	return p.paneLayoutSurface == surface
+}
+
+func (p *Plugin) storeLivePaneLayout(root, surface string) {
+	if p.paneRoot == nil || surface == "" {
+		return
+	}
+	layout := p.encodeSurfacePaneLayout(root, surface)
+	if layout == nil {
+		return
+	}
+	wt := p.readWorkspaceState()
+	if wt.PaneLayouts == nil {
+		wt.PaneLayouts = make(map[string]*state.PaneLayoutJSON)
+	}
+	wt.PaneLayouts[surface] = layout
+	wt.PaneLayout = nil
+	p.writeWorkspaceState(wt)
+}
+
+func (p *Plugin) restoreIncomingPaneLayout() {
+	p.restoreSurfacePaneLayout(false)
+}
+
+// restoreIncomingPaneLayoutHonoringOpen is the relaunch/retarget path: a
+// hidden set stays in the map and the live tree stays terminal-only. An
+// explicit surface switch uses restoreIncomingPaneLayout so q-hidden tabs
+// come back.
+func (p *Plugin) restoreIncomingPaneLayoutHonoringOpen() {
+	p.restoreSurfacePaneLayout(true)
+}
+
+func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
+	if p.paneRoot == nil {
+		return
+	}
+	_, surface, ok := p.selectedTerminalSurface()
+	p.resetPaneTreeToTerminal()
+	if !ok {
+		p.paneLayoutSurface = ""
+		p.paneRestoreCmd = nil
+		return
+	}
+	p.paneLayoutSurface = surface
+	layout := p.readWorkspaceState().PaneLayouts[surface]
+	if layout == nil {
+		p.paneRestoreCmd = nil
+		return
+	}
+	if honorOpen && !state.PaneLayoutOpen(layout) {
+		if paneLayoutHasDocTabs(layout) {
+			p.hiddenPaneLayout = layout
+		}
+		p.paneRestoreCmd = nil
+		return
+	}
+	p.paneRestoreCmd = p.restorePaneLayout(layout)
+}
+
+func (p *Plugin) takePaneRestoreCmd() tea.Cmd {
+	cmd := p.paneRestoreCmd
+	p.paneRestoreCmd = nil
+	return cmd
 }
 
 func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
@@ -485,14 +889,39 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: issue.view.IssueID()}
 	}
 	doc := p.docs[node.ContentID]
-	if doc == nil || doc.view == nil || doc.view.Title() == "" {
+	tabs, active := encodeDocTabs(doc)
+	if len(tabs) == 0 {
 		return nil
 	}
-	mode := "raw"
-	if doc.view.Rendered() {
-		mode = "rendered"
+	return &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: tabs, Active: active}
+}
+
+func encodeDocTabs(doc *docPane) ([]state.PaneDocTabJSON, int) {
+	if doc == nil {
+		return nil, 0
 	}
-	return &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: doc.view.Title(), Mode: mode}}}
+	tabs := make([]state.PaneDocTabJSON, 0, len(doc.tabs.Items))
+	active := 0
+	for i, item := range doc.tabs.Items {
+		view := item.View
+		if view == nil || view.Title() == "" {
+			continue
+		}
+		if i == doc.tabs.Active {
+			active = len(tabs)
+		}
+		mode := "raw"
+		if view.Rendered() {
+			mode = "rendered"
+		}
+		tabs = append(tabs, state.PaneDocTabJSON{
+			Path:   docview.NormalizeTabPath(view.Title()),
+			Mode:   mode,
+			Wrap:   view.Wrap(),
+			Scroll: view.ScrollOffset(),
+		})
+	}
+	return tabs, active
 }
 
 func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
@@ -576,29 +1005,7 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		}
 		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
 	case contentKindDoc:
-		if len(saved.Tabs) == 0 {
-			return nil
-		}
-		active := clampInt(saved.Active, 0, len(saved.Tabs)-1)
-		ordered := append([]state.PaneDocTabJSON{saved.Tabs[active]}, saved.Tabs[:active]...)
-		ordered = append(ordered, saved.Tabs[active+1:]...)
-		for _, tab := range ordered {
-			rel, _, valid := resolveTerminalPath(root, tab.Path)
-			// ResolveFile may accept a file outside root, reporting it as an
-			// absolute display path. A restored layout only ever addresses the
-			// viewer with a root-relative path, so an escaping tab is dropped
-			// rather than joined onto root as if it were relative.
-			if !valid || filepath.IsAbs(rel) {
-				continue
-			}
-			id := p.nextPaneID()
-			viewer := docview.New(nil)
-			load := viewer.Load(id, root, filepath.ToSlash(rel), 0, p.ctx.Epoch)
-			viewer.SetRendered(tab.Mode != "raw")
-			p.docs[id] = &docPane{leafID: id, root: root, surface: savedRootSurface(p, root), view: viewer}
-			*loads = append(*loads, load)
-			return &PaneNode{ID: id, Kind: PaneDoc, ContentID: id}
-		}
+		return p.decodeDocLeaf(saved, root, loads)
 	case contentKindIssue:
 		// An issue leaf with no durable target is dropped, and the collapse in
 		// the split above gives its box back to its sibling: one unreadable leaf
@@ -622,6 +1029,66 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 	return nil
 }
 
+func (p *Plugin) decodeDocLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
+	if saved == nil || len(saved.Tabs) == 0 || p.ctx == nil {
+		return nil
+	}
+	wanted := saved.Active
+	if wanted < 0 || wanted >= len(saved.Tabs) {
+		wanted = 0
+	}
+	type restoredTab struct {
+		rel    string
+		mode   string
+		wrap   bool
+		scroll int
+	}
+	var pending []restoredTab
+	active := 0
+	for i, tab := range saved.Tabs {
+		rel, _, valid := resolveTerminalPath(root, tab.Path)
+		// ResolveFile may accept a file outside root, reporting it as an
+		// absolute display path. A restored layout only ever addresses the
+		// viewer with a root-relative path, so an escaping tab is dropped
+		// rather than joined onto root as if it were relative.
+		if !valid || filepath.IsAbs(rel) {
+			continue
+		}
+		if i == wanted {
+			active = len(pending)
+		}
+		pending = append(pending, restoredTab{
+			rel:    filepath.ToSlash(rel),
+			mode:   tab.Mode,
+			wrap:   tab.Wrap,
+			scroll: tab.Scroll,
+		})
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	id := p.nextPaneID()
+	items := make([]docview.Item, 0, len(pending))
+	for _, tab := range pending {
+		viewer := docview.New(nil)
+		viewer.SetRendered(tab.mode != "raw")
+		viewer.SetWrap(tab.wrap)
+		viewer.SetPendingScroll(tab.scroll)
+		viewer.Arm(id, tab.rel, p.ctx.Epoch)
+		items = append(items, docview.Item{View: viewer})
+	}
+	tabs := docview.Tabs{Items: items, Active: active}
+	view := tabs.ActiveView()
+	rendered := view.Rendered()
+	wrap := view.Wrap()
+	load := view.Load(id, root, view.Title(), 0, p.ctx.Epoch)
+	view.SetRendered(rendered)
+	view.SetWrap(wrap)
+	p.docs[id] = &docPane{leafID: id, root: root, surface: savedRootSurface(p, root), tabs: tabs}
+	*loads = append(*loads, load)
+	return &PaneNode{ID: id, Kind: PaneDoc, ContentID: id}
+}
+
 func savedRootSurface(p *Plugin, root string) string {
 	selectedRoot, surface, ok := p.selectedTerminalSurface()
 	if !ok || selectedRoot != root {
@@ -637,85 +1104,83 @@ func (p *Plugin) nextPaneID() int {
 }
 
 func (p *Plugin) resetPaneTreeToTerminal() {
+	p.closeDocInfo()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.hiddenPaneLayout = nil
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
 	p.paneFocus = p.paneRoot.ID
 }
 
 func (p *Plugin) cycleDocumentFocus(reverse bool) {
-	_, docLeaf := p.activeDocPane()
-	if docLeaf == nil {
+	leaves := p.contentLeafIDs()
+	if len(leaves) == 0 {
 		return
 	}
 	terminalID := terminalLeafID(p.paneRoot)
-	switch {
-	case p.activePane == PaneSidebar:
-		p.activePane = PanePreview
-		if reverse {
-			p.paneFocus = docLeaf.ID
-		} else {
-			p.paneFocus = terminalID
+	idx := -1
+	if p.activePane == PanePreview && p.paneFocus != terminalID {
+		for i, id := range leaves {
+			if id == p.paneFocus {
+				idx = i
+				break
+			}
 		}
-	case p.paneFocus == docLeaf.ID:
-		if reverse || !p.sidebarVisible {
-			p.paneFocus = terminalID
-		} else {
-			p.activePane = PaneSidebar
-		}
-	default:
-		if reverse && p.sidebarVisible {
-			p.activePane = PaneSidebar
-		} else {
+	}
+	if reverse {
+		switch {
+		case p.activePane == PaneSidebar:
 			p.activePane = PanePreview
-			p.paneFocus = docLeaf.ID
+			p.paneFocus = leaves[len(leaves)-1]
+		case idx > 0:
+			p.paneFocus = leaves[idx-1]
+		case idx == 0:
+			p.paneFocus = terminalID
+		default:
+			if p.sidebarVisible {
+				p.activePane = PaneSidebar
+			} else {
+				p.activePane = PanePreview
+				p.paneFocus = leaves[len(leaves)-1]
+			}
+		}
+	} else {
+		switch {
+		case p.activePane == PaneSidebar:
+			p.activePane = PanePreview
+			p.paneFocus = terminalID
+		case idx >= 0 && idx < len(leaves)-1:
+			p.paneFocus = leaves[idx+1]
+		case idx == len(leaves)-1:
+			if p.sidebarVisible {
+				p.activePane = PaneSidebar
+			} else {
+				p.paneFocus = terminalID
+			}
+		default:
+			p.activePane = PanePreview
+			p.paneFocus = leaves[0]
 		}
 	}
 	p.termPanelFocused = false
 }
 
-// docHeaderChips renders the doc leaf's header chips. title is the content's
-// own answer rather than a second read of the viewer, so the row the frame
-// draws and the regions it registers cannot name the leaf differently.
-func (p *Plugin) docHeaderChips(doc *docPane, title string, width int, focused bool) []string {
-	// Keep each chip whole so the shared header layout can drop it cleanly at
-	// narrow widths. Bound the path before styling so a deep path does not crowd
-	// out the mode and close affordances.
-	pathBudget := maxInt(width/2, 8)
-	path := p.truncateCache.Truncate(title, pathBudget, "…")
-	pathStyle := styles.BarChip
-	if focused {
-		pathStyle = styles.BarChipActive
-	}
-	mode := "Rendered"
-	if !doc.view.Rendered() {
-		mode = "Raw"
-	}
-	return []string{
-		styles.RenderPillWithStyle(path, pathStyle, nil),
-		styles.RenderPillWithStyle(mode, styles.BarChip, nil),
-		styles.RenderPillWithStyle("×", styles.BarChip, nil),
-	}
-}
-
-// docPaneHeaderRow is the doc leaf's header row, drawn above the viewer rather
-// than by it. focused is the frame's answer, so the chip a click lands on and
-// the chip the leaf drew cannot disagree about which leaf holds focus.
-func (p *Plugin) docPaneHeaderRow(doc *docPane, title string, width int, focused bool) string {
-	action := "raw"
-	if !doc.view.Rendered() {
-		action = "render"
-	}
-	return p.terminalHeader(p.docHeaderChips(doc, title, width, focused), dimText("q close · m "+action), width, 0)
+// docPaneHeaderRow is the doc leaf's header: the tab strip only. focused is
+// the frame's answer, so the tab a click lands on matches the one the leaf drew.
+func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
+	return layoutDocTabStrip(doc, width, focused).Row
 }
 
 func (p *Plugin) toggleDocRenderMode() {
 	doc, _ := p.activeDocPane()
-	if doc == nil || doc.view == nil {
+	if doc == nil || doc.view() == nil {
 		return
 	}
-	doc.view.ToggleRenderMode()
+	if !terminallink.Markdown(doc.view().Title()) {
+		return
+	}
+	doc.view().ToggleRenderMode()
 	p.saveSelectionState()
 }
 
@@ -738,19 +1203,10 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 	return paneTreeDividerStyle(focused).Render(strings.Repeat("─", maxInt(width, 0)))
 }
 
-func (p *Plugin) registerDocPaneRegions(doc *docPane, title string, leafID int, box Box) {
+func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
-	chips := p.docHeaderChips(doc, title, box.W, p.paneFocus == leafID)
-	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
-		if !chip.Drawn {
-			continue
-		}
-		switch index {
-		case len(chips) - 2:
-			p.mouseHandler.HitMap.AddRect(regionDocMode, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
-		case len(chips) - 1:
-			p.mouseHandler.HitMap.AddRect(regionDocClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
-		}
+	for _, tab := range layoutDocTabStrip(doc, box.W, p.paneFocus == leafID).Tabs {
+		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+tab.Col, box.Y, tab.Width, 1, docTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }
 
@@ -855,10 +1311,9 @@ func (p *Plugin) renderPaneTreeDivider(split Divider) string {
 }
 
 // registerPaneLeafRegions registers one placed leaf's hit regions, in
-// plugin-local coordinates. The title a region is registered under is the
-// content's own, the same answer the header row was drawn from, so a chip
-// cannot be hit-tested at a width it was never rendered at. A terminal leaf
-// registers nothing here: its regions belong to the legacy renderer inside it.
+// plugin-local coordinates. Tab hits come from the same strip the header
+// draws, so a click cannot land on a tab that was never rendered. A terminal
+// leaf registers nothing here: its regions belong to the legacy renderer inside it.
 func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 	if node == nil || node.Split != nil {
 		return
@@ -870,7 +1325,7 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 	switch node.Kind {
 	case PaneDoc:
 		if doc := p.docs[node.ContentID]; doc != nil {
-			p.registerDocPaneRegions(doc, content.Title(), node.ID, box)
+			p.registerDocPaneRegions(doc, node.ID, box)
 		}
 	case PaneIssue:
 		p.registerIssuePaneRegions(content.Title(), node.ID, box)

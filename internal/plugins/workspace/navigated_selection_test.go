@@ -66,14 +66,14 @@ func TestNavigatingToTheDocumentsOwnerRestoresIt(t *testing.T) {
 		t.Fatalf("navigation moved off the owning shell: shell=%v idx=%d", p.shellSelected, p.selectedShellIdx)
 	}
 	doc := p.activeDocPaneOrNil()
-	if doc == nil || doc.view.Title() != "README.md" {
+	if doc == nil || doc.view().Title() != "README.md" {
 		t.Fatalf("navigating to the document's owner closed it: %#v", doc)
 	}
 	if p.paneRestoreCmd == nil {
 		t.Fatal("the restored document's load was dropped")
 	}
-	if saved.PaneLayout == nil || saved.PaneLayout.Split == nil {
-		t.Fatalf("the persisted layout was rewritten: %#v", saved.PaneLayout)
+	if !layoutHasDocPath(workspacePaneLayout(*saved, "shell:test-shell"), "README.md") {
+		t.Fatalf("the persisted layout was rewritten: %#v", saved.PaneLayouts)
 	}
 }
 
@@ -96,10 +96,12 @@ func TestNavigatingToASiblingClosesTheDocumentThroughTheProjectsOwnRule(t *testi
 	if p.paneRestoreCmd != nil {
 		t.Fatal("a load for the closed document is still pending")
 	}
-	// The collapsed layout is persisted immediately, so the document cannot
-	// come back attached to the workspace the user navigated away from.
-	if saved.PaneLayout == nil || saved.PaneLayout.Split != nil || saved.PaneLayout.Kind != "terminal" {
-		t.Fatalf("collapsed layout was not persisted: %#v", saved.PaneLayout)
+	// A's document stays in the map; B's live tree is terminal-only.
+	if !layoutHasDocPath(workspacePaneLayout(*saved, "shell:test-shell"), "README.md") {
+		t.Fatalf("shell A layout missing after navigating to B: %#v", saved.PaneLayouts)
+	}
+	if layoutHasDocPath(workspacePaneLayout(*saved, "shell:test-shell-b"), "README.md") {
+		t.Fatalf("sibling stole the document: %#v", saved.PaneLayouts)
 	}
 	if saved.ShellTmuxName != "test-shell-b" {
 		t.Fatalf("persisted selection = %q, want the navigated shell", saved.ShellTmuxName)

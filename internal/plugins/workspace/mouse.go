@@ -46,6 +46,13 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// split SGR report from a typed one, and the component owns it.
 	p.noteTerminalMouseActivity()
 
+	if p.docInfo != nil {
+		if p.docInfo.HandleMouse(msg, p.mouseHandler) {
+			p.closeDocInfo()
+		}
+		return nil
+	}
+
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
 	}
@@ -582,10 +589,31 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
+			case regionIssuePane:
+				if leafID, ok := action.Region.Data.(int); ok {
+					if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
+						if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
+							lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+							issue.view.HandleHover(lx, ly)
+						}
+					}
+				}
+			default:
+				p.clearIssueHover()
 			}
+		} else {
+			p.clearIssueHover()
 		}
 	}
 	return nil
+}
+
+func (p *Plugin) clearIssueHover() {
+	for _, issue := range p.issues {
+		if issue != nil && issue.view != nil {
+			issue.view.HandleHover(-1, -1)
+		}
+	}
 }
 
 // notePressAwayFromTerminal answers a button going down anywhere but a
@@ -716,23 +744,21 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.termPanelFocused = false
 			}
 		}
-	case regionDocMode:
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
-				p.activePane = PanePreview
-				p.paneFocus = leafID
-				p.termPanelFocused = false
-			}
-		}
-		p.toggleDocRenderMode()
-	case regionDocClose:
-		return p.closeDocPane()
+	case regionDocTab:
+		return p.clickDocTab(action.Region.Data)
 	case regionIssuePane:
 		if leafID, ok := action.Region.Data.(int); ok {
 			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
 				p.activePane = PanePreview
 				p.paneFocus = leafID
 				p.termPanelFocused = false
+				if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
+					issue.view.SetActive(true)
+					issue.view.SetFocused(true)
+					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+					_, cmd := issue.view.HandleClick(lx, ly)
+					return cmd
+				}
 			}
 		}
 	case regionIssueClose:
@@ -1148,6 +1174,21 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 				return p.loadCommitDetail(commit.Hash)
 			}
 		}
+	case regionIssuePane:
+		if leafID, ok := action.Region.Data.(int); ok {
+			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
+				p.activePane = PanePreview
+				p.paneFocus = leafID
+				p.termPanelFocused = false
+				if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
+					issue.view.SetActive(true)
+					issue.view.SetFocused(true)
+					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+					_, _ = issue.view.HandleClick(lx, ly)
+					return issue.view.OpenSelection()
+				}
+			}
+		}
 	case regionKanbanCard:
 		// Double-click on kanban card - attach to tmux session if agent running
 		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
@@ -1223,11 +1264,18 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionDocPane, regionDocMode:
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
-				if doc := p.docs[leaf.ContentID]; doc != nil {
-					doc.view.Scroll(delta)
+	case regionDocPane, regionDocTab:
+		leafID := 0
+		switch data := action.Region.Data.(type) {
+		case int:
+			leafID = data
+		case docTabHit:
+			leafID = data.LeafID
+		}
+		if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+			if doc := p.docs[leaf.ContentID]; doc != nil {
+				if view := doc.view(); view != nil {
+					view.Scroll(delta)
 				}
 			}
 		}

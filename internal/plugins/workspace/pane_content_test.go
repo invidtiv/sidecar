@@ -15,7 +15,7 @@ func docPaneSplitTree(t *testing.T, p *Plugin, root, rel string) (terminal, leaf
 	writeDocPaneFixture(t, root, rel, "# "+rel+"\n\nbody\n")
 	viewer := docview.New(nil)
 	viewer.Load(2, root, rel, 0, p.ctx.Epoch)
-	doc = &docPane{leafID: 2, root: root, surface: "shell:test-shell", view: viewer}
+	doc = newDocPane(2, root, "shell:test-shell", viewer)
 	p.docs = map[int]*docPane{2: doc}
 	terminal = &PaneNode{ID: 1, Kind: PaneTerminal}
 	leaf = &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
@@ -103,7 +103,7 @@ func TestDocContentDrawsItsHeaderAboveTheViewerBox(t *testing.T) {
 	if !split {
 		t.Fatalf("document leaf drew no body under its header: %q", got)
 	}
-	if want := p.docPaneHeaderRow(doc, content.Title(), width, false); header != want {
+	if want := p.docPaneHeaderRow(doc, width, false); header != want {
 		t.Fatalf("header row = %q, want %q", header, want)
 	}
 	if cells := ansi.StringWidth(header); cells != width {
@@ -111,8 +111,8 @@ func TestDocContentDrawsItsHeaderAboveTheViewerBox(t *testing.T) {
 	}
 	// The viewer is sized to the box below the header row — the same
 	// subtraction termpreview.SurfaceIn makes for a terminal leaf.
-	doc.view.SetSize(width, height-terminalHeaderRows)
-	if want := doc.view.View(); body != want {
+	doc.view().SetSize(width, height-terminalHeaderRows)
+	if want := doc.view().View(); body != want {
 		t.Fatalf("document body was drawn against a different box than the header row left it")
 	}
 }

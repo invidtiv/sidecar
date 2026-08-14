@@ -22,6 +22,10 @@ func stubTd(t *testing.T) {
 	// The body runs past any pane this test composes, which is what gives the
 	// wheel somewhere to travel and the compositor something to clip.
 	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = tree ]; then\n" +
+		`printf '{"id":"%s","title":"Issue %s","status":"open","type":"task","priority":"P2","children":[]}\n' "$2" "$2"` + "\n" +
+		"exit 0\n" +
+		"fi\n" +
 		"body=\"Body of $2.\"\n" +
 		"i=1\n" +
 		"while [ $i -le 8 ]; do body=\"$body\\n\\nParagraph $i of $2.\"; i=$((i+1)); done\n" +
@@ -127,7 +131,7 @@ func TestSteelThreadPaneTreeComposesTheIssueLeafsCells(t *testing.T) {
 		body = append(body, within(row))
 	}
 	joined := strings.Join(body, "\n")
-	for _, want := range []string{"td-1a2b3c: Issue td-1a2b3c", "[open]", "Body of td-1a2b3c"} {
+	for _, want := range []string{"OPEN", "Issue td-1a2b3c", "Body of td-1a2b3c"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("issue body missing %q:\n%s", want, joined)
 		}
@@ -213,7 +217,7 @@ func TestTheSteelThreadSurvivesQuitAndReopen(t *testing.T) {
 
 	// Quitting writes nothing of its own: what the reopen has to work from is
 	// whatever the session already saved.
-	if saved.ShellTmuxName != "test-shell" || saved.PaneLayout == nil {
+	if saved.ShellTmuxName != "test-shell" || workspacePaneLayout(saved, "shell:test-shell") == nil {
 		t.Fatalf("the session left nothing to reopen: %#v", saved)
 	}
 
@@ -234,7 +238,7 @@ func TestTheSteelThreadSurvivesQuitAndReopen(t *testing.T) {
 		t.Fatalf("reopened boxes %#v, want the ones the session was quit on %#v", after, before)
 	}
 	doc, _ := reopened.activeDocPane()
-	if doc == nil || doc.view.Title() != "clicked.md" {
+	if doc == nil || doc.view().Title() != "clicked.md" {
 		t.Fatalf("reopened document = %#v, want the clicked file", doc)
 	}
 	issue, _ := reopened.activeIssuePane()
@@ -397,6 +401,59 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 	}
 	if doc, _ := p.activeDocPane(); doc == nil {
 		t.Fatal("q took the document leaf with it")
+	}
+}
+
+func TestTabCyclesThroughTheIssueLeaf(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	steelThreadPaneTree(t, p, root)
+	p.sidebarVisible = false
+	p.activePane = PanePreview
+	p.paneFocus = terminalLeafID(p.paneRoot)
+
+	// Forward: terminal → doc → issue → terminal.
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+	if p.docFocused() != true || p.issueFocused() {
+		t.Fatalf("first tab: doc=%v issue=%v", p.docFocused(), p.issueFocused())
+	}
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !p.issueFocused() || p.docFocused() {
+		t.Fatalf("second tab: doc=%v issue=%v", p.docFocused(), p.issueFocused())
+	}
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: tea.KeyTab}); handled {
+		t.Fatal("the issue leaf claimed Tab instead of yielding it to the cycle")
+	}
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+	if p.issueFocused() || p.docFocused() || p.paneFocus != terminalLeafID(p.paneRoot) {
+		t.Fatalf("third tab did not return to the terminal: focus=%d issue=%v doc=%v",
+			p.paneFocus, p.issueFocused(), p.docFocused())
+	}
+}
+
+func TestApplyIssueLoadedDoesNotDropALiveLeaf(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	steelThreadPaneTree(t, p, root)
+	issue, _ := p.activeIssuePane()
+	fetch := issue.view.Load(issue.leafID, issue.root, "td-1a2b3c", p.ctx.Epoch)
+	if !issue.view.Loading() {
+		t.Fatal("load did not enter loading")
+	}
+	p.shellSelected = false
+	p.worktrees = nil
+	if _, _, ok := p.selectedTerminalSurface(); ok {
+		t.Fatal("expected no current surface")
+	}
+	loaded, ok := fetch().(issueview.LoadedMsg)
+	if !ok {
+		t.Fatal("load did not return LoadedMsg")
+	}
+	p.applyIssueLoaded(loaded)
+	if issue.view.Loading() {
+		t.Fatal("applyIssueLoaded left a live leaf on Loading issue…")
 	}
 }
 

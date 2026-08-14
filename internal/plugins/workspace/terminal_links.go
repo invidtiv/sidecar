@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
-	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -374,7 +373,7 @@ func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int)
 		return nil
 	}
 	return tea.Batch(app.FocusPlugin("file-browser"), func() tea.Msg {
-		return filebrowser.NavigateToFileMsg{Path: filepath.ToSlash(display), Line: line}
+		return app.NavigateToFileMsg{Path: filepath.ToSlash(display), Line: line}
 	})
 }
 

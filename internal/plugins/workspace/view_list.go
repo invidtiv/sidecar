@@ -80,7 +80,11 @@ func (p *Plugin) View(width, height int) string {
 		background := p.renderListView(width, height)
 		return p.renderFilePickerModal(background)
 	default:
-		return p.renderListView(width, height)
+		view := p.renderListView(width, height)
+		if p.docInfo != nil {
+			return ui.OverlayModal(view, p.docInfo.Render(width, height, p.mouseHandler), width, height)
+		}
+		return view
 	}
 }
 

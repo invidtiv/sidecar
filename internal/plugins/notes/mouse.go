@@ -436,29 +436,6 @@ func (p *Plugin) editorContentStartY() int {
 	return 2
 }
 
-// screenYToEditorLine converts a screen Y coordinate to an editor line index.
-// Uses previewScrollOff which is kept in sync with the textarea viewport
-// via trackTextareaScroll().
-func (p *Plugin) screenYToEditorLine(y int) int {
-	editorContentY := p.editorContentStartY()
-	visualRow := y - editorContentY
-	if visualRow < 0 {
-		visualRow = 0
-	}
-	line := p.previewScrollOff + visualRow
-	lineCount := p.editorTextarea.LineCount()
-	if lineCount == 0 {
-		return 0
-	}
-	if line >= lineCount {
-		line = lineCount - 1
-	}
-	if line < 0 {
-		line = 0
-	}
-	return line
-}
-
 // screenXToEditorCol converts a screen X coordinate to a column in editor content.
 // In edit mode, the textarea renders its own line numbers with a hardcoded width of 4
 // (see bubbles/textarea SetWidth: const lnWidth = 4). The panel adds 1 border + 1 padding.

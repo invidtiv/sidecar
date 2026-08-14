@@ -1034,30 +1034,6 @@ func (p *Plugin) loadNoteIntoEditor() {
 	p.editorTextarea.Blur()
 }
 
-// loadNoteIntoEditorAtEnd loads the currently selected note into the editor pane
-// with cursor positioned at the end of the content. Used for new notes created via search.
-func (p *Plugin) loadNoteIntoEditorAtEnd() {
-	note := p.getSelectedNote()
-	if note == nil {
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return
-	}
-
-	p.editorNote = note
-	p.editorTextarea.SetValue(note.Content)
-	p.previewLines = strings.Split(note.Content, "\n")
-	if len(p.previewLines) == 0 {
-		p.previewLines = []string{""}
-	}
-	p.previewCursorLine = 0
-	p.previewScrollOff = 0
-	p.editorDirty = false
-	p.previewMode = false // Immediately in edit mode for new notes
-	p.editorTextarea.Focus()
-}
-
 // updateTextareaDimensions updates the textarea dimensions based on current layout.
 func (p *Plugin) updateTextareaDimensions() {
 	if p.width == 0 || p.height == 0 {

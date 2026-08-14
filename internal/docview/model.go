@@ -41,8 +41,12 @@ type Model struct {
 	height int
 	scroll int
 
+	pendingScroll    int
+	hasPendingScroll bool
+
 	loading  bool
 	rendered bool
+	wrap     bool
 	result   filepreview.PreviewResult
 
 	renderWidth   int
@@ -114,9 +118,51 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	if m.targetLine > 0 && msg.Result.Error == nil {
 		m.rendered = false
 		m.scroll = m.targetLine - 1
+	} else if m.hasPendingScroll {
+		m.scroll = m.pendingScroll
 	}
+	m.hasPendingScroll = false
 	m.clampScroll()
 	return true
+}
+
+// Arm shows the loading placeholder for a restored tab without issuing a load.
+func (m *Model) Arm(modelID int, relPath string, epoch uint64) {
+	m.modelID = modelID
+	m.epoch = epoch
+	m.path = relPath
+	m.loading = true
+}
+
+// NeedsLoad reports whether this model has never been asked to Load.
+func (m *Model) NeedsLoad() bool { return m.requestGeneration == 0 }
+
+// ScrollOffset is the current (or still-pending restore) viewport offset.
+func (m *Model) ScrollOffset() int {
+	if m.hasPendingScroll {
+		return m.pendingScroll
+	}
+	return m.scroll
+}
+
+// SetPendingScroll remembers an offset to apply after the next successful load.
+func (m *Model) SetPendingScroll(offset int) {
+	m.pendingScroll = max(offset, 0)
+	m.hasPendingScroll = true
+}
+
+// ApplyLine jumps to line (1-based) and forces raw mode so the line is visible.
+func (m *Model) ApplyLine(line int) {
+	if line <= 0 {
+		return
+	}
+	m.targetLine = line
+	m.rendered = false
+	m.hasPendingScroll = false
+	if !m.loading {
+		m.scroll = line - 1
+		m.clampScroll()
+	}
 }
 
 // SetSize sets the content box dimensions. A width change invalidates rendered
@@ -139,7 +185,7 @@ func (m *Model) View() string {
 		return ""
 	}
 
-	lines := m.lines()
+	lines := m.displayLines()
 	rows := make([]string, m.height)
 	for i := range rows {
 		lineIndex := m.scroll + i
@@ -195,8 +241,35 @@ func (m *Model) SetRendered(rendered bool) {
 	m.clampScroll()
 }
 
+// Wrap reports whether long lines wrap instead of truncating.
+func (m *Model) Wrap() bool { return m.wrap }
+
+// SetWrap restores the persisted wrap flag.
+func (m *Model) SetWrap(wrap bool) {
+	m.wrap = wrap
+	m.clampScroll()
+}
+
+// ToggleWrap flips line wrapping.
+func (m *Model) ToggleWrap() {
+	m.wrap = !m.wrap
+	m.clampScroll()
+}
+
 // Title returns the document's relative path.
 func (m *Model) Title() string { return m.path }
+
+func (m *Model) displayLines() []string {
+	src := m.lines()
+	if !m.wrap || m.width <= 0 {
+		return src
+	}
+	out := make([]string, 0, len(src))
+	for _, line := range src {
+		out = append(out, wrapLine(line, m.width)...)
+	}
+	return out
+}
 
 func (m *Model) lines() []string {
 	if m.loading {
@@ -240,7 +313,7 @@ func (m *Model) invalidateRender() {
 }
 
 func (m *Model) maxScroll() int {
-	return max(len(m.lines())-m.height, 0)
+	return max(len(m.displayLines())-m.height, 0)
 }
 
 func (m *Model) clampScroll() {

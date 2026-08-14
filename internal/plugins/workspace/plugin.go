@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -121,8 +122,7 @@ const (
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
 	regionDocPane          = "doc-pane"
-	regionDocMode          = "doc-mode"
-	regionDocClose         = "doc-close"
+	regionDocTab           = "doc-tab"
 	regionIssuePane        = "issue-pane"
 	regionIssueClose       = "issue-close"
 	regionPaneTreeDivider  = "pane-tree-divider"
@@ -217,6 +217,14 @@ type Plugin struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneRestoreCmd  tea.Cmd
+	// paneLayoutSurface is the surface the live tree currently represents.
+	// Empty until a restore or save binds it, so an init terminal is not
+	// written onto the default selection.
+	paneLayoutSurface string
+	// hiddenPaneLayout is the last encoded split+tabs for the current surface
+	// when the pane is hidden (q). Last-x forgets it. Restoring an Open
+	// surface clears it.
+	hiddenPaneLayout *state.PaneLayoutJSON
 	// paneSizeCmds holds what a leaf's SetSize answered during a render until
 	// the next update can dispatch it. A render has no runtime to hand a command
 	// to, and dropping one would swallow the exact signal the content contract
@@ -224,6 +232,8 @@ type Plugin struct {
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
 	issues       map[int]*issuePane
+	// docInfo is the file-info modal over a workspace document tab.
+	docInfo *docview.Info
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -627,22 +637,17 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 // selection that arrived from the global browser, so an arriving destination is
 // indistinguishable from one the user picked here.
 //
-// Doc panes belong to the selected terminal surface root. Landing on the item
-// that owns an open document keeps it — including the one restoreSelectionState
-// just rebuilt from the persisted PaneLayout. Landing on any other item in the
-// project collapses the doc subtree through resetDocPanesForSelection, exactly
-// as moving the cursor locally does, and persists the collapsed layout so a
-// document cannot come back attached to the wrong workspace.
+// selectTopShellAt / selectWorktreeAt already wrote the previous surface and
+// restored the destination. resetDocPanesForSelection is a safety net for a
+// tree that still belongs to someone else. The pending load stays unless that
+// reset actually closed the restored leaves.
 //
 // The rule lives here on purpose: no global code path reads, rewrites, or
 // prunes a project's pane layout. It hands over an identity and nothing else.
 func (p *Plugin) finishNavigatedSelection() {
-	if !p.resetDocPanesForSelection() {
-		return
+	if p.resetDocPanesForSelection() {
+		p.paneRestoreCmd = nil
 	}
-	// The restored layout described the workspace we just navigated away from,
-	// so its pending document load has nothing left to fill.
-	p.paneRestoreCmd = nil
 	p.saveSelectionState()
 }
 
@@ -673,8 +678,11 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneNextID = 1
 	p.paneDragSplitID = 0
 	p.paneRestoreCmd = nil
+	p.paneLayoutSurface = ""
+	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
@@ -782,7 +790,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("m", "render", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("w", "toggle-wrap", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("I", "info", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("ctrl+r", "reveal", "workspace-doc")
+		ctx.Keymap.RegisterPluginBinding("Y", "yank-path", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-doc")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-doc")
@@ -793,6 +808,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("enter", "open-item", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-issue")
 	}
 
 	// Load saved sidebar width
@@ -972,14 +990,22 @@ func (p *Plugin) saveSelectionState() {
 	}
 	// A disabled feature must not consume or overwrite its dormant state. The
 	// nil paneRoot is the Init-time feature boundary and preserves PaneLayout
-	// verbatim through ordinary selection saves.
+	// and PaneLayouts verbatim through ordinary selection saves.
 	if p.paneRoot != nil {
-		wtState.PaneLayout = p.persistedPaneLayout()
+		state.MigratePaneLayouts(&wtState)
+		if layout := p.persistedPaneLayout(); layout != nil && layout.Surface != "" {
+			if wtState.PaneLayouts == nil {
+				wtState.PaneLayouts = make(map[string]*state.PaneLayoutJSON)
+			}
+			wtState.PaneLayouts[layout.Surface] = layout
+			p.paneLayoutSurface = layout.Surface
+		}
+		wtState.PaneLayout = nil
 	}
 
 	// td-f88fdd: Shell display names now persisted in shells.json manifest
 	// Only save selection state (which worktree/shell is selected)
-	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" || wtState.PaneLayout != nil {
+	if wtState.WorkspaceName != "" || wtState.ShellTmuxName != "" || wtState.PaneLayout != nil || len(wtState.PaneLayouts) > 0 {
 		_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, wtState)
 	}
 }
@@ -1003,19 +1029,15 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.ShellTmuxName != "" {
 		for i, shell := range p.shells {
 			if shell.TmuxName == wtState.ShellTmuxName {
-				p.selectTopShellAt(i)
-				if p.paneRoot != nil {
-					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
-				}
+				p.applyTopShellSelection(i)
+				p.restoreIncomingPaneLayoutHonoringOpen()
 				p.saveSelectionState()
 				return true
 			}
 		}
 		if parent, shell := p.findNestedShell(wtState.ShellTmuxName); shell != nil {
-			p.selectNestedShell(parent, shell.TmuxName)
-			if p.paneRoot != nil {
-				p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
-			}
+			p.applyNestedShellSelection(parent, shell.TmuxName)
+			p.restoreIncomingPaneLayoutHonoringOpen()
 			p.saveSelectionState()
 			return true
 		}
@@ -1026,10 +1048,8 @@ func (p *Plugin) restoreSelectionState() bool {
 	if wtState.WorkspaceName != "" {
 		for i, wt := range p.worktrees {
 			if wt.Name == wtState.WorkspaceName {
-				p.selectWorktreeAt(i)
-				if p.paneRoot != nil {
-					p.paneRestoreCmd = p.restorePaneLayout(wtState.PaneLayout)
-				}
+				p.applyWorktreeSelection(i)
+				p.restoreIncomingPaneLayoutHonoringOpen()
 				p.saveSelectionState()
 				return true
 			}
@@ -1065,22 +1085,94 @@ func (p *Plugin) selectedWorktree() *Worktree {
 	return p.worktrees[p.selectedIdx]
 }
 
-func (p *Plugin) selectTopShellAt(idx int) {
+func (p *Plugin) applyTopShellSelection(idx int) {
 	p.shellSelected = true
 	p.selectedShellIdx = idx
 	p.selectedNestedTmux = ""
 }
 
-func (p *Plugin) selectWorktreeAt(idx int) {
+func (p *Plugin) applyWorktreeSelection(idx int) {
 	p.shellSelected = false
 	p.selectedIdx = idx
 	p.selectedNestedTmux = ""
 }
 
-func (p *Plugin) selectNestedShell(parentIdx int, tmuxName string) {
+func (p *Plugin) applyNestedShellSelection(parentIdx int, tmuxName string) {
 	p.shellSelected = false
 	p.selectedIdx = parentIdx
 	p.selectedNestedTmux = tmuxName
+}
+
+func (p *Plugin) selectTopShellAt(idx int) {
+	p.changeSelectedSurface(func() { p.applyTopShellSelection(idx) })
+}
+
+func (p *Plugin) selectWorktreeAt(idx int) {
+	p.changeSelectedSurface(func() { p.applyWorktreeSelection(idx) })
+}
+
+func (p *Plugin) selectNestedShell(parentIdx int, tmuxName string) {
+	p.changeSelectedSurface(func() { p.applyNestedShellSelection(parentIdx, tmuxName) })
+}
+
+// changeSelectedSurface captures the outgoing identity, applies the index
+// change, encodes the still-live tree under that captured key, then restores
+// the incoming surface. The store key must stay the captured one: using
+// selectedTerminalSurface after apply would write the outgoing tree onto B,
+// or the safety net would write terminal-only onto B.
+func (p *Plugin) changeSelectedSurface(apply func()) {
+	oldRoot, oldSurface, oldOK := p.selectedTerminalSurface()
+	apply()
+	if p.paneRoot == nil {
+		return
+	}
+	_, newSurface, newOK := p.selectedTerminalSurface()
+	if oldOK && newOK && oldSurface == newSurface {
+		return
+	}
+	if oldOK && p.liveTreeRepresents(oldSurface) {
+		p.storeLivePaneLayout(oldRoot, oldSurface)
+	}
+	p.restoreIncomingPaneLayout()
+}
+
+// retargetAfterSelectedSurfaceGone jumps without storing. The outgoing
+// surface no longer exists; a store through persistedPaneLayout would write
+// terminal-only onto the incoming key and wipe that surface's set.
+func (p *Plugin) retargetAfterSelectedSurfaceGone(apply func()) {
+	apply()
+	if p.paneRoot == nil {
+		return
+	}
+	p.restoreIncomingPaneLayoutHonoringOpen()
+}
+
+func (p *Plugin) retargetAfterKilledTopShell(removedIdx int) {
+	if !p.shellSelected {
+		return
+	}
+	if removedIdx < p.selectedShellIdx {
+		p.selectedShellIdx--
+		return
+	}
+	if removedIdx != p.selectedShellIdx && p.selectedShellIdx < len(p.shells) {
+		return
+	}
+	if len(p.shells) > 0 {
+		dest := p.selectedShellIdx
+		if dest >= len(p.shells) {
+			dest = len(p.shells) - 1
+		}
+		p.retargetAfterSelectedSurfaceGone(func() { p.applyTopShellSelection(dest) })
+		return
+	}
+	if len(p.worktrees) > 0 {
+		p.retargetAfterSelectedSurfaceGone(func() { p.applyWorktreeSelection(0) })
+		return
+	}
+	p.shellSelected = false
+	p.selectedShellIdx = 0
+	p.selectedIdx = -1
 }
 
 func (p *Plugin) selectingShell() bool {
@@ -1135,7 +1227,11 @@ func (p *Plugin) rebuildNestedShells(defs []ShellDefinition, paneID func(string)
 	p.nestedByWorkDir = nested
 	if p.selectedNestedTmux != "" {
 		if _, shell := p.findNestedShell(p.selectedNestedTmux); shell == nil {
+			// The name is gone; selectedTerminalSurface already reports the
+			// parent. Restore that surface instead of writing the nested
+			// tree onto it.
 			p.selectedNestedTmux = ""
+			p.restoreIncomingPaneLayoutHonoringOpen()
 		}
 	}
 }
@@ -1161,6 +1257,12 @@ func (p *Plugin) dropNestedShell(tmuxName string) bool {
 		_ = p.shellManifest.RemoveShell(tmuxName)
 	}
 	dir := filepath.Clean(p.worktrees[parent].Path)
+	// Jump to the parent while the nested identity is still resolvable so
+	// changeSelectedSurface can store the nested set instead of treating
+	// old and new as the same worktree.
+	if p.selectedNestedTmux == tmuxName {
+		p.selectWorktreeAt(parent)
+	}
 	remaining := make([]*ShellSession, 0, len(p.nestedByWorkDir[dir]))
 	for _, candidate := range p.nestedByWorkDir[dir] {
 		if candidate.TmuxName != tmuxName {
@@ -1171,11 +1273,6 @@ func (p *Plugin) dropNestedShell(tmuxName string) bool {
 		delete(p.nestedByWorkDir, dir)
 	} else {
 		p.nestedByWorkDir[dir] = remaining
-	}
-	// The cursor lands on the worktree the row hung under, which is the nearest
-	// thing left to it.
-	if p.selectedNestedTmux == tmuxName {
-		p.selectWorktreeAt(parent)
 	}
 	return true
 }
@@ -1844,7 +1941,11 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 	if p.resetDocPanesForSelection() {
 		// The selection owns the terminal root. Persist the collapsed terminal
 		// immediately so an old worktree's document cannot return after restart.
+		p.paneRestoreCmd = nil
 		p.saveSelectionState()
+	}
+	if cmd := p.takePaneRestoreCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
 	// Resize selected pane to match preview width so capture output is correct

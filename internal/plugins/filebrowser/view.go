@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -1325,18 +1326,8 @@ func truncatePath(path string, maxWidth int) string {
 	return "..." + string(runes[len(runes)-maxWidth+3:])
 }
 
-// formatSize formats a file size in human-readable form.
 func formatSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%dB", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	return docview.FormatSize(bytes)
 }
 
 // renderQuickOpenModalContent renders the quick open modal box content.

@@ -595,6 +595,13 @@ func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
 			A: &PaneLayoutJSON{Kind: "terminal"},
 			B: &PaneLayoutJSON{Kind: "doc", Active: 0, Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
 		}},
+		PaneLayouts: map[string]*PaneLayoutJSON{
+			"shell:shell-1": {Root: "/repo", Surface: "shell:shell-1", Open: true, Split: &PaneSplitJSON{
+				Axis: "cols", Ratio: 63,
+				A: &PaneLayoutJSON{Kind: "terminal"},
+				B: &PaneLayoutJSON{Kind: "doc", Active: 0, Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
+			}},
+		},
 	}}}
 	encoded, err := json.Marshal(want)
 	if err != nil {
@@ -609,10 +616,54 @@ func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
 		layout.Split.B == nil || len(layout.Split.B.Tabs) != 1 || layout.Split.B.Tabs[0].Mode != "raw" {
 		t.Fatalf("pane layout round trip = %#v", layout)
 	}
+	mapped := got.Workspace["/repo"].PaneLayouts["shell:shell-1"]
+	if mapped == nil || !mapped.Open || mapped.Split == nil || mapped.Split.Ratio != 63 ||
+		mapped.Split.B == nil || len(mapped.Split.B.Tabs) != 1 || mapped.Split.B.Tabs[0].Path != "README.md" {
+		t.Fatalf("pane layouts map round trip = %#v", got.Workspace["/repo"].PaneLayouts)
+	}
 
 	var malformed State
 	if err := json.Unmarshal([]byte(`{"workspace":{"/repo":{"paneLayout":{"split":{"axis":7}}}}}`), &malformed); err == nil {
 		t.Fatal("malformed pane layout JSON unexpectedly decoded")
+	}
+}
+
+func TestMigratePaneLayoutsCopiesLegacySlot(t *testing.T) {
+	legacy := &PaneLayoutJSON{Root: "/repo", Surface: "shell:A", Kind: "terminal"}
+	s := WorkspaceState{PaneLayout: legacy}
+	MigratePaneLayouts(&s)
+	if got := s.PaneLayoutFor("shell:A"); got != legacy {
+		t.Fatalf("migrated map = %#v, want the legacy record at shell:A", s.PaneLayouts)
+	}
+	if s.PaneLayout != legacy {
+		t.Fatal("migrate cleared the legacy field")
+	}
+
+	kept := &PaneLayoutJSON{Root: "/repo", Surface: "shell:B", Kind: "doc"}
+	s = WorkspaceState{
+		PaneLayout:  legacy,
+		PaneLayouts: map[string]*PaneLayoutJSON{"shell:B": kept},
+	}
+	MigratePaneLayouts(&s)
+	if s.PaneLayoutFor("shell:A") != nil || s.PaneLayoutFor("shell:B") != kept {
+		t.Fatalf("non-empty map was overwritten: %#v", s.PaneLayouts)
+	}
+
+	emptySurface := WorkspaceState{PaneLayout: &PaneLayoutJSON{Root: "/repo", Kind: "terminal"}}
+	MigratePaneLayouts(&emptySurface)
+	if emptySurface.PaneLayouts != nil {
+		t.Fatalf("empty-surface legacy was keyed: %#v", emptySurface.PaneLayouts)
+	}
+
+	legacySplit := &PaneLayoutJSON{Root: "/repo", Surface: "shell:C", Split: &PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &PaneLayoutJSON{Kind: "terminal"},
+		B: &PaneLayoutJSON{Kind: "doc", Tabs: []PaneDocTabJSON{{Path: "README.md"}}},
+	}}
+	s = WorkspaceState{PaneLayout: legacySplit}
+	MigratePaneLayouts(&s)
+	if !legacySplit.Open || !PaneLayoutOpen(s.PaneLayoutFor("shell:C")) {
+		t.Fatal("legacy split omitted Open was not treated as open")
 	}
 }
 

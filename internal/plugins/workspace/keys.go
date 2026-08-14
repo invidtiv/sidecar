@@ -569,7 +569,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
 	if msg.String() == "tab" || msg.String() == "shift+tab" {
-		if _, leaf := p.activeDocPane(); leaf != nil {
+		if len(p.contentLeafIDs()) > 0 {
 			p.cycleDocumentFocus(msg.String() == "shift+tab")
 			return nil
 		}

@@ -86,7 +86,7 @@ func TestZoomedLeafOwnsBothTheBoxAndThePixels(t *testing.T) {
 		t.Fatalf("doc-focused zoom gave the terminal box %+v, want none", box)
 	}
 	rendered, ok := p.renderDocumentSplit(content.W, content.H)
-	if !ok || !strings.Contains(rendered, doc.view.Title()) {
+	if !ok || !strings.Contains(rendered, doc.view().Title()) {
 		t.Fatalf("doc-focused zoom rendered ok=%v, want the document full-box", ok)
 	}
 

@@ -1,13 +1,10 @@
 package filebrowser
 
 import (
-	"os"
 	"path/filepath"
-	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/modal"
-	"github.com/marcus/sidecar/internal/styles"
 )
 
 // renderInfoModalContent renders the file info modal.
@@ -65,67 +62,18 @@ func (p *Plugin) infoTargetPath() string {
 func (p *Plugin) infoModalDetailsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		path := p.infoTargetPath()
-		if path == "" {
-			return modal.RenderedSection{Content: styles.Muted.Render("No file selected")}
+		root := ""
+		if p.ctx != nil {
+			root = p.ctx.WorkDir
 		}
-
-		fullPath := filepath.Join(p.ctx.WorkDir, path)
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			return modal.RenderedSection{Content: styles.StatusDeleted.Render("Error reading file: " + err.Error())}
-		}
-
-		isDir := info.IsDir()
+		details := docview.Inspect(root, path)
 		if p.activePane != PanePreview {
-			if node := p.tree.GetNode(p.treeCursor); node != nil {
-				isDir = node.IsDir
+			if node := p.tree.GetNode(p.treeCursor); node != nil && node.IsDir {
+				details.Kind = "Directory"
+				details.Size = "--"
+				details.IsDir = true
 			}
 		}
-
-		name := info.Name()
-		kind := "File"
-		if isDir {
-			kind = "Directory"
-		} else {
-			ext := filepath.Ext(name)
-			if ext != "" && len(ext) > 1 {
-				kind = strings.ToUpper(ext[1:]) + " File"
-			}
-		}
-
-		size := formatSize(info.Size())
-		if isDir {
-			size = "--"
-		}
-
-		modTime := info.ModTime().Format("Jan 2, 2006 at 15:04")
-		perms := info.Mode().String()
-
-		labelStyle := styles.Muted.Width(12).Align(lipgloss.Right).MarginRight(2)
-		valueStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary)
-
-		fields := []struct{ label, value string }{
-			{"Kind:", kind},
-			{"Size:", size},
-			{"Where:", filepath.Dir(path)},
-			{"Modified:", modTime},
-			{"Permissions:", perms},
-			{"Git Status:", p.gitStatus},
-			{"Commit:", p.gitLastCommit},
-		}
-
-		var sb strings.Builder
-		for i, f := range fields {
-			line := lipgloss.JoinHorizontal(lipgloss.Top,
-				labelStyle.Render(f.label),
-				valueStyle.Render(f.value),
-			)
-			sb.WriteString(line)
-			if i < len(fields)-1 {
-				sb.WriteString("\n")
-			}
-		}
-
-		return modal.RenderedSection{Content: sb.String()}
+		return modal.RenderedSection{Content: docview.RenderInfo(details, p.gitStatus, p.gitLastCommit)}
 	}, nil)
 }

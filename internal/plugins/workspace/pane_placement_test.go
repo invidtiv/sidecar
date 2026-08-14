@@ -441,7 +441,7 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 		t.Fatalf("second td click = leaf %d showing %q, want leaf %d retargeted",
 			retargetedLeaf.ID, retargeted.view.IssueID(), leaf.ID)
 	}
-	if doc, _ := p.activeDocPane(); doc == nil || doc.view.Title() != "clicked.md" {
+	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "clicked.md" {
 		t.Fatalf("the retarget disturbed the document leaf: %#v", doc)
 	}
 }

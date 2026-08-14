@@ -3,29 +3,44 @@ package workspace
 import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
 	if p.viewMode == ViewModeList && p.docFocused() {
-		renderName := "Raw"
-		if doc, _ := p.activeDocPane(); doc != nil && !doc.view.Rendered() {
-			renderName = "Render"
+		cmds := []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Hide document pane", Context: "workspace-doc", Priority: 1},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 4},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 5},
 		}
-		return []plugin.Command{
-			{ID: "close", Name: "Close", Description: "Close document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 2},
-			{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 3},
-			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 4},
-			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 5},
-			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 6},
-			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 7},
+		if doc, _ := p.activeDocPane(); doc != nil && doc.view() != nil && terminallink.Markdown(doc.view().Title()) {
+			renderName := "Raw"
+			if !doc.view().Rendered() {
+				renderName = "Render"
+			}
+			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 6})
 		}
+		cmds = append(cmds,
+			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 7},
+			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 8},
+			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 9},
+			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 10},
+			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 11},
+			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 12},
+			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 13},
+		)
+		return cmds
 	}
 	if p.viewMode == ViewModeList && p.issueFocused() {
 		return []plugin.Command{
-			{ID: "close", Name: "Close", Description: "Close issue pane", Context: "workspace-issue", Priority: 1},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 2},
+			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: "workspace-issue", Priority: 1},
+			{ID: "close", Name: "Close", Description: "Close issue pane", Context: "workspace-issue", Priority: 2},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 3},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 4},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 5},
 		}
 	}
 	switch p.viewMode {
@@ -451,5 +466,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
+	if p.docInfo != nil {
+		return true
+	}
 	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive
 }
