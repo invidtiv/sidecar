@@ -516,8 +516,12 @@ away), selection copy. Each is a viewer feature with tests against
 the model, then bindings in both hosts.
 
 **Phase 8 — Files hosts the viewer.**
-Delete the preview field pile and `filebrowser/tabs.go` state that
-the viewer now owns. Files `View` composes tree + viewer. Preview
+First extract the content-neutral tab group and strip described in
+[workspace-issue-pane-tabs.md](workspace-issue-pane-tabs.md), without waiting
+on Phase 7; Files, project/global document panes, and later issue panes all use
+that one foundation. The rest of this phase still follows Phase 7: delete the
+preview field pile and remaining `filebrowser/tabs.go` state that the viewer now
+owns. Files `View` composes tree + viewer. Preview
 tests that talked to plugin fields talk to the viewer. Rename
 `docview` → `fileview` in this slice so the import churn happens
 once, with both hosts already compiling against the grown API.
