@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  td-abc123: Extract the issue preview into a component                       │
+│                                                                              │
+│  [in_progress]  task  P1  3p                                                 │
+│  Parent: td-parent1                                                          │
+│  Labels: windowing, refactor                                                 │
+│                                                                              │
+│                                                                              │
+│    ## Why                                                                    │
+│                                                                              │
+│    The modal owns fetch and render today.                                    │
+│                                                                              │
+│    • move fetch                                                              │
+│    • move render                                                             │
+│                                                                              │
+│     Open in TD        Back        Close                                      │
+│   j/k  scroll   o  open   b  back   y  yank   Y  yank key   esc  close       │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯

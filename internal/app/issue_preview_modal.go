@@ -7,7 +7,7 @@ import (
 	"image/color"
 
 	"charm.land/lipgloss/v2"
-	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -281,28 +281,6 @@ func (m *Model) ensureIssuePreviewModal() {
 
 	data := m.issuePreviewData
 
-	// Build title
-	title := data.ID
-	if data.Title != "" {
-		title += ": " + data.Title
-	}
-
-	// Build status line
-	var metaParts []string
-	if data.Status != "" {
-		metaParts = append(metaParts, "["+data.Status+"]")
-	}
-	if data.Type != "" {
-		metaParts = append(metaParts, data.Type)
-	}
-	if data.Priority != "" {
-		metaParts = append(metaParts, data.Priority)
-	}
-	if data.Points > 0 {
-		metaParts = append(metaParts, fmt.Sprintf("%dp", data.Points))
-	}
-	statusLine := strings.Join(metaParts, "  ")
-
 	// Build fixed footer hint string
 	var hintBuf strings.Builder
 	hintBuf.WriteString(styles.KeyHint.Render("j/k"))
@@ -318,33 +296,27 @@ func (m *Model) ensureIssuePreviewModal() {
 	hintBuf.WriteString(styles.KeyHint.Render("esc"))
 	hintBuf.WriteString(styles.Muted.Render(" close"))
 
-	// Build modal
-	b := modal.New(title,
+	// Build modal — the issue's own rendering comes from the shared component;
+	// the modal owns only its chrome.
+	b := modal.New(issueview.Heading(data),
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
 		modal.WithCustomFooter(hintBuf.String()),
 	)
 
-	if statusLine != "" {
-		b = b.AddSection(modal.Text(statusLine))
-	}
-
-	if data.ParentID != "" {
-		b = b.AddSection(modal.Text("Parent: " + data.ParentID))
-	}
-
-	if len(data.Labels) > 0 {
-		b = b.AddSection(modal.Text("Labels: " + strings.Join(data.Labels, ", ")))
+	for _, line := range []string{
+		issueview.StatusLine(data),
+		issueview.ParentLine(data),
+		issueview.LabelsLine(data),
+	} {
+		if line != "" {
+			b = b.AddSection(modal.Text(line))
+		}
 	}
 
 	// Description — render as markdown, let modal scroll handle overflow
-	if data.Description != "" {
+	if desc := issueview.Description(nil, data, modalW-modal.ModalPadding); desc != "" {
 		b = b.AddSection(modal.Spacer())
-		desc := data.Description
-		if renderer, err := markdown.NewRenderer(); err == nil {
-			rendered := renderer.RenderContent(desc, modalW-modal.ModalPadding)
-			desc = strings.Join(rendered, "\n")
-		}
 		b = b.AddSection(modal.Text(desc))
 	}
 
