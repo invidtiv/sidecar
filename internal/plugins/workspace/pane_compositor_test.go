@@ -197,7 +197,7 @@ func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers
 			want.W = dividerHitWidth
 		} else {
 			want.Y--
-			want.H = dividerHitWidth
+			want.H = dividerHitWidth - 1
 		}
 		got, found := find(regionPaneTreeDivider, split.SplitID)
 		if !found {
@@ -417,9 +417,10 @@ func TestNestedDividerTargetsResolveToTheEnclosedSplit(t *testing.T) {
 			}
 		}
 	}
-	// Three levels of nesting is what makes the ordering testable at all: with
-	// none of the targets overlapping, any registration order would pass.
-	if contested < 3 {
+	// At least one nested overlap makes the ordering testable. Horizontal
+	// targets intentionally no longer reach into the lower leaf's header, so
+	// this asymmetric geometry has fewer contested cells than the old 3x3 rule.
+	if contested < 1 {
 		t.Fatalf("only %d divider targets overlap; the tree does not exercise the ordering", contested)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -298,7 +299,10 @@ const previewRegionKind = "global-preview"
 const (
 	workspacesSidebarRegion = "global-workspaces-sidebar"
 	workspacesDividerRegion = "global-workspaces-divider"
+	previewPaneDividerKind  = "global-preview-pane-divider"
 )
+
+type previewPaneDividerHit int
 
 func (m *Model) addSidebarRegion(x, width, height int) {
 	if width > 0 && height > 0 {
@@ -314,10 +318,34 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 }
 
 func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
-	termBox, _, _ := m.previewSecondaryLayout(box)
-	m.registerPreviewTabRegions(termBox)
+	if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
+		m.registerPreviewTabRegions(box)
+		return
+	}
+	termBox, ok := m.previewPaneBox(panelayout.Terminal, box)
+	if ok {
+		m.registerPreviewTabRegions(termBox)
+	}
 	m.registerPreviewDocRegions(box)
 	m.registerPreviewIssueRegions(box)
+	if layout, ok := m.layoutPreviewPanes(box); ok {
+		for _, divider := range layout.Dividers {
+			hit := divider.Box
+			if divider.Axis == panelayout.Columns {
+				hit.X--
+				hit.W = 3
+			} else {
+				hit.Y--
+				// Do not cover the lower leaf's header. Its issue close chip
+				// must remain clickable when the issue is below a document.
+				hit.H = 2
+			}
+			m.workspacesMouse.HitMap.AddRect(previewPaneDividerKind, hit.X, hit.Y, hit.W, hit.H, previewPaneDividerHit(divider.SplitID))
+		}
+	}
+	// Exact file-tab regions win the one cell where the widened divider reaches
+	// into the document header; the divider itself remains draggable.
+	m.registerPreviewDocTabRegions(box)
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -579,8 +607,27 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
 	}
+	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewPaneDividerKind {
+		split := panelayout.Find(m.preview.paneRoot, m.preview.paneDragSplitID)
+		box, ok := m.previewBox()
+		if !ok || split == nil || split.Split == nil {
+			return nil
+		}
+		ratio := m.workspacesMouse.DragStartValue()
+		if split.Split.Axis == panelayout.Rows && box.H > 0 {
+			ratio += action.DragDY * 100 / box.H
+		} else if split.Split.Axis == panelayout.Columns && box.W > 0 {
+			ratio += action.DragDX * 100 / box.W
+		}
+		panelayout.SetRatio(m.preview.paneRoot, m.preview.paneDragSplitID, ratio)
+		return m.syncTerminalGeometry()
+	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
+		return m.syncTerminalGeometry()
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewPaneDividerKind {
+		m.preview.paneDragSplitID = 0
 		return m.syncTerminalGeometry()
 	}
 	// Whether a notch is placed by region or stays with the pointer is the
@@ -651,6 +698,16 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if _, ok := action.Region.Data.(previewGitHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.OpenSelectedInGit()
+		}
+		return nil
+	}
+	if hit, ok := action.Region.Data.(previewPaneDividerHit); ok {
+		if action.Type == mouse.ActionClick {
+			split := panelayout.Find(m.preview.paneRoot, int(hit))
+			if split != nil && split.Split != nil {
+				m.preview.paneDragSplitID = int(hit)
+				m.workspacesMouse.StartDrag(action.X, action.Y, previewPaneDividerKind, split.Split.Ratio)
+			}
 		}
 		return nil
 	}

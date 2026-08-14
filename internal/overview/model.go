@@ -1059,7 +1059,7 @@ func (m *Model) Commands() []struct{ Key, Name string } {
 	if m.RenameShellOpen() {
 		return []struct{ Key, Name string }{{"enter", "Rename"}, {"esc", "Cancel"}}
 	}
-	if m.preview.doc != nil && m.preview.doc.focused && !m.PreviewInteractive() {
+	if m.PreviewFocused() && m.preview.doc != nil && m.preview.doc.focused && !m.PreviewInteractive() {
 		return []struct{ Key, Name string }{
 			{"q", "Close"}, {"x", "Tab×"}, {"{", "Tab←"}, {"}", "Tab→"}, {"m", "Raw"},
 		}

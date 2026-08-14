@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -234,7 +235,7 @@ func TestGlobalIssuePreviewRawChildClickUsesRenderedCoordinates(t *testing.T) {
 	}
 }
 
-func TestGlobalIssuePreviewHasSharedPaddingAndOneSecondarySlot(t *testing.T) {
+func TestGlobalIssueAndDocumentShareTheProjectPanePlacement(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, m.openPreviewIssue("td-196c42"))
@@ -252,13 +253,137 @@ func TestGlobalIssuePreviewHasSharedPaddingAndOneSecondarySlot(t *testing.T) {
 
 	action := previewNeedleAction(t, m, "README.md")
 	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, action)))
-	if m.preview.doc == nil || m.preview.issue != nil {
-		t.Fatalf("opening doc did not replace issue: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
+	if m.preview.doc == nil || m.preview.issue == nil {
+		t.Fatalf("opening doc did not preserve issue: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
 	}
+	root := m.preview.paneRoot
+	if root == nil || root.Split == nil || root.Split.Axis != panelayout.Columns || root.Split.A.Kind != panelayout.Terminal ||
+		root.Split.B.Split == nil || root.Split.B.Split.Axis != panelayout.Rows ||
+		root.Split.B.Split.A.Kind != panelayout.Issue || root.Split.B.Split.B.Kind != panelayout.Document {
+		t.Fatalf("global pane tree = %#v, want terminal beside stacked issue/document", root)
+	}
+}
+
+func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	root := m.catalog["a"].Path
+	longDoc := strings.Repeat("line\n", 80)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(longDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
-	if m.preview.issue == nil || m.preview.doc != nil {
-		t.Fatalf("opening issue did not replace doc: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
+	if m.preview.doc == nil || m.preview.issue == nil {
+		t.Fatalf("stack did not open: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
 	}
+	m.preview.doc.view().SetSize(30, 4)
+	m.preview.doc.view().Scroll(7)
+	data := *m.preview.issue.view.Data()
+	data.Description = strings.Repeat("issue body\n\n", 40)
+	m.preview.issue.view.SetData(&data)
+	m.preview.issue.view.SetSize(30, 4)
+	m.preview.issue.view.Scroll(5)
+	m.WorkspacesView(previewWide, previewTall)
+	box, hasBox := m.previewBox()
+	if !hasBox {
+		t.Fatal("preview box missing")
+	}
+	layout, ok := m.layoutPreviewPanes(box)
+	if !ok {
+		t.Fatal("stacked layout did not fit")
+	}
+	var divider panelayout.Divider
+	for _, candidate := range layout.Dividers {
+		if candidate.Axis == panelayout.Rows {
+			divider = candidate
+			break
+		}
+	}
+	if divider.SplitID == 0 {
+		t.Fatalf("no row divider in %+v", layout.Dividers)
+	}
+	before := panelayout.Find(m.preview.paneRoot, divider.SplitID).Split.Ratio
+	x, y := divider.Box.X+divider.Box.W/2, divider.Box.Y
+	m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.WorkspacesMouse(tea.MouseMotionMsg{X: x, Y: y + 3, Button: tea.MouseLeft})
+	after := panelayout.Find(m.preview.paneRoot, divider.SplitID).Split.Ratio
+	if after == before {
+		t.Fatalf("row divider ratio stayed %d", before)
+	}
+	m.WorkspacesMouse(tea.MouseReleaseMsg{X: x, Y: y + 3, Button: tea.MouseLeft})
+	m.WorkspacesView(previewWide, previewTall)
+	docScroll, issueScroll := m.preview.doc.view().ScrollOffset(), m.preview.issue.view.ScrollOffset()
+
+	result := m.results["sidecar"]
+	other := result.Workspaces[0]
+	other.ID, other.Name = "b", "beta"
+	result.Workspaces = append(result.Workspaces, other)
+	m.results["sidecar"] = result
+	m.syncBoard()
+	m.workspaces.SelectID("b")
+	run(t, m, m.previewSync())
+	if m.preview.doc != nil || m.preview.issue != nil {
+		t.Fatalf("workspace b inherited a's panes: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
+	}
+	m.workspaces.SelectID("a")
+	run(t, m, m.previewSync())
+	m.WorkspacesView(previewWide, previewTall)
+	if m.preview.doc == nil || m.preview.issue == nil ||
+		m.preview.doc.view().ScrollOffset() != docScroll || m.preview.issue.view.ScrollOffset() != issueScroll {
+		t.Fatalf("restored panes/scroll = doc %#v offset %d, issue %#v offset %d; want %d/%d",
+			m.preview.doc, scrollOfPreviewDoc(m.preview.doc), m.preview.issue, scrollOfPreviewIssue(m.preview.issue), docScroll, issueScroll)
+	}
+	restored := panelayout.Find(m.preview.paneRoot, divider.SplitID)
+	if restored == nil || restored.Split == nil || restored.Split.Ratio != after {
+		t.Fatalf("restored divider = %#v, want ratio %d", restored, after)
+	}
+}
+
+func TestGlobalStackClicksKeepInputAndTreeFocusTogether(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	m.WorkspacesView(previewWide, previewTall)
+
+	x, y, ok := visualPreviewDocTabPoint(t, m, 0)
+	if !ok {
+		t.Fatal("document tab is not drawn")
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
+	docLeaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document)
+	if docLeaf == nil || m.preview.paneFocus != docLeaf.ID || !m.preview.doc.focused || m.preview.issue.focused {
+		t.Fatalf("doc click focus = tree %d doc %v issue %v", m.preview.paneFocus, m.preview.doc.focused, m.preview.issue.focused)
+	}
+
+	m.WorkspacesView(previewWide, previewTall)
+	var issueBody mouse.Region
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, _ := region.Data.(string); kind == previewIssueRegionKind {
+			issueBody = region
+			break
+		}
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: issueBody.Rect.X + 1, Y: issueBody.Rect.Y + 2, Button: tea.MouseLeft}))
+	issueLeaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue)
+	if issueLeaf == nil || m.preview.paneFocus != issueLeaf.ID || m.preview.doc.focused || !m.preview.issue.focused {
+		t.Fatalf("issue click focus = tree %d doc %v issue %v", m.preview.paneFocus, m.preview.doc.focused, m.preview.issue.focused)
+	}
+}
+
+func scrollOfPreviewDoc(doc *previewDoc) int {
+	if doc == nil || doc.view() == nil {
+		return -1
+	}
+	return doc.view().ScrollOffset()
+}
+
+func scrollOfPreviewIssue(issue *previewIssue) int {
+	if issue == nil || issue.view == nil {
+		return -1
+	}
+	return issue.view.ScrollOffset()
 }
 
 func TestGlobalIssuePreviewWheelKeyboardAndCloseChip(t *testing.T) {
@@ -312,6 +437,22 @@ func TestGlobalIssuePreviewWheelKeyboardAndCloseChip(t *testing.T) {
 	if m.preview.issue != nil {
 		t.Fatal("close chip left issue open")
 	}
+
+	// When the issue is the lower half of a file/issue stack, the widened
+	// divider must not cover its header or close chip.
+	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, m.openPreviewIssue("td-196c42"))
+	m.WorkspacesView(previewWide, previewTall)
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, _ := region.Data.(string); kind == previewIssueCloseKind {
+			resolved := m.workspacesMouse.HitMap.Test(region.Rect.X, region.Rect.Y)
+			if resolved == nil || resolved.ID != region.ID {
+				t.Fatalf("lower issue close resolves to %#v, want %#v", resolved, region)
+			}
+			return
+		}
+	}
+	t.Fatal("lower issue close chip was not registered")
 }
 
 func TestGlobalIssuePreviewDoesNotStealOverlayKeys(t *testing.T) {
@@ -514,15 +655,81 @@ func TestGlobalPreviewDocQClosesAndDropsStaleLoad(t *testing.T) {
 	if m.preview.doc == nil {
 		t.Fatal("doc did not open")
 	}
-	generation := m.preview.generation
 	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
-	if !handled || m.preview.doc != nil || m.PreviewFocused() || m.preview.generation == generation {
-		t.Fatalf("q handled=%v doc=%#v focused=%v generation %d→%d", handled, m.preview.doc, m.PreviewFocused(), generation, m.preview.generation)
+	if !handled || m.preview.doc != nil || m.PreviewFocused() {
+		t.Fatalf("q handled=%v doc=%#v focused=%v", handled, m.preview.doc, m.PreviewFocused())
 	}
 	run(t, m, cmd)
 	run(t, m, first)
 	if m.preview.doc != nil {
 		t.Fatal("stale load after q restored the document")
+	}
+}
+
+func TestGlobalPreviewReopenRejectsClosedModelResults(t *testing.T) {
+	t.Run("document", func(t *testing.T) {
+		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+		span := mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))
+		oldLoad := m.openPreviewDoc(span)
+		oldEpoch := m.preview.doc.epoch
+		m.closePreviewDoc()
+		newLoad := m.openPreviewDoc(span)
+		if m.preview.doc.epoch == oldEpoch {
+			t.Fatalf("reopened document reused epoch %d", oldEpoch)
+		}
+		m.preview.doc.view().SetSize(40, 8)
+		run(t, m, oldLoad)
+		if !strings.Contains(ansi.Strip(m.preview.doc.view().View()), "Loading document") {
+			t.Fatal("closed document result completed the reopened model")
+		}
+		run(t, m, newLoad)
+		if strings.Contains(ansi.Strip(m.preview.doc.view().View()), "Loading document") {
+			t.Fatal("reopened document's own result was rejected")
+		}
+	})
+
+	t.Run("issue", func(t *testing.T) {
+		stubPreviewTd(t)
+		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+		oldLoad := m.openPreviewIssue("td-196c42")
+		oldEpoch := m.preview.issue.epoch
+		m.closePreviewIssue()
+		newLoad := m.openPreviewIssue("td-196c42")
+		if m.preview.issue.epoch == oldEpoch {
+			t.Fatalf("reopened issue reused epoch %d", oldEpoch)
+		}
+		run(t, m, oldLoad)
+		if !m.preview.issue.view.Loading() {
+			t.Fatal("closed issue result completed the reopened model")
+		}
+		run(t, m, newLoad)
+		if m.preview.issue.view.Loading() {
+			t.Fatal("reopened issue's own result was rejected")
+		}
+	})
+}
+
+func TestGlobalPreviewLoadFinishesWhileItsWorkspaceIsCached(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	load := m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
+	if load == nil || m.preview.doc == nil {
+		t.Fatal("document did not begin loading")
+	}
+	result := m.results["sidecar"]
+	other := result.Workspaces[0]
+	other.ID, other.Name = "b", "beta"
+	result.Workspaces = append(result.Workspaces, other)
+	m.results["sidecar"] = result
+	m.syncBoard()
+	m.workspaces.SelectID("b")
+	run(t, m, m.previewSync())
+	run(t, m, load)
+	m.workspaces.SelectID("a")
+	run(t, m, m.previewSync())
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if m.preview.doc == nil || m.preview.doc.view() == nil ||
+		!strings.Contains(view, "Hello from preview") {
+		t.Fatalf("cached document load did not finish: %#v\n%s", m.preview.doc, view)
 	}
 }
 
@@ -532,7 +739,7 @@ func visualPreviewDocTabPoint(t *testing.T, m *Model, index int) (x, y int, ok b
 	if !hasBox || m.preview.doc == nil {
 		return 0, 0, false
 	}
-	_, docBox, split := m.previewSecondaryLayout(box)
+	docBox, split := m.previewPaneBox(panelayout.Document, box)
 	if !split {
 		return 0, 0, false
 	}
@@ -563,6 +770,12 @@ func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
 	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
 	if strings.Contains(view, "Hello from preview") {
 		t.Fatalf("diff tab rendered the doc body: %q", view)
+	}
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		kind, _ := region.Data.(string)
+		if kind == previewDocRegionKind || kind == previewIssueRegionKind || kind == previewPaneDividerKind {
+			t.Fatalf("diff tab retained hidden Output region %#v", region)
+		}
 	}
 }
 

@@ -128,6 +128,35 @@ func TestClickingATdIssueThenAFileStacksTheRightColumn(t *testing.T) {
 	if boxes[PaneDoc].X != boxes[PaneIssue].X || boxes[PaneDoc].W != boxes[PaneIssue].W {
 		t.Fatalf("document box %#v is not in the issue's column %#v", boxes[PaneDoc], boxes[PaneIssue])
 	}
+
+	// The lower document's tab header begins one row below this divider. The
+	// filename-click fallback must not consume the divider press.
+	p.renderListView(p.width, p.height)
+	layout, ok := LayoutPaneTree(p.paneRoot, Box{W: content.W, H: content.H}, paneTreeFloors(), p.paneFocus)
+	if !ok {
+		t.Fatal("stacked pane layout disappeared before divider drag")
+	}
+	var rowDivider Divider
+	for _, divider := range layout.Dividers {
+		if divider.SplitID == stack.ID {
+			rowDivider = divider
+			break
+		}
+	}
+	x, y := content.X+rowDivider.Box.X+rowDivider.Box.W/2, content.Y+rowDivider.Box.Y
+	hit := p.mouseHandler.HitMap.Test(x, y)
+	if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != stack.ID {
+		t.Fatalf("stack divider at (%d,%d) resolves to %#v", x, y, hit)
+	}
+	before := stack.Split.Ratio
+	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, X: x, Y: y, Region: hit})
+	p.handleMouseDrag(mouse.MouseAction{Type: mouse.ActionDrag, DragStartID: regionPaneTreeDivider, DragDY: 3})
+	if stack.Split.Ratio == before {
+		t.Fatalf("stack divider stayed at %d after drag", before)
+	}
+	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "clicked.md" {
+		t.Fatalf("divider press selected or replaced the file tab: %#v", doc)
+	}
 }
 
 // With nothing but the terminal on screen a td click takes the placement a file

@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -20,11 +21,10 @@ import (
 )
 
 const (
-	previewDocRegionKind       = "global-preview-doc"
-	previewDocTabKind          = "global-preview-doc-tab"
-	previewSecondaryMinWidth   = markdown.MinWidthForMarkdown
-	previewTermMinWidth        = 12
-	previewSecondarySplitRatio = 50
+	previewDocRegionKind     = "global-preview-doc"
+	previewDocTabKind        = "global-preview-doc-tab"
+	previewSecondaryMinWidth = markdown.MinWidthForMarkdown
+	previewTermMinWidth      = 12
 )
 
 func isPreviewDocRegion(kind string) bool {
@@ -42,6 +42,7 @@ type previewDoc struct {
 	surface string
 	focused bool
 	nextID  int
+	epoch   uint64
 }
 
 func (d *previewDoc) view() *docview.Model {
@@ -58,7 +59,6 @@ func (d *previewDoc) allocID() int {
 
 type previewDocLoadedMsg struct {
 	docview.LoadedMsg
-	Generation  int
 	WorkspaceID string
 }
 
@@ -172,10 +172,6 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	box, hasBox := m.previewBox()
-	if !hasBox || !m.previewDocFits(box) {
-		return appmsg.ShowToast("Document pane needs a wider window; terminal left unchanged", 3*time.Second)
-	}
 	file, err := openPreviewFile(root, display, abs)
 	if err != nil {
 		return nil
@@ -185,15 +181,20 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 			_ = file.Close()
 		}
 	}()
+	leafID, refusal := m.ensurePreviewPane(panelayout.Document, "Document")
+	if refusal != nil {
+		return refusal
+	}
+	if leafID == 0 {
+		return nil
+	}
 	wasInteractive := m.PreviewInteractive()
-	m.preview.issue = nil
 	if m.preview.doc == nil || m.preview.doc.surface != workspace.ID {
-		m.preview.doc = &previewDoc{}
+		m.preview.doc = &previewDoc{epoch: m.nextPreviewContentEpoch()}
 	}
 	m.preview.doc.root = root
 	m.preview.doc.surface = workspace.ID
-	m.preview.doc.focused = true
-	m.preview.focus = focusPreview
+	m.focusPreviewPane(panelayout.Document)
 
 	var load tea.Cmd
 	if idx := m.preview.doc.tabs.IndexOf(display); idx >= 0 {
@@ -201,7 +202,7 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 		file = nil
 	} else {
 		viewer := docview.New(nil)
-		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, span.Extra.Line, uint64(m.preview.generation))
+		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, span.Extra.Line, m.preview.doc.epoch)
 		file = nil
 		applyPreviewDocRenderMode(viewer, display, span.Extra.Line)
 		m.preview.doc.tabs.Append(viewer)
@@ -211,7 +212,7 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 	if wasInteractive {
 		cmds = append(cmds, m.exitPreviewInteractive())
 	}
-	cmds = append(cmds, wrapPreviewDocLoad(load, m.preview.generation, workspace.ID), m.syncTerminalGeometry())
+	cmds = append(cmds, wrapPreviewDocLoad(load, workspace.ID), m.syncTerminalGeometry())
 	return tea.Batch(cmds...)
 }
 
@@ -245,9 +246,9 @@ func (m *Model) selectPreviewDocTab(idx, line int, file *os.File) tea.Cmd {
 	wrap := view.Wrap()
 	var cmd tea.Cmd
 	if file != nil {
-		cmd = view.LoadFile(doc.allocID(), file, rel, line, uint64(m.preview.generation))
+		cmd = view.LoadFile(doc.allocID(), file, rel, line, doc.epoch)
 	} else {
-		cmd = view.Load(doc.allocID(), doc.root, rel, line, uint64(m.preview.generation))
+		cmd = view.Load(doc.allocID(), doc.root, rel, line, doc.epoch)
 	}
 	if line > 0 {
 		applyPreviewDocRenderMode(view, rel, line)
@@ -262,12 +263,11 @@ func (m *Model) clickPreviewDocTab(index int) tea.Cmd {
 	if m.preview.doc == nil {
 		return nil
 	}
-	m.preview.doc.focused = true
-	m.preview.focus = focusPreview
+	m.focusPreviewPane(panelayout.Document)
 	if index == m.preview.doc.tabs.Active {
 		return nil
 	}
-	return wrapPreviewDocLoad(m.selectPreviewDocTab(index, 0, nil), m.preview.generation, m.preview.doc.surface)
+	return wrapPreviewDocLoad(m.selectPreviewDocTab(index, 0, nil), m.preview.doc.surface)
 }
 
 func (m *Model) cyclePreviewDocTab(delta int) tea.Cmd {
@@ -275,7 +275,7 @@ func (m *Model) cyclePreviewDocTab(delta int) tea.Cmd {
 		return nil
 	}
 	m.preview.doc.tabs.Cycle(delta)
-	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.generation, m.preview.doc.surface)
+	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.doc.surface)
 }
 
 func (m *Model) closePreviewDocTab() tea.Cmd {
@@ -286,7 +286,7 @@ func (m *Model) closePreviewDocTab() tea.Cmd {
 		return m.closePreviewDoc()
 	}
 	m.preview.doc.tabs.CloseActive()
-	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.generation, m.preview.doc.surface)
+	return wrapPreviewDocLoad(m.ensurePreviewDocTabLoaded(), m.preview.doc.surface)
 }
 
 func (m *Model) ensurePreviewDocTabLoaded() tea.Cmd {
@@ -300,7 +300,7 @@ func (m *Model) ensurePreviewDocTabLoaded() tea.Cmd {
 	}
 	rendered := view.Rendered()
 	wrap := view.Wrap()
-	cmd := view.Load(doc.allocID(), doc.root, view.Title(), 0, uint64(m.preview.generation))
+	cmd := view.Load(doc.allocID(), doc.root, view.Title(), 0, doc.epoch)
 	view.SetRendered(rendered)
 	view.SetWrap(wrap)
 	return cmd
@@ -313,14 +313,14 @@ func openPreviewFile(root, display, abs string) (*os.File, error) {
 	return terminallink.OpenRegular(abs)
 }
 
-func wrapPreviewDocLoad(cmd tea.Cmd, generation int, workspaceID string) tea.Cmd {
+func wrapPreviewDocLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		msg := cmd()
 		if loaded, ok := msg.(docview.LoadedMsg); ok {
-			return previewDocLoadedMsg{LoadedMsg: loaded, Generation: generation, WorkspaceID: workspaceID}
+			return previewDocLoadedMsg{LoadedMsg: loaded, WorkspaceID: workspaceID}
 		}
 		return msg
 	}
@@ -328,10 +328,10 @@ func wrapPreviewDocLoad(cmd tea.Cmd, generation int, workspaceID string) tea.Cmd
 
 func (m *Model) applyPreviewDocLoaded(msg previewDocLoadedMsg) {
 	doc := m.preview.doc
-	if doc == nil ||
-		msg.Generation != m.preview.generation ||
-		msg.WorkspaceID != m.preview.workspaceID ||
-		doc.surface != msg.WorkspaceID {
+	if msg.WorkspaceID != m.preview.workspaceID {
+		doc = m.preview.paneCache[msg.WorkspaceID].doc
+	}
+	if doc == nil || doc.surface != msg.WorkspaceID {
 		return
 	}
 	for _, item := range doc.tabs.Items {
@@ -357,44 +357,100 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 		return nil
 	}
 	m.preview.doc = nil
-	m.preview.generation++
+	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document); leaf != nil {
+		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
+	}
+	if m.preview.issue != nil {
+		m.focusPreviewPane(panelayout.Issue)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
-func (m *Model) previewDocFits(box termpreview.Box) bool {
-	return m.previewSecondaryFits(box)
+// focusPreviewPane keeps the input owner and the layout tree's focused leaf in
+// lockstep. The tree focus also selects the pane rendered in narrow layouts.
+func (m *Model) focusPreviewPane(kind panelayout.Kind) bool {
+	leaf := panelayout.FirstOfKind(m.preview.paneRoot, kind)
+	if leaf == nil {
+		return false
+	}
+	m.preview.paneFocus = leaf.ID
+	m.preview.focus = focusPreview
+	if m.preview.doc != nil {
+		m.preview.doc.focused = kind == panelayout.Document
+	}
+	if m.preview.issue != nil {
+		m.preview.issue.focused = kind == panelayout.Issue
+		if m.preview.issue.view != nil {
+			m.preview.issue.view.SetFocused(m.preview.issue.focused)
+		}
+	}
+	return true
 }
 
-const previewSecondaryDividerWidth = 1
-
-func (m *Model) previewSecondaryOpen() bool {
-	return m.preview.doc != nil || m.preview.issue != nil
+func previewPaneFloors() panelayout.Floors {
+	return panelayout.Floors{
+		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
+		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+	}
 }
 
-func (m *Model) previewSecondaryFits(box termpreview.Box) bool {
-	return box.W >= previewTermMinWidth+previewSecondaryDividerWidth+previewSecondaryMinWidth && box.H >= 3
+func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.Cmd) {
+	if m.preview.paneRoot == nil {
+		m.resetActivePreviewPanes()
+	}
+	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind)
+	if !ok {
+		return 0, nil
+	}
+	if plan.Retarget != 0 {
+		return plan.Retarget, nil
+	}
+	box, ok := m.previewBox()
+	if !ok {
+		return 0, nil
+	}
+	id := m.preview.paneNextID
+	trial := panelayout.Clone(m.preview.paneRoot)
+	trial, focus := panelayout.SplitLeaf(trial, plan.Split, plan.Axis, &panelayout.Node{ID: id, Kind: kind, ContentID: id})
+	if focus != id {
+		return 0, nil
+	}
+	if _, _, fits := panelayout.LayoutPanes(trial, termpreview.Box{W: box.W, H: box.H}, previewPaneFloors()); !fits {
+		dimension := "wider"
+		if plan.Axis == panelayout.Rows {
+			dimension = "taller"
+		}
+		return 0, appmsg.ShowToast(name+" pane needs a "+dimension+" window; layout left unchanged", 3*time.Second)
+	}
+	m.preview.paneRoot, focus = panelayout.SplitLeaf(m.preview.paneRoot, plan.Split, plan.Axis, &panelayout.Node{ID: id, Kind: kind, ContentID: id})
+	if focus != id {
+		return 0, nil
+	}
+	m.preview.paneFocus = focus
+	m.preview.paneNextID = panelayout.MaxID(m.preview.paneRoot) + 1
+	return id, nil
 }
 
-func (m *Model) previewSecondaryLayout(box termpreview.Box) (termBox, secondaryBox termpreview.Box, split bool) {
-	if !m.previewSecondaryOpen() || !m.previewSecondaryFits(box) {
-		return box, termpreview.Box{}, false
+func (m *Model) layoutPreviewPanes(box termpreview.Box) (panelayout.Layout, bool) {
+	if m.preview.paneRoot == nil {
+		m.resetActivePreviewPanes()
 	}
-	available := box.W - previewSecondaryDividerWidth
-	termW := available * previewSecondarySplitRatio / 100
-	if termW < previewTermMinWidth {
-		termW = previewTermMinWidth
+	return panelayout.LayoutTree(m.preview.paneRoot, box, previewPaneFloors(), m.preview.paneFocus)
+}
+
+func (m *Model) previewPaneBox(kind panelayout.Kind, box termpreview.Box) (termpreview.Box, bool) {
+	layout, ok := m.layoutPreviewPanes(box)
+	if !ok {
+		return termpreview.Box{}, false
 	}
-	secondaryW := available - termW
-	if secondaryW < previewSecondaryMinWidth {
-		secondaryW = previewSecondaryMinWidth
-		termW = available - secondaryW
+	for _, leaf := range layout.Leaves {
+		if leaf.Node.Kind == kind {
+			return leaf.Box, true
+		}
 	}
-	if termW < previewTermMinWidth {
-		return box, termpreview.Box{}, false
-	}
-	termBox = termpreview.Box{X: box.X, Y: box.Y, W: termW, H: box.H}
-	secondaryBox = termpreview.Box{X: box.X + termW + previewSecondaryDividerWidth, Y: box.Y, W: secondaryW, H: box.H}
-	return termBox, secondaryBox, true
+	return termpreview.Box{}, false
 }
 
 func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
@@ -402,20 +458,29 @@ func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
 	if !ok {
 		return termpreview.Box{}, false
 	}
-	term, _, _ := m.previewSecondaryLayout(box)
-	return term, true
+	return m.previewPaneBox(panelayout.Terminal, box)
 }
 
 func (m *Model) registerPreviewDocRegions(box termpreview.Box) {
 	if m.preview.doc == nil {
 		return
 	}
-	_, docBox, split := m.previewSecondaryLayout(box)
+	docBox, split := m.previewPaneBox(panelayout.Document, box)
 	if !split {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(previewDocRegionKind, docBox.X, docBox.Y, docBox.W, docBox.H, previewDocRegionKind)
-	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, docBox.W, m.preview.doc.focused).Tabs {
+}
+
+func (m *Model) registerPreviewDocTabRegions(box termpreview.Box) {
+	if m.preview.doc == nil {
+		return
+	}
+	docBox, ok := m.previewPaneBox(panelayout.Document, box)
+	if !ok {
+		return
+	}
+	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, docBox.W, m.PreviewFocused() && m.preview.doc.focused).Tabs {
 		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+tab.Col, docBox.Y, tab.Width, 1, previewDocTabHit(tab.Index))
 	}
 }
@@ -439,8 +504,7 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	switch action.Type {
 	case mouse.ActionClick, mouse.ActionDoubleClick:
-		m.preview.doc.focused = true
-		m.preview.focus = focusPreview
+		m.focusPreviewPane(panelayout.Document)
 		return nil
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		if view := m.preview.doc.view(); view != nil {
@@ -490,7 +554,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := docview.LayoutTabStrip(doc.tabs, box.W, doc.focused).Row
+	header := docview.LayoutTabStrip(doc.tabs, box.W, m.PreviewFocused() && doc.focused).Row
 	body := ""
 	if view != nil {
 		body = view.View()
@@ -501,17 +565,16 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	return header + "\n" + body
 }
 
-func renderPreviewDocDivider(height int, focused bool) string {
+func renderPreviewPaneDivider(divider panelayout.Divider, focused bool) string {
 	style := lipgloss.NewStyle().Foreground(styles.BorderNormal)
 	if focused {
 		style = lipgloss.NewStyle().Foreground(styles.BorderActive)
 	}
-	if height <= 0 {
+	if divider.Axis == panelayout.Rows {
+		return style.Render(strings.Repeat("─", max(divider.Box.W, 0)))
+	}
+	if divider.Box.H <= 0 {
 		return ""
 	}
-	return style.Render(strings.TrimSuffix(strings.Repeat("│\n", height), "\n"))
-}
-
-func joinPreviewSecondary(term, secondary string, height int, focused bool) string {
-	return lipgloss.JoinHorizontal(lipgloss.Top, term, renderPreviewDocDivider(height, focused), secondary)
+	return style.Render(strings.TrimSuffix(strings.Repeat("│\n", divider.Box.H), "\n"))
 }

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -14,9 +15,10 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-// The global Workspaces preview is one terminal box, with one optional
-// terminal-adjacent document or issue when the user clicks a link. It is not a
-// workspace plugin instance and owns no persistent pane layout.
+// The global Workspaces preview is one terminal box with the same shared pane
+// placement rules the project workspace uses for clicked documents and issues.
+// It is not a workspace plugin instance; its per-workspace layouts live only
+// in this model for the lifetime of the Overview plugin.
 //
 // The selected visible pane is always produced by the same tty.Model component
 // the project Workspaces plugin uses. Watching and typing are therefore two
@@ -24,9 +26,11 @@ import (
 // pipelines. Inventory remains cheap and read-only: no terminal is opened for
 // list rows, hidden tabs, or unselected panes.
 //
-// Nothing is persisted: the model and its bounded buffer live only while the
-// selected Output preview is visible. Leaving the tab or selecting a row with no
-// live pane closes the control subscription and releases the buffer.
+// Nothing is written to disk. The bounded terminal buffer lives only while the
+// selected Output preview is visible; secondary pane models stay cached in
+// memory so cursoring to another shell and back preserves their layout and
+// scroll positions. Leaving the tab or selecting a row with no live pane closes
+// the control subscription and releases the terminal buffer.
 
 const (
 	// The initial bounded live/history window this surface captures. tty.Model
@@ -64,10 +68,13 @@ type previewState struct {
 	// than sharing it.
 	full bool
 
-	// generation scopes asynchronous document loads to the selected row.
-	generation  int
-	workspaceID string
-	reason      string
+	// generation scopes terminal activation to the selected row. contentEpoch
+	// gives each newly opened secondary model a process-local identity so a
+	// result from a closed model cannot land on a reopened one for the same path.
+	generation   int
+	contentEpoch uint64
+	workspaceID  string
+	reason       string
 	// offset is rows scrolled back from the live bottom. Zero follows output.
 	offset int
 	// freeze holds the window still for the duration of a pointer gesture. The
@@ -98,10 +105,24 @@ type previewState struct {
 	interactive          bool
 	interactiveHintShown bool
 
-	// Exactly one memory-only secondary preview may sit beside the terminal.
-	// Opening a document replaces an issue and vice versa.
-	doc   *previewDoc
-	issue *previewIssue
+	// Memory-only secondary previews may sit beside the terminal. The shared
+	// pane tree places document and issue leaves beside it, and the
+	// cache keeps that live layout when the global cursor visits another row.
+	doc             *previewDoc
+	issue           *previewIssue
+	paneRoot        *panelayout.Node
+	paneFocus       int
+	paneNextID      int
+	paneDragSplitID int
+	paneCache       map[string]previewPaneCache
+}
+
+type previewPaneCache struct {
+	root   *panelayout.Node
+	focus  int
+	nextID int
+	doc    *previewDoc
+	issue  *previewIssue
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -145,6 +166,7 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 // releasePreview closes the selected terminal and forgets its memory-only state.
 func (m *Model) releasePreview() {
 	m.closePreviewTerminal()
+	m.stashPreviewPanes()
 	m.preview.generation++
 	m.preview.workspaceID = ""
 	m.resetPreviewContent()
@@ -163,8 +185,44 @@ func (m *Model) resetPreviewContent() {
 	m.preview.selection.Clear()
 	m.preview.pointer.Abandon()
 	m.preview.pointer.ResetUnit()
+	m.resetActivePreviewPanes()
+}
+
+func (m *Model) resetActivePreviewPanes() {
 	m.preview.doc = nil
 	m.preview.issue = nil
+	m.preview.paneRoot = &panelayout.Node{ID: 1, Kind: panelayout.Terminal}
+	m.preview.paneFocus = 1
+	m.preview.paneNextID = 2
+	m.preview.paneDragSplitID = 0
+}
+
+func (m *Model) nextPreviewContentEpoch() uint64 {
+	m.preview.contentEpoch++
+	return m.preview.contentEpoch
+}
+
+func (m *Model) stashPreviewPanes() {
+	if m.preview.workspaceID == "" || m.preview.paneRoot == nil {
+		return
+	}
+	if m.preview.paneCache == nil {
+		m.preview.paneCache = make(map[string]previewPaneCache)
+	}
+	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
+		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
+		doc: m.preview.doc, issue: m.preview.issue,
+	}
+}
+
+func (m *Model) restorePreviewPanes(workspaceID string) {
+	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
+		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
+		m.preview.doc, m.preview.issue = cached.doc, cached.issue
+		m.preview.paneDragSplitID = 0
+		return
+	}
+	m.resetActivePreviewPanes()
 }
 
 // previewSync reconciles the one visible terminal when selection or tab state
@@ -203,6 +261,7 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if keep {
 		m.clearPreviewSelection()
 	} else {
+		m.stashPreviewPanes()
 		m.resetPreviewContent()
 	}
 	m.preview.reason = ""
@@ -213,6 +272,9 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		return nil
 	}
 	m.preview.workspaceID = workspace.ID
+	if !keep {
+		m.restorePreviewPanes(workspace.ID)
+	}
 	extras := m.ensurePreviewExtras()
 
 	// An item with no single live pane behind it opens no model. There is nothing

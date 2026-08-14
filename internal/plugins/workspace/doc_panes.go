@@ -285,8 +285,8 @@ func (p *Plugin) closeActiveDocTab() tea.Cmd {
 // does this by testing the tab row first, because the preview pane region
 // covers the header and a one-cell miss becomes a terminal click. The same
 // steal happens here (plus the widened pane-tree divider), so a click on the
-// document header row — including one row of slop — picks the tab under X, or
-// the closest tab on that row. X is constrained to the document leaf so the
+// exact document header row picks the tab under X, or the closest tab on that
+// row. X is constrained to the document leaf so the
 // terminal header that shares the row keeps Output/Diff/Task.
 func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 	if !p.docVisible() {
@@ -297,7 +297,7 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		if region.ID != regionDocTab {
 			continue
 		}
-		if absInt(y-region.Rect.Y) > 1 {
+		if y != region.Rect.Y {
 			continue
 		}
 		tabs = append(tabs, region)
@@ -310,7 +310,7 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		if region.ID != regionDocPane {
 			continue
 		}
-		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && absInt(y-region.Rect.Y) <= 1 {
+		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
 			inDocHeader = true
 			break
 		}
@@ -1485,7 +1485,7 @@ func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider)
 		})
 	}
 	// Dividers arrive in LayoutPanes' order, each split before the splits inside
-	// it, and three-cell hit targets overlap once splits nest. Two targets can
+	// it, and widened hit targets overlap once splits nest. Two targets can
 	// only overlap when one split encloses the other, because sibling subtrees
 	// are held apart by the divider between them — so registering the enclosing
 	// split first is what leaves the enclosed one last, and HitMap.Test's
@@ -1515,7 +1515,9 @@ func paneDividerHitBox(split Divider) Box {
 		hit.W = dividerHitWidth
 		hit.X--
 	} else {
-		hit.H = dividerHitWidth
+		// The lower leaf starts with a header row, so only widen upward.
+		// Reaching below the divider would mask an issue's whole header.
+		hit.H = dividerHitWidth - 1
 		hit.Y--
 	}
 	return hit

@@ -338,6 +338,10 @@ func TestIssuePaneAnswersTheWheelAndItsCloseChip(t *testing.T) {
 	if closeChip == nil {
 		t.Fatal("the issue leaf drew no close chip")
 	}
+	resolvedClose := p.mouseHandler.HitMap.Test(closeChip.Rect.X, closeChip.Rect.Y)
+	if resolvedClose == nil || resolvedClose.ID != regionIssueClose {
+		t.Fatalf("issue close chip resolves to %#v, want %s", resolvedClose, regionIssueClose)
+	}
 	if cmd := p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, Region: closeChip}); cmd == nil {
 		t.Fatal("closing the issue leaf did not schedule the resize of the terminal it gave its box back to")
 	}

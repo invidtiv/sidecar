@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -604,14 +605,18 @@ func TestDocPaneTabRowClickWinsOverPreviewPaneAndDivider(t *testing.T) {
 	if tab == nil {
 		t.Fatal("README tab missing after re-render")
 	}
+	beforeRatio := p.paneRoot.Split.Ratio
 	_ = p.handleMouseClick(mouse.MouseAction{
 		Type:   mouse.ActionClick,
 		X:      tab.Rect.X,
 		Y:      tab.Rect.Y + 1,
-		Region: &mouse.Region{ID: regionPaneTreeDivider},
+		Region: &mouse.Region{ID: regionPaneTreeDivider, Data: p.paneRoot.ID},
 	})
-	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
-		t.Fatalf("divider/off-by-one steal selected %q", got)
+	if p.mouseHandler.DragRegion() != regionPaneTreeDivider || p.paneRoot.Split.Ratio != beforeRatio {
+		t.Fatalf("divider press was stolen by tab fallback: drag=%q ratio=%d", p.mouseHandler.DragRegion(), p.paneRoot.Split.Ratio)
+	}
+	if got := p.activeDocPaneOrNil().view().Title(); got != "main.go" {
+		t.Fatalf("divider press selected file tab %q", got)
 	}
 }
 
@@ -1096,8 +1101,9 @@ func TestRestorePaneLayoutCollapsesEscapingDocument(t *testing.T) {
 }
 
 func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
+	stubTd(t)
 	root := t.TempDir()
-	writeDocPaneFixture(t, root, "README.md", "# shell A\n")
+	writeDocPaneFixture(t, root, "README.md", "# shell A\n"+strings.Repeat("line\n", 40))
 	p := docPaneTestPlugin(t, root, true)
 	p.ctx.ProjectRoot = root
 	p.shells = append(p.shells, &ShellSession{Name: "Shell B", TmuxName: "test-shell-b", Agent: &Agent{TmuxPane: "%903", OutputBuf: tty.NewOutputBuffer(20)}})
@@ -1106,11 +1112,39 @@ func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
 		getWorkspaceState: func(string) state.WorkspaceState { return saved },
 		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
 	}
-	p.openTerminalPath("README.md", 0)
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
 	doc, _ := p.activeDocPane()
 	if doc == nil || doc.surface != "shell:test-shell" {
 		t.Fatalf("opened doc surface = %#v", doc)
 	}
+	doc.view().SetSize(30, 4)
+	doc.view().Scroll(6)
+	wantScroll := doc.view().ScrollOffset()
+	selectedRoot, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		t.Fatal("selected shell has no terminal surface")
+	}
+	issueCmd := p.openIssuePaneForSurface(selectedRoot, surface, "td-1a2b3c")
+	if issueCmd == nil {
+		t.Fatal("issue did not open beside document")
+	}
+	if batch, ok := issueCmd().(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if child == nil {
+				continue
+			}
+			if loaded, ok := child().(issueview.LoadedMsg); ok {
+				p.applyIssueLoaded(loaded)
+			}
+		}
+	}
+	issue, _ := p.activeIssuePane()
+	if issue == nil || issue.view.Data() == nil {
+		t.Fatal("issue load did not land")
+	}
+	issue.view.SetSize(30, 4)
+	issue.view.Scroll(5)
+	wantIssueScroll := issue.view.ScrollOffset()
 
 	// Encode A before the index changes. A test that only inspects the map
 	// after a finished switch would miss writing B's empty tree onto A's key.
@@ -1132,8 +1166,12 @@ func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
 
 	p.selectTopShellAt(0)
 	reopened, _ := p.activeDocPane()
-	if reopened == nil || reopened.view().Title() != "README.md" || reopened.surface != "shell:test-shell" {
+	if reopened == nil || reopened.view().Title() != "README.md" || reopened.surface != "shell:test-shell" || reopened.view().ScrollOffset() != wantScroll {
 		t.Fatalf("selecting A again did not reopen README: %#v", reopened)
+	}
+	reopenedIssue, _ := p.activeIssuePane()
+	if reopenedIssue == nil || reopenedIssue.view.IssueID() != "td-1a2b3c" || reopenedIssue.view.ScrollOffset() != wantIssueScroll {
+		t.Fatalf("selecting A again did not restore issue scroll: %#v", reopenedIssue)
 	}
 }
 

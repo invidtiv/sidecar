@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -296,20 +297,33 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 }
 
 func (m *Model) renderOutputPreview(width, height int) string {
-	if m.previewSecondaryOpen() {
-		box := termpreview.Box{W: width, H: height}
-		termBox, secondaryBox, split := m.previewSecondaryLayout(box)
-		if split {
-			term := m.renderOutputTerminal(termBox.W, termBox.H)
-			if m.preview.issue != nil {
-				issue := m.renderPreviewIssue(m.preview.issue, secondaryBox)
-				return joinPreviewSecondary(term, issue, height, m.preview.issue.focused)
-			}
-			document := m.renderPreviewDoc(m.preview.doc, secondaryBox)
-			return joinPreviewSecondary(term, document, height, m.preview.doc.focused)
-		}
+	box := termpreview.Box{W: width, H: height}
+	layout, ok := m.layoutPreviewPanes(box)
+	if !ok || len(layout.Leaves) == 0 {
+		return m.renderOutputTerminal(width, height)
 	}
-	return m.renderOutputTerminal(width, height)
+	canvas := ui.NewCanvas(width, height)
+	for _, leaf := range layout.Leaves {
+		var content string
+		switch leaf.Node.Kind {
+		case panelayout.Terminal:
+			content = m.renderOutputTerminal(leaf.Box.W, leaf.Box.H)
+		case panelayout.Document:
+			if m.preview.doc != nil {
+				content = m.renderPreviewDoc(m.preview.doc, leaf.Box)
+			}
+		case panelayout.Issue:
+			if m.preview.issue != nil {
+				content = m.renderPreviewIssue(m.preview.issue, leaf.Box)
+			}
+		}
+		canvas.Blit(leaf.Box, content)
+	}
+	focused := m.PreviewFocused() && ((m.preview.doc != nil && m.preview.doc.focused) || (m.preview.issue != nil && m.preview.issue.focused))
+	for _, divider := range layout.Dividers {
+		canvas.Blit(divider.Box, renderPreviewPaneDivider(divider, focused))
+	}
+	return canvas.String()
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {
