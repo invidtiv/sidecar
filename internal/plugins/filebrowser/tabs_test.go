@@ -662,11 +662,29 @@ func tabPaths(tabs []FileTab) []string {
 	return paths
 }
 
+func setPreviewModes(p *Plugin) {
+	p.contentSearchMode = true
+	p.contentSearchQuery = "readme"
+	p.blameMode = true
+	p.infoMode = true
+	p.lineJumpMode = true
+	p.lineJumpBuffer = "9"
+}
+
+func assertPreviewModesKept(t *testing.T, p *Plugin) {
+	t.Helper()
+	if !p.contentSearchMode || p.contentSearchQuery != "readme" || !p.blameMode || !p.infoMode || !p.lineJumpMode || p.lineJumpBuffer != "9" {
+		t.Errorf("preview modes cleared on surviving tab: search=%v q=%q blame=%v info=%v jump=%v buf=%q",
+			p.contentSearchMode, p.contentSearchQuery, p.blameMode, p.infoMode, p.lineJumpMode, p.lineJumpBuffer)
+	}
+}
+
 func TestTabs_CloseTabsForPath_RemovesBeforeActive(t *testing.T) {
 	p := closeTabsFixture(t)
 	p.activeTab = 3
 	p.previewFile = "README.md"
 	p.previewLines = []string{"readme"}
+	setPreviewModes(p)
 
 	cmd := p.closeTabsForPath("src/helper.go")
 
@@ -680,8 +698,9 @@ func TestTabs_CloseTabsForPath_RemovesBeforeActive(t *testing.T) {
 		t.Errorf("previewFile = %q, want README.md", p.previewFile)
 	}
 	if cmd != nil {
-		t.Error("expected nil cmd for already-loaded survivor")
+		t.Error("expected nil cmd when the same loaded tab survives")
 	}
+	assertPreviewModesKept(t, p)
 }
 
 func TestTabs_CloseTabsForPath_RemovesActive(t *testing.T) {
@@ -714,8 +733,9 @@ func TestTabs_CloseTabsForPath_RemovesAfterActive(t *testing.T) {
 	p.activeTab = 0
 	p.previewFile = "main.go"
 	p.previewLines = []string{"main"}
+	setPreviewModes(p)
 
-	_ = p.closeTabsForPath("README.md")
+	cmd := p.closeTabsForPath("README.md")
 
 	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/helper.go,src/main.go" {
 		t.Fatalf("tabs = %v", got)
@@ -726,6 +746,10 @@ func TestTabs_CloseTabsForPath_RemovesAfterActive(t *testing.T) {
 	if p.previewFile != "main.go" {
 		t.Errorf("previewFile = %q, want main.go", p.previewFile)
 	}
+	if cmd != nil {
+		t.Error("expected nil cmd when the same loaded tab survives")
+	}
+	assertPreviewModesKept(t, p)
 }
 
 func TestTabs_CloseTabsForPath_RemovesDirectory(t *testing.T) {
@@ -848,6 +872,7 @@ func TestTabs_CloseTabsForPath_AbsoluteDeletedPath(t *testing.T) {
 	p.activeTab = 0
 	p.previewFile = "main.go"
 	p.previewLines = []string{"main"}
+	setPreviewModes(p)
 
 	cmd := p.closeTabsForPath(filepath.Join(tmpDir, "src"))
 
@@ -858,8 +883,9 @@ func TestTabs_CloseTabsForPath_AbsoluteDeletedPath(t *testing.T) {
 		t.Errorf("active=%d preview=%q, want 0/main.go", p.activeTab, p.previewFile)
 	}
 	if cmd != nil {
-		t.Error("expected nil cmd for already-loaded survivor")
+		t.Error("expected nil cmd when the same loaded tab survives")
 	}
+	assertPreviewModesKept(t, p)
 }
 
 func TestTabs_CloseTabsForPath_AbsoluteFilePath(t *testing.T) {
@@ -902,8 +928,9 @@ func TestTabs_CloseTabsForPath_DirectoryBeforeActiveAdjustsOnce(t *testing.T) {
 	p.previewLines = []string{"readme"}
 	p.previewScroll = 2
 	p.tabs[3].Scroll = 2
+	setPreviewModes(p)
 
-	_ = p.closeTabsForPath("src")
+	cmd := p.closeTabsForPath("src")
 
 	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,README.md" {
 		t.Fatalf("tabs = %v", got)
@@ -914,6 +941,60 @@ func TestTabs_CloseTabsForPath_DirectoryBeforeActiveAdjustsOnce(t *testing.T) {
 	if p.previewFile != "README.md" {
 		t.Errorf("previewFile = %q, want README.md", p.previewFile)
 	}
+	if p.previewScroll != 2 {
+		t.Errorf("previewScroll = %d, want 2", p.previewScroll)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd when the same loaded tab survives")
+	}
+	assertPreviewModesKept(t, p)
+}
+
+func TestTabs_CloseTabsForPath_SiblingFileKeepsPreviewModes(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 3
+	p.previewFile = "README.md"
+	p.previewLines = []string{"readme"}
+	p.previewScroll = 3
+	setPreviewModes(p)
+
+	cmd := p.closeTabsForPath("src/helper.go")
+
+	if p.previewFile != "README.md" || p.activeTab != 2 {
+		t.Fatalf("survivor moved: active=%d preview=%q", p.activeTab, p.previewFile)
+	}
+	if cmd != nil {
+		t.Error("sibling file delete must not applyActiveTab on a loaded survivor")
+	}
+	if p.previewScroll != 3 {
+		t.Errorf("previewScroll = %d, want 3", p.previewScroll)
+	}
+	assertPreviewModesKept(t, p)
+}
+
+func TestTabs_CloseTabsForPath_SiblingDirectoryKeepsPreviewModes(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 3
+	p.previewFile = "README.md"
+	p.previewLines = []string{"readme"}
+	p.previewScroll = 5
+	setPreviewModes(p)
+
+	cmd := p.closeTabsForPath("src")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.activeTab != 1 || p.previewFile != "README.md" {
+		t.Fatalf("survivor moved: active=%d preview=%q", p.activeTab, p.previewFile)
+	}
+	if cmd != nil {
+		t.Error("directory delete that misses the active tab must not applyActiveTab")
+	}
+	if p.previewScroll != 5 {
+		t.Errorf("previewScroll = %d, want 5", p.previewScroll)
+	}
+	assertPreviewModesKept(t, p)
 }
 
 func TestTabs_CloseTabsForPath_LoadsUnloadedSurvivor(t *testing.T) {

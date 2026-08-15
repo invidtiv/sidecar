@@ -617,6 +617,7 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 	originalActive := p.activeTab
 	removedBeforeActive := 0
 	removedAny := false
+	activeRemoved := false
 
 	kept := make([]FileTab, 0, len(p.tabs))
 	for i := range p.tabs {
@@ -626,8 +627,11 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 		}
 		removedAny = true
 		p.killTabEditSession(i)
-		if i == originalActive && p.inlineEditMode {
-			p.clearPluginEditState()
+		if i == originalActive {
+			activeRemoved = true
+			if p.inlineEditMode {
+				p.clearPluginEditState()
+			}
 		}
 		if i < originalActive {
 			removedBeforeActive++
@@ -654,6 +658,14 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 	}
 	if p.activeTab < 0 {
 		p.activeTab = 0
+	}
+
+	// applyActiveTab resets search/blame/info/line-jump. Skip it when the
+	// same loaded tab is still active so a sibling delete does not wipe
+	// the preview the user is looking at.
+	survivor := p.tabs[p.activeTab]
+	if !activeRemoved && p.previewFile == survivor.Path && survivor.Loaded {
+		return nil
 	}
 	return p.applyActiveTab()
 }
