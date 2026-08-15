@@ -638,6 +638,9 @@ const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
 const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
+const sidecarDisplayNameFile = "display-name"
+
+const maxWorktreeSlugRunes = 63
 
 func saveBaseBranchContext(ctx context.Context, projectRoot, worktreePath string, branch string) error {
 	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
@@ -668,6 +671,41 @@ func loadBaseBranchContext(ctx context.Context, projectRoot, worktreePath string
 	}
 	basePath := filepath.Join(wtDir, sidecarBaseFile)
 	content, err := os.ReadFile(basePath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
+
+func saveDisplayNameContext(ctx context.Context, projectRoot, worktreePath, name string) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
+	if err != nil {
+		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	displayPath := filepath.Join(wtDir, sidecarDisplayNameFile)
+	if name == "" {
+		_ = os.Remove(displayPath)
+		return nil
+	}
+	return os.WriteFile(displayPath, []byte(name+"\n"), 0644)
+}
+
+func loadDisplayName(projectRoot, worktreePath string) string {
+	return loadDisplayNameContext(context.Background(), projectRoot, worktreePath)
+}
+
+func loadDisplayNameContext(ctx context.Context, projectRoot, worktreePath string) string {
+	if err := ctx.Err(); err != nil {
+		return ""
+	}
+	wtDir, ok := projectdir.LookupWorktree(projectRoot, worktreePath)
+	if !ok {
+		return ""
+	}
+	content, err := os.ReadFile(filepath.Join(wtDir, sidecarDisplayNameFile))
 	if err != nil {
 		return ""
 	}
@@ -1160,6 +1198,58 @@ func SanitizeBranchName(name string) string {
 	result = strings.ToLower(result)
 
 	return result
+}
+
+// SlugifyWorktreeName turns a display name into a git-safe branch and directory
+// component. An empty result means the name cannot be used.
+func SlugifyWorktreeName(name string) string {
+	result := strings.ToLower(strings.TrimSpace(name))
+	result = strings.ReplaceAll(result, " ", "-")
+	result = strings.ReplaceAll(result, "@{", "")
+	for _, char := range []string{"~", "^", ":", "?", "*", "[", "\\"} {
+		result = strings.ReplaceAll(result, char, "")
+	}
+	var cleaned strings.Builder
+	for _, r := range result {
+		if r >= 32 && r != 127 {
+			cleaned.WriteRune(r)
+		}
+	}
+	result = collapseSlugSeparators(cleaned.String())
+	result = strings.Trim(result, "-./")
+	result = truncateSlugRunes(result, maxWorktreeSlugRunes)
+	result = strings.Trim(result, "-./")
+	if result == "" || result == "@" || strings.HasSuffix(result, ".lock") {
+		return ""
+	}
+	return result
+}
+
+func collapseSlugSeparators(s string) string {
+	var b strings.Builder
+	var prev rune
+	for i, r := range s {
+		if i > 0 && (r == '-' || r == '/' || r == '.') && r == prev {
+			continue
+		}
+		b.WriteRune(r)
+		prev = r
+	}
+	return b.String()
+}
+
+func truncateSlugRunes(s string, max int) string {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
+		return s
+	}
+	runes = runes[:max]
+	for i := len(runes) - 1; i > 0; i-- {
+		if runes[i] == '-' {
+			return string(runes[:i])
+		}
+	}
+	return string(runes)
 }
 
 // loadTaskDetails fetches full task details from td.

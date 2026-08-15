@@ -1712,9 +1712,18 @@ func (p *Plugin) resolveWorktreeAgentType(wt *Worktree) AgentType {
 }
 
 // getDefaultCreateAgentType returns the default agent for create-worktree modal.
-// .sidecar-agent in the current workspace is treated equivalently to config defaultAgentType.
-// Result is clamped to the selectable allowlist when the preferred type is hidden.
+// Precedence: persisted last-create agent (if still selectable) → .sidecar-agent
+// in the current workspace → config defaultAgentType → Claude. Result is
+// clamped to the selectable allowlist when the preferred type is hidden.
 func (p *Plugin) getDefaultCreateAgentType() AgentType {
+	agents := p.selectableAgentTypes()
+	if last := AgentType(strings.TrimSpace(state.GetLastCreateAgent())); last != "" {
+		for _, at := range agents {
+			if at == last {
+				return last
+			}
+		}
+	}
 	var preferred AgentType
 	if p != nil && p.ctx != nil {
 		fileAgent := loadAgentType(p.ctx.ProjectRoot, p.ctx.WorkDir)
@@ -1726,7 +1735,6 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 	} else {
 		preferred = p.getConfigDefaultAgentType()
 	}
-	agents := p.selectableAgentTypes()
 	got, _ := clampAgentSelection(agents, preferred, -1)
 	return got
 }

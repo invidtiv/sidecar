@@ -269,15 +269,19 @@ func (r *CreateSetupResult) Warnings() []CreateSetupOutcome {
 }
 
 func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, base string, dirPrefix bool, setup config.WorktreeSetupConfig) (*CreateOperationPlan, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
+	displayName := strings.TrimSpace(name)
+	if displayName == "" {
 		return nil, fmt.Errorf("workspace name is required")
 	}
-	if _, err := gitOutputContext(ctx, workDir, "check-ref-format", "--branch", name); err != nil {
-		return nil, fmt.Errorf("invalid branch name %q: %w", name, err)
+	slug := SlugifyWorktreeName(displayName)
+	if slug == "" {
+		return nil, fmt.Errorf("invalid branch name %q", displayName)
 	}
-	if _, err := gitOutputContext(ctx, workDir, "show-ref", "--verify", "--quiet", "refs/heads/"+name); err == nil {
-		return nil, fmt.Errorf("branch %q already exists", name)
+	if _, err := gitOutputContext(ctx, workDir, "check-ref-format", "--branch", slug); err != nil {
+		return nil, fmt.Errorf("invalid branch name %q: %w", slug, err)
+	}
+	if _, err := gitOutputContext(ctx, workDir, "show-ref", "--verify", "--quiet", "refs/heads/"+slug); err == nil {
+		return nil, fmt.Errorf("branch %q already exists", slug)
 	}
 
 	sourceWorktree, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
@@ -309,13 +313,13 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 		sourceRef = requestedBase
 	}
 
-	displayName := name
+	dirName := slug
 	if dirPrefix {
 		if repo := repoNameContext(ctx, workDir); repo != "" {
-			displayName = repo + "-" + name
+			dirName = repo + "-" + slug
 		}
 	}
-	destination := filepath.Join(filepath.Dir(mainWorktree), displayName)
+	destination := filepath.Join(filepath.Dir(mainWorktree), dirName)
 	if err := ensureRealDirectoryPath(filepath.Dir(mainWorktree), filepath.Dir(destination), false); err != nil {
 		return nil, fmt.Errorf("destination parent is unsafe: %w", err)
 	}
@@ -356,7 +360,7 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 
 	return &CreateOperationPlan{
 		SourceWorktree: sourceWorktree, MainWorktree: mainWorktree,
-		SourceRef: sourceRef, SourceOID: sourceOID, Branch: name,
+		SourceRef: sourceRef, SourceOID: sourceOID, Branch: slug,
 		Path: destination, DisplayName: displayName,
 		RemotePolicy: "local branch only; no remote push",
 		CopyEnv:      len(envFiles) > 0, EnvFiles: envFiles,
@@ -665,6 +669,7 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 	}
 	base := strings.TrimPrefix(plan.SourceRef, "refs/heads/")
 	add(CreateOutcomeIdentity, "base metadata", true, saveBaseBranchContext(ctx, plan.MainWorktree, plan.Path, base))
+	add(CreateOutcomeIdentity, "display name", true, saveDisplayNameContext(ctx, plan.MainWorktree, plan.Path, plan.DisplayName))
 	add(CreateOutcomeAgent, "agent metadata", true, saveAgentTypeContext(ctx, plan.MainWorktree, plan.Path, plan.AgentType))
 	add(CreateOutcomeTDRoot, ".td-root", false, setupTDRootContext(ctx, plan.SourceWorktree, plan.MainWorktree, plan.Path))
 
