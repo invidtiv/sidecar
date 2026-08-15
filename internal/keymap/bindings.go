@@ -128,6 +128,19 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		// The two search surfaces a focused document pane can open on itself.
+		// Both are rooted at the pane's own directory; the rest of the pane's
+		// keys are registered by the plugin.
+		{Key: "ctrl+p", Command: "find-file", Context: "workspace-doc"},
+		{Key: "f", Command: "search-project", Context: "workspace-doc"},
+
+		// While one of them is open it owns every key in the pane, so only the
+		// ways out and in are named. It is not a root context: esc closes the
+		// search rather than leaving the plugin.
+		{Key: "esc", Command: "search-cancel", Context: "workspace-doc-search"},
+		{Key: "enter", Command: "search-open", Context: "workspace-doc-search"},
+		{Key: "shift+enter", Command: "search-open-tab", Context: "workspace-doc-search"},
+
 		{Key: "q", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "x", Command: "close-tab", Context: "global-workspaces-diff"},
@@ -419,6 +432,10 @@ func DefaultBindings() []Binding {
 		{Key: "l", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "right", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "/", Command: "search", Context: "file-browser-tree"},
+		// The same two search surfaces a workspace file pane opens, on the same
+		// two keys and under the same two names: ctrl+p Find finds a file by
+		// name, f Search searches the project's contents. The names say what the
+		// feature does, so the two surfaces cannot drift apart again.
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-tree"},
 		{Key: "f", Command: "project-search", Context: "file-browser-tree"},
 		{Key: "t", Command: "new-tab", Context: "file-browser-tree"},
@@ -448,6 +465,8 @@ func DefaultBindings() []Binding {
 		// File browser preview context
 		{Key: "tab", Command: "switch-pane", Context: "file-browser-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "file-browser-preview"},
+		// `/` is InFile: this file's contents, as against f Search's whole
+		// project and ctrl+p Find's file names.
 		{Key: "/", Command: "search-content", Context: "file-browser-preview"},
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-preview"},
 		{Key: "f", Command: "project-search", Context: "file-browser-preview"},
@@ -546,7 +565,8 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
-		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "P", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "F", Command: "find-file", Context: "workspace-list"},
 		{Key: "R", Command: "rename-shell", Context: "workspace-list"},
 		{Key: "R", Command: "rename-worktree", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},

@@ -1,4 +1,4 @@
-package filebrowser
+package projectsearch
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewProjectSearchState(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	if state == nil {
 		t.Fatal("expected non-nil state")
 	}
@@ -22,7 +22,7 @@ func TestNewProjectSearchState(t *testing.T) {
 }
 
 func TestProjectSearchState_TotalMatches(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}}},
 		{Path: "b.go", Matches: []SearchMatch{{LineNo: 5}}},
@@ -33,7 +33,7 @@ func TestProjectSearchState_TotalMatches(t *testing.T) {
 }
 
 func TestProjectSearchState_FileCount(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go"},
 		{Path: "b.go"},
@@ -83,7 +83,7 @@ func TestProjectSearchState_FlatLen(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			state := NewProjectSearchState()
+			state := NewState()
 			state.Results = tc.results
 			if got := state.FlatLen(); got != tc.expected {
 				t.Errorf("expected FlatLen %d, got %d", tc.expected, got)
@@ -93,23 +93,23 @@ func TestProjectSearchState_FlatLen(t *testing.T) {
 }
 
 func TestProjectSearchState_FlatItem(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Collapsed: false, Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}}},
 		{Path: "b.go", Collapsed: false, Matches: []SearchMatch{{LineNo: 5}}},
 	}
 
 	tests := []struct {
-		idx         int
-		wantFileIdx int
+		idx          int
+		wantFileIdx  int
 		wantMatchIdx int
-		wantIsFile  bool
+		wantIsFile   bool
 	}{
-		{idx: 0, wantFileIdx: 0, wantMatchIdx: -1, wantIsFile: true},  // a.go header
-		{idx: 1, wantFileIdx: 0, wantMatchIdx: 0, wantIsFile: false},  // a.go match 1
-		{idx: 2, wantFileIdx: 0, wantMatchIdx: 1, wantIsFile: false},  // a.go match 2
-		{idx: 3, wantFileIdx: 1, wantMatchIdx: -1, wantIsFile: true},  // b.go header
-		{idx: 4, wantFileIdx: 1, wantMatchIdx: 0, wantIsFile: false},  // b.go match 1
+		{idx: 0, wantFileIdx: 0, wantMatchIdx: -1, wantIsFile: true}, // a.go header
+		{idx: 1, wantFileIdx: 0, wantMatchIdx: 0, wantIsFile: false}, // a.go match 1
+		{idx: 2, wantFileIdx: 0, wantMatchIdx: 1, wantIsFile: false}, // a.go match 2
+		{idx: 3, wantFileIdx: 1, wantMatchIdx: -1, wantIsFile: true}, // b.go header
+		{idx: 4, wantFileIdx: 1, wantMatchIdx: 0, wantIsFile: false}, // b.go match 1
 	}
 
 	for _, tc := range tests {
@@ -123,7 +123,7 @@ func TestProjectSearchState_FlatItem(t *testing.T) {
 }
 
 func TestProjectSearchState_ToggleFileCollapse(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Collapsed: false, Matches: []SearchMatch{{LineNo: 1}}},
 		{Path: "b.go", Collapsed: true, Matches: []SearchMatch{{LineNo: 5}}},
@@ -151,7 +151,7 @@ func TestProjectSearchState_ToggleFileCollapse(t *testing.T) {
 }
 
 func TestProjectSearchState_GetSelectedFile(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Collapsed: false, Matches: []SearchMatch{
 			{LineNo: 10},
@@ -167,11 +167,11 @@ func TestProjectSearchState_GetSelectedFile(t *testing.T) {
 		wantPath string
 		wantLine int
 	}{
-		{cursor: 0, wantPath: "a.go", wantLine: 0},   // file header
-		{cursor: 1, wantPath: "a.go", wantLine: 10},  // first match
-		{cursor: 2, wantPath: "a.go", wantLine: 20},  // second match
-		{cursor: 3, wantPath: "b.go", wantLine: 0},   // file header
-		{cursor: 4, wantPath: "b.go", wantLine: 5},   // match
+		{cursor: 0, wantPath: "a.go", wantLine: 0},  // file header
+		{cursor: 1, wantPath: "a.go", wantLine: 10}, // first match
+		{cursor: 2, wantPath: "a.go", wantLine: 20}, // second match
+		{cursor: 3, wantPath: "b.go", wantLine: 0},  // file header
+		{cursor: 4, wantPath: "b.go", wantLine: 5},  // match
 	}
 
 	for _, tc := range tests {
@@ -187,13 +187,13 @@ func TestProjectSearchState_GetSelectedFile(t *testing.T) {
 func TestBuildRipgrepArgs(t *testing.T) {
 	tests := []struct {
 		name          string
-		state         *ProjectSearchState
+		state         *State
 		expectContain []string
 		expectExclude []string
 	}{
 		{
 			name: "default options",
-			state: &ProjectSearchState{
+			state: &State{
 				Query: "test",
 			},
 			expectContain: []string{"--line-number", "--ignore-case", "--fixed-strings", "--", "test"},
@@ -201,7 +201,7 @@ func TestBuildRipgrepArgs(t *testing.T) {
 		},
 		{
 			name: "case sensitive",
-			state: &ProjectSearchState{
+			state: &State{
 				Query:         "test",
 				CaseSensitive: true,
 			},
@@ -210,7 +210,7 @@ func TestBuildRipgrepArgs(t *testing.T) {
 		},
 		{
 			name: "regex mode",
-			state: &ProjectSearchState{
+			state: &State{
 				Query:    "test.*",
 				UseRegex: true,
 			},
@@ -219,7 +219,7 @@ func TestBuildRipgrepArgs(t *testing.T) {
 		},
 		{
 			name: "whole word",
-			state: &ProjectSearchState{
+			state: &State{
 				Query:     "test",
 				WholeWord: true,
 			},
@@ -254,7 +254,10 @@ test.go:20:4:// Test comment
 other.go:5:5:var TestVar = 1`
 
 	reader := strings.NewReader(lineOutput)
-	results := parseRipgrepOutput(reader, 100, 4) // query "Test" has length 4
+	results, truncated := parseRipgrepOutput(reader, 100, 4) // query "Test" has length 4
+	if truncated {
+		t.Error("a run well under the cap reported itself truncated")
+	}
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(results))
@@ -293,7 +296,10 @@ func TestParseRipgrepOutput_MaxMatches(t *testing.T) {
 	}
 
 	reader := strings.NewReader(sb.String())
-	results := parseRipgrepOutput(reader, 10, 1) // Limit to 10, query length 1
+	results, truncated := parseRipgrepOutput(reader, 10, 1) // Limit to 10, query length 1
+	if !truncated {
+		t.Error("a run cut off by the cap did not report itself truncated")
+	}
 
 	totalMatches := 0
 	for _, f := range results {
@@ -351,7 +357,7 @@ func TestProjectSearchState_FirstMatchIndex(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			state := NewProjectSearchState()
+			state := NewState()
 			state.Results = tc.results
 			if got := state.FirstMatchIndex(); got != tc.expected {
 				t.Errorf("FirstMatchIndex() = %d, want %d", got, tc.expected)
@@ -361,7 +367,7 @@ func TestProjectSearchState_FirstMatchIndex(t *testing.T) {
 }
 
 func TestProjectSearchState_NextMatchIndex(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}}},
 		{Path: "b.go", Matches: []SearchMatch{{LineNo: 5}}},
@@ -388,7 +394,7 @@ func TestProjectSearchState_NextMatchIndex(t *testing.T) {
 }
 
 func TestProjectSearchState_PrevMatchIndex(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}}},
 		{Path: "b.go", Matches: []SearchMatch{{LineNo: 5}}},
@@ -467,7 +473,7 @@ func TestProjectSearchState_LastMatchIndex(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			state := NewProjectSearchState()
+			state := NewState()
 			state.Results = tc.results
 			if got := state.LastMatchIndex(); got != tc.expected {
 				t.Errorf("LastMatchIndex() = %d, want %d", got, tc.expected)
@@ -478,14 +484,14 @@ func TestProjectSearchState_LastMatchIndex(t *testing.T) {
 
 func TestProjectSearchState_ResultsFocused(t *testing.T) {
 	t.Run("default is input focused", func(t *testing.T) {
-		state := NewProjectSearchState()
+		state := NewState()
 		if state.ResultsFocused {
 			t.Error("expected new state to have ResultsFocused=false")
 		}
 	})
 
 	t.Run("toggle results focused", func(t *testing.T) {
-		state := NewProjectSearchState()
+		state := NewState()
 		state.ResultsFocused = true
 		if !state.ResultsFocused {
 			t.Error("expected ResultsFocused=true after setting")
@@ -498,7 +504,7 @@ func TestProjectSearchState_ResultsFocused(t *testing.T) {
 }
 
 func TestProjectSearchState_NearestMatchIndex(t *testing.T) {
-	state := NewProjectSearchState()
+	state := NewState()
 	state.Results = []SearchFileResult{
 		{Path: "a.go", Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}}},
 		{Path: "b.go", Matches: []SearchMatch{{LineNo: 5}}},

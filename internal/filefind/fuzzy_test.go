@@ -1,4 +1,4 @@
-package filebrowser
+package filefind
 
 import (
 	"testing"
@@ -131,7 +131,7 @@ func TestFuzzyMatch_EmptyTarget(t *testing.T) {
 }
 
 func TestFuzzySort_ByScore(t *testing.T) {
-	matches := []QuickOpenMatch{
+	matches := []Match{
 		{Path: "low.go", Score: 10},
 		{Path: "high.go", Score: 100},
 		{Path: "med.go", Score: 50},
@@ -145,7 +145,7 @@ func TestFuzzySort_ByScore(t *testing.T) {
 }
 
 func TestFuzzySort_TiebreakByLength(t *testing.T) {
-	matches := []QuickOpenMatch{
+	matches := []Match{
 		{Path: "very/long/path.go", Score: 50},
 		{Path: "short.go", Score: 50},
 		{Path: "medium/path.go", Score: 50},
@@ -216,5 +216,31 @@ func TestFuzzyFilter_ExtractsName(t *testing.T) {
 	}
 	if matches[0].Path != "src/app/main.go" {
 		t.Errorf("Path should be 'src/app/main.go', got %q", matches[0].Path)
+	}
+}
+
+// Subsequence matching lights up any character in the right order, so a short
+// query paints stray letters far from what the user perceives as the match.
+// Only runs of two or more, and single characters that start a segment or a
+// word, survive into the highlight.
+func TestSignificantRangesDropStrayCharacters(t *testing.T) {
+	_, ranges := FuzzyMatch("wd", "website/docs/workspaces-plugin.md")
+	if len(ranges) == 0 {
+		t.Fatal("no match to filter")
+	}
+	got := significantRanges("website/docs/workspaces-plugin.md", ranges)
+	for _, r := range got {
+		if r.End-r.Start >= 2 {
+			continue
+		}
+		if !atWordStart("website/docs/workspaces-plugin.md", r.Start) {
+			t.Errorf("isolated character at %d survived the filter", r.Start)
+		}
+	}
+
+	// A run the user typed as one word is never dropped.
+	_, ranges = FuzzyMatch("view", "internal/app/view.go")
+	if got := significantRanges("internal/app/view.go", ranges); len(got) == 0 {
+		t.Fatal("a whole-word match was filtered away")
 	}
 }

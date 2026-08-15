@@ -8,29 +8,38 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.viewMode == ViewModeList && p.docSearchActive() {
+		return []plugin.Command{
+			{ID: "search-open", Name: "Open", Description: "Open the selected file in this pane", Context: "workspace-doc-search", Priority: 1},
+			{ID: "search-open-tab", Name: "Tab+", Description: "Open the selected file in a new tab", Context: "workspace-doc-search", Priority: 2},
+			{ID: "search-cancel", Name: "Cancel", Description: "Close the search and return to the document", Context: "workspace-doc-search", Priority: 3},
+		}
+	}
 	if p.viewMode == ViewModeList && p.docFocused() {
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 4},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 5},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 2},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 3},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 4},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 5},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 6},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 7},
 		}
 		if doc, _ := p.activeDocPane(); doc != nil && doc.view() != nil && terminallink.Markdown(doc.view().Title()) {
 			renderName := "Raw"
 			if !doc.view().Rendered() {
 				renderName = "Render"
 			}
-			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 6})
+			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 8})
 		}
 		cmds = append(cmds,
-			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 7},
-			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 8},
-			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 9},
-			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 10},
-			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 11},
-			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 12},
-			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 9},
+			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 10},
+			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 11},
+			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 12},
+			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 14},
+			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 15},
 		)
 		return cmds
 	}
@@ -297,6 +306,19 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-list", Priority: 8},
 		}
 
+		// F opens a document pane, and kanban draws no pane tree, so the key is
+		// only real in list view (see openFinderPane). A footer hint for a key
+		// that does nothing is worse than no hint: the fix is to stop
+		// advertising it where it cannot work, not to make kanban silently
+		// switch views out from under the board.
+		if p.viewMode == ViewModeList {
+			// Priority 8 was this command's home until the Diff pane took it;
+			// 9-16 are the agent and worktree blocks. 17 keeps the ordering
+			// deterministic without renumbering them — see the merge note in
+			// the commit message if Find should sit beside Diff instead.
+			cmds = append(cmds, plugin.Command{ID: "find-file", Name: "Find", Description: "Open a file pane on the file finder", Context: "workspace-list", Priority: 17})
+		}
+
 		// Shell-specific commands when shell is selected
 		if p.selectingShell() {
 			shell := p.getSelectedShell()
@@ -353,11 +375,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Task linking
 			if wt.TaskID != "" {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 15},
 				)
 			} else {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 15},
 				)
 			}
 		}
@@ -427,6 +449,12 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeFilePicker:
 		return "workspace-file-picker"
 	default:
+		// A pane-scoped search is its own text-input context: while a query has
+		// focus the document's keys — and the host's root-context q — must not
+		// take printable characters from it.
+		if p.docSearchActive() {
+			return "workspace-doc-search"
+		}
 		if p.docFocused() {
 			return "workspace-doc"
 		}
@@ -454,6 +482,9 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
+	if p.docSearchActive() {
+		return true
+	}
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
 		return true
 	}
@@ -477,6 +508,10 @@ func (p *Plugin) ConsumesTextInput() bool {
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
 	if p.docInfo != nil {
+		return true
+	}
+	// A pane-scoped search surface is a modal with the keyboard, box or no box.
+	if p.docSearchActive() {
 		return true
 	}
 	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive

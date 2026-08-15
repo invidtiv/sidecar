@@ -1,4 +1,4 @@
-package filebrowser
+package filefind
 
 import (
 	"os"

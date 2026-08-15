@@ -52,6 +52,17 @@ type Model struct {
 
 	renderWidth   int
 	renderedLines []string
+
+	// Laying out a document is O(lines): every source line is measured, given a
+	// gutter cell, and possibly wrapped. View, maxScroll and displayRowForLine
+	// all need the result, and clampScroll runs on every scroll key, so a large
+	// file would pay that walk several times per keystroke. Hold the last pass
+	// and rebuild it only when something it depends on moves.
+	layout       displayRows
+	layoutKey    layoutKey
+	layoutValid  bool
+	contentGen   uint64
+	layoutBuilds int // test-visible count of full layout passes
 }
 
 // New creates an empty document viewer. A nil renderer uses the default
@@ -118,7 +129,7 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.invalidateRender()
 	if m.targetLine > 0 && msg.Result.Error == nil {
 		m.rendered = false
-		m.scroll = m.targetLine - 1
+		m.scroll = m.displayRowForLine(m.targetLine)
 	} else if m.hasPendingScroll {
 		m.scroll = m.pendingScroll
 	}
@@ -170,7 +181,7 @@ func (m *Model) ApplyLine(line int) {
 	m.rendered = false
 	m.hasPendingScroll = false
 	if !m.loading {
-		m.scroll = line - 1
+		m.scroll = m.displayRowForLine(line)
 		m.clampScroll()
 	}
 }
@@ -195,13 +206,13 @@ func (m *Model) View() string {
 		return ""
 	}
 
-	lines := m.displayLines()
+	display := m.display()
 	rows := make([]string, m.height)
 	for i := range rows {
 		lineIndex := m.scroll + i
 		line := ""
-		if lineIndex < len(lines) {
-			line = lines[lineIndex]
+		if lineIndex < len(display.rows) {
+			line = display.rows[lineIndex]
 		}
 		rows[i] = fitLine(line, m.width)
 	}
@@ -269,42 +280,124 @@ func (m *Model) ToggleWrap() {
 // Title returns the document's relative path.
 func (m *Model) Title() string { return m.path }
 
-func (m *Model) displayLines() []string {
-	src := m.lines()
-	if !m.wrap || m.width <= 0 {
-		return src
+// displayRows is one render pass worth of visual rows plus the mapping back to
+// source lines. starts[n-1] is the row index where source line n begins, so
+// scrolling and ApplyLine stay expressible in source-line terms even when wrap
+// turns one source line into several rows.
+type displayRows struct {
+	rows   []string
+	starts []int
+}
+
+// docContent is the document's text before layout. banner counts leading rows
+// that are viewer chrome rather than source lines, and numbered reports whether
+// the remaining lines map 1:1 onto source lines.
+type docContent struct {
+	lines    []string
+	banner   int
+	numbered bool
+}
+
+// layoutKey names everything a laid-out document depends on. Width changes the
+// gutter and the wrap points, wrap and rendered change what the lines are, and
+// contentGen moves whenever the document itself is replaced.
+type layoutKey struct {
+	width      int
+	wrap       bool
+	rendered   bool
+	contentGen uint64
+}
+
+func (m *Model) currentLayoutKey() layoutKey {
+	return layoutKey{width: m.width, wrap: m.wrap, rendered: m.rendered, contentGen: m.contentGen}
+}
+
+func (m *Model) display() displayRows {
+	// A placeholder is a handful of lines that depend on transient state the
+	// cache key does not track - whether a load is in flight, which path was
+	// armed, what the error said. It is cheap enough to lay out every time, and
+	// doing so keeps the cache honest about the one thing it is for: documents.
+	if lines, ok := m.placeholder(); ok {
+		return m.layOutContent(docContent{lines: lines})
 	}
-	out := make([]string, 0, len(src))
-	for _, line := range src {
-		out = append(out, wrapLine(line, m.width)...)
+
+	key := m.currentLayoutKey()
+	if m.layoutValid && m.layoutKey == key {
+		return m.layout
+	}
+	rows := m.layOut()
+	m.layout = rows
+	m.layoutKey = key
+	m.layoutValid = true
+	return rows
+}
+
+func (m *Model) layOut() displayRows {
+	m.layoutBuilds++
+	return m.layOutContent(m.content())
+}
+
+func (m *Model) layOutContent(content docContent) displayRows {
+	gutter := Gutter{}
+	if content.numbered {
+		gutter = NewGutterForWidth(len(content.lines)-content.banner, m.width)
+	}
+	textWidth := m.width - gutter.Width()
+
+	out := displayRows{rows: make([]string, 0, len(content.lines))}
+	for i, line := range content.lines {
+		first, cont := gutter.Blank(), gutter.Blank()
+		if i >= content.banner {
+			first = gutter.Number(i - content.banner + 1)
+			out.starts = append(out.starts, len(out.rows))
+		}
+		if !m.wrap || textWidth <= 0 {
+			out.rows = append(out.rows, first+line)
+			continue
+		}
+		for wi, segment := range wrapLine(line, textWidth) {
+			prefix := cont
+			if wi == 0 {
+				prefix = first
+			}
+			out.rows = append(out.rows, prefix+segment)
+		}
 	}
 	return out
 }
 
-func (m *Model) lines() []string {
-	if m.loading {
-		return []string{"Loading document…", m.path}
+// displayRowForLine maps a 1-based source line to the row that shows it.
+func (m *Model) displayRowForLine(line int) int {
+	if line <= 1 {
+		return 0
 	}
-	if m.result.Error != nil {
-		return []string{"Document unavailable", m.path, m.result.Error.Error()}
+	starts := m.display().starts
+	if idx := line - 1; idx < len(starts) {
+		return starts[idx]
 	}
-	if m.result.IsImage {
-		return []string{"Image preview is not supported"}
+	if len(starts) > 0 {
+		return starts[len(starts)-1]
 	}
-	if m.result.IsBinary {
-		return []string{"Binary preview is not supported"}
-	}
-	if m.result.Content == "" {
-		return []string{"Empty document"}
+	return line - 1
+}
+
+func (m *Model) content() docContent {
+	if lines, ok := m.placeholder(); ok {
+		return docContent{lines: lines}
 	}
 	var lines []string
+	numbered := false
 	if !m.rendered {
+		// Raw source: rows and source lines are the same thing.
+		numbered = true
 		if len(m.result.HighlightedLines) > 0 {
 			lines = m.result.HighlightedLines
 		} else {
 			lines = m.result.Lines
 		}
 	} else {
+		// Glamour output has no 1:1 mapping back to source lines, so numbering
+		// it would be a lie.
 		if m.renderWidth != m.width {
 			m.renderedLines = m.renderer.RenderContent(m.result.Content, m.width)
 			m.renderWidth = m.width
@@ -312,18 +405,46 @@ func (m *Model) lines() []string {
 		lines = m.renderedLines
 	}
 	if m.result.IsTruncated {
-		return append([]string{"Preview truncated", ""}, lines...)
+		return docContent{
+			lines:    append([]string{"Preview truncated", ""}, lines...),
+			banner:   2,
+			numbered: numbered,
+		}
 	}
-	return lines
+	return docContent{lines: lines, numbered: numbered}
+}
+
+// placeholder returns the stand-in text shown when there is no document body to
+// number.
+func (m *Model) placeholder() ([]string, bool) {
+	if m.loading {
+		return []string{"Loading document…", m.path}, true
+	}
+	if m.result.Error != nil {
+		return []string{"Document unavailable", m.path, m.result.Error.Error()}, true
+	}
+	if m.result.IsImage {
+		return []string{"Image preview is not supported"}, true
+	}
+	if m.result.IsBinary {
+		return []string{"Binary preview is not supported"}, true
+	}
+	if m.result.Content == "" {
+		return []string{"Empty document"}, true
+	}
+	return nil, false
 }
 
 func (m *Model) invalidateRender() {
 	m.renderWidth = -1
 	m.renderedLines = nil
+	m.contentGen++
+	m.layoutValid = false
+	m.layout = displayRows{}
 }
 
 func (m *Model) maxScroll() int {
-	return max(len(m.displayLines())-m.height, 0)
+	return max(len(m.display().rows)-m.height, 0)
 }
 
 func (m *Model) clampScroll() {

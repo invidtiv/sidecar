@@ -440,6 +440,16 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// unreachable. A terminal in interactive mode never gets here: that mode
 	// dispatches before the list keys and keeps Tab for the shell.
 	if msg.String() == "tab" || msg.String() == "shift+tab" {
+		// A live pane search owns Tab, exactly as the same surface does in the
+		// Files plugin: it moves focus inside the surface — query ↔ results —
+		// rather than cycling panes. Letting the ring have it first left the box
+		// drawn, cursor and all, over a pane that no longer took keys: a modal
+		// that looks focused, is not, and cannot be dismissed.
+		if p.docSearchActive() {
+			if handled, cmd := p.handleDocKey(msg); handled {
+				return cmd
+			}
+		}
 		// Leaving a live terminal search input the way the global overview
 		// leaves a focused filter: stop taking keystrokes, keep the query and
 		// its matches, then move focus. Without this the search box would keep
@@ -939,6 +949,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.loadOpenTasks()
 		}
 	case "F":
+		// Open a file pane on the fuzzy file finder. F is the file key here for
+		// the same reason it is in the Files plugin's neighbourhood: fetching a
+		// PR moved to P, which is free and says what it does.
+		return p.openFinderPane()
+	case "P":
 		// Fetch remote PR as workspace
 		p.viewMode = ViewModeFetchPR
 		p.fetchPRLoading = true

@@ -228,6 +228,10 @@ type Plugin struct {
 	issueModelNextID int
 	// docInfo is the file-info modal over a workspace document tab.
 	docInfo *docview.Info
+	// docFinderCaches holds one file list per pane root, so the file finder
+	// walks a directory tree once for every pane rooted there rather than once
+	// per ctrl+p. Dropped on Init: a project switch invalidates every root.
+	docFinderCaches map[string]*docFinderCache
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -653,6 +657,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
 	p.issueModelNextID = 0
+	p.docFinderCaches = nil
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {

@@ -1,6 +1,7 @@
 package filebrowser
 
 import (
+	"github.com/marcus/sidecar/internal/filefind"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,7 +59,7 @@ type FileTree struct {
 	Root        *FileNode
 	RootDir     string
 	FlatList    []*FileNode // Flattened visible nodes for cursor navigation
-	gitIgnore   *GitIgnore
+	gitIgnore   *filefind.GitIgnore
 	SortMode    SortMode // Current sort mode
 	ShowIgnored bool     // Whether to include ignored files in FlatList
 }
@@ -68,7 +69,7 @@ func NewFileTree(rootDir string) *FileTree {
 	return &FileTree{
 		RootDir:     rootDir,
 		FlatList:    make([]*FileNode, 0),
-		gitIgnore:   NewGitIgnore(),
+		gitIgnore:   filefind.NewGitIgnore(),
 		ShowIgnored: true, // Show ignored files by default
 	}
 }
@@ -76,7 +77,7 @@ func NewFileTree(rootDir string) *FileTree {
 // Build initializes the tree by loading the root directory's children.
 func (t *FileTree) Build() error {
 	// Load .gitignore from root
-	t.gitIgnore = NewGitIgnore()
+	t.gitIgnore = filefind.NewGitIgnore()
 	_ = t.gitIgnore.LoadFile(filepath.Join(t.RootDir, ".gitignore"))
 
 	t.Root = &FileNode{

@@ -23,10 +23,9 @@ A full-featured terminal file browser with syntax-highlighted previews, project-
 
 | Key | Action |
 |-----|--------|
-| `ctrl+p` | Quick open (fuzzy file search) |
-| `ctrl+s` | Search across entire project |
-| `/` | Filter visible files in tree |
-| `?` | Search within current file |
+| `ctrl+p` | Find a file by name |
+| `f` | Search the project's contents |
+| `/` | Filter visible files in tree, or search the previewed file |
 | `\` | Toggle tree pane |
 
 ## Core Concepts
@@ -60,7 +59,7 @@ Vim-style movement through your project structure.
 
 Four search modes, each optimized for different scenarios:
 
-#### Quick Open (`ctrl+p`)
+#### Find (`ctrl+p`)
 
 Fuzzy file finder that caches up to 50,000 files for instant results. Type any part of the filename—no exact matches needed.
 
@@ -68,7 +67,7 @@ Fuzzy file finder that caches up to 50,000 files for instant results. Type any p
 Example: "mdplug" matches "website/docs/files-plugin.md"
 ```
 
-#### Project Search (`ctrl+s`)
+#### Search (`f`)
 
 Full-text search across your entire codebase using ripgrep. Supports regex, case sensitivity toggles, and whole-word matching. Shows up to 1,000 matches with context.
 
@@ -77,11 +76,11 @@ Example: Search "TODO" to find all pending tasks
 Toggle regex mode for pattern matching
 ```
 
-#### Tree Filter (`/`)
+#### Tree Filter (`/`, in the tree pane)
 
 Filter visible files in the tree by name. Great for quick navigation in the current view.
 
-#### Content Search (`?`)
+#### InFile (`/`, in the preview pane)
 
 Search within the currently previewed file. Use `n`/`N` to jump between matches.
 
@@ -251,8 +250,8 @@ Reveal opens the system file manager with the file selected (macOS Finder, Windo
 
 | Key | Action |
 |-----|--------|
-| `ctrl+p` | Quick open (fuzzy file finder) |
-| `ctrl+s` | Project search (ripgrep) |
+| `ctrl+p` | Find a file by name (fuzzy file finder) |
+| `f` | Search the project's contents (ripgrep) |
 | `\` | Toggle tree pane visibility |
 | `tab` | Switch between tree and preview |
 
@@ -282,13 +281,13 @@ Reveal opens the system file manager with the file selected (macOS Finder, Windo
 | `g` / `G` | Jump to top/bottom |
 | `ctrl+d` / `ctrl+u` | Page down/up |
 | `h` or `←` or `esc` | Return to tree |
-| `?` | Search within file |
+| `/` | Search within file (InFile) |
 | `n` / `N` | Next/previous search match |
 | `m` | Toggle markdown rendering |
 | `y` | Copy file contents |
 | `c` | Copy file path |
 
-### Quick Open Modal
+### Find Modal
 
 | Key | Action |
 |-----|--------|
@@ -297,7 +296,7 @@ Reveal opens the system file manager with the file selected (macOS Finder, Windo
 | `enter` | Open selected file |
 | `esc` | Cancel |
 
-### Project Search Modal
+### Search Modal
 
 | Key | Action |
 |-----|--------|
@@ -313,8 +312,8 @@ Supports regex mode, case sensitivity, and whole-word toggles (see hints in moda
 
 The files plugin is built for speed, even on large codebases:
 
-- **Quick open**: Caches 50,000 files in memory with 2-second scan timeout—handles massive monorepos
-- **Project search**: Uses ripgrep (one of the fastest code search tools) with 30-second timeout
+- **Find**: Caches 50,000 files in memory with 2-second scan timeout—handles massive monorepos
+- **Search**: Uses ripgrep (one of the fastest code search tools) with 30-second timeout
 - **Preview rendering**: Syntax highlighting is cached until file changes
 - **File watching**: Efficient fsnotify-based watching only for the previewed file
 - **Lazy loading**: Tree nodes expand on demand, keeping memory usage low
@@ -322,21 +321,21 @@ The files plugin is built for speed, even on large codebases:
 **Limits:**
 - Preview files truncated at 500KB (with warning shown)
 - Max 10,000 lines displayed per file
-- Max 1,000 search results shown per project search
-- Max 50 quick open results displayed
+- Max 1,000 results shown per search
+- Max 50 Find results displayed
 
 ## Common Workflows
 
 ### Finding and Editing a File
 
-1. Press `ctrl+p` for quick open
+1. Press `ctrl+p` to find a file by name
 2. Type part of the filename (fuzzy matching)
 3. Press `enter` to preview
 4. Press `⌘+o` (or configured) to open in your editor
 
 ### Searching Across the Project
 
-1. Press `ctrl+s` to open project search
+1. Press `f` to search the project's contents
 2. Type your search query (supports regex)
 3. Navigate results with `j/k`
 4. Press `enter` to jump to the match
@@ -357,20 +356,20 @@ The files plugin is built for speed, even on large codebases:
 
 ## Tips and Tricks
 
-- **Use quick open for everything**: `ctrl+p` is faster than navigating the tree manually
+- **Use Find for everything**: `ctrl+p` is faster than navigating the tree manually
 - **Markdown previews**: Press `m` in any `.md` file to see rendered output
 - **Watch AI changes**: Preview a file before starting an AI agent—watch it update in real-time
 - **Multi-line copy**: Click and drag in the preview to select specific lines to copy
-- **Regex search**: In project search, toggle regex mode to find patterns like `TODO|FIXME|HACK`
+- **Regex search**: In Search, toggle regex mode to find patterns like `TODO|FIXME|HACK`
 - **Path completion**: When moving files, start typing a path to see directory suggestions
 - **Tree filtering**: Use `/` to quickly filter visible files without changing your tree expansion state
 
 ## Troubleshooting
 
-**Quick open shows no results**
+**Find shows no results**
 - Check the timeout wasn't exceeded (look for timeout message)
 - Some files may be ignored by git patterns
-- Try project search (`ctrl+s`) instead—it searches all files
+- Try Search (`f`) instead—it searches all files
 
 **Preview shows "Binary file"**
 - File contains null bytes in the first 512 bytes

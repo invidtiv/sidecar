@@ -555,11 +555,11 @@ Opens confirmation with options:
 
 ### Fetching Remote PRs
 
-Press `F` to fetch a pull request created remotely (e.g., via Claude Code on your phone) and create a local workspace from it.
+Press `P` to fetch a pull request created remotely (e.g., via Claude Code on your phone) and create a local workspace from it.
 
 | Key | Action |
 |-----|--------|
-| `F` | Open PR fetch modal |
+| `P` | Open PR fetch modal |
 
 The modal lists open PRs from GitHub (via `gh pr list`). Filter by typing, select a PR, and press Enter. Sidecar fetches the branch and creates a worktree tracking it, with the PR URL pre-linked. Start an agent with `s` to continue the work locally.
 
@@ -773,7 +773,8 @@ All keyboard shortcuts by context:
 | `l`, `→` | Next column / focus preview |
 | `v` | Toggle view mode |
 | `n` | Create workspace |
-| `F` | Fetch remote PR as workspace |
+| `P` | Fetch remote PR as workspace |
+| `F` | Open a file pane on the file finder (list view) |
 | `D` | Delete workspace / Delete shell |
 | `p` | Push branch |
 | `d` | Show diff |
@@ -824,12 +825,27 @@ File tabs beside the selected workspace or shell terminal. `q` hides the
 pane and remembers the set; `x` on the last tab forgets it. Each surface
 restores its own tabs.
 
+A pane can search for its own next file. `ctrl+p` opens Find, the fuzzy file
+finder, and `f` opens Search, a project-wide ripgrep search — the same two
+keys under the same two names the Files plugin uses, both rooted at the
+pane's own workspace or shell directory and drawn as a modal inside the
+pane, below its header row: sized to its own content and centred with the
+document dimmed around it when the pane is wide enough to show a readable
+margin of itself, and taking the whole pane when it is not. The header row
+keeps saying which mode the pane is in at every size. While one is open it owns every key
+in the pane; `esc` closes it, `enter` loads the hit in the active tab,
+and `shift+enter` opens it in a new tab. `F` in the list view opens a new file
+pane straight into the finder; kanban draws no pane tree, so it is offered
+only in the list.
+
 | Key | Action |
 |-----|--------|
 | `j`, `↓` | Scroll down |
 | `k`, `↑` | Scroll up |
 | `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
 | `g`, `G` | Jump to start / end |
+| `ctrl+p` | Find a file by name in this pane |
+| `f` | Search the project in this pane |
 | `x` | Close the active tab. Last tab forgets the set |
 | `{`, `}` | Previous / next file tab |
 | `m` | Toggle rendered / raw markdown (markdown only) |

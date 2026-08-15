@@ -70,6 +70,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.docInfo.ApplyGit(msg)
 		}
 		return p, nil
+	case docSearchMsg:
+		// A pane's own search traffic — a file scan, a debounce tick, a ripgrep
+		// result — routed back to the pane that issued it. The surface drops what
+		// is stale for its epoch.
+		return p, p.applyDocSearchMsg(msg)
 	case docview.RevealErrorMsg:
 		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 2*time.Second)
 	case issueview.LoadedMsg:

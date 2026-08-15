@@ -255,8 +255,9 @@ active tab, and each tab's scroll.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `/` | search | Filter files by name |
-| `ctrl+p` | quick-open | Fuzzy file finder |
-| `ctrl+s` | project-search | Project-wide search |
+| `ctrl+p` | quick-open | Find — a file by name (same key, same name as a workspace file pane) |
+| `f` | project-search | Search — the project's contents (ripgrep) |
+| `/` (preview) | search-content | InFile — this file's contents |
 | `a` | create-file | Create new file |
 | `A` | create-dir | Create new directory |
 | `d` | delete | Delete (with confirmation) |
@@ -321,6 +322,8 @@ active tab, and each tab's scroll.
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |
+| `F` | find-file | Open a file pane on the fuzzy file finder |
+| `P` | fetch-pr | Fetch a remote PR as a workspace |
 
 
 ### Interactive Mode
@@ -359,6 +362,8 @@ tabs only while a Diff leaf is focused; they do not cycle document tabs.
 | `k` / `up` | scroll-up | Scroll up |
 | `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
 | `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
+| `ctrl+p` | find-file | Find a file by name in this pane (modal scoped to the pane) |
+| `f` | search-project | Search the project in this pane (modal scoped to the pane) |
 | `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
 | `{` / `}` | prev-tab / next-tab | Previous / next file tab |
 | `m` | render | Toggle rendered/raw markdown (markdown only; no-op otherwise) |
@@ -369,6 +374,10 @@ tabs only while a Diff leaf is focused; they do not cycle document tabs.
 | `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the workspace split |
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and document |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
+
+While a pane search is open (`workspace-doc-search`) it owns every key in
+the pane: `esc` closes it, `enter` loads the hit in the active tab, and
+`shift+enter` opens it in a new tab.
 
 ### Diff Pane
 

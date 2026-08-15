@@ -1757,6 +1757,13 @@ func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
 // consumesTextInput returns true when the active context should treat printable
 // keys as text input (block app-level navigation shortcuts).
 func (m *Model) consumesTextInput() bool {
+	return Model(*m).textInputFocused()
+}
+
+// textInputFocused is consumesTextInput for the value receivers — the footer,
+// above all, which has to know whether the keys it is about to advertise are
+// already spoken for.
+func (m Model) textInputFocused() bool {
 	// A global view overlays the plugin pane and takes keyboard focus, so a
 	// plugin sitting in a text-input mode underneath it does not consume keys.
 	// focusedSurface answers nil for exactly that case.

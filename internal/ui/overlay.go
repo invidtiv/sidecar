@@ -133,6 +133,21 @@ func OverlayModal(background, modal string, width, height int) string {
 	// Calculate modal dimensions and position
 	modalWidth := maxLineWidth(modalLines)
 	modalHeight := len(modalLines)
+	if modalWidth > 0 && modalWidth+2 <= width {
+		// A blank column either side. Without it the dimmed text behind the
+		// modal runs straight into the box's border — "runes := []r╭───" reads
+		// as two overlapping strings rather than as a box over a page — and the
+		// gutter costs a column the box was never going to use. The box's own
+		// position is unchanged: padding both sides moves the centre by nothing.
+		for i := range modalLines {
+			pad := modalWidth - ansi.StringWidth(modalLines[i])
+			if pad < 0 {
+				pad = 0
+			}
+			modalLines[i] = " " + modalLines[i] + strings.Repeat(" ", pad) + " "
+		}
+		modalWidth += 2
+	}
 	startX := (width - modalWidth) / 2
 	startY := (height - modalHeight) / 2
 	if startX < 0 {
