@@ -2,7 +2,7 @@
 > and durable-write layer, the tmux session helpers, and shell creation now live
 > in `internal/workspaceops`. Steps 4 to 6 — global shell create, extracting the
 > git layer, and global worktree create — carried forward into
-> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).
+> [Workspaces: finishing the cross-project surface](workspaces-cross-project-completion.md).
 >
 > Read the "Correction" section before trusting any survey like this one: the
 > first version of this document counted receivers and concluded the move was

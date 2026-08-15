@@ -1,5 +1,5 @@
 > **Deprecated — superseded by
-> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).**
+> [Workspaces: finishing the cross-project surface](../implemented/workspaces-cross-project-completion.md).**
 >
 > Parts of this shipped: one header grammar, one row grammar, the shared View
 > surface, project sorting, and per-scope persistence. Parts were deliberately

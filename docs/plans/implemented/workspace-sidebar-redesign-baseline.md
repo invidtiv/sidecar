@@ -1,6 +1,6 @@
 > **Implemented.** Every finding recorded here was fixed; the "Still open" items
 > moved into
-> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).
+> [Workspaces: finishing the cross-project surface](workspaces-cross-project-completion.md).
 > The golden fixture it introduced is live at
 > `internal/workspacelist/testdata/baseline-sidebar.txt`.
 

@@ -1,15 +1,33 @@
 # Workspaces: finishing the cross-project surface
 
-**Status:** active
+**Status:** implemented
 **Branch:** `workspace-panel-redesign`
 **Written:** 2026-08-15, at `c313c741`
 **Supersedes:** [the original sidebar redesign](../deprecated/workspace-sidebar-redesign.md)
-**Companions:** [baseline](../implemented/workspace-sidebar-redesign-baseline.md) ·
-[extraction brief](../implemented/workspace-create-extraction.md)
+**Companions:** [baseline](workspace-sidebar-redesign-baseline.md) ·
+[extraction brief](workspace-create-extraction.md)
 
-This is a working brief for the next session, not a specification. It says what
-is true now, what was decided and why, what to build next, and which mistakes
-this branch already made so you do not repeat them.
+This was the working brief for completing the cross-project Workspaces surface.
+It is retained as the decision and implementation record.
+
+## Completion
+
+Implemented on 2026-08-15. Global Workspaces can now create shells and
+worktrees in a chosen project, follow the created row, delete shells, and route
+worktree merges through the existing project workflow. Project and global
+creation share the same worktree planner, setup, journal, environment, agent
+launch, and refusal seams; global actions do not instantiate or temporarily
+switch project plugins.
+
+The implementation was independently reviewed through two fix cycles, merged
+with the latest `main`, and independently reviewed again at the integration
+boundary. Focused tests, the full Go build/vet/test gates, diff checks, and an
+isolated real-app render of both global create flows passed. Mouse-only section
+and header actions are covered by direct hit-region tests because the headless
+tmux driver cannot click.
+
+The remainder of this document preserves the pre-implementation brief and its
+decisions for historical context.
 
 ## The goal, in the user's words
 
