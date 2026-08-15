@@ -669,10 +669,9 @@ func TestDiffLoadedMsgPreservesCommitFileCursor(t *testing.T) {
 
 func TestLoadSelectedContentSkipsDiffOnOutput(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.previewTab = PreviewTabOutput
 	p.width, p.height = 120, 40
 	if cmd := p.loadSelectedDiff(); cmd != nil {
-		t.Fatal("loadSelectedDiff ran git while previewTab is Output")
+		t.Fatal("loadSelectedDiff ran git with no Diff leaf showing")
 	}
 	if p.diff.State == LoadStateLoading {
 		t.Fatal("Output tab marked the viewer loading")

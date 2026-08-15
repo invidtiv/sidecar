@@ -14,7 +14,6 @@ func terminalSearchPlugin(content string, base int) *Plugin {
 	p.width = 100
 	p.height = 30
 	p.activePane = PanePreview
-	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(content, base)

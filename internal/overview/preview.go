@@ -257,7 +257,7 @@ func (m *Model) previewSync() tea.Cmd {
 		return nil
 	}
 	if selected.ID == m.preview.workspaceID {
-		return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
+		return m.syncPreviewTerminal()
 	}
 	return m.previewSelect()
 }
@@ -295,21 +295,19 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if !keep {
 		m.restorePreviewPanes(workspace.ID)
 	}
-	extras := m.ensurePreviewExtras()
-
 	// An item with no single live pane behind it opens no model. There is nothing
 	// to read, and guessing among several panes is exactly what the catalog refuses.
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
 		m.closePreviewTerminal()
 		m.resetPreviewContent()
-		return extras
+		return nil
 	}
 	var pendingCmd tea.Cmd
 	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
 		pendingCmd = cmd
 	}
-	return tea.Batch(extras, m.syncPreviewTerminal(), pendingCmd)
+	return tea.Batch(m.syncPreviewTerminal(), pendingCmd)
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live
@@ -358,7 +356,7 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.previewDocKey(msg); handled {
 		return true, cmd
 	}
-	if handled, cmd := m.previewDiffKey(msg); handled {
+	if handled, cmd := m.previewDiffPaneKey(msg); handled {
 		return true, cmd
 	}
 	// The same acts on the terminal surface the live pane routes through OnKey.

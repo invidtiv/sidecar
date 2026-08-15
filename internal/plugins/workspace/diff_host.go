@@ -83,57 +83,7 @@ func (p *Plugin) diffDividerBox() (mouse.Rect, bool) {
 			return mouse.Rect{X: box.X, Y: box.Y + terminalHeaderRows, W: box.W, H: maxInt(box.H-terminalHeaderRows, 0)}, true
 		}
 	}
-	return p.diffTabBox()
-}
-
-func (p *Plugin) diffTabBox() (mouse.Rect, bool) {
-	content, ok := p.previewContentBox()
-	if !ok || content.H <= previewTabRows {
-		return mouse.Rect{}, false
-	}
-	return mouse.Rect{
-		X: content.X,
-		Y: content.Y + previewTabRows,
-		W: content.W,
-		H: content.H - previewTabRows,
-	}, true
-}
-
-func (p *Plugin) registerDiffTabRegions() {
-	if p.previewTab != PreviewTabDiff || p.selectingShell() {
-		return
-	}
-	box, ok := p.diffTabBox()
-	if !ok {
-		return
-	}
-	p.diff.SetSize(box.W, box.H)
-	p.attachDiffPaint()
-	for _, hit := range p.diff.FileHits(box) {
-		p.mouseHandler.HitMap.AddRect(hit.ID, hit.Rect.X, hit.Rect.Y, hit.Rect.W, hit.Rect.H, hit.Data)
-	}
-	if d := p.diff.DividerHit(box); d.W > 0 && d.H > 0 {
-		p.mouseHandler.HitMap.AddRect(regionDiffTabDivider, d.X, d.Y, d.W, d.H, nil)
-	}
-	p.registerDiffTabMinimap(box)
-}
-
-func (p *Plugin) registerDiffTabMinimap(box mouse.Rect) {
-	if p.diff.ViewMode != DiffViewFullFile || p.fullFileDiff == nil || box.W < workspacediff.CollapseThreshold {
-		return
-	}
-	listW := p.diff.EffectiveListWidth(box.W)
-	diffW := box.W - listW - 1
-	contentH := box.H - 2
-	if contentH < 1 {
-		contentH = 1
-	}
-	mmH := contentH
-	if total := p.fullFileDiff.TotalLines(); total < mmH {
-		mmH = total
-	}
-	mmX := box.X + listW + 1 + diffW - gitstatus.MinimapWidth
-	p.mouseHandler.HitMap.AddRect(regionDiffTabMinimap, mmX, box.Y+2, gitstatus.MinimapWidth, mmH, nil)
+	return mouse.Rect{}, false
 }
 
 func (p *Plugin) renderDiffContent(width, height int) string {

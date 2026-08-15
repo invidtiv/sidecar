@@ -16,7 +16,6 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
-	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -322,14 +321,9 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 }
 
 func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
-	if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-		m.registerPreviewTabRegions(box)
-		m.registerPreviewDiffRegions(box)
-		return
-	}
 	termBox, ok := m.previewPaneBox(panelayout.Terminal, box)
 	if ok {
-		m.registerPreviewTabRegions(termBox)
+		m.registerPreviewActionRegions(termBox)
 	}
 	m.registerPreviewDocRegions(box)
 	m.registerPreviewIssueRegions(box)
@@ -440,18 +434,6 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if key == "\\" {
 		return true, m.toggleWorkspaceSidebar()
 	}
-	if key == "," || key == "." {
-		// A focused content leaf owns comma/dot. Cycling Output/Diff/Task
-		// here would hide the tree the leaf lives in.
-		if !m.contentLeafFocused() && m.previewTabsVisible() {
-			delta := 1
-			if key == "," {
-				delta = -1
-			}
-			return true, m.cyclePreviewTab(delta)
-		}
-	}
-
 	// While the preview has focus its keys come first, so list navigation
 	// cannot move the cursor out from under the output being read.
 	if m.PreviewFocused() {
@@ -466,7 +448,7 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// live pane refuses and stays on the list — it does not navigate.
 		// Double-click is the remaining jump-to-project path. Diff/Task are
 		// views of the row, so typing always happens on Output.
-		return true, tea.Batch(m.ensureOutputTab(), m.enterPreviewInteractive())
+		return true, m.enterPreviewInteractive()
 	case "/":
 		cmd := m.focusList()
 		m.workspaces.FocusFilter()
@@ -796,12 +778,6 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	}
-	if tab, ok := action.Region.Data.(previewTabHit); ok {
-		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.setPreviewTab(workspacediff.Tab(tab))
-		}
-		return nil
-	}
 	if _, ok := action.Region.Data.(previewDocTabHit); ok {
 		return m.handlePreviewDocMouse(action)
 	}
@@ -835,17 +811,6 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			// press arms a gesture the release resolves, a drag selects, a double
 			// or triple click takes the word or the line, and the wheel belongs
 			// to the application only while it has asked for mouse reports.
-			if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-				switch action.Type {
-				case mouse.ActionScrollUp:
-					m.scrollVisiblePreviewTab(action.Delta)
-					return nil
-				case mouse.ActionScrollDown:
-					m.scrollVisiblePreviewTab(action.Delta)
-					return nil
-				}
-				return nil
-			}
 			switch m.previewPointerIntent(action, false, "") {
 			case tty.PointerPress:
 				return m.pressPreview(action)

@@ -456,8 +456,6 @@ func (p *Plugin) executeDelete() tea.Cmd {
 
 	// Clear preview pane content
 	p.resetDiffView()
-	p.cachedTaskID = ""
-	p.cachedTask = nil
 
 	return func() tea.Msg {
 		var warnings []string
@@ -608,7 +606,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.activePane == PanePreview && !p.termPanelFocused && tty.IsScrollbackKey(tty.ScrollbackWatched, msg) {
 		p.releaseTerminalDocProjection(false)
 	}
-	if p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+	if p.activePane == PanePreview {
 		if handled, cmd := p.handleTerminalSearchKey(msg, false); handled {
 			return cmd
 		}
@@ -653,16 +651,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
 			if !p.termPanelFocused {
 				p.termPanelFocused = true
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll it.
-		}
-		// Diff tab: route to internal two-pane navigation
-		if p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
 		}
 		// Scroll down: a terminal window moves towards its live bottom, a
 		// document's offset towards the end of its content.
@@ -684,16 +678,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
 			if p.termPanelFocused {
 				p.termPanelFocused = false
 				return nil
 			}
 			// Already at agent (top) — fall through to scroll agent output
-		}
-		// Diff tab: route to internal two-pane navigation
-		if p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
 		}
 		// Scroll up: a terminal window moves back through scrollback, a
 		// document's offset towards the top of its content.
@@ -730,10 +720,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.scrollOffset = 0
 			return p.loadSelectedContent()
 		}
-		// Diff tab: route to internal two-pane navigation
-		if p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		}
 		// Go to top: the oldest rows the surface holds, and the older ones behind
 		// them that the same jump on a live pane reaches for.
 		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
@@ -762,10 +748,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// Diff tab: route to internal two-pane navigation
-		if p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		}
 		// Go to bottom: the newest content, which for a terminal is the live
 		// edge it follows from.
 		if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
@@ -780,10 +762,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 	case "n":
-		// In diff tab: handle internally (next change navigation)
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		}
 		// Open type selector modal to choose between Shell and Worktree
 		p.viewMode = ViewModeTypeSelector
 		p.typeSelectorIdx = 1 // Default to Worktree (more common)
@@ -848,18 +826,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused {
 			// Right layout: move focus from agent to terminal panel
 			p.thawTermPanelWindow()
 			p.termPanelFocused = true
-		} else if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
 		}
 	case "enter":
-		// In diff tab file list: drill into diff pane
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff && p.diff.Focus == DiffTabFocusFileList {
-			return p.handleDiffTabKey(msg)
-		}
 		// Kanban mode: sync cursor to selection, then fall through to activate
 		if p.viewMode == ViewModeKanban {
 			oldShellSelected := p.shellSelected
@@ -876,8 +848,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		// Enter interactive mode (tmux input passthrough) - feature gated
-		// Only from Output tab or sidebar — Diff/Task tabs have no terminal to attach to.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
+		if p.activePane == PanePreview || p.activePane == PaneSidebar {
 			// Handle orphaned worktrees: start new agent instead of silently returning nil
 			if !p.selectingShell() {
 				wt := p.selectedWorktree()
@@ -929,14 +900,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
 			p.releaseTerminalDocProjection(false)
 			return nil
-		}
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
 		}
 		if p.activePane == PanePreview {
 			p.termPanelFocused = false // Reset when leaving preview
@@ -946,17 +914,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if !p.sidebarVisible {
 			p.toggleSidebar()
 			return p.resizeSelectedPaneCmd()
-		}
-		// In diff tab: handle hierarchical back navigation
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			if box, ok := p.diffTabBox(); ok {
-				p.diff.SetSize(box.W, box.H)
-			}
-			p.bindDiffView()
-			cmd, handled := p.diff.HandleKey(msg)
-			if handled {
-				return cmd
-			}
 		}
 		if p.activePane == PanePreview {
 			p.termPanelFocused = false
@@ -986,43 +943,17 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	case "\\":
 		return p.toggleSidebarCmd()
-	case ",":
-		return p.cyclePreviewTab(-1)
-	case ".":
-		return p.cyclePreviewTab(1)
-	case "{":
-		// Jump to previous file in diff tab
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.jumpToPrevFile()
-		}
-	case "}":
-		// Jump to next file in diff tab
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.jumpToNextFile()
-		}
-	case "f":
-		// In diff tab with diff pane focused: open file picker (legacy support)
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.openFilePicker()
-		}
 	case "r":
 		return func() tea.Msg { return RefreshMsg{} }
 	case tty.EnterInteractiveKeyAlt:
 		// E is the explicit type key. i is Sidecar's find-TD-task shortcut
 		// (td-ba46ea); enter remains the primary way in.
-		// Worktree Diff/Task tabs have no terminal. A shell always does, even if
-		// its selection inherited the worktree's previous tab value.
-		if p.activePane != PanePreview || p.previewTab == PreviewTabOutput || p.selectingShell() {
-			if p.termPanelFocused && p.termPanelVisible {
-				return p.enterTermPanelInteractiveMode()
-			}
-			return p.enterInteractiveMode()
+		if p.termPanelFocused && p.termPanelVisible {
+			return p.enterTermPanelInteractiveMode()
 		}
+		return p.enterInteractiveMode()
 	case "v":
-		// In preview pane on diff tab: cycle view mode
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		} else if p.activePane == PaneSidebar || p.viewMode == ViewModeKanban {
+		if p.activePane == PaneSidebar || p.viewMode == ViewModeKanban {
 			switch p.viewMode {
 			case ViewModeList:
 				p.viewMode = ViewModeKanban
@@ -1033,21 +964,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 				return p.pollSelectedAgentNowIfVisible()
 			}
 		}
-	case "V":
-		// In preview pane on diff tab: cycle view mode (unified → side-by-side → full-file)
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		}
-	case "z":
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.cycleDiffScope()
-		}
 	case "ctrl+d", "pgdown":
 		// Page down in preview pane (unified: increase offset toward bottom)
 		if p.activePane == PanePreview {
-			if p.previewTab == PreviewTabDiff {
-				return p.handleDiffTabKey(msg)
-			}
 			// A terminal surface pages by its own drawn rows, which is the shared
 			// rule's business; a document has only this plugin's height to go on.
 			if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
@@ -1063,9 +982,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+u", "pgup":
 		// Page up in preview pane (unified: decrease offset toward top)
 		if p.activePane == PanePreview {
-			if p.previewTab == PreviewTabDiff {
-				return p.handleDiffTabKey(msg)
-			}
 			if handled, cmd := p.handleWatchedScrollbackKey(msg); handled {
 				return cmd
 			}
@@ -1120,10 +1036,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		// Approve all pending prompts
 		return p.ApproveAll()
 	case "N":
-		// In diff tab: handle internally (prev change navigation)
-		if p.activePane == PanePreview && p.previewTab == PreviewTabDiff {
-			return p.handleDiffTabKey(msg)
-		}
 		// Reject pending prompt on selected worktree
 		wt := p.selectedWorktree()
 		if wt != nil && wt.Status == StatusWaiting && wt.Agent != nil {
@@ -1161,14 +1073,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.fetchPRError = ""
 		return p.fetchPRList()
 	case "m":
-		// In preview pane on task tab: toggle markdown render mode
-		// Otherwise: start merge workflow
-		if p.activePane == PanePreview && p.previewTab == PreviewTabTask {
-			p.taskMarkdownMode = !p.taskMarkdownMode
-			// Clear cached render to force re-render on mode change
-			p.taskMarkdownRendered = nil
-			return nil
-		}
 		// Start merge workflow
 		wt := p.selectedWorktree()
 		if wt != nil {
@@ -1199,9 +1103,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return p.switchTermPanelLayout()
 	default:
 		// Unhandled key in preview pane - flash to indicate attach is needed
-		// Only flash on the Output tab where there's a terminal to attach to.
-		// Diff and Task tabs have no interactive terminal.
-		if fullTmuxAttachEnabled() && p.activePane == PanePreview && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+		if fullTmuxAttachEnabled() && p.activePane == PanePreview {
 			canAttach := p.selectingShell() || (p.selectedWorktree() != nil && p.selectedWorktree().Agent != nil)
 			if canAttach {
 				p.flashPreviewTime = time.Now()
@@ -1955,22 +1857,4 @@ func (p *Plugin) handleFilePickerKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	return nil
-}
-
-// handleDiffTabKey is the Diff-tab host wrapper around View.HandleKey.
-func (p *Plugin) handleDiffTabKey(msg tea.KeyPressMsg) tea.Cmd {
-	if box, ok := p.diffTabBox(); ok {
-		p.diff.SetSize(box.W, box.H)
-	}
-	p.bindDiffView()
-	if msg.String() == "f" {
-		return p.openFilePicker()
-	}
-	cmd, handled := p.diff.HandleKey(msg)
-	if !handled && (msg.String() == "h" || msg.String() == "left") {
-		p.activePane = PaneSidebar
-		return nil
-	}
-	p.persistDiffViewMode()
-	return cmd
 }

@@ -6,19 +6,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestCommaAndPeriodCyclePreviewTabs(t *testing.T) {
-	p := &Plugin{
-		activePane: PanePreview,
-		previewTab: PreviewTabDiff,
+func TestCommaAndPeriodDoNotHideThePaneTree(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, false)
+	if !p.paneTreeShowing() {
+		t.Fatal("premise: tree is showing")
 	}
-
+	p.activePane = PanePreview
 	p.handleListKeys(tea.KeyPressMsg{Code: ',', Text: ","})
-	if p.previewTab != PreviewTabOutput {
-		t.Fatalf("previewTab after comma = %v, want Output", p.previewTab)
-	}
 	p.handleListKeys(tea.KeyPressMsg{Code: '.', Text: "."})
-	if p.previewTab != PreviewTabDiff {
-		t.Fatalf("previewTab after period = %v, want Diff", p.previewTab)
+	if !p.paneTreeShowing() || p.paneRoot == nil {
+		t.Fatal(",/. hid the pane tree")
 	}
 }
 

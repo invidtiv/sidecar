@@ -36,16 +36,7 @@ type FocusPane int
 
 const (
 	PaneSidebar FocusPane = iota // Worktree list
-	PanePreview                  // Preview pane (output/diff/task)
-)
-
-// PreviewTab represents the active tab in the preview pane.
-type PreviewTab int
-
-const (
-	PreviewTabOutput PreviewTab = iota // Agent output
-	PreviewTabDiff                     // Git diff
-	PreviewTabTask                     // TD task info
+	PanePreview                  // Preview pane (terminal + content leaves)
 )
 
 // Diff view types live in workspacediff so the global preview can use the

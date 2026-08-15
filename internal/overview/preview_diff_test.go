@@ -33,9 +33,6 @@ func TestOverviewCompositorDiffArmIsNotBlank(t *testing.T) {
 	if !strings.Contains(stripped, "Working Tree") && !strings.Contains(stripped, "Loading diff") {
 		t.Fatalf("Diff compositor arm drew a blank box:\n%s", stripped)
 	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 }
 
 func TestOverviewDiffFocusContextIsNotRoot(t *testing.T) {
@@ -62,9 +59,6 @@ func TestOverviewDiffFocusContextIsNotRoot(t *testing.T) {
 func TestWorkspacesKeyDotOnFocusedDiffLeafKeepsTree(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("premise: previewTab = %v, want Output", m.previewTab)
-	}
 	if !m.diffPaneFocused() {
 		t.Fatal("premise: Diff leaf should own the keyboard")
 	}
@@ -75,9 +69,6 @@ func TestWorkspacesKeyDotOnFocusedDiffLeafKeepsTree(t *testing.T) {
 	}
 	if cmd != nil {
 		run(t, m, cmd)
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf(". on focused Diff leaf set previewTab = %v (hid the tree)", m.previewTab)
 	}
 	if m.preview.diff == nil || panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) == nil {
 		t.Fatal(". hid the Diff leaf")
@@ -92,9 +83,6 @@ func TestWorkspacesKeyDotOnFocusedDiffLeafKeepsTree(t *testing.T) {
 	}
 	if cmd != nil {
 		run(t, m, cmd)
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf(", on focused Diff leaf set previewTab = %v (hid the tree)", m.previewTab)
 	}
 }
 
@@ -145,13 +133,9 @@ func TestOverviewDiffLeafRegistersFileHitsAndDragsLeafDivider(t *testing.T) {
 	}
 }
 
-func TestOverviewOpenPreviewDiffForcesOutput(t *testing.T) {
+func TestOverviewOpenPreviewDiffOpensLeaf(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	m.previewTab = workspacediff.TabDiff
 	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 	if m.preview.diff == nil {
 		t.Fatal("openPreviewDiff did not open a Diff leaf")
 	}

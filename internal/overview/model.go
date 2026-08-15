@@ -84,7 +84,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
-		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg, workspacediff.TaskMsg,
+		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg,
 		renameShellDoneMsg:
 		return true
 	default:
@@ -138,9 +138,7 @@ type Model struct {
 	sidebarVisible      bool
 	catalog             map[string]workspaceinventory.Workspace
 	preview             previewState
-	previewTab          workspacediff.Tab
 	diff                workspacediff.View
-	task                workspacediff.TaskView
 	previewExtrasID     string
 	terminalConfig      tty.Config
 	width               int
@@ -435,9 +433,6 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitFileDiffMsg:
 		cmd := m.diff.ApplyCommitFileDiff(msg)
 		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
-	case workspacediff.TaskMsg:
-		m.applyTask(msg)
-		return nil
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil

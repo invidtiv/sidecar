@@ -69,7 +69,6 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
 		return nil
 	}
-	p.previewTab = PreviewTabOutput
 	reopen := p.reopenHiddenIssuePane()
 	plan, ok := p.planOpen(PaneIssue)
 	if !ok {

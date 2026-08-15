@@ -36,17 +36,10 @@ func TestClickDiffChipOnMainWorktreeOpensLeaf(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
 	p.worktrees[0].IsMain = true
-	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = false
 
 	clickPreviewActionChip(t, p, previewActionDiff)
 
-	if p.previewTab == PreviewTabDiff {
-		t.Fatal("Diff chip set previewTab to Diff")
-	}
-	if p.previewTab != PreviewTabOutput {
-		t.Fatalf("previewTab = %v, want Output", p.previewTab)
-	}
 	if !p.paneTreeShowing() {
 		t.Fatal("tree is not showing after Diff chip click")
 	}
@@ -58,26 +51,16 @@ func TestClickDiffChipOnMainWorktreeOpensLeaf(t *testing.T) {
 	}
 }
 
-func TestClickDiffChipOnTopicTaskTabOpensLeaf(t *testing.T) {
+func TestClickDiffChipOnTopicWorktreeOpensLeaf(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
 	p.worktrees[0].TaskID = "td-abcd12"
-	p.previewTab = PreviewTabTask
 	p.sidebarVisible = false
-	if p.paneTreeShowing() {
-		t.Fatal("premise: Task tab hides the tree")
-	}
 
 	clickPreviewActionChip(t, p, previewActionDiff)
 
-	if p.previewTab == PreviewTabDiff {
-		t.Fatal("Diff chip set previewTab to Diff")
-	}
-	if p.previewTab != PreviewTabOutput {
-		t.Fatalf("previewTab = %v, want Output", p.previewTab)
-	}
 	if !p.paneTreeShowing() {
-		t.Fatal("tree is not showing after Diff chip click from Task tab")
+		t.Fatal("tree is not showing after Diff chip click")
 	}
 	if diff, _ := p.activeDiffPane(); diff == nil || diff.view() == nil || diff.view().Target.Identity() != workspacediff.IdentityWorkingTree {
 		t.Fatal("Diff chip did not open a working-tree Diff leaf")
@@ -92,17 +75,10 @@ func TestClickTaskChipOpensIssueLeaf(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
 	p.worktrees[0].TaskID = "td-abcd12"
-	p.previewTab = PreviewTabDiff
 	p.sidebarVisible = false
 
 	clickPreviewActionChip(t, p, previewActionTask)
 
-	if p.previewTab == PreviewTabDiff {
-		t.Fatal("Task chip left previewTab on Diff")
-	}
-	if p.previewTab != PreviewTabOutput {
-		t.Fatalf("previewTab = %v, want Output", p.previewTab)
-	}
 	issue, _ := p.activeIssuePane()
 	if issue == nil || issue.view() == nil || issue.view().IssueID() != "td-abcd12" {
 		t.Fatalf("Task chip did not open Issues leaf on TaskID: %#v", issue)

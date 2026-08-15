@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/features"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -67,6 +69,18 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 			cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
 			opened = cmd != nil
 		case uirequest.TargetKindDiff:
+			if p.paneRoot == nil {
+				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+					Instance: hostInstanceID(),
+					Host:     uirequest.HostName(),
+					PID:      os.Getpid(),
+					Status:   uirequest.StatusDeclined,
+					Reason:   features.WorkspaceDocPanesDisabledDiff,
+					Surface:  surface,
+					At:       time.Now().UTC(),
+				})
+				return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+			}
 			retargeted = p.willRetargetPane(PaneDiff)
 			spec := uirequest.DiffTarget(root, req.Target.Value)
 			cmd = p.openDiffPaneForSurface(root, surface, spec)

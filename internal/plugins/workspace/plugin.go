@@ -51,7 +51,6 @@ const (
 	regionPreviewPane   = "preview-pane"
 	regionPaneDivider   = "pane-divider"
 	regionWorktreeItem  = "workspace-item"
-	regionPreviewTab    = "preview-tab"
 	regionPreviewAction = "preview-action"
 	regionListFilter    = "workspace-list-filter"
 	// Agent choice modal IDs (modal library)
@@ -185,7 +184,6 @@ type Plugin struct {
 	// View state
 	viewMode     ViewMode
 	activePane   FocusPane
-	previewTab   PreviewTab
 	selectedIdx  int
 	scrollOffset int // Sidebar list scroll offset
 	visibleCount int // Number of visible list items
@@ -378,18 +376,8 @@ type Plugin struct {
 	taskLinkModal      *modal.Modal
 	taskLinkModalWidth int
 
-	// Cached task details for preview pane
-	cachedTaskID      string
-	cachedTask        *TaskDetails
-	cachedTaskFetched time.Time
-	taskLoading       bool // True when task fetch is in progress
-
-	// Markdown rendering for task view
-	markdownRenderer      *markdown.Renderer
-	taskMarkdownMode      bool     // true = rendered, false = raw
-	taskMarkdownRendered  []string // Cached rendered lines
-	taskMarkdownWidth     int      // Width used for cached render
-	taskRenderedLineCount int      // Total line count of last task render (for scroll clamping)
+	// Markdown renderer shared with issue panes.
+	markdownRenderer *markdown.Renderer
 
 	// Merge workflow state
 	mergeState      *MergeWorkflowState
@@ -540,7 +528,6 @@ func New() *Plugin {
 		shells:              make([]*ShellSession, 0),
 		viewMode:            ViewModeList,
 		activePane:          PaneSidebar,
-		previewTab:          PreviewTabOutput,
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
@@ -548,10 +535,8 @@ func New() *Plugin {
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
 		terminalHistory:     make(map[string]tty.HistoryReach),
 		markdownRenderer:    mdRenderer,
-		taskMarkdownMode:    true,  // Default to rendered mode
 		shellSelected:       false, // Start with first worktree selected, not shell
 		typeSelectorIdx:     1,     // Default to Worktree option
-		taskLoading:         false, // Explicitly initialized (td-3668584f)
 		applicationFocused:  true,
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
@@ -1373,9 +1358,6 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {
 		return false
 	}
-	if p.previewTab != PreviewTabOutput {
-		return false
-	}
 	wt := p.selectedWorktree()
 	if wt == nil || wt.IdentityKey() != worktreeName {
 		return false
@@ -1418,7 +1400,7 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
-	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+	if p.width > 0 && p.height > 0 {
 		var h int
 		if p.termPanelVisible {
 			_, h = p.calculateAgentPaneDimensions()
@@ -1429,13 +1411,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 			return h
 		}
 	}
-	// Terminal surfaces spend one row on their own header; Diff and Task keep
-	// the standalone tab row and the blank spacer under it.
-	chrome := previewTabRows
-	if p.previewTab == PreviewTabOutput || p.selectingShell() {
-		chrome = terminalHeaderRows
-	}
-	h := p.height - panelBorderWidth - chrome
+	h := p.height - panelBorderWidth - terminalHeaderRows
 	if h < 1 {
 		h = 1
 	}
@@ -1447,20 +1423,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 // content, which is the same number of rows a terminal window can sit back from
 // its live bottom (previewMaxScroll reads it that way round).
 func (p *Plugin) getMaxScrollOffset() int {
-	var contentHeight int
-	switch {
-	case p.selectingShell():
-		contentHeight = p.getOutputLineCount()
-	default:
-		switch p.previewTab {
-		case PreviewTabOutput:
-			contentHeight = p.getOutputLineCount()
-		case PreviewTabTask:
-			contentHeight = p.taskRenderedLineCount
-		default:
-			return 0 // Diff tab uses its own scroll state
-		}
-	}
+	contentHeight := p.getOutputLineCount()
 	visibleHeight := p.getPreviewVisibleHeight()
 	maxOffset := contentHeight - visibleHeight
 	if maxOffset < 0 {
@@ -1470,12 +1433,10 @@ func (p *Plugin) getMaxScrollOffset() int {
 }
 
 // previewShowsTerminal reports whether the preview pane is drawing the primary
-// terminal rather than a document: the Output tab, or any shell selection.
-// Every scroll path asks it, because the two are placed by different models —
-// a document by an absolute line from its top, a terminal by a distance back
-// from its live bottom.
+// terminal rather than a document. Worktree terminals are terminals; documents
+// live in their own leaves.
 func (p *Plugin) previewShowsTerminal() bool {
-	return p.previewTab == PreviewTabOutput || p.selectingShell()
+	return true
 }
 
 // previewMaxScroll is the furthest back the primary terminal's window can sit,
@@ -1927,7 +1888,6 @@ func (p *Plugin) applySelectionChange() {
 	// done marker once the selection has been held long enough to read.
 	p.selectionSince = time.Now()
 	p.resetPreviewScroll()
-	p.taskLoading = false // Reset task loading state for new selection (td-3668584f)
 	p.resetDiffView()
 	p.commitStatusWorktree = ""
 	// Exit interactive mode when switching selection (td-fc758e88)
@@ -1965,43 +1925,8 @@ func (p *Plugin) clampScrollOffset(total int) {
 	}
 }
 
-// cyclePreviewTab cycles through preview tabs.
-func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
-	prevTab := p.previewTab
-	p.previewTab = PreviewTab((int(p.previewTab) + delta + 3) % 3)
-	p.resetPreviewScroll()
-	p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-
-	if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-		p.clearTerminalSelection()
-	}
-
-	// Load content for the active tab
-	var cmds []tea.Cmd
-	switch p.previewTab {
-	case PreviewTabDiff:
-		if cmd := p.loadSelectedDiff(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case PreviewTabTask:
-		if cmd := p.loadTaskDetailsIfNeeded(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	if cmd := p.pollSelectedAgentNowIfVisible(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if len(cmds) == 0 {
-		return nil
-	}
-	if len(cmds) == 1 {
-		return cmds[0]
-	}
-	return tea.Batch(cmds...)
-}
-
-// loadSelectedContent loads content based on the active preview tab.
-// Diff git runs only while the Diff tab is showing.
+// loadSelectedContent loads content for the selected surface.
+// Diff git runs only while a Diff leaf is showing.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
 	p.terminalDocProjection = terminalDocProjection{}
 	var cmds []tea.Cmd
@@ -2034,11 +1959,6 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
-	// Always pre-fetch task details if worktree has a linked task (eliminates lag when switching to task tab)
-	if cmd := p.loadTaskDetailsIfNeeded(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
 	if cmd := p.pollSelectedAgentNowIfVisible(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -2060,27 +1980,6 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		return cmds[0]
 	}
 	return tea.Batch(cmds...)
-}
-
-// loadTaskDetailsIfNeeded loads task details if not cached or stale.
-// Guards against multiple simultaneous fetches (td-3668584f).
-func (p *Plugin) loadTaskDetailsIfNeeded() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil || wt.TaskID == "" {
-		return nil
-	}
-
-	// Don't start a new fetch if already loading (td-3668584f)
-	if p.taskLoading {
-		return nil
-	}
-
-	// Check if we need to refresh (different task or cache is older than 30 seconds)
-	if p.cachedTaskID != wt.TaskID || time.Since(p.cachedTaskFetched) > 30*time.Second {
-		p.taskLoading = true
-		return p.loadTaskDetails(wt.TaskID)
-	}
-	return nil
 }
 
 // now is the clock every wheel-burst decision reads.

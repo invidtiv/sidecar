@@ -768,23 +768,23 @@ func titleOrEmpty(doc *previewDoc) string {
 	return doc.view().Title()
 }
 
-func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
+func TestGlobalPreviewDiffLeafKeepsDoc(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	action := previewNeedleAction(t, m, "README.md")
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: action.X, Y: action.Y, Button: tea.MouseLeft}))
 	if m.preview.doc == nil {
 		t.Fatal("expected an open doc")
 	}
-	m.previewTab = workspacediff.TabDiff
-	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if strings.Contains(view, "Hello from preview") {
-		t.Fatalf("diff tab rendered the doc body: %q", view)
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	if m.preview.diff == nil {
+		t.Fatal("expected a Diff leaf")
 	}
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		kind, _ := region.Data.(string)
-		if kind == previewDocRegionKind || kind == previewIssueRegionKind || kind == previewPaneDividerKind {
-			t.Fatalf("diff tab retained hidden Output region %#v", region)
-		}
+	if m.preview.doc == nil {
+		t.Fatal("opening Diff hid the document leaf")
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "Hello from preview") {
+		t.Fatalf("Diff leaf hid the doc body:\n%s", view)
 	}
 }
 
@@ -808,7 +808,6 @@ func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 	m.previewSpecResolver = func(_, raw string) (string, bool) {
 		return raw, raw == "abc1234" || raw == "abc1234..def5678"
 	}
-	m.previewTab = workspacediff.TabDiff
 	if buf := m.previewBuffer(); buf == nil {
 		t.Fatal("no preview buffer")
 	} else {
@@ -821,9 +820,6 @@ func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 		t.Fatal("range was not activated")
 	}
 	run(t, m, cmd)
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 	if m.preview.diff == nil || m.preview.diff.view() == nil {
 		t.Fatal("range click opened no Diff leaf")
 	}

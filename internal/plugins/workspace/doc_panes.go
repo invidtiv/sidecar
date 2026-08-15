@@ -147,7 +147,6 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	if p.paneRoot == nil || p.ctx == nil {
 		return nil
 	}
-	p.previewTab = PreviewTabOutput
 	rel = docview.NormalizeTabPath(rel)
 	if rel == "" || rel == "." {
 		return nil
@@ -289,7 +288,7 @@ func (p *Plugin) closeActiveDocTab() tea.Cmd {
 // steal happens here (plus the widened pane-tree divider), so a click on the
 // exact document header row picks the tab under X, or the closest tab on that
 // row. X is constrained to the document leaf so the
-// terminal header that shares the row keeps Output/Diff/Task.
+// terminal header that shares the row keeps Diff/Task action chips.
 func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 	if !p.docVisible() {
 		return nil, false
@@ -988,7 +987,7 @@ func (p *Plugin) docVisible() bool {
 			break
 		}
 	}
-	return live && (p.selectingShell() || p.previewTab == PreviewTabOutput)
+	return live && p.paneRoot != nil
 }
 
 // previewLeafFocused reports whether a visible content leaf holds the preview's

@@ -5,7 +5,6 @@ import (
 
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -54,16 +53,9 @@ func TestOverviewClickDiffChipOnMainOpensLeaf(t *testing.T) {
 	m.syncBoard()
 	m.workspaces.SelectID("a")
 	run(t, m, m.previewSelect())
-	m.previewTab = workspacediff.TabOutput
 
 	clickOverviewAction(t, m, previewActionDiff)
 
-	if m.previewTab == workspacediff.TabDiff {
-		t.Fatal("Diff chip set previewTab to Diff")
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 	if m.preview.diff == nil || panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) == nil {
 		t.Fatal("Diff chip did not open a Diff leaf")
 	}
@@ -72,19 +64,12 @@ func TestOverviewClickDiffChipOnMainOpensLeaf(t *testing.T) {
 	}
 }
 
-func TestOverviewClickDiffChipFromTaskTabOpensLeaf(t *testing.T) {
+func TestOverviewClickDiffChipOnTopicOpensLeaf(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	setOverviewTaskID(t, m, "td-196c42")
-	run(t, m, m.setPreviewTab(workspacediff.TabTask))
 
 	clickOverviewAction(t, m, previewActionDiff)
 
-	if m.previewTab == workspacediff.TabDiff {
-		t.Fatal("Diff chip set previewTab to Diff")
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 	if m.preview.diff == nil {
 		t.Fatal("Diff chip did not open a Diff leaf")
 	}
@@ -97,16 +82,9 @@ func TestOverviewClickTaskChipOpensIssueLeaf(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	setOverviewTaskID(t, m, "td-196c42")
-	run(t, m, m.setPreviewTab(workspacediff.TabDiff))
 
 	clickOverviewAction(t, m, previewActionTask)
 
-	if m.previewTab == workspacediff.TabDiff {
-		t.Fatal("Task chip left previewTab on Diff")
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("previewTab = %v, want Output", m.previewTab)
-	}
 	if m.preview.issue == nil || m.preview.issue.view() == nil || m.preview.issue.view().IssueID() != "td-196c42" {
 		t.Fatal("Task chip did not open the Issues leaf on TaskID")
 	}

@@ -90,7 +90,6 @@ func newTerminalEmbeddingTestPlugin() *Plugin {
 	p.focused = true
 	p.applicationFocused = true
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.primaryTerminal = p.newWorkspaceTerminal()
 	p.panelTerminal = p.newWorkspaceTerminal()
 	return p
@@ -159,7 +158,6 @@ func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
 	p := nestedSidebarPlugin(t)
 	p.primaryTerminal = p.newWorkspaceTerminal()
 	p.panelTerminal = p.newWorkspaceTerminal()
-	p.previewTab = PreviewTabDiff // Shell surfaces ignore the worktree tab state.
 	const session = "sidecar-sh-sidecar-feature-1"
 	parent, shell := p.findNestedShell(session)
 	if shell == nil {

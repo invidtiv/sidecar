@@ -1346,7 +1346,6 @@ func TestGitSpecSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 func TestGitSpecClickOpensDiffLeafForParseSpec(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
-	p.previewTab = PreviewTabDiff
 	p.terminalSpecResolver = func(_, raw string) (string, bool) {
 		switch raw {
 		case "abc1234", "abc1234..def5678", "aaa1111...bbb2222":
@@ -1365,14 +1364,10 @@ func TestGitSpecClickOpensDiffLeafForParseSpec(t *testing.T) {
 		{"aaa1111...bbb2222", "r:aaa1111...bbb2222"},
 	}
 	for _, tc := range cases {
-		p.previewTab = PreviewTabDiff
 		line := "see " + tc.token + " next"
 		p.shells[0].Agent.OutputBuf.Update(line + "\n")
 		if _, ok := p.activateDiffLink(tc.token); !ok {
 			t.Fatalf("activateDiffLink(%q) failed", tc.token)
-		}
-		if p.previewTab != PreviewTabOutput {
-			t.Fatalf("%s: previewTab = %v, want Output", tc.token, p.previewTab)
 		}
 		diff, leaf := p.activeDiffPane()
 		if diff == nil || leaf == nil || leaf.Kind != PaneDiff {

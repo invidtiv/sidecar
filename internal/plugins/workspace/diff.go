@@ -26,33 +26,15 @@ const (
 // immutable worktree/base identity.
 type DiffSnapshot = workspacediff.Snapshot
 
-// loadSelectedDiff returns a command to load diff for the selected worktree.
-// Also loads task details if Task tab is active.
+// loadSelectedDiff returns a command to load the visible Diff leaf.
 func (p *Plugin) loadSelectedDiff() tea.Cmd {
-	if p.diffLeafShowing() {
-		if diff, _ := p.activeDiffPane(); diff != nil {
-			return p.ensureActiveDiffTabLoaded(diff)
-		}
-	}
-	if p.previewTab != PreviewTabDiff {
+	if !p.diffLeafShowing() {
 		return nil
 	}
-	wt := p.selectedWorktree()
-	if wt == nil {
-		return nil
+	if diff, _ := p.activeDiffPane(); diff != nil {
+		return p.ensureActiveDiffTabLoaded(diff)
 	}
-	p.bindDiffView()
-	p.diff.State = LoadStateLoading
-	p.diff.Error = ""
-
-	cmds := []tea.Cmd{p.loadDiff(wt)}
-
-	// Also load task details if Task tab is active
-	if p.previewTab == PreviewTabTask && wt.TaskID != "" {
-		cmds = append(cmds, p.loadTaskDetailsIfNeeded())
-	}
-
-	return tea.Batch(cmds...)
+	return nil
 }
 
 // loadDiff returns a command to load diff for a worktree.

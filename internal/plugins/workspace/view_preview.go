@@ -10,7 +10,6 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
-	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // renderPreviewContent renders the preview pane content (no borders).
@@ -22,17 +21,14 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 }
 
 func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
-	var lines []string
-
 	// Show welcome guide only when no worktree AND no shell is selected
 	wt := p.selectedWorktree()
 	if wt == nil && !p.selectingShell() {
 		return p.truncateAllLines(p.renderWelcomeGuide(width, height), width)
 	}
 
-	// When shell is selected, show shell content directly without tabs
-	// (Output/Diff/Task tabs are not relevant for the project shell). The shell's
-	// name is the left region of the terminal's own header row instead.
+	// Worktree terminals are terminals: output is the surface. Diff and Task
+	// are action chips that insert leaves into the pane tree.
 	if p.selectingShell() {
 		if p.termPanelVisible {
 			return p.renderShellWithTermPanel(width, height)
@@ -40,39 +36,14 @@ func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 		return p.renderShellOutput(width, height)
 	}
 
-	// Main worktree: show informational view instead of normal tabs
 	if wt.IsMain {
 		return p.truncateAllLines(p.renderMainWorktreeView(width, height), width)
 	}
 
-	// The Output tab is a terminal surface, and a terminal surface owns its own
-	// header row: the tab chips are its left region, so there is no standalone
-	// tab row and the terminal starts on the row below the panel border.
-	if p.previewTab == PreviewTabOutput {
-		if p.termPanelVisible {
-			// Terminal viewport renderers already expand tabs and truncate once.
-			return p.renderOutputWithTermPanel(width, height)
-		}
-		return p.renderOutputContent(width, height)
+	if p.termPanelVisible {
+		return p.renderOutputWithTermPanel(width, height)
 	}
-
-	// Diff and Task are not terminals, so they keep the standalone tab row and
-	// the blank spacer under it.
-	lines = append(lines, p.renderTabs(width))
-	lines = append(lines, "")
-
-	contentHeight := height - previewTabRows
-
-	var content string
-	switch p.previewTab {
-	case PreviewTabDiff:
-		content = p.renderDiffContent(width, contentHeight)
-	case PreviewTabTask:
-		content = p.renderTaskContent(width, contentHeight)
-	}
-	lines = append(lines, content)
-
-	return p.truncateAllLines(strings.Join(lines, "\n"), width)
+	return p.renderOutputContent(width, height)
 }
 
 // renderWelcomeGuide renders a helpful guide when no worktree is selected.
@@ -139,7 +110,7 @@ func (p *Plugin) renderWelcomeGuide(width, height int) string {
 	// Section: Common tasks
 	lines = append(lines, sectionStyle.Render("Tips"))
 	lines = append(lines, dimText("  • Create a worktree with 'n' to start"))
-	lines = append(lines, dimText("  • Agent output streams in the Output tab"))
+	lines = append(lines, dimText("  • Agent output streams in the terminal"))
 	lines = append(lines, dimText("  • Attach to interact with the agent directly"))
 	lines = append(lines, "")
 	lines = append(lines, dimText("Customize tmux: ~/.tmux.conf (man tmux for options)"))
@@ -175,45 +146,12 @@ func (p *Plugin) truncateAllLines(content string, maxWidth int) string {
 	return sb.String()
 }
 
-// previewTabChips renders the Output / Diff / Task pills as separate chips, so
-// the header row can drop whole chips rather than clip one in half.
-func (p *Plugin) previewTabChips() []string {
-	return workspacediff.TabChips(workspacediff.Tab(p.previewTab))
-}
-
 func (p *Plugin) previewActionChips() []string {
 	chips := []string{styles.RenderPillWithStyle("Diff", styles.BarChip, nil)}
 	if p.previewTaskID() != "" {
 		chips = append(chips, styles.RenderPillWithStyle("Task", styles.BarChip, nil))
 	}
 	return chips
-}
-
-// previewHeaderChips is tabs (when drawn) plus Diff/Task action chips.
-func (p *Plugin) previewHeaderChips() []string {
-	if p.previewTabsVisible() {
-		return append(p.previewTabChips(), p.previewActionChips()...)
-	}
-	return p.previewActionChips()
-}
-
-// previewTabsVisible reports whether the preview is in a state that draws the
-// Output/Diff/Task chips at all. The shell has no tabs, and neither the welcome
-// guide nor the main-worktree view is a tab; anything else — including the
-// Output tab's no-agent and orphaned states — puts them on its first row.
-func (p *Plugin) previewTabsVisible() bool {
-	if p.selectingShell() {
-		return false
-	}
-	wt := p.selectedWorktree()
-	return wt != nil && workspacediff.TabsVisible(false, wt.IsMain)
-}
-
-// renderTabs renders the standalone tab row the Diff and Task tabs still use.
-// It goes through the same header layout the Output tab's chips do, so the tab
-// hit regions describe this row too.
-func (p *Plugin) renderTabs(width int) string {
-	return p.terminalHeader(p.previewHeaderChips(), "", width, 0)
 }
 
 // paneFocusChip renders a sub-pane's identity chip, marked when that sub-pane
@@ -374,11 +312,12 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 
 // renderOutputContent renders agent output.
 func (p *Plugin) renderOutputContent(width, height int) string {
-	// The tab chips are this surface's left region. When the terminal panel is
-	// up they are followed by the agent sub-pane's own identity chip, so both
-	// children of the split name themselves and neither can be truncated away —
-	// the chips are also the row's only hit region (regionPreviewTab).
-	chips := p.previewHeaderChips()
+	// Identity plus Diff/Task action chips are this surface's left region.
+	name := "Workspace"
+	if wt := p.selectedWorktree(); wt != nil && wt.Name != "" {
+		name = wt.Name
+	}
+	chips := append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
 
 	// The states below have no terminal to draw, but they are still the Output
 	// tab, so they still owe the header row the tabs live on: without it a
@@ -612,120 +551,6 @@ func (p *Plugin) renderMainWorktreeView(width, height int) string {
 	lines = append(lines, "")
 	lines = append(lines, dimText("Shells are plain terminals in this directory, for"))
 	lines = append(lines, dimText("quick tasks that don't need their own workspace."))
-
-	return strings.Join(lines, "\n")
-}
-
-// renderTaskContent renders linked task info.
-func (p *Plugin) renderTaskContent(width, height int) string {
-	wt := p.selectedWorktree()
-	if wt == nil {
-		return dimText("No worktree selected")
-	}
-
-	if wt.TaskID == "" {
-		view, _ := workspacediff.RenderTask(workspacediff.TaskView{}, workspacediff.TaskRenderOpts{
-			EmptyHint: "Press 't' to link a task", Width: width, Height: height,
-		})
-		return view
-	}
-
-	// Check if we're loading or don't have cached details for this task
-	if p.taskLoading || p.cachedTask == nil || p.cachedTaskID != wt.TaskID {
-		return dimText(fmt.Sprintf("Loading task %s...", wt.TaskID))
-	}
-
-	task := p.cachedTask
-	var lines []string
-
-	mode := "Raw"
-	if p.taskMarkdownMode {
-		mode = "Rendered"
-	}
-	modeHint := dimText("[m] " + mode)
-
-	// Header
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("Task: %s", task.ID))+"  "+modeHint)
-
-	// Status and priority
-	statusLine := fmt.Sprintf("Status: %s", task.Status)
-	if task.Priority != "" {
-		statusLine += fmt.Sprintf("  Priority: %s", task.Priority)
-	}
-	if task.Type != "" {
-		statusLine += fmt.Sprintf("  Type: %s", task.Type)
-	}
-	lines = append(lines, statusLine)
-	lines = append(lines, strings.Repeat("─", min(width-4, 60)))
-	lines = append(lines, "")
-
-	// Title
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(task.Title))
-	lines = append(lines, "")
-
-	// Markdown rendering for description and acceptance
-	if p.taskMarkdownMode && p.markdownRenderer != nil {
-		// Build markdown content
-		var mdContent strings.Builder
-		if task.Description != "" {
-			mdContent.WriteString(task.Description)
-			mdContent.WriteString("\n\n")
-		}
-		if task.Acceptance != "" {
-			mdContent.WriteString("## Acceptance Criteria\n\n")
-			mdContent.WriteString(task.Acceptance)
-		}
-
-		// Check if we need to re-render (width changed or cache empty)
-		if p.taskMarkdownWidth != width || len(p.taskMarkdownRendered) == 0 {
-			p.taskMarkdownRendered = p.markdownRenderer.RenderContent(mdContent.String(), width-4)
-			p.taskMarkdownWidth = width
-		}
-
-		// Append rendered lines
-		lines = append(lines, p.taskMarkdownRendered...)
-	} else {
-		// Plain text fallback
-		if task.Description != "" {
-			wrapped := wrapText(task.Description, width-4)
-			lines = append(lines, wrapped)
-			lines = append(lines, "")
-		}
-
-		if task.Acceptance != "" {
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Acceptance Criteria:"))
-			wrapped := wrapText(task.Acceptance, width-4)
-			lines = append(lines, wrapped)
-			lines = append(lines, "")
-		}
-	}
-
-	// Timestamps (dimmed)
-	lines = append(lines, "")
-	if task.CreatedAt != "" {
-		lines = append(lines, dimText(fmt.Sprintf("Created: %s", task.CreatedAt)))
-	}
-	if task.UpdatedAt != "" {
-		lines = append(lines, dimText(fmt.Sprintf("Updated: %s", task.UpdatedAt)))
-	}
-
-	// Track total line count for scroll clamping
-	p.taskRenderedLineCount = len(lines)
-
-	// Apply scroll offset (unified: previewOffset = line from top)
-	if p.previewOffset > 0 && p.previewOffset < len(lines) {
-		lines = lines[p.previewOffset:]
-	} else if p.previewOffset >= len(lines) {
-		// Clamp: offset past content, show last page
-		if len(lines) > height {
-			lines = lines[len(lines)-height:]
-		}
-	}
-
-	// Trim to visible height
-	if len(lines) > height {
-		lines = lines[:height]
-	}
 
 	return strings.Join(lines, "\n")
 }

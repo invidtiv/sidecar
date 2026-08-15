@@ -1,4 +1,4 @@
-// Package workspacediff is the shared Diff/Task preview model.
+// Package workspacediff is the shared Diff preview model.
 //
 // The project Workspaces plugin and the global Workspaces preview both draw
 // the same working-tree + commits view. This package owns snapshot load,
@@ -8,16 +8,7 @@ package workspacediff
 
 import "strings"
 
-// Tab is the Output / Diff / Task preview tab.
-type Tab int
-
-const (
-	TabOutput Tab = iota
-	TabDiff
-	TabTask
-)
-
-// Scope names the three distinct questions answered by the Diff tab.
+// Scope names the three distinct questions answered by the Diff pane.
 type Scope int
 
 const (
@@ -126,19 +117,6 @@ type CommitInfo struct {
 	Subject string
 	Pushed  bool
 	Merged  bool
-}
-
-// Task is the linked-task payload shown on the Task tab.
-type Task struct {
-	ID          string
-	Title       string
-	Status      string
-	Priority    string
-	Type        string
-	Description string
-	Acceptance  string
-	CreatedAt   string
-	UpdatedAt   string
 }
 
 const (

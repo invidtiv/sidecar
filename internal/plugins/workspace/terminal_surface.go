@@ -25,11 +25,6 @@ const (
 	// row, and both consumers read it from there.
 	terminalHeaderRows = termpreview.HeaderRows
 
-	// previewTabRows is the standalone tab row plus its blank spacer, which only
-	// the non-terminal preview tabs (Diff, Task) still render: on the Output tab
-	// the tab chips are the left region of the terminal's own header row.
-	previewTabRows = 2
-
 	// termPanelDividerRows / termPanelDividerCols size the rule drawn between
 	// the primary terminal and the terminal panel.
 	termPanelDividerRows = 1

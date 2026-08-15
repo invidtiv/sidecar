@@ -206,16 +206,6 @@ func (p *Plugin) Commands() []plugin.Command {
 			cmds = append(cmds,
 				plugin.Command{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-preview", Priority: 3},
 			)
-			if !p.selectingShell() {
-				cmds = append(cmds,
-					plugin.Command{ID: "prev-tab", Name: "Tab←", Description: "Previous preview tab", Context: "workspace-preview", Priority: 4},
-					plugin.Command{ID: "next-tab", Name: "Tab→", Description: "Next preview tab", Context: "workspace-preview", Priority: 5},
-				)
-				// Add diff view toggle when on Diff tab
-				if p.previewTab == PreviewTabDiff {
-					cmds = append(cmds, p.diff.Commands("workspace-preview")...)
-				}
-			}
 			// Also show agent commands in preview pane
 			wt := p.selectedWorktree()
 			if wt != nil {
@@ -247,7 +237,7 @@ func (p *Plugin) Commands() []plugin.Command {
 					if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 						hasActiveSession = true
 					}
-				} else if wt != nil && wt.Agent != nil && p.previewTab == PreviewTabOutput {
+				} else if wt != nil && wt.Agent != nil {
 					hasActiveSession = true
 				}
 				if hasActiveSession {
@@ -257,7 +247,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if terminalPanelEnabled() && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			if terminalPanelEnabled() {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"

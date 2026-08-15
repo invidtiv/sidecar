@@ -81,11 +81,16 @@ var (
 	}
 
 	// WorkspaceDocPanes enables document panes beside workspace terminals.
+	// When off there is no pane tree, so Diff is also unavailable.
 	WorkspaceDocPanes = Feature{
 		Name:        "workspace_doc_panes",
 		Default:     true,
-		Description: "Open documents in panes beside workspace terminals",
+		Description: "Open documents in panes beside workspace terminals. When disabled, Diff is unavailable (no pane tree).",
 	}
+
+	// WorkspaceDocPanesDisabledDiff is the toast/no-op copy when Diff is
+	// requested while the pane tree is off.
+	WorkspaceDocPanesDisabledDiff = "Document panes are disabled; Diff needs the workspace pane tree"
 
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{

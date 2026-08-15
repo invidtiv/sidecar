@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -44,7 +45,9 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 	if target.Identity() == "" {
 		target = workspacediff.WorkingTreeTarget()
 	}
-	m.previewTab = workspacediff.TabOutput
+	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+	}
 	leafID, refusal := m.ensurePreviewPane(panelayout.Diff, "Diff")
 	if refusal != nil {
 		return refusal
@@ -374,8 +377,10 @@ func (m *Model) previewDiffDragWidth() int {
 	if body, ok := m.previewDiffLeafBody(); ok {
 		return body.W
 	}
-	w, _ := m.diffContentSize()
-	return w
+	if box, ok := m.previewBox(); ok {
+		return box.W
+	}
+	return m.width
 }
 
 func (m *Model) previewDiffPaneKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {

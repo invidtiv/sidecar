@@ -1139,9 +1139,6 @@ func (p *Plugin) terminalMouseCoords(termPanel bool, x, y int) (col, row int, ok
 	if p.width <= 0 || p.height <= 0 {
 		return 0, 0, false
 	}
-	if !p.selectingShell() && p.previewTab != PreviewTabOutput {
-		return 0, 0, false
-	}
 	if termPanel && !p.termPanelVisible {
 		return 0, 0, false
 	}

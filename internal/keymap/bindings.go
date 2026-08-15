@@ -93,8 +93,6 @@ func DefaultBindings() []Binding {
 		// Enter from the list starts typing. E is the remaining explicit
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
-		{Key: ",", Command: "prev-tab", Context: "global-workspaces"},
-		{Key: ".", Command: "next-tab", Context: "global-workspaces"},
 		// Display-name write, not create/destroy. Worktrees ignore the key.
 		{Key: "R", Command: "rename-shell", Context: "global-workspaces"},
 		// Navigation: leave global and open the project's Git plugin.
@@ -547,8 +545,6 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
-		{Key: ",", Command: "prev-tab", Context: "workspace-list"},
-		{Key: ".", Command: "next-tab", Context: "workspace-list"},
 		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "workspace-list"},
@@ -579,14 +575,10 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "approve", Context: "workspace-preview"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},
 		{Key: "N", Command: "reject", Context: "workspace-preview"},
-		{Key: "v", Command: "toggle-diff-view", Context: "workspace-preview"},
-		{Key: "z", Command: "toggle-diff-scope", Context: "workspace-preview"},
 		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-preview"},
-		{Key: ",", Command: "prev-tab", Context: "workspace-preview"},
-		{Key: ".", Command: "next-tab", Context: "workspace-preview"},
 		{Key: "j", Command: "scroll-down", Context: "workspace-preview"},
 		{Key: "k", Command: "scroll-up", Context: "workspace-preview"},
 		{Key: "ctrl+d", Command: "page-down", Context: "workspace-preview"},

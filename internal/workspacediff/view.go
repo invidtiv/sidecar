@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// View is the reusable Diff tab model: one snapshot, one cursor, one commit
+// View is the reusable Diff pane model: one snapshot, one cursor, one commit
 // detail. The project plugin wraps it; the global preview holds one for the
 // selected worktree.
 type View struct {
@@ -630,34 +630,6 @@ func (v *View) ScrollContent(delta int) {
 	v.DiffScroll += delta
 	if v.DiffScroll < 0 {
 		v.DiffScroll = 0
-	}
-}
-
-// TaskView is the Task tab model for one worktree.
-type TaskView struct {
-	TaskID    string
-	Task      *Task
-	Loading   bool
-	Offset    int
-	LineCount int
-	Error     string
-}
-
-func (t *TaskView) Scroll(delta, height int) {
-	if t.LineCount <= 0 {
-		t.Offset = 0
-		return
-	}
-	t.Offset += delta
-	if t.Offset < 0 {
-		t.Offset = 0
-	}
-	maxOff := t.LineCount - 1
-	if height > 0 && t.LineCount > height {
-		maxOff = t.LineCount - height
-	}
-	if t.Offset > maxOff {
-		t.Offset = maxOff
 	}
 }
 

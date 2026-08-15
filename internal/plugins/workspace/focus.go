@@ -3,10 +3,9 @@ package workspace
 import "github.com/marcus/sidecar/internal/panelayout"
 
 // paneTreeShowing reports whether the pane tree is what the preview is drawing.
-// A shell selection shows its terminal whatever tab is named; Diff and Task
-// replace the split, so those tabs cycle the two windows they actually draw.
+// Worktree terminals are terminals: the tree is on screen whenever it exists.
 func (p *Plugin) paneTreeShowing() bool {
-	return p.selectingShell() || p.previewTab == PreviewTabOutput
+	return p.paneRoot != nil
 }
 
 // termPanelOnScreen answers the renderers' question, not the state flag's: the
@@ -24,12 +23,11 @@ func (p *Plugin) termPanelOnScreen() bool {
 
 // focusRing lists the windows Tab walks, in the order the preview draws them:
 // the sidebar, then every tree leaf in placement order, then the terminal panel.
-// Diff and Task draw one preview window beside the sidebar — the intra-window
-// focus those tabs keep (file list ↔ diff) is h/l/enter's, never Tab's. With
+// Intra-Diff focus (file list ↔ hunks) stays h/l/enter's, never Tab's. With
 // the workspace_doc_panes flag off there is no tree at all, so the preview is
-// the same single window those tabs draw and it cycles the same two ways.
+// one window beside the sidebar.
 func (p *Plugin) focusRing() []panelayout.Target {
-	if !p.paneTreeShowing() || p.paneRoot == nil {
+	if p.paneRoot == nil {
 		ring := make([]panelayout.Target, 0, 2)
 		if p.sidebarVisible {
 			ring = append(ring, panelayout.Target{Kind: panelayout.TargetSidebar})

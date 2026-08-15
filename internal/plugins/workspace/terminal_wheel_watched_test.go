@@ -21,7 +21,6 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 	p.width, p.height = 100, 30
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
 
 	buffer := testTerminalBuffer(strings.Repeat("watched row\n", 60))

@@ -6,6 +6,14 @@ All notable changes to sidecar are documented here.
 
 ### Features
 
+- Worktree terminals are terminals. The Output / Diff / Task tab row is gone.
+  **Diff** and **Task** stay as header action chips that insert a leaf beside
+  the live terminal. `,` / `.` no longer cycle worktree views; they cycle Diff
+  target tabs only while a Diff leaf is focused. `d`, the Diff chip, and
+  `sidecar open --diff` are the paths into Diff.
+- `--disable-feature=workspace_doc_panes` now means no Diff: there is no pane
+  tree, so `d` / the Diff chip / `sidecar open --diff` toast or no-op
+  ("Document panes are disabled; Diff needs the workspace pane tree").
 - File preview tabs are now clickable in both project and global Workspaces,
   with global previews retaining multiple open files instead of replacing the
   current one.

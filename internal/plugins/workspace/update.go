@@ -214,8 +214,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.reconcilePendingCreation()
 			p.applyPendingWorkspaceSelection()
-			if p.previewTab == PreviewTabDiff {
-				cmds = append(cmds, p.loadSelectedDiff())
+			if cmd := p.loadSelectedDiff(); cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 
 			// Reconnect to existing tmux sessions after initial worktree load
@@ -633,8 +633,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Clear preview pane content to ensure old diff doesn't persist
 		p.diff.Content = ""
 		p.diff.Raw = ""
-		p.cachedTaskID = ""
-		p.cachedTask = nil
 		// Load diff for newly selected worktree
 		cmds = append(cmds, p.loadSelectedDiff())
 
@@ -1523,10 +1521,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Err == nil {
 			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
 				wt.TaskID = msg.TaskID
-				// Load task details for the newly linked task
-				if msg.TaskID != "" {
-					cmds = append(cmds, p.loadTaskDetails(msg.TaskID))
-				}
 			}
 		}
 
@@ -1563,14 +1557,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
-		}
-
-	case TaskDetailsLoadedMsg:
-		p.taskLoading = false
-		if msg.Err == nil && msg.Details != nil {
-			p.cachedTaskID = msg.TaskID
-			p.cachedTask = msg.Details
-			p.cachedTaskFetched = time.Now()
 		}
 
 	case LocalBranchesMsg:

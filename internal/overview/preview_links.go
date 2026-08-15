@@ -251,7 +251,6 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 			_ = file.Close()
 		}
 	}()
-	m.previewTab = workspacediff.TabOutput
 	leafID, refusal := m.ensurePreviewPane(panelayout.Document, "Document")
 	if refusal != nil {
 		return refusal

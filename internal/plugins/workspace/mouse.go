@@ -1,10 +1,14 @@
 package workspace
 
 import (
+	"time"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
@@ -34,6 +38,9 @@ func (p *Plugin) clickPreviewAction(data any) tea.Cmd {
 	}
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
+	}
+	if p.paneRoot == nil {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
 	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {
@@ -66,7 +73,7 @@ func (p *Plugin) isModalViewMode() bool {
 func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab, regionPreviewAction, regionDiffTargetTab, regionListFilter,
+		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
@@ -756,15 +763,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Entering interactive mode here would resize and reframe the terminal
 		// before drag tracking is armed, so an immediate click-drag selection
 		// jumps or disappears.
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			if !action.Shift && !action.Alt {
-				if cmd, ok := p.activateTerminalLink(action); ok {
-					return cmd
-				}
+		if !action.Shift && !action.Alt {
+			if cmd, ok := p.activateTerminalLink(action); ok {
+				return cmd
 			}
-			p.releaseTerminalDocProjection(false)
-			return p.prepareTerminalClickOrDrag(action)
 		}
+		p.releaseTerminalDocProjection(false)
+		return p.prepareTerminalClickOrDrag(action)
 	case regionPaneDivider:
 		// Start drag for pane resizing
 		p.mouseHandler.StartDrag(action.X, action.Y, regionPaneDivider, p.sidebarWidth)
@@ -848,7 +853,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				if p.shellSelected || p.selectedNestedTmux != hit.TmuxName {
 					p.selectNestedShell(parent, hit.TmuxName)
 					p.resetPreviewScroll()
-					p.taskLoading = false
 					p.exitInteractiveMode()
 					p.saveSelectionState()
 				}
@@ -865,7 +869,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					if !p.shellSelected || p.selectedShellIdx != shellIdx || p.selectedNestedTmux != "" {
 						p.selectTopShellAt(shellIdx)
 						p.resetPreviewScroll()
-						p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 						// Exit interactive mode when switching selection (td-fc758e88)
 						p.exitInteractiveMode()
 						p.saveSelectionState()
@@ -878,7 +881,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				if p.shellSelected || p.selectedNestedTmux != "" || p.selectedIdx != idx {
 					p.selectWorktreeAt(idx)
 					p.resetPreviewScroll()
-					p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 					// Exit interactive mode when switching selection (td-fc758e88)
 					p.exitInteractiveMode()
 					p.saveSelectionState()
@@ -890,25 +892,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionPreviewAction:
 		return p.clickPreviewAction(action.Region.Data)
-	case regionPreviewTab:
-		// Click on preview tab
-		if idx, ok := action.Region.Data.(int); ok && idx >= 0 && idx <= 2 {
-			prevTab := p.previewTab
-			p.previewTab = PreviewTab(idx)
-			p.resetPreviewScroll()
-			p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-			if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-				p.clearTerminalSelection()
-			}
-
-			// Load content for the selected tab
-			switch p.previewTab {
-			case PreviewTabDiff:
-				return p.loadSelectedDiff()
-			case PreviewTabTask:
-				return p.loadTaskDetailsIfNeeded()
-			}
-		}
 	case regionKanbanCard:
 		// Click on kanban card - select it
 		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
@@ -1145,10 +1128,8 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			p.termPanelFocused = false
-			return p.selectTerminalWord(action)
-		}
+		p.termPanelFocused = false
+		return p.selectTerminalWord(action)
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
 		if hit, ok := action.Region.Data.(nestedShellHit); ok {
@@ -1290,11 +1271,9 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalLine(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			p.activePane = PanePreview
-			p.termPanelFocused = false
-			return p.selectTerminalLine(action)
-		}
+		p.activePane = PanePreview
+		p.termPanelFocused = false
+		return p.selectTerminalLine(action)
 	}
 	return p.handleMouseDoubleClick(action)
 }

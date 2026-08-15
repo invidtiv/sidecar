@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
@@ -44,6 +45,9 @@ func (p *Plugin) activeDiffPane() (*diffPane, *PaneNode) {
 
 // showDiffCmd opens the working-tree Diff leaf on the selected surface.
 func (p *Plugin) showDiffCmd() tea.Cmd {
+	if p.paneRoot == nil {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {
 		return nil
@@ -57,13 +61,15 @@ func (p *Plugin) showDiffCmd() tea.Cmd {
 // size it already has rather than reflowing an agent for a pane that will not
 // be drawn.
 func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacediff.Target) tea.Cmd {
-	if p.paneRoot == nil || p.ctx == nil {
+	if p.paneRoot == nil {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+	}
+	if p.ctx == nil {
 		return nil
 	}
 	if target.Identity() == "" {
 		target = workspacediff.WorkingTreeTarget()
 	}
-	p.previewTab = PreviewTabOutput
 	reopen := p.reopenHiddenDiffPane()
 	plan, ok := p.planOpen(PaneDiff)
 	if !ok {

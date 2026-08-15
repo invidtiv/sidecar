@@ -30,7 +30,6 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	p.width, p.height = 120, 40
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.termPanelVisible = true
 	p.termPanelSession = "panel-session"
 	p.termPanelPaneID = "%2"

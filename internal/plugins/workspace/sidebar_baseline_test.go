@@ -42,7 +42,6 @@ func sidebarBaselinePlugin(t *testing.T) *Plugin {
 	p.width, p.height = 140, 40
 	p.focused = true
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = true
 	p.sidebarWidth = 30
 	p.activePane = PaneSidebar

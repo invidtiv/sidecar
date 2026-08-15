@@ -29,12 +29,12 @@ Workspace preview content is three different things stacked on one screen:
 
 | Surface | What the user sees | Implementation |
 | --- | --- | --- |
-| Project shells | Terminal only (no Output/Diff/Task chips) | `renderPreviewContentLegacy` when `selectingShell()` |
-| Project main worktree | Informational view, no chips | `renderMainWorktreeView` |
-| Project topic worktrees | Output / Diff / Task *tabs* | `workspacediff.TabsFor` → `TabSetOutputDiffTask` |
-| Global shells | Output / Diff chips + a **Git** action chip | `workspacediff.GlobalTabsFor` |
-| Global topic worktrees | Output / Diff / Task + Git chip | same |
-| Beside any of the above | Files and TD Issues *leaves* in the pane tree | `PaneDoc`, `PaneIssue`, `planPaneOpen` |
+| Project shells | Terminal + Diff/Task action chips | `renderPreviewContentLegacy` when `selectingShell()` |
+| Project main worktree | Informational view + Diff chip | `renderMainWorktreeView` |
+| Project topic worktrees | Terminal + Diff/Task action chips (no Output/Diff/Task tabs) | chips call `openDiffPaneForSurface` / `openIssuePaneForSurface` |
+| Global shells | Terminal + Diff/Git action chips | `previewActionChips` + Git chip |
+| Global topic worktrees | Terminal + Diff/Task/Git chips | same |
+| Beside any of the above | Files, Issues, and Diff *leaves* in the pane tree | `PaneDoc`, `PaneIssue`, `PaneDiff`, `planPaneOpen` |
 
 The pane tree is already general. `internal/panelayout` is presentation-neutral. Project and global hosts both call `PlanOpen` + `SplitLeaf`, trial the result against floors, and refuse rather than squeeze. Persistence is structural (`state.PaneLayoutJSON` keyed by surface). Document and issue leaves are tab groups (`docview.Tabs`, `issueview.Tabs` wrapping `tabs.Group`) with hide-on-`q` and forget-on-last-`x`.
 

@@ -210,7 +210,6 @@ func TestInteractiveMouseCoordsFollowClippedPane(t *testing.T) {
 	p := &Plugin{truncateCache: ui.NewTruncateCache(64)}
 	p.width, p.height = 100, 30
 	p.viewMode = ViewModeInteractive
-	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
 
 	// 4 lines of scrollback followed by the pane's 35 rows.

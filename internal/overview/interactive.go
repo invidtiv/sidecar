@@ -9,7 +9,6 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
-	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // Watching and typing into a pane from the global browser use internal/tty's
@@ -123,7 +122,7 @@ var newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTermina
 // pane actually visible on the Output surface. The catalog remains metadata:
 // list collection never opens a model for any other row.
 func (m *Model) syncPreviewTerminal() tea.Cmd {
-	if !m.preview.visible || (m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput) {
+	if !m.preview.visible {
 		m.closePreviewTerminal()
 		return nil
 	}
@@ -269,7 +268,7 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	if m.PreviewInteractive() {
 		return nil
 	}
-	_ = m.ensureOutputTab()
+
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
@@ -460,9 +459,6 @@ func (m *Model) finishPreviewGesture() tea.Cmd {
 	switch resolution {
 	case tty.ClickActivate:
 		// Diff/Task are views of the row. Only the Output terminal types.
-		if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-			return nil
-		}
 		return m.enterPreviewInteractive()
 	case tty.ClickForward:
 		// The press position, not the release: a click that resolves here never

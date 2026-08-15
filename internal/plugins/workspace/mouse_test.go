@@ -43,7 +43,7 @@ func TestIsModalViewMode(t *testing.T) {
 func TestIsBackgroundRegion(t *testing.T) {
 	background := []string{
 		regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab,
+		regionWorktreeItem,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 	}
@@ -78,7 +78,7 @@ func TestModalClickGuard(t *testing.T) {
 	}
 	backgroundRegions := []string{
 		regionSidebar, regionPreviewPane, regionWorktreeItem,
-		regionPaneDivider, regionPreviewTab,
+		regionPaneDivider,
 	}
 
 	for _, mode := range modalModes {
@@ -208,7 +208,6 @@ func newPreviewClickTestPlugin() *Plugin {
 		width:         100,
 		height:        30,
 		sidebarWidth:  40,
-		previewTab:    PreviewTabOutput,
 		shellSelected: true,
 		shells: []*ShellSession{{
 			TmuxName: "shell-1",
@@ -386,7 +385,6 @@ func TestPreviewPaneModifierClickStaysInReadMode(t *testing.T) {
 func TestPreviewPaneClickOnNonTerminalTabDoesNotAttach(t *testing.T) {
 	p := newPreviewClickTestPlugin()
 	p.shellSelected = false
-	p.previewTab = PreviewTabDiff
 	p.worktrees = []*Worktree{{Name: "wt"}}
 
 	p.handleMouseClick(previewClickAction(false, false))

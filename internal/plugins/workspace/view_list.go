@@ -99,45 +99,34 @@ func (p *Plugin) View(width, height int) string {
 	return view
 }
 
-// registerPreviewTabRegions puts click targets over the Output/Diff/Task tabs
-// and the Diff/Task action chips, taken from the same layout that drew them.
-// A chip the header dropped for want of columns gets no region.
-func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
-	chips, tabCount := p.previewHitChipRow()
+// registerPreviewActionRegions puts click targets over the Diff/Task action
+// chips, taken from the same layout that drew them. A chip the header dropped
+// for want of columns gets no region.
+func (p *Plugin) registerPreviewActionRegions(split previewSplit) {
+	chips, actionStart := p.previewHitChipRow()
 	if len(chips) == 0 {
 		return
 	}
-	// On Output (and shells) the chips are the terminal's own header row.
-	// Diff/Task tabs and the main-worktree body draw their row across the
-	// preview's first content row.
 	row, width, originX, hintFloor := p.previewContentY(), split.ContentWidth, split.ContentX, 0
-	useTerminalHeader := p.selectingShell() || p.previewTab == PreviewTabOutput
-	if useTerminalHeader {
+	if p.selectingShell() || p.selectedWorktree() != nil {
 		surface := p.terminalSurfaceGeometry(false)
 		if surface.OK {
 			row, width, originX = surface.HeaderY, surface.Width, surface.X
 			if p.interactiveDescribes(false) {
 				hintFloor = p.interactiveHintFloor()
 			}
-		} else if p.previewTabsVisible() {
+		} else {
 			// The terminal is not on screen (zoomed document). Do not paint
-			// Output/Diff/Task targets on top of the file tabs.
-			return
+			// action chips on top of file tabs.
+			if p.selectedWorktree() == nil || !p.selectedWorktree().IsMain {
+				return
+			}
 		}
 	}
 
-	placements := layoutHeaderChips(chips, width, hintFloor)
-	for i, placement := range placements {
-		if !placement.Drawn || i >= tabCount {
-			continue
-		}
-		p.mouseHandler.HitMap.AddRect(regionPreviewTab,
-			originX+placement.Col, row, placement.Width, 1, i)
-	}
-	// Action chips last so they win any one-cell overlap with tab chips.
 	actionIdx := 0
-	for i, placement := range placements {
-		if !placement.Drawn || i < tabCount {
+	for i, placement := range layoutHeaderChips(chips, width, hintFloor) {
+		if !placement.Drawn || i < actionStart {
 			continue
 		}
 		hit := previewActionDiff
@@ -150,20 +139,25 @@ func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
 	}
 }
 
-func (p *Plugin) previewHitChipRow() (chips []string, tabCount int) {
+func (p *Plugin) previewHitChipRow() (chips []string, actionStart int) {
 	if p.selectingShell() {
 		name := "Shell"
 		if shell := p.getSelectedShell(); shell != nil && shell.Name != "" {
 			name = shell.Name
 		}
 		chips = append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
-		return chips, 0
-	}
-	if p.previewTabsVisible() {
-		return p.previewHeaderChips(), len(p.previewTabChips())
+		return chips, 1
 	}
 	if wt := p.selectedWorktree(); wt != nil && wt.IsMain {
 		return p.previewActionChips(), 0
+	}
+	if wt := p.selectedWorktree(); wt != nil {
+		name := wt.Name
+		if name == "" {
+			name = "Workspace"
+		}
+		chips = append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
+		return chips, 1
 	}
 	return nil, 0
 }
@@ -193,8 +187,7 @@ func (p *Plugin) renderListView(width, height int) string {
 
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
-		p.registerPreviewTabRegions(split)
-		p.registerDiffTabRegions()
+		p.registerPreviewActionRegions(split)
 
 		if p.previewFlashActive() {
 			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
@@ -225,8 +218,7 @@ func (p *Plugin) renderListView(width, height int) string {
 
 	// Preview tabs are registered after document bodies and their divider, so
 	// the visible chips remain the highest-priority targets.
-	p.registerPreviewTabRegions(split)
-	p.registerDiffTabRegions()
+	p.registerPreviewActionRegions(split)
 
 	flashActive := p.previewFlashActive()
 

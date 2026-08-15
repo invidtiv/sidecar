@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
-	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 const (
@@ -60,7 +59,6 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	if !ok || issueID == "" || workspace.Path == "" {
 		return nil
 	}
-	m.previewTab = workspacediff.TabOutput
 	leafID, refusal := m.ensurePreviewPane(panelayout.Issue, "Issue")
 	if refusal != nil {
 		return refusal

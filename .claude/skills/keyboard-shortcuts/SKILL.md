@@ -92,9 +92,8 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | Key | Action |
 |-----|--------|
 | `j` / `k` / arrows / `g` / `G` | Move selection; preview follows; not typing |
-| `,` / `.` | Previous / next preview tab (Output / Diff / Task) on a non-main worktree. Shells and the main worktree have no tab row |
-| `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
-| click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
+| `enter` / `E` | Start typing in the selected live pane. A dead row stays put |
+| click in pane | Start typing. Clicking Diff/Task action chips opens a leaf and does not type |
 | click a file tab | Select that file in the document preview. `{` / `}` also cycle when the document is focused |
 | click an issue tab | Select that issue in the issue preview. `{` / `}` also cycle when the issue is focused |
 | click a list row | Select it; preview follows; not typing |
@@ -322,8 +321,7 @@ active tab, and each tab's scroll.
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |
-| `,` | prev-tab | Previous preview tab |
-| `.` | next-tab | Next preview tab |
+
 
 ### Interactive Mode
 
@@ -344,7 +342,7 @@ that is already open is focused (and `path:line` jumps). Click a drawn tab
 to select it. The header is only the tab strip: each label is the relative
 path, left-truncated so the filename end always wins. Document panes are
 enabled by default; `--disable-feature=workspace_doc_panes` opts out for a
-launch. `shift`-drag and `alt`-drag remain terminal selection gestures.
+launch and also disables Diff (no pane tree). `shift`-drag and `alt`-drag remain terminal selection gestures.
 
 The global Workspaces view uses the same tab strip and the same click / `{`
 / `}` / `x` keys. Those tabs stay in memory for the selected row.
@@ -352,8 +350,8 @@ The global Workspaces view uses the same tab strip and the same click / `{`
 `q` / `esc` hide the pane and remember the tab set for this shell or
 workspace. `x` on the last tab forgets the set. Switching surfaces or
 relaunching onto the same surface restores open files, the active tab,
-render mode, wrap, scroll, and split ratio. `,` / `.` stay Output/Diff/Task
-on worktrees and do not cycle document tabs.
+render mode, wrap, scroll, and split ratio. `,` / `.` cycle Diff target
+tabs only while a Diff leaf is focused; they do not cycle document tabs.
 
 | Key | Command | Description |
 |-----|---------|-------------|

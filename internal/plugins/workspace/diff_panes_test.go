@@ -7,27 +7,25 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
-func TestDFromDiffTabShowsTreeAndDiffLeaf(t *testing.T) {
+func TestDOpensDiffLeafBesideTheTerminal(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
-	p.previewTab = PreviewTabDiff
-	if p.paneTreeShowing() {
-		t.Fatal("premise: Diff tab hides the pane tree")
+	if !p.paneTreeShowing() {
+		t.Fatal("premise: tree is showing")
 	}
 
 	cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	if cmd == nil {
 		t.Fatal("d did not open a Diff leaf")
 	}
-	if p.previewTab != PreviewTabOutput {
-		t.Fatalf("previewTab = %v, want Output so the tree is drawn", p.previewTab)
-	}
 	if !p.paneTreeShowing() {
-		t.Fatal("d from the Diff tab did not show the pane tree")
+		t.Fatal("d hid the pane tree")
 	}
 	diff, leaf := p.activeDiffPane()
 	if diff == nil || leaf == nil || leaf.Kind != PaneDiff {
@@ -163,7 +161,6 @@ func TestShowDiffAdvertisedOnListAndPreview(t *testing.T) {
 func TestHandleListKeysRoutesDBeforeSwitch(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
-	p.previewTab = PreviewTabDiff
 	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'd', Text: "d"}); cmd == nil {
 		t.Fatal("handleListKeys d opened nothing")
 	}
@@ -204,7 +201,6 @@ func TestHashClickCommitTabNeverLeavesLoading(t *testing.T) {
 	root := initTwoCommitRepo(t)
 	short := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD"))
 	p := docPaneTestPlugin(t, root, true)
-	p.previewTab = PreviewTabDiff
 	p.shells[0].Agent.OutputBuf.Update("landed " + short + "\n")
 
 	cmd, ok := p.activateDiffLink(short)
@@ -242,7 +238,6 @@ func TestRangeClickLoadsFilesNotWorkingTree(t *testing.T) {
 	b := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD"))
 	token := a + ".." + b
 	p := docPaneTestPlugin(t, root, true)
-	p.previewTab = PreviewTabDiff
 	p.shells[0].Agent.OutputBuf.Update("compare " + token + "\n")
 
 	cmd, ok := p.activateDiffLink(token)
@@ -271,6 +266,37 @@ func TestRangeClickLoadsFilesNotWorkingTree(t *testing.T) {
 	got := view.Render(140, 12, workspacediff.RenderOpts{})
 	if strings.Contains(got, "Loading diff…") || strings.Contains(got, "Working Tree vs HEAD") {
 		t.Fatalf("range chrome wrong: %q", got)
+	}
+}
+
+func TestShowDiffToastsWhenPanesDisabled(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, false)
+	p.paneRoot = nil
+	p.paneFocus = 0
+
+	cmd := p.showDiffCmd()
+	if cmd == nil {
+		t.Fatal("flag-off d returned no toast")
+	}
+	msg := cmd()
+	toast, ok := msg.(appmsg.ToastMsg)
+	if !ok {
+		t.Fatalf("flag-off d produced %T, want ToastMsg", msg)
+	}
+	if toast.Message != features.WorkspaceDocPanesDisabledDiff {
+		t.Fatalf("toast = %q", toast.Message)
+	}
+	if p.paneRoot != nil {
+		t.Fatal("flag-off d created a pane tree")
+	}
+
+	click := p.clickPreviewAction(previewActionDiff)
+	if click == nil {
+		t.Fatal("flag-off Diff chip returned no toast")
+	}
+	if got := click(); got.(appmsg.ToastMsg).Message != features.WorkspaceDocPanesDisabledDiff {
+		t.Fatalf("chip toast = %#v", got)
 	}
 }
 
