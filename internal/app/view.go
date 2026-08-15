@@ -661,165 +661,246 @@ func (m Model) renderProjectAddThemePickerOverlay(content string) string {
 	return ui.OverlayModal(content, modal, m.width, m.height)
 }
 
-// renderHeader renders the top bar with title, tabs, and clock.
+// renderHeader renders the single physical header row. Its two clusters come
+// from headerGeometry, which is also the sole source for mouse hit regions.
 func (m Model) renderHeader() string {
-	title, tabs, clock, spacing := m.headerLayout()
-	tabTexts := make([]string, 0, len(tabs))
-	for _, tab := range tabs {
-		tabTexts = append(tabTexts, tab.text)
+	layout := m.headerGeometry()
+	header := layout.left
+	if gap := layout.rightStart - lipgloss.Width(layout.left); gap > 0 {
+		header += strings.Repeat(" ", gap)
 	}
-	header := title + strings.Repeat(" ", spacing/2) + strings.Join(tabTexts, " ") + strings.Repeat(" ", spacing-(spacing/2)) + clock
-	header = ansi.Truncate(header, m.width, "")
+	header += layout.right
+	header = ansi.Truncate(header, max(0, m.width), "")
 	return m.headerBarStyle().Width(m.width).MaxWidth(m.width).Render(header)
 }
 
 func (m Model) headerBarStyle() lipgloss.Style {
-	if m.inGlobalScope() {
-		return styles.HeaderGlobal
-	}
 	return styles.Header
 }
 
 type headerTab struct {
-	ref  tabRef
-	text string
+	ref        tabRef
+	text       string
+	start, end int
 }
 
-// headerLayout keeps the header on the one physical row assumed by
-// headerHeight and mouse routing. Wide layouts retain every existing element;
-// narrow layouts drop the clock, then inactive tabs from the right, while
-// preserving the active destination title and active plugin tab.
-func (m Model) headerLayout() (title string, tabs []headerTab, clock string, spacing int) {
-	// Check if we're in a worktree for the indicator
-	worktreeIndicator := ""
+type headerLayout struct {
+	left                    string
+	right                   string
+	rightStart              int
+	logoEnd                 int
+	globalTabs, projectTabs []headerTab
+	selectorStart           int
+	selectorEnd             int
+	restoreStart            int
+	restoreEnd              int
+}
+
+// headerGeometry lays out both stable anchor zones. Global navigation is
+// always part of the left cluster. The selector's right edge is always the
+// terminal's right edge; project tabs consume only the space between them.
+func (m Model) headerGeometry() headerLayout {
+	width := max(0, m.width)
+	brand := styles.BrandLogo.Render(" ◱ Sidecar")
+	brandPrefix := brand + " " + styles.HeaderDivider.Render("│") + " "
+	layout := headerLayout{logoEnd: min(width, lipgloss.Width(brand))}
+
+	global := m.globalTabsVisible()
+	for i, tab := range global {
+		ref := globalTabRef(tab)
+		text := styles.RenderTab(tab.Name(), i, len(global), m.inGlobalScope() && tab == m.globalTab, false)
+		layout.globalTabs = append(layout.globalTabs, headerTab{ref: ref, text: text})
+	}
+	selectorLabel := "Select Project"
 	if !m.inGlobalScope() {
-		if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
-			// Show worktree branch name as indicator
-			branchName := wtInfo.Branch
-			if branchName == "" {
-				branchName = "worktree"
+		if name := m.activeDestinationName(); name != "" {
+			selectorLabel = name
+		}
+		if wt := m.currentWorktreeInfo(); wt != nil && !wt.IsMain {
+			branch := wt.Branch
+			if branch == "" {
+				branch = "worktree"
 			}
-			worktreeIndicator = styles.WorktreeIndicator.Render(" [" + branchName + "]")
+			selectorLabel += " [" + branch + "]"
 		}
 	}
-
-	// Calculate final title width (with repo name and worktree indicator) - used for tab positioning
-	destination := m.headerDestinationSuffix()
-	finalTitleWidth := lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
-	finalTitleWidth += lipgloss.Width(destination)
-	finalTitleWidth += lipgloss.Width(worktreeIndicator)
-	finalTitleWidth += 1 // trailing space
-
-	// Title with optional repo name and worktree indicator
-	if m.intro.Active {
-		// During animation, render into fixed-width container to keep tabs stable
-		titleContent := styles.BarTitle.Render(" "+m.intro.View()) + m.intro.RepoNameView() + worktreeIndicator + " "
-		title = lipgloss.NewStyle().Width(finalTitleWidth).Render(titleContent)
-	} else {
-		title = styles.BarTitle.Render(" Sidecar") + destination + worktreeIndicator + " "
+	renderSelector := func(label string, budget int) string {
+		render := func(text string) string {
+			if m.inGlobalScope() {
+				// Do not route this through RenderPillWithStyle: Nerd Font caps
+				// require a background and would refill the global action.
+				return styles.GlobalHeaderAction.Render(text)
+			}
+			return styles.RenderPillWithStyle(text, styles.ProjectSelector, styles.BgSecondary)
+		}
+		const suffix = " ▾"
+		full := render(label + suffix)
+		if lipgloss.Width(full) <= budget {
+			return full
+		}
+		overhead := lipgloss.Width(render(suffix)) - lipgloss.Width(suffix)
+		labelBudget := max(0, budget-overhead-lipgloss.Width(suffix))
+		fitted := render(ansi.Truncate(label, labelBudget, "…") + suffix)
+		if lipgloss.Width(fitted) <= budget {
+			return fitted
+		}
+		// Unsupported widths may not even hold the style padding and arrow.
+		// Preserve the right edge and never publish bounds beyond what paints.
+		return ansi.TruncateLeft(fitted, max(0, lipgloss.Width(fitted)-budget), "")
 	}
 
-	// Tabs owned by the active scope: the global space's own tabs, or the
-	// project's plugin tabs. Never both — a project tab row behind an active
-	// global view is exactly the ambiguity this replaces.
-	visible := m.visibleTabs()
-	active := m.activeTab()
-	for i, ref := range visible {
-		tab := styles.RenderTab(m.tabLabel(ref), i, len(visible), ref.same(active), false)
-		tabs = append(tabs, headerTab{ref: ref, text: tab})
-	}
-
-	// Clock (conditional on config)
-	if m.showClock {
-		clock = styles.BarText.Render(m.ui.Clock.Format("15:04"))
-	}
-
-	tabsWidth := func() int {
-		width := 0
+	// A fully hidden or partially clipped tab must never retain a hit region.
+	// Fit whole global tabs into the space left of the pinned selector, dropping
+	// inactive tabs from the right at exceptionally narrow widths.
+	leftWidth := func(tabs []headerTab) int {
+		result := lipgloss.Width(brandPrefix)
 		for i, tab := range tabs {
-			width += lipgloss.Width(tab.text)
+			result += lipgloss.Width(tab.text)
 			if i > 0 {
-				width++
+				result++
 			}
 		}
-		return width
+		return result
 	}
-	totalWidth := func() int {
-		return finalTitleWidth + tabsWidth() + lipgloss.Width(clock)
-	}
-	if totalWidth() > m.width {
-		clock = ""
-	}
-	for totalWidth() > m.width && len(tabs) > 0 {
-		// Drop inactive tabs from the right. The active tab of the active scope
-		// is protected: whichever space owns the screen keeps saying where the
-		// user is, however narrow the terminal gets.
+	minimumSelectorWidth := lipgloss.Width(renderSelector("", width))
+	for len(layout.globalTabs) > 0 && leftWidth(layout.globalTabs)+minimumSelectorWidth > width {
 		remove := -1
-		for i := len(tabs) - 1; i >= 0; i-- {
-			if !tabs[i].ref.same(active) {
+		for i := len(layout.globalTabs) - 1; i >= 0; i-- {
+			if !m.inGlobalScope() || layout.globalTabs[i].ref.global != m.globalTab {
 				remove = i
 				break
 			}
 		}
 		if remove < 0 {
+			layout.globalTabs = nil
 			break
 		}
-		tabs = append(tabs[:remove], tabs[remove+1:]...)
+		layout.globalTabs = append(layout.globalTabs[:remove], layout.globalTabs[remove+1:]...)
 	}
-	if totalWidth() > m.width {
-		// Only protected tabs remain. Reserve their rendered and clickable
-		// width first, then fit the destination title into the prefix space.
-		// The explicit separator is part of title width, keeping render and
-		// getTabBounds on identical geometry.
-		reserved := tabsWidth()
-		if reserved >= m.width {
-			title = ""
-			if len(tabs) == 1 {
-				tabs[0].text = ansi.Truncate(tabs[0].text, m.width, "")
-			}
-		} else {
-			titleBudget := max(0, m.width-reserved-1)
-			title = ansi.Truncate(title, titleBudget, "…") + " "
+	left := brandPrefix
+	for i := range layout.globalTabs {
+		if i > 0 {
+			left += " "
 		}
-		finalTitleWidth = lipgloss.Width(title)
+		layout.globalTabs[i].start = lipgloss.Width(left)
+		left += layout.globalTabs[i].text
+		layout.globalTabs[i].end = lipgloss.Width(left)
 	}
-	spacing = max(0, m.width-totalWidth())
-	return title, tabs, clock, spacing
+
+	// The left anchor is protected. Fit the selector into exactly the columns
+	// that remain so a long repo or worktree name cannot cover the brand/tabs or
+	// push its arrow beyond the right edge.
+	selectorBudget := max(0, width-lipgloss.Width(left))
+	selector := renderSelector(selectorLabel, selectorBudget)
+	selectorWidth := lipgloss.Width(selector)
+
+	restore := ""
+	if m.inGlobalScope() {
+		if name := strings.TrimSpace(m.intro.RepoName); name != "" {
+			candidate := styles.ProjectRestore.Render("↖ " + name)
+			fullSelector := renderSelector(selectorLabel, width)
+			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+lipgloss.Width(fullSelector) <= width {
+				restore = candidate
+				selector = fullSelector
+				selectorWidth = lipgloss.Width(selector)
+			}
+		}
+	}
+	restoreWidth := lipgloss.Width(restore)
+	suffixWidth := selectorWidth
+	if restoreWidth > 0 {
+		suffixWidth += restoreWidth + 1
+	}
+
+	project := []headerTab(nil)
+	if !m.inGlobalScope() && m.registry != nil {
+		plugins := m.registry.Plugins()
+		for i := range plugins {
+			ref := projectTabRef(i)
+			project = append(project, headerTab{
+				ref:  ref,
+				text: styles.RenderTab(m.tabLabel(ref), i, len(plugins), i == m.activePlugin, false),
+			})
+		}
+	}
+
+	clusterWidth := func(tabs []headerTab) int {
+		result := suffixWidth
+		if len(tabs) > 0 {
+			result += 1
+		}
+		for i, tab := range tabs {
+			result += lipgloss.Width(tab.text)
+			if i > 0 {
+				result++
+			}
+		}
+		return result
+	}
+	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
+		remove := -1
+		for i := len(project) - 1; i >= 0; i-- {
+			if project[i].ref.plugin != m.activePlugin {
+				remove = i
+				break
+			}
+		}
+		if remove < 0 {
+			project = nil
+			break
+		}
+		project = append(project[:remove], project[remove+1:]...)
+	}
+
+	right := ""
+	for i := range project {
+		if i > 0 {
+			right += " "
+		}
+		project[i].start = lipgloss.Width(right)
+		right += project[i].text
+		project[i].end = lipgloss.Width(right)
+	}
+	if len(project) > 0 {
+		right += " "
+	}
+	restoreOffset := lipgloss.Width(right)
+	if restore != "" {
+		right += restore
+		right += " "
+	}
+	selectorOffset := lipgloss.Width(right)
+	right += selector
+	rightStart := max(lipgloss.Width(left), width-lipgloss.Width(right))
+	for i := range project {
+		project[i].start += rightStart
+		project[i].end += rightStart
+	}
+
+	layout.left = left
+	layout.right = right
+	layout.rightStart = rightStart
+	layout.projectTabs = project
+	if restore != "" {
+		layout.restoreStart = rightStart + restoreOffset
+		layout.restoreEnd = layout.restoreStart + restoreWidth
+	}
+	layout.selectorStart = rightStart + selectorOffset
+	layout.selectorEnd = min(width, layout.selectorStart+selectorWidth)
+	return layout
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
 // Used for mouse click detection on tabs.
 func (m Model) getTabBounds() []TabBounds {
-	title, tabs, _, spacing := m.headerLayout()
-	tabStartX := lipgloss.Width(title) + spacing/2
+	layout := m.headerGeometry()
+	tabs := append(append([]headerTab(nil), layout.globalTabs...), layout.projectTabs...)
 	bounds := make([]TabBounds, 0, len(tabs))
-	x := tabStartX
 	for _, tab := range tabs {
-		w := lipgloss.Width(tab.text)
-		bounds = append(bounds, TabBounds{Start: x, End: x + w, Tab: tab.ref})
-		x += w + 1 // +1 for space between tabs
+		bounds = append(bounds, TabBounds{Start: tab.start, End: tab.end, Tab: tab.ref})
 	}
 
 	return bounds
-}
-
-func (m Model) headerDestinationParts() (sep, name string) {
-	activeName := m.activeDestinationName()
-	if activeName == "" {
-		return "", ""
-	}
-	sep = styles.Subtitle.Render(" / ")
-	if m.inGlobalScope() {
-		name = styles.BarChipActive.Render(activeName)
-	} else {
-		name = styles.Subtitle.Render(activeName)
-	}
-	return sep, name
-}
-
-func (m Model) headerDestinationSuffix() string {
-	sep, name := m.headerDestinationParts()
-	return sep + name
 }
 
 // getLogoBounds returns the X bounds for the "Sidecar" brand in the header.
@@ -831,7 +912,7 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	// Leading space is part of the painted brand (" Sidecar").
-	end = lipgloss.Width(styles.BarTitle.Render(" Sidecar"))
+	end = m.headerGeometry().logoEnd
 	if end <= 0 {
 		return 0, 0, false
 	}
@@ -841,84 +922,24 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 	return 0, end, true
 }
 
-// getScopeBounds returns the X bounds for the global Overview pill. Clicking
-// it is the same toggle as the brand logo / K.
-func (m Model) getScopeBounds() (start, end int, ok bool) {
-	if !m.inGlobalScope() || !m.globalScopeAvailable() {
+// getProjectSelectorBounds returns the exact painted selector geometry in both
+// scopes. Its right edge is pinned to the terminal edge.
+func (m Model) getProjectSelectorBounds() (start, end int, ok bool) {
+	layout := m.headerGeometry()
+	if layout.selectorEnd <= layout.selectorStart {
 		return 0, 0, false
 	}
-	sep, name := m.headerDestinationParts()
-	if name == "" {
-		return 0, 0, false
-	}
-	start = lipgloss.Width(styles.BarTitle.Render(" Sidecar")) + lipgloss.Width(sep)
-	end = start + lipgloss.Width(name)
-	if m.width > 0 {
-		title, _, _, _ := m.headerLayout()
-		end = min(end, max(start, lipgloss.Width(title)-1))
-		if end <= start {
-			return 0, 0, false
-		}
-	}
-	return start, end, true
+	return layout.selectorStart, layout.selectorEnd, true
 }
 
-// getRepoNameBounds returns the X bounds for the repo name in the header.
-func (m Model) getRepoNameBounds() (start, end int, ok bool) {
-	if m.inGlobalScope() {
+// getProjectRestoreBounds returns the optional global-scope control that
+// restores the covered project without reinitializing or switching it.
+func (m Model) getProjectRestoreBounds() (start, end int, ok bool) {
+	layout := m.headerGeometry()
+	if layout.restoreEnd <= layout.restoreStart {
 		return 0, 0, false
 	}
-	name := m.activeDestinationName()
-	if name == "" {
-		return 0, 0, false
-	}
-
-	titlePrefix := styles.BarTitle.Render(" Sidecar")
-	repoPrefix := styles.Subtitle.Render(" / ")
-	repoName := styles.Subtitle.Render(name)
-
-	start = lipgloss.Width(titlePrefix) + lipgloss.Width(repoPrefix)
-	end = start + lipgloss.Width(repoName)
-	// headerLayout may truncate a long destination to reserve the active tab.
-	// Keep the project-switcher hit target inside the actually painted title so
-	// it cannot cover a fitted plugin tab to its right.
-	if m.width > 0 && m.registry != nil {
-		title, _, _, _ := m.headerLayout()
-		end = min(end, max(start, lipgloss.Width(title)-1))
-		if end <= start {
-			return 0, 0, false
-		}
-	}
-	return start, end, true
-}
-
-// getWorktreeIndicatorBounds returns the X bounds for the worktree indicator in the header.
-func (m Model) getWorktreeIndicatorBounds() (start, end int, ok bool) {
-	if m.inGlobalScope() {
-		return 0, 0, false
-	}
-	wtInfo := m.currentWorktreeInfo()
-	if wtInfo == nil || wtInfo.IsMain {
-		return 0, 0, false
-	}
-
-	branchName := wtInfo.Branch
-	if branchName == "" {
-		branchName = "worktree"
-	}
-
-	// Calculate position: after title + repo name
-	titlePrefix := styles.BarTitle.Render(" Sidecar")
-	start = lipgloss.Width(titlePrefix)
-
-	if m.intro.RepoName != "" {
-		repoSuffix := styles.Subtitle.Render(" / " + m.intro.RepoName)
-		start += lipgloss.Width(repoSuffix)
-	}
-
-	indicator := styles.WorktreeIndicator.Render(" [" + branchName + "]")
-	end = start + lipgloss.Width(indicator)
-	return start, end, true
+	return layout.restoreStart, layout.restoreEnd, true
 }
 
 // renderContent renders the main content area.
@@ -949,7 +970,7 @@ func (m Model) renderGlobalContent(width, height int) string {
 		if host := m.globalTasksPlugin(); host != nil {
 			return host.View(width, height)
 		}
-	case GlobalWorkspaces:
+	case GlobalSessions:
 		if m.overview != nil {
 			return m.overview.WorkspacesView(width, height)
 		}
@@ -1060,7 +1081,7 @@ type footerHint struct {
 // global hints are not appended to it.
 func (m Model) typingFooterHints() ([]footerHint, bool) {
 	if m.inGlobalScope() {
-		if m.globalTab == GlobalWorkspaces && m.overview != nil && m.overview.PreviewInteractive() {
+		if m.globalTab == GlobalSessions && m.overview != nil && m.overview.PreviewInteractive() {
 			return []footerHint{
 				{keys: m.overview.InteractiveExitKey(), label: "Stop typing"},
 				{keys: "esc esc", label: "Stop typing"},
@@ -1085,7 +1106,7 @@ func (m Model) footerHints() []footerHint {
 	switch {
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
-	case m.inGlobalScope() && m.globalTab == GlobalWorkspaces:
+	case m.inGlobalScope() && m.globalTab == GlobalSessions:
 		// Typing is the host's "only ways out" footer — almost every key is
 		// already on its way to the pane. Every other Workspaces context,
 		// including a focused document or issue leaf, is Commands + keymap.

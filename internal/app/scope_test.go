@@ -135,18 +135,18 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 		t.Fatalf("project space ran the cross-project collector %d times", runner.calls)
 	}
 
-	// Entering the global space on the Agents tab starts exactly one cycle.
+	// Entering the global space on the primary Sessions tab starts one cycle.
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
 	if cmd == nil {
-		t.Fatal("entering the Agents tab started no collection")
+		t.Fatal("entering the Sessions tab started no collection")
 	}
 	cmd()
 	if runner.calls != 1 {
 		t.Fatalf("entry ran the collector %d times, want 1", runner.calls)
 	}
 
-	// Slice 2: the Workspaces tab is the second projection of the same catalog,
+	// Activity is the second projection of the same catalog,
 	// so switching onto it — and back — reuses the running cycle rather than
 	// starting a second one.
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
@@ -164,8 +164,13 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 	}
 
 	// Leaving the global space stops collection, so returning to the remembered
-	// Workspaces tab starts exactly one new shared cycle.
+	// Sessions tab starts exactly one new shared cycle.
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	m = asAppModel(t, updated)
+	if cmd != nil {
+		cmd()
+	}
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
 	m = asAppModel(t, updated)
 	if cmd != nil {
 		cmd()
@@ -178,7 +183,7 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 		t.Fatal("re-entering the Workspaces tab started no collection")
 	}
 	cmd()
-	if m.globalTab != GlobalWorkspaces {
+	if m.globalTab != GlobalSessions {
 		t.Fatalf("re-entry forgot the last global tab: %v", m.globalTab)
 	}
 	if runner.calls != 2 {
@@ -194,11 +199,13 @@ func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 	m = asAppModel(t, updated)
 	updated, _ = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 	m = asAppModel(t, updated)
-	if m.globalTab != GlobalWorkspaces {
-		t.Fatalf("setup: tab = %v, want Workspaces", m.globalTab)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	m = asAppModel(t, updated)
+	if m.globalTab != GlobalSessions {
+		t.Fatalf("setup: tab = %v, want Sessions", m.globalTab)
 	}
-	if got := state.GetLastGlobalTab(); got != "workspaces" {
-		t.Fatalf("persisted tab = %q, want workspaces", got)
+	if got := state.GetLastGlobalTab(); got != "sessions" {
+		t.Fatalf("persisted tab = %q, want sessions", got)
 	}
 
 	// A new Model is what a Sidecar relaunch constructs.
@@ -206,14 +213,38 @@ func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 	if restarted.inGlobalScope() {
 		t.Fatal("restart landed in the global space")
 	}
-	if restarted.globalTab != GlobalWorkspaces {
+	if restarted.globalTab != GlobalSessions {
 		t.Fatalf("New() did not restore the persisted tab: %v", restarted.globalTab)
 	}
 
 	updated, _ = restarted.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	restarted = asAppModel(t, updated)
-	if !restarted.inGlobalScope() || restarted.globalTab != GlobalWorkspaces {
+	if !restarted.inGlobalScope() || restarted.globalTab != GlobalSessions {
 		t.Fatalf("K after restart: global=%v tab=%v", restarted.inGlobalScope(), restarted.globalTab)
+	}
+}
+
+func TestGlobalTabPersistenceReadsLegacyNamesAndWritesNewNames(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want GlobalTab
+	}{
+		{"sessions", GlobalSessions},
+		{"workspaces", GlobalSessions},
+		{"activity", GlobalActivity},
+		{"agents", GlobalActivity},
+		{"tasks", GlobalTasks},
+	} {
+		got, ok := parseGlobalTabID(tc.id)
+		if !ok || got != tc.want {
+			t.Errorf("parseGlobalTabID(%q) = %v, %v; want %v, true", tc.id, got, ok, tc.want)
+		}
+	}
+	if got := GlobalSessions.persistID(); got != "sessions" {
+		t.Errorf("Sessions persist ID = %q", got)
+	}
+	if got := GlobalActivity.persistID(); got != "activity" {
+		t.Errorf("Activity persist ID = %q", got)
 	}
 }
 
@@ -560,12 +591,12 @@ func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 		t.Fatalf("global footer lost quit: %#v", globalHints)
 	}
 
-	if title, ctx := m.helpSurface(); title != "Agents" || ctx != "overview" {
+	if title, ctx := m.helpSurface(); title != "Sessions" || ctx != "global-workspaces" {
 		t.Fatalf("help documents %q/%q, want the visible global tab", title, ctx)
 	}
-	m.globalTab = GlobalWorkspaces
-	if title, ctx := m.helpSurface(); title != "Workspaces" || ctx != "global-workspaces" {
-		t.Fatalf("help documents %q/%q on the Workspaces tab", title, ctx)
+	m.globalTab = GlobalActivity
+	if title, ctx := m.helpSurface(); title != "Activity" || ctx != "overview" {
+		t.Fatalf("help documents %q/%q on the Activity tab", title, ctx)
 	}
 	m.globalTab = GlobalTasks
 	if title, ctx := m.helpSurface(); title != "tasks" || ctx != "tasks-list" {
@@ -589,7 +620,7 @@ func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
 	m.updateContext()
 
 	title, ctx := m.helpSurface()
-	if title != "Workspaces" || ctx != "global-workspaces" {
+	if title != "Sessions" || ctx != "global-workspaces" {
 		t.Fatalf("help surface = %q/%q", title, ctx)
 	}
 	var help strings.Builder
@@ -739,14 +770,14 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 		t.Fatal("the preview was live before the global space was ever entered")
 	}
 
-	// Entering on Agents is not the Workspaces tab, so the preview stays asleep.
+	// Entering on Sessions wakes the session preview.
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
 	if cmd != nil {
 		cmd()
 	}
-	if m.overview.WorkspacesPreviewVisible() {
-		t.Fatal("the Agents tab woke the Workspaces preview")
+	if !m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("the Sessions tab did not wake its preview")
 	}
 
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
@@ -754,8 +785,8 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 	if cmd != nil {
 		cmd()
 	}
-	if !m.overview.WorkspacesPreviewVisible() {
-		t.Fatal("switching to the Workspaces tab did not wake its preview")
+	if m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("switching to Activity did not put the Sessions preview to sleep")
 	}
 
 	// Another global tab, and leaving the space entirely, both put it back to
@@ -765,8 +796,8 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 	if cmd != nil {
 		cmd()
 	}
-	if m.overview.WorkspacesPreviewVisible() {
-		t.Fatal("moving to another global tab left the preview polling")
+	if !m.overview.WorkspacesPreviewVisible() {
+		t.Fatal("switching back to Sessions did not wake its preview")
 	}
 
 	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
@@ -863,13 +894,8 @@ func TestShutdownReleasesTheGlobalBrowsersTerminal(t *testing.T) {
 	if cmd != nil {
 		cmd()
 	}
-	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
-	m = asAppModel(t, updated)
-	if cmd != nil {
-		cmd()
-	}
 	if !m.overview.WorkspacesPreviewVisible() {
-		t.Fatal("the Workspaces tab never woke its preview")
+		t.Fatal("the Sessions tab never woke its preview")
 	}
 
 	m.shutdown()

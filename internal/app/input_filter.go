@@ -56,7 +56,7 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 				return consumer.WheelAtBoundary(wheel)
 			}
 			return false
-		case m.globalTab == GlobalAgents && m.overview != nil:
+		case m.globalTab == GlobalActivity && m.overview != nil:
 			return m.overview.BoardWheelAtBoundary(wheel)
 		case m.globalWorkspacesVisible():
 			return m.overview.WorkspacesWheelAtBoundary(wheel)

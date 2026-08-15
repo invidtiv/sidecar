@@ -119,7 +119,7 @@ func TestOverviewEntryAndExitKeepTheExactProjectDestination(t *testing.T) {
 	if got := totalInits(plugins); got != inits {
 		t.Fatalf("entry reinitialized plugins: inits %d -> %d", inits, got)
 	}
-	if m.activeContext != "overview" || m.activeDestinationName() != "Overview" {
+	if m.activeContext != "global-workspaces" || m.activeDestinationName() != "Overview" {
 		t.Fatalf("entry did not name the global destination: context=%q name=%q",
 			m.activeContext, m.activeDestinationName())
 	}
@@ -279,15 +279,13 @@ func TestSelectingTheCoveredProjectFromGlobalRestoresItsTerminalOnce(t *testing.
 
 func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
-	projectTitle, projectTabs, _, _ := m.headerLayout()
+	layout := m.headerGeometry()
+	projectTabs := layout.projectTabs
 	if len(projectTabs) != 4 {
 		t.Fatalf("project tabs = %d, want one per plugin", len(projectTabs))
 	}
-	if !strings.Contains(ansi.Strip(projectTitle), "one") {
-		t.Fatalf("project title = %q, want the project name", ansi.Strip(projectTitle))
-	}
-	if strings.Contains(projectTitle, styles.BarChipActive.Render("one")) {
-		t.Fatal("project repo name should stay subtitle text, not a filled pill")
+	if !strings.Contains(ansi.Strip(layout.right), "one ▾") {
+		t.Fatalf("project right cluster = %q, want the project selector", ansi.Strip(layout.right))
 	}
 	for i, tab := range projectTabs {
 		if tab.ref.scope != ScopeProject || tab.ref.plugin != i {
@@ -301,16 +299,14 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 
 	m.scope = ScopeGlobal
 	m.updateContext()
-	title, tabs, _, _ := m.headerLayout()
-	if !strings.Contains(ansi.Strip(title), "Overview") {
-		t.Fatalf("global title = %q, want Overview", ansi.Strip(title))
-	}
-	if !strings.Contains(title, styles.BarChipActive.Render("Overview")) {
-		t.Fatalf("global title is missing the Overview pill: %q", ansi.Strip(title))
+	layout = m.headerGeometry()
+	tabs := layout.globalTabs
+	if !strings.Contains(ansi.Strip(layout.right), "Select Project ▾") {
+		t.Fatalf("global right cluster = %q, want project selector", ansi.Strip(layout.right))
 	}
 	// The global space owns its own tabs, and only its own. Tasks is absent
 	// because its feature is off in this fixture.
-	want := []GlobalTab{GlobalAgents, GlobalWorkspaces}
+	want := []GlobalTab{GlobalSessions, GlobalActivity}
 	if len(tabs) != len(want) {
 		t.Fatalf("global tabs = %d, want %d", len(tabs), len(want))
 	}
@@ -324,7 +320,7 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	}
 	// The visible global tab is the active one; nothing renders a project tab
 	// behind it.
-	activeGlobal := styles.RenderTab(GlobalAgents.Name(), 0, len(want), true, false)
+	activeGlobal := styles.RenderTab(GlobalSessions.Name(), 0, len(want), true, false)
 	if tabs[0].text != activeGlobal {
 		t.Fatal("the visible global tab is not drawn active")
 	}
@@ -355,8 +351,8 @@ func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 		target := bounds[1]
 		updated, _ := m.Update(tea.MouseClickMsg{X: (target.Start + target.End) / 2, Y: 0, Button: tea.MouseLeft})
 		clicked := asAppModel(t, updated)
-		if !clicked.inGlobalScope() || clicked.globalTab != GlobalWorkspaces {
-			t.Fatalf("tab click: global=%v tab=%v, want the global Workspaces tab",
+		if !clicked.inGlobalScope() || clicked.globalTab != GlobalActivity {
+			t.Fatalf("tab click: global=%v tab=%v, want the global Activity tab",
 				clicked.inGlobalScope(), clicked.globalTab)
 		}
 		if clicked.activePlugin != 2 || clicked.ui.WorkDir != "/tmp/one" || totalInits(plugins) != inits {
@@ -371,9 +367,9 @@ func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 		tab    GlobalTab
 		global bool
 	}{
-		"1": {GlobalAgents, true},
-		"2": {GlobalWorkspaces, true},
-		"3": {GlobalAgents, true}, // no third tab: Tasks is disabled here
+		"1": {GlobalSessions, true},
+		"2": {GlobalActivity, true},
+		"3": {GlobalSessions, true}, // no third tab: starting tab is unchanged
 	}
 	for key, want := range globalNumbers {
 		t.Run("global number "+key, func(t *testing.T) {
@@ -407,7 +403,7 @@ func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 		})
 	}
 
-	globalCycles := map[string]GlobalTab{"`": GlobalWorkspaces, "]": GlobalWorkspaces, "~": GlobalWorkspaces, "[": GlobalWorkspaces}
+	globalCycles := map[string]GlobalTab{"`": GlobalActivity, "]": GlobalActivity, "~": GlobalActivity, "[": GlobalActivity}
 	for key, want := range globalCycles {
 		t.Run("global cycle "+key, func(t *testing.T) {
 			m, _ := scopeBaselineModel(t, "notes")

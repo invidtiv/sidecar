@@ -28,18 +28,23 @@ const (
 type GlobalTab uint8
 
 const (
-	GlobalAgents GlobalTab = iota
-	GlobalWorkspaces
+	GlobalSessions GlobalTab = iota
+	GlobalActivity
 	GlobalTasks
+
+	// Deprecated compatibility names. Session state and older callers used the
+	// surface names before the header established the fleet vocabulary.
+	GlobalWorkspaces = GlobalSessions
+	GlobalAgents     = GlobalActivity
 )
 
 // Name is the header label for a global tab.
 func (t GlobalTab) Name() string {
 	switch t {
-	case GlobalAgents:
-		return "Agents"
-	case GlobalWorkspaces:
-		return "Workspaces"
+	case GlobalSessions:
+		return "Sessions"
+	case GlobalActivity:
+		return "Activity"
 	case GlobalTasks:
 		return "Tasks"
 	}
@@ -49,10 +54,10 @@ func (t GlobalTab) Name() string {
 // persistID is the stable state.json value for a global tab.
 func (t GlobalTab) persistID() string {
 	switch t {
-	case GlobalAgents:
-		return "agents"
-	case GlobalWorkspaces:
-		return "workspaces"
+	case GlobalSessions:
+		return "sessions"
+	case GlobalActivity:
+		return "activity"
 	case GlobalTasks:
 		return "tasks"
 	}
@@ -61,10 +66,10 @@ func (t GlobalTab) persistID() string {
 
 func parseGlobalTabID(id string) (GlobalTab, bool) {
 	switch id {
-	case "agents":
-		return GlobalAgents, true
-	case "workspaces":
-		return GlobalWorkspaces, true
+	case "sessions", "workspaces":
+		return GlobalSessions, true
+	case "activity", "agents":
+		return GlobalActivity, true
 	case "tasks":
 		return GlobalTasks, true
 	}
@@ -75,9 +80,9 @@ func parseGlobalTabID(id string) (GlobalTab, bool) {
 // is absent: its context is reported by the Tasks model itself.
 func (t GlobalTab) context() string {
 	switch t {
-	case GlobalAgents:
+	case GlobalActivity:
 		return "overview"
-	case GlobalWorkspaces:
+	case GlobalSessions:
 		return "global-workspaces"
 	}
 	return "overview"
@@ -121,7 +126,7 @@ func (m Model) inGlobalScope() bool { return m.scope == ScopeGlobal }
 func (m Model) globalTabsVisible() []GlobalTab {
 	var tabs []GlobalTab
 	if m.overview != nil {
-		tabs = append(tabs, GlobalAgents, GlobalWorkspaces)
+		tabs = append(tabs, GlobalSessions, GlobalActivity)
 	}
 	if m.globalTasks != nil {
 		tabs = append(tabs, GlobalTasks)
@@ -201,6 +206,13 @@ func (m Model) activeTab() tabRef {
 // numbered, or cycled onto.
 func (m *Model) activateTab(ref tabRef) tea.Cmd {
 	if ref.scope == ScopeGlobal {
+		if !m.inGlobalScope() {
+			enter := m.enterOverview()
+			if m.globalTab == ref.global {
+				return enter
+			}
+			return tea.Batch(enter, m.setGlobalTab(ref.global))
+		}
 		return m.setGlobalTab(ref.global)
 	}
 	m.leaveOverview(false)
@@ -245,7 +257,7 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 // catalogTab reports that a global tab is a projection of the cross-project
 // catalog. Agents and Workspaces both are; Tasks owns its own store.
 func catalogTab(tab GlobalTab) bool {
-	return tab == GlobalAgents || tab == GlobalWorkspaces
+	return tab == GlobalActivity || tab == GlobalSessions
 }
 
 // startVisibleGlobalTab starts whatever collection the visible global tab
@@ -264,7 +276,7 @@ func (m *Model) startVisibleGlobalTab() tea.Cmd {
 	// the scope tells it directly rather than inferring visibility from renders.
 	// The same switch releases a terminal the user was typing into: a tab nobody
 	// is looking at holds neither a capture nor a live pane.
-	visible := m.overview.SetWorkspacesVisible(m.globalTab == GlobalWorkspaces)
+	visible := m.overview.SetWorkspacesVisible(m.globalTab == GlobalSessions)
 	if catalogTab(m.globalTab) {
 		return tea.Batch(m.overview.Ensure(m.overviewProjects()), visible)
 	}
@@ -274,7 +286,7 @@ func (m *Model) startVisibleGlobalTab() tea.Cmd {
 // globalWorkspacesVisible reports that the cross-project Workspaces browser
 // owns the screen, and therefore its own keys and mouse events.
 func (m Model) globalWorkspacesVisible() bool {
-	return m.inGlobalScope() && m.globalTab == GlobalWorkspaces && m.overview != nil
+	return m.inGlobalScope() && m.globalTab == GlobalSessions && m.overview != nil
 }
 
 // globalWorkspacesFilterFocused reports that the browser's inline filter is
@@ -402,7 +414,7 @@ func (h *globalTasksHost) update(msg tea.Msg) tea.Cmd {
 // screen. Board navigation and its validated cross-project transitions are
 // accepted only while it does.
 func (m Model) agentsBoardVisible() bool {
-	return m.inGlobalScope() && m.globalTab == GlobalAgents
+	return m.inGlobalScope() && m.globalTab == GlobalActivity
 }
 
 // globalCatalogNavigable reports that a projection of the cross-project catalog
@@ -423,7 +435,7 @@ func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	switch {
 	case m.globalTasksFocused():
 		return m.globalTasks.update(msg)
-	case m.globalTab == GlobalAgents && m.overview != nil:
+	case m.globalTab == GlobalActivity && m.overview != nil:
 		return m.overview.Update(msg)
 	case m.globalWorkspacesVisible():
 		return m.overview.WorkspacesMouse(msg)
