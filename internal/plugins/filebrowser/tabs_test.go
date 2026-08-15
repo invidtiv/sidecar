@@ -641,3 +641,394 @@ exit 0
 		t.Fatalf("kill-session count = %d, want 1; log:\n%s", count, data)
 	}
 }
+
+func closeTabsFixture(t *testing.T) *Plugin {
+	t.Helper()
+	p := createTabTestPlugin(t, t.TempDir())
+	p.tabs = []FileTab{
+		{Path: "main.go", Loaded: true, Result: PreviewResult{Lines: []string{"main"}}},
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "src/main.go", Loaded: true, Result: PreviewResult{Lines: []string{"src-main"}}},
+		{Path: "README.md", Loaded: true, Result: PreviewResult{Lines: []string{"readme"}}},
+	}
+	return p
+}
+
+func tabPaths(tabs []FileTab) []string {
+	paths := make([]string, len(tabs))
+	for i, tab := range tabs {
+		paths[i] = tab.Path
+	}
+	return paths
+}
+
+func TestTabs_CloseTabsForPath_RemovesBeforeActive(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 3
+	p.previewFile = "README.md"
+	p.previewLines = []string{"readme"}
+
+	cmd := p.closeTabsForPath("src/helper.go")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/main.go,README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.activeTab != 2 {
+		t.Errorf("activeTab = %d, want 2", p.activeTab)
+	}
+	if p.previewFile != "README.md" {
+		t.Errorf("previewFile = %q, want README.md", p.previewFile)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for already-loaded survivor")
+	}
+}
+
+func TestTabs_CloseTabsForPath_RemovesActive(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 1
+	p.previewFile = "src/helper.go"
+	p.previewLines = []string{"helper"}
+
+	cmd := p.closeTabsForPath("src/helper.go")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/main.go,README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.activeTab != 1 {
+		t.Errorf("activeTab = %d, want 1 (next survivor)", p.activeTab)
+	}
+	if p.previewFile != "src/main.go" {
+		t.Errorf("previewFile = %q, want src/main.go", p.previewFile)
+	}
+	if got := strings.Join(p.previewLines, ""); got != "src-main" {
+		t.Errorf("previewLines = %v, want applied survivor content", p.previewLines)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for already-loaded survivor")
+	}
+}
+
+func TestTabs_CloseTabsForPath_RemovesAfterActive(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 0
+	p.previewFile = "main.go"
+	p.previewLines = []string{"main"}
+
+	_ = p.closeTabsForPath("README.md")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/helper.go,src/main.go" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.activeTab != 0 {
+		t.Errorf("activeTab = %d, want 0", p.activeTab)
+	}
+	if p.previewFile != "main.go" {
+		t.Errorf("previewFile = %q, want main.go", p.previewFile)
+	}
+}
+
+func TestTabs_CloseTabsForPath_RemovesDirectory(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 2 // src/main.go, between two other src/ files
+	p.previewFile = "src/main.go"
+	p.previewLines = []string{"src-main"}
+
+	cmd := p.closeTabsForPath("src")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	// originalActive=2, one removal before it (src/helper.go), active itself
+	// removed, so index becomes 2-1=1 → README.md.
+	if p.activeTab != 1 {
+		t.Errorf("activeTab = %d, want 1", p.activeTab)
+	}
+	if p.previewFile != "README.md" {
+		t.Errorf("previewFile = %q, want README.md", p.previewFile)
+	}
+	if got := strings.Join(p.previewLines, ""); got != "readme" {
+		t.Errorf("previewLines = %v, want readme", p.previewLines)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for already-loaded survivor")
+	}
+}
+
+func TestTabs_CloseTabsForPath_RemovesAll(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.tabs = []FileTab{
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "src/main.go", Loaded: true, Result: PreviewResult{Lines: []string{"src-main"}}},
+	}
+	p.activeTab = 1
+	p.previewFile = "src/main.go"
+	p.previewScroll = 4
+	p.previewLines = []string{"src-main"}
+	p.previewHighlighted = []string{"hi"}
+	p.isBinary = true
+	p.isTruncated = true
+	p.contentSearchMode = true
+	p.contentSearchQuery = "src"
+	p.blameMode = true
+	p.infoMode = true
+	p.lineJumpMode = true
+	p.lineJumpBuffer = "12"
+
+	cmd := p.closeTabsForPath("src")
+
+	if len(p.tabs) != 0 {
+		t.Fatalf("expected 0 tabs, got %d", len(p.tabs))
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd after removing every tab")
+	}
+	if p.activeTab != 0 {
+		t.Errorf("activeTab = %d, want 0", p.activeTab)
+	}
+	if p.previewFile != "" {
+		t.Errorf("previewFile = %q, want empty", p.previewFile)
+	}
+	if p.previewScroll != 0 {
+		t.Errorf("previewScroll = %d, want 0", p.previewScroll)
+	}
+	if p.previewLines != nil {
+		t.Errorf("previewLines = %v, want nil", p.previewLines)
+	}
+	if p.previewHighlighted != nil {
+		t.Errorf("previewHighlighted = %v, want nil", p.previewHighlighted)
+	}
+	if p.isBinary || p.isTruncated {
+		t.Error("preview content flags should be cleared")
+	}
+	if p.contentSearchMode || p.contentSearchQuery != "" || p.blameMode || p.infoMode || p.lineJumpMode || p.lineJumpBuffer != "" {
+		t.Error("preview modes should be cleared")
+	}
+}
+
+func TestTabs_CloseTabsForPath_FileDoesNotCloseSiblings(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 0
+	p.previewFile = "main.go"
+
+	_ = p.closeTabsForPath("src/helper.go")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/main.go,README.md" {
+		t.Fatalf("file delete closed extra tabs: %v", got)
+	}
+}
+
+func TestTabs_CloseTabsForPath_PrefixIsNotSibling(t *testing.T) {
+	p := createTabTestPlugin(t, t.TempDir())
+	p.tabs = []FileTab{
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "src2/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"other"}}},
+	}
+	p.activeTab = 0
+	p.previewFile = "src/helper.go"
+
+	_ = p.closeTabsForPath("src")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "src2/helper.go" {
+		t.Fatalf("directory prefix should not match sibling src2: %v", got)
+	}
+	if p.previewFile != "src2/helper.go" {
+		t.Errorf("previewFile = %q, want src2/helper.go", p.previewFile)
+	}
+}
+
+func TestTabs_CloseTabsForPath_AbsoluteDeletedPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTabTestPlugin(t, tmpDir)
+	p.tabs = []FileTab{
+		{Path: "main.go", Loaded: true, Result: PreviewResult{Lines: []string{"main"}}},
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "src/main.go", Loaded: true, Result: PreviewResult{Lines: []string{"src-main"}}},
+	}
+	p.activeTab = 0
+	p.previewFile = "main.go"
+	p.previewLines = []string{"main"}
+
+	cmd := p.closeTabsForPath(filepath.Join(tmpDir, "src"))
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go" {
+		t.Fatalf("absolute directory delete should close relative tabs: %v", got)
+	}
+	if p.activeTab != 0 || p.previewFile != "main.go" {
+		t.Errorf("active=%d preview=%q, want 0/main.go", p.activeTab, p.previewFile)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for already-loaded survivor")
+	}
+}
+
+func TestTabs_CloseTabsForPath_AbsoluteFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTabTestPlugin(t, tmpDir)
+	p.tabs = []FileTab{
+		{Path: "main.go", Loaded: true, Result: PreviewResult{Lines: []string{"main"}}},
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+	}
+	p.activeTab = 1
+	p.previewFile = "src/helper.go"
+	p.previewLines = []string{"helper"}
+
+	_ = p.closeTabsForPath(filepath.Join(tmpDir, "src", "helper.go"))
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go" {
+		t.Fatalf("absolute file delete should close the matching relative tab: %v", got)
+	}
+	if p.previewFile != "main.go" {
+		t.Errorf("previewFile = %q, want main.go", p.previewFile)
+	}
+}
+
+func TestTabs_CloseTabsForPath_RelativeDeletedPathStillWorks(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 1
+	p.previewFile = "src/helper.go"
+
+	_ = p.closeTabsForPath("src/helper.go")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,src/main.go,README.md" {
+		t.Fatalf("relative delete should still match: %v", got)
+	}
+}
+
+func TestTabs_CloseTabsForPath_DirectoryBeforeActiveAdjustsOnce(t *testing.T) {
+	p := closeTabsFixture(t)
+	p.activeTab = 3
+	p.previewFile = "README.md"
+	p.previewLines = []string{"readme"}
+	p.previewScroll = 2
+	p.tabs[3].Scroll = 2
+
+	_ = p.closeTabsForPath("src")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go,README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.activeTab != 1 {
+		t.Errorf("activeTab = %d, want 1 (2 removals before original index 3)", p.activeTab)
+	}
+	if p.previewFile != "README.md" {
+		t.Errorf("previewFile = %q, want README.md", p.previewFile)
+	}
+}
+
+func TestTabs_CloseTabsForPath_LoadsUnloadedSurvivor(t *testing.T) {
+	p := createTabTestPlugin(t, t.TempDir())
+	p.tabs = []FileTab{
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "README.md"},
+	}
+	p.activeTab = 0
+	p.previewFile = "src/helper.go"
+
+	cmd := p.closeTabsForPath("src/helper.go")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.previewFile != "README.md" {
+		t.Errorf("previewFile = %q, want README.md", p.previewFile)
+	}
+	if cmd == nil {
+		t.Error("expected LoadPreview command for unloaded survivor")
+	}
+}
+
+func TestTabs_CloseTabsForPath_KillsEditSession(t *testing.T) {
+	tty.WaitForPendingSends()
+	t.Cleanup(tty.WaitForPendingSends)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TEST_LOG", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := createTabTestPlugin(t, t.TempDir())
+	p.inlineEditor = tty.New(nil)
+	p.tabs = []FileTab{
+		{
+			Path:        "src/helper.go",
+			Loaded:      true,
+			Result:      PreviewResult{Lines: []string{"helper"}},
+			EditSession: "editor-src-helper",
+			EditEditor:  "nvim",
+		},
+		{
+			Path:        "src/main.go",
+			Loaded:      true,
+			Result:      PreviewResult{Lines: []string{"src-main"}},
+			EditSession: "editor-src-main",
+			EditEditor:  "nvim",
+		},
+		{Path: "README.md", Loaded: true, Result: PreviewResult{Lines: []string{"readme"}}},
+	}
+	p.activeTab = 0
+	p.previewFile = "src/helper.go"
+	p.inlineEditMode = true
+	p.inlineEditSession = "editor-src-helper"
+	p.inlineEditFile = "src/helper.go"
+	p.inlineEditEditor = "nvim"
+
+	_ = p.closeTabsForPath("src")
+
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "README.md" {
+		t.Fatalf("tabs = %v", got)
+	}
+	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditFile != "" {
+		t.Fatalf("plugin edit state retained: mode:%v session:%q file:%q",
+			p.inlineEditMode, p.inlineEditSession, p.inlineEditFile)
+	}
+	if p.previewFile != "README.md" {
+		t.Errorf("previewFile = %q, want README.md", p.previewFile)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if count := strings.Count(log, "kill-session -t editor-src-helper"); count != 1 {
+		t.Fatalf("helper kill-session count = %d, want 1; log:\n%s", count, log)
+	}
+	if count := strings.Count(log, "kill-session -t editor-src-main"); count != 1 {
+		t.Fatalf("main kill-session count = %d, want 1; log:\n%s", count, log)
+	}
+}
+
+func TestTabs_DeleteSuccessMsg_AbsolutePathClosesTabs(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTabTestPlugin(t, tmpDir)
+	p.tabs = []FileTab{
+		{Path: "main.go", Loaded: true, Result: PreviewResult{Lines: []string{"main"}}},
+		{Path: "src/helper.go", Loaded: true, Result: PreviewResult{Lines: []string{"helper"}}},
+		{Path: "src/main.go", Loaded: true, Result: PreviewResult{Lines: []string{"src-main"}}},
+	}
+	p.activeTab = 1
+	p.previewFile = "src/helper.go"
+	p.fileOpMode = FileOpDelete
+	p.fileOpConfirmDelete = true
+
+	_, cmd := p.update(DeleteSuccessMsg{Path: filepath.Join(tmpDir, "src")})
+
+	if p.fileOpMode != FileOpNone || p.fileOpConfirmDelete {
+		t.Fatal("delete success should clear file-op state")
+	}
+	if got := tabPaths(p.tabs); strings.Join(got, ",") != "main.go" {
+		t.Fatalf("DeleteSuccessMsg should close relative tabs under the absolute path: %v", got)
+	}
+	if p.previewFile != "main.go" {
+		t.Errorf("previewFile = %q, want main.go", p.previewFile)
+	}
+	if cmd == nil {
+		t.Error("expected batched refresh command")
+	}
+}

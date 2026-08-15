@@ -603,27 +603,101 @@ func (p *Plugin) killTabEditSession(index int) {
 	}
 }
 
-// closeTabsForPath kills edit sessions and removes tabs matching the deleted path.
-// Handles both files (exact match) and directories (prefix match).
-func (p *Plugin) closeTabsForPath(deletedPath string) {
-	deletedPath = filepath.Clean(deletedPath)
-	// Iterate backwards to safely remove tabs by index
-	for i := len(p.tabs) - 1; i >= 0; i-- {
-		tabPath := filepath.Clean(p.tabs[i].Path)
-		if tabPath == deletedPath || strings.HasPrefix(tabPath, deletedPath+string(filepath.Separator)) {
-			p.killTabEditSession(i)
-			if i == p.activeTab && p.inlineEditMode {
-				p.clearPluginEditState()
-			}
-			p.tabs = append(p.tabs[:i], p.tabs[i+1:]...)
-			if p.activeTab > i || p.activeTab >= len(p.tabs) {
-				p.activeTab--
-			}
+// closeTabsForPath kills edit sessions and removes tabs matching the deleted
+// path. deletedPath may be workdir-relative or absolute (DeleteSuccessMsg).
+// A file matches exactly; a directory also removes tabs underneath it.
+func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
+	if deletedPath == "" || len(p.tabs) == 0 {
+		return nil
+	}
+
+	p.saveActiveTabState()
+
+	deleted := p.normalizeDeletedPath(deletedPath)
+	originalActive := p.activeTab
+	removedBeforeActive := 0
+	removedAny := false
+
+	kept := make([]FileTab, 0, len(p.tabs))
+	for i := range p.tabs {
+		if !tabPathMatchesDeleted(p.tabs[i].Path, deleted) {
+			kept = append(kept, p.tabs[i])
+			continue
 		}
+		removedAny = true
+		p.killTabEditSession(i)
+		if i == originalActive && p.inlineEditMode {
+			p.clearPluginEditState()
+		}
+		if i < originalActive {
+			removedBeforeActive++
+		}
+	}
+	if !removedAny {
+		return nil
+	}
+	p.tabs = kept
+
+	if len(p.tabs) == 0 {
+		p.activeTab = 0
+		p.previewFile = ""
+		p.previewScroll = 0
+		p.resetPreviewContent()
+		p.resetPreviewModes()
+		p.updateWatchedFile()
+		return nil
+	}
+
+	p.activeTab = originalActive - removedBeforeActive
+	if p.activeTab >= len(p.tabs) {
+		p.activeTab = len(p.tabs) - 1
 	}
 	if p.activeTab < 0 {
 		p.activeTab = 0
 	}
+	return p.applyActiveTab()
+}
+
+// normalizeDeletedPath maps a deleted path onto FileTab.Path space
+// (workdir-relative). Absolute DeleteSuccessMsg paths become relative when
+// they live under WorkDir; already-relative paths are cleaned as-is so tests
+// and any other relative caller keep working.
+func (p *Plugin) normalizeDeletedPath(deletedPath string) string {
+	deletedPath = filepath.Clean(deletedPath)
+	if !filepath.IsAbs(deletedPath) {
+		return deletedPath
+	}
+	if p.ctx == nil || p.ctx.WorkDir == "" {
+		return deletedPath
+	}
+	workDir, err := filepath.Abs(p.ctx.WorkDir)
+	if err != nil {
+		return deletedPath
+	}
+	absDeleted, err := filepath.Abs(deletedPath)
+	if err != nil {
+		return deletedPath
+	}
+	rel, err := filepath.Rel(workDir, absDeleted)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return deletedPath
+	}
+	return rel
+}
+
+// tabPathMatchesDeleted reports whether a workdir-relative tab path is the
+// deleted file or lives under the deleted directory. The trailing separator
+// keeps "foo" from matching "foobar".
+func tabPathMatchesDeleted(tabPath, deletedPath string) bool {
+	tabPath = filepath.Clean(tabPath)
+	deletedPath = filepath.Clean(deletedPath)
+	if tabPath == deletedPath {
+		return true
+	}
+	if deletedPath == "" || deletedPath == "." {
+		return false
+	}
+	return strings.HasPrefix(tabPath, deletedPath+string(filepath.Separator))
 }
 
 // invalidateTabsInDirs drops the cached content of background tabs whose file
