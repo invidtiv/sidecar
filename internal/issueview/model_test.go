@@ -158,6 +158,25 @@ func TestModelIgnoresStaleResults(t *testing.T) {
 	}
 }
 
+func TestArmLeavesNeedsLoadUntilLoadAndKeepsPendingScroll(t *testing.T) {
+	m := New(nil)
+	m.Arm(7, "td-abc123", 3)
+	if !m.NeedsLoad() || m.IssueID() != "td-abc123" || m.ModelID() != 7 || !m.Loading() {
+		t.Fatalf("armed = id=%q model=%d needsLoad=%v loading=%v", m.IssueID(), m.ModelID(), m.NeedsLoad(), m.Loading())
+	}
+	m.SetPendingScroll(4)
+	cmd := m.Load(7, t.TempDir(), "td-abc123", 3)
+	if cmd == nil {
+		t.Fatal("Load returned no command")
+	}
+	if m.NeedsLoad() {
+		t.Fatal("Load left NeedsLoad true")
+	}
+	if got := m.ScrollOffset(); got != 4 {
+		t.Fatalf("Load cleared pending scroll: %d", got)
+	}
+}
+
 func TestPendingScrollIsAppliedOnlyByTheCurrentLoadGeneration(t *testing.T) {
 	m := New(nil)
 	m.SetSize(40, 3)

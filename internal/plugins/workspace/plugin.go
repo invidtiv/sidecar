@@ -222,8 +222,8 @@ type Plugin struct {
 	// written onto the default selection.
 	paneLayoutSurface string
 	// hiddenPaneLayout is the last encoded split+tabs for the current surface
-	// when the pane is hidden (q). Last-x forgets it. Restoring an Open
-	// surface clears it.
+	// when the pane is hidden (q). It can be a document set, an issue set, or
+	// both. Last-x forgets it. Restoring an Open surface clears it.
 	hiddenPaneLayout *state.PaneLayoutJSON
 	// paneSizeCmds holds what a leaf's SetSize answered during a render until
 	// the next update can dispatch it. A render has no runtime to hand a command

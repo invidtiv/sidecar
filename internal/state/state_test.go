@@ -628,6 +628,53 @@ func TestWorkspacePaneLayoutJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPaneIssueTabJSONRoundTripOmitsLegacyScalars(t *testing.T) {
+	want := PaneLayoutJSON{
+		Kind:   "issue",
+		Active: 1,
+		IssueTabs: []PaneIssueTabJSON{
+			{Issue: "td-1111aa", Scroll: 2},
+			{Issue: "td-2222bb"},
+		},
+	}
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(encoded)
+	if strings.Contains(raw, `"issue":"td-1111aa"`) && !strings.Contains(raw, `"issueTabs"`) {
+		t.Fatalf("encoded as legacy issue: %s", raw)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["issue"]; ok {
+		t.Fatalf("legacy issue field present: %s", raw)
+	}
+	if _, ok := decoded["scroll"]; ok {
+		t.Fatalf("legacy scroll field present: %s", raw)
+	}
+
+	var got PaneLayoutJSON
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "issue" || got.Active != 1 || len(got.IssueTabs) != 2 ||
+		got.IssueTabs[0].Issue != "td-1111aa" || got.IssueTabs[0].Scroll != 2 ||
+		got.IssueTabs[1].Issue != "td-2222bb" || got.Issue != "" || got.Scroll != 0 {
+		t.Fatalf("issue tabs round trip = %#v", got)
+	}
+
+	var legacy PaneLayoutJSON
+	if err := json.Unmarshal([]byte(`{"kind":"issue","issue":"td-1a2b3c","scroll":4}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Issue != "td-1a2b3c" || legacy.Scroll != 4 || legacy.IssueTabs != nil {
+		t.Fatalf("legacy decode = %#v", legacy)
+	}
+}
+
 func TestMigratePaneLayoutsCopiesLegacySlot(t *testing.T) {
 	legacy := &PaneLayoutJSON{Root: "/repo", Surface: "shell:A", Kind: "terminal"}
 	s := WorkspaceState{PaneLayout: legacy}

@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/state"
 )
 
 // issuePane is one td issue leaf's tab group. The pane tree points at this,
@@ -64,60 +65,62 @@ func (p *Plugin) activateIssueLink(issueID string) (tea.Cmd, bool) {
 // size it already has rather than reflowing an agent for a pane that will not
 // be drawn.
 func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd {
-	if p.paneRoot == nil || p.ctx == nil || issueview.NormalizeID(issueID) == "" {
+	issueID = issueview.NormalizeID(issueID)
+	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
 		return nil
 	}
+	reopen := p.reopenHiddenIssuePane()
 	plan, ok := planPaneOpen(p.paneRoot, PaneIssue)
 	if !ok {
-		return nil
+		return reopen
 	}
 	if plan.Retarget != 0 {
 		leaf := FindPane(p.paneRoot, plan.Retarget)
 		if leaf == nil || leaf.Split != nil {
-			return nil
+			return reopen
 		}
 		load := p.attachIssuePane(leaf.ContentID, root, surface, issueID)
 		if p.issues[leaf.ContentID] == nil || p.issues[leaf.ContentID].view() == nil {
-			return nil
+			return reopen
 		}
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
 		p.saveSelectionState()
-		return load
+		return tea.Batch(reopen, load)
 	}
 
 	content, placed := p.previewContentBox()
 	if !placed {
-		return nil
+		return reopen
 	}
 	id := p.paneNextID
 	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis,
 		&PaneNode{ID: id, Kind: PaneIssue, ContentID: id})
 	if trialFocus != id {
-		return nil
+		return reopen
 	}
 	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Issue", plan.Axis)
 		p.toastTime = time.Now()
-		return nil
+		return reopen
 	}
 
 	newLeaf := &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
 	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
 	if focus != newLeaf.ID {
-		return nil
+		return reopen
 	}
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
 	p.activePane = PanePreview
 	load := p.attachIssuePane(newLeaf.ContentID, root, surface, issueID)
 	p.saveSelectionState()
-	return tea.Batch(load, p.resizeDocTerminalCmd())
+	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its
-// fetch when a new tab is created. An already-open ID is focused and returns
-// nil; the pane still exists so a retarget can proceed without a load.
+// fetch when a new tab is created or a restored tab still needs one. An
+// already-loaded ID is focused and returns nil.
 func (p *Plugin) attachIssuePane(leafID int, root, surface, issueID string) tea.Cmd {
 	issueID = issueview.NormalizeID(issueID)
 	if p.ctx == nil || issueID == "" {
@@ -152,8 +155,8 @@ func (p *Plugin) nextIssueModelID() int {
 }
 
 // openOrFocusIssue selects an existing tab for issueID or appends a fresh
-// model and loads it. The returned command is the fetch for a new tab, or
-// nil when the ID was already open.
+// model and loads it. The returned command is the fetch for a new or still
+// unloaded tab, or nil when the ID is already loaded.
 func (p *Plugin) openOrFocusIssue(pane *issuePane, issueID string) tea.Cmd {
 	issueID = issueview.NormalizeID(issueID)
 	if pane == nil || p.ctx == nil || issueID == "" {
@@ -161,13 +164,13 @@ func (p *Plugin) openOrFocusIssue(pane *issuePane, issueID string) tea.Cmd {
 	}
 	if idx := pane.tabs.Find(issueID); idx >= 0 {
 		pane.tabs.Select(idx)
-		return nil
+		return p.ensureActiveIssueTabLoaded(pane)
 	}
 	view := p.newIssueModel(pane)
 	if _, created := pane.tabs.OpenOrFocus(issueID, view); !created {
-		return nil
+		return p.ensureActiveIssueTabLoaded(pane)
 	}
-	return view.Load(p.nextIssueModelID(), pane.root, issueID, p.ctx.Epoch)
+	return p.loadIssueView(view, pane.root, issueID)
 }
 
 // applyIssueLoaded delivers a fetch to the tab that asked for it. The epoch
@@ -225,7 +228,7 @@ func (p *Plugin) focusedIssuePane() (*issuePane, *PaneNode) {
 // pane does not own must not fall through to the terminal behind it, which is
 // the pane the user is not looking at.
 func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	issue, leaf := p.focusedIssuePane()
+	issue, _ := p.focusedIssuePane()
 	if issue == nil {
 		return false, nil
 	}
@@ -246,7 +249,7 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "\\":
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
-		return true, p.closeIssuePane(leaf.ID)
+		return true, p.hideIssuePane()
 	case "x":
 		return true, p.closeActiveIssueTab()
 	case "{":
@@ -280,7 +283,7 @@ func (p *Plugin) cycleActiveIssueTab(delta int) tea.Cmd {
 	}
 	issue.tabs.Cycle(delta)
 	p.saveSelectionState()
-	return nil
+	return p.ensureActiveIssueTabLoaded(issue)
 }
 
 func (p *Plugin) closeActiveIssueTab() tea.Cmd {
@@ -293,7 +296,7 @@ func (p *Plugin) closeActiveIssueTab() tea.Cmd {
 	}
 	issue.tabs.CloseActive()
 	p.saveSelectionState()
-	return nil
+	return p.ensureActiveIssueTabLoaded(issue)
 }
 
 func (p *Plugin) selectIssueTab(issue *issuePane, leafID, idx int) tea.Cmd {
@@ -308,11 +311,11 @@ func (p *Plugin) selectIssueTab(issue *issuePane, leafID, idx int) tea.Cmd {
 		p.exitInteractiveMode()
 	}
 	if idx == issue.tabs.Active {
-		return nil
+		return p.ensureActiveIssueTabLoaded(issue)
 	}
 	issue.tabs.Select(idx)
 	p.saveSelectionState()
-	return nil
+	return p.ensureActiveIssueTabLoaded(issue)
 }
 
 // clickIssueTabAt selects an issue tab from a pointer position. File tabs
@@ -374,11 +377,177 @@ func (p *Plugin) clickIssueTab(data any) tea.Cmd {
 	return p.selectIssueTab(issue, hit.LeafID, hit.Index)
 }
 
+// hideIssuePane collapses the live issue leaf and remembers the tab set. q/esc
+// hide; last-x forgets through closeIssuePane.
+func (p *Plugin) hideIssuePane() tea.Cmd {
+	issue, leaf := p.focusedIssuePane()
+	if issue == nil || leaf == nil {
+		return nil
+	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if ok {
+		if layout := p.encodePaneNode(p.paneRoot); layout != nil {
+			layout.Root = root
+			layout.Surface = surface
+			layout.Open = false
+			p.hiddenPaneLayout = layout
+		}
+	}
+	if !p.closeContentLeaf(leaf.ID) {
+		p.hiddenPaneLayout = nil
+		return nil
+	}
+	p.activePane = PanePreview
+	p.saveSelectionState()
+	return p.resizeDocTerminalCmd()
+}
+
+// reopenHiddenIssuePane rebuilds a hidden split at the last ratio so an issue
+// click can focus or append against the remembered set.
+func (p *Plugin) reopenHiddenIssuePane() tea.Cmd {
+	if issue, _ := p.activeIssuePane(); issue != nil {
+		return nil
+	}
+	_, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil
+	}
+	layout := p.hiddenLayoutFor(surface)
+	if layout == nil {
+		return nil
+	}
+	p.hiddenPaneLayout = nil
+	return p.restorePaneLayout(layout)
+}
+
+func (p *Plugin) ensureActiveIssueTabLoaded(issue *issuePane) tea.Cmd {
+	if issue == nil || p.ctx == nil {
+		return nil
+	}
+	view := issue.view()
+	if view == nil || !view.NeedsLoad() {
+		return nil
+	}
+	id := issueview.NormalizeID(view.IssueID())
+	if id == "" {
+		if item, ok := issue.tabs.ActiveItem(); ok {
+			id = issueview.NormalizeID(item.Key)
+		}
+	}
+	if id == "" {
+		return nil
+	}
+	return p.loadIssueView(view, issue.root, id)
+}
+
+func (p *Plugin) loadIssueView(view *issueview.Model, root, issueID string) tea.Cmd {
+	if view == nil || p.ctx == nil {
+		return nil
+	}
+	modelID := view.ModelID()
+	if modelID == 0 {
+		modelID = p.nextIssueModelID()
+	}
+	return view.Load(modelID, root, issueID, p.ctx.Epoch)
+}
+
+func encodeIssueTabs(issue *issuePane) ([]state.PaneIssueTabJSON, int) {
+	if issue == nil {
+		return nil, 0
+	}
+	tabs := make([]state.PaneIssueTabJSON, 0, len(issue.tabs.Items))
+	active := 0
+	for i, item := range issue.tabs.Items {
+		id := issueview.NormalizeID(item.Key)
+		if id == "" && item.Value != nil {
+			id = issueview.NormalizeID(item.Value.IssueID())
+		}
+		if id == "" {
+			continue
+		}
+		scroll := 0
+		if item.Value != nil {
+			scroll = item.Value.ScrollOffset()
+		}
+		if i == issue.tabs.Active {
+			active = len(tabs)
+		}
+		tabs = append(tabs, state.PaneIssueTabJSON{Issue: id, Scroll: scroll})
+	}
+	return tabs, active
+}
+
+func persistedIssueTabs(saved *state.PaneLayoutJSON) []state.PaneIssueTabJSON {
+	if saved == nil {
+		return nil
+	}
+	if saved.IssueTabs != nil {
+		return saved.IssueTabs
+	}
+	if id := issueview.NormalizeID(saved.Issue); id != "" {
+		return []state.PaneIssueTabJSON{{Issue: id, Scroll: saved.Scroll}}
+	}
+	return nil
+}
+
+func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
+	if saved == nil || p.ctx == nil {
+		return nil
+	}
+	raw := persistedIssueTabs(saved)
+	if len(raw) == 0 {
+		return nil
+	}
+	wanted := saved.Active
+	if wanted < 0 || wanted >= len(raw) {
+		wanted = 0
+	}
+	type restoredTab struct {
+		id     string
+		scroll int
+	}
+	var pending []restoredTab
+	active := 0
+	for i, tab := range raw {
+		id := issueview.NormalizeID(tab.Issue)
+		if id == "" {
+			continue
+		}
+		if i == wanted {
+			active = len(pending)
+		}
+		pending = append(pending, restoredTab{id: id, scroll: tab.Scroll})
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if p.issues == nil {
+		p.issues = make(map[int]*issuePane)
+	}
+	id := p.nextPaneID()
+	pane := &issuePane{leafID: id, root: root, surface: savedRootSurface(p, root)}
+	p.issues[id] = pane
+	var group issueview.Tabs
+	for _, tab := range pending {
+		view := p.newIssueModel(pane)
+		view.Arm(p.nextIssueModelID(), tab.id, p.ctx.Epoch)
+		view.SetPendingScroll(tab.scroll)
+		group.Append(tab.id, view)
+	}
+	group.Select(active)
+	pane.tabs = group
+	if load := p.ensureActiveIssueTabLoaded(pane); load != nil {
+		*loads = append(*loads, load)
+	}
+	return &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
+}
+
 // closeIssuePane removes the issue leaf and gives its box back to its sibling.
 func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 	if !p.closeContentLeaf(leafID) {
 		return nil
 	}
+	p.hiddenPaneLayout = nil
 	p.activePane = PanePreview
 	p.saveSelectionState()
 	return p.resizeDocTerminalCmd()

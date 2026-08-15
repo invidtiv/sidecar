@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -169,8 +170,11 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 		t.Fatalf("persisted layout lost the stack: %#v", layout)
 	}
 	saved := layout.Split.B.Split.B
-	if saved.Kind != contentKindIssue || saved.Issue != "td-1a2b3c" || saved.Scroll != 4 {
-		t.Fatalf("persisted issue leaf = %#v, want kind %q targeting td-1a2b3c", saved, contentKindIssue)
+	if saved.Kind != contentKindIssue || saved.Issue != "" || saved.Scroll != 0 {
+		t.Fatalf("legacy issue fields still written: %#v", saved)
+	}
+	if len(saved.IssueTabs) != 1 || saved.IssueTabs[0].Issue != "td-1a2b3c" || saved.IssueTabs[0].Scroll != 4 {
+		t.Fatalf("persisted issue leaf = %#v, want issueTabs targeting td-1a2b3c", saved)
 	}
 
 	restored := docPaneTestPlugin(t, root, true)
@@ -902,5 +906,511 @@ func TestIssueTabHeaderHasNoCloseChipOrHint(t *testing.T) {
 	}
 	if !strings.Contains(got, "td-1111aa") || !strings.Contains(got, "td-2222bb") {
 		t.Fatalf("issue strip dropped a tab: %q", got)
+	}
+}
+
+func firstIssueLeafTabs(layout *state.PaneLayoutJSON) (tabs []state.PaneIssueTabJSON, active int) {
+	if layout == nil {
+		return nil, 0
+	}
+	if len(layout.IssueTabs) > 0 || layout.Issue != "" {
+		if len(layout.IssueTabs) > 0 {
+			return layout.IssueTabs, layout.Active
+		}
+		return []state.PaneIssueTabJSON{{Issue: layout.Issue, Scroll: layout.Scroll}}, 0
+	}
+	if layout.Split == nil {
+		return nil, 0
+	}
+	if tabs, active = firstIssueLeafTabs(layout.Split.B); len(tabs) > 0 {
+		return tabs, active
+	}
+	return firstIssueLeafTabs(layout.Split.A)
+}
+
+func layoutHasIssueID(layout *state.PaneLayoutJSON, id string) bool {
+	if layout == nil {
+		return false
+	}
+	if layout.Issue == id {
+		return true
+	}
+	for _, tab := range layout.IssueTabs {
+		if tab.Issue == id {
+			return true
+		}
+	}
+	if layout.Split == nil {
+		return false
+	}
+	return layoutHasIssueID(layout.Split.A, id) || layoutHasIssueID(layout.Split.B, id)
+}
+
+func assertIssueLeafOmitsLegacy(t *testing.T, leaf *state.PaneLayoutJSON) {
+	t.Helper()
+	if leaf == nil {
+		t.Fatal("missing issue leaf")
+	}
+	if leaf.Issue != "" || leaf.Scroll != 0 {
+		t.Fatalf("legacy fields still set: %#v", leaf)
+	}
+	raw, err := json.Marshal(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["issue"]; ok {
+		t.Fatalf("legacy issue field present: %s", raw)
+	}
+	if _, ok := decoded["scroll"]; ok {
+		t.Fatalf("legacy scroll field present: %s", raw)
+	}
+	if _, ok := decoded["issueTabs"]; !ok {
+		t.Fatalf("issueTabs missing: %s", raw)
+	}
+}
+
+func TestIssueTabsPersistAcrossShellSwitch(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+	second := issue.view()
+	second.SetSize(40, 3)
+	second.Scroll(4)
+	scroll2 := second.ScrollOffset()
+	if scroll2 == 0 {
+		t.Fatal("second tab did not scroll")
+	}
+	p.handleIssueKey(tea.KeyPressMsg{Code: '{', Text: "{"})
+	first := issue.view()
+	first.SetSize(40, 3)
+	first.Scroll(2)
+	scroll1 := first.ScrollOffset()
+	p.handleIssueKey(tea.KeyPressMsg{Code: '}', Text: "}"})
+	p.saveSelectionState()
+
+	p.selectTopShellAt(1)
+	p.saveSelectionState()
+	tabs, active := firstIssueLeafTabs(workspacePaneLayout(*saved, "shell:test-shell"))
+	if len(tabs) != 2 || active != 1 || tabs[0].Issue != "td-1111aa" || tabs[1].Issue != "td-2222bb" {
+		t.Fatalf("A tabs missing after selecting B: %#v active=%d", tabs, active)
+	}
+	if tabs[0].Scroll != scroll1 || tabs[1].Scroll != scroll2 {
+		t.Fatalf("A scroll missing after selecting B: %#v want %d/%d", tabs, scroll1, scroll2)
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil || p.paneRoot.Split != nil {
+		t.Fatalf("B live tree is not terminal-only: %#v", p.paneRoot)
+	}
+
+	p.shells[1].Agent.OutputBuf.Update("B only has td-3333cc\n")
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-3333cc"))
+	bIssue, _ := p.activeIssuePane()
+	if got := issueTabIDs(bIssue); len(got) != 1 || got[0] != "td-3333cc" {
+		t.Fatalf("B tabs = %v, want [td-3333cc]", got)
+	}
+	if layoutHasIssueID(workspacePaneLayout(*saved, "shell:test-shell"), "td-3333cc") {
+		t.Fatalf("B leaked onto A: %#v", saved.PaneLayouts)
+	}
+	if !layoutHasIssueID(workspacePaneLayout(*saved, "shell:test-shell-b"), "td-3333cc") {
+		t.Fatalf("B did not persist its own tab: %#v", saved.PaneLayouts)
+	}
+
+	p.selectTopShellAt(0)
+	restored, _ := p.activeIssuePane()
+	if got := issueTabIDs(restored); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || restored.tabs.Active != 1 {
+		t.Fatalf("selecting A again = %v active=%d", got, restored.tabs.Active)
+	}
+	if restored.view() == nil || restored.view().IssueID() != "td-2222bb" || restored.view().ScrollOffset() != scroll2 {
+		t.Fatalf("A active scroll = %q %d, want td-2222bb @ %d", restored.view().IssueID(), restored.view().ScrollOffset(), scroll2)
+	}
+	if restored.tabs.Items[0].Value == nil || restored.tabs.Items[0].Value.ScrollOffset() != scroll1 {
+		t.Fatalf("A first-tab scroll = %d, want %d", restored.tabs.Items[0].Value.ScrollOffset(), scroll1)
+	}
+	assertIssueLeafOmitsLegacy(t, workspacePaneLayout(*saved, "shell:test-shell").Split.B)
+}
+
+func TestIssueTabsSurviveQuitAndReopen(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	issue.view().SetSize(40, 3)
+	issue.view().Scroll(5)
+	p.saveSelectionState()
+	if !state.PaneLayoutOpen(workspacePaneLayout(*saved, "shell:test-shell")) {
+		t.Fatal("open session wrote Open=false")
+	}
+
+	reopened := docPaneTestPlugin(t, root, true)
+	reopened.ctx.ProjectRoot = root
+	reopened.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return *saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { *saved = next; return nil },
+	}
+	if !reopened.restoreSelectionState() {
+		t.Fatal("relaunch restored no selection")
+	}
+	if reopened.paneRestoreCmd == nil {
+		t.Fatal("relaunch scheduled no loads")
+	}
+	restored, _ := reopened.activeIssuePane()
+	if got := issueTabIDs(restored); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || restored.tabs.Active != 1 {
+		t.Fatalf("relaunch tabs = %v active=%d", got, restored.tabs.Active)
+	}
+	if restored.view() == nil || restored.view().IssueID() != "td-2222bb" || restored.view().ScrollOffset() != 5 || !restored.view().Loading() {
+		t.Fatalf("relaunch active = %q scroll=%d loading=%v", restored.view().IssueID(), restored.view().ScrollOffset(), restored.view().Loading())
+	}
+	if restored.tabs.Items[0].Value == nil || !restored.tabs.Items[0].Value.NeedsLoad() {
+		t.Fatal("inactive relaunch tab was fetched eagerly")
+	}
+	if restored.tabs.Items[1].Value == nil || restored.tabs.Items[1].Value.NeedsLoad() {
+		t.Fatal("active relaunch tab was not fetched")
+	}
+}
+
+func TestRestoreIssueLayoutLoadsOnlyActiveTab(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolved, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{Kind: contentKindIssue, Active: 1, IssueTabs: []state.PaneIssueTabJSON{
+			{Issue: "td-1111aa", Scroll: 2},
+			{Issue: "td-2222bb", Scroll: 4},
+			{Issue: "td-3333cc", Scroll: 1},
+		}},
+	}}
+	cmd := p.restorePaneLayout(layout)
+	if cmd == nil {
+		t.Fatal("restore scheduled no load")
+	}
+	issue, _ := p.activeIssuePane()
+	if issue == nil || len(issue.tabs.Items) != 3 || issue.tabs.Active != 1 {
+		t.Fatalf("restored tabs = %v active=%d", issueTabIDs(issue), issue.tabs.Active)
+	}
+	for i, item := range issue.tabs.Items {
+		if item.Value == nil {
+			t.Fatalf("tab %d has no model", i)
+		}
+		if item.Value.NeedsLoad() == (i == 1) {
+			t.Fatalf("tab %d NeedsLoad=%v, want only the active tab loaded", i, item.Value.NeedsLoad())
+		}
+		if item.Value.IssueID() != layout.Split.B.IssueTabs[i].Issue {
+			t.Fatalf("tab %d id = %q", i, item.Value.IssueID())
+		}
+		if item.Value.ModelID() == 0 {
+			t.Fatalf("tab %d has no model id", i)
+		}
+	}
+	if issue.tabs.Items[0].Value.ModelID() == issue.tabs.Items[1].Value.ModelID() {
+		t.Fatal("restored tabs share a model ID")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.BatchMsg); ok {
+		t.Fatalf("restore issued a batch, want one Load: %T", msg)
+	}
+	loaded, ok := msg.(issueview.LoadedMsg)
+	if !ok || loaded.IssueID != "td-2222bb" {
+		t.Fatalf("restore load = %#v, want td-2222bb", msg)
+	}
+
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+	handled, load := p.handleIssueKey(tea.KeyPressMsg{Code: '}', Text: "}"})
+	if !handled || load == nil || issue.tabs.Active != 2 || issue.tabs.Items[2].Value.NeedsLoad() {
+		t.Fatalf("cycle onto a lazy tab: handled=%v load=%v active=%d needsLoad=%v",
+			handled, load != nil, issue.tabs.Active, issue.tabs.Items[2].Value != nil && issue.tabs.Items[2].Value.NeedsLoad())
+	}
+}
+
+func TestInvalidIssueTabEntriesArePruned(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolved, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: "rows", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: "clicked.md"}}},
+			B: &state.PaneLayoutJSON{Kind: contentKindIssue, Active: 3, IssueTabs: []state.PaneIssueTabJSON{
+				{Issue: "--force"},
+				{Issue: "td-1111aa", Scroll: 2},
+				{Issue: "td-xyz"},
+				{Issue: "td-2222bb", Scroll: 3},
+			}},
+		}},
+	}}
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("the surviving tabs did not schedule a load")
+	}
+	if doc, _ := p.activeDocPane(); doc == nil {
+		t.Fatal("pruning issue tabs took the document sibling")
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || issue.tabs.Active != 1 {
+		t.Fatalf("pruned tabs = %v active=%d", got, issue.tabs.Active)
+	}
+	if issue.view() == nil || issue.view().ScrollOffset() != 3 {
+		t.Fatalf("active scroll = %d, want 3", issue.view().ScrollOffset())
+	}
+}
+
+func TestAllInvalidIssueTabsCollapseTheLeaf(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolved, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: "rows", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: []state.PaneDocTabJSON{{Path: "clicked.md"}}},
+			B: &state.PaneLayoutJSON{Kind: contentKindIssue, IssueTabs: []state.PaneIssueTabJSON{
+				{Issue: "--force"},
+				{Issue: "td-xyz"},
+			}},
+		}},
+	}}
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("the surviving document did not schedule its load")
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil {
+		t.Fatalf("all-invalid issue leaf was restored: %v", issueTabIDs(issue))
+	}
+	if doc, _ := p.activeDocPane(); doc == nil || p.paneRoot.Split == nil {
+		t.Fatalf("all-invalid issue leaf reset the layout: root=%#v", p.paneRoot)
+	}
+}
+
+func TestLegacyIssueScrollRestoresAsOneTabThenSavesIssueTabs(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolved, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: "td-1a2b3c", Scroll: 4},
+	}}
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("legacy issue did not schedule a load")
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 1 || got[0] != "td-1a2b3c" || issue.view().ScrollOffset() != 4 || !issue.view().Loading() {
+		t.Fatalf("legacy restore = %v scroll=%d loading=%v", got, issue.view().ScrollOffset(), issue.view().Loading())
+	}
+
+	saved := p.encodePaneNode(p.paneRoot)
+	if saved == nil || saved.Split == nil {
+		t.Fatalf("re-encode lost the tree: %#v", saved)
+	}
+	leaf := saved.Split.B
+	if len(leaf.IssueTabs) != 1 || leaf.IssueTabs[0].Issue != "td-1a2b3c" || leaf.IssueTabs[0].Scroll != 4 {
+		t.Fatalf("save after legacy = %#v", leaf)
+	}
+	assertIssueLeafOmitsLegacy(t, leaf)
+}
+
+func TestIssuePaneQHidesAndRestoresAcrossSwitch(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+
+	handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if still, _ := p.activeIssuePane(); !handled || cmd == nil || still != nil || p.paneRoot.Split != nil {
+		t.Fatalf("q did not hide to full-width terminal: handled=%v root=%#v", handled, p.paneRoot)
+	}
+	hidden := workspacePaneLayout(*saved, "shell:test-shell")
+	tabs, active := firstIssueLeafTabs(hidden)
+	if state.PaneLayoutOpen(hidden) || len(tabs) != 2 || active != 1 || tabs[0].Issue != "td-1111aa" || tabs[1].Issue != "td-2222bb" {
+		t.Fatalf("q persist = %#v tabs=%#v active=%d", hidden, tabs, active)
+	}
+
+	p.selectTopShellAt(1)
+	p.saveSelectionState()
+	if issue, _ := p.activeIssuePane(); issue != nil || p.paneRoot.Split != nil {
+		t.Fatal("B live tree is not terminal-only")
+	}
+	if !layoutHasIssueID(workspacePaneLayout(*saved, "shell:test-shell"), "td-1111aa") {
+		t.Fatalf("switch-away dropped A's hidden tabs: %#v", saved.PaneLayouts)
+	}
+
+	p.selectTopShellAt(0)
+	reopened, _ := p.activeIssuePane()
+	if got := issueTabIDs(reopened); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || reopened.view().IssueID() != "td-2222bb" {
+		t.Fatalf("switch-back after q = %v active=%q", got, reopened.view().IssueID())
+	}
+}
+
+func TestIssuePaneEscHidesLikeQ(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	p.shells[0].Agent.OutputBuf.Update("only td-1111aa\n")
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-1111aa"))
+	issue, leaf := p.activeIssuePane()
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+
+	handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !handled || cmd == nil || issue == nil {
+		t.Fatalf("esc: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if still, _ := p.activeIssuePane(); still != nil || p.paneRoot.Split != nil {
+		t.Fatalf("esc did not hide: root=%#v", p.paneRoot)
+	}
+	if state.PaneLayoutOpen(workspacePaneLayout(*saved, "shell:test-shell")) || !layoutHasIssueID(workspacePaneLayout(*saved, "shell:test-shell"), "td-1111aa") {
+		t.Fatalf("esc persist = %#v", saved.PaneLayouts)
+	}
+}
+
+func TestIssuePaneLastXForgetsAcrossSwitch(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: 'x', Text: "x"}); !handled || p.paneRoot.Split == nil {
+		t.Fatal("first x closed the pane")
+	}
+	if !state.PaneLayoutOpen(workspacePaneLayout(*saved, "shell:test-shell")) {
+		t.Fatal("x on a non-last tab hid the pane")
+	}
+	handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if !handled || cmd == nil {
+		t.Fatalf("last x: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if still, _ := p.activeIssuePane(); still != nil || p.paneRoot.Split != nil {
+		t.Fatalf("last x did not forget: root=%#v", p.paneRoot)
+	}
+	forgotten := workspacePaneLayout(*saved, "shell:test-shell")
+	if layoutHasIssueID(forgotten, "td-1111aa") || layoutHasIssueID(forgotten, "td-2222bb") {
+		t.Fatalf("last x kept tabs: %#v", forgotten)
+	}
+
+	p.selectTopShellAt(1)
+	p.saveSelectionState()
+	p.selectTopShellAt(0)
+	if issue, _ := p.activeIssuePane(); issue != nil || p.paneRoot.Split != nil {
+		t.Fatalf("forgotten pane came back: %#v", p.paneRoot)
+	}
+}
+
+func TestIssuePaneClickWhileHiddenReopensRememberedSet(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p, saved := persistDocPanePlugin(t, root)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+	if p.paneRoot.Split == nil {
+		t.Fatal("expected an issue split before hide")
+	}
+	p.paneRoot.Split.Ratio = 45
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled || p.paneRoot.Split != nil {
+		t.Fatal("q did not hide")
+	}
+	if _, ok := p.activateIssueLink("td-1111aa"); !ok {
+		t.Fatal("click existing while hidden failed")
+	}
+	reopened, _ := p.activeIssuePane()
+	if got := issueTabIDs(reopened); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || reopened.view().IssueID() != "td-1111aa" {
+		t.Fatalf("click existing while hidden = %v active=%q", got, reopened.view().IssueID())
+	}
+	if p.paneRoot.Split == nil || p.paneRoot.Split.Ratio != 45 {
+		t.Fatalf("reopen ratio = %#v, want 45", p.paneRoot.Split)
+	}
+	if !state.PaneLayoutOpen(workspacePaneLayout(*saved, "shell:test-shell")) {
+		t.Fatal("click while hidden left Open=false")
+	}
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled || p.paneRoot.Split != nil {
+		t.Fatal("second q did not hide")
+	}
+	p.shells[0].Agent.OutputBuf.Update("first is td-1111aa\nsecond is td-2222bb\nthird is td-3333cc\n")
+	if _, ok := p.activateIssueLink("td-3333cc"); !ok {
+		t.Fatal("click new while hidden failed")
+	}
+	appended, _ := p.activeIssuePane()
+	if got := issueTabIDs(appended); len(got) != 3 || got[2] != "td-3333cc" || appended.view().IssueID() != "td-3333cc" {
+		t.Fatalf("click new while hidden = %v active=%q", got, appended.view().IssueID())
+	}
+}
+
+func TestRestoreHiddenIssueLayoutKeepsTabsWithoutSplit(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	saved := state.WorkspaceState{
+		ShellTmuxName: "test-shell",
+		PaneLayouts: map[string]*state.PaneLayoutJSON{
+			"shell:test-shell": {Root: resolved, Surface: "shell:test-shell", Open: false, Split: &state.PaneSplitJSON{
+				Axis: "cols", Ratio: 41,
+				A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+				B: &state.PaneLayoutJSON{Kind: contentKindIssue, Active: 1, IssueTabs: []state.PaneIssueTabJSON{
+					{Issue: "td-1111aa", Scroll: 2},
+					{Issue: "td-2222bb", Scroll: 3},
+				}},
+			}},
+		},
+	}
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	if !p.restoreSelectionState() {
+		t.Fatal("saved shell selection was not restored")
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil || p.paneRoot.Split != nil {
+		t.Fatalf("relaunch restored a hidden split: root=%#v", p.paneRoot)
+	}
+	if !layoutHasIssueID(workspacePaneLayout(saved, "shell:test-shell"), "td-2222bb") {
+		t.Fatalf("relaunch dropped hidden tabs: %#v", saved.PaneLayouts)
+	}
+
+	if _, ok := p.activateIssueLink("td-2222bb"); !ok {
+		t.Fatal("click after relaunch hide failed")
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || issue.view().IssueID() != "td-2222bb" {
+		t.Fatalf("click after relaunch hide = %v active=%q", got, issue.view().IssueID())
+	}
+	if p.paneRoot.Split == nil || p.paneRoot.Split.Ratio != 41 {
+		t.Fatalf("relaunch reopen ratio = %#v, want 41", p.paneRoot.Split)
+	}
+	if issue.view().ScrollOffset() != 3 {
+		t.Fatalf("reopened active scroll = %d, want 3", issue.view().ScrollOffset())
 	}
 }

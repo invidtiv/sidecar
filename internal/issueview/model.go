@@ -116,7 +116,8 @@ func New(renderer *markdown.Renderer) *Model {
 }
 
 // Load retargets the model at issueID and returns a command that fetches it.
-// Only the issueview-owned LoadedMsg is broadcast.
+// Only the issueview-owned LoadedMsg is broadcast. A pending restore scroll
+// survives so SetResult can apply it to this generation.
 func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd {
 	m.modelID = modelID
 	m.requestGeneration++
@@ -124,7 +125,6 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.issueID = issueID
 	m.workDir = workDir
 	m.scroll = 0
-	m.hasPendingScroll = false
 	m.cursor = -1
 	m.hover = -1
 	m.loading = true
@@ -165,6 +165,17 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.clampScroll()
 	return true
 }
+
+// Arm shows the loading placeholder for a restored tab without issuing a load.
+func (m *Model) Arm(modelID int, issueID string, epoch uint64) {
+	m.modelID = modelID
+	m.epoch = epoch
+	m.issueID = issueID
+	m.loading = true
+}
+
+// NeedsLoad reports whether this model has never been asked to Load.
+func (m *Model) NeedsLoad() bool { return m.requestGeneration == 0 }
 
 // SetData installs already-fetched data. Tests and hosts that fetched
 // themselves use this instead of going through Load.
