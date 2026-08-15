@@ -642,6 +642,7 @@ func (m *Model) applyCreateAction(action string, previousProject, previousKind i
 			// worktree; it must never silently abandon recovery state.
 			return m.openCreatedWorktreeAnyway()
 		}
+		m.clearPendingCreated()
 		m.closeCreateShell()
 		return nil
 	case globalCreateSubmitID:
@@ -841,6 +842,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	m.createError = ""
 	m.createModal = nil
 	m.pendingCreatedTmux = session
+	m.pendingCreatedPath = ""
 	_ = saveLastGlobalCreateProject(project.Path)
 	_ = saveLastCreateAgent(agent)
 	return func() tea.Msg {
@@ -909,17 +911,35 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 	m.results[projectKey(msg.Project)] = msg.Result
 	delete(m.projectErrors, projectKey(msg.Project))
 	m.syncBoard()
-	for _, workspace := range msg.Result.Workspaces {
-		createdShell := workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
-		createdWorktree := workspace.Kind == workspaceinventory.KindWorktree && m.pendingCreatedPath != "" && workspace.Path == m.pendingCreatedPath
-		if createdShell || createdWorktree {
-			m.workspaces.SelectID(workspace.ID)
-			break
-		}
-	}
+	return m.previewSync()
+}
+
+func (m *Model) clearPendingCreated() {
 	m.pendingCreatedTmux = ""
 	m.pendingCreatedPath = ""
-	return m.previewSync()
+}
+
+// honorPendingCreated selects a still-pending created workspace once it is
+// present in results and visible. Pending stays set until that happens.
+func (m *Model) honorPendingCreated() bool {
+	if m.pendingCreatedTmux == "" && m.pendingCreatedPath == "" {
+		return false
+	}
+	for _, result := range m.results {
+		for _, workspace := range result.Workspaces {
+			createdShell := m.pendingCreatedTmux != "" && workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
+			createdWorktree := m.pendingCreatedPath != "" && workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == m.pendingCreatedPath
+			if !createdShell && !createdWorktree {
+				continue
+			}
+			if m.workspaces.SelectID(workspace.ID) {
+				m.clearPendingCreated()
+				return true
+			}
+			return false
+		}
+	}
+	return false
 }
 
 func (m *Model) createWheelAtBoundary(msg tea.MouseWheelMsg) bool {

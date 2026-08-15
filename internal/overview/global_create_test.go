@@ -669,3 +669,152 @@ func TestCreateModalOverlayDoesNotChangeHeight(t *testing.T) {
 		t.Fatalf("combo overlay changed height: closed=%d open=%d", lipgloss.Height(closed), lipgloss.Height(open))
 	}
 }
+
+func createdShellWorkspace(project Project) workspaceinventory.Workspace {
+	return workspaceinventory.Workspace{
+		ID: "created", ProjectKey: projectKey(project), ProjectName: project.Name, ProjectRoot: project.Path,
+		Kind: workspaceinventory.KindShell, Key: "sidecar-sh-sidecar-9", TmuxName: "sidecar-sh-sidecar-9", Name: "Shell 9", Live: true,
+	}
+}
+
+func TestPendingCreatedShellSurvivesMissThenHits(t *testing.T) {
+	m := catalogModel(t)
+	prev := m.workspaces.SelectedID()
+	m.pendingCreatedTmux = "sidecar-sh-sidecar-9"
+	project := m.projects[0]
+	miss := m.results[projectKey(project)]
+	m.applyProjectMutationRefresh(projectMutationRefreshMsg{Project: project, Result: miss})
+	if m.pendingCreatedTmux != "sidecar-sh-sidecar-9" {
+		t.Fatal("pending cleared by a refresh that omitted the session")
+	}
+	if got := m.workspaces.SelectedID(); got != prev {
+		t.Fatalf("missed refresh stole selection: %q -> %q", prev, got)
+	}
+
+	hit := miss
+	hit.Workspaces = append(append([]workspaceinventory.Workspace(nil), miss.Workspaces...), createdShellWorkspace(project))
+	m.applyProjectMutationRefresh(projectMutationRefreshMsg{Project: project, Result: hit})
+	if m.pendingCreatedTmux != "" || m.pendingCreatedPath != "" {
+		t.Fatalf("pending still set after hit: tmux=%q path=%q", m.pendingCreatedTmux, m.pendingCreatedPath)
+	}
+	if got := m.workspaces.SelectedID(); got != "created" {
+		t.Fatalf("selected = %q, want created", got)
+	}
+}
+
+func TestPendingCreatedShellSurvivesPollWithoutSession(t *testing.T) {
+	m := catalogModel(t)
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		if m.cancel != nil {
+			m.cancel()
+		}
+	})
+	m.generation = 3
+	prev := m.workspaces.SelectedID()
+	m.pendingCreatedTmux = "sidecar-sh-sidecar-9"
+	project := m.projects[0]
+	without := m.results[projectKey(project)]
+
+	m.Update(pollMsg{Generation: 2})
+	if m.pendingCreatedTmux != "sidecar-sh-sidecar-9" {
+		t.Fatal("stale poll generation cleared pending")
+	}
+
+	_ = m.start(m.projects, "poll")
+	if m.pendingCreatedTmux != "sidecar-sh-sidecar-9" {
+		t.Fatal("start poll cleared pending before the session existed")
+	}
+	if got := m.workspaces.SelectedID(); got != prev {
+		t.Fatalf("start poll stole selection: %q -> %q", prev, got)
+	}
+
+	m.Update(projectMsg{Generation: m.generation, Project: project, Phase: phaseStatus, Result: without})
+	if m.pendingCreatedTmux != "sidecar-sh-sidecar-9" {
+		t.Fatal("poll status without the session cleared pending")
+	}
+	if got := m.workspaces.SelectedID(); got != prev {
+		t.Fatalf("poll status stole selection: %q -> %q", prev, got)
+	}
+
+	with := without
+	with.Workspaces = append(append([]workspaceinventory.Workspace(nil), without.Workspaces...), createdShellWorkspace(project))
+	m.Update(projectMsg{Generation: m.generation, Project: project, Phase: phaseStatus, Result: with})
+	if m.pendingCreatedTmux != "" {
+		t.Fatal("pending not cleared after poll presented the session")
+	}
+	if got := m.workspaces.SelectedID(); got != "created" {
+		t.Fatalf("selected = %q, want created", got)
+	}
+}
+
+func TestFailedShellCreateClearsPendingWithoutMovingSelection(t *testing.T) {
+	m := catalogModel(t)
+	prev := m.workspaces.SelectedID()
+	m.pendingCreatedTmux = "sidecar-sh-sidecar-9"
+	m.Update(globalShellCreatedMsg{Project: m.projects[0], Tmux: "sidecar-sh-sidecar-9", Err: errors.New("tmux failed")})
+	if m.pendingCreatedTmux != "" {
+		t.Fatal("failed create left pending set")
+	}
+	if got := m.workspaces.SelectedID(); got != prev {
+		t.Fatalf("failed create moved selection to %q", got)
+	}
+}
+
+func TestNewerCreateReplacesPendingTmux(t *testing.T) {
+	m := catalogModel(t)
+	original := createManagedShell
+	defer func() { createManagedShell = original }()
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
+	}
+	m.pendingCreatedTmux = "old-session"
+	m.pendingCreatedPath = "/tmp/stale"
+	m.OpenCreateShell("sidecar")
+	_ = m.submitCreateShell()
+	if m.pendingCreatedTmux == "" || m.pendingCreatedTmux == "old-session" {
+		t.Fatalf("pending tmux = %q, want the newer session", m.pendingCreatedTmux)
+	}
+	if m.pendingCreatedPath != "" {
+		t.Fatalf("newer shell create left stale path %q", m.pendingCreatedPath)
+	}
+}
+
+func TestCancelCreateClearsPending(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	m.pendingCreatedTmux = "should-clear"
+	m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex)
+	if m.pendingCreatedTmux != "" {
+		t.Fatal("cancel-without-create left pending set")
+	}
+}
+
+func TestPendingCreatedWorktreeSurvivesMissThenHits(t *testing.T) {
+	m := catalogModel(t)
+	m.showIdleWorktrees = true
+	prev := m.workspaces.SelectedID()
+	m.pendingCreatedPath = "/tmp/created"
+	project := m.projects[0]
+	miss := m.results[projectKey(project)]
+	m.applyProjectMutationRefresh(projectMutationRefreshMsg{Project: project, Result: miss})
+	if m.pendingCreatedPath != "/tmp/created" {
+		t.Fatal("worktree pending cleared by a miss")
+	}
+	if got := m.workspaces.SelectedID(); got != prev {
+		t.Fatalf("worktree miss stole selection: %q -> %q", prev, got)
+	}
+
+	hit := miss
+	hit.Workspaces = append(append([]workspaceinventory.Workspace(nil), miss.Workspaces...), workspaceinventory.Workspace{
+		ID: "created-worktree", ProjectKey: projectKey(project), ProjectName: project.Name, ProjectRoot: project.Path,
+		Kind: workspaceinventory.KindWorktree, Key: "created", Path: "/tmp/created", Name: "Created",
+	})
+	m.applyProjectMutationRefresh(projectMutationRefreshMsg{Project: project, Result: hit})
+	if m.pendingCreatedPath != "" {
+		t.Fatal("worktree pending not cleared after hit")
+	}
+	if got := m.workspaces.SelectedID(); got != "created-worktree" {
+		t.Fatalf("selected = %q, want created worktree", got)
+	}
+}

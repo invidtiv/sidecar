@@ -558,6 +558,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.Err != nil {
 			m.createError = msg.Err.Error()
 			m.createModal = nil
+			m.clearPendingCreated()
 			return nil
 		}
 		m.closeCreateShell()
@@ -616,6 +617,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.pendingCreatedPath = msg.Record.Path
+		m.pendingCreatedTmux = ""
 		m.showIdleWorktrees = true
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)
@@ -1062,6 +1064,7 @@ func (m *Model) syncBoard() {
 	// One collection, two projections: the list is rebuilt from the same
 	// results map, in the same pass, so the tabs cannot disagree.
 	m.syncWorkspaces()
+	m.honorPendingCreated()
 }
 
 // spineGlyph is the per-kind left accent every content line carries: solid
