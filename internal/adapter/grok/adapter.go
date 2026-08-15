@@ -144,7 +144,6 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 
 	sessions := make([]adapter.Session, 0, len(entries))
 	newIndex := make(map[string]string, len(entries))
-	seenMeta := make(map[string]struct{}, len(entries))
 
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -235,7 +234,6 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		}
 		sessions = append(sessions, sess)
 		newIndex[id] = sessionDir
-		seenMeta[filepath.Join(sessionDir, "summary.json")] = struct{}{}
 	}
 
 	a.mu.Lock()
@@ -244,8 +242,6 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		a.sessionIndex[id] = path
 	}
 	a.mu.Unlock()
-
-	a.pruneMetaCache(seenMeta)
 
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
@@ -506,18 +502,6 @@ func (a *Adapter) readSummaryCached(path string) (Summary, error) {
 	a.metaMu.Unlock()
 
 	return sum, nil
-}
-
-func (a *Adapter) pruneMetaCache(keep map[string]struct{}) {
-	a.metaMu.Lock()
-	defer a.metaMu.Unlock()
-	for path := range a.metaCache {
-		if _, ok := keep[path]; !ok {
-			// Keep entries from other projects (not in this pass's keep set only for
-			// paths we saw). Only drop if over capacity via LRU on write.
-			_ = path
-		}
-	}
 }
 
 func (a *Adapter) cachedMessageCount(chatPath string) int {

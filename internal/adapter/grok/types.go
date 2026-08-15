@@ -28,15 +28,15 @@ type Summary struct {
 // ChatLine is one JSONL record from chat_history.jsonl.
 // Content is heterogeneous (string or array of blocks) so it stays raw JSON.
 type ChatLine struct {
-	Type          string          `json:"type"`
-	ID            string          `json:"id"`
-	Content       json.RawMessage `json:"content"`
-	ToolCallID    string          `json:"tool_call_id"`
-	ToolCalls     []ToolCall      `json:"tool_calls"`
-	ModelID       string          `json:"model_id"`
-	Summary       []SummaryText   `json:"summary"` // reasoning summaries
-	Status        string          `json:"status"`
-	SyntheticReason string        `json:"synthetic_reason"`
+	Type            string          `json:"type"`
+	ID              string          `json:"id"`
+	Content         json.RawMessage `json:"content"`
+	ToolCallID      string          `json:"tool_call_id"`
+	ToolCalls       []ToolCall      `json:"tool_calls"`
+	ModelID         string          `json:"model_id"`
+	Summary         []SummaryText   `json:"summary"` // reasoning summaries
+	Status          string          `json:"status"`
+	SyntheticReason string          `json:"synthetic_reason"`
 }
 
 // ToolCall is an assistant tool invocation on a chat line.

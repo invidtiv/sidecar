@@ -189,7 +189,7 @@ func TestSessionsMissingDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sessions != nil && len(sessions) != 0 {
+	if len(sessions) != 0 {
 		t.Fatalf("want empty, got %d", len(sessions))
 	}
 	found, err := a.Detect("/home/user/project")
