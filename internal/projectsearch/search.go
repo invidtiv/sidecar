@@ -353,6 +353,17 @@ func (r request) exec(parent context.Context) tea.Msg {
 		return ResultsMsg{Epoch: r.epoch, Run: r.run, Error: err}
 	}
 
+	// Cancelling the context kills the direct child, but anything that child
+	// forked inherits the write end of this pipe, so the read below can
+	// outlive the process it was reading from. Closing the read end on
+	// cancellation is what actually unblocks the parse — without it a
+	// cancelled search sits here until the grandchild exits on its own, which
+	// is platform-dependent (it shows up on Linux, not on macOS).
+	go func() {
+		<-ctx.Done()
+		_ = stdout.Close()
+	}()
+
 	results, truncated := parseRipgrepOutput(stdout, maxResults, len(r.query))
 
 	// Kill ripgrep early if we hit our limit - don't wait for it to finish
