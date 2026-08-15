@@ -61,6 +61,10 @@ func RootCommand() *Command {
 			{Command: "sidecar shell name"},
 			{Command: "sidecar shell name --json"},
 		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell name",
+			Summary:    "Read the name this shell shows the user",
+		},
 		Run: runShellName,
 	}
 
@@ -84,6 +88,10 @@ func RootCommand() *Command {
 		},
 		Examples: []Example{
 			{Command: "sidecar shell rename \"shell rename implementation\""},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell rename \"<short context>\"",
+			Summary:    "Keep the shell's name describing the work you are doing now",
 		},
 		Run: runShellRename,
 	}
@@ -127,10 +135,32 @@ func RootCommand() *Command {
 			{Command: "sidecar open td-348d88", Description: "td issue"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 		},
+		Agent: AgentDoc{
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx",
+			Summary:    "Put a file or a td issue in front of the user, beside your terminal",
+		},
 		Run: runOpen,
 	}
 
-	root.Sub = []*Command{helpCmd, openCmd, shellCmd}
+	agentsCmd := &Command{
+		Name:    "agents",
+		Summary: "List what an agent can do from inside a Sidecar shell",
+		Usage:   "sidecar --agents",
+		Long: "List the Sidecar commands worth reaching for from inside a project shell,\n" +
+			"one line each. Also spelled \"sidecar --agents\".",
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+		},
+		Examples: []Example{
+			{Command: "sidecar --agents"},
+		},
+		Run: func(env Env, _ []string) int {
+			_, _ = fmt.Fprint(env.Stdout, RenderAgents(RootCommand()))
+			return 0
+		},
+	}
+
+	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, shellCmd}
 	return root
 }
 

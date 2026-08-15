@@ -2,6 +2,27 @@
 
 Sidecar provides non-interactive commands for scripting and agent workflows.
 
+## `sidecar agents`
+
+List what an agent can do from inside a Sidecar shell
+
+List the Sidecar commands worth reaching for from inside a project shell,
+one line each. Also spelled "sidecar --agents".
+
+```
+Usage: sidecar --agents
+```
+
+**Exit codes:**
+
+- `0`: success
+
+**Examples:**
+
+```bash
+sidecar --agents
+```
+
 ## `sidecar help`
 
 Show help for commands or emit JSON command metadata

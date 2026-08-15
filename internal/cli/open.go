@@ -203,6 +203,7 @@ func runOpen(env Env, args []string) int {
 	hasDeclined := false
 	var declineReason string
 	hasOpened := false
+	allRetargeted := true
 	for _, ack := range acks {
 		if ack.Status == uirequest.StatusDeclined {
 			hasDeclined = true
@@ -212,6 +213,9 @@ func runOpen(env Env, args []string) int {
 		}
 		if ack.Status == uirequest.StatusOpened || ack.Status == uirequest.StatusRetargeted {
 			hasOpened = true
+			if ack.Status != uirequest.StatusRetargeted {
+				allRetargeted = false
+			}
 		}
 	}
 
@@ -251,7 +255,11 @@ func runOpen(env Env, args []string) int {
 	}
 
 	if hasOpened {
-		_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", target.Value, originInfo.DisplayName)
+		if allRetargeted {
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in the split already beside %q.\n", target.Value, originInfo.DisplayName)
+		} else {
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", target.Value, originInfo.DisplayName)
+		}
 	} else {
 		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", target.Value, originInfo.DisplayName)
 	}

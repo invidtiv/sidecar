@@ -337,9 +337,11 @@ type Model struct {
 	globalTab   GlobalTab
 	globalTasks *globalTasksHost
 
-	// UI request watcher for external CLI commands (e.g. sidecar open)
-	uiRequestWatcher         *uirequest.Watcher
-	uiRequestWatcherMessages <-chan tea.Msg
+	// UI request watcher for external CLI commands (e.g. sidecar open).
+	// The channel is deliberately not cached here: Init takes the model by
+	// value, so anything it assigns is discarded, and a cached-and-nil channel
+	// silently stops the listener re-arming after the first request.
+	uiRequestWatcher *uirequest.Watcher
 }
 
 // New creates a new application model.
@@ -449,8 +451,8 @@ func (m Model) Init() tea.Cmd {
 	}
 
 	if m.uiRequestWatcher != nil {
-		m.uiRequestWatcherMessages = m.uiRequestWatcher.Start()
-		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcherMessages))
+		m.uiRequestWatcher.Start()
+		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 	}
 
 	return tea.Batch(cmds...)

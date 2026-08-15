@@ -585,8 +585,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case uirequest.RequestMsg:
-		if m.uiRequestWatcherMessages != nil {
-			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcherMessages))
+		if m.uiRequestWatcher != nil {
+			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}
 		if m.overview != nil {
 			if cmd := m.overview.Update(msg); cmd != nil {

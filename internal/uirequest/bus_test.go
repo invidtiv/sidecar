@@ -126,6 +126,46 @@ func TestSweepExpired(t *testing.T) {
 	}
 }
 
+// A host re-arms its listener from Messages() after every request it handles,
+// so Messages() must be the very channel Start() emits on, and the watcher must
+// keep delivering after the first request. A host that caches the channel
+// somewhere the runtime discards goes deaf after exactly one `sidecar open`.
+func TestWatcherKeepsDeliveringAfterFirstRequest(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	w, err := NewWatcher(stateDir)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	defer w.Stop()
+	if ch := w.Start(); ch != w.Messages() {
+		t.Fatal("Messages() is not the channel Start() emits on")
+	}
+
+	for _, name := range []string{"first.txt", "second.txt", "third.txt"} {
+		if _, err := WriteRequest(stateDir, Request{
+			Action: ActionOpen,
+			Target: Target{Kind: TargetKindFile, Value: name},
+		}); err != nil {
+			t.Fatalf("WriteRequest %s: %v", name, err)
+		}
+
+		select {
+		case msg := <-w.Messages():
+			reqMsg, ok := msg.(RequestMsg)
+			if !ok {
+				t.Fatalf("unexpected message type: %T", msg)
+			}
+			if reqMsg.Request.Target.Value != name {
+				t.Errorf("expected %s, got %s", name, reqMsg.Request.Target.Value)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for %s: the watcher stopped delivering", name)
+		}
+	}
+}
+
 func TestWatcherPicksUpNewRequest(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
