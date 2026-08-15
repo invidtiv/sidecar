@@ -26,6 +26,16 @@ type Section interface {
 type RenderedSection struct {
 	Content    string          // Rendered string content
 	Focusables []FocusableInfo // Focusable elements with hit region info
+	Overlay    *Overlay        // Optional floating layer; does not affect section height
+}
+
+// Overlay is drawn over later sections and does not count toward modal height.
+// Focusables are relative to the overlay's top-left, not the section.
+type Overlay struct {
+	Content    string
+	OffsetX    int
+	OffsetY    int // preferred top relative to the section (typically just below it)
+	Focusables []FocusableInfo
 }
 
 // FocusableInfo describes a focusable element within a section.
