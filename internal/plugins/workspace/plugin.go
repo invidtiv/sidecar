@@ -459,6 +459,7 @@ type Plugin struct {
 
 	// Sidebar header hover state
 	hoverNewButton            bool
+	hoverSortButton           bool
 	hoverShellsPlusButton     bool
 	hoverWorkspacesPlusButton bool
 

@@ -55,25 +55,35 @@ func (p *Plugin) activityAnimationNeeded() bool {
 		if !p.sidebarVisible {
 			return false
 		}
-		// The current list renderer shows every shell, then a scrollable slice
-		// of worktrees. Match that projection so hidden worktrees cannot keep
-		// the animation clock alive.
-		for _, shell := range p.shells {
-			if shellNeedsAnimation(shell) {
-				return true
-			}
+		// Ask the same projection the renderer draws from. This used to assume
+		// the list was every shell followed by a scrollable slice of
+		// worktrees, and indexed p.worktrees by scrollOffset — but scrollOffset
+		// counts rows in the combined list, and a computed sort interleaves
+		// the two kinds and lifts nested shells to the top level. Under any
+		// sort but Manual that arithmetic pointed at the wrong records, so a
+		// working row on screen could fail to keep its own animation running.
+		items := p.visibleSidebarItems()
+		start := max(p.scrollOffset, 0)
+		end := min(start+p.visibleCount, len(items))
+		if p.visibleCount <= 0 {
+			// Nothing has been rendered yet, so nothing is known to be hidden.
+			// Consider the whole list rather than starting the clock late.
+			start, end = 0, len(items)
 		}
-		start := p.scrollOffset
-		if start < 0 {
-			start = 0
-		}
-		end := start + p.visibleCount
-		if end > len(p.worktrees) {
-			end = len(p.worktrees)
-		}
-		for i := start; i < end; i++ {
-			if worktreeNeedsAnimation(p.worktrees[i]) {
-				return true
+		for _, item := range items[min(start, len(items)):end] {
+			switch item.kind {
+			case navKindShell:
+				if shellNeedsAnimation(p.shells[item.shellIdx]) {
+					return true
+				}
+			case navKindNestedShell:
+				if shellNeedsAnimation(item.shell) {
+					return true
+				}
+			default:
+				if worktreeNeedsAnimation(p.worktrees[item.worktreeIdx]) {
+					return true
+				}
 			}
 		}
 	case ViewModeKanban:

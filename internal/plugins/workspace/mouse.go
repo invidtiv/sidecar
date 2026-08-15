@@ -722,6 +722,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
+		p.hoverSortButton = false
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
 		if action.Region != nil {
@@ -732,6 +733,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				}
 			case regionCreateWorktreeButton:
 				p.hoverNewButton = true
+			case regionListSortButton:
+				p.hoverSortButton = true
 			case regionShellsPlusButton:
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:

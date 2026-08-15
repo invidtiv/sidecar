@@ -395,3 +395,52 @@ func TestFreshCloneExplainsItsEmptyList(t *testing.T) {
 		t.Fatalf("a list with nothing in it said nothing:\n%s", view)
 	}
 }
+
+// The animation clock has to follow the rows actually on screen. It used to
+// index p.worktrees by scrollOffset, which counts rows in the combined list —
+// so under any sort but Manual it consulted the wrong records, and a working
+// row in view could fail to keep its own marker breathing.
+func TestAnimationClockFollowsTheVisibleRowsUnderEverySort(t *testing.T) {
+	for _, mode := range projectSortModes {
+		p := sortPlugin(t)
+		p.listSort = mode
+		p.applicationFocused = true
+		p.sidebarVisible = true
+
+		items := p.visibleSidebarItems()
+		// Put the viewport on the single row the working nested shell occupies,
+		// so a stale projection would look somewhere else entirely.
+		target := -1
+		for i, item := range items {
+			if item.kind == navKindNestedShell {
+				target = i
+				break
+			}
+		}
+		if target < 0 {
+			t.Fatalf("%s: fixture lost its nested shell", mode.Label())
+		}
+		p.scrollOffset, p.visibleCount = target, 1
+
+		if !p.activityAnimationNeeded() {
+			t.Fatalf("%s: a working row is on screen but the clock stopped", mode.Label())
+		}
+
+		// And the mirror image: a viewport holding only a quiet row must not
+		// keep the clock running.
+		quiet := -1
+		for i, item := range items {
+			if item.kind == navKindShell && p.shells[item.shellIdx].Agent == nil {
+				quiet = i
+				break
+			}
+		}
+		if quiet < 0 {
+			t.Fatalf("%s: fixture lost its sessionless shell", mode.Label())
+		}
+		p.scrollOffset, p.visibleCount = quiet, 1
+		if p.activityAnimationNeeded() {
+			t.Fatalf("%s: a viewport of one quiet row kept the clock alive", mode.Label())
+		}
+	}
+}

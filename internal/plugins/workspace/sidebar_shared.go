@@ -292,7 +292,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		// then the button that adds to it. "New" became "+" because the section
 		// headings already offer "+" for the same job — three words for one
 		// action was the noisiest thing in this header.
-		HeaderMeta:   &workspacelist.SidebarAction{ID: regionListSortButton, Label: workspacelist.SortPillLabel(p.listSort)},
+		HeaderMeta:   &workspacelist.SidebarAction{ID: regionListSortButton, Label: workspacelist.SortPillLabel(p.listSort), Hovered: p.hoverSortButton},
 		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "+", Hovered: p.hoverNewButton},
 		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
 		Sections: sections, EmptyLines: empty,
