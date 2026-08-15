@@ -1194,6 +1194,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				p.blameState.Lines = msg.Lines
 			}
+			// The modal's sections read blameState live, so its cached layout
+			// bounds no longer describe the content that will be rendered.
+			if p.blameModal != nil {
+				p.blameModal.Invalidate()
+			}
 		}
 		return p, nil
 
@@ -1220,6 +1225,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.projectSearchState.ScrollOffset = 0
 				// Set cursor to first match (skip file headers)
 				p.projectSearchState.Cursor = p.projectSearchState.FirstMatchIndex()
+			}
+			// Results are read live by the modal's sections; drop the cached
+			// layout bounds until the next render rebuilds them.
+			if p.projectSearchModal != nil {
+				p.projectSearchModal.Invalidate()
 			}
 		}
 

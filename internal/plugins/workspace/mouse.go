@@ -17,7 +17,13 @@ import (
 // performs no loads or visible mutations, allowing Bubble Tea to discard an
 // inertial tail before Update and View.
 func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	if p.isModalViewMode() || p.mouseHandler == nil {
+	if p.mouseHandler == nil {
+		return false
+	}
+	if bounded, ok := p.modalWheelAtBoundary(msg); ok {
+		return bounded
+	}
+	if p.isModalViewMode() {
 		return false
 	}
 	action := p.mouseHandler.HandleMouse(msg)
@@ -100,6 +106,54 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return p.terminalWheelAtBoundary(false, action)
 	}
 	return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+}
+
+// modalWheelAtBoundary answers for whichever modal overlay currently owns mouse
+// input, following the same precedence as handleMouse. ok is false when no
+// overlay owns the wheel, which lets the ordinary panes and terminals answer.
+//
+// Every one of these modals routes the wheel through modal.HandleMouse, which
+// only scrolls the modal body, so the shared modal query is the exact answer.
+// ViewModeFilePicker stays unknown: it is not one of the modal mouse branches
+// and renders its own overlay over the list regions.
+func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	if p.docInfo != nil {
+		return p.docInfo.WheelAtBoundary(msg, p.mouseHandler), true
+	}
+	switch p.viewMode {
+	case ViewModeCreate:
+		if p.createBusyStep != "" {
+			// A busy create step drops every mouse event untouched.
+			return true, true
+		}
+		if p.createPlan != nil {
+			return p.createOperationModal != nil && p.createOperationModal.WheelAtBoundary(msg, p.mouseHandler), true
+		}
+		return p.createModal != nil && p.createModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeTaskLink:
+		return p.taskLinkModal != nil && p.taskLinkModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeRenameShell:
+		return p.renameShellModal != nil && p.renameShellModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeRenameWorktree:
+		return p.renameWorktreeModal != nil && p.renameWorktreeModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeConfirmDelete:
+		return p.deleteConfirmModal != nil && p.deleteConfirmModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeConfirmDeleteShell:
+		return p.deleteShellModal != nil && p.deleteShellModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeTypeSelector:
+		return p.typeSelectorModal != nil && p.typeSelectorModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeAgentConfig:
+		return p.agentConfigModal != nil && p.agentConfigModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeAgentChoice:
+		return p.agentChoiceModal != nil && p.agentChoiceModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeFetchPR:
+		return p.fetchPRModal != nil && p.fetchPRModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeMerge:
+		return p.mergeModal != nil && p.mergeModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeCommitForMerge:
+		return p.commitForMergeModal != nil && p.commitForMergeModal.WheelAtBoundary(msg, p.mouseHandler), true
+	}
+	return false, false
 }
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).

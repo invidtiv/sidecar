@@ -218,10 +218,10 @@ func TestNotesWheelUnknownSurfaces(t *testing.T) {
 		{name: "textarea edit mode", setup: func(p *Plugin) { p.previewMode = false }, x: editorX},
 		{name: "inline tmux editor", setup: func(p *Plugin) { p.inlineEditMode = true }, x: editorX},
 		{name: "inline tmux editor over list", setup: func(p *Plugin) { p.inlineEditMode = true }, x: listX},
-		{name: "exit confirmation", setup: func(p *Plugin) { p.showExitConfirmation = true }, x: listX},
-		{name: "task modal", setup: func(p *Plugin) { p.showTaskModal = true }, x: listX},
-		{name: "delete modal", setup: func(p *Plugin) { p.showDeleteModal = true }, x: listX},
-		{name: "info modal", setup: func(p *Plugin) { p.showInfoModal = true }, x: listX},
+		// An unrendered modal has no trustworthy geometry yet.
+		{name: "task modal before render", setup: func(p *Plugin) { p.showTaskModal = true }, x: listX},
+		{name: "delete modal before render", setup: func(p *Plugin) { p.showDeleteModal = true }, x: listX},
+		{name: "info modal before render", setup: func(p *Plugin) { p.showInfoModal = true }, x: listX},
 		{name: "no store", setup: func(p *Plugin) { p.store = nil }, x: listX},
 		{name: "loading", setup: func(p *Plugin) { p.loading = true }, x: listX},
 	}

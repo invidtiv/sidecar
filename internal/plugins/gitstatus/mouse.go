@@ -21,11 +21,17 @@ const (
 	regionCommitButton = "commit-button" // Commit modal button
 )
 
-// WheelAtBoundary implements plugin.WheelBoundaryConsumer for Git's status and
-// full-screen diff surfaces. Modal views retain their existing handlers.
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer for Git's status,
+// full-screen diff, and modal surfaces. Modal view modes are answered by the
+// modal that owns mouse input, in the same precedence Update uses, and never by
+// the panes underneath. The history-search and path-filter overlays do not
+// intercept the wheel, so the status panes answer while they are open.
 func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	if p == nil || p.mouseHandler == nil || p.historySearchMode || p.pathFilterMode || p.inNoRepoMode() {
+	if p == nil || p.mouseHandler == nil || p.inNoRepoMode() {
 		return false
+	}
+	if bounded, ok := p.modalWheelAtBoundary(msg); ok {
+		return bounded
 	}
 	action := p.mouseHandler.HandleMouse(msg)
 	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
@@ -55,6 +61,57 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return (sharedscroll.Bounds{Position: p.previewCommitScroll, Maximum: len(p.previewCommit.Files) - 5}).AtBoundary(action.Delta)
 	}
 	return (sharedscroll.Bounds{Position: p.diffPaneScroll, Maximum: p.diffPaneMaxScroll()}).AtBoundary(action.Delta)
+}
+
+// modalWheelAtBoundary answers for whichever modal view mode currently owns
+// mouse input, following the same precedence as Update's MouseMsg routing. ok
+// is false for the non-modal view modes, which the panes answer.
+func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	switch p.viewMode {
+	case ViewModeBranchPicker:
+		// The branch picker moves its cursor by one wherever the pointer is;
+		// the modal body never scrolls for it.
+		delta, vertical := wheelDelta(msg)
+		if !vertical {
+			return false, true
+		}
+		return (sharedscroll.Bounds{
+			Position: p.branchCursor,
+			Maximum:  len(p.branches) - 1,
+		}).AtBoundary(delta), true
+	case ViewModeCommit:
+		return p.commitModal != nil && p.commitModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModePushMenu:
+		return p.pushMenuModal != nil && p.pushMenuModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModePullMenu:
+		return p.pullModal != nil && p.pullModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModePullConflict:
+		return p.pullConflictModal != nil && p.pullConflictModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeConfirmDiscard:
+		return p.discardModal != nil && p.discardModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeConfirmStashPop:
+		return p.stashPopModal != nil && p.stashPopModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeError:
+		return p.errorModal != nil && p.errorModal.WheelAtBoundary(msg, p.mouseHandler), true
+	}
+	return false, false
+}
+
+// wheelDelta converts a wheel event into the signed line delta a cursor-driven
+// modal applies. vertical is false for horizontal or shifted wheels, which are
+// outside this vertical contract and must never be dropped.
+func wheelDelta(msg tea.MouseWheelMsg) (delta int, vertical bool) {
+	mm := msg.Mouse()
+	if mm.Mod.Contains(tea.ModShift) {
+		return 0, false
+	}
+	switch mm.Button {
+	case tea.MouseWheelUp:
+		return -1, true
+	case tea.MouseWheelDown:
+		return 1, true
+	}
+	return 0, false
 }
 
 // handleMouse processes mouse events in the status view.

@@ -25,13 +25,16 @@ func (p *Plugin) previewBounds() sharedscroll.Bounds {
 //
 // Textarea edit mode and the inline tmux editor stay unknown: the textarea
 // exposes no exact viewport boundary, and the inline editor's wheel belongs to
-// the embedded application. Modal and exit-confirmation modes stay unknown
-// until the shared modal contract can answer for them.
+// the embedded application. Open modals are answered by the modal itself, in
+// the same precedence Update uses, and never by the panes underneath.
 func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if p == nil || p.mouseHandler == nil || p.store == nil || p.loading || p.loadErr != nil {
 		return false
 	}
-	if p.inlineEditMode || p.showExitConfirmation || p.showTaskModal || p.showDeleteModal || p.showInfoModal {
+	if bounded, ok := p.modalWheelAtBoundary(msg); ok {
+		return bounded
+	}
+	if p.inlineEditMode {
 		return false
 	}
 	action := p.mouseHandler.HandleMouse(msg)
@@ -68,4 +71,24 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return true
 	}
 	return p.previewBounds().AtBoundary(delta)
+}
+
+// modalWheelAtBoundary answers for whichever overlay currently owns mouse
+// input, following the same precedence as Update: info, then delete, then task
+// modal, then the inline editor's exit confirmation. ok is false when no
+// overlay is open, which lets the ordinary panes answer.
+func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	switch {
+	case p.showInfoModal:
+		return p.infoModal != nil && p.infoModal.WheelAtBoundary(msg, p.infoModalMouseHandler), true
+	case p.showDeleteModal:
+		return p.deleteModal != nil && p.deleteModal.WheelAtBoundary(msg, p.deleteModalMouseHandler), true
+	case p.showTaskModal:
+		return p.taskModal != nil && p.taskModal.WheelAtBoundary(msg, p.taskModalMouseHandler), true
+	case p.showExitConfirmation:
+		// The exit confirmation is a fixed three-option dialog that absorbs
+		// every mouse event without scroll state of its own.
+		return true, true
+	}
+	return false, false
 }
