@@ -6,11 +6,245 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
+
+// This is the live `sidecar open` journey: the request arrives while the shell
+// owns interactive input, mutates the pane tree without exiting that mode, and
+// must hand the active terminal component the tree's new viewport immediately.
+// The assertion is driven through the model's deferred-resize path and accepted
+// by that same activation without executing the resulting tmux command.
+func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	stubTd(t)
+
+	tests := []struct {
+		name   string
+		target uirequest.Target
+		close  func(*Plugin) tea.Cmd
+	}{
+		{name: "Doc", target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md", Line: 1}, close: func(p *Plugin) tea.Cmd { return p.closeDocPane() }},
+		{name: "Issue", target: uirequest.Target{Kind: uirequest.TargetKindIssue, Value: "td-1a2b3c"}, close: func(p *Plugin) tea.Cmd { return p.hideIssuePane() }},
+		{name: "Diff", target: uirequest.Target{Kind: uirequest.TargetKindDiff, Value: "wt"}, close: func(p *Plugin) tea.Cmd { return p.hideDiffPane() }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# resize\n")
+			p := interactiveUIRequestTestPlugin(t, root)
+			before, ok := p.terminalLeafBox()
+			if !ok {
+				t.Fatal("no terminal leaf before split")
+			}
+			openArmedAt := armDeferredResize(p.primaryTerminal)
+
+			cmd := p.handleUIRequest(uirequest.Request{
+				ID: "interactive-" + tt.name, Action: uirequest.ActionOpen,
+				CreatedAt: time.Now().UTC(), TTLMs: 5000,
+				Origin: uirequest.Origin{TmuxSession: "test-shell"}, Target: tt.target,
+			})
+			assertResizeStayedDeferred(t, p.primaryTerminal, openArmedAt)
+			after, ok := p.terminalLeafBox()
+			if !ok || after.W >= before.W {
+				t.Fatalf("post-open terminal leaf = %+v ok=%v, want narrower than %+v", after, ok, before)
+			}
+			assertInteractiveTerminalGeometry(t, p, after)
+			assertDeferredGeometryAssertion(t, p, lastBatchCommand(t, cmd), after)
+			if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
+				t.Fatal("sidecar open exited the live interactive terminal")
+			}
+			openW, openH := p.primaryTerminal.Width, p.primaryTerminal.Height
+			_ = p.View(p.width, p.height)
+			if len(p.paneSizeCmds) != 0 || p.primaryTerminal.Width != openW || p.primaryTerminal.Height != openH {
+				t.Fatalf("View scheduled or applied terminal geometry: queued=%d size=%dx%d", len(p.paneSizeCmds), p.primaryTerminal.Width, p.primaryTerminal.Height)
+			}
+
+			closeArmedAt := armDeferredResize(p.primaryTerminal)
+			closeCmd := tt.close(p)
+			assertResizeStayedDeferred(t, p.primaryTerminal, closeArmedAt)
+			grown, ok := p.terminalLeafBox()
+			if !ok || grown != before {
+				t.Fatalf("post-close terminal leaf = %+v ok=%v, want original %+v", grown, ok, before)
+			}
+			assertInteractiveTerminalGeometry(t, p, grown)
+			assertDeferredGeometryAssertion(t, p, closeCmd, grown)
+		})
+	}
+}
+
+func TestUIRequests_RefusedInteractiveSplitEmitsNoGeometryAssertion(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	stubTd(t)
+	tests := []struct {
+		name   string
+		target uirequest.Target
+	}{
+		{name: "Doc", target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md", Line: 1}},
+		{name: "Issue", target: uirequest.Target{Kind: uirequest.TargetKindIssue, Value: "td-1a2b3c"}},
+		{name: "Diff", target: uirequest.Target{Kind: uirequest.TargetKindDiff, Value: "wt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeDocPaneFixture(t, root, "README.md", "# too narrow\n")
+			p := interactiveUIRequestTestPlugin(t, root)
+			p.width = 40
+			beforeTree := clonePaneTree(p.paneRoot)
+			beforeGeometry := terminalModelGeometry(p.primaryTerminal)
+			beforeInteractive := *p.interactiveState
+			beforeFocus, beforeNext, beforePane, beforeMode := p.paneFocus, p.paneNextID, p.activePane, p.viewMode
+
+			cmd := p.handleUIRequest(uirequest.Request{
+				ID: "interactive-refused-" + tt.name, Action: uirequest.ActionOpen,
+				CreatedAt: time.Now().UTC(), TTLMs: 5000,
+				Origin: uirequest.Origin{TmuxSession: "test-shell"}, Target: tt.target,
+			})
+			if cmd != nil {
+				t.Fatal("refused split emitted work, including a possible terminal resize")
+			}
+			if !reflect.DeepEqual(p.paneRoot, beforeTree) {
+				t.Fatalf("refused split changed pane tree\n before: %#v\n  after: %#v", beforeTree, p.paneRoot)
+			}
+			if got := terminalModelGeometry(p.primaryTerminal); got != beforeGeometry {
+				t.Fatalf("refused split changed terminal geometry/state: before=%+v after=%+v", beforeGeometry, got)
+			}
+			if p.interactiveState == nil || *p.interactiveState != beforeInteractive {
+				t.Fatalf("refused split changed interactive state: before=%+v after=%+v", beforeInteractive, p.interactiveState)
+			}
+			if p.paneFocus != beforeFocus || p.paneNextID != beforeNext || p.activePane != beforePane || p.viewMode != beforeMode {
+				t.Fatalf("refused split changed focus/allocation: focus %d->%d next %d->%d pane %v->%v mode %v->%v",
+					beforeFocus, p.paneFocus, beforeNext, p.paneNextID, beforePane, p.activePane, beforeMode, p.viewMode)
+			}
+		})
+	}
+}
+
+func interactiveUIRequestTestPlugin(t *testing.T, root string) *Plugin {
+	t.Helper()
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	p.shells[0].Agent.TmuxSession = "test-shell"
+	box, ok := p.terminalLeafBox()
+	if !ok {
+		t.Fatal("test terminal leaf is not placed")
+	}
+	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal.Width = p.terminalContentWidth(box.W)
+	p.primaryTerminal.Height = box.H - terminalHeaderRows
+	// Activate the model without Open: Open would start a real control client,
+	// while this contract must never query or resize the developer's tmux server.
+	p.primaryTerminal.State = &tty.State{
+		Active: true, TargetSession: "test-shell", TargetPane: "%901",
+		OutputBuf: tty.NewOutputBuffer(20),
+	}
+	p.primaryTerminalTarget = workspaceTerminalTarget{
+		Session: "test-shell", Pane: "%901", Width: p.primaryTerminal.Width,
+		Height: p.primaryTerminal.Height, Source: "shell", SourceID: "test-shell",
+	}
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{
+		Active: true, TargetPane: "%901", TargetSession: "test-shell", PaneOnEntry: PanePreview,
+	}
+	return p
+}
+
+func assertInteractiveTerminalGeometry(t *testing.T, p *Plugin, leaf Box) {
+	t.Helper()
+	wantW, wantH := p.terminalContentWidth(leaf.W), leaf.H-terminalHeaderRows
+	if p.primaryTerminal.Width != wantW || p.primaryTerminal.Height != wantH {
+		t.Fatalf("live terminal geometry = %dx%d, want leaf viewport %dx%d", p.primaryTerminal.Width, p.primaryTerminal.Height, wantW, wantH)
+	}
+}
+
+func armDeferredResize(model *tty.Model) time.Time {
+	armedAt := time.Now().Add(-tty.ResizeDebounce + 100*time.Millisecond)
+	model.State.LastResizeAt = armedAt
+	return armedAt
+}
+
+func assertResizeStayedDeferred(t *testing.T, model *tty.Model, armedAt time.Time) {
+	t.Helper()
+	if !model.State.LastResizeAt.Equal(armedAt) {
+		t.Fatalf("resize asserted synchronously instead of deferring: %v -> %v", armedAt, model.State.LastResizeAt)
+	}
+}
+
+func lastBatchCommand(t *testing.T, cmd tea.Cmd) tea.Cmd {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("successful open emitted no command")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("open command emitted %T, want load plus geometry batch", msg)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("open command scheduled %d children, want exactly one load followed by one geometry assertion", len(batch))
+	}
+	return batch[len(batch)-1]
+}
+
+func assertDeferredGeometryAssertion(t *testing.T, p *Plugin, cmd tea.Cmd, leaf Box) {
+	t.Helper()
+	messages := terminalMessages(cmd)
+	if len(messages) != 1 {
+		t.Fatalf("geometry command emitted %d terminal messages, want exactly one", len(messages))
+	}
+	msg := messages[0]
+	if got := reflect.TypeOf(msg).String(); got != "tty.deferredResizeMsg" {
+		t.Fatalf("geometry command emitted %s, want tty.deferredResizeMsg", got)
+	}
+	before := p.primaryTerminal.State.LastResizeAt
+	assertCmd := p.primaryTerminal.Update(msg)
+	if assertCmd == nil {
+		t.Fatal("the same active terminal rejected its deferred resize assertion")
+	}
+	if !p.primaryTerminal.State.LastResizeAt.After(before) {
+		t.Fatalf("accepted assertion did not advance LastResizeAt: %v -> %v", before, p.primaryTerminal.State.LastResizeAt)
+	}
+	assertInteractiveTerminalGeometry(t, p, leaf)
+	// Do not execute assertCmd: it is the real tmux query/resize closure. A
+	// non-nil result plus the advanced timestamp proves the scoped debt was
+	// accepted, while keeping the developer's default tmux server untouched.
+}
+
+func terminalMessages(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var messages []tea.Msg
+		for _, child := range batch {
+			messages = append(messages, terminalMessages(child)...)
+		}
+		return messages
+	}
+	if tty.IsTerminalMessage(msg) {
+		return []tea.Msg{msg}
+	}
+	return nil
+}
+
+type terminalGeometry struct {
+	Width, Height int
+	Active        bool
+	Target        string
+}
+
+func terminalModelGeometry(model *tty.Model) terminalGeometry {
+	return terminalGeometry{Width: model.Width, Height: model.Height, Active: model.IsActive(), Target: model.GetTarget()}
+}
 
 func TestUIRequests_PendingViewLifecycle(t *testing.T) {
 	stateHome := t.TempDir()
