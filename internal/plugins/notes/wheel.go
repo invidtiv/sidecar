@@ -79,21 +79,21 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 }
 
 // modalWheelAtBoundary answers for whichever overlay currently owns mouse
-// input, following the same precedence as Update: info, then delete, then task
-// modal, then the inline editor's exit confirmation. ok is false when no
-// overlay is open, which lets the ordinary panes answer.
+// input, following the same precedence as handleMouse: the exit confirmation
+// first, then info, delete, and the task modal. ok is false when no overlay is
+// open, which lets the ordinary panes answer.
 func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
 	switch {
+	case p.showExitConfirmation:
+		// A fixed three-option dialog that absorbs every mouse event without
+		// scroll state of its own.
+		return true, true
 	case p.showInfoModal:
 		return p.infoModal != nil && p.infoModal.WheelAtBoundary(msg, p.infoModalMouseHandler), true
 	case p.showDeleteModal:
 		return p.deleteModal != nil && p.deleteModal.WheelAtBoundary(msg, p.deleteModalMouseHandler), true
 	case p.showTaskModal:
 		return p.taskModal != nil && p.taskModal.WheelAtBoundary(msg, p.taskModalMouseHandler), true
-	case p.showExitConfirmation:
-		// The exit confirmation is a fixed three-option dialog that absorbs
-		// every mouse event without scroll state of its own.
-		return true, true
 	}
 	return false, false
 }

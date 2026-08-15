@@ -46,11 +46,20 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return false
 	}
 	if m.inGlobalScope() {
-		if m.globalWorkspacesVisible() && m.overview != nil {
+		// Mirror globalMouse's precedence exactly. Asking a surface that is not
+		// the visible tab would answer for something off screen: once Tasks
+		// gains a boundary contract, a wheel over the Agents board would be
+		// answered by Tasks and legitimately swallowed.
+		switch {
+		case m.globalTasksFocused():
+			if consumer, ok := m.globalTasksPlugin().(plugin.WheelBoundaryConsumer); ok {
+				return consumer.WheelAtBoundary(wheel)
+			}
+			return false
+		case m.globalTab == GlobalAgents && m.overview != nil:
+			return m.overview.BoardWheelAtBoundary(wheel)
+		case m.globalWorkspacesVisible():
 			return m.overview.WorkspacesWheelAtBoundary(wheel)
-		}
-		if consumer, ok := m.globalTasksPlugin().(plugin.WheelBoundaryConsumer); ok {
-			return consumer.WheelAtBoundary(wheel)
 		}
 		return false
 	}
