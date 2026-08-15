@@ -41,3 +41,53 @@ func TestAnnounceInstanceCmdWritesPresence(t *testing.T) {
 		t.Fatal("expected projectKey from registered project")
 	}
 }
+
+func TestAnnounceInstanceCmdOverwritesOnProjectSwitch(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	projectA := t.TempDir()
+	projectB := t.TempDir()
+	if _, err := projectdir.Resolve(projectA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectdir.Resolve(projectB); err != nil {
+		t.Fatal(err)
+	}
+
+	if msg := announceInstanceCmd(projectA, projectA)(); msg != nil {
+		t.Fatalf("announce A returned %v", msg)
+	}
+	live, err := uirequest.ListInstances(config.StateDir())
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("after A: %+v, want one", live)
+	}
+	keyA := live[0].ProjectKey
+	if keyA == "" {
+		t.Fatal("expected projectKey for A")
+	}
+
+	if msg := announceInstanceCmd(projectB, projectB)(); msg != nil {
+		t.Fatalf("announce B returned %v", msg)
+	}
+	live, err = uirequest.ListInstances(config.StateDir())
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("after B: %+v, want one overwritten record", live)
+	}
+	if live[0].PID != os.Getpid() {
+		t.Fatalf("pid = %d, want %d", live[0].PID, os.Getpid())
+	}
+	if live[0].ProjectKey == keyA {
+		t.Fatalf("projectKey still %q after switch", keyA)
+	}
+	if live[0].WorkDir != projectB {
+		t.Fatalf("WorkDir = %q, want %q", live[0].WorkDir, projectB)
+	}
+}

@@ -439,6 +439,76 @@ func TestOpenCurrentShellWinsOverInstance(t *testing.T) {
 	}
 }
 
+func TestOpenWorkDirIsProjectRootFromSubdir(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	rel := filepath.Join("internal", "cli", "open.go")
+	if err := os.MkdirAll(filepath.Join(workDir, "internal", "cli"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, rel), []byte("package cli\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(workDir, "internal", "cli"))
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "internal/cli/open.go"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open internal/cli/open.go) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Target.Value != "internal/cli/open.go" {
+		t.Fatalf("Target.Value = %q, want internal/cli/open.go", req.Target.Value)
+	}
+	if req.Origin.WorkDir != workDir {
+		t.Fatalf("Origin.WorkDir = %q, want project root %q", req.Origin.WorkDir, workDir)
+	}
+}
+
+func TestOpenProjectFlagRefusesDuplicateLiveInstances(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	child := startDummyProcess(t)
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: child, ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--project", "sidecar", "--wait", "0", "doc.md"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("Run(open --project sidecar) = %v, %d; want true, 3 (stderr %q)", handled, code, errOut.String())
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "--shell") {
+		t.Fatalf("refusal missing --shell: %q", combined)
+	}
+	reqsDir := filepath.Join(stateDir, "requests")
+	if entries, err := os.ReadDir(reqsDir); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".json") && !strings.Contains(e.Name(), ".tmp.") {
+				t.Fatalf("wrote a request despite duplicate live instances: %s", e.Name())
+			}
+		}
+	}
+}
+
 func TestOpenJSONIncludesResolvedDestination(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	workDir := t.TempDir()

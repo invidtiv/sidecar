@@ -95,6 +95,9 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string) (openDe
 		return destFromShell(hitProj, shell, workDir, uirequest.ResolvedShell), nil
 	}
 
+	if err := refuseDuplicateProjectInstances(stateDir, proj.Key); err != nil {
+		return openDestination{}, err
+	}
 	workDir := resolveTargetWorkDir(proj, "")
 	return destFromProject(proj, workDir, uirequest.ResolvedProject), nil
 }
@@ -324,14 +327,16 @@ func (p registeredProject) roots() []string {
 func resolveTargetWorkDir(proj registeredProject, raw string) string {
 	roots := proj.roots()
 	cwd, cwdErr := os.Getwd()
-	if cwdErr == nil && containingRoot(cwd, roots) != "" {
-		return cwd
+	if cwdErr == nil {
+		if root := containingRoot(cwd, roots); root != "" {
+			return root
+		}
 	}
 
 	filePath := stripLineSuffix(raw)
 	if filePath != "" && cwdErr == nil && !filepath.IsAbs(filePath) {
-		if containingRoot(filepath.Join(cwd, filePath), roots) != "" {
-			return cwd
+		if root := containingRoot(filepath.Join(cwd, filePath), roots); root != "" {
+			return root
 		}
 	}
 	if filePath != "" {
@@ -348,10 +353,30 @@ func resolveTargetWorkDir(proj registeredProject, raw string) string {
 	if proj.Path != "" {
 		return proj.Path
 	}
-	if cwdErr == nil {
-		return cwd
-	}
 	return ""
+}
+
+func refuseDuplicateProjectInstances(stateDir, projectKey string) error {
+	if projectKey == "" {
+		return nil
+	}
+	instances, err := uirequest.ListInstances(stateDir)
+	if err != nil || len(instances) < 2 {
+		return nil
+	}
+	n := 0
+	for _, inst := range instances {
+		if inst.ProjectKey == projectKey {
+			n++
+		}
+	}
+	if n > 1 {
+		return &destError{
+			code: 3,
+			msg:  fmt.Sprintf("several Sidecar instances are showing project %q; pass --shell to pick one", projectKey),
+		}
+	}
+	return nil
 }
 
 func containingRoot(path string, roots []string) string {

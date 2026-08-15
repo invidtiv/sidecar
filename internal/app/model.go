@@ -929,6 +929,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		titleCmd,
 		inventoryRefresh,
 		overviewFocusCmd,
+		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 		func() tea.Msg {
 			return ToastMsg{
 				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),
