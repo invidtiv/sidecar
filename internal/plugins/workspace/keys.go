@@ -1169,7 +1169,6 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 		p.createError = "Name does not produce a valid git branch"
 		return nil
 	}
-	_ = state.SetLastCreateAgent(string(p.createAgentType))
 	p.createBusyStep = "Validating branch, source, and destination"
 	p.createOperationModal = nil
 	return p.resolveCreatePlan()

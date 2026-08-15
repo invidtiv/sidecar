@@ -155,7 +155,11 @@ func (p *Plugin) ensureCreateModal() {
 	p.createModalBranchN = branchN
 	p.createModalTaskN = taskN
 	p.syncCreateAgentFromIdx()
-	p.prefillCreateAgentInput()
+	// Combo owns the input while focused; rebuilding after branch/task load
+	// must not overwrite an in-progress filter query.
+	if prevFocus != createAgentFieldID {
+		p.prefillCreateAgentInput()
+	}
 
 	branchItems := p.createBranchItems()
 	taskItems := p.createTaskItems()
@@ -331,10 +335,13 @@ func (p *Plugin) prefillCreateAgentInput() {
 func (p *Plugin) syncCreateAgentFromIdx() {
 	agents := p.selectableAgentTypes()
 	prev := p.createAgentType
-	p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
+	if p.createAgentIdx >= 0 && p.createAgentIdx < len(agents) {
+		p.createAgentType = agents[p.createAgentIdx]
+	} else {
+		p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
+	}
 	if p.createAgentType != prev {
 		p.loadCreateAutoApprove()
-		p.prefillCreateAgentInput()
 	}
 }
 

@@ -333,12 +333,12 @@ func (c *checkboxSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) 
 	}
 
 	switch keyMsg.String() {
-	case "enter", " ":
+	case "enter", " ", "space":
 		if c.checked != nil {
 			*c.checked = !*c.checked
 		}
-		// Checkboxes don't return an action on toggle
-		return "", nil
+		// Non-empty so Modal.resolveEnterAction does not treat this as submit.
+		return actionOverlayIdle, nil
 	}
 
 	return "", nil

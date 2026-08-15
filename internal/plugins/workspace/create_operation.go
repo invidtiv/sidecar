@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/state"
 	"golang.org/x/sys/unix"
 )
 
@@ -205,6 +206,9 @@ func (p *Plugin) selectCreatedWorktree(wt *Worktree) {
 }
 
 func (p *Plugin) finishCreatedWorktree(plan *CreateOperationPlan, wt *Worktree) []tea.Cmd {
+	if plan != nil && plan.AgentType != "" {
+		_ = state.SetLastCreateAgent(string(plan.AgentType))
+	}
 	p.selectCreatedWorktree(wt)
 	p.viewMode = ViewModeList
 	p.clearCreateModal()

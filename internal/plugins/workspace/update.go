@@ -16,6 +16,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -375,6 +376,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.createError = msg.Err.Error()
 			// Stay in ViewModeCreate - don't close modal or clear state
 		} else {
+			if msg.AgentType != "" {
+				_ = state.SetLastCreateAgent(string(msg.AgentType))
+			}
 			p.viewMode = ViewModeList
 			p.worktrees = append(p.worktrees, msg.Worktree)
 

@@ -550,23 +550,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	// Handle hover in modals that have button hover states
 	switch p.viewMode {
 	case ViewModeCreate:
-		if action.Region == nil {
-			p.createButtonHover = 0
-			return nil
-		}
-		switch action.Region.ID {
-		case regionCreateButton:
-			if idx, ok := action.Region.Data.(int); ok {
-				switch idx {
-				case 6:
-					p.createButtonHover = 1 // Create
-				case 7:
-					p.createButtonHover = 2 // Cancel
-				}
-			}
-		default:
-			p.createButtonHover = 0
-		}
+		return nil
 	case ViewModeAgentConfig:
 		// Modal library handles hover state internally
 		return nil
@@ -586,7 +570,6 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		// Modal library handles hover state internally
 		return nil
 	default:
-		p.createButtonHover = 0
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
@@ -1004,57 +987,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			p.diffTabFocus = DiffTabFocusCommitFiles
 		} else {
 			p.diffTabFocus = DiffTabFocusFileList
-		}
-	case regionCreateBackdrop:
-		// Click outside create modal - close it
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
-	case regionCreateModalBody:
-		// Click inside modal but not on a form element - absorb
-	case regionCreateInput:
-		// Legacy hit region; create form mouse is handled by handleCreateModalMouse.
-	case regionCreateDropdown:
-		// Click on dropdown item
-		if data, ok := action.Region.Data.(dropdownItemData); ok {
-			switch data.field {
-			case 1:
-				// Branch selection
-				if data.idx >= 0 && data.idx < len(p.branchFiltered) {
-					p.createBaseBranchInput.SetValue(p.branchFiltered[data.idx])
-					p.branchFiltered = nil
-				}
-			case 3:
-				// Task selection
-				if data.idx >= 0 && data.idx < len(p.taskSearchFiltered) {
-					task := p.taskSearchFiltered[data.idx]
-					p.createTaskID = task.ID
-					p.createTaskTitle = task.Title
-					p.taskSearchFiltered = nil
-				}
-			}
-		}
-	case regionCreateAgentOption:
-		// Click on agent option
-		if idx, ok := action.Region.Data.(int); ok {
-			agents := p.selectableAgentTypes()
-			if idx >= 0 && idx < len(agents) {
-				p.createAgentType = agents[idx]
-				p.createAgentIdx = idx
-			}
-		}
-	case regionCreateCheckbox:
-		p.createSkipPermissions = !p.createSkipPermissions
-		p.persistCreateAutoApprove()
-	case regionCreateButton:
-		// Click on button
-		if idx, ok := action.Region.Data.(int); ok {
-			switch idx {
-			case 6:
-				return p.validateAndCreateWorktree()
-			case 7:
-				p.viewMode = ViewModeList
-				p.clearCreateModal()
-			}
 		}
 	case regionTaskLinkDropdown:
 		// Click on task link dropdown item

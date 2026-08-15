@@ -55,7 +55,7 @@ func TestIsBackgroundRegion(t *testing.T) {
 	modal := []string{
 		agentChoiceConfirmID, agentChoiceCancelID,
 		deleteConfirmDeleteID, deleteConfirmCancelID,
-		regionCreateBackdrop, regionCreateModalBody, regionCreateInput,
+		createSubmitID, createCancelID,
 		mergeMethodListID, mergeCleanUpButtonID, mergeSkipButtonID, // Merge modal element IDs
 		typeSelectorListID, typeSelectorConfirmID, typeSelectorCancelID, typeSelectorInputID, // Type selector modal element IDs
 	}

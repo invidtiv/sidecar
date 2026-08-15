@@ -256,12 +256,6 @@ var ShellAgentOrder = []AgentType{
 	AgentGrok,
 }
 
-// dropdownItemData stores field ID and item index for dropdown hit regions.
-type dropdownItemData struct {
-	field int // 1=branch, 3=task
-	idx   int // index in filtered list
-}
-
 // Worktree represents a git worktree with optional agent.
 type Worktree struct {
 	Key             string           // Stable normalized-path identity; never presentation

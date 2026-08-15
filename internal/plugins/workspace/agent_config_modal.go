@@ -82,7 +82,7 @@ func (p *Plugin) syncAgentConfigFromIdx() {
 		p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
 	}
 	if p.agentConfigAgentType != prev {
-		p.prefillAgentConfigAgentInput()
+		p.loadAgentConfigAutoApprove()
 	}
 }
 
@@ -132,7 +132,9 @@ func (p *Plugin) ensureAgentConfigModal() {
 		p.agentConfigAgentList = agentTypes
 	}
 	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agentTypes, p.agentConfigAgentType, p.agentConfigAgentIdx)
-	p.prefillAgentConfigAgentInput()
+	if p.agentConfigModal == nil || p.agentConfigModal.FocusedID() != agentConfigAgentFieldID {
+		p.prefillAgentConfigAgentInput()
+	}
 	items := p.agentConfigItems()
 
 	title := fmt.Sprintf("Start Agent: %s", p.agentConfigWorktree.Name)

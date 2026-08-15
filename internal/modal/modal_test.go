@@ -128,9 +128,12 @@ func TestCheckboxSection(t *testing.T) {
 	}
 
 	// Toggle via Update
-	s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, "agree")
+	action, _ := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, "agree")
 	if !checked {
 		t.Errorf("expected checked to be true after Enter")
+	}
+	if action == "" || action == "submit" {
+		t.Errorf("checkbox Enter action = %q, want a non-empty idle action", action)
 	}
 
 	res = s.Render(80, "agree", "")
@@ -284,6 +287,32 @@ func TestHandleKeyEnter(t *testing.T) {
 	action, _ = m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action != "cancel" {
 		t.Errorf("expected 'cancel' on Enter, got %q", action)
+	}
+}
+
+func TestHandleKeyEnterOnCheckboxDoesNotSubmit(t *testing.T) {
+	checked := false
+	m := New("Test", WithPrimaryAction("submit"), WithHints(false)).
+		AddSection(Checkbox("skip", "Auto-approve", &checked)).
+		AddSection(Buttons(Btn(" Create ", "submit"), Btn(" Cancel ", "cancel")))
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+	m.SetFocus("skip")
+
+	action, _ := m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action == "submit" {
+		t.Fatal("Enter on checkbox submitted the modal")
+	}
+	if !checked {
+		t.Fatal("Enter on checkbox should toggle")
+	}
+
+	action, _ = m.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if action == "submit" {
+		t.Fatal("Space on checkbox submitted the modal")
+	}
+	if checked {
+		t.Fatal("Space on checkbox should toggle back")
 	}
 }
 

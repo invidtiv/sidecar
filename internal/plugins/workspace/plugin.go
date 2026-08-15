@@ -62,15 +62,6 @@ const (
 	regionKanbanColumn = "kanban-column"
 	regionViewToggle   = "view-toggle"
 
-	// Create modal regions
-	regionCreateBackdrop    = "create-backdrop"
-	regionCreateModalBody   = "create-modal-body"
-	regionCreateInput       = "create-input"
-	regionCreateDropdown    = "create-dropdown"
-	regionCreateButton      = "create-button"
-	regionCreateCheckbox    = "create-checkbox"
-	regionCreateAgentOption = "create-agent-option"
-
 	// Task Link modal regions
 	regionTaskLinkDropdown = "task-link-dropdown"
 
@@ -346,7 +337,6 @@ type Plugin struct {
 	createBaseIdx           int       // Selected base-branch index in branchAll
 	createTaskIdx           int       // Selected task index in createTaskItems() (0 = none)
 	createSkipPermissions   bool      // Skip permissions checkbox
-	createButtonHover       int       // 0=none, 1=create, 2=cancel
 	createError             string    // Error message to display in create modal
 	createModal             *modal.Modal
 	createModalWidth        int
