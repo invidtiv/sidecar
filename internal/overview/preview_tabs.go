@@ -5,7 +5,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -15,10 +17,13 @@ import (
 )
 
 const (
-	previewTabRegionKind = "global-preview-tab"
-	previewGitRegionKind = "global-preview-git"
-	previewTabRows       = 2
+	previewTabRegionKind   = "global-preview-tab"
+	previewGitRegionKind   = "global-preview-git"
+	previewDiffDividerKind = "global-preview-diff-divider"
+	previewTabRows         = 2
 )
+
+type previewDiffDividerHit struct{}
 
 // previewTabHit is the tab stored on the tab-row region.
 type previewTabHit int
@@ -106,11 +111,18 @@ func (m *Model) ensurePreviewExtras() tea.Cmd {
 	switch m.previewTab {
 	case workspacediff.TabDiff:
 		path := previewDiffPath(workspace)
+		m.diff.Bind(path, workspace.ID, m.preview.contentEpoch)
+		m.diff.Target = workspacediff.WorkingTreeTarget()
+		if m.diff.ListWidth() == 0 {
+			if w := state.GetDiffTabFileListWidth(); w > 0 {
+				m.diff.SetListWidth(w)
+			}
+		}
 		if m.diff.State != workspacediff.LoadStateUnknown && m.diff.State != workspacediff.LoadStateError {
 			return m.diff.LoadSelectedCommit(path, workspace.ID)
 		}
 		m.diff.State = workspacediff.LoadStateLoading
-		return workspacediff.LoadSnapshotCmd(path, "", workspace.ID)
+		return workspacediff.LoadSnapshotCmdAt(path, "", workspace.ID, m.preview.contentEpoch, workspacediff.IdentityWorkingTree)
 	case workspacediff.TabTask:
 		return m.loadPreviewTask(workspace)
 	}
@@ -127,7 +139,9 @@ func previewDiffPath(workspace workspaceinventory.Workspace) string {
 }
 
 func (m *Model) resetPreviewExtras() {
-	m.diff = workspacediff.View{}
+	width, mode := m.diff.ListWidth(), m.diff.ViewMode
+	m.diff = workspacediff.View{ViewMode: mode, Target: workspacediff.WorkingTreeTarget()}
+	m.diff.SetListWidth(width)
 	m.task = workspacediff.TaskView{}
 	m.previewExtrasID = ""
 }
@@ -149,12 +163,8 @@ func (m *Model) applyDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
 	if !ok || workspace.ID != msg.WorkspaceID {
 		return nil
 	}
-	if msg.Err != nil {
-		m.diff.State = workspacediff.LoadStateError
-		m.diff.Error = msg.Err.Error()
-		return nil
-	}
-	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, previewDiffPath(workspace), workspace.ID)
+	m.diff.Bind(previewDiffPath(workspace), workspace.ID, m.preview.contentEpoch)
+	return m.diff.ApplySnapshotMsg(msg, previewDiffPath(workspace), workspace.ID)
 }
 
 func (m *Model) applyCommitDetail(msg workspacediff.CommitDetailMsg) {
@@ -162,7 +172,8 @@ func (m *Model) applyCommitDetail(msg workspacediff.CommitDetailMsg) {
 	if !ok || workspace.ID != msg.WorkspaceID {
 		return
 	}
-	m.diff.ApplyCommitDetail(msg)
+	m.diff.Bind(previewDiffPath(workspace), workspace.ID, m.preview.contentEpoch)
+	_ = m.diff.ApplyCommitDetail(msg)
 }
 
 func (m *Model) applyTask(msg workspacediff.TaskMsg) {
@@ -179,6 +190,64 @@ func (m *Model) applyTask(msg workspacediff.TaskMsg) {
 		return
 	}
 	m.task.Task = msg.Task
+}
+
+func (m *Model) previewDiffKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !m.previewTabsVisible() || m.previewTab != workspacediff.TabDiff {
+		return false, nil
+	}
+	w, h := m.diffContentSize()
+	m.diff.SetSize(w, h)
+	cmd, handled := m.diff.HandleKey(msg)
+	if !handled {
+		return false, nil
+	}
+	m.persistDiffViewMode()
+	return true, cmd
+}
+
+func (m *Model) persistDiffViewMode() {
+	switch m.diff.ViewMode {
+	case workspacediff.ViewSideBySide:
+		_ = state.SetWorkspaceDiffMode("side-by-side")
+	case workspacediff.ViewFullFile:
+		_ = state.SetWorkspaceDiffMode("full-file")
+	default:
+		_ = state.SetWorkspaceDiffMode("unified")
+	}
+}
+
+func (m *Model) diffContentSize() (int, int) {
+	box, ok := m.previewBox()
+	if !ok {
+		h := m.height - 2 - previewTabRows
+		if h < 1 {
+			h = 1
+		}
+		return m.width, h
+	}
+	h := box.H - previewTabRows
+	if h < 1 {
+		h = 1
+	}
+	return box.W, h
+}
+
+func (m *Model) registerPreviewDiffRegions(box termpreview.Box) {
+	if !m.previewTabsVisible() || m.previewTab != workspacediff.TabDiff {
+		return
+	}
+	leaf := mouse.Rect{X: box.X, Y: box.Y + previewTabRows, W: box.W, H: box.H - previewTabRows}
+	if leaf.H < 1 {
+		return
+	}
+	m.diff.SetSize(leaf.W, leaf.H)
+	for _, hit := range m.diff.FileHits(leaf) {
+		m.workspacesMouse.HitMap.AddRect(hit.ID, hit.Rect.X, hit.Rect.Y, hit.Rect.W, hit.Rect.H, hit.Data)
+	}
+	if d := m.diff.DividerHit(leaf); d.W > 0 && d.H > 0 {
+		m.workspacesMouse.HitMap.AddRect(previewDiffDividerKind, d.X, d.Y, d.W, d.H, previewDiffDividerHit{})
+	}
 }
 
 func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
@@ -252,6 +321,7 @@ func (m *Model) renderPreviewWithTabs(width, height int) string {
 	}
 	switch m.previewTab {
 	case workspacediff.TabDiff:
+		m.diff.SetSize(width, contentHeight)
 		lines = append(lines, m.diff.Render(width, contentHeight, workspacediff.RenderOpts{
 			Truncate: func(s string, w int, _ string) string { return termpreview.TruncateANSI(s, w) },
 		}))

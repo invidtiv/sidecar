@@ -84,6 +84,7 @@ type TmuxAttachFinishedMsg struct {
 type DiffLoadedMsg struct {
 	OperationScope
 	WorkspaceName string
+	Identity      string
 	Content       string
 	Raw           string
 	Snapshot      *DiffSnapshot

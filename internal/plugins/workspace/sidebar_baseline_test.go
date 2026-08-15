@@ -155,16 +155,16 @@ func TestSidebarSelectionChangeResetsPreviewScrollAndFollowsLiveOutput(t *testin
 	p := sidebarBaselinePlugin(t)
 	p.previewOffset = 12
 	p.previewScroll = 9
-	p.diffTabCursor = 3
+	p.diff.Cursor = 3
 	p.scrollOffset = 5
 
 	pressList(p, "j")
 	if selectionLabel(p) != "shell:two" {
 		t.Fatalf("selection did not move: %q", selectionLabel(p))
 	}
-	if p.previewOffset != 0 || p.previewScroll != 0 || p.diffTabCursor != 0 {
+	if p.previewOffset != 0 || p.previewScroll != 0 || p.diff.Cursor != 0 {
 		t.Fatalf("selection change left stale preview state: offset=%d scroll=%d diffCursor=%d",
-			p.previewOffset, p.previewScroll, p.diffTabCursor)
+			p.previewOffset, p.previewScroll, p.diff.Cursor)
 	}
 
 	// A movement that changes nothing (already clamped) leaves the state alone.

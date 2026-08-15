@@ -337,6 +337,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.previewDocKey(msg); handled {
 		return true, cmd
 	}
+	if handled, cmd := m.previewDiffKey(msg); handled {
+		return true, cmd
+	}
 	// The same acts on the terminal surface the live pane routes through OnKey.
 	// The selection they act on exists in both states, so a watched pane answers
 	// them too; everything after this is the browser's own navigation.

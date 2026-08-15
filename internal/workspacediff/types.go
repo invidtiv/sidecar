@@ -112,10 +112,12 @@ type File struct {
 
 // CommitDetail is the file list for the commit under the cursor.
 type CommitDetail struct {
-	Hash      string
-	ShortHash string
-	Subject   string
-	Files     []CommitFile
+	Hash         string
+	ShortHash    string
+	Subject      string
+	Files        []CommitFile
+	IsMerge      bool
+	ParentHashes []string
 }
 
 // CommitFile is one path inside a commit.

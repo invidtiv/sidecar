@@ -83,7 +83,8 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+		workspacediff.CommitFileDiffMsg, workspacediff.TaskMsg,
 		renameShellDoneMsg:
 		return true
 	default:
@@ -426,6 +427,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitDetailMsg:
 		m.applyCommitDetail(msg)
 		return nil
+	case workspacediff.CommitFileDiffMsg:
+		return m.diff.ApplyCommitFileDiff(msg)
 	case workspacediff.TaskMsg:
 		m.applyTask(msg)
 		return nil

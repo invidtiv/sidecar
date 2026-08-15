@@ -8,6 +8,17 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 )
 
+func padToHeight(content string, height, width int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // wrapText wraps text to the specified width.
 func wrapText(text string, width int) string {
 	if width <= 0 {

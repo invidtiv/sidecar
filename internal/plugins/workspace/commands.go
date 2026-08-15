@@ -192,23 +192,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				)
 				// Add diff view toggle when on Diff tab
 				if p.previewTab == PreviewTabDiff {
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-scope", Name: "Scope", Description: "Cycle working tree, commits, and aggregate", Context: "workspace-preview", Priority: 5})
-					diffViewName := "Split"
-					switch p.diffViewMode {
-					case DiffViewSideBySide:
-						diffViewName = "Full"
-					case DiffViewFullFile:
-						diffViewName = "Unified"
-					}
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-view", Name: diffViewName, Description: "Cycle diff view mode", Context: "workspace-preview", Priority: 6})
-					// Add file navigation commands when viewing diff with multiple files
-					if p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 1 {
-						cmds = append(cmds,
-							plugin.Command{ID: "next-file", Name: "}", Description: "Next file", Context: "workspace-preview", Priority: 6},
-							plugin.Command{ID: "prev-file", Name: "{", Description: "Previous file", Context: "workspace-preview", Priority: 7},
-							plugin.Command{ID: "file-picker", Name: "Files", Description: "Open file picker", Context: "workspace-preview", Priority: 8},
-						)
-					}
+					cmds = append(cmds, p.diff.Commands("workspace-preview")...)
 				}
 			}
 			// Also show agent commands in preview pane

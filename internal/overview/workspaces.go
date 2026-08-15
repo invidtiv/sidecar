@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -323,6 +324,7 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
 	if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
 		m.registerPreviewTabRegions(box)
+		m.registerPreviewDiffRegions(box)
 		return
 	}
 	termBox, ok := m.previewPaneBox(panelayout.Terminal, box)
@@ -642,6 +644,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
 	}
+	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewDiffDividerKind {
+		w, _ := m.diffContentSize()
+		m.diff.SetListWidth(m.workspacesMouse.DragStartValue())
+		m.diff.ApplyListWidthDelta(action.DragDX, w)
+		return nil
+	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewPaneDividerKind {
 		split := panelayout.Find(m.preview.paneRoot, m.preview.paneDragSplitID)
 		box, ok := m.previewBox()
@@ -660,6 +668,10 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
 		return m.syncTerminalGeometry()
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewDiffDividerKind {
+		_ = state.SetDiffTabFileListWidth(m.diff.ListWidth())
+		return nil
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewPaneDividerKind {
 		m.preview.paneDragSplitID = 0
@@ -744,6 +756,15 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 				m.preview.paneDragSplitID = int(hit)
 				m.workspacesMouse.StartDrag(action.X, action.Y, previewPaneDividerKind, split.Split.Ratio)
 			}
+		}
+		return nil
+	}
+	if _, ok := action.Region.Data.(previewDiffDividerHit); ok {
+		if action.Type == mouse.ActionClick {
+			w, _ := m.diffContentSize()
+			start := m.diff.EffectiveListWidth(w)
+			m.diff.SetListWidth(start)
+			m.workspacesMouse.StartDrag(action.X, action.Y, previewDiffDividerKind, start)
 		}
 		return nil
 	}

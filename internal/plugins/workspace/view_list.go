@@ -165,6 +165,7 @@ func (p *Plugin) renderListView(width, height int) string {
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
 		p.registerPreviewTabRegions(split)
+		p.registerDiffTabRegions()
 
 		if p.previewFlashActive() {
 			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
@@ -196,6 +197,7 @@ func (p *Plugin) renderListView(width, height int) string {
 	// Preview tabs are registered after document bodies and their divider, so
 	// the visible chips remain the highest-priority targets.
 	p.registerPreviewTabRegions(split)
+	p.registerDiffTabRegions()
 
 	flashActive := p.previewFlashActive()
 

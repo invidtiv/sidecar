@@ -30,24 +30,14 @@ const (
 	RegionCommitBack   = "commit-file-back"
 	RegionCommitFile   = "commit-file-item"
 	RegionCommitDiff   = "commit-file-diff-pane"
+	RegionMinimap      = "diff-tab-minimap"
 	dividerHitWidth    = 3
 )
 
 func dimText(s string) string { return styles.Muted.Render(s) }
 
 func fileListWidth(totalWidth int) int {
-	w := totalWidth * 25 / 100
-	if w < 20 {
-		w = 20
-	}
-	maxW := totalWidth - 30
-	if maxW < 20 {
-		maxW = 20
-	}
-	if w > maxW {
-		w = maxW
-	}
-	return w
+	return defaultListWidth(totalWidth)
 }
 
 func padToHeight(content string, height, width int) string {
@@ -96,48 +86,41 @@ func (v *View) Render(width, height int, opts RenderOpts) string {
 		return v.renderRaw(v.Content, width, height, opts)
 	}
 
-	v.ClampCursor()
-
 	if width < CollapseThreshold {
 		return v.renderCollapsed(width, height, opts)
 	}
 
-	listWidth := v.ListWidth
-	if listWidth <= 0 {
-		listWidth = fileListWidth(width)
-	}
-	if listWidth < 20 {
-		listWidth = 20
-	}
-	maxW := width - 30
-	if maxW < 20 {
-		maxW = 20
-	}
-	if listWidth > maxW {
-		listWidth = maxW
-	}
+	listWidth := v.resolvedListWidth(width)
 	diffPaneWidth := width - listWidth - 1
 	if diffPaneWidth < 10 {
 		diffPaneWidth = 10
 	}
-
-	if opts.Hit != nil && opts.ContentBaseX > 0 {
-		opts.Hit(RegionDivider, opts.ContentBaseX+listWidth, 0, dividerHitWidth, opts.PanelHeight, nil)
-	}
 	rightX := opts.ContentBaseX + listWidth + 1
 
-	leftPane := v.renderFileList(listWidth, height, opts.ContentBaseX, opts.BaseY, opts)
-	rightPane := v.renderDiffPane(diffPaneWidth, height, rightX, opts.BaseY, opts)
+	var leftPane, rightPane string
+	if v.Focus == FocusCommitFiles || v.Focus == FocusCommitDiff {
+		leftPane = v.renderCommitFileList(listWidth, height, opts.ContentBaseX, opts.BaseY, opts)
+		rightPane = v.renderCommitFileDiffPane(diffPaneWidth, height, rightX, opts.BaseY, opts)
+	} else {
+		leftPane = v.renderFileList(listWidth, height, opts.ContentBaseX, opts.BaseY, opts)
+		rightPane = v.renderDiffPane(diffPaneWidth, height, rightX, opts.BaseY, opts)
+	}
 	leftPane = padToHeight(leftPane, height, listWidth)
 	rightPane = padToHeight(rightPane, height, diffPaneWidth)
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, renderDivider(height), rightPane)
 }
 
 func (v *View) renderCollapsed(width, height int, opts RenderOpts) string {
-	if v.Focus == FocusDiff {
+	switch v.Focus {
+	case FocusDiff:
 		return v.renderDiffPane(width, height, 0, 0, opts)
+	case FocusCommitFiles:
+		return v.renderCommitFileList(width, height, 0, 0, opts)
+	case FocusCommitDiff:
+		return v.renderCommitFileDiffPane(width, height, 0, 0, opts)
+	default:
+		return v.renderFileList(width, height, 0, 0, opts)
 	}
-	return v.renderFileList(width, height, 0, 0, opts)
 }
 
 func renderDivider(height int) string {
@@ -154,7 +137,7 @@ func renderDivider(height int) string {
 
 func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) string {
 	var sb strings.Builder
-	files := v.Files
+	files := v.fileRows()
 	commits := v.Commits
 	fileListActive := v.Focus == FocusFileList
 	maxWidth := width - 2
@@ -191,15 +174,6 @@ func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) 
 	filesHeight := height - linesUsed - commitLines
 	if filesHeight < 3 {
 		filesHeight = 3
-	}
-
-	if v.Cursor < len(files) {
-		if v.Cursor < v.Scroll {
-			v.Scroll = v.Cursor
-		}
-		if v.Cursor >= v.Scroll+filesHeight {
-			v.Scroll = v.Cursor - filesHeight + 1
-		}
 	}
 
 	startIdx := v.Scroll
@@ -321,16 +295,16 @@ func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) 
 }
 
 func (v *View) renderDiffPane(width, height, baseX, baseY int, opts RenderOpts) string {
-	if v.Cursor >= len(v.Files) {
+	if v.Cursor >= v.FileCount() {
 		commit, ok := v.SelectedCommit()
 		if !ok {
 			return dimText("Select a file to view diff")
 		}
 		return v.renderCommitPreview(commit, width, height, baseX, baseY, opts)
 	}
-	file := v.Files[v.Cursor]
+	name := v.selectedFileName()
 	var sb strings.Builder
-	headerStr := file.Path + " [unified]"
+	headerStr := fmt.Sprintf("%s [%s]", name, v.viewModeLabel())
 	if v.Focus == FocusDiff {
 		sb.WriteString(styles.Title.Render(headerStr))
 	} else {
@@ -341,9 +315,165 @@ func (v *View) renderDiffPane(width, height, baseX, baseY int, opts RenderOpts) 
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
-	sb.WriteString(v.renderRaw(file.Raw, width, contentHeight, opts))
+	sb.WriteString(v.renderFileDiff(name, v.selectedFileRaw(), width, contentHeight, opts))
 	if opts.Hit != nil && baseX > 0 {
 		opts.Hit(RegionDiffPane, baseX, baseY, width, height, nil)
+	}
+	return sb.String()
+}
+
+func (v *View) viewModeLabel() string {
+	switch v.ViewMode {
+	case ViewSideBySide:
+		return "split"
+	case ViewFullFile:
+		return "full-file"
+	default:
+		return "unified"
+	}
+}
+
+func (v *View) renderFileDiff(name, raw string, width, height int, opts RenderOpts) string {
+	_ = name
+	if raw != "" {
+		return v.renderRaw(raw, width, height, opts)
+	}
+	return dimText("No diff data")
+}
+
+func (v *View) renderCommitFileList(width, height, baseX, baseY int, opts RenderOpts) string {
+	var sb strings.Builder
+	maxWidth := width - 2
+	if v.CommitDetail == nil {
+		sb.WriteString(styles.Muted.Render("Loading commit files..."))
+		return sb.String()
+	}
+	files := v.CommitDetail.Files
+	isActive := v.Focus == FocusCommitFiles
+	if opts.Hit != nil && baseX > 0 {
+		opts.Hit(RegionFileListPane, baseX, baseY, width, height, nil)
+	}
+	hash := v.CommitDetail.ShortHash
+	if hash == "" && len(v.CommitDetail.Hash) >= 7 {
+		hash = v.CommitDetail.Hash[:7]
+	}
+	hashStyle := lipgloss.NewStyle().Foreground(styles.Warning)
+	sb.WriteString(styles.Muted.Render("←") + " " + hashStyle.Render(hash))
+	if opts.Hit != nil && baseX > 0 {
+		opts.Hit(RegionCommitBack, baseX, baseY, width, 1, nil)
+	}
+	sb.WriteString("\n")
+	subject := v.CommitDetail.Subject
+	subjectRunes := []rune(subject)
+	if len(subjectRunes) > maxWidth && maxWidth > 1 {
+		subject = string(subjectRunes[:maxWidth-1]) + "…"
+	}
+	sb.WriteString(styles.Muted.Render(subject))
+	sb.WriteString("\n")
+	sb.WriteString(styles.Muted.Render(strings.Repeat("─", maxWidth)))
+	sb.WriteString("\n")
+	filesHeader := fmt.Sprintf("Files (%d)", len(files))
+	if isActive {
+		sb.WriteString(styles.Title.Render(filesHeader))
+	} else {
+		sb.WriteString(styles.Muted.Render(filesHeader))
+	}
+	sb.WriteString("\n")
+	if len(files) == 0 {
+		sb.WriteString(dimText("No files in commit"))
+		return sb.String()
+	}
+	contentHeight := height - commitFileListHeaderLines
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	startIdx := v.CommitFileScroll
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := startIdx + contentHeight
+	if endIdx > len(files) {
+		endIdx = len(files)
+	}
+	for i := startIdx; i < endIdx; i++ {
+		file := files[i]
+		selected := i == v.CommitFileCursor
+		if opts.Hit != nil && baseX > 0 {
+			opts.Hit(RegionCommitFile, baseX, baseY+commitFileListHeaderLines+(i-startIdx), width, 1, i)
+		}
+		statusIcon := file.Status
+		if statusIcon == "" {
+			statusIcon = "M"
+		}
+		fileName := file.Path
+		statsStr := fmt.Sprintf("+%d/-%d", file.Additions, file.Deletions)
+		fileRunes := []rune(fileName)
+		availableWidth := maxWidth - 4
+		if len(fileRunes)+len(statsStr)+1 > availableWidth {
+			keepWidth := availableWidth - len(statsStr) - 2
+			if keepWidth > 3 {
+				fileName = "…" + string(fileRunes[len(fileRunes)-keepWidth:])
+			}
+		}
+		if selected && isActive {
+			plainLine := fmt.Sprintf("%s %s %s", statusIcon, fileName, statsStr)
+			if gap := maxWidth - lipgloss.Width(plainLine); gap > 0 {
+				plainLine += strings.Repeat(" ", gap)
+			}
+			sb.WriteString(styles.ListItemSelected.Render(plainLine))
+		} else {
+			var statusStyle lipgloss.Style
+			switch statusIcon {
+			case "A":
+				statusStyle = styles.StatusStaged
+			case "D":
+				statusStyle = styles.StatusDeleted
+			case "R":
+				statusStyle = lipgloss.NewStyle().Foreground(styles.Info)
+			default:
+				statusStyle = styles.StatusModified
+			}
+			plainLine := fmt.Sprintf("%s %s %s", statusIcon, fileName, statsStr)
+			if gap := maxWidth - lipgloss.Width(plainLine); gap > 0 {
+				plainLine += strings.Repeat(" ", gap)
+			}
+			sb.WriteString(statusStyle.Render(plainLine))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func (v *View) renderCommitFileDiffPane(width, height, baseX, baseY int, opts RenderOpts) string {
+	if v.CommitDetail == nil {
+		return dimText("Loading...")
+	}
+	if len(v.CommitDetail.Files) == 0 {
+		return dimText("No files in commit")
+	}
+	if v.CommitFileCursor < 0 || v.CommitFileCursor >= len(v.CommitDetail.Files) {
+		return dimText("Select a file")
+	}
+	file := v.CommitDetail.Files[v.CommitFileCursor]
+	var sb strings.Builder
+	headerStr := fmt.Sprintf("%s [%s]", file.Path, v.viewModeLabel())
+	if v.Focus == FocusCommitDiff {
+		sb.WriteString(styles.Title.Render(headerStr))
+	} else {
+		sb.WriteString(styles.Muted.Render(headerStr))
+	}
+	sb.WriteString("\n\n")
+	contentHeight := height - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	if v.CommitFileDiffRaw == "" {
+		sb.WriteString(dimText("Loading diff..."))
+		return sb.String()
+	}
+	sb.WriteString(v.renderFileDiff(file.Path, v.CommitFileDiffRaw, width, contentHeight, opts))
+	if opts.Hit != nil && baseX > 0 {
+		opts.Hit(RegionCommitDiff, baseX, baseY, width, height, nil)
 	}
 	return sb.String()
 }
@@ -420,6 +550,13 @@ func (v *View) renderAggregate(width, height int) string {
 	if v.Snapshot == nil {
 		return dimText("Loading aggregate diff…")
 	}
+	return v.renderRaw(v.aggregateText(), width, height, RenderOpts{})
+}
+
+func (v *View) aggregateText() string {
+	if v.Snapshot == nil {
+		return ""
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Aggregate: %s..HEAD", v.Snapshot.MergeBase)
 	sb.WriteString("\nCommitted branch changes\n")
@@ -435,7 +572,12 @@ func (v *View) renderAggregate(width, height int) string {
 	} else {
 		sb.WriteString(v.Snapshot.AggregateUncommitted)
 	}
-	return v.renderRaw(sb.String(), width, height, RenderOpts{})
+	if v.Snapshot.Truncated {
+		fmt.Fprintf(&sb, "\n\nUntracked limits: %d files, %d bytes/file, %d bytes total; omitted %d files (%d bytes).",
+			MaxUntrackedFiles, MaxUntrackedFileSize, MaxUntrackedTotalBytes,
+			v.Snapshot.UntrackedOmitted, v.Snapshot.UntrackedBytesOmitted)
+	}
+	return sb.String()
 }
 
 func (v *View) renderRaw(content string, width, height int, opts RenderOpts) string {

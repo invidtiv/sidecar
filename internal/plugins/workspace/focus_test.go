@@ -143,18 +143,18 @@ func TestTabOnTheDiffTabLeavesDiffFocusUntouched(t *testing.T) {
 	p := docPaneTestPlugin(t, root, false)
 	p.sidebarVisible = true
 	p.previewTab = PreviewTabDiff
-	p.diffTabFocus = DiffTabFocusDiff
+	p.diff.Focus = DiffTabFocusDiff
 	p.setFocusTarget(sidebarTarget())
 
 	p.handleListKeys(tabKey())
 	assertFocus(t, p, leafTarget(terminalLeafID(p.paneRoot)), "diff tab to preview")
-	if p.diffTabFocus != DiffTabFocusDiff {
-		t.Fatalf("tab moved diff focus to %v", p.diffTabFocus)
+	if p.diff.Focus != DiffTabFocusDiff {
+		t.Fatalf("tab moved diff focus to %v", p.diff.Focus)
 	}
 	p.handleListKeys(tabKey())
 	assertFocus(t, p, sidebarTarget(), "diff preview to sidebar")
-	if p.diffTabFocus != DiffTabFocusDiff {
-		t.Fatalf("tab moved diff focus to %v", p.diffTabFocus)
+	if p.diff.Focus != DiffTabFocusDiff {
+		t.Fatalf("tab moved diff focus to %v", p.diff.Focus)
 	}
 }
 

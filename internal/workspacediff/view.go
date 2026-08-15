@@ -35,7 +35,55 @@ type View struct {
 	CommitFileScroll  int
 	CommitFileDiffRaw string
 
-	ListWidth int
+	Target      Target
+	Epoch       uint64
+	WorkspaceID string
+	WorkDir     string
+
+	width     int
+	height    int
+	listWidth int
+}
+
+// Bind records the host identity used to drop stale async results.
+func (v *View) Bind(workdir, workspaceID string, epoch uint64) {
+	if workdir != "" {
+		v.WorkDir = workdir
+	}
+	if workspaceID != "" {
+		v.WorkspaceID = workspaceID
+	}
+	v.Epoch = epoch
+	if v.Target.Identity() == "" {
+		v.Target = WorkingTreeTarget()
+	}
+}
+
+// SetSize records the allocated leaf box and reclamps scroll. Never call from View().
+func (v *View) SetSize(width, height int) {
+	v.width = width
+	v.height = height
+	if v.listWidth > 0 {
+		v.listWidth = clampListWidth(v.listWidth, width)
+	}
+	v.ClampScroll()
+}
+
+// Width and Height are the last SetSize allocation.
+func (v *View) Width() int  { return v.width }
+func (v *View) Height() int { return v.height }
+
+func (v *View) accepts(epoch uint64, workspaceID, identity string) bool {
+	if workspaceID != "" && v.WorkspaceID != "" && workspaceID != v.WorkspaceID {
+		return false
+	}
+	if epoch != 0 && v.Epoch != 0 && epoch != v.Epoch {
+		return false
+	}
+	if identity != "" && v.Target.Identity() != "" && identity != v.Target.Identity() {
+		return false
+	}
+	return true
 }
 
 // ApplySnapshot rebuilds the working-tree / commits lists from the snapshot
@@ -58,7 +106,7 @@ func (v *View) ApplySnapshot() {
 		v.Files = ParseFiles(v.Raw)
 		v.Commits = append([]CommitInfo(nil), v.Snapshot.Commits...)
 	}
-	v.ClampCursor()
+	v.ClampScroll()
 }
 
 // FileCount is the number of working-tree files in the current scope.
@@ -107,39 +155,77 @@ func (v *View) LoadSelectedCommit(workdir, workspaceID string) tea.Cmd {
 	v.CommitFileCursor = 0
 	v.CommitFileScroll = 0
 	v.CommitFileDiffRaw = ""
-	hash := commit.Hash
-	return func() tea.Msg {
-		detail, err := LoadCommitDetail(context.Background(), workdir, hash)
-		return CommitDetailMsg{WorkspaceID: workspaceID, Hash: hash, Commit: detail, Err: err}
+	return v.loadCommit(workdir, workspaceID, commit.Hash)
+}
+
+// LoadCommit fetches one commit's file list, tagged for stale-drop.
+func (v *View) LoadCommit(hash string) tea.Cmd {
+	return v.loadCommit(v.WorkDir, v.WorkspaceID, hash)
+}
+
+func (v *View) loadCommit(workdir, workspaceID, hash string) tea.Cmd {
+	if workdir != "" {
+		v.WorkDir = workdir
 	}
+	if workspaceID != "" {
+		v.WorkspaceID = workspaceID
+	}
+	epoch, id, ident := v.Epoch, v.WorkspaceID, v.Target.Identity()
+	wd := v.WorkDir
+	return func() tea.Msg {
+		detail, err := LoadCommitDetail(context.Background(), wd, hash)
+		return CommitDetailMsg{
+			Epoch: epoch, WorkspaceID: id, Identity: ident,
+			Hash: hash, Commit: detail, Err: err,
+		}
+	}
+}
+
+func (v *View) commitMatches(listHash string) bool {
+	return CommitDetailMatchesListHash(v.CommitDetail, listHash)
 }
 
 // CommitDetailMsg is the result of LoadSelectedCommit.
 type CommitDetailMsg struct {
+	Epoch       uint64
 	WorkspaceID string
+	Identity    string
 	Hash        string
 	Commit      *CommitDetail
 	Err         error
 }
 
 // ApplyCommitDetail installs a loaded commit if it is still the row under the cursor.
-func (v *View) ApplyCommitDetail(msg CommitDetailMsg) {
+func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
+	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
 	if msg.Err != nil || msg.Commit == nil {
-		return
+		return nil
 	}
 	commit, ok := v.SelectedCommit()
 	if !ok || !CommitDetailMatchesListHash(msg.Commit, commit.Hash) {
-		return
+		return nil
 	}
+	preserve := v.CommitDetail != nil && CommitDetailMatchesListHash(v.CommitDetail, commit.Hash)
 	v.CommitDetail = msg.Commit
-	v.CommitFileCursor = 0
-	v.CommitFileScroll = 0
-	v.CommitFileDiffRaw = ""
+	if !preserve {
+		v.CommitFileCursor = 0
+		v.CommitFileScroll = 0
+		v.CommitFileDiffRaw = ""
+	}
+	v.ClampScroll()
+	if v.Focus == FocusCommitFiles || v.Focus == FocusCommitDiff {
+		return v.LoadSelectedCommitFile()
+	}
+	return nil
 }
 
 // SnapshotMsg is a completed snapshot load for one worktree.
 type SnapshotMsg struct {
+	Epoch       uint64
 	WorkspaceID string
+	Identity    string
 	Snapshot    *Snapshot
 	Err         error
 	Command     string
@@ -148,14 +234,38 @@ type SnapshotMsg struct {
 
 // LoadSnapshotCmd loads a snapshot for workdir and tags it with workspaceID.
 func LoadSnapshotCmd(workdir, baseRef, workspaceID string) tea.Cmd {
+	return LoadSnapshotCmdAt(workdir, baseRef, workspaceID, 0, IdentityWorkingTree)
+}
+
+// LoadSnapshotCmdAt is LoadSnapshotCmd with epoch and target identity.
+func LoadSnapshotCmdAt(workdir, baseRef, workspaceID string, epoch uint64, identity string) tea.Cmd {
+	if identity == "" {
+		identity = IdentityWorkingTree
+	}
 	return func() tea.Msg {
 		snapshot, err := LoadSnapshot(context.Background(), workdir, baseRef)
 		if err != nil {
-			return SnapshotMsg{WorkspaceID: workspaceID, Err: err,
+			return SnapshotMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: identity, Err: err,
 				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", BaseRef: baseRef}
 		}
-		return SnapshotMsg{WorkspaceID: workspaceID, Snapshot: snapshot, BaseRef: baseRef}
+		return SnapshotMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: identity, Snapshot: snapshot, BaseRef: baseRef}
 	}
+}
+
+// ApplySnapshotMsg installs a loaded snapshot or records the error, dropping stale msgs.
+func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) tea.Cmd {
+	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
+	if msg.Err != nil {
+		v.Snapshot = nil
+		v.State = LoadStateError
+		v.Error = msg.Err.Error()
+		v.Content, v.Raw = "", ""
+		v.Files, v.Commits = nil, nil
+		return nil
+	}
+	return v.ApplyLoadedSnapshot(msg.Snapshot, workdir, workspaceID)
 }
 
 // ApplyLoadedSnapshot installs a snapshot, applies the default working-tree
@@ -169,6 +279,191 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 	}
 	v.ApplySnapshot()
 	return v.LoadSelectedCommit(workdir, workspaceID)
+}
+
+// CycleScope walks working-tree → commits → aggregate. No-op on commit/range targets.
+func (v *View) CycleScope() tea.Cmd {
+	if v.Target.Kind != TargetWorkingTree {
+		return nil
+	}
+	v.Scope = (v.Scope + 1) % 3
+	v.Cursor, v.Scroll, v.DiffScroll, v.HorizScroll = 0, 0, 0, 0
+	v.Focus = FocusFileList
+	if v.Scope == ScopeAggregate {
+		v.Focus = FocusDiff
+	}
+	v.CommitDetail = nil
+	v.clearCommitFileDiff()
+	v.ApplySnapshot()
+	return v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)
+}
+
+// CycleViewMode walks unified → side-by-side → full-file.
+// workspacediff cannot import gitstatus (cycle via app/overview), so the
+// painted body stays the unified raw patch; the mode label still cycles.
+func (v *View) CycleViewMode() tea.Cmd {
+	switch v.ViewMode {
+	case ViewUnified:
+		v.ViewMode = ViewSideBySide
+	case ViewSideBySide:
+		v.ViewMode = ViewFullFile
+	default:
+		v.ViewMode = ViewUnified
+	}
+	v.HorizScroll = 0
+	v.ClampScroll()
+	return nil
+}
+
+// JumpFile moves to the next or previous file in this tab's list.
+func (v *View) JumpFile(delta int) tea.Cmd {
+	if v.Focus == FocusCommitDiff || v.Focus == FocusCommitFiles {
+		if v.CommitDetail == nil {
+			return nil
+		}
+		n := len(v.CommitDetail.Files)
+		next := v.CommitFileCursor + delta
+		if next < 0 || next >= n {
+			return nil
+		}
+		v.CommitFileCursor = next
+		v.DiffScroll, v.HorizScroll = 0, 0
+		v.clearCommitFileDiff()
+		v.ClampScroll()
+		return v.LoadSelectedCommitFile()
+	}
+	n := v.FileCount()
+	if n <= 1 {
+		return nil
+	}
+	next := v.Cursor + delta
+	if next < 0 || next >= n {
+		return nil
+	}
+	old := v.Cursor
+	v.Cursor = next
+	v.DiffScroll, v.HorizScroll = 0, 0
+	v.ClampScroll()
+	return v.OnCursorChanged(old)
+}
+
+// OnCursorChanged resets the right pane after a file-list move.
+func (v *View) OnCursorChanged(oldCursor int) tea.Cmd {
+	if v.Cursor == oldCursor {
+		return nil
+	}
+	v.DiffScroll = 0
+	v.HorizScroll = 0
+	v.ClampScroll()
+	if v.Cursor < v.FileCount() {
+		v.CommitDetail = nil
+		return nil
+	}
+	return v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)
+}
+
+func (v *View) selectedFileName() string {
+	if v.Cursor >= 0 && v.Cursor < len(v.Files) {
+		return v.Files[v.Cursor].Path
+	}
+	return ""
+}
+
+func (v *View) selectedFileRaw() string {
+	if v.Cursor >= 0 && v.Cursor < len(v.Files) {
+		return v.Files[v.Cursor].Raw
+	}
+	return ""
+}
+
+type fileRow struct {
+	Path      string
+	Additions int
+	Deletions int
+}
+
+func (v *View) fileRows() []fileRow {
+	rows := make([]fileRow, len(v.Files))
+	for i, f := range v.Files {
+		rows[i] = fileRow{Path: f.Path, Additions: f.Additions, Deletions: f.Deletions}
+	}
+	return rows
+}
+
+// SelectedFileName is the working-tree path under the cursor, if any.
+func (v *View) SelectedFileName() string { return v.selectedFileName() }
+
+// FileNames is the working-tree list for the host file picker.
+func (v *View) FileNames() []string {
+	names := make([]string, len(v.Files))
+	for i, f := range v.Files {
+		names[i] = f.Path
+	}
+	return names
+}
+
+// CommitFileDiffMsg is a completed commit-file patch load.
+type CommitFileDiffMsg struct {
+	Epoch       uint64
+	WorkspaceID string
+	Identity    string
+	CommitHash  string
+	FilePath    string
+	Raw         string
+	Err         error
+}
+
+// ApplyCommitFileDiff installs a commit file patch if the cursor still matches.
+func (v *View) ApplyCommitFileDiff(msg CommitFileDiffMsg) tea.Cmd {
+	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
+	if msg.Err != nil || v.CommitDetail == nil || v.CommitDetail.Hash != msg.CommitHash {
+		return nil
+	}
+	if v.CommitFileCursor < 0 || v.CommitFileCursor >= len(v.CommitDetail.Files) {
+		return nil
+	}
+	if v.CommitDetail.Files[v.CommitFileCursor].Path != msg.FilePath {
+		return nil
+	}
+	v.CommitFileDiffRaw = msg.Raw
+	return nil
+}
+
+// LoadSelectedCommitFile loads the patch for the commit file under the cursor.
+func (v *View) LoadSelectedCommitFile() tea.Cmd {
+	if v.CommitDetail == nil || v.CommitFileCursor < 0 || v.CommitFileCursor >= len(v.CommitDetail.Files) {
+		return nil
+	}
+	file := v.CommitDetail.Files[v.CommitFileCursor]
+	parentHash := ""
+	if v.CommitDetail.IsMerge && len(v.CommitDetail.ParentHashes) > 0 {
+		parentHash = v.CommitDetail.ParentHashes[0]
+	}
+	hash := v.CommitDetail.Hash
+	workdir, epoch, id, ident := v.WorkDir, v.Epoch, v.WorkspaceID, v.Target.Identity()
+	return func() tea.Msg {
+		raw, err := loadCommitFileDiff(workdir, hash, file.Path, parentHash)
+		return CommitFileDiffMsg{
+			Epoch: epoch, WorkspaceID: id, Identity: ident,
+			CommitHash: hash, FilePath: file.Path, Raw: raw, Err: err,
+		}
+	}
+}
+
+func loadCommitFileDiff(workdir, hash, path, parentHash string) (string, error) {
+	args := []string{"show", hash, "--", path}
+	if parentHash != "" {
+		args = []string{"diff", parentHash, hash, "--", path}
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // ScrollContent moves the visible right-pane (or collapsed) content.
