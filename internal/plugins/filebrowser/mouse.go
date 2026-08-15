@@ -85,23 +85,6 @@ func (p *Plugin) overlayWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool
 	return false, false
 }
 
-// wheelDelta converts a wheel event into the signed line delta the cursor-driven
-// overlays apply. vertical is false for horizontal or shifted wheels, which are
-// outside this vertical contract and must never be dropped.
-func wheelDelta(msg tea.MouseWheelMsg) (delta int, vertical bool) {
-	mm := msg.Mouse()
-	if mm.Mod.Contains(tea.ModShift) {
-		return 0, false
-	}
-	switch mm.Button {
-	case tea.MouseWheelUp:
-		return -3, true
-	case tea.MouseWheelDown:
-		return 3, true
-	}
-	return 0, false
-}
-
 // dragForwardThrottle is the minimum interval between forwarding mouse drag
 // events to the inline editor's tmux session. Without throttling, every mouse
 // motion event (~100+/sec) spawns a subprocess, causing 10-30s hangs.
