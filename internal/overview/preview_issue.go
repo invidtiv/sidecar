@@ -5,34 +5,49 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 )
 
 const (
 	previewIssueRegionKind = "global-preview-issue"
-	previewIssueCloseKind  = "global-preview-issue-close"
-	previewIssueModelID    = -1
+	previewIssueTabKind    = "global-preview-issue-tab"
 )
 
 func isPreviewIssueRegion(kind string) bool {
-	return kind == previewIssueRegionKind || kind == previewIssueCloseKind
+	return kind == previewIssueRegionKind || kind == previewIssueTabKind
 }
 
-// previewIssue is the memory-only issue card beside the selected terminal.
-// Its root and surface keep the read scoped to the workspace whose link was
-// clicked; selection changes drop the entire value in resetPreviewContent.
+// previewIssueTabHit is the tab stored on the issue header region.
+type previewIssueTabHit int
+
+// previewIssue is the memory-only issue pane beside the selected terminal.
+// The shared issue group lives here; this wrapper still owns root, workspace
+// surface, focus, epoch, and model-ID allocation. paneCache[workspaceID] is
+// the lifetime: switching rows restores this value, a restart does not.
 type previewIssue struct {
-	view    *issueview.Model
+	tabs    issueview.Tabs
 	root    string
 	surface string
 	focused bool
 	epoch   uint64
+	nextID  int
+}
+
+func (i *previewIssue) view() *issueview.Model {
+	if i == nil {
+		return nil
+	}
+	return i.tabs.ActiveView()
+}
+
+func (i *previewIssue) allocID() int {
+	i.nextID++
+	return i.nextID
 }
 
 // previewIssueLoadedMsg adds workspace identity to issueview's own request
-// identity. The component protects retargets while the wrapper routes a result
-// to the active or cached workspace that owns it.
+// identity. Routing first resolves the workspace cache entry, then the tab
+// whose model ID issued the fetch.
 type previewIssueLoadedMsg struct {
 	issueview.LoadedMsg
 	WorkspaceID string
@@ -40,6 +55,7 @@ type previewIssueLoadedMsg struct {
 
 func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
+	issueID = issueview.NormalizeID(issueID)
 	if !ok || issueID == "" || workspace.Path == "" {
 		return nil
 	}
@@ -53,25 +69,54 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 
 	wasInteractive := m.PreviewInteractive()
 	if m.preview.issue == nil {
-		m.preview.issue = &previewIssue{view: issueview.New(nil), epoch: m.nextPreviewContentEpoch()}
+		m.preview.issue = &previewIssue{epoch: m.nextPreviewContentEpoch()}
 	}
 	issue := m.preview.issue
 	issue.root = workspace.Path
 	issue.surface = workspace.ID
 	m.focusPreviewPane(panelayout.Issue)
-	issue.view.SetActive(true)
-	issue.view.SetFocused(true)
-	load := issue.view.Load(previewIssueModelID, issue.root, issueID, issue.epoch)
+	load := m.openOrFocusPreviewIssue(issue, issueID)
+	if view := issue.view(); view != nil {
+		view.SetActive(true)
+		view.SetFocused(true)
+	}
 
 	var cmds []tea.Cmd
 	if wasInteractive {
 		cmds = append(cmds, m.exitPreviewInteractive())
 	}
-	cmds = append(cmds,
-		wrapPreviewIssueLoad(load, workspace.ID),
-		m.syncTerminalGeometry(),
-	)
+	cmds = append(cmds, load, m.syncTerminalGeometry())
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) newPreviewIssueModel(issue *previewIssue) *issueview.Model {
+	view := issueview.New(nil)
+	view.OpenHandler = func(id string) tea.Cmd {
+		if m.preview.issue != issue {
+			return nil
+		}
+		return m.openOrFocusPreviewIssue(issue, id)
+	}
+	return view
+}
+
+// openOrFocusPreviewIssue selects an existing tab or appends a fresh model
+// and loads it. A unique model ID is allocated per new tab so a late result
+// cannot land on whichever tab is now active.
+func (m *Model) openOrFocusPreviewIssue(issue *previewIssue, issueID string) tea.Cmd {
+	issueID = issueview.NormalizeID(issueID)
+	if issue == nil || issueID == "" {
+		return nil
+	}
+	if idx := issue.tabs.Find(issueID); idx >= 0 {
+		issue.tabs.Select(idx)
+		return nil
+	}
+	view := m.newPreviewIssueModel(issue)
+	if _, created := issue.tabs.OpenOrFocus(issueID, view); !created {
+		return nil
+	}
+	return wrapPreviewIssueLoad(view.Load(issue.allocID(), issue.root, issueID, issue.epoch), issue.surface)
 }
 
 func wrapPreviewIssueLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
@@ -89,22 +134,35 @@ func wrapPreviewIssueLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
 	}
 }
 
-func (m *Model) applyPreviewIssueLoaded(msg previewIssueLoadedMsg) {
-	issue := m.preview.issue
-	if msg.WorkspaceID != m.preview.workspaceID {
-		issue = m.preview.paneCache[msg.WorkspaceID].issue
+func (m *Model) previewIssueForWorkspace(workspaceID string) *previewIssue {
+	if m.preview.issue != nil && m.preview.workspaceID == workspaceID {
+		return m.preview.issue
 	}
-	if issue == nil || issue.view == nil || issue.surface != msg.WorkspaceID {
+	if cached, ok := m.preview.paneCache[workspaceID]; ok {
+		return cached.issue
+	}
+	return nil
+}
+
+func (m *Model) applyPreviewIssueLoaded(msg previewIssueLoadedMsg) {
+	issue := m.previewIssueForWorkspace(msg.WorkspaceID)
+	if issue == nil || issue.surface != msg.WorkspaceID {
 		return
 	}
-	issue.view.SetResult(msg.LoadedMsg)
+	for _, item := range issue.tabs.Items {
+		if item.Value == nil || item.Value.ModelID() != msg.ModelID {
+			continue
+		}
+		item.Value.SetResult(msg.LoadedMsg)
+		return
+	}
 }
 
 func (m *Model) closePreviewIssue() tea.Cmd {
 	if m.preview.issue == nil {
 		return nil
 	}
-	m.preview.issue = nil
+	m.forgetPreviewIssue(m.preview.workspaceID)
 	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue); leaf != nil {
 		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
 	}
@@ -115,37 +173,69 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
-func previewIssueHeaderChips(issue *previewIssue, width int, focused bool) []string {
-	title := issue.view.Title()
-	title = termpreview.TruncateANSI(title, max(width-6, 8))
-	style := styles.BarChip
-	if focused {
-		style = styles.BarChipActive
+// forgetPreviewIssue drops the in-memory tab set for workspaceID. Global
+// issue tabs are not written to disk; q/esc and last-x must not leave a
+// cache entry that a later row switch would restore.
+func (m *Model) forgetPreviewIssue(workspaceID string) {
+	m.preview.issue = nil
+	if cached, ok := m.preview.paneCache[workspaceID]; ok {
+		cached.issue = nil
+		m.preview.paneCache[workspaceID] = cached
 	}
-	return []string{
-		styles.RenderPillWithStyle(title, style, nil),
-		styles.RenderPillWithStyle("×", styles.BarChip, nil),
+}
+
+func (m *Model) closePreviewIssueTab() tea.Cmd {
+	if m.preview.issue == nil {
+		return nil
 	}
+	if len(m.preview.issue.tabs.Items) <= 1 {
+		return m.closePreviewIssue()
+	}
+	m.preview.issue.tabs.CloseActive()
+	return nil
+}
+
+func (m *Model) cyclePreviewIssueTab(delta int) tea.Cmd {
+	if m.preview.issue == nil || len(m.preview.issue.tabs.Items) < 2 {
+		return nil
+	}
+	m.preview.issue.tabs.Cycle(delta)
+	return nil
+}
+
+func (m *Model) clickPreviewIssueTab(index int) tea.Cmd {
+	if m.preview.issue == nil {
+		return nil
+	}
+	m.focusPreviewPane(panelayout.Issue)
+	if index == m.preview.issue.tabs.Active {
+		return nil
+	}
+	m.preview.issue.tabs.Select(index)
+	return nil
 }
 
 func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) string {
+	view := issue.view()
 	contentHeight := max(box.H-termpreview.HeaderRows, 0)
-	issue.view.SetSize(box.W, contentHeight)
 	focused := m.PreviewFocused() && issue.focused
-	issue.view.SetFocused(focused)
-	header := termpreview.HeaderRow(
-		previewIssueHeaderChips(issue, box.W, focused),
-		styles.Muted.Render("q close"), box.W, 0, termpreview.TruncateANSI,
-	)
+	if view != nil {
+		view.SetSize(box.W, contentHeight)
+		view.SetFocused(focused)
+	}
+	header := issueview.LayoutTabStrip(issue.tabs, box.W, focused).Row
 	if contentHeight <= 0 {
 		return header
 	}
-	return header + "\n" + issue.view.View()
+	body := ""
+	if view != nil {
+		body = view.View()
+	}
+	return header + "\n" + body
 }
 
 func (m *Model) registerPreviewIssueRegions(box termpreview.Box) {
-	issue := m.preview.issue
-	if issue == nil {
+	if m.preview.issue == nil {
 		return
 	}
 	issueBox, split := m.previewPaneBox(panelayout.Issue, box)
@@ -157,37 +247,55 @@ func (m *Model) registerPreviewIssueRegions(box termpreview.Box) {
 		issueBox.X, issueBox.Y, issueBox.W, issueBox.H,
 		previewIssueRegionKind,
 	)
-	chips := previewIssueHeaderChips(issue, issueBox.W, m.PreviewFocused() && issue.focused)
-	for index, chip := range termpreview.LayoutChips(chips, issueBox.W, 0) {
-		if chip.Drawn && index == len(chips)-1 {
-			m.workspacesMouse.HitMap.AddRect(
-				previewIssueCloseKind,
-				issueBox.X+chip.Col, issueBox.Y, chip.Width, 1,
-				previewIssueCloseKind,
-			)
-		}
+}
+
+func (m *Model) registerPreviewIssueTabRegions(box termpreview.Box) {
+	if m.preview.issue == nil {
+		return
+	}
+	issueBox, ok := m.previewPaneBox(panelayout.Issue, box)
+	if !ok {
+		return
+	}
+	focused := m.PreviewFocused() && m.preview.issue.focused
+	for _, tab := range issueview.LayoutTabStrip(m.preview.issue.tabs, issueBox.W, focused).Tabs {
+		m.workspacesMouse.HitMap.AddRect(
+			previewIssueTabKind,
+			issueBox.X+tab.Col, issueBox.Y, tab.Width, 1,
+			previewIssueTabHit(tab.Index),
+		)
 	}
 }
 
 func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
-	kind, _ := regionKind(action.Region)
-	if kind == previewIssueCloseKind {
+	if tab, ok := action.Region.Data.(previewIssueTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.closePreviewIssue()
+			return m.clickPreviewIssueTab(int(tab))
+		}
+		if view := m.preview.issue.view(); view != nil {
+			switch action.Type {
+			case mouse.ActionScrollUp, mouse.ActionScrollDown:
+				view.Scroll(action.Delta)
+			}
 		}
 		return nil
 	}
 	issue := m.preview.issue
+	kind, _ := regionKind(action.Region)
 	if kind != previewIssueRegionKind || issue == nil {
 		return nil
 	}
+	view := issue.view()
 	switch action.Type {
 	case mouse.ActionClick:
 		m.focusPreviewPane(panelayout.Issue)
+		if view == nil {
+			return nil
+		}
 		lx := action.X - action.Region.Rect.X
 		ly := action.Y - action.Region.Rect.Y - termpreview.HeaderRows
-		_, cmd := issue.view.HandleClick(lx, ly)
-		return wrapPreviewIssueLoad(cmd, issue.surface)
+		_, cmd := view.HandleClick(lx, ly)
+		return cmd
 	case mouse.ActionDoubleClick:
 		// The preceding click already navigated. Consume Bubble Tea's
 		// follow-up double event so a child that has just rendered its parent
@@ -195,7 +303,9 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return nil
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		issue.view.Scroll(action.Delta)
+		if view != nil {
+			view.Scroll(action.Delta)
+		}
 	}
 	return nil
 }
@@ -208,17 +318,27 @@ func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return true, m.closePreviewIssue()
+	case "x":
+		return true, m.closePreviewIssueTab()
+	case "{":
+		return true, m.cyclePreviewIssueTab(-1)
+	case "}":
+		return true, m.cyclePreviewIssueTab(1)
 	case "y":
 		return true, m.yankPreviewIssue(false)
 	case "Y", "shift+y":
 		return true, m.yankPreviewIssue(true)
 	}
+	view := issue.view()
+	if view == nil {
+		return true, nil
+	}
 	issue.focused = true
-	issue.view.SetActive(true)
-	issue.view.SetFocused(true)
-	handled, cmd := issue.view.HandleKey(msg)
+	view.SetActive(true)
+	view.SetFocused(true)
+	handled, cmd := view.HandleKey(msg)
 	if handled {
-		return true, wrapPreviewIssueLoad(cmd, issue.surface)
+		return true, cmd
 	}
 	// A focused issue is its own input context. Do not let an unowned key
 	// refresh, navigate, or type into the terminal behind the visible card.
@@ -226,11 +346,11 @@ func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) yankPreviewIssue(idOnly bool) tea.Cmd {
-	issue := m.preview.issue
-	if issue == nil || issue.view == nil {
+	view := m.preview.issue.view()
+	if view == nil {
 		return nil
 	}
-	data := issue.view.Data()
+	data := view.Data()
 	if data == nil {
 		return nil
 	}

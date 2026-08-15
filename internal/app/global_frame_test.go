@@ -104,9 +104,12 @@ func TestGlobalWorkspacesFooterFollowsIssueContext(t *testing.T) {
 	m := globalFrameModel(t)
 	hints := m.commandFooterHints([]plugin.Command{
 		{ID: "open-item", Name: "Open", Context: "global-workspaces-issue", Priority: 1},
-		{ID: "yank-issue", Name: "Yank", Context: "global-workspaces-issue", Priority: 2},
-		{ID: "yank-issue-key", Name: "YankID", Context: "global-workspaces-issue", Priority: 3},
-		{ID: "close", Name: "Close", Context: "global-workspaces-issue", Priority: 4},
+		{ID: "close-tab", Name: "Tab×", Context: "global-workspaces-issue", Priority: 2},
+		{ID: "prev-tab", Name: "Tab←", Context: "global-workspaces-issue", Priority: 3},
+		{ID: "next-tab", Name: "Tab→", Context: "global-workspaces-issue", Priority: 4},
+		{ID: "yank-issue", Name: "Yank", Context: "global-workspaces-issue", Priority: 5},
+		{ID: "yank-issue-key", Name: "YankID", Context: "global-workspaces-issue", Priority: 6},
+		{ID: "close", Name: "Close", Context: "global-workspaces-issue", Priority: 7},
 		{ID: "pin", Name: "Pin", Context: "global-workspaces", Priority: 4},
 	}, "global-workspaces-issue")
 	labels := make([]string, 0, len(hints))
@@ -115,6 +118,12 @@ func TestGlobalWorkspacesFooterFollowsIssueContext(t *testing.T) {
 	}
 	if !containsHint(labels, "Yank") || !containsHint(labels, "YankID") || !containsHint(labels, "Close") {
 		t.Fatalf("issue footer = %v, want Yank / YankID / Close", labels)
+	}
+	if !containsHint(labels, "Tab×") || !containsHint(labels, "Tab←") || !containsHint(labels, "Tab→") {
+		t.Fatalf("issue footer omitted tab actions: %v", labels)
+	}
+	if !containsHint(labels, "Tab×") || !containsHint(labels, "Tab←") || !containsHint(labels, "Tab→") {
+		t.Fatalf("issue footer omitted tab actions: %v", labels)
 	}
 	if containsHint(labels, "Pin") {
 		t.Fatalf("issue footer leaked the list: %v", labels)

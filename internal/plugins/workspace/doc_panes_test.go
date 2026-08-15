@@ -1139,12 +1139,12 @@ func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
 		}
 	}
 	issue, _ := p.activeIssuePane()
-	if issue == nil || issue.view.Data() == nil {
+	if issue == nil || issue.view().Data() == nil {
 		t.Fatal("issue load did not land")
 	}
-	issue.view.SetSize(30, 4)
-	issue.view.Scroll(5)
-	wantIssueScroll := issue.view.ScrollOffset()
+	issue.view().SetSize(30, 4)
+	issue.view().Scroll(5)
+	wantIssueScroll := issue.view().ScrollOffset()
 
 	// Encode A before the index changes. A test that only inspects the map
 	// after a finished switch would miss writing B's empty tree onto A's key.
@@ -1170,7 +1170,7 @@ func TestShellSelectionIdentityClosesSameRootDocument(t *testing.T) {
 		t.Fatalf("selecting A again did not reopen README: %#v", reopened)
 	}
 	reopenedIssue, _ := p.activeIssuePane()
-	if reopenedIssue == nil || reopenedIssue.view.IssueID() != "td-1a2b3c" || reopenedIssue.view.ScrollOffset() != wantIssueScroll {
+	if reopenedIssue == nil || reopenedIssue.view().IssueID() != "td-1a2b3c" || reopenedIssue.view().ScrollOffset() != wantIssueScroll {
 		t.Fatalf("selecting A again did not restore issue scroll: %#v", reopenedIssue)
 	}
 }

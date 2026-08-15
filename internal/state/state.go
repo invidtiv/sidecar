@@ -76,19 +76,30 @@ type WorkspaceState struct {
 
 // PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
 // tabs are a list from the first version so adding tab UI later is additive.
+// Issue tabs are IssueTabs plus Active. Issue and Scroll are read-only legacy
+// and are not written after the first save.
 type PaneLayoutJSON struct {
-	Root    string           `json:"root,omitempty"`
-	Surface string           `json:"surface,omitempty"`
-	Kind    string           `json:"kind,omitempty"`
-	Split   *PaneSplitJSON   `json:"split,omitempty"`
-	Tabs    []PaneDocTabJSON `json:"tabs,omitempty"`
-	Active  int              `json:"active,omitempty"`
+	Root      string             `json:"root,omitempty"`
+	Surface   string             `json:"surface,omitempty"`
+	Kind      string             `json:"kind,omitempty"`
+	Split     *PaneSplitJSON     `json:"split,omitempty"`
+	Tabs      []PaneDocTabJSON   `json:"tabs,omitempty"`
+	IssueTabs []PaneIssueTabJSON `json:"issueTabs,omitempty"`
+	Active    int                `json:"active,omitempty"`
 	// Open is true when restore should rebuild the split. False means this
 	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
 	// record that still has a split is treated as open by MigratePaneLayouts.
 	Open bool `json:"open,omitempty"`
-	// Issue is an issue leaf's durable target: the td ID a restore re-fetches.
+	// Issue and Scroll are the pre-tab issue leaf. Decode treats them as a
+	// one-tab list when IssueTabs is absent.
 	Issue  string `json:"issue,omitempty"`
+	Scroll int    `json:"scroll,omitempty"`
+}
+
+// PaneIssueTabJSON is one persisted issue tab. Restore re-fetches the issue
+// and applies Scroll; the body is not cached.
+type PaneIssueTabJSON struct {
+	Issue  string `json:"issue"`
 	Scroll int    `json:"scroll,omitempty"`
 }
 

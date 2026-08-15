@@ -175,7 +175,7 @@ func TestClickingATdIssueWithNoDocumentSplitsTheTerminal(t *testing.T) {
 		p.paneRoot.Split.A.Kind != PaneTerminal || p.paneRoot.Split.B.Kind != PaneIssue {
 		t.Fatalf("issue pane = %#v, want the column split a file click gets", p.paneRoot)
 	}
-	if issue, _ := p.activeIssuePane(); issue == nil || issue.view.IssueID() != "td-1a2b3c" {
+	if issue, _ := p.activeIssuePane(); issue == nil || issue.view().IssueID() != "td-1a2b3c" {
 		t.Fatalf("issue leaf = %#v, want td-1a2b3c", issue)
 	}
 }
@@ -237,7 +237,7 @@ func TestClickingATdIssueInALiveTerminalTakesTheClickFromTheApplication(t *testi
 		t.Fatal("clicking a td id in a live terminal did not activate")
 	}
 	issue, leaf := p.activeIssuePane()
-	if issue == nil || issue.view.IssueID() != "td-1a2b3c" {
+	if issue == nil || issue.view().IssueID() != "td-1a2b3c" {
 		t.Fatalf("issue leaf = %#v, want td-1a2b3c", issue)
 	}
 	if p.viewMode != ViewModeList || p.interactiveState != nil || p.paneFocus != leaf.ID {
@@ -321,8 +321,8 @@ func paneLeafBoxes(t *testing.T, p *Plugin) (map[PaneKind]Box, Box) {
 // beside it, then a clicked td id below the file — terminal in the left column
 // at full height, document above issue in the right one. Every stage is measured
 // as boxes and then as composed cells, because a tree of the right shape and a
-// screen of the right shape are two claims. A second td click retargets the
-// issue leaf instead of growing the tree.
+// screen of the right shape are two claims. A second td click appends a tab
+// on the issue leaf instead of growing the tree.
 func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 	stubTd(t)
 	root := t.TempDir()
@@ -376,7 +376,7 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 		t.Fatalf("the issue was not stacked below the document: %#v", stack)
 	}
 	issue, leaf := p.activeIssuePane()
-	if issue == nil || leaf == nil || issue.view.IssueID() != "td-1a2b3c" || !issue.view.Loading() {
+	if issue == nil || leaf == nil || issue.view().IssueID() != "td-1a2b3c" || !issue.view().Loading() {
 		t.Fatalf("issue leaf = %#v, want td-1a2b3c fetching", issue)
 	}
 	if p.paneFocus != leaf.ID || p.activePane != PanePreview {
@@ -460,17 +460,20 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 		t.Fatal("the second td click opened nothing")
 	}
 	if p.paneRoot.Split.B != stack || stack.Split.B.Kind != PaneIssue || stack.Split.B.Split != nil {
-		t.Fatalf("the second td click grew the tree instead of retargeting: %#v", p.paneRoot)
+		t.Fatalf("the second td click grew the tree instead of appending a tab: %#v", p.paneRoot)
 	}
 	if len(p.issues) != 1 {
-		t.Fatalf("issue panes = %d, want the first leaf retargeted", len(p.issues))
+		t.Fatalf("issue panes = %d, want the first leaf kept", len(p.issues))
 	}
 	retargeted, retargetedLeaf := p.activeIssuePane()
-	if retargeted.view.IssueID() != "td-9f8e7d" || retargetedLeaf.ID != leaf.ID {
-		t.Fatalf("second td click = leaf %d showing %q, want leaf %d retargeted",
-			retargetedLeaf.ID, retargeted.view.IssueID(), leaf.ID)
+	if retargeted.view().IssueID() != "td-9f8e7d" || retargetedLeaf.ID != leaf.ID {
+		t.Fatalf("second td click = leaf %d showing %q, want leaf %d with the new tab",
+			retargetedLeaf.ID, retargeted.view().IssueID(), leaf.ID)
+	}
+	if len(retargeted.tabs.Items) != 2 || retargeted.tabs.Find("td-1a2b3c") < 0 {
+		t.Fatalf("second td click tabs = %d, want both issues in one group", len(retargeted.tabs.Items))
 	}
 	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "clicked.md" {
-		t.Fatalf("the retarget disturbed the document leaf: %#v", doc)
+		t.Fatalf("the append disturbed the document leaf: %#v", doc)
 	}
 }

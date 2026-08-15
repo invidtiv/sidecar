@@ -46,9 +46,12 @@ func (m *Model) Commands() []plugin.Command {
 	case ctxGlobalWorkspacesIssue:
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: ctxGlobalWorkspacesIssue, Priority: 1},
-			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 2},
-			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 3},
-			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 4},
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 4},
+			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 5},
+			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 6},
+			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 7},
 		}
 	default:
 		cmds := []plugin.Command{

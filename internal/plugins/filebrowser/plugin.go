@@ -1170,8 +1170,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.fileOpError = ""
 		p.fileOpConfirmDelete = false
 		// Clean up tabs for the deleted file/directory
-		p.closeTabsForPath(msg.Path)
-		return p, p.refresh()
+		closeCmd := p.closeTabsForPath(msg.Path)
+		return p, tea.Batch(closeCmd, p.refresh())
 
 	case PasteSuccessMsg:
 		// Refresh after paste

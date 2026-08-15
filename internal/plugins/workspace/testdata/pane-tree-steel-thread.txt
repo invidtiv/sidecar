@@ -11,7 +11,7 @@ No output yet                                     │
                                                   │
                                                   │
                                                   │─────────────────────────────────────────────────
-                                                  │ td-1a2b3c: Issue td-1a2b3c   ×           q close
+                                                  │  td-1a2b3c: Issue td-1a2b3c
                                                   │ OPEN ─────────────────────────────── td-1a2b3c┃
                                                   │ Issue td-1a2b3c                               ┃
                                                   │ ■ task  P2                                    ┃

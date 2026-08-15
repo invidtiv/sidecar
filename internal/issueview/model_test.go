@@ -158,6 +158,25 @@ func TestModelIgnoresStaleResults(t *testing.T) {
 	}
 }
 
+func TestArmLeavesNeedsLoadUntilLoadAndKeepsPendingScroll(t *testing.T) {
+	m := New(nil)
+	m.Arm(7, "td-abc123", 3)
+	if !m.NeedsLoad() || m.IssueID() != "td-abc123" || m.ModelID() != 7 || !m.Loading() {
+		t.Fatalf("armed = id=%q model=%d needsLoad=%v loading=%v", m.IssueID(), m.ModelID(), m.NeedsLoad(), m.Loading())
+	}
+	m.SetPendingScroll(4)
+	cmd := m.Load(7, t.TempDir(), "td-abc123", 3)
+	if cmd == nil {
+		t.Fatal("Load returned no command")
+	}
+	if m.NeedsLoad() {
+		t.Fatal("Load left NeedsLoad true")
+	}
+	if got := m.ScrollOffset(); got != 4 {
+		t.Fatalf("Load cleared pending scroll: %d", got)
+	}
+}
+
 func TestPendingScrollIsAppliedOnlyByTheCurrentLoadGeneration(t *testing.T) {
 	m := New(nil)
 	m.SetSize(40, 3)
@@ -409,6 +428,45 @@ func apply(t *testing.T, m *Model, data *Data, err error) {
 	t.Helper()
 	if !m.SetResult(result(t, m, data, err)) {
 		t.Fatal("the model rejected its own result")
+	}
+}
+
+func TestOpenHandlerReceivesNavigationInsteadOfRetargeting(t *testing.T) {
+	m := New(nil)
+	m.SetSize(60, 16)
+	apply(t, m, sample(), nil)
+	m.SetActive(true)
+
+	var opened []string
+	m.OpenHandler = func(id string) tea.Cmd {
+		opened = append(opened, id)
+		return nil
+	}
+
+	_, cmd := m.handleKeyString("up")
+	if cmd != nil {
+		t.Fatal("OpenHandler's nil command should pass through")
+	}
+	if m.IssueID() != sample().ID {
+		t.Fatalf("OpenHandler path retargeted the model to %q", m.IssueID())
+	}
+	if len(opened) != 1 || opened[0] != "td-parent1" {
+		t.Fatalf("opened = %v, want the parent", opened)
+	}
+
+	_, _ = m.handleKeyString("down")
+	_, _ = m.handleKeyString("down")
+	_, cmd = m.handleKeyString("enter")
+	if cmd != nil || m.IssueID() != sample().ID {
+		t.Fatalf("enter retargeted: id=%q cmd=%v", m.IssueID(), cmd != nil)
+	}
+	if len(opened) != 2 || opened[1] != "td-83cfc9" {
+		t.Fatalf("enter opened = %v, want the first child", opened)
+	}
+
+	m.handleKeyString("right")
+	if m.IssueID() != sample().ID || opened[len(opened)-1] != "td-sib3" {
+		t.Fatalf("sibling opened = %v id=%q", opened, m.IssueID())
 	}
 }
 

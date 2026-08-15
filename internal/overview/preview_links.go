@@ -394,8 +394,8 @@ func (m *Model) focusPreviewLeaf(leafID int) bool {
 	}
 	if m.preview.issue != nil {
 		m.preview.issue.focused = leaf.Kind == panelayout.Issue
-		if m.preview.issue.view != nil {
-			m.preview.issue.view.SetFocused(m.preview.issue.focused)
+		if view := m.preview.issue.view(); view != nil {
+			view.SetFocused(m.preview.issue.focused)
 		}
 	}
 	return true

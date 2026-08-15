@@ -339,16 +339,18 @@ func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
 				hit.W = 3
 			} else {
 				hit.Y--
-				// Do not cover the lower leaf's header. Its issue close chip
+				// Do not cover the lower leaf's header. Its issue tab cells
 				// must remain clickable when the issue is below a document.
 				hit.H = 2
 			}
 			m.workspacesMouse.HitMap.AddRect(previewPaneDividerKind, hit.X, hit.Y, hit.W, hit.H, previewPaneDividerHit(divider.SplitID))
 		}
 	}
-	// Exact file-tab regions win the one cell where the widened divider reaches
-	// into the document header; the divider itself remains draggable.
+	// Exact file/issue tab regions win the one cell where the widened
+	// divider reaches into a stacked header; the divider itself remains
+	// draggable. Pane and body regions are registered first.
 	m.registerPreviewDocTabRegions(box)
+	m.registerPreviewIssueTabRegions(box)
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -685,7 +687,8 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		kind = string(region.Kind)
 	}
 	_, docTab := action.Region.Data.(previewDocTabHit)
-	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind) || docTab
+	_, issueTab := action.Region.Data.(previewIssueTabHit)
+	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind) || docTab || issueTab
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
@@ -752,6 +755,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	if _, ok := action.Region.Data.(previewDocTabHit); ok {
 		return m.handlePreviewDocMouse(action)
+	}
+	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
+		return m.handlePreviewIssueMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewDocRegion(kind) {
 		return m.handlePreviewDocMouse(action)

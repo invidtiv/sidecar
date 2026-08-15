@@ -308,6 +308,60 @@ resize.
 `shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
 is an override for opening links. Use an unmodified click to follow a path.
 
+#### Open issues beside the terminal
+
+An unmodified click on a `td-…` link in a selected workspace or
+project shell terminal opens it beside that terminal.
+
+A second click adds a tab instead of replacing the issue. Clicking an
+ID that is already open focuses that tab. Click a drawn tab to select
+it; `{` / `}` cycle. `x` closes the active tab. The header is only the
+tab strip: each label is the issue ID plus headline, truncated at the
+end so the ID stays visible (`td-abc123: Fix the lo…`). There is no
+close chip or in-header hint. The footer shows Tab×, Tab←, and Tab→.
+
+The same open, append, click, cycle, and close journey works on the
+global Workspaces view. Those tabs stay in memory for the selected row;
+they are not written to disk and are not restored after a relaunch.
+
+`enter` on a parent or subtask uses the same open-or-focus path as a
+terminal link: an already-open issue is focused; a new one is appended.
+It does not create a duplicate tab or replace the issue you were
+reading.
+
+File tabs keep left-truncated paths so the filename survives. Issue
+tabs keep the ID visible and truncate the headline.
+
+Click a pane or use `tab` and `shift+tab` to move focus. Issue focus
+provides these commands:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Scroll by one line |
+| `↓` / `↑` | Walk parent, siblings, and subtasks (scrolls when none) |
+| `ctrl+d` / `ctrl+u` | Scroll by half a page |
+| `g` / `G` | Jump to the start / end |
+| `x` | Close the active tab. The last tab closes the pane and forgets the set |
+| `{` / `}` | Previous / next tab |
+| `enter` | Open or focus the selected parent or subtask as a tab |
+| `y` | Copy the issue as markdown |
+| `Y` | Copy the issue ID |
+| `tab` / `shift+tab` | Move focus between sidebar, terminal, document, and issue |
+| `q`, `esc` | Hide the pane. The issues stay remembered for this shell or workspace |
+
+In project Workspaces, `q` hides; `x` on the last issue forgets.
+Switching to another shell and back, or relaunching onto the same
+surface, restores open issues, the active tab, and each tab's scroll.
+Clicking an issue while the pane is hidden reopens the remembered set
+and focuses (or appends) that ID.
+
+On the global Workspaces view, `q` / `esc` and last-`x` close the pane
+and forget that row's in-memory set. Switching rows and back restores
+tabs that were still open.
+
+`,` / `.` stay Output / Diff / Task on worktrees and do not cycle issue
+tabs.
+
 **What you'll see:**
 - Agent initialization and model selection
 - Tool calls and file operations
@@ -670,13 +724,14 @@ Press `m` to start a multi-step merge:
 | `esc` | Return to sidebar |
 | `\` | Toggle sidebar visibility |
 
-When a document is open, this cycle includes sidebar, terminal, and document.
-The document header and adjacent divider show which inner pane has focus.
+When a document or issue is open, this cycle includes sidebar, terminal, and
+those panes. The focused pane's header and adjacent divider show which inner
+pane has focus.
 
 ## Mouse Support
 
 - **Click workspace**: Select
-- **Click tab**: Switch preview tab
+- **Click tab**: Switch Output / Diff / Task, or select a file or issue tab
 - **Click button**: Execute action
 - **Drag divider**: Resize panes
 - **Scroll**: Navigate lists and content
@@ -693,7 +748,7 @@ The plugin remembers state across restarts and automatically reconnects to runni
 | Sidebar width | User config |
 | Diff view mode | User config |
 | Active tab | User config |
-| Open tabs, wrap, render mode, and split (per shell / workspace) | Per-project workspace state |
+| Open file and issue tabs, wrap, render mode, scroll, and split (per shell / workspace) | Per-project workspace state |
 | Agent type | `.sidecar-agent` in workspace dir |
 | Agent start command override | `.sidecar-agent-start` in workspace dir |
 | Task link | `.sidecar-task` in workspace dir |
@@ -865,6 +920,28 @@ restores its own tabs.
 | `Y` | Copy the relative path |
 | `+`, `-` | Grow / shrink the split |
 | `tab`, `shift+tab` | Move focus between sidebar, terminal, and document |
+| `q`, `esc` | Hide the pane. Tabs stay remembered for this surface |
+
+### Issue Context (`workspace-issue`)
+
+Issue tabs beside the selected workspace or shell terminal. `q` hides the
+pane and remembers the set; `x` on the last tab forgets it. Each surface
+restores its own tabs, active tab, and scroll. Global Workspaces uses
+the same `{` / `}` / `x` keys; those tabs stay in memory for the
+selected row and are forgotten by `q` / last-`x`.
+
+| Key | Action |
+|-----|--------|
+| `j`, `k` | Scroll down / up |
+| `↓`, `↑` | Walk parent, siblings, and subtasks |
+| `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
+| `g`, `G` | Jump to start / end |
+| `x` | Close the active tab. Last tab forgets the set |
+| `{`, `}` | Previous / next issue tab |
+| `enter` | Open or focus the selected parent or subtask as a tab |
+| `y` | Copy the issue as markdown |
+| `Y` | Copy the issue ID |
+| `tab`, `shift+tab` | Move focus between sidebar, terminal, document, and issue |
 | `q`, `esc` | Hide the pane. Tabs stay remembered for this surface |
 
 ### Create Modal (`workspace-create`)

@@ -94,6 +94,11 @@ type Model struct {
 	hits     []Hit
 	rows     []row
 	buildFor int
+
+	// OpenHandler, when set, receives parent/subtask/sibling activations
+	// instead of Load retargeting this model. Hosts that tab issues use this
+	// so navigation cannot destroy the issue the user is reading.
+	OpenHandler func(issueID string) tea.Cmd
 }
 
 // ActionHint is one key/label pair drawn in the card's ACTIONS row.
@@ -111,7 +116,8 @@ func New(renderer *markdown.Renderer) *Model {
 }
 
 // Load retargets the model at issueID and returns a command that fetches it.
-// Only the issueview-owned LoadedMsg is broadcast.
+// Only the issueview-owned LoadedMsg is broadcast. A pending restore scroll
+// survives so SetResult can apply it to this generation.
 func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd {
 	m.modelID = modelID
 	m.requestGeneration++
@@ -119,7 +125,6 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.issueID = issueID
 	m.workDir = workDir
 	m.scroll = 0
-	m.hasPendingScroll = false
 	m.cursor = -1
 	m.hover = -1
 	m.loading = true
@@ -160,6 +165,17 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.clampScroll()
 	return true
 }
+
+// Arm shows the loading placeholder for a restored tab without issuing a load.
+func (m *Model) Arm(modelID int, issueID string, epoch uint64) {
+	m.modelID = modelID
+	m.epoch = epoch
+	m.issueID = issueID
+	m.loading = true
+}
+
+// NeedsLoad reports whether this model has never been asked to Load.
+func (m *Model) NeedsLoad() bool { return m.requestGeneration == 0 }
 
 // SetData installs already-fetched data. Tests and hosts that fetched
 // themselves use this instead of going through Load.
@@ -531,18 +547,25 @@ func (m *Model) moveSibling(delta int) tea.Cmd {
 }
 
 func (m *Model) navigateTo(id string) tea.Cmd {
-	if id == "" || id == m.issueID || m.workDir == "" {
-		// Tests and hosts that injected data without Load still need a way
-		// to observe the destination. Reload is skipped; the host can read
-		// SelectedID and fetch itself. When workDir is known, Load it.
-		if id == "" || id == m.issueID {
-			return nil
-		}
+	if id == "" || id == m.issueID {
+		return nil
+	}
+	if m.OpenHandler != nil {
+		return m.OpenHandler(id)
+	}
+	// Tests and hosts that injected data without Load still need a way
+	// to observe the destination. Reload is skipped; the host can read
+	// SelectedID and fetch itself. When workDir is known, Load it.
+	if m.workDir == "" {
 		m.issueID = id
 		return nil
 	}
 	return m.Load(m.modelID, m.workDir, id, m.epoch)
 }
+
+// ModelID is the load identity last passed to Load. Hosts route async
+// results by this, not by pane-leaf identity.
+func (m *Model) ModelID() int { return m.modelID }
 
 // SelectedID is the issue the cursor is on, or the current issue when
 // nothing is selected.

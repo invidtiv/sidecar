@@ -517,7 +517,7 @@ the model, then bindings in both hosts.
 
 **Phase 8 — Files hosts the viewer.**
 First extract the content-neutral tab group and strip described in
-[workspace-issue-pane-tabs.md](workspace-issue-pane-tabs.md), without waiting
+[workspace-issue-pane-tabs.md](../implemented/workspace-issue-pane-tabs.md), without waiting
 on Phase 7; Files, project/global document panes, and later issue panes all use
 that one foundation. The rest of this phase still follows Phase 7: delete the
 preview field pile and remaining `filebrowser/tabs.go` state that the viewer now

@@ -9,6 +9,11 @@ All notable changes to sidecar are documented here.
 - File preview tabs are now clickable in both project and global Workspaces,
   with global previews retaining multiple open files instead of replacing the
   current one.
+- Issue panes in project and global Workspaces keep one tab per open td id
+  instead of replacing the current issue. Click a drawn tab to select it;
+  `{` / `}` cycle; `x` closes the active tab. Project tabs persist per
+  terminal surface (`q` hides, last `x` forgets). Global tabs stay in
+  memory for the selected row and are not written to disk.
 
 ### Bug Fixes
 

@@ -126,7 +126,7 @@ const (
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
 	regionPaneLeaf        = "pane-leaf"
 	regionDocTab          = "doc-tab"
-	regionIssueClose      = "issue-close"
+	regionIssueTab        = "issue-tab"
 	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -224,8 +224,8 @@ type Plugin struct {
 	// written onto the default selection.
 	paneLayoutSurface string
 	// hiddenPaneLayout is the last encoded split+tabs for the current surface
-	// when the pane is hidden (q). Last-x forgets it. Restoring an Open
-	// surface clears it.
+	// when the pane is hidden (q). It can be a document set, an issue set, or
+	// both. Last-x forgets it. Restoring an Open surface clears it.
 	hiddenPaneLayout *state.PaneLayoutJSON
 	// paneSizeCmds holds what a leaf's SetSize answered during a render until
 	// the next update can dispatch it. A render has no runtime to hand a command
@@ -234,6 +234,9 @@ type Plugin struct {
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
 	issues       map[int]*issuePane
+	// issueModelNextID allocates a unique load identity per issue tab so a
+	// late result cannot land on whichever tab is now active.
+	issueModelNextID int
 	// docInfo is the file-info modal over a workspace document tab.
 	docInfo *docview.Info
 
@@ -698,6 +701,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.issueModelNextID = 0
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
@@ -823,6 +827,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		// answers; the rest it absorbs rather than passing to the terminal.
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("enter", "open-item", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("y", "yank-issue", "workspace-issue")

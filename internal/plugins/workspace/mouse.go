@@ -598,8 +598,10 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 					p.clearIssueHover()
 					break
 				}
-				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-				issue.view.HandleHover(lx, ly)
+				if view := issue.view(); view != nil {
+					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+					view.HandleHover(lx, ly)
+				}
 			default:
 				p.clearIssueHover()
 			}
@@ -612,8 +614,13 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 
 func (p *Plugin) clearIssueHover() {
 	for _, issue := range p.issues {
-		if issue != nil && issue.view != nil {
-			issue.view.HandleHover(-1, -1)
+		if issue == nil {
+			continue
+		}
+		for _, item := range issue.tabs.Items {
+			if item.Value != nil {
+				item.Value.HandleHover(-1, -1)
+			}
 		}
 	}
 }
@@ -652,6 +659,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	}
 	p.notePressAwayFromTerminal(action)
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
+		return cmd
+	}
+	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
 	}
 
@@ -738,6 +748,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.prepareTerminalClickOrDrag(action)
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
+	case regionIssueTab:
+		return p.clickIssueTab(action.Region.Data)
 	case regionPaneLeaf:
 		leafID, ok := action.Region.Data.(int)
 		if !ok {
@@ -748,19 +760,24 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			return nil
 		}
 		p.focusLeaf(leafID)
-		if issue, _ := p.issueLeafAt(leafID); issue != nil {
-			lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-			beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
-			_, cmd := issue.view.HandleClick(lx, ly)
-			if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
-				p.saveSelectionState()
-			}
-			return cmd
+		issue, _ := p.issueLeafAt(leafID)
+		if issue == nil {
+			return nil
 		}
-	case regionIssueClose:
-		if leafID, ok := action.Region.Data.(int); ok {
-			return p.closeIssuePane(leafID)
+		view := issue.view()
+		if view == nil {
+			return nil
 		}
+		lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+		beforeActive := issue.tabs.Active
+		beforeID, beforeScroll := view.IssueID(), view.ScrollOffset()
+		_, cmd := view.HandleClick(lx, ly)
+		after := issue.view()
+		if issue.tabs.Active != beforeActive ||
+			(after != nil && (after.IssueID() != beforeID || after.ScrollOffset() != beforeScroll)) {
+			p.saveSelectionState()
+		}
+		return cmd
 	case regionPaneTreeDivider:
 		if splitID, ok := action.Region.Data.(int); ok {
 			if split := FindPane(p.paneRoot, splitID); split != nil && split.Split != nil {
@@ -1063,6 +1080,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
 		return cmd
 	}
+	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	switch action.Region.ID {
 	case regionTermPanelContent:
@@ -1257,12 +1277,14 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueClose:
+	case regionPaneLeaf, regionDocTab, regionIssueTab:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
 			leafID = data
 		case docTabHit:
+			leafID = data.LeafID
+		case issueTabHit:
 			leafID = data.LeafID
 		}
 		leaf := FindPane(p.paneRoot, leafID)
@@ -1285,10 +1307,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 			// document viewer answers a notch in, so the wheel reaches it by
 			// the same path rather than a second one.
 			if issue := p.issues[leaf.ContentID]; issue != nil {
-				before := issue.view.ScrollOffset()
-				issue.view.Scroll(delta)
-				if issue.view.ScrollOffset() != before {
-					p.saveSelectionState()
+				if view := issue.view(); view != nil {
+					before := view.ScrollOffset()
+					view.Scroll(delta)
+					if view.ScrollOffset() != before {
+						p.saveSelectionState()
+					}
 				}
 			}
 		}

@@ -1,0 +1,190 @@
+package tabs
+
+import (
+	"strings"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/styles"
+)
+
+// MinBudget is the floor for one tab's column share, chrome included.
+const MinBudget = 8
+
+// Label is the text a host wants drawn on one tab.
+type Label struct {
+	Text    string
+	Preview bool
+}
+
+// FitLabel shortens a tab's text so the rendered pill fits in maxWidth.
+// maxWidth is the label column budget (chrome already reserved).
+// The function returns label text, not the painted tab.
+type FitLabel func(text string, index, total, maxWidth int, active bool) string
+
+// Hit is a drawn tab's click target. Col is relative to the strip's first
+// column; Width is the rendered pill.
+type Hit struct {
+	Index    int
+	Col      int
+	Width    int
+	Rendered string
+}
+
+// Strip is the header row: only tabs, packed left to right.
+type Strip struct {
+	Row  string
+	Tabs []Hit
+}
+
+func tabActive(focused bool, index, active int) bool {
+	return focused && index == active
+}
+
+func tabChromeWidth(index, total int, active bool) int {
+	return lipgloss.Width(styles.RenderTab("X", index, total, active, false)) - 1
+}
+
+func identityFit(text string, _, _, maxWidth int, _ bool) string {
+	if maxWidth < 1 {
+		return ""
+	}
+	return text
+}
+
+// fitRendered left-fits label text so RenderTab stays within maxWidth.
+func fitRendered(text string, index, total, maxWidth int, active, preview bool, fit FitLabel) string {
+	if maxWidth < 1 {
+		return ""
+	}
+	if fit == nil {
+		fit = identityFit
+	}
+	labelW := maxWidth - tabChromeWidth(index, total, active)
+	if labelW < 1 {
+		labelW = 1
+	}
+	for labelW >= 1 {
+		rendered := styles.RenderTab(fit(text, index, total, labelW, active), index, total, active, preview)
+		if w := lipgloss.Width(rendered); w <= maxWidth {
+			return rendered
+		}
+		if labelW == 1 {
+			return ansi.Truncate(rendered, maxWidth, "")
+		}
+		labelW--
+	}
+	return ""
+}
+
+func packedTabsWidth(widths []int, start, end int, showLeft, showRight bool) int {
+	tabCount := end - start + 1
+	if tabCount < 1 {
+		return 0
+	}
+	total := 0
+	for i := start; i <= end; i++ {
+		total += widths[i]
+	}
+	indicators := 0
+	if showLeft {
+		indicators++
+	}
+	if showRight {
+		indicators++
+	}
+	tokens := tabCount + indicators
+	seps := tokens - 1
+	if seps < 0 {
+		seps = 0
+	}
+	return total + indicators + seps
+}
+
+func padTabRow(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w == width {
+		return s
+	}
+	if w > width {
+		return ansi.Truncate(s, width, "")
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+func paintStrip(rendered []string, widths []int, start, end int, showLeft, showRight bool, width int) Strip {
+	var tokens []string
+	var hits []Hit
+	x := 0
+	if showLeft {
+		tokens = append(tokens, styles.Muted.Render("<"))
+		x++
+	}
+	for i := start; i <= end; i++ {
+		if len(tokens) > 0 {
+			tokens = append(tokens, " ")
+			x++
+		}
+		tokens = append(tokens, rendered[i])
+		hits = append(hits, Hit{Index: i, Col: x, Width: widths[i], Rendered: rendered[i]})
+		x += widths[i]
+	}
+	if showRight {
+		if len(tokens) > 0 {
+			tokens = append(tokens, " ")
+		}
+		tokens = append(tokens, styles.Muted.Render(">"))
+	}
+	return Strip{Row: padTabRow(strings.Join(tokens, ""), width), Tabs: hits}
+}
+
+// LayoutStrip paints labels left to right with overflow markers. Leftover
+// width goes to the active tab. Hits describe the tabs actually painted.
+func LayoutStrip(labels []Label, active, width int, focused bool, fit FitLabel) Strip {
+	if width < 1 {
+		return Strip{}
+	}
+	n := len(labels)
+	if n == 0 {
+		return Strip{Row: strings.Repeat(" ", width)}
+	}
+	if active < 0 || active >= n {
+		active = 0
+	}
+	if fit == nil {
+		fit = identityFit
+	}
+
+	if n == 1 {
+		rendered := fitRendered(labels[0].Text, 0, 1, width, tabActive(focused, 0, active), labels[0].Preview, fit)
+		return Strip{
+			Row:  padTabRow(rendered, width),
+			Tabs: []Hit{{Index: 0, Col: 0, Width: lipgloss.Width(rendered), Rendered: rendered}},
+		}
+	}
+
+	share := (width - (n - 1)) / n
+	if share < MinBudget {
+		share = MinBudget
+	}
+
+	rendered := make([]string, n)
+	widths := make([]int, n)
+	for i, label := range labels {
+		rendered[i] = fitRendered(label.Text, i, n, share, tabActive(focused, i, active), label.Preview, fit)
+		widths[i] = lipgloss.Width(rendered[i])
+	}
+
+	start, end, showLeft, showRight := VisibleRange(widths, active, width)
+	if start > end {
+		return Strip{Row: strings.Repeat(" ", width)}
+	}
+
+	leftover := width - packedTabsWidth(widths, start, end, showLeft, showRight)
+	if leftover > 0 && active >= start && active <= end {
+		rendered[active] = fitRendered(labels[active].Text, active, n, widths[active]+leftover, tabActive(focused, active, active), labels[active].Preview, fit)
+		widths[active] = lipgloss.Width(rendered[active])
+	}
+
+	return paintStrip(rendered, widths, start, end, showLeft, showRight, width)
+}

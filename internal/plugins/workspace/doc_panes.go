@@ -459,12 +459,7 @@ func (p *Plugin) hideDocPane() tea.Cmd {
 	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if ok {
-		if layout := p.encodePaneNode(p.paneRoot); layout != nil {
-			layout.Root = root
-			layout.Surface = surface
-			layout.Open = false
-			p.hiddenPaneLayout = layout
-		}
+		p.rememberHiddenPaneLayout(root, surface)
 	}
 	if !p.closeDocPaneState() {
 		p.hiddenPaneLayout = nil
@@ -489,6 +484,12 @@ func (p *Plugin) reopenHiddenDocPane() tea.Cmd {
 	if layout == nil {
 		return nil
 	}
+	if p.liveContentBesides(PaneDoc) {
+		if !paneLayoutHasDocTabs(layout) {
+			return nil
+		}
+		return p.reinsertHiddenDocLeaf(layout)
+	}
 	p.hiddenPaneLayout = nil
 	return p.restorePaneLayout(layout)
 }
@@ -497,11 +498,11 @@ func (p *Plugin) hiddenLayoutFor(surface string) *state.PaneLayoutJSON {
 	if surface == "" {
 		return nil
 	}
-	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasDocTabs(p.hiddenPaneLayout) {
+	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasRetainedTabs(p.hiddenPaneLayout) {
 		return p.hiddenPaneLayout
 	}
 	layout := p.savedPaneLayoutForCurrentSurface(surface)
-	if layout == nil || state.PaneLayoutOpen(layout) || !paneLayoutHasDocTabs(layout) {
+	if layout == nil || state.PaneLayoutOpen(layout) || !paneLayoutHasRetainedTabs(layout) {
 		return nil
 	}
 	return layout
@@ -518,6 +519,265 @@ func paneLayoutHasDocTabs(layout *state.PaneLayoutJSON) bool {
 		return false
 	}
 	return paneLayoutHasDocTabs(layout.Split.A) || paneLayoutHasDocTabs(layout.Split.B)
+}
+
+func paneLayoutHasIssueTabs(layout *state.PaneLayoutJSON) bool {
+	if layout == nil {
+		return false
+	}
+	if len(layout.IssueTabs) > 0 {
+		return true
+	}
+	if terminallink.IssueID(strings.TrimSpace(layout.Issue)) {
+		return true
+	}
+	if layout.Split == nil {
+		return false
+	}
+	return paneLayoutHasIssueTabs(layout.Split.A) || paneLayoutHasIssueTabs(layout.Split.B)
+}
+
+// paneLayoutHasRetainedTabs is the hide/reopen predicate: a q-hidden surface
+// keeps document tabs, issue tabs, or a legacy issue leaf.
+func paneLayoutHasRetainedTabs(layout *state.PaneLayoutJSON) bool {
+	return paneLayoutHasDocTabs(layout) || paneLayoutHasIssueTabs(layout)
+}
+
+// rememberHiddenPaneLayout merges the live tree into the surface's hidden
+// snapshot so a later q on the remaining sibling keeps the first-hidden tabs.
+func (p *Plugin) rememberHiddenPaneLayout(root, surface string) {
+	live := p.encodePaneNode(p.paneRoot)
+	if live == nil {
+		return
+	}
+	live.Root = root
+	live.Surface = surface
+	live.Open = false
+	merged := mergeHiddenPaneLayout(p.hiddenPaneLayout, live)
+	if merged == nil {
+		return
+	}
+	merged.Root = root
+	merged.Surface = surface
+	merged.Open = false
+	normalizePersistedIssueLeaves(merged)
+	p.hiddenPaneLayout = merged
+}
+
+func mergeHiddenPaneLayout(existing, live *state.PaneLayoutJSON) *state.PaneLayoutJSON {
+	if existing == nil {
+		return clonePaneLayout(live)
+	}
+	if live == nil {
+		return clonePaneLayout(existing)
+	}
+	liveDoc := firstLayoutLeafOfKind(live, contentKindDoc)
+	liveIssue := firstLayoutLeafOfKind(live, contentKindIssue)
+	existDoc := firstLayoutLeafOfKind(existing, contentKindDoc)
+	existIssue := firstLayoutLeafOfKind(existing, contentKindIssue)
+	doc := liveDoc
+	if doc == nil {
+		doc = existDoc
+	}
+	issue := liveIssue
+	if issue == nil {
+		issue = existIssue
+	}
+	if doc == nil && issue == nil {
+		return clonePaneLayout(live)
+	}
+	existBoth := existDoc != nil && existIssue != nil
+	liveBoth := liveDoc != nil && liveIssue != nil
+	if doc != nil && issue != nil && !existBoth && !liveBoth {
+		return composeStackedHidden(live, doc, issue)
+	}
+	template := existing
+	if !existBoth && liveBoth {
+		template = live
+	}
+	out := clonePaneLayout(template)
+	replaceLayoutLeaf(out, contentKindDoc, doc)
+	replaceLayoutLeaf(out, contentKindIssue, issue)
+	out.Open = false
+	return out
+}
+
+func composeStackedHidden(template, doc, issue *state.PaneLayoutJSON) *state.PaneLayoutJSON {
+	cols, rows := 50, 50
+	var root, surface string
+	if template != nil {
+		root, surface = template.Root, template.Surface
+		if template.Split != nil {
+			cols = template.Split.Ratio
+			if inner := template.Split.B; inner != nil && inner.Split != nil {
+				rows = inner.Split.Ratio
+			} else if inner := template.Split.A; inner != nil && inner.Split != nil {
+				rows = inner.Split.Ratio
+			}
+		}
+	}
+	return &state.PaneLayoutJSON{
+		Root: root, Surface: surface, Open: false,
+		Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: cols,
+			A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+			B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+				Axis: "rows", Ratio: rows,
+				A: copyContentLeaf(doc),
+				B: copyContentLeaf(issue),
+			}},
+		},
+	}
+}
+
+func clonePaneLayout(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
+	if src == nil {
+		return nil
+	}
+	out := *src
+	if src.Tabs != nil {
+		out.Tabs = append([]state.PaneDocTabJSON(nil), src.Tabs...)
+	}
+	if src.IssueTabs != nil {
+		out.IssueTabs = append([]state.PaneIssueTabJSON(nil), src.IssueTabs...)
+	}
+	if src.Split != nil {
+		split := *src.Split
+		split.A = clonePaneLayout(src.Split.A)
+		split.B = clonePaneLayout(src.Split.B)
+		out.Split = &split
+	}
+	return &out
+}
+
+func copyContentLeaf(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
+	if src == nil {
+		return nil
+	}
+	out := &state.PaneLayoutJSON{
+		Kind: src.Kind, Active: src.Active,
+		Issue: src.Issue, Scroll: src.Scroll,
+	}
+	if src.Tabs != nil {
+		out.Tabs = append([]state.PaneDocTabJSON(nil), src.Tabs...)
+	}
+	if src.IssueTabs != nil {
+		out.IssueTabs = append([]state.PaneIssueTabJSON(nil), src.IssueTabs...)
+	}
+	return out
+}
+
+func firstLayoutLeafOfKind(layout *state.PaneLayoutJSON, kind string) *state.PaneLayoutJSON {
+	if layout == nil {
+		return nil
+	}
+	if layout.Split == nil {
+		if layout.Kind == kind {
+			return layout
+		}
+		return nil
+	}
+	if leaf := firstLayoutLeafOfKind(layout.Split.A, kind); leaf != nil {
+		return leaf
+	}
+	return firstLayoutLeafOfKind(layout.Split.B, kind)
+}
+
+func replaceLayoutLeaf(tree *state.PaneLayoutJSON, kind string, leaf *state.PaneLayoutJSON) {
+	target := firstLayoutLeafOfKind(tree, kind)
+	if target == nil || leaf == nil {
+		return
+	}
+	target.Kind = leaf.Kind
+	target.Active = leaf.Active
+	target.Issue = leaf.Issue
+	target.Scroll = leaf.Scroll
+	target.Split = nil
+	if leaf.Tabs != nil {
+		target.Tabs = append([]state.PaneDocTabJSON(nil), leaf.Tabs...)
+	} else {
+		target.Tabs = nil
+	}
+	if leaf.IssueTabs != nil {
+		target.IssueTabs = append([]state.PaneIssueTabJSON(nil), leaf.IssueTabs...)
+	} else {
+		target.IssueTabs = nil
+	}
+}
+
+func (p *Plugin) liveContentBesides(kind PaneKind) bool {
+	for _, id := range p.contentLeafIDs() {
+		leaf := FindPane(p.paneRoot, id)
+		if leaf != nil && leaf.Kind != kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Plugin) reinsertHiddenDocLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
+	return p.reinsertHiddenContentLeaf(PaneDoc, firstLayoutLeafOfKind(layout, contentKindDoc), "Document")
+}
+
+func (p *Plugin) reinsertHiddenContentLeaf(kind PaneKind, saved *state.PaneLayoutJSON, name string) tea.Cmd {
+	if saved == nil || p.paneRoot == nil || p.ctx == nil {
+		return nil
+	}
+	root, _, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil
+	}
+	plan, planned := planPaneOpen(p.paneRoot, kind)
+	if !planned || plan.Retarget != 0 {
+		return nil
+	}
+	var loads []tea.Cmd
+	var node *PaneNode
+	switch kind {
+	case PaneDoc:
+		node = p.decodeDocLeaf(saved, root, &loads)
+	case PaneIssue:
+		node = p.decodeIssueLeaf(saved, root, &loads)
+	}
+	if node == nil {
+		return nil
+	}
+	if !p.splitOnPlannedLeaf(plan, node, name) {
+		switch kind {
+		case PaneDoc:
+			delete(p.docs, node.ContentID)
+		case PaneIssue:
+			delete(p.issues, node.ContentID)
+		}
+		return nil
+	}
+	p.hiddenPaneLayout = nil
+	p.activePane = PanePreview
+	return tea.Batch(append(loads, p.resizeDocTerminalCmd())...)
+}
+
+func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) bool {
+	content, placed := p.previewContentBox()
+	if !placed {
+		return false
+	}
+	trialNode := clonePaneTree(node)
+	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, trialNode)
+	if trialFocus != trialNode.ID {
+		return false
+	}
+	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+		p.toastMessage = paneFitMessage(name, plan.Axis)
+		p.toastTime = time.Now()
+		return false
+	}
+	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
+	if focus != node.ID {
+		return false
+	}
+	p.paneRoot, p.paneFocus = treeRoot, focus
+	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
+	return true
 }
 
 func (p *Plugin) closeDocPaneState() bool {
@@ -844,11 +1104,12 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 }
 
 func (p *Plugin) encodeSurfacePaneLayout(root, surface string) *state.PaneLayoutJSON {
-	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasDocTabs(p.hiddenPaneLayout) {
+	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasRetainedTabs(p.hiddenPaneLayout) {
 		layout := p.hiddenPaneLayout
 		layout.Root = root
 		layout.Surface = surface
 		layout.Open = false
+		normalizePersistedIssueLeaves(layout)
 		return layout
 	}
 	layout := p.encodePaneNode(p.paneRoot)
@@ -973,7 +1234,7 @@ func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
 		return
 	}
 	if honorOpen && !state.PaneLayoutOpen(layout) {
-		if paneLayoutHasDocTabs(layout) {
+		if paneLayoutHasRetainedTabs(layout) {
 			p.hiddenPaneLayout = layout
 		}
 		p.paneRestoreCmd = nil
@@ -1006,14 +1267,11 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
 	}
 	if node.Kind == PaneIssue {
-		// The issue ID is the leaf's durable target, the way a path is a
-		// document's: restore re-fetches rather than persisting a fetched body
-		// that td may have moved on from.
-		issue := p.issues[node.ContentID]
-		if issue == nil || issue.view == nil || issue.view.IssueID() == "" {
+		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
+		if len(tabs) == 0 {
 			return nil
 		}
-		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: issue.view.IssueID(), Scroll: issue.view.ScrollOffset()}
+		return &state.PaneLayoutJSON{Kind: contentKindIssue, IssueTabs: tabs, Active: active}
 	}
 	doc := p.docs[node.ContentID]
 	tabs, active := encodeDocTabs(doc)
@@ -1134,25 +1392,7 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 	case contentKindDoc:
 		return p.decodeDocLeaf(saved, root, loads)
 	case contentKindIssue:
-		// An issue leaf with no durable target is dropped, and the collapse in
-		// the split above gives its box back to its sibling: one unreadable leaf
-		// costs its own pane, never the whole layout. Whether td still knows the
-		// issue is the fetch's answer, arriving as this leaf's "Issue
-		// unavailable" body rather than as a reason to reset the tree.
-		// The id is checked against the shape the click path can produce, not
-		// merely for emptiness: a state file is a file a hand can edit, and this
-		// string becomes an argv element of the fetch — a leading `-` would
-		// reach td as a flag.
-		issueID := strings.TrimSpace(saved.Issue)
-		if !terminallink.IssueID(issueID) {
-			return nil
-		}
-		id := p.nextPaneID()
-		if load := p.attachIssuePane(id, root, savedRootSurface(p, root), issueID); load != nil {
-			p.issues[id].view.SetPendingScroll(saved.Scroll)
-			*loads = append(*loads, load)
-		}
-		return &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
+		return p.decodeIssueLeaf(saved, root, loads)
 	}
 	return nil
 }
@@ -1407,16 +1647,25 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 			p.registerDocPaneRegions(doc, node.ID, box)
 		}
 	case PaneIssue:
-		p.registerIssuePaneRegions(content.Title(), node.ID, box)
+		if issue := p.issues[node.ContentID]; issue != nil {
+			p.registerIssuePaneRegions(issue, node.ID, box)
+		}
 	}
 }
 
 func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
-	if node == nil || node.Split != nil || node.Kind != PaneDoc {
+	if node == nil || node.Split != nil {
 		return
 	}
-	if doc := p.docs[node.ContentID]; doc != nil {
-		p.registerDocTabRegions(doc, node.ID, box)
+	switch node.Kind {
+	case PaneDoc:
+		if doc := p.docs[node.ContentID]; doc != nil {
+			p.registerDocTabRegions(doc, node.ID, box)
+		}
+	case PaneIssue:
+		if issue := p.issues[node.ContentID]; issue != nil {
+			p.registerIssueTabRegions(issue, node.ID, box)
+		}
 	}
 }
 
