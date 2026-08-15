@@ -8,6 +8,14 @@ func planPaneOpen(root *PaneNode, kind PaneKind, boxes map[int]Box) (paneOpen, b
 	return panelayout.PlanOpen(root, kind, boxes)
 }
 
+func (p *Plugin) planOpen(kind PaneKind) (paneOpen, bool) {
+	plan, ok := planPaneOpen(p.paneRoot, kind, p.lastPaneBoxes())
+	if !ok {
+		return plan, false
+	}
+	return panelayout.ApplyAxisOverride(plan, p.openSplit), true
+}
+
 // lastPaneBoxes is the tiled leaf geometry for the current preview box.
 // PlanOpen reads areas from these boxes; a tree that does not fit (the zoomed
 // LayoutTree case) has no areas to offer.

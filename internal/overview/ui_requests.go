@@ -14,6 +14,7 @@ import (
 
 type pendingView struct {
 	Target    uirequest.Target
+	Options   uirequest.Options
 	CreatedAt time.Time
 	TTLMs     int
 }
@@ -42,6 +43,10 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	isSelected := hasSelected && selected.TmuxName == req.Origin.TmuxSession
 
 	if isSelected {
+		prevSplit := m.openSplit
+		m.openSplit = req.Options.Split
+		defer func() { m.openSplit = prevSplit }()
+
 		var cmd tea.Cmd
 		// Asked before the open, because afterwards the pane exists either way:
 		// the planner is what decides between a new split and an existing pane.
@@ -61,6 +66,9 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		case uirequest.TargetKindIssue:
 			retargeted = m.willRetargetPreviewPane(panelayout.Issue)
 			cmd = m.openPreviewIssue(req.Target.Value)
+		case uirequest.TargetKindDiff:
+			retargeted = m.willRetargetPreviewPane(panelayout.Diff)
+			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
 		}
 
 		if cmd == nil {
@@ -97,6 +105,7 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	}
 	m.pendingViews[targetWorkspace.TmuxName] = &pendingView{
 		Target:    req.Target,
+		Options:   req.Options,
 		CreatedAt: req.CreatedAt,
 		TTLMs:     req.TTLMs,
 	}
@@ -137,6 +146,10 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 		return nil
 	}
 
+	prevSplit := m.openSplit
+	m.openSplit = pv.Options.Split
+	defer func() { m.openSplit = prevSplit }()
+
 	switch pv.Target.Kind {
 	case uirequest.TargetKindFile:
 		span := terminallink.Span{
@@ -150,6 +163,12 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 		return m.openPreviewDoc(span)
 	case uirequest.TargetKindIssue:
 		return m.openPreviewIssue(pv.Target.Value)
+	case uirequest.TargetKindDiff:
+		root := ""
+		if selected, ok := m.SelectedWorkspace(); ok {
+			root = selected.Path
+		}
+		return m.openPreviewDiff(uirequest.DiffTarget(root, pv.Target.Value))
 	}
 	return nil
 }

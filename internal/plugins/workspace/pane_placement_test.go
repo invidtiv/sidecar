@@ -573,3 +573,40 @@ func TestPlanOpenSplitsTheLargestContentLeaf(t *testing.T) {
 		t.Fatalf("zoomed layout offered areas %#v", boxes)
 	}
 }
+
+func TestSplitFlagIsAxisOverrideOnly(t *testing.T) {
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	doc := &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
+	issue := &PaneNode{ID: 3, Kind: PaneIssue, ContentID: 3}
+	stack := &PaneNode{ID: 4, Split: &PaneSplit{Axis: SplitRows, Ratio: 50, A: doc, B: issue}}
+	p.paneRoot = &PaneNode{ID: 5, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: &PaneNode{ID: 1, Kind: PaneTerminal},
+		B: stack,
+	}}
+	p.paneFocus, p.paneNextID = 2, 6
+
+	auto, ok := p.planOpen(PaneDiff)
+	if !ok || auto.Retarget != 0 {
+		t.Fatalf("auto = %#v ok=%v", auto, ok)
+	}
+	p.openSplit = "right"
+	right, ok := p.planOpen(PaneDiff)
+	if !ok || right.Split != auto.Split || right.Axis != SplitCols {
+		t.Fatalf("--split right = %#v, want same leaf %d axis cols", right, auto.Split)
+	}
+	p.openSplit = "below"
+	below, ok := p.planOpen(PaneDiff)
+	if !ok || below.Split != auto.Split || below.Axis != SplitRows {
+		t.Fatalf("--split below = %#v, want same leaf %d axis rows", below, auto.Split)
+	}
+
+	p.paneRoot = &PaneNode{ID: 6, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: &PaneNode{ID: 1, Kind: PaneTerminal},
+		B: &PaneNode{ID: 7, Kind: PaneDiff, ContentID: 7},
+	}}
+	p.openSplit = "below"
+	retarget, ok := p.planOpen(PaneDiff)
+	if !ok || retarget.Retarget == 0 || retarget.Split != 0 {
+		t.Fatalf("--split on retarget = %#v, want retarget only", retarget)
+	}
+}

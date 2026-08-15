@@ -18,6 +18,7 @@ func runOpen(env Env, args []string) int {
 	openHelp := RenderHelp(openCmd)
 
 	jsonOutput := false
+	wantDiff := false
 	splitMode := "auto"
 	waitDuration := 1200 * time.Millisecond
 	lineNo := 0
@@ -31,6 +32,8 @@ func runOpen(env Env, args []string) int {
 			return 0
 		case arg == "--json":
 			jsonOutput = true
+		case arg == "--diff":
+			wantDiff = true
 		case arg == "--line":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--line requires a line number argument\n\n%s", openHelp)
@@ -97,8 +100,13 @@ func runOpen(env Env, args []string) int {
 		}
 	}
 
-	if len(positional) != 1 {
-		cliErrf(env.Stderr, "open requires exactly one target (path or td-xxxxxx)\n\n%s", openHelp)
+	if wantDiff {
+		if len(positional) > 1 {
+			cliErrf(env.Stderr, "open accepts at most one target\n\n%s", openHelp)
+			return 2
+		}
+	} else if len(positional) != 1 {
+		cliErrf(env.Stderr, "open requires exactly one target (path, td-xxxxxx, or a git spec)\n\n%s", openHelp)
 		return 2
 	}
 
@@ -122,7 +130,11 @@ func runOpen(env Env, args []string) int {
 		return 3
 	}
 
-	target, err := uirequest.ResolveTarget(originInfo.WorkDir, positional[0], lineNo)
+	raw := ""
+	if len(positional) == 1 {
+		raw = positional[0]
+	}
+	target, err := uirequest.ResolveTarget(originInfo.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff})
 	if err != nil {
 		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, openHelp)
 		return 2

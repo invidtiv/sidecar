@@ -1,6 +1,8 @@
 package uirequest
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,22 +10,34 @@ import (
 	"strings"
 
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
+
+// ResolveOptions controls how ResolveTarget classifies a CLI argument.
+type ResolveOptions struct {
+	// Diff is sidecar open --diff. A missing positional becomes the working
+	// tree (wt). A positional is a git spec, including HEAD and branch names.
+	Diff bool
+}
 
 // ResolveTarget parses and validates a target string against the shell's workspace root.
 //
-// Target can be:
-// 1. "td-xxxxxx" (a td issue id)
-// 2. "path" or "path:line" (a file within workDir)
-//
-// If explicitLine > 0, it overrides any :line suffix.
-func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
+// Classification, in order:
+//  1. td- issue id (even with --diff)
+//  2. --diff with no positional → working tree (Value "wt")
+//  3. --diff with a positional → ParseSpec + ResolveSpec
+//  4. Existing regular file inside workDir (a real file named abc1234 wins)
+//  5. ParseSpec + ResolveSpec → TargetKindDiff
+//  6. Usage error (a missing file is not fatal until hash resolution also fails)
+func ResolveTarget(workDir, raw string, explicitLine int, opts ResolveOptions) (Target, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
+		if opts.Diff {
+			return Target{Kind: TargetKindDiff, Value: workspacediff.IdentityWorkingTree}, nil
+		}
 		return Target{}, fmt.Errorf("target cannot be empty")
 	}
 
-	// 1. Issue ID detection
 	if terminallink.IssueID(raw) {
 		return Target{
 			Kind:  TargetKindIssue,
@@ -32,7 +46,79 @@ func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
 		}, nil
 	}
 
-	// 2. File path with optional :line suffix
+	workDir, err := canonicalizeWorkDir(workDir)
+	if err != nil {
+		return Target{}, err
+	}
+
+	if opts.Diff {
+		return resolveDiffTarget(workDir, raw)
+	}
+
+	file, fileErr := resolveFileTarget(workDir, raw, explicitLine)
+	if fileErr == nil {
+		return file, nil
+	}
+	if !errors.Is(fileErr, os.ErrNotExist) {
+		return Target{}, fileErr
+	}
+
+	if diff, diffErr := resolveDiffTarget(workDir, raw); diffErr == nil {
+		return diff, nil
+	}
+	return Target{}, fileErr
+}
+
+func canonicalizeWorkDir(workDir string) (string, error) {
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve current directory: %w", err)
+		}
+	}
+	workDirClean := filepath.Clean(workDir)
+	if resolvedRoot, err := filepath.EvalSymlinks(workDirClean); err == nil {
+		workDirClean = filepath.Clean(resolvedRoot)
+	}
+	return workDirClean, nil
+}
+
+// DiffTarget turns a request Value into a workspacediff.Target. Hosts re-resolve
+// in workDir (no shell) so a crafted request cannot skip rev-parse. An
+// unresolvable spec is still returned parsed — the leaf load reports the error.
+func DiffTarget(workDir, value string) workspacediff.Target {
+	spec, ok := workspacediff.ParseSpec(value)
+	if !ok {
+		return workspacediff.WorkingTreeTarget()
+	}
+	if workDir == "" {
+		return spec
+	}
+	resolved, err := workspacediff.ResolveSpec(context.Background(), workDir, spec)
+	if err != nil {
+		return spec
+	}
+	return resolved
+}
+
+func resolveDiffTarget(workDir, raw string) (Target, error) {
+	spec, ok := workspacediff.ParseSpec(raw)
+	if !ok {
+		return Target{}, fmt.Errorf("not a git spec: %q", raw)
+	}
+	resolved, err := workspacediff.ResolveSpec(context.Background(), workDir, spec)
+	if err != nil {
+		return Target{}, fmt.Errorf("unknown git object %q", raw)
+	}
+	ident := resolved.Identity()
+	if ident == "" {
+		return Target{}, fmt.Errorf("unknown git object %q", raw)
+	}
+	return Target{Kind: TargetKindDiff, Value: ident}, nil
+}
+
+func resolveFileTarget(workDir, raw string, explicitLine int) (Target, error) {
 	targetPath := raw
 	line := explicitLine
 	if colonIdx := strings.LastIndex(raw, ":"); colonIdx > 0 && colonIdx < len(raw)-1 {
@@ -49,22 +135,6 @@ func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
 		return Target{}, fmt.Errorf("file path cannot be empty")
 	}
 
-	// If workDir is empty, use current working directory
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return Target{}, fmt.Errorf("resolve current directory: %w", err)
-		}
-	}
-
-	// Canonicalize workDir
-	workDirClean := filepath.Clean(workDir)
-	if resolvedRoot, err := filepath.EvalSymlinks(workDirClean); err == nil {
-		workDirClean = filepath.Clean(resolvedRoot)
-	}
-
-	// Resolve absolute path for candidate file
 	var absPath string
 	if filepath.IsAbs(targetPath) {
 		absPath = filepath.Clean(targetPath)
@@ -75,22 +145,23 @@ func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
 		}
 		absPath = filepath.Join(home, strings.TrimPrefix(targetPath, "~"))
 	} else {
-		absPath = filepath.Join(workDirClean, targetPath)
+		absPath = filepath.Join(workDir, targetPath)
 	}
 
-	// Eval symlinks of the target file
 	resolvedTarget, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Target{}, fmt.Errorf("file %q does not exist", targetPath)
+			return Target{}, fmt.Errorf("file %q does not exist: %w", targetPath, os.ErrNotExist)
 		}
 		return Target{}, fmt.Errorf("resolve target path %q: %w", targetPath, err)
 	}
 	resolvedTarget = filepath.Clean(resolvedTarget)
 
-	// Stat to ensure it is a regular file
 	info, err := os.Stat(resolvedTarget)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return Target{}, fmt.Errorf("file %q does not exist: %w", targetPath, os.ErrNotExist)
+		}
 		return Target{}, fmt.Errorf("stat target %q: %w", targetPath, err)
 	}
 	if info.IsDir() {
@@ -100,13 +171,11 @@ func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
 		return Target{}, fmt.Errorf("target %q is not a regular file", targetPath)
 	}
 
-	// Verify target sits inside workDir
-	rel, err := filepath.Rel(workDirClean, resolvedTarget)
+	rel, err := filepath.Rel(workDir, resolvedTarget)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return Target{}, fmt.Errorf("target %q resolves outside workspace root %s", targetPath, workDirClean)
+		return Target{}, fmt.Errorf("target %q resolves outside workspace root %s", targetPath, workDir)
 	}
 
-	// Return clean forward-slash relative path
 	return Target{
 		Kind:  TargetKindFile,
 		Value: filepath.ToSlash(rel),

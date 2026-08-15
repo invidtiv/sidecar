@@ -154,7 +154,7 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	}
 	reopen := p.reopenHiddenDocPane()
 	epoch := p.ctx.Epoch
-	plan, planned := planPaneOpen(p.paneRoot, PaneDoc, p.lastPaneBoxes())
+	plan, planned := p.planOpen(PaneDoc)
 	if !planned {
 		return reopen
 	}

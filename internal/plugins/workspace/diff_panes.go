@@ -65,7 +65,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 	}
 	p.previewTab = PreviewTabOutput
 	reopen := p.reopenHiddenDiffPane()
-	plan, ok := planPaneOpen(p.paneRoot, PaneDiff, p.lastPaneBoxes())
+	plan, ok := p.planOpen(PaneDiff)
 	if !ok {
 		return reopen
 	}

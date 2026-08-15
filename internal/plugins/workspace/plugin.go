@@ -522,6 +522,10 @@ type Plugin struct {
 
 	// Pending agent UI requests
 	pendingViews map[string]*pendingView
+	// openSplit is the request-scoped --split axis override ("right"/"below").
+	// Empty or "auto" leaves PlanOpen's axis alone. Set around handleUIRequest
+	// and consumePendingView only.
+	openSplit string
 }
 
 // New creates a new worktree manager plugin.

@@ -126,6 +126,26 @@ func TestPlanOpen(t *testing.T) {
 	}
 }
 
+func TestApplyAxisOverride(t *testing.T) {
+	split := OpenPlan{Split: 2, Axis: Rows}
+	if got := ApplyAxisOverride(split, "right"); got.Axis != Columns || got.Split != 2 {
+		t.Fatalf("right = %#v", got)
+	}
+	if got := ApplyAxisOverride(split, "below"); got.Axis != Rows || got.Split != 2 {
+		t.Fatalf("below = %#v", got)
+	}
+	if got := ApplyAxisOverride(split, "auto"); got != split {
+		t.Fatalf("auto = %#v", got)
+	}
+	if got := ApplyAxisOverride(split, ""); got != split {
+		t.Fatalf("empty = %#v", got)
+	}
+	retarget := OpenPlan{Retarget: 3, Axis: Rows}
+	if got := ApplyAxisOverride(retarget, "right"); got != retarget {
+		t.Fatalf("retarget ignored --split: %#v", got)
+	}
+}
+
 func TestPlanOpenThirdContentKeepsTerminalFullHeight(t *testing.T) {
 	root := terminalDocIssue()
 	box := Box{W: 120, H: 40}

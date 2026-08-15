@@ -147,6 +147,23 @@ type OpenPlan struct {
 	Axis     Axis
 }
 
+// ApplyAxisOverride rewrites a split plan's axis from the CLI --split flag.
+// auto / empty leave PlanOpen's axis alone. A retarget is unchanged: --split
+// never forces a second leaf of a kind that already exists, and it never
+// retargets the named leaf onto the terminal.
+func ApplyAxisOverride(plan OpenPlan, split string) OpenPlan {
+	if plan.Retarget != 0 {
+		return plan
+	}
+	switch split {
+	case "right":
+		plan.Axis = Columns
+	case "below":
+		plan.Axis = Rows
+	}
+	return plan
+}
+
 // PlanOpen keeps the terminal in a full-height left column: the first content
 // opens beside it, a different content kind stacks in the right column, a later
 // content kind stacks on the largest content leaf, and a repeated kind

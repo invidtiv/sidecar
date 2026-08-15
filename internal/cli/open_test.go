@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ func TestOpenValidation(t *testing.T) {
 	}{
 		{"missing target", []string{"open"}, 2, "open requires exactly one target"},
 		{"multiple targets", []string{"open", "a", "b"}, 2, "open requires exactly one target"},
+		{"diff with two targets", []string{"open", "--diff", "a", "b"}, 2, "open accepts at most one target"},
 		{"invalid line flag", []string{"open", "--line", "abc", "foo.txt"}, 2, "invalid line number"},
 		{"missing line value", []string{"open", "--line"}, 2, "--line requires a line number argument"},
 		{"invalid split flag", []string{"open", "--split", "diagonal", "foo.txt"}, 2, "invalid split option"},
@@ -221,4 +223,98 @@ func TestOpenExecution(t *testing.T) {
 			t.Fatalf("expected code 3 for timeout/no instances, got %v, %d (err: %s)", handled, code, errOut.String())
 		}
 	}
+}
+
+func TestOpenDiffWritesWorkingTreeRequest(t *testing.T) {
+	req := runOpenFireAndForget(t, t.TempDir(), []string{"open", "--diff", "--wait", "0"})
+	if req.Target.Kind != uirequest.TargetKindDiff || req.Target.Value != "wt" {
+		t.Fatalf("sidecar open --diff = %+v, want kind=diff value=wt", req.Target)
+	}
+}
+
+func TestOpenDiffHEADWritesCommitNotWorkingTree(t *testing.T) {
+	dir, oid := initOpenGitRepo(t)
+	req := runOpenFireAndForget(t, dir, []string{"open", "--diff", "HEAD", "--wait", "0"})
+	if req.Target.Kind != uirequest.TargetKindDiff || req.Target.Value != "c:"+oid {
+		t.Fatalf("sidecar open --diff HEAD = %+v, want c:%s", req.Target, oid)
+	}
+	if req.Target.Value == "wt" {
+		t.Fatal("--diff HEAD must not be wt")
+	}
+}
+
+func TestOpenHashWithoutDiffFlag(t *testing.T) {
+	dir, oid := initOpenGitRepo(t)
+	short := oid[:7]
+	req := runOpenFireAndForget(t, dir, []string{"open", "--wait", "0", short})
+	if req.Target.Kind != uirequest.TargetKindDiff || req.Target.Value != "c:"+oid {
+		t.Fatalf("sidecar open %s = %+v, want c:%s", short, req.Target, oid)
+	}
+}
+
+func runOpenFireAndForget(t *testing.T, workDir string, args []string) uirequest.Request {
+	t.Helper()
+	stateHome, socket := setupShellCLI(t, "open-diff")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	projectDir := filepath.Join(stateHome, "sidecar", "projects", "sidecar")
+	if err := os.WriteFile(filepath.Join(projectDir, "meta.json"), []byte(`{"path":`+quoteJSON(t, workDir)+`}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run(args, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(%v) = %v, %d; stderr: %q", args, handled, code, errOut.String())
+	}
+
+	reqsDir := filepath.Join(stateHome, "sidecar", "requests")
+	entries, err := os.ReadDir(reqsDir)
+	if err != nil {
+		t.Fatalf("read requests: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") && !strings.Contains(e.Name(), ".tmp.") {
+			req, err := uirequest.ReadRequest(filepath.Join(reqsDir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return req
+		}
+	}
+	t.Fatal("no request written")
+	return uirequest.Request{}
+}
+
+func initOpenGitRepo(t *testing.T) (dir, oid string) {
+	t.Helper()
+	dir = t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.example",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.example",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	run("init")
+	run("config", "user.email", "t@t.example")
+	run("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "f")
+	run("commit", "-m", "init")
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, strings.TrimSpace(string(out))
 }

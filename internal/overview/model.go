@@ -165,6 +165,8 @@ type Model struct {
 	viewFlyoutMouse   *mouse.Handler
 
 	pendingViews map[string]*pendingView
+	// openSplit is the request-scoped --split axis override ("right"/"below").
+	openSplit string
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace

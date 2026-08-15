@@ -518,6 +518,7 @@ func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.C
 	if !ok {
 		return 0, nil
 	}
+	plan = panelayout.ApplyAxisOverride(plan, m.openSplit)
 	if plan.Retarget != 0 {
 		return plan.Retarget, nil
 	}
