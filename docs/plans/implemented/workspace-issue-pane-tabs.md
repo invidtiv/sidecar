@@ -1,5 +1,8 @@
 # TD issue tabs in project and global Workspaces
 
+Landed on `workspace-tabs` as `td-489182` (commits `6d7b539`–`9685ea3`).
+Follow-up: `td-aa3855` (hidden snapshot can stale live document tabs on relaunch).
+
 Click a `td-…` link beside a terminal and the issue opens in an issue pane.
 Click another issue and it becomes a second tab instead of replacing the first.
 The same journey works in project Workspaces and global Workspaces, including
@@ -7,7 +10,7 @@ mouse selection of a drawn tab.
 
 This is tracked by `td-489182`. It deliberately reuses the tab consolidation
 already implied by `td-210cb8` (Phase 8 of
-[workspace-doc-pane-tabs.md](workspace-doc-pane-tabs.md)); issue tabs must not
+[workspace-doc-pane-tabs.md](../active/workspace-doc-pane-tabs.md)); issue tabs must not
 become a third tab model or renderer.
 
 ---
