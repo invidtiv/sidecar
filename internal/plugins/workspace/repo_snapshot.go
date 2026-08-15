@@ -141,19 +141,6 @@ func BuildRepoSnapshot(ctx context.Context, repoPath string) (*RepoSnapshot, err
 	return snapshot, nil
 }
 
-func mainWorktreePathContext(ctx context.Context, workDir string) string {
-	out, err := gitOutputContext(ctx, workDir, "--no-optional-locks", "worktree", "list", "--porcelain")
-	if err != nil {
-		return ""
-	}
-	for line := range strings.SplitSeq(out, "\n") {
-		if path, ok := strings.CutPrefix(line, "worktree "); ok {
-			return filepath.Clean(path)
-		}
-	}
-	return ""
-}
-
 func repoNameContext(ctx context.Context, workDir string) string {
 	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "remote", "get-url", "origin")
 	cmd.Dir = workDir

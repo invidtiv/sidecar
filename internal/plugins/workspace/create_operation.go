@@ -2,21 +2,17 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspaceops"
-	"golang.org/x/sys/unix"
 )
 
 // CreateOperationPlan is the immutable contract shown to the user before any
@@ -95,37 +91,6 @@ func loadPendingCreation(ctx context.Context, projectRoot string, worktrees []*W
 	plan := createPlanFromShared(&shared.Plan)
 	wt := worktreeFromShared(&shared.Worktree, plan)
 	return &pendingCreationJournal{Version: shared.Version, RepoKey: shared.RepoKey, OperationID: shared.OperationID, Plan: *plan, Worktree: *wt}, nil
-}
-
-func loadPendingCreationLegacy(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
-	for _, wt := range worktrees {
-		dir, err := projectdir.WorktreeDirContext(ctx, projectRoot, wt.Path)
-		if err != nil {
-			continue
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "pending-creation-") || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
-			if readErr != nil {
-				continue
-			}
-			var journal pendingCreationJournal
-			if json.Unmarshal(data, &journal) != nil || journal.Version != 1 || journal.RepoKey != repoKey {
-				continue
-			}
-			if journal.Worktree.IdentityKey() != wt.IdentityKey() || filepath.Clean(journal.Worktree.Path) != filepath.Clean(wt.Path) || journal.Worktree.HEADOID != wt.HEADOID {
-				continue
-			}
-			return &journal, nil
-		}
-	}
-	return nil, nil
 }
 
 func (p *Plugin) reconcilePendingCreation() bool {
@@ -320,123 +285,13 @@ func worktreeFromShared(record *workspaceops.WorktreeRecord, plan *CreateOperati
 	return wt
 }
 
-// resolveCreateOperationLegacy remains temporarily as characterization source;
-// production callers above run the shared workspaceops planner.
-func resolveCreateOperationLegacy(ctx context.Context, workDir, projectRoot, name, base string, dirPrefix bool, setup config.WorktreeSetupConfig) (*CreateOperationPlan, error) {
-	displayName := strings.TrimSpace(name)
-	if displayName == "" {
-		return nil, fmt.Errorf("workspace name is required")
-	}
-	slug := SlugifyWorktreeName(displayName)
-	if slug == "" {
-		return nil, fmt.Errorf("invalid branch name %q", displayName)
-	}
-	if _, err := gitOutputContext(ctx, workDir, "check-ref-format", "--branch", slug); err != nil {
-		return nil, fmt.Errorf("invalid branch name %q: %w", slug, err)
-	}
-	if _, err := gitOutputContext(ctx, workDir, "show-ref", "--verify", "--quiet", "refs/heads/"+slug); err == nil {
-		return nil, fmt.Errorf("branch %q already exists", slug)
-	}
-
-	sourceWorktree, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return nil, fmt.Errorf("resolve source worktree: %w", err)
-	}
-	mainWorktree := projectRoot
-	if mainWorktree == "" {
-		mainWorktree = mainWorktreePathContext(ctx, workDir)
-	}
-	if mainWorktree == "" {
-		mainWorktree = sourceWorktree
-	}
-	mainWorktree, _ = filepath.Abs(mainWorktree)
-	if resolved, resolveErr := filepath.EvalSymlinks(mainWorktree); resolveErr == nil {
-		mainWorktree = resolved
-	}
-
-	requestedBase := strings.TrimSpace(base)
-	if requestedBase == "" {
-		requestedBase = "HEAD"
-	}
-	sourceOID, err := gitOutputContext(ctx, workDir, "rev-parse", "--verify", requestedBase+"^{commit}")
-	if err != nil {
-		return nil, fmt.Errorf("source %q is not a commit: %w", requestedBase, err)
-	}
-	sourceRef, err := gitOutputContext(ctx, workDir, "rev-parse", "--symbolic-full-name", requestedBase)
-	if err != nil || sourceRef == "" {
-		sourceRef = requestedBase
-	}
-
-	dirName := slug
-	if dirPrefix {
-		if repo := repoNameContext(ctx, workDir); repo != "" {
-			dirName = repo + "-" + slug
-		}
-	}
-	destination := filepath.Join(filepath.Dir(mainWorktree), dirName)
-	if err := ensureRealDirectoryPath(filepath.Dir(mainWorktree), filepath.Dir(destination), false); err != nil {
-		return nil, fmt.Errorf("destination parent is unsafe: %w", err)
-	}
-	if _, err := os.Lstat(destination); err == nil {
-		return nil, fmt.Errorf("destination path already exists: %s", destination)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("inspect destination path: %w", err)
-	}
-
-	envFiles := make([]string, 0, len(setup.EnvFiles))
-	if setup.CopyEnvFiles {
-		for _, rel := range setup.EnvFiles {
-			if !safeSetupRelativePath(rel) {
-				return nil, fmt.Errorf("env file path must stay within the main worktree: %q", rel)
-			}
-			if _, err := containedRegularFile(mainWorktree, rel); err == nil {
-				envFiles = append(envFiles, rel)
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("env file %q is unsafe: %w", rel, err)
-			}
-		}
-	}
-	hookPath := setup.HookPath
-	if hookPath == "" {
-		hookPath = setupScriptName
-	}
-	if !safeSetupRelativePath(hookPath) {
-		return nil, fmt.Errorf("setup hook path must stay within the main worktree: %q", hookPath)
-	}
-	runHook := setup.RunHook
-	if runHook {
-		if _, err := containedRegularFile(mainWorktree, hookPath); errors.Is(err, os.ErrNotExist) {
-			runHook = false
-		} else if err != nil {
-			return nil, fmt.Errorf("setup hook %q is unsafe: %w", hookPath, err)
-		}
-	}
-
-	return &CreateOperationPlan{
-		SourceWorktree: sourceWorktree, MainWorktree: mainWorktree,
-		SourceRef: sourceRef, SourceOID: sourceOID, Branch: slug,
-		Path: destination, DisplayName: displayName,
-		RemotePolicy: "local branch only; no remote push",
-		CopyEnv:      len(envFiles) > 0, EnvFiles: envFiles,
-		RunHook: runHook, HookPath: hookPath, HookRequired: setup.HookRequired,
-	}, nil
-}
-
 // The path-containment and durable-write layer now lives in
 // internal/workspaceops, so the global browser can reach the same
 // implementation without importing this plugin. These are the plugin's names
 // for it; there is one implementation, not two.
 var (
-	safeSetupRelativePath            = workspaceops.SafeRelativePath
-	containedRegularFile             = workspaceops.ContainedRegularFile
 	openContainedRegularFile         = workspaceops.OpenContainedRegularFile
 	openContainedRegularFileWithHook = workspaceops.OpenContainedRegularFileWithHook
-	openPinnedDirectory              = workspaceops.OpenPinnedDirectory
-	walkPinnedDirectory              = workspaceops.WalkPinnedDirectory
-	normalizeContainmentOpenError    = workspaceops.NormalizeOpenError
-	copyOpenFile                     = workspaceops.CopyOpenFile
-	ensureRealDirectoryPath          = workspaceops.EnsureRealDirectoryPath
-	mkdirPinnedTemp                  = workspaceops.MkdirPinnedTemp
 	writeDurableFile                 = workspaceops.WriteDurableFile
 )
 
@@ -462,105 +317,6 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 		TaskID: plan.TaskID, TaskTitle: plan.TaskTitle, ChosenAgentType: plan.AgentType,
 		Status: StatusPaused, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	return wt, err
-}
-
-// addCreatedWorktreeWithRunnerLegacy is retained only while the extraction's
-// characterization tests compare the old and shared operation boundaries.
-func addCreatedWorktreeWithRunnerLegacy(ctx context.Context, repoKey string, plan *CreateOperationPlan, run func(*exec.Cmd) ([]byte, error)) (*Worktree, error) {
-	if _, err := gitOutputContext(ctx, plan.SourceWorktree, "check-ref-format", "--branch", plan.Branch); err != nil {
-		return nil, fmt.Errorf("branch is no longer valid: %w", err)
-	}
-	if current, err := gitOutputContext(ctx, plan.SourceWorktree, "rev-parse", "--verify", plan.SourceRef+"^{commit}"); err != nil || current != plan.SourceOID {
-		return nil, fmt.Errorf("source changed since confirmation (expected %s, got %s)", shortOID(plan.SourceOID), shortOID(current))
-	}
-	if _, err := os.Lstat(plan.Path); err == nil {
-		return nil, fmt.Errorf("destination path now exists: %s", plan.Path)
-	}
-	allowedRoot := filepath.Dir(plan.MainWorktree)
-	parentRel, err := filepath.Rel(allowedRoot, filepath.Dir(plan.Path))
-	if err != nil {
-		return nil, fmt.Errorf("resolve destination parent: %w", err)
-	}
-	parent, err := openPinnedDirectory(allowedRoot, parentRel, true)
-	if err != nil {
-		return nil, fmt.Errorf("pin destination parent: %w", err)
-	}
-	defer func() { _ = parent.Close() }()
-	leaf := filepath.Base(plan.Path)
-	if fd, openErr := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0); openErr == nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("destination path already exists: %s", plan.Path)
-	} else if !errors.Is(openErr, unix.ENOENT) {
-		return nil, fmt.Errorf("inspect pinned destination: %w", openErr)
-	}
-	rootDir, err := openPinnedDirectory(allowedRoot, ".", false)
-	if err != nil {
-		return nil, fmt.Errorf("pin destination root: %w", err)
-	}
-	defer func() { _ = rootDir.Close() }()
-	stagingName, err := mkdirPinnedTemp(rootDir)
-	if err != nil {
-		return nil, fmt.Errorf("create pinned staging directory: %w", err)
-	}
-	rootPath, err := pinnedDirectoryPath(rootDir)
-	if err != nil {
-		_ = unix.Unlinkat(int(rootDir.Fd()), stagingName, unix.AT_REMOVEDIR)
-		return nil, err
-	}
-	stagingPath := filepath.Join(rootPath, stagingName)
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", plan.Branch, stagingPath, plan.SourceOID)
-	cmd.Dir = plan.SourceWorktree
-	output, addRunErr := run(cmd)
-	head, stagingErr := gitOutputContext(context.Background(), stagingPath, "rev-parse", "HEAD")
-	if stagingErr != nil {
-		_ = unix.Unlinkat(int(rootDir.Fd()), stagingName, unix.AT_REMOVEDIR)
-		if addRunErr != nil {
-			return nil, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), addRunErr)
-		}
-		return nil, fmt.Errorf("verify staged worktree: %w", stagingErr)
-	}
-	if head != plan.SourceOID {
-		return nil, fmt.Errorf("verify created worktree identity: got %s want %s", head, plan.SourceOID)
-	}
-	moveErr := unix.Renameat(int(rootDir.Fd()), stagingName, int(parent.Fd()), leaf)
-	actualPath := stagingPath
-	if moveErr == nil {
-		actualParent, pathErr := pinnedDirectoryPath(parent)
-		if pathErr != nil {
-			return createdWorktree(repoKey, plan, head), pathErr
-		}
-		actualPath = filepath.Join(actualParent, leaf)
-		if _, repairErr := gitOutputContext(context.Background(), plan.SourceWorktree, "worktree", "repair", actualPath); repairErr != nil {
-			movedPlan := *plan
-			movedPlan.Path = actualPath
-			return createdWorktree(repoKey, &movedPlan, head), fmt.Errorf("repair moved worktree metadata: %w", repairErr)
-		}
-	}
-	confirmedPath := filepath.Clean(plan.Path)
-	plan.Path = filepath.Clean(actualPath)
-	wt := createdWorktree(repoKey, plan, head)
-	if addRunErr != nil {
-		return wt, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), addRunErr)
-	}
-	if moveErr != nil {
-		return wt, fmt.Errorf("move staged worktree into pinned destination: %w", moveErr)
-	}
-	if plan.Path != confirmedPath {
-		return wt, fmt.Errorf("destination parent identity changed during creation; worktree was retained at %s", plan.Path)
-	}
-	return wt, nil
-}
-
-func createdWorktree(repoKey string, plan *CreateOperationPlan, head string) *Worktree {
-	wt := &Worktree{Key: stablePathKey(plan.Path), RepoKey: repoKey, Name: plan.DisplayName, Path: plan.Path,
-		Branch: plan.Branch, BaseBranch: strings.TrimPrefix(plan.SourceRef, "refs/heads/"), TaskID: plan.TaskID,
-		TaskTitle: plan.TaskTitle, ChosenAgentType: plan.AgentType, Status: StatusPaused, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	if key, keyErr := projectdir.WorktreeKey(plan.Path); keyErr == nil {
-		wt.Key = key
-	}
-	// Store the exact created identity for recovery even if subsequent metadata fails.
-	wt.HEADOID = head
-	return wt
 }
 
 func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree) *CreateSetupResult {
@@ -596,10 +352,6 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 		add(CreateOutcomeKind(outcome.Kind), outcome.Action, outcome.Required, outcome.Err)
 	}
 	return result
-}
-
-func runSetupHookContext(ctx context.Context, plan *CreateOperationPlan) error {
-	return runSetupHookContextWithHook(ctx, plan, nil)
 }
 
 func runSetupHookContextWithHook(ctx context.Context, plan *CreateOperationPlan, beforeOpen func()) error {

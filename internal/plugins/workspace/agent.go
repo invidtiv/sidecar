@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,8 +25,6 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
-
-var openCodeRunPrefixRe = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
 
 // paneCacheEntry holds cached capture output with timestamp
 type paneCacheEntry struct {
@@ -473,27 +469,6 @@ func getAgentCommand(agentType AgentType) string {
 	return "claude" // Default to claude
 }
 
-// readAgentStartOverride reads a .sidecar-agent-start command override from a worktree path.
-func readAgentStartOverride(worktreePath string) string {
-	if worktreePath == "" {
-		return ""
-	}
-	overridePath := filepath.Join(worktreePath, sidecarAgentStartFile)
-	raw, err := os.ReadFile(overridePath)
-	if err != nil {
-		return ""
-	}
-
-	// Normalize editor/file encoding quirks so an invalid override never breaks startup.
-	raw = bytes.TrimSpace(raw)
-	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw) {
-		return ""
-	}
-	return sanitizeAgentStartCommand(string(raw))
-}
-
 func sanitizeAgentStartCommand(raw string) string {
 	cmd := strings.TrimSpace(raw)
 	if cmd == "" || strings.ContainsAny(cmd, "\r\n") {
@@ -532,23 +507,6 @@ func resolveConfigAgentStart(agentStart map[string]string, agentType AgentType) 
 		}
 	}
 	return ""
-}
-
-// normalizeOpenCodeBaseCommand ensures overrides represent the opencode command portion,
-// not the "opencode run" invocation. The launcher appends "run" itself.
-func normalizeOpenCodeBaseCommand(cmd string) string {
-	if cmd == "" {
-		return ""
-	}
-	m := openCodeRunPrefixRe.FindStringSubmatch(cmd)
-	if len(m) == 0 {
-		return cmd
-	}
-	suffix := ""
-	if len(m) > 2 {
-		suffix = m[2]
-	}
-	return strings.TrimSpace(m[1] + suffix)
 }
 
 // resolveAgentBaseCommand returns the command used to launch the selected agent family.

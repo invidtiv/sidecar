@@ -187,7 +187,7 @@ func ExecuteWorktreeWithRunner(ctx context.Context, repoKey string, plan *Worktr
 	if err != nil {
 		return nil, fmt.Errorf("pin destination parent: %w", err)
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	leaf := filepath.Base(plan.Path)
 	if fd, openErr := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0); openErr == nil {
 		_ = unix.Close(fd)
@@ -199,7 +199,7 @@ func ExecuteWorktreeWithRunner(ctx context.Context, repoKey string, plan *Worktr
 	if err != nil {
 		return nil, fmt.Errorf("pin destination root: %w", err)
 	}
-	defer rootDir.Close()
+	defer func() { _ = rootDir.Close() }()
 	stagingName, err := MkdirPinnedTemp(rootDir)
 	if err != nil {
 		return nil, fmt.Errorf("create pinned staging directory: %w", err)

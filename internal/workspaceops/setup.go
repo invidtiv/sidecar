@@ -50,7 +50,7 @@ func RunSetupHookWithHook(ctx context.Context, plan *WorktreePlan, beforeOpen fu
 	if err != nil {
 		return fmt.Errorf("validate setup hook: %w", err)
 	}
-	defer hook.Close()
+	defer func() { _ = hook.Close() }()
 	cmd := exec.CommandContext(ctx, "bash", "/dev/fd/3")
 	cmd.ExtraFiles = []*os.File{hook}
 	cmd.Dir = plan.Path

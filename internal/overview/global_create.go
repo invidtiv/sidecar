@@ -358,10 +358,6 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 	return m.applyCreateAction(action, before, beforeKind)
 }
 
-func (m *Model) applyCreateShellAction(action string, previousProject int) tea.Cmd {
-	return m.applyCreateAction(action, previousProject, m.createKindIndex)
-}
-
 func (m *Model) applyCreateAction(action string, previousProject, previousKind int) tea.Cmd {
 	if m.createProjectIndex != previousProject || m.createKindIndex != previousKind {
 		if project, ok := m.selectedCreateProject(); ok {
@@ -668,9 +664,4 @@ func (m *Model) createWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 
 func createProjectKeyFromAction(id string) string {
 	return strings.TrimPrefix(id, globalCreateActionID+":")
-}
-
-func (m *Model) debugCreateState() string {
-	project, _ := m.selectedCreateProject()
-	return fmt.Sprintf("%s:%s", projectKey(project), m.createNameInput.Value())
 }
