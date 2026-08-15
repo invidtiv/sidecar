@@ -395,6 +395,7 @@ func (m *Model) renderRow(item Item, selected, focused bool, width int, now time
 		Kind:          item.Kind,
 		Name:          item.Name,
 		NamePrefix:    namePrefix,
+		NameMeta:      item.NameMeta,
 		Age:           RelativeAge(item.ChangedAt, now),
 		Provider:      item.Provider,
 		AfterProvider: after,

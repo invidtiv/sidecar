@@ -59,6 +59,9 @@ func (m *Model) syncWorkspaces() {
 		for _, workspace := range result.Workspaces {
 			m.catalog[workspace.ID] = workspace
 			item := listItem(workspace.Item(), project.Name, order, m.stale[key])
+			if badge, hasBadge := m.pendingViewBadge(workspace.TmuxName); hasBadge {
+				item.NameMeta = append(item.NameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
+			}
 			if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
 				continue
 			}

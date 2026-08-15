@@ -40,6 +40,28 @@ not for every sub-step or status change. Prefer the outcome
 (`Codex running tests`). These commands act only on the current Sidecar shell;
 do not edit `shells.json` or rename tmux sessions directly.
 
+## Opening Files and Tasks Beside Your Shell
+
+When working inside a Sidecar project shell, you can open files or td tasks in
+an adjacent split pane for the user to review:
+
+```bash
+sidecar open internal/cli/open.go:42    # open a file at a specific line
+sidecar open docs/plans/active/plan.md  # open a document / plan
+sidecar open td-da8523                  # open a td task details view
+```
+
+If the user is currently watching your shell, the split pane opens immediately.
+If they are looking elsewhere, a badge appears on your shell in the sidebar and
+the split opens automatically when they switch to your shell.
+
+CLI exit codes:
+- 0: opened or queued
+- 1: internal error
+- 2: validation error (file missing / outside workspace)
+- 3: not running in a Sidecar shell / no instance watching this shell
+- 4: declined (e.g. terminal window too narrow to split)
+
 ## Build & Versioning
 
 ```bash

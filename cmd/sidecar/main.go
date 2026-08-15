@@ -332,8 +332,12 @@ func effectiveVersion(v string) string {
 func init() {
 	// Customize usage output
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: sidecar [options]\n\n")
-		fmt.Fprintf(os.Stderr, "A TUI dashboard for AI coding agents.\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: sidecar [options] [command]\n\n")
+		fmt.Fprintf(os.Stderr, "A TUI dashboard and command-line companion for AI coding agents.\n\n")
+		fmt.Fprintf(os.Stderr, "Commands:\n")
+		fmt.Fprintf(os.Stderr, "  help           Show help for sidecar or a subcommand\n")
+		fmt.Fprintf(os.Stderr, "  open           Open a file or issue in an adjacent split pane\n")
+		fmt.Fprintf(os.Stderr, "  shell          Manage the current Sidecar shell\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}

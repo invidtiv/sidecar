@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -19,32 +18,40 @@ import (
 // Run dispatches a non-interactive command. handled=false leaves legacy TUI
 // flag parsing entirely untouched.
 func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
-	if len(args) == 0 || args[0] != "shell" {
+	if len(args) == 0 {
 		return false, 0
 	}
-	if len(args) == 1 || isHelp(args[1]) {
-		if _, err := fmt.Fprint(stdout, shellHelp); err != nil {
-			return true, 1
-		}
-		return true, 0
+
+	env := defaultEnv(stdout, stderr)
+
+	if args[0] == "-h" || args[0] == "--help" {
+		return true, runHelpCommand(env, args[1:])
 	}
-	switch args[1] {
-	case "name":
-		return true, runShellName(args[2:], stdout, stderr)
-	case "rename":
-		return true, runShellRename(args[2:], stdout, stderr)
-	default:
-		cliErrf(stderr, "unknown shell command %q\n\n%s", args[1], shellHelp)
-		return true, 2
+	if args[0] == "help" {
+		return true, runHelpCommand(env, args[1:])
 	}
+
+	root := RootCommand()
+	cmd := root.FindSubcommand(args[0])
+	if cmd == nil {
+		return false, 0
+	}
+
+	if cmd.Run != nil {
+		return true, cmd.Run(env, args[1:])
+	}
+
+	return true, 0
 }
 
-func runShellName(args []string, stdout, stderr io.Writer) int {
+func runShellName(env Env, args []string) int {
+	nameCmd := RootCommand().FindSubcommand("shell").FindSubcommand("name")
+	nameHelp := RenderHelp(nameCmd)
 	jsonOutput := false
 	for _, arg := range args {
 		switch arg {
 		case "-h", "--help":
-			if _, err := fmt.Fprint(stdout, nameHelp); err != nil {
+			if _, err := fmt.Fprint(env.Stdout, nameHelp); err != nil {
 				return 1
 			}
 			return 0
@@ -52,46 +59,52 @@ func runShellName(args []string, stdout, stderr io.Writer) int {
 			jsonOutput = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				cliErrf(stderr, "unknown option %q\n\n%s", arg, nameHelp)
+				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, nameHelp)
 				return 2
 			}
-			cliErrf(stderr, "shell name takes no positional arguments\n\n%s", nameHelp)
+			cliErrf(env.Stderr, "shell name takes no positional arguments\n\n%s", nameHelp)
 			return 2
 		}
 	}
-	identity, err := currentShellIdentity(context.Background())
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	identity, err := currentShellIdentity(ctx)
 	if err != nil {
-		cliErrln(stderr, err)
+		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result, err := shellstate.LookupCurrent(config.StateDir(), shellstate.Identity{
+	result, err := shellstate.LookupCurrent(env.StateDir, shellstate.Identity{
 		TmuxName:  identity.session,
 		Namespace: identity.socket,
 	})
 	if err != nil {
-		cliErrln(stderr, err)
+		cliErrln(env.Stderr, err)
 		return 1
 	}
 	if jsonOutput {
-		if err := json.NewEncoder(stdout).Encode(result); err != nil {
-			cliErrln(stderr, err)
+		if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
+			cliErrln(env.Stderr, err)
 			return 1
 		}
 		return 0
 	}
-	if _, err := fmt.Fprintln(stdout, result.Name); err != nil {
+	if _, err := fmt.Fprintln(env.Stdout, result.Name); err != nil {
 		return 1
 	}
 	return 0
 }
 
-func runShellRename(args []string, stdout, stderr io.Writer) int {
+func runShellRename(env Env, args []string) int {
+	renameCmd := RootCommand().FindSubcommand("shell").FindSubcommand("rename")
+	renameHelp := RenderHelp(renameCmd)
 	jsonOutput := false
 	var positional []string
 	for _, arg := range args {
 		switch arg {
 		case "-h", "--help":
-			if _, err := fmt.Fprint(stdout, renameHelp); err != nil {
+			if _, err := fmt.Fprint(env.Stdout, renameHelp); err != nil {
 				return 1
 			}
 			return 0
@@ -99,29 +112,33 @@ func runShellRename(args []string, stdout, stderr io.Writer) int {
 			jsonOutput = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				cliErrf(stderr, "unknown option %q\n\n%s", arg, renameHelp)
+				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, renameHelp)
 				return 2
 			}
 			positional = append(positional, arg)
 		}
 	}
 	if len(positional) != 1 {
-		cliErrf(stderr, "shell rename requires exactly one quoted display name\n\n%s", renameHelp)
+		cliErrf(env.Stderr, "shell rename requires exactly one quoted display name\n\n%s", renameHelp)
 		return 2
 	}
 	name, err := shellstate.NormalizeName(positional[0])
 	if err != nil {
-		cliErrln(stderr, err)
+		cliErrln(env.Stderr, err)
 		return 2
 	}
-	identity, err := currentShellIdentity(context.Background())
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	identity, err := currentShellIdentity(ctx)
 	if err != nil {
-		cliErrln(stderr, err)
+		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result, err := shellstate.RenameCurrent(config.StateDir(), shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+	result, err := shellstate.RenameCurrent(env.StateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
 	if err != nil {
-		cliErrln(stderr, err)
+		cliErrln(env.Stderr, err)
 		if shellstate.IsValidation(err) {
 			return 2
 		}
@@ -132,16 +149,16 @@ func runShellRename(args []string, stdout, stderr io.Writer) int {
 	// environment, is the authority.
 	_ = tty.SetSessionEnv(identity.session, shellstate.NameEnv, result.Name)
 	if jsonOutput {
-		if err := json.NewEncoder(stdout).Encode(result); err != nil {
-			cliErrln(stderr, err)
+		if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
+			cliErrln(env.Stderr, err)
 			return 1
 		}
 	} else if result.Changed {
-		if _, err := fmt.Fprintf(stdout, "Renamed current Sidecar shell %q to %q.\n", result.OldName, result.Name); err != nil {
+		if _, err := fmt.Fprintf(env.Stdout, "Renamed current Sidecar shell %q to %q.\n", result.OldName, result.Name); err != nil {
 			return 1
 		}
 	} else {
-		if _, err := fmt.Fprintf(stdout, "Current Sidecar shell is already named %q.\n", result.Name); err != nil {
+		if _, err := fmt.Fprintf(env.Stdout, "Current Sidecar shell is already named %q.\n", result.Name); err != nil {
 			return 1
 		}
 	}
@@ -187,55 +204,3 @@ func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
 }
 
 func isHelp(arg string) bool { return arg == "-h" || arg == "--help" || arg == "help" }
-
-const shellHelp = `Usage: sidecar shell <command>
-
-Manage the current Sidecar project shell.
-
-Commands:
-  name      Print the current shell's display name
-  rename    Rename the current shell's display name
-
-Run "sidecar shell <command> --help" for command details.
-`
-
-const nameHelp = `Usage: sidecar shell name [--json]
-
-Print the Sidecar display name of the project shell containing this command.
-Reads the registered manifest (authoritative), not $SIDECAR_SHELL_NAME, so it
-works for shells created before that environment cue existed.
-
-Human output is the display name alone, one line, for easy scripting.
-JSON includes the stable tmux session id and display name.
-
-Example:
-  sidecar shell name
-  sidecar shell name --json
-
-Options:
-  --json    Write one structured result object to stdout
-  -h, --help
-            Show this help
-
-Exit codes: 0 success, 1 identity or state failure, 2 usage error.
-`
-
-const renameHelp = `Usage: sidecar shell rename [--json] <display-name>
-
-Rename only the Sidecar project shell containing this command. This changes
-Sidecar's display name; it does not rename the tmux session.
-
-The current display name is also published as $SIDECAR_SHELL_NAME. "Shell 3"
-is the unset default; a previous task's name is equally stale — rename when
-the name no longer describes the work in this shell.
-
-Example:
-  sidecar shell rename "shell rename implementation"
-
-Options:
-  --json    Write one structured result object to stdout
-  -h, --help
-            Show this help
-
-Exit codes: 0 success, 1 identity or state failure, 2 usage or validation error.
-`
