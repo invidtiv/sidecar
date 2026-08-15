@@ -3085,6 +3085,11 @@ func TestResumeCommand(t *testing.T) {
 			expected: "amp threads continue T-a38f981d-52da-47b1-818c-fbaa9ab56e0c",
 		},
 		{
+			name:     "grok adapter",
+			session:  &adapter.Session{ID: "019fef25-eee2-7532-9fc3-e7e23ed49721", AdapterID: "grok"},
+			expected: "grok --resume 019fef25-eee2-7532-9fc3-e7e23ed49721",
+		},
+		{
 			name:     "unknown adapter",
 			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "unknown"},
 			expected: "",

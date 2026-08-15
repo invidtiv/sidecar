@@ -1,0 +1,18 @@
+{
+  "info": {
+    "id": "019f0000-bbbb-7000-8000-000000000002",
+    "cwd": "/home/user/project"
+  },
+  "session_summary": "Investigate auth module",
+  "created_at": "2026-08-01T10:15:00Z",
+  "updated_at": "2026-08-01T10:20:00Z",
+  "num_messages": 6,
+  "num_chat_messages": 3,
+  "current_model_id": "grok-4.5",
+  "git_root_dir": "/home/user/project/",
+  "generated_title": "Investigate auth module",
+  "agent_name": "grok-build",
+  "session_kind": "subagent",
+  "parent_session_id": "019f0000-aaaa-7000-8000-000000000001",
+  "last_active_at": "2026-08-01T10:20:00Z"
+}

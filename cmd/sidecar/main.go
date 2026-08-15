@@ -21,6 +21,7 @@ import (
 	_ "github.com/marcus/sidecar/internal/adapter/codex"
 	_ "github.com/marcus/sidecar/internal/adapter/copilot"
 	_ "github.com/marcus/sidecar/internal/adapter/cursor"
+	_ "github.com/marcus/sidecar/internal/adapter/grok"
 	_ "github.com/marcus/sidecar/internal/adapter/kiro"
 	_ "github.com/marcus/sidecar/internal/adapter/omp"
 	_ "github.com/marcus/sidecar/internal/adapter/opencode"
