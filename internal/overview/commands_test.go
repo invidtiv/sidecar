@@ -29,9 +29,25 @@ func TestWorkspaceFocusContextFollowsTheFocusedLeaf(t *testing.T) {
 	if got := m.WorkspaceFocusContext(); got != ctxGlobalWorkspacesIssue {
 		t.Fatalf("focused issue context = %q", got)
 	}
-	for _, want := range []string{"yank-issue", "yank-issue-key", "close", "open-item"} {
+	for _, want := range []string{"yank-issue", "yank-issue-key", "close", "open-item", "close-tab", "prev-tab", "next-tab"} {
 		if !commandNamed(m, want) {
 			t.Fatalf("issue Commands() omitted %s: %#v", want, m.Commands())
+		}
+	}
+	for _, cmd := range m.Commands() {
+		switch cmd.ID {
+		case "close-tab":
+			if cmd.Name != "Tab×" {
+				t.Fatalf("close-tab name = %q, want Tab×", cmd.Name)
+			}
+		case "prev-tab":
+			if cmd.Name != "Tab←" {
+				t.Fatalf("prev-tab name = %q, want Tab←", cmd.Name)
+			}
+		case "next-tab":
+			if cmd.Name != "Tab→" {
+				t.Fatalf("next-tab name = %q, want Tab→", cmd.Name)
+			}
 		}
 	}
 	if commandNamed(m, "pin") {
@@ -59,7 +75,7 @@ func TestFocusedIssueYankKeysReturnACopyCommand(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, m.openPreviewIssue("td-196c42"))
-	if m.preview.issue == nil || m.preview.issue.view.Data() == nil {
+	if m.preview.issue == nil || m.preview.issue.view() == nil || m.preview.issue.view().Data() == nil {
 		t.Fatal("issue did not load")
 	}
 
@@ -72,7 +88,7 @@ func TestFocusedIssueYankKeysReturnACopyCommand(t *testing.T) {
 		t.Fatalf("Y on a loaded issue: handled=%v cmd=%v", handled, cmd != nil)
 	}
 
-	if m.preview.issue == nil || m.preview.issue.view.IssueID() != "td-196c42" {
+	if m.preview.issue == nil || m.preview.issue.view() == nil || m.preview.issue.view().IssueID() != "td-196c42" {
 		t.Fatalf("yank moved the issue: %#v", m.preview.issue)
 	}
 }

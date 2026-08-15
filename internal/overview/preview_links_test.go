@@ -159,7 +159,7 @@ func TestGlobalPreviewURLAndIssueActivationStayDistinct(t *testing.T) {
 	if m.preview.doc != nil {
 		t.Fatal("issue id opened the document slot")
 	}
-	if m.preview.issue == nil || m.preview.issue.view.Data() == nil || m.preview.issue.view.Data().ID != "td-196c42" {
+	if m.preview.issue == nil || m.preview.issue.view() == nil || m.preview.issue.view().Data() == nil || m.preview.issue.view().Data().ID != "td-196c42" {
 		t.Fatalf("issue preview = %#v", m.preview.issue)
 	}
 
@@ -178,20 +178,20 @@ func TestGlobalIssuePreviewRawChildClickUsesRenderedCoordinates(t *testing.T) {
 			run(t, m, m.openPreviewIssue("td-196c42"))
 			m.WorkspacesView(width, previewTall)
 			issue := m.preview.issue
-			if issue == nil || issue.view.Data() == nil {
+			if issue == nil || issue.view() == nil || issue.view().Data() == nil {
 				t.Fatalf("issue did not load: %#v", issue)
 			}
 
 			var child issueview.Hit
 			found := false
-			for _, hit := range issue.view.Hits() {
+			for _, hit := range issue.view().Hits() {
 				if hit.Kind == issueview.HitChild && hit.ID == "td-acde12" {
 					child, found = hit, true
 					break
 				}
 			}
 			if !found {
-				t.Fatalf("rendered issue has no child hit: %+v", issue.view.Hits())
+				t.Fatalf("rendered issue has no child hit: %+v", issue.view().Hits())
 			}
 			var region *mouse.Region
 			for _, candidate := range m.workspacesMouse.HitMap.Regions() {
@@ -212,24 +212,27 @@ func TestGlobalIssuePreviewRawChildClickUsesRenderedCoordinates(t *testing.T) {
 			}
 
 			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
-			if issue.view.Data() == nil || issue.view.Data().ID != "td-acde12" {
-				t.Fatalf("raw child click loaded %#v, want td-acde12", issue.view.Data())
+			if issue.view() == nil || issue.view().Data() == nil || issue.view().Data().ID != "td-acde12" {
+				t.Fatalf("raw child click loaded %#v, want td-acde12", issue.view())
+			}
+			if got := previewIssueTabIDs(issue); len(got) != 2 || got[0] != "td-196c42" || got[1] != "td-acde12" {
+				t.Fatalf("child click tabs = %v, want parent kept and child appended", got)
 			}
 
 			m.WorkspacesView(width, previewTall)
 			parentAtSameCell := false
-			for _, hit := range issue.view.Hits() {
+			for _, hit := range issue.view().Hits() {
 				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == region.Rect.X+hit.X {
 					parentAtSameCell = true
 					break
 				}
 			}
 			if !parentAtSameCell {
-				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view.Hits())
+				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view().Hits())
 			}
 			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
-			if issue.view.Data() == nil || issue.view.Data().ID != "td-acde12" || issue.view.IssueID() != "td-acde12" {
-				t.Fatalf("double-click replay navigated to %#v / %q", issue.view.Data(), issue.view.IssueID())
+			if issue.view() == nil || issue.view().Data() == nil || issue.view().Data().ID != "td-acde12" || issue.view().IssueID() != "td-acde12" {
+				t.Fatalf("double-click replay navigated to %#v / %q", issue.view().Data(), issue.view().IssueID())
 			}
 		})
 	}
@@ -279,11 +282,11 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 	}
 	m.preview.doc.view().SetSize(30, 4)
 	m.preview.doc.view().Scroll(7)
-	data := *m.preview.issue.view.Data()
+	data := *m.preview.issue.view().Data()
 	data.Description = strings.Repeat("issue body\n\n", 40)
-	m.preview.issue.view.SetData(&data)
-	m.preview.issue.view.SetSize(30, 4)
-	m.preview.issue.view.Scroll(5)
+	m.preview.issue.view().SetData(&data)
+	m.preview.issue.view().SetSize(30, 4)
+	m.preview.issue.view().Scroll(5)
 	m.WorkspacesView(previewWide, previewTall)
 	box, hasBox := m.previewBox()
 	if !hasBox {
@@ -313,7 +316,7 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 	}
 	m.WorkspacesMouse(tea.MouseReleaseMsg{X: x, Y: y + 3, Button: tea.MouseLeft})
 	m.WorkspacesView(previewWide, previewTall)
-	docScroll, issueScroll := m.preview.doc.view().ScrollOffset(), m.preview.issue.view.ScrollOffset()
+	docScroll, issueScroll := m.preview.doc.view().ScrollOffset(), m.preview.issue.view().ScrollOffset()
 
 	result := m.results["sidecar"]
 	other := result.Workspaces[0]
@@ -330,7 +333,7 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 	run(t, m, m.previewSync())
 	m.WorkspacesView(previewWide, previewTall)
 	if m.preview.doc == nil || m.preview.issue == nil ||
-		m.preview.doc.view().ScrollOffset() != docScroll || m.preview.issue.view.ScrollOffset() != issueScroll {
+		m.preview.doc.view().ScrollOffset() != docScroll || m.preview.issue.view().ScrollOffset() != issueScroll {
 		t.Fatalf("restored panes/scroll = doc %#v offset %d, issue %#v offset %d; want %d/%d",
 			m.preview.doc, scrollOfPreviewDoc(m.preview.doc), m.preview.issue, scrollOfPreviewIssue(m.preview.issue), docScroll, issueScroll)
 	}
@@ -380,79 +383,68 @@ func scrollOfPreviewDoc(doc *previewDoc) int {
 }
 
 func scrollOfPreviewIssue(issue *previewIssue) int {
-	if issue == nil || issue.view == nil {
+	if issue == nil || issue.view() == nil {
 		return -1
 	}
-	return issue.view.ScrollOffset()
+	return issue.view().ScrollOffset()
 }
 
-func TestGlobalIssuePreviewWheelKeyboardAndCloseChip(t *testing.T) {
+func TestGlobalIssuePreviewWheelKeyboardAndQClose(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	issue := m.preview.issue
-	data := *issue.view.Data()
+	data := *issue.view().Data()
 	data.Description = strings.Repeat("scrollable issue body\n\n", 30)
-	issue.view.SetData(&data)
-	m.WorkspacesView(previewWide, previewTall)
-
-	var body, close mouse.Region
+	issue.view().SetData(&data)
+	view := m.WorkspacesView(previewWide, previewTall)
+	if strings.Contains(ansi.Strip(view), "q close") {
+		t.Fatalf("issue header still has q close: %q", ansi.Strip(view))
+	}
 	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		kind, _ := region.Data.(string)
-		switch kind {
-		case previewIssueRegionKind:
-			body = region
-		case previewIssueCloseKind:
-			close = region
+		if region.ID == "global-preview-issue-close" {
+			t.Fatalf("issue still registered a close chip: %#v", region)
 		}
 	}
-	if body.ID == "" || close.ID == "" {
-		t.Fatalf("issue regions missing: body=%#v close=%#v", body, close)
+
+	var body mouse.Region
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, _ := region.Data.(string); kind == previewIssueRegionKind {
+			body = region
+			break
+		}
 	}
-	before := issue.view.View()
+	if body.ID == "" {
+		t.Fatalf("issue body region missing: %#v", m.workspacesMouse.HitMap.Regions())
+	}
+	before := issue.view().View()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: body.Rect.X + 2, Y: body.Rect.Y + 3, Button: tea.MouseWheelDown}))
-	if issue.view.View() == before {
+	if issue.view().View() == before {
 		t.Fatal("wheel over issue did not scroll the issue")
 	}
-	before = issue.view.View()
+	before = issue.view().View()
 	handled, _ := m.WorkspacesKey(key("j"))
-	if !handled || issue.view.View() == before {
-		t.Fatalf("issue keyboard scroll handled=%v changed=%v", handled, issue.view.View() != before)
+	if !handled || issue.view().View() == before {
+		t.Fatalf("issue keyboard scroll handled=%v changed=%v", handled, issue.view().View() != before)
 	}
 	handled, _ = m.WorkspacesKey(key("q"))
 	if !handled || m.preview.issue != nil {
 		t.Fatalf("q handled=%v issue=%#v", handled, m.preview.issue)
 	}
 
-	run(t, m, m.openPreviewIssue("td-196c42"))
-	m.WorkspacesView(previewWide, previewTall)
-	close = mouse.Region{}
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		if kind, _ := region.Data.(string); kind == previewIssueCloseKind {
-			close = region
-			break
-		}
-	}
-	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: close.Rect.X, Y: close.Rect.Y, Button: tea.MouseLeft}))
-	if m.preview.issue != nil {
-		t.Fatal("close chip left issue open")
-	}
-
 	// When the issue is the lower half of a file/issue stack, the widened
-	// divider must not cover its header or close chip.
+	// divider must not cover its tab ID cell.
 	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	m.WorkspacesView(previewWide, previewTall)
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		if kind, _ := region.Data.(string); kind == previewIssueCloseKind {
-			resolved := m.workspacesMouse.HitMap.Test(region.Rect.X, region.Rect.Y)
-			if resolved == nil || resolved.ID != region.ID {
-				t.Fatalf("lower issue close resolves to %#v, want %#v", resolved, region)
-			}
-			return
-		}
+	x, y, ok := visualPreviewIssueIDPoint(t, m, "td-196c42")
+	if !ok {
+		t.Fatal("stacked issue tab ID is not drawn")
 	}
-	t.Fatal("lower issue close chip was not registered")
+	resolved := m.workspacesMouse.HitMap.Test(x, y)
+	if hit, isTab := resolved.Data.(previewIssueTabHit); !isTab || int(hit) != 0 {
+		t.Fatalf("lower issue tab at (%d,%d) resolves to %#v", x, y, resolved)
+	}
 }
 
 func TestGlobalIssuePreviewDoesNotStealOverlayKeys(t *testing.T) {
@@ -716,11 +708,11 @@ func TestGlobalPreviewReopenRejectsClosedModelResults(t *testing.T) {
 			t.Fatalf("reopened issue reused epoch %d", oldEpoch)
 		}
 		run(t, m, oldLoad)
-		if !m.preview.issue.view.Loading() {
+		if !m.preview.issue.view().Loading() {
 			t.Fatal("closed issue result completed the reopened model")
 		}
 		run(t, m, newLoad)
-		if m.preview.issue.view.Loading() {
+		if m.preview.issue.view().Loading() {
 			t.Fatal("reopened issue's own result was rejected")
 		}
 	})

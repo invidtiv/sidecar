@@ -110,12 +110,16 @@ func DefaultBindings() []Binding {
 		{Key: "m", Command: "render", Context: "global-workspaces-doc"},
 		{Key: "Y", Command: "yank-path", Context: "global-workspaces-doc"},
 
-		// Focused td issue leaf. y/Y match td monitor and the project issue pane.
+		// Focused td issue leaf. Tab keys match global-workspaces-doc;
+		// y/Y match td monitor and the project issue pane.
 		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
 		{Key: "y", Command: "yank-issue", Context: "global-workspaces-issue"},
 		{Key: "Y", Command: "yank-issue-key", Context: "global-workspaces-issue"},
 		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-issue"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-issue"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-issue"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-issue"},
 
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
