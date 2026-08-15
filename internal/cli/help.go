@@ -212,3 +212,38 @@ func renderMarkdownCommand(buf *bytes.Buffer, cmd *Command, parentPath string, l
 		renderMarkdownCommand(buf, sub, cmdPath, level+1)
 	}
 }
+
+// RenderAgents lists what an agent can do from inside a Sidecar project shell.
+// It is generated from the same registry the help and the reference doc come
+// from, so a command that grows an agent-facing use appears here by declaring
+// it, not by someone remembering to update a list.
+func RenderAgents(root *Command) string {
+	var buf strings.Builder
+	buf.WriteString("Sidecar commands for agents. Each acts on the shell you are running in.\n\n")
+
+	var lines [][2]string
+	var collect func(cmd *Command)
+	collect = func(cmd *Command) {
+		if cmd.Agent.Invocation != "" {
+			lines = append(lines, [2]string{cmd.Agent.Invocation, cmd.Agent.Summary})
+		}
+		for _, sub := range cmd.Sub {
+			collect(sub)
+		}
+	}
+	collect(root)
+
+	width := 0
+	for _, line := range lines {
+		if len(line[0]) > width {
+			width = len(line[0])
+		}
+	}
+	for _, line := range lines {
+		fmt.Fprintf(&buf, "  %s%s  %s\n", line[0], strings.Repeat(" ", width-len(line[0])), line[1])
+	}
+
+	buf.WriteString("\nAdd --json to any of them for a structured result.\n")
+	buf.WriteString("Run \"sidecar help <command>\" for options and exit codes.\n")
+	return buf.String()
+}

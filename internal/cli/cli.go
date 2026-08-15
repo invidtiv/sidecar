@@ -30,6 +30,12 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	if args[0] == "help" {
 		return true, runHelpCommand(env, args[1:])
 	}
+	// Spelled as a flag because that is how an agent probes an unfamiliar
+	// binary; "sidecar agents" answers the same way for the same reason.
+	if args[0] == "--agents" || args[0] == "agents" {
+		_, _ = fmt.Fprint(env.Stdout, RenderAgents(RootCommand()))
+		return true, 0
+	}
 
 	root := RootCommand()
 	cmd := root.FindSubcommand(args[0])

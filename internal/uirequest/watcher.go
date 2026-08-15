@@ -82,6 +82,14 @@ func (w *Watcher) Start() <-chan tea.Msg {
 	return w.msgChan
 }
 
+// Messages returns the channel Start emits on. The channel belongs to the
+// watcher, not to whoever called Start: a Bubble Tea model re-arming its
+// listener each time a request arrives reads it from here, so the re-arm
+// cannot depend on a field assignment surviving a value-receiver Init.
+func (w *Watcher) Messages() <-chan tea.Msg {
+	return w.msgChan
+}
+
 // Stop terminates the watcher and cleans up resources.
 func (w *Watcher) Stop() {
 	w.mu.Lock()

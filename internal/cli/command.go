@@ -60,6 +60,18 @@ type Command struct {
 	Examples  []Example               `json:"examples,omitempty"`
 	Sub       []*Command              `json:"subcommands,omitempty"`
 	Run       func(Env, []string) int `json:"-"`
+
+	// Agent is what `sidecar --agents` says about this command: the one line an
+	// agent needs to decide whether to reach for it. Commands without one are
+	// left out of that list, so it stays a short list of things worth doing
+	// rather than a second copy of the help.
+	Agent AgentDoc `json:"agent,omitempty"`
+}
+
+// AgentDoc is a command's agent-facing summary: an invocation and why it helps.
+type AgentDoc struct {
+	Invocation string `json:"invocation,omitempty"`
+	Summary    string `json:"summary,omitempty"`
 }
 
 // FindSubcommand looks up a direct child subcommand by name.
