@@ -14,7 +14,33 @@ const (
 	listMaxReserve   = 30
 	dividerHitCols   = 3
 	defaultListShare = 25
+	// ContentInset is the columns of padding the Diff body keeps on each side,
+	// matching the issue pane's horizontal content padding.
+	ContentInset = 1
+	// minInsetWidth is the narrowest leaf still worth padding. Below it the
+	// padding would cost more than the content it frames.
+	minInsetWidth = 2*ContentInset + 8
 )
+
+// ContentBox is the box the Diff body is drawn in: the leaf inset by
+// ContentInset on the left and right. Render and every hit region go through
+// this one function, so a click lands on the row that was drawn.
+func ContentBox(leaf mouse.Rect) mouse.Rect {
+	if leaf.W < minInsetWidth {
+		return leaf
+	}
+	leaf.X += ContentInset
+	leaf.W -= 2 * ContentInset
+	return leaf
+}
+
+// contentWidth is ContentBox's width for a bare width.
+func contentWidth(width int) int {
+	if width < minInsetWidth {
+		return width
+	}
+	return width - 2*ContentInset
+}
 
 // ListWidth is the persisted file-list width. Zero means "use the default 25%".
 func (v *View) ListWidth() int { return v.listWidth }
@@ -22,9 +48,11 @@ func (v *View) ListWidth() int { return v.listWidth }
 // SetListWidth stores a persisted or drag-start width. Zero restores the default.
 func (v *View) SetListWidth(w int) { v.listWidth = w }
 
-// EffectiveListWidth is the width the divider would use for this leaf.
+// EffectiveListWidth is the width the divider would use for this leaf. The
+// argument is the leaf box's width; the padding is taken off here so callers
+// hold one meaning of "width" and the drag lands on the drawn divider.
 func (v *View) EffectiveListWidth(leafWidth int) int {
-	return v.resolvedListWidth(leafWidth)
+	return v.resolvedListWidth(contentWidth(leafWidth))
 }
 
 // ApplyListWidthDelta adds dx to the current (or default) list width and clamps
@@ -33,15 +61,16 @@ func (v *View) EffectiveListWidth(leafWidth int) int {
 func (v *View) ApplyListWidthDelta(dx, leafWidth int) int {
 	base := v.listWidth
 	if base <= 0 {
-		base = defaultListWidth(leafWidth)
+		base = defaultListWidth(contentWidth(leafWidth))
 	}
-	v.listWidth = clampListWidth(base+dx, leafWidth)
+	v.listWidth = clampListWidth(base+dx, contentWidth(leafWidth))
 	return v.listWidth
 }
 
 // DividerHit is the 3-col drag target on the list/diff split, inside the leaf
 // box only. Empty when the layout is collapsed or the box is too narrow.
 func (v *View) DividerHit(leaf mouse.Rect) mouse.Rect {
+	leaf = ContentBox(leaf)
 	if leaf.W < CollapseThreshold || leaf.W < 1 || leaf.H < 1 {
 		return mouse.Rect{}
 	}
@@ -55,6 +84,7 @@ func (v *View) DividerHit(leaf mouse.Rect) mouse.Rect {
 // FileHits are the file/commit/pane targets inside the leaf. Collapsed mode
 // still reports the visible list or pane. The host registers these.
 func (v *View) FileHits(leaf mouse.Rect) []Hit {
+	leaf = ContentBox(leaf)
 	if leaf.W < 1 || leaf.H < 1 {
 		return nil
 	}

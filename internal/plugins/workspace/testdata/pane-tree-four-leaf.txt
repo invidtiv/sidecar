@@ -1,4 +1,4 @@
-Shell  Diff                                       │  upper-right.md
+Shell                                        Diff │  upper-right.md
 No output yet                                     │
                                                   │   upper
                                                   │

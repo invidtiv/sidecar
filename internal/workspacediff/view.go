@@ -37,6 +37,17 @@ type View struct {
 	CommitFileScroll  int
 	CommitFileDiffRaw string
 
+	// CommitDetailErr is why the commit under the cursor has no file list.
+	// A load that fails must say so: a nil CommitDetail with nothing recorded
+	// is indistinguishable from a load still in flight, and the pane sat on
+	// "Loading commit files…" forever.
+	CommitDetailErr string
+	// CommitFileDiffLoaded reports that a commit-file patch load has landed,
+	// empty or not. CommitFileDiffErr is why it failed. Together they separate
+	// "still loading" from "loaded and there is nothing to show".
+	CommitFileDiffLoaded bool
+	CommitFileDiffErr    string
+
 	Target      Target
 	Epoch       uint64
 	WorkspaceID string
@@ -53,6 +64,10 @@ type View struct {
 	PaintedLineCount func() int
 	LeavingFullFile  func(scroll int) int
 	ClearPaintedFile func()
+
+	// HasFilePicker is set by a host that answers "f" with a file picker. The
+	// global preview does not, and must not advertise a key nothing answers.
+	HasFilePicker bool
 }
 
 // Bind records the host identity used to drop stale async results.
@@ -160,11 +175,19 @@ func (v *View) LoadSelectedCommit(workdir, workspaceID string) tea.Cmd {
 	if CommitDetailMatchesListHash(v.CommitDetail, commit.Hash) {
 		return nil
 	}
+	v.resetCommitDetail()
+	return v.loadCommit(workdir, workspaceID, commit.Hash)
+}
+
+// resetCommitDetail drops the loaded commit and everything derived from it,
+// including the reasons a previous load failed. Every path that forgets a
+// commit goes through here so a stale error cannot outlive its commit.
+func (v *View) resetCommitDetail() {
 	v.CommitDetail = nil
+	v.CommitDetailErr = ""
 	v.CommitFileCursor = 0
 	v.CommitFileScroll = 0
-	v.CommitFileDiffRaw = ""
-	return v.loadCommit(workdir, workspaceID, commit.Hash)
+	v.clearCommitFileDiff()
 }
 
 // LoadCommit fetches one commit's file list, tagged for stale-drop.
@@ -210,12 +233,20 @@ func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
 		return v.applyCommitRoot(msg)
 	}
 	if msg.Err != nil || msg.Commit == nil {
+		// A failure is still an answer. Recording it against the row under the
+		// cursor is what lets the preview say why there are no files instead of
+		// claiming the load is still running.
+		if commit, ok := v.SelectedCommit(); ok && (msg.Hash == "" || strings.HasPrefix(commit.Hash, msg.Hash) || strings.HasPrefix(msg.Hash, commit.Hash)) {
+			v.CommitDetail = nil
+			v.CommitDetailErr = commitLoadFailure(msg.Err)
+		}
 		return nil
 	}
 	commit, ok := v.SelectedCommit()
 	if !ok || !CommitDetailMatchesListHash(msg.Commit, commit.Hash) {
 		return nil
 	}
+	v.CommitDetailErr = ""
 	preserve := v.CommitDetail != nil && CommitDetailMatchesListHash(v.CommitDetail, commit.Hash)
 	v.CommitDetail = msg.Commit
 	if !preserve {
@@ -243,6 +274,7 @@ func (v *View) applyCommitRoot(msg CommitDetailMsg) tea.Cmd {
 	}
 	preserve := v.CommitDetail != nil && CommitDetailMatchesListHash(v.CommitDetail, msg.Commit.Hash)
 	v.CommitDetail = msg.Commit
+	v.CommitDetailErr = ""
 	v.Snapshot = nil
 	v.Commits = nil
 	v.Files = nil
@@ -574,7 +606,7 @@ func (v *View) ApplyCommitFileDiff(msg CommitFileDiffMsg) tea.Cmd {
 	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
-	if msg.Err != nil || v.CommitDetail == nil || v.CommitDetail.Hash != msg.CommitHash {
+	if v.CommitDetail == nil || v.CommitDetail.Hash != msg.CommitHash {
 		return nil
 	}
 	if v.CommitFileCursor < 0 || v.CommitFileCursor >= len(v.CommitDetail.Files) {
@@ -583,8 +615,25 @@ func (v *View) ApplyCommitFileDiff(msg CommitFileDiffMsg) tea.Cmd {
 	if v.CommitDetail.Files[v.CommitFileCursor].Path != msg.FilePath {
 		return nil
 	}
+	// The load has landed either way. Marking it landed is what stops the pane
+	// sitting on "Loading diff…" when git returned an error or an empty patch.
+	v.CommitFileDiffLoaded = true
+	if msg.Err != nil {
+		v.CommitFileDiffErr = msg.Err.Error()
+		v.CommitFileDiffRaw = ""
+		return nil
+	}
+	v.CommitFileDiffErr = ""
 	v.CommitFileDiffRaw = msg.Raw
 	return nil
+}
+
+// commitLoadFailure is the one-line reason a commit could not be read.
+func commitLoadFailure(err error) string {
+	if err == nil {
+		return "commit not found"
+	}
+	return err.Error()
 }
 
 // LoadSelectedCommitFile loads the patch for the commit file under the cursor.
@@ -722,22 +771,30 @@ func countDiffStats(chunk string) (adds, dels int) {
 	return adds, dels
 }
 
-// LoadCommitDetail fetches %H/%h/subject and the commit's name-status files.
+// LoadCommitDetail fetches %H/%h/parents/subject and the commit's numstat files.
+//
+// The parent list is not decoration: git show on a merge is a combined diff, and
+// a combined diff for one path is empty for every path that was not a conflict
+// resolution. Without the parents, LoadSelectedCommitFile has nothing to diff
+// against and every file in a merge renders as an empty patch.
 func LoadCommitDetail(ctx context.Context, workdir, hash string) (*CommitDetail, error) {
-	cmd := exec.CommandContext(ctx, "git", "show", "--format=%H%n%h%n%s", "-s", hash)
+	cmd := exec.CommandContext(ctx, "git", "show", "--format=%H%n%h%n%P%n%s", "-s", hash)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) < 3 {
+	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+	if len(lines) < 4 {
 		return nil, nil
 	}
+	parents := strings.Fields(lines[2])
 	detail := &CommitDetail{
-		Hash:      strings.TrimSpace(lines[0]),
-		ShortHash: strings.TrimSpace(lines[1]),
-		Subject:   strings.TrimSpace(lines[2]),
+		Hash:         strings.TrimSpace(lines[0]),
+		ShortHash:    strings.TrimSpace(lines[1]),
+		Subject:      strings.TrimSpace(lines[3]),
+		ParentHashes: parents,
+		IsMerge:      len(parents) > 1,
 	}
 	stat := exec.CommandContext(ctx, "git", "show", "--numstat", "--format=", hash)
 	stat.Dir = workdir

@@ -466,7 +466,9 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
 		return header + "\n" + empty
 	}
-	return p.renderCapturedTerminal(chips, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
+	// The terminal panel has no action chips of its own; Diff and Task belong
+	// to the surface's primary header.
+	return p.renderCapturedTerminal(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
 // renderTermPanelDividerH renders a horizontal divider (for bottom layout).

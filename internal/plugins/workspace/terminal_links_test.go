@@ -709,13 +709,13 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 		Output: strings.Join(postResizeRows, "\n"), BaseLine: 100, Absolute: true,
 		HistoryRows: len(initialRows), PaneRows: 4,
 	})
-	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", buffer, 70, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") || strings.Contains(got, "INTERACTIVE") {
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, nil, "", buffer, 70, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") || strings.Contains(got, "INTERACTIVE") {
 		t.Fatalf("terminal was not coherent immediately after doc-open resize transition: %q", got)
 	}
 	if cmd := p.closeDocPane(); cmd == nil {
 		t.Fatal("closing document did not schedule terminal resize")
 	}
-	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", buffer, 120, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") {
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, nil, "", buffer, 120, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") {
 		t.Fatalf("closing document lost frozen terminal context: %q", got)
 	}
 	batch, ok := cmd().(tea.BatchMsg)
@@ -997,7 +997,7 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 		Output: "╭─ Claude Code narrow ─╮\n\n❯\n", BaseLine: 930, Absolute: true,
 		PaneRows: 4,
 	})
-	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, rel) || !strings.Contains(got, "preserved clicked neighborhood") {
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, rel) || !strings.Contains(got, "preserved clicked neighborhood") {
 		t.Fatalf("projection lost clicked Claude screen after destructive redraw: %q", got)
 	}
 	if got := strings.Join(live.LinesRange(0, live.LineCount()), "\n"); !strings.Contains(got, "Claude Code narrow") || strings.Contains(got, rel) {
@@ -1008,7 +1008,7 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 		Type: mouse.ActionScrollDown, Delta: 1,
 		Region: &mouse.Region{ID: regionPreviewPane},
 	})
-	if got := ansi.Strip(p.renderCapturedTerminal(nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, "Claude Code narrow") || strings.Contains(got, rel) {
+	if got := ansi.Strip(p.renderCapturedTerminal(nil, nil, "", live, 55, 8, false, "empty")); !strings.Contains(got, "Claude Code narrow") || strings.Contains(got, rel) {
 		t.Fatalf("passive wheel did not release and reveal current live grid: %q", got)
 	}
 

@@ -463,12 +463,20 @@ func (p *Plugin) loadDiffView(view *workspacediff.View, root, surface string) te
 	view.State = workspacediff.LoadStateLoading
 	switch view.Target.Kind {
 	case workspacediff.TargetCommit:
+		// A tab with nothing to load must not be left on "Loading" forever.
 		if view.Target.A == "" {
+			view.State = workspacediff.LoadStateError
+			view.Error = "commit tab has no commit"
 			return nil
 		}
 		return view.LoadCommit(view.Target.A)
 	case workspacediff.TargetRange:
-		return view.LoadRange()
+		if cmd := view.LoadRange(); cmd != nil {
+			return cmd
+		}
+		view.State = workspacediff.LoadStateError
+		view.Error = "range tab has no revisions"
+		return nil
 	default:
 		return workspacediff.LoadSnapshotCmdAt(root, p.selectedDiffBaseRef(), workspaceID, p.ctx.Epoch, view.Target.Identity())
 	}
