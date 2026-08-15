@@ -35,6 +35,90 @@ func TestRowMarkersShareTheResolvedVisualVocabulary(t *testing.T) {
 	}
 }
 
+func TestSelectedRowNameKeepsSelectionBackground(t *testing.T) {
+	row := RowPresentation{
+		Marker:         RowMarker{Icon: "◎", Tone: MarkerLive},
+		Name:           "workspace sidebar plan",
+		BeforeProvider: []RowField{PlainField("shell")},
+		AfterProvider:  []RowField{PlainField("live")},
+	}
+	for _, focused := range []bool{true, false} {
+		lines := RenderRow(row, 46, true, focused)
+		if len(lines) != 2 {
+			t.Fatalf("focused=%v lines = %d, want 2", focused, len(lines))
+		}
+		// The previous wrap put a full reset after the marker, so the name sat
+		// on the pane background while the detail line kept the fill.
+		if strings.Contains(lines[0], "\x1b[m workspace sidebar plan") {
+			t.Fatalf("focused=%v name follows a full reset with no selection style: %q", focused, lines[0])
+		}
+		if !strings.Contains(ansi.Strip(lines[0]), "workspace sidebar plan") {
+			t.Fatalf("focused=%v lost name: %q", focused, lines[0])
+		}
+		if !segmentHasBackground(lines[0], "workspace sidebar plan") {
+			t.Fatalf("focused=%v name has no selection background: %q", focused, lines[0])
+		}
+		if !segmentHasBackground(lines[1], "shell") {
+			t.Fatalf("focused=%v detail line lost the fill: %q", focused, lines[1])
+		}
+		if !strings.Contains(lines[0], "◎") {
+			t.Fatalf("focused=%v lost marker: %q", focused, lines[0])
+		}
+	}
+
+	narrow := RenderRow(row, 20, true, true)
+	if len(narrow) != 1 {
+		t.Fatalf("narrow selected row lines = %d, want 1", len(narrow))
+	}
+	if strings.Contains(narrow[0], "\x1b[m workspac") || !segmentHasBackground(narrow[0], "workspac") {
+		t.Fatalf("narrow selected name lost the fill: %q", narrow[0])
+	}
+
+	withKind := row
+	withKind.Kind = KindShell
+	kindLines := RenderRow(withKind, 46, true, true)
+	if !segmentHasBackground(kindLines[0], "workspace sidebar plan") {
+		t.Fatalf("selected name after kind glyph lost the fill: %q", kindLines[0])
+	}
+}
+
+func segmentHasBackground(styled, text string) bool {
+	plain := ansi.Strip(styled)
+	at := strings.Index(plain, text)
+	if at < 0 {
+		return false
+	}
+	target := at
+	pos := 0
+	bg := false
+	i := 0
+	for i < len(styled) {
+		if styled[i] != 0x1b {
+			if pos == target {
+				return bg
+			}
+			pos++
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(styled) && styled[j] != 'm' {
+			j++
+		}
+		if j >= len(styled) {
+			return false
+		}
+		code := styled[i : j+1]
+		if code == "\x1b[m" || code == "\x1b[0m" {
+			bg = false
+		} else if strings.Contains(code, "48;") {
+			bg = true
+		}
+		i = j + 1
+	}
+	return false
+}
+
 func TestRowProviderChipAndSelectedLabelTreatment(t *testing.T) {
 	row := RowPresentation{Marker: RowMarker{Icon: "●", Lane: "working"}, Name: "feature", Provider: "codex", AfterProvider: []RowField{PlainField("working")}}
 	unselected := strings.Join(RenderRow(row, 46, false, true), "\n")

@@ -94,44 +94,44 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 		return []string{""}
 	}
 	if width < twoLineWidth {
-		line := narrowRow(row, width, selected)
-		return []string{finishRow(line, width, selected, focused)}
+		icon, rest := narrowRowParts(row, width, selected)
+		return []string{finishRowLine(row.Marker, icon, rest, width, selected, focused)}
 	}
 
-	line1 := rowLineOne(row, width, selected)
+	icon, rest := rowLineOneParts(row, width, selected)
 	line2 := strings.Repeat(" ", rowIndent(row)) + strings.Join(renderRowFields(row, selected), "  ")
 	if strings.TrimSpace(ansi.Strip(line2)) == "" {
 		line2 = ""
 	}
 	if selected {
-		return strings.Split(ApplySelection(fit(line1, width)+"\n"+fit(line2, width), width, true, focused), "\n")
+		return []string{
+			finishRowLine(row.Marker, icon, rest, width, true, focused),
+			selectionStyle(focused).Width(width).Render(fit(line2, width)),
+		}
 	}
 	return []string{
-		styles.ListItemNormal.Width(width).Render(fit(line1, width)),
+		finishRowLine(row.Marker, icon, rest, width, false, focused),
 		styles.ListItemNormal.Width(width).Render(fit(line2, width)),
 	}
 }
 
-// rowPrefix is the gutter: the status marker, then the kind glyph that tells a
-// shell from a worktree. Both lines share its width so agent detail hangs
-// under the name rather than under the marker.
-func rowPrefix(row RowPresentation, selected bool) string {
-	icon := row.Marker.Icon
+// rowPrefixParts is the gutter: the status marker, then the kind glyph that
+// tells a shell from a worktree. Both lines share its width so agent detail
+// hangs under the name rather than under the marker. The icon is returned
+// unstyled so selection can paint it as a sibling of the name.
+func rowPrefixParts(row RowPresentation, selected bool) (icon, afterIcon string) {
+	icon = row.Marker.Icon
 	if icon == "" {
 		icon = "○"
 	}
-	// The marker keeps its own colour even under selection: it is the row's
-	// live status, and a working row that stops breathing the moment you
-	// select it reads as the agent having stopped.
-	icon = markerStyle(row.Marker).Render(icon)
-	prefix := " " + icon + " "
+	afterIcon = " "
 	if glyph := KindGlyph(row.Kind); glyph != "" {
 		if !selected {
 			glyph = styles.Muted.Render(glyph)
 		}
-		prefix += glyph + " "
+		afterIcon += glyph + " "
 	}
-	return prefix
+	return icon, afterIcon
 }
 
 func rowIndent(row RowPresentation) int {
@@ -141,8 +141,8 @@ func rowIndent(row RowPresentation) int {
 	return 3
 }
 
-func rowLineOne(row RowPresentation, width int, selected bool) string {
-	prefix := rowPrefix(row, selected)
+func rowLineOneParts(row RowPresentation, width int, selected bool) (icon, rest string) {
+	icon, afterIcon := rowPrefixParts(row, selected)
 	namePrefix := renderField(row.NamePrefix, selected)
 	meta := renderFields(row.NameMeta, selected)
 	metaText := ""
@@ -150,7 +150,8 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 		metaText = strings.Join(meta, "")
 	}
 	age := row.Age
-	reserved := ansi.StringWidth(prefix) + ansi.StringWidth(namePrefix) + ansi.StringWidth(metaText)
+	prefixWidth := 1 + ansi.StringWidth(icon) + ansi.StringWidth(afterIcon)
+	reserved := prefixWidth + ansi.StringWidth(namePrefix) + ansi.StringWidth(metaText)
 	if age != "" {
 		reserved += ansi.StringWidth(age) + 2
 	}
@@ -159,13 +160,13 @@ func rowLineOne(row RowPresentation, width int, selected bool) string {
 	if ansi.StringWidth(name) > nameWidth {
 		name = ansi.Truncate(name, nameWidth, "…")
 	}
-	line := prefix + namePrefix + name + metaText
+	rest = afterIcon + namePrefix + name + metaText
 	if age != "" {
-		if pad := width - ansi.StringWidth(line) - ansi.StringWidth(age) - 1; pad > 0 {
-			line += strings.Repeat(" ", pad) + age
+		if pad := width - prefixWidth - ansi.StringWidth(namePrefix) - ansi.StringWidth(name) - ansi.StringWidth(metaText) - ansi.StringWidth(age) - 1; pad > 0 {
+			rest += strings.Repeat(" ", pad) + age
 		}
 	}
-	return fit(line, width)
+	return icon, fit(rest, max(0, width-1-ansi.StringWidth(icon)))
 }
 
 func renderRowFields(row RowPresentation, selected bool) []string {
@@ -214,20 +215,22 @@ func renderField(field RowField, selected bool) string {
 	return field.Text
 }
 
-func narrowRow(row RowPresentation, width int, selected bool) string {
-	prefix := rowPrefix(row, selected)
+func narrowRowParts(row RowPresentation, width int, selected bool) (icon, rest string) {
+	icon, afterIcon := rowPrefixParts(row, selected)
+	prefixWidth := 1 + ansi.StringWidth(icon) + ansi.StringWidth(afterIcon)
+	remain := max(0, width-1-ansi.StringWidth(icon))
 	secondary := narrowSecondary(row, selected)
-	if secondary == "" || width < ansi.StringWidth(prefix)+8 {
-		return fit(prefix+row.Name, width)
+	if secondary == "" || width < prefixWidth+8 {
+		return icon, fit(afterIcon+row.Name, remain)
 	}
 	// Keep enough of the primary name to identify the row. Secondary identity
 	// is deliberately bounded; it may disappear before the marker or name do.
 	secondaryWidth := min(ansi.StringWidth(secondary), max(1, width/3))
 	secondary = ansi.Truncate(secondary, secondaryWidth, "…")
 	separator := " · "
-	nameWidth := max(1, width-ansi.StringWidth(prefix)-ansi.StringWidth(separator)-ansi.StringWidth(secondary))
+	nameWidth := max(1, width-prefixWidth-ansi.StringWidth(separator)-ansi.StringWidth(secondary))
 	name := ansi.Truncate(row.Name, nameWidth, "…")
-	return fit(prefix+name+separator+secondary, width)
+	return icon, fit(afterIcon+name+separator+secondary, remain)
 }
 
 func narrowSecondary(row RowPresentation, selected bool) string {
@@ -238,12 +241,23 @@ func narrowSecondary(row RowPresentation, selected bool) string {
 	return fields[0]
 }
 
-func finishRow(line string, width int, selected, focused bool) string {
-	line = fit(line, width)
+func finishRowLine(marker RowMarker, icon, rest string, width int, selected, focused bool) string {
 	if selected {
-		return selectionStyle(focused).Width(width).Render(line)
+		return paintSelectedLine(marker, icon, rest, width, focused)
 	}
-	return styles.ListItemNormal.Width(width).Render(line)
+	return styles.ListItemNormal.Width(width).Render(fit(" "+markerStyle(marker).Render(icon)+rest, width))
+}
+
+// paintSelectedLine applies the selection fill without wrapping a pre-rendered
+// marker. lipgloss.Render ends with a full reset, so a parent wrap around the
+// icon punches a hole in the background for the name that follows. The marker
+// keeps its own colour (live status should not flatten to the cursor) and
+// each span carries the selection background itself.
+func paintSelectedLine(marker RowMarker, icon, rest string, width int, focused bool) string {
+	sel := selectionStyle(focused)
+	styledIcon := markerStyle(marker).Background(sel.GetBackground()).Render(icon)
+	rest = fit(rest, max(0, width-1-ansi.StringWidth(icon)))
+	return sel.Render(" ") + styledIcon + sel.Render(rest)
 }
 
 func markerStyle(marker RowMarker) lipgloss.Style {
