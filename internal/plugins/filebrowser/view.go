@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -63,14 +64,28 @@ func (p *Plugin) renderView() string {
 	// NOTE: Inline edit mode is handled within renderPreviewPane(), not here.
 	// This allows the tree pane to remain visible during editing.
 
-	// Project search is a full overlay - render modal over dimmed background
+	// The two search surfaces get one placement, not two. Both act on the whole
+	// project rather than on the preview, so both are centred over the whole
+	// plugin area with both panes dimmed behind them; the only thing that
+	// differs is how wide each box likes to be, which is a property of its rows
+	// (paths versus source lines) rather than of where it lives. Anything else
+	// reads as two components rather than one component in two modes.
+	//
+	// This is deliberately not the placement a workspace document pane uses,
+	// and the difference is scope rather than style. There, the surface belongs
+	// to one pane and is rooted at that pane's directory — two panes can have
+	// two different roots on screen at once — so scoping the box to the pane is
+	// what says which root it is searching. Here there is one root for the whole
+	// plugin, and scoping the box to the preview pane would claim a preview
+	// scope the surface does not have. What makes them read as siblings is the
+	// box itself: same border, same rows, same elision, same counts row naming
+	// the root, whichever host drew it.
 	if p.projectSearchMode {
 		background := p.renderNormalPanes()
 		modal := p.renderProjectSearchModalContent()
 		return ui.OverlayModal(background, modal, p.width, p.height)
 	}
 
-	// Quick open is a full overlay - render modal over dimmed background
 	if p.quickOpenMode {
 		background := p.renderNormalPanes()
 		modal := p.renderQuickOpenModalContent()
@@ -657,7 +672,7 @@ func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) str
 		} else {
 			// Render with fuzzy match highlighting (all items are files from cache)
 			if len(match.MatchRanges) > 0 && len(match.Path) <= maxWidth-2 {
-				resultSB.WriteString(p.highlightFuzzyMatch(displayPath, match.MatchRanges))
+				resultSB.WriteString(filefind.HighlightMatch(displayPath, match.MatchRanges))
 			} else {
 				resultSB.WriteString(styles.FileBrowserFile.Render(displayPath))
 			}
@@ -924,12 +939,15 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 		end = len(lines)
 	}
 
-	// Calculate max line width (pane width - line number - padding)
-	lineNumWidth := 5 // "1234 " = 5 chars
+	// The gutter sizes itself to the line count, so a file past 9999 lines
+	// gets a column wide enough to hold its numbers instead of clipping them.
+	// A disabled gutter (rendered markdown) renders nothing and measures zero,
+	// which is why the branches below can just ask it for a cell.
+	gutter := docview.NewGutter(len(lines))
 	if !showLineNumbers {
-		lineNumWidth = 0
+		gutter = docview.Gutter{}
 	}
-	maxLineWidth := p.previewWidth - lineNumWidth - 4
+	maxLineWidth := p.previewWidth - gutter.Width() - 4
 	if maxLineWidth < 10 {
 		maxLineWidth = 10
 	}
@@ -961,7 +979,6 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 
 			if p.previewWrapEnabled {
 				wrappedLines := p.wrapPreviewLine(lineContent, maxLineWidth)
-				lineNumPad := strings.Repeat(" ", lineNumWidth)
 
 				// Track visual column offset into the original (expanded) line.
 				// endCol == -1 means "to end of line".
@@ -997,10 +1014,9 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 
 					// Line number with selection background (first wrapped line only)
 					if wi == 0 {
-						lineNumStr := fmt.Sprintf("%4d ", i+1)
-						sb.WriteString(ui.InjectSelectionBackground(lineNumStr))
+						sb.WriteString(ui.InjectSelectionBackground(gutter.Number(i + 1)))
 					} else {
-						sb.WriteString(lineNumPad)
+						sb.WriteString(gutter.Blank())
 					}
 					sb.WriteString(wl)
 					if visualLinesRendered < visibleHeight-1 || p.isTruncated {
@@ -1017,7 +1033,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 				lineContent = ui.ExpandTabs(lineContent, 8)
 				lineContent = ui.InjectCharacterRangeBackground(lineContent, startCol, endCol)
 				// Truncate using lipgloss (handles ANSI codes properly)
-				lineNumStr := fmt.Sprintf("%4d ", i+1)
+				lineNumStr := gutter.Number(i + 1)
 				sb.WriteString(ui.InjectSelectionBackground(lineNumStr))
 				lineContent = lipgloss.NewStyle().MaxWidth(maxLineWidth).Render(lineContent)
 				sb.WriteString(lineContent)
@@ -1050,18 +1066,14 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 
 			if p.previewWrapEnabled {
 				wrappedLines := p.wrapPreviewLine(lineContent, maxLineWidth)
-				lineNumPad := strings.Repeat(" ", lineNumWidth)
 				for wi, wl := range wrappedLines {
 					if visualLinesRendered >= visibleHeight {
 						break
 					}
-					if showLineNumbers {
-						if wi == 0 {
-							lineNum := styles.FileBrowserLineNumber.Render(fmt.Sprintf("%4d ", i+1))
-							sb.WriteString(lineNum)
-						} else {
-							sb.WriteString(lineNumPad)
-						}
+					if wi == 0 {
+						sb.WriteString(gutter.Number(i + 1))
+					} else {
+						sb.WriteString(gutter.Blank())
 					}
 					sb.WriteString(wl)
 					if visualLinesRendered < visibleHeight-1 || p.isTruncated {
@@ -1074,10 +1086,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 				line := lineStyle.Render(lineContent)
 
 				// Render with or without line numbers
-				if showLineNumbers {
-					lineNum := styles.FileBrowserLineNumber.Render(fmt.Sprintf("%4d ", i+1))
-					sb.WriteString(lineNum)
-				}
+				sb.WriteString(gutter.Number(i + 1))
 				sb.WriteString(line)
 				visualLinesRendered++
 			}
@@ -1154,7 +1163,7 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 		row = innerHeight - 1
 	}
 
-	lineNumWidth := 5
+	lineNumWidth := p.previewGutter().Width()
 	maxLineWidth := p.previewWidth - lineNumWidth - 4
 	if maxLineWidth < 10 {
 		maxLineWidth = 10
@@ -1230,6 +1239,17 @@ func (p *Plugin) previewContentStartX(lineNumWidth int) int {
 		return p.treeWidth + dividerWidth + 1 + lineNumWidth
 	}
 	return 1 + lineNumWidth
+}
+
+// previewGutter is the line-number gutter the preview is currently rendered
+// with. The hit-test geometry reads it too, so a click lands on the column it
+// looks like it lands on however wide the numbers have grown.
+func (p *Plugin) previewGutter() docview.Gutter {
+	lines, showLineNumbers := p.previewRenderLines()
+	if !showLineNumbers {
+		return docview.Gutter{}
+	}
+	return docview.NewGutter(len(lines))
 }
 
 func (p *Plugin) previewRenderLines() ([]string, bool) {
@@ -1328,170 +1348,6 @@ func truncatePath(path string, maxWidth int) string {
 
 func formatSize(bytes int64) string {
 	return docview.FormatSize(bytes)
-}
-
-// renderQuickOpenModalContent renders the quick open modal box content.
-func (p *Plugin) renderQuickOpenModalContent() string {
-	// Modal dimensions
-	modalWidth := p.width - 4
-	if modalWidth > 80 {
-		modalWidth = 80
-	}
-	if modalWidth < 30 {
-		modalWidth = 30
-	}
-
-	// Calculate max visible items based on available height
-	// Leave room for: header (2 lines), footer (2 lines), border (2 lines), some padding
-	maxListHeight := p.height - 8
-	if maxListHeight < 5 {
-		maxListHeight = 5
-	}
-	if maxListHeight > 20 {
-		maxListHeight = 20
-	}
-
-	var sb strings.Builder
-
-	// Header with search input
-	cursor := "█"
-	header := fmt.Sprintf("Quick Open: %s%s", p.quickOpenQuery, cursor)
-	sb.WriteString(styles.ModalTitle.Render(header))
-	sb.WriteString("\n\n")
-
-	// Error message if scan was limited
-	if p.quickOpenError != "" {
-		sb.WriteString(styles.Muted.Render("⚠ " + p.quickOpenError))
-		sb.WriteString("\n")
-	}
-
-	// Calculate modal position for hit region registration
-	hPad := (p.width - modalWidth - 4) / 2
-	if hPad < 0 {
-		hPad = 0
-	}
-	modalX := hPad + 1  // +1 for modal border
-	modalItemY := 2 + 3 // paddingTop(2) + border(1) + header(2)
-	if p.quickOpenError != "" {
-		modalItemY++ // Extra line for error message
-	}
-
-	if len(p.quickOpenMatches) == 0 {
-		switch {
-		case p.quickOpenScanning:
-			sb.WriteString(styles.Muted.Render("Scanning files..."))
-		case p.quickOpenQuery != "":
-			sb.WriteString(styles.Muted.Render("No matches"))
-		default:
-			sb.WriteString(styles.Muted.Render("Type to search files..."))
-		}
-	} else {
-		// Determine visible range (scroll if cursor out of view)
-		listHeight := maxListHeight
-		if listHeight > len(p.quickOpenMatches) {
-			listHeight = len(p.quickOpenMatches)
-		}
-
-		start := 0
-		if p.quickOpenCursor >= listHeight {
-			start = p.quickOpenCursor - listHeight + 1
-		}
-		end := start + listHeight
-		if end > len(p.quickOpenMatches) {
-			end = len(p.quickOpenMatches)
-		}
-
-		for i := start; i < end; i++ {
-			match := p.quickOpenMatches[i]
-			isSelected := i == p.quickOpenCursor
-
-			// Register hit region for this quick open item
-			itemY := modalItemY + (i - start)
-			p.mouseHandler.HitMap.AddRect(regionQuickOpen, modalX, itemY, modalWidth-2, 1, i)
-
-			// Build the display line with highlighted match chars
-			line := p.renderQuickOpenMatch(match, modalWidth-4)
-
-			if isSelected {
-				sb.WriteString(styles.QuickOpenItemSelected.Render("> " + line))
-			} else {
-				sb.WriteString(styles.QuickOpenItem.Render("  " + line))
-			}
-
-			if i < end-1 {
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	// Footer with match count
-	if p.quickOpenScanning {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render("(scanning...)"))
-	} else if len(p.quickOpenMatches) > 0 {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", p.quickOpenCursor+1, len(p.quickOpenMatches))))
-	} else if len(p.quickOpenFiles) > 0 {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpenFiles))))
-	}
-
-	// Wrap in modal box (centering handled by overlayModal)
-	content := sb.String()
-	return styles.ModalBox.
-		Width(modalWidth).
-		Render(content)
-}
-
-// renderQuickOpenMatch renders a single match with highlighted chars.
-func (p *Plugin) renderQuickOpenMatch(match QuickOpenMatch, maxWidth int) string {
-	path := match.Path
-
-	// Truncate path if too long
-	if len(path) > maxWidth {
-		path = "..." + path[len(path)-maxWidth+3:]
-		// Can't highlight properly after truncation, just return
-		return path
-	}
-
-	// Apply match highlighting
-	if len(match.MatchRanges) > 0 {
-		return p.highlightFuzzyMatch(path, match.MatchRanges)
-	}
-
-	return path
-}
-
-// highlightFuzzyMatch applies highlighting to matched character ranges.
-func (p *Plugin) highlightFuzzyMatch(text string, ranges []MatchRange) string {
-	if len(ranges) == 0 {
-		return text
-	}
-
-	var result strings.Builder
-	lastEnd := 0
-
-	for _, r := range ranges {
-		if r.Start > len(text) || r.End > len(text) {
-			continue
-		}
-		if r.Start < lastEnd {
-			continue // Skip overlapping
-		}
-
-		// Add text before match
-		if r.Start > lastEnd {
-			result.WriteString(text[lastEnd:r.Start])
-		}
-
-		// Add highlighted match
-		result.WriteString(styles.FuzzyMatchChar.Render(text[r.Start:r.End]))
-		lastEnd = r.End
-	}
-
-	// Add remaining text
-	if lastEnd < len(text) {
-		result.WriteString(text[lastEnd:])
-	}
-
-	return result.String()
 }
 
 // renderImagePreview renders image preview or fallback message.

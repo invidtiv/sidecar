@@ -18,6 +18,8 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 const (
@@ -73,7 +75,7 @@ func (m *Model) previewResolveRoot() string {
 func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 	root := m.previewResolveRoot()
 	if root == "" {
-		return terminallink.Scan(line, nil)
+		return terminallink.Scan(line, nil, nil)
 	}
 	return terminallink.Scan(line, func(raw string) (string, terminallink.Extra, bool) {
 		display, _, ok := terminallink.ResolveFile(root, raw)
@@ -81,7 +83,57 @@ func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 			return "", terminallink.Extra{}, false
 		}
 		return display, terminallink.Extra{Raw: raw}, true
-	})
+	}, m.previewDiffResolver(root))
+}
+
+func (m *Model) previewDiffResolver(root string) terminallink.DiffResolver {
+	if m.preview.paneRoot == nil || root == "" {
+		return nil
+	}
+	buffer := m.previewBuffer()
+	if buffer == nil {
+		return nil
+	}
+	memo := m.ensurePreviewLinkMemo(root, buffer)
+	return func(raw string) (string, terminallink.Extra, bool) {
+		resolution, found := memo.specs[raw]
+		if !found {
+			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
+				return "", terminallink.Extra{}, false
+			}
+			memo.newSpecs++
+			value, ok := m.resolvePreviewSpec(root, raw)
+			resolution = previewSpecResolution{value: value, ok: ok}
+			memo.specs[raw] = resolution
+		}
+		if !resolution.ok {
+			return "", terminallink.Extra{}, false
+		}
+		if resolution.value == "" {
+			return raw, terminallink.Extra{Raw: raw}, true
+		}
+		return resolution.value, terminallink.Extra{Raw: raw}, true
+	}
+}
+
+func (m *Model) ensurePreviewLinkMemo(root string, buffer *tty.OutputBuffer) *previewLinkMemo {
+	revision := buffer.Revision()
+	memo := &m.preview.linkMemo
+	if memo.root != root || memo.buffer != buffer || memo.revision != revision || memo.specs == nil {
+		m.preview.linkMemo = previewLinkMemo{
+			root: root, buffer: buffer, revision: revision,
+			specs: make(map[string]previewSpecResolution),
+		}
+	}
+	return &m.preview.linkMemo
+}
+
+func (m *Model) resolvePreviewSpec(root, raw string) (string, bool) {
+	if m.previewSpecResolver != nil {
+		return m.previewSpecResolver(root, raw)
+	}
+	value, _, ok := terminallink.ResolveGitSpec(root, raw)
+	return value, ok
 }
 
 func (m *Model) decoratePreviewLine(line string, _ int) string {
@@ -94,7 +146,7 @@ func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
 	spans := m.previewLinkSpans(line)
 	bound := make([]terminallink.Span, 0, len(spans))
 	for _, span := range spans {
-		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue {
+		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue || span.Kind == terminallink.KindDiff {
 			bound = append(bound, span)
 		}
 	}
@@ -117,7 +169,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
 	for _, span := range m.previewLinkSpans(line) {
-		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue {
+		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue && span.Kind != terminallink.KindDiff {
 			continue
 		}
 		if cell.Col >= span.StartCol && cell.Col <= span.EndCol {
@@ -153,9 +205,32 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		}
 		m.clearPreviewSelection()
 		return cmd, true
+	case terminallink.KindDiff:
+		cmd := m.activatePreviewDiff(span)
+		if cmd == nil {
+			return nil, false
+		}
+		m.clearPreviewSelection()
+		return cmd, true
 	default:
 		return nil, false
 	}
+}
+
+func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
+	raw := span.Extra.Raw
+	if raw == "" {
+		raw = span.Value
+	}
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return nil
+	}
+	target := uirequest.DiffTarget(previewDiffPath(workspace), raw)
+	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {
+		return nil
+	}
+	return m.openPreviewDiff(target)
 }
 
 func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
@@ -364,6 +439,10 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return m.syncTerminalGeometry()
 	}
+	if m.preview.diff != nil {
+		m.focusPreviewPane(panelayout.Diff)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
@@ -398,6 +477,9 @@ func (m *Model) focusPreviewLeaf(leafID int) bool {
 			view.SetFocused(m.preview.issue.focused)
 		}
 	}
+	if m.preview.diff != nil {
+		m.preview.diff.focused = leaf.Kind == panelayout.Diff
+	}
 	return true
 }
 
@@ -406,17 +488,41 @@ func previewPaneFloors() panelayout.Floors {
 		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
 		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 	}
+}
+
+// lastPreviewBoxes is the tiled leaf geometry for the current preview box.
+// PlanOpen reads areas from these boxes; a tree that does not fit (the zoomed
+// LayoutTree case) has no areas to offer.
+func (m *Model) lastPreviewBoxes() map[int]panelayout.Box {
+	box, ok := m.previewBox()
+	if !ok {
+		return nil
+	}
+	leaves, _, fits := panelayout.LayoutPanes(m.preview.paneRoot, termpreview.Box{W: box.W, H: box.H}, previewPaneFloors())
+	if !fits {
+		return nil
+	}
+	boxes := make(map[int]panelayout.Box, len(leaves))
+	for _, leaf := range leaves {
+		if leaf.Node == nil {
+			continue
+		}
+		boxes[leaf.Node.ID] = leaf.Box
+	}
+	return boxes
 }
 
 func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.Cmd) {
 	if m.preview.paneRoot == nil {
 		m.resetActivePreviewPanes()
 	}
-	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind)
+	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind, m.lastPreviewBoxes())
 	if !ok {
 		return 0, nil
 	}
+	plan = panelayout.ApplyAxisOverride(plan, m.openSplit)
 	if plan.Retarget != 0 {
 		return plan.Retarget, nil
 	}

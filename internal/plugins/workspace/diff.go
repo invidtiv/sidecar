@@ -26,24 +26,15 @@ const (
 // immutable worktree/base identity.
 type DiffSnapshot = workspacediff.Snapshot
 
-// loadSelectedDiff returns a command to load diff for the selected worktree.
-// Also loads task details if Task tab is active.
+// loadSelectedDiff returns a command to load the visible Diff leaf.
 func (p *Plugin) loadSelectedDiff() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil {
+	if !p.diffLeafShowing() {
 		return nil
 	}
-	p.diffState = LoadStateLoading
-	p.diffError = ""
-
-	cmds := []tea.Cmd{p.loadDiff(wt)}
-
-	// Also load task details if Task tab is active
-	if p.previewTab == PreviewTabTask && wt.TaskID != "" {
-		cmds = append(cmds, p.loadTaskDetailsIfNeeded())
+	if diff, _ := p.activeDiffPane(); diff != nil {
+		return p.ensureActiveDiffTabLoaded(diff)
 	}
-
-	return tea.Batch(cmds...)
+	return nil
 }
 
 // loadDiff returns a command to load diff for a worktree.
@@ -85,7 +76,8 @@ func (p *Plugin) loadDiff(wt *Worktree) tea.Cmd {
 				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", Err: err}
 		}
 		return DiffLoadedMsg{OperationScope: scope, WorkspaceName: name,
-			Content: snapshot.WorkingTree, Raw: snapshot.WorkingTree, Snapshot: snapshot}
+			Identity: workspacediff.IdentityWorkingTree,
+			Content:  snapshot.WorkingTree, Raw: snapshot.WorkingTree, Snapshot: snapshot}
 	}
 }
 
@@ -292,6 +284,7 @@ func getDiffStatFromBaseContext(ctx context.Context, workdir, baseBranch string)
 type FullFileDiffLoadedMsg struct {
 	Epoch         uint64
 	WorkspaceName string
+	Identity      string
 	OldContent    string
 	NewContent    string
 	Parsed        *gitstatus.ParsedDiff
@@ -301,98 +294,6 @@ type FullFileDiffLoadedMsg struct {
 
 // GetEpoch implements plugin.EpochMessage.
 func (m FullFileDiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
-
-// loadFullFileDiffForWorkspace loads full-file content for the current file in the workspace diff view.
-func (p *Plugin) loadFullFileDiffForWorkspace() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil || p.multiFileDiff == nil {
-		return nil
-	}
-
-	// Use diff tab cursor position to determine the selected file
-	fileIdx := p.diffTabCursor
-	if fileIdx < 0 || fileIdx >= len(p.multiFileDiff.Files) {
-		if len(p.multiFileDiff.Files) > 0 {
-			fileIdx = 0
-		} else {
-			return nil
-		}
-	}
-
-	file := p.multiFileDiff.Files[fileIdx]
-	filePath := file.FileName()
-	workdir := wt.Path
-	epoch := p.ctx.Epoch
-	name := wt.IdentityKey()
-
-	return func() tea.Msg {
-		// Get old content (HEAD version)
-		oldContent, _ := gitstatus.GetFileContentAtRef(workdir, filePath, "HEAD")
-		// Get new content (working tree)
-		newContent, _ := gitstatus.GetWorkingTreeFileContent(workdir, filePath)
-
-		// Use HEAD-to-working-tree diff to match old/new content sources.
-		// This captures both staged and unstaged changes consistently.
-		rawDiff, _ := gitstatus.GetDiffFromHead(workdir, filePath)
-		if rawDiff == "" {
-			// New file (not yet in HEAD) — generate new file diff
-			rawDiff, _ = gitstatus.GetNewFileDiff(workdir, filePath)
-		}
-		parsed, _ := gitstatus.ParseUnifiedDiff(rawDiff)
-
-		return FullFileDiffLoadedMsg{
-			Epoch:         epoch,
-			WorkspaceName: name,
-			OldContent:    oldContent,
-			NewContent:    newContent,
-			Parsed:        parsed,
-			FilePath:      filePath,
-		}
-	}
-}
-
-// loadFullFileDiffForCommit loads full-file content for the currently selected commit file.
-func (p *Plugin) loadFullFileDiffForCommit() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil || p.commitDetail == nil {
-		return nil
-	}
-	if p.commitFileCursor < 0 || p.commitFileCursor >= len(p.commitDetail.Files) {
-		return nil
-	}
-
-	file := p.commitDetail.Files[p.commitFileCursor]
-	filePath := file.Path
-	commitHash := p.commitDetail.Hash
-	parentHash := ""
-	if p.commitDetail.IsMerge && len(p.commitDetail.ParentHashes) > 0 {
-		parentHash = p.commitDetail.ParentHashes[0]
-	}
-	workdir := wt.Path
-	epoch := p.ctx.Epoch
-	name := wt.IdentityKey()
-
-	return func() tea.Msg {
-		parentRef := commitHash + "~1"
-		if parentHash != "" {
-			parentRef = parentHash
-		}
-		oldContent, _ := gitstatus.GetFileContentAtRef(workdir, filePath, parentRef)
-		newContent, _ := gitstatus.GetFileContentAtRef(workdir, filePath, commitHash)
-		rawDiff, _ := gitstatus.GetCommitDiff(workdir, commitHash, filePath, parentHash)
-		parsed, _ := gitstatus.ParseUnifiedDiff(rawDiff)
-
-		return FullFileDiffLoadedMsg{
-			Epoch:         epoch,
-			WorkspaceName: name,
-			OldContent:    oldContent,
-			NewContent:    newContent,
-			Parsed:        parsed,
-			FilePath:      filePath,
-			CommitHash:    commitHash,
-		}
-	}
-}
 
 // splitLines splits a string into lines, handling various line endings.
 func splitLines(s string) []string {
@@ -622,27 +523,6 @@ type CommitDetailLoadedMsg struct {
 // GetEpoch implements plugin.EpochMessage.
 func (m CommitDetailLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
-// loadCommitDetail loads the file list for a specific commit.
-func (p *Plugin) loadCommitDetail(hash string) tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil {
-		return nil
-	}
-	epoch := p.ctx.Epoch
-	name := wt.IdentityKey()
-	workdir := wt.Path
-	return func() tea.Msg {
-		commit, err := gitstatus.GetCommitDetail(workdir, hash)
-		return CommitDetailLoadedMsg{
-			Epoch:         epoch,
-			WorkspaceName: name,
-			CommitHash:    hash,
-			Commit:        commit,
-			Err:           err,
-		}
-	}
-}
-
 // CommitFileDiffLoadedMsg is sent when a commit file's diff is loaded.
 type CommitFileDiffLoadedMsg struct {
 	Epoch         uint64
@@ -655,25 +535,3 @@ type CommitFileDiffLoadedMsg struct {
 
 // GetEpoch implements plugin.EpochMessage.
 func (m CommitFileDiffLoadedMsg) GetEpoch() uint64 { return m.Epoch }
-
-// loadCommitFileDiff loads the diff for a specific file in a commit.
-func (p *Plugin) loadCommitFileDiff(hash, filePath, parentHash string) tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil {
-		return nil
-	}
-	epoch := p.ctx.Epoch
-	name := wt.IdentityKey()
-	workdir := wt.Path
-	return func() tea.Msg {
-		raw, err := gitstatus.GetCommitDiff(workdir, hash, filePath, parentHash)
-		return CommitFileDiffLoadedMsg{
-			Epoch:         epoch,
-			WorkspaceName: name,
-			CommitHash:    hash,
-			FilePath:      filePath,
-			Raw:           raw,
-			Err:           err,
-		}
-	}
-}

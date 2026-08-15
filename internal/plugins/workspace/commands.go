@@ -8,29 +8,38 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.viewMode == ViewModeList && p.docSearchActive() {
+		return []plugin.Command{
+			{ID: "search-open", Name: "Open", Description: "Open the selected file in this pane", Context: "workspace-doc-search", Priority: 1},
+			{ID: "search-open-tab", Name: "Tab+", Description: "Open the selected file in a new tab", Context: "workspace-doc-search", Priority: 2},
+			{ID: "search-cancel", Name: "Cancel", Description: "Close the search and return to the document", Context: "workspace-doc-search", Priority: 3},
+		}
+	}
 	if p.viewMode == ViewModeList && p.docFocused() {
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 4},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 5},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 2},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 3},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 4},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 5},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 6},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 7},
 		}
 		if doc, _ := p.activeDocPane(); doc != nil && doc.view() != nil && terminallink.Markdown(doc.view().Title()) {
 			renderName := "Raw"
 			if !doc.view().Rendered() {
 				renderName = "Render"
 			}
-			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 6})
+			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 8})
 		}
 		cmds = append(cmds,
-			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 7},
-			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 8},
-			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 9},
-			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 10},
-			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 11},
-			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 12},
-			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 9},
+			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 10},
+			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 11},
+			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 12},
+			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 14},
+			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 15},
 		)
 		return cmds
 	}
@@ -47,6 +56,24 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 9},
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 10},
 		}
+	}
+	if p.viewMode == ViewModeList && p.diffFocused() {
+		cmds := []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Hide diff pane", Context: "workspace-diff", Priority: 1},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active diff tab", Context: "workspace-diff", Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: "workspace-diff", Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: "workspace-diff", Priority: 4},
+			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: "workspace-diff", Priority: 5},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-diff", Priority: 6},
+			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow diff pane", Context: "workspace-diff", Priority: 7},
+			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink diff pane", Context: "workspace-diff", Priority: 8},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-diff", Priority: 9},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-diff", Priority: 10},
+		}
+		if view := p.activeDiffView(); view != nil {
+			cmds = append(cmds, view.Commands("workspace-diff")...)
+		}
+		return cmds
 	}
 	switch p.viewMode {
 	case ViewModeInteractive:
@@ -190,32 +217,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			}
 			// Tab commands only shown when a worktree is selected (not shell)
 			// Shell has no tabs - it shows primer/output directly
-			if !p.selectingShell() {
-				cmds = append(cmds,
-					plugin.Command{ID: "prev-tab", Name: "Tab←", Description: "Previous preview tab", Context: "workspace-preview", Priority: 3},
-					plugin.Command{ID: "next-tab", Name: "Tab→", Description: "Next preview tab", Context: "workspace-preview", Priority: 4},
-				)
-				// Add diff view toggle when on Diff tab
-				if p.previewTab == PreviewTabDiff {
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-scope", Name: "Scope", Description: "Cycle working tree, commits, and aggregate", Context: "workspace-preview", Priority: 5})
-					diffViewName := "Split"
-					switch p.diffViewMode {
-					case DiffViewSideBySide:
-						diffViewName = "Full"
-					case DiffViewFullFile:
-						diffViewName = "Unified"
-					}
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-view", Name: diffViewName, Description: "Cycle diff view mode", Context: "workspace-preview", Priority: 6})
-					// Add file navigation commands when viewing diff with multiple files
-					if p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 1 {
-						cmds = append(cmds,
-							plugin.Command{ID: "next-file", Name: "}", Description: "Next file", Context: "workspace-preview", Priority: 6},
-							plugin.Command{ID: "prev-file", Name: "{", Description: "Previous file", Context: "workspace-preview", Priority: 7},
-							plugin.Command{ID: "file-picker", Name: "Files", Description: "Open file picker", Context: "workspace-preview", Priority: 8},
-						)
-					}
-				}
-			}
+			cmds = append(cmds,
+				plugin.Command{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-preview", Priority: 3},
+			)
 			// Also show agent commands in preview pane
 			wt := p.selectedWorktree()
 			if wt != nil {
@@ -247,7 +251,7 @@ func (p *Plugin) Commands() []plugin.Command {
 					if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 						hasActiveSession = true
 					}
-				} else if wt != nil && wt.Agent != nil && p.previewTab == PreviewTabOutput {
+				} else if wt != nil && wt.Agent != nil {
 					hasActiveSession = true
 				}
 				if hasActiveSession {
@@ -257,7 +261,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if terminalPanelEnabled() && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			if terminalPanelEnabled() {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"
@@ -299,6 +303,20 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
 			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
+			{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-list", Priority: 8},
+		}
+
+		// F opens a document pane, and kanban draws no pane tree, so the key is
+		// only real in list view (see openFinderPane). A footer hint for a key
+		// that does nothing is worse than no hint: the fix is to stop
+		// advertising it where it cannot work, not to make kanban silently
+		// switch views out from under the board.
+		if p.viewMode == ViewModeList {
+			// Priority 8 was this command's home until the Diff pane took it;
+			// 9-16 are the agent and worktree blocks. 17 keeps the ordering
+			// deterministic without renumbering them — see the merge note in
+			// the commit message if Find should sit beside Diff instead.
+			cmds = append(cmds, plugin.Command{ID: "find-file", Name: "Find", Description: "Open a file pane on the file finder", Context: "workspace-list", Priority: 17})
 		}
 
 		// Shell-specific commands when shell is selected
@@ -357,11 +375,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Task linking
 			if wt.TaskID != "" {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 15},
 				)
 			} else {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 15},
 				)
 			}
 		}
@@ -431,6 +449,12 @@ func (p *Plugin) FocusContext() string {
 	case ViewModeFilePicker:
 		return "workspace-file-picker"
 	default:
+		// A pane-scoped search is its own text-input context: while a query has
+		// focus the document's keys — and the host's root-context q — must not
+		// take printable characters from it.
+		if p.docSearchActive() {
+			return "workspace-doc-search"
+		}
 		if p.docFocused() {
 			return "workspace-doc"
 		}
@@ -439,6 +463,9 @@ func (p *Plugin) FocusContext() string {
 		// host's root-context `q` quits Sidecar — to a pane drawn as focused.
 		if p.issueFocused() {
 			return "workspace-issue"
+		}
+		if p.diffFocused() {
+			return "workspace-diff"
 		}
 		if p.filterFocused() && p.activePane == PaneSidebar {
 			// A dedicated text-input context: while the query has focus, app
@@ -455,6 +482,9 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
+	if p.docSearchActive() {
+		return true
+	}
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
 		return true
 	}
@@ -478,6 +508,10 @@ func (p *Plugin) ConsumesTextInput() bool {
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
 	if p.docInfo != nil {
+		return true
+	}
+	// A pane-scoped search surface is a modal with the keyboard, box or no box.
+	if p.docSearchActive() {
 		return true
 	}
 	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive

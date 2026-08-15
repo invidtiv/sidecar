@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -29,7 +30,6 @@ func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	p.sidebarVisible = false
 	p.activePane = PanePreview
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus = 1
 	p.paneNextID = 2
@@ -260,7 +260,7 @@ func docPaneRegion(p *Plugin, id string) *mouse.Region {
 	return nil
 }
 
-func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
+func TestMOnFocusedDocTogglesRenderNotMerge(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
 	p := docPaneTestPlugin(t, root, false)
@@ -271,36 +271,16 @@ func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
 		}
 	}
 	doc, leaf := p.activeDocPane()
-	if doc == nil || leaf == nil || !doc.view().Rendered() || !p.taskMarkdownMode {
-		t.Fatalf("opened doc = %#v rendered=%v task=%v", doc, doc != nil && doc.view().Rendered(), p.taskMarkdownMode)
+	if doc == nil || leaf == nil || !doc.view().Rendered() {
+		t.Fatalf("opened doc = %#v rendered=%v", doc, doc != nil && doc.view().Rendered())
 	}
 	if p.FocusContext() != "workspace-doc" {
-		t.Fatalf("output context = %q, want workspace-doc", p.FocusContext())
+		t.Fatalf("context = %q, want workspace-doc", p.FocusContext())
 	}
 
-	p.handleMouseClick(mouse.MouseAction{
-		Type:   mouse.ActionClick,
-		Region: &mouse.Region{ID: regionPreviewTab, Data: int(PreviewTabTask)},
-	})
-	if p.previewTab != PreviewTabTask || p.paneFocus != leaf.ID {
-		t.Fatalf("task click tab=%v focus=%d, want Task with doc leaf %d", p.previewTab, p.paneFocus, leaf.ID)
-	}
-	if p.FocusContext() == "workspace-doc" {
-		t.Fatal("hidden document kept workspace-doc focus context")
-	}
-
-	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if !doc.view().Rendered() {
-		t.Fatal("task-tab m toggled the hidden document")
-	}
-	if p.taskMarkdownMode {
-		t.Fatal("task-tab m did not toggle task markdown to raw")
-	}
-
-	p.previewTab = PreviewTabOutput
-	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if doc.view().Rendered() || p.taskMarkdownMode {
-		t.Fatalf("output m should toggle the visible doc only: doc=%v task=%v", doc.view().Rendered(), p.taskMarkdownMode)
+	handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !handled || doc.view().Rendered() {
+		t.Fatalf("doc m: handled=%v rendered=%v", handled, doc.view().Rendered())
 	}
 }
 
@@ -633,8 +613,8 @@ func TestDocPaneTabRowClickDoesNotStealPreviewChips(t *testing.T) {
 
 	var chip *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		idx, ok := region.Data.(int)
-		if region.ID == regionPreviewTab && ok && idx == int(PreviewTabDiff) {
+		hit, ok := region.Data.(previewActionHit)
+		if region.ID == regionPreviewAction && ok && hit == previewActionDiff {
 			copy := region
 			chip = &copy
 			break
@@ -649,15 +629,15 @@ func TestDocPaneTabRowClickDoesNotStealPreviewChips(t *testing.T) {
 		Y:      chip.Rect.Y,
 		Region: chip,
 	})
-	if p.previewTab != PreviewTabDiff {
-		t.Fatalf("preview tab = %v, want Diff", p.previewTab)
+	if diff, _ := p.activeDiffPane(); diff == nil {
+		t.Fatal("Diff chip did not open a Diff leaf")
 	}
 	if got := p.activeDocPaneOrNil().view().Title(); got != "main.go" {
 		t.Fatalf("file tab changed to %q on a Diff chip click", got)
 	}
 }
 
-func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
+func TestZoomedDocumentDoesNotRegisterPreviewActionChips(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# readme\n")
 	writeDocPaneFixture(t, root, "main.go", "package main\n")
@@ -666,17 +646,14 @@ func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
 	p.width, p.height = 120, 24
 	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
 	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
-	if p.previewTab != PreviewTabOutput || !p.previewTabsVisible() {
-		t.Fatalf("premise: worktree Output chips should exist: tab=%v visible=%v", p.previewTab, p.previewTabsVisible())
-	}
 
 	p.width, p.height = 40, 24
 	_ = p.View(p.width, p.height)
 	if p.terminalSurfaceGeometry(false).OK {
 		t.Fatal("expected the split to zoom away from the terminal")
 	}
-	if docPaneRegion(p, regionPreviewTab) != nil {
-		t.Fatal("zoomed document still registered Output/Diff/Task chip targets")
+	if docPaneRegion(p, regionPreviewAction) != nil {
+		t.Fatal("zoomed document still registered Diff/Task action chip targets")
 	}
 	clickDrawnDocTab(t, p, 0)
 	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {
@@ -2218,5 +2195,124 @@ func TestDividerReleaseRecapturesTheTerminalWithoutActivation(t *testing.T) {
 
 	if p.viewMode != ViewModeList || p.interactiveState != nil {
 		t.Fatal("the divider gesture activated the terminal; the refresh must not need a click")
+	}
+}
+
+// The `w` and `ctrl+r` document keys are only reachable if the keymap routes
+// them to this plugin's commands in the workspace-doc context, and only
+// discoverable if Commands() names them for the footer. Both halves are
+// asserted here so removing either one fails.
+func TestDocWrapAndRevealAreBoundAndAdvertised(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	registry := keymap.NewRegistry()
+	keymap.RegisterDefaults(registry)
+	p := New()
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
+		setWorkspaceState: func(string, state.WorkspaceState) error { return nil },
+	}
+	if err := p.Init(&plugin.Context{WorkDir: root, ProjectRoot: root, Config: config.Default(), Keymap: registry, Epoch: 5}); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"w": "toggle-wrap", "ctrl+r": "reveal"} {
+		got, ok := registry.CommandForContextKey("workspace-doc", key)
+		if !ok || got != want {
+			t.Fatalf("workspace-doc %q -> %q (bound=%v), want %q", key, got, ok, want)
+		}
+	}
+
+	p.ctx.WorkDir = root
+	p.width, p.height = 140, 36
+	p.shellSelected = true
+	p.shells = []*ShellSession{{Name: "Shell", TmuxName: "test-shell", Agent: &Agent{TmuxPane: "%911", OutputBuf: tty.NewOutputBuffer(20)}}}
+	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
+	p.paneFocus = 1
+	p.paneNextID = 2
+	p.activePane = PanePreview
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+
+	commands := p.Commands()
+	if got := commandNameByID(commands, "toggle-wrap"); got != "Wrap" {
+		t.Fatalf("footer wrap hint = %q, want Wrap", got)
+	}
+	if got := commandNameByID(commands, "reveal"); got != "Reveal" {
+		t.Fatalf("footer reveal hint = %q, want Reveal", got)
+	}
+	for _, id := range []string{"toggle-wrap", "reveal"} {
+		for _, command := range commands {
+			if command.ID == id && command.Context != "workspace-doc" {
+				t.Fatalf("%s command context = %q, want workspace-doc", id, command.Context)
+			}
+		}
+	}
+}
+
+// `w` belongs to the focused document, not to the workspace behind it, and the
+// flip has to reach persisted state without a later save doing the work.
+func TestDocWrapKeyRequiresDocFocusAndPersistsImmediately(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "one two three four five six seven eight\n")
+	p, saved := persistDocPanePlugin(t, root)
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	doc, leaf := p.activeDocPane()
+	if doc == nil || doc.view().Wrap() {
+		t.Fatalf("opened doc = %#v", doc)
+	}
+
+	p.paneFocus = terminalLeafID(p.paneRoot)
+	if handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'w', Text: "w"}); handled {
+		t.Fatal("w was handled as a document key while the terminal was focused")
+	}
+	if doc.view().Wrap() {
+		t.Fatal("w wrapped a document that did not have focus")
+	}
+
+	p.paneFocus = leaf.ID
+	if handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'w', Text: "w"}); !handled || !doc.view().Wrap() {
+		t.Fatalf("w did not toggle wrap on the focused document: wrap=%v", doc.view().Wrap())
+	}
+	tabs, _ := firstDocLeafTabs(workspacePaneLayout(*saved, "shell:test-shell"))
+	if len(tabs) != 1 || !tabs[0].Wrap {
+		t.Fatalf("w did not persist wrap: %#v", tabs)
+	}
+
+	if handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'w', Text: "w"}); !handled || doc.view().Wrap() {
+		t.Fatalf("second w did not unwrap: wrap=%v", doc.view().Wrap())
+	}
+	tabs, _ = firstDocLeafTabs(workspacePaneLayout(*saved, "shell:test-shell"))
+	if len(tabs) != 1 || tabs[0].Wrap {
+		t.Fatalf("unwrap did not persist: %#v", tabs)
+	}
+}
+
+// ctrl+r reveals the focused document's own path, and asks for nothing when the
+// pane has no path to reveal.
+func TestDocRevealKeyNeedsAFocusedPath(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	p := docPaneTestPlugin(t, root, true)
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	doc, leaf := p.activeDocPane()
+	p.activePane = PanePreview
+	p.paneFocus = leaf.ID
+
+	handled, cmd := p.handleDocKey(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	if !handled || cmd == nil {
+		t.Fatalf("ctrl+r on a document with a path: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if got := p.revealActiveDoc(); got == nil {
+		t.Fatal("revealActiveDoc returned no command for a document with a path")
+	}
+
+	// A pathless tab has nothing to hand the file manager.
+	doc.tabs = docview.Tabs{}
+	doc.tabs.Append(docview.New(nil))
+	if doc.view().Title() != "" {
+		t.Fatalf("replacement tab has path %q", doc.view().Title())
+	}
+	handled, cmd = p.handleDocKey(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	if !handled || cmd != nil {
+		t.Fatalf("ctrl+r without a path: handled=%v cmd=%v, want handled with no command", handled, cmd != nil)
 	}
 }

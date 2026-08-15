@@ -93,8 +93,6 @@ func DefaultBindings() []Binding {
 		// Enter from the list starts typing. E is the remaining explicit
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
-		{Key: ",", Command: "prev-tab", Context: "global-workspaces"},
-		{Key: ".", Command: "next-tab", Context: "global-workspaces"},
 		// Display-name write, not create/destroy. Branch and path stay put.
 		{Key: "R", Command: "rename-shell", Context: "global-workspaces"},
 		{Key: "R", Command: "rename-worktree", Context: "global-workspaces"},
@@ -130,6 +128,30 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		// The two search surfaces a focused document pane can open on itself.
+		// Both are rooted at the pane's own directory; the rest of the pane's
+		// keys are registered by the plugin.
+		{Key: "ctrl+p", Command: "find-file", Context: "workspace-doc"},
+		{Key: "f", Command: "search-project", Context: "workspace-doc"},
+
+		// While one of them is open it owns every key in the pane, so only the
+		// ways out and in are named. It is not a root context: esc closes the
+		// search rather than leaving the plugin.
+		{Key: "esc", Command: "search-cancel", Context: "workspace-doc-search"},
+		{Key: "enter", Command: "search-open", Context: "workspace-doc-search"},
+		{Key: "shift+enter", Command: "search-open-tab", Context: "workspace-doc-search"},
+
+		{Key: "q", Command: "close", Context: "global-workspaces-diff"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-diff"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-diff"},
+		{Key: ",", Command: "prev-tab", Context: "global-workspaces-diff"},
+		{Key: ".", Command: "next-tab", Context: "global-workspaces-diff"},
+		{Key: "{", Command: "prev-file", Context: "global-workspaces-diff"},
+		{Key: "}", Command: "next-file", Context: "global-workspaces-diff"},
+		{Key: "Y", Command: "yank-id", Context: "global-workspaces-diff"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-diff"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-diff"},
+
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
 		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
@@ -142,6 +164,24 @@ func DefaultBindings() []Binding {
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-issue"},
 		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
+
+		// Focused project Workspaces Diff leaf. q hides; not a root context.
+		{Key: "q", Command: "close", Context: "workspace-diff"},
+		{Key: "esc", Command: "close", Context: "workspace-diff"},
+		{Key: "x", Command: "close-tab", Context: "workspace-diff"},
+		{Key: ",", Command: "prev-tab", Context: "workspace-diff"},
+		{Key: ".", Command: "next-tab", Context: "workspace-diff"},
+		{Key: "{", Command: "prev-file", Context: "workspace-diff"},
+		{Key: "}", Command: "next-file", Context: "workspace-diff"},
+		{Key: "Y", Command: "yank-id", Context: "workspace-diff"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-diff"},
+		{Key: "tab", Command: "next-pane", Context: "workspace-diff"},
+		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-diff"},
+		{Key: "+", Command: "resize-pane-grow", Context: "workspace-diff"},
+		{Key: "-", Command: "resize-pane-shrink", Context: "workspace-diff"},
+		{Key: "f", Command: "file-picker", Context: "workspace-diff"},
+		{Key: "v", Command: "toggle-diff-view", Context: "workspace-diff"},
+		{Key: "z", Command: "toggle-diff-scope", Context: "workspace-diff"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface
@@ -392,6 +432,10 @@ func DefaultBindings() []Binding {
 		{Key: "l", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "right", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "/", Command: "search", Context: "file-browser-tree"},
+		// The same two search surfaces a workspace file pane opens, on the same
+		// two keys and under the same two names: ctrl+p Find finds a file by
+		// name, f Search searches the project's contents. The names say what the
+		// feature does, so the two surfaces cannot drift apart again.
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-tree"},
 		{Key: "f", Command: "project-search", Context: "file-browser-tree"},
 		{Key: "t", Command: "new-tab", Context: "file-browser-tree"},
@@ -421,6 +465,8 @@ func DefaultBindings() []Binding {
 		// File browser preview context
 		{Key: "tab", Command: "switch-pane", Context: "file-browser-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "file-browser-preview"},
+		// `/` is InFile: this file's contents, as against f Search's whole
+		// project and ctrl+p Find's file names.
 		{Key: "/", Command: "search-content", Context: "file-browser-preview"},
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-preview"},
 		{Key: "f", Command: "project-search", Context: "file-browser-preview"},
@@ -501,6 +547,7 @@ func DefaultBindings() []Binding {
 		{Key: "r", Command: "refresh", Context: "workspace-list"},
 		{Key: "D", Command: "delete-workspace", Context: "workspace-list"},
 		{Key: "d", Command: "show-diff", Context: "workspace-list"},
+		{Key: "d", Command: "show-diff", Context: "workspace-preview"},
 		{Key: "p", Command: "push", Context: "workspace-list"},
 		{Key: "m", Command: "merge-workflow", Context: "workspace-list"},
 		{Key: "T", Command: "link-task", Context: "workspace-list"},
@@ -518,9 +565,8 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
-		{Key: ",", Command: "prev-tab", Context: "workspace-list"},
-		{Key: ".", Command: "next-tab", Context: "workspace-list"},
-		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "P", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "F", Command: "find-file", Context: "workspace-list"},
 		{Key: "R", Command: "rename-shell", Context: "workspace-list"},
 		{Key: "R", Command: "rename-worktree", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},
@@ -552,14 +598,10 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "approve", Context: "workspace-preview"},
 		{Key: "Y", Command: "approve-all", Context: "workspace-preview"},
 		{Key: "N", Command: "reject", Context: "workspace-preview"},
-		{Key: "v", Command: "toggle-diff-view", Context: "workspace-preview"},
-		{Key: "z", Command: "toggle-diff-scope", Context: "workspace-preview"},
 		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-preview"},
-		{Key: ",", Command: "prev-tab", Context: "workspace-preview"},
-		{Key: ".", Command: "next-tab", Context: "workspace-preview"},
 		{Key: "j", Command: "scroll-down", Context: "workspace-preview"},
 		{Key: "k", Command: "scroll-up", Context: "workspace-preview"},
 		{Key: "ctrl+d", Command: "page-down", Context: "workspace-preview"},

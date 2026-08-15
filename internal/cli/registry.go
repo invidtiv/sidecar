@@ -107,21 +107,26 @@ func RootCommand() *Command {
 
 	openCmd := &Command{
 		Name:    "open",
-		Summary: "Show a file or a td issue in a split pane",
-		Usage:   "sidecar open [options] <target>",
-		Long: "Show a file or a td issue to the user, as a split pane in the Sidecar workspace\n" +
-			"containing this shell.",
+		Summary: "Show a file, a td issue, or a git diff in a split pane",
+		Usage:   "sidecar open [options] [<target>]",
+		Long: "Show a file, a td issue, or a git diff to the user, as a split pane in the Sidecar workspace\n" +
+			"containing this shell. --diff with no spec is the working tree. --split only\n" +
+			"overrides the split axis; it never halves a live terminal after content is open.",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside this shell's workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
+			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
+			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
 		},
 		Flags: []Flag{
 			{Name: "--line", Arg: "N", Summary: "Line to reveal (alternative to \"path:line\")"},
+			{Name: "--diff", Summary: "Open a Diff leaf (working tree if no spec)", Bool: true},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
+		Args: ArgSpec{Min: 0, Max: 1, Description: "File, td-xxxxxx, or git spec; omitted with --diff for the working tree"},
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "opened or queued"},
 			{Code: 1, Summary: "state failure"},
@@ -133,11 +138,14 @@ func RootCommand() *Command {
 			{Command: "sidecar open internal/cli/cli.go", Description: "file, in a split beside the terminal"},
 			{Command: "sidecar open internal/cli/cli.go:88", Description: "file at a line"},
 			{Command: "sidecar open td-348d88", Description: "td issue"},
+			{Command: "sidecar open --diff", Description: "working-tree Diff leaf"},
+			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
+			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar open <path>[:line] | td-xxxxxx",
-			Summary:    "Put a file or a td issue in front of the user, beside your terminal",
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec]",
+			Summary:    "Put a file, a td issue, or a git diff in front of the user, beside your terminal",
 		},
 		Run: runOpen,
 	}

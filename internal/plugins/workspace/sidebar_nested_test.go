@@ -191,26 +191,20 @@ func TestNestedShellInteractionAndAttachTargetTmuxSession(t *testing.T) {
 	}
 }
 
-func TestNestedShellExplicitEEntersFromInheritedWorktreeTabs(t *testing.T) {
-	for _, tab := range []PreviewTab{PreviewTabDiff, PreviewTabTask} {
-		t.Run(map[PreviewTab]string{PreviewTabDiff: "diff", PreviewTabTask: "task"}[tab], func(t *testing.T) {
-			installSuccessfulFakeTmux(t)
-			p := nestedSidebarPlugin(t)
-			const session = "sidecar-sh-sidecar-feature-1"
-			parent, shell := p.findNestedShell(session)
-			shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
-			p.selectNestedShell(parent, session)
-			p.activePane = PanePreview
-			p.previewTab = tab
+func TestNestedShellExplicitEEntersFromPreview(t *testing.T) {
+	installSuccessfulFakeTmux(t)
+	p := nestedSidebarPlugin(t)
+	const session = "sidecar-sh-sidecar-feature-1"
+	parent, shell := p.findNestedShell(session)
+	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
+	p.selectNestedShell(parent, session)
+	p.activePane = PanePreview
 
-			p.handleListKeys(keyPressFor("E"))
+	p.handleListKeys(keyPressFor("E"))
 
-			if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||
-				p.interactiveState.TargetSession != session || p.interactiveState.TargetPane != "%9" {
-				t.Fatalf("E from inherited %v tab did not enter nested terminal: mode=%v state=%#v",
-					tab, p.viewMode, p.interactiveState)
-			}
-		})
+	if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||
+		p.interactiveState.TargetSession != session || p.interactiveState.TargetPane != "%9" {
+		t.Fatalf("E did not enter nested terminal: mode=%v state=%#v", p.viewMode, p.interactiveState)
 	}
 }
 
@@ -222,7 +216,6 @@ func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
 	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9"}
 	p.selectNestedShell(parent, session)
 	p.activePane = PanePreview
-	p.previewTab = PreviewTabDiff
 
 	ids := commandIDs(p.Commands())
 	for _, want := range []string{"interactive", "toggle-terminal"} {
@@ -251,7 +244,6 @@ func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {
 	buffer.Update("nested output")
 	shell.Agent = &Agent{Type: AgentShell, TmuxSession: session, TmuxPane: "%9", OutputBuf: buffer}
 	p.selectNestedShell(parent, session)
-	p.previewTab = PreviewTabDiff // A shell surface is terminal-shaped regardless of the old worktree tab.
 
 	if !p.previewShowsTerminal() || p.liveTerminalOutputBuffer(false) != buffer {
 		t.Fatal("nested selection did not use the ordinary terminal buffer/window")

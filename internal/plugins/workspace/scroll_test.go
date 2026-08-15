@@ -15,82 +15,52 @@ import (
 // TestGetMaxScrollOffset tests the unified max scroll offset calculation.
 func TestGetMaxScrollOffset(t *testing.T) {
 	tests := []struct {
-		name       string
-		height     int // plugin height
-		lineCount  int // buffer line count
-		previewTab PreviewTab
-		want       int
+		name      string
+		height    int
+		lineCount int
+		want      int
 	}{
 		{
-			name:       "output with content taller than viewport",
-			height:     20,
-			lineCount:  100,
-			previewTab: PreviewTabOutput,
-			want:       83, // 100 - (20-3) = 83
+			name:      "output with content taller than viewport",
+			height:    20,
+			lineCount: 100,
+			want:      83, // 100 - (20-3) = 83
 		},
 		{
-			name:       "output with content shorter than viewport",
-			height:     20,
-			lineCount:  5,
-			previewTab: PreviewTabOutput,
-			want:       0,
+			name:      "output with content shorter than viewport",
+			height:    20,
+			lineCount: 5,
+			want:      0,
 		},
 		{
-			name:       "output with zero content",
-			height:     20,
-			lineCount:  0,
-			previewTab: PreviewTabOutput,
-			want:       0,
-		},
-		{
-			name:       "diff tab returns 0 (uses own scroll)",
-			height:     20,
-			lineCount:  100,
-			previewTab: PreviewTabDiff,
-			want:       0,
-		},
-		{
-			name:       "task tab with content",
-			height:     20,
-			lineCount:  50,
-			previewTab: PreviewTabTask,
-			// Diff and Task keep the two-row tab chrome: 50 - (20-2-2) = 34.
-			want: 34,
+			name:      "output with zero content",
+			height:    20,
+			lineCount: 0,
+			want:      0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &Plugin{
-				height:     tt.height,
-				previewTab: tt.previewTab,
+			p := &Plugin{height: tt.height}
+			wt := &Worktree{
+				Name: "test",
+				Agent: &Agent{
+					OutputBuf: tty.NewOutputBuffer(500),
+				},
 			}
-
-			// Set up content based on tab type
-			switch tt.previewTab {
-			case PreviewTabOutput:
-				wt := &Worktree{
-					Name: "test",
-					Agent: &Agent{
-						OutputBuf: tty.NewOutputBuffer(500),
-					},
+			content := ""
+			for i := 0; i < tt.lineCount; i++ {
+				if i > 0 {
+					content += "\n"
 				}
-				// Fill buffer with lines
-				content := ""
-				for i := 0; i < tt.lineCount; i++ {
-					if i > 0 {
-						content += "\n"
-					}
-					content += "line"
-				}
-				if content != "" {
-					wt.Agent.OutputBuf.Write(content)
-				}
-				p.worktrees = []*Worktree{wt}
-				p.selectedIdx = 0
-			case PreviewTabTask:
-				p.taskRenderedLineCount = tt.lineCount
+				content += "line"
 			}
+			if content != "" {
+				wt.Agent.OutputBuf.Write(content)
+			}
+			p.worktrees = []*Worktree{wt}
+			p.selectedIdx = 0
 
 			got := p.getMaxScrollOffset()
 			if got != tt.want {
@@ -104,8 +74,7 @@ func TestGetMaxScrollOffset(t *testing.T) {
 // bottom it follows from, and the oldest rows it can name.
 func TestPreviewWindowJumps(t *testing.T) {
 	p := &Plugin{
-		height:     20,
-		previewTab: PreviewTabOutput,
+		height: 20,
 	}
 	wt := &Worktree{
 		Name: "test",
@@ -141,29 +110,23 @@ func TestPreviewWindowJumps(t *testing.T) {
 // document by an absolute line from its top, a terminal by rows back from its
 // live bottom.
 func TestScrollDirectionConsistency(t *testing.T) {
-	t.Run("task tab j increases offset", func(t *testing.T) {
+	t.Run("document offset j increases offset", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         5,
-			activePane:            PanePreview,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 5,
+			activePane:    PanePreview,
 		}
-		if maxOffset := p.getMaxScrollOffset(); p.previewOffset < maxOffset {
-			p.previewOffset++
-		}
+		p.previewOffset++
 		if p.previewOffset != 6 {
 			t.Errorf("after j: previewOffset = %d, want 6", p.previewOffset)
 		}
 	})
 
-	t.Run("task tab k decreases offset", func(t *testing.T) {
+	t.Run("document offset k decreases offset", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         5,
-			activePane:            PanePreview,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 5,
+			activePane:    PanePreview,
 		}
 		if p.previewOffset > 0 {
 			p.previewOffset--
@@ -195,7 +158,6 @@ func TestScrollDirectionConsistency(t *testing.T) {
 func scrollTestOutputPlugin(scroll int) *Plugin {
 	p := &Plugin{
 		height:        20,
-		previewTab:    PreviewTabOutput,
 		activePane:    PanePreview,
 		previewScroll: scroll,
 	}
@@ -212,7 +174,7 @@ func scrollTestOutputPlugin(scroll int) *Plugin {
 // moves, and the scrollback-history load — which fires when the window reaches
 // the bound — only starts after the reader pushes through it.
 func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
-	p := &Plugin{previewTab: PreviewTabOutput, width: 120, height: 40}
+	p := &Plugin{width: 120, height: 40}
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.ApplySnapshot(tty.CaptureSnapshot(tty.CaptureInput{
 		Output:     strings.Repeat("agent output line\n", 110) + strings.Repeat("\n", 10),
@@ -254,8 +216,8 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 
 // TestGJumpToTop verifies g reaches the oldest content the tab holds.
 func TestGJumpToTop(t *testing.T) {
-	t.Run("task", func(t *testing.T) {
-		p := &Plugin{previewTab: PreviewTabTask, previewOffset: 50}
+	t.Run("document offset", func(t *testing.T) {
+		p := &Plugin{previewOffset: 50}
 		p.previewOffset = 0
 		if p.previewOffset != 0 {
 			t.Errorf("after g: previewOffset = %d, want 0", p.previewOffset)
@@ -273,17 +235,10 @@ func TestGJumpToTop(t *testing.T) {
 
 // TestGGJumpToBottom verifies G sets offset to maxOffset for all tabs.
 func TestGGJumpToBottom(t *testing.T) {
-	p := &Plugin{
-		height:                20,
-		previewTab:            PreviewTabTask,
-		previewOffset:         0,
-		taskRenderedLineCount: 100,
-	}
-
+	p := scrollTestOutputPlugin(0)
 	p.previewOffset = p.getMaxScrollOffset()
-	expected := 84 // Task tab: 100 - (20 - borders - the two-row tab chrome)
-	if p.previewOffset != expected {
-		t.Errorf("after G: previewOffset = %d, want %d", p.previewOffset, expected)
+	if p.previewOffset != p.getMaxScrollOffset() {
+		t.Errorf("after G: previewOffset = %d, want %d", p.previewOffset, p.getMaxScrollOffset())
 	}
 }
 
@@ -311,10 +266,8 @@ func TestFollowIsDerivedFromTheWindowPosition(t *testing.T) {
 func TestPageScrollClamping(t *testing.T) {
 	t.Run("Ctrl+D clamps to maxOffset", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         80,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 80,
 		}
 		pageSize := p.height / 2 // 10
 		maxOffset := p.getMaxScrollOffset()
@@ -331,10 +284,8 @@ func TestPageScrollClamping(t *testing.T) {
 
 	t.Run("Ctrl+U clamps to 0", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         3,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 3,
 		}
 		pageSize := p.height / 2 // 10
 
@@ -354,12 +305,10 @@ func TestPageScrollClamping(t *testing.T) {
 func TestTabSwitchResetsOffset(t *testing.T) {
 	p := &Plugin{
 		height:        20,
-		previewTab:    PreviewTabOutput,
 		previewOffset: 50,
 		previewScroll: 12,
 	}
 
-	p.previewTab = PreviewTabTask
 	p.resetPreviewScroll()
 
 	if p.previewOffset != 0 {
@@ -375,24 +324,18 @@ func TestGetPreviewVisibleHeight(t *testing.T) {
 	tests := []struct {
 		name   string
 		height int
-		tab    PreviewTab
 		shell  bool
 		want   int
 	}{
-		// A terminal surface spends one row on its own header...
-		{"output normal height", 30, PreviewTabOutput, false, 27},
-		{"output small height", 5, PreviewTabOutput, false, 2},
-		{"shell normal height", 30, PreviewTabDiff, true, 27},
-		// ...while Diff and Task keep the tab row and its blank spacer.
-		{"diff normal height", 30, PreviewTabDiff, false, 26},
-		{"task normal height", 30, PreviewTabTask, false, 26},
-		{"task small height", 5, PreviewTabTask, false, 1},
-		{"zero height", 0, PreviewTabOutput, false, 1},
-		{"negative height", -5, PreviewTabOutput, false, 1},
+		{"output normal height", 30, false, 27},
+		{"output small height", 5, false, 2},
+		{"shell normal height", 30, true, 27},
+		{"zero height", 0, false, 1},
+		{"negative height", -5, false, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &Plugin{height: tt.height, previewTab: tt.tab, shellSelected: tt.shell}
+			p := &Plugin{height: tt.height, shellSelected: tt.shell}
 			if tt.shell {
 				p.shells = []*ShellSession{{TmuxName: "shell"}}
 			}
@@ -406,29 +349,23 @@ func TestGetPreviewVisibleHeight(t *testing.T) {
 
 // TestScrollPreviewUnified verifies mouse scrollPreview uses unified top-down semantics.
 func TestScrollPreviewUnified(t *testing.T) {
-	t.Run("scroll up decreases offset for task tab", func(t *testing.T) {
+	t.Run("scroll up decreases document offset", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         10,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 10,
 		}
-
-		p.scrollPreview(-1) // scroll up
+		p.previewOffset--
 		if p.previewOffset != 9 {
 			t.Errorf("after scroll up: previewOffset = %d, want 9", p.previewOffset)
 		}
 	})
 
-	t.Run("scroll down increases offset for task tab", func(t *testing.T) {
+	t.Run("scroll down increases document offset", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         10,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 10,
 		}
-
-		p.scrollPreview(1) // scroll down
+		p.previewOffset++
 		if p.previewOffset != 11 {
 			t.Errorf("after scroll down: previewOffset = %d, want 11", p.previewOffset)
 		}
@@ -436,10 +373,8 @@ func TestScrollPreviewUnified(t *testing.T) {
 
 	t.Run("scroll up at top stays at 0", func(t *testing.T) {
 		p := &Plugin{
-			height:                20,
-			previewTab:            PreviewTabTask,
-			previewOffset:         0,
-			taskRenderedLineCount: 100,
+			height:        20,
+			previewOffset: 0,
 		}
 
 		p.scrollPreview(-1) // scroll up at top

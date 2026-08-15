@@ -3,6 +3,7 @@ package workspace
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -93,6 +94,35 @@ func (p *Plugin) sidebarItemSelected(item sidebarNavItem) bool {
 	}
 }
 
+// toastDuration is how long a toast stays up. It is longer than the attach
+// flash because a toast is the only place a refused action explains itself: the
+// window it appears in is the narrow one that caused the refusal, so a reader
+// needs long enough to find it as well as to read it.
+const toastDuration = 4 * time.Second
+
+// fitToast picks the longest form of a toast message that survives the sidebar
+// it is drawn in. The sidebar of the window narrow enough to refuse a split is
+// itself narrow — seventeen columns at 60x24 — and a refusal truncated to
+// "⚠ Document pan…" is a message that never reaches the user it is for.
+func fitToast(msg string, width int) string {
+	candidates := []string{msg}
+	if head, _, ok := strings.Cut(msg, ";"); ok {
+		candidates = append(candidates, strings.TrimSpace(head))
+	}
+	switch {
+	case strings.Contains(msg, "wider"):
+		candidates = append(candidates, "Needs a wider window", "Too narrow")
+	case strings.Contains(msg, "taller"):
+		candidates = append(candidates, "Needs a taller window", "Too short")
+	}
+	for _, candidate := range candidates {
+		if ansi.StringWidth(candidate) <= width {
+			return candidate
+		}
+	}
+	return ansi.Truncate(candidates[len(candidates)-1], width, "…")
+}
+
 // renderSidebarContent projects project-owned shells, worktrees and optional
 // lifecycle actions into the same presentation component used by global
 // Workspaces. Nothing in workspacelist can create, attach, delete or load a
@@ -103,8 +133,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	for _, warning := range p.deleteWarnings {
 		warnings = append(warnings, warningStyle.Render("⚠ "+ansi.Truncate(warning, max(1, width-2), "…")))
 	}
-	if p.toastMessage != "" && !p.toastTime.IsZero() && time.Since(p.toastTime) < flashDuration {
-		warnings = append(warnings, warningStyle.Bold(true).Render("⚠ "+ansi.Truncate(p.toastMessage, max(1, width-2), "…")))
+	if p.toastMessage != "" && !p.toastTime.IsZero() && time.Since(p.toastTime) < toastDuration {
+		warnings = append(warnings, warningStyle.Bold(true).Render("⚠ "+fitToast(p.toastMessage, max(1, width-2))))
 	}
 
 	matched, total := p.filterCounts()

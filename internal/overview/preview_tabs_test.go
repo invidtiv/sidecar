@@ -6,30 +6,26 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-func TestGlobalPreviewChipsOnlyForNonMainWorktrees(t *testing.T) {
+func TestGlobalPreviewActionChips(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 
 	m.workspaces.SelectID("a")
 	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !m.previewTabsVisible() {
-		t.Fatal("non-main worktree should show Output/Diff/Task chips")
+	if !strings.Contains(view, "Diff") {
+		t.Fatalf("topic worktree preview missing Diff chip:\n%s", view)
 	}
-	if !strings.Contains(view, "Output") || !strings.Contains(view, "Diff") || !strings.Contains(view, "Task") {
-		t.Fatalf("non-main worktree preview missing tab chips:\n%s", view)
+	if strings.Contains(view, "Output") {
+		t.Fatalf("topic worktree still drew an Output tab:\n%s", view)
 	}
 
 	m.workspaces.SelectID("c")
-	if !m.previewTabsVisible() {
-		t.Fatal("shell should show Output/Diff chips")
-	}
 	shell := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(shell, "Output") || !strings.Contains(shell, "Diff") {
-		t.Fatalf("shell preview missing Output/Diff chips:\n%s", shell)
+	if !strings.Contains(shell, "Diff") {
+		t.Fatalf("shell preview missing Diff chip:\n%s", shell)
 	}
 	if strings.Contains(shell, "Task") {
 		t.Fatalf("shell preview drew a Task chip:\n%s", shell)
@@ -39,184 +35,50 @@ func TestGlobalPreviewChipsOnlyForNonMainWorktrees(t *testing.T) {
 	ws.IsMain = true
 	m.catalog["a"] = ws
 	m.workspaces.SelectID("a")
-	if m.previewTabsVisible() {
-		t.Fatal("main worktree should have no tab row")
+	main := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(main, "Diff") {
+		t.Fatalf("main worktree preview missing Diff chip:\n%s", main)
 	}
 }
 
-func TestGlobalPreviewDiffWheelStopsAtRenderedBoundaries(t *testing.T) {
+func TestCommaAndPeriodDoNotCycleGlobalPreview(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	m.workspaces.SelectID("a")
-	m.previewTab = workspacediff.TabDiff
-	m.diff.Content = "diff --git a/a b/a\none\ntwo\nthree\nfour\nfive"
-	m.diff.Files = []workspacediff.File{{Path: "a", Raw: "one\ntwo\nthree\nfour\nfive"}}
-	m.WorkspacesView(previewWide, previewTall)
-
-	var x, y int
-	found := false
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		if region.Data == previewRegionKind {
-			x, y = region.Rect.X+region.Rect.W/2, region.Rect.Y+region.Rect.H-2
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("preview region was not registered")
-	}
-	if !m.WorkspacesWheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp}) {
-		t.Fatal("global diff top wheel was not bounded")
-	}
-	m.scrollVisiblePreviewTab(1000)
-	if m.diff.DiffScroll != m.diff.ContentMaxScroll(m.previewTabContentHeight()) {
-		t.Fatalf("global diff overscrolled to %d", m.diff.DiffScroll)
-	}
-	if !m.WorkspacesWheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown}) {
-		t.Fatal("global diff bottom wheel was not bounded")
-	}
-}
-
-func TestCommaAndPeriodCycleGlobalPreviewTabs(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	m.workspaces.SelectID("a")
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("initial tab = %v, want Output", m.previewTab)
-	}
-
-	press(t, m, ".")
-	if m.previewTab != workspacediff.TabDiff {
-		t.Fatalf("period = %v, want Diff", m.previewTab)
-	}
-	if m.WorkspaceFocusContext() != "global-workspaces" {
-		t.Fatalf("context while Diff is showing = %q, want global-workspaces (list still focused)", m.WorkspaceFocusContext())
-	}
-
-	press(t, m, ".")
-	if m.previewTab != workspacediff.TabTask {
-		t.Fatalf("second period = %v, want Task", m.previewTab)
-	}
-	press(t, m, ",")
-	if m.previewTab != workspacediff.TabDiff {
-		t.Fatalf("comma = %v, want Diff", m.previewTab)
-	}
-
-	// j/k still move the list while Diff is showing.
 	before := m.workspaces.SelectedID()
-	press(t, m, "j")
-	if m.workspaces.SelectedID() == before {
-		t.Fatal("j did not move the list while Diff was showing")
+
+	handled, _ := m.WorkspacesKey(key("."))
+	if handled {
+		t.Fatal(". on the list was consumed as next-tab")
+	}
+	if m.preview.diff != nil {
+		t.Fatal(". on the list opened a Diff leaf")
+	}
+	handled, _ = m.WorkspacesKey(key(","))
+	if handled {
+		t.Fatal(", on the list was consumed as prev-tab")
+	}
+	if m.preview.diff != nil {
+		t.Fatal(", on the list opened a Diff leaf")
+	}
+	if m.workspaces.SelectedID() != before {
+		t.Fatal(",/. moved the list selection")
 	}
 }
 
-func TestGlobalDiffLoadsFirstCommitWithoutCursorMove(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	m.workspaces.SelectID("a")
-	press(t, m, ".")
-
-	cmd := m.applyDiffSnapshot(workspacediff.SnapshotMsg{
-		WorkspaceID: "a",
-		Snapshot: &workspacediff.Snapshot{
-			State: workspacediff.LoadStateReady,
-			Commits: []workspacediff.CommitInfo{
-				{Hash: "aaa1111", Subject: "first"},
-				{Hash: "bbb2222", Subject: "second"},
-			},
-		},
-	})
-	if m.diff.Cursor != 0 {
-		t.Fatalf("cursor = %d, want 0", m.diff.Cursor)
-	}
-	if m.diff.FileCount() != 0 {
-		t.Fatalf("file count = %d, want 0 so cursor sits on first commit", m.diff.FileCount())
-	}
-	if cmd == nil {
-		t.Fatal("applying snapshot with cursor on first commit did not issue load")
-	}
-	msg := cmd()
-	loaded, ok := msg.(workspacediff.CommitDetailMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want CommitDetailMsg", msg)
-	}
-	if loaded.Hash != "aaa1111" {
-		t.Fatalf("loaded hash = %q, want first commit aaa1111", loaded.Hash)
-	}
-}
-
-func TestGlobalTaskTabHasNoLinkHint(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	m.workspaces.SelectID("a")
-	press(t, m, ".")
-	press(t, m, ".")
-	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if !strings.Contains(view, "No linked task") {
-		t.Fatalf("task tab missing empty state:\n%s", view)
-	}
-	if strings.Contains(view, "Press 't'") || strings.Contains(view, "Press t") {
-		t.Fatalf("global task tab offered a link key that is not bound:\n%s", view)
-	}
-}
-
-func TestEnterOnDiffSwitchesToOutputAndTypes(t *testing.T) {
+func TestEnterTypesWithoutSwitchingATab(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	m.workspaces.SelectID("a")
-	press(t, m, ".")
-	if m.previewTab != workspacediff.TabDiff {
-		t.Fatal("premise: Diff tab should be showing")
-	}
 
 	press(t, m, "enter")
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("enter left tab at %v, want Output", m.previewTab)
-	}
 	if !m.PreviewInteractive() {
-		t.Fatal("enter from Diff did not start typing")
+		t.Fatal("enter did not start typing")
 	}
 	if terminal.target.Pane != "%1" {
 		t.Fatalf("typed into %+v, want the selected live pane", terminal.target)
 	}
 	if m.WorkspaceFocusContext() != "global-workspaces-terminal" {
 		t.Fatalf("context after enter = %q, want global-workspaces-terminal", m.WorkspaceFocusContext())
-	}
-}
-
-func TestPeriodOnShellCyclesOutputAndDiff(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	m.workspaces.SelectID("c")
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("initial shell tab = %v, want Output", m.previewTab)
-	}
-	press(t, m, ".")
-	if m.previewTab != workspacediff.TabDiff {
-		t.Fatalf("period on shell = %v, want Diff", m.previewTab)
-	}
-	press(t, m, ".")
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("second period on shell = %v, want Output (not Task)", m.previewTab)
-	}
-	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if strings.Contains(view, "Task") {
-		t.Fatalf("shell cycle drew Task:\n%s", view)
-	}
-}
-
-func TestMainHasNoTabCycle(t *testing.T) {
-	m, _ := previewModel(t)
-	run(t, m, m.SetWorkspacesVisible(true))
-	ws := m.catalog["a"]
-	ws.IsMain = true
-	m.catalog["a"] = ws
-	m.workspaces.SelectID("a")
-	handled, _ := m.WorkspacesKey(key("."))
-	if handled {
-		t.Fatal("period on the main worktree was consumed as next-tab")
-	}
-	if m.previewTab != workspacediff.TabOutput {
-		t.Fatalf("main tab = %v, want Output", m.previewTab)
 	}
 }
 
@@ -235,7 +97,7 @@ func TestPreviewDiffPathUsesProjectRootForShells(t *testing.T) {
 	}
 }
 
-func TestChipClickDoesNotType(t *testing.T) {
+func TestDiffActionChipClickDoesNotType(t *testing.T) {
 	m, _, terminal := interactiveModel(t)
 	m.workspaces.SelectID("a")
 	m.WorkspacesView(previewWide, previewTall)
@@ -243,8 +105,8 @@ func TestChipClickDoesNotType(t *testing.T) {
 	var chipX, chipY int
 	found := false
 	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		tab, ok := region.Data.(previewTabHit)
-		if !ok || int(tab) != int(workspacediff.TabDiff) {
+		hit, ok := region.Data.(previewActionHit)
+		if !ok || hit != previewActionDiff {
 			continue
 		}
 		chipX, chipY = region.Rect.X+1, region.Rect.Y
@@ -252,16 +114,14 @@ func TestChipClickDoesNotType(t *testing.T) {
 		break
 	}
 	if !found {
-		t.Fatal("no Diff chip hit region after render")
+		t.Fatal("no Diff action chip hit region after render")
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: chipX, Y: chipY, Button: tea.MouseLeft}))
-	if m.previewTab != workspacediff.TabDiff {
-		t.Fatalf("chip click tab = %v, want Diff", m.previewTab)
+	if m.preview.diff == nil {
+		t.Fatal("Diff chip did not open a Diff leaf")
 	}
-	if m.PreviewInteractive() || terminal.opens != 1 || terminal.IsActive() {
+	if m.PreviewInteractive() {
 		t.Fatal("clicking the Diff chip started typing")
 	}
-	if m.WorkspaceFocusContext() != "global-workspaces" {
-		t.Fatalf("context after chip click = %q, want global-workspaces", m.WorkspaceFocusContext())
-	}
+	_ = terminal
 }

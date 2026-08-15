@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -24,8 +25,18 @@ const (
 	minWidth     = 60
 	minHeight    = 24
 
-	projectSwitcherItemPrefix = "project-switcher-item-"
+	projectSwitcherItemPrefix  = "project-switcher-item-"
+	projectSwitcherAddButtonID = "project-switcher-add"
 )
+
+// shortenHomePath replaces the user's home directory with ~ for display.
+func shortenHomePath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || !strings.HasPrefix(path, home) {
+		return path
+	}
+	return "~" + strings.TrimPrefix(path, home)
+}
 
 // Startup-trace markers: fired once each on the first rendered frame and the
 // first frame after the app has real dimensions (i.e. actual usable UI).
@@ -239,9 +250,74 @@ func (m *Model) ensureProjectSwitcherModal() {
 		AddSection(m.projectSwitcherHintsSection())
 }
 
-// projectSwitcherInputSection renders the filter input.
+// projectSwitcherInputSection renders the filter input with an add-project
+// button beside it. The button is a hit region so it can be clicked, and the
+// app-level key handler moves focus to it with tab or right arrow.
 func (m *Model) projectSwitcherInputSection() modal.Section {
-	return modal.Input("project-filter", &m.projectSwitcherInput)
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		const buttonLabel = "+"
+		buttonWidth := ansi.StringWidth(styles.Button.Render(buttonLabel))
+		gap := 1
+
+		inputBoxWidth := contentWidth - 2 - buttonWidth - gap
+		if inputBoxWidth < 1 {
+			inputBoxWidth = 1
+		}
+		inputInnerWidth := inputBoxWidth - 2
+		if inputInnerWidth < 1 {
+			inputInnerWidth = 1
+		}
+
+		m.projectSwitcherInput.SetWidth(inputInnerWidth)
+		if m.projectSwitcherAddFocused {
+			m.projectSwitcherInput.Blur()
+		} else {
+			m.projectSwitcherInput.Focus()
+		}
+
+		borderColor := styles.BorderNormal
+		if !m.projectSwitcherAddFocused {
+			borderColor = styles.Primary
+		}
+		inputBox := lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(borderColor).
+			Width(inputBoxWidth).
+			Render(m.projectSwitcherInput.View())
+
+		buttonStyle := styles.Button
+		switch {
+		case m.projectSwitcherAddFocused:
+			buttonStyle = styles.ButtonFocused
+		case hoverID == projectSwitcherAddButtonID:
+			buttonStyle = styles.ButtonHover
+		}
+		button := buttonStyle.Render(buttonLabel)
+
+		row := lipgloss.JoinHorizontal(
+			lipgloss.Center,
+			inputBox,
+			strings.Repeat(" ", gap),
+			button,
+		)
+
+		inputHeight := lipgloss.Height(inputBox)
+		buttonY := 0
+		if inputHeight > 1 {
+			buttonY = (inputHeight - 1) / 2
+		}
+
+		return modal.RenderedSection{
+			Content: row,
+			Focusables: []modal.FocusableInfo{{
+				ID:      projectSwitcherAddButtonID,
+				OffsetX: inputBoxWidth + 2 + gap,
+				OffsetY: buttonY,
+				Width:   buttonWidth,
+				Height:  1,
+			}},
+		}
+	}, nil)
 }
 
 // projectSwitcherCountSection renders the project count.
@@ -309,10 +385,11 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			itemID := projectSwitcherItemID(i)
 			isHovered := itemID == hoverID
 
+			var row strings.Builder
 			if isCursor {
-				b.WriteString(cursorStyle.Render("> "))
+				row.WriteString(cursorStyle.Render("> "))
 			} else {
-				b.WriteString("  ")
+				row.WriteString("  ")
 			}
 
 			var nameStyle lipgloss.Style
@@ -333,31 +410,47 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 				name = "◫ " + name
 				nameStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 			}
-			b.WriteString(nameStyle.Render(name))
+			row.WriteString(nameStyle.Render(name))
 			if isCurrent {
-				b.WriteString(styles.Muted.Render(" (current)"))
+				row.WriteString(styles.Muted.Render(" (current)"))
 			}
-			b.WriteString("\n")
+
 			pathDisplay := destination.Path
 			if isOverview {
 				pathDisplay = "All configured projects"
 			}
-			maxPathLen := contentWidth - 4
-			if len(pathDisplay) > maxPathLen {
-				pathDisplay = "..." + pathDisplay[len(pathDisplay)-maxPathLen+3:]
+			pathDisplay = shortenHomePath(pathDisplay)
+
+			// Right-align the path on the same line, truncating from the left
+			// when the row would otherwise overflow.
+			left := row.String()
+			leftWidth := ansi.StringWidth(left)
+			maxPathLen := contentWidth - leftWidth - 2
+			if maxPathLen < 4 {
+				maxPathLen = 4
 			}
-			b.WriteString(styles.Muted.Render("  " + pathDisplay))
+			if len(pathDisplay) > maxPathLen {
+				pathDisplay = "…" + pathDisplay[len(pathDisplay)-maxPathLen+1:]
+			}
+			padding := contentWidth - leftWidth - ansi.StringWidth(pathDisplay)
+			if padding < 1 {
+				padding = 1
+			}
+			b.WriteString(left)
+			b.WriteString(strings.Repeat(" ", padding))
+			b.WriteString(styles.Subtle.Render(pathDisplay))
+
 			if i < scrollOffset+visibleCount-1 && i < len(projects)-1 {
 				b.WriteString("\n")
 			}
 
-			// Each project takes 2 lines (name + path)
+			// Each project takes exactly one line.
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i-scrollOffset)*2,
+				OffsetY: lineOffset + (i - scrollOffset),
 				Width:   contentWidth,
-				Height:  2,
+				Height:  1,
 			})
 		}
 
@@ -1038,10 +1131,16 @@ func (m Model) globalFooterHints() []footerHint {
 
 	var hints []footerHint
 
+	typing := m.textInputFocused()
+
 	// Tab switching hints (consolidated for brevity). The advertised range is
 	// the active scope's own tab count, so the global space never promises a
 	// number that would reach a project plugin.
-	if count := len(m.visibleTabs()); count > 1 {
+	//
+	// A focused text input has taken the digits: typing "2" into a file
+	// finder's query is a query, not a tab switch. A footer that advertises a
+	// binding the focused surface has claimed is not a hint, it is wrong.
+	if count := len(m.visibleTabs()); count > 1 && !typing {
 		label := "plugins"
 		if m.inGlobalScope() {
 			label = "tabs"
@@ -1049,14 +1148,41 @@ func (m Model) globalFooterHints() []footerHint {
 		hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", min(count, 9)), label: label})
 	}
 
+	// The digits are not the only global binding a text input takes. `q` types
+	// a q into the query and `?` types a question mark: precedence level 2 in
+	// update.go forwards the focused surface everything except ctrl+c. So each
+	// remaining global hint is advertised on the first of its keys that still
+	// reaches the host — which is why quit survives as ctrl+c while help, whose
+	// only key is `?`, drops out entirely rather than promising a key that
+	// types.
 	for _, spec := range specs {
-		keys := keysByCmd[spec.id]
-		if len(keys) == 0 {
+		key, ok := firstReachableKey(keysByCmd[spec.id], typing)
+		if !ok {
 			continue
 		}
-		hints = append(hints, footerHint{keys: keys[0], label: spec.label})
+		hints = append(hints, footerHint{keys: key, label: spec.label})
 	}
 	return hints
+}
+
+// firstReachableKey picks the key a global hint should advertise: the first one
+// bound, or — while a text input has the keyboard — the first one the input has
+// not taken.
+func firstReachableKey(keys []string, typing bool) (string, bool) {
+	for _, key := range keys {
+		if typing && !survivesTextInput(key) {
+			continue
+		}
+		return key, true
+	}
+	return "", false
+}
+
+// survivesTextInput reports whether the host still acts on key while a focused
+// surface is consuming text input. Update's level 2 hands the surface every key
+// but one, so this is the one.
+func survivesTextInput(key string) bool {
+	return key == "ctrl+c"
 }
 
 func (m Model) pluginFooterHints(p plugin.Plugin, context string) []footerHint {

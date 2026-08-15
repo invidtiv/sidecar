@@ -83,7 +83,8 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg,
 		renameShellDoneMsg:
 		return true
 	default:
@@ -92,58 +93,56 @@ func IsAsyncMessage(msg tea.Msg) bool {
 }
 
 type Model struct {
-	collector          workspaceinventory.Collector
-	refreshCollector   workspaceinventory.Collector
-	projects           []Project
-	roots              []string
-	generation         int
-	requestID          uint64
-	loading            bool
-	tmuxErr            error
-	results            map[string]workspaceinventory.ProjectResult
-	projectErrors      map[string]error
-	stale              map[string]bool
-	completed          map[int]bool
-	pending            []Project
-	pendingInventory   []Project
-	phase              refreshPhase
-	identityProjects   map[int]Project
-	inventoryOrder     []Project
-	inventoryScheduled map[string]bool
-	inventoryProjects  map[string]Project
-	inventoryResults   map[string]workspaceinventory.ProjectResult
-	statusInputs       map[string]workspaceinventory.ProjectResult
-	active             int
-	currentPanes       []workspaceinventory.Pane
-	shellClaims        workspaceinventory.ShellClaims
-	liveOnly           bool
-	ctx                context.Context
-	cancel             context.CancelFunc
-	traceWriter        io.Writer
-	cycleStart         time.Time
-	configured         int
-	firstResult        bool
-	maxActive          int
-	pollScheduled      bool
-	configuredPaths    []string
-	board              kanban.Component
-	cards              map[string]workspaceinventory.Workspace
-	agentCount         int
-	compactScroll      int
-	mouse              *mouse.Handler
-	workspaces         workspacelist.Model
-	workspacesMouse    *mouse.Handler
-	sidebarWidth       int
-	sidebarVisible     bool
-	catalog            map[string]workspaceinventory.Workspace
-	preview            previewState
-	previewTab         workspacediff.Tab
-	diff               workspacediff.View
-	task               workspacediff.TaskView
-	previewExtrasID    string
-	terminalConfig     tty.Config
-	width              int
-	height             int
+	collector           workspaceinventory.Collector
+	refreshCollector    workspaceinventory.Collector
+	projects            []Project
+	roots               []string
+	generation          int
+	requestID           uint64
+	loading             bool
+	tmuxErr             error
+	results             map[string]workspaceinventory.ProjectResult
+	projectErrors       map[string]error
+	stale               map[string]bool
+	completed           map[int]bool
+	pending             []Project
+	pendingInventory    []Project
+	phase               refreshPhase
+	identityProjects    map[int]Project
+	inventoryOrder      []Project
+	inventoryScheduled  map[string]bool
+	inventoryProjects   map[string]Project
+	inventoryResults    map[string]workspaceinventory.ProjectResult
+	statusInputs        map[string]workspaceinventory.ProjectResult
+	active              int
+	currentPanes        []workspaceinventory.Pane
+	shellClaims         workspaceinventory.ShellClaims
+	liveOnly            bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	traceWriter         io.Writer
+	cycleStart          time.Time
+	configured          int
+	firstResult         bool
+	maxActive           int
+	pollScheduled       bool
+	configuredPaths     []string
+	board               kanban.Component
+	cards               map[string]workspaceinventory.Workspace
+	agentCount          int
+	compactScroll       int
+	mouse               *mouse.Handler
+	workspaces          workspacelist.Model
+	workspacesMouse     *mouse.Handler
+	sidebarWidth        int
+	sidebarVisible      bool
+	catalog             map[string]workspaceinventory.Workspace
+	preview             previewState
+	diff                workspacediff.View
+	terminalConfig      tty.Config
+	width               int
+	height              int
+	previewSpecResolver func(string, string) (string, bool)
 
 	// Working/blocked markers breathe on their own clock, independent of the
 	// refresh poll. The generation lets a tick in flight be discarded.
@@ -169,6 +168,8 @@ type Model struct {
 	viewFlyoutMouse   *mouse.Handler
 
 	pendingViews map[string]*pendingView
+	// openSplit is the request-scoped --split axis override ("right"/"below").
+	openSplit string
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace
@@ -467,9 +468,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitDetailMsg:
 		m.applyCommitDetail(msg)
 		return nil
-	case workspacediff.TaskMsg:
-		m.applyTask(msg)
-		return nil
+	case workspacediff.RangeMsg:
+		return m.applyPreviewDiffRange(msg)
+	case workspacediff.CommitFileDiffMsg:
+		cmd := m.diff.ApplyCommitFileDiff(msg)
+		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil

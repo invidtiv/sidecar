@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // Content is what one pane-tree leaf shows. The tree places boxes and the frame
@@ -35,6 +36,7 @@ const (
 	contentKindTerminal = "terminal"
 	contentKindDoc      = "doc"
 	contentKindIssue    = "issue"
+	contentKindDiff     = "diff"
 )
 
 // Size is the box a content draws into. It is the leaf's whole box, header row
@@ -72,7 +74,9 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 	switch node.Kind {
 	case PaneDoc:
 		doc := p.docs[node.ContentID]
-		if doc == nil || doc.view() == nil {
+		// A pane opened straight into the file finder has no document yet: the
+		// surface it is showing is what chooses the first one.
+		if doc == nil || (doc.view() == nil && doc.mode == nil) {
 			return nil
 		}
 		return &docContent{p: p, doc: doc}
@@ -82,6 +86,12 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 			return nil
 		}
 		return &issueContent{p: p, issue: issue}
+	case PaneDiff:
+		diff := p.diffs[node.ContentID]
+		if diff == nil || diff.view() == nil {
+			return nil
+		}
+		return &diffContent{p: p, diff: diff}
 	default:
 		return &terminalContent{p: p}
 	}
@@ -156,6 +166,9 @@ func (c *docContent) Title() string {
 // subtraction termpreview.SurfaceIn makes for a terminal leaf.
 func (c *docContent) SetSize(size Size) tea.Cmd {
 	c.size = size
+	// The box is kept on the pane as well: a search surface sized on the
+	// keystroke that opens it has no render to learn it from yet.
+	c.doc.boxW, c.doc.boxH = size.Width, size.Height
 	if view := c.doc.view(); view != nil {
 		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
 	}
@@ -164,14 +177,35 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 
 // View draws the tab strip above the viewer. Focus is the frame's answer, so
 // the active tab a click lands on matches the one the leaf drew.
+//
+// A live search surface is composited over the leaf's body as a modal scoped to
+// that box, and the result is still exactly the leaf's box, so the app's header
+// cannot be pushed off screen. The pane's own header row is deliberately left
+// out of the modal's box: it is where the pane says it is in Find or Search
+// mode, and in a pane short enough for the modal to fill its box that row is the
+// only thing still saying so. Six cells of "⌕ Find" is a price every size can
+// pay.
 func (c *docContent) View(render Render) string {
+	// Where the box is, not only how big it is: a click-away test needs the
+	// origin whether or not a surface is up when the click arrives.
+	c.doc.boxX, c.doc.boxY = render.Origin.X, render.Origin.Y
 	body := ""
 	if view := c.doc.view(); view != nil {
 		body = view.View()
 	}
-	return composePaneLeaf(
-		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
-		body)
+	header := c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused)
+	if c.doc.mode != nil {
+		bodyH := c.size.Height - terminalHeaderRows
+		if header == "" || bodyH < 1 {
+			// Nothing to protect: the surface gets the whole box.
+			return c.p.renderDocSearchOverlay(c.doc, composePaneLeaf(header, body),
+				render.Origin, c.size)
+		}
+		origin := mouse.Rect{X: render.Origin.X, Y: render.Origin.Y + terminalHeaderRows}
+		body = c.p.renderDocSearchOverlay(c.doc, body, origin,
+			Size{Width: c.size.Width, Height: bodyH})
+	}
+	return composePaneLeaf(header, body)
 }
 
 // issueContent is the td issue leaf: the pane's own header row above the issue
@@ -209,6 +243,52 @@ func (c *issueContent) View(render Render) string {
 	}
 	return composePaneLeaf(
 		c.p.issuePaneHeaderRow(c.issue, c.size.Width, render.Focused),
+		body)
+}
+
+// diffContent is the Diff leaf: the pane's own header row above the
+// workspacediff viewer. It spends its box like the document and issue leaves.
+type diffContent struct {
+	p    *Plugin
+	diff *diffPane
+	size Size
+}
+
+func (c *diffContent) Kind() string { return contentKindDiff }
+
+func (c *diffContent) Title() string {
+	if view := c.diff.view(); view != nil {
+		return view.Target.TabLabel()
+	}
+	return "Diff"
+}
+
+func (c *diffContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	if view := c.diff.view(); view != nil {
+		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
+	return nil
+}
+
+func (c *diffContent) View(render Render) string {
+	body := ""
+	if view := c.diff.view(); view != nil {
+		c.p.attachDiffPaintTo(view)
+		bodyH := maxInt(c.size.Height-terminalHeaderRows, 0)
+		view.SetSize(c.size.Width, bodyH)
+		body = view.Render(c.size.Width, bodyH, workspacediff.RenderOpts{
+			Truncate: func(s string, w int, suffix string) string {
+				if c.p.truncateCache != nil {
+					return c.p.truncateCache.Truncate(s, w, suffix)
+				}
+				return s
+			},
+			PaintFile: c.p.paintDiffFile,
+		})
+	}
+	return composePaneLeaf(
+		c.p.diffPaneHeaderRow(c.diff, c.size.Width, render.Focused),
 		body)
 }
 

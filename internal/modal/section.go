@@ -497,6 +497,35 @@ func wrapText(text string, width int) string {
 	return strings.Join(result, "\n")
 }
 
+// clampLines holds every line of a section's content to contentWidth, so the
+// height the layout measures is the height the box actually renders at.
+//
+// The box is drawn with a lipgloss Width, which wraps anything wider than the
+// content column onto another row — but that happens after the layout has
+// counted the section's newline-separated lines and reserved rows for them, so
+// every wrapped line costs a row nobody budgeted and pushes the bottom border
+// out of the surface entirely. A section that overflows its column is a bug in
+// the section; clamping here is what keeps that bug from eating the border, and
+// what makes "measured height == rendered height" true rather than usually true.
+func clampLines(content string, contentWidth int) string {
+	if content == "" || contentWidth < 1 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	changed := false
+	for i, line := range lines {
+		if ansi.StringWidth(line) <= contentWidth {
+			continue
+		}
+		lines[i] = ansi.Truncate(line, contentWidth, "…")
+		changed = true
+	}
+	if !changed {
+		return content
+	}
+	return strings.Join(lines, "\n")
+}
+
 // measureHeight returns the number of lines in rendered content.
 // Trims trailing newlines and returns 0 for empty content.
 func measureHeight(content string) int {

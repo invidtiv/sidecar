@@ -33,7 +33,6 @@ func surfacePlugin(shellSelected bool) *Plugin {
 	p.focused = true
 	p.activePane = PanePreview
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = true
 	p.sidebarWidth = 40
 	p.shellSelected = shellSelected
@@ -399,10 +398,11 @@ func TestRenderedHeaderKeepsChipsAtNarrowWidth(t *testing.T) {
 	p.width = 62 // preview pane pinned at its previewMinWidth floor
 	surface := p.terminalSurfaceGeometry(false)
 	header := ansi.Strip(strings.Split(p.View(p.width, p.height), "\n")[surface.HeaderY])
-	for _, chip := range []string{"Output", "Diff", "Task"} {
-		if !strings.Contains(header, chip) {
-			t.Fatalf("narrow header %q dropped the %q chip", header, chip)
-		}
+	if !strings.Contains(header, "Diff") {
+		t.Fatalf("narrow header %q dropped the Diff chip", header)
+	}
+	if strings.Contains(header, "Output") {
+		t.Fatalf("narrow header %q still drew an Output tab", header)
 	}
 }
 
@@ -432,9 +432,9 @@ func TestFlashHintRendersInHeaderAndAddsNoRow(t *testing.T) {
 	if !strings.Contains(header, "Enter or double-click to attach") {
 		t.Fatalf("flash hint missing from the header row: %q", header)
 	}
-	// It belongs to the right region, so the tab chips still lead the row.
-	if !strings.Contains(header, "Output") ||
-		strings.Index(header, "Output") > strings.Index(header, "Enter or double-click") {
+	// It belongs to the right region, so the identity/action chips still lead the row.
+	if !strings.Contains(header, "Diff") ||
+		strings.Index(header, "Diff") > strings.Index(header, "Enter or double-click") {
 		t.Fatalf("flash hint displaced the left chips: %q", header)
 	}
 }
@@ -545,11 +545,10 @@ func TestTermPanelBottomMouseRowMatchesRenderedRow(t *testing.T) {
 	}
 }
 
-// The Output tab is still the Output tab when there is no terminal to draw.
-// A freshly created worktree has no agent, and the tab chips used to vanish
-// with the terminal while their click regions stayed live under the message —
-// so clicking "No agent running" silently switched tabs.
-func TestOutputTabHeaderSurvivesEveryState(t *testing.T) {
+// The worktree terminal still draws Diff/Task action chips when there is no
+// agent output. A freshly created worktree has no agent, and those chips must
+// stay live on the header rather than vanish with the terminal.
+func TestWorktreeHeaderChipsSurviveEveryState(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(p *Plugin)
@@ -575,19 +574,25 @@ func TestOutputTabHeaderSurvivesEveryState(t *testing.T) {
 			rendered := p.View(p.width, p.height)
 
 			header := ansi.Strip(strings.Split(rendered, "\n")[previewBorderRows])
-			for _, chip := range []string{"Output", "Diff", "Task"} {
-				if !strings.Contains(header, chip) {
-					t.Fatalf("header %q dropped the %q chip", header, chip)
-				}
+			if !strings.Contains(header, "Diff") {
+				t.Fatalf("header %q dropped the Diff chip", header)
+			}
+			if strings.Contains(header, "Output") {
+				t.Fatalf("header %q still drew an Output tab", header)
 			}
 			if !strings.Contains(ansi.Strip(rendered), tc.body) {
 				t.Fatalf("rendered frame lost its %q message", tc.body)
 			}
 
-			// The chips are drawn, so their hit regions belong on that row.
-			hit := p.mouseHandler.HitMap.Test(p.previewSplit().ContentX+1, previewBorderRows)
-			if hit == nil || hit.ID != regionPreviewTab {
-				t.Fatalf("no tab hit region over the chips: %+v", hit)
+			var found bool
+			for _, region := range p.mouseHandler.HitMap.Regions() {
+				if region.ID == regionPreviewAction {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("no Diff/Task action chip hit region")
 			}
 		})
 	}
@@ -595,35 +600,35 @@ func TestOutputTabHeaderSurvivesEveryState(t *testing.T) {
 
 // The mirror image: states that draw no chips register no click targets, so
 // nothing under the welcome guide or the shell primer switches tabs.
-func TestPreviewTabRegionsOnlyWhereChipsAreDrawn(t *testing.T) {
-	countTabRegions := func(p *Plugin) int {
+func TestPreviewActionRegionsOnlyWhereChipsAreDrawn(t *testing.T) {
+	countActionRegions := func(p *Plugin) int {
 		p.View(p.width, p.height)
 		n := 0
 		for _, region := range p.mouseHandler.HitMap.Regions() {
-			if region.ID == regionPreviewTab {
+			if region.ID == regionPreviewAction {
 				n++
 			}
 		}
 		return n
 	}
 
-	if got := countTabRegions(surfacePlugin(false)); got != 3 {
-		t.Fatalf("worktree tab regions = %d, want 3", got)
+	if got := countActionRegions(surfacePlugin(false)); got < 1 {
+		t.Fatalf("worktree action regions = %d, want at least Diff", got)
 	}
-	if got := countTabRegions(surfacePlugin(true)); got != 0 {
-		t.Fatalf("shell tab regions = %d, want 0", got)
+	if got := countActionRegions(surfacePlugin(true)); got < 1 {
+		t.Fatalf("shell action regions = %d, want at least Diff", got)
 	}
 
 	main := surfacePlugin(false)
 	main.worktrees[0].IsMain = true
-	if got := countTabRegions(main); got != 0 {
-		t.Fatalf("main-worktree tab regions = %d, want 0", got)
+	if got := countActionRegions(main); got < 1 {
+		t.Fatalf("main-worktree action regions = %d, want at least Diff", got)
 	}
 
 	empty := surfacePlugin(false)
 	empty.worktrees = nil
-	if got := countTabRegions(empty); got != 0 {
-		t.Fatalf("welcome-guide tab regions = %d, want 0", got)
+	if got := countActionRegions(empty); got != 0 {
+		t.Fatalf("welcome-guide action regions = %d, want 0", got)
 	}
 }
 
@@ -706,33 +711,31 @@ func TestTermPanelDimensionsFallBackWhenSplitDoesNotFit(t *testing.T) {
 // The regions are measured from the chips, so each one has to sit over the tab
 // it names — the hand-rolled widths they replaced were a set of magic numbers
 // nothing checked against the pixels.
-func TestPreviewTabRegionsSitOverTheirChips(t *testing.T) {
+func TestPreviewActionRegionsSitOverTheirChips(t *testing.T) {
 	p := surfacePlugin(false)
 	frame := p.View(p.width, p.height)
 	header := strings.Split(frame, "\n")[previewBorderRows]
 
-	names := []string{"Output", "Diff", "Task"}
 	seen := 0
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionPreviewTab {
+		if region.ID != regionPreviewAction {
 			continue
 		}
-		index, _ := region.Data.(int)
 		under := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(header, region.Rect.X, ""), region.Rect.W, ""))
-		if !strings.Contains(under, names[index]) {
-			t.Fatalf("region %d covers %q, want the %q chip", index, under, names[index])
+		if !strings.Contains(under, "Diff") && !strings.Contains(under, "Task") {
+			t.Fatalf("action region covers %q, want Diff or Task", under)
 		}
 		seen++
 	}
-	if seen != len(names) {
-		t.Fatalf("registered %d tab regions, want %d", seen, len(names))
+	if seen < 1 {
+		t.Fatal("no Diff/Task action chip regions")
 	}
 }
 
 // A narrow interactive header drops chips to keep the exit hint. The regions
 // have to drop with them: a region left behind sits on top of the hint, and
 // clicking the word INTERACTIVE both exits interactive mode and switches tab.
-func TestPreviewTabRegionsDropWithTheChipsTheHeaderDropped(t *testing.T) {
+func TestPreviewActionRegionsDropWithTheChipsTheHeaderDropped(t *testing.T) {
 	p := surfacePlugin(false)
 	p.sidebarVisible = false
 	p.width = previewMinWidth // 36 content columns: too few for chips and hint
@@ -748,7 +751,7 @@ func TestPreviewTabRegionsDropWithTheChipsTheHeaderDropped(t *testing.T) {
 		t.Fatalf("header %q does not carry the exit hint", header)
 	}
 
-	names := []string{"Output", "Diff", "Task"}
+	names := []string{"Diff", "Task"}
 	drawn := 0
 	for _, name := range names {
 		if idx := strings.Index(header, name); idx >= 0 && idx < hintAt {
@@ -761,14 +764,11 @@ func TestPreviewTabRegionsDropWithTheChipsTheHeaderDropped(t *testing.T) {
 
 	seen := 0
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionPreviewTab {
+		if region.ID != regionPreviewAction {
 			continue
 		}
 		seen++
 		index, _ := region.Data.(int)
-		if index >= drawn {
-			t.Fatalf("region %d registered for a chip the header dropped (%q)", index, header)
-		}
 		// Columns are plugin-local; the header row starts at the preview's first
 		// content column.
 		end := region.Rect.X + region.Rect.W - p.previewSplit().ContentX

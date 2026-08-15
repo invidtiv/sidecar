@@ -16,7 +16,6 @@ func nativeWorkspacePlugin() *Plugin {
 	p.focused = true
 	p.activePane = PanePreview
 	p.viewMode = ViewModeInteractive
-	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = false
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.Write("zero\none\ntwo")
@@ -71,7 +70,6 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.focused = true
 	p.activePane = PanePreview
 	p.viewMode = ViewModeInteractive
-	p.previewTab = PreviewTabOutput
 	p.sidebarVisible = true
 	p.sidebarWidth = 40
 	p.shellSelected = true

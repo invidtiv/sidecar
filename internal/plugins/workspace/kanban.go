@@ -288,7 +288,6 @@ func (p *Plugin) applyKanbanSelectionChange(oldShellSelected bool, oldShellIdx, 
 		p.selectedNestedTmux != ""
 	if selectionChanged {
 		p.resetPreviewScroll()
-		p.taskLoading = false
 		p.exitInteractiveMode()
 		p.saveSelectionState()
 	}

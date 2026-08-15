@@ -32,6 +32,7 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 
 	for _, s := range m.sections {
 		res := s.Render(contentWidth, focusID, m.hoverID)
+		res.Content = clampLines(res.Content, contentWidth)
 		height := measureHeight(res.Content)
 
 		rendered = append(rendered, renderedSection{
@@ -63,7 +64,7 @@ func (m *Modal) collectFocusIDs(contentWidth int) []string {
 // buildLayout renders all sections, measures heights, and registers hit regions.
 func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string {
 	// Clamp modal width
-	maxWidth := screenW - 4
+	maxWidth := screenW - 2*m.marginX
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
@@ -78,7 +79,7 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	}
 
 	// Compute viewport height budget
-	modalInnerHeight := desiredModalInnerHeight(screenH)
+	modalInnerHeight := desiredModalInnerHeight(screenH, m.marginY)
 	headerLines := 0
 	if m.title != "" {
 		headerLines = 2 // title + blank line
@@ -206,7 +207,7 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 		handler.HitMap.Clear()
 
 		// Background absorber (added first = lowest priority)
-		handler.HitMap.AddRect("modal-backdrop", 0, 0, screenW, screenH, nil)
+		handler.HitMap.AddRect(BackdropRegionID, 0, 0, screenW, screenH, nil)
 
 		// Modal body absorber (for scroll events)
 		handler.HitMap.AddRect("modal-body", modalX, modalY, modalWidth, modalH, nil)
@@ -364,10 +365,11 @@ func hintLines(show bool) int {
 	return 0
 }
 
-// desiredModalInnerHeight calculates the max inner height based on screen size.
-func desiredModalInnerHeight(screenH int) int {
-	// Leave room for modal border and some margin
-	maxH := screenH - 6
+// desiredModalInnerHeight calculates the max inner height based on screen size:
+// the surface less the box's own border and padding, less the margin the modal
+// keeps clear above and below itself.
+func desiredModalInnerHeight(screenH, marginY int) int {
+	maxH := screenH - ChromeHeight - 2*marginY
 	if maxH < 1 {
 		maxH = 1
 	}

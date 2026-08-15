@@ -1002,6 +1002,39 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		projects := m.projectSwitcherFiltered
 
+		// The + button takes focus from the filter input via tab or right
+		// arrow; enter or space then opens add-project.
+		if m.projectSwitcherAddFocused {
+			switch msg.String() {
+			case "enter", " ", "space":
+				m.projectSwitcherAddFocused = false
+				m.initProjectAdd()
+				return m, nil
+			case "tab", "shift+tab", "left", "backtab":
+				m.projectSwitcherAddFocused = false
+				return m, nil
+			case "up", "down", "ctrl+n", "ctrl+p":
+				m.projectSwitcherAddFocused = false
+				// fall through to the normal handling below
+			default:
+				// Typing returns to the filter input.
+				m.projectSwitcherAddFocused = false
+			}
+		} else {
+			switch msg.String() {
+			case "tab":
+				m.projectSwitcherAddFocused = true
+				return m, nil
+			case "right":
+				// Only when the caret is already at the end, so right arrow
+				// still moves through filter text.
+				if m.projectSwitcherInput.Position() >= len(m.projectSwitcherInput.Value()) {
+					m.projectSwitcherAddFocused = true
+					return m, nil
+				}
+			}
+		}
+
 		switch msg.Code {
 		case tea.KeyEnter:
 			// Select project and switch to it
@@ -1724,6 +1757,13 @@ func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
 // consumesTextInput returns true when the active context should treat printable
 // keys as text input (block app-level navigation shortcuts).
 func (m *Model) consumesTextInput() bool {
+	return Model(*m).textInputFocused()
+}
+
+// textInputFocused is consumesTextInput for the value receivers — the footer,
+// above all, which has to know whether the keys it is about to advertise are
+// already spoken for.
+func (m Model) textInputFocused() bool {
 	// A global view overlays the plugin pane and takes keyboard focus, so a
 	// plugin sitting in a text-input mode underneath it does not consume keys.
 	// focusedSurface answers nil for exactly that case.
@@ -1867,6 +1907,10 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 	}
 
 	switch action {
+	case projectSwitcherAddButtonID:
+		m.projectSwitcherAddFocused = false
+		m.initProjectAdd()
+		return m, nil
 	case "cancel":
 		m.resetProjectSwitcher()
 		m.updateContext()

@@ -8,35 +8,13 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-// wrapText wraps text to the specified width.
-func wrapText(text string, width int) string {
-	if width <= 0 {
-		return text
+func padToHeight(content string, height, width int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
 	}
-
-	var lines []string
-	for _, para := range strings.Split(text, "\n") {
-		if len(para) <= width {
-			lines = append(lines, para)
-			continue
-		}
-
-		// Simple word wrapping
-		words := strings.Fields(para)
-		var currentLine string
-		for _, word := range words {
-			if currentLine == "" {
-				currentLine = word
-			} else if len(currentLine)+1+len(word) <= width {
-				currentLine += " " + word
-			} else {
-				lines = append(lines, currentLine)
-				currentLine = word
-			}
-		}
-		if currentLine != "" {
-			lines = append(lines, currentLine)
-		}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
 	}
 	return strings.Join(lines, "\n")
 }

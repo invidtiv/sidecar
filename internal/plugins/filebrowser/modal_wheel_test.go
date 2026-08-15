@@ -1,11 +1,14 @@
 package filebrowser
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/projectsearch"
 )
 
 func fbWheel(x, y int, up bool) tea.MouseWheelMsg {
@@ -177,9 +180,14 @@ func TestFilesQuickOpenCursorBounds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := fbModalPlugin(t, func(p *Plugin) {
 				p.quickOpenMode = true
-				p.quickOpenMatches = make([]QuickOpenMatch, tt.matches)
-				p.quickOpenCursor = tt.cursor
-				p.quickOpenScanning = tt.scanning
+				p.quickOpen = filefind.Cache{
+					Files:    quickOpenFixtureFiles(tt.matches),
+					OK:       true,
+					Scanning: tt.scanning,
+				}
+				f := p.fileFinder()
+				f.Refilter()
+				f.SetCursor(tt.cursor)
 			}, 40)
 			// The wheel moves the cursor wherever the pointer sits, so both a
 			// point over the list and one over the backdrop answer the same.
@@ -192,34 +200,48 @@ func TestFilesQuickOpenCursorBounds(t *testing.T) {
 	}
 }
 
-func TestFilesProjectSearchCursorBounds(t *testing.T) {
-	results := []SearchFileResult{{
-		Path:    "a.go",
-		Matches: []SearchMatch{{LineNo: 1}, {LineNo: 2}, {LineNo: 3}},
-	}}
-	newState := func(cursor int, searching bool) *ProjectSearchState {
-		return &ProjectSearchState{Results: results, Cursor: cursor, IsSearching: searching}
+func quickOpenFixtureFiles(n int) []string {
+	files := make([]string, n)
+	for i := range files {
+		files[i] = "file" + strconv.Itoa(i) + ".go"
 	}
-	last := (&ProjectSearchState{Results: results}).FlatLen() - 1
+	return files
+}
+
+func TestFilesProjectSearchCursorBounds(t *testing.T) {
+	results := []projectsearch.SearchFileResult{{
+		Path:    "a.go",
+		Matches: []projectsearch.SearchMatch{{LineNo: 1}, {LineNo: 2}, {LineNo: 3}},
+	}}
+	last := (&projectsearch.State{Results: results}).FlatLen() - 1
 
 	tests := []struct {
-		name  string
-		state *ProjectSearchState
-		up    bool
-		want  bool
+		name      string
+		cursor    int
+		searching bool
+		noSurface bool
+		up        bool
+		want      bool
 	}{
-		{name: "top up", state: newState(0, false), up: true, want: true},
-		{name: "top down", state: newState(0, false)},
-		{name: "bottom down", state: newState(last, false), want: true},
-		{name: "bottom up (reverse)", state: newState(last, false), up: true},
-		{name: "still searching", state: newState(last, true)},
-		{name: "no state", state: nil},
+		{name: "top up", cursor: 0, up: true, want: true},
+		{name: "top down", cursor: 0},
+		{name: "bottom down", cursor: last, want: true},
+		{name: "bottom up (reverse)", cursor: last, up: true},
+		{name: "still searching", cursor: last, searching: true},
+		{name: "no surface", noSurface: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := fbModalPlugin(t, func(p *Plugin) {
 				p.projectSearchMode = true
-				p.projectSearchState = tt.state
+				if tt.noSurface {
+					return
+				}
+				search := projectsearch.New(t.TempDir(), 0)
+				search.State.Results = results
+				search.State.Cursor = tt.cursor
+				search.State.IsSearching = tt.searching
+				p.projectSearch = search
 			}, 40)
 			if got := p.WheelAtBoundary(fbWheel(30, 10, tt.up)); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
@@ -258,7 +280,8 @@ func TestFilesFileOperationBarLeavesPanesAnswering(t *testing.T) {
 func TestFilesModalHorizontalWheelIsUnknown(t *testing.T) {
 	p := fbModalPlugin(t, func(p *Plugin) {
 		p.quickOpenMode = true
-		p.quickOpenMatches = make([]QuickOpenMatch, 3)
+		p.quickOpen = filefind.Cache{Files: quickOpenFixtureFiles(3), OK: true}
+		p.fileFinder().Refilter()
 	}, 40)
 	if p.WheelAtBoundary(tea.MouseWheelMsg{X: 30, Y: 5, Button: tea.MouseWheelLeft}) {
 		t.Fatal("horizontal wheel must stay unknown")

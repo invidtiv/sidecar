@@ -170,6 +170,10 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 		m.focusPreviewPane(panelayout.Document)
 		return m.syncTerminalGeometry()
 	}
+	if m.preview.diff != nil {
+		m.focusPreviewPane(panelayout.Diff)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 

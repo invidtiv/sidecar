@@ -35,7 +35,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 func (p *Plugin) nativeTerminalActive() bool {
 	return p.focused && p.activePane == PanePreview &&
 		p.viewMode == ViewModeInteractive && p.interactiveState != nil &&
-		p.interactiveState.Active && (p.selectingShell() || p.previewTab == PreviewTabOutput)
+		p.interactiveState.Active
 }
 
 // PreferredMouseMode keeps hover-rich all-motion reporting for ordinary
