@@ -71,7 +71,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	}
 	p.previewTab = PreviewTabOutput
 	reopen := p.reopenHiddenIssuePane()
-	plan, ok := planPaneOpen(p.paneRoot, PaneIssue)
+	plan, ok := planPaneOpen(p.paneRoot, PaneIssue, p.lastPaneBoxes())
 	if !ok {
 		return reopen
 	}

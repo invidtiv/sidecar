@@ -154,7 +154,7 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	}
 	reopen := p.reopenHiddenDocPane()
 	epoch := p.ctx.Epoch
-	plan, planned := planPaneOpen(p.paneRoot, PaneDoc)
+	plan, planned := planPaneOpen(p.paneRoot, PaneDoc, p.lastPaneBoxes())
 	if !planned {
 		return reopen
 	}
@@ -786,7 +786,7 @@ func (p *Plugin) reinsertHiddenContentLeaf(kind PaneKind, saved *state.PaneLayou
 	if !ok {
 		return nil
 	}
-	plan, planned := planPaneOpen(p.paneRoot, kind)
+	plan, planned := planPaneOpen(p.paneRoot, kind, p.lastPaneBoxes())
 	if !planned || plan.Retarget != 0 {
 		return nil
 	}

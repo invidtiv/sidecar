@@ -188,11 +188,11 @@ func TestDiffLeafDoesNotChangeFileIssueSteelThread(t *testing.T) {
 	if cmd := p.showDiffCmd(); cmd == nil {
 		t.Fatal("open Diff failed")
 	}
-	plan, ok := planPaneOpen(p.paneRoot, PaneDoc)
+	plan, ok := planPaneOpen(p.paneRoot, PaneDoc, nil)
 	if !ok || plan.Retarget != 0 || plan.Axis != SplitRows {
 		t.Fatalf("File after Diff should stack on the Diff leaf: %#v ok=%v", plan, ok)
 	}
-	plan, ok = planPaneOpen(p.paneRoot, PaneDiff)
+	plan, ok = planPaneOpen(p.paneRoot, PaneDiff, nil)
 	if !ok || plan.Retarget == 0 {
 		t.Fatalf("second Diff should retarget: %#v ok=%v", plan, ok)
 	}

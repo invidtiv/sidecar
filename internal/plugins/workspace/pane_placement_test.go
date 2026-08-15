@@ -71,21 +71,27 @@ func TestPlanPaneOpenPlacesClickedContentByTheDefaultHeuristic(t *testing.T) {
 			kind: PaneDoc,
 			want: paneOpen{Retarget: 2},
 		},
+		{
+			name: "a third kind stacks on the first content leaf when boxes are unknown",
+			root: stacked,
+			kind: PaneDiff,
+			want: paneOpen{Split: 2, Axis: SplitRows},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := planPaneOpen(tc.root, tc.kind)
+			got, ok := planPaneOpen(tc.root, tc.kind, nil)
 			if !ok || got != tc.want {
 				t.Fatalf("planPaneOpen = %#v ok=%v, want %#v", got, ok, tc.want)
 			}
 		})
 	}
 
-	if _, ok := planPaneOpen(nil, PaneIssue); ok {
+	if _, ok := planPaneOpen(nil, PaneIssue, nil); ok {
 		t.Fatal("a tree with no leaf named a placement")
 	}
-	if _, ok := planPaneOpen(terminal(), PaneTerminal); ok {
+	if _, ok := planPaneOpen(terminal(), PaneTerminal, nil); ok {
 		t.Fatal("a terminal is not content a click opens")
 	}
 }
@@ -475,5 +481,95 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 	}
 	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "clicked.md" {
 		t.Fatalf("the append disturbed the document leaf: %#v", doc)
+	}
+}
+
+// File, then a td issue, then Diff: the third kind stacks on the largest
+// content leaf. The terminal stays a full-height left column — the live pane
+// is not split again.
+func TestClickingAFileThenATdIssueThenDiffKeepsTheTerminalFullHeight(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n\nfile body\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.shells[0].Agent.OutputBuf.Update("wrote clicked.md:1\nfollow-up is td-1a2b3c\n")
+
+	fileCmd := clickTerminalLink(t, p, "clicked.md")
+	if fileCmd == nil {
+		t.Fatal("clicking the file opened nothing")
+	}
+	deliverLoads(t, p, fileCmd)
+	if cmd := clickTerminalLink(t, p, "td-1a2b3c"); cmd == nil {
+		t.Fatal("clicking the td id opened nothing")
+	}
+	if cmd := p.showDiffCmd(); cmd == nil {
+		t.Fatal("opening Diff after File and Issue opened nothing")
+	}
+
+	if p.paneRoot.Split == nil || p.paneRoot.Split.Axis != SplitCols ||
+		p.paneRoot.Split.A.Kind != PaneTerminal {
+		t.Fatalf("Diff open moved the terminal out of its own column: %#v", p.paneRoot)
+	}
+	right := p.paneRoot.Split.B
+	if right.Split == nil || right.Split.Axis != SplitRows || right.Split.B.Kind != PaneIssue {
+		t.Fatalf("right column = %#v, want Issue still below a stacked pair", right)
+	}
+	pair := right.Split.A
+	if pair.Split == nil || pair.Split.Axis != SplitRows ||
+		pair.Split.A.Kind != PaneDoc || pair.Split.B.Kind != PaneDiff {
+		t.Fatalf("Diff did not stack on the document: %#v", pair)
+	}
+
+	boxes, content := paneLeafBoxes(t, p)
+	if len(boxes) != 4 {
+		t.Fatalf("File+Issue+Diff left %d leaves, want four", len(boxes))
+	}
+	if boxes[PaneTerminal].H != content.H || boxes[PaneTerminal].Y != content.Y {
+		t.Fatalf("terminal box %#v, want the left column at the full height of %#v",
+			boxes[PaneTerminal], content)
+	}
+	if boxes[PaneDiff].X != boxes[PaneDoc].X || boxes[PaneDiff].W != boxes[PaneDoc].W {
+		t.Fatalf("diff box %#v is not in the document's column %#v", boxes[PaneDiff], boxes[PaneDoc])
+	}
+}
+
+// Areas, not kind order, name the leaf a third content kind splits. Equal
+// areas (and nil boxes) keep today's DFS-A answer; a dragged-larger document
+// still wins; a dragged-larger issue is the case today's walk would get wrong.
+func TestPlanOpenSplitsTheLargestContentLeaf(t *testing.T) {
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	doc := &PaneNode{ID: 2, Kind: PaneDoc, ContentID: 2}
+	issue := &PaneNode{ID: 3, Kind: PaneIssue, ContentID: 3}
+	stack := &PaneNode{ID: 4, Split: &PaneSplit{Axis: SplitRows, Ratio: 50, A: doc, B: issue}}
+	p.paneRoot = &PaneNode{ID: 5, Split: &PaneSplit{Axis: SplitCols, Ratio: 50,
+		A: &PaneNode{ID: 1, Kind: PaneTerminal},
+		B: stack,
+	}}
+	p.paneFocus, p.paneNextID = 2, 6
+
+	equal := map[int]Box{2: {W: 40, H: 10}, 3: {W: 40, H: 10}}
+	got, ok := planPaneOpen(p.paneRoot, PaneDiff, equal)
+	if !ok || got != (paneOpen{Split: 2, Axis: SplitRows}) {
+		t.Fatalf("equal areas = %#v ok=%v, want DFS-A document", got, ok)
+	}
+	if got, ok := planPaneOpen(p.paneRoot, PaneDiff, nil); !ok || got != (paneOpen{Split: 2, Axis: SplitRows}) {
+		t.Fatalf("nil boxes = %#v ok=%v, want DFS-A document", got, ok)
+	}
+
+	stack.Split.Ratio = 70
+	got, ok = planPaneOpen(p.paneRoot, PaneDiff, p.lastPaneBoxes())
+	if !ok || got != (paneOpen{Split: 2, Axis: SplitRows}) {
+		t.Fatalf("dragged-larger document = %#v ok=%v last=%#v", got, ok, p.lastPaneBoxes())
+	}
+
+	stack.Split.Ratio = 25
+	got, ok = planPaneOpen(p.paneRoot, PaneDiff, p.lastPaneBoxes())
+	if !ok || got != (paneOpen{Split: 3, Axis: SplitRows}) {
+		t.Fatalf("dragged-larger issue = %#v ok=%v last=%#v", got, ok, p.lastPaneBoxes())
+	}
+
+	p.width = 20
+	if boxes := p.lastPaneBoxes(); boxes != nil {
+		t.Fatalf("zoomed layout offered areas %#v", boxes)
 	}
 }

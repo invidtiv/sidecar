@@ -148,20 +148,29 @@ type OpenPlan struct {
 }
 
 // PlanOpen keeps the terminal in a full-height left column: the first content
-// opens beside it, a different content kind stacks in the right column, and a
-// repeated kind retargets its existing leaf.
-func PlanOpen(root *Node, kind Kind) (OpenPlan, bool) {
+// opens beside it, a different content kind stacks in the right column, a later
+// content kind stacks on the largest content leaf, and a repeated kind
+// retargets its existing leaf. boxes may be nil; ties and missing geometry
+// follow the first content leaf in the tree.
+func PlanOpen(root *Node, kind Kind, boxes map[int]Box) (OpenPlan, bool) {
 	if kind == Terminal {
 		return OpenPlan{}, false
 	}
 	if leaf := FirstOfKind(root, kind); leaf != nil {
 		return OpenPlan{Retarget: leaf.ID}, true
 	}
-	if leaf := firstContent(root); leaf != nil {
-		return OpenPlan{Split: leaf.ID, Axis: Rows}, true
-	}
-	if leaf := FirstOfKind(root, Terminal); leaf != nil {
-		return OpenPlan{Split: leaf.ID, Axis: Columns}, true
+	contents := contentLeaves(root)
+	switch {
+	case len(contents) == 0:
+		if leaf := FirstOfKind(root, Terminal); leaf != nil {
+			return OpenPlan{Split: leaf.ID, Axis: Columns}, true
+		}
+	case len(contents) == 1:
+		return OpenPlan{Split: contents[0].ID, Axis: Rows}, true
+	default:
+		if leaf := largestContentLeaf(contents, boxes); leaf != nil {
+			return OpenPlan{Split: leaf.ID, Axis: Rows}, true
+		}
 	}
 	return OpenPlan{}, false
 }
@@ -182,20 +191,36 @@ func FirstOfKind(node *Node, kind Kind) *Node {
 	return FirstOfKind(node.Split.B, kind)
 }
 
-func firstContent(node *Node) *Node {
+func contentLeaves(node *Node) []*Node {
 	if node == nil {
 		return nil
 	}
 	if node.Split == nil {
 		if node.Kind != Terminal {
-			return node
+			return []*Node{node}
 		}
 		return nil
 	}
-	if leaf := firstContent(node.Split.A); leaf != nil {
-		return leaf
+	return append(contentLeaves(node.Split.A), contentLeaves(node.Split.B)...)
+}
+
+func largestContentLeaf(contents []*Node, boxes map[int]Box) *Node {
+	var best *Node
+	bestArea := -1
+	for _, leaf := range contents {
+		if leaf == nil {
+			continue
+		}
+		area := 0
+		if box, ok := boxes[leaf.ID]; ok {
+			area = box.W * box.H
+		}
+		if best == nil || area > bestArea {
+			best = leaf
+			bestArea = area
+		}
 	}
-	return firstContent(node.Split.B)
+	return best
 }
 
 func SplitLeaf(root *Node, leafID int, axis Axis, newLeaf *Node) (*Node, int) {

@@ -115,7 +115,7 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 // willRetargetPreviewPane reports whether opening kind would land in a pane
 // that is already on screen rather than splitting a new one.
 func (m *Model) willRetargetPreviewPane(kind panelayout.Kind) bool {
-	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind)
+	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind, m.lastPreviewBoxes())
 	return ok && plan.Retarget != 0
 }
 

@@ -122,7 +122,7 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 // willRetargetPane reports whether opening kind would land in a pane that is
 // already on screen rather than splitting a new one.
 func (p *Plugin) willRetargetPane(kind PaneKind) bool {
-	plan, ok := planPaneOpen(p.paneRoot, kind)
+	plan, ok := planPaneOpen(p.paneRoot, kind, p.lastPaneBoxes())
 	return ok && plan.Retarget != 0
 }
 

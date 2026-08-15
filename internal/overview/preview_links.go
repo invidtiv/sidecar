@@ -419,11 +419,33 @@ func previewPaneFloors() panelayout.Floors {
 	}
 }
 
+// lastPreviewBoxes is the tiled leaf geometry for the current preview box.
+// PlanOpen reads areas from these boxes; a tree that does not fit (the zoomed
+// LayoutTree case) has no areas to offer.
+func (m *Model) lastPreviewBoxes() map[int]panelayout.Box {
+	box, ok := m.previewBox()
+	if !ok {
+		return nil
+	}
+	leaves, _, fits := panelayout.LayoutPanes(m.preview.paneRoot, termpreview.Box{W: box.W, H: box.H}, previewPaneFloors())
+	if !fits {
+		return nil
+	}
+	boxes := make(map[int]panelayout.Box, len(leaves))
+	for _, leaf := range leaves {
+		if leaf.Node == nil {
+			continue
+		}
+		boxes[leaf.Node.ID] = leaf.Box
+	}
+	return boxes
+}
+
 func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.Cmd) {
 	if m.preview.paneRoot == nil {
 		m.resetActivePreviewPanes()
 	}
-	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind)
+	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind, m.lastPreviewBoxes())
 	if !ok {
 		return 0, nil
 	}
