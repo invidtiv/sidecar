@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/workspaceops"
 	"golang.org/x/sys/unix"
 )
 
@@ -371,186 +371,27 @@ func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, bas
 	}, nil
 }
 
-func safeSetupRelativePath(path string) bool {
-	clean := filepath.Clean(path)
-	return path != "" && clean != "." && clean != ".." && !filepath.IsAbs(path) && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
-}
+// The path-containment and durable-write layer now lives in
+// internal/workspaceops, so the global browser can reach the same
+// implementation without importing this plugin. These are the plugin's names
+// for it; there is one implementation, not two.
+var (
+	safeSetupRelativePath            = workspaceops.SafeRelativePath
+	containedRegularFile             = workspaceops.ContainedRegularFile
+	openContainedRegularFile         = workspaceops.OpenContainedRegularFile
+	openContainedRegularFileWithHook = workspaceops.OpenContainedRegularFileWithHook
+	openPinnedDirectory              = workspaceops.OpenPinnedDirectory
+	walkPinnedDirectory              = workspaceops.WalkPinnedDirectory
+	normalizeContainmentOpenError    = workspaceops.NormalizeOpenError
+	copyOpenFile                     = workspaceops.CopyOpenFile
+	ensureRealDirectoryPath          = workspaceops.EnsureRealDirectoryPath
+	mkdirPinnedTemp                  = workspaceops.MkdirPinnedTemp
+	writeDurableFile                 = workspaceops.WriteDurableFile
+)
 
-func containedRegularFile(root, rel string) (string, error) {
-	file, err := openContainedRegularFile(root, rel)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = file.Close() }()
-	return file.Name(), nil
-}
-
-func openContainedRegularFile(root, rel string) (*os.File, error) {
-	return openContainedRegularFileWithHook(root, rel, nil)
-}
-
-func openContainedRegularFileWithHook(root, rel string, beforeWalk func()) (*os.File, error) {
-	if !safeSetupRelativePath(rel) {
-		return nil, fmt.Errorf("path must remain relative")
-	}
-	rootReal, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil, err
-	}
-	rootDir, err := openPinnedDirectory(rootReal, ".", false)
-	if err != nil {
-		return nil, err
-	}
-	if beforeWalk != nil {
-		beforeWalk()
-	}
-	dir, err := walkPinnedDirectory(rootDir, filepath.Dir(filepath.Clean(rel)), false)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = dir.Close() }()
-	leaf := filepath.Base(filepath.Clean(rel))
-	fd, err := unix.Openat(int(dir.Fd()), leaf, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, normalizeContainmentOpenError(filepath.Join(rootReal, filepath.Clean(rel)), err)
-	}
-	target := filepath.Join(rootReal, filepath.Clean(rel))
-	file := os.NewFile(uintptr(fd), target)
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, fmt.Errorf("artifact is not a regular file: %s", target)
-	}
-	return file, nil
-}
-
-func openPinnedDirectory(root, rel string, create bool) (*os.File, error) {
-	rootReal, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil, err
-	}
-	fd, err := unix.Open(rootReal, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
-	current := os.NewFile(uintptr(fd), rootReal)
-	return walkPinnedDirectory(current, rel, create)
-}
-
-func walkPinnedDirectory(current *os.File, rel string, create bool) (*os.File, error) {
-	clean := filepath.Clean(rel)
-	if clean == "." || clean == "" {
-		return current, nil
-	}
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		_ = current.Close()
-		return nil, fmt.Errorf("directory path escapes pinned root")
-	}
-	for _, component := range strings.Split(clean, string(filepath.Separator)) {
-		if component == "" || component == "." {
-			continue
-		}
-		if create {
-			if err := unix.Mkdirat(int(current.Fd()), component, 0755); err != nil && !errors.Is(err, unix.EEXIST) {
-				_ = current.Close()
-				return nil, err
-			}
-		}
-		nextFD, err := unix.Openat(int(current.Fd()), component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
-		if err != nil {
-			path := filepath.Join(current.Name(), component)
-			_ = current.Close()
-			return nil, normalizeContainmentOpenError(path, err)
-		}
-		next := os.NewFile(uintptr(nextFD), filepath.Join(current.Name(), component))
-		_ = current.Close()
-		current = next
-	}
-	return current, nil
-}
-
-// containmentPathError gives callers a stable, actionable refusal while
-// retaining the platform errno for errors.Is and diagnostics. With O_NOFOLLOW,
-// Darwin reports a final symlink as ELOOP and a symlink used as a directory as
-// ENOTDIR; both mean the path cannot be safely traversed.
-type containmentPathError struct {
-	Path string
-	Err  error
-}
-
-func (e *containmentPathError) Error() string {
-	return fmt.Sprintf("path containment refused for %q: symlink or non-directory component", e.Path)
-}
-
-func (e *containmentPathError) Unwrap() error { return e.Err }
-
-func normalizeContainmentOpenError(path string, err error) error {
-	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
-		return &containmentPathError{Path: path, Err: err}
-	}
-	return err
-}
-
-func copyOpenFile(source *os.File, dst string) error {
-	info, err := source.Stat()
-	if err != nil {
-		return err
-	}
-	dest, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, info.Mode())
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(dest, source)
-	if syncErr := dest.Sync(); copyErr == nil {
-		copyErr = syncErr
-	}
-	if closeErr := dest.Close(); copyErr == nil {
-		copyErr = closeErr
-	}
-	return copyErr
-}
-
-// ensureRealDirectoryPath rejects symlink traversal for every existing path
-// component below root. Missing components are allowed only when requested;
-// callers re-run this after creation to narrow the remaining TOCTOU window.
-func ensureRealDirectoryPath(root, target string, requireExisting bool) error {
-	rootReal, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(rootReal, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path escapes allowed root")
-	}
-	current := rootReal
-	for _, component := range strings.Split(rel, string(filepath.Separator)) {
-		if component == "" || component == "." {
-			continue
-		}
-		current = filepath.Join(current, component)
-		info, statErr := os.Lstat(current)
-		if errors.Is(statErr, os.ErrNotExist) {
-			if requireExisting {
-				return statErr
-			}
-			continue
-		}
-		if statErr != nil {
-			return statErr
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink path component is not allowed: %s", current)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("path component is not a directory: %s", current)
-		}
-	}
-	return nil
-}
+// containmentPathError is the plugin's name for the shared refusal type, kept
+// so existing errors.As call sites read unchanged.
+type containmentPathError = workspaceops.PathError
 
 func addCreatedWorktree(ctx context.Context, repoKey string, plan *CreateOperationPlan) (*Worktree, error) {
 	return addCreatedWorktreeWithRunner(ctx, repoKey, plan, func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() })
@@ -641,18 +482,6 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 	return wt, nil
 }
 
-func mkdirPinnedTemp(root *os.File) (string, error) {
-	for attempt := 0; attempt < 100; attempt++ {
-		name := fmt.Sprintf(".sidecar-worktree-%d-%d", os.Getpid(), time.Now().UnixNano()+int64(attempt))
-		if err := unix.Mkdirat(int(root.Fd()), name, 0700); err == nil {
-			return name, nil
-		} else if !errors.Is(err, unix.EEXIST) {
-			return "", err
-		}
-	}
-	return "", fmt.Errorf("could not allocate a staging directory")
-}
-
 func createdWorktree(repoKey string, plan *CreateOperationPlan, head string) *Worktree {
 	wt := &Worktree{Key: stablePathKey(plan.Path), RepoKey: repoKey, Name: plan.DisplayName, Path: plan.Path,
 		Branch: plan.Branch, BaseBranch: strings.TrimPrefix(plan.SourceRef, "refs/heads/"), TaskID: plan.TaskID,
@@ -710,36 +539,6 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 		add(CreateOutcomeHook, "run "+plan.HookPath, plan.HookRequired, err)
 	}
 	return result
-}
-
-func writeDurableFile(path string, data []byte, mode os.FileMode) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".sidecar-write-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err = tmp.Chmod(mode); err == nil {
-		_, err = tmp.Write(data)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dir.Close() }()
-	return dir.Sync()
 }
 
 func runSetupHookContext(ctx context.Context, plan *CreateOperationPlan) error {

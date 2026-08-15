@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 var openCodeRunPrefixRe = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
@@ -868,19 +869,10 @@ func getPaneID(sessionName string) string {
 	if paneID, ok := globalPaneIDCache.get(sessionName); ok {
 		return paneID
 	}
-
-	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	// Return first pane ID (sessions typically have one pane)
-	paneID := strings.TrimSpace(string(output))
-	if idx := strings.Index(paneID, "\n"); idx > 0 {
-		paneID = paneID[:idx]
-	}
-
-	// Cache for future lookups
+	// One tmux call, in workspaceops, so a global caller asking the same
+	// question does not grow a second copy of it. The cache stays here: it is
+	// this plugin's optimisation, not part of what the question means.
+	paneID := workspaceops.PaneID(sessionName)
 	if paneID != "" {
 		globalPaneIDCache.set(sessionName, paneID)
 	}
@@ -1802,10 +1794,7 @@ func (p *Plugin) StopAgent(wt *Worktree) tea.Cmd {
 }
 
 // sessionExists checks if a tmux session exists.
-func sessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
-	return cmd.Run() == nil
-}
+func sessionExists(name string) bool { return workspaceops.SessionExists(name) }
 
 // detectOrphanedWorktrees marks worktrees as orphaned if they have a saved
 // agent type but no running tmux session.
