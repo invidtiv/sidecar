@@ -624,9 +624,13 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) applyCreateAction(action string, previousProject, previousKind int) tea.Cmd {
-	m.syncCreateAgentFromIdx()
+	// Kind reorder moves None between the ends of the agent list. Syncing the
+	// old index against the new order would rewrite createAgentType (None→claude,
+	// claude→codex). Rematch the chosen type onto the new order instead.
 	if m.createKindIndex != previousKind {
 		m.rematchCreateAgentIndex()
+	} else {
+		m.syncCreateAgentFromIdx()
 	}
 	if m.createProjectIndex != previousProject || m.createKindIndex != previousKind {
 		if project, ok := m.selectedCreateProject(); ok {

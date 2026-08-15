@@ -472,6 +472,63 @@ func TestCreateModalKindClickChangesKindAndPlaceholder(t *testing.T) {
 	}
 }
 
+func TestCreateModalKindSwitchKeepsChosenAgent(t *testing.T) {
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "claude",
+		Agents:           []string{"claude", "grok"},
+	}}}
+
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	if m.selectedCreateAgent() != "claude" {
+		t.Fatalf("default shell agent = %q, want claude", m.selectedCreateAgent())
+	}
+	beforeType, beforeIdx := m.createAgentType, m.createAgentIndex
+
+	m.createModal.SetFocus(globalCreateKindID)
+	if handled, cmd := m.handleCreateShellKey(createKey("j")); !handled || cmd != nil {
+		t.Fatalf("kind j handled=%v cmd=%v", handled, cmd)
+	}
+	if m.createKindIndex != globalCreateWorktree {
+		t.Fatalf("kind after j = %d, want worktree", m.createKindIndex)
+	}
+	if got := m.selectedCreateAgent(); got != beforeType {
+		t.Fatalf("kind switch remapped agent %q@%d → %q@%d", beforeType, beforeIdx, got, m.createAgentIndex)
+	}
+
+	region, ok := createHit(m, globalCreateKindID)
+	if !ok {
+		t.Fatal("kind control missing after rebuild")
+	}
+	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{
+		X: region.Rect.X + 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+	}); cmd != nil {
+		t.Fatalf("kind click submitted: %v", cmd)
+	}
+	if m.createKindIndex != globalCreateShell {
+		t.Fatalf("kind after click = %d, want shell", m.createKindIndex)
+	}
+	if got := m.selectedCreateAgent(); got != "claude" {
+		t.Fatalf("click back to shell remapped agent to %q", got)
+	}
+
+	m.createAgentType = ""
+	m.rematchCreateAgentIndex()
+	m.prefillCreateAgentInput()
+	if m.selectedCreateAgent() != "" {
+		t.Fatalf("None not selected: %q", m.selectedCreateAgent())
+	}
+	m.createModal.SetFocus(globalCreateKindID)
+	m.handleCreateShellKey(createKey("j"))
+	if m.createKindIndex != globalCreateWorktree {
+		t.Fatalf("kind after None switch = %d, want worktree", m.createKindIndex)
+	}
+	if got := m.selectedCreateAgent(); got != "" {
+		t.Fatalf("switching kind remapped None to %q", got)
+	}
+}
+
 func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
