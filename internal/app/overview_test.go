@@ -35,6 +35,7 @@ type navigationPlugin struct {
 	terminalOpen    bool
 	terminalResizes int
 	terminalMsgs    int
+	mouseClicks     int
 	focusChanges    []bool
 	focusNotices    int
 }
@@ -46,6 +47,9 @@ func (p *navigationPlugin) Init(*plugin.Context) error { p.inits++; return nil }
 func (p *navigationPlugin) Start() tea.Cmd             { return nil }
 func (p *navigationPlugin) Stop()                      {}
 func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, ok := msg.(tea.MouseClickMsg); ok {
+		p.mouseClicks++
+	}
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		p.keyInputs++
 	}

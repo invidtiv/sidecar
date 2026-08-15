@@ -274,33 +274,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Only row 0 is painted header chrome. Row 1 is intentional breathing
 		// room and must remain inert even though both rows make up headerHeight.
+		// Left-clicks anywhere in that band stay here so they are not rewritten
+		// into plugin-local Y<0 (some surfaces treat that as the first row).
 		mi := msg.Mouse()
 		_, isClickPress := msg.(tea.MouseClickMsg)
-		if mi.Y == 0 && isClickPress && mi.Button == tea.MouseLeft {
-			// Brand logo opens the Overview (when the feature is enabled).
-			if start, end, ok := m.getLogoBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				return m, m.toggleOverview()
-			}
+		if isClickPress && mi.Button == tea.MouseLeft && mi.Y < headerHeight {
+			if mi.Y == 0 {
+				// Brand logo opens the Overview (when the feature is enabled).
+				if start, end, ok := m.getLogoBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, m.toggleOverview()
+				}
 
-			if start, end, ok := m.getProjectRestoreBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				return m, m.exitOverview()
-			}
+				if start, end, ok := m.getProjectRestoreBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, m.exitOverview()
+				}
 
-			// The project selector is a stable far-right target in both scopes.
-			if start, end, ok := m.getProjectSelectorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				m.showProjectSwitcher = true
-				m.activeContext = "project-switcher"
-				m.initProjectSwitcher()
-				return m, nil
-			}
+				// The project selector is a stable far-right target in both scopes.
+				if start, end, ok := m.getProjectSelectorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					m.showProjectSwitcher = true
+					m.activeContext = "project-switcher"
+					m.initProjectSwitcher()
+					return m, nil
+				}
 
-			// Check if click is on a tab. The bounds carry the typed tab of the
-			// scope that painted them, so a click activates that tab and only
-			// that tab.
-			tabBounds := m.getTabBounds()
-			for _, bounds := range tabBounds {
-				if mi.X >= bounds.Start && mi.X < bounds.End {
-					return m, m.activateTab(bounds.Tab)
+				// Check if click is on a tab. The bounds carry the typed tab of the
+				// scope that painted them, so a click activates that tab and only
+				// that tab.
+				tabBounds := m.getTabBounds()
+				for _, bounds := range tabBounds {
+					if mi.X >= bounds.Start && mi.X < bounds.End {
+						return m, m.activateTab(bounds.Tab)
+					}
 				}
 			}
 			return m, nil

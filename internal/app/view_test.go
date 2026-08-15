@@ -491,6 +491,24 @@ func TestHeaderControlsOnlyActivateOnPaintedRow(t *testing.T) {
 	}
 }
 
+func TestHeaderSpacerClicksDoNotReachPlugins(t *testing.T) {
+	m, plugins := scopeBaselineModel(t, "git")
+	m.scope = ScopeProject
+	m.width, m.height, m.ready = 160, 40, true
+	git := plugins["git"]
+	before := git.mouseClicks
+
+	_, _ = m.Update(tea.MouseClickMsg{X: 20, Y: 1, Button: tea.MouseLeft})
+	if git.mouseClicks != before {
+		t.Fatalf("spacer click reached the project plugin: clicks=%d", git.mouseClicks)
+	}
+
+	_, _ = m.Update(tea.MouseClickMsg{X: 20, Y: headerHeight, Button: tea.MouseLeft})
+	if git.mouseClicks != before+1 {
+		t.Fatalf("content click did not reach the project plugin: clicks=%d", git.mouseClicks)
+	}
+}
+
 func TestLongProjectSelectorPreservesNarrowLeftAnchorAndExactBounds(t *testing.T) {
 	original := styles.PillTabsEnabled
 	t.Cleanup(func() { styles.PillTabsEnabled = original })
