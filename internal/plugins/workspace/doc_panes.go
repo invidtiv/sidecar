@@ -999,12 +999,14 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 	if node.Kind == PaneIssue {
 		// The issue ID is the leaf's durable target, the way a path is a
 		// document's: restore re-fetches rather than persisting a fetched body
-		// that td may have moved on from.
+		// that td may have moved on from. Phase 2 still writes the active tab
+		// only; the list lands in Phase 3.
 		issue := p.issues[node.ContentID]
-		if issue == nil || issue.view == nil || issue.view.IssueID() == "" {
+		view := issue.view()
+		if issue == nil || view == nil || view.IssueID() == "" {
 			return nil
 		}
-		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: issue.view.IssueID(), Scroll: issue.view.ScrollOffset()}
+		return &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: view.IssueID(), Scroll: view.ScrollOffset()}
 	}
 	doc := p.docs[node.ContentID]
 	tabs, active := encodeDocTabs(doc)
@@ -1140,7 +1142,9 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		}
 		id := p.nextPaneID()
 		if load := p.attachIssuePane(id, root, savedRootSurface(p, root), issueID); load != nil {
-			p.issues[id].view.SetPendingScroll(saved.Scroll)
+			if view := p.issues[id].view(); view != nil {
+				view.SetPendingScroll(saved.Scroll)
+			}
 			*loads = append(*loads, load)
 		}
 		return &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
@@ -1451,16 +1455,25 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 			p.registerDocPaneRegions(doc, node.ID, box)
 		}
 	case PaneIssue:
-		p.registerIssuePaneRegions(content.Title(), node.ID, box)
+		if issue := p.issues[node.ContentID]; issue != nil {
+			p.registerIssuePaneRegions(issue, node.ID, box)
+		}
 	}
 }
 
 func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
-	if node == nil || node.Split != nil || node.Kind != PaneDoc {
+	if node == nil || node.Split != nil {
 		return
 	}
-	if doc := p.docs[node.ContentID]; doc != nil {
-		p.registerDocTabRegions(doc, node.ID, box)
+	switch node.Kind {
+	case PaneDoc:
+		if doc := p.docs[node.ContentID]; doc != nil {
+			p.registerDocTabRegions(doc, node.ID, box)
+		}
+	case PaneIssue:
+		if issue := p.issues[node.ContentID]; issue != nil {
+			p.registerIssueTabRegions(issue, node.ID, box)
+		}
 	}
 }
 

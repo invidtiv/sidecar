@@ -78,7 +78,7 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 		return &docContent{p: p, doc: doc}
 	case PaneIssue:
 		issue := p.issues[node.ContentID]
-		if issue == nil || issue.view == nil {
+		if issue == nil || issue.view() == nil {
 			return nil
 		}
 		return &issueContent{p: p, issue: issue}
@@ -186,19 +186,30 @@ type issueContent struct {
 
 func (c *issueContent) Kind() string { return contentKindIssue }
 
-// Title is the issue's headline, which is its ID until the fetch lands.
-func (c *issueContent) Title() string { return c.issue.view.Title() }
+// Title is the active tab's headline, which is its ID until the fetch lands.
+func (c *issueContent) Title() string {
+	if view := c.issue.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
 
 func (c *issueContent) SetSize(size Size) tea.Cmd {
 	c.size = size
-	c.issue.view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	if view := c.issue.view(); view != nil {
+		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
 	return nil
 }
 
 func (c *issueContent) View(render Render) string {
+	body := ""
+	if view := c.issue.view(); view != nil {
+		body = view.View()
+	}
 	return composePaneLeaf(
-		c.p.issuePaneHeaderRow(c.Title(), c.size.Width, render.Focused),
-		c.issue.view.View())
+		c.p.issuePaneHeaderRow(c.issue, c.size.Width, render.Focused),
+		body)
 }
 
 // composePaneLeaf joins a leaf's header row to the body under it. An empty

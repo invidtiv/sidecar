@@ -412,6 +412,45 @@ func apply(t *testing.T, m *Model, data *Data, err error) {
 	}
 }
 
+func TestOpenHandlerReceivesNavigationInsteadOfRetargeting(t *testing.T) {
+	m := New(nil)
+	m.SetSize(60, 16)
+	apply(t, m, sample(), nil)
+	m.SetActive(true)
+
+	var opened []string
+	m.OpenHandler = func(id string) tea.Cmd {
+		opened = append(opened, id)
+		return nil
+	}
+
+	_, cmd := m.handleKeyString("up")
+	if cmd != nil {
+		t.Fatal("OpenHandler's nil command should pass through")
+	}
+	if m.IssueID() != sample().ID {
+		t.Fatalf("OpenHandler path retargeted the model to %q", m.IssueID())
+	}
+	if len(opened) != 1 || opened[0] != "td-parent1" {
+		t.Fatalf("opened = %v, want the parent", opened)
+	}
+
+	_, _ = m.handleKeyString("down")
+	_, _ = m.handleKeyString("down")
+	_, cmd = m.handleKeyString("enter")
+	if cmd != nil || m.IssueID() != sample().ID {
+		t.Fatalf("enter retargeted: id=%q cmd=%v", m.IssueID(), cmd != nil)
+	}
+	if len(opened) != 2 || opened[1] != "td-83cfc9" {
+		t.Fatalf("enter opened = %v, want the first child", opened)
+	}
+
+	m.handleKeyString("right")
+	if m.IssueID() != sample().ID || opened[len(opened)-1] != "td-sib3" {
+		t.Fatalf("sibling opened = %v id=%q", opened, m.IssueID())
+	}
+}
+
 func TestHandleKeyAcceptsKeyPressMsg(t *testing.T) {
 	m := New(nil)
 	m.SetSize(40, 4)

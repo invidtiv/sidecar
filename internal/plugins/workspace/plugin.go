@@ -124,7 +124,7 @@ const (
 	regionDocPane          = "doc-pane"
 	regionDocTab           = "doc-tab"
 	regionIssuePane        = "issue-pane"
-	regionIssueClose       = "issue-close"
+	regionIssueTab         = "issue-tab"
 	regionPaneTreeDivider  = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -232,6 +232,9 @@ type Plugin struct {
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
 	issues       map[int]*issuePane
+	// issueModelNextID allocates a unique load identity per issue tab so a
+	// late result cannot land on whichever tab is now active.
+	issueModelNextID int
 	// docInfo is the file-info modal over a workspace document tab.
 	docInfo *docview.Info
 
@@ -693,6 +696,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.issueModelNextID = 0
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
@@ -818,6 +822,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		// answers; the rest it absorbs rather than passing to the terminal.
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("enter", "open-item", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("y", "yank-issue", "workspace-issue")

@@ -94,6 +94,11 @@ type Model struct {
 	hits     []Hit
 	rows     []row
 	buildFor int
+
+	// OpenHandler, when set, receives parent/subtask/sibling activations
+	// instead of Load retargeting this model. Hosts that tab issues use this
+	// so navigation cannot destroy the issue the user is reading.
+	OpenHandler func(issueID string) tea.Cmd
 }
 
 // ActionHint is one key/label pair drawn in the card's ACTIONS row.
@@ -531,18 +536,25 @@ func (m *Model) moveSibling(delta int) tea.Cmd {
 }
 
 func (m *Model) navigateTo(id string) tea.Cmd {
-	if id == "" || id == m.issueID || m.workDir == "" {
-		// Tests and hosts that injected data without Load still need a way
-		// to observe the destination. Reload is skipped; the host can read
-		// SelectedID and fetch itself. When workDir is known, Load it.
-		if id == "" || id == m.issueID {
-			return nil
-		}
+	if id == "" || id == m.issueID {
+		return nil
+	}
+	if m.OpenHandler != nil {
+		return m.OpenHandler(id)
+	}
+	// Tests and hosts that injected data without Load still need a way
+	// to observe the destination. Reload is skipped; the host can read
+	// SelectedID and fetch itself. When workDir is known, Load it.
+	if m.workDir == "" {
 		m.issueID = id
 		return nil
 	}
 	return m.Load(m.modelID, m.workDir, id, m.epoch)
 }
+
+// ModelID is the load identity last passed to Load. Hosts route async
+// results by this, not by pane-leaf identity.
+func (m *Model) ModelID() int { return m.modelID }
 
 // SelectedID is the issue the cursor is on, or the current issue when
 // nothing is selected.

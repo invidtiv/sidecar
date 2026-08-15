@@ -61,7 +61,7 @@ func compositorIssueLeaf(t *testing.T, p *Plugin, leafID int, issueID string) {
 		t.Fatalf("issue %s fetch failed: %v", issueID, msg.Error)
 	}
 	p.applyIssueLoaded(msg)
-	if p.issues[leafID].view.Loading() {
+	if p.issues[leafID].view().Loading() {
 		t.Fatalf("issue %s pane did not apply its own fetch", issueID)
 	}
 }
@@ -160,9 +160,9 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 	compositorDocLeaf(t, p, resolved, 2, "clicked.md", "# clicked\n")
 	p.attachIssuePane(3, resolved, "shell:test-shell", "td-1a2b3c")
 	issueData := &issueview.Data{ID: "td-1a2b3c", Title: "Persist me", Description: strings.Repeat("line\n\n", 20)}
-	p.issues[3].view.SetSize(40, 3)
-	p.issues[3].view.SetData(issueData)
-	p.issues[3].view.Scroll(4)
+	p.issues[3].view().SetSize(40, 3)
+	p.issues[3].view().SetData(issueData)
+	p.issues[3].view().Scroll(4)
 
 	layout := p.persistedPaneLayout()
 	if layout == nil || layout.Split == nil || layout.Split.B.Split == nil {
@@ -185,9 +185,9 @@ func TestIssueLeafRoundTripsThroughThePersistedLayout(t *testing.T) {
 	if issue == nil || leaf == nil {
 		t.Fatal("the issue leaf was not restored")
 	}
-	if issue.view.IssueID() != "td-1a2b3c" || issue.view.ScrollOffset() != 4 || !issue.view.Loading() {
+	if issue.view().IssueID() != "td-1a2b3c" || issue.view().ScrollOffset() != 4 || !issue.view().Loading() {
 		t.Fatalf("restored issue = %q loading=%v, want td-1a2b3c re-fetching",
-			issue.view.IssueID(), issue.view.Loading())
+			issue.view().IssueID(), issue.view().Loading())
 	}
 	if issue.root != resolved || issue.surface != "shell:test-shell" {
 		t.Fatalf("restored issue surface = %q %q, want the selected terminal's", issue.root, issue.surface)
@@ -247,7 +247,7 @@ func TestTheSteelThreadSurvivesQuitAndReopen(t *testing.T) {
 		t.Fatalf("reopened document = %#v, want the clicked file", doc)
 	}
 	issue, _ := reopened.activeIssuePane()
-	if issue == nil || issue.view.IssueID() != "td-1a2b3c" {
+	if issue == nil || issue.view().IssueID() != "td-1a2b3c" {
 		t.Fatalf("reopened issue = %#v, want td-1a2b3c", issue)
 	}
 
@@ -300,16 +300,16 @@ func TestUnresolvableIssueLeafCollapsesWithoutResettingTheLayout(t *testing.T) {
 	}
 }
 
-// The issue leaf answers the wheel over its own box and the close chip in its
-// own header, both at the regions the canvas registered them from.
-func TestIssuePaneAnswersTheWheelAndItsCloseChip(t *testing.T) {
+// The issue leaf answers the wheel over its own box. The header is only the
+// tab strip: there is no close chip and no in-header "q close".
+func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
 	stubTd(t)
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 
 	const width, height = 100, 24
-	composePaneTree(t, p, width, height)
+	rows := composePaneTree(t, p, width, height)
 	origin, ok := p.previewContentBox()
 	if !ok {
 		t.Fatal("preview content box is unplaced")
@@ -321,35 +321,20 @@ func TestIssuePaneAnswersTheWheelAndItsCloseChip(t *testing.T) {
 	if body == nil || body.ID != regionIssuePane {
 		t.Fatalf("the issue leaf's body resolves to %#v, want %s", body, regionIssuePane)
 	}
-	before := p.issues[3].view.View()
+	before := p.issues[3].view().View()
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Region: body, Delta: 3, X: x, Y: y})
-	if p.issues[3].view.View() == before {
+	if p.issues[3].view().View() == before {
 		t.Fatal("a notch over the issue leaf scrolled nothing")
 	}
 
-	var closeChip *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID == regionIssueClose {
-			chip := region
-			closeChip = &chip
-			break
+		if region.ID == "issue-close" {
+			t.Fatal("the issue leaf still registered a close chip")
 		}
 	}
-	if closeChip == nil {
-		t.Fatal("the issue leaf drew no close chip")
-	}
-	resolvedClose := p.mouseHandler.HitMap.Test(closeChip.Rect.X, closeChip.Rect.Y)
-	if resolvedClose == nil || resolvedClose.ID != regionIssueClose {
-		t.Fatalf("issue close chip resolves to %#v, want %s", resolvedClose, regionIssueClose)
-	}
-	if cmd := p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, Region: closeChip}); cmd == nil {
-		t.Fatal("closing the issue leaf did not schedule the resize of the terminal it gave its box back to")
-	}
-	if issue, _ := p.activeIssuePane(); issue != nil || len(p.issues) != 0 {
-		t.Fatalf("the issue leaf survived its close chip: %#v", p.issues)
-	}
-	if doc, _ := p.activeDocPane(); doc == nil {
-		t.Fatal("closing the issue leaf took its sibling with it")
+	header := strings.TrimSpace(ansi.Strip(rows[box.Y]))
+	if strings.Contains(header, "q close") || strings.Contains(header, "×") {
+		t.Fatalf("issue header still has chips/hints: %q", header)
 	}
 }
 
@@ -362,23 +347,23 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			p.width, p.height = width, 24
 			steelThreadPaneTree(t, p, root)
 			issue := p.issues[3]
-			issue.view.SetData(&issueview.Data{
-				ID: "td-parent", Title: "Parent", Status: "open", Type: "epic",
-				Children: []issueview.Ref{{ID: "td-child", Title: "Child", Status: "open", Type: "task"}},
+			issue.view().SetData(&issueview.Data{
+				ID: "td-aaaa11", Title: "Parent", Status: "open", Type: "epic",
+				Children: []issueview.Ref{{ID: "td-bbbb22", Title: "Child", Status: "open", Type: "task"}},
 			})
 
 			p.mouseHandler.Clear()
 			_ = p.renderListView(width, p.height)
 			var child issueview.Hit
 			found := false
-			for _, hit := range issue.view.Hits() {
-				if hit.Kind == issueview.HitChild && hit.ID == "td-child" {
+			for _, hit := range issue.view().Hits() {
+				if hit.Kind == issueview.HitChild && hit.ID == "td-bbbb22" {
 					child, found = hit, true
 					break
 				}
 			}
 			if !found {
-				t.Fatalf("rendered issue has no child hit: %+v", issue.view.Hits())
+				t.Fatalf("rendered issue has no child hit: %+v", issue.view().Hits())
 			}
 			var pane *mouse.Region
 			for _, region := range p.mouseHandler.HitMap.Regions() {
@@ -403,35 +388,41 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 				t.Fatalf("raw click action = %#v, want an issue-pane click", action)
 			}
 			cmd := p.handleMouseClick(action)
-			if cmd == nil || issue.view.IssueID() != "td-child" {
+			if cmd == nil || issue.view().IssueID() != "td-bbbb22" {
 				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-				t.Fatalf("raw child click local=(%d,%d) target=%+v remaining=%+v cmd=%v issue=%q, want a td-child load",
-					lx, ly, child, issue.view.Hits(), cmd != nil, issue.view.IssueID())
+				t.Fatalf("raw child click local=(%d,%d) target=%+v remaining=%+v cmd=%v issue=%q, want a td-bbbb22 load",
+					lx, ly, child, issue.view().Hits(), cmd != nil, issue.view().IssueID())
+			}
+			if len(issue.tabs.Items) != 2 || issue.tabs.Find("td-bbbb22") < 0 {
+				t.Fatalf("child click tabs = %v, want parent kept and child appended", issueTabIDs(issue))
+			}
+			if issue.tabs.Items[0].Value == nil || issue.tabs.Items[0].Value.IssueID() != "td-aaaa11" {
+				t.Fatalf("parent tab was retargeted: %v", issueTabIDs(issue))
 			}
 			deliverLoads(t, p, cmd)
-			if issue.view.Data() == nil || issue.view.Data().ID != "td-child" {
-				t.Fatalf("loaded issue = %#v, want td-child", issue.view.Data())
+			if issue.view().Data() == nil || issue.view().Data().ID != "td-bbbb22" {
+				t.Fatalf("loaded issue = %#v, want td-bbbb22", issue.view().Data())
 			}
 
 			// The loaded child's parent row occupies the same rendered row as the
 			// parent's child row. Bubble Tea now emits the double-click event for
 			// that same raw cell; it must not replay navigation back to the parent.
-			issue.view.SetData(&issueview.Data{
-				ID: "td-child", Title: "Child", Status: "open", Type: "task",
-				ParentID: "td-parent",
-				Parent:   &issueview.Ref{ID: "td-parent", Title: "Parent", Status: "open", Type: "epic"},
+			issue.view().SetData(&issueview.Data{
+				ID: "td-bbbb22", Title: "Child", Status: "open", Type: "task",
+				ParentID: "td-aaaa11",
+				Parent:   &issueview.Ref{ID: "td-aaaa11", Title: "Parent", Status: "open", Type: "epic"},
 			})
 			p.mouseHandler.Clear()
 			_ = p.renderListView(width, p.height)
 			parentAtSameCell := false
-			for _, hit := range issue.view.Hits() {
+			for _, hit := range issue.view().Hits() {
 				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == pane.Rect.X+hit.X {
 					parentAtSameCell = true
 					break
 				}
 			}
 			if !parentAtSameCell {
-				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view.Hits())
+				t.Fatalf("loaded child did not render its parent at the original raw cell: %+v", issue.view().Hits())
 			}
 			double := p.mouseHandler.HandleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
 			if double.Type != mouse.ActionDoubleClick {
@@ -440,8 +431,8 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			if cmd := p.handleMouseDoubleClick(double); cmd != nil {
 				t.Fatal("issue double-click scheduled a second navigation")
 			}
-			if issue.view.IssueID() != "td-child" || issue.view.Data() == nil || issue.view.Data().ID != "td-child" {
-				t.Fatalf("double-click navigated to %#v / %q", issue.view.Data(), issue.view.IssueID())
+			if issue.view().IssueID() != "td-bbbb22" || issue.view().Data() == nil || issue.view().Data().ID != "td-bbbb22" {
+				t.Fatalf("double-click navigated to %#v / %q", issue.view().Data(), issue.view().IssueID())
 			}
 		})
 	}
@@ -468,12 +459,12 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 	}
 
 	// Scrolling reaches the component the wheel reaches; nothing else escapes.
-	p.issues[leaf.ContentID].view.SetSize(40, 3)
-	before := p.issues[leaf.ContentID].view.View()
+	p.issues[leaf.ContentID].view().SetSize(40, 3)
+	before := p.issues[leaf.ContentID].view().View()
 	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: 'j'}); !handled {
 		t.Fatal("the focused issue leaf did not claim j")
 	}
-	if p.issues[leaf.ContentID].view.View() == before {
+	if p.issues[leaf.ContentID].view().View() == before {
 		t.Fatal("j over a focused issue leaf scrolled nothing")
 	}
 	// Every other key is absorbed: routed through the plugin's own key path, it
@@ -502,17 +493,26 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'Y', Text: "Y"}); !handled || cmd == nil {
 		t.Fatalf("Y on a loaded issue: handled=%v cmd=%v", handled, cmd != nil)
 	}
-	var yank, yankID bool
+	var yank, yankID, closeTab, prevTab, nextTab bool
 	for _, cmd := range p.Commands() {
 		switch cmd.ID {
 		case "yank-issue":
 			yank = true
 		case "yank-issue-key":
 			yankID = true
+		case "close-tab":
+			closeTab = cmd.Name == "Tab×"
+		case "prev-tab":
+			prevTab = cmd.Name == "Tab←"
+		case "next-tab":
+			nextTab = cmd.Name == "Tab→"
 		}
 	}
 	if !yank || !yankID {
 		t.Fatalf("workspace-issue Commands() omitted yank: %#v", p.Commands())
+	}
+	if !closeTab || !prevTab || !nextTab {
+		t.Fatalf("workspace-issue Commands() omitted tab actions: %#v", p.Commands())
 	}
 
 	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'q'}); cmd == nil {
@@ -560,8 +560,8 @@ func TestApplyIssueLoadedDoesNotDropALiveLeaf(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 	issue, _ := p.activeIssuePane()
-	fetch := issue.view.Load(issue.leafID, issue.root, "td-1a2b3c", p.ctx.Epoch)
-	if !issue.view.Loading() {
+	fetch := issue.view().Load(issue.view().ModelID(), issue.root, "td-1a2b3c", p.ctx.Epoch)
+	if !issue.view().Loading() {
 		t.Fatal("load did not enter loading")
 	}
 	p.shellSelected = false
@@ -574,7 +574,7 @@ func TestApplyIssueLoadedDoesNotDropALiveLeaf(t *testing.T) {
 		t.Fatal("load did not return LoadedMsg")
 	}
 	p.applyIssueLoaded(loaded)
-	if issue.view.Loading() {
+	if issue.view().Loading() {
 		t.Fatal("applyIssueLoaded left a live leaf on Loading issue…")
 	}
 }
@@ -606,11 +606,301 @@ func TestRestoreRefusesAnIssueIDTheClickPathCouldNotHaveProduced(t *testing.T) {
 				t.Fatal("the surviving document did not schedule its load")
 			}
 			if issue, _ := p.activeIssuePane(); issue != nil {
-				t.Fatalf("a malformed persisted id was fetched: %q", issue.view.IssueID())
+				t.Fatalf("a malformed persisted id was fetched: %q", issue.view().IssueID())
 			}
 			if doc, _ := p.activeDocPane(); doc == nil {
 				t.Fatal("refusing the issue leaf took its sibling with it")
 			}
 		})
+	}
+}
+
+func issueTabIDs(issue *issuePane) []string {
+	if issue == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(issue.tabs.Items))
+	for _, item := range issue.tabs.Items {
+		if item.Value != nil {
+			ids = append(ids, item.Value.IssueID())
+		} else {
+			ids = append(ids, item.Key)
+		}
+	}
+	return ids
+}
+
+func openTwoIssueTabs(t *testing.T, p *Plugin) *issuePane {
+	t.Helper()
+	p.shells[0].Agent.OutputBuf.Update("first is td-1111aa\nsecond is td-2222bb\n")
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-1111aa"))
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-2222bb"))
+	issue, _ := p.activeIssuePane()
+	if issue == nil {
+		t.Fatal("no issue pane after opening two links")
+	}
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" {
+		t.Fatalf("tabs after two links = %v, want [td-1111aa td-2222bb]", got)
+	}
+	if issue.view() == nil || issue.view().IssueID() != "td-2222bb" || issue.tabs.Active != 1 {
+		t.Fatalf("active after two links = %q idx=%d, want td-2222bb", issue.view().IssueID(), issue.tabs.Active)
+	}
+	if issue.tabs.Items[0].Value.ModelID() == issue.tabs.Items[1].Value.ModelID() {
+		t.Fatal("two tabs share a model ID")
+	}
+	return issue
+}
+
+func TestOpeningTwoIssueLinksCreatesTwoTabs(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	openTwoIssueTabs(t, p)
+}
+
+func TestIssueTabClickAndCycleSelectsWithoutDuplicating(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.sidebarVisible = false
+	p.width, p.height = 120, 24
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+
+	view := p.View(p.width, p.height)
+	origin, ok := p.previewContentBox()
+	if !ok {
+		t.Fatal("preview content box is unplaced")
+	}
+	box := issueLeafBox(t, p, origin.W, origin.H)
+	y := origin.Y + box.Y
+	lines := strings.Split(view, "\n")
+	if y < 0 || y >= len(lines) {
+		t.Fatalf("issue header row %d is outside the view", y)
+	}
+	plain := ansi.Strip(lines[y])
+	at := strings.Index(plain, "td-1111aa")
+	if at < 0 {
+		t.Fatalf("td-1111aa is not on the issue header row: %q", plain)
+	}
+	x := ansi.StringWidth(plain[:at]) + ansi.StringWidth("td-1111aa")/2
+	resolved := p.mouseHandler.HitMap.Test(x, y)
+	if resolved == nil || resolved.ID != regionIssueTab {
+		t.Fatalf("visible title at (%d,%d) resolves to %#v, want %s\nheader=%q", x, y, resolved, regionIssueTab, plain)
+	}
+	if hit, ok := resolved.Data.(issueTabHit); !ok || hit.Index != 0 {
+		t.Fatalf("visible title hit = %#v, want tab 0", resolved.Data)
+	}
+	_ = p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	if issue.view().IssueID() != "td-1111aa" || issue.tabs.Active != 0 {
+		t.Fatalf("clicking td-1111aa selected %q", issue.view().IssueID())
+	}
+	if len(issue.tabs.Items) != 2 {
+		t.Fatalf("click created a tab: %v", issueTabIDs(issue))
+	}
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: '}', Text: "}"}); !handled || issue.view().IssueID() != "td-2222bb" {
+		t.Fatalf("}} selected %q, want td-2222bb", issue.view().IssueID())
+	}
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: '{', Text: "{"}); !handled || issue.view().IssueID() != "td-1111aa" {
+		t.Fatalf("{{ selected %q, want td-1111aa", issue.view().IssueID())
+	}
+}
+
+func TestIssueTabsKeepIndependentScroll(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+
+	second := issue.view()
+	second.SetSize(40, 3)
+	second.Scroll(4)
+	scroll2 := second.ScrollOffset()
+	if scroll2 == 0 {
+		t.Fatal("second tab did not scroll")
+	}
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: '{', Text: "{"}); !handled {
+		t.Fatal("{ did not cycle")
+	}
+	first := issue.view()
+	if first == second || first.IssueID() != "td-1111aa" {
+		t.Fatalf("cycle selected %q", first.IssueID())
+	}
+	first.SetSize(40, 3)
+	if first.ScrollOffset() != 0 {
+		t.Fatalf("first tab inherited second's scroll %d", first.ScrollOffset())
+	}
+	first.Scroll(2)
+	scroll1 := first.ScrollOffset()
+
+	p.handleIssueKey(tea.KeyPressMsg{Code: '}', Text: "}"})
+	if issue.view().ScrollOffset() != scroll2 {
+		t.Fatalf("second tab scroll = %d, want %d", issue.view().ScrollOffset(), scroll2)
+	}
+	p.handleIssueKey(tea.KeyPressMsg{Code: '{', Text: "{"})
+	if issue.view().ScrollOffset() != scroll1 {
+		t.Fatalf("first tab scroll = %d, want %d", issue.view().ScrollOffset(), scroll1)
+	}
+}
+
+func TestOpeningAnAlreadyOpenIssueFocusesWithoutDuplicating(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	issue := openTwoIssueTabs(t, p)
+	if cmd, ok := p.activateIssueLink("td-1111aa"); !ok {
+		t.Fatalf("reopening td-1111aa failed, cmd=%v", cmd != nil)
+	}
+	if got := issueTabIDs(issue); len(got) != 2 || issue.view().IssueID() != "td-1111aa" || issue.tabs.Active != 0 {
+		t.Fatalf("reopen = tabs %v active=%d, want focus without a third tab", got, issue.tabs.Active)
+	}
+}
+
+func TestEnterOpensParentOrSubtaskAsATab(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.shells[0].Agent.OutputBuf.Update("start td-1111aa\n")
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-1111aa"))
+	issue, leaf := p.activeIssuePane()
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+	issue.view().SetData(&issueview.Data{
+		ID: "td-1111aa", Title: "Parent", Status: "open", Type: "epic",
+		Children: []issueview.Ref{{ID: "td-2222bb", Title: "Child", Status: "open", Type: "task"}},
+	})
+	issue.view().SetActive(true)
+	issue.view().SetFocused(true)
+	issue.view().HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	issue.view().HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if issue.view().SelectedID() != "td-2222bb" {
+		t.Fatalf("selected %q, want the child row", issue.view().SelectedID())
+	}
+
+	handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled || cmd == nil || issue.view().IssueID() != "td-2222bb" {
+		t.Fatalf("enter: handled=%v cmd=%v issue=%q", handled, cmd != nil, issue.view().IssueID())
+	}
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" {
+		t.Fatalf("enter tabs = %v, want parent kept and child appended", got)
+	}
+	deliverLoads(t, p, cmd)
+	issue.view().SetData(&issueview.Data{
+		ID: "td-2222bb", Title: "Child", Status: "open", Type: "task",
+		ParentID: "td-1111aa",
+		Parent:   &issueview.Ref{ID: "td-1111aa", Title: "Parent", Status: "open", Type: "epic"},
+	})
+	issue.view().SetActive(true)
+	_, _ = issue.view().HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if issue.view().SelectedID() != "td-1111aa" {
+		t.Fatalf("selected %q, want the parent row", issue.view().SelectedID())
+	}
+
+	handled, cmd = p.handleIssueKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled {
+		t.Fatal("enter on the parent row was not handled")
+	}
+	if issue.view().IssueID() != "td-1111aa" || len(issue.tabs.Items) != 2 {
+		t.Fatalf("enter on existing parent = %v, want a focus not a third tab", issueTabIDs(issue))
+	}
+	if cmd != nil {
+		t.Fatal("focusing an already-open parent scheduled a load")
+	}
+}
+
+func TestCloseActiveIssueTabThenLastTabClosesThePane(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	issue := openTwoIssueTabs(t, p)
+	p.paneFocus = issue.leafID
+	p.activePane = PanePreview
+
+	handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if still, _ := p.activeIssuePane(); !handled || cmd != nil || still == nil {
+		t.Fatalf("x closed the pane with two tabs: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if got := issueTabIDs(issue); len(got) != 1 || got[0] != "td-1111aa" {
+		t.Fatalf("x left %v, want the first tab", got)
+	}
+
+	handled, cmd = p.handleIssueKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if !handled || cmd == nil {
+		t.Fatalf("last x: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil || len(p.issues) != 0 {
+		t.Fatalf("last x left the pane: %#v", p.issues)
+	}
+}
+
+func TestStaleIssueLoadedMsgIsIgnored(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.shells[0].Agent.OutputBuf.Update("first is td-1111aa\nsecond is td-2222bb\n")
+	firstCmd := clickTerminalLink(t, p, "td-1111aa")
+	var first issueview.LoadedMsg
+	if batch, ok := firstCmd().(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if child == nil {
+				continue
+			}
+			if loaded, ok := child().(issueview.LoadedMsg); ok {
+				first = loaded
+			}
+		}
+	}
+	if first.IssueID != "td-1111aa" {
+		t.Fatalf("first load = %#v", first)
+	}
+	deliverLoads(t, p, clickTerminalLink(t, p, "td-2222bb"))
+	issue, leaf := p.activeIssuePane()
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+	secondID := issue.view().ModelID()
+
+	if handled, _ := p.handleIssueKey(tea.KeyPressMsg{Code: '{', Text: "{"}); !handled {
+		t.Fatal("could not select the first tab to close it")
+	}
+	p.handleIssueKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if issue, _ = p.activeIssuePane(); issue == nil || issue.view().IssueID() != "td-2222bb" {
+		t.Fatalf("after closing first tab: %v", issueTabIDs(issue))
+	}
+
+	p.applyIssueLoaded(first)
+	if issue.view().IssueID() != "td-2222bb" || issue.view().Data() == nil || issue.view().Data().ID != "td-2222bb" {
+		t.Fatalf("closed tab's result landed on the survivor: %#v", issue.view().Data())
+	}
+
+	p.applyIssueLoaded(issueview.LoadedMsg{
+		ModelID:           secondID + 99,
+		RequestGeneration: 1,
+		Epoch:             p.ctx.Epoch,
+		IssueID:           "td-3333cc",
+		Data:              &issueview.Data{ID: "td-3333cc", Title: "stale"},
+	})
+	if issue.view().IssueID() != "td-2222bb" {
+		t.Fatalf("foreign model id retargeted the tab to %q", issue.view().IssueID())
+	}
+}
+
+func TestIssueTabHeaderHasNoCloseChipOrHint(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.width, p.height = 80, 20
+	issue := openTwoIssueTabs(t, p)
+	strip := layoutIssueTabStrip(issue, 48, true)
+	got := ansi.Strip(strip.Row)
+	if strings.Contains(got, "q close") || strings.Contains(got, "×") {
+		t.Fatalf("issue strip still has chips/hints: %q", got)
+	}
+	if !strings.Contains(got, "td-1111aa") || !strings.Contains(got, "td-2222bb") {
+		t.Fatalf("issue strip dropped a tab: %q", got)
 	}
 }

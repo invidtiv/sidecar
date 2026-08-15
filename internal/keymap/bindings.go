@@ -117,6 +117,19 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-issue"},
 
+		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
+		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
+		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
+		{Key: "Y", Command: "yank-issue-key", Context: "workspace-issue"},
+		{Key: "q", Command: "close", Context: "workspace-issue"},
+		{Key: "esc", Command: "close", Context: "workspace-issue"},
+		{Key: "x", Command: "close-tab", Context: "workspace-issue"},
+		{Key: "{", Command: "prev-tab", Context: "workspace-issue"},
+		{Key: "}", Command: "next-tab", Context: "workspace-issue"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-issue"},
+		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
+		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
+
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface
 		// around it are listed: the ways out and the terminal's own selection and

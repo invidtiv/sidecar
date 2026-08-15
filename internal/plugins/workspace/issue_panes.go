@@ -5,23 +5,29 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/issueview"
-	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/mouse"
 )
 
-// issuePane is one td issue leaf's state: the component, and the terminal
-// surface the link that opened it was clicked in. The surface is what lets a
-// selection change collapse the leaf rather than carry an issue from one shell
-// into another, exactly as a document leaf carries its own.
+// issuePane is one td issue leaf's tab group. The pane tree points at this,
+// not at a single model. The surface is what lets a selection change collapse
+// the leaf rather than carry issues from one shell into another.
 type issuePane struct {
 	leafID  int
 	root    string
 	surface string
-	view    *issueview.Model
+	tabs    issueview.Tabs
+}
+
+func (i *issuePane) view() *issueview.Model {
+	if i == nil {
+		return nil
+	}
+	return i.tabs.ActiveView()
 }
 
 // activeIssuePane returns the first live issue leaf. A second td link click
-// retargets this leaf rather than splitting again, which mirrors how a file
-// click retargets the document pane.
+// opens or focuses a tab on this leaf rather than splitting again, which
+// mirrors how a file click retargets the document pane.
 func (p *Plugin) activeIssuePane() (*issuePane, *PaneNode) {
 	for id, issue := range p.issues {
 		if issue == nil {
@@ -44,7 +50,8 @@ func (p *Plugin) activateIssueLink(issueID string) (tea.Cmd, bool) {
 		return nil, false
 	}
 	cmd := p.openIssuePaneForSurface(root, surface, issueID)
-	if cmd == nil {
+	issue, _ := p.activeIssuePane()
+	if issue == nil || issue.tabs.Find(issueID) < 0 {
 		return nil, false
 	}
 	p.clearTerminalSelection()
@@ -57,7 +64,7 @@ func (p *Plugin) activateIssueLink(issueID string) (tea.Cmd, bool) {
 // size it already has rather than reflowing an agent for a pane that will not
 // be drawn.
 func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd {
-	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
+	if p.paneRoot == nil || p.ctx == nil || issueview.NormalizeID(issueID) == "" {
 		return nil
 	}
 	plan, ok := planPaneOpen(p.paneRoot, PaneIssue)
@@ -70,7 +77,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 			return nil
 		}
 		load := p.attachIssuePane(leaf.ContentID, root, surface, issueID)
-		if load == nil {
+		if p.issues[leaf.ContentID] == nil || p.issues[leaf.ContentID].view() == nil {
 			return nil
 		}
 		p.paneFocus = leaf.ID
@@ -109,9 +116,10 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its
-// fetch. It both creates a leaf's content and retargets it, so opening and
-// retargeting cannot drift into two ways of holding the same state.
+// fetch when a new tab is created. An already-open ID is focused and returns
+// nil; the pane still exists so a retarget can proceed without a load.
 func (p *Plugin) attachIssuePane(leafID int, root, surface, issueID string) tea.Cmd {
+	issueID = issueview.NormalizeID(issueID)
 	if p.ctx == nil || issueID == "" {
 		return nil
 	}
@@ -120,26 +128,68 @@ func (p *Plugin) attachIssuePane(leafID int, root, surface, issueID string) tea.
 	}
 	pane := p.issues[leafID]
 	if pane == nil {
-		pane = &issuePane{leafID: leafID, view: issueview.New(p.markdownRenderer)}
+		pane = &issuePane{leafID: leafID}
 		p.issues[leafID] = pane
 	}
 	pane.root, pane.surface = root, surface
-	return pane.view.Load(leafID, root, issueID, p.ctx.Epoch)
+	return p.openOrFocusIssue(pane, issueID)
 }
 
-// applyIssueLoaded delivers a fetch to the pane that asked for it. The epoch
-// and surface checks are the document pane's: a result that outlived its
-// project or its terminal selection has nowhere to land.
+func (p *Plugin) newIssueModel(pane *issuePane) *issueview.Model {
+	view := issueview.New(p.markdownRenderer)
+	view.OpenHandler = func(id string) tea.Cmd {
+		if pane == nil || p.issues[pane.leafID] != pane {
+			return nil
+		}
+		return p.openOrFocusIssue(pane, id)
+	}
+	return view
+}
+
+func (p *Plugin) nextIssueModelID() int {
+	p.issueModelNextID++
+	return p.issueModelNextID
+}
+
+// openOrFocusIssue selects an existing tab for issueID or appends a fresh
+// model and loads it. The returned command is the fetch for a new tab, or
+// nil when the ID was already open.
+func (p *Plugin) openOrFocusIssue(pane *issuePane, issueID string) tea.Cmd {
+	issueID = issueview.NormalizeID(issueID)
+	if pane == nil || p.ctx == nil || issueID == "" {
+		return nil
+	}
+	if idx := pane.tabs.Find(issueID); idx >= 0 {
+		pane.tabs.Select(idx)
+		return nil
+	}
+	view := p.newIssueModel(pane)
+	if _, created := pane.tabs.OpenOrFocus(issueID, view); !created {
+		return nil
+	}
+	return view.Load(p.nextIssueModelID(), pane.root, issueID, p.ctx.Epoch)
+}
+
+// applyIssueLoaded delivers a fetch to the tab that asked for it. The epoch
+// check is the document pane's: a result that outlived its project has
+// nowhere to land. Routing is pane then tab-by-model-ID, so a closed tab or
+// a different live tab cannot consume the result.
 func (p *Plugin) applyIssueLoaded(msg issueview.LoadedMsg) {
-	issue := p.issues[msg.ModelID]
-	if issue == nil || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
+	if p.ctx == nil || msg.Epoch != p.ctx.Epoch {
 		return
 	}
-	// The pane asked for this load. SetResult already rejects a stale
-	// generation or issue; dropping on a transient surface mismatch left
-	// the leaf stuck on "Loading issue…". A real selection change closes
-	// the leaf via resetDocPanesForSelection.
-	issue.view.SetResult(msg)
+	for _, issue := range p.issues {
+		if issue == nil {
+			continue
+		}
+		for _, item := range issue.tabs.Items {
+			if item.Value == nil || item.Value.ModelID() != msg.ModelID {
+				continue
+			}
+			item.Value.SetResult(msg)
+			return
+		}
+	}
 }
 
 // issueFocused is the issue leaf's own version of docFocused: not "a content
@@ -179,11 +229,14 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if issue == nil {
 		return false, nil
 	}
-	// A focused issue pane is the active card: the pane already owns the
-	// keyboard, so arrows walk parent/siblings/subtasks instead of waiting
-	// for a second enter the way the preview modal must.
-	issue.view.SetActive(true)
-	issue.view.SetFocused(true)
+	view := issue.view()
+	if view != nil {
+		// A focused issue pane is the active card: the pane already owns the
+		// keyboard, so arrows walk parent/siblings/subtasks instead of waiting
+		// for a second enter the way the preview modal must.
+		view.SetActive(true)
+		view.SetFocused(true)
+	}
 	switch msg.String() {
 	case "tab", "shift+tab":
 		// The pane cycle lives on the list keymap so issue, doc, and
@@ -194,18 +247,131 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
 		return true, p.closeIssuePane(leaf.ID)
+	case "x":
+		return true, p.closeActiveIssueTab()
+	case "{":
+		return true, p.cycleActiveIssueTab(-1)
+	case "}":
+		return true, p.cycleActiveIssueTab(1)
 	case "y":
 		return true, p.yankFocusedIssue(false)
 	case "Y", "shift+y":
 		return true, p.yankFocusedIssue(true)
 	default:
-		beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
-		_, cmd := issue.view.HandleKey(msg)
-		if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
+		if view == nil {
+			return true, nil
+		}
+		beforeActive := issue.tabs.Active
+		beforeID, beforeScroll := view.IssueID(), view.ScrollOffset()
+		_, cmd := view.HandleKey(msg)
+		after := issue.view()
+		if issue.tabs.Active != beforeActive ||
+			(after != nil && (after.IssueID() != beforeID || after.ScrollOffset() != beforeScroll)) {
 			p.saveSelectionState()
 		}
 		return true, cmd
 	}
+}
+
+func (p *Plugin) cycleActiveIssueTab(delta int) tea.Cmd {
+	issue, _ := p.focusedIssuePane()
+	if issue == nil || len(issue.tabs.Items) < 2 {
+		return nil
+	}
+	issue.tabs.Cycle(delta)
+	p.saveSelectionState()
+	return nil
+}
+
+func (p *Plugin) closeActiveIssueTab() tea.Cmd {
+	issue, leaf := p.focusedIssuePane()
+	if issue == nil {
+		return nil
+	}
+	if len(issue.tabs.Items) <= 1 {
+		return p.closeIssuePane(leaf.ID)
+	}
+	issue.tabs.CloseActive()
+	p.saveSelectionState()
+	return nil
+}
+
+func (p *Plugin) selectIssueTab(issue *issuePane, leafID, idx int) tea.Cmd {
+	if issue == nil {
+		return nil
+	}
+	p.activePane = PanePreview
+	p.paneFocus = leafID
+	p.termPanelFocused = false
+	p.pointer.Abandon()
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+	if idx == issue.tabs.Active {
+		return nil
+	}
+	issue.tabs.Select(idx)
+	p.saveSelectionState()
+	return nil
+}
+
+// clickIssueTabAt selects an issue tab from a pointer position. File tabs
+// test the tab row first so a one-cell miss on a widened divider does not
+// become a terminal click; issue tabs need the same steal.
+func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
+	if !p.docVisible() {
+		return nil, false
+	}
+	var tabs []mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionIssueTab {
+			continue
+		}
+		if y != region.Rect.Y {
+			continue
+		}
+		tabs = append(tabs, region)
+	}
+	if len(tabs) == 0 {
+		return nil, false
+	}
+	inIssueHeader := false
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionIssuePane {
+			continue
+		}
+		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
+			inIssueHeader = true
+			break
+		}
+	}
+	if !inIssueHeader {
+		return nil, false
+	}
+	best := tabs[0]
+	bestDist := tabRowDistance(x, best.Rect)
+	for _, region := range tabs[1:] {
+		if d := tabRowDistance(x, region.Rect); d < bestDist {
+			best, bestDist = region, d
+		}
+	}
+	return p.clickIssueTab(best.Data), true
+}
+
+func (p *Plugin) clickIssueTab(data any) tea.Cmd {
+	hit, ok := data.(issueTabHit)
+	if !ok {
+		return nil
+	}
+	leaf := FindPane(p.paneRoot, hit.LeafID)
+	if leaf == nil || leaf.Kind != PaneIssue {
+		return nil
+	}
+	issue := p.issues[leaf.ContentID]
+	if issue == nil {
+		return nil
+	}
+	return p.selectIssueTab(issue, hit.LeafID, hit.Index)
 }
 
 // closeIssuePane removes the issue leaf and gives its box back to its sibling.
@@ -218,37 +384,18 @@ func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 	return p.resizeDocTerminalCmd()
 }
 
-// issueHeaderChips renders the issue leaf's header chips: the issue's own
-// identity, and the affordance that closes it. title is the content's answer
-// rather than a second read of the component, so the row the frame draws and
-// the regions it registers name one issue.
-func (p *Plugin) issueHeaderChips(title string, width int, focused bool) []string {
-	// The close chip and the row's padding are what the title gives way to;
-	// the shared header layout drops a chip whole when even that does not fit.
-	titleStyle := styles.BarChip
-	if focused {
-		titleStyle = styles.BarChipActive
-	}
-	return []string{
-		styles.RenderPillWithStyle(p.truncateCache.Truncate(title, maxInt(width-6, 8), "…"), titleStyle, nil),
-		styles.RenderPillWithStyle("×", styles.BarChip, nil),
-	}
+// issuePaneHeaderRow is the issue leaf's header: the tab strip only.
+func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) string {
+	return layoutIssueTabStrip(issue, width, focused).Row
 }
 
-// issuePaneHeaderRow is the issue leaf's header row. It names the one key the
-// leaf answers besides scrolling, the way the document's row names its own: a
-// focused pane that says nothing about how to leave it reads as stuck.
-func (p *Plugin) issuePaneHeaderRow(title string, width int, focused bool) string {
-	return p.terminalHeader(p.issueHeaderChips(title, width, focused), dimText("q close"), width, 0)
-}
-
-func (p *Plugin) registerIssuePaneRegions(title string, leafID int, box Box) {
+func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionIssuePane, box.X, box.Y, box.W, box.H, leafID)
-	chips := p.issueHeaderChips(title, box.W, p.paneFocus == leafID)
-	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
-		if chip.Drawn && index == len(chips)-1 {
-			p.mouseHandler.HitMap.AddRect(regionIssueClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
-		}
+}
+
+func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
+	for _, tab := range layoutIssueTabStrip(issue, box.W, p.paneFocus == leafID).Tabs {
+		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+tab.Col, box.Y, tab.Width, 1, issueTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }
 
@@ -258,10 +405,11 @@ func issueViewLocal(actionX, actionY int, box Box) (int, int) {
 
 func (p *Plugin) yankFocusedIssue(idOnly bool) tea.Cmd {
 	issue, _ := p.focusedIssuePane()
-	if issue == nil || issue.view == nil {
+	view := issue.view()
+	if view == nil {
 		return nil
 	}
-	data := issue.view.Data()
+	data := view.Data()
 	if data == nil {
 		return nil
 	}
