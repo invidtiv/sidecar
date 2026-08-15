@@ -288,14 +288,14 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 	}
 
 	if inListPane {
-		// Scroll list by moving cursor
-		notesList := p.getDisplayNotes()
-		p.cursor += delta
-		if p.cursor < 0 {
-			p.cursor = 0
-		} else if p.cursor >= len(notesList) {
-			p.cursor = len(notesList) - 1
+		// Scroll list by moving cursor. A wheel that cannot move the cursor
+		// must not reload the editor: the note is already loaded, and the
+		// reload is the expensive half of an inertia tail.
+		cursor, changed := p.listBounds().Move(delta)
+		if !changed {
+			return p, nil
 		}
+		p.cursor = cursor
 		p.loadNoteIntoEditor()
 		return p, nil
 	}
@@ -309,10 +309,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 		if len(p.previewLines) == 0 {
 			return p, nil
 		}
-		p.previewScrollOff += delta
-		if p.previewScrollOff < 0 {
-			p.previewScrollOff = 0
-		}
+		p.previewScrollOff, _ = p.previewBounds().Move(delta)
 	} else {
 		// In edit mode, forward scroll as cursor movement to textarea
 		var cmd tea.Cmd

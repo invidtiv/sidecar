@@ -231,7 +231,7 @@ func (p *Plugin) renderPreviewContent(height, width int) string {
 	}
 
 	// Ensure preview cursor is visible
-	p.ensurePreviewCursorVisibleWithHeight(height)
+	p.ensurePreviewCursorVisibleWithHeight(height, width)
 
 	// Calculate visible range
 	start := p.previewScrollOff
@@ -464,8 +464,60 @@ func (p *Plugin) renderEditorPlaceholder(height int) string {
 	return sb.String()
 }
 
-// ensurePreviewCursorVisibleWithHeight adjusts preview scroll offset for given height.
-func (p *Plugin) ensurePreviewCursorVisibleWithHeight(viewHeight int) {
+// previewViewport returns the content height and width of the preview pane as
+// renderTwoPaneLayout builds them. Boundary queries, wheel movement, and the
+// renderer's clamp all measure the same box through this one helper.
+func (p *Plugin) previewViewport() (height, width int) {
+	paneHeight := p.height
+	if paneHeight < 4 {
+		paneHeight = 4
+	}
+	innerHeight := paneHeight - 2
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	height = innerHeight - 1 // status header line
+	if height < 1 {
+		height = 1
+	}
+	width = p.width - p.listWidth - dividerWidth - 4 // borders (2) + padding (2)
+	return height, width
+}
+
+// previewMaxScroll returns the largest previewScrollOff that still fills the
+// viewport, measured from the same wrapped lines renderPreviewContent draws.
+// With wrapping on, trailing lines occupy more than one row, so the logical
+// maximum is smaller than len(previewLines)-height.
+func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
+	lines := p.previewLines
+	if len(lines) == 0 || viewHeight < 1 {
+		return 0
+	}
+	lineNumWidth := len(fmt.Sprintf("%d", len(lines)))
+	if lineNumWidth < 2 {
+		lineNumWidth = 2
+	}
+	maxLineWidth := viewWidth - lineNumWidth - 3
+	if maxLineWidth < 1 {
+		maxLineWidth = 1
+	}
+	rows := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		if p.previewWrapEnabled {
+			rows += len(p.wrapEditorLine(lines[i], maxLineWidth))
+		} else {
+			rows++
+		}
+		if rows >= viewHeight {
+			return i
+		}
+	}
+	return 0
+}
+
+// ensurePreviewCursorVisibleWithHeight adjusts preview scroll offset for given
+// viewport dimensions.
+func (p *Plugin) ensurePreviewCursorVisibleWithHeight(viewHeight, viewWidth int) {
 	if len(p.previewLines) == 0 {
 		return
 	}
@@ -484,10 +536,7 @@ func (p *Plugin) ensurePreviewCursorVisibleWithHeight(viewHeight int) {
 	if p.previewScrollOff < 0 {
 		p.previewScrollOff = 0
 	}
-	maxScroll := len(p.previewLines) - viewHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := p.previewMaxScroll(viewHeight, viewWidth)
 	if p.previewScrollOff > maxScroll {
 		p.previewScrollOff = maxScroll
 	}

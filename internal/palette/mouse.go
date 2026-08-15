@@ -3,6 +3,7 @@ package palette
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 )
 
 // Mouse region identifiers
@@ -30,26 +31,9 @@ func rebuildMouseAt(msg tea.MouseMsg, x, y int) tea.MouseMsg {
 
 // handleMouse processes mouse events for the command palette.
 func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
-	// Calculate modal position (same logic as View)
-	modalWidth := min(80, m.width-4)
-	if modalWidth < 40 {
-		modalWidth = 40
-	}
-
-	// Modal height = header (3 lines) + visible entries + scroll indicators + borders/padding
-	// Approximate: header(3) + maxVisible + scroll hints(2) + borders(4)
-	modalHeight := 3 + m.maxVisible + 6
-
-	modalX := (m.width - modalWidth) / 2
-	modalY := (m.height - modalHeight) / 2
-
-	// Translate to modal-relative coordinates
-	mi := msg.Mouse()
-	relX := mi.X - modalX
-	relY := mi.Y - modalY
-
-	// Ignore clicks outside modal bounds
-	if relX < 0 || relY < 0 || relX >= modalWidth || relY >= modalHeight {
+	// Ignore events outside modal bounds; the palette absorbs them.
+	relX, relY, ok := m.modalCoords(msg)
+	if !ok {
 		return *m, nil
 	}
 
@@ -123,4 +107,48 @@ func (m *Model) ensureCursorVisible() {
 	if m.cursor >= m.offset+m.maxVisible {
 		m.offset = m.cursor - m.maxVisible + 1
 	}
+}
+
+// WheelAtBoundary reports whether a wheel event certainly cannot change the
+// palette. The palette's wheel moves the cursor over the currently filtered
+// entries, so the bound is that cursor against the filtered count. Events
+// outside the modal bounds are absorbed by handleMouse and are known no-ops.
+//
+// It is read-only: no filtering is re-run and no visible state changes. The
+// app layer owns whether to call it.
+func (m *Model) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m == nil || m.mouseHandler == nil {
+		return false
+	}
+	if _, _, ok := m.modalCoords(msg); !ok {
+		return true
+	}
+	delta := 3
+	if msg.Button == tea.MouseWheelUp {
+		delta = -3
+	} else if msg.Button != tea.MouseWheelDown {
+		return false
+	}
+	if len(m.filtered) == 0 {
+		return true
+	}
+	return (sharedscroll.Bounds{Position: m.cursor, Maximum: len(m.filtered) - 1}).AtBoundary(delta)
+}
+
+// modalCoords translates a mouse event into palette-modal coordinates and
+// reports whether it landed inside the modal. Wheel routing and the boundary
+// query share this one geometry.
+func (m *Model) modalCoords(msg tea.MouseMsg) (relX, relY int, inside bool) {
+	modalWidth := min(80, m.width-4)
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modalHeight := 3 + m.maxVisible + 6
+	modalX := (m.width - modalWidth) / 2
+	modalY := (m.height - modalHeight) / 2
+	mi := msg.Mouse()
+	relX = mi.X - modalX
+	relY = mi.Y - modalY
+	inside = relX >= 0 && relY >= 0 && relX < modalWidth && relY < modalHeight
+	return relX, relY, inside
 }
