@@ -44,8 +44,19 @@ type State struct {
 	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
 	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 
+	// WorkspaceListSort is the global Workspaces list's chosen order, stored as
+	// its display label ("Activity", "Project", "Recent", "Name") rather than
+	// an ordinal, so the file reads plainly and the enum can be reordered.
+	// Unrecognised or empty falls back to the default. Its per-project
+	// counterpart lives on WorkspaceState, because the two scopes answer the
+	// question separately.
+	WorkspaceListSort string `json:"workspaceListSort,omitempty"`
+
 	// LastCreateAgent is the last agent chosen when creating a worktree.
 	LastCreateAgent string `json:"lastCreateAgent,omitempty"`
+	// LastGlobalCreateProject is the stable project root last chosen from the
+	// cross-project Workspaces create flow.
+	LastGlobalCreateProject string `json:"lastGlobalCreateProject,omitempty"`
 
 	// AgentAutoApprove is the last auto-approve checkbox value per agent type.
 	// A missing key is treated as false.
@@ -79,6 +90,12 @@ type WorkspaceState struct {
 	ShellDisplayNames map[string]string          `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
 	PaneLayout        *PaneLayoutJSON            `json:"paneLayout,omitempty"`        // Read-only migrate into PaneLayouts
 	PaneLayouts       map[string]*PaneLayoutJSON `json:"paneLayouts,omitempty"`       // surface → layout
+	// ListSort is the sidebar's chosen order, stored as its display label
+	// ("Manual", "Activity", "Recent", "Name") rather than an ordinal. A label
+	// survives reordering the enum, reads plainly in the state file, and an
+	// unrecognised one falls back to the default instead of selecting an
+	// arbitrary mode. Empty means the project has never chosen.
+	ListSort string `json:"listSort,omitempty"`
 }
 
 // PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc
@@ -728,6 +745,28 @@ func SetLastGlobalTab(tab string) error {
 	return Save()
 }
 
+// GetWorkspaceListSort returns the global Workspaces list's saved order label,
+// or "" when the user has never chosen one.
+func GetWorkspaceListSort() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.WorkspaceListSort
+}
+
+// SetWorkspaceListSort saves the global Workspaces list's chosen order.
+func SetWorkspaceListSort(label string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.WorkspaceListSort = label
+	mu.Unlock()
+	return Save()
+}
+
 // GetShowIdleWorktrees reports whether the global list should include idle
 // worktrees. A missing or fresh state is off.
 func GetShowIdleWorktrees() bool {
@@ -857,6 +896,29 @@ func SetLastCreateAgent(agent string) error {
 		current = &State{}
 	}
 	current.LastCreateAgent = agent
+	mu.Unlock()
+	return Save()
+}
+
+// GetLastGlobalCreateProject returns the last project root chosen in global
+// Workspaces creation.
+func GetLastGlobalCreateProject() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastGlobalCreateProject
+}
+
+// SetLastGlobalCreateProject persists the last project root chosen in global
+// Workspaces creation.
+func SetLastGlobalCreateProject(project string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.LastGlobalCreateProject = project
 	mu.Unlock()
 	return Save()
 }

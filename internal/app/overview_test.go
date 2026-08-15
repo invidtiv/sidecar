@@ -741,6 +741,7 @@ func overviewNavigation(t *testing.T, model *overview.Model, workspace workspace
 func overviewValidation(navigation overview.NavigateMsg, err error) overview.ValidationMsg {
 	return overview.ValidationMsg{
 		Workspace:  navigation.Workspace,
+		Action:     navigation.Action,
 		Generation: navigation.Generation,
 		RequestID:  navigation.RequestID,
 		Err:        err,

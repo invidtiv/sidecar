@@ -115,6 +115,10 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.globalWorkspacesVisible() && m.overview.CreateOpen() && m.overview.CreatePaste(msg.Content) {
+		return m, nil
+	}
+
 	if m.globalWorkspacesVisible() && m.overview.RenameShellOpen() && m.overview.RenameShellPaste(msg.Content) {
 		return m, nil
 	}
@@ -458,7 +462,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return ToastMsg{Message: "Overview item is stale: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
 			}
 		}
-		return m, m.navigateFromOverview(msg.Workspace)
+		return m, m.navigateFromOverviewAction(msg.Workspace, msg.Action)
 
 	case SwitchWorktreeMsg:
 		// Switch to the requested worktree
@@ -1814,6 +1818,7 @@ func isTextInputContext(ctx string) bool {
 		"theme-switcher",
 		"global-workspaces-filter",
 		"global-workspaces-rename",
+		"global-workspaces-create",
 		"issue-input":
 		return true
 	default:

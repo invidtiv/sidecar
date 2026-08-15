@@ -433,6 +433,12 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 
 // handleListKeys handles keys in list view (and kanban view).
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
+	// The View surface is a modal over the list: while it is open it owns the
+	// keyboard, so a stray key cannot fall through to a project command.
+	if p.viewFlyoutActive() {
+		_, cmd := p.handleViewFlyoutKey(msg)
+		return cmd
+	}
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
 	// Tab walks every window on screen — sidebar, tree leaves, terminal panel —
@@ -833,6 +839,15 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return p.enterInteractiveMode()
 	case "v":
+		// v opens View, matching the global browser. Kanban moves to V: the
+		// two surfaces should not spend their most obvious "view" key on
+		// different things, and switching a project to a board is the rarer
+		// action of the two.
+		if p.activePane == PaneSidebar && p.viewMode == ViewModeList {
+			p.openViewFlyout()
+			return nil
+		}
+	case "V":
 		if p.activePane == PaneSidebar || p.viewMode == ViewModeKanban {
 			switch p.viewMode {
 			case ViewModeList:

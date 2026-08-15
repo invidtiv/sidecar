@@ -51,19 +51,132 @@ func (p *Plugin) visibleNestedShells(wt *Worktree) []*ShellSession {
 	return out
 }
 
-func (p *Plugin) visibleSidebarItems() []sidebarNavItem {
-	items := make([]sidebarNavItem, 0, len(p.shells)+len(p.worktrees)+p.nestedShellTotal())
-	for _, index := range p.visibleShellIndices() {
-		items = append(items, sidebarNavItem{kind: navKindShell, shellIdx: index})
+// sidebarNavSection is one headed run of navigable items. It is the single
+// description of what the sidebar contains and in what order.
+type sidebarNavSection struct {
+	title  string
+	action *workspacelist.SidebarAction
+	items  []sidebarNavItem
+}
+
+// sidebarNavSections is the one place that decides what the sidebar shows and
+// in what order.
+//
+// Keyboard navigation and rendering used to derive that order independently and
+// happened to agree, which was survivable only while the order was hard-coded
+// as "shells, then worktrees with their nests". It stops being survivable the
+// moment the order becomes a user choice: j/k would walk one sequence while the
+// eye read another. Both now consume this.
+func (p *Plugin) sidebarNavSections() []sidebarNavSection {
+	if p.listSort != workspacelist.SortManual {
+		return p.sortedNavSections()
 	}
+	return p.manualNavSections()
+}
+
+// manualNavSections is the structural order: shells the user is working in,
+// then worktrees, each followed by the shells living inside it. It is the shape
+// of the project rather than a judgement about it, which is why it stays the
+// default and why it is the only mode where a shell is drawn as a child.
+func (p *Plugin) manualNavSections() []sidebarNavSection {
+	shells := sidebarNavSection{title: "Shells"}
+	for _, index := range p.visibleShellIndices() {
+		shells.items = append(shells.items, sidebarNavItem{kind: navKindShell, shellIdx: index})
+	}
+	if len(shells.items) > 0 {
+		shells.action = &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}
+	}
+
+	worktrees := sidebarNavSection{title: "Worktrees"}
 	for _, index := range p.visibleWorktreeIndices() {
-		items = append(items, sidebarNavItem{kind: navKindWorktree, worktreeIdx: index})
-		wt := p.worktrees[index]
-		for _, shell := range p.visibleNestedShells(wt) {
-			items = append(items, sidebarNavItem{kind: navKindNestedShell, worktreeIdx: index, shell: shell})
+		worktrees.items = append(worktrees.items, sidebarNavItem{kind: navKindWorktree, worktreeIdx: index})
+		for _, shell := range p.visibleNestedShells(p.worktrees[index]) {
+			worktrees.items = append(worktrees.items, sidebarNavItem{kind: navKindNestedShell, worktreeIdx: index, shell: shell})
 		}
 	}
+	// With no Shells section above it this heading lands one row under the panel
+	// header, whose "New" creates the same thing the "+" would.
+	if len(worktrees.items) > 0 && len(shells.items) > 0 {
+		worktrees.action = &workspacelist.SidebarAction{ID: regionWorkspacesPlusButton, Label: "+", Hovered: p.hoverWorkspacesPlusButton}
+	}
+
+	sections := make([]sidebarNavSection, 0, 2)
+	for _, section := range []sidebarNavSection{shells, worktrees} {
+		if len(section.items) > 0 {
+			sections = append(sections, section)
+		}
+	}
+	return sections
+}
+
+func (p *Plugin) visibleSidebarItems() []sidebarNavItem {
+	sections := p.sidebarNavSections()
+	items := make([]sidebarNavItem, 0, len(p.shells)+len(p.worktrees)+p.nestedShellTotal())
+	for _, section := range sections {
+		items = append(items, section.items...)
+	}
 	return items
+}
+
+// rowID is the stable identity the shared list selects and hit-tests by.
+func (p *Plugin) rowID(item sidebarNavItem) string {
+	switch item.kind {
+	case navKindShell:
+		shell := p.shells[item.shellIdx]
+		if shell.TmuxName == "" {
+			return fmt.Sprintf("shell:%s:%d", shell.Name, item.shellIdx)
+		}
+		return "shell:" + shell.TmuxName
+	case navKindNestedShell:
+		if item.shell.TmuxName == "" {
+			return fmt.Sprintf("nested:%s:%s", p.worktrees[item.worktreeIdx].IdentityKey(), item.shell.Name)
+		}
+		return "nested:" + item.shell.TmuxName
+	default:
+		return "worktree:" + p.worktrees[item.worktreeIdx].IdentityKey()
+	}
+}
+
+// rowData is the caller-owned payload the hit map hands back on a click. The
+// encodings are historical and unchanged: top shells are a negative index,
+// worktrees a plain index, nested shells their tmux name.
+func (p *Plugin) rowData(item sidebarNavItem) any {
+	switch item.kind {
+	case navKindShell:
+		return -(item.shellIdx + 1)
+	case navKindNestedShell:
+		return nestedShellHit{TmuxName: item.shell.TmuxName}
+	default:
+		return item.worktreeIdx
+	}
+}
+
+func (p *Plugin) renderNavItem(item sidebarNavItem, width int, selected bool) []string {
+	switch item.kind {
+	case navKindShell:
+		return []string{p.renderShellEntryForSession(p.shells[item.shellIdx], selected, width)}
+	case navKindNestedShell:
+		// Indented under its worktree only while the order is structural. A
+		// computed order has flattened the tree, so the row draws as a peer
+		// carrying its worktree as context instead.
+		if p.listSort != workspacelist.SortManual {
+			return []string{p.renderPeerShellEntry(item.shell, p.worktrees[item.worktreeIdx], selected, width)}
+		}
+		return []string{p.renderNestedShellEntry(item.shell, selected, width)}
+	default:
+		return []string{p.renderWorktreeSidebarItem(p.worktrees[item.worktreeIdx], selected, width)}
+	}
+}
+
+// selectedRowID is the identity of the current selection, or "" when nothing
+// visible is selected.
+func (p *Plugin) selectedRowID() string {
+	for _, item := range p.visibleSidebarItems() {
+		if p.sidebarItemSelected(item) {
+			return p.rowID(item)
+		}
+	}
+	return ""
 }
 
 func (p *Plugin) selectSidebarItem(item sidebarNavItem) {
@@ -138,73 +251,36 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	}
 
 	matched, total := p.filterCounts()
-	sections := make([]workspacelist.SidebarSection, 0, 2)
-	visibleShells := p.visibleShellIndices()
-	if len(visibleShells) > 0 {
-		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Shells", len(visibleShells)), Action: &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}}
-		for _, index := range visibleShells {
-			index := index
-			shell := p.shells[index]
-			id := shell.TmuxName
-			if id == "" {
-				id = fmt.Sprintf("shell:%s:%d", shell.Name, index)
-			} else {
-				id = "shell:" + id
-			}
-			section.Rows = append(section.Rows, workspacelist.SidebarRow{ID: id, Data: -(index + 1), Render: func(rowWidth int, selected, _ bool) []string {
-				return []string{p.renderShellEntryForSession(shell, selected, rowWidth)}
-			}})
+	navSections := p.sidebarNavSections()
+	sections := make([]workspacelist.SidebarSection, 0, len(navSections))
+	rowCount := 0
+	for _, nav := range navSections {
+		section := workspacelist.SidebarSection{Title: nav.title, Count: len(nav.items), Action: nav.action}
+		for _, item := range nav.items {
+			item := item
+			section.Rows = append(section.Rows, workspacelist.SidebarRow{
+				ID: p.rowID(item), Data: p.rowData(item),
+				Render: func(rowWidth int, selected, _ bool) []string {
+					return p.renderNavItem(item, rowWidth, selected)
+				},
+			})
 		}
-		sections = append(sections, section)
-	}
-	visibleWorktrees := p.visibleWorktreeIndices()
-	if len(visibleWorktrees) > 0 {
-		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Workspaces", len(visibleWorktrees))}
-		// With no Shells section above it this heading lands one row under the
-		// panel header, whose "New" creates the same thing the "+" would.
-		if len(visibleShells) > 0 {
-			section.Action = &workspacelist.SidebarAction{ID: regionWorkspacesPlusButton, Label: "+", Hovered: p.hoverWorkspacesPlusButton}
-		}
-		for _, index := range visibleWorktrees {
-			index := index
-			wt := p.worktrees[index]
-			id := "worktree:" + wt.IdentityKey()
-			section.Rows = append(section.Rows, workspacelist.SidebarRow{ID: id, Data: index, Render: func(rowWidth int, selected, _ bool) []string {
-				return []string{p.renderWorktreeSidebarItem(wt, selected, rowWidth)}
-			}})
-			for _, shell := range p.visibleNestedShells(wt) {
-				shell := shell
-				nestedID := "nested:" + shell.TmuxName
-				if shell.TmuxName == "" {
-					nestedID = fmt.Sprintf("nested:%s:%s", wt.IdentityKey(), shell.Name)
-				}
-				section.Rows = append(section.Rows, workspacelist.SidebarRow{ID: nestedID, Data: nestedShellHit{TmuxName: shell.TmuxName}, Render: func(rowWidth int, selected, _ bool) []string {
-					return []string{p.renderNestedShellEntry(shell, selected, rowWidth)}
-				}})
-			}
-		}
+		rowCount += len(section.Rows)
 		sections = append(sections, section)
 	}
 
-	selectedID := ""
-	if p.shellSelected && p.selectedShellIdx >= 0 && p.selectedShellIdx < len(p.shells) {
-		shell := p.shells[p.selectedShellIdx]
-		if shell.TmuxName == "" {
-			selectedID = fmt.Sprintf("shell:%s:%d", shell.Name, p.selectedShellIdx)
-		} else {
-			selectedID = "shell:" + shell.TmuxName
-		}
-	} else if p.selectedNestedTmux != "" {
-		selectedID = "nested:" + p.selectedNestedTmux
-	} else if p.selectedIdx >= 0 && p.selectedIdx < len(p.worktrees) {
-		selectedID = "worktree:" + p.worktrees[p.selectedIdx].IdentityKey()
-	}
+	selectedID := p.selectedRowID()
 
 	empty := []string(nil)
-	if len(visibleShells)+len(visibleWorktrees) == 0 {
+	if rowCount == 0 {
 		if p.filterActive() {
 			empty = []string{workspacelist.NoMatchRow(max(1, width-1), p.listFilter.Query())}
-		} else if len(p.shells)+len(p.worktrees) == 0 {
+		} else {
+			// Every project has a main checkout and the list does not offer it,
+			// so counting raw worktrees here left a fresh clone with an empty
+			// sidebar and no word about what to do next. The question is
+			// whether there is anything to show, not whether Git found
+			// something.
 			empty = []string{styles.Muted.Render("No workspaces"), styles.Muted.Render("Press 'n' to create one")}
 		}
 	}
@@ -212,7 +288,12 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	rendered := workspacelist.RenderSidebar(workspacelist.SidebarOptions{
 		Width: width, Height: height, Title: "Workspaces", Focused: p.activePane == PaneSidebar,
 		SelectedID: selectedID, ScrollOffset: p.scrollOffset,
-		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "New", Hovered: p.hoverNewButton},
+		// One header grammar with the global list: the order the list is in,
+		// then the button that adds to it. "New" became "+" because the section
+		// headings already offer "+" for the same job — three words for one
+		// action was the noisiest thing in this header.
+		HeaderMeta:   &workspacelist.SidebarAction{ID: regionListSortButton, Label: workspacelist.SortPillLabel(p.listSort), Hovered: p.hoverSortButton},
+		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "+", Hovered: p.hoverNewButton},
 		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
 		Sections: sections, EmptyLines: empty,
 	})
@@ -220,7 +301,12 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	for _, region := range rendered.Regions {
 		id, data := string(region.Kind), region.Data
 		switch region.Kind {
-		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction:
+		// The sort pill is a header control like any other: it carries the
+		// caller's own region ID, not the shared component's kind. Falling
+		// through to the kind left the pill drawn, hit-tested, and wired to a
+		// handler that could never be reached — a button that looks pressable
+		// and does nothing.
+		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction, workspacelist.RegionSort:
 			id = region.ID
 		case workspacelist.RegionRow:
 			id = regionWorktreeItem

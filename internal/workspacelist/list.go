@@ -82,6 +82,30 @@ func groupRank(g Group) int {
 // order so a group that gains its first item never appears in a new place.
 func Groups() []Group { return append([]Group(nil), activityOrder...) }
 
+// GroupForLane is the vertical projection of a resolved agent lane, shared by
+// every consumer that groups by activity.
+//
+// It takes the lane as a string rather than an agentstatus.LaneID so this
+// package keeps its promise not to import a status reducer: it does not decide
+// what "blocked" means, only where a row already resolved as blocked belongs in
+// a list. An unrecognised lane lands in Paused, which is the bucket for
+// "something is here and its state is not legible" — a row this does not
+// recognise is still a row someone has to see.
+func GroupForLane(lane string) Group {
+	switch lane {
+	case "blocked":
+		return GroupNeedsAttention
+	case "working":
+		return GroupWorking
+	case "done":
+		return GroupDone
+	case "idle":
+		return GroupIdle
+	default:
+		return GroupPaused
+	}
+}
+
 // Sort is an explicit user-chosen ordering. Sorting is presentation only: it
 // never changes identities, and it never triggers collection.
 type Sort uint8
@@ -91,9 +115,16 @@ const (
 	SortProject
 	SortRecent
 	SortName
+	// SortManual is the caller's own order, left exactly as handed in. It is
+	// offered only where a durable order actually exists — the project
+	// sidebar's fixed Shells/Worktrees structure, and later its drag order.
+	// Global inventory does not pretend to own Git or tmux ordering, so it
+	// does not offer this.
+	SortManual
 )
 
-// SortModes is the cycle order behind `s`.
+// SortModes is the cycle order behind the global list's sort control. Manual is
+// absent: it means something only to a consumer that owns its input order.
 var SortModes = []Sort{SortActivity, SortProject, SortRecent, SortName}
 
 func (s Sort) Label() string {
@@ -104,9 +135,67 @@ func (s Sort) Label() string {
 		return "Recent"
 	case SortName:
 		return "Name"
+	case SortManual:
+		return "Manual"
 	default:
 		return "Activity"
 	}
+}
+
+// SortGlyph marks the header control as a sort rather than a caption. A bare
+// "Activity" in the corner of a panel says nothing about why it is there; the
+// same word behind ⇅ says the list is ordered by it and that the control is
+// worth pressing.
+//
+// It is ⇅ rather than the word "Sort:" because the control shares its row with
+// the create button and, on a narrow sidebar, six columns of label is the
+// difference between both controls fitting and neither. It is ⇅ rather than a
+// single arrow because the list offers no direction to point in — a ↓ would be
+// answering a question nobody asked. U+21C5 is ordinary Unicode, not a Nerd
+// Font glyph, so it survives a plain terminal font.
+const SortGlyph = "⇅"
+
+// SortPillLabel is what the header control reads.
+func SortPillLabel(mode Sort) string { return SortGlyph + " " + mode.Label() }
+
+// SortActionID names the choice a View surface reports when a sort is picked.
+// Both surfaces build their own sections — they offer different modes and
+// different extra toggles — but they must not invent two names for the same
+// choice, or a shared handler would answer to one and ignore the other.
+func SortActionID(mode Sort) string { return "sort-" + mode.Label() }
+
+// SortFromAction resolves an action ID back to a mode within the offered set.
+func SortFromAction(action string, modes []Sort) (Sort, bool) {
+	for _, mode := range modes {
+		if action == SortActionID(mode) {
+			return mode, true
+		}
+	}
+	return 0, false
+}
+
+// SortFromLabel resolves a persisted label back to a mode within the offered
+// set, case-insensitively. Labels are what surfaces persist: they read plainly
+// in a state file and survive the enum being reordered. A label this set does
+// not offer reports false so the caller can fall back to its own default rather
+// than land on an arbitrary mode.
+func SortFromLabel(label string, modes []Sort) (Sort, bool) {
+	for _, mode := range modes {
+		if strings.EqualFold(label, mode.Label()) {
+			return mode, true
+		}
+	}
+	return 0, false
+}
+
+// SortIndex is a mode's position in the offered set, for a list cursor.
+func SortIndex(mode Sort, modes []Sort) int {
+	for i, candidate := range modes {
+		if candidate == mode {
+			return i
+		}
+	}
+	return 0
 }
 
 // Next cycles to the following sort mode.
@@ -198,6 +287,8 @@ func Filtered(items []Item, query string) []Item {
 func Sorted(items []Item, mode Sort) []Item {
 	out := append([]Item(nil), items...)
 	switch mode {
+	case SortManual:
+		// The caller's order is the answer.
 	case SortProject:
 		sort.SliceStable(out, func(a, b int) bool {
 			if out[a].ProjectOrder != out[b].ProjectOrder {
@@ -247,6 +338,9 @@ var recentBucketOrder = []string{RecentNew, RecentToday, RecentThisWeek, RecentO
 // bucket when that sort is in play.
 type Section struct {
 	Title string
+	// Key is the stable grouping identity when a section represents a project.
+	// Presentation callers can hang an action from it without decoding Title.
+	Key   string
 	Group Group
 	Items []Item
 }
@@ -272,7 +366,7 @@ func GroupedAt(items []Item, mode Sort, now time.Time, pinnedIDs []string) []Sec
 		sections = groupByProject(rest)
 	case SortRecent:
 		sections = groupByRecent(rest, now)
-	case SortName:
+	case SortName, SortManual:
 		if len(rest) > 0 {
 			sections = []Section{{Items: rest}}
 		}
@@ -355,7 +449,7 @@ func groupByProject(items []Item) []Section {
 			if title == "" {
 				title = item.ProjectKey
 			}
-			sections = append(sections, Section{Title: title})
+			sections = append(sections, Section{Title: title, Key: itemKey})
 			current = len(sections) - 1
 			key = itemKey
 			started = true

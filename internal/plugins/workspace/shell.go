@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // Shell session constants
@@ -43,10 +45,7 @@ var (
 // isTmuxInstalled returns true if tmux is available in PATH.
 // Result is cached after first check.
 func isTmuxInstalled() bool {
-	tmuxInstalledOnce.Do(func() {
-		_, err := exec.LookPath("tmux")
-		tmuxInstalledCached = err == nil
-	})
+	tmuxInstalledOnce.Do(func() { tmuxInstalledCached = workspaceops.TmuxInstalled() })
 	return tmuxInstalledCached
 }
 
@@ -516,51 +515,45 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		}
 	}
 
-	sessionName := p.generateShellSessionName()
 	displayName := strings.TrimSpace(opts.CustomName)
 	if displayName == "" {
 		displayName = p.nextShellDisplayName()
 	}
-	workDir := p.ctx.WorkDir
 	// Size the pane at creation. Without -x/-y tmux uses default-size (80x24),
 	// and anything the user starts before the follow-up resize lands — an editor
 	// especially — lays itself out for 24 rows (td-9b181e). The shell is not
 	// selected yet, which no longer matters: every terminal surface reserves the
 	// same single header row, so the preview size does not depend on the kind.
 	previewWidth, previewHeight := p.calculatePreviewDimensions()
+	spec := workspaceops.ShellSpec{
+		WorkDir:     p.ctx.WorkDir,
+		SessionName: p.generateShellSessionName(),
+		DisplayName: displayName,
+		Cols:        previewWidth,
+		Rows:        previewHeight,
+	}
 
 	created := ShellCreatedMsg{
-		SessionName:   sessionName,
-		DisplayName:   displayName,
+		SessionName:   spec.SessionName,
+		DisplayName:   spec.DisplayName,
 		AgentType:     opts.AgentType,
 		SkipPerms:     opts.SkipPerms,
 		KeepSelection: opts.KeepSelection,
 	}
 
+	// Everything above resolves this project's answers; the creation itself is
+	// the shared operation, so a global caller runs the same code with its own
+	// project's answers rather than a second copy of this.
 	return func() tea.Msg {
-		// Check if session already exists (shouldn't happen with unique names)
-		if sessionExists(sessionName) {
-			created.PaneID = getPaneID(sessionName)
-			return created
+		result, err := workspaceops.CreateShell(spec)
+		created.PaneID = result.PaneID
+		created.Err = err
+		if result.PaneID != "" {
+			// Seed the cache with the pane we just made. This is the one moment
+			// the value is certainly fresh, and skipping it would cost a
+			// tmux list-panes on the very next poll of a brand-new shell.
+			globalPaneIDCache.set(spec.SessionName, result.PaneID)
 		}
-
-		// Create new detached session in project directory
-		args := []string{
-			"new-session",
-			"-d",              // Detached
-			"-s", sessionName, // Session name
-			"-c", workDir, // Working directory
-		}
-		if previewWidth > 0 && previewHeight > 0 {
-			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
-		}
-		if err := newShellSession(args, sessionName, displayName); err != nil {
-			created.Err = fmt.Errorf("create shell session: %w", err)
-			return created
-		}
-
-		// Capture pane ID for interactive mode support
-		created.PaneID = getPaneID(sessionName)
 		return created
 	}
 }
@@ -706,8 +699,7 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 		baseCmd = withShellNamingInstruction(baseCmd, agentType)
 
 		// Send the command to the shell's tmux session
-		cmd := exec.Command("tmux", "send-keys", "-t", tmuxName, baseCmd, "Enter")
-		if err := cmd.Run(); err != nil {
+		if err := workspaceops.StartAgentInShell(context.Background(), tmuxName, baseCmd); err != nil {
 			return ShellAgentErrorMsg{
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("failed to start agent: %w", err),
@@ -720,44 +712,6 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 			SkipPerms: skipPerms,
 		}
 	}
-}
-
-// shellEnvArgs are the new-session flags that publish a shell's identity into
-// its own environment. An agent can then read $SIDECAR_SHELL_NAME to tell a
-// default name from a deliberate one without asking anybody.
-func shellEnvArgs(sessionName, displayName string) []string {
-	return []string{
-		"-e", shellstate.SessionEnv + "=" + sessionName,
-		"-e", shellstate.NameEnv + "=" + displayName,
-	}
-}
-
-// newShellSession creates a shell session with its identity environment,
-// falling back to a plain create if this tmux rejects new-session -e (added in
-// tmux 3.2). Losing the environment cue is a degraded shell; failing to create
-// the session is a broken one, and the fallback still publishes the values to
-// the session environment for any pane opened later.
-func newShellSession(args []string, sessionName, displayName string) error {
-	withEnv := append(append([]string(nil), args...), shellEnvArgs(sessionName, displayName)...)
-	if err := tty.NewSession(withEnv...); err == nil {
-		return nil
-	}
-	if err := tty.NewSession(args...); err != nil {
-		return err
-	}
-	setShellEnv(sessionName, displayName)
-	return nil
-}
-
-// setShellEnv publishes the display name to the tmux session environment.
-// Panes already running keep the value they were created with — the manifest
-// and `sidecar shell rename` remain the authority, this is only the cue.
-func setShellEnv(sessionName, displayName string) {
-	if sessionName == "" {
-		return
-	}
-	_ = tty.SetSessionEnv(sessionName, shellstate.SessionEnv, sessionName)
-	_ = tty.SetSessionEnv(sessionName, shellstate.NameEnv, displayName)
 }
 
 // withShellNamingInstruction appends the shell-naming guidance to an agent
@@ -1278,4 +1232,14 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			AgentType:     agentType,
 		}
 	}
+}
+
+// newShellSession and setShellEnv keep their plugin names for the other
+// creation paths that still call them; the implementation is shared.
+func newShellSession(args []string, sessionName, displayName string) error {
+	return workspaceops.NewSessionWithIdentity(args, sessionName, displayName)
+}
+
+func setShellEnv(sessionName, displayName string) {
+	workspaceops.SetShellEnv(sessionName, displayName)
 }

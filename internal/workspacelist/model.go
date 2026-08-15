@@ -40,15 +40,25 @@ type Model struct {
 	sortMode Sort
 	filter   Filter
 
-	selectedID string
-	scroll     int
-	visible    []Item
-	rows       int
-	loading    bool
-	failures   []string
-	emptyText  string
-	pinnedIDs  []string
-	pulseFrame int
+	selectedID     string
+	scroll         int
+	visible        []Item
+	rows           int
+	loading        bool
+	failures       []string
+	emptyText      string
+	pinnedIDs      []string
+	pulseFrame     int
+	headerAction   *SidebarAction
+	sectionActions map[string]*SidebarAction
+}
+
+// SetCreateActions supplies presentation-only create affordances. Section
+// actions are keyed by Section.Key, which is a stable project identity under
+// Project sort. Nil removes the corresponding affordance and hit region.
+func (m *Model) SetCreateActions(header *SidebarAction, sections map[string]*SidebarAction) {
+	m.headerAction = header
+	m.sectionActions = sections
 }
 
 // SetPulseFrame advances the working/blocked marker animation. Consumers that
@@ -344,11 +354,11 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
-		title := ""
-		if section.Title != "" {
-			title = SectionTitle(section.Title, len(section.Items))
+		s := SidebarSection{Title: section.Title, Count: len(section.Items)}
+		if action := m.sectionActions[section.Key]; action != nil {
+			copy := *action
+			s.Action = &copy
 		}
-		s := SidebarSection{Title: title}
 		for _, item := range section.Items {
 			item := item
 			s.Rows = append(s.Rows, SidebarRow{ID: item.ID, Data: item.Data, Render: func(width int, selected, focused bool) []string {
@@ -372,7 +382,8 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	rendered := RenderSidebar(SidebarOptions{Width: opts.Width, Height: opts.Height, Title: opts.Title, Focused: opts.Focused,
 		SelectedID: m.selectedID, ScrollOffset: m.scroll,
-		HeaderMeta: &SidebarAction{ID: "sort", Label: m.sortMode.Label()},
+		HeaderAction: m.headerAction,
+		HeaderMeta:   &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode)},
 		// The filter row costs a row of chrome, so it appears when the filter is
 		// live and not before — the rule the project sidebar already follows, so
 		// the first heading sits on the same row on both surfaces.

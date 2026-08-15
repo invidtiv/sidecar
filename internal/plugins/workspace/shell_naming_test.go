@@ -3,8 +3,6 @@ package workspace
 import (
 	"strings"
 	"testing"
-
-	"github.com/marcus/sidecar/internal/shellstate"
 )
 
 func TestWithShellNamingInstructionOnlyForSupportedHarnesses(t *testing.T) {
@@ -41,21 +39,5 @@ func TestWithShellNamingInstructionOnlyForSupportedHarnesses(t *testing.T) {
 	// than with a guessed flag that would break the launch.
 	if got := withShellNamingInstruction("codex", AgentCodex); got != "codex" {
 		t.Fatalf("codex command = %q, want unchanged", got)
-	}
-}
-
-func TestShellEnvArgsPublishIdentity(t *testing.T) {
-	args := shellEnvArgs("sidecar-sh-demo-3", "Shell 3")
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, shellstate.NameEnv+"=Shell 3") {
-		t.Fatalf("args = %v, want display name", args)
-	}
-	if !strings.Contains(joined, shellstate.SessionEnv+"=sidecar-sh-demo-3") {
-		t.Fatalf("args = %v, want session name", args)
-	}
-	for i := 0; i < len(args); i += 2 {
-		if args[i] != "-e" {
-			t.Fatalf("args = %v, want each value preceded by -e", args)
-		}
 	}
 }

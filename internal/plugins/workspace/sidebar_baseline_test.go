@@ -302,7 +302,7 @@ func TestWorkspacesSectionOffersNoSecondCreateButtonWithoutShells(t *testing.T) 
 	p.shellSelected = false
 	p.shells = nil
 	view := ansi.Strip(p.renderSidebarContent(30, 24))
-	if !strings.Contains(view, workspacelist.SectionTitle("Workspaces", 3)) {
+	if !strings.Contains(view, workspacelist.SectionTitle("Worktrees", 3)) {
 		t.Fatalf("the section heading is gone:\n%s", view)
 	}
 	for _, region := range p.mouseHandler.HitMap.Regions() {
@@ -335,7 +335,7 @@ func TestSidebarHeadingsAndSeparatorPlacement(t *testing.T) {
 	if lines[4] != "" {
 		t.Fatalf("sections are not separated by a blank line: %q\n%s", lines[4], strings.Join(lines, "\n"))
 	}
-	if got, want := strings.TrimSpace(lines[5]), workspacelist.SectionTitle("Workspaces", 3); !strings.HasPrefix(got, want) {
+	if got, want := strings.TrimSpace(lines[5]), workspacelist.SectionTitle("Worktrees", 3); !strings.HasPrefix(got, want) {
 		t.Fatalf("second heading = %q, want %q", got, want)
 	}
 }

@@ -29,11 +29,19 @@ type SidebarRow struct {
 
 // SidebarSection is a headed run of rows. The optional action is commonly the
 // project's create-shell/create-worktree affordance; global sections omit it.
+//
+// Title is the bare name ("Shells", "Needs Attention") and Count is rendered
+// beside it. They are kept apart rather than pre-joined so a narrow heading can
+// drop the count and still name its rows. An empty Title means an unheaded run.
 type SidebarSection struct {
 	Title  string
+	Count  int
 	Action *SidebarAction
 	Rows   []SidebarRow
 }
+
+// heading is the section's widest form: name and count together.
+func (s SidebarSection) heading() string { return SectionTitle(s.Title, s.Count) }
 
 // SidebarOptions contains only resolved presentation state. Collection,
 // selection side effects, preview loading and mutations stay with the caller.
@@ -86,13 +94,10 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 	}
 	lines := make([]string, 0, height)
 	regions := make([]Region, 0)
-	header, actionX, actionW := sidebarHeader(title, opts.HeaderAction, opts.HeaderMeta, width)
+	header, placed := sidebarHeader(title, opts.HeaderMeta, opts.HeaderAction, width)
 	lines = append(lines, fit(header, width))
-	if opts.HeaderAction != nil && actionW > 0 {
-		regions = append(regions, Region{Kind: RegionHeaderAction, ID: opts.HeaderAction.ID, X: actionX, Y: 0, W: actionW, H: 1})
-	}
-	if opts.HeaderMeta != nil && actionW > 0 {
-		regions = append(regions, Region{Kind: RegionSort, ID: opts.HeaderMeta.ID, X: actionX, Y: 0, W: actionW, H: 1})
+	for _, control := range placed {
+		regions = append(regions, Region{Kind: control.kind, ID: control.id, X: control.x, Y: 0, W: control.w, H: 1})
 	}
 	for _, line := range opts.PrefixLines {
 		lines = append(lines, fit(line, width))
@@ -234,44 +239,148 @@ func sidebarRowLines(rendered []string) []string {
 	return lines
 }
 
-func sidebarHeader(title string, action, meta *SidebarAction, width int) (string, int, int) {
-	right := action
-	if right == nil {
-		right = meta
-	}
-	if right == nil || right.Label == "" {
-		return styles.Title.Render(title), 0, 0
-	}
-	label := right.Label
-	if action != nil {
-		style := styles.Button
-		if right.Hovered {
-			style = styles.ButtonHover
-		}
-		label = styles.RenderPillWithStyle(label, style, nil)
-	} else {
-		label = styles.Muted.Render(label)
-	}
-	w := ansi.StringWidth(label)
-	x := max(0, width-w)
-	gap := max(1, x-ansi.StringWidth(title))
-	return styles.Title.Render(title) + strings.Repeat(" ", gap) + label, x, w
+// renderControl gives every sidebar control one style: a flat pill at rest and
+// an accent pill on hover. Project's "New" and global's view control sit in the
+// same place and do the same kind of job, so they may not read as two different
+// species of thing — one a button, the other a muted caption that gives no clue
+// it can be pressed.
+func renderControl(action *SidebarAction) string {
+	return renderControlLabel(action, action.Label)
 }
 
-func sidebarSectionHeader(section SidebarSection, width int) (string, int, int) {
-	title := styles.Muted.Render(section.Title)
-	if section.Action == nil || section.Action.Label == "" {
-		return title, 0, 0
-	}
+// renderControlLabel paints a control with a caller-chosen label, so a
+// degradation step can shorten the text without inventing a second style.
+func renderControlLabel(action *SidebarAction, label string) string {
 	style := styles.Button
-	if section.Action.Hovered {
+	if action.Hovered {
 		style = styles.ButtonHover
 	}
-	button := styles.RenderPillWithStyle(section.Action.Label, style, nil)
-	w := ansi.StringWidth(button)
-	x := max(0, width-w)
-	gap := max(1, x-ansi.StringWidth(title))
-	return title + strings.Repeat(" ", gap) + button, x, w
+	return styles.RenderPillWithStyle(label, style, nil)
+}
+
+// placedControl is one header control that survived layout, with the geometry
+// its hit region needs.
+type placedControl struct {
+	kind RegionKind
+	id   string
+	x, w int
+}
+
+// sidebarHeader lays out the panel title and its right-hand controls: the sort
+// pill, then the create button, in that reading order.
+//
+// Chrome degrades in a defined order rather than clipping. A control that
+// cannot be drawn whole is dropped entirely, and its hit region with it,
+// because a control clipped to "Activi…" — or to a bare "…" — is a target whose
+// meaning a reader cannot recover but whose click still fires. Losing a control
+// at 18 columns costs the user a mouse affordance they still have a key for;
+// keeping a mystery button costs them a wrong action.
+//
+// The order is create last to go. When both cannot fit, the sort pill sheds its
+// word and keeps its glyph — the list still says it is ordered by something and
+// the control is still there to press — and only then disappears. Create is an
+// action with no substitute in the header; the sort's label has one, because
+// the section headings underneath already name the grouping.
+func sidebarHeader(title string, sort, create *SidebarAction, width int) (string, []placedControl) {
+	plain := styles.Title.Render(title)
+	titleWidth := ansi.StringWidth(title)
+
+	type candidate struct {
+		kind  RegionKind
+		id    string
+		label string
+	}
+	// Widest form first, then each fallback, most complete to least.
+	for _, attempt := range headerAttempts(sort, create) {
+		controls := make([]candidate, 0, 2)
+		for _, c := range attempt {
+			if c.action != nil && c.label != "" {
+				controls = append(controls, candidate{kind: c.kind, id: c.action.ID, label: renderControlLabel(c.action, c.label)})
+			}
+		}
+		if len(controls) == 0 {
+			continue
+		}
+		total := 0
+		for i, c := range controls {
+			total += ansi.StringWidth(c.label)
+			if i > 0 {
+				total++ // one column between adjacent controls
+			}
+		}
+		if titleWidth+1+total > width {
+			continue
+		}
+		x := width - total
+		line := plain + strings.Repeat(" ", x-titleWidth)
+		placed := make([]placedControl, 0, len(controls))
+		for i, c := range controls {
+			if i > 0 {
+				line += " "
+				x++
+			}
+			w := ansi.StringWidth(c.label)
+			line += c.label
+			placed = append(placed, placedControl{kind: c.kind, id: c.id, x: x, w: w})
+			x += w
+		}
+		return line, placed
+	}
+	return plain, nil
+}
+
+type headerCandidate struct {
+	kind   RegionKind
+	action *SidebarAction
+	label  string
+}
+
+// headerAttempts is the fixed degradation ladder, widest first.
+func headerAttempts(sort, create *SidebarAction) [][]headerCandidate {
+	sortFull, sortGlyph := "", ""
+	if sort != nil {
+		sortFull = sort.Label
+		// The glyph-only form is the label's first cell when the caller built it
+		// with SortPillLabel; a caller that passed a bare word keeps its word.
+		if _, rest, ok := strings.Cut(sort.Label, " "); ok && rest != "" {
+			sortGlyph = SortGlyph
+		} else {
+			sortGlyph = sort.Label
+		}
+	}
+	createLabel := ""
+	if create != nil {
+		createLabel = create.Label
+	}
+	return [][]headerCandidate{
+		{{RegionSort, sort, sortFull}, {RegionHeaderAction, create, createLabel}},
+		{{RegionSort, sort, sortGlyph}, {RegionHeaderAction, create, createLabel}},
+		{{RegionHeaderAction, create, createLabel}},
+		{{RegionSort, sort, sortFull}},
+		{{RegionSort, sort, sortGlyph}},
+	}
+}
+
+// sidebarSectionHeader lays out one section heading and its optional action.
+//
+// The degradation order is deliberate: the action goes first, then the count,
+// then the name truncates. A heading's job is naming what the rows beneath it
+// are, and the panel header already offers the same create action the section
+// "+" does — so when the two compete for a narrow row, the words win.
+func sidebarSectionHeader(section SidebarSection, width int) (string, int, int) {
+	full := section.heading()
+	if section.Action != nil && section.Action.Label != "" {
+		button := renderControl(section.Action)
+		w := ansi.StringWidth(button)
+		if ansi.StringWidth(full)+1+w <= width {
+			x := width - w
+			return styles.Muted.Render(full) + strings.Repeat(" ", x-ansi.StringWidth(full)) + button, x, w
+		}
+	}
+	if ansi.StringWidth(full) > width {
+		full = section.Title
+	}
+	return styles.Muted.Render(full), 0, 0
 }
 
 // MoveIndex applies the shared clamped selection semantics used by keyboard

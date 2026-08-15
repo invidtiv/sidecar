@@ -98,11 +98,49 @@ func (p *Plugin) visibleShellIndices() []int {
 	return indices
 }
 
+// listedWorktree reports whether a worktree is offered as a row at all.
+//
+// The main worktree is not. It is the project's primary checkout rather than a
+// workspace: it cannot be created, deleted, merged, or pushed from this list,
+// and selecting it replaces the preview with a static explainer instead of a
+// terminal. Rendered with the same marker, glyph, and two-line grammar as its
+// neighbours, it read as one more workspace that happened to be inert — the one
+// row in the list that answers nothing you can act on.
+//
+// The exception is a main checkout that is hosting shells. That happens when
+// Sidecar is running from inside a worktree, so the main checkout's shells are
+// nested under its row rather than in the top Shells section. Hiding the row
+// there would take live sessions off the surface entirely, which is a worse
+// outcome than an odd-looking parent. In the ordinary case — Sidecar running in
+// the main checkout, its shells already in the Shells section — the row is
+// simply gone.
+func (p *Plugin) listedWorktree(wt *Worktree) bool {
+	if wt == nil {
+		return false
+	}
+	return !wt.IsMain || p.hostsNestedShells(wt)
+}
+
+// hostsNestedShells asks whether a worktree has shells living in it at all,
+// ignoring the filter. Whether a row is ever offered is a property of the
+// project; whether it is showing right now is a property of the query. Reading
+// the filtered list here made the "N of M" denominator shrink as the user
+// typed, so the total they were being measured against moved under them.
+func (p *Plugin) hostsNestedShells(wt *Worktree) bool {
+	if wt == nil || p.isCurrentWorkDir(wt.Path) {
+		return false
+	}
+	return len(p.nestedByWorkDir[filepath.Clean(wt.Path)]) > 0
+}
+
 // visibleWorktreeIndices lists the worktree indices the sidebar draws.
 func (p *Plugin) visibleWorktreeIndices() []int {
 	indices := make([]int, 0, len(p.worktrees))
 	query := p.listFilter.Query()
 	for i, wt := range p.worktrees {
+		if !p.listedWorktree(wt) {
+			continue
+		}
 		if query == "" || workspacelist.MatchFields(query, p.worktreeFilterFields(wt)...) || len(p.visibleNestedShells(wt)) > 0 {
 			indices = append(indices, i)
 		}
@@ -129,10 +167,19 @@ func (p *Plugin) visibleNestedCount() int {
 	return n
 }
 
-// filterCounts is the "N of M" the filter row reports.
+// filterCounts is the "N of M" the filter row reports. M counts the rows the
+// list would show with no query, so a worktree the list never offers — the main
+// checkout — is absent from both halves rather than inflating the total the
+// user is measured against.
 func (p *Plugin) filterCounts() (matched, total int) {
+	listable := 0
+	for _, wt := range p.worktrees {
+		if p.listedWorktree(wt) {
+			listable++
+		}
+	}
 	return len(p.visibleShellIndices()) + len(p.visibleWorktreeIndices()) + p.visibleNestedCount(),
-		len(p.shells) + len(p.worktrees) + p.nestedShellTotal()
+		len(p.shells) + listable + p.nestedShellTotal()
 }
 
 // selectionVisible reports that the current selection survives the query.

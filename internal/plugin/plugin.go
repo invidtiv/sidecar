@@ -96,10 +96,17 @@ type PendingWorkspaceSelection struct {
 	Kind WorkspaceSelectionKind
 	Key  string
 	Path string
+	// Action asks the owning project surface to continue with one of its own
+	// established workflows after the exact identity is selected.
+	Action string
 }
 
 type PendingWorkspaceSelector interface {
 	SetPendingWorkspaceSelection(PendingWorkspaceSelection)
+}
+
+type PendingWorkspaceActionProvider interface {
+	TakePendingWorkspaceAction() tea.Cmd
 }
 
 // Category represents a logical grouping of commands for the command palette.

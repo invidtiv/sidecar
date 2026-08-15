@@ -272,3 +272,39 @@ func TestRowWidthsAndNarrowPriorityAreANSISafe(t *testing.T) {
 		}
 	}
 }
+
+// A row that collapses to one line still gets the full-width selection fill and
+// still keeps its marker's own colour. The two changes meet here: the collapse
+// removed a physical line, and the fill/marker treatment is per-line, so a
+// collapsed row must not fall back to the plain unselected path.
+func TestCollapsedRowKeepsSelectionFillAndMarkerColour(t *testing.T) {
+	// A plain live shell: nothing for line two to say.
+	row := RowPresentation{
+		Marker: RowMarker{Icon: "◎", Tone: MarkerLive},
+		Kind:   KindShell,
+		Name:   "scratch",
+		Age:    "3m",
+	}
+	lines := RenderRow(row, 44, true, true)
+	if len(lines) != 1 {
+		t.Fatalf("collapsed row rendered %d lines, want 1: %q", len(lines), lines)
+	}
+	if got := ansi.StringWidth(lines[0]); got != 44 {
+		t.Fatalf("collapsed selected row is %d cells wide, want the full 44", got)
+	}
+	selected := lines[0]
+	if !strings.Contains(selected, "\x1b[") {
+		t.Fatal("collapsed selected row carries no styling at all")
+	}
+	// The same row unselected must differ — otherwise the fill is not being
+	// painted and the test above would pass on width alone.
+	if unselected := RenderRow(row, 44, false, false); unselected[0] == selected {
+		t.Fatal("collapsed row renders identically selected and unselected")
+	}
+	// The marker keeps its live colour rather than inheriting the fill's
+	// foreground, which is what makes a working row keep breathing under the
+	// cursor.
+	if !strings.Contains(selected, ansi.Strip("◎")) {
+		t.Fatalf("collapsed row lost its marker: %q", selected)
+	}
+}

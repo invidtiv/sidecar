@@ -243,3 +243,30 @@ func writeTestManifest(t *testing.T, path string, m manifest) {
 		t.Fatal(err)
 	}
 }
+
+func TestAddAndRemoveAtPathPreserveSiblingDefinitions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	created := time.Now().UTC().Truncate(time.Second)
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{{TmuxName: "one", DisplayName: "One", Namespace: "/tmp/socket", CreatedAt: created}}})
+	def := Definition{TmuxName: "two", DisplayName: "Two", Namespace: "/tmp/socket", AgentType: "codex", WorkDir: "/tmp/project"}
+	if err := AddAtPath(path, def); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 2 || m.Shells[0].DisplayName != "One" || m.Shells[1].AgentType != "codex" {
+		t.Fatalf("manifest after add = %+v", m.Shells)
+	}
+	if err := RemoveAtPath(path, Identity{TmuxName: "two", Namespace: "/tmp/socket"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err = readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 1 || m.Shells[0].TmuxName != "one" || !m.Shells[0].CreatedAt.Equal(created) {
+		t.Fatalf("manifest after remove = %+v", m.Shells)
+	}
+}

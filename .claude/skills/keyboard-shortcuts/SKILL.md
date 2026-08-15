@@ -85,9 +85,9 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 
 ## Global Workspaces
 
-Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
+Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-create`, `global-workspaces-delete`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
 
-The list is browse-only. There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
+There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
 
 | Key | Action |
 |-----|--------|
@@ -102,8 +102,12 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | wheel on terminal | Scroll only; do not activate |
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
 | `i` | Find TD task (`open-issue`). Not interactive |
+| `n` | Create a worktree, choosing the owning project, then confirm the Git plan |
+| `ctrl+n` | Create a shell, choosing the owning project (selected row then last-used default) |
+| `D` | Delete the selected shell (shown only for shell rows) |
+| `m` | Open the owning project's established merge strategy workflow for a safe worktree |
 | `/` | Filter |
-| `s` | Sort |
+| `v` / `s` | Open View: sort the list. `v` matches the project sidebar; `s` is the original alias |
 | `\` | Toggle sidebar |
 | `esc` | Leave the global space (or clear the filter first) |
 | `q` | Quit Sidecar (confirmation modal) |
@@ -309,7 +313,8 @@ active tab, and each tab's scroll.
 |-----|---------|-------------|
 | `n` | new-workspace | Create new workspace |
 | `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
-| `v` | toggle-view | Toggle list/kanban |
+| `v` | open-view | Open View: sort the list (Manual, Activity, Recent, Name) |
+| `V` | toggle-view | Toggle list/kanban |
 | `D` | delete-workspace | Delete workspace / delete shell (confirm) |
 | `d` | show-diff | Open working-tree Diff leaf |
 | `p` | push | Push branch |

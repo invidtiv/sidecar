@@ -230,7 +230,7 @@ func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
 		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
-		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
+		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
@@ -248,6 +248,12 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// them or not: the shared key gate reads that clock to tell the bracket of a
 	// split SGR report from a typed one, and the component owns it.
 	p.noteTerminalMouseActivity()
+
+	// The View surface hit-tests its own regions, so a click inside it cannot
+	// reach the list underneath.
+	if p.viewFlyoutActive() {
+		return p.handleViewFlyoutMouse(msg)
+	}
 
 	if p.docInfo != nil {
 		if p.docInfo.HandleMouse(msg, p.mouseHandler) {
@@ -716,6 +722,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
+		p.hoverSortButton = false
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
 		if action.Region != nil {
@@ -726,6 +733,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				}
 			case regionCreateWorktreeButton:
 				p.hoverNewButton = true
+			case regionListSortButton:
+				p.hoverSortButton = true
 			case regionShellsPlusButton:
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
@@ -839,8 +848,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	}
 
 	switch action.Region.ID {
+	case regionListSortButton:
+		// Click on the [⇅ Sort] pill - open View, the same surface v opens.
+		p.openViewFlyout()
+		return nil
 	case regionCreateWorktreeButton:
-		// Click on [New] button - open type selector modal
+		// Click on the header [+] - open type selector modal
 		return p.openCreateModal()
 	case regionShellsPlusButton:
 		// Click on Shells [+] button - immediately create a new shell

@@ -63,12 +63,13 @@ func DefaultBindings() []Binding {
 		// keymap dispatch; they are registered so help, the palette, and the
 		// footer can discover them.
 		//
-		// This list is also the boundary the plan draws: the browser's list is a
-		// reader, so there is deliberately no create, delete, or attach command
-		// here. Creating and destroying workspaces belongs to the owning
-		// project's Workspaces plugin, where its refusal rules live. Typing into
-		// a pane that already exists is on the other side of that line.
+		// Creation is hosted globally, but delegates lifecycle work to the same
+		// presentation-neutral core as the project surface.
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
+		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
+		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
+		{Key: "D", Command: "delete-shell", Context: "global-workspaces"},
+		{Key: "m", Command: "merge-workflow", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
 		{Key: "p", Command: "pin", Context: "global-workspaces"},
@@ -102,6 +103,11 @@ func DefaultBindings() []Binding {
 		// Rename prompt. Enter confirms; esc cancels. The query is a text input.
 		{Key: "enter", Command: "confirm", Context: "global-workspaces-rename"},
 		{Key: "esc", Command: "cancel", Context: "global-workspaces-rename"},
+		{Key: "enter", Command: "confirm", Context: "global-workspaces-create"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-create"},
+		{Key: "enter", Command: "confirm-delete", Context: "global-workspaces-delete"},
+		{Key: "D", Command: "confirm-delete", Context: "global-workspaces-delete"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-delete"},
 
 		// Focused document leaf beside the selected terminal. q closes the
 		// pane; it must not be a root context or Sidecar would quit instead.
@@ -545,7 +551,11 @@ func DefaultBindings() []Binding {
 		// Worktree context
 		{Key: "n", Command: "new-workspace", Context: "workspace-list"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "workspace-list"},
-		{Key: "v", Command: "toggle-view", Context: "workspace-list"},
+		// v opens View here as it does in the global browser; the kanban toggle
+		// moved to V so the two surfaces spend their obvious "view" key on the
+		// same thing.
+		{Key: "v", Command: "open-view", Context: "workspace-list"},
+		{Key: "V", Command: "toggle-view", Context: "workspace-list"},
 		{Key: "r", Command: "refresh", Context: "workspace-list"},
 		{Key: "D", Command: "delete-workspace", Context: "workspace-list"},
 		{Key: "d", Command: "show-diff", Context: "workspace-list"},

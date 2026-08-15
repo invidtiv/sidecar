@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,9 +23,8 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
-
-var openCodeRunPrefixRe = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
 
 // paneCacheEntry holds cached capture output with timestamp
 type paneCacheEntry struct {
@@ -472,27 +469,6 @@ func getAgentCommand(agentType AgentType) string {
 	return "claude" // Default to claude
 }
 
-// readAgentStartOverride reads a .sidecar-agent-start command override from a worktree path.
-func readAgentStartOverride(worktreePath string) string {
-	if worktreePath == "" {
-		return ""
-	}
-	overridePath := filepath.Join(worktreePath, sidecarAgentStartFile)
-	raw, err := os.ReadFile(overridePath)
-	if err != nil {
-		return ""
-	}
-
-	// Normalize editor/file encoding quirks so an invalid override never breaks startup.
-	raw = bytes.TrimSpace(raw)
-	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.IndexByte(raw, 0) >= 0 || !utf8.Valid(raw) {
-		return ""
-	}
-	return sanitizeAgentStartCommand(string(raw))
-}
-
 func sanitizeAgentStartCommand(raw string) string {
 	cmd := strings.TrimSpace(raw)
 	if cmd == "" || strings.ContainsAny(cmd, "\r\n") {
@@ -533,41 +509,14 @@ func resolveConfigAgentStart(agentStart map[string]string, agentType AgentType) 
 	return ""
 }
 
-// normalizeOpenCodeBaseCommand ensures overrides represent the opencode command portion,
-// not the "opencode run" invocation. The launcher appends "run" itself.
-func normalizeOpenCodeBaseCommand(cmd string) string {
-	if cmd == "" {
-		return ""
-	}
-	m := openCodeRunPrefixRe.FindStringSubmatch(cmd)
-	if len(m) == 0 {
-		return cmd
-	}
-	suffix := ""
-	if len(m) > 2 {
-		suffix = m[2]
-	}
-	return strings.TrimSpace(m[1] + suffix)
-}
-
 // resolveAgentBaseCommand returns the command used to launch the selected agent family.
 // Precedence: worktree .sidecar-agent-start > config.plugins.workspace.agentStart > AgentCommands map.
 func (p *Plugin) resolveAgentBaseCommand(worktreePath string, agentType AgentType) string {
-	if overrideCmd := readAgentStartOverride(worktreePath); overrideCmd != "" {
-		if agentType == AgentOpenCode {
-			overrideCmd = normalizeOpenCodeBaseCommand(overrideCmd)
-		}
-		return overrideCmd
-	}
+	var configured map[string]string
 	if p != nil && p.ctx != nil && p.ctx.Config != nil {
-		if configCmd := resolveConfigAgentStart(p.ctx.Config.Plugins.Workspace.AgentStart, agentType); configCmd != "" {
-			if agentType == AgentOpenCode {
-				configCmd = normalizeOpenCodeBaseCommand(configCmd)
-			}
-			return configCmd
-		}
+		configured = p.ctx.Config.Plugins.Workspace.AgentStart
 	}
-	return getAgentCommand(agentType)
+	return workspaceops.ResolveAgentCommand(worktreePath, string(agentType), configured, false)
 }
 
 // buildAgentCommand builds the agent command with optional skip permissions and task context.
@@ -700,75 +649,24 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 	if mainRoot == "" {
 		mainRoot = p.ctx.WorkDir
 	}
-	envOverrides := BuildEnvOverrides(mainRoot)
+	envOverrides := workspaceops.BuildEnvOverrides(mainRoot)
 	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms)
 	return func() tea.Msg {
-
-		// Check if session already exists
-		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
-		if checkCmd.Run() == nil {
-			// Session exists - reconnect to it instead of failing
-			paneID := getPaneID(sessionName)
-			return AgentStartedMsg{
-				Epoch:         epoch,
-				WorktreeKey:   key,
-				WorkspaceName: name,
-				SessionName:   sessionName,
-				PaneID:        paneID,
-				AgentType:     agentType,
-				Reconnected:   true,
-			}
+		result, err := workspaceops.LaunchWorktreeSession(p.operationCtx, workspaceops.AgentLaunchSpec{
+			SessionName: sessionName, WorkDir: path, AgentCommand: agentCmd, TaskID: taskID,
+			Env: envOverrides, StartAgent: true,
+		})
+		if err != nil {
+			return AgentStartedMsg{Epoch: epoch, Err: err}
 		}
-
-		// Create new detached session with working directory
-		args := []string{
-			"new-session",
-			"-d",              // Detached
-			"-s", sessionName, // Session name
-			"-c", path, // Working directory
-		}
-
-		if err := tty.NewSession(args...); err != nil {
-			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
-		}
-
-		// Set TD_SESSION_ID environment variable for td session tracking
-		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
-		_ = exec.Command("tmux", "send-keys", "-t", sessionName, tdEnvCmd, "Enter").Run()
-
-		// Apply environment isolation to prevent conflicts (GOWORK, etc.)
-		if envCmd := GenerateSingleEnvCommand(envOverrides); envCmd != "" {
-			_ = exec.Command("tmux", "send-keys", "-t", sessionName, envCmd, "Enter").Run()
-		}
-
-		// If worktree has a linked task, start it in td
-		if taskID != "" {
-			tdStartCmd := fmt.Sprintf("td start %s", taskID)
-			_ = exec.Command("tmux", "send-keys", "-t", sessionName, tdStartCmd, "Enter").Run()
-		}
-
-		// Small delay to ensure env is set
-		time.Sleep(100 * time.Millisecond)
-
-		// Build the agent command with skip permissions and prompt if enabled
-		// Send the agent command to start it
-		sendCmd := exec.Command("tmux", "send-keys", "-t", sessionName, agentCmd, "Enter")
-		if err := sendCmd.Run(); err != nil {
-			// Try to kill the session if we failed to start the agent
-			_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("start agent: %w", err)}
-		}
-
-		// Capture pane ID for interactive mode support
-		paneID := getPaneID(sessionName)
-
 		return AgentStartedMsg{
 			Epoch:         epoch,
 			WorktreeKey:   key,
 			WorkspaceName: name,
 			SessionName:   sessionName,
-			PaneID:        paneID,
+			PaneID:        result.PaneID,
 			AgentType:     agentType,
+			Reconnected:   result.Reconnected,
 		}
 	}
 }
@@ -868,19 +766,10 @@ func getPaneID(sessionName string) string {
 	if paneID, ok := globalPaneIDCache.get(sessionName); ok {
 		return paneID
 	}
-
-	cmd := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	// Return first pane ID (sessions typically have one pane)
-	paneID := strings.TrimSpace(string(output))
-	if idx := strings.Index(paneID, "\n"); idx > 0 {
-		paneID = paneID[:idx]
-	}
-
-	// Cache for future lookups
+	// One tmux call, in workspaceops, so a global caller asking the same
+	// question does not grow a second copy of it. The cache stays here: it is
+	// this plugin's optimisation, not part of what the question means.
+	paneID := workspaceops.PaneID(sessionName)
 	if paneID != "" {
 		globalPaneIDCache.set(sessionName, paneID)
 	}
@@ -1802,10 +1691,7 @@ func (p *Plugin) StopAgent(wt *Worktree) tea.Cmd {
 }
 
 // sessionExists checks if a tmux session exists.
-func sessionExists(name string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", name)
-	return cmd.Run() == nil
-}
+func sessionExists(name string) bool { return workspaceops.SessionExists(name) }
 
 // detectOrphanedWorktrees marks worktrees as orphaned if they have a saved
 // agent type but no running tmux session.

@@ -21,7 +21,6 @@ import (
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/startuptrace"
-	"github.com/marcus/sidecar/internal/tdroot"
 )
 
 const maxRefreshConcurrency = 4
@@ -614,17 +613,6 @@ func filterBranches(query string, allBranches []string) []string {
 		}
 	}
 	return matches
-}
-
-func setupTDRootContext(ctx context.Context, workDir, projectRoot, worktreePath string) error {
-	mainPath := mainWorktreePathContext(ctx, workDir)
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if mainPath == "" {
-		mainPath = workDir
-	}
-	return tdroot.CreateTDRoot(projectRoot, worktreePath, mainPath)
 }
 
 const sidecarTaskFile = "task"

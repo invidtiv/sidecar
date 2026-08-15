@@ -218,6 +218,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.reconcilePendingCreation()
 			p.applyPendingWorkspaceSelection()
+			if cmd := p.TakePendingWorkspaceAction(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			if cmd := p.loadSelectedDiff(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -650,8 +653,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				}
 			}
 			modelOwns := p.primaryTerminalOwns("agent", wt.IdentityKey())
+			// LastOutput is the age column's clock, so it has to move only when
+			// something actually happened. Setting it on every capture — which is
+			// what this path used to do — pinned every agent worktree to "now"
+			// forever, making the column useless exactly where it matters most.
+			// The shell path has always read the snapshot's change signal; this
+			// one ignored it.
+			changed := false
 			if wt.Agent.OutputBuf != nil && !modelOwns {
-				wt.Agent.OutputBuf.ApplySnapshot(
+				changed = wt.Agent.OutputBuf.ApplySnapshot(
 					tty.CaptureSnapshot(tty.CaptureInput{
 						Output:     msg.Output,
 						BaseLine:   msg.CaptureBase,
@@ -671,7 +681,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.recordPaneMouseReporting("agent", wt.Agent.TmuxSession, msg.MouseReporting)
 				}
 			}
-			wt.Agent.LastOutput = time.Now()
+			if changed {
+				wt.Agent.LastOutput = time.Now()
+			}
 			wt.Agent.WaitingFor = msg.WaitingFor
 			wt.Status = worktreeStatusForActivity(wt.Agent, msg.Status)
 			// Track poll time for runaway detection (td-018f25)
@@ -1990,6 +2002,11 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	}
 	p.stateRestored = true
 
+	// The saved order is restored before the selection is resolved, so the
+	// clamp below lands on the first row of the list the user will actually
+	// see rather than the first row of the default one.
+	p.restoreListSort()
+
 	var commands []tea.Cmd
 	if len(p.worktrees) > 0 || len(p.shells) > 0 {
 		p.restoreSelectionState()
@@ -1999,6 +2016,17 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 		// restore the saved workspace over the one the user just opened.
 		// Re-applying here is a no-op once the selection has been consumed.
 		p.applyPendingWorkspaceSelection()
+		if cmd := p.TakePendingWorkspaceAction(); cmd != nil {
+			commands = append(commands, cmd)
+		}
+		// selectedIdx starts at zero, which is the main checkout, and the list
+		// no longer offers that row. Nothing above guarantees the restored or
+		// default selection is one the user can see, so land it on the first
+		// visible item before any preview loads. This is a no-op whenever the
+		// selection is already visible.
+		if cmd := p.clampSelectionToFilter(); cmd != nil {
+			commands = append(commands, cmd)
+		}
 		if cmd := p.takePaneRestoreCmd(); cmd != nil {
 			commands = append(commands, cmd)
 		}

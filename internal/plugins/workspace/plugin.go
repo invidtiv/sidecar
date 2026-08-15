@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
@@ -90,6 +91,7 @@ const (
 	regionCreateWorktreeButton = "create-worktree-button"
 	regionShellsPlusButton     = "shells-plus-button"
 	regionWorkspacesPlusButton = "workspaces-plus-button"
+	regionListSortButton       = "list-sort-button"
 
 	// Diff tab pane divider (for drag-to-resize file list vs diff viewer)
 	regionDiffTabDivider = "diff-tab-divider"
@@ -163,6 +165,7 @@ type Plugin struct {
 	refreshOperationID         string
 	activeLifecycleOperationID string
 	pendingOverviewSelection   *plugin.PendingWorkspaceSelection
+	pendingOverviewAction      tea.Cmd
 
 	// Session tracking for safe cleanup
 	managedSessions map[string]bool
@@ -194,10 +197,19 @@ type Plugin struct {
 	// listFilter is the shared `/` filter over the sidebar list. The component
 	// is internal/workspacelist, the same one the global Workspaces browser
 	// uses, so both lists agree on matching, counts, and escape behaviour.
-	listFilter       workspacelist.Filter
-	flashPreviewTime time.Time // When preview flash was triggered
-	toastMessage     string    // Temporary toast message to display
-	toastTime        time.Time // When toast was triggered
+	listFilter workspacelist.Filter
+	// listSort orders the sidebar. Manual is the default and means the fixed
+	// Shells/Worktrees structure with shells nested under their worktree; every
+	// other mode is a computed order over one flat list. See sortedNavSections.
+	listSort workspacelist.Sort
+	// viewFlyout is the sidebar's View surface, open only while non-nil.
+	viewFlyout        *modal.Modal
+	viewFlyoutMouse   *mouse.Handler
+	viewFlyoutWidth   int
+	viewFlyoutSortIdx int
+	flashPreviewTime  time.Time // When preview flash was triggered
+	toastMessage      string    // Temporary toast message to display
+	toastTime         time.Time // When toast was triggered
 
 	// Preview pane tree state. A nil root retains the legacy path while the
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
@@ -449,6 +461,7 @@ type Plugin struct {
 
 	// Sidebar header hover state
 	hoverNewButton            bool
+	hoverSortButton           bool
 	hoverShellsPlusButton     bool
 	hoverWorkspacesPlusButton bool
 
@@ -519,6 +532,7 @@ func New() *Plugin {
 		managedSessions:     make(map[string]bool),
 		shells:              make([]*ShellSession, 0),
 		viewMode:            ViewModeList,
+		listSort:            workspacelist.SortManual,
 		activePane:          PaneSidebar,
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar
@@ -581,9 +595,11 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		for i, wt := range p.worktrees {
 			if workspaceinventory.CanonicalPath(wt.Path) == workspaceinventory.CanonicalPath(target.Path) {
 				p.selectWorktreeAt(i)
+				action := target.Action
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
 				p.finishNavigatedSelection()
+				p.queuePendingOverviewAction(action, wt)
 				return true
 			}
 		}
@@ -611,6 +627,23 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		p.toastTime = time.Now()
 	}
 	return false
+}
+
+func (p *Plugin) queuePendingOverviewAction(action string, wt *Worktree) {
+	if action != "merge" || wt == nil {
+		return
+	}
+	if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
+		p.pendingOverviewAction = appmsg.ShowToast(reason, 3*time.Second)
+		return
+	}
+	p.pendingOverviewAction = p.startMergeWorkflow(wt)
+}
+
+func (p *Plugin) TakePendingWorkspaceAction() tea.Cmd {
+	cmd := p.pendingOverviewAction
+	p.pendingOverviewAction = nil
+	return cmd
 }
 
 // finishNavigatedSelection applies this plugin's own selection-change rule to a
@@ -1090,7 +1123,15 @@ func (p *Plugin) selectedWorktree() *Worktree {
 	if p.selectedIdx < 0 || p.selectedIdx >= len(p.worktrees) {
 		return nil
 	}
-	return p.worktrees[p.selectedIdx]
+	wt := p.worktrees[p.selectedIdx]
+	// A worktree the list does not offer cannot be the selected surface. The
+	// index still defaults to zero — the main checkout — before anything has
+	// been restored, and without this the preview would open on a workspace
+	// that has no row, which reads as a selection the user cannot find.
+	if !p.listedWorktree(wt) {
+		return nil
+	}
+	return wt
 }
 
 func (p *Plugin) applyTopShellSelection(idx int) {

@@ -303,7 +303,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "new-workspace", Name: "New", Description: "Create new workspace", Context: "workspace-list", Priority: 1},
 			{ID: "new-shell", Name: "Shell", Description: "Create new shell session", Context: "workspace-list", Priority: 2},
 			{ID: "fetch-pr", Name: "Fetch", Description: "Fetch remote PR as workspace", Context: "workspace-list", Priority: 3},
-			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 4},
+			{ID: "open-view", Name: "View", Description: "Sort the workspace list", Context: "workspace-list", Priority: 4},
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
 			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
@@ -321,6 +321,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			// deterministic without renumbering them — see the merge note in
 			// the commit message if Find should sit beside Diff instead.
 			cmds = append(cmds, plugin.Command{ID: "find-file", Name: "Find", Description: "Open a file pane on the file finder", Context: "workspace-list", Priority: 17})
+			// Kanban gave its footer slot to View and its key to V. Both moves
+			// say the same thing: shaping the list you are looking at is the
+			// commoner need, and switching a project to a board is the rarer
+			// one. It keeps a hint, just not one of the first eight.
+			cmds = append(cmds, plugin.Command{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 18})
 		}
 
 		// Shell-specific commands when shell is selected

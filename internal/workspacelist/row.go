@@ -101,7 +101,12 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 	icon, rest := rowLineOneParts(row, width, selected)
 	line2 := strings.Repeat(" ", rowIndent(row)) + strings.Join(renderRowFields(row, selected), "  ")
 	if strings.TrimSpace(ansi.Strip(line2)) == "" {
-		line2 = ""
+		// A row with nothing to say on line two is one row, not two. Sidebar
+		// body height is the scarcest resource on this surface: a plain shell
+		// in the global list carries neither provider nor branch nor task, and
+		// spending a blank row on each of them is what pushes a whole section
+		// off the bottom of an ordinary pane.
+		return []string{finishRowLine(row.Marker, icon, rest, width, selected, focused)}
 	}
 	if selected {
 		return []string{

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 func TestOutputBuffer(t *testing.T) {
@@ -187,11 +188,29 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
+// The project sidebar and the global list sit beside each other and show the
+// same workspaces, so one age has to read the same in both. This surface used
+// to say "now" for anything under a minute while the global list counted
+// seconds; both now go through workspacelist.RelativeAge.
 func TestFormatRelativeTime(t *testing.T) {
-	// Just verify it doesn't panic with zero time
-	s := formatRelativeTime(time.Time{})
-	if s != "" {
+	if s := formatRelativeTime(time.Time{}); s != "" {
 		t.Errorf("formatRelativeTime(zero) = %q, want empty", s)
+	}
+	for _, age := range []time.Duration{
+		2 * time.Second, 42 * time.Second, 90 * time.Second,
+		3 * time.Hour, 50 * time.Hour,
+	} {
+		at := time.Now().Add(-age)
+		got := formatRelativeTime(at)
+		want := workspacelist.RelativeAge(at, time.Now())
+		if got != want {
+			t.Errorf("at %s: project sidebar says %q, global list says %q", age, got, want)
+		}
+	}
+	// The seconds count is the point: a workspace that just moved should say so
+	// rather than flattening into "now" for a whole minute.
+	if got := formatRelativeTime(time.Now().Add(-42 * time.Second)); got != "42s" {
+		t.Errorf("42s ago = %q, want %q", got, "42s")
 	}
 }
 

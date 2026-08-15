@@ -389,6 +389,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
+		m.overview.SetConfig(cfg)
 		// One resolution of the user's terminal settings, handed to every surface
 		// that hosts a terminal: the browser's live pane answers the chords the
 		// project plugin answers. The bindings are registered here for the same
@@ -889,6 +890,11 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(*pending)
 		}
+		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
+			if cmd := provider.TakePendingWorkspaceAction(); cmd != nil {
+				startCmds = append(startCmds, cmd)
+			}
+		}
 	}
 
 	// Send WindowSizeMsg to all plugins so they recalculate layout/bounds.
@@ -967,6 +973,10 @@ func (m *Model) openInGitFromOverview(path string) tea.Cmd {
 }
 
 func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea.Cmd {
+	return m.navigateFromOverviewAction(workspace, "")
+}
+
+func (m *Model) navigateFromOverviewAction(workspace workspaceinventory.Workspace, action string) tea.Cmd {
 	m.leaveOverview(false)
 	kind := plugin.WorkspaceSelectionWorktree
 	target := workspace.ProjectRoot
@@ -981,13 +991,17 @@ func (m *Model) navigateFromOverview(workspace workspaceinventory.Workspace) tea
 		kind = plugin.WorkspaceSelectionShell
 		key = workspace.TmuxName
 	}
-	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path}
+	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path, Action: action}
 	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) {
 		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(pending)
 		}
 		m.updateContext()
-		return m.FocusPluginByID(workspacePluginID)
+		var actionCmd tea.Cmd
+		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
+			actionCmd = provider.TakePendingWorkspaceAction()
+		}
+		return tea.Batch(m.FocusPluginByID(workspacePluginID), actionCmd)
 	}
 	// Worktree cards name an exact destination, so the remembered worktree must
 	// not override it. Shells are project-scoped and still open in whichever
@@ -1347,6 +1361,19 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return nil
 	}
 	switch id {
+	case "confirm-delete", "cancel":
+		if m.overview.DeleteOpen() {
+			return m.overview.RunDeleteCommand(id)
+		}
+		return nil
+	case "delete-shell":
+		return m.overview.OpenDeleteSelectedShell()
+	case "merge-workflow":
+		return m.overview.StartSelectedMerge()
+	case "new-worktree":
+		return m.overview.OpenCreateWorktree("")
+	case "new-shell":
+		return m.overview.OpenCreateShell("")
 	case "rename-shell":
 		return m.overview.OpenRenameShell()
 	case "rename-worktree":

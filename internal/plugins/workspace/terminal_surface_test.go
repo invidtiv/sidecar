@@ -619,10 +619,13 @@ func TestPreviewActionRegionsOnlyWhereChipsAreDrawn(t *testing.T) {
 		t.Fatalf("shell action regions = %d, want at least Diff", got)
 	}
 
+	// The main checkout is not a row this list offers, so it is never the
+	// selected surface and draws the welcome guide rather than a chip header.
+	// Diffing the main checkout belongs to the Git plugin, which owns it.
 	main := surfacePlugin(false)
 	main.worktrees[0].IsMain = true
-	if got := countActionRegions(main); got < 1 {
-		t.Fatalf("main-worktree action regions = %d, want at least Diff", got)
+	if got := countActionRegions(main); got != 0 {
+		t.Fatalf("main-worktree action regions = %d, want 0", got)
 	}
 
 	empty := surfacePlugin(false)

@@ -408,6 +408,7 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	p.shells = result.shells
 	p.rebuildNestedShellsFromState()
 	p.applyPendingWorkspaceSelection()
+	pendingAction := p.TakePendingWorkspaceAction()
 	if p.managedSessions == nil {
 		p.managedSessions = make(map[string]bool)
 	}
@@ -416,6 +417,9 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	}
 
 	var commands []tea.Cmd
+	if pendingAction != nil {
+		commands = append(commands, pendingAction)
+	}
 	if cmd := p.backfillWorkDirsCmd(); cmd != nil {
 		commands = append(commands, cmd)
 	}

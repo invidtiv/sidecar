@@ -59,3 +59,18 @@ func TestPendingOverviewSelectionStaleDoesNotSelectSimilarItem(t *testing.T) {
 		t.Fatalf("stale selection mutated selection or lacked feedback: index=%d pending=%#v toast=%q", p.selectedIdx, p.pendingOverviewSelection, p.toastMessage)
 	}
 }
+
+func TestPendingOverviewMergeQueuesExistingStrategyWorkflow(t *testing.T) {
+	path := t.TempDir()
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: path, ProjectRoot: path, Epoch: 1}
+	p.worktreesLoaded = true
+	p.worktrees = []*Worktree{{Name: "topic", Path: path, Branch: "topic"}}
+	p.SetPendingWorkspaceSelection(plugin.PendingWorkspaceSelection{Kind: plugin.WorkspaceSelectionWorktree, Path: path, Action: "merge"})
+	if cmd := p.TakePendingWorkspaceAction(); cmd == nil {
+		t.Fatal("global merge navigation did not queue the project merge workflow")
+	}
+	if cmd := p.TakePendingWorkspaceAction(); cmd != nil {
+		t.Fatal("pending merge workflow was delivered more than once")
+	}
+}

@@ -1,12 +1,12 @@
 //go:build linux
 
-package workspace
+package workspaceops
 
 import (
 	"fmt"
 	"os"
 )
 
-func pinnedDirectoryPath(file *os.File) (string, error) {
+func PinnedDirectoryPath(file *os.File) (string, error) {
 	return os.Readlink(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
 }

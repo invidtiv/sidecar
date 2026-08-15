@@ -3,6 +3,7 @@ package overview
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -26,12 +27,11 @@ import (
 // so switching tabs re-renders what is already collected instead of launching a
 // duplicate tmux/Git fan-out.
 //
-// The list itself is a reader. Creation, deletion, attach, Git lifecycle, and
-// Task actions stay in the owning project's Workspaces plugin, where their
-// validation and refusal rules live. Renaming a shell display name is the one
-// write that belongs here: it is the same shellstate persist the project
-// plugin and `sidecar shell rename` already do, aimed at the owning project's
-// shells.json. The other thing the browser drives is an existing live pane:
+// The list hosts cross-project presentation state, while shell creation and
+// rename persistence run through shared state-free operations. Worktree and
+// Git lifecycle actions join it only after their refusal/execution rules have
+// moved behind the same kind of boundary. The other thing the browser drives
+// is an existing live pane:
 // Enter, a click in the pane, or E hands the keyboard to the pane behind the
 // selected row (internal/overview/interactive.go), which creates nothing and
 // destroys nothing — it types into a session that is already there. The list
@@ -70,12 +70,26 @@ func (m *Model) syncWorkspaces() {
 	}
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
+	m.syncCreateActions()
 	if !m.loading {
 		m.pruneGonePins()
 	}
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+}
+
+func (m *Model) syncCreateActions() {
+	header := &workspacelist.SidebarAction{ID: globalCreateActionID, Label: "+"}
+	var sectionActions map[string]*workspacelist.SidebarAction
+	if m.workspaces.Sort() == workspacelist.SortProject {
+		sectionActions = make(map[string]*workspacelist.SidebarAction, len(m.projects))
+		for _, project := range m.projects {
+			key := projectKey(project)
+			sectionActions[key] = &workspacelist.SidebarAction{ID: globalCreateActionID + ":" + key, Label: "+"}
+		}
+	}
+	m.workspaces.SetCreateActions(header, sectionActions)
 }
 
 func (m *Model) pruneGonePins() {
@@ -166,22 +180,11 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 	return row
 }
 
-// laneGroup is the vertical projection of the shared Kanban lanes. The order
-// the list renders them in is workspacelist's, not a second opinion about what
-// each lane means.
+// laneGroup is the vertical projection of the shared Kanban lanes. The mapping
+// itself lives in workspacelist so the project sidebar and this list cannot
+// come to different conclusions about where a blocked agent belongs.
 func laneGroup(lane agentstatus.LaneID) workspacelist.Group {
-	switch lane {
-	case agentstatus.LaneBlocked:
-		return workspacelist.GroupNeedsAttention
-	case agentstatus.LaneWorking:
-		return workspacelist.GroupWorking
-	case agentstatus.LaneDone:
-		return workspacelist.GroupDone
-	case agentstatus.LaneIdle:
-		return workspacelist.GroupIdle
-	default:
-		return workspacelist.GroupPaused
-	}
+	return workspacelist.GroupForLane(string(lane))
 }
 
 // workspacesLayout is the tab's one placement rule. Three arrangements are
@@ -270,6 +273,12 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if m.renameOpen {
 		view = m.overlayRenameShell(view, width, height)
 	}
+	if m.createOpen {
+		view = m.overlayCreateShell(view, width, height)
+	}
+	if m.deleteOpen {
+		view = m.overlayDelete(view, width, height)
+	}
 	if m.viewFlyoutOpen {
 		view = m.overlayViewFlyout(view, width, height)
 	}
@@ -283,6 +292,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
 func (m *Model) renderWorkspaceList(x, y, width, height int) string {
+	m.syncCreateActions()
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
 		Width:   width,
 		Height:  height,
@@ -394,6 +404,12 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.renameOpen {
 		return m.handleRenameShellKey(msg)
 	}
+	if m.createOpen {
+		return m.handleCreateShellKey(msg)
+	}
+	if m.deleteOpen {
+		return m.handleDeleteKey(msg)
+	}
 	// The fly-out is an overlay, not a third browse mode. Esc / backdrop close
 	// it and leave the list as the rest state. "/" still focuses the filter.
 	if m.viewFlyoutOpen {
@@ -443,6 +459,20 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch key {
+	case "D":
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			return true, m.OpenDeleteSelectedShell()
+		}
+		return false, nil
+	case "m":
+		if workspace, ok := m.SelectedWorkspace(); ok && mergeRefusal(workspace) == "" {
+			return true, m.StartSelectedMerge()
+		}
+		return false, nil
+	case "n":
+		return true, m.OpenCreateWorktree("")
+	case "ctrl+n":
+		return true, m.OpenCreateShell("")
 	case "enter", interactiveEnterKeyAlt:
 		// Enter (and E) start typing in the selected live pane. A row with no
 		// live pane refuses and stays on the list — it does not navigate.
@@ -453,7 +483,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		cmd := m.focusList()
 		m.workspaces.FocusFilter()
 		return true, cmd
-	case "s":
+	case "v", "s":
+		// v is the shared key for View, matching the project sidebar. s stays
+		// as an alias because it is what this surface has always answered to.
 		m.openViewFlyout()
 		return true, nil
 	case "p":
@@ -497,6 +529,12 @@ func (m *Model) WorkspaceFocusContext() string {
 	}
 	if m.renameOpen {
 		return "global-workspaces-rename"
+	}
+	if m.createOpen {
+		return "global-workspaces-create"
+	}
+	if m.deleteOpen {
+		return ctxGlobalWorkspacesDelete
 	}
 	if m.WorkspacesFilterFocused() {
 		return "global-workspaces-filter"
@@ -610,6 +648,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if m.renameOpen {
 		return m.handleRenameShellMouse(mouseMsg)
 	}
+	if m.createOpen {
+		return m.handleCreateShellMouse(mouseMsg)
+	}
+	if m.deleteOpen {
+		return m.handleDeleteMouse(mouseMsg)
+	}
 	if m.viewFlyoutOpen {
 		return m.handleViewFlyoutMouse(mouseMsg)
 	}
@@ -717,6 +761,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 // mutating visible state. It is called before Bubble Tea Update/View so an
 // inertial tail at a real boundary can be discarded cheaply.
 func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m != nil && m.createOpen {
+		return m.createWheelAtBoundary(msg)
+	}
 	if m == nil || m.renameOpen || m.viewFlyoutOpen || m.workspacesMouse == nil {
 		return false
 	}
@@ -911,6 +958,14 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			focus = m.focusList()
 		case workspacelist.RegionSort:
 			m.openViewFlyout()
+		case workspacelist.RegionHeaderAction:
+			if region.ID == globalCreateActionID {
+				return m.OpenCreate("")
+			}
+		case workspacelist.RegionSectionAction:
+			if strings.HasPrefix(region.ID, globalCreateActionID+":") {
+				return m.OpenCreate(createProjectKeyFromAction(region.ID))
+			}
 		case workspacelist.RegionFilter:
 			focus = m.focusList()
 			m.workspaces.FocusFilter()
@@ -964,7 +1019,6 @@ func (m *Model) WorkspacesSummary() string {
 // The browser's command set is declared in Commands() and registered in
 // internal/keymap under each WorkspaceFocusContext. Help, the palette, and
 // the host footer all read that pair, so a focused document or issue leaf
-// cannot advertise the list's keys. The list itself stays a reader: no
-// create, delete, or attach. rename-shell and rename-worktree are
-// display-name writes, not create/destroy. Typing into a live pane is
-// Enter / click / E.
+// cannot advertise the list's keys. Creation delegates to workspaceops;
+// rename-shell and rename-worktree are display-name writes. Typing into a
+// live pane is Enter / click / E.

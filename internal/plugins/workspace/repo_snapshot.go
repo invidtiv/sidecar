@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/startuptrace"
@@ -140,19 +141,6 @@ func BuildRepoSnapshot(ctx context.Context, repoPath string) (*RepoSnapshot, err
 	return snapshot, nil
 }
 
-func mainWorktreePathContext(ctx context.Context, workDir string) string {
-	out, err := gitOutputContext(ctx, workDir, "--no-optional-locks", "worktree", "list", "--porcelain")
-	if err != nil {
-		return ""
-	}
-	for line := range strings.SplitSeq(out, "\n") {
-		if path, ok := strings.CutPrefix(line, "worktree "); ok {
-			return filepath.Clean(path)
-		}
-	}
-	return ""
-}
-
 func repoNameContext(ctx context.Context, workDir string) string {
 	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "remote", "get-url", "origin")
 	cmd.Dir = workDir
@@ -262,7 +250,18 @@ func snapshotToWorktrees(snapshot *RepoSnapshot) []*Worktree {
 		if display := loadDisplayName(snapshot.CanonicalRoot, item.Path); display != "" {
 			name = display
 		}
-		_, statErr := os.Stat(item.Path)
+		info, statErr := os.Stat(item.Path)
+		// The row has always had an age column and it has always been blank for
+		// discovered worktrees, because nothing on this path ever set UpdatedAt.
+		// This stat is already being made to decide IsMissing, so the directory's
+		// modification time is free: it is the last time anything happened in the
+		// worktree that Sidecar can see without a session attached. A worktree
+		// that does have an agent reports its last output instead, which is both
+		// fresher and more truthful about work happening deep in the tree.
+		updatedAt := time.Time{}
+		if statErr == nil && info != nil {
+			updatedAt = info.ModTime()
+		}
 		result = append(result, &Worktree{
 			Key: item.Key, RepoKey: item.RepoKey, Name: name, Path: item.Path,
 			Branch: item.Branch, BaseBranch: item.BaseRef, HEADOID: item.HEADOID,
@@ -270,6 +269,7 @@ func snapshotToWorktrees(snapshot *RepoSnapshot) []*Worktree {
 			Status: StatusPaused, IsMain: item.IsMain, IsBare: item.Bare,
 			IsDetached: item.Detached, IsLocked: item.Locked,
 			IsPrunable: item.Prunable, IsMissing: item.Prunable || os.IsNotExist(statErr),
+			UpdatedAt: updatedAt,
 		})
 	}
 	return result

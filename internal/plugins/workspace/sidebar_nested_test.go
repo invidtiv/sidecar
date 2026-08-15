@@ -66,17 +66,19 @@ func TestNestedShellsAppearUnderSiblingWorktreeOnly(t *testing.T) {
 		t.Fatalf("current worktree shell appeared more than once:\n%s", view)
 	}
 
+	// The main checkout is the current working directory here: its shells are
+	// already the top Shells section, so it hosts nothing and is not listed.
 	items := p.visibleSidebarItems()
-	if len(items) != 4 { // here, main, feature, sibling
-		t.Fatalf("visible items = %d, want 4: %+v", len(items), items)
+	if len(items) != 3 { // here, feature, sibling
+		t.Fatalf("visible items = %d, want 3: %+v", len(items), items)
 	}
-	if items[0].kind != navKindShell || items[1].kind != navKindWorktree || items[2].kind != navKindWorktree || items[3].kind != navKindNestedShell {
+	if items[0].kind != navKindShell || items[1].kind != navKindWorktree || items[2].kind != navKindNestedShell {
 		t.Fatalf("item kinds = %+v", items)
 	}
-	if items[3].shell == nil || items[3].shell.TmuxName != "sidecar-sh-sidecar-feature-1" {
-		t.Fatalf("nested item = %+v", items[3])
+	if items[2].shell == nil || items[2].shell.TmuxName != "sidecar-sh-sidecar-feature-1" {
+		t.Fatalf("nested item = %+v", items[2])
 	}
-	if items[1].worktreeIdx != 0 || len(p.visibleNestedShells(p.worktrees[0])) != 0 {
+	if items[1].worktreeIdx != 1 || len(p.visibleNestedShells(p.worktrees[0])) != 0 {
 		t.Fatal("current worktree grew a nest")
 	}
 }
@@ -101,7 +103,7 @@ func TestNestedShellKeyboardAndMouseSelect(t *testing.T) {
 		p.moveCursor(1)
 		walk = append(walk, selectionLabel(p))
 	}
-	want := []string{"shell:here", "worktree:main", "worktree:feature", "nested:sibling"}
+	want := []string{"shell:here", "worktree:feature", "nested:sibling", "nested:sibling"}
 	if strings.Join(walk, ",") != strings.Join(want, ",") {
 		t.Fatalf("j walk = %v, want %v", walk, want)
 	}

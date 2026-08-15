@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
@@ -55,11 +56,13 @@ const (
 
 type NavigateMsg struct {
 	Workspace  workspaceinventory.Workspace
+	Action     string
 	Generation int
 	RequestID  uint64
 }
 type ValidationMsg struct {
 	Workspace  workspaceinventory.Workspace
+	Action     string
 	Generation int
 	RequestID  uint64
 	Err        error
@@ -86,7 +89,13 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		renameShellDoneMsg:
+		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
+		// creation is a multi-stage async workflow; every result must stay
+		// routed to the global host even while its modal owns focus.
+		return true
+	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg, globalWorkspaceLaunchedMsg:
+		return true
+	case globalShellDeletedMsg:
 		return true
 	default:
 		return false
@@ -157,6 +166,7 @@ type Model struct {
 	preview             previewState
 	diff                workspacediff.View
 	terminalConfig      tty.Config
+	config              *config.Config
 	width               int
 	height              int
 	previewSpecResolver func(string, string) (string, bool)
@@ -195,6 +205,30 @@ type Model struct {
 	renameModal      *modal.Modal
 	renameModalWidth int
 	renameMouse      *mouse.Handler
+
+	createOpen         bool
+	createProjectIndex int
+	createProjectKey   string
+	createKindIndex    int
+	createNameInput    textinput.Model
+	createError        string
+	createWarning      string
+	createBusy         bool
+	createModal        *modal.Modal
+	createModalWidth   int
+	createMouse        *mouse.Handler
+	pendingCreatedTmux string
+	createPlan         *workspaceops.WorktreePlan
+	createRecord       *workspaceops.WorktreeRecord
+	pendingCreatedPath string
+
+	deleteOpen      bool
+	deleteBusy      bool
+	deleteError     string
+	deleteWorkspace workspaceinventory.Workspace
+	deleteModal     *modal.Modal
+	deleteModalW    int
+	deleteMouse     *mouse.Handler
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -205,12 +239,16 @@ var ActivityStorePath = func() string {
 // Sidebar preference access is overridable so interaction tests can prove a
 // drag release without reading or writing the developer's real state file.
 var (
-	loadWorkspaceSidebarWidth = state.GetWorkspaceSidebarWidth
-	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
-	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
-	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
-	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
-	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
+	loadWorkspaceSidebarWidth   = state.GetWorkspaceSidebarWidth
+	saveWorkspaceSidebarWidth   = state.SetWorkspaceSidebarWidth
+	loadShowIdleWorktrees       = state.GetShowIdleWorktrees
+	saveShowIdleWorktrees       = state.SetShowIdleWorktrees
+	loadPinnedWorkspaceIDs      = state.GetPinnedWorkspaceIDs
+	savePinnedWorkspaceIDs      = state.SetPinnedWorkspaceIDs
+	loadWorkspaceListSort       = state.GetWorkspaceListSort
+	saveWorkspaceListSort       = state.SetWorkspaceListSort
+	loadLastGlobalCreateProject = state.GetLastGlobalCreateProject
+	saveLastGlobalCreateProject = state.SetLastGlobalCreateProject
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -221,17 +259,28 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
 	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
+	// The chosen order is as much a part of "where I left off" as the pins and
+	// the sidebar width beside it. Without this the list reshuffled itself on
+	// every launch, which is the one moment a user is least able to tell a
+	// reset apart from something having actually changed.
+	if mode, ok := workspacelist.SortFromLabel(loadWorkspaceListSort(), workspacelist.SortModes); ok {
+		m.workspaces.SetSort(mode)
+	}
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
 	return m
 }
+
+// SetConfig hands the global host the same app-owned configuration project
+// plugins receive, without instantiating or temporarily switching a plugin.
+func (m *Model) SetConfig(cfg *config.Config) { m.config = cfg }
 
 // persistActivity writes committed trackers after a completed cycle. Failure
 // is silent by design: the store is a convenience, and a state directory that
@@ -338,8 +387,12 @@ func (m *Model) Stop() {
 // RequestNavigation binds a card activation to the current Overview lifecycle
 // and supersedes any prior in-flight destination validation.
 func (m *Model) RequestNavigation(workspace workspaceinventory.Workspace) tea.Cmd {
+	return m.RequestNavigationAction(workspace, "")
+}
+
+func (m *Model) RequestNavigationAction(workspace workspaceinventory.Workspace, action string) tea.Cmd {
 	m.requestID++
-	msg := NavigateMsg{Workspace: workspace, Generation: m.generation, RequestID: m.requestID}
+	msg := NavigateMsg{Workspace: workspace, Action: action, Generation: m.generation, RequestID: m.requestID}
 	return func() tea.Msg { return msg }
 }
 
@@ -361,6 +414,7 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 	return func() tea.Msg {
 		return ValidationMsg{
 			Workspace:  msg.Workspace,
+			Action:     msg.Action,
 			Generation: msg.Generation,
 			RequestID:  msg.RequestID,
 			Err:        m.collector.ValidateWorkspace(context.Background(), msg.Workspace),
@@ -493,6 +547,92 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil
+	case globalShellCreatedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalWorktreePlannedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.createPlan = msg.Plan
+		m.createModal = nil
+		return nil
+	case globalWorktreeCreatedMsg:
+		m.createBusy = false
+		m.createPlan, m.createRecord = msg.Plan, msg.Record
+		if msg.Record == nil {
+			m.createError = "Worktree creation failed"
+			if msg.Err != nil {
+				m.createError = msg.Err.Error()
+			}
+			m.createModal = nil
+			return nil
+		}
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			if failed := failedCreateOutcomes(msg.Outcomes, false); len(failed) > 0 {
+				m.createError += "; " + summarizeCreateOutcomes(failed)
+			}
+			m.createModal = nil
+			return nil
+		}
+		if failed := failedCreateOutcomes(msg.Outcomes, true); len(failed) > 0 {
+			m.createError = summarizeCreateOutcomes(failed)
+			m.createModal = nil
+			return nil
+		}
+		if failed := failedCreateOutcomes(msg.Outcomes, false); len(failed) > 0 {
+			m.createWarning = summarizeCreateOutcomes(failed)
+			m.createModal = nil
+			return nil
+		}
+		if err := removeGlobalJournal(msg.Plan); err != nil {
+			m.createError = "finalize pending creation journal: " + err.Error()
+			m.createModal = nil
+			return nil
+		}
+		return m.launchCreatedWorktree(msg.Project, msg.Plan, msg.Record)
+	case globalWorkspaceLaunchedMsg:
+		m.createBusy = false
+		m.createPlan, m.createRecord = msg.Plan, msg.Record
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.pendingCreatedPath = msg.Record.Path
+		m.showIdleWorktrees = true
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalWorktreeDeletedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalShellDeletedMsg:
+		m.deleteBusy = false
+		if msg.Err != nil {
+			m.deleteError = msg.Err.Error()
+			m.deleteModal = nil
+			return nil
+		}
+		m.closeDelete()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case projectMutationRefreshMsg:
+		return m.applyProjectMutationRefresh(msg)
 	case uirequest.RequestMsg:
 		return m.handleUIRequest(msg.Request)
 	case pollMsg:
