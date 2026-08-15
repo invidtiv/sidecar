@@ -1,6 +1,6 @@
 # Plan: Create New Worktree modal — type name, hit Enter, done
 
-**Status:** ready to implement
+**Status:** implemented on `worktree-modal` (td-dfe6e2)
 **Branch:** `worktree-modal`
 **Scope:** create-worktree journey, reusable modal dropdown, prompt removal, worktree display-name rename
 **Out of scope:** the visual-language rebuild in `docs/plans/active/modal-redesign.md` (flat tokens, Header/Choice/Actions). This plan changes behaviour and layout stability. Do not wait on that redesign, and do not restyle every modal.

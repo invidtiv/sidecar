@@ -1,6 +1,6 @@
 ---
 name: create-modal
-description: Create declarative modals using the modal library API. Covers modal types (confirm, input, select, form), sections (Text, Buttons, Input, Textarea, Checkbox, List, When, Custom), rendering with OverlayModal, and keyboard/mouse handling. Use when adding modals or dialogs to the application.
+description: Create declarative modals using the modal library API. Covers modal types (confirm, input, select, form), sections (Text, Buttons, Input, Textarea, Checkbox, List, Combo, When, Custom), rendering with OverlayModal, and keyboard/mouse handling. Use when adding modals or dialogs to the application.
 ---
 
 # Creating Declarative Modals
@@ -148,12 +148,29 @@ modal.TextareaWithLabel("message", "Label:", &msgArea, 5)
 ```
 - Enter inserts newlines (never submits)
 
+### Combo (floating dropdown)
+```go
+items := []modal.DropdownItem{
+    {ID: "main", Label: "main", Value: "main"},
+    {ID: "dev", Label: "dev", Value: "dev"},
+}
+var selectedIdx int
+modal.Combo("branch", &branchInput, items, &selectedIdx)
+```
+- Single-line input; filtered results float over later sections (modal height does not change)
+- `selected` is an **items** index (same as List)
+- Typing filters and selects the top match; up/down move the highlight
+- Enter commits the highlight and, by default, returns the modal primary action
+- Tab commits and moves focus; Esc closes the overlay without cancelling the modal
+- Click an overlay row to commit without submitting
+
 ### Checkbox
 ```go
 var includeFiles bool
 modal.Checkbox("include-files", "Include untracked files", &includeFiles)
 ```
-- Enter or Space toggles
+- Space toggles
+- Enter does **not** toggle; it submits the modal primary action (if any)
 
 ### List
 ```go
@@ -202,8 +219,8 @@ action, cmd := m.HandleKey(msg)
 |-----|----------|
 | Tab | Focus next element |
 | Shift+Tab | Focus previous element |
-| Enter | Return focused element's ID (or primaryAction for inputs) |
-| Esc | Return "cancel" |
+| Enter | Return focused element's ID (or primaryAction for inputs). Checkbox Enter submits primary without toggling. Combo Enter commits then submits. |
+| Esc | Offered to the focused section first (Combo closes its overlay). Otherwise "cancel". |
 | Other | Forwarded to focused section |
 
 ### Mouse
