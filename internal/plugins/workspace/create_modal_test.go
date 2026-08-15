@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -201,12 +202,13 @@ func TestCreateModalAgentComboKeepsIncrementalQuery(t *testing.T) {
 	}
 }
 
-func TestCreateModalCheckboxEnterDoesNotSubmit(t *testing.T) {
+func TestCreateModalCheckboxEnterSubmitsWithoutToggle(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
 	p.mouseHandler = mouse.NewHandler()
-	p.ctx = &plugin.Context{Epoch: 1}
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
 	p.initCreateModalBase()
+	p.createNameInput.SetValue("Auth Refresh")
 	p.createAgentType = AgentClaude
 	p.createSkipPermissions = false
 	p.ensureCreateModal()
@@ -214,11 +216,49 @@ func TestCreateModalCheckboxEnterDoesNotSubmit(t *testing.T) {
 	p.createModal.SetFocus(createSkipPermissionsID)
 
 	cmd := p.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil || p.createBusyStep != "" {
-		t.Fatalf("Enter on checkbox submitted (cmd=%v busy=%q)", cmd != nil, p.createBusyStep)
+	if cmd == nil && p.createBusyStep == "" {
+		t.Fatal("Enter on auto-approve should submit without flipping")
+	}
+	if p.createSkipPermissions {
+		t.Fatal("Enter on auto-approve must not toggle")
+	}
+
+	p.createBusyStep = ""
+	p.createPlan = nil
+	p.createSkipPermissions = false
+	p.createModal.SetFocus(createSkipPermissionsID)
+	if cmd := p.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}); cmd != nil || p.createBusyStep != "" {
+		t.Fatal("Space on auto-approve should not submit")
 	}
 	if !p.createSkipPermissions {
-		t.Fatal("Enter on checkbox should toggle auto-approve")
+		t.Fatal("Space on auto-approve should toggle")
+	}
+}
+
+func TestConfirmCreateEnterOnEnvCheckboxCreatesWithoutToggle(t *testing.T) {
+	p := New()
+	p.width, p.height = 100, 40
+	p.mouseHandler = mouse.NewHandler()
+	p.viewMode = ViewModeCreate
+	p.createCopyEnv = true
+	p.createPlan = &CreateOperationPlan{
+		SourceRef: "refs/heads/main", SourceOID: strings.Repeat("a", 40),
+		SourceWorktree: "/repo", MainWorktree: "/repo", Path: "/feature/auth",
+		Branch: "feature/auth", RemotePolicy: "local", EnvFiles: []string{".env.local"},
+		CopyEnv: true,
+	}
+	p.ensureCreateOperationModal()
+	p.createOperationModal.Render(p.width, p.height, p.mouseHandler)
+	if got := p.createOperationModal.FocusedID(); got != createCopyEnvID {
+		t.Fatalf("initial confirm focus = %q, want env checkbox", got)
+	}
+
+	action, _ := p.createOperationModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != createConfirmID {
+		t.Fatalf("Enter on env checkbox action = %q, want %q", action, createConfirmID)
+	}
+	if !p.createCopyEnv {
+		t.Fatal("Enter on env checkbox must not toggle Copy env")
 	}
 }
 

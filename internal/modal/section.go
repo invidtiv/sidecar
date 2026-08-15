@@ -333,12 +333,14 @@ func (c *checkboxSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) 
 	}
 
 	switch keyMsg.String() {
-	case "enter", " ", "space":
+	case " ", "space":
 		if c.checked != nil {
 			*c.checked = !*c.checked
 		}
-		// Non-empty so Modal.resolveEnterAction does not treat this as submit.
 		return actionOverlayIdle, nil
+	case "enter":
+		// Submit the modal without flipping. Space is the toggle.
+		return actionSubmitPrimary, nil
 	}
 
 	return "", nil
