@@ -3,6 +3,7 @@ package gitstatus
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 )
 
@@ -19,6 +20,42 @@ const (
 	regionMinimap      = "minimap"       // Minimap in full-file diff view
 	regionCommitButton = "commit-button" // Commit modal button
 )
+
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer for Git's status and
+// full-screen diff surfaces. Modal views retain their existing handlers.
+func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if p == nil || p.mouseHandler == nil || p.historySearchMode || p.pathFilterMode || p.inNoRepoMode() {
+		return false
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if p.viewMode == ViewModeDiff {
+		return (sharedscroll.Bounds{Position: p.diffScroll, Maximum: p.diffMaxScroll()}).AtBoundary(action.Delta)
+	}
+	if p.viewMode != ViewModeStatus || p.tree == nil {
+		return false
+	}
+	inSidebar := action.X < p.sidebarWidth+2
+	if action.Region != nil {
+		switch action.Region.ID {
+		case regionSidebar, regionFile, regionCommit:
+			inSidebar = true
+		case regionDiffPane, regionCommitFile:
+			inSidebar = false
+		default:
+			return false
+		}
+	}
+	if inSidebar {
+		return (sharedscroll.Bounds{Position: p.cursor, Maximum: p.totalSelectableItems() - 1}).AtBoundary(action.Delta)
+	}
+	if p.previewCommit != nil && p.cursorOnCommit() {
+		return (sharedscroll.Bounds{Position: p.previewCommitScroll, Maximum: len(p.previewCommit.Files) - 5}).AtBoundary(action.Delta)
+	}
+	return (sharedscroll.Bounds{Position: p.diffPaneScroll, Maximum: p.diffPaneMaxScroll()}).AtBoundary(action.Delta)
+}
 
 // handleMouse processes mouse events in the status view.
 func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
@@ -256,13 +293,7 @@ func (p *Plugin) scrollSidebar(delta int) (*Plugin, tea.Cmd) {
 	}
 
 	// Move cursor by scroll amount
-	newCursor := p.cursor + delta
-	if newCursor < 0 {
-		newCursor = 0
-	}
-	if newCursor >= totalItems {
-		newCursor = totalItems - 1
-	}
+	newCursor, _ := (sharedscroll.Bounds{Position: p.cursor, Maximum: totalItems - 1}).Move(delta)
 
 	if newCursor != p.cursor {
 		p.cursor = newCursor
@@ -287,17 +318,11 @@ func (p *Plugin) scrollSidebar(delta int) (*Plugin, tea.Cmd) {
 func (p *Plugin) scrollDiffPane(delta int) (*Plugin, tea.Cmd) {
 	// If showing commit preview, scroll its file list
 	if p.previewCommit != nil && p.cursorOnCommit() {
-		p.previewCommitScroll += delta
-		if p.previewCommitScroll < 0 {
-			p.previewCommitScroll = 0
-		}
 		maxScroll := len(p.previewCommit.Files) - 5
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if p.previewCommitScroll > maxScroll {
-			p.previewCommitScroll = maxScroll
-		}
+		p.previewCommitScroll, _ = (sharedscroll.Bounds{
+			Position: p.previewCommitScroll,
+			Maximum:  maxScroll,
+		}).Move(delta)
 		return p, nil
 	}
 

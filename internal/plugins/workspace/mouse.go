@@ -6,10 +6,101 @@ import (
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
+
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer for the project
+// Workspaces surface. It follows the same hit regions as handleMouseScroll but
+// performs no loads or visible mutations, allowing Bubble Tea to discard an
+// inertial tail before Update and View.
+func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if p.isModalViewMode() || p.mouseHandler == nil {
+		return false
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
+		return p.terminalWheelAtBoundary(p.interactiveTermPanel(), action)
+	}
+	regionID := ""
+	if action.Region != nil {
+		regionID = action.Region.ID
+	}
+	switch regionID {
+	case regionSidebar, regionWorktreeItem:
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	case regionPaneLeaf, regionDocTab, regionIssueTab:
+		leafID := 0
+		switch data := action.Region.Data.(type) {
+		case int:
+			leafID = data
+		case docTabHit:
+			leafID = data.LeafID
+		case issueTabHit:
+			leafID = data.LeafID
+		}
+		leaf := FindPane(p.paneRoot, leafID)
+		if leaf == nil {
+			return true
+		}
+		switch leaf.Kind {
+		case PaneDoc:
+			doc := p.docs[leaf.ContentID]
+			return doc == nil || doc.view() == nil || doc.view().ScrollAtBoundary(action.Delta)
+		case PaneIssue:
+			issue := p.issues[leaf.ContentID]
+			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+		default:
+			return false
+		}
+	case regionTermPanelContent:
+		return p.terminalWheelAtBoundary(true, action)
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane, regionDiffTabPreviewFile:
+		return (sharedscroll.Bounds{Position: p.diffTabCursor, Maximum: p.diffTabTotalItems() - 1}).AtBoundary(action.Delta)
+	case regionDiffTabDiffPane, regionDiffTabMinimap:
+		return (sharedscroll.Bounds{Position: p.diffTabDiffScroll, Maximum: p.diffTabMaxScroll(false)}).AtBoundary(action.Delta)
+	case regionCommitFileItem, regionCommitFileBack:
+		maximum := -1
+		if p.commitDetail != nil {
+			maximum = len(p.commitDetail.Files) - 1
+		}
+		return (sharedscroll.Bounds{Position: p.commitFileCursor, Maximum: maximum}).AtBoundary(action.Delta)
+	case regionCommitFileDiffPane:
+		return (sharedscroll.Bounds{Position: p.diffTabDiffScroll, Maximum: p.diffTabMaxScroll(true)}).AtBoundary(action.Delta)
+	case regionPreviewPane:
+		if p.previewShowsTerminal() {
+			return p.terminalWheelAtBoundary(false, action)
+		}
+		return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+	case regionKanbanCard, regionKanbanColumn:
+		return false
+	}
+	if action.Region != nil {
+		return false
+	}
+	if p.viewMode == ViewModeKanban {
+		return false
+	}
+	split := p.previewSplit()
+	if p.sidebarVisible && action.X < split.SidebarWidth {
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	}
+	if p.previewShowsTerminal() {
+		return p.terminalWheelAtBoundary(false, action)
+	}
+	return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+}
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
 func (p *Plugin) isModalViewMode() bool {
@@ -1331,20 +1422,20 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollDiffTabFileList(delta)
 	case regionDiffTabDiffPane, regionDiffTabMinimap:
 		// Scroll diff content
-		p.diffTabDiffScroll += delta
-		if p.diffTabDiffScroll < 0 {
-			p.diffTabDiffScroll = 0
-		}
+		p.diffTabDiffScroll, _ = (sharedscroll.Bounds{
+			Position: p.diffTabDiffScroll,
+			Maximum:  p.diffTabMaxScroll(false),
+		}).Move(delta)
 		return nil
 	case regionCommitFileItem, regionCommitFileBack:
 		// Scroll commit file list
 		return p.scrollDiffTabCommitFileList(delta)
 	case regionCommitFileDiffPane:
 		// Scroll commit file diff content
-		p.diffTabDiffScroll += delta
-		if p.diffTabDiffScroll < 0 {
-			p.diffTabDiffScroll = 0
-		}
+		p.diffTabDiffScroll, _ = (sharedscroll.Bounds{
+			Position: p.diffTabDiffScroll,
+			Maximum:  p.diffTabMaxScroll(true),
+		}).Move(delta)
 		return nil
 	case regionPreviewPane:
 		return p.wheelPreview(action, delta)

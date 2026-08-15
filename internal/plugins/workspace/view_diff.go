@@ -902,6 +902,24 @@ func (p *Plugin) countDiffTabDiffLines() int {
 	return 0
 }
 
+// diffTabMaxScroll is the vertical bound shared by keyboard, wheel placement,
+// and the app-level wheel filter. Commit-file detail has a separate parsed
+// source but uses the same content box height.
+func (p *Plugin) diffTabMaxScroll(commitFile bool) int {
+	lines := p.countDiffTabDiffLines()
+	if commitFile {
+		switch {
+		case p.diffViewMode == DiffViewFullFile && p.fullFileDiff != nil:
+			lines = p.fullFileDiff.TotalLines()
+		case p.commitFileParsed != nil:
+			lines = gitstatus.CountParsedDiffLines(p.commitFileParsed)
+		default:
+			lines = 0
+		}
+	}
+	return max(lines-(p.height-6), 0)
+}
+
 // renderDiffContentBasicWithHeight renders git diff with basic highlighting with explicit height.
 func (p *Plugin) renderDiffContentBasicWithHeight(width, height int) string {
 	return p.renderDiffTextWithHeight(p.diffContent, width, height)

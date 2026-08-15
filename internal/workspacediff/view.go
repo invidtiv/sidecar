@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 )
 
 // View is the reusable Diff tab model: one snapshot, one cursor, one commit
@@ -171,12 +172,36 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 	return v.LoadSelectedCommit(workdir, workspaceID)
 }
 
-// ScrollContent moves the visible right-pane (or collapsed) content.
-func (v *View) ScrollContent(delta int) {
-	v.DiffScroll += delta
-	if v.DiffScroll < 0 {
-		v.DiffScroll = 0
+// ContentMaxScroll returns the exact vertical bound for the content currently
+// rendered in the right pane (or collapsed view).
+func (v *View) ContentMaxScroll(height int) int {
+	content := v.Content
+	visible := height
+	switch {
+	case v.Scope == ScopeAggregate:
+		content = v.aggregateContent()
+	case len(v.Files) > 0 || len(v.Commits) > 0:
+		if v.Cursor < 0 || v.Cursor >= len(v.Files) {
+			return 0 // commit preview is not scrollable
+		}
+		content = v.Files[v.Cursor].Raw
+		visible = max(1, height-2) // filename + spacer
 	}
+	return max(len(splitLines(content))-visible, 0)
+}
+
+// ScrollAtBoundary reports whether delta points farther past the rendered
+// content boundary.
+func (v *View) ScrollAtBoundary(delta, height int) bool {
+	return (sharedscroll.Bounds{Position: v.DiffScroll, Maximum: v.ContentMaxScroll(height)}).AtBoundary(delta)
+}
+
+// ScrollContent moves the visible right-pane (or collapsed) content.
+func (v *View) ScrollContent(delta, height int) {
+	v.DiffScroll, _ = (sharedscroll.Bounds{
+		Position: v.DiffScroll,
+		Maximum:  v.ContentMaxScroll(height),
+	}).Move(delta)
 }
 
 // TaskView is the Task tab model for one worktree.
@@ -194,17 +219,15 @@ func (t *TaskView) Scroll(delta, height int) {
 		t.Offset = 0
 		return
 	}
-	t.Offset += delta
-	if t.Offset < 0 {
-		t.Offset = 0
-	}
-	maxOff := t.LineCount - 1
-	if height > 0 && t.LineCount > height {
-		maxOff = t.LineCount - height
-	}
-	if t.Offset > maxOff {
-		t.Offset = maxOff
-	}
+	t.Offset, _ = (sharedscroll.Bounds{Position: t.Offset, Maximum: t.MaxScroll(height)}).Move(delta)
+}
+
+func (t *TaskView) MaxScroll(height int) int {
+	return max(t.LineCount-max(1, height), 0)
+}
+
+func (t *TaskView) ScrollAtBoundary(delta, height int) bool {
+	return (sharedscroll.Bounds{Position: t.Offset, Maximum: t.MaxScroll(height)}).AtBoundary(delta)
 }
 
 // ParseFiles splits a unified multi-file diff into named file entries.
