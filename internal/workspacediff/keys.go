@@ -169,6 +169,9 @@ func (v *View) handleDiffPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if v.CommitDetail == nil {
 		if msg.String() == "esc" || msg.String() == "h" || msg.String() == "left" {
+			if v.Target.Kind == TargetCommit {
+				return nil, true
+			}
 			v.Focus = FocusFileList
 			v.CommitDetail = nil
 			v.dropPaintedFile()
@@ -211,6 +214,9 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	case "h", "left", "esc":
+		if v.Target.Kind == TargetCommit {
+			return nil, true
+		}
 		v.Focus = FocusFileList
 		v.CommitDetail = nil
 		v.clearCommitFileDiff()

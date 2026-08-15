@@ -2,6 +2,7 @@ package workspacediff
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -202,10 +203,14 @@ type CommitDetailMsg struct {
 	Err         error
 }
 
-// ApplyCommitDetail installs a loaded commit if it is still the row under the cursor.
+// ApplyCommitDetail installs a loaded commit if it is still the row under
+// the cursor, or the root of a TargetCommit tab whose Identity matches.
 func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
 	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
 		return nil
+	}
+	if v.Target.Kind == TargetCommit {
+		return v.applyCommitRoot(msg)
 	}
 	if msg.Err != nil || msg.Commit == nil {
 		return nil
@@ -226,6 +231,35 @@ func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
 		return v.LoadSelectedCommitFile()
 	}
 	return nil
+}
+
+func (v *View) applyCommitRoot(msg CommitDetailMsg) tea.Cmd {
+	if msg.Err != nil || msg.Commit == nil {
+		v.CommitDetail = nil
+		v.State = LoadStateError
+		if msg.Err != nil {
+			v.Error = msg.Err.Error()
+		} else {
+			v.Error = "commit not found"
+		}
+		return nil
+	}
+	preserve := v.CommitDetail != nil && CommitDetailMatchesListHash(v.CommitDetail, msg.Commit.Hash)
+	v.CommitDetail = msg.Commit
+	v.Snapshot = nil
+	v.Commits = nil
+	v.Files = nil
+	v.Content, v.Raw = "", ""
+	v.Error = ""
+	v.State = LoadStateReady
+	v.Focus = FocusCommitFiles
+	if !preserve {
+		v.CommitFileCursor = 0
+		v.CommitFileScroll = 0
+		v.CommitFileDiffRaw = ""
+	}
+	v.ClampScroll()
+	return v.LoadSelectedCommitFile()
 }
 
 // SnapshotMsg is a completed snapshot load for one worktree.
@@ -261,6 +295,9 @@ func LoadSnapshotCmdAt(workdir, baseRef, workspaceID string, epoch uint64, ident
 
 // ApplySnapshotMsg installs a loaded snapshot or records the error, dropping stale msgs.
 func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) tea.Cmd {
+	if v.Target.Kind != TargetWorkingTree {
+		return nil
+	}
 	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
@@ -286,6 +323,92 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 	}
 	v.ApplySnapshot()
 	return v.LoadSelectedCommit(workdir, workspaceID)
+}
+
+// RangeMsg is the result of LoadRange for one A..B / A...B tab.
+type RangeMsg struct {
+	Epoch       uint64
+	WorkspaceID string
+	Identity    string
+	Raw         string
+	Files       []File
+	Err         error
+}
+
+// LoadRange fetches git diff --binary A..B or A...B for this tab.
+func (v *View) LoadRange() tea.Cmd {
+	if v.Target.Kind != TargetRange || v.Target.A == "" || v.Target.B == "" {
+		return nil
+	}
+	return LoadRangeCmd(v.WorkDir, v.Target, v.Epoch, v.WorkspaceID)
+}
+
+// LoadRangeCmd runs one git diff for a range target.
+func LoadRangeCmd(workdir string, t Target, epoch uint64, workspaceID string) tea.Cmd {
+	if t.Kind != TargetRange || t.A == "" || t.B == "" {
+		return nil
+	}
+	dots := t.Dots
+	if dots != "..." {
+		dots = ".."
+	}
+	spec := t.A + dots + t.B
+	ident := t.Identity()
+	return func() tea.Msg {
+		raw, err := loadRangeDiff(context.Background(), workdir, spec)
+		if err != nil {
+			return RangeMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: ident, Err: err}
+		}
+		return RangeMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: ident, Raw: raw, Files: ParseFiles(raw)}
+	}
+}
+
+func loadRangeDiff(ctx context.Context, workdir, spec string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", spec)
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return "", err
+		}
+	}
+	return string(out), nil
+}
+
+// ApplyRangeMsg installs a range patch when Identity matches this r: tab.
+func (v *View) ApplyRangeMsg(msg RangeMsg) tea.Cmd {
+	if v.Target.Kind != TargetRange {
+		return nil
+	}
+	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
+	if msg.Err != nil {
+		v.State = LoadStateError
+		v.Error = msg.Err.Error()
+		v.Files = nil
+		v.Commits = nil
+		v.Snapshot = nil
+		v.CommitDetail = nil
+		v.Content, v.Raw = "", ""
+		return nil
+	}
+	v.Error = ""
+	v.State = LoadStateReady
+	v.Snapshot = nil
+	v.Commits = nil
+	v.CommitDetail = nil
+	v.Raw = msg.Raw
+	v.Content = msg.Raw
+	if msg.Files != nil {
+		v.Files = msg.Files
+	} else {
+		v.Files = ParseFiles(msg.Raw)
+	}
+	v.Focus = FocusFileList
+	v.ClampScroll()
+	return nil
 }
 
 // CycleScope walks working-tree → commits → aggregate. No-op on commit/range targets.

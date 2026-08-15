@@ -145,6 +145,9 @@ func (p *Plugin) newDiffView(target workspacediff.Target) *workspacediff.View {
 		ViewMode: p.diff.ViewMode,
 		State:    workspacediff.LoadStateLoading,
 	}
+	if target.Kind == workspacediff.TargetCommit {
+		view.Focus = workspacediff.FocusCommitFiles
+	}
 	if w := state.GetDiffTabFileListWidth(); w > 0 {
 		view.SetListWidth(w)
 	}
@@ -215,6 +218,22 @@ func (p *Plugin) applyCommitDetailToLeaves(msg workspacediff.CommitDetailMsg) te
 				continue
 			}
 			cmds = append(cmds, item.Value.ApplyCommitDetail(msg))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (p *Plugin) applyRangeToLeaves(msg workspacediff.RangeMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, pane := range p.diffs {
+		if pane == nil {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			if item.Value == nil {
+				continue
+			}
+			cmds = append(cmds, item.Value.ApplyRangeMsg(msg))
 		}
 	}
 	return tea.Batch(cmds...)
@@ -483,8 +502,7 @@ func (p *Plugin) loadDiffView(view *workspacediff.View, root, surface string) te
 		}
 		return view.LoadCommit(view.Target.A)
 	case workspacediff.TargetRange:
-		// Range load is PR 4/5. A range tab still paints loading until then.
-		return nil
+		return view.LoadRange()
 	default:
 		return workspacediff.LoadSnapshotCmdAt(root, p.selectedDiffBaseRef(), workspaceID, p.ctx.Epoch, view.Target.Identity())
 	}

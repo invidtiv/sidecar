@@ -77,6 +77,9 @@ func (m *Model) newPreviewDiffView(target workspacediff.Target) *workspacediff.V
 		ViewMode: m.diff.ViewMode,
 		State:    workspacediff.LoadStateLoading,
 	}
+	if target.Kind == workspacediff.TargetCommit {
+		view.Focus = workspacediff.FocusCommitFiles
+	}
 	if w := state.GetDiffTabFileListWidth(); w > 0 {
 		view.SetListWidth(w)
 	}
@@ -124,6 +127,8 @@ func (m *Model) loadPreviewDiffView(view *workspacediff.View, root, workspaceID 
 			return nil
 		}
 		return view.LoadCommit(view.Target.A)
+	case workspacediff.TargetRange:
+		return view.LoadRange()
 	default:
 		return workspacediff.LoadSnapshotCmdAt(root, "", workspaceID, m.preview.contentEpoch, view.Target.Identity())
 	}
@@ -138,6 +143,25 @@ func (m *Model) applyPreviewDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd 
 		for _, item := range diff.tabs.Items {
 			if item.Value != nil {
 				cmds = append(cmds, item.Value.ApplySnapshotMsg(msg, item.Value.WorkDir, item.Value.WorkspaceID))
+			}
+		}
+	}
+	apply(m.preview.diff)
+	if cached, ok := m.preview.paneCache[msg.WorkspaceID]; ok {
+		apply(cached.diff)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) applyPreviewDiffRange(msg workspacediff.RangeMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	apply := func(diff *previewDiff) {
+		if diff == nil {
+			return
+		}
+		for _, item := range diff.tabs.Items {
+			if item.Value != nil {
+				cmds = append(cmds, item.Value.ApplyRangeMsg(msg))
 			}
 		}
 	}

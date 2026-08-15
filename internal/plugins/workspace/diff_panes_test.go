@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,4 +198,109 @@ func TestDiffLeafDoesNotChangeFileIssueSteelThread(t *testing.T) {
 		t.Fatalf("second Diff should retarget: %#v ok=%v", plan, ok)
 	}
 	_ = strings.TrimSpace(root)
+}
+
+func TestHashClickCommitTabNeverLeavesLoading(t *testing.T) {
+	root := initTwoCommitRepo(t)
+	short := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD"))
+	p := docPaneTestPlugin(t, root, true)
+	p.previewTab = PreviewTabDiff
+	p.shells[0].Agent.OutputBuf.Update("landed " + short + "\n")
+
+	cmd, ok := p.activateDiffLink(short)
+	if !ok {
+		t.Fatal("activateDiffLink failed")
+	}
+	deliverDiffLoads(t, p, cmd)
+
+	diff, _ := p.activeDiffPane()
+	if diff == nil || diff.view() == nil {
+		t.Fatal("no Diff view")
+	}
+	view := diff.view()
+	if view.CommitDetail == nil {
+		t.Fatalf("CommitDetail still nil; state=%v", view.State)
+	}
+	if view.State == workspacediff.LoadStateLoading {
+		t.Fatal("state stayed Loading")
+	}
+	if view.Focus != workspacediff.FocusCommitFiles {
+		t.Fatalf("focus = %v, want commit file list", view.Focus)
+	}
+	got := view.Render(80, 12, workspacediff.RenderOpts{})
+	if strings.Contains(got, "Loading diff…") {
+		t.Fatalf("render still loading: %q", got)
+	}
+	if strings.Contains(got, "Working Tree vs HEAD") {
+		t.Fatalf("commit tab rendered working-tree chrome: %q", got)
+	}
+}
+
+func TestRangeClickLoadsFilesNotWorkingTree(t *testing.T) {
+	root := initTwoCommitRepo(t)
+	a := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD~1"))
+	b := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD"))
+	token := a + ".." + b
+	p := docPaneTestPlugin(t, root, true)
+	p.previewTab = PreviewTabDiff
+	p.shells[0].Agent.OutputBuf.Update("compare " + token + "\n")
+
+	cmd, ok := p.activateDiffLink(token)
+	if !ok {
+		t.Fatal("activateDiffLink range failed")
+	}
+	deliverDiffLoads(t, p, cmd)
+
+	diff, _ := p.activeDiffPane()
+	if diff == nil || diff.view() == nil {
+		t.Fatal("no range view")
+	}
+	view := diff.view()
+	if view.State == workspacediff.LoadStateLoading {
+		t.Fatal("range stayed Loading")
+	}
+	if view.Target.Kind != workspacediff.TargetRange || view.Target.Dots != ".." {
+		t.Fatalf("target = %+v", view.Target)
+	}
+	if view.CommitDetail != nil || view.Snapshot != nil {
+		t.Fatal("range tab took a commit or snapshot")
+	}
+	if len(view.Files) == 0 {
+		t.Fatal("range file list empty")
+	}
+	got := view.Render(140, 12, workspacediff.RenderOpts{})
+	if strings.Contains(got, "Loading diff…") || strings.Contains(got, "Working Tree vs HEAD") {
+		t.Fatalf("range chrome wrong: %q", got)
+	}
+}
+
+func initTwoCommitRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runGitOutput(t, root, "init", "-b", "main")
+	runGitOutput(t, root, "config", "user.email", "sidecar@example.test")
+	runGitOutput(t, root, "config", "user.name", "Sidecar Test")
+	runGitOutput(t, root, "commit", "--allow-empty", "-m", "one")
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitOutput(t, root, "add", "a.go")
+	runGitOutput(t, root, "commit", "-m", "two")
+	return root
+}
+
+func deliverDiffLoads(t *testing.T, p *Plugin, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, child := range msg {
+			deliverDiffLoads(t, p, child)
+		}
+	case workspacediff.CommitDetailMsg, workspacediff.RangeMsg, workspacediff.SnapshotMsg,
+		workspacediff.CommitFileDiffMsg:
+		p.update(msg)
+	}
 }

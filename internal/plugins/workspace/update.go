@@ -285,6 +285,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.diff.ApplyCommitDetail(msg))
 		cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
 
+	case workspacediff.RangeMsg:
+		cmds = append(cmds, p.applyRangeToLeaves(msg))
+
 	case workspacediff.CommitFileDiffMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))

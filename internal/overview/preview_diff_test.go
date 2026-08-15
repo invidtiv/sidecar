@@ -156,3 +156,59 @@ func TestOverviewOpenPreviewDiffForcesOutput(t *testing.T) {
 		t.Fatal("openPreviewDiff did not open a Diff leaf")
 	}
 }
+
+func TestOverviewCommitTabApplyLeavesLoading(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDiff(workspacediff.MustParse("abc1234")))
+	view := m.preview.diff.view()
+	if view == nil {
+		t.Fatal("no commit view")
+	}
+	run(t, m, func() tea.Msg {
+		return workspacediff.CommitDetailMsg{
+			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "c:abc1234",
+			Hash: "abc1234",
+			Commit: &workspacediff.CommitDetail{
+				Hash: "abc1234", ShortHash: "abc1234", Subject: "one",
+				Files: []workspacediff.CommitFile{{Path: "a.go"}},
+			},
+		}
+	})
+	if view.CommitDetail == nil || view.State == workspacediff.LoadStateLoading {
+		t.Fatalf("after apply: detail=%#v state=%v", view.CommitDetail, view.State)
+	}
+	if view.Focus != workspacediff.FocusCommitFiles {
+		t.Fatalf("focus = %v, want commit file list", view.Focus)
+	}
+	got := view.Render(80, 10, workspacediff.RenderOpts{})
+	if strings.Contains(got, "Loading diff…") || strings.Contains(got, "Working Tree vs HEAD") {
+		t.Fatalf("render = %q", got)
+	}
+}
+
+func TestOverviewRangeTabApplyRefusesSnapshot(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDiff(workspacediff.MustParse("aaa1111..bbb2222")))
+	view := m.preview.diff.view()
+	if view == nil {
+		t.Fatal("no range view")
+	}
+	run(t, m, func() tea.Msg {
+		return workspacediff.RangeMsg{
+			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "r:aaa1111..bbb2222",
+			Raw: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\n+hi\n",
+		}
+	})
+	if view.State == workspacediff.LoadStateLoading || len(view.Files) != 1 {
+		t.Fatalf("range apply: state=%v files=%#v", view.State, view.Files)
+	}
+	run(t, m, func() tea.Msg {
+		return workspacediff.SnapshotMsg{
+			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "r:aaa1111..bbb2222",
+			Snapshot: &workspacediff.Snapshot{State: workspacediff.LoadStateReady, WorkingTree: "wt"},
+		}
+	})
+	if view.Snapshot != nil || (len(view.Files) == 1 && view.Files[0].Path != "a.go") {
+		t.Fatalf("snapshot landed on range tab: snapshot=%v files=%#v", view.Snapshot != nil, view.Files)
+	}
+}

@@ -74,14 +74,21 @@ func (v *View) Render(width, height int, opts RenderOpts) string {
 		}
 		return styles.StatusDeleted.Render("Error loading diff") + "\n" + err
 	}
-	if v.Scope == ScopeAggregate {
+	if v.Scope == ScopeAggregate && v.Target.Kind == TargetWorkingTree {
 		return v.renderAggregate(width, height)
+	}
+
+	if v.Target.Kind == TargetCommit {
+		return v.renderCommitRoot(width, height, opts)
 	}
 
 	hasFiles := len(v.Files) > 0
 	hasCommits := len(v.Commits) > 0
 	if !hasFiles && !hasCommits {
 		if v.Raw == "" {
+			if v.Target.Kind == TargetRange {
+				return dimText(v.rangeLabel() + ": no changes")
+			}
 			if v.Scope == ScopeCommits {
 				return dimText(fmt.Sprintf("Commits unique to %s: none", v.baseRef()))
 			}
@@ -112,6 +119,42 @@ func (v *View) Render(width, height int, opts RenderOpts) string {
 	leftPane = padToHeight(leftPane, height, listWidth)
 	rightPane = padToHeight(rightPane, height, diffPaneWidth)
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, renderDivider(height), rightPane)
+}
+
+func (v *View) renderCommitRoot(width, height int, opts RenderOpts) string {
+	if v.CommitDetail == nil {
+		return dimText("Loading commit files...")
+	}
+	if width < CollapseThreshold {
+		if v.Focus == FocusCommitDiff {
+			return v.renderCommitFileDiffPane(width, height, 0, 0, opts)
+		}
+		return v.renderCommitFileList(width, height, 0, 0, opts)
+	}
+	listWidth := v.resolvedListWidth(width)
+	diffPaneWidth := width - listWidth - 1
+	if diffPaneWidth < 10 {
+		diffPaneWidth = 10
+	}
+	rightX := opts.ContentBaseX + listWidth + 1
+	leftPane := padToHeight(v.renderCommitFileList(listWidth, height, opts.ContentBaseX, opts.BaseY, opts), height, listWidth)
+	rightPane := padToHeight(v.renderCommitFileDiffPane(diffPaneWidth, height, rightX, opts.BaseY, opts), height, diffPaneWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, renderDivider(height), rightPane)
+}
+
+func (v *View) rangeLabel() string {
+	label := v.Target.TabLabel()
+	if label == "" || label == "Range" {
+		dots := v.Target.Dots
+		if dots != "..." {
+			dots = ".."
+		}
+		if v.Target.A != "" && v.Target.B != "" {
+			return v.Target.A + dots + v.Target.B
+		}
+		return "Range"
+	}
+	return label
 }
 
 func (v *View) renderCollapsed(width, height int, opts RenderOpts) string {
@@ -151,7 +194,10 @@ func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) 
 	}
 
 	headerText := fmt.Sprintf("Working Tree vs HEAD (%d)", len(files))
-	if v.Scope == ScopeCommits {
+	if v.Target.Kind == TargetRange {
+		headerText = fmt.Sprintf("%s (%d)", v.rangeLabel(), len(files))
+		commits = nil
+	} else if v.Scope == ScopeCommits {
 		headerText = fmt.Sprintf("Commits vs %s (%d)", v.baseRef(), len(commits))
 	} else if v.Snapshot != nil && v.Snapshot.Truncated {
 		headerText = fmt.Sprintf("Working Tree vs HEAD (%d) [untracked caps: %d files, %d B/file, %d B total; %d omitted]",
@@ -366,9 +412,13 @@ func (v *View) renderCommitFileList(width, height, baseX, baseY int, opts Render
 		hash = v.CommitDetail.Hash[:7]
 	}
 	hashStyle := lipgloss.NewStyle().Foreground(styles.Warning)
-	sb.WriteString(styles.Muted.Render("←") + " " + hashStyle.Render(hash))
-	if opts.Hit != nil && baseX > 0 {
-		opts.Hit(RegionCommitBack, baseX, baseY, width, 1, nil)
+	if v.Target.Kind == TargetCommit {
+		sb.WriteString(styles.Title.Render("Commit ") + hashStyle.Render(hash))
+	} else {
+		sb.WriteString(styles.Muted.Render("←") + " " + hashStyle.Render(hash))
+		if opts.Hit != nil && baseX > 0 {
+			opts.Hit(RegionCommitBack, baseX, baseY, width, 1, nil)
+		}
 	}
 	sb.WriteString("\n")
 	subject := v.CommitDetail.Subject

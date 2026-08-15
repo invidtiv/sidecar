@@ -90,6 +90,15 @@ func (t Target) Identity() string {
 	}
 }
 
+// MustParse is ParseSpec that panics on refusal. Tests and fixtures only.
+func MustParse(raw string) Target {
+	t, ok := ParseSpec(raw)
+	if !ok {
+		panic("workspacediff: ParseSpec(" + raw + ")")
+	}
+	return t
+}
+
 // ParseSpec accepts user-facing forms and Identity forms.
 func ParseSpec(raw string) (Target, bool) {
 	raw = strings.TrimSpace(raw)
