@@ -28,7 +28,7 @@ import (
 
 const (
 	pluginID   = "workspace-manager"
-	pluginName = "workspaces"
+	pluginName = "Workspaces"
 	pluginIcon = "W"
 
 	// Output buffer capacity (lines). The live capture remains small; older

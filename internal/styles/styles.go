@@ -238,6 +238,15 @@ var (
 			Foreground(TextPrimary).
 			Bold(true)
 
+	// BrandLogo and HeaderDivider give the two stable header anchors their own
+	// semantic styles instead of borrowing destination-title styling.
+	BrandLogo = lipgloss.NewStyle().
+			Foreground(Primary).
+			Bold(true)
+
+	HeaderDivider = lipgloss.NewStyle().
+			Foreground(TextMuted)
+
 	BarText = lipgloss.NewStyle().
 		Foreground(TextMuted)
 
@@ -251,6 +260,23 @@ var (
 			Background(Primary).
 			Padding(0, 1).
 			Bold(true)
+
+	ProjectSelector = lipgloss.NewStyle().
+			Foreground(Primary).
+			Background(SurfaceRaised).
+			Padding(0, 1).
+			Bold(true)
+
+	// GlobalHeaderAction is deliberately transparent: global scope uses the
+	// same header surface as project scope, with text-only actions at the right.
+	GlobalHeaderAction = lipgloss.NewStyle().
+				Foreground(Primary).
+				Padding(0, 1).
+				Bold(true)
+
+	ProjectRestore = lipgloss.NewStyle().
+			Foreground(TextSecondary).
+			Padding(0, 1)
 )
 
 // TabTextActive is the text color for active tabs

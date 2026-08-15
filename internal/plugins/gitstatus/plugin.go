@@ -23,7 +23,7 @@ import (
 
 const (
 	pluginID   = "git-status"
-	pluginName = "git"
+	pluginName = "Git"
 	pluginIcon = "G"
 )
 

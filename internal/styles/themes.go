@@ -1137,6 +1137,13 @@ func rebuildStyles() {
 		Foreground(TextPrimary).
 		Bold(true)
 
+	BrandLogo = lipgloss.NewStyle().
+		Foreground(Primary).
+		Bold(true)
+
+	HeaderDivider = lipgloss.NewStyle().
+		Foreground(TextMuted)
+
 	BarText = lipgloss.NewStyle().
 		Foreground(TextMuted)
 
@@ -1150,6 +1157,21 @@ func rebuildStyles() {
 		Background(Primary).
 		Padding(0, 1).
 		Bold(true)
+
+	ProjectSelector = lipgloss.NewStyle().
+		Foreground(Primary).
+		Background(SurfaceRaised).
+		Padding(0, 1).
+		Bold(true)
+
+	GlobalHeaderAction = lipgloss.NewStyle().
+		Foreground(Primary).
+		Padding(0, 1).
+		Bold(true)
+
+	ProjectRestore = lipgloss.NewStyle().
+		Foreground(TextSecondary).
+		Padding(0, 1)
 
 	// Tab styles
 	TabTextActive = lipgloss.NewStyle().
