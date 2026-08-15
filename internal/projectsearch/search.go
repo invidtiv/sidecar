@@ -1,4 +1,4 @@
-package filebrowser
+package projectsearch
 
 import (
 	"bufio"
@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	projectSearchMaxResults = 1000                   // Max total matches to display
-	projectSearchTimeout    = 30 * time.Second       // Max time for search
-	projectSearchDebounce   = 200 * time.Millisecond // Debounce delay before searching
+	maxResults    = 1000                   // Max total matches to display
+	searchTimeout = 30 * time.Second       // Max time for search
+	debounceDelay = 200 * time.Millisecond // Debounce delay before searching
 )
 
-// ProjectSearchState holds the state for project-wide search.
-type ProjectSearchState struct {
+// State holds the state for project-wide search.
+type State struct {
 	Query   string
 	Results []SearchFileResult
 
@@ -41,8 +41,8 @@ type ProjectSearchState struct {
 	TabID int
 }
 
-// projectSearchDebounceMsg is sent after debounce delay to trigger search.
-type projectSearchDebounceMsg struct {
+// DebounceMsg is sent after debounce delay to trigger search.
+type DebounceMsg struct {
 	Version int
 	Query   string
 }
@@ -62,26 +62,26 @@ type SearchMatch struct {
 	ColEnd   int    // Match end column (0-indexed)
 }
 
-// ProjectSearchResultsMsg contains results from a search.
-type ProjectSearchResultsMsg struct {
+// ResultsMsg contains results from a search.
+type ResultsMsg struct {
 	Epoch   uint64 // Epoch when request was issued (for stale detection)
 	Results []SearchFileResult
 	Error   error
 }
 
 // GetEpoch implements plugin.EpochMessage.
-func (m ProjectSearchResultsMsg) GetEpoch() uint64 { return m.Epoch }
+func (m ResultsMsg) GetEpoch() uint64 { return m.Epoch }
 
-// NewProjectSearchState creates a new search state.
-func NewProjectSearchState() *ProjectSearchState {
-	return &ProjectSearchState{
+// NewState creates a new search state.
+func NewState() *State {
+	return &State{
 		Cursor:  0,
 		Results: make([]SearchFileResult, 0),
 	}
 }
 
 // TotalMatches returns the total number of matches across all files.
-func (s *ProjectSearchState) TotalMatches() int {
+func (s *State) TotalMatches() int {
 	count := 0
 	for _, f := range s.Results {
 		count += len(f.Matches)
@@ -90,13 +90,13 @@ func (s *ProjectSearchState) TotalMatches() int {
 }
 
 // FileCount returns the number of files with matches.
-func (s *ProjectSearchState) FileCount() int {
+func (s *State) FileCount() int {
 	return len(s.Results)
 }
 
 // FlatLen returns the length of the flattened results list.
 // Each file is 1 item, plus its matches if not collapsed.
-func (s *ProjectSearchState) FlatLen() int {
+func (s *State) FlatLen() int {
 	count := 0
 	for _, f := range s.Results {
 		count++ // File header
@@ -110,7 +110,7 @@ func (s *ProjectSearchState) FlatLen() int {
 // FlatItem returns the item at the given flat index.
 // Returns (fileIndex, matchIndex, isFile).
 // matchIndex is -1 if this is a file header.
-func (s *ProjectSearchState) FlatItem(idx int) (fileIdx int, matchIdx int, isFile bool) {
+func (s *State) FlatItem(idx int) (fileIdx int, matchIdx int, isFile bool) {
 	pos := 0
 	for fi, f := range s.Results {
 		if pos == idx {
@@ -130,7 +130,7 @@ func (s *ProjectSearchState) FlatItem(idx int) (fileIdx int, matchIdx int, isFil
 }
 
 // ToggleFileCollapse toggles the collapsed state of the file at cursor.
-func (s *ProjectSearchState) ToggleFileCollapse() {
+func (s *State) ToggleFileCollapse() {
 	fileIdx, _, isFile := s.FlatItem(s.Cursor)
 	if fileIdx >= 0 && isFile {
 		s.Results[fileIdx].Collapsed = !s.Results[fileIdx].Collapsed
@@ -139,7 +139,7 @@ func (s *ProjectSearchState) ToggleFileCollapse() {
 
 // FirstMatchIndex returns the flat index of the first match (skipping file headers).
 // Returns 0 if no matches exist.
-func (s *ProjectSearchState) FirstMatchIndex() int {
+func (s *State) FirstMatchIndex() int {
 	pos := 0
 	for _, f := range s.Results {
 		pos++ // Skip file header
@@ -155,7 +155,7 @@ func (s *ProjectSearchState) FirstMatchIndex() int {
 
 // LastMatchIndex returns the flat index of the last visible match.
 // Skips file headers. Returns 0 if no matches are visible.
-func (s *ProjectSearchState) LastMatchIndex() int {
+func (s *State) LastMatchIndex() int {
 	last := 0
 	found := false
 	pos := 0
@@ -177,7 +177,7 @@ func (s *ProjectSearchState) LastMatchIndex() int {
 
 // NextMatchIndex returns the flat index of the next match after current cursor.
 // Skips file headers. Returns current cursor if no next match exists.
-func (s *ProjectSearchState) NextMatchIndex() int {
+func (s *State) NextMatchIndex() int {
 	maxIdx := s.FlatLen() - 1
 	for idx := s.Cursor + 1; idx <= maxIdx; idx++ {
 		_, _, isFile := s.FlatItem(idx)
@@ -190,7 +190,7 @@ func (s *ProjectSearchState) NextMatchIndex() int {
 
 // PrevMatchIndex returns the flat index of the previous match before current cursor.
 // Skips file headers. Returns current cursor if no previous match exists.
-func (s *ProjectSearchState) PrevMatchIndex() int {
+func (s *State) PrevMatchIndex() int {
 	for idx := s.Cursor - 1; idx >= 0; idx-- {
 		_, _, isFile := s.FlatItem(idx)
 		if !isFile {
@@ -202,7 +202,7 @@ func (s *ProjectSearchState) PrevMatchIndex() int {
 
 // NearestMatchIndex returns the flat index of the nearest match to the given index.
 // Searches forward first, then backward. Returns 0 if no matches exist.
-func (s *ProjectSearchState) NearestMatchIndex(fromIdx int) int {
+func (s *State) NearestMatchIndex(fromIdx int) int {
 	maxIdx := s.FlatLen() - 1
 	if maxIdx < 0 {
 		return 0
@@ -238,7 +238,7 @@ func (s *ProjectSearchState) NearestMatchIndex(fromIdx int) int {
 // GetSelectedFile returns the currently selected file path and line number.
 // If a match is selected, returns file path and line number.
 // If a file header is selected, returns file path and line 0.
-func (s *ProjectSearchState) GetSelectedFile() (path string, lineNo int) {
+func (s *State) GetSelectedFile() (path string, lineNo int) {
 	fileIdx, matchIdx, isFile := s.FlatItem(s.Cursor)
 	if fileIdx < 0 || fileIdx >= len(s.Results) {
 		return "", 0
@@ -256,22 +256,23 @@ func (s *ProjectSearchState) GetSelectedFile() (path string, lineNo int) {
 	return file.Path, 0
 }
 
-// scheduleProjectSearch schedules a debounced search.
-// Returns a command that fires after the debounce delay.
-func scheduleProjectSearch(version int, query string) tea.Cmd {
-	return tea.Tick(projectSearchDebounce, func(t time.Time) tea.Msg {
-		return projectSearchDebounceMsg{Version: version, Query: query}
+// Schedule schedules a debounced search. The returned command fires a
+// DebounceMsg after the debounce delay; the caller runs the search only if the
+// version still matches, so newer keystrokes cancel older ones.
+func Schedule(version int, query string) tea.Cmd {
+	return tea.Tick(debounceDelay, func(t time.Time) tea.Msg {
+		return DebounceMsg{Version: version, Query: query}
 	})
 }
 
-// RunProjectSearch executes ripgrep and returns results.
-func RunProjectSearch(workDir string, state *ProjectSearchState, epoch uint64) tea.Cmd {
+// Run executes ripgrep and returns results.
+func Run(workDir string, state *State, epoch uint64) tea.Cmd {
 	return func() tea.Msg {
 		if state.Query == "" {
-			return ProjectSearchResultsMsg{Epoch: epoch, Results: nil}
+			return ResultsMsg{Epoch: epoch, Results: nil}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), projectSearchTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 		defer cancel()
 
 		args := buildRipgrepArgs(state)
@@ -280,30 +281,30 @@ func RunProjectSearch(workDir string, state *ProjectSearchState, epoch uint64) t
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			return ProjectSearchResultsMsg{Epoch: epoch, Error: err}
+			return ResultsMsg{Epoch: epoch, Error: err}
 		}
 
 		if err := cmd.Start(); err != nil {
 			// Check if rg is not installed
 			if strings.Contains(err.Error(), "executable file not found") {
-				return ProjectSearchResultsMsg{Epoch: epoch, Error: &ripgrepNotFoundError{}}
+				return ResultsMsg{Epoch: epoch, Error: &ripgrepNotFoundError{}}
 			}
-			return ProjectSearchResultsMsg{Epoch: epoch, Error: err}
+			return ResultsMsg{Epoch: epoch, Error: err}
 		}
 
-		results := parseRipgrepOutput(stdout, projectSearchMaxResults, len(state.Query))
+		results := parseRipgrepOutput(stdout, maxResults, len(state.Query))
 
 		// Kill ripgrep early if we hit our limit - don't wait for it to finish
 		// This is critical for queries with many matches (e.g., common words)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 
-		return ProjectSearchResultsMsg{Epoch: epoch, Results: results}
+		return ResultsMsg{Epoch: epoch, Results: results}
 	}
 }
 
 // buildRipgrepArgs constructs the ripgrep command arguments.
-func buildRipgrepArgs(state *ProjectSearchState) []string {
+func buildRipgrepArgs(state *State) []string {
 	args := []string{
 		"--line-number",     // Include line numbers
 		"--column",          // Include column numbers for match position

@@ -1,4 +1,4 @@
-package filebrowser
+package filefind
 
 import (
 	"testing"
@@ -131,7 +131,7 @@ func TestFuzzyMatch_EmptyTarget(t *testing.T) {
 }
 
 func TestFuzzySort_ByScore(t *testing.T) {
-	matches := []QuickOpenMatch{
+	matches := []Match{
 		{Path: "low.go", Score: 10},
 		{Path: "high.go", Score: 100},
 		{Path: "med.go", Score: 50},
@@ -145,7 +145,7 @@ func TestFuzzySort_ByScore(t *testing.T) {
 }
 
 func TestFuzzySort_TiebreakByLength(t *testing.T) {
-	matches := []QuickOpenMatch{
+	matches := []Match{
 		{Path: "very/long/path.go", Score: 50},
 		{Path: "short.go", Score: 50},
 		{Path: "medium/path.go", Score: 50},

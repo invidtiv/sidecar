@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
+	"github.com/marcus/sidecar/internal/projectsearch"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -381,7 +382,7 @@ func (p *Plugin) renderProjectSearchHeader(width int) string {
 }
 
 // renderSearchFileHeader renders a file header line.
-func (p *Plugin) renderSearchFileHeader(file SearchFileResult, fileIdx int, selected, hovered bool, width int) string {
+func (p *Plugin) renderSearchFileHeader(file projectsearch.SearchFileResult, fileIdx int, selected, hovered bool, width int) string {
 	icon := "▼ "
 	if file.Collapsed {
 		icon = "▶ "
@@ -413,7 +414,7 @@ func (p *Plugin) renderSearchFileHeader(file SearchFileResult, fileIdx int, sele
 }
 
 // renderSearchMatchLine renders a single match line.
-func (p *Plugin) renderSearchMatchLine(match SearchMatch, matchIdx int, selected, hovered bool, width int) string {
+func (p *Plugin) renderSearchMatchLine(match projectsearch.SearchMatch, matchIdx int, selected, hovered bool, width int) string {
 	indent := "    "
 	lineNum := fmt.Sprintf("%4d: ", match.LineNo)
 

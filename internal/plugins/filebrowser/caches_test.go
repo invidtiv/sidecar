@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -116,7 +117,7 @@ func TestWatchEvent_TreeChangedMarksCachesDirtyAndInvalidatesTabs(t *testing.T) 
 
 	p.Update(WatchEventMsg{TreeChanged: true, Dirs: []string{filepath.Join(tmpDir, "src")}})
 
-	if !p.quickOpenDirty || !p.dirCacheDirty {
+	if !p.quickOpen.Dirty || !p.dirCache.Dirty {
 		t.Error("a tree change should mark both quick-open caches dirty")
 	}
 	if p.tabs[1].Loaded {
@@ -134,7 +135,7 @@ func TestWatchEvent_PreviewOnlyLeavesCachesClean(t *testing.T) {
 
 	p.Update(WatchEventMsg{PreviewChanged: true})
 
-	if p.quickOpenDirty || p.dirCacheDirty {
+	if p.quickOpen.Dirty || p.dirCache.Dirty {
 		t.Error("a preview-only change does not change the directory listing")
 	}
 }
@@ -149,7 +150,7 @@ func TestEnsureFileCache_ScansOnceThenReusesCache(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first call should start a scan")
 	}
-	if !p.quickOpenScanning {
+	if !p.quickOpen.Scanning {
 		t.Error("quickOpenScanning should be set while the scan is in flight")
 	}
 	p.Update(cmd())
@@ -164,12 +165,12 @@ func TestEnsureFileCache_RescansWhenCachesDirty(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	primeFileCache(t, p)
 
-	p.quickOpenDirty = true
+	p.quickOpen.Dirty = true
 
 	if p.ensureFileCache() == nil {
 		t.Fatal("a dirty cache should be rescanned")
 	}
-	if p.quickOpenDirty {
+	if p.quickOpen.Dirty {
 		t.Error("the dirty flag should be consumed once a scan starts")
 	}
 }
@@ -191,14 +192,14 @@ func TestEnsureFileCache_KeepsStaleFilesUntilScanLands(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	primeFileCache(t, p)
 
-	before := append([]string(nil), p.quickOpenFiles...)
-	p.quickOpenDirty = true
+	before := append([]string(nil), p.quickOpen.Files...)
+	p.quickOpen.Dirty = true
 	cmd := p.ensureFileCache()
 	if cmd == nil {
 		t.Fatal("expected a rescan")
 	}
 
-	if len(p.quickOpenFiles) != len(before) {
+	if len(p.quickOpen.Files) != len(before) {
 		t.Error("the previous file list should stay visible while the rescan runs")
 	}
 }
@@ -214,8 +215,8 @@ func TestCacheDirtyFlags_AreTrackedPerCache(t *testing.T) {
 		t.Fatal("expected a directory scan")
 	}
 	p.Update(dirCmd())
-	p.quickOpenDirty = true
-	p.dirCacheDirty = true
+	p.quickOpen.Dirty = true
+	p.dirCache.Dirty = true
 
 	// One cache rescanning must not clear the other's flag.
 	if p.ensureFileCache() == nil {
@@ -235,7 +236,7 @@ func TestEnsureDirCache_RescansWhenDirtiedMidScan(t *testing.T) {
 		t.Fatal("expected a directory scan")
 	}
 	// The disk moves while the scan is walking it.
-	p.dirCacheDirty = true
+	p.dirCache.Dirty = true
 	p.Update(cmd())
 
 	if p.ensureDirCache() == nil {
@@ -251,15 +252,15 @@ func TestFileCacheBuiltMsg_PopulatesCacheAndMatches(t *testing.T) {
 
 	p.quickOpenMode = true
 	p.quickOpenQuery = "app"
-	p.quickOpenScanning = true
+	p.quickOpen.Scanning = true
 
 	p.Update(FileCacheBuiltMsg{Files: []string{"main.go", filepath.Join("src", "app.go")}})
 
-	if p.quickOpenScanning {
+	if p.quickOpen.Scanning {
 		t.Error("quickOpenScanning should be cleared when the scan lands")
 	}
-	if len(p.quickOpenFiles) != 2 {
-		t.Fatalf("quickOpenFiles = %v, want 2 entries", p.quickOpenFiles)
+	if len(p.quickOpen.Files) != 2 {
+		t.Fatalf("quickOpenFiles = %v, want 2 entries", p.quickOpen.Files)
 	}
 	if len(p.quickOpenMatches) == 0 {
 		t.Error("matches should be recomputed against the new cache")
@@ -270,14 +271,14 @@ func TestFileCacheBuiltMsg_StaleEpochIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.ctx.Epoch = 2
-	p.quickOpenScanning = true
+	p.quickOpen.Scanning = true
 
 	p.Update(FileCacheBuiltMsg{Files: []string{"stale.go"}, Epoch: 1})
 
-	if len(p.quickOpenFiles) != 0 {
-		t.Errorf("stale scan applied: %v", p.quickOpenFiles)
+	if len(p.quickOpen.Files) != 0 {
+		t.Errorf("stale scan applied: %v", p.quickOpen.Files)
 	}
-	if !p.quickOpenScanning {
+	if !p.quickOpen.Scanning {
 		t.Error("a dropped scan should not clear the in-flight flag for the current epoch")
 	}
 }
@@ -285,17 +286,17 @@ func TestFileCacheBuiltMsg_StaleEpochIgnored(t *testing.T) {
 func TestFileCacheBuiltMsg_DirsPopulateDirCache(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
-	p.dirCacheScanning = true
+	p.dirCache.Scanning = true
 
 	p.Update(FileCacheBuiltMsg{Dirs: true, Files: []string{"src"}})
 
-	if len(p.dirCache) != 1 || p.dirCache[0] != "src" {
-		t.Errorf("dirCache = %v, want [src]", p.dirCache)
+	if len(p.dirCache.Files) != 1 || p.dirCache.Files[0] != "src" {
+		t.Errorf("dirCache = %v, want [src]", p.dirCache.Files)
 	}
-	if p.dirCacheScanning {
+	if p.dirCache.Scanning {
 		t.Error("dirCacheScanning should be cleared when the scan lands")
 	}
-	if len(p.quickOpenFiles) != 0 {
+	if len(p.quickOpen.Files) != 0 {
 		t.Error("a directory scan must not touch the file cache")
 	}
 }
@@ -306,69 +307,18 @@ func TestFileCacheBuiltMsg_ErrTextSurfaces(t *testing.T) {
 
 	p.Update(FileCacheBuiltMsg{ErrText: "scan timed out"})
 
-	if p.quickOpenError != "scan timed out" {
-		t.Errorf("quickOpenError = %q, want scan timed out", p.quickOpenError)
+	if p.quickOpen.ErrText != "scan timed out" {
+		t.Errorf("quickOpenError = %q, want scan timed out", p.quickOpen.ErrText)
 	}
 }
 
 // --- The scan itself ---
 
-func TestScanPaths_CollectsFilesRespectingIgnores(t *testing.T) {
-	tmpDir := t.TempDir()
-	mkdirAll(t, filepath.Join(tmpDir, "src"))
-	mkdirAll(t, filepath.Join(tmpDir, ".git"))
-	mkdirAll(t, filepath.Join(tmpDir, "node_modules"))
-	mkdirAll(t, filepath.Join(tmpDir, "ignored"))
-	writeFile(t, filepath.Join(tmpDir, ".gitignore"), "ignored/\n")
-	writeFile(t, filepath.Join(tmpDir, "main.go"), "package main")
-	writeFile(t, filepath.Join(tmpDir, ".hidden"), "x")
-	writeFile(t, filepath.Join(tmpDir, "src", "app.go"), "package src")
-	writeFile(t, filepath.Join(tmpDir, ".git", "config"), "x")
-	writeFile(t, filepath.Join(tmpDir, "node_modules", "dep.js"), "x")
-	writeFile(t, filepath.Join(tmpDir, "ignored", "skip.go"), "x")
-
-	files, errText := scanPaths(tmpDir, false)
-	if errText != "" {
-		t.Fatalf("unexpected scan error: %s", errText)
-	}
-
-	want := []string{"main.go", filepath.Join("src", "app.go")}
-	if len(files) != len(want) {
-		t.Fatalf("files = %v, want %v", files, want)
-	}
-	for i, path := range want {
-		if files[i] != path {
-			t.Errorf("files[%d] = %q, want %q (sorted)", i, files[i], path)
-		}
-	}
-}
-
-func TestScanPaths_CollectsDirs(t *testing.T) {
-	tmpDir := t.TempDir()
-	mkdirAll(t, filepath.Join(tmpDir, "src", "inner"))
-	mkdirAll(t, filepath.Join(tmpDir, ".git"))
-	writeFile(t, filepath.Join(tmpDir, "main.go"), "package main")
-
-	dirs, errText := scanPaths(tmpDir, true)
-	if errText != "" {
-		t.Fatalf("unexpected scan error: %s", errText)
-	}
-
-	want := []string{"src", filepath.Join("src", "inner")}
-	if len(dirs) != len(want) {
-		t.Fatalf("dirs = %v, want %v", dirs, want)
-	}
-	for i, path := range want {
-		if dirs[i] != path {
-			t.Errorf("dirs[%d] = %q, want %q", i, dirs[i], path)
-		}
-	}
-}
-
 func TestScanFileCache_RunsOffTheUpdateGoroutine(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir) // Creates main.go, src/app.go, ...
-	cmd := scanFileCache(tmpDir, 0)
+	cache := &filefind.Cache{}
+	cmd := cache.Ensure(tmpDir, 0)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -400,14 +350,14 @@ func TestQuickOpenModal_ShowsScanningState(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 
 	p.quickOpenMode = true
-	p.quickOpenScanning = true
+	p.quickOpen.Scanning = true
 
 	out := p.renderQuickOpenModalContent()
 	if !strings.Contains(out, "Scanning files") {
 		t.Errorf("quick open modal should report the in-flight scan, got:\n%s", out)
 	}
 
-	p.quickOpenScanning = false
+	p.quickOpen.Scanning = false
 	out = p.renderQuickOpenModalContent()
 	if strings.Contains(out, "Scanning files") {
 		t.Error("scanning state should disappear once the scan lands")
@@ -457,7 +407,7 @@ func TestFileCacheBuiltMsg_SearchKeepsTheSelectedMatch(t *testing.T) {
 	// so the selection must not jump back to the first match.
 	p.searchCursor = 1
 	selected := p.searchMatches[1].Path
-	p.quickOpenDirty = true
+	p.quickOpen.Dirty = true
 	rescan := p.ensureFileCache()
 	if rescan == nil {
 		t.Fatal("expected a rescan")

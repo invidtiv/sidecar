@@ -1,13 +1,10 @@
 package filebrowser
 
 import (
-	"context"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,8 +12,10 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectsearch"
 )
 
 // openFile returns a command to open a file in the user's editor.
@@ -701,7 +700,7 @@ func (p *Plugin) openQuickOpen() (plugin.Plugin, tea.Cmd) {
 
 // updateQuickOpenMatches filters files using fuzzy matching.
 func (p *Plugin) updateQuickOpenMatches() {
-	p.quickOpenMatches = FuzzyFilter(p.quickOpenFiles, p.quickOpenQuery, quickOpenMaxResults)
+	p.quickOpenMatches = filefind.FuzzyFilter(p.quickOpen.Files, p.quickOpenQuery, quickOpenMaxResults)
 
 	// Reset cursor if out of bounds
 	if p.quickOpenCursor >= len(p.quickOpenMatches) {
@@ -751,7 +750,7 @@ func (p *Plugin) selectQuickOpenMatch() (plugin.Plugin, tea.Cmd) {
 // openProjectSearch enters project-wide search mode.
 func (p *Plugin) openProjectSearch() (plugin.Plugin, tea.Cmd) {
 	p.projectSearchMode = true
-	p.projectSearchState = NewProjectSearchState()
+	p.projectSearchState = projectsearch.NewState()
 	p.clearProjectSearchModal()
 	return p, nil
 }
@@ -855,146 +854,18 @@ func (p *Plugin) openProjectSearchResultInNewTab() (plugin.Plugin, tea.Cmd) {
 // missing or the disk has moved under it. The existing cache is left in place
 // until the scan lands, so the modal keeps showing something usable.
 func (p *Plugin) ensureFileCache() tea.Cmd {
-	if p.ctx == nil || p.quickOpenScanning {
+	if p.ctx == nil {
 		return nil
 	}
-	if p.quickOpenCacheOK && !p.quickOpenDirty {
-		return nil
-	}
-	// Cleared at the start of the scan: a change arriving while it runs re-sets
-	// the flag, so the result it is about to deliver is not mistaken for fresh.
-	p.quickOpenDirty = false
-	p.quickOpenScanning = true
-	return scanFileCache(p.ctx.WorkDir, p.ctx.Epoch)
+	return p.quickOpen.Ensure(p.ctx.WorkDir, p.ctx.Epoch)
 }
 
 // ensureDirCache is ensureFileCache for the path auto-complete directory list.
 func (p *Plugin) ensureDirCache() tea.Cmd {
-	if p.ctx == nil || p.dirCacheScanning {
+	if p.ctx == nil {
 		return nil
 	}
-	if p.dirCacheOK && !p.dirCacheDirty {
-		return nil
-	}
-	p.dirCacheDirty = false
-	p.dirCacheScanning = true
-	return scanDirCache(p.ctx.WorkDir, p.ctx.Epoch)
-}
-
-// scanFileCache walks workDir on a background goroutine to build the quick open
-// file list. Everything it touches is passed by value: the walk loads its own
-// gitignore rather than sharing the live tree's, whose match cache is not safe
-// for concurrent use.
-func scanFileCache(workDir string, epoch uint64) tea.Cmd {
-	return func() tea.Msg {
-		paths, errText := scanPaths(workDir, false)
-		return FileCacheBuiltMsg{Files: paths, ErrText: errText, Epoch: epoch}
-	}
-}
-
-// scanDirCache is scanFileCache for directories (path auto-complete).
-func scanDirCache(workDir string, epoch uint64) tea.Cmd {
-	return func() tea.Msg {
-		paths, errText := scanPaths(workDir, true)
-		return FileCacheBuiltMsg{Dirs: true, Files: paths, ErrText: errText, Epoch: epoch}
-	}
-}
-
-// scanPaths walks workDir collecting relative paths of either files or
-// directories, respecting gitignore and bounded by a time and count limit.
-// It returns the sorted paths plus a message describing why the scan stopped
-// early, if it did.
-func scanPaths(workDir string, wantDirs bool) ([]string, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), quickOpenTimeout)
-	defer cancel()
-
-	gitIgnore := NewGitIgnore()
-	_ = gitIgnore.LoadFile(filepath.Join(workDir, ".gitignore"))
-
-	limit := quickOpenMaxFiles
-	if wantDirs {
-		limit = dirCacheMaxDirs
-	}
-
-	var paths []string
-	limited := false
-
-	err := filepath.WalkDir(workDir, func(path string, d fs.DirEntry, err error) error {
-		// Check timeout
-		select {
-		case <-ctx.Done():
-			limited = true
-			return filepath.SkipAll
-		default:
-		}
-
-		if err != nil {
-			return nil // Skip unreadable entries
-		}
-
-		// Get relative path
-		rel, err := filepath.Rel(workDir, path)
-		if err != nil {
-			return nil
-		}
-
-		// Skip root
-		if rel == "." {
-			return nil
-		}
-
-		name := d.Name()
-
-		if d.IsDir() {
-			// Skip common large/irrelevant directories
-			if name == ".git" || name == "node_modules" || name == "vendor" ||
-				name == ".next" || name == "dist" || name == "build" ||
-				name == "__pycache__" || name == ".venv" || name == "venv" ||
-				name == ".idea" || name == ".vscode" {
-				return filepath.SkipDir
-			}
-			if gitIgnore.IsIgnored(rel, true) {
-				return filepath.SkipDir
-			}
-			if !wantDirs {
-				return nil // Directories are not part of the file list
-			}
-		} else {
-			if wantDirs {
-				return nil
-			}
-			// Skip hidden files (starting with .)
-			if strings.HasPrefix(name, ".") {
-				return nil
-			}
-			if gitIgnore.IsIgnored(rel, false) {
-				return nil
-			}
-		}
-
-		if len(paths) >= limit {
-			limited = true
-			return filepath.SkipAll
-		}
-
-		paths = append(paths, rel)
-		return nil
-	})
-
-	// Sort paths for consistent ordering
-	sort.Strings(paths)
-
-	switch {
-	case err != nil && err != filepath.SkipAll:
-		return paths, "scan error: " + err.Error()
-	case limited && ctx.Err() != nil:
-		return paths, "scan timed out"
-	case limited && !wantDirs:
-		return paths, fmt.Sprintf("limited to %d files", quickOpenMaxFiles)
-	case limited:
-		return paths, fmt.Sprintf("limited to %d directories", dirCacheMaxDirs)
-	}
-	return paths, ""
+	return p.dirCache.EnsureDirs(p.ctx.WorkDir, p.ctx.Epoch)
 }
 
 // getPathSuggestions returns fuzzy-matched directory suggestions for the query,
@@ -1007,7 +878,7 @@ func (p *Plugin) getPathSuggestions(query string) ([]string, tea.Cmd) {
 	cmd := p.ensureDirCache()
 
 	// Use FuzzyFilter for matching
-	matches := FuzzyFilter(p.dirCache, query, dirCacheMaxResults)
+	matches := filefind.FuzzyFilter(p.dirCache.Files, query, dirCacheMaxResults)
 
 	var paths []string
 	for _, m := range matches {
@@ -1052,7 +923,7 @@ func (p *Plugin) updateSearchMatches() tea.Cmd {
 	cmd := p.ensureFileCache()
 
 	// Use fuzzy filter on cached files (same as Ctrl+P)
-	p.searchMatches = FuzzyFilter(p.quickOpenFiles, p.searchQuery, 20)
+	p.searchMatches = filefind.FuzzyFilter(p.quickOpen.Files, p.searchQuery, 20)
 	p.searchCursor = 0
 	return cmd
 }
@@ -1071,7 +942,7 @@ func (p *Plugin) refilterSearchMatches() {
 		p.searchCursor = 0
 		return
 	}
-	p.searchMatches = FuzzyFilter(p.quickOpenFiles, p.searchQuery, 20)
+	p.searchMatches = filefind.FuzzyFilter(p.quickOpen.Files, p.searchQuery, 20)
 
 	p.searchCursor = 0
 	for i, match := range p.searchMatches {

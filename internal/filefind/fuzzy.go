@@ -1,4 +1,4 @@
-package filebrowser
+package filefind
 
 import (
 	"sort"
@@ -12,8 +12,8 @@ type MatchRange struct {
 	End   int
 }
 
-// QuickOpenMatch represents a file matching the fuzzy query.
-type QuickOpenMatch struct {
+// Match represents a file matching the fuzzy query.
+type Match struct {
 	Path        string       // Relative path from root
 	Name        string       // Base filename
 	Score       int          // Match score (higher = better)
@@ -105,7 +105,7 @@ func isWordSeparator(r rune) bool {
 }
 
 // FuzzySort sorts matches by score descending, then path length ascending.
-func FuzzySort(matches []QuickOpenMatch) {
+func FuzzySort(matches []Match) {
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].Score != matches[j].Score {
 			return matches[i].Score > matches[j].Score
@@ -116,10 +116,10 @@ func FuzzySort(matches []QuickOpenMatch) {
 
 // FuzzyFilter filters and scores files against a query.
 // Returns top maxResults matches sorted by score.
-func FuzzyFilter(files []string, query string, maxResults int) []QuickOpenMatch {
+func FuzzyFilter(files []string, query string, maxResults int) []Match {
 	if query == "" {
 		// Return first maxResults files sorted by path length
-		var matches []QuickOpenMatch
+		var matches []Match
 		for i, f := range files {
 			if i >= maxResults {
 				break
@@ -128,7 +128,7 @@ func FuzzyFilter(files []string, query string, maxResults int) []QuickOpenMatch 
 			if idx := strings.LastIndex(f, "/"); idx != -1 {
 				name = f[idx+1:]
 			}
-			matches = append(matches, QuickOpenMatch{
+			matches = append(matches, Match{
 				Path:  f,
 				Name:  name,
 				Score: 100 / (len(f) + 1), // Prefer shorter paths
@@ -138,7 +138,7 @@ func FuzzyFilter(files []string, query string, maxResults int) []QuickOpenMatch 
 		return matches
 	}
 
-	var matches []QuickOpenMatch
+	var matches []Match
 	for _, f := range files {
 		score, ranges := FuzzyMatch(query, f)
 		if score > 0 {
@@ -146,7 +146,7 @@ func FuzzyFilter(files []string, query string, maxResults int) []QuickOpenMatch 
 			if idx := strings.LastIndex(f, "/"); idx != -1 {
 				name = f[idx+1:]
 			}
-			matches = append(matches, QuickOpenMatch{
+			matches = append(matches, Match{
 				Path:        f,
 				Name:        name,
 				Score:       score,

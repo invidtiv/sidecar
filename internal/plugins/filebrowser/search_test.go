@@ -807,7 +807,7 @@ func TestQuickOpen_OpenMode(t *testing.T) {
 	if !p.quickOpenMode {
 		t.Error("quickOpenMode should be true after ctrl+p")
 	}
-	if !p.quickOpenScanning {
+	if !p.quickOpen.Scanning {
 		t.Error("ctrl+p should start a background file scan")
 	}
 	if cmd == nil {
@@ -817,10 +817,10 @@ func TestQuickOpen_OpenMode(t *testing.T) {
 	// The scan populates the cache when its message is handled
 	p.Update(cmd())
 
-	if len(p.quickOpenFiles) == 0 {
+	if len(p.quickOpen.Files) == 0 {
 		t.Error("file cache should be populated")
 	}
-	if p.quickOpenScanning {
+	if p.quickOpen.Scanning {
 		t.Error("quickOpenScanning should be cleared once the scan lands")
 	}
 }
@@ -832,7 +832,7 @@ func TestQuickOpen_CloseWithEsc(t *testing.T) {
 	// Enter quick open
 	p.quickOpenMode = true
 	p.quickOpenQuery = "test"
-	p.quickOpenFiles = []string{"test.go"}
+	p.quickOpen.Files = []string{"test.go"}
 	p.updateQuickOpenMatches()
 
 	// Press esc
@@ -850,7 +850,7 @@ func TestQuickOpen_TypeQuery(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"main.go", "test.go", "app.go"}
+	p.quickOpen.Files = []string{"main.go", "test.go", "app.go"}
 
 	// Type "ma"
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
@@ -877,7 +877,7 @@ func TestQuickOpen_NavigateResults(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"a.go", "b.go", "c.go"}
+	p.quickOpen.Files = []string{"a.go", "b.go", "c.go"}
 	p.updateQuickOpenMatches()
 
 	if len(p.quickOpenMatches) < 3 {
@@ -912,7 +912,7 @@ func TestQuickOpen_SelectMatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"main.go", "src/app.go"}
+	p.quickOpen.Files = []string{"main.go", "src/app.go"}
 	p.quickOpenQuery = "app"
 	p.updateQuickOpenMatches()
 
@@ -968,7 +968,7 @@ func TestQuickOpen_Backspace(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpenQuery = "test"
-	p.quickOpenFiles = []string{"test.go"}
+	p.quickOpen.Files = []string{"test.go"}
 
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
@@ -981,7 +981,7 @@ func TestQuickOpen_CtrlPNavigates(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"a.go", "b.go"}
+	p.quickOpen.Files = []string{"a.go", "b.go"}
 	p.updateQuickOpenMatches()
 	p.quickOpenCursor = 1
 
@@ -997,7 +997,7 @@ func TestQuickOpen_CtrlNNavigates(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"a.go", "b.go"}
+	p.quickOpen.Files = []string{"a.go", "b.go"}
 	p.updateQuickOpenMatches()
 
 	// ctrl+n should move cursor down
@@ -1012,7 +1012,7 @@ func TestQuickOpen_UpdateMatchesResetsCursor(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenFiles = []string{"aaa.go", "bbb.go", "ccc.go"}
+	p.quickOpen.Files = []string{"aaa.go", "bbb.go", "ccc.go"}
 	p.updateQuickOpenMatches()
 	p.quickOpenCursor = 2
 

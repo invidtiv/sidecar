@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectsearch"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -1248,7 +1249,7 @@ func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 			} else {
 				state.IsSearching = true
 				state.DebounceVersion++
-				return p, scheduleProjectSearch(state.DebounceVersion, state.Query)
+				return p, projectsearch.Schedule(state.DebounceVersion, state.Query)
 			}
 		}
 
@@ -1258,14 +1259,14 @@ func (p *Plugin) handleProjectSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 			state.Query += text
 			state.IsSearching = true
 			state.DebounceVersion++
-			return p, scheduleProjectSearch(state.DebounceVersion, state.Query)
+			return p, projectsearch.Schedule(state.DebounceVersion, state.Query)
 		}
 	}
 
 	return p, cmd
 }
 
-func (p *Plugin) toggleProjectSearchOption(state *ProjectSearchState, option *bool) (plugin.Plugin, tea.Cmd) {
+func (p *Plugin) toggleProjectSearchOption(state *projectsearch.State, option *bool) (plugin.Plugin, tea.Cmd) {
 	if state == nil || option == nil {
 		return p, nil
 	}
@@ -1274,7 +1275,7 @@ func (p *Plugin) toggleProjectSearchOption(state *ProjectSearchState, option *bo
 	if state.Query != "" {
 		state.IsSearching = true
 		state.DebounceVersion++ // Cancel any pending debounced search
-		return p, RunProjectSearch(p.ctx.WorkDir, state, p.ctx.Epoch)
+		return p, projectsearch.Run(p.ctx.WorkDir, state, p.ctx.Epoch)
 	}
 	return p, nil
 }

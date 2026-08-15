@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -1360,8 +1361,8 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	sb.WriteString("\n\n")
 
 	// Error message if scan was limited
-	if p.quickOpenError != "" {
-		sb.WriteString(styles.Muted.Render("⚠ " + p.quickOpenError))
+	if p.quickOpen.ErrText != "" {
+		sb.WriteString(styles.Muted.Render("⚠ " + p.quickOpen.ErrText))
 		sb.WriteString("\n")
 	}
 
@@ -1372,13 +1373,13 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	}
 	modalX := hPad + 1  // +1 for modal border
 	modalItemY := 2 + 3 // paddingTop(2) + border(1) + header(2)
-	if p.quickOpenError != "" {
+	if p.quickOpen.ErrText != "" {
 		modalItemY++ // Extra line for error message
 	}
 
 	if len(p.quickOpenMatches) == 0 {
 		switch {
-		case p.quickOpenScanning:
+		case p.quickOpen.Scanning:
 			sb.WriteString(styles.Muted.Render("Scanning files..."))
 		case p.quickOpenQuery != "":
 			sb.WriteString(styles.Muted.Render("No matches"))
@@ -1425,12 +1426,12 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	}
 
 	// Footer with match count
-	if p.quickOpenScanning {
+	if p.quickOpen.Scanning {
 		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render("(scanning...)"))
 	} else if len(p.quickOpenMatches) > 0 {
 		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", p.quickOpenCursor+1, len(p.quickOpenMatches))))
-	} else if len(p.quickOpenFiles) > 0 {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpenFiles))))
+	} else if len(p.quickOpen.Files) > 0 {
+		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(p.quickOpen.Files))))
 	}
 
 	// Wrap in modal box (centering handled by overlayModal)
@@ -1441,7 +1442,7 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 }
 
 // renderQuickOpenMatch renders a single match with highlighted chars.
-func (p *Plugin) renderQuickOpenMatch(match QuickOpenMatch, maxWidth int) string {
+func (p *Plugin) renderQuickOpenMatch(match filefind.Match, maxWidth int) string {
 	path := match.Path
 
 	// Truncate path if too long
@@ -1460,7 +1461,7 @@ func (p *Plugin) renderQuickOpenMatch(match QuickOpenMatch, maxWidth int) string
 }
 
 // highlightFuzzyMatch applies highlighting to matched character ranges.
-func (p *Plugin) highlightFuzzyMatch(text string, ranges []MatchRange) string {
+func (p *Plugin) highlightFuzzyMatch(text string, ranges []filefind.MatchRange) string {
 	if len(ranges) == 0 {
 		return text
 	}

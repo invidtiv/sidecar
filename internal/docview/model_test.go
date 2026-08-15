@@ -101,18 +101,18 @@ func TestScrollAndLineTargetClamp(t *testing.T) {
 		t.Fatal("current result was rejected")
 	}
 	rows := strings.Split(ansi.Strip(m.View()), "\n")
-	if got := strings.TrimSpace(rows[0]) + "\n" + strings.TrimSpace(rows[1]); got != "three\nfour" {
+	if got := strings.TrimSpace(rows[0]) + "\n" + strings.TrimSpace(rows[1]); got != "3 three\n4 four" {
 		t.Fatalf("targeted view = %q", got)
 	}
 
 	m.Scroll(-999)
-	if got := strings.TrimSpace(ansi.Strip(m.View())); !strings.HasPrefix(got, "one") {
+	if got := strings.TrimSpace(ansi.Strip(m.View())); !strings.HasPrefix(got, "1 one") {
 		t.Fatalf("scroll up did not clamp: %q", got)
 	}
 	if !m.HandleKey(tea.KeyPressMsg{Code: 'G', Text: "G"}) {
 		t.Fatal("G was not handled")
 	}
-	if got := strings.TrimSpace(ansi.Strip(m.View())); !strings.HasPrefix(got, "three") {
+	if got := strings.TrimSpace(ansi.Strip(m.View())); !strings.HasPrefix(got, "3 three") {
 		t.Fatalf("end did not clamp: %q", got)
 	}
 	if m.HandleKey(tea.KeyPressMsg{Code: 'x', Text: "x"}) {
@@ -299,5 +299,166 @@ func TestArmNeedsLoadAndPendingScroll(t *testing.T) {
 	m.ApplyLine(1)
 	if m.Rendered() || m.ScrollOffset() != 0 {
 		t.Fatalf("ApplyLine = rendered=%v scroll=%d", m.Rendered(), m.ScrollOffset())
+	}
+}
+
+func TestRawViewNumbersLinesAndRenderedViewDoesNot(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(60, 3)
+	msg := loadFixture(t, m, "# Heading\n\nbody", 0)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	if got := ansi.Strip(m.View()); strings.Contains(got, "   1 ") {
+		t.Fatalf("rendered markdown must not be numbered: %q", got)
+	}
+
+	m.ToggleRenderMode()
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	if !strings.HasPrefix(rows[0], "   1 # Heading") {
+		t.Fatalf("raw row 0 = %q", rows[0])
+	}
+	if !strings.HasPrefix(rows[2], "   3 body") {
+		t.Fatalf("raw row 2 = %q", rows[2])
+	}
+	for i, row := range rows {
+		if got := ansi.StringWidth(row); got != 60 {
+			t.Fatalf("row %d width = %d, want 60", i, got)
+		}
+	}
+}
+
+func TestPlaceholderLinesAreNotNumbered(t *testing.T) {
+	cases := []struct {
+		name   string
+		setup  func(*Model)
+		expect string
+	}{
+		{"loading", func(m *Model) { _ = m.Load(1, t.TempDir(), "wait.md", 0, 3) }, "Loading document"},
+		{"error", func(m *Model) {
+			msg, _ := m.Load(1, t.TempDir(), "missing.md", 0, 9)().(LoadedMsg)
+			m.SetResult(msg)
+		}, "Document unavailable"},
+		{"binary", func(m *Model) { m.loading = false; m.result.IsBinary = true }, "Binary preview"},
+		{"image", func(m *Model) { m.loading = false; m.result.IsImage = true }, "Image preview"},
+		{"empty", func(m *Model) { m.loading = false }, "Empty document"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.SetSize(60, 3)
+			tc.setup(m)
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, tc.expect) {
+				t.Fatalf("view = %q, want %q", view, tc.expect)
+			}
+			if !strings.HasPrefix(view, tc.expect) {
+				t.Fatalf("placeholder was given a gutter: %q", view)
+			}
+		})
+	}
+}
+
+func TestTruncationBannerIsNotNumberedButContentIs(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(40, 3)
+	msg := loadFixture(t, m, "alpha\nbeta", 1)
+	msg.Result.IsTruncated = true
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	if !strings.HasPrefix(rows[0], "     Preview truncated") {
+		t.Fatalf("banner row = %q", rows[0])
+	}
+	if !strings.HasPrefix(rows[2], "   1 alpha") {
+		t.Fatalf("first content row = %q", rows[2])
+	}
+}
+
+func TestGutterConsumesWidthWhenTruncatingAndWrapping(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(15, 3)
+	msg := loadFixture(t, m, "abcdefghijklmnopqrstuvwxyz", 1)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	// 15 cells - 5 gutter cells leaves exactly 10 for the text.
+	if rows[0] != "   1 abcdefghij" {
+		t.Fatalf("truncated row = %q", rows[0])
+	}
+
+	m.SetWrap(true)
+	rows = strings.Split(ansi.Strip(m.View()), "\n")
+	if rows[0] != "   1 abcdefghij" || rows[1] != "     klmnopqrst" || rows[2] != "     uvwxyz    " {
+		t.Fatalf("wrapped rows = %q", rows)
+	}
+	for i, row := range rows {
+		if got := ansi.StringWidth(row); got != 15 {
+			t.Fatalf("row %d width = %d, want 15", i, got)
+		}
+	}
+}
+
+func TestApplyLineLandsOnSourceLineWithWrap(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(15, 2)
+	// Each source line wraps into three rows of ten cells.
+	long := strings.Repeat("x", 25)
+	msg := loadFixture(t, m, strings.Join([]string{long, long, long + "END", long}, "\n"), 1)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	m.SetWrap(true)
+
+	m.ApplyLine(3)
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	if !strings.HasPrefix(rows[0], "   3 ") {
+		t.Fatalf("ApplyLine(3) landed on %q", rows[0])
+	}
+	if m.ScrollOffset() != 6 {
+		t.Fatalf("scroll offset = %d, want 6", m.ScrollOffset())
+	}
+
+	m.ApplyLine(1)
+	if m.ScrollOffset() != 0 {
+		t.Fatalf("ApplyLine(1) scroll = %d", m.ScrollOffset())
+	}
+}
+
+func TestLoadTargetLineLandsOnSourceLineWithWrap(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(15, 2)
+	m.SetWrap(true)
+	long := strings.Repeat("y", 25)
+	msg := loadFixture(t, m, strings.Join([]string{long, long, long}, "\n"), 2)
+	if !m.SetResult(msg) {
+		t.Fatal("current result was rejected")
+	}
+	if got := m.ScrollOffset(); got != 3 {
+		t.Fatalf("targeted scroll = %d, want 3", got)
+	}
+	if row := strings.Split(ansi.Strip(m.View()), "\n")[0]; !strings.HasPrefix(row, "   2 ") {
+		t.Fatalf("target row = %q", row)
+	}
+}
+
+func TestGutterGrowsWithLineCount(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(40, 2)
+	lines := make([]string, 12000)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	m.loading = false
+	m.rendered = false
+	m.result.Content = "line"
+	m.result.HighlightedLines = lines
+	m.ApplyLine(12000)
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	row := rows[len(rows)-1]
+	if !strings.HasPrefix(row, "12000 line") {
+		t.Fatalf("wide gutter row = %q", row)
 	}
 }

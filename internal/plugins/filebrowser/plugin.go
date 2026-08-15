@@ -11,12 +11,14 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/image"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectsearch"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -28,13 +30,10 @@ const (
 	pluginIcon = "F"
 
 	// Quick open limits
-	quickOpenMaxFiles   = 50000           // Max files to cache (prevents OOM on huge repos)
-	quickOpenMaxResults = 50              // Max matches to show
-	quickOpenTimeout    = 2 * time.Second // Max time to spend scanning
+	quickOpenMaxResults = 50 // Max matches to show
 
 	// Directory cache limits (for path auto-complete)
-	dirCacheMaxDirs    = 10000 // Max directories to cache
-	dirCacheMaxResults = 5     // Max suggestions to show
+	dirCacheMaxResults = 5 // Max suggestions to show
 
 	// treePreviewQuiet keeps cursor movement live while avoiding a preview tab,
 	// watcher, and file load for every event in a wheel or key-repeat burst.
@@ -77,12 +76,7 @@ type (
 	}
 	// FileCacheBuiltMsg carries the result of a background quick-open cache
 	// scan. Dirs distinguishes the path auto-complete scan from the file scan.
-	FileCacheBuiltMsg struct {
-		Dirs    bool
-		Files   []string // Paths relative to the working directory, sorted
-		ErrText string   // Non-empty when the scan failed or hit a limit
-		Epoch   uint64
-	}
+	FileCacheBuiltMsg = filefind.ScannedMsg
 	// NavigateToFileMsg requests navigation to a specific file (from other plugins).
 	NavigateToFileMsg = app.NavigateToFileMsg
 	// RevealErrorMsg is sent when reveal in file manager fails.
@@ -142,9 +136,6 @@ type (
 
 // GetEpoch implements plugin.EpochMessage for staleness detection.
 func (m TreeBuiltMsg) GetEpoch() uint64 { return m.Epoch }
-
-// GetEpoch implements plugin.EpochMessage for staleness detection.
-func (m FileCacheBuiltMsg) GetEpoch() uint64 { return m.Epoch }
 
 // ContentMatch represents a match position within file content.
 type ContentMatch struct {
@@ -206,7 +197,7 @@ type Plugin struct {
 	// Search state (tree filename search)
 	searchMode    bool
 	searchQuery   string
-	searchMatches []QuickOpenMatch
+	searchMatches []filefind.Match
 	searchCursor  int
 
 	// Auto-open state
@@ -227,26 +218,20 @@ type Plugin struct {
 	selection ui.SelectionState
 
 	// Quick open state
-	quickOpenMode     bool
-	quickOpenQuery    string
-	quickOpenMatches  []QuickOpenMatch
-	quickOpenCursor   int
-	quickOpenFiles    []string // Cached file paths (relative)
-	quickOpenError    string   // Error message if scan failed/limited
-	quickOpenScanning bool     // A background file scan is in flight
-	quickOpenCacheOK  bool     // A file scan has completed at least once
-
-	// quickOpenDirty and dirCacheDirty are set when watched directories changed
-	// on disk, so the cache no longer matches what is there. Each cache owns its
-	// own flag: a scan clears only its own, and a change arriving while that
-	// scan is in flight re-sets it, so the landing result cannot pass itself off
-	// as current. The stale cache keeps rendering until the next scan lands.
-	quickOpenDirty bool
-	dirCacheDirty  bool
+	quickOpenMode    bool
+	quickOpenQuery   string
+	quickOpenMatches []filefind.Match
+	quickOpenCursor  int
+	// quickOpen holds the cached project file list (relative paths) and its
+	// scan bookkeeping. quickOpen and dirCache each own their own dirty flag: a
+	// scan clears only its own, and a change arriving while that scan is in
+	// flight re-sets it, so the landing result cannot pass itself off as
+	// current. The stale cache keeps rendering until the next scan lands.
+	quickOpen filefind.Cache
 
 	// Project-wide search state (ctrl+s)
 	projectSearchMode       bool
-	projectSearchState      *ProjectSearchState
+	projectSearchState      *projectsearch.State
 	projectSearchModal      *modal.Modal
 	projectSearchModalWidth int
 
@@ -279,12 +264,10 @@ type Plugin struct {
 	lineJumpBuffer string
 
 	// Path auto-complete state (for move modal)
-	dirCache              []string // Cached directory paths
-	dirCacheScanning      bool     // A background directory scan is in flight
-	dirCacheOK            bool     // A directory scan has completed at least once
-	fileOpSuggestions     []string // Current filtered suggestions
-	fileOpSuggestionIdx   int      // Selected suggestion (-1 = none)
-	fileOpShowSuggestions bool     // Show suggestions dropdown
+	dirCache              filefind.Cache // Cached directory paths
+	fileOpSuggestions     []string       // Current filtered suggestions
+	fileOpSuggestionIdx   int            // Selected suggestion (-1 = none)
+	fileOpShowSuggestions bool           // Show suggestions dropdown
 
 	// Clipboard state (yank/paste)
 	clipboardPath  string // Relative path of yanked file/directory
@@ -420,15 +403,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.clearDragState()
 
 	// The quick-open caches describe the old project's disk; drop them.
-	p.quickOpenFiles = nil
-	p.quickOpenError = ""
-	p.quickOpenScanning = false
-	p.quickOpenCacheOK = false
-	p.dirCache = nil
-	p.dirCacheScanning = false
-	p.dirCacheOK = false
-	p.quickOpenDirty = false
-	p.dirCacheDirty = false
+	p.quickOpen.Reset()
+	p.dirCache.Reset()
 
 	// Initialize markdown renderer
 	renderer, err := markdown.NewRenderer()
@@ -604,8 +580,8 @@ func (p *Plugin) handleWatchEvent(msg WatchEventMsg) (plugin.Plugin, tea.Cmd) {
 	if msg.TreeChanged && autoRefreshEnabled() {
 		// Caches that describe the disk are now behind it, whether or not the
 		// rebuild itself can run right now.
-		p.quickOpenDirty = true
-		p.dirCacheDirty = true
+		p.quickOpen.MarkDirty()
+		p.dirCache.MarkDirty()
 		if cmd := p.requestAutoRefresh(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -1069,9 +1045,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Dirs {
-			p.dirCacheScanning = false
-			p.dirCacheOK = true
-			p.dirCache = msg.Files
+			p.dirCache.Apply(msg)
 			// The move modal filtered an empty cache on the keystroke that
 			// started this scan; recompute so the dropdown appears without
 			// needing another one. A dropdown the user already dismissed by
@@ -1081,10 +1055,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			return p, nil
 		}
-		p.quickOpenScanning = false
-		p.quickOpenCacheOK = true
-		p.quickOpenFiles = msg.Files
-		p.quickOpenError = msg.ErrText
+		p.quickOpen.Apply(msg)
 		if p.quickOpenMode {
 			p.updateQuickOpenMatches()
 		}
@@ -1197,14 +1168,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, nil
 
-	case projectSearchDebounceMsg:
+	case projectsearch.DebounceMsg:
 		// Only run search if debounce version matches (no newer keystrokes)
 		if p.projectSearchState != nil && p.projectSearchState.DebounceVersion == msg.Version {
-			return p, RunProjectSearch(p.ctx.WorkDir, p.projectSearchState, p.ctx.Epoch)
+			return p, projectsearch.Run(p.ctx.WorkDir, p.projectSearchState, p.ctx.Epoch)
 		}
 		return p, nil
 
-	case ProjectSearchResultsMsg:
+	case projectsearch.ResultsMsg:
 		// Check for stale message from previous project context
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
