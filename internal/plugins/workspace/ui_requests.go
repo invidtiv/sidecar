@@ -44,8 +44,12 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if isSelected {
 		var cmd tea.Cmd
 		opened := false
+		// Asked before the open, because afterwards the pane exists either way:
+		// the planner is what decides between a new split and an existing pane.
+		retargeted := false
 		switch req.Target.Kind {
 		case uirequest.TargetKindFile:
+			retargeted = p.willRetargetPane(PaneDoc)
 			cmd = p.openDocPaneForSurface(root, surface, req.Target.Value, req.Target.Line)
 			// A document open is not reported by its command: a split that did
 			// not fit still returns the reopen command, and re-opening a file
@@ -53,6 +57,7 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 			// only honest witness.
 			opened = p.docPaneShows(req.Target.Value)
 		case uirequest.TargetKindIssue:
+			retargeted = p.willRetargetPane(PaneIssue)
 			cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
 			opened = cmd != nil
 		}
@@ -77,11 +82,15 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 			return nil
 		}
 
+		status := uirequest.StatusOpened
+		if retargeted {
+			status = uirequest.StatusRetargeted
+		}
 		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 			Instance: hostInstanceID(),
 			Host:     uirequest.HostName(),
 			PID:      os.Getpid(),
-			Status:   uirequest.StatusOpened,
+			Status:   status,
 			Surface:  surface,
 			Pane:     p.paneFocus,
 			At:       time.Now().UTC(),
@@ -108,6 +117,13 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		At:       time.Now().UTC(),
 	})
 	return nil
+}
+
+// willRetargetPane reports whether opening kind would land in a pane that is
+// already on screen rather than splitting a new one.
+func (p *Plugin) willRetargetPane(kind PaneKind) bool {
+	plan, ok := planPaneOpen(p.paneRoot, kind)
+	return ok && plan.Retarget != 0
 }
 
 // docPaneShows reports whether the live document pane is showing rel.

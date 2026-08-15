@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -42,8 +43,12 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 	if isSelected {
 		var cmd tea.Cmd
+		// Asked before the open, because afterwards the pane exists either way:
+		// the planner is what decides between a new split and an existing pane.
+		retargeted := false
 		switch req.Target.Kind {
 		case uirequest.TargetKindFile:
+			retargeted = m.willRetargetPreviewPane(panelayout.Document)
 			span := terminallink.Span{
 				Kind:  terminallink.KindFile,
 				Value: req.Target.Value,
@@ -54,6 +59,7 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 			}
 			cmd = m.openPreviewDoc(span)
 		case uirequest.TargetKindIssue:
+			retargeted = m.willRetargetPreviewPane(panelayout.Issue)
 			cmd = m.openPreviewIssue(req.Target.Value)
 		}
 
@@ -70,11 +76,15 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 			return nil
 		}
 
+		status := uirequest.StatusOpened
+		if retargeted {
+			status = uirequest.StatusRetargeted
+		}
 		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 			Instance: hostInstanceID(),
 			Host:     uirequest.HostName(),
 			PID:      os.Getpid(),
-			Status:   uirequest.StatusOpened,
+			Status:   status,
 			Surface:  "shell:" + targetWorkspace.TmuxName,
 			Pane:     m.preview.paneFocus,
 			At:       time.Now().UTC(),
@@ -100,6 +110,13 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		At:       time.Now().UTC(),
 	})
 	return nil
+}
+
+// willRetargetPreviewPane reports whether opening kind would land in a pane
+// that is already on screen rather than splitting a new one.
+func (m *Model) willRetargetPreviewPane(kind panelayout.Kind) bool {
+	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind)
+	return ok && plan.Retarget != 0
 }
 
 func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
