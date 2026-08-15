@@ -1,11 +1,11 @@
 package workspace
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 func padToHeight(content string, height, width int) string {
@@ -24,21 +24,14 @@ func dimText(s string) string {
 	return styles.Muted.Render(s)
 }
 
-// formatRelativeTime formats a time as relative (e.g., "3m", "2h").
+// formatRelativeTime formats a time as relative (e.g., "42s", "3m", "2h").
+//
+// It defers to the shared formatter rather than keeping a second copy that
+// happened to agree above a minute and disagreed below it: this surface used to
+// say "now" for anything under a minute while the global list counted seconds,
+// so the same workspace could read "now" here and "12s" there. Counting the
+// seconds is the better of the two — it draws the eye to something that just
+// moved, which is exactly what the age column is for.
 func formatRelativeTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return workspacelist.RelativeAge(t, time.Now())
 }
