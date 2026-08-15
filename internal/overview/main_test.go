@@ -27,6 +27,8 @@ func TestMain(m *testing.M) {
 	// and the save would reach the developer's real state file.
 	loadWorkspaceListSort = func() string { return "" }
 	saveWorkspaceListSort = func(string) error { return nil }
+	loadLastGlobalCreateProject = func() string { return "" }
+	saveLastGlobalCreateProject = func(string) error { return nil }
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

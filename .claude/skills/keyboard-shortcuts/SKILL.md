@@ -102,6 +102,7 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | wheel on terminal | Scroll only; do not activate |
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
 | `i` | Find TD task (`open-issue`). Not interactive |
+| `ctrl+n` | Create a shell, choosing the owning project (selected row then last-used default) |
 | `/` | Filter |
 | `v` / `s` | Open View: sort the list. `v` matches the project sidebar; `s` is the original alias |
 | `\` | Toggle sidebar |

@@ -387,6 +387,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
+		m.overview.SetConfig(cfg)
 		// One resolution of the user's terminal settings, handed to every surface
 		// that hosts a terminal: the browser's live pane answers the chords the
 		// project plugin answers. The bindings are registered here for the same
@@ -1319,6 +1320,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return nil
 	}
 	switch id {
+	case "new-shell":
+		return m.overview.OpenCreateShell("")
 	case "rename-shell":
 		return m.overview.OpenRenameShell()
 	case "rename-worktree":

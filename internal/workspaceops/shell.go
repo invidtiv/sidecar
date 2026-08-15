@@ -3,10 +3,14 @@ package workspaceops
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -45,6 +49,95 @@ type ShellSpec struct {
 type ShellResult struct {
 	SessionName string
 	PaneID      string
+}
+
+// ManagedShellSpec adds the durable project identity that turns a tmux
+// session into a Sidecar shell. The operation resolves no project state on its
+// own; the caller explicitly chooses the owning project and agent metadata.
+type ManagedShellSpec struct {
+	ShellSpec
+	ProjectRoot string
+	AgentType   string
+	SkipPerms   bool
+}
+
+// CreateManagedShell creates the tmux session and then records it in the
+// owning project's manifest. A newly-created session is rolled back if the
+// durable identity cannot be written; a pre-existing retry is never killed.
+func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
+	existed := SessionExists(spec.SessionName)
+	result, err := CreateShell(spec.ShellSpec)
+	if err != nil {
+		return result, err
+	}
+	projectDir, err := projectdir.Resolve(spec.ProjectRoot)
+	if err == nil {
+		definition := shellstate.Definition{
+			TmuxName: spec.SessionName, DisplayName: spec.DisplayName,
+			Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), AgentType: spec.AgentType,
+			SkipPerms: spec.SkipPerms, WorkDir: spec.WorkDir,
+		}
+		err = shellstate.AddAtPath(filepath.Join(projectDir, "shells.json"), definition)
+	}
+	if err != nil {
+		if !existed {
+			_ = exec.Command("tmux", "kill-session", "-t", spec.SessionName).Run()
+		}
+		return result, fmt.Errorf("record shell identity: %w", err)
+	}
+	return result, nil
+}
+
+// DeleteManagedShell removes the durable identity and then closes the exact
+// tmux session. If tmux has already exited, the requested state is achieved.
+func DeleteManagedShell(projectRoot, sessionName, namespace string) error {
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return err
+	}
+	if err := shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace}); err != nil {
+		return err
+	}
+	cmd := exec.Command("tmux", "kill-session", "-t", sessionName)
+	if output, err := cmd.CombinedOutput(); err != nil && SessionExists(sessionName) {
+		return fmt.Errorf("close tmux session: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+// ShellNames resolves the next generated display and session names from one
+// project's inventory. It tolerates legacy names while never reusing a suffix.
+func ShellNames(projectRoot string, existing []shellstate.Definition) (displayName, sessionName string) {
+	base := "sidecar-sh-" + sanitizeShellName(filepath.Base(projectRoot))
+	maxIndex := 0
+	for _, shell := range existing {
+		if shell.TmuxName == base {
+			maxIndex = max(maxIndex, 1)
+			continue
+		}
+		prefix := base + "-"
+		if !strings.HasPrefix(shell.TmuxName, prefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimPrefix(shell.TmuxName, prefix)); err == nil {
+			maxIndex = max(maxIndex, n)
+		}
+	}
+	next := maxIndex + 1
+	return fmt.Sprintf("Shell %d", next), fmt.Sprintf("%s-%d", base, next)
+}
+
+func sanitizeShellName(name string) string {
+	name = strings.ToLower(name)
+	var b strings.Builder
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		} else if b.Len() > 0 && !strings.HasSuffix(b.String(), "-") {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // TmuxInstalled reports whether a tmux binary is on PATH. Creating a shell

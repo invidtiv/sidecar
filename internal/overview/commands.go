@@ -9,6 +9,7 @@ const (
 	ctxGlobalWorkspaces         = "global-workspaces"
 	ctxGlobalWorkspacesFilter   = "global-workspaces-filter"
 	ctxGlobalWorkspacesRename   = "global-workspaces-rename"
+	ctxGlobalWorkspacesCreate   = "global-workspaces-create"
 	ctxGlobalWorkspacesTerminal = "global-workspaces-terminal"
 	ctxGlobalWorkspacesDoc      = "global-workspaces-doc"
 	ctxGlobalWorkspacesIssue    = "global-workspaces-issue"
@@ -29,6 +30,11 @@ func (m *Model) Commands() []plugin.Command {
 		return []plugin.Command{
 			{ID: "confirm", Name: "Rename", Description: "Confirm the new display name", Context: ctxGlobalWorkspacesRename, Priority: 1},
 			{ID: "cancel", Name: "Cancel", Description: "Close the rename prompt", Context: ctxGlobalWorkspacesRename, Priority: 2},
+		}
+	case ctxGlobalWorkspacesCreate:
+		return []plugin.Command{
+			{ID: "confirm", Name: "Create", Description: "Create the shell in the chosen project", Context: ctxGlobalWorkspacesCreate, Priority: 1},
+			{ID: "cancel", Name: "Cancel", Description: "Close the create prompt", Context: ctxGlobalWorkspacesCreate, Priority: 2},
 		}
 	case ctxGlobalWorkspacesTerminal:
 		return []plugin.Command{
@@ -70,7 +76,8 @@ func (m *Model) Commands() []plugin.Command {
 		}
 	default:
 		cmds := []plugin.Command{
-			{ID: "interactive", Name: "Type", Description: "Start typing in the selected live pane", Context: ctxGlobalWorkspaces, Priority: 1},
+			{ID: "new-shell", Name: "Shell", Description: "Create a shell in a configured project", Context: ctxGlobalWorkspaces, Priority: 1},
+			{ID: "interactive", Name: "Type", Description: "Start typing in the selected live pane", Context: ctxGlobalWorkspaces, Priority: 2},
 			{ID: "filter", Name: "Filter", Description: "Filter workspaces", Context: ctxGlobalWorkspaces, Priority: 2},
 			{ID: "sort", Name: "Sort", Description: "Open the sort menu", Context: ctxGlobalWorkspaces, Priority: 3},
 			{ID: "pin", Name: "Pin", Description: "Pin or unpin the selected workspace", Context: ctxGlobalWorkspaces, Priority: 4},

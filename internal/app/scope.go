@@ -474,6 +474,9 @@ func (m *Model) globalSurfaceWantsEsc() bool {
 	if m.globalWorkspacesVisible() && m.overview != nil && m.overview.RenameShellOpen() {
 		return true
 	}
+	if m.globalWorkspacesVisible() && m.overview != nil && m.overview.CreateOpen() {
+		return true
+	}
 	// While typing, esc belongs to the pane (a second one leaves the mode).
 	// Only an esc pressed with the list focused means "leave the global space".
 	if m.globalWorkspacesPreviewFocused() {

@@ -24,3 +24,14 @@ func TestShellEnvArgsPublishIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestShellNamesStayProjectScoped(t *testing.T) {
+	one := []shellstate.Definition{{TmuxName: "sidecar-sh-one-8"}}
+	two := []shellstate.Definition{{TmuxName: "sidecar-sh-two-2"}, {TmuxName: "unrelated-99"}}
+	if display, session := ShellNames("/tmp/one", one); display != "Shell 9" || session != "sidecar-sh-one-9" {
+		t.Fatalf("one = %q/%q", display, session)
+	}
+	if display, session := ShellNames("/tmp/two", two); display != "Shell 3" || session != "sidecar-sh-two-3" {
+		t.Fatalf("two = %q/%q", display, session)
+	}
+}

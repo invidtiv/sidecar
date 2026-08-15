@@ -115,6 +115,10 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.globalWorkspacesVisible() && m.overview.CreateOpen() && m.overview.CreatePaste(msg.Content) {
+		return m, nil
+	}
+
 	if m.globalWorkspacesVisible() && m.overview.RenameShellOpen() && m.overview.RenameShellPaste(msg.Content) {
 		return m, nil
 	}
@@ -1819,6 +1823,7 @@ func isTextInputContext(ctx string) bool {
 		"theme-switcher",
 		"global-workspaces-filter",
 		"global-workspaces-rename",
+		"global-workspaces-create",
 		"issue-input":
 		return true
 	default:

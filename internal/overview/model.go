@@ -86,7 +86,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		renameShellDoneMsg:
+		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
 		return true
 	default:
 		return false
@@ -157,6 +157,7 @@ type Model struct {
 	preview             previewState
 	diff                workspacediff.View
 	terminalConfig      tty.Config
+	config              *config.Config
 	width               int
 	height              int
 	previewSpecResolver func(string, string) (string, bool)
@@ -195,6 +196,17 @@ type Model struct {
 	renameModal      *modal.Modal
 	renameModalWidth int
 	renameMouse      *mouse.Handler
+
+	createOpen         bool
+	createProjectIndex int
+	createProjectKey   string
+	createNameInput    textinput.Model
+	createError        string
+	createBusy         bool
+	createModal        *modal.Modal
+	createModalWidth   int
+	createMouse        *mouse.Handler
+	pendingCreatedTmux string
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -205,14 +217,16 @@ var ActivityStorePath = func() string {
 // Sidebar preference access is overridable so interaction tests can prove a
 // drag release without reading or writing the developer's real state file.
 var (
-	loadWorkspaceSidebarWidth = state.GetWorkspaceSidebarWidth
-	saveWorkspaceSidebarWidth = state.SetWorkspaceSidebarWidth
-	loadShowIdleWorktrees     = state.GetShowIdleWorktrees
-	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
-	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
-	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
-	loadWorkspaceListSort     = state.GetWorkspaceListSort
-	saveWorkspaceListSort     = state.SetWorkspaceListSort
+	loadWorkspaceSidebarWidth   = state.GetWorkspaceSidebarWidth
+	saveWorkspaceSidebarWidth   = state.SetWorkspaceSidebarWidth
+	loadShowIdleWorktrees       = state.GetShowIdleWorktrees
+	saveShowIdleWorktrees       = state.SetShowIdleWorktrees
+	loadPinnedWorkspaceIDs      = state.GetPinnedWorkspaceIDs
+	savePinnedWorkspaceIDs      = state.SetPinnedWorkspaceIDs
+	loadWorkspaceListSort       = state.GetWorkspaceListSort
+	saveWorkspaceListSort       = state.SetWorkspaceListSort
+	loadLastGlobalCreateProject = state.GetLastGlobalCreateProject
+	saveLastGlobalCreateProject = state.SetLastGlobalCreateProject
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -223,7 +237,7 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
@@ -241,6 +255,10 @@ func New(collector workspaceinventory.Collector) *Model {
 	}
 	return m
 }
+
+// SetConfig hands the global host the same app-owned configuration project
+// plugins receive, without instantiating or temporarily switching a plugin.
+func (m *Model) SetConfig(cfg *config.Config) { m.config = cfg }
 
 // persistActivity writes committed trackers after a completed cycle. Failure
 // is silent by design: the store is a convenience, and a state directory that
@@ -502,6 +520,17 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil
+	case globalShellCreatedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case projectMutationRefreshMsg:
+		return m.applyProjectMutationRefresh(msg)
 	case uirequest.RequestMsg:
 		return m.handleUIRequest(msg.Request)
 	case pollMsg:

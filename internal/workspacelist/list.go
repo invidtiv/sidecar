@@ -338,6 +338,9 @@ var recentBucketOrder = []string{RecentNew, RecentToday, RecentThisWeek, RecentO
 // bucket when that sort is in play.
 type Section struct {
 	Title string
+	// Key is the stable grouping identity when a section represents a project.
+	// Presentation callers can hang an action from it without decoding Title.
+	Key   string
 	Group Group
 	Items []Item
 }
@@ -446,7 +449,7 @@ func groupByProject(items []Item) []Section {
 			if title == "" {
 				title = item.ProjectKey
 			}
-			sections = append(sections, Section{Title: title})
+			sections = append(sections, Section{Title: title, Key: itemKey})
 			current = len(sections) - 1
 			key = itemKey
 			started = true

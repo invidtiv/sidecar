@@ -69,6 +69,7 @@ func DefaultBindings() []Binding {
 		// project's Workspaces plugin, where its refusal rules live. Typing into
 		// a pane that already exists is on the other side of that line.
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
+		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
 		{Key: "p", Command: "pin", Context: "global-workspaces"},
@@ -102,6 +103,8 @@ func DefaultBindings() []Binding {
 		// Rename prompt. Enter confirms; esc cancels. The query is a text input.
 		{Key: "enter", Command: "confirm", Context: "global-workspaces-rename"},
 		{Key: "esc", Command: "cancel", Context: "global-workspaces-rename"},
+		{Key: "enter", Command: "confirm", Context: "global-workspaces-create"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-create"},
 
 		// Focused document leaf beside the selected terminal. q closes the
 		// pane; it must not be a root context or Sidecar would quit instead.

@@ -54,6 +54,9 @@ type State struct {
 
 	// LastCreateAgent is the last agent chosen when creating a worktree.
 	LastCreateAgent string `json:"lastCreateAgent,omitempty"`
+	// LastGlobalCreateProject is the stable project root last chosen from the
+	// cross-project Workspaces create flow.
+	LastGlobalCreateProject string `json:"lastGlobalCreateProject,omitempty"`
 
 	// AgentAutoApprove is the last auto-approve checkbox value per agent type.
 	// A missing key is treated as false.
@@ -893,6 +896,29 @@ func SetLastCreateAgent(agent string) error {
 		current = &State{}
 	}
 	current.LastCreateAgent = agent
+	mu.Unlock()
+	return Save()
+}
+
+// GetLastGlobalCreateProject returns the last project root chosen in global
+// Workspaces creation.
+func GetLastGlobalCreateProject() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastGlobalCreateProject
+}
+
+// SetLastGlobalCreateProject persists the last project root chosen in global
+// Workspaces creation.
+func SetLastGlobalCreateProject(project string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.LastGlobalCreateProject = project
 	mu.Unlock()
 	return Save()
 }

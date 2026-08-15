@@ -103,6 +103,81 @@ type RenameResult struct {
 	Changed bool   `json:"changed"`
 }
 
+// AddAtPath records one shell definition with the same locked, atomic
+// read-before-write semantics used by rename. It is the state-free persistence
+// boundary used by project and cross-project shell hosts.
+func AddAtPath(path string, def Definition) error {
+	if strings.TrimSpace(def.TmuxName) == "" {
+		return &Error{Kind: KindValidation, Msg: "shell session name is required"}
+	}
+	if _, err := NormalizeName(def.DisplayName); err != nil {
+		return err
+	}
+	return mutateManifest(path, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName == def.TmuxName && sameNamespace(m.Shells[i].Namespace, def.Namespace) {
+				m.Shells[i] = def
+				return nil
+			}
+			if m.Shells[i].DisplayName == def.DisplayName {
+				return &Error{Kind: KindValidation, Msg: "name is already in use in this project"}
+			}
+		}
+		m.Shells = append(m.Shells, def)
+		return nil
+	})
+}
+
+// RemoveAtPath forgets one exact shell identity. A missing entry is already
+// the requested state and therefore succeeds.
+func RemoveAtPath(path string, id Identity) error {
+	return mutateManifest(path, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName == id.TmuxName && sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func mutateManifest(path string, apply func(*manifest) error) error {
+	if err := config.AssertIsolatedPath(path); err != nil {
+		return &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return &Error{Kind: KindState, Msg: "create shell manifest directory", Err: err}
+	}
+	lock, err := acquireLock(path)
+	if err != nil {
+		return &Error{Kind: KindState, Msg: "lock shell manifest", Err: err}
+	}
+	defer releaseLock(lock)
+	m := manifest{Version: 1}
+	if current, readErr := readManifest(path); readErr == nil {
+		m = current
+	} else if !os.IsNotExist(readErr) {
+		return &Error{Kind: KindState, Msg: "read shell manifest", Err: readErr}
+	}
+	if err := apply(&m); err != nil {
+		return err
+	}
+	m.Version = 1
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return &Error{Kind: KindState, Msg: "write shell manifest", Err: err}
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return &Error{Kind: KindState, Msg: "replace shell manifest", Err: err}
+	}
+	return nil
+}
+
 // Definition contains all information needed to recreate a shell session.
 type Definition struct {
 	TmuxName    string `json:"tmuxName"`
