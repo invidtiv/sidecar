@@ -3,7 +3,9 @@ package overview
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -803,6 +806,54 @@ func TestGlobalPreviewDecoratesEveryActivatedLinkKind(t *testing.T) {
 	}
 }
 
+func TestPreviewClickThenCLISharesResolvedIdentity(t *testing.T) {
+	root := initPreviewTwoCommitRepo(t)
+	headShort := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "--short=7", "HEAD"))
+	headFull := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "HEAD"))
+	parentShort := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "--short=7", "HEAD~1"))
+	parentFull := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "HEAD~1"))
+
+	cases := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"commit", headShort, "c:" + headFull},
+		{"two-dot", parentShort + ".." + headShort, "r:" + parentFull + ".." + headFull},
+		{"three-dot", parentShort + "..." + headShort, "r:" + parentFull + "..." + headFull},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+			ws := m.catalog["a"]
+			ws.Path = root
+			ws.ProjectRoot = root
+			m.catalog["a"] = ws
+
+			run(t, m, m.activatePreviewDiff(terminallink.Span{
+				Kind:  terminallink.KindDiff,
+				Value: tc.token,
+				Extra: terminallink.Extra{Raw: tc.token},
+			}))
+			if m.preview.diff == nil || m.preview.diff.view() == nil {
+				t.Fatal("click opened no Diff view")
+			}
+			if got := m.preview.diff.view().Target.Identity(); got != tc.want {
+				t.Fatalf("click identity = %q, want %q", got, tc.want)
+			}
+
+			cli := uirequest.DiffTarget(previewDiffPath(ws), tc.token)
+			if cli.Identity() != tc.want {
+				t.Fatalf("DiffTarget identity = %q, want %q", cli.Identity(), tc.want)
+			}
+			run(t, m, m.openPreviewDiff(cli))
+			if keys := previewDiffKeys(m.preview.diff); !reflect.DeepEqual(keys, []string{tc.want}) {
+				t.Fatalf("tabs after click+CLI = %v, want [%s]", keys, tc.want)
+			}
+		})
+	}
+}
+
 func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	m.previewSpecResolver = func(_, raw string) (string, bool) {
@@ -877,6 +928,32 @@ func TestGlobalPreviewGitSpecCapAndRejects(t *testing.T) {
 	if n := diffSpanCount(m.previewLinkSpans("abc1234..def5678")); n != 1 {
 		t.Fatalf("range produced %d spans, want 1", n)
 	}
+}
+
+func initPreviewTwoCommitRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runPreviewGit(t, root, "init", "-b", "main")
+	runPreviewGit(t, root, "config", "user.email", "sidecar@example.test")
+	runPreviewGit(t, root, "config", "user.name", "Sidecar Test")
+	runPreviewGit(t, root, "commit", "--allow-empty", "-m", "one")
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runPreviewGit(t, root, "add", "a.go")
+	runPreviewGit(t, root, "commit", "-m", "two")
+	return root
+}
+
+func runPreviewGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, out, err)
+	}
+	return string(out)
 }
 
 func previewDiffKeys(diff *previewDiff) []string {

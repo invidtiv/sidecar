@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -474,15 +475,15 @@ func (p *Plugin) resolveTerminalSpec(root, raw string) (string, bool) {
 }
 
 // activateDiffLink opens the clicked git spec against the selected terminal
-// surface as a Diff leaf tab. The token is parsed, not re-resolved: the
-// scanner already existence-gated it, and ParseSpec keeps .. vs ... .
+// surface as a Diff leaf tab. DiffTarget re-resolves in the checkout so a
+// short click and sidecar open share one Identity; .. vs ... is kept.
 func (p *Plugin) activateDiffLink(raw string) (tea.Cmd, bool) {
-	target, ok := workspacediff.ParseSpec(raw)
-	if !ok || (target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange) {
-		return nil, false
-	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {
+		return nil, false
+	}
+	target := uirequest.DiffTarget(root, raw)
+	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {
 		return nil, false
 	}
 	cmd := p.openDiffPaneForSurface(root, surface, target)

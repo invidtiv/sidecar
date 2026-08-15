@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -221,8 +222,12 @@ func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
 	if raw == "" {
 		raw = span.Value
 	}
-	target, ok := workspacediff.ParseSpec(raw)
-	if !ok || (target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange) {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok {
+		return nil
+	}
+	target := uirequest.DiffTarget(previewDiffPath(workspace), raw)
+	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {
 		return nil
 	}
 	return m.openPreviewDiff(target)

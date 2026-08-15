@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -195,6 +197,55 @@ func TestDiffLeafDoesNotChangeFileIssueSteelThread(t *testing.T) {
 		t.Fatalf("second Diff should retarget: %#v ok=%v", plan, ok)
 	}
 	_ = strings.TrimSpace(root)
+}
+
+func TestClickThenCLISharesResolvedIdentity(t *testing.T) {
+	root := initTwoCommitRepo(t)
+	headShort := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD"))
+	headFull := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD"))
+	parentShort := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "--short=7", "HEAD~1"))
+	parentFull := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD~1"))
+
+	cases := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"commit", headShort, "c:" + headFull},
+		{"two-dot", parentShort + ".." + headShort, "r:" + parentFull + ".." + headFull},
+		{"three-dot", parentShort + "..." + headShort, "r:" + parentFull + "..." + headFull},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := docPaneTestPlugin(t, root, true)
+			if _, ok := p.activateDiffLink(tc.token); !ok {
+				t.Fatalf("activateDiffLink(%q) failed", tc.token)
+			}
+			diff, _ := p.activeDiffPane()
+			if diff == nil || diff.view() == nil {
+				t.Fatal("click opened no Diff view")
+			}
+			if got := diff.view().Target.Identity(); got != tc.want {
+				t.Fatalf("click identity = %q, want %q", got, tc.want)
+			}
+
+			surfaceRoot, surface, ok := p.selectedTerminalSurface()
+			if !ok {
+				t.Fatal("no surface")
+			}
+			cli := uirequest.DiffTarget(root, tc.token)
+			if cli.Identity() != tc.want {
+				t.Fatalf("DiffTarget identity = %q, want %q", cli.Identity(), tc.want)
+			}
+			if cmd := p.openDiffPaneForSurface(surfaceRoot, surface, cli); cmd == nil {
+				t.Fatal("openDiffPaneForSurface failed")
+			}
+			diff, _ = p.activeDiffPane()
+			if keys := diffTabKeys(diff); !reflect.DeepEqual(keys, []string{tc.want}) {
+				t.Fatalf("tabs after click+CLI = %v, want [%s]", keys, tc.want)
+			}
+		})
+	}
 }
 
 func TestHashClickCommitTabNeverLeavesLoading(t *testing.T) {
