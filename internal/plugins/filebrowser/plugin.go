@@ -1251,9 +1251,9 @@ func (p *Plugin) SetFocused(f bool) {
 func (p *Plugin) Commands() []plugin.Command {
 	return []plugin.Command{
 		// Tree pane commands
-		{ID: "quick-open", Name: "Open", Description: "Quick open file by name", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 1},
+		{ID: "quick-open", Name: "Find", Description: "Find a file by name", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 1},
 		{ID: "new-tab", Name: "Tab+", Description: "Open file in new tab", Category: plugin.CategoryNavigation, Context: "file-browser-tree", Priority: 2},
-		{ID: "project-search", Name: "Find", Description: "Search in project", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 2},
+		{ID: "project-search", Name: "Search", Description: "Search the project's contents", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 2},
 		{ID: "info", Name: "Info", Description: "Show file info", Category: plugin.CategoryActions, Context: "file-browser-tree", Priority: 2},
 		{ID: "edit", Name: "Edit", Description: "Edit file inline", Category: plugin.CategoryActions, Context: "file-browser-tree", Priority: 2},
 		{ID: "edit-external", Name: "Edit+", Description: "Edit in full terminal", Category: plugin.CategoryActions, Context: "file-browser-tree", Priority: 2},
@@ -1276,15 +1276,15 @@ func (p *Plugin) Commands() []plugin.Command {
 		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle tree pane visibility", Category: plugin.CategoryView, Context: "file-browser-tree", Priority: 9},
 		{ID: "toggle-ignored", Name: "Ignored", Description: "Toggle git-ignored file visibility", Category: plugin.CategoryView, Context: "file-browser-tree", Priority: 9},
 		// Preview pane commands
-		{ID: "quick-open", Name: "Open", Description: "Quick open file by name", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 1},
-		{ID: "project-search", Name: "Find", Description: "Search in project", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 2},
+		{ID: "quick-open", Name: "Find", Description: "Find a file by name", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 1},
+		{ID: "project-search", Name: "Search", Description: "Search the project's contents", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 2},
 		{ID: "info", Name: "Info", Description: "Show file info", Category: plugin.CategoryActions, Context: "file-browser-preview", Priority: 2},
 		{ID: "edit", Name: "Edit", Description: "Edit file inline", Category: plugin.CategoryActions, Context: "file-browser-preview", Priority: 2},
 		{ID: "edit-external", Name: "Edit+", Description: "Edit in full terminal", Category: plugin.CategoryActions, Context: "file-browser-preview", Priority: 2},
 		{ID: "prev-tab", Name: "Tab←", Description: "Previous tab", Category: plugin.CategoryNavigation, Context: "file-browser-preview", Priority: 3},
 		{ID: "next-tab", Name: "Tab→", Description: "Next tab", Category: plugin.CategoryNavigation, Context: "file-browser-preview", Priority: 3},
 		{ID: "blame", Name: "Blame", Description: "Show git blame", Category: plugin.CategoryView, Context: "file-browser-preview", Priority: 3},
-		{ID: "search-content", Name: "Search", Description: "Search file content", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 3},
+		{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Category: plugin.CategorySearch, Context: "file-browser-preview", Priority: 3},
 		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "file-browser-preview", Priority: 3},
 		{ID: "toggle-markdown", Name: "Render", Description: "Toggle markdown rendering", Category: plugin.CategoryActions, Context: "file-browser-preview", Priority: 4},
 		{ID: "close-tab", Name: "Close", Description: "Close active tab", Category: plugin.CategoryActions, Context: "file-browser-preview", Priority: 4},

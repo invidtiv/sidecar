@@ -906,8 +906,9 @@ File tabs beside the selected workspace or shell terminal. `q` hides the
 pane and remembers the set; `x` on the last tab forgets it. Each surface
 restores its own tabs.
 
-A pane can search for its own next file. `ctrl+p` opens the fuzzy file
-finder and `f` opens a project-wide ripgrep search, both rooted at the
+A pane can search for its own next file. `ctrl+p` opens Find, the fuzzy file
+finder, and `f` opens Search, a project-wide ripgrep search — the same two
+keys under the same two names the Files plugin uses, both rooted at the
 pane's own workspace or shell directory and drawn as a modal inside the
 pane, below its header row: sized to its own content and centred with the
 document dimmed around it when the pane is wide enough to show a readable

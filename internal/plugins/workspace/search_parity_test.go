@@ -3,6 +3,7 @@ package workspace
 import (
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -221,5 +222,67 @@ func selectedRowPath(t *testing.T, rendered string, files []string) string {
 		}
 	}
 	t.Fatalf("no selected row in:\n%s", rendered)
+	return ""
+}
+
+// The two surfaces must call the two features by the same names. They drifted
+// once — the Files plugin said "ctrl+p Open" and "f Find" while the pane said
+// "ctrl+p Find" and "f Search", four names for two features — and the footer is
+// where a user learns what a key does. The names chosen say what the feature
+// does rather than how it is built: ctrl+p Find finds a file by name, f Search
+// searches the project's contents.
+func TestBothSurfacesNameTheSearchPairTheSame(t *testing.T) {
+	pane, root := docSearchPlugin(t, true)
+	paneNames := commandNamesByID(t, pane.Commands())
+	fileNames := commandNamesByID(t, filesPluginHost(t, root).Commands())
+
+	for _, pair := range []struct {
+		feature  string
+		paneID   string
+		filesID  string
+		wantName string
+	}{
+		{"find a file by name (ctrl+p)", "find-file", "quick-open", "Find"},
+		{"search the project's contents (f)", "search-project", "project-search", "Search"},
+	} {
+		if got := onlyName(paneNames, pair.paneID); got != pair.wantName {
+			t.Errorf("the pane calls %s %q, want %q", pair.feature, got, pair.wantName)
+		}
+		if got := onlyName(fileNames, pair.filesID); got != pair.wantName {
+			t.Errorf("the Files plugin calls %s %q, want %q", pair.feature, got, pair.wantName)
+		}
+	}
+
+	// And nothing else in the Files plugin may answer to one of those names,
+	// or a footer would show the same word twice for two different keys.
+	for id, names := range fileNames {
+		for _, name := range names {
+			if (name == "Find" && id != "quick-open") || (name == "Search" && id != "project-search") {
+				t.Errorf("%q also calls itself %q, which collides with the pair", id, name)
+			}
+		}
+	}
+}
+
+// commandNamesByID maps each command ID to the names it answers to. An ID may
+// legitimately read differently in two contexts ("cancel" is Cancel in one and
+// Close in another), so the map keeps a set and the caller says what it wants.
+func commandNamesByID(t *testing.T, cmds []plugin.Command) map[string][]string {
+	t.Helper()
+	names := map[string][]string{}
+	for _, cmd := range cmds {
+		if !slices.Contains(names[cmd.ID], cmd.Name) {
+			names[cmd.ID] = append(names[cmd.ID], cmd.Name)
+		}
+	}
+	return names
+}
+
+// onlyName is the single name an ID answers to, or "" if it answers to none or
+// to several — either of which is a footer that says two things about one key.
+func onlyName(names map[string][]string, id string) string {
+	if got := names[id]; len(got) == 1 {
+		return got[0]
+	}
 	return ""
 }

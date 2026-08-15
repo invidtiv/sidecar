@@ -263,6 +263,36 @@ func TestNarrowMatchRowsStayDistinguishable(t *testing.T) {
 	}
 }
 
+// Selection is marked the way the finder marks it, on both kinds of row. A
+// background highlight alone is not enough: a proof run at a real terminal
+// concluded that clicking a result did nothing, when the click had in fact
+// moved the cursor onto the row it clicked. The gutter is the same two cells
+// whether or not the row is selected, so nothing shifts as the cursor moves.
+func TestSelectedRowsCarryTheFindersMarker(t *testing.T) {
+	file := SearchFileResult{Path: "internal/app/update.go", Matches: []SearchMatch{
+		{LineNo: 12, LineText: "return p.update(msg)", ColStart: 9, ColEnd: 15},
+	}}
+
+	for _, width := range []int{24, 40, 80} {
+		header := ansi.Strip(renderFileHeader(file, file.Path, true, false, width))
+		if !strings.HasPrefix(header, "> ") {
+			t.Errorf("width %d: selected header does not carry the marker: %q", width, header)
+		}
+		if idle := ansi.Strip(renderFileHeader(file, file.Path, false, false, width)); !strings.HasPrefix(idle, "  ") {
+			t.Errorf("width %d: unselected header does not hold the gutter open: %q", width, idle)
+		}
+
+		gutter := matchGutter([]SearchFileResult{file})
+		match := ansi.Strip(renderMatchLine(file.Matches[0], true, false, width, gutter))
+		if !strings.HasPrefix(match, "> ") {
+			t.Errorf("width %d: selected match line does not carry the marker: %q", width, match)
+		}
+		if idle := ansi.Strip(renderMatchLine(file.Matches[0], false, false, width, gutter)); !strings.HasPrefix(idle, "  ") {
+			t.Errorf("width %d: unselected match line does not hold the gutter open: %q", width, idle)
+		}
+	}
+}
+
 // A pane's search is rooted at that pane's directory, which in a global
 // workspace is often not the checkout on screen. The box says which one it is,
 // in every state — including the one where it found nothing.

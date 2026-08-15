@@ -308,6 +308,42 @@ func TestFooterDropsTabDigitsWhileTextInputHasTheKeyboard(t *testing.T) {
 	}
 }
 
+// The digits were only the first of them. `q` and `?` are global bindings too,
+// and a surface consuming text input has taken those as well: `q` typed into a
+// query is a q, not a quit. Every global hint left standing must name a key the
+// host still acts on, which while typing is ctrl+c alone.
+func TestFooterDropsEveryGlobalKeyTheTextInputHasTaken(t *testing.T) {
+	m := globalFrameModel(t)
+	m.width, m.height, m.ready = 160, 40, true
+
+	idle := m.globalFooterHints()
+	if !containsHint(hintLabels(idle), "quit") || !containsHint(hintLabels(idle), "help") {
+		t.Fatalf("the idle footer is missing quit or help: %v", idle)
+	}
+
+	m.activeContext = "global-workspaces-filter"
+	for _, hint := range m.globalFooterHints() {
+		if hint.keys != "ctrl+c" {
+			t.Errorf("the footer advertised %q (%s) to a focused text input, which types it",
+				hint.keys, hint.label)
+		}
+	}
+	if !containsHint(hintLabels(m.globalFooterHints()), "quit") {
+		t.Errorf("quit lost its remaining way out: %v", m.globalFooterHints())
+	}
+	if containsHint(hintLabels(m.globalFooterHints()), "help") {
+		t.Errorf("help is only bound to `?`, which the input takes, so it must not be advertised")
+	}
+}
+
+func hintLabels(hints []footerHint) []string {
+	labels := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		labels = append(labels, hint.label)
+	}
+	return labels
+}
+
 func tabDigitLabel(m Model) string {
 	if m.inGlobalScope() {
 		return "tabs"

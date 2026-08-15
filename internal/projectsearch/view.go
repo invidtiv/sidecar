@@ -556,25 +556,63 @@ func (s *Search) renderHeader(width int) string {
 	return styles.ModalTitle.Render(header)
 }
 
+// tightRow is the width below which a file header buys columns back from its
+// own chrome — the spaces around the chevron and the match count. It is set
+// where the cells actually run out rather than at the general "narrow pane"
+// threshold: a 30-column pane leaves a header 24 cells, and at 24 the family of
+// paths under .claude/skills cannot be told apart without them. Above it the
+// row keeps its ordinary spacing, so only the sizes that need the columns pay
+// for the selection gutter.
+const tightRow = 32
+
 // headerIcon is the collapse chevron a file header carries, which is part of
-// the row's budget whichever way it points.
-func headerIcon(file SearchFileResult) string {
+// the row's budget whichever way it points. In a narrow row the space after it
+// goes: the selection gutter to its left already separates it from the rows'
+// left edge.
+func headerIcon(file SearchFileResult, width int) string {
+	chevron := "▼"
 	if file.Collapsed {
-		return "▶ "
+		chevron = "▶"
 	}
-	return "▼ "
+	if width < tightRow {
+		return chevron
+	}
+	return chevron + " "
 }
 
-func headerCount(file SearchFileResult) string {
+// headerCount is the "(3)" a header ends with. Its leading space goes in a
+// narrow row for the same reason the chevron's does; the parentheses already
+// tell it from the path.
+func headerCount(file SearchFileResult, width int) string {
+	if width < tightRow {
+		return fmt.Sprintf("(%d)", len(file.Matches))
+	}
 	return fmt.Sprintf(" (%d)", len(file.Matches))
 }
 
-// headerPathWidth is what a file header has left for the path once its chevron
-// and its match count are drawn. It differs per row — a file with 9 hits and a
-// file with 100 do not have the same budget — which is why the list is fitted
-// through ElidePathSetWidths rather than at one shared width.
+// markerWidth is the "> " gutter every row carries, selected or not, so the
+// row's budget does not change when the cursor moves. It is the finder's
+// marker, at the finder's width: one component in two modes says "this row" one
+// way. A background highlight alone is not enough — a proof run concluded that
+// clicking a result did nothing, when the click had in fact moved the cursor to
+// the row it clicked.
+const markerWidth = 2
+
+// selectionMarker is the gutter's contents for a row in the given state.
+func selectionMarker(selected bool) string {
+	if selected {
+		return "> "
+	}
+	return "  "
+}
+
+// headerPathWidth is what a file header has left for the path once its
+// selection gutter, its chevron and its match count are drawn. It differs per
+// row — a file with 9 hits and a file with 100 do not have the same budget —
+// which is why the list is fitted through ElidePathSetWidths rather than at one
+// shared width.
 func headerPathWidth(file SearchFileResult, width int) int {
-	available := width - ansi.StringWidth(headerIcon(file)) - ansi.StringWidth(headerCount(file))
+	available := width - markerWidth - ansi.StringWidth(headerIcon(file, width)) - ansi.StringWidth(headerCount(file, width))
 	if available < 1 {
 		available = 1
 	}
@@ -599,23 +637,25 @@ func elideFileHeaders(files []SearchFileResult, width int) []string {
 // rows are — leading directories first, the parent and the filename last — so a
 // narrow pane does not fill up with rows that all look alike.
 func renderFileHeader(file SearchFileResult, path string, selected, hovered bool, width int) string {
-	icon := headerIcon(file)
-	matchCount := headerCount(file)
+	marker := selectionMarker(selected)
+	icon := headerIcon(file, width)
+	matchCount := headerCount(file, width)
 	if path == "" {
 		path = file.Path
 	}
 
 	if selected || hovered {
 		// Build plain text version for full-width highlight
-		plainLine := icon + path + matchCount
+		plainLine := marker + icon + path + matchCount
 		// Pad to full width
-		if len(plainLine) < width {
-			plainLine += strings.Repeat(" ", width-len(plainLine))
+		if pad := width - ansi.StringWidth(plainLine); pad > 0 {
+			plainLine += strings.Repeat(" ", pad)
 		}
 		return styles.ListItemSelected.Render(plainLine)
 	}
 
-	return fmt.Sprintf("%s%s%s",
+	return fmt.Sprintf("%s%s%s%s",
+		marker,
 		styles.FileBrowserIcon.Render(icon),
 		styles.FileBrowserDir.Render(path),
 		styles.Muted.Render(matchCount),
@@ -643,7 +683,7 @@ func matchGutter(results []SearchFileResult) docview.Gutter {
 // both sides down to the query itself, which renders every row as the same four
 // characters.
 func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutter docview.Gutter) string {
-	indent := matchIndent(width)
+	indent := selectionMarker(selected) + matchIndent(width)
 	lineNum := gutter.Plain(match.LineNo)
 
 	availableWidth := width - ansi.StringWidth(indent) - ansi.StringWidth(lineNum)
@@ -692,14 +732,17 @@ func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutte
 	)
 }
 
-// matchIndent is how far a match row sits under its file header. A narrow pane
-// spends two cells on the hierarchy rather than four; the row's content is
-// worth more than the extra step.
+// matchIndent is how far a match row sits under its file header, beyond the
+// selection gutter every row already carries. A narrow pane spends two cells on
+// the hierarchy rather than four; the row's content is worth more than the
+// extra step. The gutter is the first of those cells, so a match row's total
+// left margin is unchanged by the marker and its text keeps every column it
+// had.
 func matchIndent(width int) string {
 	if width < 60 {
-		return "  "
+		return ""
 	}
-	return "    "
+	return "  "
 }
 
 // runeToByte converts a rune index in s to a byte offset.

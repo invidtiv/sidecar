@@ -1038,6 +1038,8 @@ func (m Model) globalFooterHints() []footerHint {
 
 	var hints []footerHint
 
+	typing := m.textInputFocused()
+
 	// Tab switching hints (consolidated for brevity). The advertised range is
 	// the active scope's own tab count, so the global space never promises a
 	// number that would reach a project plugin.
@@ -1045,7 +1047,7 @@ func (m Model) globalFooterHints() []footerHint {
 	// A focused text input has taken the digits: typing "2" into a file
 	// finder's query is a query, not a tab switch. A footer that advertises a
 	// binding the focused surface has claimed is not a hint, it is wrong.
-	if count := len(m.visibleTabs()); count > 1 && !m.textInputFocused() {
+	if count := len(m.visibleTabs()); count > 1 && !typing {
 		label := "plugins"
 		if m.inGlobalScope() {
 			label = "tabs"
@@ -1053,14 +1055,41 @@ func (m Model) globalFooterHints() []footerHint {
 		hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", min(count, 9)), label: label})
 	}
 
+	// The digits are not the only global binding a text input takes. `q` types
+	// a q into the query and `?` types a question mark: precedence level 2 in
+	// update.go forwards the focused surface everything except ctrl+c. So each
+	// remaining global hint is advertised on the first of its keys that still
+	// reaches the host — which is why quit survives as ctrl+c while help, whose
+	// only key is `?`, drops out entirely rather than promising a key that
+	// types.
 	for _, spec := range specs {
-		keys := keysByCmd[spec.id]
-		if len(keys) == 0 {
+		key, ok := firstReachableKey(keysByCmd[spec.id], typing)
+		if !ok {
 			continue
 		}
-		hints = append(hints, footerHint{keys: keys[0], label: spec.label})
+		hints = append(hints, footerHint{keys: key, label: spec.label})
 	}
 	return hints
+}
+
+// firstReachableKey picks the key a global hint should advertise: the first one
+// bound, or — while a text input has the keyboard — the first one the input has
+// not taken.
+func firstReachableKey(keys []string, typing bool) (string, bool) {
+	for _, key := range keys {
+		if typing && !survivesTextInput(key) {
+			continue
+		}
+		return key, true
+	}
+	return "", false
+}
+
+// survivesTextInput reports whether the host still acts on key while a focused
+// surface is consuming text input. Update's level 2 hands the surface every key
+// but one, so this is the one.
+func survivesTextInput(key string) bool {
+	return key == "ctrl+c"
 }
 
 func (m Model) pluginFooterHints(p plugin.Plugin, context string) []footerHint {

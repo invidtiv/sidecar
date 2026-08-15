@@ -256,8 +256,9 @@ active tab, and each tab's scroll.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `/` | search | Filter files by name |
-| `ctrl+p` | quick-open | Fuzzy file finder |
-| `ctrl+s` | project-search | Project-wide search |
+| `ctrl+p` | quick-open | Find — a file by name (same key, same name as a workspace file pane) |
+| `f` | project-search | Search — the project's contents (ripgrep) |
+| `/` (preview) | search-content | InFile — this file's contents |
 | `a` | create-file | Create new file |
 | `A` | create-dir | Create new directory |
 | `d` | delete | Delete (with confirmation) |

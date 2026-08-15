@@ -404,6 +404,10 @@ func DefaultBindings() []Binding {
 		{Key: "l", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "right", Command: "focus-right", Context: "file-browser-tree"},
 		{Key: "/", Command: "search", Context: "file-browser-tree"},
+		// The same two search surfaces a workspace file pane opens, on the same
+		// two keys and under the same two names: ctrl+p Find finds a file by
+		// name, f Search searches the project's contents. The names say what the
+		// feature does, so the two surfaces cannot drift apart again.
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-tree"},
 		{Key: "f", Command: "project-search", Context: "file-browser-tree"},
 		{Key: "t", Command: "new-tab", Context: "file-browser-tree"},
@@ -433,6 +437,8 @@ func DefaultBindings() []Binding {
 		// File browser preview context
 		{Key: "tab", Command: "switch-pane", Context: "file-browser-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "file-browser-preview"},
+		// `/` is InFile: this file's contents, as against f Search's whole
+		// project and ctrl+p Find's file names.
 		{Key: "/", Command: "search-content", Context: "file-browser-preview"},
 		{Key: "ctrl+p", Command: "quick-open", Context: "file-browser-preview"},
 		{Key: "f", Command: "project-search", Context: "file-browser-preview"},
