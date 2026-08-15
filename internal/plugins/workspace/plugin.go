@@ -1081,7 +1081,15 @@ func (p *Plugin) selectedWorktree() *Worktree {
 	if p.selectedIdx < 0 || p.selectedIdx >= len(p.worktrees) {
 		return nil
 	}
-	return p.worktrees[p.selectedIdx]
+	wt := p.worktrees[p.selectedIdx]
+	// A worktree the list does not offer cannot be the selected surface. The
+	// index still defaults to zero — the main checkout — before anything has
+	// been restored, and without this the preview would open on a workspace
+	// that has no row, which reads as a selection the user cannot find.
+	if !p.listedWorktree(wt) {
+		return nil
+	}
+	return wt
 }
 
 func (p *Plugin) applyTopShellSelection(idx int) {

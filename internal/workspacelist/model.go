@@ -344,11 +344,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
-		title := ""
-		if section.Title != "" {
-			title = SectionTitle(section.Title, len(section.Items))
-		}
-		s := SidebarSection{Title: title}
+		s := SidebarSection{Title: section.Title, Count: len(section.Items)}
 		for _, item := range section.Items {
 			item := item
 			s.Rows = append(s.Rows, SidebarRow{ID: item.ID, Data: item.Data, Render: func(width int, selected, focused bool) []string {

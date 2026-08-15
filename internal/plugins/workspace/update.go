@@ -2005,6 +2005,14 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 		// restore the saved workspace over the one the user just opened.
 		// Re-applying here is a no-op once the selection has been consumed.
 		p.applyPendingWorkspaceSelection()
+		// selectedIdx starts at zero, which is the main checkout, and the list
+		// no longer offers that row. Nothing above guarantees the restored or
+		// default selection is one the user can see, so land it on the first
+		// visible item before any preview loads. This is a no-op whenever the
+		// selection is already visible.
+		if cmd := p.clampSelectionToFilter(); cmd != nil {
+			commands = append(commands, cmd)
+		}
 		if cmd := p.takePaneRestoreCmd(); cmd != nil {
 			commands = append(commands, cmd)
 		}

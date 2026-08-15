@@ -141,7 +141,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	sections := make([]workspacelist.SidebarSection, 0, 2)
 	visibleShells := p.visibleShellIndices()
 	if len(visibleShells) > 0 {
-		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Shells", len(visibleShells)), Action: &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}}
+		section := workspacelist.SidebarSection{Title: "Shells", Count: len(visibleShells), Action: &workspacelist.SidebarAction{ID: regionShellsPlusButton, Label: "+", Hovered: p.hoverShellsPlusButton}}
 		for _, index := range visibleShells {
 			index := index
 			shell := p.shells[index]
@@ -159,7 +159,10 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	}
 	visibleWorktrees := p.visibleWorktreeIndices()
 	if len(visibleWorktrees) > 0 {
-		section := workspacelist.SidebarSection{Title: workspacelist.SectionTitle("Workspaces", len(visibleWorktrees))}
+		// "Worktrees" rather than "Workspaces": the panel itself is titled
+		// Workspaces, and a section repeating that word four rows below it made
+		// the same term mean two different things. These rows are worktrees.
+		section := workspacelist.SidebarSection{Title: "Worktrees", Count: len(visibleWorktrees)}
 		// With no Shells section above it this heading lands one row under the
 		// panel header, whose "New" creates the same thing the "+" would.
 		if len(visibleShells) > 0 {

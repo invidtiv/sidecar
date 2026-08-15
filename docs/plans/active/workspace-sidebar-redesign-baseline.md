@@ -52,14 +52,54 @@ The drift is entirely in **what each caller hands the shared renderer**. That is
 good news for the redesign: most of slices 1 and 2 are changes to two call
 sites and one options struct, not a rewrite.
 
+## Correction to the first capture
+
+The first version of this document reported that "the project row has no age".
+That was an artifact of the fixture, not the product: `renderWorktreeItemKind`
+has always passed an `Age`, and the fixture did not. The fixture has since been
+made faithful to `view_list.go`, and the real asymmetries it then exposed are
+recorded below. The lesson is worth keeping — a fixture that paraphrases a
+caller will confidently report the paraphrase's bugs as the caller's.
+
 ## Findings from the capture
 
-### 1. The project row has no age, and the global row has no manual position
+### 1. The age column existed but was empty, and shells had none at all
 
-Project rows render `marker · kind · name` on line one with nothing
-right-aligned. Global rows render `marker · kind · project · name · age`. Age is
-the plan's field 6 and it simply does not exist project-side. This is the
-largest single row-grammar gap, and it is additive rather than contested.
+Three separate problems wearing one coat:
+
+- **Shell rows passed no `Age`.** Worktree rows did. The one list where the two
+  kinds sit together answered "how long since anything happened here?" for half
+  its rows.
+- **Worktree rows passed an age that was always blank.** Nothing on the
+  discovery path ever set `UpdatedAt`. `snapshotToWorktrees` builds every
+  worktree the sidebar shows and sets neither timestamp, so
+  `formatRelativeTime` was returning `""` for every row in every real session.
+  The dead comment in `parseWorktreeList` — "Will be updated from file stat" —
+  is a promise from a function that no longer has a caller.
+- **Two age formatters.** The project sidebar's `formatRelativeTime` says "now"
+  under a minute; the shared `RelativeAge` says "now" under five seconds and
+  then counts seconds. Same column, two vocabularies.
+
+**Fixed.** Shells report their agent's last output (recorded only when the
+capture actually differed, so an idle session's age climbs instead of resetting
+on every poll) and fall back to creation time. Worktrees report their agent's
+last output and fall back to the worktree directory's modification time, which
+`snapshotToWorktrees` was already stat-ing and discarding. Ages now render:
+`19m`, `12h`, `30m` against a real repository.
+
+The two formatters are still two formatters. Consolidating them is a one-line
+change but it moves the sub-minute wording on both surfaces, which is a visible
+decision rather than a fix — left for the slice that owns the row grammar.
+
+### 1b. Top-level shells had no kind glyph, and a different indent
+
+`renderShellEntryForSession` passed no `Kind`, so a top-level shell was the only
+row in either sidebar with no kind marker — and, because the gutter is narrower
+without one, its second line hung three columns in while every worktree's hung
+five. Two grammars in one list, visible as a ragged left edge.
+
+**Fixed.** Top-level shells carry `❯` like nested shells and like every shell in
+the global list, and both sections now share one gutter.
 
 ### 2. A plain shell always costs two rows even when its second line is empty
 
@@ -73,10 +113,14 @@ that belongs to the row, then the section separator blank. On the global side
 the same waste pushes the entire `No Session (1)` section off an 18-row panel
 while two blank lines sit on screen above it.
 
-This is a real density cost in the surface whose whole job is finding the right
-workspace, and the plan already asks for the correct behaviour ("Plain shells
-omit the empty second line unless another fact exists"). It is a good early win
-in slice 2.
+It bites hardest in global, where the comment in `listItem` is explicit that a
+plain shell "shows nothing" on line two — every plain shell in the global list
+was spending a blank row. Project-side shells always carry a status word, so
+they were never affected, which is why the waste was easy to miss.
+
+**Fixed.** `RenderRow` returns one line when line two would be blank. In the
+56-column capture the global list gains a row and the `Idle` section, which
+previously had its second line cut off, now fits.
 
 ### 3. Narrow widths produce controls that cannot be read or reached
 
@@ -87,22 +131,59 @@ At 18 columns:
 - the section heading loses its count (`Needs Attention …`);
 - the global sort control truncates to `Activi…`.
 
-Nothing degrades in a defined order today; the header just gets clipped from the
-right. The plan's fixed elision priority should apply to chrome as well as rows.
+Nothing degraded in a defined order; the header was just clipped from the right.
+
+**Fixed.** Chrome now degrades in a stated order. A control that cannot be drawn
+beside the whole title is dropped entirely, and its hit region with it — a
+control clipped to `Activi…`, or to a bare `…`, is a target whose meaning a
+reader cannot recover but whose click still fires. A section heading drops its
+action first, then its count, then truncates its name: the heading's job is
+naming what the rows beneath it are, and the panel header already offers the
+same create action the section `+` does.
+
+At 18 columns the global sort control is now absent rather than mangled, and
+`Needs Attention` keeps its name instead of becoming `Needs Attention …`.
 
 ### 4. The two header controls do not look like the same kind of thing
 
-Project renders `New` as a button pill via `styles.Button`. Global renders the
+Project renders `New` as a button pill via `styles.Button`. Global rendered the
 sort label as muted text via `styles.Muted` — same position, same region
-plumbing, but it does not read as pressable, and there is nothing to suggest `s`
-cycles it. The plan's "one shared style: flat at rest, accent on hover" is a
-small change with a large legibility payoff.
+plumbing, but it did not read as pressable, and nothing suggested `s` cycles it.
 
-### 5. The project section heading collides with the panel title
+**Fixed.** One `renderControl` gives every sidebar control the same treatment:
+flat pill at rest, accent pill on hover.
 
-The panel is titled `Workspaces` and its second section is also titled
-`Workspaces (2)`. Two different meanings of the same word, four rows apart. The
-plan's move to `Group by: Kind` grouping is an opportunity to word this once.
+### 5. The project section heading collided with the panel title
+
+The panel is titled `Workspaces` and its second section was also titled
+`Workspaces (2)`. Two meanings of one word, four rows apart.
+
+**Fixed.** The section is now `Worktrees`, which is what its rows are. This is
+an interim wording: once grouping and sorting are user-controlled the sections
+stop being fixed kinds, and the heading should be revisited then.
+
+### 5b. The main checkout was a row that answered nothing
+
+The main worktree rendered with the same marker, glyph, and two-line grammar as
+its neighbours, but it is the project's primary working directory rather than a
+workspace: nothing in the list creates, deletes, merges, or pushes it, and
+selecting it replaced the preview with a static explainer instead of a terminal.
+It read as one more workspace that happened to be inert.
+
+**Fixed.** It is no longer offered as a row, is no longer selectable, and no
+longer draws a chip header. Diffing the main checkout belongs to the Git plugin,
+which owns it.
+
+One exception is deliberate: a main checkout that is *hosting shells* keeps its
+row. That happens when Sidecar is running from inside a worktree, so the main
+checkout's shells nest under its row rather than appearing in the top Shells
+section — hiding the parent would take live sessions off the surface entirely.
+In the ordinary case (Sidecar running in the main checkout, its shells already
+in the Shells section) the row is simply gone.
+
+The default selection needed a matching change: `selectedIdx` starts at zero,
+which *is* the main checkout, so the initial selection is now clamped to the
+first visible row before any preview loads.
 
 ### 6. Global loses its scope cue exactly when it matters least — and most
 
@@ -120,24 +201,26 @@ whose `New` creates the same thing. That instinct is the plan's slice 5
 conclusion, arrived at locally. Removing the section `+` buttons entirely is
 consistent with a decision the code has already half-made.
 
-## Suggested reordering of the plan's slices
+## Still open
 
-Findings 2, 3, and 4 are small, self-contained, independently reviewable, and
-improve the surface for every user immediately — no new concepts, no lifecycle
-risk, no persistence schema. They currently sit inside slices 1 and 2 alongside
-much larger structural work.
+### The global list still shows main checkouts
 
-Worth considering as a first shippable increment before the plan's larger
-structure lands:
+Everything above fixes the *project* sidebar's main-checkout row. The global
+list has the same row, from the same inventory (`listItem` gives it the `◉`
+marker), and it is equally non-actionable there. It is usually invisible because
+an idle main checkout lands in `No Session`, which the `showIdleWorktrees`
+toggle hides by default — but that is a coincidence of the toggle, not a
+decision.
 
-1. collapse the empty second line;
-2. give header/section chrome a defined degradation order;
-3. give both header controls one button style;
-4. add age to the project row.
+It was left alone because the trade-off is genuinely different in global: a
+project with no worktrees would disappear from the list entirely, and the global
+list is also how you discover that a project exists. Worth a decision before the
+scope selector lands.
 
-That is a visible improvement to both sidebars with none of the plan's
-architectural commitments, and it would let the bigger slices be judged against
-an already-tidier baseline.
+### The two age formatters
+
+`formatRelativeTime` and `RelativeAge` still disagree under a minute. See
+finding 1.
 
 ## Open questions for the plan
 

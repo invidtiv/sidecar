@@ -56,10 +56,10 @@ func TestRenderSidebarOwnsSectionsViewportAndTypedGeometry(t *testing.T) {
 
 func TestRenderSidebarSeparatesSectionsAndKeepsRegionsOnTheirRows(t *testing.T) {
 	sections := []SidebarSection{
-		{Title: SectionTitle("Shells", 2), Rows: []SidebarRow{
+		{Title: "Shells", Count: 2, Rows: []SidebarRow{
 			testSidebarRow("shell:a", "alpha", -1), testSidebarRow("shell:b", "beta", -2),
 		}},
-		{Title: SectionTitle("Workspaces", 1), Rows: []SidebarRow{testSidebarRow("wt:a", "topic", 0)}},
+		{Title: "Workspaces", Count: 1, Rows: []SidebarRow{testSidebarRow("wt:a", "topic", 0)}},
 	}
 	// The project sidebar and the global browser configure the same renderer
 	// differently; the section shape they get must not differ.

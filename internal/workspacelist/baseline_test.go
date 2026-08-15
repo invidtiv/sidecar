@@ -103,47 +103,57 @@ func renderGlobalShape(width, height int) string {
 }
 
 // renderProjectShape is how internal/plugins/workspace composes the same
-// records: a "New" header button, fixed Shells/Workspaces sections each with
-// their own "+", no project prefix, and no age column.
+// records: a "New" header button, fixed Shells/Worktrees sections each with
+// their own "+", and no project prefix.
 //
 // It reproduces the plugin's SidebarOptions rather than importing it, because
 // the plugin owns a live tmux/Git model this package must never depend on. The
-// shape is asserted against the plugin's own baseline test, which pins the same
-// headings and separator placement.
+// details below track view_list.go and sidebar_shared.go:
+//
+//   - both kinds carry their glyph and both carry an age, so the two sections
+//     share one gutter width and one right-hand column;
+//   - shell rows always carry a status word on line two ("live", "no session"),
+//     so unlike global they never render an empty second line;
+//   - worktree rows lead line two with a state label ("branch X");
+//   - the main checkout is not offered as a row at all.
 func renderProjectShape(width, height int) string {
-	items := baselineItems()
-	shells := SidebarSection{
-		Title:  SectionTitle("Shells", 0),
-		Action: &SidebarAction{ID: "shells-plus", Label: "+"},
-	}
-	worktrees := SidebarSection{
-		Title:  SectionTitle("Workspaces", 0),
-		Action: &SidebarAction{ID: "workspaces-plus", Label: "+"},
-	}
-	for _, item := range items {
+	shells := SidebarSection{Action: &SidebarAction{ID: "shells-plus", Label: "+"}}
+	worktrees := SidebarSection{Action: &SidebarAction{ID: "workspaces-plus", Label: "+"}}
+	for _, item := range baselineItems() {
 		if item.Project != "sidecar" {
 			continue // project scope shows one project's records only
 		}
+		if item.Name == "main" {
+			continue // the main checkout is not a workspace row
+		}
 		item := item
+		isShell := item.Kind == KindShell
 		row := SidebarRow{ID: item.ID, Data: item.ID, Render: func(w int, selected, focused bool) []string {
-			// The project sidebar renders no project prefix and no age: the
-			// scope is implicit and freshness is not in its row today.
-			return RenderRow(RowPresentation{
-				Marker:        item.Marker,
-				Kind:          item.Kind,
-				Name:          item.Name,
-				Provider:      item.Provider,
-				AfterProvider: []RowField{PlainField(item.Detail)},
-			}, w, selected, focused)
+			presentation := RowPresentation{
+				Marker: item.Marker, Kind: item.Kind, Name: item.Name,
+				Provider: item.Provider, Age: RelativeAge(item.ChangedAt, baselineNow),
+			}
+			if isShell {
+				if item.Provider == "" {
+					presentation.BeforeProvider = []RowField{PlainField("shell")}
+				}
+				presentation.AfterProvider = []RowField{PlainField(item.Status)}
+			} else {
+				presentation.BeforeProvider = []RowField{PlainField("branch " + item.Branch)}
+				if item.Task != "" {
+					presentation.AfterProvider = []RowField{PlainField(item.Task)}
+				}
+			}
+			return RenderRow(presentation, w, selected, focused)
 		}}
-		if item.Kind == KindShell {
+		if isShell {
 			shells.Rows = append(shells.Rows, row)
 		} else {
 			worktrees.Rows = append(worktrees.Rows, row)
 		}
 	}
-	shells.Title = SectionTitle("Shells", len(shells.Rows))
-	worktrees.Title = SectionTitle("Workspaces", len(worktrees.Rows))
+	shells.Title, shells.Count = "Shells", len(shells.Rows)
+	worktrees.Title, worktrees.Count = "Worktrees", len(worktrees.Rows)
 	return RenderSidebar(SidebarOptions{
 		Width: width, Height: height, Title: "Workspaces", Focused: true,
 		SelectedID:   "sidecar:fix-terminal-resize",

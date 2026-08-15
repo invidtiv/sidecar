@@ -29,11 +29,19 @@ type SidebarRow struct {
 
 // SidebarSection is a headed run of rows. The optional action is commonly the
 // project's create-shell/create-worktree affordance; global sections omit it.
+//
+// Title is the bare name ("Shells", "Needs Attention") and Count is rendered
+// beside it. They are kept apart rather than pre-joined so a narrow heading can
+// drop the count and still name its rows. An empty Title means an unheaded run.
 type SidebarSection struct {
 	Title  string
+	Count  int
 	Action *SidebarAction
 	Rows   []SidebarRow
 }
+
+// heading is the section's widest form: name and count together.
+func (s SidebarSection) heading() string { return SectionTitle(s.Title, s.Count) }
 
 // SidebarOptions contains only resolved presentation state. Collection,
 // selection side effects, preview loading and mutations stay with the caller.
@@ -234,44 +242,65 @@ func sidebarRowLines(rendered []string) []string {
 	return lines
 }
 
+// renderControl gives every sidebar control one style: a flat pill at rest and
+// an accent pill on hover. Project's "New" and global's view control sit in the
+// same place and do the same kind of job, so they may not read as two different
+// species of thing — one a button, the other a muted caption that gives no clue
+// it can be pressed.
+func renderControl(action *SidebarAction) string {
+	style := styles.Button
+	if action.Hovered {
+		style = styles.ButtonHover
+	}
+	return styles.RenderPillWithStyle(action.Label, style, nil)
+}
+
+// sidebarHeader lays out the panel title and its single right-hand control.
+//
+// Chrome degrades in a defined order rather than clipping. A control that
+// cannot be drawn beside the whole title is dropped entirely, and its hit
+// region with it, because a control clipped to "Activi…" — or to a bare "…" —
+// is a target whose meaning a reader cannot recover but whose click still
+// fires. Losing the control at 18 columns costs the user a mouse affordance
+// they still have a key for; keeping a mystery button costs them a wrong action.
 func sidebarHeader(title string, action, meta *SidebarAction, width int) (string, int, int) {
 	right := action
 	if right == nil {
 		right = meta
 	}
+	plain := styles.Title.Render(title)
 	if right == nil || right.Label == "" {
-		return styles.Title.Render(title), 0, 0
+		return plain, 0, 0
 	}
-	label := right.Label
-	if action != nil {
-		style := styles.Button
-		if right.Hovered {
-			style = styles.ButtonHover
-		}
-		label = styles.RenderPillWithStyle(label, style, nil)
-	} else {
-		label = styles.Muted.Render(label)
-	}
+	label := renderControl(right)
 	w := ansi.StringWidth(label)
-	x := max(0, width-w)
-	gap := max(1, x-ansi.StringWidth(title))
-	return styles.Title.Render(title) + strings.Repeat(" ", gap) + label, x, w
+	if ansi.StringWidth(title)+1+w > width {
+		return plain, 0, 0
+	}
+	x := width - w
+	return plain + strings.Repeat(" ", x-ansi.StringWidth(title)) + label, x, w
 }
 
+// sidebarSectionHeader lays out one section heading and its optional action.
+//
+// The degradation order is deliberate: the action goes first, then the count,
+// then the name truncates. A heading's job is naming what the rows beneath it
+// are, and the panel header already offers the same create action the section
+// "+" does — so when the two compete for a narrow row, the words win.
 func sidebarSectionHeader(section SidebarSection, width int) (string, int, int) {
-	title := styles.Muted.Render(section.Title)
-	if section.Action == nil || section.Action.Label == "" {
-		return title, 0, 0
+	full := section.heading()
+	if section.Action != nil && section.Action.Label != "" {
+		button := renderControl(section.Action)
+		w := ansi.StringWidth(button)
+		if ansi.StringWidth(full)+1+w <= width {
+			x := width - w
+			return styles.Muted.Render(full) + strings.Repeat(" ", x-ansi.StringWidth(full)) + button, x, w
+		}
 	}
-	style := styles.Button
-	if section.Action.Hovered {
-		style = styles.ButtonHover
+	if ansi.StringWidth(full) > width {
+		full = section.Title
 	}
-	button := styles.RenderPillWithStyle(section.Action.Label, style, nil)
-	w := ansi.StringWidth(button)
-	x := max(0, width-w)
-	gap := max(1, x-ansi.StringWidth(title))
-	return title + strings.Repeat(" ", gap) + button, x, w
+	return styles.Muted.Render(full), 0, 0
 }
 
 // MoveIndex applies the shared clamped selection semantics used by keyboard

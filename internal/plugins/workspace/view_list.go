@@ -334,7 +334,7 @@ func (p *Plugin) renderWorktreeItemKind(wt *Worktree, selected bool, width int, 
 		after = append(after, workspacelist.RowField{Text: "⚠ session ended", Rendered: styles.StatusModified.Render("⚠ session ended")})
 	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Kind: kind, Name: name, Age: formatRelativeTime(wt.UpdatedAt), NameMeta: nameMeta,
+		Marker: marker, Kind: kind, Name: name, Age: worktreeAge(wt), NameMeta: nameMeta,
 		BeforeProvider: before, Provider: provider, AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")
@@ -391,7 +391,11 @@ func (p *Plugin) worktreeStateLabels(wt *Worktree) []string {
 
 // renderShellEntryForSession renders a shell entry for a specific shell session.
 func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, width int) string {
-	return p.renderShellEntry(shell, selected, width, 0, "")
+	// Top-level shells carry the same kind glyph as nested ones and as every
+	// shell in the global list. Without it a shell row was the only row in
+	// either sidebar with no kind, and its second line hung three columns in
+	// while every worktree's hung five — two grammars in one list.
+	return p.renderShellEntry(shell, selected, width, 0, workspacelist.KindShell)
 }
 
 func (p *Plugin) renderNestedShellEntry(shell *ShellSession, selected bool, width int) string {
@@ -457,10 +461,42 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 		nameMeta = append(nameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
 	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Kind: kind, Name: shell.Name, NameMeta: nameMeta, BeforeProvider: before,
+		Marker: marker, Kind: kind, Name: shell.Name, Age: shellAge(shell), NameMeta: nameMeta, BeforeProvider: before,
 		Provider: string(provider), AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")
+}
+
+// worktreeAge is the freshness a worktree row reports. A live agent's last
+// output wins: it moves when work actually happens, including work several
+// directories deep that never touches the worktree root's timestamp. Without a
+// session there is nothing to observe but the directory itself.
+func worktreeAge(wt *Worktree) string {
+	if wt == nil {
+		return ""
+	}
+	if wt.Agent != nil && !wt.Agent.LastOutput.IsZero() {
+		return formatRelativeTime(wt.Agent.LastOutput)
+	}
+	return formatRelativeTime(wt.UpdatedAt)
+}
+
+// shellAge is the freshness a shell row reports, in the same column and the
+// same units a worktree row uses. Worktree rows have shown an age all along and
+// shell rows have not, which left the one list where the two sit together
+// answering "how long since anything happened here?" for half its rows.
+//
+// Last output is the meaningful change: it is recorded only when the capture
+// actually differed, so an idle session's age keeps climbing instead of resetting
+// on every poll. A shell with no session yet falls back to when it was created.
+func shellAge(shell *ShellSession) string {
+	if shell == nil {
+		return ""
+	}
+	if shell.Agent != nil && !shell.Agent.LastOutput.IsZero() {
+		return formatRelativeTime(shell.Agent.LastOutput)
+	}
+	return formatRelativeTime(shell.CreatedAt)
 }
 
 func healthMarkerTone(icon string) workspacelist.MarkerTone {
