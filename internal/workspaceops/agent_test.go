@@ -7,17 +7,71 @@ import (
 	"testing"
 )
 
-type fakeTmuxRunner struct{ calls [][]string }
+type fakeTmuxRunner struct {
+	calls             [][]string
+	sessionExists     bool
+	failSendSubstring string
+}
 
 func (r *fakeTmuxRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "has-session" {
+		if r.sessionExists {
+			return nil, nil
+		}
 		return nil, errors.New("missing")
+	}
+	if len(args) > 0 && args[0] == "new-session" {
+		r.sessionExists = true
+	}
+	if len(args) > 0 && args[0] == "kill-session" {
+		r.sessionExists = false
+	}
+	if len(args) > 3 && args[0] == "send-keys" && r.failSendSubstring != "" && strings.Contains(args[3], r.failSendSubstring) {
+		return []byte("send failed"), errors.New("send failed")
 	}
 	if len(args) > 0 && args[0] == "list-panes" {
 		return []byte("%7\n"), nil
 	}
 	return nil, nil
+}
+
+func TestLaunchWorktreeSessionCleansUpFailedNewSessionBeforeRetry(t *testing.T) {
+	for _, failCommand := range []string{"TD_SESSION_ID", "CUSTOM_FLAG", "td start"} {
+		t.Run(failCommand, func(t *testing.T) {
+			runner := &fakeTmuxRunner{failSendSubstring: failCommand}
+			spec := AgentLaunchSpec{
+				SessionName: "sidecar-ws-topic", WorkDir: "/tmp/topic", AgentCommand: "codex-custom", TaskID: "td-123",
+				Env: map[string]string{"CUSTOM_FLAG": "from-file"}, StartAgent: true,
+			}
+			if _, err := LaunchWorktreeSessionWithRunner(context.Background(), spec, runner); err == nil {
+				t.Fatalf("%s setup failure unexpectedly succeeded", failCommand)
+			}
+			if runner.sessionExists {
+				t.Fatal("failed launch left the newly created session behind")
+			}
+			if got := strings.Join(flattenCalls(runner.calls), "\n"); !strings.Contains(got, "kill-session -t sidecar-ws-topic") {
+				t.Fatalf("failed launch did not clean up session:\n%s", got)
+			}
+
+			runner.failSendSubstring = ""
+			result, err := LaunchWorktreeSessionWithRunner(context.Background(), spec, runner)
+			if err != nil {
+				t.Fatalf("retry launch: %v", err)
+			}
+			if result.Reconnected {
+				t.Fatal("retry falsely reconnected to the failed launch session")
+			}
+		})
+	}
+}
+
+func flattenCalls(calls [][]string) []string {
+	flat := make([]string, 0, len(calls))
+	for _, call := range calls {
+		flat = append(flat, strings.Join(call, " "))
+	}
+	return flat
 }
 
 func TestLaunchWorktreeSessionRunsEnvironmentTaskAndAgent(t *testing.T) {

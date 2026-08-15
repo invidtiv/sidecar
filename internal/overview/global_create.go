@@ -512,21 +512,19 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	if plan == nil || record == nil {
 		return nil
 	}
-	if plan.AgentType == "" {
-		m.pendingCreatedPath = record.Path
-		m.showIdleWorktrees = true
-		m.closeCreateShell()
-		return m.refreshProjectAfterMutation(project)
-	}
 	configured := map[string]string(nil)
 	if m.config != nil {
 		configured = m.config.Plugins.Workspace.AgentStart
 	}
-	command := workspaceops.ResolveAgentCommand(record.Path, plan.AgentType, configured, plan.SkipPerms)
+	startAgent := plan.AgentType != ""
+	command := ""
+	if startAgent {
+		command = workspaceops.ResolveAgentCommand(record.Path, plan.AgentType, configured, plan.SkipPerms)
+	}
 	spec := workspaceops.AgentLaunchSpec{
 		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
 		AgentCommand: command, TaskID: plan.TaskID, Env: workspaceops.BuildEnvOverrides(plan.MainWorktree),
-		StartAgent: true,
+		StartAgent: startAgent,
 	}
 	m.createBusy = true
 	m.createModal = nil

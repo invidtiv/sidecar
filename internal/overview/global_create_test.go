@@ -165,6 +165,31 @@ func TestGlobalWorktreeLaunchesConfiguredAgentBeforeRefresh(t *testing.T) {
 	}
 }
 
+func TestGlobalWorktreeWithoutAgentStillLaunchesPlainWorktreeSession(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateWorktree("")
+	plan := &workspaceops.WorktreePlan{MainWorktree: t.TempDir(), Path: t.TempDir(), Branch: "created"}
+	record := &workspaceops.WorktreeRecord{Path: plan.Path, Name: "Created", Branch: plan.Branch, HEADOID: "abc"}
+	originalRemove, originalLaunch := removeGlobalJournal, launchGlobalSession
+	defer func() { removeGlobalJournal, launchGlobalSession = originalRemove, originalLaunch }()
+	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { return nil }
+	var spec workspaceops.AgentLaunchSpec
+	launchGlobalSession = func(_ context.Context, got workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		spec = got
+		return workspaceops.AgentLaunchResult{SessionName: got.SessionName, PaneID: "%1"}, nil
+	}
+	launchCmd := m.update(globalWorktreeCreatedMsg{Project: m.projects[0], Plan: plan, Record: record})
+	if launchCmd == nil {
+		t.Fatal("plain worktree closed and refreshed without launching its session")
+	}
+	if _, ok := launchCmd().(globalWorkspaceLaunchedMsg); !ok {
+		t.Fatalf("plain worktree launch returned unexpected message")
+	}
+	if spec.StartAgent || spec.AgentCommand != "" || spec.WorkDir != plan.Path {
+		t.Fatalf("plain worktree launch spec = %+v", spec)
+	}
+}
+
 func TestCreatedWorktreeSelectionFollowsAcrossSortsAndTinyViewport(t *testing.T) {
 	for _, sortMode := range workspacelist.SortModes {
 		t.Run(sortMode.Label(), func(t *testing.T) {

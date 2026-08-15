@@ -154,6 +154,12 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 	if err := newSession("new-session", "-d", "-s", spec.SessionName, "-c", spec.WorkDir); err != nil {
 		return result, fmt.Errorf("create session: %w", err)
 	}
+	failCreatedSession := func(err error) (AgentLaunchResult, error) {
+		if _, cleanupErr := runner.Run(context.Background(), "kill-session", "-t", spec.SessionName); cleanupErr != nil {
+			return result, fmt.Errorf("%w; cleanup session: %v", err, cleanupErr)
+		}
+		return result, err
+	}
 	send := func(command string) error {
 		if command == "" {
 			return nil
@@ -165,24 +171,23 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 		return nil
 	}
 	if err := send("export TD_SESSION_ID=" + ShellQuote(spec.SessionName)); err != nil {
-		return result, err
+		return failCreatedSession(err)
 	}
 	if err := send(GenerateSingleEnvCommand(spec.Env)); err != nil {
-		return result, err
+		return failCreatedSession(err)
 	}
 	if spec.TaskID != "" {
 		if err := send("td start " + ShellQuote(spec.TaskID)); err != nil {
-			return result, err
+			return failCreatedSession(err)
 		}
 	}
 	if spec.StartAgent {
 		if strings.TrimSpace(spec.AgentCommand) == "" {
-			return result, fmt.Errorf("agent command is empty")
+			return failCreatedSession(fmt.Errorf("agent command is empty"))
 		}
 		time.Sleep(100 * time.Millisecond)
 		if err := send(spec.AgentCommand); err != nil {
-			_, _ = runner.Run(context.Background(), "kill-session", "-t", spec.SessionName)
-			return result, fmt.Errorf("start agent: %w", err)
+			return failCreatedSession(fmt.Errorf("start agent: %w", err))
 		}
 	}
 	result.PaneID = paneIDWithRunner(ctx, spec.SessionName, runner)
