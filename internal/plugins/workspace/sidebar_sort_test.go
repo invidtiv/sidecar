@@ -223,3 +223,55 @@ func indexOf(names []string, want string) int {
 	}
 	return -1
 }
+
+// v opens the View surface and it owns the keyboard while open, so a stray key
+// cannot fall through to a project command that creates or deletes something.
+func TestViewFlyoutOpensOnVAndOwnsTheKeyboard(t *testing.T) {
+	p := sortPlugin(t)
+	if p.viewFlyoutActive() {
+		t.Fatal("View opened itself")
+	}
+	pressList(p, "v")
+	if !p.viewFlyoutActive() {
+		t.Fatal("v did not open View")
+	}
+
+	// "n" would otherwise start creating a workspace.
+	before := p.viewMode
+	pressList(p, "n")
+	if p.viewMode != before {
+		t.Fatalf("a key fell through the View surface into %v", p.viewMode)
+	}
+	pressList(p, "v")
+	if p.viewFlyoutActive() {
+		t.Fatal("v did not close View again")
+	}
+}
+
+// Picking a mode from the surface applies it and closes.
+func TestViewFlyoutAppliesTheChosenSort(t *testing.T) {
+	p := sortPlugin(t)
+	p.openViewFlyout()
+	if cmd := p.applyViewFlyoutAction(workspacelist.SortActionID(workspacelist.SortActivity)); cmd != nil {
+		_ = cmd()
+	}
+	if p.listSort != workspacelist.SortActivity {
+		t.Fatalf("sort = %s, want Activity", p.listSort.Label())
+	}
+	if p.viewFlyoutActive() {
+		t.Fatal("View stayed open after a choice")
+	}
+}
+
+// V still reaches the kanban board now that v is spoken for.
+func TestCapitalVTogglesKanban(t *testing.T) {
+	p := sortPlugin(t)
+	pressList(p, "V")
+	if p.viewMode != ViewModeKanban {
+		t.Fatalf("V left view mode at %v, want kanban", p.viewMode)
+	}
+	pressList(p, "V")
+	if p.viewMode != ViewModeList {
+		t.Fatalf("V did not return to the list: %v", p.viewMode)
+	}
+}

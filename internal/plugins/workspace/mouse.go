@@ -249,6 +249,12 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// split SGR report from a typed one, and the component owns it.
 	p.noteTerminalMouseActivity()
 
+	// The View surface hit-tests its own regions, so a click inside it cannot
+	// reach the list underneath.
+	if p.viewFlyoutActive() {
+		return p.handleViewFlyoutMouse(msg)
+	}
+
 	if p.docInfo != nil {
 		if p.docInfo.HandleMouse(msg, p.mouseHandler) {
 			p.closeDocInfo()

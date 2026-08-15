@@ -92,6 +92,9 @@ func (p *Plugin) View(width, height int) string {
 		if p.docInfo != nil {
 			view = ui.OverlayModal(view, p.docInfo.Render(width, height, p.mouseHandler), width, height)
 		}
+		if p.viewFlyoutActive() {
+			view = p.overlayViewFlyout(view, width, height)
+		}
 	}
 	p.wheelViewCache = view
 	p.wheelViewCacheW = width

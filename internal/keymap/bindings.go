@@ -543,7 +543,11 @@ func DefaultBindings() []Binding {
 		// Worktree context
 		{Key: "n", Command: "new-workspace", Context: "workspace-list"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "workspace-list"},
-		{Key: "v", Command: "toggle-view", Context: "workspace-list"},
+		// v opens View here as it does in the global browser; the kanban toggle
+		// moved to V so the two surfaces spend their obvious "view" key on the
+		// same thing.
+		{Key: "v", Command: "open-view", Context: "workspace-list"},
+		{Key: "V", Command: "toggle-view", Context: "workspace-list"},
 		{Key: "r", Command: "refresh", Context: "workspace-list"},
 		{Key: "D", Command: "delete-workspace", Context: "workspace-list"},
 		{Key: "d", Command: "show-diff", Context: "workspace-list"},

@@ -103,7 +103,7 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
 | `i` | Find TD task (`open-issue`). Not interactive |
 | `/` | Filter |
-| `s` | Sort |
+| `v` / `s` | Open View: sort the list. `v` matches the project sidebar; `s` is the original alias |
 | `\` | Toggle sidebar |
 | `esc` | Leave the global space (or clear the filter first) |
 | `q` | Quit Sidecar (confirmation modal) |
@@ -309,7 +309,8 @@ active tab, and each tab's scroll.
 |-----|---------|-------------|
 | `n` | new-workspace | Create new workspace |
 | `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
-| `v` | toggle-view | Toggle list/kanban |
+| `v` | open-view | Open View: sort the list (Manual, Activity, Recent, Name) |
+| `V` | toggle-view | Toggle list/kanban |
 | `D` | delete-workspace | Delete workspace / delete shell (confirm) |
 | `d` | show-diff | Open working-tree Diff leaf |
 | `p` | push | Push branch |

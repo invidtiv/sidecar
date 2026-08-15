@@ -166,24 +166,14 @@ func (m *Model) persistIdleAndSync() tea.Cmd {
 	return m.previewSync()
 }
 
+// The sort vocabulary is workspacelist's so the project sidebar's View surface
+// and this one cannot name the same choice differently.
 func sortIndex(mode workspacelist.Sort) int {
-	for i, candidate := range workspacelist.SortModes {
-		if candidate == mode {
-			return i
-		}
-	}
-	return 0
+	return workspacelist.SortIndex(mode, workspacelist.SortModes)
 }
 
-func sortActionID(mode workspacelist.Sort) string {
-	return "sort-" + mode.Label()
-}
+func sortActionID(mode workspacelist.Sort) string { return workspacelist.SortActionID(mode) }
 
 func sortFromAction(action string) (workspacelist.Sort, bool) {
-	for _, mode := range workspacelist.SortModes {
-		if action == sortActionID(mode) {
-			return mode, true
-		}
-	}
-	return 0, false
+	return workspacelist.SortFromAction(action, workspacelist.SortModes)
 }

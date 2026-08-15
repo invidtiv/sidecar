@@ -198,10 +198,15 @@ type Plugin struct {
 	// listSort orders the sidebar. Manual is the default and means the fixed
 	// Shells/Worktrees structure with shells nested under their worktree; every
 	// other mode is a computed order over one flat list. See sortedNavSections.
-	listSort         workspacelist.Sort
-	flashPreviewTime time.Time // When preview flash was triggered
-	toastMessage     string    // Temporary toast message to display
-	toastTime        time.Time // When toast was triggered
+	listSort workspacelist.Sort
+	// viewFlyout is the sidebar's View surface, open only while non-nil.
+	viewFlyout        *modal.Modal
+	viewFlyoutMouse   *mouse.Handler
+	viewFlyoutWidth   int
+	viewFlyoutSortIdx int
+	flashPreviewTime  time.Time // When preview flash was triggered
+	toastMessage      string    // Temporary toast message to display
+	toastTime         time.Time // When toast was triggered
 
 	// Preview pane tree state. A nil root retains the legacy path while the
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;

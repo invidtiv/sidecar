@@ -442,7 +442,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		cmd := m.focusList()
 		m.workspaces.FocusFilter()
 		return true, cmd
-	case "s":
+	case "v", "s":
+		// v is the shared key for View, matching the project sidebar. s stays
+		// as an alias because it is what this surface has always answered to.
 		m.openViewFlyout()
 		return true, nil
 	case "p":

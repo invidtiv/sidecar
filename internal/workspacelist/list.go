@@ -142,6 +142,32 @@ func (s Sort) Label() string {
 	}
 }
 
+// SortActionID names the choice a View surface reports when a sort is picked.
+// Both surfaces build their own sections — they offer different modes and
+// different extra toggles — but they must not invent two names for the same
+// choice, or a shared handler would answer to one and ignore the other.
+func SortActionID(mode Sort) string { return "sort-" + mode.Label() }
+
+// SortFromAction resolves an action ID back to a mode within the offered set.
+func SortFromAction(action string, modes []Sort) (Sort, bool) {
+	for _, mode := range modes {
+		if action == SortActionID(mode) {
+			return mode, true
+		}
+	}
+	return 0, false
+}
+
+// SortIndex is a mode's position in the offered set, for a list cursor.
+func SortIndex(mode Sort, modes []Sort) int {
+	for i, candidate := range modes {
+		if candidate == mode {
+			return i
+		}
+	}
+	return 0
+}
+
 // Next cycles to the following sort mode.
 func (s Sort) Next() Sort {
 	for i, mode := range SortModes {
