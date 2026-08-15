@@ -972,11 +972,8 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 // ensurePreviewCursorVisible adjusts preview scroll offset to keep cursor visible.
 // Uses last known height from the view dimensions.
 func (p *Plugin) ensurePreviewCursorVisible() {
-	contentHeight := p.height - 2 - 1 // borders - status header
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-	p.ensurePreviewCursorVisibleWithHeight(contentHeight)
+	height, width := p.previewViewport()
+	p.ensurePreviewCursorVisibleWithHeight(height, width)
 }
 
 // trackTextareaScroll updates previewScrollOff to approximate the textarea's viewport

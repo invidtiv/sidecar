@@ -55,3 +55,25 @@ func TestFilterInputDoesNotAskCoveredPluginUnderModal(t *testing.T) {
 }
 
 var _ plugin.WheelBoundaryConsumer = (*wheelBoundaryPlugin)(nil)
+
+// The global scope routes the wheel by visible tab. Asking a surface that is
+// not on screen would answer for the wrong thing, so the filter must follow
+// globalMouse's precedence rather than falling through to Tasks.
+func TestGlobalWheelFollowsTheVisibleTab(t *testing.T) {
+	m := globalFrameModel(t)
+	m.width, m.height, m.ready = 140, 40, true
+
+	m.globalTab = GlobalAgents
+	m.updateContext()
+	if m.overview == nil {
+		t.Skip("overview is not built in this baseline model")
+	}
+	// The Agents board must be consulted, not the hosted Tasks surface. An
+	// unrendered board answers unknown; the point is that it is asked at all.
+	if got := m.wheelAtBoundary(wheelAt(10, 10, true)); got {
+		t.Errorf("unrendered agents board = %v, want false (unknown)", got)
+	}
+	if m.globalTasksFocused() {
+		t.Fatal("globalTasksFocused is true while the Agents tab is visible")
+	}
+}

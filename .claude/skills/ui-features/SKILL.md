@@ -253,6 +253,47 @@ Pattern: reduce content width by 1, render content, render scrollbar, join horiz
 
 For multi-line items, set `TrackHeight` to actual terminal rows: `visibleCount * linesPerItem`.
 
+## Wheel boundaries (required for every new scrollable surface)
+
+Trackpad and Magic Mouse flicks emit hundreds of inertial wheel events. Bubble Tea
+repaints all of Sidecar after every accepted one, so clamping an offset during
+`Update` is too late — the freeze happens before the clamp helps. `tea.WithFilter(app.FilterInput)`
+asks one read-only question *before* `Update` and `View`:
+
+> Would this exact wheel event change the surface currently under the pointer?
+
+**Rule: every new scrollable surface or modal must provide exact pre-update
+bounds, or explicitly declare why its answer is unknown.** "Unknown" is a valid,
+safe answer — guessing is not. Return `true` only when the event is a certain
+no-op.
+
+How to comply:
+
+1. Implement `plugin.WheelBoundaryConsumer` on the plugin
+   (`WheelAtBoundary(tea.MouseWheelMsg) bool`) and add
+   `var _ plugin.WheelBoundaryConsumer = (*Plugin)(nil)`.
+2. Mirror `handleMouseScroll`'s routing exactly — same hit map, same modal
+   precedence — but load nothing, move nothing, render nothing.
+3. Derive the maximum from the same helper the renderer clamps with
+   (`internal/scroll.Bounds`), never a second copy of the arithmetic.
+4. Declarative modals answer for themselves via
+   `modal.WheelAtBoundary(msg, handler)`; the host only owns precedence between
+   a modal, a nested overlay, and a custom scrolling child.
+   Call `Invalidate()` when content or geometry changes so a stale layout
+   answers unknown instead of wrong.
+5. Return `false` (unknown) for: embedded models you do not own, tmux panes with
+   mouse reporting, scrollback with unloaded history, lazy lists that can load
+   more, and anything before its first trustworthy render.
+6. Declare the surface's policy in `assembly.WheelBoundaryRegistry`
+   (`covered` / `externally-owned` / `deprecated-exclusion`). A new plugin
+   without a row fails the assembly tests; a new `ModalKind` without a row fails
+   `TestEveryModalKindHasALedgerRow` in `internal/app`.
+7. Prove it with the shared stress fixture `internal/scroll/scrolltest`:
+   `scrolltest.Run(t, scrolltest.Tail{...})` feeds hundreds of same-direction
+   events and one reverse event, with no sleeps.
+
+Background: `docs/plans/active/scroll-inertia-complete-coverage.md`.
+
 ## Mouse Support
 
 ### Setup

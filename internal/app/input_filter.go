@@ -33,12 +33,11 @@ func FilterInput(model tea.Model, msg tea.Msg) tea.Msg {
 }
 
 func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	// App-level overlays own their input and several contain independently
-	// focused lists. Keep forwarding until those surfaces expose the same exact
-	// boundary contract; a false negative costs a repaint, a false positive
-	// makes scrolling feel broken.
+	// An open app-level overlay owns every mouse event: the plugin underneath
+	// it must never be consulted. Each ModalKind answers for itself, in the same
+	// precedence order Update and View use.
 	if m.hasModal() {
-		return false
+		return m.activeModalWheelAtBoundary(msg)
 	}
 
 	local := offsetMouseY(msg, -headerHeight)
@@ -47,11 +46,20 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return false
 	}
 	if m.inGlobalScope() {
-		if m.globalWorkspacesVisible() && m.overview != nil {
+		// Mirror globalMouse's precedence exactly. Asking a surface that is not
+		// the visible tab would answer for something off screen: once Tasks
+		// gains a boundary contract, a wheel over the Agents board would be
+		// answered by Tasks and legitimately swallowed.
+		switch {
+		case m.globalTasksFocused():
+			if consumer, ok := m.globalTasksPlugin().(plugin.WheelBoundaryConsumer); ok {
+				return consumer.WheelAtBoundary(wheel)
+			}
+			return false
+		case m.globalTab == GlobalAgents && m.overview != nil:
+			return m.overview.BoardWheelAtBoundary(wheel)
+		case m.globalWorkspacesVisible():
 			return m.overview.WorkspacesWheelAtBoundary(wheel)
-		}
-		if consumer, ok := m.globalTasksPlugin().(plugin.WheelBoundaryConsumer); ok {
-			return consumer.WheelAtBoundary(wheel)
 		}
 		return false
 	}

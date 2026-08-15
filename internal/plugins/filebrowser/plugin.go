@@ -1165,6 +1165,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else {
 				p.blameState.Lines = msg.Lines
 			}
+			// The modal's sections read blameState live, so its cached layout
+			// bounds no longer describe the content that will be rendered.
+			if p.blameModal != nil {
+				p.blameModal.Invalidate()
+			}
 		}
 		return p, nil
 

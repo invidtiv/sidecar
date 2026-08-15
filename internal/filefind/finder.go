@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -500,4 +501,28 @@ func highlightRanges(text string, ranges []MatchRange, base, hl func(string) str
 	}
 
 	return result.String()
+}
+
+// WheelAtBoundary reports whether a wheel event is certainly a no-op for the
+// finder. The wheel moves the match cursor wherever the pointer is, so only the
+// cursor bounds matter. A scan still in flight can add matches, so it is never
+// bounded.
+//
+// True means "certain no-op"; false means the cursor can move, or the answer is
+// unknown. It performs no scans and mutates nothing.
+func (f *Finder) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if f == nil || (f.Cache != nil && f.Cache.Scanning) {
+		return false
+	}
+	// Mirrors the ±3 HandleMouse applies to the cursor.
+	delta := 3
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		delta = -3
+	case tea.MouseWheelDown:
+	default:
+		// Horizontal and shift wheel are outside the vertical contract.
+		return false
+	}
+	return (scroll.Bounds{Position: f.cursor, Maximum: len(f.matches) - 1}).AtBoundary(delta)
 }

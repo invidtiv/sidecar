@@ -3,6 +3,7 @@ package modal
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll"
 )
 
 // Modal represents a declarative modal dialog with automatic hit region management.
@@ -27,6 +28,12 @@ type Modal struct {
 	// Focus-scroll tracking (cached during buildLayout)
 	focusPositions map[string]focusablePos // Absolute Y positions of focusable elements
 	lastViewportH  int                     // Viewport height from last render
+
+	// Render-derived scroll bounds, cached during buildLayout. layoutValid is
+	// false until the first render and whenever the cached geometry can no
+	// longer be trusted (see Invalidate).
+	lastMaxScroll int
+	layoutValid   bool
 }
 
 // focusablePos records the absolute position of a focusable element within the full content.
@@ -55,7 +62,17 @@ func New(title string, opts ...Option) *Modal {
 // AddSection adds a section to the modal. Returns the modal for chaining.
 func (m *Modal) AddSection(s Section) *Modal {
 	m.sections = append(m.sections, s)
+	m.Invalidate()
 	return m
+}
+
+// Invalidate marks the cached layout bounds as untrustworthy. Call it whenever
+// the modal's content changes outside a render (for example when an async load
+// replaces the text a Custom section draws). Until the next Render, boundary
+// queries answer "unknown" rather than guessing.
+func (m *Modal) Invalidate() {
+	m.layoutValid = false
+	m.lastMaxScroll = 0
 }
 
 // Render renders the modal and registers hit regions.
@@ -161,14 +178,13 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 
 	case mouse.ActionScrollUp:
 		if action.Region != nil && action.Region.ID == "modal-body" {
-			m.scrollOffset = max(0, m.scrollOffset-3)
+			m.ScrollBy(-wheelLines)
 		}
 		return ""
 
 	case mouse.ActionScrollDown:
 		if action.Region != nil && action.Region.ID == "modal-body" {
-			m.scrollOffset += 3
-			// Clamping happens in buildLayout
+			m.ScrollBy(wheelLines)
 		}
 		return ""
 	}
@@ -176,16 +192,92 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 	return ""
 }
 
+// wheelLines is how far one wheel notch moves the modal body.
+const wheelLines = 3
+
+// bounds returns the modal body's scroll bounds from the last render.
+func (m *Modal) bounds() scroll.Bounds {
+	return scroll.Bounds{Position: m.scrollOffset, Maximum: m.lastMaxScroll}
+}
+
 // ScrollBy adjusts the scroll offset by delta lines (positive = down, negative = up).
-// Clamping to valid range happens in buildLayout.
-func (m *Modal) ScrollBy(delta int) { m.scrollOffset += delta }
+// Movement is clamped through the last render's bounds; before the first
+// trustworthy render the offset is clamped again in buildLayout.
+func (m *Modal) ScrollBy(delta int) {
+	if m.layoutValid {
+		m.scrollOffset, _ = m.bounds().Move(delta)
+		return
+	}
+	m.scrollOffset = max(0, m.scrollOffset+delta)
+}
 
 // ScrollToTop scrolls to the top of the content.
 func (m *Modal) ScrollToTop() { m.scrollOffset = 0 }
 
 // ScrollToBottom scrolls to the bottom of the content.
 // The offset is clamped to the actual max in buildLayout.
-func (m *Modal) ScrollToBottom() { m.scrollOffset = 999999 }
+func (m *Modal) ScrollToBottom() {
+	if m.layoutValid {
+		m.scrollOffset = m.lastMaxScroll
+		return
+	}
+	m.scrollOffset = 999999
+}
+
+// WheelAtBoundary reports whether this wheel event is certainly a no-op for the
+// modal, using only the geometry and scroll bounds produced by the most recent
+// Render. It never rebuilds or mutates visible content.
+//
+// True means "certain no-op": the event can be dropped before Update and View.
+// False means the surface can move, or that the answer is unknown - callers
+// must forward the event. The query answers unknown before the first render and
+// after Invalidate, and answers true for wheel over the backdrop or over
+// non-scrollable modal chrome, because an open modal absorbs those events
+// without changing state. When the pointer is over a section that owns its own
+// scroll state (see ScrollOwnerSection), that section answers instead.
+func (m *Modal) WheelAtBoundary(msg tea.MouseWheelMsg, h *mouse.Handler) bool {
+	if h == nil || !m.layoutValid {
+		return false
+	}
+
+	mm := msg.Mouse()
+	var delta int
+	switch mm.Button {
+	case tea.MouseWheelUp:
+		delta = -wheelLines
+	case tea.MouseWheelDown:
+		delta = wheelLines
+	default:
+		// Horizontal wheel is outside this vertical contract.
+		return false
+	}
+	if mm.Mod.Contains(tea.ModShift) {
+		// Shift+wheel is a horizontal gesture; stay out of it.
+		return false
+	}
+
+	region := h.HitMap.Test(mm.X, mm.Y)
+	if region == nil {
+		// No hit region under the pointer: stale or unbuilt geometry.
+		return false
+	}
+
+	// A section that owns its own scroll state answers for its own region.
+	for _, s := range m.sections {
+		owner, ok := asScrollOwner(s)
+		if ok && owner.OwnsScrollRegion(region.ID) {
+			return owner.ScrollAtBoundary(delta)
+		}
+	}
+
+	if region.ID == "modal-body" {
+		return m.bounds().AtBoundary(delta)
+	}
+
+	// Backdrop and non-scrollable chrome (buttons, inputs, overlays): the modal
+	// absorbs the wheel and nothing moves.
+	return true
+}
 
 // SetFocus sets focus to a specific element by ID.
 func (m *Modal) SetFocus(id string) {
@@ -252,6 +344,9 @@ func (m *Modal) scrollToFocused() {
 	// If focused element extends below the viewport, scroll down
 	if pos.y+pos.height > m.scrollOffset+m.lastViewportH {
 		m.scrollOffset = pos.y + pos.height - m.lastViewportH
+	}
+	if m.layoutValid {
+		m.scrollOffset = clamp(m.scrollOffset, 0, m.lastMaxScroll)
 	}
 }
 

@@ -106,3 +106,13 @@ func (i *Info) ensure(width int) {
 		return modal.RenderedSection{Content: RenderInfo(Inspect(i.Root, i.Path), i.GitStatus, i.LastCommit)}
 	}, nil))
 }
+
+// WheelAtBoundary reports whether this wheel event is certainly a no-op for the
+// info modal, using the geometry of its most recent render. It never rebuilds
+// or mutates content, and reports unknown (false) before the first render.
+func (i *Info) WheelAtBoundary(msg tea.MouseWheelMsg, handler *mouse.Handler) bool {
+	if i == nil || i.modal == nil {
+		return false
+	}
+	return i.modal.WheelAtBoundary(msg, handler)
+}

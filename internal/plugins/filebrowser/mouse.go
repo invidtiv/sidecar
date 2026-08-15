@@ -14,14 +14,23 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
+// The Files plugin is declared "covered" in assembly.WheelBoundaryRegistry;
+// this assertion makes losing the contract a compile error.
+var _ plugin.WheelBoundaryConsumer = (*Plugin)(nil)
+
 // WheelAtBoundary implements plugin.WheelBoundaryConsumer. It mirrors the
 // routing in handleMouseScroll without opening files, updating selection, or
-// rendering. Inline editors and overlays keep receiving wheel input because
-// they own additional scroll state outside the ordinary Files panes.
+// rendering. Open overlays are answered by the overlay that owns mouse input,
+// in the same precedence handleMouse uses, and never by the panes underneath.
+// The inline editor stays unknown: its wheel belongs to the embedded
+// application. The file-operation bar does not intercept the wheel, so the
+// ordinary panes answer while it is open.
 func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	if p == nil || p.mouseHandler == nil || p.tree == nil || p.inlineEditMode || p.showExitConfirmation || p.projectSearchMode ||
-		p.quickOpenMode || p.infoMode || p.blameMode || p.fileOpMode != FileOpNone {
+	if p == nil || p.mouseHandler == nil || p.tree == nil {
 		return false
+	}
+	if bounded, ok := p.overlayWheelAtBoundary(msg); ok {
+		return bounded
 	}
 	action := p.mouseHandler.HandleMouse(msg)
 	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
@@ -47,6 +56,33 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	// dropping the inertia tail at this boundary.
 	p.wheelBursts.For(surface).Reset()
 	return true
+}
+
+// overlayWheelAtBoundary answers for whichever overlay currently owns mouse
+// input, following the same precedence as handleMouse. ok is false when no
+// overlay owns the wheel, which lets the ordinary panes answer.
+func (p *Plugin) overlayWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	switch {
+	case p.showExitConfirmation:
+		// handleExitConfirmationMouse consumes every mouse event without
+		// touching state: the whole wheel stream is a known no-op.
+		return true, true
+	case p.inlineEditMode:
+		// The embedded editor owns the wheel.
+		return false, true
+	case p.projectSearchMode:
+		// The search owns its cursor and its in-flight state, so it answers for
+		// itself rather than having those rules reproduced here.
+		return p.projectSearchSurface().WheelAtBoundary(msg), true
+	case p.quickOpenMode:
+		// Likewise the finder.
+		return p.fileFinder().WheelAtBoundary(msg), true
+	case p.infoMode:
+		return p.infoModal != nil && p.infoModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case p.blameMode:
+		return p.blameModal != nil && p.blameModal.WheelAtBoundary(msg, p.mouseHandler), true
+	}
+	return false, false
 }
 
 // dragForwardThrottle is the minimum interval between forwarding mouse drag

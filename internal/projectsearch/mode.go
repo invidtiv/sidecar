@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -233,6 +234,11 @@ func (s *Search) Apply(msg ResultsMsg) {
 		state.ScrollOffset = 0
 		// Set cursor to first match (skip file headers)
 		state.Cursor = state.FirstMatchIndex()
+	}
+	// The modal's sections read this state live, so its cached layout bounds
+	// no longer describe what is on screen. Drop them until the next render.
+	if s.modal != nil {
+		s.modal.Invalidate()
 	}
 }
 
@@ -647,4 +653,28 @@ func (s *Search) SetFocus(id string) {
 	if s.modal != nil {
 		s.modal.SetFocus(id)
 	}
+}
+
+// WheelAtBoundary reports whether a wheel event is certainly a no-op for the
+// search. The wheel moves the result cursor wherever the pointer is, so the
+// modal body never scrolls and only the cursor bounds matter. A run still in
+// flight can grow the list, so it is never bounded.
+//
+// True means "certain no-op"; false means the cursor can move, or the answer
+// is unknown. It performs no loads and mutates nothing.
+func (s *Search) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if s == nil || s.State.IsSearching {
+		return false
+	}
+	// Mirrors the ±3 HandleMouse applies to the cursor.
+	delta := 3
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		delta = -3
+	case tea.MouseWheelDown:
+	default:
+		// Horizontal and shift wheel are outside the vertical contract.
+		return false
+	}
+	return (scroll.Bounds{Position: s.State.Cursor, Maximum: s.State.FlatLen() - 1}).AtBoundary(delta)
 }
