@@ -96,6 +96,7 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
 | click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
 | click a file tab | Select that file in the document preview. `{` / `}` also cycle when the document is focused |
+| click an issue tab | Select that issue in the issue preview. `{` / `}` also cycle when the issue is focused |
 | click a list row | Select it; preview follows; not typing |
 | click another row while typing | Switch session and stay typing |
 | double-click a row | Open that identity in its owning project |
@@ -117,16 +118,43 @@ Same tab keys as the project document pane: `q`/`esc` close, `x` close tab, `{`/
 
 ### Focused issue (`global-workspaces-issue`)
 
+An unmodified click on a `td-…` link opens it beside the terminal. A
+second click appends a tab; an already-open ID is focused. Click a
+drawn tab to select it. The header is only the tab strip: ID plus
+headline, truncated at the end so the ID stays visible. Footer hints
+are Tab× Tab← Tab→. There is no close chip.
+
+`enter` on a parent or subtask uses the same open-or-focus path (no
+duplicate, no silent replace). Tabs stay in memory for the selected
+row and are not written to disk.
+
 | Key | Command | Description |
 |-----|---------|-------------|
-| `enter` | open-item | Open selected parent or subtask |
+| `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
+| `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
 | `y` | yank-issue | Copy issue as markdown |
 | `Y` | yank-issue-key | Copy issue ID |
-| `q` / `esc` | close | Close the issue pane |
+| `q` / `esc` | close | Close the pane and forget this row's in-memory tabs |
 
 ### Project issue pane (`workspace-issue`)
 
-Same `y` / `Y` yank pair, plus `tab` / `shift+tab` to cycle panes and `\` to toggle the sidebar.
+Same open/append/click/cycle/close journey and the same `{` / `}` / `x`
+/ yank / enter keys. `tab` / `shift+tab` cycle panes; `\` toggles the
+sidebar. `q` / `esc` hide the pane and retain tabs for that surface;
+last `x` forgets. Switching shells or relaunching restores tabs, the
+active tab, and each tab's scroll.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `x` | close-tab | Close the active tab. Last tab forgets the pane |
+| `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
+| `y` | yank-issue | Copy issue as markdown |
+| `Y` | yank-issue-key | Copy issue ID |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, document, and issue |
+| `\` | toggle-sidebar | Toggle sidebar visibility |
+| `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 
 ## Sidebar Controls (All Two-Pane Plugins)
 
@@ -268,7 +296,7 @@ Same `y` / `Y` yank pair, plus `tab` / `shift+tab` to cycle panes and `\` to tog
 | `workspace-list` | Workspace list (root) |
 | `workspace-preview` | Preview pane |
 | `workspace-doc` | File tabs beside the terminal (hide with `q`) |
-| `workspace-issue` | td issue leaf beside the terminal (hide with `q`) |
+| `workspace-issue` | Issue tabs beside the terminal (hide with `q`; last `x` forgets) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -340,6 +368,43 @@ on worktrees and do not cycle document tabs.
 | `Y` | yank-path | Copy the relative path |
 | `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the workspace split |
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and document |
+| `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
+
+### Issue Pane
+
+An unmodified click on a `td-…` link in workspace or shell terminal
+output opens it beside that terminal. A second click appends a tab; an
+ID that is already open is focused. Click a drawn tab to select it.
+The header is only the tab strip: each label is the issue ID plus
+headline, truncated at the end so the ID stays visible. There is no
+close chip. Footer hints are Tab× Tab← Tab→.
+
+The global Workspaces view uses the same tab strip and the same click /
+`{` / `}` / `x` keys. Those tabs stay in memory for the selected row
+and are not written to disk. `q` / `esc` and last-`x` forget that row's
+set.
+
+In project Workspaces, `q` / `esc` hide the pane and remember the tab
+set for this shell or workspace. `x` on the last tab forgets the set.
+Switching surfaces or relaunching onto the same surface restores open
+issues, the active tab, and each tab's scroll. Parent and subtask
+`enter` uses the same open-or-focus path.
+
+File tabs keep left-truncated paths so the filename survives. Issue
+tabs keep the ID visible and truncate the headline.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `j` / `k` | scroll-down / scroll-up | Scroll down / up |
+| `down` / `up` | | Walk parent, siblings, and subtasks |
+| `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
+| `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
+| `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
+| `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
+| `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `y` | yank-issue | Copy the issue as markdown |
+| `Y` | yank-issue-key | Copy the issue ID |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, document, and issue |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 
 ## TD Monitor Plugin
