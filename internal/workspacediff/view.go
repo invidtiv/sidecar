@@ -190,10 +190,6 @@ func (v *View) loadCommit(workdir, workspaceID, hash string) tea.Cmd {
 	}
 }
 
-func (v *View) commitMatches(listHash string) bool {
-	return CommitDetailMatchesListHash(v.CommitDetail, listHash)
-}
-
 // CommitDetailMsg is the result of LoadSelectedCommit.
 type CommitDetailMsg struct {
 	Epoch       uint64

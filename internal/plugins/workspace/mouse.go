@@ -1442,11 +1442,11 @@ func (p *Plugin) scrollDiffTabFileList(delta int) tea.Cmd {
 		p.diff.HorizScroll = 0
 
 		fileCount := p.diffTabFileCount()
+		// Cursor on a commit — just clear the stale state reset above, no
+		// async load. Only a cursor on a file needs work here.
 		if p.diff.Cursor < fileCount {
 			// Cursor on a file — sync update the parsed diff (cheap)
 			p.diff.CommitDetail = nil
-		} else {
-			// Cursor on a commit — just clear stale state, no async load
 		}
 	}
 	return nil

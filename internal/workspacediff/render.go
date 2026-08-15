@@ -40,10 +40,6 @@ const (
 
 func dimText(s string) string { return styles.Muted.Render(s) }
 
-func fileListWidth(totalWidth int) int {
-	return defaultListWidth(totalWidth)
-}
-
 func padToHeight(content string, height, width int) string {
 	lines := strings.Split(content, "\n")
 	if len(lines) > height {

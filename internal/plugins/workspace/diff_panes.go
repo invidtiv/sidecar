@@ -382,46 +382,6 @@ func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
 	return p.ensureActiveDiffTabLoaded(diff)
 }
 
-func (p *Plugin) clickDiffTabAt(x, y int) (tea.Cmd, bool) {
-	if !p.docVisible() {
-		return nil, false
-	}
-	var tabs []mouse.Region
-	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionDiffTargetTab {
-			continue
-		}
-		if y != region.Rect.Y {
-			continue
-		}
-		tabs = append(tabs, region)
-	}
-	if len(tabs) == 0 {
-		return nil, false
-	}
-	inDiffHeader := false
-	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionPaneLeaf {
-			continue
-		}
-		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
-			inDiffHeader = true
-			break
-		}
-	}
-	if !inDiffHeader {
-		return nil, false
-	}
-	best := tabs[0]
-	bestDist := tabRowDistance(x, best.Rect)
-	for _, region := range tabs[1:] {
-		if d := tabRowDistance(x, region.Rect); d < bestDist {
-			best, bestDist = region, d
-		}
-	}
-	return p.clickDiffTab(best.Data), true
-}
-
 func (p *Plugin) clickDiffTab(data any) tea.Cmd {
 	hit, ok := data.(diffTabHit)
 	if !ok {
@@ -648,22 +608,6 @@ func (p *Plugin) registerDiffLeafHits(diff *diffPane, box Box) {
 	if d := view.DividerHit(body); d.W > 0 && d.H > 0 {
 		p.mouseHandler.HitMap.AddRect(regionDiffTabDivider, d.X, d.Y, d.W, d.H, nil)
 	}
-}
-
-func (p *Plugin) diffLeafAt(data any) (*diffPane, *PaneNode) {
-	leafID, ok := data.(int)
-	if !ok {
-		return nil, nil
-	}
-	leaf := FindPane(p.paneRoot, leafID)
-	if leaf == nil || leaf.Kind != PaneDiff {
-		return nil, nil
-	}
-	diff := p.diffs[leaf.ContentID]
-	if diff == nil || diff.view() == nil {
-		return nil, nil
-	}
-	return diff, leaf
 }
 
 func (p *Plugin) yankFocusedDiff() tea.Cmd {

@@ -139,7 +139,6 @@ type Model struct {
 	catalog             map[string]workspaceinventory.Workspace
 	preview             previewState
 	diff                workspacediff.View
-	previewExtrasID     string
 	terminalConfig      tty.Config
 	width               int
 	height              int

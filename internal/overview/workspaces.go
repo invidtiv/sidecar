@@ -528,10 +528,6 @@ func (m *Model) diffPaneFocused() bool {
 		m.preview.diff != nil && m.preview.diff.focused
 }
 
-func (m *Model) contentLeafFocused() bool {
-	return m.diffPaneFocused() || m.docPaneFocused() || m.issuePaneFocused()
-}
-
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
 
 func (m *Model) toggleWorkspacePin() tea.Cmd {

@@ -1,11 +1,9 @@
 package overview
 
 import (
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -84,13 +82,6 @@ func previewDiffPath(workspace workspaceinventory.Workspace) string {
 		return workspace.ProjectRoot
 	}
 	return workspace.Path
-}
-
-func (m *Model) resetPreviewExtras() {
-	width, mode := m.diff.ListWidth(), m.diff.ViewMode
-	m.diff = workspacediff.View{ViewMode: mode, Target: workspacediff.WorkingTreeTarget()}
-	m.diff.SetListWidth(width)
-	m.previewExtrasID = ""
 }
 
 func (m *Model) applyDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
@@ -241,31 +232,8 @@ func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []str
 	}
 	if m.canOpenInGit() {
 		chips = append(chips, gitActionChip())
-	} else if workspace.ProjectName != "" && !(workspace.IsMain && workspace.Kind != workspaceinventory.KindShell) {
+	} else if workspace.ProjectName != "" && (!workspace.IsMain || workspace.Kind == workspaceinventory.KindShell) {
 		chips = append(chips, styles.Muted.Render(workspace.ProjectName))
 	}
 	return chips
-}
-
-func (m *Model) truncatePreviewLines(content string, maxWidth int) string {
-	if maxWidth <= 0 {
-		return content
-	}
-	var b strings.Builder
-	start := 0
-	for i := 0; i <= len(content); i++ {
-		if i == len(content) || content[i] == '\n' {
-			line := content[start:i]
-			line = ui.ExpandTabs(line, tty.DefaultTabWidth)
-			if lipgloss.Width(line) > maxWidth {
-				line = termpreview.TruncateANSI(line, maxWidth)
-			}
-			if start > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(line)
-			start = i + 1
-		}
-	}
-	return b.String()
 }

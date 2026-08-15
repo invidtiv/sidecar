@@ -226,16 +226,3 @@ func TestDiffContentScrollClampsToRenderedViewport(t *testing.T) {
 		t.Fatalf("first reverse step after bottom = %d, want 2", got)
 	}
 }
-
-func contains(s, sub string) bool {
-	return stringIndex(s, sub) >= 0
-}
-
-func stringIndex(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}

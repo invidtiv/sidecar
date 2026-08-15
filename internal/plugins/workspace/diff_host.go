@@ -124,16 +124,6 @@ func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 	return p.diff.OnCursorChanged(oldCursor)
 }
 
-func (p *Plugin) jumpToNextFile() tea.Cmd {
-	p.bindDiffView()
-	return p.diff.JumpFile(1)
-}
-
-func (p *Plugin) jumpToPrevFile() tea.Cmd {
-	p.bindDiffView()
-	return p.diff.JumpFile(-1)
-}
-
 func (p *Plugin) loadSelectedCommitFileDiff() tea.Cmd {
 	p.bindDiffView()
 	return p.diff.LoadSelectedCommitFile()
@@ -177,10 +167,6 @@ func (p *Plugin) paintDiffFile(name, raw string, mode workspacediff.ViewMode, wi
 	}
 }
 
-func (p *Plugin) loadFullFileForCurrent() tea.Cmd {
-	return p.loadFullFileForView(p.activeDiffView())
-}
-
 func (p *Plugin) loadFullFileForView(view *workspacediff.View) tea.Cmd {
 	if view == nil || p.fullFileDiff != nil {
 		return nil
@@ -189,10 +175,6 @@ func (p *Plugin) loadFullFileForView(view *workspacediff.View) tea.Cmd {
 		return p.loadFullFileDiffForView(view)
 	}
 	return p.loadFullFileDiffForWorkspaceView(view)
-}
-
-func (p *Plugin) loadFullFileDiffForWorkspace() tea.Cmd {
-	return p.loadFullFileDiffForWorkspaceView(p.activeDiffView())
 }
 
 func (p *Plugin) loadFullFileDiffForWorkspaceView(view *workspacediff.View) tea.Cmd {
@@ -233,10 +215,6 @@ func (p *Plugin) loadFullFileDiffForWorkspaceView(view *workspacediff.View) tea.
 			OldContent: oldContent, NewContent: newContent, Parsed: parsed, FilePath: filePath,
 		}
 	}
-}
-
-func (p *Plugin) loadFullFileDiffForCommit() tea.Cmd {
-	return p.loadFullFileDiffForView(p.activeDiffView())
 }
 
 func (p *Plugin) loadFullFileDiffForView(view *workspacediff.View) tea.Cmd {
@@ -402,14 +380,4 @@ func (p *Plugin) colorStatLine(line string, width int) string {
 		}
 	}
 	return colored.String()
-}
-
-func (p *Plugin) diffBaseRef() string {
-	if p.diff.Snapshot != nil && p.diff.Snapshot.BaseRef != "" {
-		return p.diff.Snapshot.BaseRef
-	}
-	if wt := p.selectedWorktree(); wt != nil && wt.BaseBranch != "" {
-		return wt.BaseBranch
-	}
-	return "resolved base"
 }

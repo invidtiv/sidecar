@@ -377,14 +377,6 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// scrollWatchedPreview moves the window outside a pointer gesture: a selection
-// anchored to the rows it leaves behind would highlight rows the user never
-// picked.
-func (m *Model) scrollWatchedPreview(delta int) {
-	m.clearPreviewSelectionOnScroll()
-	m.scrollPreview(delta)
-}
-
 // terminalKey answers the chords that act on the terminal surface rather than on
 // the browser around it. They are answered in both of the preview's states,
 // because the selection they act on exists in both.
