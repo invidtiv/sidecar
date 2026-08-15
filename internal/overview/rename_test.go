@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func TestROnShellOpensRenameModalPrefillingTheName(t *testing.T) {
@@ -44,13 +45,30 @@ func TestROnShellOpensRenameModalPrefillingTheName(t *testing.T) {
 	}
 }
 
-func TestROnWorktreeIsIgnored(t *testing.T) {
+func TestROnWorktreeOpensRenameModalPrefillingTheName(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
-	m.workspaces.SelectID("a")
+	if !m.workspaces.SelectID("a") {
+		t.Fatal("could not select the worktree")
+	}
+
 	handled, cmd := m.WorkspacesKey(key("R"))
-	if handled || cmd != nil || m.RenameShellOpen() {
-		t.Fatalf("R on a worktree opened rename (handled=%v cmd=%v)", handled, cmd != nil)
+	if !handled {
+		t.Fatal("R on a worktree was not handled")
+	}
+	run(t, m, cmd)
+	if !m.RenameWorktreeOpen() {
+		t.Fatal("R on a worktree did not open the rename modal")
+	}
+	if m.renameInput.Value() != "alpha" {
+		t.Fatalf("prefill = %q, want alpha", m.renameInput.Value())
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "Rename Worktree") {
+		t.Fatalf("modal missing title:\n%s", view)
+	}
+	if !strings.Contains(view, "Current:") || !strings.Contains(view, "alpha") {
+		t.Fatalf("modal missing current name:\n%s", view)
 	}
 }
 
@@ -224,24 +242,156 @@ func TestRenameDeadShellStillWritesManifest(t *testing.T) {
 	}
 }
 
-func TestListCommandsAdvertiseRenameOnlyForAShell(t *testing.T) {
+func TestListCommandsAdvertiseRenameForWorktreeAndShell(t *testing.T) {
 	m, _ := previewModel(t)
 	m.workspaces.SelectID("a")
+	var foundWorktree bool
 	for _, cmd := range m.Commands() {
-		if cmd.Name == "Rename" {
-			t.Fatalf("worktree Commands() advertised Rename: %#v", m.Commands())
+		if cmd.ID == "rename-worktree" && cmd.Name == "Rename" {
+			foundWorktree = true
 		}
+		if cmd.ID == "rename-shell" {
+			t.Fatalf("worktree Commands() advertised rename-shell: %#v", m.Commands())
+		}
+	}
+	if !foundWorktree {
+		t.Fatalf("worktree Commands() omitted Rename: %#v", m.Commands())
 	}
 	m.workspaces.SelectID("c")
-	var found bool
+	var foundShell bool
 	for _, cmd := range m.Commands() {
 		if cmd.ID == "rename-shell" && cmd.Name == "Rename" {
-			found = true
+			foundShell = true
+		}
+		if cmd.ID == "rename-worktree" {
+			t.Fatalf("shell Commands() advertised rename-worktree: %#v", m.Commands())
 		}
 	}
-	if !found {
+	if !foundShell {
 		t.Fatalf("shell Commands() omitted Rename: %#v", m.Commands())
 	}
+}
+
+func TestRenameWorktreePersistsDisplayNameOnly(t *testing.T) {
+	stateDir := t.TempDir()
+	config.SetTestStateDir(stateDir)
+	t.Cleanup(config.ResetTestStateDir)
+
+	projectRoot := filepath.Join(t.TempDir(), "other-repo")
+	worktreePath := filepath.Join(projectRoot, "feature")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectState, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellsPath := filepath.Join(projectState, "shells.json")
+	writeShellManifest(t, shellsPath, []shellstate.Definition{
+		{TmuxName: "sc-sh", DisplayName: "charlie", Namespace: "/tmp/socket"},
+	})
+	before, err := os.ReadFile(shellsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	stampWorktreeOwner(m, "a", projectRoot, worktreePath, "alpha-branch")
+
+	press(t, m, "R")
+	if !m.RenameWorktreeOpen() {
+		t.Fatal("premise: modal should be open")
+	}
+	m.renameInput.SetValue("Auth Refresh")
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled || cmd == nil {
+		t.Fatal("confirm did not schedule persistence")
+	}
+	run(t, m, cmd)
+	if m.RenameWorktreeOpen() {
+		t.Fatalf("successful rename left the modal open: %s", m.renameError)
+	}
+
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Name != "Auth Refresh" {
+		t.Fatalf("row name = %#v, want Auth Refresh", workspace)
+	}
+	if workspace.Branch != "alpha-branch" {
+		t.Fatalf("branch = %q, want alpha-branch", workspace.Branch)
+	}
+	if workspace.Path != worktreePath {
+		t.Fatalf("path = %q, want %q", workspace.Path, worktreePath)
+	}
+
+	dir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "display-name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "Auth Refresh" {
+		t.Fatalf("display-name = %q", got)
+	}
+
+	after, err := os.ReadFile(shellsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("shells.json rewritten:\n%s", after)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree directory moved or removed: %v", err)
+	}
+}
+
+func TestInvalidWorktreeRenameNameStaysInModalWithSharedError(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.workspaces.SelectID("a")
+	press(t, m, "R")
+	m.renameInput.SetValue("")
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled {
+		t.Fatal("enter in the rename modal was not handled")
+	}
+	if cmd != nil {
+		t.Fatal("invalid name scheduled persistence")
+	}
+	if !m.RenameWorktreeOpen() {
+		t.Fatal("invalid name dismissed the modal")
+	}
+	_, sharedErr := shellstate.NormalizeName("")
+	if sharedErr == nil || m.renameError != sharedErr.Error() {
+		t.Fatalf("modal error = %q, shared = %v", m.renameError, sharedErr)
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "Error:") {
+		t.Fatalf("validation error not shown:\n%s", view)
+	}
+}
+
+func stampWorktreeOwner(m *Model, id, projectRoot, path, branch string) {
+	ws := m.catalog[id]
+	ws.ProjectRoot = projectRoot
+	ws.ProjectKey = "sidecar"
+	ws.Kind = workspaceinventory.KindWorktree
+	ws.Path = path
+	ws.Branch = branch
+	m.catalog[id] = ws
+	result := m.results[ws.ProjectKey]
+	for i := range result.Workspaces {
+		if result.Workspaces[i].ID == id {
+			result.Workspaces[i] = ws
+			break
+		}
+	}
+	m.results[ws.ProjectKey] = result
+	m.syncBoard()
+	m.workspaces.SelectID(id)
 }
 
 func stampShellOwner(m *Model, id, projectRoot, tmuxName, namespace string) {

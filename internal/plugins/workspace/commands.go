@@ -159,6 +159,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "cancel", Name: "Cancel", Description: "Cancel rename", Context: "workspace-rename-shell", Priority: 1},
 			{ID: "confirm", Name: "Rename", Description: "Confirm new name", Context: "workspace-rename-shell", Priority: 2},
 		}
+	case ViewModeRenameWorktree:
+		return []plugin.Command{
+			{ID: "cancel", Name: "Cancel", Description: "Cancel rename", Context: "workspace-rename-worktree", Priority: 1},
+			{ID: "confirm", Name: "Rename", Description: "Confirm new name", Context: "workspace-rename-worktree", Priority: 2},
+		}
 	case ViewModeFetchPR:
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel PR fetch", Context: "workspace-fetch-pr", Priority: 1},
@@ -347,6 +352,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			if WorktreeActionRefusal(wt, WorktreeActionMerge) == "" {
 				cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7})
 			}
+			cmds = append(cmds, plugin.Command{ID: "rename-worktree", Name: "Rename", Description: "Rename worktree", Context: "workspace-list", Priority: 12})
 			cmds = append(cmds, plugin.Command{ID: "open-in-git", Name: "Git", Description: "Open in Git tab", Context: "workspace-list", Priority: 16})
 			// Task linking
 			if wt.TaskID != "" {
@@ -414,10 +420,10 @@ func (p *Plugin) FocusContext() string {
 		return "workspace-confirm-delete-shell"
 	case ViewModeCommitForMerge:
 		return "workspace-commit-for-merge"
-	case ViewModePromptPicker:
-		return "workspace-prompt-picker"
 	case ViewModeRenameShell:
 		return "workspace-rename-shell"
+	case ViewModeRenameWorktree:
+		return "workspace-rename-worktree"
 	case ViewModeTypeSelector:
 		return "workspace-type-selector"
 	case ViewModeFetchPR:
@@ -457,8 +463,8 @@ func (p *Plugin) ConsumesTextInput() bool {
 		ViewModeCreate,
 		ViewModeTaskLink,
 		ViewModeCommitForMerge,
-		ViewModePromptPicker,
 		ViewModeRenameShell,
+		ViewModeRenameWorktree,
 		ViewModeTypeSelector,
 		ViewModeFetchPR:
 		return true

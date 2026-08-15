@@ -1146,14 +1146,13 @@ func (p *Plugin) executeMergeResolution() tea.Cmd {
 	}
 }
 
-
 // performSelectedCleanup executes only the user-selected cleanup actions.
 func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState) tea.Cmd {
 	scope := state.OperationScope
 	ctx := p.operationCtx
 	name, path, branch := wt.Name, wt.Path, wt.Branch
 	// Compute session name before entering closure (consistent with executeDelete)
-	sessionName := tmuxSessionPrefix + sanitizeName(name)
+	sessionName := worktreeTmuxSession(wt)
 
 	repoPath := p.ctx.ProjectRoot
 	if p.repoSnapshot != nil {

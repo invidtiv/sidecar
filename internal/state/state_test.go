@@ -1213,3 +1213,125 @@ func TestSetLineWrapEnabled_InitializesNilState(t *testing.T) {
 		t.Errorf("LineWrapEnabled = %v, want true", current.LineWrapEnabled)
 	}
 }
+
+func TestGetLastCreateAgent_Default(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetLastCreateAgent(); got != "" {
+		t.Errorf("GetLastCreateAgent() with nil current = %q, want empty", got)
+	}
+}
+
+func TestSetLastCreateAgentPersists(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetLastCreateAgent("opencode"); err != nil {
+		t.Fatalf("SetLastCreateAgent() failed: %v", err)
+	}
+	if current.LastCreateAgent != "opencode" {
+		t.Errorf("current.LastCreateAgent = %q, want opencode", current.LastCreateAgent)
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded State
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LastCreateAgent != "opencode" {
+		t.Errorf("saved LastCreateAgent = %q, want opencode", loaded.LastCreateAgent)
+	}
+
+	current = nil
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if GetLastCreateAgent() != "opencode" {
+		t.Errorf("reloaded LastCreateAgent = %q, want opencode", GetLastCreateAgent())
+	}
+}
+
+func TestGetAgentAutoApprove_DefaultFalse(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if GetAgentAutoApprove("claude") {
+		t.Error("GetAgentAutoApprove() with nil current = true, want false")
+	}
+
+	current = &State{}
+	if GetAgentAutoApprove("claude") {
+		t.Error("GetAgentAutoApprove() with nil map = true, want false")
+	}
+
+	current.AgentAutoApprove = map[string]bool{"opencode": true}
+	if GetAgentAutoApprove("claude") {
+		t.Error("GetAgentAutoApprove() missing key = true, want false")
+	}
+}
+
+func TestSetAgentAutoApprovePersists(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	stateFile := filepath.Join(tmpDir, "state.json")
+	path = stateFile
+	current = &State{}
+
+	if err := SetAgentAutoApprove("claude", true); err != nil {
+		t.Fatalf("SetAgentAutoApprove() failed: %v", err)
+	}
+	if !GetAgentAutoApprove("claude") {
+		t.Error("GetAgentAutoApprove(claude) = false, want true")
+	}
+	if GetAgentAutoApprove("codex") {
+		t.Error("GetAgentAutoApprove(codex) = true, want false")
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded State
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.AgentAutoApprove["claude"] {
+		t.Errorf("saved AgentAutoApprove = %#v", loaded.AgentAutoApprove)
+	}
+
+	current = nil
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !GetAgentAutoApprove("claude") {
+		t.Error("reloaded GetAgentAutoApprove(claude) = false, want true")
+	}
+
+	if err := SetAgentAutoApprove("claude", false); err != nil {
+		t.Fatal(err)
+	}
+	if GetAgentAutoApprove("claude") {
+		t.Error("GetAgentAutoApprove(claude) after toggle off = true, want false")
+	}
+}

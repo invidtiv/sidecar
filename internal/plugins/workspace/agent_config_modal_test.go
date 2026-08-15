@@ -4,44 +4,8 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 )
-
-func TestGetAgentConfigPrompt(t *testing.T) {
-	tests := []struct {
-		name     string
-		prompts  []Prompt
-		idx      int
-		wantNil  bool
-		wantName string
-	}{
-		{"negative index", []Prompt{{Name: "a"}}, -1, true, ""},
-		{"out of bounds", []Prompt{{Name: "a"}}, 5, true, ""},
-		{"nil prompts", nil, 0, true, ""},
-		{"valid index", []Prompt{{Name: "first"}, {Name: "second"}}, 1, false, "second"},
-		{"first index", []Prompt{{Name: "only"}}, 0, false, "only"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &Plugin{
-				agentConfigPrompts:   tt.prompts,
-				agentConfigPromptIdx: tt.idx,
-			}
-			got := p.getAgentConfigPrompt()
-			if tt.wantNil {
-				if got != nil {
-					t.Errorf("expected nil, got %+v", got)
-				}
-				return
-			}
-			if got == nil {
-				t.Fatal("expected non-nil prompt")
-			}
-			if got.Name != tt.wantName {
-				t.Errorf("expected name %q, got %q", tt.wantName, got.Name)
-			}
-		})
-	}
-}
 
 func TestClearAgentConfigModal(t *testing.T) {
 	p := &Plugin{
@@ -50,8 +14,6 @@ func TestClearAgentConfigModal(t *testing.T) {
 		agentConfigAgentType: AgentClaude,
 		agentConfigAgentIdx:  3,
 		agentConfigSkipPerms: true,
-		agentConfigPromptIdx: 2,
-		agentConfigPrompts:   []Prompt{{Name: "x"}},
 	}
 	p.clearAgentConfigModal()
 
@@ -69,12 +31,6 @@ func TestClearAgentConfigModal(t *testing.T) {
 	}
 	if p.agentConfigSkipPerms {
 		t.Error("skipPerms not cleared")
-	}
-	if p.agentConfigPromptIdx != -1 {
-		t.Error("promptIdx not cleared")
-	}
-	if p.agentConfigPrompts != nil {
-		t.Error("prompts not cleared")
 	}
 	if p.agentConfigModal != nil {
 		t.Error("modal not cleared")
@@ -106,6 +62,9 @@ func TestShouldShowAgentConfigSkipPerms(t *testing.T) {
 }
 
 func TestExecuteAgentConfig_FreshStart(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	wt := &Worktree{Name: "test-wt", Path: "/tmp/test"}
 	p := &Plugin{
 		ctx:                  &plugin.Context{},
@@ -113,7 +72,6 @@ func TestExecuteAgentConfig_FreshStart(t *testing.T) {
 		agentConfigIsRestart: false,
 		agentConfigAgentType: AgentClaude,
 		agentConfigSkipPerms: true,
-		agentConfigPromptIdx: -1,
 		viewMode:             ViewModeAgentConfig,
 	}
 
@@ -128,9 +86,18 @@ func TestExecuteAgentConfig_FreshStart(t *testing.T) {
 	if cmd == nil {
 		t.Error("expected non-nil cmd for fresh start")
 	}
+	if state.GetLastCreateAgent() != string(AgentClaude) {
+		t.Errorf("last create agent = %q, want claude", state.GetLastCreateAgent())
+	}
+	if !state.GetAgentAutoApprove(string(AgentClaude)) {
+		t.Error("auto-approve should persist on Start")
+	}
 }
 
 func TestExecuteAgentConfig_Restart(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	wt := &Worktree{Name: "test-wt", Path: "/tmp/test"}
 	p := &Plugin{
 		ctx:                  &plugin.Context{},
@@ -138,7 +105,6 @@ func TestExecuteAgentConfig_Restart(t *testing.T) {
 		agentConfigIsRestart: true,
 		agentConfigAgentType: AgentCodex,
 		agentConfigSkipPerms: false,
-		agentConfigPromptIdx: -1,
 		viewMode:             ViewModeAgentConfig,
 	}
 
@@ -165,5 +131,20 @@ func TestExecuteAgentConfig_NilWorktree(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for nil worktree")
+	}
+}
+
+func TestOpenAgentConfigModalLoadsAutoApprove(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetAgentAutoApprove(string(AgentClaude), true); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.ctx = &plugin.Context{}
+	p.openAgentConfigModal(&Worktree{Name: "wt", Path: "/tmp"}, false)
+	if !p.agentConfigSkipPerms {
+		t.Error("expected persisted auto-approve for claude")
 	}
 }

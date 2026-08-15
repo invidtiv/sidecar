@@ -5,7 +5,71 @@ import (
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 )
+
+func TestGetDefaultCreateAgentType_LastCreateAgentPrecedence(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.SetLastCreateAgent("") })
+
+	workDir := t.TempDir()
+	projectRoot := workDir
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	cfg := config.Default()
+	cfg.Plugins.Workspace.DefaultAgentType = string(AgentAntigravity)
+	if err := saveAgentType(projectRoot, workDir, AgentCodex); err != nil {
+		t.Fatalf("saveAgentType: %v", err)
+	}
+	if err := state.SetLastCreateAgent(string(AgentOpenCode)); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Plugin{
+		ctx: &plugin.Context{
+			WorkDir:     workDir,
+			ProjectRoot: projectRoot,
+			Config:      cfg,
+		},
+	}
+	if got := p.getDefaultCreateAgentType(); got != AgentOpenCode {
+		t.Errorf("getDefaultCreateAgentType() = %q, want %q", got, AgentOpenCode)
+	}
+}
+
+func TestGetDefaultCreateAgentType_LastCreateAgentMustBeSelectable(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.SetLastCreateAgent("") })
+
+	workDir := t.TempDir()
+	projectRoot := workDir
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	cfg := config.Default()
+	cfg.Plugins.Workspace.DefaultAgentType = string(AgentAntigravity)
+	cfg.Plugins.Workspace.Agents = []string{"grok", "claude"}
+	if err := saveAgentType(projectRoot, workDir, AgentGrok); err != nil {
+		t.Fatalf("saveAgentType: %v", err)
+	}
+	if err := state.SetLastCreateAgent(string(AgentOpenCode)); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Plugin{
+		ctx: &plugin.Context{
+			WorkDir:     workDir,
+			ProjectRoot: projectRoot,
+			Config:      cfg,
+		},
+	}
+	if got := p.getDefaultCreateAgentType(); got != AgentGrok {
+		t.Errorf("getDefaultCreateAgentType() = %q, want %q", got, AgentGrok)
+	}
+}
 
 func TestGetDefaultCreateAgentType_FromConfig(t *testing.T) {
 	cfg := config.Default()

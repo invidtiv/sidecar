@@ -259,6 +259,9 @@ func snapshotToWorktrees(snapshot *RepoSnapshot) []*Worktree {
 				name = rel
 			}
 		}
+		if display := loadDisplayName(snapshot.CanonicalRoot, item.Path); display != "" {
+			name = display
+		}
 		_, statErr := os.Stat(item.Path)
 		result = append(result, &Worktree{
 			Key: item.Key, RepoKey: item.RepoKey, Name: name, Path: item.Path,

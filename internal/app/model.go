@@ -1318,6 +1318,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 	switch id {
 	case "rename-shell":
 		return m.overview.OpenRenameShell()
+	case "rename-worktree":
+		return m.overview.OpenRenameWorktree()
 	case "open-in-git":
 		return m.overview.OpenSelectedInGit()
 	default:

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -13,11 +14,18 @@ type renderedSection struct {
 	content    string
 	height     int
 	focusables []FocusableInfo
+	overlay    *Overlay
 }
 
 // renderSections renders all sections at the given content width and returns
 // the rendered sections along with collected focusable IDs.
 func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
+	// First paint has no tab order yet; seed it so the focused field (and a
+	// Combo overlay) can render correctly on this frame.
+	if len(m.focusIDs) == 0 {
+		m.focusIDs = m.collectFocusIDs(contentWidth)
+	}
+
 	focusID := m.currentFocusID()
 	rendered := make([]renderedSection, 0, len(m.sections))
 	var focusIDs []string
@@ -30,6 +38,7 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 			content:    res.Content,
 			height:     height,
 			focusables: res.Focusables,
+			overlay:    res.Overlay,
 		})
 
 		for _, f := range res.Focusables {
@@ -38,6 +47,17 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 	}
 
 	return rendered, focusIDs
+}
+
+func (m *Modal) collectFocusIDs(contentWidth int) []string {
+	var ids []string
+	for _, s := range m.sections {
+		res := s.Render(contentWidth, "", m.hoverID)
+		for _, f := range res.Focusables {
+			ids = append(ids, f.ID)
+		}
+	}
+	return ids
 }
 
 // buildLayout renders all sections, measures heights, and registers hit regions.
@@ -148,6 +168,14 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	// line with BgSecondary ensures a uniform background.
 	viewport = styles.FillBackground(viewport, contentWidth, styles.BgSecondary)
 
+	// 5c. Composite floating overlays onto the already-sized viewport. They
+	// never change measured height; later hit-region registration uses the
+	// same placements so clicks land on overlay rows.
+	overlays := placeOverlays(visible, m.scrollOffset, viewportHeight)
+	for _, ov := range overlays {
+		viewport = compositeOverlay(viewport, ov.content, ov.x, ov.y)
+	}
+
 	// 6. Build modal content
 	var inner strings.Builder
 	if m.title != "" {
@@ -202,6 +230,17 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 				}
 			}
 			sectionStartY += r.height
+		}
+
+		// Overlay regions last so they win HitMap.Test over covered fields.
+		for _, ov := range overlays {
+			for _, f := range ov.focusables {
+				absY := contentY + ov.y + f.OffsetY
+				if intersectsViewport(absY, f.Height, contentY, viewportHeight) {
+					absX := contentX + ov.x + f.OffsetX
+					handler.HitMap.AddRect(f.ID, absX, absY, f.Width, f.Height, f.ID)
+				}
+			}
 		}
 	}
 
@@ -366,6 +405,93 @@ func intersectsViewport(y, h, viewportY, viewportH int) bool {
 	viewportBottom := viewportY + viewportH
 
 	return elementTop < viewportBottom && elementBottom > viewportTop
+}
+
+// overlayPlacement is an overlay positioned in viewport coordinates.
+type overlayPlacement struct {
+	content    string
+	x, y       int
+	focusables []FocusableInfo
+}
+
+// placeOverlays positions each section overlay in the viewport, flipping
+// above the field when it would clip off the bottom.
+func placeOverlays(sections []renderedSection, scrollOffset, viewportHeight int) []overlayPlacement {
+	var out []overlayPlacement
+	sectionY := 0
+	for _, r := range sections {
+		if r.overlay != nil && r.overlay.Content != "" {
+			if p, ok := placeOverlay(*r.overlay, sectionY, scrollOffset, viewportHeight); ok {
+				out = append(out, p)
+			}
+		}
+		sectionY += r.height
+	}
+	return out
+}
+
+func placeOverlay(ov Overlay, sectionY, scroll, viewportH int) (overlayPlacement, bool) {
+	oh := measureHeight(ov.Content)
+	if oh == 0 {
+		return overlayPlacement{}, false
+	}
+	preferY := sectionY + ov.OffsetY - scroll
+	y := preferY
+	if preferY+oh > viewportH {
+		visBelow := max(0, viewportH-preferY)
+		visAbove := max(0, min(oh, sectionY-scroll))
+		if visAbove > visBelow {
+			y = sectionY - oh - scroll
+			// Overlap the field rather than clip the highlight off the top.
+			if y < 0 {
+				y = 0
+			}
+		}
+	}
+	return overlayPlacement{
+		content:    ov.Content,
+		x:          ov.OffsetX,
+		y:          y,
+		focusables: ov.Focusables,
+	}, true
+}
+
+// compositeOverlay draws overlay onto base at (x, y) without adding lines.
+func compositeOverlay(base, overlay string, x, y int) string {
+	if overlay == "" {
+		return base
+	}
+	baseLines := strings.Split(base, "\n")
+	overLines := strings.Split(strings.TrimRight(overlay, "\n"), "\n")
+	for i, ol := range overLines {
+		dest := y + i
+		if dest < 0 || dest >= len(baseLines) {
+			continue
+		}
+		baseLines[dest] = overlayOnLine(baseLines[dest], ol, x)
+	}
+	return strings.Join(baseLines, "\n")
+}
+
+func overlayOnLine(base, over string, x int) string {
+	if x < 0 {
+		over = ansi.Cut(over, -x, ansi.StringWidth(over))
+		x = 0
+	}
+	overW := ansi.StringWidth(over)
+	left := ""
+	if x > 0 {
+		left = ansi.Cut(base, 0, x)
+		if pad := x - ansi.StringWidth(left); pad > 0 {
+			left += strings.Repeat(" ", pad)
+		}
+	}
+	baseW := ansi.StringWidth(base)
+	right := ""
+	if x+overW < baseW {
+		right = ansi.Cut(base, x+overW, baseW)
+	}
+	return left + over + right
 }
 
 // clamp constrains a value between min and max.

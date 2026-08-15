@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -63,15 +62,6 @@ const (
 	regionKanbanColumn = "kanban-column"
 	regionViewToggle   = "view-toggle"
 
-	// Create modal regions
-	regionCreateBackdrop    = "create-backdrop"
-	regionCreateModalBody   = "create-modal-body"
-	regionCreateInput       = "create-input"
-	regionCreateDropdown    = "create-dropdown"
-	regionCreateButton      = "create-button"
-	regionCreateCheckbox    = "create-checkbox"
-	regionCreateAgentOption = "create-agent-option"
-
 	// Task Link modal regions
 	regionTaskLinkDropdown = "task-link-dropdown"
 
@@ -94,10 +84,6 @@ const (
 	mergeCreatePRID        = "merge-create-pr"
 	mergeStopWatchingID    = "merge-stop-watching"
 	mergeForceBranchID     = "merge-force-branch"
-
-	// Prompt Picker modal regions
-	regionPromptItem   = "prompt-item"
-	regionPromptFilter = "prompt-filter"
 
 	// Sidebar header regions
 	regionCreateWorktreeButton = "create-worktree-button"
@@ -343,16 +329,19 @@ type Plugin struct {
 	// Create modal state
 	createNameInput         textinput.Model
 	createBaseBranchInput   textinput.Model
+	createAgentInput        textinput.Model
 	createTaskID            string
 	createTaskTitle         string    // Title of selected task for display
 	createAgentType         AgentType // Selected agent type (default: AgentClaude)
 	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
+	createBaseIdx           int       // Selected base-branch index in branchAll
+	createTaskIdx           int       // Selected task index in createTaskItems() (0 = none)
 	createSkipPermissions   bool      // Skip permissions checkbox
-	createFocus             int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
-	createButtonHover       int       // 0=none, 1=create, 2=cancel
 	createError             string    // Error message to display in create modal
 	createModal             *modal.Modal
 	createModalWidth        int
+	createModalBranchN      int
+	createModalTaskN        int
 	createOperationModal    *modal.Modal
 	createOperationWidth    int
 	createPlan              *CreateOperationPlan
@@ -363,19 +352,6 @@ type Plugin struct {
 	createRunHook           bool
 	deferredCreations       []CreateWorktreeAddedMsg         // stale cross-project results retained until matching repo returns
 	removePendingCreationFn func(*CreateOperationPlan) error // test seam for durable journal completion failures
-
-	// Branch name validation state
-	branchNameValid     bool     // Is current name valid?
-	branchNameErrors    []string // Validation error messages
-	branchNameSanitized string   // Suggested sanitized name
-
-	// Prompt state for create modal
-	createPrompts          []Prompt      // Available prompts (merged global + project)
-	createPromptIdx        int           // Selected prompt index (-1 = none)
-	promptPicker           *PromptPicker // Picker modal state (when open)
-	promptPickerModal      *modal.Modal
-	promptPickerModalWidth int
-	promptPickerModalEmpty bool
 
 	// Task search state for create modal
 	taskSearchInput    textinput.Model
@@ -434,13 +410,9 @@ type Plugin struct {
 	agentConfigAgentIdx   int
 	agentConfigAgentList  []AgentType // Fixed picker list for modal lifetime (includes preferred)
 	agentConfigSkipPerms  bool
-	agentConfigPromptIdx  int
-	agentConfigPrompts    []Prompt
+	agentConfigAgentInput textinput.Model
 	agentConfigModal      *modal.Modal
 	agentConfigModalWidth int
-
-	// Prompt picker return routing
-	promptPickerReturnMode ViewMode
 
 	// Delete confirmation modal state
 	deleteConfirmWorktree   *Worktree // Worktree pending deletion
@@ -463,6 +435,13 @@ type Plugin struct {
 	renameShellModal      *modal.Modal    // Modal instance
 	renameShellModalWidth int             // Cached width for rebuild detection
 	renameShellError      string          // Validation error message
+
+	// Rename worktree modal state (display-name only; branch and path stay put)
+	renameWorktree           *Worktree
+	renameWorktreeInput      textinput.Model
+	renameWorktreeModal      *modal.Modal
+	renameWorktreeModalWidth int
+	renameWorktreeError      string
 
 	// Initial reconnection tracking
 	initialReconnectDone bool
@@ -1712,9 +1691,18 @@ func (p *Plugin) resolveWorktreeAgentType(wt *Worktree) AgentType {
 }
 
 // getDefaultCreateAgentType returns the default agent for create-worktree modal.
-// .sidecar-agent in the current workspace is treated equivalently to config defaultAgentType.
-// Result is clamped to the selectable allowlist when the preferred type is hidden.
+// Precedence: persisted last-create agent (if still selectable) → .sidecar-agent
+// in the current workspace → config defaultAgentType → Claude. Result is
+// clamped to the selectable allowlist when the preferred type is hidden.
 func (p *Plugin) getDefaultCreateAgentType() AgentType {
+	agents := p.selectableAgentTypes()
+	if last := AgentType(strings.TrimSpace(state.GetLastCreateAgent())); last != "" {
+		for _, at := range agents {
+			if at == last {
+				return last
+			}
+		}
+	}
 	var preferred AgentType
 	if p != nil && p.ctx != nil {
 		fileAgent := loadAgentType(p.ctx.ProjectRoot, p.ctx.WorkDir)
@@ -1726,7 +1714,6 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 	} else {
 		preferred = p.getConfigDefaultAgentType()
 	}
-	agents := p.selectableAgentTypes()
 	got, _ := clampAgentSelection(agents, preferred, -1)
 	return got
 }
@@ -1735,15 +1722,19 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 func (p *Plugin) clearCreateModal() {
 	p.createNameInput = textinput.Model{}
 	p.createBaseBranchInput = textinput.Model{}
+	p.createAgentInput = textinput.Model{}
 	p.createTaskID = ""
 	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
+	p.createBaseIdx = 0
+	p.createTaskIdx = 0
 	p.createSkipPermissions = false
-	p.createFocus = 0
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createModalBranchN = 0
+	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1764,50 +1755,47 @@ func (p *Plugin) clearCreateModal() {
 	p.branchScroll = 0
 	p.taskLinkModal = nil
 	p.taskLinkModalWidth = 0
-	// Clear prompt state
-	p.createPrompts = nil
-	p.createPromptIdx = -1
-	p.promptPicker = nil
-	p.clearPromptPickerModal()
-}
-
-func (p *Plugin) clearPromptPickerModal() {
-	p.promptPickerModal = nil
-	p.promptPickerModalWidth = 0
-	p.promptPickerModalEmpty = false
 }
 
 // initCreateModalBase initializes common create modal state.
 func (p *Plugin) initCreateModalBase() {
 	p.viewMode = ViewModeCreate
 
-	// Initialize text inputs
 	p.createNameInput = textinput.New()
-	p.createNameInput.Placeholder = "feature-name"
+	p.createNameInput.Placeholder = "feature name"
 	p.createNameInput.Prompt = ""
 	p.createNameInput.Focus()
 	p.createNameInput.CharLimit = 100
 
 	p.createBaseBranchInput = textinput.New()
-	p.createBaseBranchInput.Placeholder = "main"
+	p.createBaseBranchInput.Placeholder = ""
 	p.createBaseBranchInput.Prompt = ""
 	p.createBaseBranchInput.CharLimit = 100
 
+	p.createAgentInput = textinput.New()
+	p.createAgentInput.Placeholder = ""
+	p.createAgentInput.Prompt = ""
+	p.createAgentInput.CharLimit = 80
+
 	p.taskSearchInput = textinput.New()
-	p.taskSearchInput.Placeholder = "Search tasks..."
+	p.taskSearchInput.Placeholder = "Search tasks…"
 	p.taskSearchInput.Prompt = ""
 	p.taskSearchInput.CharLimit = 100
 
-	// Reset all state
 	p.createTaskID = ""
 	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-	p.createSkipPermissions = false
-	p.createFocus = 0
+	p.createBaseIdx = 0
+	p.createTaskIdx = 0
+	p.loadCreateAutoApprove()
+	p.prefillCreateAgentInput()
+	p.prefillCreateBaseBranch()
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createModalBranchN = 0
+	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1821,14 +1809,6 @@ func (p *Plugin) initCreateModalBase() {
 	p.taskSearchIdx = 0
 	p.taskSearchScroll = 0
 	p.taskSearchLoading = true
-
-	// Load prompts from global and project config
-	home, _ := os.UserHomeDir()
-	configDir := filepath.Join(home, ".config", "sidecar")
-	p.createPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-	p.createPromptIdx = -1
-	p.promptPicker = nil
-	p.clearPromptPickerModal()
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
@@ -1849,11 +1829,11 @@ func (p *Plugin) openCreateModalWithTask(taskID, taskTitle string) tea.Cmd {
 	// Pre-fill name from task
 	suggestedName := p.deriveBranchName(taskID, taskTitle)
 	p.createNameInput.SetValue(suggestedName)
-	p.branchNameValid, p.branchNameErrors, p.branchNameSanitized = ValidateBranchName(suggestedName)
 
 	// Pre-fill task link
 	p.createTaskID = taskID
 	p.createTaskTitle = taskTitle
+	p.taskSearchInput.SetValue(taskID)
 
 	return tea.Batch(p.loadOpenTasks(), p.loadBranches())
 }
@@ -1871,14 +1851,6 @@ func (p *Plugin) deriveBranchName(taskID, title string) string {
 		return taskID
 	}
 	return taskID + "-" + sanitized
-}
-
-// getSelectedPrompt returns the currently selected prompt, or nil if none.
-func (p *Plugin) getSelectedPrompt() *Prompt {
-	if p.createPromptIdx < 0 || p.createPromptIdx >= len(p.createPrompts) {
-		return nil
-	}
-	return &p.createPrompts[p.createPromptIdx]
 }
 
 // toggleSidebar toggles sidebar visibility.
