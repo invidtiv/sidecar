@@ -1413,8 +1413,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
-			// Capture session name before clearing Agent (uses sanitized name like StartAgent)
-			sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+			// Capture session name before clearing Agent (path identity, like StartAgent)
+			sessionName := worktreeTmuxSession(wt)
 			wt.Agent = nil
 			wt.Status = StatusPaused
 			// Clean up cache, active registry, and session tracking (td-53e8a023, td-018f25)
@@ -1790,6 +1790,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Remove worktree from list if deleted
 			if msg.Results.LocalWorktreeDeleted {
 				sessionName := tmuxSessionPrefix + sanitizeName(msg.WorkspaceName)
+				if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
+					sessionName = worktreeTmuxSession(wt)
+				}
 				delete(p.managedSessions, sessionName)
 				globalPaneCache.remove(sessionName)
 				p.removeWorktreeByName(msg.WorkspaceName)

@@ -313,7 +313,7 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(wt)
 
 	// Kill tmux session if it exists (before deleting worktree)
-	sessionName := tmuxSessionPrefix + sanitizeName(name)
+	sessionName := worktreeTmuxSession(wt)
 	if sessionExists(sessionName) {
 		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
 	}

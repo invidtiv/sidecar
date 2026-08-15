@@ -16,6 +16,26 @@ import (
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
+func TestWorktreeSessionNameIgnoresDisplayRename(t *testing.T) {
+	wt := &Worktree{Name: "auth-refresh", Path: "/tmp/repo/auth-refresh", Branch: "auth-refresh"}
+	before := worktreeTmuxSession(wt)
+	if want := tmuxSessionPrefix + sanitizeName(filepath.Base(wt.Path)); before != want {
+		t.Fatalf("session = %q, want %q", before, want)
+	}
+
+	wt.Name = "Auth Refresh"
+	after := worktreeTmuxSession(wt)
+	if after != before {
+		t.Fatalf("session after rename = %q, want unchanged %q", after, before)
+	}
+
+	p := &Plugin{worktrees: []*Worktree{wt}, selectedIdx: 0}
+	panel := p.termPanelSessionName()
+	if want := termPanelSessionPrefix + sanitizeName(filepath.Base(wt.Path)); panel != want {
+		t.Fatalf("term panel session = %q, want %q", panel, want)
+	}
+}
+
 func TestROnWorktreeOpensRenameModal(t *testing.T) {
 	wt := &Worktree{Name: "auth-refresh", Path: "/tmp/auth-refresh", Branch: "auth-refresh"}
 	p := &Plugin{worktrees: []*Worktree{wt}, selectedIdx: 0}

@@ -110,6 +110,22 @@ func TestFindWorktreeBySanitizedName(t *testing.T) {
 			sanitizedName: "any-name",
 			expectName:    "",
 		},
+		{
+			name: "match path slug, not display name",
+			worktrees: []*Worktree{
+				{Name: "Auth Refresh", Path: "/tmp/repo/auth-refresh"},
+			},
+			sanitizedName: "auth-refresh",
+			expectName:    "Auth Refresh",
+		},
+		{
+			name: "display name is not the session identity",
+			worktrees: []*Worktree{
+				{Name: "Auth Refresh", Path: "/tmp/repo/auth-refresh"},
+			},
+			sanitizedName: "Auth Refresh",
+			expectName:    "",
+		},
 	}
 
 	for _, tt := range tests {
