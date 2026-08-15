@@ -14,12 +14,10 @@ import (
 const (
 	createNameFieldID       = "create-name"
 	createBaseFieldID       = "create-base"
-	createTaskFieldID       = "create-task"
 	createAgentFieldID      = "create-agent"
 	createSkipPermissionsID = "create-skip-permissions"
 	createSubmitID          = "create-submit"
 	createCancelID          = "create-cancel"
-	createTaskNoneID        = "create-task-none"
 	createConfirmID         = "create-confirm"
 	createRetrySetupID      = "create-retry-setup"
 	createOpenAnywayID      = "create-open-anyway"
@@ -92,11 +90,6 @@ func (p *Plugin) ensureCreateOperationModal() {
 		"Branch: " + plan.Branch,
 		"Remote: " + plan.RemotePolicy,
 	}
-	if plan.TaskID == "" {
-		lines = append(lines, "Task: none")
-	} else {
-		lines = append(lines, "Task: "+plan.TaskID+"  "+plan.TaskTitle)
-	}
 	p.createOperationModal = modal.New("Confirm Worktree Creation", modal.WithWidth(modalW), modal.WithPrimaryAction(createConfirmID), modal.WithHints(false)).
 		AddSection(modal.Text(strings.Join(lines, "\n"))).
 		AddSection(modal.Spacer())
@@ -141,8 +134,8 @@ func (p *Plugin) ensureCreateModal() {
 		modalW = maxW
 	}
 
-	branchN, taskN := len(p.branchAll), len(p.taskSearchAll)
-	if p.createModal != nil && p.createModalWidth == modalW && p.createModalBranchN == branchN && p.createModalTaskN == taskN {
+	branchN := len(p.branchAll)
+	if p.createModal != nil && p.createModalWidth == modalW && p.createModalBranchN == branchN {
 		return
 	}
 
@@ -153,16 +146,14 @@ func (p *Plugin) ensureCreateModal() {
 
 	p.createModalWidth = modalW
 	p.createModalBranchN = branchN
-	p.createModalTaskN = taskN
 	p.syncCreateAgentFromIdx()
-	// Combo owns the input while focused; rebuilding after branch/task load
+	// Combo owns the input while focused; rebuilding after branch load
 	// must not overwrite an in-progress filter query.
 	if prevFocus != createAgentFieldID {
 		p.prefillCreateAgentInput()
 	}
 
 	branchItems := p.createBranchItems()
-	taskItems := p.createTaskItems()
 	agentItems := p.createAgentItems()
 
 	p.createModal = modal.New("Create New Worktree",
@@ -175,8 +166,6 @@ func (p *Plugin) ensureCreateModal() {
 		AddSection(modal.Text("Base Branch")).
 		AddSection(modal.Combo(createBaseFieldID, &p.createBaseBranchInput, branchItems, &p.createBaseIdx,
 			modal.WithComboFilter(comboExactOrAllFilter(branchItems)))).
-		AddSection(modal.Text("Link Task")).
-		AddSection(modal.Combo(createTaskFieldID, &p.taskSearchInput, taskItems, &p.createTaskIdx)).
 		AddSection(modal.Text("Agent")).
 		AddSection(modal.Combo(createAgentFieldID, &p.createAgentInput, agentItems, &p.createAgentIdx,
 			modal.WithComboFilter(comboExactOrAllFilter(agentItems)))).
@@ -197,21 +186,6 @@ func (p *Plugin) createBranchItems() []modal.DropdownItem {
 	items := make([]modal.DropdownItem, len(p.branchAll))
 	for i, branch := range p.branchAll {
 		items[i] = modal.DropdownItem{ID: branch, Label: branch, Value: branch}
-	}
-	return items
-}
-
-func (p *Plugin) createTaskItems() []modal.DropdownItem {
-	items := make([]modal.DropdownItem, 0, len(p.taskSearchAll)+1)
-	items = append(items, modal.DropdownItem{ID: createTaskNoneID, Label: "(none)", Value: ""})
-	for _, task := range p.taskSearchAll {
-		items = append(items, modal.DropdownItem{
-			ID:    task.ID,
-			Label: task.ID + "  " + task.Title,
-			Value: task.ID,
-			Desc:  task.Title,
-			Data:  task,
-		})
 	}
 	return items
 }
@@ -356,58 +330,8 @@ func (p *Plugin) persistCreateAutoApprove() {
 	_ = state.SetAgentAutoApprove(string(p.createAgentType), p.createSkipPermissions)
 }
 
-func (p *Plugin) syncCreateTaskFromCombo() {
-	val := strings.TrimSpace(p.taskSearchInput.Value())
-	if val == "" {
-		p.createTaskID = ""
-		p.createTaskTitle = ""
-		return
-	}
-	items := p.createTaskItems()
-	if p.createTaskIdx >= 0 && p.createTaskIdx < len(items) {
-		item := items[p.createTaskIdx]
-		if t, ok := item.Data.(Task); ok && (val == item.Value || val == item.Label || val == t.ID) {
-			p.createTaskID = t.ID
-			p.createTaskTitle = t.Title
-			return
-		}
-	}
-	for i, t := range p.taskSearchAll {
-		if t.ID == val {
-			p.createTaskID = t.ID
-			p.createTaskTitle = t.Title
-			p.createTaskIdx = i + 1
-			return
-		}
-	}
-	p.createTaskID = ""
-	p.createTaskTitle = ""
-}
-
-func (p *Plugin) rematchCreateTaskIdx() {
-	if p.createTaskID == "" {
-		p.createTaskIdx = 0
-		return
-	}
-	for i, t := range p.taskSearchAll {
-		if t.ID == p.createTaskID {
-			p.createTaskIdx = i + 1
-			p.taskSearchInput.SetValue(t.ID)
-			return
-		}
-	}
-}
-
-func (p *Plugin) clearCreateTaskSelection() {
-	p.createTaskID = ""
-	p.createTaskTitle = ""
-	p.createTaskIdx = 0
-	p.taskSearchInput.SetValue("")
-}
-
 func (p *Plugin) applyCreateModalAfterInput(prevAgent AgentType, prevSkip bool) {
 	p.syncCreateAgentFromIdx()
-	p.syncCreateTaskFromCombo()
 	if p.createAgentType != prevAgent {
 		p.loadCreateAutoApprove()
 		return

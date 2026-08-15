@@ -266,8 +266,8 @@ type CommitStatusLoadedMsg struct {
 // GetEpoch implements plugin.EpochMessage.
 func (m CommitStatusLoadedMsg) GetEpoch() uint64 { return m.Epoch }
 
-// OpenCreateModalWithTaskMsg opens create modal pre-filled with task data.
-// Sent from td-monitor plugin when user presses send-to-worktree hotkey.
+// OpenCreateModalWithTaskMsg opens the create modal with a name derived from
+// the task. Sent from td-monitor when the user presses send-to-worktree.
 type OpenCreateModalWithTaskMsg struct {
 	TaskID    string
 	TaskTitle string

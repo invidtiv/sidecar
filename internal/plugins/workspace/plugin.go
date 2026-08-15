@@ -335,18 +335,14 @@ type Plugin struct {
 	createNameInput         textinput.Model
 	createBaseBranchInput   textinput.Model
 	createAgentInput        textinput.Model
-	createTaskID            string
-	createTaskTitle         string    // Title of selected task for display
 	createAgentType         AgentType // Selected agent type (default: AgentClaude)
 	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
 	createBaseIdx           int       // Selected base-branch index in branchAll
-	createTaskIdx           int       // Selected task index in createTaskItems() (0 = none)
 	createSkipPermissions   bool      // Skip permissions checkbox
 	createError             string    // Error message to display in create modal
 	createModal             *modal.Modal
 	createModalWidth        int
 	createModalBranchN      int
-	createModalTaskN        int
 	createOperationModal    *modal.Modal
 	createOperationWidth    int
 	createPlan              *CreateOperationPlan
@@ -358,7 +354,7 @@ type Plugin struct {
 	deferredCreations       []CreateWorktreeAddedMsg         // stale cross-project results retained until matching repo returns
 	removePendingCreationFn func(*CreateOperationPlan) error // test seam for durable journal completion failures
 
-	// Task search state for create modal
+	// Task search state for linking an existing worktree
 	taskSearchInput    textinput.Model
 	taskSearchAll      []Task // All available tasks
 	taskSearchFiltered []Task // Filtered based on query
@@ -1741,18 +1737,14 @@ func (p *Plugin) clearCreateModal() {
 	p.createNameInput = textinput.Model{}
 	p.createBaseBranchInput = textinput.Model{}
 	p.createAgentInput = textinput.Model{}
-	p.createTaskID = ""
-	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
 	p.createBaseIdx = 0
-	p.createTaskIdx = 0
 	p.createSkipPermissions = false
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
 	p.createModalBranchN = 0
-	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1795,17 +1787,9 @@ func (p *Plugin) initCreateModalBase() {
 	p.createAgentInput.Prompt = ""
 	p.createAgentInput.CharLimit = 80
 
-	p.taskSearchInput = textinput.New()
-	p.taskSearchInput.Placeholder = "Search tasks…"
-	p.taskSearchInput.Prompt = ""
-	p.taskSearchInput.CharLimit = 100
-
-	p.createTaskID = ""
-	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
 	p.createBaseIdx = 0
-	p.createTaskIdx = 0
 	p.loadCreateAutoApprove()
 	p.prefillCreateAgentInput()
 	p.prefillCreateBaseBranch()
@@ -1813,7 +1797,6 @@ func (p *Plugin) initCreateModalBase() {
 	p.createModal = nil
 	p.createModalWidth = 0
 	p.createModalBranchN = 0
-	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1822,11 +1805,6 @@ func (p *Plugin) initCreateModalBase() {
 	p.createBusyStep = ""
 	p.createCopyEnv = false
 	p.createRunHook = false
-	p.taskSearchAll = nil
-	p.taskSearchFiltered = nil
-	p.taskSearchIdx = 0
-	p.taskSearchScroll = 0
-	p.taskSearchLoading = true
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
@@ -1836,24 +1814,15 @@ func (p *Plugin) initCreateModalBase() {
 // openCreateModal opens the create worktree modal and initializes all inputs.
 func (p *Plugin) openCreateModal() tea.Cmd {
 	p.initCreateModalBase()
-	return tea.Batch(p.loadOpenTasks(), p.loadBranches())
+	return p.loadBranches()
 }
 
-// openCreateModalWithTask opens the create modal pre-filled with task data.
-// Called from td-monitor plugin when user presses send-to-worktree hotkey.
+// openCreateModalWithTask opens the create modal with a name derived from the
+// task. Linking stays a separate action on the created worktree.
 func (p *Plugin) openCreateModalWithTask(taskID, taskTitle string) tea.Cmd {
 	p.initCreateModalBase()
-
-	// Pre-fill name from task
-	suggestedName := p.deriveBranchName(taskID, taskTitle)
-	p.createNameInput.SetValue(suggestedName)
-
-	// Pre-fill task link
-	p.createTaskID = taskID
-	p.createTaskTitle = taskTitle
-	p.taskSearchInput.SetValue(taskID)
-
-	return tea.Batch(p.loadOpenTasks(), p.loadBranches())
+	p.createNameInput.SetValue(p.deriveBranchName(taskID, taskTitle))
+	return p.loadBranches()
 }
 
 // deriveBranchName creates a git-safe branch name from task ID and title.

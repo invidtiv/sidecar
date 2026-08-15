@@ -52,7 +52,7 @@ func (p *Plugin) ensureTaskLinkModal() {
 	p.taskLinkModalWidth = modalW
 	title := "Link Task to " + ansi.Truncate(p.linkingWorktree.Name, max(1, modalW-16), "…")
 	p.taskLinkModal = modal.New(title, modal.WithWidth(modalW), modal.WithHints(false)).
-		AddSection(p.taskPickerSection(taskLinkFieldID, taskLinkItemPrefix, "Search tasks:", false, 8)).
+		AddSection(p.taskPickerSection(taskLinkFieldID, taskLinkItemPrefix, "Search tasks:", 8)).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(modal.Btn(" Cancel ", createCancelID)))
 	p.taskLinkModal.SetFocus(taskLinkFieldID)

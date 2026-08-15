@@ -57,6 +57,37 @@ func TestValidateAndCreateWorktreeRequiresName(t *testing.T) {
 	}
 }
 
+func TestCreateModalOmitsTaskLink(t *testing.T) {
+	p := New()
+	p.width, p.height = 80, 40
+	p.mouseHandler = mouse.NewHandler()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
+	p.initCreateModalBase()
+	if p.taskSearchLoading {
+		t.Fatal("opening create should not start a task load")
+	}
+	p.ensureCreateModal()
+	view := p.createModal.Render(80, 40, p.mouseHandler)
+	if strings.Contains(view, "Link Task") {
+		t.Fatalf("create modal still shows Link Task:\n%s", view)
+	}
+	if strings.Contains(view, "Search tasks") {
+		t.Fatalf("create modal still shows a task picker:\n%s", view)
+	}
+}
+
+func TestOpenCreateModalWithTaskPrefillsNameOnly(t *testing.T) {
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
+	p.openCreateModalWithTask("td-abc123", "Add user auth")
+	if p.taskSearchLoading {
+		t.Fatal("create-from-task should not start a task load")
+	}
+	if got := p.createNameInput.Value(); got != p.deriveBranchName("td-abc123", "Add user auth") {
+		t.Fatalf("prefilled name = %q", got)
+	}
+}
+
 func TestCreateModalEnterFromNameSubmits(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
