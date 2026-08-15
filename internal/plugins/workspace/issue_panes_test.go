@@ -1414,3 +1414,175 @@ func TestRestoreHiddenIssueLayoutKeepsTabsWithoutSplit(t *testing.T) {
 		t.Fatalf("reopened active scroll = %d, want 3", issue.view().ScrollOffset())
 	}
 }
+
+func openSteelThreadTwoIssues(t *testing.T, p *Plugin) (*docPane, *issuePane) {
+	t.Helper()
+	applyDocOpen(t, p, p.openTerminalPath("clicked.md", 0))
+	issue := openTwoIssueTabs(t, p)
+	doc, _ := p.activeDocPane()
+	if doc == nil || docTabTitles(doc)[0] != "clicked.md" {
+		t.Fatalf("steel thread missing clicked.md: %v", docTabTitles(doc))
+	}
+	return doc, issue
+}
+
+func hideFocusedIssue(t *testing.T, p *Plugin) {
+	t.Helper()
+	issue, leaf := p.activeIssuePane()
+	if issue == nil || leaf == nil {
+		t.Fatal("no issue to hide")
+	}
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled || cmd == nil {
+		t.Fatalf("q did not hide issue: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if still, _ := p.activeIssuePane(); still != nil {
+		t.Fatal("issue leaf survived q")
+	}
+}
+
+func hideFocusedDoc(t *testing.T, p *Plugin) {
+	t.Helper()
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil {
+		t.Fatal("no document to hide")
+	}
+	p.paneFocus = leaf.ID
+	p.activePane = PanePreview
+	if handled, cmd := p.handleDocKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled || cmd == nil {
+		t.Fatalf("q did not hide document: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if p.activeDocPaneOrNil() != nil {
+		t.Fatal("document leaf survived q")
+	}
+}
+
+func TestSequentialHideIssueThenDocRestoresBothSets(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	p, saved := persistDocPanePlugin(t, root)
+	openSteelThreadTwoIssues(t, p)
+
+	hideFocusedIssue(t, p)
+	if p.activeDocPaneOrNil() == nil {
+		t.Fatal("hiding the issue took the document with it")
+	}
+	hideFocusedDoc(t, p)
+	if p.paneRoot.Split != nil {
+		t.Fatalf("sequential hide left a split: %#v", p.paneRoot)
+	}
+	hidden := workspacePaneLayout(*saved, "shell:test-shell")
+	docs, _ := firstDocLeafTabs(hidden)
+	issues, _ := firstIssueLeafTabs(hidden)
+	if state.PaneLayoutOpen(hidden) || len(docs) != 1 || docs[0].Path != "clicked.md" ||
+		len(issues) != 2 || issues[0].Issue != "td-1111aa" || issues[1].Issue != "td-2222bb" {
+		t.Fatalf("sequential hide persist = docs=%#v issues=%#v", docs, issues)
+	}
+
+	if _, ok := p.activateIssueLink("td-1111aa"); !ok {
+		t.Fatal("activate after sequential hide failed")
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || issue.view().IssueID() != "td-1111aa" {
+		t.Fatalf("restored issues = %v active=%q", got, issue.view().IssueID())
+	}
+	if titles := docTabTitles(p.activeDocPaneOrNil()); len(titles) != 1 || titles[0] != "clicked.md" {
+		t.Fatalf("restored docs = %v, want [clicked.md]", titles)
+	}
+}
+
+func TestSequentialHideDocThenIssueRestoresBothSets(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	p, saved := persistDocPanePlugin(t, root)
+	openSteelThreadTwoIssues(t, p)
+
+	hideFocusedDoc(t, p)
+	if issue, _ := p.activeIssuePane(); issue == nil {
+		t.Fatal("hiding the document took the issue with it")
+	}
+	hideFocusedIssue(t, p)
+	if p.paneRoot.Split != nil {
+		t.Fatalf("reverse sequential hide left a split: %#v", p.paneRoot)
+	}
+	hidden := workspacePaneLayout(*saved, "shell:test-shell")
+	docs, _ := firstDocLeafTabs(hidden)
+	issues, _ := firstIssueLeafTabs(hidden)
+	if state.PaneLayoutOpen(hidden) || len(docs) != 1 || docs[0].Path != "clicked.md" ||
+		len(issues) != 2 || issues[0].Issue != "td-1111aa" || issues[1].Issue != "td-2222bb" {
+		t.Fatalf("reverse sequential hide persist = docs=%#v issues=%#v", docs, issues)
+	}
+
+	applyDocOpen(t, p, p.openTerminalPath("clicked.md", 0))
+	if titles := docTabTitles(p.activeDocPaneOrNil()); len(titles) != 1 || titles[0] != "clicked.md" {
+		t.Fatalf("open file after reverse hide = %v", titles)
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" {
+		t.Fatalf("issues after opening a file = %v", got)
+	}
+}
+
+func TestHideIssueKeepsMutatedLiveDocsOnReopen(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "clicked.md", "# clicked\n")
+	writeDocPaneFixture(t, root, "other.md", "# other\n")
+	p, _ := persistDocPanePlugin(t, root)
+	openSteelThreadTwoIssues(t, p)
+
+	hideFocusedIssue(t, p)
+	applyDocOpen(t, p, p.openTerminalPath("other.md", 0))
+	if titles := docTabTitles(p.activeDocPaneOrNil()); len(titles) != 2 || titles[0] != "clicked.md" || titles[1] != "other.md" {
+		t.Fatalf("mutated live docs = %v", titles)
+	}
+
+	if _, ok := p.activateIssueLink("td-1111aa"); !ok {
+		t.Fatal("activate after hiding issue failed")
+	}
+	if titles := docTabTitles(p.activeDocPaneOrNil()); len(titles) != 2 || titles[0] != "clicked.md" || titles[1] != "other.md" {
+		t.Fatalf("reopening the issue reset docs to %v, want [clicked.md other.md]", titles)
+	}
+	issue, _ := p.activeIssuePane()
+	if got := issueTabIDs(issue); len(got) != 2 || got[0] != "td-1111aa" || got[1] != "td-2222bb" || issue.view().IssueID() != "td-1111aa" {
+		t.Fatalf("reinserted issues = %v active=%q", got, issue.view().IssueID())
+	}
+}
+
+func TestHiddenLegacyIssueSaveWritesIssueTabsOnly(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	p.ctx.ProjectRoot = root
+	saved := state.WorkspaceState{
+		ShellTmuxName: "test-shell",
+		PaneLayouts: map[string]*state.PaneLayoutJSON{
+			"shell:test-shell": {Root: resolved, Surface: "shell:test-shell", Open: false, Split: &state.PaneSplitJSON{
+				Axis: "cols", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+				B: &state.PaneLayoutJSON{Kind: contentKindIssue, Issue: "td-1a2b3c", Scroll: 4},
+			}},
+		},
+	}
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	if !p.restoreSelectionState() {
+		t.Fatal("saved shell selection was not restored")
+	}
+	if issue, _ := p.activeIssuePane(); issue != nil || p.paneRoot.Split != nil {
+		t.Fatalf("relaunch restored a hidden legacy split: root=%#v", p.paneRoot)
+	}
+	leaf := firstLayoutLeafOfKind(workspacePaneLayout(saved, "shell:test-shell"), contentKindIssue)
+	if leaf == nil || len(leaf.IssueTabs) != 1 || leaf.IssueTabs[0].Issue != "td-1a2b3c" || leaf.IssueTabs[0].Scroll != 4 {
+		t.Fatalf("hidden legacy save = %#v", leaf)
+	}
+	assertIssueLeafOmitsLegacy(t, leaf)
+}

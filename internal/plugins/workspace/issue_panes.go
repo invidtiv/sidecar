@@ -386,12 +386,7 @@ func (p *Plugin) hideIssuePane() tea.Cmd {
 	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if ok {
-		if layout := p.encodePaneNode(p.paneRoot); layout != nil {
-			layout.Root = root
-			layout.Surface = surface
-			layout.Open = false
-			p.hiddenPaneLayout = layout
-		}
+		p.rememberHiddenPaneLayout(root, surface)
 	}
 	if !p.closeContentLeaf(leaf.ID) {
 		p.hiddenPaneLayout = nil
@@ -413,11 +408,18 @@ func (p *Plugin) reopenHiddenIssuePane() tea.Cmd {
 		return nil
 	}
 	layout := p.hiddenLayoutFor(surface)
-	if layout == nil {
+	if layout == nil || !paneLayoutHasIssueTabs(layout) {
 		return nil
+	}
+	if p.liveContentBesides(PaneIssue) {
+		return p.reinsertHiddenIssueLeaf(layout)
 	}
 	p.hiddenPaneLayout = nil
 	return p.restorePaneLayout(layout)
+}
+
+func (p *Plugin) reinsertHiddenIssueLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
+	return p.reinsertHiddenContentLeaf(PaneIssue, firstLayoutLeafOfKind(layout, contentKindIssue), "Issue")
 }
 
 func (p *Plugin) ensureActiveIssueTabLoaded(issue *issuePane) tea.Cmd {
@@ -488,6 +490,45 @@ func persistedIssueTabs(saved *state.PaneLayoutJSON) []state.PaneIssueTabJSON {
 		return []state.PaneIssueTabJSON{{Issue: id, Scroll: saved.Scroll}}
 	}
 	return nil
+}
+
+func normalizePersistedIssueLeaves(layout *state.PaneLayoutJSON) {
+	if layout == nil {
+		return
+	}
+	if layout.Split != nil {
+		normalizePersistedIssueLeaves(layout.Split.A)
+		normalizePersistedIssueLeaves(layout.Split.B)
+		return
+	}
+	if layout.Kind != contentKindIssue {
+		return
+	}
+	raw := persistedIssueTabs(layout)
+	wanted := layout.Active
+	if layout.IssueTabs == nil || wanted < 0 || wanted >= len(raw) {
+		wanted = 0
+	}
+	tabs := make([]state.PaneIssueTabJSON, 0, len(raw))
+	active := 0
+	for i, tab := range raw {
+		id := issueview.NormalizeID(tab.Issue)
+		if id == "" {
+			continue
+		}
+		if i == wanted {
+			active = len(tabs)
+		}
+		tabs = append(tabs, state.PaneIssueTabJSON{Issue: id, Scroll: tab.Scroll})
+	}
+	if len(tabs) == 0 {
+		layout.IssueTabs = nil
+	} else {
+		layout.IssueTabs = tabs
+	}
+	layout.Active = active
+	layout.Issue = ""
+	layout.Scroll = 0
 }
 
 func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
