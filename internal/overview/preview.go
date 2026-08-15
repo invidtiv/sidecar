@@ -287,7 +287,11 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		m.resetPreviewContent()
 		return extras
 	}
-	return tea.Batch(extras, m.syncPreviewTerminal())
+	var pendingCmd tea.Cmd
+	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
+		pendingCmd = cmd
+	}
+	return tea.Batch(extras, m.syncPreviewTerminal(), pendingCmd)
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live

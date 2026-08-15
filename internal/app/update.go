@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -582,6 +583,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.issueInputModal = nil
 		m.issueInputModalWidth = 0
 		return m, nil
+
+	case uirequest.RequestMsg:
+		if m.uiRequestWatcherMessages != nil {
+			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcherMessages))
+		}
+		if m.overview != nil {
+			if cmd := m.overview.Update(msg); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	}
 
 	// Unparsed terminal input (CSI u / modifyOtherKeys sequences) is keyboard
