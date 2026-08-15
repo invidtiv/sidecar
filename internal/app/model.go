@@ -183,6 +183,7 @@ type Model struct {
 	projectSwitcherModal        *modal.Modal
 	projectSwitcherModalWidth   int
 	projectSwitcherMouseHandler *mouse.Handler
+	projectSwitcherAddFocused   bool // the + (add project) button holds focus
 
 	// Project add sub-mode (within project switcher)
 	projectAddMode         bool
@@ -559,6 +560,7 @@ func (m *Model) resetProjectSwitcher() {
 	m.projectSwitcherCursor = 0
 	m.projectSwitcherScroll = 0
 	m.projectSwitcherFiltered = nil
+	m.projectSwitcherAddFocused = false
 	m.clearProjectSwitcherModal()
 	m.resetProjectAdd()
 	// Restore current project's theme (undo any live preview)
@@ -585,6 +587,7 @@ func (m *Model) initProjectSwitcher() {
 	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 	m.projectSwitcherCursor = 0
 	m.projectSwitcherScroll = 0
+	m.projectSwitcherAddFocused = false
 
 	// Set cursor to current project if found
 	for i, destination := range m.projectSwitcherFiltered {
