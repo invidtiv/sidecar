@@ -440,16 +440,15 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			b.WriteString(strings.Repeat(" ", padding))
 			b.WriteString(styles.Subtle.Render(pathDisplay))
 
-			// One blank line between rows keeps the list breathable.
 			if i < scrollOffset+visibleCount-1 && i < len(projects)-1 {
-				b.WriteString("\n\n")
+				b.WriteString("\n")
 			}
 
-			// Each project takes 1 line plus its trailing blank line
+			// Each project takes exactly one line.
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i-scrollOffset)*2,
+				OffsetY: lineOffset + (i - scrollOffset),
 				Width:   contentWidth,
 				Height:  1,
 			})
