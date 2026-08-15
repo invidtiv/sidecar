@@ -42,9 +42,7 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 			overlay:    res.Overlay,
 		})
 
-		for _, f := range res.Focusables {
-			focusIDs = append(focusIDs, f.ID)
-		}
+		focusIDs = appendTabIDs(focusIDs, res.Focusables)
 	}
 
 	return rendered, focusIDs
@@ -54,11 +52,21 @@ func (m *Modal) collectFocusIDs(contentWidth int) []string {
 	var ids []string
 	for _, s := range m.sections {
 		res := s.Render(contentWidth, "", m.hoverID)
-		for _, f := range res.Focusables {
-			ids = append(ids, f.ID)
-		}
+		ids = appendTabIDs(ids, res.Focusables)
 	}
 	return ids
+}
+
+// appendTabIDs adds section hit targets that participate in Tab order.
+// MouseOnly rows stay in the hit map but are not focus stops.
+func appendTabIDs(dst []string, focusables []FocusableInfo) []string {
+	for _, f := range focusables {
+		if f.MouseOnly {
+			continue
+		}
+		dst = append(dst, f.ID)
+	}
+	return dst
 }
 
 // buildLayout renders all sections, measures heights, and registers hit regions.

@@ -502,12 +502,12 @@ func TestListSection(t *testing.T) {
 	if !strings.Contains(res.Content, "Item 1") {
 		t.Errorf("expected content to contain 'Item 1', got %q", res.Content)
 	}
-	// Default is singleFocus=true, so list registers as 1 focusable
-	if len(res.Focusables) != 1 {
-		t.Errorf("expected 1 focusable (list itself), got %d", len(res.Focusables))
+	tabStops, mouseOnly := splitListFocusables(res.Focusables)
+	if len(tabStops) != 1 || tabStops[0].ID != "list" {
+		t.Errorf("singleFocus tab stops = %v, want only 'list'", focusableIDs(tabStops))
 	}
-	if res.Focusables[0].ID != "list" {
-		t.Errorf("expected focusable ID 'list', got %q", res.Focusables[0].ID)
+	if got := focusableIDs(mouseOnly); len(got) != 3 || got[0] != "item1" || got[1] != "item2" || got[2] != "item3" {
+		t.Errorf("singleFocus mouse-only rows = %v, want item1..item3", got)
 	}
 
 	// Test navigation - use "list" as focusID since singleFocus is default
@@ -521,6 +521,135 @@ func TestListSection(t *testing.T) {
 	if action != "item2" {
 		t.Errorf("expected action 'item2' on enter, got %q", action)
 	}
+}
+
+func TestListSingleFocusIsOneTabStop(t *testing.T) {
+	m, _, _ := newSingleFocusListModal(t, 0)
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	if m.FocusedID() != "list" {
+		t.Fatalf("initial focus = %q, want list", m.FocusedID())
+	}
+	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.FocusedID() != "done" {
+		t.Fatalf("Tab from list = %q, want done (not a sort row)", m.FocusedID())
+	}
+	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.FocusedID() != "list" {
+		t.Fatalf("Tab from done = %q, want list", m.FocusedID())
+	}
+}
+
+func TestListSingleFocusClickReturnsItemID(t *testing.T) {
+	m, selected, _ := newSingleFocusListModal(t, 0)
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	item2 := mustHitRegion(t, handler, "item2")
+	hit := handler.HitMap.Test(item2.Rect.X, item2.Rect.Y)
+	if hit == nil || hit.ID != "item2" {
+		t.Fatalf("hit-test on row = %v, want item2", hit)
+	}
+
+	action := m.HandleMouse(tea.MouseClickMsg{
+		X:      item2.Rect.X,
+		Y:      item2.Rect.Y,
+		Button: tea.MouseLeft,
+	}, handler)
+	if action != "item2" {
+		t.Fatalf("click action = %q, want item2", action)
+	}
+	if *selected != 1 {
+		t.Fatalf("selectedIdx = %d, want 1 (the clicked row)", *selected)
+	}
+
+	item1 := mustHitRegion(t, handler, "item1")
+	action = m.HandleMouse(tea.MouseClickMsg{
+		X:      item1.Rect.X,
+		Y:      item1.Rect.Y,
+		Button: tea.MouseLeft,
+	}, handler)
+	if action != "item1" {
+		t.Fatalf("click on selected row action = %q, want item1", action)
+	}
+	if *selected != 0 {
+		t.Fatalf("selectedIdx = %d, want 0", *selected)
+	}
+}
+
+func TestListSingleFocusHoverUsesItemID(t *testing.T) {
+	m, _, _ := newSingleFocusListModal(t, 0)
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	item3 := mustHitRegion(t, handler, "item3")
+	m.HandleMouse(tea.MouseMotionMsg{X: item3.Rect.X, Y: item3.Rect.Y}, handler)
+	if m.HoveredID() != "item3" {
+		t.Fatalf("hoverID = %q, want item3", m.HoveredID())
+	}
+}
+
+func TestListPerItemFocusStillTabsEachRow(t *testing.T) {
+	selected := 0
+	items := []ListItem{
+		{ID: "item1", Label: "Item 1"},
+		{ID: "item2", Label: "Item 2"},
+	}
+	s := List("list", items, &selected, WithPerItemFocus())
+	res := s.Render(60, "item1", "")
+	tabStops, mouseOnly := splitListFocusables(res.Focusables)
+	if got := focusableIDs(tabStops); len(got) != 2 || got[0] != "item1" || got[1] != "item2" {
+		t.Fatalf("per-item tab stops = %v, want item1, item2", got)
+	}
+	if len(mouseOnly) != 0 {
+		t.Fatalf("per-item mouse-only rows = %v, want none", focusableIDs(mouseOnly))
+	}
+}
+
+func newSingleFocusListModal(t *testing.T, selected int) (*Modal, *int, []ListItem) {
+	t.Helper()
+	idx := selected
+	items := []ListItem{
+		{ID: "item1", Label: "Item 1"},
+		{ID: "item2", Label: "Item 2"},
+		{ID: "item3", Label: "Item 3"},
+	}
+	m := New("List", WithWidth(40), WithHints(false)).
+		AddSection(List("list", items, &idx, WithMaxVisible(len(items)))).
+		AddSection(Buttons(Btn(" Done ", "done")))
+	return m, &idx, items
+}
+
+func splitListFocusables(all []FocusableInfo) (tabStops, mouseOnly []FocusableInfo) {
+	for _, f := range all {
+		if f.MouseOnly {
+			mouseOnly = append(mouseOnly, f)
+			continue
+		}
+		tabStops = append(tabStops, f)
+	}
+	return tabStops, mouseOnly
+}
+
+func focusableIDs(in []FocusableInfo) []string {
+	ids := make([]string, len(in))
+	for i, f := range in {
+		ids[i] = f.ID
+	}
+	return ids
+}
+
+func mustHitRegion(t *testing.T, handler *mouse.Handler, id string) *mouse.Region {
+	t.Helper()
+	for _, r := range handler.HitMap.Regions() {
+		if r.ID == id {
+			copied := r
+			return &copied
+		}
+	}
+	t.Fatalf("no hit region for %q", id)
+	return nil
 }
 
 func TestHitRegionAccuracy(t *testing.T) {

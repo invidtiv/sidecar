@@ -150,7 +150,7 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 			return ""
 		}
 
-		// Click on a focusable element - focus it and return its ID as action
+		// Click on a tab-order focusable — focus it and return its ID.
 		for i, fid := range m.focusIDs {
 			if fid == id {
 				if id != m.currentFocusID() {
@@ -165,6 +165,15 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		action, _ := m.routeToFocusedSection(overlayClickMsg{id: id})
 		if action == actionOverlayIdle {
 			return ""
+		}
+		if action != "" {
+			return action
+		}
+
+		// Mouse-only section hits (single-focus list rows) are in the hit map
+		// and focusPositions, but not in focusIDs.
+		if _, ok := m.focusPositions[id]; ok {
+			return id
 		}
 		return ""
 
