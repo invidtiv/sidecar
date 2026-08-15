@@ -1002,6 +1002,39 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		projects := m.projectSwitcherFiltered
 
+		// The + button takes focus from the filter input via tab or right
+		// arrow; enter or space then opens add-project.
+		if m.projectSwitcherAddFocused {
+			switch msg.String() {
+			case "enter", " ", "space":
+				m.projectSwitcherAddFocused = false
+				m.initProjectAdd()
+				return m, nil
+			case "tab", "shift+tab", "left", "backtab":
+				m.projectSwitcherAddFocused = false
+				return m, nil
+			case "up", "down", "ctrl+n", "ctrl+p":
+				m.projectSwitcherAddFocused = false
+				// fall through to the normal handling below
+			default:
+				// Typing returns to the filter input.
+				m.projectSwitcherAddFocused = false
+			}
+		} else {
+			switch msg.String() {
+			case "tab":
+				m.projectSwitcherAddFocused = true
+				return m, nil
+			case "right":
+				// Only when the caret is already at the end, so right arrow
+				// still moves through filter text.
+				if m.projectSwitcherInput.Position() >= len(m.projectSwitcherInput.Value()) {
+					m.projectSwitcherAddFocused = true
+					return m, nil
+				}
+			}
+		}
+
 		switch msg.Code {
 		case tea.KeyEnter:
 			// Select project and switch to it
@@ -1867,6 +1900,10 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 	}
 
 	switch action {
+	case projectSwitcherAddButtonID:
+		m.projectSwitcherAddFocused = false
+		m.initProjectAdd()
+		return m, nil
 	case "cancel":
 		m.resetProjectSwitcher()
 		m.updateContext()
