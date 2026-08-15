@@ -11,11 +11,11 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
-	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -321,16 +321,13 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 }
 
 func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
-	if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-		m.registerPreviewTabRegions(box)
-		return
-	}
 	termBox, ok := m.previewPaneBox(panelayout.Terminal, box)
 	if ok {
-		m.registerPreviewTabRegions(termBox)
+		m.registerPreviewActionRegions(termBox)
 	}
 	m.registerPreviewDocRegions(box)
 	m.registerPreviewIssueRegions(box)
+	m.registerPreviewDiffPaneRegions(box)
 	if layout, ok := m.layoutPreviewPanes(box); ok {
 		for _, divider := range layout.Dividers {
 			hit := divider.Box
@@ -437,16 +434,6 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if key == "\\" {
 		return true, m.toggleWorkspaceSidebar()
 	}
-	if key == "," || key == "." {
-		if m.previewTabsVisible() {
-			delta := 1
-			if key == "," {
-				delta = -1
-			}
-			return true, m.cyclePreviewTab(delta)
-		}
-	}
-
 	// While the preview has focus its keys come first, so list navigation
 	// cannot move the cursor out from under the output being read.
 	if m.PreviewFocused() {
@@ -461,7 +448,7 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// live pane refuses and stays on the list — it does not navigate.
 		// Double-click is the remaining jump-to-project path. Diff/Task are
 		// views of the row, so typing always happens on Output.
-		return true, tea.Batch(m.ensureOutputTab(), m.enterPreviewInteractive())
+		return true, m.enterPreviewInteractive()
 	case "/":
 		cmd := m.focusList()
 		m.workspaces.FocusFilter()
@@ -517,6 +504,9 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.issuePaneFocused() {
 		return "global-workspaces-issue"
 	}
+	if m.diffPaneFocused() {
+		return ctxGlobalWorkspacesDiff
+	}
 	if m.docPaneFocused() {
 		return "global-workspaces-doc"
 	}
@@ -531,6 +521,11 @@ func (m *Model) issuePaneFocused() bool {
 func (m *Model) docPaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.doc != nil && m.preview.doc.focused
+}
+
+func (m *Model) diffPaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.diff != nil && m.preview.diff.focused
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -647,6 +642,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
 	}
+	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewDiffDividerKind {
+		view := m.previewDiffDragView()
+		view.SetListWidth(m.workspacesMouse.DragStartValue())
+		view.ApplyListWidthDelta(action.DragDX, m.previewDiffDragWidth())
+		return nil
+	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewPaneDividerKind {
 		split := panelayout.Find(m.preview.paneRoot, m.preview.paneDragSplitID)
 		box, ok := m.previewBox()
@@ -665,6 +666,10 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {
 		_ = saveWorkspaceSidebarWidth(m.sidebarWidth)
 		return m.syncTerminalGeometry()
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewDiffDividerKind {
+		_ = state.SetDiffTabFileListWidth(m.previewDiffDragView().ListWidth())
+		return nil
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewPaneDividerKind {
 		m.preview.paneDragSplitID = 0
@@ -743,10 +748,13 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case isPreviewIssueRegion(kind):
 			view := m.preview.issue.view()
 			return view == nil || view.ScrollAtBoundary(action.Delta)
-		case kind == previewRegionKind:
-			if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-				return m.visiblePreviewTabAtBoundary(action.Delta)
+		case kind == previewDiffRegionKind:
+			view := m.preview.diff.view()
+			if view == nil {
+				return true
 			}
+			return view.ScrollAtBoundary(action.Delta, view.Height())
+		case kind == previewRegionKind:
 			return m.previewWheelAtBoundary(action)
 		default:
 			return false
@@ -789,6 +797,18 @@ func regionKind(region *mouse.Region) (string, bool) {
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over terminal output moves that
 	// output, not the list underneath it.
+	if _, ok := action.Region.Data.(previewDiffTabHit); ok {
+		return m.handlePreviewDiffMouse(action)
+	}
+	if kind, _ := regionKind(action.Region); kind == previewDiffRegionKind {
+		return m.handlePreviewDiffMouse(action)
+	}
+	if hit, ok := action.Region.Data.(previewActionHit); ok {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.clickPreviewAction(hit)
+		}
+		return nil
+	}
 	if _, ok := action.Region.Data.(previewGitHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.OpenSelectedInGit()
@@ -805,9 +825,13 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	}
-	if tab, ok := action.Region.Data.(previewTabHit); ok {
-		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.setPreviewTab(workspacediff.Tab(tab))
+	if _, ok := action.Region.Data.(previewDiffDividerHit); ok {
+		if action.Type == mouse.ActionClick {
+			view := m.previewDiffDragView()
+			w := m.previewDiffDragWidth()
+			start := view.EffectiveListWidth(w)
+			view.SetListWidth(start)
+			m.workspacesMouse.StartDrag(action.X, action.Y, previewDiffDividerKind, start)
 		}
 		return nil
 	}
@@ -844,17 +868,6 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			// press arms a gesture the release resolves, a drag selects, a double
 			// or triple click takes the word or the line, and the wheel belongs
 			// to the application only while it has asked for mouse reports.
-			if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-				switch action.Type {
-				case mouse.ActionScrollUp:
-					m.scrollVisiblePreviewTab(action.Delta)
-					return nil
-				case mouse.ActionScrollDown:
-					m.scrollVisiblePreviewTab(action.Delta)
-					return nil
-				}
-				return nil
-			}
 			switch m.previewPointerIntent(action, false, "") {
 			case tty.PointerPress:
 				return m.pressPreview(action)

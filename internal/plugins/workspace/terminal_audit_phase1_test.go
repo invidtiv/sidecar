@@ -334,8 +334,7 @@ func TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation(t *testing.T) 
 
 func newInteractiveInputTestPlugin() *Plugin {
 	return &Plugin{
-		viewMode:   ViewModeInteractive,
-		previewTab: PreviewTabOutput,
+		viewMode: ViewModeInteractive,
 		interactiveState: &InteractiveState{
 			Active:        true,
 			TargetSession: "sidecar-test",

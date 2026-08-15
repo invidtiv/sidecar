@@ -810,7 +810,7 @@ func TestGetInteractiveExitKey_VariousKeys(t *testing.T) {
 // claim steps this surface's own window back through scrollback.
 func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 	p := &Plugin{
-		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		viewMode: ViewModeInteractive, width: 120, height: 40,
 		terminalHistory: make(map[string]tty.HistoryReach),
 	}
 	givePaneScrollableOutput(p, 120)
@@ -824,7 +824,7 @@ func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 // window to the live bottom it follows from.
 func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
 	p := &Plugin{
-		viewMode: ViewModeInteractive, previewTab: PreviewTabOutput, width: 120, height: 40,
+		viewMode: ViewModeInteractive, width: 120, height: 40,
 		terminalHistory: make(map[string]tty.HistoryReach),
 	}
 	givePaneScrollableOutput(p, 120)
@@ -1279,7 +1279,6 @@ func TestPassiveModeCopyChords(t *testing.T) {
 		p := &Plugin{
 			viewMode:      ViewModeList,
 			activePane:    PanePreview,
-			previewTab:    PreviewTabOutput,
 			shellSelected: true,
 			shells:        []*ShellSession{{Agent: &Agent{OutputBuf: testTerminalBuffer("copy me\n")}}},
 		}
@@ -1297,7 +1296,6 @@ func TestCopyChordWithoutSelectionLeavesClipboardAlone(t *testing.T) {
 	p := &Plugin{
 		viewMode:      ViewModeList,
 		activePane:    PanePreview,
-		previewTab:    PreviewTabOutput,
 		shellSelected: true,
 		shells:        []*ShellSession{{Agent: &Agent{OutputBuf: testTerminalBuffer("visible output\n")}}},
 	}

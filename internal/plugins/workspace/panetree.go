@@ -13,6 +13,7 @@ const (
 	PaneTerminal = panelayout.Terminal
 	PaneDoc      = panelayout.Document
 	PaneIssue    = panelayout.Issue
+	PaneDiff     = panelayout.Diff
 )
 
 type SplitAxis = panelayout.Axis

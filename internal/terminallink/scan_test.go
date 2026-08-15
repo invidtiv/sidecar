@@ -10,7 +10,7 @@ import (
 )
 
 func TestScanFindsSafeURLAndPathLine(t *testing.T) {
-	spans := Scan("see https://example.com/docs?q=1, then internal/foo.go:123", nil)
+	spans := Scan("see https://example.com/docs?q=1, then internal/foo.go:123", nil, nil)
 	if len(spans) != 2 {
 		t.Fatalf("spans = %#v, want URL and path", spans)
 	}
@@ -23,7 +23,7 @@ func TestScanFindsSafeURLAndPathLine(t *testing.T) {
 }
 
 func TestScanIssueOnTypicalAgentLine(t *testing.T) {
-	spans := Scan("review td-196c42", nil)
+	spans := Scan("review td-196c42", nil, nil)
 	if len(spans) != 1 {
 		t.Fatalf("spans = %#v, want one issue", spans)
 	}
@@ -37,7 +37,7 @@ func TestScanIssueOnTypicalAgentLine(t *testing.T) {
 
 func TestScanIssueDoesNotOverlapURLOrFile(t *testing.T) {
 	line := "see https://example.com/td-196c42 and td-196c42.go:12 then review td-196c42"
-	spans := Scan(line, nil)
+	spans := Scan(line, nil, nil)
 	var issues, files, urls int
 	for _, span := range spans {
 		switch span.Kind {
@@ -75,11 +75,11 @@ func TestScanIssueRequiresWordBoundaryAndFourHex(t *testing.T) {
 		"td-",
 		"TD-196c42",
 	} {
-		if spans := Scan(line, nil); len(spans) != 0 {
+		if spans := Scan(line, nil, nil); len(spans) != 0 {
 			t.Fatalf("Scan(%q) = %#v, want none", line, spans)
 		}
 	}
-	spans := Scan("see td-196C42 done", nil)
+	spans := Scan("see td-196C42 done", nil, nil)
 	if len(spans) != 1 || spans[0].Value != "td-196C42" {
 		t.Fatalf("mixed-case issue = %#v", spans)
 	}
@@ -92,7 +92,7 @@ func TestScanBareMarkdownUsesResolverAndSkipsMisses(t *testing.T) {
 		}
 		return "", Extra{}, false
 	}
-	spans := Scan("please read README.md and missing.md", resolve)
+	spans := Scan("please read README.md and missing.md", resolve, nil)
 	if len(spans) != 1 || spans[0].Kind != KindFile || spans[0].Value != "README.md" || spans[0].Extra.Raw != "README.md" {
 		t.Fatalf("bare spans = %#v", spans)
 	}
@@ -111,25 +111,25 @@ func TestScanBareCodeAndHomePaths(t *testing.T) {
 		display, _, ok := ResolveFile(home, raw)
 		return display, Extra{Raw: raw}, ok
 	}
-	spans := Scan("see main.go and ~/dot.go and missing.go", resolve)
+	spans := Scan("see main.go and ~/dot.go and missing.go", resolve, nil)
 	if len(spans) != 1 || spans[0].Kind != KindFile || spans[0].Extra.Raw != "~/dot.go" {
 		t.Fatalf("spans = %#v", spans)
 	}
-	spans = Scan("main.go:37", resolve)
+	spans = Scan("main.go:37", resolve, nil)
 	if len(spans) != 0 {
 		t.Fatalf("missing path:line = %#v", spans)
 	}
 	if err := os.WriteFile(filepath.Join(home, "main.go"), []byte("package main"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	spans = Scan("main.go:37", resolve)
+	spans = Scan("main.go:37", resolve, nil)
 	if len(spans) != 1 || spans[0].Value != "main.go" || spans[0].Extra.Line != 37 {
 		t.Fatalf("path:line = %#v", spans)
 	}
 }
 
 func TestScanWithoutResolverOmitsBareMarkdown(t *testing.T) {
-	spans := Scan("please read README.md", nil)
+	spans := Scan("please read README.md", nil, nil)
 	if len(spans) != 0 {
 		t.Fatalf("nil resolver still emitted %#v", spans)
 	}
@@ -139,7 +139,7 @@ func TestScanFirstKindWinsOnURLContainingMarkdownPath(t *testing.T) {
 	spans := Scan("https://example.test/docs/guide.markdown", func(string) (string, Extra, bool) {
 		t.Fatal("resolver should not run for a URL overlap")
 		return "", Extra{}, false
-	})
+	}, nil)
 	if len(spans) != 1 || spans[0].Kind != KindURL {
 		t.Fatalf("spans = %#v, want the URL only", spans)
 	}
@@ -166,7 +166,7 @@ func TestScanDoesNotImportWorkspaceOrOverview(t *testing.T) {
 	// it; it must not import them. The blank imports below would fail to
 	// compile if we accidentally grew a host dependency — they stay in the
 	// host packages' tests. Here we only document the rule and check kinds.
-	for _, kind := range []Kind{KindURL, KindFile, KindIssue} {
+	for _, kind := range []Kind{KindURL, KindFile, KindIssue, KindDiff} {
 		if kind == "" {
 			t.Fatal("empty kind")
 		}
@@ -188,13 +188,13 @@ func TestScanIssueRejectsATdStemInsideALongerToken(t *testing.T) {
 		"open notes-td-a1b2c3",
 		"open td-a1b2c3_draft",
 	} {
-		if spans := Scan(line, nil); len(spans) != 0 {
+		if spans := Scan(line, nil, nil); len(spans) != 0 {
 			t.Fatalf("Scan(%q) = %#v, want no issue span", line, spans)
 		}
 	}
 	// A sentence's own punctuation still ends the token.
 	for _, line := range []string{"closed by td-a1b2c3.", "closed by td-a1b2c3, then"} {
-		spans := Scan(line, nil)
+		spans := Scan(line, nil, nil)
 		if len(spans) != 1 || spans[0].Kind != KindIssue || spans[0].Value != "td-a1b2c3" {
 			t.Fatalf("Scan(%q) = %#v, want the issue", line, spans)
 		}
@@ -214,5 +214,127 @@ func TestIssueIDAcceptsOnlyTheShapeTheScannerProduces(t *testing.T) {
 		if IssueID(value) {
 			t.Fatalf("IssueID(%q) = true, want a refusal", value)
 		}
+	}
+}
+
+func acceptAllDiff(_ string) (string, Extra, bool) {
+	return "", Extra{}, true
+}
+
+func TestScanGitRangeIsOneSpan(t *testing.T) {
+	spans := Scan("landed abc1234..def5678", nil, acceptAllDiff)
+	if len(spans) != 1 || spans[0].Kind != KindDiff || spans[0].Value != "abc1234..def5678" {
+		t.Fatalf("range spans = %#v, want one dotted spec", spans)
+	}
+	if spans[0].StartCol != ansi.StringWidth("landed ") || spans[0].EndCol != ansi.StringWidth("landed abc1234..def5678")-1 {
+		t.Fatalf("range columns = %d..%d", spans[0].StartCol, spans[0].EndCol)
+	}
+
+	three := Scan("compare abc1234...def5678", nil, acceptAllDiff)
+	if len(three) != 1 || three[0].Value != "abc1234...def5678" {
+		t.Fatalf("three-dot spans = %#v", three)
+	}
+}
+
+func TestScanGitRejectsMixedCaseShortAndFilename(t *testing.T) {
+	for _, line := range []string{
+		"Abc1234",
+		"DEADBEE",
+		"abc123",
+		"abc1234.go",
+		"foo/abc1234",
+		"see HEAD",
+		"see HEAD~3",
+		"see origin/main",
+		"cafe",
+		"filter",
+	} {
+		if spans := Scan(line, nil, acceptAllDiff); len(spans) != 0 {
+			t.Fatalf("Scan(%q) = %#v, want no git spec", line, spans)
+		}
+	}
+	spans := Scan("landed abc1234.", nil, acceptAllDiff)
+	if len(spans) != 1 || spans[0].Value != "abc1234" {
+		t.Fatalf("sentence period should still yield the rev: %#v", spans)
+	}
+}
+
+func TestScanGitCommitWordAndBareRev(t *testing.T) {
+	spans := Scan("see commit abc1234 then done", nil, acceptAllDiff)
+	if len(spans) != 1 || spans[0].Kind != KindDiff || spans[0].Value != "commit abc1234" {
+		t.Fatalf("commit-word spans = %#v", spans)
+	}
+	spans = Scan("landed abc1234 on main", nil, acceptAllDiff)
+	if len(spans) != 1 || spans[0].Value != "abc1234" {
+		t.Fatalf("bare rev spans = %#v", spans)
+	}
+}
+
+func TestScanGitDoesNotOverlapURLFileOrIssue(t *testing.T) {
+	line := "see https://example.com/abc1234 and abc1234.go then td-abc1234 and abc1234"
+	fileResolve := func(raw string) (string, Extra, bool) {
+		if raw == "abc1234.go" {
+			return raw, Extra{Raw: raw}, true
+		}
+		return "", Extra{}, false
+	}
+	spans := Scan(line, fileResolve, acceptAllDiff)
+	var diffs, files, issues, urls int
+	for _, span := range spans {
+		switch span.Kind {
+		case KindDiff:
+			diffs++
+			if span.Value != "abc1234" {
+				t.Fatalf("diff value = %q", span.Value)
+			}
+		case KindFile:
+			files++
+		case KindIssue:
+			issues++
+		case KindURL:
+			urls++
+		}
+		for _, other := range spans {
+			if span == other {
+				continue
+			}
+			if span.StartCol <= other.EndCol && span.EndCol >= other.StartCol {
+				t.Fatalf("overlapping spans %#v and %#v", span, other)
+			}
+		}
+	}
+	if urls != 1 || files != 1 || issues != 1 || diffs != 1 {
+		t.Fatalf("kinds url=%d file=%d issue=%d diff=%d, want 1 each: %#v", urls, files, issues, diffs, spans)
+	}
+}
+
+func TestScanGitNilResolverOmitsSpecs(t *testing.T) {
+	if spans := Scan("landed abc1234 and abc1234..def5678", nil, nil); len(spans) != 0 {
+		t.Fatalf("nil DiffResolver still emitted %#v", spans)
+	}
+}
+
+func TestScanGitResolverMissDropsSpan(t *testing.T) {
+	resolve := func(raw string) (string, Extra, bool) {
+		return "", Extra{}, raw == "abc1234"
+	}
+	spans := Scan("abc1234 then deadbee", nil, resolve)
+	if len(spans) != 1 || spans[0].Value != "abc1234" {
+		t.Fatalf("resolver miss = %#v", spans)
+	}
+}
+
+func TestScanGitDottedWinsOverComponentRevs(t *testing.T) {
+	var seen []string
+	resolve := func(raw string) (string, Extra, bool) {
+		seen = append(seen, raw)
+		return raw, Extra{Raw: raw}, true
+	}
+	spans := Scan("abc1234..def5678", nil, resolve)
+	if len(spans) != 1 || spans[0].Value != "abc1234..def5678" {
+		t.Fatalf("dotted span = %#v", spans)
+	}
+	if len(seen) != 1 || seen[0] != "abc1234..def5678" {
+		t.Fatalf("resolver saw %#v, want only the range token", seen)
 	}
 }

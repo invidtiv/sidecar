@@ -11,6 +11,8 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 type terminalLinkKind int
@@ -19,6 +21,7 @@ const (
 	terminalURLLink terminalLinkKind = iota + 1
 	terminalPathLink
 	terminalIssueLink
+	terminalDiffLink
 )
 
 type terminalLink struct {
@@ -42,6 +45,8 @@ type terminalLinkSurfaceMemo struct {
 	buffer   *tty.OutputBuffer
 	revision uint64
 	paths    map[string]terminalLinkResolution
+	specs    map[string]terminalLinkResolution
+	newSpecs int
 }
 
 func (p *Plugin) terminalLinkTarget(termPanel bool) string {
@@ -88,15 +93,15 @@ func safeHTTPURL(raw string) (string, bool) {
 }
 
 func detectTerminalLinks(line string) []terminalLink {
-	return activatableTerminalLinks(terminallink.Scan(line, nil), false)
+	return activatableTerminalLinks(terminallink.Scan(line, nil, nil), false)
 }
 
-// activatableTerminalLinks keeps the spans this host can act on. Issue spans
-// are among them only when issues is true — a td id opens a leaf of the pane
-// tree, so without a tree there is nothing to open and an underline would
-// promise a click that goes nowhere. The issue-preview modal is not this
-// host's route and never was.
-func activatableTerminalLinks(spans []terminallink.Span, issues bool) []terminalLink {
+// activatableTerminalLinks keeps the spans this host can act on. Issue and
+// git-spec spans are among them only when leaves is true — both open a leaf
+// of the pane tree, so without a tree there is nothing to open and an
+// underline would promise a click that goes nowhere. The issue-preview modal
+// is not this host's route and never was.
+func activatableTerminalLinks(spans []terminallink.Span, leaves bool) []terminalLink {
 	links := make([]terminalLink, 0, len(spans))
 	for _, span := range spans {
 		switch span.Kind {
@@ -117,7 +122,7 @@ func activatableTerminalLinks(spans []terminallink.Span, issues bool) []terminal
 				Raw:      span.Extra.Raw,
 			})
 		case terminallink.KindIssue:
-			if !issues {
+			if !leaves {
 				continue
 			}
 			links = append(links, terminalLink{
@@ -125,6 +130,21 @@ func activatableTerminalLinks(spans []terminallink.Span, issues bool) []terminal
 				StartCol: span.StartCol,
 				EndCol:   span.EndCol,
 				Value:    span.Value,
+			})
+		case terminallink.KindDiff:
+			if !leaves {
+				continue
+			}
+			raw := span.Extra.Raw
+			if raw == "" {
+				raw = span.Value
+			}
+			links = append(links, terminalLink{
+				Kind:     terminalDiffLink,
+				StartCol: span.StartCol,
+				EndCol:   span.EndCol,
+				Value:    span.Value,
+				Raw:      raw,
 			})
 		}
 	}
@@ -154,6 +174,9 @@ func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
 			span.Extra = terminallink.Extra{Line: link.Line, Raw: link.Raw}
 		case terminalIssueLink:
 			span.Kind = terminallink.KindIssue
+		case terminalDiffLink:
+			span.Kind = terminallink.KindDiff
+			span.Extra = terminallink.Extra{Raw: link.Raw}
 		default:
 			continue
 		}
@@ -238,7 +261,10 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 	memo, found := p.terminalLinkMemo.surfaces[context.surface]
 	if !found || memo.root != context.root || memo.target != context.target || memo.buffer != buffer || memo.revision != revision {
 		memo = terminalLinkSurfaceMemo{rawRoot: context.rawRoot, root: context.root, target: context.target, buffer: buffer, revision: revision,
-			paths: make(map[string]terminalLinkResolution)}
+			paths: make(map[string]terminalLinkResolution), specs: make(map[string]terminalLinkResolution)}
+	}
+	if memo.specs == nil {
+		memo.specs = make(map[string]terminalLinkResolution)
 	}
 	resolver := resolveTerminalPathFromResolvedBase
 	if p.terminalPathResolver != nil {
@@ -253,6 +279,24 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 		}
 		if !resolution.ok {
 			return "", terminallink.Extra{}, false
+		}
+		return resolution.rel, terminallink.Extra{Raw: raw}, true
+	}, func(raw string) (string, terminallink.Extra, bool) {
+		resolution, found := memo.specs[raw]
+		if !found {
+			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
+				return "", terminallink.Extra{}, false
+			}
+			memo.newSpecs++
+			value, ok := p.resolveTerminalSpec(context.root, raw)
+			resolution = terminalLinkResolution{rel: value, ok: ok}
+			memo.specs[raw] = resolution
+		}
+		if !resolution.ok {
+			return "", terminallink.Extra{}, false
+		}
+		if resolution.rel == "" {
+			return raw, terminallink.Extra{Raw: raw}, true
 		}
 		return resolution.rel, terminallink.Extra{Raw: raw}, true
 	}), true)
@@ -300,6 +344,13 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 	}
 	if link.Kind == terminalIssueLink {
 		return p.activateIssueLink(link.Value)
+	}
+	if link.Kind == terminalDiffLink {
+		raw := link.Raw
+		if raw == "" {
+			raw = link.Value
+		}
+		return p.activateDiffLink(raw)
 	}
 	if link.Kind != terminalPathLink {
 		return nil, false
@@ -413,4 +464,33 @@ func resolveTerminalPath(base, raw string) (relative, absolute string, ok bool) 
 
 func resolveTerminalPathFromResolvedBase(baseResolved, raw string) (relative, absolute string, ok bool) {
 	return terminallink.ResolveFile(baseResolved, raw)
+}
+
+func (p *Plugin) resolveTerminalSpec(root, raw string) (string, bool) {
+	if p.terminalSpecResolver != nil {
+		return p.terminalSpecResolver(root, raw)
+	}
+	value, _, ok := terminallink.ResolveGitSpec(root, raw)
+	return value, ok
+}
+
+// activateDiffLink opens the clicked git spec against the selected terminal
+// surface as a Diff leaf tab. DiffTarget re-resolves in the checkout so a
+// short click and sidecar open share one Identity; .. vs ... is kept.
+func (p *Plugin) activateDiffLink(raw string) (tea.Cmd, bool) {
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil, false
+	}
+	target := uirequest.DiffTarget(root, raw)
+	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {
+		return nil, false
+	}
+	cmd := p.openDiffPaneForSurface(root, surface, target)
+	diff, _ := p.activeDiffPane()
+	if diff == nil || diff.tabs.Find(target.Identity()) < 0 {
+		return nil, false
+	}
+	p.clearTerminalSelection()
+	return cmd, true
 }

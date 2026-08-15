@@ -84,6 +84,7 @@ type TmuxAttachFinishedMsg struct {
 type DiffLoadedMsg struct {
 	OperationScope
 	WorkspaceName string
+	Identity      string
 	Content       string
 	Raw           string
 	Snapshot      *DiffSnapshot
@@ -240,27 +241,6 @@ type Task struct {
 	Status      string
 	Description string
 	EpicTitle   string // Parent epic title for search
-}
-
-// TaskDetails contains full task information for preview pane.
-type TaskDetails struct {
-	ID          string
-	Title       string
-	Status      string
-	Priority    string
-	Type        string
-	Description string
-	Acceptance  string
-	CreatedAt   string
-	UpdatedAt   string
-}
-
-// TaskDetailsLoadedMsg delivers task details for the preview pane.
-type TaskDetailsLoadedMsg struct {
-	OperationScope
-	TaskID  string
-	Details *TaskDetails
-	Err     error
 }
 
 // restartAgentMsg signals that an agent should be restarted after stopping.

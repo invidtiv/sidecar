@@ -136,25 +136,25 @@ func TestTabCyclesTheSidebarAndPreviewWithNoPaneTree(t *testing.T) {
 	assertFocus(t, p, leafTarget(0), "no tree: sidebar back to preview")
 }
 
-// Diff draws one preview window beside the sidebar. Tab cycles those two and
-// leaves the tab's own intra-window focus — file list ↔ diff — to h/l/enter.
-func TestTabOnTheDiffTabLeavesDiffFocusUntouched(t *testing.T) {
+// A focused Diff leaf owns intra-window focus (file list ↔ hunks). Tab walks
+// the tree and must not change that intra-leaf focus.
+func TestTabOnFocusedDiffLeafLeavesIntraFocusUntouched(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, false)
 	p.sidebarVisible = true
-	p.previewTab = PreviewTabDiff
-	p.diffTabFocus = DiffTabFocusDiff
+	if cmd := p.showDiffCmd(); cmd == nil {
+		t.Fatal("show-diff opened nothing")
+	}
+	view := p.activeDiffView()
+	if view == nil {
+		t.Fatal("no Diff view")
+	}
+	view.Focus = DiffTabFocusDiff
 	p.setFocusTarget(sidebarTarget())
 
 	p.handleListKeys(tabKey())
-	assertFocus(t, p, leafTarget(terminalLeafID(p.paneRoot)), "diff tab to preview")
-	if p.diffTabFocus != DiffTabFocusDiff {
-		t.Fatalf("tab moved diff focus to %v", p.diffTabFocus)
-	}
-	p.handleListKeys(tabKey())
-	assertFocus(t, p, sidebarTarget(), "diff preview to sidebar")
-	if p.diffTabFocus != DiffTabFocusDiff {
-		t.Fatalf("tab moved diff focus to %v", p.diffTabFocus)
+	if view.Focus != DiffTabFocusDiff {
+		t.Fatalf("tab moved diff focus to %v", view.Focus)
 	}
 }
 

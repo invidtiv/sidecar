@@ -283,7 +283,6 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	}
 	p := &Plugin{
 		viewMode:         ViewModeInteractive,
-		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
 		previewScroll:    2,
 		termPanelOutput:  panelBuffer,
@@ -329,7 +328,6 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 		width:            80,
 		height:           20,
 		viewMode:         ViewModeInteractive,
-		previewTab:       PreviewTabOutput,
 		selectedIdx:      0,
 		interactiveState: &InteractiveState{Active: true},
 		worktrees: []*Worktree{{
@@ -419,7 +417,6 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 			p := &Plugin{
 				focused:          true,
 				viewMode:         ViewModeInteractive,
-				previewTab:       PreviewTabOutput,
 				selectedIdx:      0,
 				interactiveState: state,
 				worktrees: []*Worktree{{

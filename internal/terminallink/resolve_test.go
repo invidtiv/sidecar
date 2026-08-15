@@ -2,7 +2,9 @@ package terminallink
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,4 +68,69 @@ func TestMarkdownExt(t *testing.T) {
 	if !Markdown("README.MD") || Markdown("main.go") {
 		t.Fatal("markdown extension classification")
 	}
+}
+
+func TestResolveCommitAndGitSpec(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "sidecar@example.test")
+	runGit(t, dir, "config", "user.name", "Sidecar Test")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "one")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "two")
+	first := shortRev(t, dir, "HEAD~1")
+	second := shortRev(t, dir, "HEAD")
+
+	oid, ok := ResolveCommit(dir, first)
+	if !ok || oid == "" {
+		t.Fatalf("ResolveCommit(%q) = %q ok=%v", first, oid, ok)
+	}
+	if _, ok := ResolveCommit(dir, "deadbee"); ok {
+		t.Fatal("unknown rev was accepted")
+	}
+	if _, ok := ResolveCommit(dir, "HEAD"); !ok {
+		t.Fatal("HEAD should resolve as a commit even though the scanner will not emit it")
+	}
+
+	if _, _, ok := ResolveGitSpec(dir, first); !ok {
+		t.Fatalf("ResolveGitSpec(%q) refused a real rev", first)
+	}
+	if _, extra, ok := ResolveGitSpec(dir, first+".."+second); !ok || extra.Raw != first+".."+second {
+		t.Fatalf("two-dot spec refused")
+	}
+	if _, extra, ok := ResolveGitSpec(dir, first+"..."+second); !ok || extra.Raw != first+"..."+second {
+		t.Fatalf("three-dot spec refused")
+	}
+	if _, extra, ok := ResolveGitSpec(dir, "commit "+first); !ok || extra.Raw != "commit "+first {
+		t.Fatalf("commit-word spec refused")
+	}
+	if _, _, ok := ResolveGitSpec(dir, "HEAD"); ok {
+		t.Fatal("HEAD is CLI-only and must not pass ResolveGitSpec")
+	}
+	if _, _, ok := ResolveGitSpec(dir, "deadbee.."+second); ok {
+		t.Fatal("range with unknown left accepted")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v (%s)", strings.Join(args, " "), err, out)
+	}
+}
+
+func shortRev(t *testing.T, dir, rev string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--short=7", rev)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(out))
+	if len(got) < 7 {
+		t.Fatalf("short rev %q", got)
+	}
+	return got
 }

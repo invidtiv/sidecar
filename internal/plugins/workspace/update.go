@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // update handles messages. The public Update wrapper in terminal_control.go
@@ -212,10 +213,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.reconcilePendingCreation()
 			p.applyPendingWorkspaceSelection()
-			// Load diff for the selected worktree so diff tab shows content immediately
-			p.diffState = LoadStateLoading
-			p.diffError = ""
-			cmds = append(cmds, p.loadSelectedDiff())
+			if cmd := p.loadSelectedDiff(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 
 			// Reconnect to existing tmux sessions after initial worktree load
 			if !p.initialReconnectDone {
@@ -253,32 +253,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorktreeKey {
-			p.diffSnapshot = msg.Snapshot
-			p.diffError = ""
-			p.diffState = LoadStateClean
+			if msg.Identity != "" && msg.Identity != p.diff.Target.Identity() && p.diff.Target.Identity() != "" {
+				return p, nil
+			}
+			p.bindDiffView()
 			if msg.Snapshot != nil {
-				p.diffState = msg.Snapshot.State
 				p.commitStatusWorktree = msg.WorktreeKey
 			}
-			p.applyDiffScope()
-			// Invalidate full-file diff since diff content changed
-			p.fullFileDiff = nil
-			// Clamp cursor if total items changed
-			totalItems := p.diffTabFileCount() + len(p.commitStatusList)
-			if totalItems > 0 && p.diffTabCursor >= totalItems {
-				p.diffTabCursor = totalItems - 1
-			} else if totalItems == 0 {
-				p.diffTabCursor = 0
-			}
-			// Update cached parsed diff AFTER clamping cursor
-			p.diffTabParsedDiff = p.parsedDiffForCurrentFile()
-			// Reload full-file diff if in full-file mode and cursor is on a file
-			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
-				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
-			}
-			// Opening/applying a snapshot selects the first item without a
-			// cursor-change event. Load that commit if it is the current item.
-			cmds = append(cmds, p.loadSelectedDiffTabCommit())
+			cmds = append(cmds, p.diff.ApplyLoadedSnapshot(msg.Snapshot, p.diff.WorkDir, p.diff.WorkspaceID))
 		}
 
 	case DiffErrorMsg:
@@ -286,12 +268,29 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorktreeKey {
-			p.diffSnapshot = nil
-			p.diffState = LoadStateError
-			p.diffContent, p.diffRaw, p.multiFileDiff = "", "", nil
-			p.commitStatusList = nil
-			p.diffError = fmt.Sprintf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err)
+			p.diff.ApplySnapshotMsg(workspacediff.SnapshotMsg{
+				Epoch: msg.Epoch, WorkspaceID: msg.WorktreeKey, Identity: workspacediff.IdentityWorkingTree,
+				Err: fmt.Errorf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err),
+			}, wt.Path, wt.IdentityKey())
 		}
+
+	case workspacediff.SnapshotMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplySnapshotMsg(msg, p.diff.WorkDir, p.diff.WorkspaceID))
+		cmds = append(cmds, p.applyDiffLoadedToLeaves(msg))
+
+	case workspacediff.CommitDetailMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitDetail(msg))
+		cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
+
+	case workspacediff.RangeMsg:
+		cmds = append(cmds, p.applyRangeToLeaves(msg))
+
+	case workspacediff.CommitFileDiffMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))
+		cmds = append(cmds, p.applyCommitFileDiffToLeaves(msg))
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -301,18 +300,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
 			return p, nil
 		}
+		p.bindDiffView()
+		if msg.Identity != "" && p.diff.Target.Identity() != "" && msg.Identity != p.diff.Target.Identity() {
+			return p, nil
+		}
 		if msg.CommitHash != "" {
-			// Commit file full-file diff: verify commit and file cursor match
-			if p.commitDetail != nil && p.commitDetail.Hash == msg.CommitHash &&
-				p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&
-				p.commitDetail.Files[p.commitFileCursor].Path == msg.FilePath {
+			if p.diff.CommitDetail != nil && p.diff.CommitDetail.Hash == msg.CommitHash &&
+				p.diff.CommitFileCursor >= 0 && p.diff.CommitFileCursor < len(p.diff.CommitDetail.Files) &&
+				p.diff.CommitDetail.Files[p.diff.CommitFileCursor].Path == msg.FilePath {
 				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 			}
-		} else {
-			// Workspace file full-file diff: verify file matches current cursor
-			if msg.FilePath == p.selectedDiffTabFile() {
-				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
-			}
+		} else if msg.FilePath == p.selectedDiffTabFile() {
+			p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 		}
 
 	case CommitStatusLoadedMsg:
@@ -321,12 +320,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
-			p.commitStatusList = msg.Commits
+			p.diff.Commits = msg.Commits
 			p.commitStatusWorktree = msg.WorkspaceName
 			// Clamp diff tab cursor if total items changed
-			totalItems := p.diffTabFileCount() + len(p.commitStatusList)
-			if totalItems > 0 && p.diffTabCursor >= totalItems {
-				p.diffTabCursor = totalItems - 1
+			totalItems := p.diffTabFileCount() + len(p.diff.Commits)
+			if totalItems > 0 && p.diff.Cursor >= totalItems {
+				p.diff.Cursor = totalItems - 1
 			}
 		}
 
@@ -336,40 +335,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.Err == nil && msg.Commit != nil && p.selectedWorktree() != nil &&
 			p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
-			p.commitDetail = msg.Commit
-			p.commitFileCursor = 0
-			p.commitFileScroll = 0
-			p.commitFileDiffRaw = ""
-			p.commitFileParsed = nil
-			// Auto-load diff for first file if any
-			if len(msg.Commit.Files) > 0 {
-				parentHash := ""
-				if msg.Commit.IsMerge && len(msg.Commit.ParentHashes) > 0 {
-					parentHash = msg.Commit.ParentHashes[0]
-				}
-				cmds = append(cmds, p.loadCommitFileDiff(msg.Commit.Hash, msg.Commit.Files[0].Path, parentHash))
-			}
+			p.bindDiffView()
+			cmds = append(cmds, p.diff.ApplyCommitDetail(workspacediff.CommitDetailMsg{
+				Epoch: msg.Epoch, WorkspaceID: msg.WorkspaceName, Identity: workspacediff.IdentityWorkingTree,
+				Hash: msg.CommitHash, Commit: mapPluginCommit(msg.Commit),
+			}))
 		}
 
 	case CommitFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if msg.Err == nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().IdentityKey() == msg.WorkspaceName && p.commitDetail != nil &&
-			p.commitDetail.Hash == msg.CommitHash {
-			// Verify file path matches current selection
-			if p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&
-				p.commitDetail.Files[p.commitFileCursor].Path == msg.FilePath {
-				p.commitFileDiffRaw = msg.Raw
-				p.commitFileParsed, _ = gitstatus.ParseUnifiedDiff(msg.Raw)
-				// Auto-load full-file content if already in full-file view mode
-				if p.diffViewMode == DiffViewFullFile {
-					p.fullFileDiff = nil
-					return p, p.loadFullFileDiffForCommit()
-				}
-			}
-		}
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitFileDiff(workspacediff.CommitFileDiffMsg{
+			Epoch: msg.Epoch, WorkspaceID: msg.WorkspaceName, Identity: workspacediff.IdentityWorkingTree,
+			CommitHash: msg.CommitHash, FilePath: msg.FilePath, Raw: msg.Raw, Err: msg.Err,
+		}))
 
 	case CreateDoneMsg:
 		if msg.Err != nil {
@@ -576,10 +557,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Store any warnings for display
 		p.deleteWarnings = msg.Warnings
 		// Clear preview pane content to ensure old diff doesn't persist
-		p.diffContent = ""
-		p.diffRaw = ""
-		p.cachedTaskID = ""
-		p.cachedTask = nil
+		p.diff.Content = ""
+		p.diff.Raw = ""
 		// Load diff for newly selected worktree
 		cmds = append(cmds, p.loadSelectedDiff())
 
@@ -1483,10 +1462,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Err == nil {
 			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
 				wt.TaskID = msg.TaskID
-				// Load task details for the newly linked task
-				if msg.TaskID != "" {
-					cmds = append(cmds, p.loadTaskDetails(msg.TaskID))
-				}
 			}
 		}
 
@@ -1522,14 +1497,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.createModal = nil
 				p.createModalWidth = 0
 			}
-		}
-
-	case TaskDetailsLoadedMsg:
-		p.taskLoading = false
-		if msg.Err == nil && msg.Details != nil {
-			p.cachedTaskID = msg.TaskID
-			p.cachedTask = msg.Details
-			p.cachedTaskFetched = time.Now()
 		}
 
 	case LocalBranchesMsg:

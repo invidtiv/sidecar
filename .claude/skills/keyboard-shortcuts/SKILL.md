@@ -85,16 +85,15 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 
 ## Global Workspaces
 
-Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`.
+Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
 
 The list is browse-only. There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` / arrows / `g` / `G` | Move selection; preview follows; not typing |
-| `,` / `.` | Previous / next preview tab (Output / Diff / Task) on a non-main worktree. Shells and the main worktree have no tab row |
-| `enter` / `E` | Start typing in the selected live pane (switches to Output if needed). A dead row stays put |
-| click in pane | Start typing (Output terminal only). Clicking Diff/Task chips does not type |
+| `enter` / `E` | Start typing in the selected live pane. A dead row stays put |
+| click in pane | Start typing. Clicking Diff/Task action chips opens a leaf and does not type |
 | click a file tab | Select that file in the document preview. `{` / `}` also cycle when the document is focused |
 | click an issue tab | Select that issue in the issue preview. `{` / `}` also cycle when the issue is focused |
 | click a list row | Select it; preview follows; not typing |
@@ -297,6 +296,7 @@ active tab, and each tab's scroll.
 | `workspace-preview` | Preview pane |
 | `workspace-doc` | File tabs beside the terminal (hide with `q`) |
 | `workspace-issue` | Issue tabs beside the terminal (hide with `q`; last `x` forgets) |
+| `workspace-diff` | Diff tabs beside the terminal (hide with `q`; last `x` forgets) |
 | `workspace-create` | Create worktree input |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
@@ -310,6 +310,7 @@ active tab, and each tab's scroll.
 | `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
 | `v` | toggle-view | Toggle list/kanban |
 | `D` | delete-workspace | Delete workspace / delete shell (confirm) |
+| `d` | show-diff | Open working-tree Diff leaf |
 | `p` | push | Push branch |
 | `m` | merge-workflow | Start merge workflow |
 | `T` | link-task | Link/unlink task |
@@ -320,8 +321,7 @@ active tab, and each tab's scroll.
 | `S` | stop-agent | Stop agent |
 | `y` | approve | Approve agent prompt |
 | `N` | reject | Reject agent prompt |
-| `,` | prev-tab | Previous preview tab |
-| `.` | next-tab | Next preview tab |
+
 
 ### Interactive Mode
 
@@ -342,7 +342,7 @@ that is already open is focused (and `path:line` jumps). Click a drawn tab
 to select it. The header is only the tab strip: each label is the relative
 path, left-truncated so the filename end always wins. Document panes are
 enabled by default; `--disable-feature=workspace_doc_panes` opts out for a
-launch. `shift`-drag and `alt`-drag remain terminal selection gestures.
+launch and also disables Diff (no pane tree). `shift`-drag and `alt`-drag remain terminal selection gestures.
 
 The global Workspaces view uses the same tab strip and the same click / `{`
 / `}` / `x` keys. Those tabs stay in memory for the selected row.
@@ -350,8 +350,8 @@ The global Workspaces view uses the same tab strip and the same click / `{`
 `q` / `esc` hide the pane and remember the tab set for this shell or
 workspace. `x` on the last tab forgets the set. Switching surfaces or
 relaunching onto the same surface restores open files, the active tab,
-render mode, wrap, scroll, and split ratio. `,` / `.` stay Output/Diff/Task
-on worktrees and do not cycle document tabs.
+render mode, wrap, scroll, and split ratio. `,` / `.` cycle Diff target
+tabs only while a Diff leaf is focused; they do not cycle document tabs.
 
 | Key | Command | Description |
 |-----|---------|-------------|
@@ -369,6 +369,24 @@ on worktrees and do not cycle document tabs.
 | `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the workspace split |
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and document |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
+
+### Diff Pane
+
+`d` / `show-diff` on the Workspaces list or preview opens a working-tree Diff
+leaf beside the terminal. The leaf is not a root context: `q` / `esc` hide it.
+`{` / `}` stay next/prev file inside the view; `,` / `.` cycle Diff target
+tabs while the leaf is focused.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `d` | show-diff | Open working-tree Diff leaf (list and preview) |
+| `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
+| `x` | close-tab | Close the active tab. Last tab forgets the pane |
+| `,` / `.` | prev-tab / next-tab | Previous / next Diff target tab |
+| `{` / `}` | prev-file / next-file | Previous / next file in this target |
+| `Y` | yank-id | Copy the target identity (`wt` / `c:…` / `r:…`) |
+| `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and content |
+| `\` | toggle-sidebar | Toggle sidebar visibility |
 
 ### Issue Pane
 

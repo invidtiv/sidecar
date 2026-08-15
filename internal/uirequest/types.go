@@ -15,6 +15,7 @@ type TargetKind string
 const (
 	TargetKindFile  TargetKind = "file"
 	TargetKindIssue TargetKind = "issue"
+	TargetKindDiff  TargetKind = "diff"
 )
 
 // Status describes the host's response to a UI request.

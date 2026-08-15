@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // Content is what one pane-tree leaf shows. The tree places boxes and the frame
@@ -35,6 +36,7 @@ const (
 	contentKindTerminal = "terminal"
 	contentKindDoc      = "doc"
 	contentKindIssue    = "issue"
+	contentKindDiff     = "diff"
 )
 
 // Size is the box a content draws into. It is the leaf's whole box, header row
@@ -82,6 +84,12 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 			return nil
 		}
 		return &issueContent{p: p, issue: issue}
+	case PaneDiff:
+		diff := p.diffs[node.ContentID]
+		if diff == nil || diff.view() == nil {
+			return nil
+		}
+		return &diffContent{p: p, diff: diff}
 	default:
 		return &terminalContent{p: p}
 	}
@@ -209,6 +217,52 @@ func (c *issueContent) View(render Render) string {
 	}
 	return composePaneLeaf(
 		c.p.issuePaneHeaderRow(c.issue, c.size.Width, render.Focused),
+		body)
+}
+
+// diffContent is the Diff leaf: the pane's own header row above the
+// workspacediff viewer. It spends its box like the document and issue leaves.
+type diffContent struct {
+	p    *Plugin
+	diff *diffPane
+	size Size
+}
+
+func (c *diffContent) Kind() string { return contentKindDiff }
+
+func (c *diffContent) Title() string {
+	if view := c.diff.view(); view != nil {
+		return view.Target.TabLabel()
+	}
+	return "Diff"
+}
+
+func (c *diffContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	if view := c.diff.view(); view != nil {
+		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
+	return nil
+}
+
+func (c *diffContent) View(render Render) string {
+	body := ""
+	if view := c.diff.view(); view != nil {
+		c.p.attachDiffPaintTo(view)
+		bodyH := maxInt(c.size.Height-terminalHeaderRows, 0)
+		view.SetSize(c.size.Width, bodyH)
+		body = view.Render(c.size.Width, bodyH, workspacediff.RenderOpts{
+			Truncate: func(s string, w int, suffix string) string {
+				if c.p.truncateCache != nil {
+					return c.p.truncateCache.Truncate(s, w, suffix)
+				}
+				return s
+			},
+			PaintFile: c.p.paintDiffFile,
+		})
+	}
+	return composePaneLeaf(
+		c.p.diffPaneHeaderRow(c.diff, c.size.Width, render.Focused),
 		body)
 }
 

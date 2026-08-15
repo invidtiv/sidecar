@@ -251,7 +251,9 @@ the selected row; they are not restored after a relaunch.
 
 Document panes are enabled by default. To turn them off for a launch, run
 `sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
-`~/.config/sidecar/config.json`:
+`~/.config/sidecar/config.json`. When the flag is off there is no pane tree,
+so Diff is also unavailable (`d`, the Diff chip, and `sidecar open --diff`
+toast or no-op):
 
 ```json
 {
@@ -289,9 +291,9 @@ remembered files stays a full-width terminal. Clicking a file while the
 pane is hidden reopens the remembered set and focuses (or appends) that
 path.
 
-`,` / `.` stay Output / Diff / Task on worktrees and do not cycle document
-tabs. `m` on a focused document does not start a merge. Drag the divider to
-resize.
+`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
+not cycle document tabs. `m` on a focused document does not start a merge.
+Drag the divider to resize.
 
 `shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
 is an override for opening links. Use an unmodified click to follow a path.
@@ -347,8 +349,8 @@ On the global Workspaces view, `q` / `esc` and last-`x` close the pane
 and forget that row's in-memory set. Switching rows and back restores
 tabs that were still open.
 
-`,` / `.` stay Output / Diff / Task on worktrees and do not cycle issue
-tabs.
+`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
+not cycle issue tabs.
 
 **What you'll see:**
 - Agent initialization and model selection
@@ -357,43 +359,20 @@ tabs.
 - Error messages and stack traces
 - Completion messages
 
-### Diff Tab
+### Diff pane
 
-Full git diff for the workspace branch compared to base branch. Shows all changes the agent made.
+`d`, the **Diff** header chip, or `sidecar open --diff` opens a working-tree
+Diff leaf beside the terminal. Click a printed hash or `A..B` range to open a
+commit or range tab on the same leaf. `,` / `.` cycle those target tabs while
+the leaf is focused. `q` / `esc` hide it.
 
-**Features:**
-- Unified diff (traditional +/- format)
-- Side-by-side diff (split-screen before/after)
-- Syntax highlighting for code changes
-- Horizontal scroll for wide diffs
-- Merge conflict detection and highlighting
+`--disable-feature=workspace_doc_panes` disables Diff: there is no pane tree,
+so those paths toast or no-op.
 
-| Key | Action |
-|-----|--------|
-| `v` | Toggle unified/side-by-side view |
-| `h`, `←` | Scroll left (wide diffs) |
-| `l`, `→` | Scroll right |
-| `0` | Reset horizontal scroll |
+### Task chip
 
-Diff mode preference persists across sessions.
-
-### Task Tab
-
-Displays linked TD task with full context. Shows task title, description, acceptance criteria, and metadata.
-
-**Features:**
-- Markdown rendering (headings, lists, code blocks, emphasis)
-- Raw text mode (toggle off for plain view)
-- Scrollable content for long task descriptions
-- Automatic task link detection from `.sidecar-task` file
-
-| Key | Action |
-|-----|--------|
-| `m` | Toggle markdown rendering |
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-
-Empty if no task is linked. Press `t` in the sidebar to link a task.
+When a worktree has a linked `TaskID`, the **Task** chip opens that id in the
+Issues leaf. Press `T` in the sidebar to link or unlink a task.
 
 ## Agent Integration
 
@@ -672,7 +651,7 @@ pane has focus.
 ## Mouse Support
 
 - **Click workspace**: Select
-- **Click tab**: Switch Output / Diff / Task, or select a file or issue tab
+- **Click tab**: Select a file or issue tab. Diff and Task header chips open leaves.
 - **Click button**: Execute action
 - **Drag divider**: Resize panes
 - **Scroll**: Navigate lists and content

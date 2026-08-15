@@ -4,7 +4,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // focusRing is the windows this tab has on screen, in cycle order. It is the
@@ -18,19 +17,6 @@ func (m *Model) focusRing() []panelayout.Target {
 		return []panelayout.Target{{Kind: panelayout.TargetSidebar}}
 	}
 	sidebarVisible := !layout.previewOnly
-	// Diff and Task are views of the selected row, drawn in place of the pane
-	// tree: the whole preview is one window, exactly as the project surface's
-	// two-state toggle treats it.
-	if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
-		ring := make([]panelayout.Target, 0, 2)
-		if sidebarVisible {
-			ring = append(ring, panelayout.Target{Kind: panelayout.TargetSidebar})
-		}
-		if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal); leaf != nil {
-			ring = append(ring, panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leaf.ID})
-		}
-		return ring
-	}
 	return panelayout.Ring(m.preview.paneRoot, sidebarVisible, false)
 }
 

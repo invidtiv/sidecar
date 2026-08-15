@@ -48,6 +48,24 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 10},
 		}
 	}
+	if p.viewMode == ViewModeList && p.diffFocused() {
+		cmds := []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Hide diff pane", Context: "workspace-diff", Priority: 1},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active diff tab", Context: "workspace-diff", Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: "workspace-diff", Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: "workspace-diff", Priority: 4},
+			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: "workspace-diff", Priority: 5},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-diff", Priority: 6},
+			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow diff pane", Context: "workspace-diff", Priority: 7},
+			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink diff pane", Context: "workspace-diff", Priority: 8},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-diff", Priority: 9},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-diff", Priority: 10},
+		}
+		if view := p.activeDiffView(); view != nil {
+			cmds = append(cmds, view.Commands("workspace-diff")...)
+		}
+		return cmds
+	}
 	switch p.viewMode {
 	case ViewModeInteractive:
 		return []plugin.Command{
@@ -190,32 +208,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			}
 			// Tab commands only shown when a worktree is selected (not shell)
 			// Shell has no tabs - it shows primer/output directly
-			if !p.selectingShell() {
-				cmds = append(cmds,
-					plugin.Command{ID: "prev-tab", Name: "Tab←", Description: "Previous preview tab", Context: "workspace-preview", Priority: 3},
-					plugin.Command{ID: "next-tab", Name: "Tab→", Description: "Next preview tab", Context: "workspace-preview", Priority: 4},
-				)
-				// Add diff view toggle when on Diff tab
-				if p.previewTab == PreviewTabDiff {
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-scope", Name: "Scope", Description: "Cycle working tree, commits, and aggregate", Context: "workspace-preview", Priority: 5})
-					diffViewName := "Split"
-					switch p.diffViewMode {
-					case DiffViewSideBySide:
-						diffViewName = "Full"
-					case DiffViewFullFile:
-						diffViewName = "Unified"
-					}
-					cmds = append(cmds, plugin.Command{ID: "toggle-diff-view", Name: diffViewName, Description: "Cycle diff view mode", Context: "workspace-preview", Priority: 6})
-					// Add file navigation commands when viewing diff with multiple files
-					if p.multiFileDiff != nil && len(p.multiFileDiff.Files) > 1 {
-						cmds = append(cmds,
-							plugin.Command{ID: "next-file", Name: "}", Description: "Next file", Context: "workspace-preview", Priority: 6},
-							plugin.Command{ID: "prev-file", Name: "{", Description: "Previous file", Context: "workspace-preview", Priority: 7},
-							plugin.Command{ID: "file-picker", Name: "Files", Description: "Open file picker", Context: "workspace-preview", Priority: 8},
-						)
-					}
-				}
-			}
+			cmds = append(cmds,
+				plugin.Command{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-preview", Priority: 3},
+			)
 			// Also show agent commands in preview pane
 			wt := p.selectedWorktree()
 			if wt != nil {
@@ -247,7 +242,7 @@ func (p *Plugin) Commands() []plugin.Command {
 					if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
 						hasActiveSession = true
 					}
-				} else if wt != nil && wt.Agent != nil && p.previewTab == PreviewTabOutput {
+				} else if wt != nil && wt.Agent != nil {
 					hasActiveSession = true
 				}
 				if hasActiveSession {
@@ -257,7 +252,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
-			if terminalPanelEnabled() && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+			if terminalPanelEnabled() {
 				termName := "Term"
 				if p.termPanelVisible {
 					termName = "Hide"
@@ -299,6 +294,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
 			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
+			{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-list", Priority: 8},
 		}
 
 		// Shell-specific commands when shell is selected
@@ -439,6 +435,9 @@ func (p *Plugin) FocusContext() string {
 		// host's root-context `q` quits Sidecar — to a pane drawn as focused.
 		if p.issueFocused() {
 			return "workspace-issue"
+		}
+		if p.diffFocused() {
+			return "workspace-diff"
 		}
 		if p.filterFocused() && p.activePane == PaneSidebar {
 			// A dedicated text-input context: while the query has focus, app

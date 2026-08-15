@@ -1,6 +1,10 @@
 package workspacediff
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestCommitDetailMatchesListHash(t *testing.T) {
 	const short, full = "aaa1111", "aaa1111bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -67,6 +71,124 @@ func TestLoadSelectedCommitSkipsAlreadyLoadedHash(t *testing.T) {
 	}
 }
 
+func TestApplyCommitDetailInstallsCommitRoot(t *testing.T) {
+	v := &View{
+		Target: MustParse("abc1234"),
+		State:  LoadStateLoading,
+	}
+	v.Bind("/tmp", "ws", 1)
+	cmd := v.ApplyCommitDetail(CommitDetailMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "c:abc1234",
+		Hash: "abc1234",
+		Commit: &CommitDetail{
+			Hash:      "abc1234bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			ShortHash: "abc1234",
+			Subject:   "one",
+			Files:     []CommitFile{{Path: "a.go", Status: "M"}},
+		},
+	})
+	_ = cmd
+	if v.CommitDetail == nil || v.CommitDetail.Subject != "one" {
+		t.Fatalf("CommitDetail = %#v, want installed", v.CommitDetail)
+	}
+	if v.State == LoadStateLoading {
+		t.Fatal("state stayed Loading")
+	}
+	if v.Focus != FocusCommitFiles {
+		t.Fatalf("focus = %v, want FocusCommitFiles", v.Focus)
+	}
+	got := v.Render(80, 12, RenderOpts{})
+	if strings.Contains(got, "Loading diff…") {
+		t.Fatalf("render still loading: %q", got)
+	}
+	if strings.Contains(got, "Working Tree vs HEAD") {
+		t.Fatalf("commit-root rendered working-tree chrome: %q", got)
+	}
+	if !strings.Contains(got, "Commit") || !strings.Contains(got, "abc1234") || !strings.Contains(got, "one") {
+		t.Fatalf("commit chrome missing: %q", got)
+	}
+}
+
+func TestApplyCommitDetailCommitRootErrorLeavesLoading(t *testing.T) {
+	v := &View{Target: MustParse("abc1234"), State: LoadStateLoading}
+	v.Bind("/tmp", "ws", 1)
+	v.ApplyCommitDetail(CommitDetailMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "c:abc1234",
+		Hash: "abc1234", Err: errors.New("missing object"),
+	})
+	if v.State != LoadStateError {
+		t.Fatalf("state = %v, want Error", v.State)
+	}
+	if v.CommitDetail != nil {
+		t.Fatal("error path installed a commit")
+	}
+	got := v.Render(40, 6, RenderOpts{})
+	if strings.Contains(got, "Loading diff…") {
+		t.Fatalf("error still renders loading: %q", got)
+	}
+}
+
+func TestApplyCommitDetailDropsIdentityMismatchOnCommitRoot(t *testing.T) {
+	v := &View{Target: MustParse("abc1234"), State: LoadStateLoading}
+	v.Bind("/tmp", "ws", 1)
+	v.ApplyCommitDetail(CommitDetailMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "c:deadbee",
+		Hash:   "deadbee",
+		Commit: &CommitDetail{Hash: "deadbee", ShortHash: "deadbee", Subject: "other"},
+	})
+	if v.CommitDetail != nil || v.State != LoadStateLoading {
+		t.Fatalf("mismatch applied: detail=%#v state=%v", v.CommitDetail, v.State)
+	}
+}
+
+func TestApplyRangeMsgInstallsFilesAndRefusesSnapshot(t *testing.T) {
+	v := &View{Target: MustParse("aaa1111..bbb2222"), State: LoadStateLoading}
+	v.Bind("/tmp", "ws", 1)
+	v.ApplyRangeMsg(RangeMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "r:aaa1111..bbb2222",
+		Raw: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\n+hi\n",
+	})
+	if v.State == LoadStateLoading {
+		t.Fatal("range stayed Loading")
+	}
+	if len(v.Files) != 1 || v.Files[0].Path != "a.go" {
+		t.Fatalf("range files = %#v", v.Files)
+	}
+	if v.Commits != nil || v.CommitDetail != nil || v.Snapshot != nil {
+		t.Fatal("range tab grew a commits list or snapshot")
+	}
+	got := v.Render(140, 12, RenderOpts{})
+	if strings.Contains(got, "Loading diff…") || strings.Contains(got, "Working Tree vs HEAD") {
+		t.Fatalf("range chrome wrong: %q", got)
+	}
+	if !strings.Contains(got, "aaa1111") || !strings.Contains(got, "bbb2222") {
+		t.Fatalf("range label missing: %q", got)
+	}
+
+	v.ApplySnapshotMsg(SnapshotMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "r:aaa1111..bbb2222",
+		Snapshot: &Snapshot{State: LoadStateReady, WorkingTree: "diff --git a/wt.go b/wt.go\n"},
+	}, "/tmp", "ws")
+	if len(v.Files) != 1 || v.Files[0].Path != "a.go" {
+		t.Fatalf("snapshot applied onto range tab: %#v", v.Files)
+	}
+}
+
+func TestApplyRangeMsgError(t *testing.T) {
+	v := &View{Target: MustParse("aaa1111...bbb2222"), State: LoadStateLoading}
+	v.Bind("/tmp", "ws", 1)
+	v.ApplyRangeMsg(RangeMsg{
+		Epoch: 1, WorkspaceID: "ws", Identity: "r:aaa1111...bbb2222",
+		Err: errors.New("bad rev"),
+	})
+	if v.State != LoadStateError {
+		t.Fatalf("state = %v, want Error", v.State)
+	}
+	if strings.Contains(v.Render(40, 4, RenderOpts{}), "Loading diff…") {
+		t.Fatal("range error still loading")
+	}
+}
+
 func TestApplySnapshotDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 	v := &View{Scope: ScopeWorkingTree, Cursor: 0}
 	v.Snapshot = &Snapshot{
@@ -80,82 +202,6 @@ func TestApplySnapshotDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 	}
 	if cmd := v.LoadSelectedCommit("/tmp", "wt"); cmd != nil {
 		t.Fatal("file-under-cursor issued LoadSelectedCommit")
-	}
-}
-
-func TestTabsVisible(t *testing.T) {
-	if TabsVisible(true, false) {
-		t.Fatal("project-plugin shell should have no tabs")
-	}
-	if TabsVisible(false, true) {
-		t.Fatal("main worktree should have no tabs")
-	}
-	if !TabsVisible(false, false) {
-		t.Fatal("non-main worktree should have tabs")
-	}
-}
-
-func TestGlobalTabsFor(t *testing.T) {
-	if GlobalTabsFor(true, false) != TabSetOutputDiff {
-		t.Fatal("global shell should be Output+Diff")
-	}
-	if GlobalTabsFor(false, false) != TabSetOutputDiffTask {
-		t.Fatal("global topic worktree should keep Task")
-	}
-	if GlobalTabsFor(false, true) != TabSetNone {
-		t.Fatal("global main worktree should stay tabless")
-	}
-	if GlobalTabsFor(true, false).Contains(TabTask) {
-		t.Fatal("global shell must not include Task")
-	}
-}
-
-func TestCycleTab(t *testing.T) {
-	if got := CycleTab(TabDiff, -1); got != TabOutput {
-		t.Fatalf("comma from Diff = %v, want Output", got)
-	}
-	if got := CycleTab(TabOutput, 1); got != TabDiff {
-		t.Fatalf("period from Output = %v, want Diff", got)
-	}
-	if got := CycleTab(TabTask, 1); got != TabOutput {
-		t.Fatalf("period from Task wraps to Output, got %v", got)
-	}
-}
-
-func TestCycleTabInShellSkipsTask(t *testing.T) {
-	if got := CycleTabIn(TabOutput, 1, TabSetOutputDiff); got != TabDiff {
-		t.Fatalf("period from Output = %v, want Diff", got)
-	}
-	if got := CycleTabIn(TabDiff, 1, TabSetOutputDiff); got != TabOutput {
-		t.Fatalf("period from Diff wrapped to %v, want Output (not Task)", got)
-	}
-	if got := CycleTabIn(TabTask, 1, TabSetOutputDiff); got != TabDiff {
-		t.Fatalf("stale Task tab cycled to %v, want Diff", got)
-	}
-}
-
-func TestTabChipsMarksActive(t *testing.T) {
-	chips := TabChips(TabDiff)
-	if len(chips) != 3 {
-		t.Fatalf("chips = %d, want 3", len(chips))
-	}
-	shell := TabChipsFor(TabDiff, TabSetOutputDiff)
-	if len(shell) != 2 {
-		t.Fatalf("shell chips = %d, want 2", len(shell))
-	}
-}
-
-func TestRenderTaskOmitsLinkHintWhenEmpty(t *testing.T) {
-	view, _ := RenderTask(TaskView{}, TaskRenderOpts{Width: 40, Height: 10})
-	if !contains(view, "No linked task") {
-		t.Fatalf("empty task view = %q, want No linked task", view)
-	}
-	if contains(view, "Press") {
-		t.Fatalf("global empty hint leaked a link key: %q", view)
-	}
-	view, _ = RenderTask(TaskView{}, TaskRenderOpts{Width: 40, Height: 10, EmptyHint: "Press 't' to link a task"})
-	if !contains(view, "Press 't' to link a task") {
-		t.Fatalf("plugin empty hint missing: %q", view)
 	}
 }
 
@@ -179,32 +225,4 @@ func TestDiffContentScrollClampsToRenderedViewport(t *testing.T) {
 	if got := v.DiffScroll; got != 2 {
 		t.Fatalf("first reverse step after bottom = %d, want 2", got)
 	}
-}
-
-func TestTaskScrollUsesVisibleBottomBoundary(t *testing.T) {
-	task := TaskView{LineCount: 10}
-	task.Scroll(1000, 4)
-	if got, want := task.Offset, 6; got != want {
-		t.Fatalf("overscroll = %d, want clamped %d", got, want)
-	}
-	if !task.ScrollAtBoundary(1, 4) {
-		t.Fatal("task bottom was not a boundary")
-	}
-	task.Scroll(-1, 4)
-	if got := task.Offset; got != 5 {
-		t.Fatalf("first reverse step after bottom = %d, want 5", got)
-	}
-}
-
-func contains(s, sub string) bool {
-	return stringIndex(s, sub) >= 0
-}
-
-func stringIndex(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

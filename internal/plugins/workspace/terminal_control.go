@@ -183,7 +183,7 @@ func (p *Plugin) terminalOutputSurfaceVisible() bool {
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {
 		return false
 	}
-	return p.selectingShell() || p.previewTab == PreviewTabOutput
+	return true
 }
 
 func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {

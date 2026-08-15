@@ -70,7 +70,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 		return nil
 	}
 	reopen := p.reopenHiddenIssuePane()
-	plan, ok := planPaneOpen(p.paneRoot, PaneIssue)
+	plan, ok := p.planOpen(PaneIssue)
 	if !ok {
 		return reopen
 	}

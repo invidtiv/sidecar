@@ -8,14 +8,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Decorate underlines file and issue spans and synthesizes OSC-8 for validated
-// URLs. A host passes only the kinds it binds — an underline no click can
-// honor is a dead link, and which kinds a host binds is the host's own answer.
-// Callers must StripOSC8 first.
+// Decorate underlines file, issue, and git-spec spans and synthesizes OSC-8
+// for validated URLs. A host passes only the kinds it binds — an underline
+// no click can honor is a dead link, and which kinds a host binds is the
+// host's own answer. Callers must StripOSC8 first.
 func Decorate(line string, spans []Span) string {
 	active := make([]Span, 0, len(spans))
 	for _, span := range spans {
-		if span.Kind == KindURL || span.Kind == KindFile || span.Kind == KindIssue {
+		if span.Kind == KindURL || span.Kind == KindFile || span.Kind == KindIssue || span.Kind == KindDiff {
 			active = append(active, span)
 		}
 	}

@@ -15,11 +15,17 @@ const (
 	KindURL   Kind = "url"
 	KindFile  Kind = "file"
 	KindIssue Kind = "issue"
+	KindDiff  Kind = "diff"
 )
 
+// MaxNewDiffResolves is the host budget for new git existence checks per
+// (surface, buffer revision). Further unique spec tokens stay plain text
+// until the next revision.
+const MaxNewDiffResolves = 16
+
 // Extra holds kind-specific fields. Line is 1-based and zero when the token
-// has no :line suffix. Raw is the original file token when Value is rewritten
-// by a Resolver.
+// has no :line suffix. Raw is the original file or git-spec token when Value
+// is rewritten by a Resolver.
 type Extra struct {
 	Line int
 	Raw  string
@@ -40,6 +46,11 @@ type Span struct {
 // span. A nil Resolver skips existence-gated file spans (bare paths).
 type Resolver func(raw string) (value string, extra Extra, ok bool)
 
+// DiffResolver reports whether a git-spec token exists in the selected
+// checkout. Extra.Raw is the matched token; Extra.Line is unused. ok=false
+// drops the span. A nil DiffResolver emits no git-spec spans.
+type DiffResolver func(raw string) (value string, extra Extra, ok bool)
+
 var (
 	urlPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
 	// path:line, including absolute and ~/ prefixes.
@@ -56,6 +67,10 @@ var (
 	// The same shape anchored, for callers holding a stored id rather than a
 	// line of output.
 	issueIDPattern = regexp.MustCompile(`^td-[0-9a-fA-F]{4,}$`)
+	// Lowercase hex only. Mixed-case and HEAD/branch names are CLI-only.
+	gitRevPattern        = regexp.MustCompile(`[0-9a-f]{7,64}`)
+	gitDottedPattern     = regexp.MustCompile(`[0-9a-f]{7,64}(?:\.\.\.|\.\.)[0-9a-f]{7,64}`)
+	gitCommitWordPattern = regexp.MustCompile(`\bcommit[ \t]+[0-9a-f]{7,64}`)
 )
 
 // IssueID reports whether value is a td id of the shape this package detects.
@@ -66,13 +81,14 @@ func IssueID(value string) bool {
 	return issueIDPattern.MatchString(value)
 }
 
-// Scan finds URL, file, and issue spans in a terminal line.
+// Scan finds URL, file, issue, and git-spec spans in a terminal line.
 //
 // line may still contain ANSI; it is stripped before matching. Overlaps are
 // resolved first-kind-wins in this order: url, path:line, resolved bare
-// files, issue. File tokens need a suffix. Bare files (and, when a Resolver
-// is supplied, path:line) are existence-gated.
-func Scan(line string, resolve Resolver) []Span {
+// files, issue, git spec. File tokens need a suffix. Bare files (and, when a
+// Resolver is supplied, path:line) are existence-gated. Git specs are
+// existence-gated by resolveDiff and scanned dotted → commit-word → rev.
+func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
 	plain := ansi.Strip(line)
 	var spans []Span
 	spans = append(spans, scanURLs(plain)...)
@@ -81,6 +97,9 @@ func Scan(line string, resolve Resolver) []Span {
 		spans = append(spans, scanBareFiles(plain, spans, resolve)...)
 	}
 	spans = append(spans, scanIssues(plain, spans)...)
+	if resolveDiff != nil {
+		spans = append(spans, scanGitSpecs(plain, spans, resolveDiff)...)
+	}
 	return spans
 }
 
@@ -191,6 +210,46 @@ func scanIssues(plain string, existing []Span) []Span {
 			StartCol: colAt(plain, start),
 			EndCol:   colAt(plain, end) - 1,
 			Value:    plain[start:end],
+		})
+	}
+	return spans
+}
+
+func scanGitSpecs(plain string, existing []Span, resolve DiffResolver) []Span {
+	var spans []Span
+	for _, re := range []*regexp.Regexp{gitDottedPattern, gitCommitWordPattern, gitRevPattern} {
+		spans = append(spans, scanGitPattern(plain, existing, spans, re, resolve)...)
+	}
+	return spans
+}
+
+func scanGitPattern(plain string, existing, pending []Span, re *regexp.Regexp, resolve DiffResolver) []Span {
+	var spans []Span
+	for _, loc := range re.FindAllStringIndex(plain, -1) {
+		start, end := loc[0], loc[1]
+		if overlaps(plain, existing, pending, start, end) || overlapsBytes(plain, spans, start, end) || !issueTokenWhole(plain, start, end) {
+			continue
+		}
+		raw := plain[start:end]
+		if containsControl(raw) {
+			continue
+		}
+		value, extra, ok := resolve(raw)
+		if !ok {
+			continue
+		}
+		if extra.Raw == "" {
+			extra.Raw = raw
+		}
+		if value == "" {
+			value = raw
+		}
+		spans = append(spans, Span{
+			Kind:     KindDiff,
+			StartCol: colAt(plain, start),
+			EndCol:   colAt(plain, end) - 1,
+			Value:    value,
+			Extra:    extra,
 		})
 	}
 	return spans
