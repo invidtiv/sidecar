@@ -340,6 +340,9 @@ func RenderMatch(match Match, maxWidth int) string {
 // tell one row from another (see ui.ElidePath) and carrying the match ranges
 // across onto whatever text survived, so a narrow row still shows why it
 // matched.
+//
+// A list draws its rows through elideMatches instead: a path fitted on its own
+// cannot know that the row above it came out the same.
 func elideMatch(match Match, maxWidth int) (string, []MatchRange) {
 	if maxWidth < 1 {
 		return "", nil
@@ -351,6 +354,41 @@ func elideMatch(match Match, maxWidth int) (string, []MatchRange) {
 
 	elided, spans := ui.ElidePath(match.Path, maxWidth)
 	return elided, mapRanges(ranges, spans)
+}
+
+// fittedMatch is one row's path, cut to the row's budget, with its highlights
+// moved onto whatever text survived the cut.
+type fittedMatch struct {
+	text   string
+	ranges []MatchRange
+}
+
+// elideMatches fits a whole window of rows at once. Eliding the list rather
+// than each path in it is what keeps two different files from arriving as the
+// same row — the failure this list has produced three times — because the
+// repair for a collision is by definition something no single row can see.
+func elideMatches(matches []Match, maxWidth int) []fittedMatch {
+	out := make([]fittedMatch, len(matches))
+	if len(matches) == 0 {
+		return out
+	}
+	if maxWidth < 1 {
+		return out
+	}
+	paths := make([]string, len(matches))
+	for i, match := range matches {
+		paths[i] = match.Path
+	}
+	texts, spans := ui.ElidePathSet(paths, maxWidth)
+	for i, match := range matches {
+		ranges := significantRanges(match.Path, match.MatchRanges)
+		if texts[i] == match.Path {
+			out[i] = fittedMatch{text: texts[i], ranges: ranges}
+			continue
+		}
+		out[i] = fittedMatch{text: texts[i], ranges: mapRanges(ranges, spans[i])}
+	}
+	return out
 }
 
 // mapRanges translates match ranges onto elided text, dropping the ones whose

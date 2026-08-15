@@ -627,3 +627,140 @@ func TestDocPaneHeaderSurvivesASmallPane(t *testing.T) {
 		}
 	}
 }
+
+// A pane F opened for the finder, and that never got a file, goes away with the
+// finder. What was left behind was a blank third of the window with no filename
+// in its header, nothing on screen saying what it was, and no obvious way to
+// dismiss it: the user asked for a file, chose none, and there is nothing for
+// the pane to be.
+//
+// Every route out of the finder is checked, because the pane was reachable
+// through all of them: esc, a click outside the pane, and focus moving away.
+func TestCancellingTheFinderClosesThePaneItOpened(t *testing.T) {
+	dismissals := map[string]func(t *testing.T, p *Plugin, doc *docPane){
+		"esc": func(t *testing.T, p *Plugin, doc *docPane) {
+			p.handleDocSearchKey(doc, tea.KeyPressMsg{Code: tea.KeyEsc})
+		},
+		"click outside the pane": func(t *testing.T, p *Plugin, doc *docPane) {
+			p.handleDocSearchMouse(doc, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+		},
+		"focus leaves the pane": func(t *testing.T, p *Plugin, doc *docPane) {
+			p.activePane = PaneSidebar
+			p.closeUnfocusedDocSearches()
+		},
+	}
+
+	for name, dismiss := range dismissals {
+		t.Run(name, func(t *testing.T) {
+			p, _ := docSearchPlugin(t, true)
+			p.closeDocPane()
+			p.activePane = PaneSidebar
+			cmd := p.handleListKeys(tea.KeyPressMsg{Code: 'F', Text: "F"})
+			scanFinder(t, p, unwrapDocSearchCmd(t, cmd))
+			doc := p.focusedDocPane()
+			if doc == nil || doc.mode == nil {
+				t.Fatal("F opened no finder pane")
+			}
+			composePaneTree(t, p, 120, 30)
+
+			dismiss(t, p, doc)
+
+			if pane := p.activeDocPaneOrNil(); pane != nil {
+				t.Fatalf("an empty pane survived the cancelled finder: %d tabs", len(pane.tabs.Items))
+			}
+			if firstPaneLeafOfKind(p.paneRoot, PaneDoc) != nil {
+				t.Fatal("the document leaf is still in the tree")
+			}
+		})
+	}
+}
+
+// The other half of the rule, and the one that must not regress: a pane already
+// holding a file keeps it. Cancelling a search there means "never mind, I am
+// still reading this".
+func TestCancellingAFinderInAPaneWithAFileKeepsTheFile(t *testing.T) {
+	p, _ := docSearchPlugin(t, true)
+	doc := p.focusedDocPane()
+	before := doc.view()
+	if before == nil {
+		t.Fatal("the fixture pane holds no file")
+	}
+	scanFinder(t, p, p.openDocFinder(doc))
+	typeDocSearch(p, "g")
+	p.handleDocSearchKey(doc, tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	still := p.activeDocPaneOrNil()
+	if still == nil {
+		t.Fatal("cancelling a search closed a pane that was showing a file")
+	}
+	if still.mode != nil {
+		t.Fatal("the search survived esc")
+	}
+	if still.view() != before {
+		t.Fatal("the pane lost the file it was showing")
+	}
+}
+
+// A click on a result row selects it, and a double-click opens it — driven
+// through the plugin's own mouse entry point, at the coordinates the row is
+// actually drawn at on screen.
+//
+// The coordinates matter. The region-translation test asks the hit map about a
+// region it got from the hit map, which is true by construction whether or not
+// the region sits where the row was painted. This one renders the frame, finds
+// the row's text in it, and clicks there, so a translation that lands the
+// regions anywhere but under their glyphs fails here.
+func TestDocPaneFinderRowsAnswerTheMouse(t *testing.T) {
+	p, _ := docSearchPlugin(t, true)
+	const width, height = 100, 30
+	p.View(width, height)
+	doc := p.focusedDocPane()
+	scanFinder(t, p, p.openDocFinder(doc))
+	typeDocSearch(p, "g")
+	if len(doc.mode.finder.Matches()) < 2 {
+		t.Fatalf("need two matches to tell a click apart, got %d", len(doc.mode.finder.Matches()))
+	}
+	second := doc.mode.finder.Matches()[1].Path
+
+	p.View(width, height)
+	x, y, ok := drawnRowCell(p.View(width, height), second)
+	if !ok {
+		t.Fatalf("the second match %q is not on screen", second)
+	}
+
+	p.handleMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if doc.mode == nil {
+		t.Fatal("a click on a row dismissed the finder")
+	}
+	if got := doc.mode.finder.Cursor(); got != 1 {
+		t.Fatalf("a click on the second row left the cursor at %d, want 1", got)
+	}
+
+	p.handleMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if doc.mode != nil {
+		t.Fatal("a double-click on a row did not open it: the finder is still up")
+	}
+	pane := p.activeDocPaneOrNil()
+	if pane == nil || pane.view() == nil {
+		t.Fatal("a double-click on a row opened nothing")
+	}
+	if title := pane.view().Title(); !strings.Contains(title, second) {
+		t.Fatalf("the pane shows %q, want the row that was double-clicked (%q)", title, second)
+	}
+}
+
+// drawnRowCell finds a cell inside the row that displays path, in a rendered
+// frame. The row may be elided, so it is located by the tail of its filename,
+// which every elision keeps.
+func drawnRowCell(view, path string) (int, int, bool) {
+	name := path[strings.LastIndex(path, "/")+1:]
+	for y, line := range strings.Split(view, "\n") {
+		plain := ansi.Strip(line)
+		x := strings.Index(plain, name)
+		if x < 0 || strings.Contains(plain, "Quick Open") {
+			continue
+		}
+		return x + 1, y, true
+	}
+	return 0, 0, false
+}

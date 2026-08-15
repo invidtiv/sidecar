@@ -374,6 +374,35 @@ func (p *Plugin) closeDocSearch(doc *docPane) {
 	doc.modeRegions = nil
 }
 
+// cancelDocSearch drops a pane's search surface the way the user dismissing it
+// means: with nothing chosen. A pane that was opened *for* the search and never
+// got a file — F splits a new document pane straight into the finder — has
+// nothing left to be once the search is gone, so it closes with it. What
+// remained instead was a blank pane taking a third of the width, with no
+// filename in its header and nothing on screen saying what it was or how to
+// get rid of it.
+//
+// A pane that already holds a file is untouched: cancelling a search there
+// means "never mind, I am still reading this", and the file is what the pane
+// is for. The question is only ever whether the pane has a document, never how
+// the pane came to exist, so every route into an empty pane is covered by the
+// one rule.
+func (p *Plugin) cancelDocSearch(doc *docPane) tea.Cmd {
+	if doc == nil {
+		return nil
+	}
+	p.closeDocSearch(doc)
+	if len(doc.tabs.Items) > 0 {
+		return nil
+	}
+	if !p.closeContentLeaf(doc.leafID) {
+		return nil
+	}
+	p.activePane = PanePreview
+	p.saveSelectionState()
+	return p.resizeDocTerminalCmd()
+}
+
 // closeUnfocusedDocSearches drops any pane search whose pane no longer holds
 // the keyboard. It is the one rule this surface has about focus: a search is a
 // modal scoped to its pane, and a modal that has lost the keyboard is dismissed
@@ -381,14 +410,24 @@ func (p *Plugin) closeDocSearch(doc *docPane) {
 // (setFocusTarget) means every gesture that moves focus — Tab, a click on the
 // sidebar or another leaf, a shortcut that focuses a pane — obeys it without
 // each one having to remember to.
-func (p *Plugin) closeUnfocusedDocSearches() {
+//
+// Losing focus is a dismissal, so it goes through cancelDocSearch: a pane that
+// only ever held a finder goes with it rather than staying on screen blank.
+func (p *Plugin) closeUnfocusedDocSearches() tea.Cmd {
 	focused := p.focusedDocPane()
+	var cmds []tea.Cmd
 	for _, doc := range p.docs {
 		if doc == nil || doc.mode == nil || doc == focused {
 			continue
 		}
-		p.closeDocSearch(doc)
+		if cmd := p.cancelDocSearch(doc); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleDocSearchKey routes a keypress to the live surface. Every key belongs
@@ -423,7 +462,7 @@ func (p *Plugin) handleDocSearchMouse(doc *docPane, msg tea.MouseMsg) tea.Cmd {
 		pos := msg.Mouse()
 		if !doc.boxContains(pos.X, pos.Y) {
 			if _, isClick := msg.(tea.MouseClickMsg); isClick {
-				p.closeDocSearch(doc)
+				return p.cancelDocSearch(doc)
 			}
 			return nil
 		}
@@ -436,8 +475,7 @@ func (p *Plugin) applyDocSearchOutcome(doc *docPane, out docSearchOutcome, cmd t
 	wrapped := docSearchCmd(doc.leafID, cmd)
 	switch {
 	case out.Cancelled:
-		p.closeDocSearch(doc)
-		return wrapped
+		return tea.Batch(wrapped, p.cancelDocSearch(doc))
 	case out.Open && out.Path != "":
 		p.closeDocSearch(doc)
 		return tea.Batch(wrapped, p.loadDocSearchResult(doc, out))

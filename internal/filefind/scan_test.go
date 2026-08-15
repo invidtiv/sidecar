@@ -32,7 +32,10 @@ func TestScanPaths_CollectsFilesRespectingIgnores(t *testing.T) {
 		t.Fatalf("unexpected scan error: %s", errText)
 	}
 
-	want := []string{"main.go", filepath.Join("src", "app.go")}
+	// Dotfiles are files: what a scan hides is what .gitignore hides, not what
+	// the name starts with. The tree pane shows them, and a finder that did not
+	// answered "No matches" about files it had just walked past.
+	want := []string{".gitignore", ".hidden", "main.go", filepath.Join("src", "app.go")}
 	if len(files) != len(want) {
 		t.Fatalf("files = %v, want %v", files, want)
 	}
@@ -62,5 +65,35 @@ func TestScanPaths_CollectsDirs(t *testing.T) {
 		if dirs[i] != path {
 			t.Errorf("dirs[%d] = %q, want %q", i, dirs[i], path)
 		}
+	}
+}
+
+// The reported case, named: a tracked dotfile at the top of the tree is
+// findable. `ctrl+p` + "goreleaser" answered "No matches" while
+// `.goreleaser.yml` sat in the repo root, and the Files tree showed it.
+func TestScanPathsFindsTrackedDotfiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".gitignore"), ".env\n")
+	writeFile(t, filepath.Join(root, ".goreleaser.yml"), "x")
+	writeFile(t, filepath.Join(root, ".env"), "SECRET=1")
+	mkdirAll(t, filepath.Join(root, ".github", "workflows"))
+	writeFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"), "x")
+
+	files, errText := ScanPaths(root, false)
+	if errText != "" {
+		t.Fatalf("scan error: %s", errText)
+	}
+	found := map[string]bool{}
+	for _, f := range files {
+		found[f] = true
+	}
+	for _, want := range []string{".goreleaser.yml", ".gitignore", filepath.Join(".github", "workflows", "ci.yml")} {
+		if !found[want] {
+			t.Errorf("%q is in the tree but not in the scan: %v", want, files)
+		}
+	}
+	// Ignored is still ignored: the rule is .gitignore, not the leading dot.
+	if found[".env"] {
+		t.Errorf("a gitignored dotfile was scanned: %v", files)
 	}
 }

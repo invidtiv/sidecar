@@ -87,7 +87,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// this catches the paths that move focus without it — a shell selection
 	// landing, a layout being restored — so none of them can leave a surface
 	// drawn over a pane that no longer takes keys.
-	p.closeUnfocusedDocSearches()
+	if cmd := p.closeUnfocusedDocSearches(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
 	return p, tea.Batch(cmds...)

@@ -129,7 +129,8 @@ func TestScanPathsRespectsGitignore(t *testing.T) {
 	if errText != "" {
 		t.Fatalf("scan error: %s", errText)
 	}
-	if len(files) != 1 || files[0] != "kept.go" {
-		t.Errorf("files = %v, want [kept.go]", files)
+	// The .gitignore itself is a file like any other, and findable.
+	if len(files) != 2 || files[0] != ".gitignore" || files[1] != "kept.go" {
+		t.Errorf("files = %v, want [.gitignore kept.go]", files)
 	}
 }

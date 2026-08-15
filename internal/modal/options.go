@@ -109,6 +109,35 @@ func ListRows(surfaceHeight, seen int) int {
 	return rows
 }
 
+// ListRowsFor is ListRows with the two cases the high-water mark gets wrong.
+//
+// The mark exists so that refining a query does not resize the box under the
+// user's hands, and that is right while the list is answering. It is not right
+// once it has stopped:
+//
+//   - a query that matches nothing gets a one-row list. The mark had a box that
+//     grew to fifty hits still reserving a dozen rows under the words "No
+//     matches", which reads as broken rather than steady, and nothing is being
+//     refined at that point — the query has stopped matching.
+//   - a list showing fewer rows than the ordinary floor keeps the floor and no
+//     more. One hit in a fourteen-row box is thirteen blank rows; one hit in an
+//     eight-row box is the same box an unasked finder draws, so nothing has
+//     jittered and nothing is being reserved for results that are not coming.
+//
+// current is how many rows the list is showing. A caller in a state that has
+// not asked anything yet — no query, or a scan still running — passes
+// MinListRows rather than zero: an empty box is not a dead end, and a box that
+// opens one row tall and grows is the jitter this all exists to avoid.
+func ListRowsFor(surfaceHeight, seen, current int) int {
+	if current < 1 {
+		return 1
+	}
+	if current < MinListRows {
+		return MinListRows
+	}
+	return ListRows(surfaceHeight, seen)
+}
+
 // ContentBoxWidth is the widest a content-sized box may be on a surface this
 // wide. It keeps RoomyMarginX clear on each side so a host that dims the
 // surface around the box has something left to dim, and falls back to the

@@ -26,17 +26,18 @@ func TestTruncateStartKeepsFilenameEnd(t *testing.T) {
 func TestElidePathSpansMapRangesOntoTheElidedText(t *testing.T) {
 	path := ".claude/skills/create-modal/SKILL.md"
 	out, spans := ElidePath(path, 26)
-	if out != ".c…/s/creat…modal/SKILL.md" {
+	if out != ".c…/s…/creat…odal/SKILL.md" {
 		t.Fatalf("ElidePath = %q", out)
 	}
-	// "modal" in the original must land on "modal" in the elided text.
-	src := strings.Index(path, "modal")
-	start, end, ok := MapSpans(spans, src, src+len("modal"))
+	// "odal" in the original must land on "odal" in the elided text: the
+	// segment was cut in the middle, and the tail it kept is verbatim.
+	src := strings.Index(path, "odal")
+	start, end, ok := MapSpans(spans, src, src+len("odal"))
 	if !ok {
 		t.Fatal("the range did not survive an elision that kept the text it names")
 	}
-	if got := out[start:end]; got != "modal" {
-		t.Errorf("mapped range spells %q, want %q", got, "modal")
+	if got := out[start:end]; got != "odal" {
+		t.Errorf("mapped range spells %q, want %q", got, "odal")
 	}
 
 	// A range in a segment that was abbreviated away is reported as gone rather
@@ -50,9 +51,9 @@ func TestElidePathSpansMapRangesOntoTheElidedText(t *testing.T) {
 	// either end still maps onto the characters it names.
 	out, spans = ElidePath(path, 22)
 	src = strings.Index(path, "modal")
-	if start, end, ok := MapSpans(spans, src+2, src+5); ok {
-		if got := out[start:end]; got != "dal" {
-			t.Errorf("tail range spells %q, want %q in %q", got, "dal", out)
+	if start, end, ok := MapSpans(spans, src+3, src+5); ok {
+		if got := out[start:end]; got != "al" {
+			t.Errorf("tail range spells %q, want %q in %q", got, "al", out)
 		}
 	} else {
 		t.Errorf("the tail of a middle-elided segment did not map: %q", out)
@@ -78,42 +79,193 @@ func TestElidePathDegradesGradually(t *testing.T) {
 	}
 }
 
-// The property that matters in a list: sibling paths must not render as the
-// same string. The budgets are the ones a real workspace file pane produces —
-// a 100x30 terminal gives a 30-column pane, whose finder rows have 22 cells and
-// whose search headers have less.
-func TestElidePathKeepsSiblingsDistinguishable(t *testing.T) {
-	families := [][]string{{
-		".claude/skills/create-modal/SKILL.md",
-		".claude/skills/create-plugin/SKILL.md",
-		".claude/skills/create-theme/SKILL.md",
-		".claude/skills/drag-pane/SKILL.md",
-		".claude/skills/ui-features/SKILL.md",
-		".agents/skills/drag-pane/SKILL.md",
-		".agents/skills/release-sidecar/SKILL.md",
+// Every cut an elision makes is marked, at every width. An unmarked
+// abbreviation is not a short path, it is a different path: `i/p/t/x.go` names
+// directories that do not exist, and a reader has no way to tell it from one
+// that does. The narrowest budgets — where a segment collapses to a single
+// letter — are where the lie used to be told and where it is most convincing.
+func TestElidePathMarksEveryAbbreviation(t *testing.T) {
+	paths := []string{
+		"internal/plugins/tasks/plugin_test.go",
+		".claude/skills/project-switching/SKILL.md",
+		"internal/agents/tools/browse/narrow-global-agents.txt",
+	}
+	for _, path := range paths {
+		for width := 8; width < runewidth.StringWidth(path); width++ {
+			got, _ := ElidePath(path, width)
+			for i, seg := range strings.Split(got, "/") {
+				if seg == "…" || seg == "" || strings.Contains(seg, "…") {
+					continue
+				}
+				// A segment drawn verbatim must actually be one of the path's,
+				// in the same position from the end.
+				src := strings.Split(path, "/")
+				if !containsSegment(src, seg) {
+					t.Errorf("width %d: %q renders %q, which is not a segment of the path (%d)", width, got, seg, i)
+				}
+			}
+		}
+	}
+}
+
+func containsSegment(segs []string, want string) bool {
+	for _, seg := range segs {
+		if seg == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The property that matters in a list: two different paths must never render
+// as the same row. No single-path elision can promise that — every budget
+// eventually forces a choice of characters, and the neighbour may have made the
+// same one — so the promise belongs to ElidePathSet, which can see the list.
+//
+// The families are the shapes that actually break it: same depth, shared
+// prefixes, names differing only at position N, names differing only in length,
+// and the plugin_test.go family that rendered two files as one row on screen.
+func TestElidePathSetKeepsRowsDistinct(t *testing.T) {
+	cases := []struct {
+		name string
+		// floor is the narrowest width at which every row of this family can
+		// still be told apart. Below it the discriminating characters do not
+		// fit beside the shared filename at any spending, and the honest answer
+		// is that the list cannot be separated rather than that it was.
+		floor  int
+		family []string
+	}{{
+		name:  "same depth, one directory apart, one character in",
+		floor: 18,
+		family: []string{
+			"internal/plugins/tasks/plugin_test.go",
+			"internal/plugins/tdmonitor/plugin_test.go",
+			"internal/plugins/filebrowser/plugin_test.go",
+			"internal/plugins/workspace/plugin_test.go",
+			"internal/plugins/gitstatus/plugin_test.go",
+		},
 	}, {
-		"internal/plugins/workspace/plugin.go",
-		"internal/plugins/filebrowser/plugin.go",
-		"internal/plugins/gitstatus/plugin.go",
-		"internal/plugins/git/plugin.go",
+		name:  "shared prefix, shared filename, two roots",
+		floor: 18,
+		family: []string{
+			".claude/skills/create-modal/SKILL.md",
+			".claude/skills/create-plugin/SKILL.md",
+			".claude/skills/create-theme/SKILL.md",
+			".claude/skills/drag-pane/SKILL.md",
+			".claude/skills/ui-features/SKILL.md",
+			".agents/skills/drag-pane/SKILL.md",
+			".agents/skills/release-sidecar/SKILL.md",
+		},
+	}, {
+		name:  "names differing only in length",
+		floor: 20,
+		family: []string{
+			"internal/plugins/git/plugin.go",
+			"internal/plugins/gitstatus/plugin.go",
+			"internal/plugins/gitstatusbar/plugin.go",
+			"internal/plugins/workspace/plugin.go",
+		},
+	}, {
+		name:  "names differing only at the last character",
+		floor: 20,
+		family: []string{
+			"a/alpha1/notes.md",
+			"a/alpha2/notes.md",
+			"a/alpha3/notes.md",
+		},
+	}, {
+		name:  "different depths under one root",
+		floor: 16,
+		family: []string{
+			"src/main.go",
+			"src/app/main.go",
+			"src/app/cmd/main.go",
+			"src/app/cmd/run/main.go",
+		},
+	}, {
+		name:  "the same file listed twice is not a collision",
+		floor: 12,
+		family: []string{
+			"internal/plugins/workspace/plugin.go",
+			"internal/plugins/workspace/plugin.go",
+		},
 	}}
 
-	// Below about 18 cells the SKILL.md family cannot be told apart without
-	// cutting the shared filename, which is a worse trade; these are the widths
-	// a real pane actually produces.
-	for _, width := range []int{22, 18} {
-		for _, family := range families {
-			seen := map[string]string{}
-			for _, path := range family {
-				got, _ := ElidePath(path, width)
-				if w := runewidth.StringWidth(got); w > width {
-					t.Errorf("width %d: %q is %d cells", width, got, w)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			widest := 0
+			for _, path := range tc.family {
+				if w := runewidth.StringWidth(path); w > widest {
+					widest = w
 				}
-				if other, dup := seen[got]; dup {
-					t.Errorf("width %d: %q and %q both render as %q", width, other, path, got)
-				}
-				seen[got] = path
 			}
+			for width := tc.floor; width <= widest+2; width++ {
+				got, _ := ElidePathSet(tc.family, width)
+				if len(got) != len(tc.family) {
+					t.Fatalf("width %d: %d rows for %d paths", width, len(got), len(tc.family))
+				}
+				seen := map[string]string{}
+				for i, row := range got {
+					if w := runewidth.StringWidth(row); w > width {
+						t.Errorf("width %d: %q is %d cells", width, row, w)
+					}
+					if other, dup := seen[row]; dup && other != tc.family[i] {
+						t.Errorf("width %d: %q and %q both render as %q", width, other, tc.family[i], row)
+					}
+					seen[row] = tc.family[i]
+				}
+			}
+		})
+	}
+}
+
+// Seeing the list may never make a row worse: at every width, eliding the set
+// together produces at least as many distinct rows as eliding each path alone.
+func TestElidePathSetNeverLosesToElidingAlone(t *testing.T) {
+	family := []string{
+		"internal/plugins/tasks/plugin_test.go",
+		"internal/plugins/tdmonitor/plugin_test.go",
+		"internal/plugins/tdwatch/plugin_test.go",
+		".claude/skills/create-modal/SKILL.md",
+		".claude/skills/create-plugin/SKILL.md",
+		"docs/guides/active/releasing.md",
+		"docs/guides/active/headless-testing.md",
+		"README.md",
+	}
+	for width := 6; width <= 60; width++ {
+		alone := map[string]bool{}
+		for _, path := range family {
+			got, _ := ElidePath(path, width)
+			alone[got] = true
+		}
+		set, _ := ElidePathSet(family, width)
+		together := map[string]bool{}
+		for _, row := range set {
+			together[row] = true
+		}
+		if len(together) < len(alone) {
+			t.Errorf("width %d: %d distinct rows as a set, %d eliding alone: %q",
+				width, len(together), len(alone), set)
+		}
+	}
+}
+
+// Spans have to survive the list-aware passes, or a repaired row loses the
+// highlight that says why it matched.
+func TestElidePathSetKeepsSpansOnTheRepairedRows(t *testing.T) {
+	family := []string{
+		"internal/plugins/tasks/plugin_test.go",
+		"internal/plugins/tdmonitor/plugin_test.go",
+	}
+	rows, spans := ElidePathSet(family, 22)
+	for i, row := range rows {
+		src := strings.Index(family[i], "plugin_test.go")
+		start, end, ok := MapSpans(spans[i], src, src+len("plugin_test.go"))
+		if !ok {
+			t.Fatalf("row %d (%q) dropped the filename span", i, row)
+		}
+		if got := row[start:end]; got != "plugin_test.go" {
+			t.Errorf("row %d span spells %q in %q", i, got, row)
 		}
 	}
 }

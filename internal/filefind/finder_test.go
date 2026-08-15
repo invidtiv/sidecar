@@ -219,11 +219,12 @@ func TestElidePathKeepsWhatDiffers(t *testing.T) {
 		// Outermost directories are spent first, and only as far as the budget
 		// demands: the parent keeps both of its ends, which is where sibling
 		// names differ.
-		// An abbreviated leading segment carries an ellipsis: ".c" alone reads as
-		// a directory that could exist next to ".claude" and ".codex".
-		{".claude/skills/create-modal/SKILL.md", 26, ".c…/s/creat…modal/SKILL.md"},
-		{".claude/skills/create-modal/SKILL.md", 22, ".c…/s/cre…dal/SKILL.md"},
-		{"internal/plugins/filebrowser/view.go", 23, "i…/p/fileb…wser/view.go"},
+		// Every abbreviated segment carries an ellipsis, not only the leading
+		// one: ".c" alone reads as a directory that could exist next to
+		// ".claude" and ".codex", and "s" reads as one next to "skills".
+		{".claude/skills/create-modal/SKILL.md", 26, ".c…/s…/creat…odal/SKILL.md"},
+		{".claude/skills/create-modal/SKILL.md", 22, ".c…/s…/cre…al/SKILL.md"},
+		{"internal/plugins/filebrowser/view.go", 23, "i…/p…/file…wser/view.go"},
 		// Too deep to abbreviate its way down: the middle collapses, and the
 		// leading segment and the filename are what survive.
 		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "a/…/on/file.go"},
@@ -247,17 +248,22 @@ func TestElidePathKeepsWhatDiffers(t *testing.T) {
 }
 
 // TestNarrowRowsStayDistinguishable is the property that actually matters in a
-// tight pane: rows that share a long prefix and a filename must not all render
-// as the same string.
+// tight pane: two different files must never render as the same row.
 //
-// The widths are the ones the app really produces, which is what the previous
-// version of this test got wrong — it passed at 30 and 45 cells while the real
-// pane, whose rows have 22, rendered fourteen of sixteen rows as byte-identical
-// pairs. A 100x30 terminal gives a 30-column workspace file pane: 24 cells of
-// modal content, less the two-cell selection marker, is a 22-cell path budget.
-// The whole rendered list is compared, not the elision in isolation.
+// It is asserted against the drawn list, not against the elision of one path,
+// because the list is where the property lives. Twice now a per-path test has
+// passed while the pane on screen showed a pair of byte-identical rows: no
+// elision of `internal/plugins/tasks/plugin_test.go` can know that
+// `internal/plugins/tdmonitor/plugin_test.go` is the row above it. The finder
+// fits its whole visible window as a set (ui.ElidePathSet) for exactly that
+// reason, and this test drives the real render so a future change that goes
+// back to per-row fitting fails here rather than on a screenshot.
+//
+// The widths are the ones the app really produces: a 100x30 terminal gives a
+// 30-column workspace file pane, whose rows have 22 cells of path budget; 200x50
+// gives a pane wide enough that nothing should be abbreviated at all.
 func TestNarrowRowsStayDistinguishable(t *testing.T) {
-	paths := []string{
+	families := [][]string{{
 		".claude/skills/create-modal/SKILL.md",
 		".claude/skills/create-plugin/SKILL.md",
 		".claude/skills/create-theme/SKILL.md",
@@ -266,25 +272,95 @@ func TestNarrowRowsStayDistinguishable(t *testing.T) {
 		".agents/skills/release-sidecar/SKILL.md",
 		".agents/skills/drag-pane/SKILL.md",
 		".agents/skills/shell-integration/SKILL.md",
-		"internal/plugins/workspace/plugin.go",
-		"internal/plugins/filebrowser/plugin.go",
-		"internal/plugins/gitstatus/plugin.go",
-	}
-	// 22: a 30-column pane at 100x30. 20: the same pane with a scrollbar.
-	// 55: the 200x50 pane, where nothing should be abbreviated at all.
-	for _, width := range []int{22, 20, 55} {
-		seen := map[string]string{}
-		for _, path := range paths {
-			row := ansi.Strip(RenderMatch(Match{Path: path}, width))
-			if ansi.StringWidth(row) > width {
-				t.Errorf("width %d: row %q is %d cells", width, row, ansi.StringWidth(row))
+	}, {
+		// The family that shipped two identical rows to a real screen.
+		"internal/plugins/tasks/plugin_test.go",
+		"internal/plugins/tdmonitor/plugin_test.go",
+		"internal/plugins/filebrowser/plugin_test.go",
+		"internal/plugins/gitstatus/plugin_test.go",
+		"internal/plugins/workspace/plugin_test.go",
+		"internal/plugins/git/plugin_test.go",
+	}}
+
+	// 30x24 is the pane a 100x30 terminal gives; 60x40 is the roomy one.
+	for _, size := range []struct{ w, h int }{{30, 24}, {60, 40}} {
+		for _, family := range families {
+			rows := drawnResultRows(t, family, size.w, size.h)
+			if len(rows) != len(family) {
+				t.Fatalf("%dx%d: drew %d rows for %d files: %q", size.w, size.h, len(rows), len(family), rows)
 			}
-			if other, dup := seen[row]; dup {
-				t.Errorf("width %d: %q and %q both render as %q", width, other, path, row)
+			seen := map[string]string{}
+			for i, row := range rows {
+				if other, dup := seen[row]; dup {
+					t.Errorf("%dx%d: %q and %q both render as %q", size.w, size.h, other, family[i], row)
+				}
+				seen[row] = family[i]
 			}
-			seen[row] = path
 		}
 	}
+}
+
+// Nothing a row draws may name a directory that is not there. An abbreviation
+// without its ellipsis is not a shorter path, it is a different one, and the
+// narrowest pane is where that used to happen.
+func TestNarrowRowsMarkEveryAbbreviation(t *testing.T) {
+	family := []string{
+		"internal/plugins/tasks/plugin_test.go",
+		"internal/plugins/tdmonitor/plugin_test.go",
+		".claude/skills/project-switching/SKILL.md",
+	}
+	real := map[string]bool{}
+	for _, path := range family {
+		for _, seg := range strings.Split(path, "/") {
+			real[seg] = true
+		}
+	}
+	for _, row := range drawnResultRows(t, family, 30, 24) {
+		for _, seg := range strings.Split(row, "/") {
+			if seg == "" || seg == "\u2026" || strings.Contains(seg, "\u2026") {
+				continue
+			}
+			if !real[seg] {
+				t.Errorf("row %q draws %q, which is not a directory in the list", row, seg)
+			}
+		}
+	}
+}
+
+// drawnResultRows renders the finder at a real pane size against a file list
+// and returns the result rows as they appear, stripped of styling and of the
+// selection gutter.
+func drawnResultRows(t *testing.T, files []string, width, height int) []string {
+	t.Helper()
+	finder := NewFinder(&Cache{Files: files, OK: true}, "/tmp/project", 0)
+	// A query every path matches, so the window holds the whole family.
+	finder.SetQuery(".")
+	if len(finder.Matches()) != len(files) {
+		finder.SetQuery("")
+	}
+	if len(finder.Matches()) != len(files) {
+		t.Fatalf("the query matched %d of %d files", len(finder.Matches()), len(files))
+	}
+	view := finder.View(width, height, nil)
+
+	var rows []string
+	bases := map[string]bool{}
+	for _, f := range files {
+		bases[f[strings.LastIndex(f, "/")+1:]] = true
+	}
+	for _, line := range strings.Split(view, "\n") {
+		plain := strings.TrimRight(ansi.Strip(line), " ")
+		trimmed := strings.TrimLeft(plain, " │")
+		trimmed = strings.TrimPrefix(trimmed, "> ")
+		trimmed = strings.TrimRight(trimmed, "│ ")
+		// A result row ends with a filename from the list; the query row and
+		// the counts row do not.
+		if !bases[trimmed[strings.LastIndex(trimmed, "/")+1:]] {
+			continue
+		}
+		rows = append(rows, trimmed)
+	}
+	return rows
 }
 
 // A path that fits is not touched: the 200x50 pane shows whole paths, where the
@@ -467,6 +543,11 @@ func TestFinderLongQueryDoesNotWrapTheHeader(t *testing.T) {
 
 // The box must not breathe as the user types: an empty finder, a scanning one,
 // and one with results all occupy exactly the same rows.
+//
+// A dead end is the exception, and the only one: a query matching nothing keeps
+// a one-row list rather than a dozen blank rows under the words "No matches".
+// The box is not being refined at that point, and a page of reserved rows for
+// results that are not coming reads as broken rather than steady.
 func TestFinderHeightIsStableAcrossStates(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{100, 30}, {80, 24}, {56, 20}} {
 		f := NewFinder(&Cache{}, "/root", 1)
@@ -485,9 +566,16 @@ func TestFinderHeightIsStableAcrossStates(t *testing.T) {
 		f.SetQuery("zzzz")
 		nomatch := renderSize(f, size.w, size.h)
 
-		if empty != scanning || empty != results || empty != nomatch {
-			t.Errorf("%dx%d: box height jitters: empty=%v scanning=%v results=%v nomatch=%v",
-				size.w, size.h, empty, scanning, results, nomatch)
+		if empty != scanning || empty != results {
+			t.Errorf("%dx%d: box height jitters: empty=%v scanning=%v results=%v",
+				size.w, size.h, empty, scanning, results)
+		}
+		if nomatch[0] != empty[0] {
+			t.Errorf("%dx%d: a dead-end query changed the box width: %v vs %v", size.w, size.h, nomatch, empty)
+		}
+		if nomatch[1] >= empty[1] {
+			t.Errorf("%dx%d: a dead-end query kept the tall box: nomatch=%v results=%v",
+				size.w, size.h, nomatch, empty)
 		}
 	}
 }

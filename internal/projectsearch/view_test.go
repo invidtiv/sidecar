@@ -207,17 +207,24 @@ func TestNarrowRowsStayDistinguishable(t *testing.T) {
 	// the match count take six; 40 is a wider pane. Below about 16 cells of
 	// path the family cannot be told apart at all without cutting the shared
 	// filename, which is a worse trade.
+	files := make([]SearchFileResult, len(paths))
+	for i, path := range paths {
+		files[i] = SearchFileResult{Path: path, Matches: []SearchMatch{{}}}
+	}
+	// The headers are fitted as a list, which is the only way the property can
+	// hold: one header cannot know what the header above it came out as.
 	for _, width := range []int{24, 40} {
+		fitted := elideFileHeaders(files, width)
 		seen := map[string]string{}
-		for _, path := range paths {
-			row := ansi.Strip(renderFileHeader(SearchFileResult{Path: path, Matches: []SearchMatch{{}}}, false, false, width))
+		for i, file := range files {
+			row := ansi.Strip(renderFileHeader(file, fitted[i], false, false, width))
 			if ansi.StringWidth(row) > width {
 				t.Errorf("width %d: header is %d cells: %q", width, ansi.StringWidth(row), row)
 			}
 			if other, dup := seen[row]; dup {
-				t.Errorf("width %d: %q and %q both render as %q", width, other, path, row)
+				t.Errorf("width %d: %q and %q both render as %q", width, other, paths[i], row)
 			}
-			seen[row] = path
+			seen[row] = paths[i]
 		}
 	}
 }
@@ -403,9 +410,19 @@ func TestSearchHeightIsStableAcrossStates(t *testing.T) {
 		s.State.Query = "zzzz"
 		nomatch := measure()
 
-		if empty != searching || empty != results || empty != nomatch {
-			t.Errorf("%dx%d: box jitters: empty=%v searching=%v results=%v nomatch=%v",
-				size.w, size.h, empty, searching, results, nomatch)
+		if empty != searching || empty != results {
+			t.Errorf("%dx%d: box jitters: empty=%v searching=%v results=%v",
+				size.w, size.h, empty, searching, results)
+		}
+		// A dead end is the one state that shrinks: a query matching nothing
+		// keeps a one-row list rather than a page of rows reserved for results
+		// that are not coming.
+		if nomatch[0] != empty[0] {
+			t.Errorf("%dx%d: a dead-end query changed the box width: %v vs %v", size.w, size.h, nomatch, empty)
+		}
+		if nomatch[1] >= empty[1] {
+			t.Errorf("%dx%d: a dead-end query kept the tall box: nomatch=%v answering=%v",
+				size.w, size.h, nomatch, empty)
 		}
 	}
 }

@@ -298,6 +298,12 @@ func (s *Search) resultsSection() modal.Section {
 		}
 
 		gutter := matchGutter(state.Results)
+		// The file headers are fitted as one list rather than one at a time:
+		// two different files must never render as the same header row, and no
+		// per-row elision can promise that (see ui.ElidePathSet). Every result
+		// is fitted, not only the visible ones, so a row does not change shape
+		// as the list scrolls past it.
+		headers := elideFileHeaders(state.Results, contentWidth)
 
 		var lines []string
 		focusables := make([]modal.FocusableInfo, 0, maxVisible)
@@ -315,7 +321,7 @@ func (s *Search) resultsSection() modal.Section {
 					break
 				}
 				hovered := itemID == hoverID
-				line := renderFileHeader(file, selected, hovered, contentWidth)
+				line := renderFileHeader(file, headers[fi], selected, hovered, contentWidth)
 
 				lines = append(lines, line)
 				focusables = append(focusables, modal.FocusableInfo{
@@ -417,8 +423,15 @@ func (s *Search) countsText(width int) string {
 	}
 	matches, files := state.TotalMatches(), state.FileCount()
 	count := strconv.Itoa(matches)
+	// A capped run stopped partway through the project, so neither number is a
+	// total. The file count moved between runs of the same query — 159, 184,
+	// 205, 236 — because it counts however far the traversal got before the cap,
+	// and a bare "in 159 files" claims that is how many files matched. Both
+	// numbers carry the "+", so both read as the floor they are.
+	fileCount := strconv.Itoa(files)
 	if state.Truncated {
 		count += "+"
+		fileCount += "+"
 	}
 
 	position := ""
@@ -426,9 +439,9 @@ func (s *Search) countsText(width int) string {
 		position = fmt.Sprintf("%d/%d  ", state.Cursor+1, flatLen)
 	}
 
-	long := fmt.Sprintf("%s %s in %d %s", count, plural(matches, "match", "matches"),
-		files, plural(files, "file", "files"))
-	short := fmt.Sprintf("%s in %d %s", count, files, plural(files, "file", "files"))
+	long := fmt.Sprintf("%s %s in %s %s", count, plural(matches, "match", "matches"),
+		fileCount, plural(files, "file", "files"))
+	short := fmt.Sprintf("%s in %s %s", count, fileCount, plural(files, "file", "files"))
 	for _, candidate := range []string{
 		position + long,
 		long,
@@ -456,6 +469,22 @@ func plural(n int, one, many string) string {
 // file finder budgets its list the same way. It drops to a single row rather
 // than to a floor, because a file pane can be shorter than a modal ever is on
 // a screen.
+// currentRows is how many rows the list is actually showing right now, which is
+// what tells a query that has narrowed to nothing from one that is merely being
+// refined. See modal.ListRowsFor.
+func (s *Search) currentRows() int {
+	if s.State == nil {
+		return modal.MinListRows
+	}
+	if rows := s.State.FlatLen(); rows > 0 {
+		return rows
+	}
+	if s.State.Query == "" || s.State.IsSearching {
+		return modal.MinListRows
+	}
+	return 0
+}
+
 func (s *Search) maxVisible() int {
 	overhead := searchOverheadWithoutStats
 	if s.hasStats() {
@@ -469,7 +498,7 @@ func (s *Search) maxVisible() int {
 	if s.fill {
 		return available
 	}
-	return minInt(modal.ListRows(s.height, s.seenRows), available)
+	return minInt(modal.ListRowsFor(s.height, s.seenRows, s.currentRows()), available)
 }
 
 // searchOverheadWithoutStats is everything drawn above the list: the title row
@@ -527,24 +556,53 @@ func (s *Search) renderHeader(width int) string {
 	return styles.ModalTitle.Render(header)
 }
 
-// renderFileHeader renders a file header line. The path is elided the way the
-// finder's rows are — leading directories first, the parent and the filename
-// last — so a narrow pane does not fill up with rows that all look alike.
-func renderFileHeader(file SearchFileResult, selected, hovered bool, width int) string {
-	icon := "▼ "
+// headerIcon is the collapse chevron a file header carries, which is part of
+// the row's budget whichever way it points.
+func headerIcon(file SearchFileResult) string {
 	if file.Collapsed {
-		icon = "▶ "
+		return "▶ "
 	}
+	return "▼ "
+}
 
-	matchCount := fmt.Sprintf(" (%d)", len(file.Matches))
-	availableWidth := width - ansi.StringWidth(icon) - ansi.StringWidth(matchCount)
-	if availableWidth < 1 {
-		availableWidth = 1
+func headerCount(file SearchFileResult) string {
+	return fmt.Sprintf(" (%d)", len(file.Matches))
+}
+
+// headerPathWidth is what a file header has left for the path once its chevron
+// and its match count are drawn. It differs per row — a file with 9 hits and a
+// file with 100 do not have the same budget — which is why the list is fitted
+// through ElidePathSetWidths rather than at one shared width.
+func headerPathWidth(file SearchFileResult, width int) int {
+	available := width - ansi.StringWidth(headerIcon(file)) - ansi.StringWidth(headerCount(file))
+	if available < 1 {
+		available = 1
 	}
+	return available
+}
 
-	path := file.Path
-	if ansi.StringWidth(path) > availableWidth {
-		path, _ = ui.ElidePath(path, availableWidth)
+// elideFileHeaders fits every file header's path, as a set, so two files never
+// arrive as the same header row.
+func elideFileHeaders(files []SearchFileResult, width int) []string {
+	paths := make([]string, len(files))
+	widths := make([]int, len(files))
+	for i, file := range files {
+		paths[i] = file.Path
+		widths[i] = headerPathWidth(file, width)
+	}
+	fitted, _ := ui.ElidePathSetWidths(paths, widths)
+	return fitted
+}
+
+// renderFileHeader renders a file header line from a path already fitted to the
+// row's budget by elideFileHeaders. The path is elided the way the finder's
+// rows are — leading directories first, the parent and the filename last — so a
+// narrow pane does not fill up with rows that all look alike.
+func renderFileHeader(file SearchFileResult, path string, selected, hovered bool, width int) string {
+	icon := headerIcon(file)
+	matchCount := headerCount(file)
+	if path == "" {
+		path = file.Path
 	}
 
 	if selected || hovered {

@@ -194,7 +194,21 @@ func (f *Finder) maxVisible() int {
 	if f.fill {
 		return available
 	}
-	return minInt(modal.ListRows(f.height, f.seenRows), available)
+	return minInt(modal.ListRowsFor(f.height, f.seenRows, f.currentRows()), available)
+}
+
+// currentRows is how many rows the list is showing, in the terms
+// modal.ListRowsFor asks for: a finder that has not been given a query, or
+// whose scan is still running, has not reached a dead end and asks for the
+// ordinary floor rather than for nothing.
+func (f *Finder) currentRows() int {
+	if len(f.matches) > 0 {
+		return len(f.matches)
+	}
+	if f.query == "" || (f.Cache != nil && f.Cache.Scanning) {
+		return modal.MinListRows
+	}
+	return 0
 }
 
 // chromeHeight is what the box costs on this surface: border and padding, plus
@@ -290,12 +304,18 @@ func (f *Finder) resultsSection() modal.Section {
 		lines := make([]string, 0, maxVisible)
 		focusables := make([]modal.FocusableInfo, 0, maxVisible)
 
+		// The rows are elided as one list rather than one at a time: two
+		// different files must never render as the same row, and no per-row
+		// elision can promise that (see ui.ElidePathSet). The budget is the
+		// same for every row, so the whole visible window is one set.
+		fitted := elideMatches(f.matches[start:end], contentWidth-markerWidth)
+
 		for i := start; i < end; i++ {
 			itemID := ItemID(i)
 			selected := i == f.cursor
 			hovered := itemID == hoverID
 
-			lines = append(lines, renderRow(f.matches[i], selected, hovered, contentWidth))
+			lines = append(lines, renderRow(fitted[i-start], selected, hovered, contentWidth))
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
@@ -397,21 +417,20 @@ func (f *Finder) countsText(width int) string {
 	return ""
 }
 
-// renderRow renders one result row. Selection and hover paint the full width,
-// with the fuzzy-matched characters kept legible inside the highlight, which is
-// how projectsearch paints its rows.
-func renderRow(match Match, selected, hovered bool, width int) string {
+// markerWidth is the "> " gutter every row carries, selected or not, so the
+// path budget does not change when the cursor moves.
+const markerWidth = 2
+
+// renderRow renders one already-fitted result row. Selection and hover paint
+// the full width, with the fuzzy-matched characters kept legible inside the
+// highlight, which is how projectsearch paints its rows.
+func renderRow(row fittedMatch, selected, hovered bool, width int) string {
 	marker := "  "
 	if selected {
 		marker = "> "
 	}
 
-	available := width - len(marker)
-	if available < 1 {
-		available = 1
-	}
-
-	path, ranges := elideMatch(match, available)
+	path, ranges := row.text, row.ranges
 
 	if selected || hovered {
 		line := marker + path

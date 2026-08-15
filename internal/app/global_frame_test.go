@@ -286,3 +286,31 @@ func containsHint(labels []string, want string) bool {
 	}
 	return false
 }
+
+// The footer must not advertise a key the focused surface has taken. Digits
+// switch tabs — except while a text input owns the keyboard, where they are
+// text: typing "2" into a file finder's query narrows the query and does not
+// move to the second plugin, so "1-4 plugins" under the finder is a promise the
+// app does not keep.
+func TestFooterDropsTabDigitsWhileTextInputHasTheKeyboard(t *testing.T) {
+	m := globalFrameModel(t)
+	m.width, m.height, m.ready = 160, 40, true
+	if len(m.visibleTabs()) < 2 {
+		t.Skip("one tab, so no digit hint either way")
+	}
+
+	if !containsHint(footerLabels(m), tabDigitLabel(m)) {
+		t.Fatalf("the idle footer does not advertise the tab digits: %v", footerLabels(m))
+	}
+	m.activeContext = "global-workspaces-filter"
+	if containsHint(footerLabels(m), tabDigitLabel(m)) {
+		t.Fatalf("the footer advertised the tab digits to a focused text input: %v", footerLabels(m))
+	}
+}
+
+func tabDigitLabel(m Model) string {
+	if m.inGlobalScope() {
+		return "tabs"
+	}
+	return "plugins"
+}

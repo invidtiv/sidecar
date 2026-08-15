@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -85,10 +84,17 @@ func ScanPaths(root string, wantDirs bool) ([]string, string) {
 			if wantDirs {
 				return nil
 			}
-			// Skip hidden files (starting with .)
-			if strings.HasPrefix(name, ".") {
-				return nil
-			}
+			// Dotfiles are files. What is worth hiding is what the project has
+			// said is not worth keeping — .gitignore — not what its name starts
+			// with, and the two are not the same set: `.goreleaser.yml`,
+			// `.golangci.yml`, `.env.example` are all tracked, all findable in
+			// the Files tree, and were all invisible to the finder, which
+			// answered "No matches" about files sitting in the tree beside it.
+			//
+			// The rule was inconsistent with itself as well: the walk descends
+			// into `.claude/` and `.github/` and lists what is inside them, so a
+			// dot in a directory name meant nothing while a dot in a file name
+			// meant everything.
 			if gitIgnore.IsIgnored(rel, false) {
 				return nil
 			}

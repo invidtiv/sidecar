@@ -1041,7 +1041,11 @@ func (m Model) globalFooterHints() []footerHint {
 	// Tab switching hints (consolidated for brevity). The advertised range is
 	// the active scope's own tab count, so the global space never promises a
 	// number that would reach a project plugin.
-	if count := len(m.visibleTabs()); count > 1 {
+	//
+	// A focused text input has taken the digits: typing "2" into a file
+	// finder's query is a query, not a tab switch. A footer that advertises a
+	// binding the focused surface has claimed is not a hint, it is wrong.
+	if count := len(m.visibleTabs()); count > 1 && !m.textInputFocused() {
 		label := "plugins"
 		if m.inGlobalScope() {
 			label = "tabs"
