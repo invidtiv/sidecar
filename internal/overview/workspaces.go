@@ -453,6 +453,8 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch key {
+	case "n":
+		return true, m.OpenCreateWorktree("")
 	case "ctrl+n":
 		return true, m.OpenCreateShell("")
 	case "enter", interactiveEnterKeyAlt:
@@ -936,11 +938,11 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			m.openViewFlyout()
 		case workspacelist.RegionHeaderAction:
 			if region.ID == globalCreateActionID {
-				return m.OpenCreateShell("")
+				return m.OpenCreate("")
 			}
 		case workspacelist.RegionSectionAction:
 			if strings.HasPrefix(region.ID, globalCreateActionID+":") {
-				return m.OpenCreateShell(createProjectKeyFromAction(region.ID))
+				return m.OpenCreate(createProjectKeyFromAction(region.ID))
 			}
 		case workspacelist.RegionFilter:
 			focus = m.focusList()
@@ -995,7 +997,6 @@ func (m *Model) WorkspacesSummary() string {
 // The browser's command set is declared in Commands() and registered in
 // internal/keymap under each WorkspaceFocusContext. Help, the palette, and
 // the host footer all read that pair, so a focused document or issue leaf
-// cannot advertise the list's keys. The list itself stays a reader: no
-// create, delete, or attach. rename-shell and rename-worktree are
-// display-name writes, not create/destroy. Typing into a live pane is
-// Enter / click / E.
+// cannot advertise the list's keys. Creation delegates to workspaceops;
+// rename-shell and rename-worktree are display-name writes. Typing into a
+// live pane is Enter / click / E.

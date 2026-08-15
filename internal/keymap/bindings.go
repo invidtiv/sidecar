@@ -63,12 +63,10 @@ func DefaultBindings() []Binding {
 		// keymap dispatch; they are registered so help, the palette, and the
 		// footer can discover them.
 		//
-		// This list is also the boundary the plan draws: the browser's list is a
-		// reader, so there is deliberately no create, delete, or attach command
-		// here. Creating and destroying workspaces belongs to the owning
-		// project's Workspaces plugin, where its refusal rules live. Typing into
-		// a pane that already exists is on the other side of that line.
+		// Creation is hosted globally, but delegates lifecycle work to the same
+		// presentation-neutral core as the project surface.
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
+		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},

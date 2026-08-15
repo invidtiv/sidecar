@@ -1320,6 +1320,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return nil
 	}
 	switch id {
+	case "new-worktree":
+		return m.overview.OpenCreateWorktree("")
 	case "new-shell":
 		return m.overview.OpenCreateShell("")
 	case "rename-shell":

@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
@@ -87,6 +88,10 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
 		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
+		// creation is a multi-stage async workflow; every result must stay
+		// routed to the global host even while its modal owns focus.
+		return true
+	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg:
 		return true
 	default:
 		return false
@@ -200,13 +205,18 @@ type Model struct {
 	createOpen         bool
 	createProjectIndex int
 	createProjectKey   string
+	createKindIndex    int
 	createNameInput    textinput.Model
 	createError        string
+	createWarning      string
 	createBusy         bool
 	createModal        *modal.Modal
 	createModalWidth   int
 	createMouse        *mouse.Handler
 	pendingCreatedTmux string
+	createPlan         *workspaceops.WorktreePlan
+	createRecord       *workspaceops.WorktreeRecord
+	pendingCreatedPath string
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -521,6 +531,54 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.applyRenameShell(msg)
 		return nil
 	case globalShellCreatedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalWorktreePlannedMsg:
+		m.createBusy = false
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
+		m.createPlan = msg.Plan
+		m.createModal = nil
+		return nil
+	case globalWorktreeCreatedMsg:
+		m.createBusy = false
+		m.createPlan, m.createRecord = msg.Plan, msg.Record
+		if msg.Record == nil {
+			m.createError = "Worktree creation failed"
+			if msg.Err != nil {
+				m.createError = msg.Err.Error()
+			}
+			m.createModal = nil
+			return nil
+		}
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+		}
+		if failed := failedCreateOutcomes(msg.Outcomes, true); len(failed) > 0 {
+			m.createError = summarizeCreateOutcomes(failed)
+			m.createModal = nil
+			return nil
+		}
+		if failed := failedCreateOutcomes(msg.Outcomes, false); len(failed) > 0 {
+			m.createWarning = summarizeCreateOutcomes(failed)
+			m.createModal = nil
+			return nil
+		}
+		_ = removeGlobalJournal(msg.Plan)
+		m.pendingCreatedPath = msg.Record.Path
+		m.showIdleWorktrees = true
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalWorktreeDeletedMsg:
 		m.createBusy = false
 		if msg.Err != nil {
 			m.createError = msg.Err.Error()

@@ -311,9 +311,9 @@ func rowPoint(m *Model, id string) (int, int, bool) {
 	return 0, 0, false
 }
 
-// The global browser now owns the presentation host for shared shell creation.
+// The global browser owns presentation for shared shell/worktree creation.
 // Other mutations remain absent until they move behind the same reusable core.
-func TestGlobalBrowserListOffersOnlySharedShellCreationMutation(t *testing.T) {
+func TestGlobalBrowserListOffersSharedCreationMutations(t *testing.T) {
 	m, recorder := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
 	captures := len(recorder.panes())
@@ -321,7 +321,7 @@ func TestGlobalBrowserListOffersOnlySharedShellCreationMutation(t *testing.T) {
 	// The discoverable command set — what help and the palette offer for this
 	// tab — carries the same boundary as the keys below. rename-shell and
 	// rename-worktree are display-name writes, not create/destroy.
-	allowed := map[string]bool{"rename-shell": true, "rename-worktree": true, "open-in-git": true, "new-shell": true}
+	allowed := map[string]bool{"rename-shell": true, "rename-worktree": true, "open-in-git": true, "new-shell": true, "new-worktree": true}
 	var registered int
 	for _, binding := range keymap.DefaultBindings() {
 		if binding.Context != "global-workspaces" && binding.Context != "global-workspaces-filter" {
@@ -344,11 +344,15 @@ func TestGlobalBrowserListOffersOnlySharedShellCreationMutation(t *testing.T) {
 	// The project plugin's mutating keys are not the browser's to answer.
 	// R on a worktree or shell is a display-name write (tested separately).
 	before := m.workspaces.SelectedID()
-	for _, k := range []string{"n", "D", "a", "c", "x", "N"} {
+	for _, k := range []string{"D", "a", "c", "x", "N"} {
 		if handled, cmd := m.WorkspacesKey(key(k)); handled {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}
 	}
+	if handled, _ := m.WorkspacesKey(key("n")); !handled || !m.CreateOpen() || m.createKindIndex != globalCreateWorktree {
+		t.Fatal("n did not open shared global worktree creation")
+	}
+	m.closeCreateShell()
 	if m.workspaces.SelectedID() != before {
 		t.Fatalf("a refused key moved the selection to %q", m.workspaces.SelectedID())
 	}

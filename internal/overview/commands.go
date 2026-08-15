@@ -76,7 +76,8 @@ func (m *Model) Commands() []plugin.Command {
 		}
 	default:
 		cmds := []plugin.Command{
-			{ID: "new-shell", Name: "Shell", Description: "Create a shell in a configured project", Context: ctxGlobalWorkspaces, Priority: 1},
+			{ID: "new-worktree", Name: "New", Description: "Create a worktree in a configured project", Context: ctxGlobalWorkspaces, Priority: 1},
+			{ID: "new-shell", Name: "Shell", Description: "Create a shell in a configured project", Context: ctxGlobalWorkspaces, Priority: 2},
 			{ID: "interactive", Name: "Type", Description: "Start typing in the selected live pane", Context: ctxGlobalWorkspaces, Priority: 2},
 			{ID: "filter", Name: "Filter", Description: "Filter workspaces", Context: ctxGlobalWorkspaces, Priority: 2},
 			{ID: "sort", Name: "Sort", Description: "Open the sort menu", Context: ctxGlobalWorkspaces, Priority: 3},

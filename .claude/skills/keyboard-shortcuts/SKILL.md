@@ -87,7 +87,7 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 
 Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
 
-The list is browse-only. There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
+There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
 
 | Key | Action |
 |-----|--------|
@@ -102,6 +102,7 @@ The list is browse-only. There is no watched-preview focus: hiding the sidebar i
 | wheel on terminal | Scroll only; do not activate |
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
 | `i` | Find TD task (`open-issue`). Not interactive |
+| `n` | Create a worktree, choosing the owning project, then confirm the Git plan |
 | `ctrl+n` | Create a shell, choosing the owning project (selected row then last-used default) |
 | `/` | Filter |
 | `v` / `s` | Open View: sort the list. `v` matches the project sidebar; `s` is the original alias |

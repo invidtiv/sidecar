@@ -77,7 +77,7 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 	}
 }
 
-// The footer follows the two-state model: the list advertises Type. Hiding the
+// The footer follows the two-state model: the list advertises creation and Type. Hiding the
 // sidebar is layout only, so the table stays the list's.
 func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 	m := globalFrameModel(t)
@@ -93,7 +93,10 @@ func TestGlobalWorkspacesFooterFollowsFocus(t *testing.T) {
 	if !containsHint(hidden, "Type") || !containsHint(hidden, "Filter") || containsHint(hidden, "Scroll") {
 		t.Fatalf("hidden-sidebar footer = %v, want the list table", hidden)
 	}
-	for _, forbidden := range []string{"Attach", "Interactive", "Delete", "New"} {
+	if !containsHint(list, "New") || !containsHint(hidden, "New") {
+		t.Fatalf("create worktree was not discoverable: list=%v hidden=%v", list, hidden)
+	}
+	for _, forbidden := range []string{"Attach", "Interactive", "Delete"} {
 		if containsHint(list, forbidden) || containsHint(hidden, forbidden) {
 			t.Fatalf("the read-only browser advertised %q: list=%v hidden=%v", forbidden, list, hidden)
 		}
