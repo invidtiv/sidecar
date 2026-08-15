@@ -6,8 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -38,9 +37,37 @@ type tabHit struct {
 	Width int
 }
 
-func (p *Plugin) findPreviewTab() int {
+func fileTabItem(tab FileTab) tabs.Item[FileTab] {
+	return tabs.Item[FileTab]{
+		Key:     filepath.Clean(tab.Path),
+		Value:   tab,
+		Preview: tab.IsPreview,
+	}
+}
+
+func (p *Plugin) tabGroup() tabs.Group[FileTab] {
+	g := tabs.Group[FileTab]{Active: p.activeTab}
+	g.Items = make([]tabs.Item[FileTab], len(p.tabs))
 	for i, tab := range p.tabs {
-		if tab.IsPreview {
+		g.Items[i] = fileTabItem(tab)
+	}
+	return g
+}
+
+func (p *Plugin) applyTabGroup(g tabs.Group[FileTab]) {
+	p.tabs = make([]FileTab, len(g.Items))
+	for i, item := range g.Items {
+		tab := item.Value
+		tab.IsPreview = item.Preview
+		p.tabs[i] = tab
+	}
+	p.activeTab = g.Active
+	p.normalizeActiveTab()
+}
+
+func (p *Plugin) findPreviewTab() int {
+	for i, item := range p.tabGroup().Items {
+		if item.Preview {
 			return i
 		}
 	}
@@ -54,13 +81,7 @@ func (p *Plugin) pinTab(idx int) {
 }
 
 func (p *Plugin) findTab(path string) int {
-	normalizedPath := filepath.Clean(path)
-	for i, tab := range p.tabs {
-		if filepath.Clean(tab.Path) == normalizedPath {
-			return i
-		}
-	}
-	return -1
+	return p.tabGroup().Find(filepath.Clean(path))
 }
 
 func (p *Plugin) normalizeActiveTab() {
@@ -114,14 +135,19 @@ func (p *Plugin) openTab(path string, mode TabOpenMode) tea.Cmd {
 			return p.applyActiveTab()
 		}
 		p.saveActiveTabState()
-		p.tabs = append(p.tabs, FileTab{Path: path, IsPreview: true})
-		p.activeTab = len(p.tabs) - 1
+		g := p.tabGroup()
+		g.AppendItem(tabs.Item[FileTab]{
+			Key:     filepath.Clean(path),
+			Value:   FileTab{Path: path, IsPreview: true},
+			Preview: true,
+		})
+		p.applyTabGroup(g)
 		return p.applyActiveTab()
 	}
 
 	// Only deduplicate for non-TabOpenNew; TabOpenNew always creates a new tab
 	if mode != TabOpenNew {
-		if idx := p.findTab(path); idx >= 0 {
+		if idx := p.tabGroup().Find(filepath.Clean(path)); idx >= 0 {
 			return p.switchTab(idx)
 		}
 	}
@@ -131,8 +157,9 @@ func (p *Plugin) openTab(path string, mode TabOpenMode) tea.Cmd {
 	if mode == TabOpenReplace && len(p.tabs) > 0 {
 		p.tabs[p.activeTab] = FileTab{Path: path}
 	} else {
-		p.tabs = append(p.tabs, FileTab{Path: path})
-		p.activeTab = len(p.tabs) - 1
+		g := p.tabGroup()
+		g.Append(filepath.Clean(path), FileTab{Path: path})
+		p.applyTabGroup(g)
 	}
 
 	return p.applyActiveTab()
@@ -166,39 +193,37 @@ func (p *Plugin) switchTab(index int) tea.Cmd {
 	// Auto-close preview tab when switching to a pinned tab
 	if previewIdx := p.findPreviewTab(); previewIdx >= 0 && previewIdx != index {
 		p.killTabEditSession(previewIdx)
-		p.tabs = append(p.tabs[:previewIdx], p.tabs[previewIdx+1:]...)
+		g := p.tabGroup()
+		g.CloseAt(previewIdx)
 		if previewIdx < index {
 			index--
 		}
-		if previewIdx < p.activeTab {
-			p.activeTab--
-		} else if previewIdx == p.activeTab {
-			p.activeTab = index
+		if previewIdx == p.activeTab {
+			g.Select(index)
 		}
-		if index < 0 || index >= len(p.tabs) {
+		if index < 0 || index >= len(g.Items) {
+			p.applyTabGroup(g)
 			return nil
 		}
+		p.applyTabGroup(g)
 	}
 
 	p.saveActiveTabState()
-	p.activeTab = index
+	g := p.tabGroup()
+	g.Select(index)
+	p.applyTabGroup(g)
 
 	return p.applyActiveTab()
 }
 
 func (p *Plugin) cycleTab(delta int) tea.Cmd {
-	if len(p.tabs) < 2 {
+	g := p.tabGroup()
+	prev := g.Active
+	g.Cycle(delta)
+	if g.Active == prev {
 		return nil
 	}
-
-	idx := p.activeTab + delta
-	if idx < 0 {
-		idx = len(p.tabs) - 1
-	} else if idx >= len(p.tabs) {
-		idx = 0
-	}
-
-	return p.switchTab(idx)
+	return p.switchTab(g.Active)
 }
 
 func (p *Plugin) closeTab(index int) tea.Cmd {
@@ -218,24 +243,17 @@ func (p *Plugin) closeTab(index int) tea.Cmd {
 		p.saveActiveTabState()
 	}
 
-	p.tabs = append(p.tabs[:index], p.tabs[index+1:]...)
+	g := p.tabGroup()
+	result := g.CloseAt(index)
+	p.applyTabGroup(g)
 
-	if len(p.tabs) == 0 {
-		p.activeTab = 0
+	if result.Empty {
 		p.previewFile = ""
 		p.previewScroll = 0
 		p.resetPreviewContent()
 		p.resetPreviewModes()
 		p.updateWatchedFile()
 		return nil
-	}
-
-	if index < p.activeTab {
-		p.activeTab--
-	} else if index == p.activeTab {
-		if p.activeTab >= len(p.tabs) {
-			p.activeTab = len(p.tabs) - 1
-		}
 	}
 
 	return p.applyActiveTab()
@@ -384,125 +402,21 @@ func (p *Plugin) renderPreviewTabs(width int) string {
 
 	p.normalizeActiveTab()
 
-	labels := p.tabLabels(width)
-	rendered := make([]string, 0, len(p.tabs))
-	widths := make([]int, 0, len(p.tabs))
-
-	for i, label := range labels {
-		isActive := i == p.activeTab
-		item := styles.RenderTab(label, i, len(p.tabs), isActive, p.tabs[i].IsPreview)
-		rendered = append(rendered, item)
-		widths = append(widths, lipgloss.Width(item))
+	texts := p.tabLabels(width)
+	labels := make([]tabs.Label, len(texts))
+	for i, text := range texts {
+		labels[i] = tabs.Label{Text: text, Preview: p.tabs[i].IsPreview}
 	}
 
-	start, end, showLeft, showRight := p.visibleTabRange(widths, width)
-	if start > end {
-		return ""
+	strip := tabs.LayoutStrip(labels, p.activeTab, width, true, fitFilesLabel)
+	for _, hit := range strip.Tabs {
+		p.tabHits = append(p.tabHits, tabHit{Index: hit.Index, X: hit.Col, Width: hit.Width})
 	}
-
-	var tokens []string
-	x := 0
-
-	if showLeft {
-		left := styles.Muted.Render("<")
-		tokens = append(tokens, left)
-		x += 1
-	}
-
-	for i := start; i <= end; i++ {
-		if len(tokens) > 0 {
-			tokens = append(tokens, " ")
-			x += 1
-		}
-		tokens = append(tokens, rendered[i])
-		p.tabHits = append(p.tabHits, tabHit{Index: i, X: x, Width: widths[i]})
-		x += widths[i]
-	}
-
-	if showRight {
-		if len(tokens) > 0 {
-			tokens = append(tokens, " ")
-		}
-		right := styles.Muted.Render(">")
-		tokens = append(tokens, right)
-	}
-
-	return strings.Join(tokens, "")
+	return strip.Row
 }
 
-func (p *Plugin) visibleTabRange(widths []int, maxWidth int) (int, int, bool, bool) {
-	if len(widths) == 0 {
-		return 0, -1, false, false
-	}
-	if p.activeTab < 0 || p.activeTab >= len(widths) {
-		return 0, -1, false, false
-	}
-
-	start := p.activeTab
-	end := p.activeTab
-	used := widths[p.activeTab]
-
-	for {
-		expanded := false
-		if end+1 < len(widths) && used+1+widths[end+1] <= maxWidth {
-			end++
-			used += 1 + widths[end]
-			expanded = true
-		}
-		if start-1 >= 0 && used+1+widths[start-1] <= maxWidth {
-			start--
-			used += 1 + widths[start]
-			expanded = true
-		}
-		if !expanded {
-			break
-		}
-	}
-
-	showLeft := start > 0
-	showRight := end < len(widths)-1
-
-	for {
-		indicatorTokens := 0
-		if showLeft {
-			indicatorTokens++
-		}
-		if showRight {
-			indicatorTokens++
-		}
-
-		tabCount := end - start + 1
-		if tabCount < 1 {
-			return 0, -1, false, false
-		}
-
-		totalTokens := tabCount + indicatorTokens
-		sepCount := totalTokens - 1
-		totalWidth := p.sumTabWidths(widths, start, end) + indicatorTokens + sepCount
-
-		if totalWidth <= maxWidth || tabCount == 1 {
-			break
-		}
-
-		if end-p.activeTab >= p.activeTab-start {
-			end--
-		} else {
-			start++
-		}
-
-		showLeft = start > 0
-		showRight = end < len(widths)-1
-	}
-
-	return start, end, showLeft, showRight
-}
-
-func (p *Plugin) sumTabWidths(widths []int, start, end int) int {
-	total := 0
-	for i := start; i <= end; i++ {
-		total += widths[i]
-	}
-	return total
+func fitFilesLabel(text string, _, _, maxWidth int, _ bool) string {
+	return truncatePath(text, maxWidth)
 }
 
 func (p *Plugin) tabLabels(width int) []string {
@@ -594,12 +508,17 @@ func (p *Plugin) killTabEditSession(index int) {
 	if index < 0 || index >= len(p.tabs) {
 		return
 	}
-	tab := &p.tabs[index]
+	tab := p.tabs[index]
+	killFileTabEditSession(tab)
+	tab.EditSession = ""
+	tab.EditOrigMtime = time.Time{}
+	tab.EditEditor = ""
+	p.tabs[index] = tab
+}
+
+func killFileTabEditSession(tab FileTab) {
 	if tab.EditSession != "" {
 		tty.EditorSession{Name: tab.EditSession}.Kill()
-		tab.EditSession = ""
-		tab.EditOrigMtime = time.Time{}
-		tab.EditEditor = ""
 	}
 }
 
@@ -614,36 +533,22 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 	p.saveActiveTabState()
 
 	deleted := p.normalizeDeletedPath(deletedPath)
-	originalActive := p.activeTab
-	removedBeforeActive := 0
-	removedAny := false
-	activeRemoved := false
-
-	kept := make([]FileTab, 0, len(p.tabs))
-	for i := range p.tabs {
-		if !tabPathMatchesDeleted(p.tabs[i].Path, deleted) {
-			kept = append(kept, p.tabs[i])
-			continue
-		}
-		removedAny = true
-		p.killTabEditSession(i)
-		if i == originalActive {
-			activeRemoved = true
-			if p.inlineEditMode {
-				p.clearPluginEditState()
-			}
-		}
-		if i < originalActive {
-			removedBeforeActive++
-		}
-	}
-	if !removedAny {
+	g := p.tabGroup()
+	result := g.CloseMatching(func(item tabs.Item[FileTab]) bool {
+		return tabPathMatchesDeleted(item.Value.Path, deleted)
+	})
+	if len(result.Removed) == 0 {
 		return nil
 	}
-	p.tabs = kept
+	for _, item := range result.Removed {
+		killFileTabEditSession(item.Value)
+	}
+	if result.ActiveRemoved && p.inlineEditMode {
+		p.clearPluginEditState()
+	}
+	p.applyTabGroup(g)
 
-	if len(p.tabs) == 0 {
-		p.activeTab = 0
+	if result.Empty {
 		p.previewFile = ""
 		p.previewScroll = 0
 		p.resetPreviewContent()
@@ -652,19 +557,11 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 		return nil
 	}
 
-	p.activeTab = originalActive - removedBeforeActive
-	if p.activeTab >= len(p.tabs) {
-		p.activeTab = len(p.tabs) - 1
-	}
-	if p.activeTab < 0 {
-		p.activeTab = 0
-	}
-
 	// applyActiveTab resets search/blame/info/line-jump. Skip it when the
 	// same loaded tab is still active so a sibling delete does not wipe
 	// the preview the user is looking at.
 	survivor := p.tabs[p.activeTab]
-	if !activeRemoved && p.previewFile == survivor.Path && survivor.Loaded {
+	if !result.ActiveRemoved && p.previewFile == survivor.Path && survivor.Loaded {
 		return nil
 	}
 	return p.applyActiveTab()
