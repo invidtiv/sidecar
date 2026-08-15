@@ -25,10 +25,15 @@ func TestSearchBoxNeverLandsOnThePaneDivider(t *testing.T) {
 			}
 			left := (width - w) / 2
 			right := left + w - 1
+			// The blank gutter ui.OverlayModal keeps on each side of the box
+			// blanks whatever it lands on for the box's full height, so it has
+			// to clear the divider too.
 			for _, col := range []int{p.treeWidth, p.treeWidth + 1} {
-				if left == col || right == col {
-					t.Errorf("width %d: a %d-cell box puts a border on the frame column %d",
-						width, w, col)
+				for _, box := range []int{left - 1, left, right, right + 1} {
+					if box == col {
+						t.Errorf("width %d: a %d-cell box puts %d on the frame column %d",
+							width, w, box, col)
+					}
 				}
 			}
 		}

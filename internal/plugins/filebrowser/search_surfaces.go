@@ -63,16 +63,19 @@ func (p *Plugin) renderQuickOpenModalContent() string {
 	return f.View(p.width, p.height, p.mouseHandler)
 }
 
-// boxWidthOffTheDivider is preferred, adjusted if a box that wide would put one
-// of its vertical borders on the column the pane divider occupies.
+// boxWidthOffTheDivider is preferred, adjusted if a box that wide would land on
+// the column the pane divider occupies — with either a border or the blank
+// gutter ui.OverlayModal keeps on each side of the box.
 //
 // Centring is arithmetic and the divider is wherever the user dragged it, so
-// the two coincide sooner or later — and when they do the box reads as welded
-// to the frame rather than floating over it: one unbroken vertical line runs
-// from the top of the plugin to the bottom, through the box. Two cells of width
-// moves the border one column, which is all it takes to break the line, and the
-// surface computes its own hit regions from the same number, so nothing else
-// has to know.
+// the two coincide sooner or later. A border there reads as welded to the
+// frame: one unbroken vertical line runs from the top of the plugin to the
+// bottom, through the box. The gutter there is worse — it blanks the divider
+// for the box's full height, punching a two-dozen-row hole in the pane's
+// vertical rule, which is neither overlapping it cleanly nor keeping clear of
+// it. Two cells of width moves the box one column, which is all it takes, and
+// the surface computes its own hit regions from the same number, so nothing
+// else has to know.
 func (p *Plugin) boxWidthOffTheDivider(preferred int) int {
 	if p.width <= 0 {
 		return preferred
@@ -85,12 +88,12 @@ func (p *Plugin) boxWidthOffTheDivider(preferred int) int {
 		// The surface would clamp it anyway; adjust the width it will really use.
 		width = maxW
 	}
-	for range 2 {
+	for range 4 {
 		if width < modal.MinModalWidth {
 			return preferred
 		}
-		left := (p.width - width) / 2
-		if !frame[left] && !frame[left+width-1] {
+		left, right := (p.width-width)/2, (p.width-width)/2+width-1
+		if !frame[left] && !frame[right] && !frame[left-1] && !frame[right+1] {
 			return width
 		}
 		width -= 2

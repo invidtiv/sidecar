@@ -272,6 +272,22 @@ func TestSearchNamesTheRootItIsSearching(t *testing.T) {
 	}
 }
 
+// A label that disappears is worse than a label that is short. This checkout is
+// named "sidecar-files-panel-improvements" — 32 cells against the counts row's
+// 28 — and the root vanished from the box entirely at every size and in every
+// state while the goldens, rooted at "/golden/sidecar", stayed green.
+func TestSearchNamesALongRootToo(t *testing.T) {
+	const root = "/Users/someone/code/sidecar-files-panel-improvements"
+	for _, size := range []struct{ w, h int }{{200, 50}, {100, 30}, {56, 20}} {
+		s := New(root, 1)
+		s.State.Query = "zzzz"
+		out := ansi.Strip(s.View(size.w, size.h, mouse.NewHandler()))
+		if !strings.Contains(out, "sidecar-") {
+			t.Errorf("%dx%d: the long root is not named anywhere in:\n%s", size.w, size.h, out)
+		}
+	}
+}
+
 // One match in one file is not "1 matches in 1 files".
 func TestCountsLinePluralises(t *testing.T) {
 	s := New("/root", 1)
@@ -284,6 +300,29 @@ func TestCountsLinePluralises(t *testing.T) {
 	got := s.countsText(60)
 	if !strings.Contains(got, "1 match in 1 file") || strings.Contains(got, "matches") || strings.Contains(got, "files") {
 		t.Errorf("counts line reads %q", got)
+	}
+}
+
+// A capped result set says it is capped, at every width, and never renders as
+// "1000/107" — which reads as "item 1000 of 107", the one thing the row never
+// means.
+func TestCountsLineSignalsTheCap(t *testing.T) {
+	s := New("/root", 1)
+	s.State.Query = "e"
+	s.State.Truncated = true
+	s.State.Results = []SearchFileResult{{
+		Path:    "internal/app/update.go",
+		Matches: []SearchMatch{{LineNo: 12, LineText: "e", ColStart: 0, ColEnd: 1}},
+	}}
+
+	for _, width := range []int{60, 30, 20, 12, 8} {
+		got := s.countsText(width)
+		if !strings.Contains(got, "+") {
+			t.Errorf("width %d: counts read %q, which does not say the set was cut", width, got)
+		}
+		if strings.Count(got, "/") > 0 && !strings.Contains(got, "  ") {
+			t.Errorf("width %d: counts read %q, which reads as a position", width, got)
+		}
 	}
 }
 

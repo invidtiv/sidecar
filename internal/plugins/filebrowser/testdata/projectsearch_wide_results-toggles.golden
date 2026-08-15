@@ -13,20 +13,18 @@
 [38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m                                                                              [m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
 [38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m                                                                              [m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
 [38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m                                                                              [m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
-[38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m                                                                              [m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
-[38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m                                                                              [m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
 [38;2;124;58;237m│[m[48;2;31;41;55m  [m[48;2;31;41;55m[48;2;31;41;55m[38;2;107;114;128m5/6  4 matches in 3 files                                      /golden/sidecar[m[48;2;31;41;55m[m[m[48;2;31;41;55m  [m[38;2;124;58;237m│[m
 [38;2;124;58;237m│[m[48;2;31;41;55m                                                                                  [m[38;2;124;58;237m│[m
 [38;2;124;58;237m╰──────────────────────────────────────────────────────────────────────────────────╯[m
 --- regions ---
 modal-backdrop x=0 y=0 w=100 h=30 data=<nil>
-modal-body x=8 y=5 w=84 h=20 data=<nil>
-project-search-toggle-regex x=11 y=9 w=4 h=1 data=project-search-toggle-regex
-project-search-toggle-case x=16 y=9 w=4 h=1 data=project-search-toggle-case
-project-search-toggle-word x=21 y=9 w=4 h=1 data=project-search-toggle-word
-project-search-file-0 x=11 y=11 w=78 h=1 data=project-search-file-0
-project-search-match-0-0 x=11 y=12 w=78 h=1 data=project-search-match-0-0
-project-search-match-0-1 x=11 y=13 w=78 h=1 data=project-search-match-0-1
-project-search-file-1 x=11 y=14 w=78 h=1 data=project-search-file-1
-project-search-file-2 x=11 y=15 w=78 h=1 data=project-search-file-2
-project-search-match-2-0 x=11 y=16 w=78 h=1 data=project-search-match-2-0
+modal-body x=8 y=6 w=84 h=18 data=<nil>
+project-search-toggle-regex x=11 y=10 w=4 h=1 data=project-search-toggle-regex
+project-search-toggle-case x=16 y=10 w=4 h=1 data=project-search-toggle-case
+project-search-toggle-word x=21 y=10 w=4 h=1 data=project-search-toggle-word
+project-search-file-0 x=11 y=12 w=78 h=1 data=project-search-file-0
+project-search-match-0-0 x=11 y=13 w=78 h=1 data=project-search-match-0-0
+project-search-match-0-1 x=11 y=14 w=78 h=1 data=project-search-match-0-1
+project-search-file-1 x=11 y=15 w=78 h=1 data=project-search-file-1
+project-search-file-2 x=11 y=16 w=78 h=1 data=project-search-file-2
+project-search-match-2-0 x=11 y=17 w=78 h=1 data=project-search-match-2-0

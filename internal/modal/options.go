@@ -88,6 +88,27 @@ func PreferredListRows(surfaceHeight int) int {
 	return rows
 }
 
+// ListRows is how long a content-sized list actually draws itself: the
+// preferred length, less what it has never needed, but never below MinListRows.
+//
+// seen is the most rows the list has wanted since it was opened — a high-water
+// mark, not the current count. A box sized to the current count breathes under
+// the user's hands as a query is refined; a box sized to the preferred length
+// whatever happens reserves two dozen rows for a picker that has one hit and
+// reads as broken on a large screen. Growing once into the results and then
+// holding still is the balance: refining a query, which is where the jitter was
+// unbearable, never resizes anything.
+func ListRows(surfaceHeight, seen int) int {
+	rows := PreferredListRows(surfaceHeight)
+	if seen < rows {
+		rows = seen
+	}
+	if rows < MinListRows {
+		rows = MinListRows
+	}
+	return rows
+}
+
 // ContentBoxWidth is the widest a content-sized box may be on a surface this
 // wide. It keeps RoomyMarginX clear on each side so a host that dims the
 // surface around the box has something left to dim, and falls back to the

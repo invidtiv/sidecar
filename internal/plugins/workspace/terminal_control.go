@@ -81,6 +81,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	// The rule a pane search lives by, swept once per update rather than trusted
+	// to each of the dozen places that write focus: the surface belongs to the
+	// pane holding the keyboard. setFocusTarget applies it for every gesture;
+	// this catches the paths that move focus without it — a shell selection
+	// landing, a layout being restored — so none of them can leave a surface
+	// drawn over a pane that no longer takes keys.
+	p.closeUnfocusedDocSearches()
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
 	return p, tea.Batch(cmds...)

@@ -57,6 +57,11 @@ func (p *Plugin) currentFocusTarget() panelayout.Target {
 // leave the surface in the same shape. Doc and issue focus are derived from
 // paneFocus, so a leaf needs no second bool kept in step.
 func (p *Plugin) setFocusTarget(t panelayout.Target) {
+	// A pane search is a modal on that pane, so it belongs to whoever holds the
+	// keyboard: focus landing anywhere else dismisses it, the way clicking off a
+	// modal does. Leaving it open would leave a box drawn with a cursor in it
+	// that no keystroke could reach, and none could close.
+	defer p.closeUnfocusedDocSearches()
 	switch t.Kind {
 	case panelayout.TargetSidebar:
 		p.activePane = PaneSidebar

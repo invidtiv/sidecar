@@ -140,6 +140,89 @@ func TestDocPaneSearchAbsorbsEveryKey(t *testing.T) {
 	}
 }
 
+// Tab belongs to an open pane search, exactly as it does to the same surface in
+// the Files plugin: it moves focus inside the surface rather than cycling the
+// pane ring. Cycling instead left the box drawn — cursor and all — over a pane
+// that no longer took keys, which esc could not close either.
+func TestDocPaneSearchOwnsTab(t *testing.T) {
+	p, _ := docSearchPlugin(t, true)
+	const width, height = 120, 30
+	composePaneTree(t, p, width, height)
+	doc := p.focusedDocPane()
+	scanFinder(t, p, p.openDocFinder(doc))
+	typeDocSearch(p, "g")
+
+	focus, active := p.paneFocus, p.activePane
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+	if p.paneFocus != focus || p.activePane != active {
+		t.Fatalf("tab moved focus to pane %d/%v, want it kept at %d/%v", p.paneFocus, p.activePane, focus, active)
+	}
+	if doc.mode == nil {
+		t.Fatal("tab dropped the search instead of moving focus inside it")
+	}
+	if got := doc.mode.finder.Query(); got != "g" {
+		t.Fatalf("finder query after tab = %q, want %q", got, "g")
+	}
+	// The surface still has the keyboard, so esc still closes it.
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if doc.mode != nil {
+		t.Fatal("esc after tab left the search open")
+	}
+
+	// The project search uses tab for its own query ↔ results focus, and must
+	// get it for the same reason.
+	p.handleDocKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if doc.mode == nil || doc.mode.kind != docSearchProject {
+		t.Fatalf("f left mode %#v, want the project search", doc.mode)
+	}
+	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if doc.mode == nil {
+		t.Fatal("shift+tab cycled panes out from under the project search")
+	}
+	if p.paneFocus != focus || p.activePane != active {
+		t.Fatalf("shift+tab moved focus to pane %d/%v with a search open", p.paneFocus, p.activePane)
+	}
+}
+
+// Focus landing anywhere else dismisses the search, the way clicking off a
+// modal does. The defect this guards is the orphan: a surface left drawn over a
+// pane that no longer takes keys, which no keystroke can reach or close.
+func TestDocPaneSearchClosesWhenFocusLeavesThePane(t *testing.T) {
+	steals := []struct {
+		name string
+		do   func(*Plugin)
+	}{
+		{"cycle", func(p *Plugin) { p.cyclePaneFocus(false) }},
+		{"sidebar", func(p *Plugin) { p.focusSidebar() }},
+		{"another leaf", func(p *Plugin) { p.focusLeaf(terminalLeafID(p.paneRoot)) }},
+	}
+	for _, steal := range steals {
+		t.Run(steal.name, func(t *testing.T) {
+			p, _ := docSearchPlugin(t, true)
+			const width, height = 120, 30
+			composePaneTree(t, p, width, height)
+			doc := p.focusedDocPane()
+			scanFinder(t, p, p.openDocFinder(doc))
+			typeDocSearch(p, "g")
+			if !strings.Contains(ansi.Strip(strings.Join(composePaneTree(t, p, width, height), "\n")), "Quick Open") {
+				t.Fatal("the finder was not on screen to begin with")
+			}
+
+			steal.do(p)
+			if doc.mode != nil {
+				t.Fatalf("%s left the search open on an unfocused pane", steal.name)
+			}
+			screen := ansi.Strip(strings.Join(composePaneTree(t, p, width, height), "\n"))
+			if strings.Contains(screen, "Quick Open") {
+				t.Fatalf("%s left the surface drawn and inert:\n%s", steal.name, screen)
+			}
+			if p.FocusContext() == "workspace-doc-search" {
+				t.Fatalf("%s left the app in the search's focus context", steal.name)
+			}
+		})
+	}
+}
+
 // Picking a file loads it through the pane's own tab machinery: plain enter
 // replaces the active tab, shift+enter opens a new one, and the line the hit
 // carries is where the document lands.
@@ -329,6 +412,12 @@ func TestListFOpensAFinderPane(t *testing.T) {
 	}
 	if doc.mode == nil || doc.mode.kind != docSearchFinder {
 		t.Fatalf("F left mode %#v, want the file finder", doc.mode)
+	}
+	// The update that opened it also sweeps searches off unfocused panes; the
+	// pane F just opened is the focused one, so its finder survives that sweep.
+	p.closeUnfocusedDocSearches()
+	if doc.mode == nil {
+		t.Fatal("the pane F opened does not read as focused: its finder was swept away")
 	}
 	if len(doc.tabs.Items) != 0 {
 		t.Fatalf("the finder pane opened with %d tabs, want none until a file is picked", len(doc.tabs.Items))

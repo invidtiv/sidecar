@@ -403,34 +403,44 @@ func rootBudget(contentWidth int) int {
 	return budget
 }
 
-// countsText says how much was found, in the longest phrasing that fits.
+// countsText says how much was found, in the longest phrasing that fits. A
+// capped run says so at every width — "1000 matches in 107 files" presented as
+// the whole truth about a project is a wrong answer, and the "+" survives even
+// the shortest phrasing.
+//
+// The narrowest phrasings are words rather than numbers over numbers: "1000/107"
+// reads as "item 1000 of 107", which is the one thing the row never means.
 func (s *Search) countsText(width int) string {
 	state := s.State
 	if state == nil || len(state.Results) == 0 {
 		return ""
 	}
 	matches, files := state.TotalMatches(), state.FileCount()
+	count := strconv.Itoa(matches)
+	if state.Truncated {
+		count += "+"
+	}
 
 	position := ""
 	if flatLen := state.FlatLen(); flatLen > 0 {
 		position = fmt.Sprintf("%d/%d  ", state.Cursor+1, flatLen)
 	}
 
-	long := fmt.Sprintf("%d %s in %d %s", matches, plural(matches, "match", "matches"),
+	long := fmt.Sprintf("%s %s in %d %s", count, plural(matches, "match", "matches"),
 		files, plural(files, "file", "files"))
-	short := fmt.Sprintf("%d in %d %s", matches, files, plural(files, "file", "files"))
+	short := fmt.Sprintf("%s in %d %s", count, files, plural(files, "file", "files"))
 	for _, candidate := range []string{
 		position + long,
 		long,
 		position + short,
 		short,
-		fmt.Sprintf("%d/%d", matches, files),
+		count + " " + plural(matches, "match", "matches"),
 	} {
 		if ansi.StringWidth(candidate) <= width {
 			return candidate
 		}
 	}
-	return strconv.Itoa(matches)
+	return count
 }
 
 func plural(n int, one, many string) string {
@@ -459,7 +469,7 @@ func (s *Search) maxVisible() int {
 	if s.fill {
 		return available
 	}
-	return minInt(modal.PreferredListRows(s.height), available)
+	return minInt(modal.ListRows(s.height, s.seenRows), available)
 }
 
 // searchOverheadWithoutStats is everything drawn above the list: the title row

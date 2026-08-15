@@ -70,6 +70,11 @@ type Finder struct {
 	query   string
 	matches []Match
 	cursor  int
+	// truncated is set when the query matched more files than the cap keeps.
+	truncated bool
+	// seenRows is the most rows the list has wanted since this finder was
+	// opened; the box sizes itself to it (see modal.ListRows).
+	seenRows int
 
 	width, height int
 	fill          bool
@@ -130,6 +135,7 @@ func (f *Finder) Open() tea.Cmd {
 	cmd := f.Cache.Ensure(f.root, f.epoch)
 	f.query = ""
 	f.cursor = 0
+	f.seenRows = 0
 	if f.modal != nil {
 		f.modal.Reset()
 	}
@@ -164,13 +170,26 @@ func (f *Finder) Reset() {
 	f.query = ""
 	f.matches = nil
 	f.cursor = 0
+	f.truncated = false
+	f.seenRows = 0
 }
 
 // Refilter recomputes the matches from the current query and file list, keeping
 // the cursor in range. Hosts that apply scan results to a shared cache
 // themselves call this afterwards; Update does it for them.
 func (f *Finder) Refilter() {
-	f.matches = FuzzyFilter(f.Cache.Files, f.query, MaxMatches)
+	// One over the cap, so the list can say it is a list of the best fifty
+	// rather than of everything that matched. A capped set presented as the
+	// whole answer is the same wrong answer the project search used to give.
+	matches := FuzzyFilter(f.Cache.Files, f.query, MaxMatches+1)
+	f.truncated = len(matches) > MaxMatches
+	if f.truncated {
+		matches = matches[:MaxMatches]
+	}
+	f.matches = matches
+	if len(matches) > f.seenRows {
+		f.seenRows = len(matches)
+	}
 
 	// Reset cursor if out of bounds
 	if f.cursor >= len(f.matches) {

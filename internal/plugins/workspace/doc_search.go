@@ -374,6 +374,23 @@ func (p *Plugin) closeDocSearch(doc *docPane) {
 	doc.modeRegions = nil
 }
 
+// closeUnfocusedDocSearches drops any pane search whose pane no longer holds
+// the keyboard. It is the one rule this surface has about focus: a search is a
+// modal scoped to its pane, and a modal that has lost the keyboard is dismissed
+// rather than left drawn and inert. Enforcing it at the single focus writer
+// (setFocusTarget) means every gesture that moves focus — Tab, a click on the
+// sidebar or another leaf, a shortcut that focuses a pane — obeys it without
+// each one having to remember to.
+func (p *Plugin) closeUnfocusedDocSearches() {
+	focused := p.focusedDocPane()
+	for _, doc := range p.docs {
+		if doc == nil || doc.mode == nil || doc == focused {
+			continue
+		}
+		p.closeDocSearch(doc)
+	}
+}
+
 // handleDocSearchKey routes a keypress to the live surface. Every key belongs
 // to it while it is open, the same way a focused document absorbs the keys it
 // does not use, so nothing leaks to the workspace behind the pane.
@@ -481,8 +498,8 @@ func (p *Plugin) renderDocSearchOverlay(doc *docPane, background string, origin 
 // start of a frame. Only a pane that is drawn puts its regions back (see
 // renderDocSearchOverlay), which is what keeps a pane the frame did not draw —
 // the panes a zoomed leaf hides, above all — from registering hit regions over
-// the pane that was drawn. A search survives losing focus, so a second pane
-// holding an open surface off-screen is reachable, not theoretical.
+// the pane that was drawn — a zoomed leaf hides its siblings, and a pane the
+// frame skipped must not keep claiming the cells the drawn one occupies.
 func (p *Plugin) clearDocSearchRegions() {
 	for _, doc := range p.docs {
 		if doc != nil {

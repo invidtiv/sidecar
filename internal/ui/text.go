@@ -20,8 +20,8 @@ type Span struct {
 // the outermost directories are the least informative thing on the line and are
 // spent first — but only as far as the budget demands:
 //
-//	.claude/skills/create-modal/SKILL.md at 30  ->  .c/s/create-modal/SKILL.md
-//	.claude/skills/create-modal/SKILL.md at 22  ->  .c/s/create-mo…/SKILL.md
+//	.claude/skills/create-modal/SKILL.md at 30  ->  .c…/sk…s/create-modal/SKILL.md
+//	.claude/skills/create-modal/SKILL.md at 22  ->  .c…/s/cre…dal/SKILL.md
 //
 // Degrading gradually is the whole point. Spending a directory outright when a
 // single cell was needed is how a list of siblings turns into a page of
@@ -139,11 +139,11 @@ func shortenDirs(segs []*segment, width int) {
 		}
 		seg := segs[i]
 		full := runewidth.StringWidth(seg.text)
-		abbr := abbreviateSegment(seg.text)
+		abbr, keep := markAbbrev(seg.text, i == 0)
 		if full-runewidth.StringWidth(abbr) <= over {
 			// Even spent entirely it does not free enough; take it and move on.
 			seg.text = abbr
-			seg.keepHead, seg.keepTail = len(abbr), 0
+			seg.keepHead, seg.keepTail = keep, 0
 			continue
 		}
 		if head, tail, ok := trimSegment(seg.text, full-over); ok {
@@ -152,7 +152,7 @@ func shortenDirs(segs []*segment, width int) {
 			return
 		}
 		seg.text = abbr
-		seg.keepHead, seg.keepTail = len(abbr), 0
+		seg.keepHead, seg.keepTail = keep, 0
 	}
 }
 
@@ -163,6 +163,32 @@ func abbreviateSegment(seg string) string {
 		n = 2
 	}
 	return leadingRunes(seg, n)
+}
+
+// markAbbrev is an abbreviated directory as it is drawn, plus how many of its
+// bytes are still a verbatim head of the source. mark asks for the ellipsis
+// that says letters were dropped.
+//
+// The leading segment always asks for it. `.claude` rendered as `.c` reads as a
+// directory literally named `.c`, and this repo holds both `.claude` and
+// `.codex`, so the bare abbreviation is not merely terse but false — while
+// every other cut on the row is marked. It is also the segment a reader takes
+// as a name: it is the row's identity, and it is a directory they know exists.
+// One cell buys the difference between a path that is short and a path that
+// lies.
+//
+// Interior directories do not, and that is a budget decision rather than an
+// oversight: their cells are the ones that tell rows apart. Marking every
+// segment cost `.claude/skills/create-modal/SKILL.md` and its siblings exactly
+// the two cells that rendered them as `.c…/s…/c…l/SKILL.md` rather than as
+// three copies of `.c…/s…/c…/SKILL.md`. A row that lies is worse than a row
+// that is terse; a column of identical rows is worse than both.
+func markAbbrev(seg string, mark bool) (text string, keepBytes int) {
+	kept := abbreviateSegment(seg)
+	if kept == seg || !mark {
+		return kept, len(kept)
+	}
+	return kept + "…", len(kept)
 }
 
 // trimSegment cuts seg down to target cells by eliding its middle, returning
@@ -249,36 +275,59 @@ func collapseMiddle(segs []*segment, width int) []*segment {
 }
 
 // keepFilename is the last resort: the directories have nothing left to give,
-// so everything above the file is spent on keeping the filename whole. As much
-// of the leading directory as still fits is kept in front of it — ".c/SKILL.md"
-// says more than "…/SKILL.md" — but the filename comes first, because a row
-// whose name has been cut is a row a reader cannot place at all.
+// so everything above the file is spent on keeping the filename. As much of the
+// leading directory as still fits is kept in front of it — ".c…/SKILL.md" says
+// more than "…/SKILL.md" — and when the name itself will not fit either it is
+// cut from its front, so the end of the name and its extension survive.
 //
-// It reports false when even the filename alone will not fit, which is the one
-// case where there is nothing better to do than keep the end of the path.
+// Cutting the name here rather than falling back to the end of the whole path
+// is what keeps a column reading as one thing. The fallback rendered
+// "…nversations-plugin.md" — no directory at all, and a leading ellipsis — next
+// to rows that still began with an abbreviated directory, so three different
+// elisions shared one list. Every row now begins with a directory and ends with
+// the end of the filename.
+//
+// It reports false only when the row is too narrow for both parts to say
+// anything, which is where keeping the end of the path is genuinely the best
+// there is.
 func keepFilename(segs []*segment, width int) (string, []Span, bool) {
 	file := segs[len(segs)-1]
+
+	head, headKeep := markAbbrev(segs[0].src, true)
+	budget := width - runewidth.StringWidth(head) - 1 // the separator
 	fileWidth := runewidth.StringWidth(file.src)
-	budget := width - fileWidth - 1 // the separator
-	if budget < 1 {
+	if head == "" || budget < 1 {
+		return "", nil, false
+	}
+	if fileWidth > budget && budget < minFilenameCells {
+		// The name would have to be cut down to nothing to make room for the
+		// directory. At that point the row says more as the end of the path.
 		return "", nil, false
 	}
 
-	head := abbreviateSegment(segs[0].src)
-	if runewidth.StringWidth(head) > budget {
-		head = leadingRunes(segs[0].src, budget)
-	}
-	if head == "" {
-		return "", nil, false
+	name := &segment{srcStart: file.srcStart, srcEnd: file.srcEnd, src: file.src,
+		text: file.src, keepHead: len(file.src)}
+	if fileWidth > budget {
+		cut := TruncateStart(file.src, budget)
+		name.text = cut
+		name.keepHead = 0
+		name.keepTail = len(strings.TrimPrefix(cut, "…"))
 	}
 
 	kept := []*segment{
-		{srcStart: segs[0].srcStart, srcEnd: segs[0].srcEnd, src: segs[0].src, text: head, keepHead: len(head)},
-		{srcStart: file.srcStart, srcEnd: file.srcEnd, src: file.src, text: file.src, keepHead: len(file.src)},
+		{srcStart: segs[0].srcStart, srcEnd: segs[0].srcEnd, src: segs[0].src, text: head, keepHead: headKeep},
+		name,
 	}
 	out, spans := renderSegments(kept)
 	return out, spans, true
 }
+
+// minFilenameCells is how little of a cut filename is still worth the directory
+// in front of it. A name that fits whole always keeps its directory; a name that
+// must be cut gives the directory up below this, because three cells out of
+// twelve is a quarter of the name spent on one letter of directory, and at that
+// width the name is all the row has left.
+const minFilenameCells = 12
 
 // leadingRunes returns the first n runes of s (all of s when it is shorter).
 func leadingRunes(s string, n int) string {
@@ -317,9 +366,15 @@ func MapSpans(spans []Span, start, end int) (int, int, bool) {
 }
 
 // ShortRoot names a directory in width cells: home-relative if it is under the
-// user's home, then the last couple of path segments, then the basename alone.
-// It returns "" when even the basename will not fit, so a caller can leave the
-// row alone rather than print a stub.
+// user's home, then the last couple of path segments, then the basename — and
+// when even the basename is too long, the basename with its middle elided.
+//
+// The last resort is a truncation rather than nothing, because a label that
+// disappears is worse than a label that is short: this very checkout is named
+// `sidecar-files-panel-improvements`, 32 cells against a budget of 28, and the
+// counts row simply had no root on it at any width. Both ends of the name are
+// kept, for the reason trimSegment keeps both: a project's worktrees share a
+// prefix and differ in the suffix.
 //
 // A search surface that does not say what it is searching is a surface that can
 // answer "No matches found" about a directory the user is not looking at — the
@@ -329,18 +384,26 @@ func ShortRoot(root string, width int) string {
 	if root == "" || width <= 0 {
 		return ""
 	}
-	candidates := []string{homeRelative(root)}
 	segs := strings.Split(strings.TrimSuffix(root, "/"), "/")
+	base := segs[len(segs)-1]
+
+	candidates := []string{homeRelative(root)}
 	for n := 2; n <= 3 && n < len(segs); n++ {
 		candidates = append(candidates, ".../"+strings.Join(segs[len(segs)-n:], "/"))
 	}
-	candidates = append(candidates, segs[len(segs)-1])
+	candidates = append(candidates, base)
 	for _, c := range candidates {
 		if c != "" && runewidth.StringWidth(c) <= width {
 			return c
 		}
 	}
-	return ""
+	if base == "" {
+		return TruncateStart(root, width)
+	}
+	if head, tail, ok := trimSegment(base, width); ok {
+		return head + "…" + tail
+	}
+	return TruncateStart(base, width)
 }
 
 // homeRelative rewrites a path under the user's home as ~/….

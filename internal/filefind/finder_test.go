@@ -1,6 +1,7 @@
 package filefind
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -218,15 +219,17 @@ func TestElidePathKeepsWhatDiffers(t *testing.T) {
 		// Outermost directories are spent first, and only as far as the budget
 		// demands: the parent keeps both of its ends, which is where sibling
 		// names differ.
-		{".claude/skills/create-modal/SKILL.md", 26, ".c/s/create-modal/SKILL.md"},
-		{".claude/skills/create-modal/SKILL.md", 22, ".c/s/crea…dal/SKILL.md"},
-		{"internal/plugins/filebrowser/view.go", 23, "i/p/filebrowser/view.go"},
+		// An abbreviated leading segment carries an ellipsis: ".c" alone reads as
+		// a directory that could exist next to ".claude" and ".codex".
+		{".claude/skills/create-modal/SKILL.md", 26, ".c…/s/creat…modal/SKILL.md"},
+		{".claude/skills/create-modal/SKILL.md", 22, ".c…/s/cre…dal/SKILL.md"},
+		{"internal/plugins/filebrowser/view.go", 23, "i…/p/fileb…wser/view.go"},
 		// Too deep to abbreviate its way down: the middle collapses, and the
 		// leading segment and the filename are what survive.
 		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "a/…/on/file.go"},
 		{"a/very/deeply/nested/path/that/goes/on/file.go", 12, "a/…/file.go"},
 		// The filename comes before the head: a name cut in half places nothing.
-		{".claude/skills/create-modal/SKILL.md", 12, ".c/SKILL.md"},
+		{".claude/skills/create-modal/SKILL.md", 12, ".c…/SKILL.md"},
 		{"dir/an_extremely_long_filename_indeed.go", 12, "…e_indeed.go"},
 		{"short.go", 20, "short.go"},
 		{"no_directory_but_far_too_long.go", 10, "…o_long.go"},
@@ -363,6 +366,50 @@ func TestFinderNamesItsRootAndFileCount(t *testing.T) {
 		if !strings.Contains(out, "files") {
 			t.Errorf("%s: the file count is missing from:\n%s", box.name, out)
 		}
+	}
+}
+
+// A root too long for the counts row's budget must still be named. This
+// checkout is "sidecar-files-panel-improvements" — 32 cells against 28 — and
+// the label was absent from the Files plugin at every size while the tests,
+// rooted at short paths, stayed green.
+func TestFinderNamesALongRootToo(t *testing.T) {
+	const root = "/Users/someone/code/sidecar-files-panel-improvements"
+	for _, size := range []struct{ w, h int }{{200, 50}, {100, 30}, {56, 20}} {
+		f := NewFinder(&Cache{Files: distinguishablePaths(), OK: true}, root, 1)
+		f.Open()
+		f.SetQuery("zzzzzz")
+
+		out := ansi.Strip(f.View(size.w, size.h, mouse.NewHandler()))
+		if !strings.Contains(out, "sidecar-") {
+			t.Errorf("%dx%d: the long root is not named anywhere in:\n%s", size.w, size.h, out)
+		}
+	}
+}
+
+// A query that matched more files than the list keeps says so, rather than
+// presenting the best fifty as all there were.
+func TestFinderSignalsTheMatchCap(t *testing.T) {
+	files := make([]string, 0, MaxMatches+10)
+	for i := range MaxMatches + 10 {
+		files = append(files, fmt.Sprintf("internal/pkg%d/view.go", i))
+	}
+	f := NewFinder(&Cache{Files: files, OK: true}, "/root", 1)
+	f.Open()
+	f.SetQuery("view")
+
+	if len(f.Matches()) != MaxMatches {
+		t.Fatalf("kept %d matches, want the cap of %d", len(f.Matches()), MaxMatches)
+	}
+	out := ansi.Strip(f.View(100, 30, mouse.NewHandler()))
+	if !strings.Contains(out, fmt.Sprintf("/%d+", MaxMatches)) {
+		t.Errorf("the counts row does not say the list was cut:\n%s", out)
+	}
+
+	f.SetQuery("pkg1/view")
+	out = ansi.Strip(f.View(100, 30, mouse.NewHandler()))
+	if strings.Contains(out, "+") {
+		t.Errorf("an uncapped query still claims to be cut:\n%s", out)
 	}
 }
 

@@ -72,6 +72,10 @@ type Search struct {
 	// surface, and rg would keep going to its 30s timeout.
 	cancel context.CancelFunc
 
+	// seenRows is the most rows the list has wanted since this search was
+	// opened; the box sizes itself to it (see modal.ListRows).
+	seenRows int
+
 	width, height int
 	fill          bool
 	// preferredWidth overrides PreferredWidth when a host has a reason to place
@@ -218,9 +222,14 @@ func (s *Search) Apply(msg ResultsMsg) {
 	if msg.Error != nil {
 		state.Error = msg.Error.Error()
 		state.Results = nil
+		state.Truncated = false
 	} else {
 		state.Error = ""
 		state.Results = msg.Results
+		state.Truncated = msg.Truncated
+		if rows := state.FlatLen(); rows > s.seenRows {
+			s.seenRows = rows
+		}
 		state.ScrollOffset = 0
 		// Set cursor to first match (skip file headers)
 		state.Cursor = state.FirstMatchIndex()

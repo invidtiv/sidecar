@@ -194,7 +194,7 @@ func (f *Finder) maxVisible() int {
 	if f.fill {
 		return available
 	}
-	return minInt(modal.PreferredListRows(f.height), available)
+	return minInt(modal.ListRows(f.height, f.seenRows), available)
 }
 
 // chromeHeight is what the box costs on this surface: border and padding, plus
@@ -367,11 +367,17 @@ func rootBudget(contentWidth int) int {
 }
 
 // countsText says where the cursor is and how many files were found, in the
-// longest phrasing that fits.
+// longest phrasing that fits. A query that matched more files than the list
+// keeps says so with a "+", so the row is never a claim that these are all of
+// them.
 func (f *Finder) countsText(width int) string {
 	position := ""
 	if len(f.matches) > 0 {
-		position = fmt.Sprintf("%d/%d  ", f.cursor+1, len(f.matches))
+		total := strconv.Itoa(len(f.matches))
+		if f.truncated {
+			total += "+"
+		}
+		position = fmt.Sprintf("%d/%s  ", f.cursor+1, total)
 	}
 
 	stats := ""

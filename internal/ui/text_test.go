@@ -26,7 +26,7 @@ func TestTruncateStartKeepsFilenameEnd(t *testing.T) {
 func TestElidePathSpansMapRangesOntoTheElidedText(t *testing.T) {
 	path := ".claude/skills/create-modal/SKILL.md"
 	out, spans := ElidePath(path, 26)
-	if out != ".c/s/create-modal/SKILL.md" {
+	if out != ".c…/s/creat…modal/SKILL.md" {
 		t.Fatalf("ElidePath = %q", out)
 	}
 	// "modal" in the original must land on "modal" in the elided text.
@@ -196,6 +196,118 @@ func TestTruncateAnchoredNeverTruncatesAMatchThatFits(t *testing.T) {
 		}
 		if hl := string([]rune(got)[hlStart:hlEnd]); hl != term {
 			t.Errorf("width %d: highlight covers %q, want %q in %q", width, hl, term, got)
+		}
+	}
+}
+
+// A root label is only useful if it always appears. The budget the counts row
+// gives it is 28 cells, and this checkout's own directory name is 32 — so the
+// label was absent from the Files plugin at every size and in every state while
+// the unit tests were green. Every candidate must fit its budget, and none may
+// be empty.
+func TestShortRootAlwaysNamesTheDirectory(t *testing.T) {
+	roots := []string{
+		"/Users/marcus/code/sidecar-files-panel-improvements",
+		"/Users/marcus/code/sidecar",
+		"/var/folders/T/some-temp-dir-with-a-long-name",
+		"/",
+		"relative-dir",
+	}
+	for _, root := range roots {
+		for width := 40; width >= 1; width-- {
+			got := ShortRoot(root, width)
+			if got == "" {
+				t.Fatalf("root %q at width %d rendered nothing", root, width)
+			}
+			if w := runewidth.StringWidth(got); w > width {
+				t.Fatalf("root %q at width %d rendered %q (%d cells)", root, width, got, w)
+			}
+		}
+	}
+	if got := ShortRoot("", 20); got != "" {
+		t.Errorf("no root rendered %q, want nothing", got)
+	}
+}
+
+// The truncated last resort keeps both ends of the name: a project's worktrees
+// share their prefix and differ in their suffix, so a head-only cut renders
+// them all alike.
+func TestShortRootTruncationKeepsSiblingsDistinguishable(t *testing.T) {
+	const budget = 28 // what the counts row allows
+	siblings := []string{
+		"/Users/marcus/code/sidecar-files-panel-improvements",
+		"/Users/marcus/code/sidecar-files-panel-regressions",
+		"/Users/marcus/code/sidecar-workspace-tabs-and-more",
+	}
+	seen := map[string]string{}
+	for _, root := range siblings {
+		got := ShortRoot(root, budget)
+		if other, dup := seen[got]; dup {
+			t.Errorf("%q and %q both render as %q", other, root, got)
+		}
+		seen[got] = root
+	}
+	if got := ShortRoot("/Users/marcus/code/sidecar-files-panel-improvements", budget); !strings.HasSuffix(got, "improvements") {
+		t.Errorf("the end of the name did not survive: %q", got)
+	}
+}
+
+// A shortened directory must never read as a real one. `.c/skills/...` names a
+// directory that could exist — this repo has both `.claude` and `.codex` — and
+// every other cut on the row is marked, so an unmarked one is the only thing on
+// the line a reader has no way to tell from the truth.
+func TestElidePathMarksTheAbbreviatedLeadingSegment(t *testing.T) {
+	paths := []string{
+		".claude/skills/inline-editor/SKILL.md",
+		".agents/skills/drag-pane/SKILL.md",
+		"internal/plugins/workspace/doc_search.go",
+	}
+	for _, path := range paths {
+		head := path[:strings.Index(path, "/")]
+		for width := 30; width >= 12; width-- {
+			got, _ := ElidePath(path, width)
+			slash := strings.Index(got, "/")
+			if slash < 0 {
+				continue // too narrow for a directory at all
+			}
+			rendered := got[:slash]
+			if rendered == head || strings.HasPrefix(rendered, "…") {
+				continue // whole, or a fallback that has no head to mark
+			}
+			if !strings.Contains(rendered, "…") {
+				t.Errorf("width %d: %q renders its head as %q, which reads as a real directory",
+					width, path, rendered)
+			}
+		}
+	}
+}
+
+// One list, one elision. Rows that lost their directory entirely and began with
+// "…" sat next to rows that had abbreviated theirs, so the column read as three
+// different renderings of the same kind of thing. Every row keeps a directory
+// in front of the name, and the name is cut from its front.
+func TestElidePathRendersAColumnOneWay(t *testing.T) {
+	column := []string{
+		"internal/plugins/tasks/plugin.go",
+		"internal/plugins/gitstatus/plugin.go",
+		"docs/plans/implemented/conversations-plugin.md",
+		"plans/conversations-plugin.md",
+		".claude/skills/create-modal/SKILL.md",
+	}
+	for _, width := range []int{22, 18} {
+		seen := map[string]string{}
+		for _, path := range column {
+			got, _ := ElidePath(path, width)
+			if w := runewidth.StringWidth(got); w > width {
+				t.Errorf("width %d: %q is %d cells", width, got, w)
+			}
+			if strings.HasPrefix(got, "…") {
+				t.Errorf("width %d: %q lost its directory: %q", width, path, got)
+			}
+			if other, dup := seen[got]; dup {
+				t.Errorf("width %d: %q and %q both render as %q", width, other, path, got)
+			}
+			seen[got] = path
 		}
 	}
 }

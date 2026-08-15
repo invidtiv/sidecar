@@ -33,6 +33,8 @@ type State struct {
 	IsSearching    bool // True while ripgrep is running
 	Error          string
 	ResultsFocused bool // When true, j/k/g/G navigate results instead of typing
+	// Truncated is set when the run hit the match cap; the counts row says so.
+	Truncated bool
 
 	// Debounce: only run search when version matches
 	DebounceVersion int
@@ -78,7 +80,11 @@ type ResultsMsg struct {
 	// message by hand) and is always applied.
 	Run     int
 	Results []SearchFileResult
-	Error   error
+	// Truncated says the run hit the match cap and there were more hits behind
+	// it, so the counts row can say so rather than present a cut set as the
+	// whole answer.
+	Truncated bool
+	Error     error
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -347,14 +353,14 @@ func (r request) exec(parent context.Context) tea.Msg {
 		return ResultsMsg{Epoch: r.epoch, Run: r.run, Error: err}
 	}
 
-	results := parseRipgrepOutput(stdout, maxResults, len(r.query))
+	results, truncated := parseRipgrepOutput(stdout, maxResults, len(r.query))
 
 	// Kill ripgrep early if we hit our limit - don't wait for it to finish
 	// This is critical for queries with many matches (e.g., common words)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 
-	return ResultsMsg{Epoch: r.epoch, Run: r.run, Results: results}
+	return ResultsMsg{Epoch: r.epoch, Run: r.run, Results: results, Truncated: truncated}
 }
 
 // buildRipgrepArgs constructs the ripgrep command arguments.
@@ -385,8 +391,11 @@ func buildRipgrepArgs(state *State) []string {
 	return args
 }
 
-// parseRipgrepOutput reads ripgrep line output (filename:line:col:content) and builds results.
-func parseRipgrepOutput(reader interface{ Read([]byte) (int, error) }, maxMatches int, queryLen int) []SearchFileResult {
+// parseRipgrepOutput reads ripgrep line output (filename:line:col:content) and
+// builds results. It also reports whether the cap cut the run short, because a
+// capped result set that says nothing about it is a wrong answer: "1000 matches
+// in 107 files" reads as the whole truth about the project.
+func parseRipgrepOutput(reader interface{ Read([]byte) (int, error) }, maxMatches int, queryLen int) ([]SearchFileResult, bool) {
 	scanner := bufio.NewScanner(reader)
 	// Increase buffer size for long lines
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -395,7 +404,14 @@ func parseRipgrepOutput(reader interface{ Read([]byte) (int, error) }, maxMatche
 	var fileOrder []string
 	totalMatches := 0
 
-	for scanner.Scan() && totalMatches < maxMatches {
+	truncated := false
+	for scanner.Scan() {
+		if totalMatches >= maxMatches {
+			// Scan already read a line this run will not show, which is exactly
+			// what makes the cap observable rather than guessed at.
+			truncated = true
+			break
+		}
 		line := scanner.Text()
 		if len(line) == 0 {
 			continue
@@ -439,7 +455,7 @@ func parseRipgrepOutput(reader interface{ Read([]byte) (int, error) }, maxMatche
 		results = append(results, *fileMap[path])
 	}
 
-	return results
+	return results, truncated
 }
 
 // parseRipgrepLine parses a ripgrep output line in format: filename:line:column:content
