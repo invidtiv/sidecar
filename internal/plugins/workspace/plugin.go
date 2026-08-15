@@ -194,7 +194,11 @@ type Plugin struct {
 	// listFilter is the shared `/` filter over the sidebar list. The component
 	// is internal/workspacelist, the same one the global Workspaces browser
 	// uses, so both lists agree on matching, counts, and escape behaviour.
-	listFilter       workspacelist.Filter
+	listFilter workspacelist.Filter
+	// listSort orders the sidebar. Manual is the default and means the fixed
+	// Shells/Worktrees structure with shells nested under their worktree; every
+	// other mode is a computed order over one flat list. See sortedNavSections.
+	listSort         workspacelist.Sort
 	flashPreviewTime time.Time // When preview flash was triggered
 	toastMessage     string    // Temporary toast message to display
 	toastTime        time.Time // When toast was triggered
@@ -510,6 +514,7 @@ func New() *Plugin {
 		managedSessions:     make(map[string]bool),
 		shells:              make([]*ShellSession, 0),
 		viewMode:            ViewModeList,
+		listSort:            workspacelist.SortManual,
 		activePane:          PaneSidebar,
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar

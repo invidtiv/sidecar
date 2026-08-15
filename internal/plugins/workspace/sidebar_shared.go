@@ -68,6 +68,17 @@ type sidebarNavSection struct {
 // moment the order becomes a user choice: j/k would walk one sequence while the
 // eye read another. Both now consume this.
 func (p *Plugin) sidebarNavSections() []sidebarNavSection {
+	if p.listSort != workspacelist.SortManual {
+		return p.sortedNavSections()
+	}
+	return p.manualNavSections()
+}
+
+// manualNavSections is the structural order: shells the user is working in,
+// then worktrees, each followed by the shells living inside it. It is the shape
+// of the project rather than a judgement about it, which is why it stays the
+// default and why it is the only mode where a shell is drawn as a child.
+func (p *Plugin) manualNavSections() []sidebarNavSection {
 	shells := sidebarNavSection{title: "Shells"}
 	for _, index := range p.visibleShellIndices() {
 		shells.items = append(shells.items, sidebarNavItem{kind: navKindShell, shellIdx: index})
@@ -145,6 +156,12 @@ func (p *Plugin) renderNavItem(item sidebarNavItem, width int, selected bool) []
 	case navKindShell:
 		return []string{p.renderShellEntryForSession(p.shells[item.shellIdx], selected, width)}
 	case navKindNestedShell:
+		// Indented under its worktree only while the order is structural. A
+		// computed order has flattened the tree, so the row draws as a peer
+		// carrying its worktree as context instead.
+		if p.listSort != workspacelist.SortManual {
+			return []string{p.renderPeerShellEntry(item.shell, p.worktrees[item.worktreeIdx], selected, width)}
+		}
 		return []string{p.renderNestedShellEntry(item.shell, selected, width)}
 	default:
 		return []string{p.renderWorktreeSidebarItem(p.worktrees[item.worktreeIdx], selected, width)}

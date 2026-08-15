@@ -82,6 +82,30 @@ func groupRank(g Group) int {
 // order so a group that gains its first item never appears in a new place.
 func Groups() []Group { return append([]Group(nil), activityOrder...) }
 
+// GroupForLane is the vertical projection of a resolved agent lane, shared by
+// every consumer that groups by activity.
+//
+// It takes the lane as a string rather than an agentstatus.LaneID so this
+// package keeps its promise not to import a status reducer: it does not decide
+// what "blocked" means, only where a row already resolved as blocked belongs in
+// a list. An unrecognised lane lands in Paused, which is the bucket for
+// "something is here and its state is not legible" — a row this does not
+// recognise is still a row someone has to see.
+func GroupForLane(lane string) Group {
+	switch lane {
+	case "blocked":
+		return GroupNeedsAttention
+	case "working":
+		return GroupWorking
+	case "done":
+		return GroupDone
+	case "idle":
+		return GroupIdle
+	default:
+		return GroupPaused
+	}
+}
+
 // Sort is an explicit user-chosen ordering. Sorting is presentation only: it
 // never changes identities, and it never triggers collection.
 type Sort uint8
@@ -91,9 +115,16 @@ const (
 	SortProject
 	SortRecent
 	SortName
+	// SortManual is the caller's own order, left exactly as handed in. It is
+	// offered only where a durable order actually exists — the project
+	// sidebar's fixed Shells/Worktrees structure, and later its drag order.
+	// Global inventory does not pretend to own Git or tmux ordering, so it
+	// does not offer this.
+	SortManual
 )
 
-// SortModes is the cycle order behind `s`.
+// SortModes is the cycle order behind the global list's sort control. Manual is
+// absent: it means something only to a consumer that owns its input order.
 var SortModes = []Sort{SortActivity, SortProject, SortRecent, SortName}
 
 func (s Sort) Label() string {
@@ -104,6 +135,8 @@ func (s Sort) Label() string {
 		return "Recent"
 	case SortName:
 		return "Name"
+	case SortManual:
+		return "Manual"
 	default:
 		return "Activity"
 	}
@@ -198,6 +231,8 @@ func Filtered(items []Item, query string) []Item {
 func Sorted(items []Item, mode Sort) []Item {
 	out := append([]Item(nil), items...)
 	switch mode {
+	case SortManual:
+		// The caller's order is the answer.
 	case SortProject:
 		sort.SliceStable(out, func(a, b int) bool {
 			if out[a].ProjectOrder != out[b].ProjectOrder {
@@ -272,7 +307,7 @@ func GroupedAt(items []Item, mode Sort, now time.Time, pinnedIDs []string) []Sec
 		sections = groupByProject(rest)
 	case SortRecent:
 		sections = groupByRecent(rest, now)
-	case SortName:
+	case SortName, SortManual:
 		if len(rest) > 0 {
 			sections = []Section{{Items: rest}}
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
@@ -395,18 +396,32 @@ func (p *Plugin) renderShellEntryForSession(shell *ShellSession, selected bool, 
 	// shell in the global list. Without it a shell row was the only row in
 	// either sidebar with no kind, and its second line hung three columns in
 	// while every worktree's hung five — two grammars in one list.
-	return p.renderShellEntry(shell, selected, width, 0, workspacelist.KindShell)
+	return p.renderShellEntry(shell, selected, width, 0, workspacelist.KindShell, "")
 }
 
+// renderNestedShellEntry draws a shell as a child of its worktree. Only the
+// structural order does this; see sidebar_sort.go.
 func (p *Plugin) renderNestedShellEntry(shell *ShellSession, selected bool, width int) string {
-	return p.renderShellEntry(shell, selected, width, 2, workspacelist.KindShell)
+	return p.renderShellEntry(shell, selected, width, 2, workspacelist.KindShell, "")
 }
 
-func (p *Plugin) renderShellEntry(shell *ShellSession, selected bool, width int, indent int, kind string) string {
+// renderPeerShellEntry draws a shell that lives in a worktree as a peer of it,
+// which is what a computed order requires. The worktree name takes the place
+// the global list gives the project name: it is the context that stops "Shell
+// 2" from being ambiguous once the row no longer sits under its parent.
+func (p *Plugin) renderPeerShellEntry(shell *ShellSession, wt *Worktree, selected bool, width int) string {
+	prefix := ""
+	if wt != nil {
+		prefix = wt.Name + " "
+	}
+	return p.renderShellEntry(shell, selected, width, 0, workspacelist.KindShell, prefix)
+}
+
+func (p *Plugin) renderShellEntry(shell *ShellSession, selected bool, width int, indent int, kind, namePrefix string) string {
 	if indent > 0 {
 		width = max(1, width-indent)
 	}
-	content := p.renderShellEntryKind(shell, selected, width, kind)
+	content := p.renderShellEntryKind(shell, selected, width, kind, namePrefix)
 	if indent <= 0 {
 		return content
 	}
@@ -418,7 +433,7 @@ func (p *Plugin) renderShellEntry(shell *ShellSession, selected bool, width int,
 	return strings.Join(lines, "\n")
 }
 
-func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width int, kind string) string {
+func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width int, kind, namePrefix string) string {
 	resolvedStatus := shellAgentStatusPresentation(shell)
 	activityIcon, activityText, activityStyle, hasActivity := p.animatedActivityPresentation(shell.Agent)
 	marker := workspacelist.RowMarker{}
@@ -460,8 +475,13 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 	if badge, hasBadge := p.pendingViewBadge(shell.TmuxName); hasBadge {
 		nameMeta = append(nameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
 	}
+	prefix := workspacelist.RowField{}
+	if namePrefix != "" {
+		prefix = workspacelist.RowField{Text: namePrefix, Rendered: styles.Muted.Render(namePrefix)}
+	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Kind: kind, Name: shell.Name, Age: shellAge(shell), NameMeta: nameMeta, BeforeProvider: before,
+		Marker: marker, Kind: kind, Name: shell.Name, NamePrefix: prefix, Age: shellAge(shell),
+		NameMeta: nameMeta, BeforeProvider: before,
 		Provider: string(provider), AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")
@@ -471,14 +491,20 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 // output wins: it moves when work actually happens, including work several
 // directories deep that never touches the worktree root's timestamp. Without a
 // session there is nothing to observe but the directory itself.
-func worktreeAge(wt *Worktree) string {
+func worktreeAge(wt *Worktree) string { return formatRelativeTime(worktreeChangedAt(wt)) }
+
+// worktreeChangedAt is the timestamp behind the age. It is separate from the
+// formatting so the Recent sort orders rows by the same instant the row
+// displays — a list sorted by one clock and labelled by another is a list a
+// user cannot trust.
+func worktreeChangedAt(wt *Worktree) time.Time {
 	if wt == nil {
-		return ""
+		return time.Time{}
 	}
 	if wt.Agent != nil && !wt.Agent.LastOutput.IsZero() {
-		return formatRelativeTime(wt.Agent.LastOutput)
+		return wt.Agent.LastOutput
 	}
-	return formatRelativeTime(wt.UpdatedAt)
+	return wt.UpdatedAt
 }
 
 // shellAge is the freshness a shell row reports, in the same column and the
@@ -489,14 +515,16 @@ func worktreeAge(wt *Worktree) string {
 // Last output is the meaningful change: it is recorded only when the capture
 // actually differed, so an idle session's age keeps climbing instead of resetting
 // on every poll. A shell with no session yet falls back to when it was created.
-func shellAge(shell *ShellSession) string {
+func shellAge(shell *ShellSession) string { return formatRelativeTime(shellChangedAt(shell)) }
+
+func shellChangedAt(shell *ShellSession) time.Time {
 	if shell == nil {
-		return ""
+		return time.Time{}
 	}
 	if shell.Agent != nil && !shell.Agent.LastOutput.IsZero() {
-		return formatRelativeTime(shell.Agent.LastOutput)
+		return shell.Agent.LastOutput
 	}
-	return formatRelativeTime(shell.CreatedAt)
+	return shell.CreatedAt
 }
 
 func healthMarkerTone(icon string) workspacelist.MarkerTone {

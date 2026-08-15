@@ -166,22 +166,11 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 	return row
 }
 
-// laneGroup is the vertical projection of the shared Kanban lanes. The order
-// the list renders them in is workspacelist's, not a second opinion about what
-// each lane means.
+// laneGroup is the vertical projection of the shared Kanban lanes. The mapping
+// itself lives in workspacelist so the project sidebar and this list cannot
+// come to different conclusions about where a blocked agent belongs.
 func laneGroup(lane agentstatus.LaneID) workspacelist.Group {
-	switch lane {
-	case agentstatus.LaneBlocked:
-		return workspacelist.GroupNeedsAttention
-	case agentstatus.LaneWorking:
-		return workspacelist.GroupWorking
-	case agentstatus.LaneDone:
-		return workspacelist.GroupDone
-	case agentstatus.LaneIdle:
-		return workspacelist.GroupIdle
-	default:
-		return workspacelist.GroupPaused
-	}
+	return workspacelist.GroupForLane(string(lane))
 }
 
 // workspacesLayout is the tab's one placement rule. Three arrangements are
