@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -27,6 +28,9 @@ const (
 // keep one code path.
 type Gutter struct {
 	digits int
+	// sep is what follows the number. The empty string means the default
+	// single space, so the zero value keeps behaving the way it always has.
+	sep string
 }
 
 // NewGutter returns a gutter wide enough to number a document of lineCount
@@ -47,16 +51,43 @@ func NewGutterForWidth(lineCount, totalWidth int) Gutter {
 	return g
 }
 
+// WithSeparator returns a copy of g whose numbers are followed by sep instead
+// of a single space, for callers that punctuate the column ("  12: text").
+// The separator counts towards Width, so a caller that budgets by Width never
+// has to know which one it got.
+func (g Gutter) WithSeparator(sep string) Gutter {
+	g.sep = sep
+	return g
+}
+
 // Enabled reports whether this gutter renders anything.
 func (g Gutter) Enabled() bool { return g.digits > 0 }
 
+// separator is the trailing text, defaulting to a single space so the zero
+// value and NewGutter behave identically.
+func (g Gutter) separator() string {
+	if g.sep == "" {
+		return " "
+	}
+	return g.sep
+}
+
 // Width is the cell width of every cell this gutter renders, including the
-// separating space. It is 0 when the gutter is disabled.
+// separator. It is 0 when the gutter is disabled.
 func (g Gutter) Width() int {
 	if g.digits == 0 {
 		return 0
 	}
-	return g.digits + 1
+	return g.digits + ansi.StringWidth(g.separator())
+}
+
+// Plain renders the cell for a 1-based source line number without styling, for
+// callers that need the text to do their own column arithmetic on.
+func (g Gutter) Plain(line int) string {
+	if g.digits == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%*d%s", g.digits, line, g.separator())
 }
 
 // Number renders the cell for a 1-based source line number.
@@ -64,8 +95,7 @@ func (g Gutter) Number(line int) string {
 	if g.digits == 0 {
 		return ""
 	}
-	cell := fmt.Sprintf("%*d ", g.digits, line)
-	return styles.FileBrowserLineNumber.Width(g.Width()).Render(cell)
+	return styles.FileBrowserLineNumber.Width(g.Width()).Render(g.Plain(line))
 }
 
 // Blank renders an equal-width empty cell, for wrapped continuation rows and

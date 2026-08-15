@@ -1,10 +1,12 @@
 package filefind
 
 import (
-	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -14,8 +16,9 @@ const (
 	// MaxMatches caps how many fuzzy matches the finder keeps for a query.
 	MaxMatches = 50
 
-	// RegionItem is the hit region ID registered for each visible row; the
-	// region's Data is the row's index into Matches.
+	// RegionItem is the prefix of the hit region ID registered for each
+	// visible row; the row's index into Matches follows it (see ItemID and
+	// ParseItemID).
 	RegionItem = "quick-open"
 )
 
@@ -66,6 +69,11 @@ type Finder struct {
 	query   string
 	matches []Match
 	cursor  int
+
+	width, height int
+
+	modal      *modal.Modal
+	modalWidth int
 }
 
 // NewFinder creates a finder over cache, rooted at root. A nil cache gives the
@@ -102,6 +110,9 @@ func (f *Finder) Open() tea.Cmd {
 	cmd := f.Cache.Ensure(f.root, f.epoch)
 	f.query = ""
 	f.cursor = 0
+	if f.modal != nil {
+		f.modal.Reset()
+	}
 	f.Refilter()
 	return cmd
 }
@@ -210,21 +221,40 @@ func (f *Finder) HandleKey(msg tea.KeyPressMsg) (Result, tea.Cmd) {
 // HandleMouse processes a mouse event against the regions the last View
 // registered on handler.
 func (f *Finder) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) (Result, tea.Cmd) {
+	f.ensureModal()
+
+	// Motion only updates hover, which the modal owns.
+	if _, ok := msg.(tea.MouseMotionMsg); ok {
+		if f.modal != nil {
+			f.modal.HandleMouse(msg, handler)
+		}
+		return Result{}, nil
+	}
+
 	action := handler.HandleMouse(msg)
 
 	switch action.Type {
 	case mouse.ActionClick:
-		if action.Region != nil && action.Region.ID == RegionItem {
-			if idx, ok := action.Region.Data.(int); ok {
-				f.cursor = idx
-			}
+		if action.Region == nil {
+			return Result{}, nil
+		}
+		switch action.Region.ID {
+		case "modal-backdrop":
+			// Clicking away dismisses the finder, as it does the search.
+			f.Reset()
+			return Result{Outcome: OutcomeCancelled}, nil
+		case "modal-body":
+			return Result{}, nil
+		}
+		if idx, ok := ParseItemID(action.Region.ID); ok {
+			f.SetCursor(idx)
 		}
 		return Result{}, nil
 
 	case mouse.ActionDoubleClick:
-		if action.Region != nil && action.Region.ID == RegionItem {
-			if idx, ok := action.Region.Data.(int); ok {
-				f.cursor = idx
+		if action.Region != nil {
+			if idx, ok := ParseItemID(action.Region.ID); ok {
+				f.SetCursor(idx)
 				return f.selectMatch(false), nil
 			}
 		}
@@ -260,144 +290,96 @@ func (f *Finder) selectMatch(newTab bool) Result {
 	return Result{Outcome: OutcomeOpen, Path: path, NewTab: newTab}
 }
 
-// View renders the finder at the given size and registers its hit regions on
-// handler. The result is the modal box alone; the caller composites it over its
-// own background (ui.OverlayModal for a screen, panemodal for a pane).
-func (f *Finder) View(width, height int, handler *mouse.Handler) string {
-	// Modal dimensions
-	modalWidth := width - 4
-	if modalWidth > 80 {
-		modalWidth = 80
-	}
-	if modalWidth < 30 {
-		modalWidth = 30
-	}
-
-	// Calculate max visible items based on available height
-	// Leave room for: header (2 lines), footer (2 lines), border (2 lines), some padding
-	maxListHeight := height - 8
-	if maxListHeight < 5 {
-		maxListHeight = 5
-	}
-	if maxListHeight > 20 {
-		maxListHeight = 20
-	}
-
-	var sb strings.Builder
-
-	// Header with search input
-	cursor := "█"
-	header := fmt.Sprintf("Quick Open: %s%s", f.query, cursor)
-	sb.WriteString(styles.ModalTitle.Render(header))
-	sb.WriteString("\n\n")
-
-	// Error message if scan was limited
-	if f.Cache.ErrText != "" {
-		sb.WriteString(styles.Muted.Render("⚠ " + f.Cache.ErrText))
-		sb.WriteString("\n")
-	}
-
-	// Calculate modal position for hit region registration
-	hPad := (width - modalWidth - 4) / 2
-	if hPad < 0 {
-		hPad = 0
-	}
-	modalX := hPad + 1  // +1 for modal border
-	modalItemY := 2 + 3 // paddingTop(2) + border(1) + header(2)
-	if f.Cache.ErrText != "" {
-		modalItemY++ // Extra line for error message
-	}
-
-	if len(f.matches) == 0 {
-		switch {
-		case f.Cache.Scanning:
-			sb.WriteString(styles.Muted.Render("Scanning files..."))
-		case f.query != "":
-			sb.WriteString(styles.Muted.Render("No matches"))
-		default:
-			sb.WriteString(styles.Muted.Render("Type to search files..."))
-		}
-	} else {
-		// Determine visible range (scroll if cursor out of view)
-		listHeight := maxListHeight
-		if listHeight > len(f.matches) {
-			listHeight = len(f.matches)
-		}
-
-		start := 0
-		if f.cursor >= listHeight {
-			start = f.cursor - listHeight + 1
-		}
-		end := start + listHeight
-		if end > len(f.matches) {
-			end = len(f.matches)
-		}
-
-		for i := start; i < end; i++ {
-			match := f.matches[i]
-			isSelected := i == f.cursor
-
-			// Register hit region for this row
-			itemY := modalItemY + (i - start)
-			if handler != nil {
-				handler.HitMap.AddRect(RegionItem, modalX, itemY, modalWidth-2, 1, i)
-			}
-
-			// Build the display line with highlighted match chars
-			line := RenderMatch(match, modalWidth-4)
-
-			if isSelected {
-				sb.WriteString(styles.QuickOpenItemSelected.Render("> " + line))
-			} else {
-				sb.WriteString(styles.QuickOpenItem.Render("  " + line))
-			}
-
-			if i < end-1 {
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	// Footer with match count
-	if f.Cache.Scanning {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render("(scanning...)"))
-	} else if len(f.matches) > 0 {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d/%d)", f.cursor+1, len(f.matches))))
-	} else if len(f.Cache.Files) > 0 {
-		fmt.Fprintf(&sb, "\n\n%s", styles.Muted.Render(fmt.Sprintf("(%d files)", len(f.Cache.Files))))
-	}
-
-	// Wrap in modal box (centering is the caller's job)
-	return styles.ModalBox.
-		Width(modalWidth).
-		Render(sb.String())
+// RenderMatch renders a single match row: the path fitted to maxWidth with its
+// matched characters highlighted.
+func RenderMatch(match Match, maxWidth int) string {
+	path, ranges := elideMatch(match, maxWidth)
+	return HighlightMatch(path, ranges)
 }
 
-// RenderMatch renders a single match row with its matched characters
-// highlighted, truncated to maxWidth.
-func RenderMatch(match Match, maxWidth int) string {
-	path := match.Path
+// elideMatch fits a match's path into maxWidth cells. A path that fits keeps
+// its match ranges; one that does not is elided in the middle, which drops the
+// ranges (they no longer describe the text) but keeps the filename — the part
+// that identifies the row — visible even in a pane a few dozen columns wide.
+func elideMatch(match Match, maxWidth int) (string, []MatchRange) {
+	if maxWidth < 1 {
+		return "", nil
+	}
+	if ansi.StringWidth(match.Path) <= maxWidth {
+		return match.Path, match.MatchRanges
+	}
+	return elidePath(match.Path, maxWidth), nil
+}
 
-	// Truncate path if too long
-	if len(path) > maxWidth {
-		path = "..." + path[len(path)-maxWidth+3:]
-		// Can't highlight properly after truncation, just return
+// elidePath shortens a path to maxWidth cells by eliding the middle of its
+// directories, so both where the file lives and what it is called survive:
+//
+//	a/very/deeply/nested/path/file.go -> a/ver…/file.go
+//
+// A final segment that cannot fit on its own is truncated from the front
+// instead, which at least keeps the end of the filename.
+func elidePath(path string, maxWidth int) string {
+	if maxWidth < 1 {
+		return ""
+	}
+	if ansi.StringWidth(path) <= maxWidth {
 		return path
 	}
 
-	// Apply match highlighting
-	if len(match.MatchRanges) > 0 {
-		return HighlightMatch(path, match.MatchRanges)
+	slash := strings.LastIndex(path, "/")
+	if slash < 0 {
+		return ui.TruncateStart(path, maxWidth)
 	}
 
-	return path
+	dir, base := path[:slash], path[slash+1:]
+
+	// "…/" plus the filename has to leave at least one cell of directory, or
+	// the elision says nothing that TruncateStart would not say better.
+	room := maxWidth - ansi.StringWidth(base) - 2
+	if room < 1 {
+		return ui.TruncateStart(path, maxWidth)
+	}
+
+	var head strings.Builder
+	used := 0
+	for _, r := range dir {
+		w := ansi.StringWidth(string(r))
+		if used+w > room {
+			break
+		}
+		head.WriteRune(r)
+		used += w
+	}
+
+	return head.String() + "\u2026/" + base
 }
 
 // HighlightMatch applies the fuzzy-match highlight style to the matched
 // character ranges of text, leaving the rest of it alone.
 func HighlightMatch(text string, ranges []MatchRange) string {
+	return highlightRanges(text, ranges, nil, styleFn(styles.FuzzyMatchChar))
+}
+
+// styleFn adapts a lipgloss style to the renderer highlightRanges takes.
+func styleFn(style lipgloss.Style) func(string) string {
+	return func(s string) string { return style.Render(s) }
+}
+
+// highlightRanges renders text with hl applied to the given byte ranges and
+// base applied to everything else. A nil base leaves the surrounding text
+// unstyled, which is what a caller compositing into an already-styled line
+// wants; a non-nil one re-applies the row style around each highlight so the
+// highlight's reset does not punch a hole in a selected row's background.
+func highlightRanges(text string, ranges []MatchRange, base, hl func(string) string) string {
+	paint := func(s string) string {
+		if s == "" || base == nil {
+			return s
+		}
+		return base(s)
+	}
+
 	if len(ranges) == 0 {
-		return text
+		return paint(text)
 	}
 
 	var result strings.Builder
@@ -411,19 +393,16 @@ func HighlightMatch(text string, ranges []MatchRange) string {
 			continue // Skip overlapping
 		}
 
-		// Add text before match
 		if r.Start > lastEnd {
-			result.WriteString(text[lastEnd:r.Start])
+			result.WriteString(paint(text[lastEnd:r.Start]))
 		}
 
-		// Add highlighted match
-		result.WriteString(styles.FuzzyMatchChar.Render(text[r.Start:r.End]))
+		result.WriteString(hl(text[r.Start:r.End]))
 		lastEnd = r.End
 	}
 
-	// Add remaining text
 	if lastEnd < len(text) {
-		result.WriteString(text[lastEnd:])
+		result.WriteString(paint(text[lastEnd:]))
 	}
 
 	return result.String()

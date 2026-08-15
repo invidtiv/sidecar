@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
@@ -263,6 +264,8 @@ func (s *Search) resultsSection() modal.Section {
 			state.ScrollOffset = 0
 		}
 
+		gutter := matchGutter(state.Results)
+
 		var lines []string
 		focusables := make([]modal.FocusableInfo, 0, maxVisible)
 		flatIdx := 0
@@ -293,7 +296,7 @@ func (s *Search) resultsSection() modal.Section {
 						itemID := matchID(fi, mi)
 						selected := flatIdx == state.Cursor
 						hovered := itemID == hoverID
-						line := renderMatchLine(match, selected, hovered, contentWidth)
+						line := renderMatchLine(match, selected, hovered, contentWidth, gutter)
 
 						lines = append(lines, line)
 						focusables = append(focusables, modal.FocusableInfo{
@@ -349,16 +352,33 @@ func (s *Search) statsSection() modal.Section {
 	}, nil)
 }
 
+// maxVisible is how many rows the results list gets: the modal's inner height
+// less everything drawn around the list. Counting the overhead exactly is what
+// keeps the box from overflowing into a scrollbar it does not need, and the
+// file finder budgets its list the same way. It drops to a single row rather
+// than to a floor, because a file pane can be shorter than a modal ever is on
+// a screen.
 func (s *Search) maxVisible() int {
-	height := s.height - 10
-	if height < 5 {
-		height = 5
+	// title row + the blank line its style leaves + the options row + the
+	// blank line above the list.
+	overhead := 4
+	if s.hasResults() {
+		overhead += 2 // blank line + stats line
+	}
+
+	height := s.height - modalChromeHeight - overhead
+	if height < 1 {
+		height = 1
 	}
 	if height > 30 {
 		height = 30
 	}
 	return height
 }
+
+// modalChromeHeight is what internal/modal spends on the box itself: border,
+// padding, and the margin it leaves around the modal on screen.
+const modalChromeHeight = 6
 
 // renderHeader renders the search input bar.
 func (s *Search) renderHeader(width int) string {
@@ -416,10 +436,25 @@ func renderFileHeader(file SearchFileResult, selected, hovered bool, width int) 
 	)
 }
 
+// matchGutter sizes the line-number column for a whole result set, so the
+// column neither clips a five-digit line number nor changes width as the list
+// scrolls. Ordinary results keep the historical four-digit column.
+func matchGutter(results []SearchFileResult) docview.Gutter {
+	maxLine := 1
+	for _, file := range results {
+		for _, m := range file.Matches {
+			if m.LineNo > maxLine {
+				maxLine = m.LineNo
+			}
+		}
+	}
+	return docview.NewGutter(maxLine).WithSeparator(": ")
+}
+
 // renderMatchLine renders a single match line.
-func renderMatchLine(match SearchMatch, selected, hovered bool, width int) string {
+func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutter docview.Gutter) string {
 	indent := "    "
-	lineNum := fmt.Sprintf("%4d: ", match.LineNo)
+	lineNum := gutter.Plain(match.LineNo)
 
 	availableWidth := width - len(indent) - len(lineNum) - 2
 	if availableWidth < 10 {
@@ -460,7 +495,7 @@ func renderMatchLine(match SearchMatch, selected, hovered bool, width int) strin
 	highlightedLine := highlightMatchInLineRunes(lineText, hlStart, hlEnd)
 	return fmt.Sprintf("%s%s%s",
 		indent,
-		styles.FileBrowserLineNumber.Render(lineNum),
+		gutter.Number(match.LineNo),
 		highlightedLine,
 	)
 }

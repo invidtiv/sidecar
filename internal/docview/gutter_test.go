@@ -81,3 +81,39 @@ func TestNewGutterForWidthDropsGutterInNarrowBoxes(t *testing.T) {
 		t.Fatal("seven-digit gutter should be dropped at width 13")
 	}
 }
+
+func TestGutterWithSeparatorWidensTheColumn(t *testing.T) {
+	g := NewGutter(500).WithSeparator(": ")
+
+	if got, want := g.Width(), 6; got != want {
+		t.Fatalf("Width() = %d, want %d (four digits plus %q)", got, want, ": ")
+	}
+	if got, want := g.Plain(12), "  12: "; got != want {
+		t.Fatalf("Plain(12) = %q, want %q", got, want)
+	}
+	if got, want := ansi.Strip(g.Number(12)), "  12: "; got != want {
+		t.Fatalf("Number(12) = %q, want %q", got, want)
+	}
+	if got := len(ansi.Strip(g.Blank())); got != g.Width() {
+		t.Fatalf("Blank() is %d cells, want %d", got, g.Width())
+	}
+
+	// Past four digits the column grows, and the separator comes along.
+	wide := NewGutter(10240).WithSeparator(": ")
+	if got, want := wide.Plain(10240), "10240: "; got != want {
+		t.Fatalf("Plain(10240) = %q, want %q", got, want)
+	}
+	if got, want := wide.Width(), 7; got != want {
+		t.Fatalf("Width() = %d, want %d", got, want)
+	}
+}
+
+func TestGutterDefaultSeparatorIsUnchanged(t *testing.T) {
+	g := NewGutter(100)
+	if got, want := g.Plain(7), "   7 "; got != want {
+		t.Fatalf("Plain(7) = %q, want %q", got, want)
+	}
+	if got, want := g.Width(), 5; got != want {
+		t.Fatalf("Width() = %d, want %d", got, want)
+	}
+}
