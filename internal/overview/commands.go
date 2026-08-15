@@ -47,10 +47,12 @@ func (m *Model) Commands() []plugin.Command {
 	case ctxGlobalWorkspacesDiff:
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide the diff pane", Context: ctxGlobalWorkspacesDiff, Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close the active diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 4},
-			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: ctxGlobalWorkspacesDiff, Priority: 5},
+			// 2..11 belong to the viewer's navigation, as on the project
+			// surface; Close keeps the lead.
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 12},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 13},
+			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 14},
+			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: ctxGlobalWorkspacesDiff, Priority: 15},
 		}
 		if m.preview.diff != nil && m.preview.diff.view() != nil {
 			cmds = append(cmds, m.preview.diff.view().Commands(ctxGlobalWorkspacesDiff)...)

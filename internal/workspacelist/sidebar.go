@@ -322,7 +322,10 @@ func ResizePercent(start, deltaColumns, viewportWidth int) int {
 }
 
 // ApplySelection gives both consumers the same focused and unfocused cursor
-// treatment while leaving their row text and icons caller-owned.
+// treatment while leaving their row text and icons caller-owned. Do not wrap
+// a pre-rendered marker: lipgloss.Render resets all attributes, and the
+// name after the icon will lose the fill. Use RenderRow, which paints the
+// marker and the name as sibling spans.
 func ApplySelection(content string, width int, selected, focused bool) string {
 	if !selected {
 		return content

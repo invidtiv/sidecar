@@ -58,17 +58,21 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 	}
 	if p.viewMode == ViewModeList && p.diffFocused() {
+		// Priorities leave 2..11 to the viewer's own navigation (see
+		// workspacediff.View.Commands): getting into a diff and moving around
+		// it is what a reader needs the footer to say first. Close keeps the
+		// lead because a pane must always advertise its way out.
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide diff pane", Context: "workspace-diff", Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active diff tab", Context: "workspace-diff", Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: "workspace-diff", Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: "workspace-diff", Priority: 4},
-			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: "workspace-diff", Priority: 5},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-diff", Priority: 6},
-			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow diff pane", Context: "workspace-diff", Priority: 7},
-			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink diff pane", Context: "workspace-diff", Priority: 8},
-			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-diff", Priority: 9},
-			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-diff", Priority: 10},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active diff tab", Context: "workspace-diff", Priority: 12},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: "workspace-diff", Priority: 13},
+			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: "workspace-diff", Priority: 14},
+			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: "workspace-diff", Priority: 15},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-diff", Priority: 24},
+			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow diff pane", Context: "workspace-diff", Priority: 25},
+			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink diff pane", Context: "workspace-diff", Priority: 26},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-diff", Priority: 27},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-diff", Priority: 28},
 		}
 		if view := p.activeDiffView(); view != nil {
 			cmds = append(cmds, view.Commands("workspace-diff")...)

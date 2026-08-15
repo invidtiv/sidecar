@@ -107,18 +107,18 @@ func (p *Plugin) View(width, height int) string {
 // chips, taken from the same layout that drew them. A chip the header dropped
 // for want of columns gets no region.
 func (p *Plugin) registerPreviewActionRegions(split previewSplit) {
-	chips, actionStart := p.previewHitChipRow()
-	if len(chips) == 0 {
+	// The placements come from the header this frame drew, not from a second
+	// layout pass: the chips are right-aligned against the hints, so their
+	// columns depend on hint text only the renderer has seen.
+	placements := p.previewActionPlacements
+	if len(placements) == 0 {
 		return
 	}
-	row, width, originX, hintFloor := p.previewContentY(), split.ContentWidth, split.ContentX, 0
+	row, originX := p.previewContentY(), split.ContentX
 	if p.selectingShell() || p.selectedWorktree() != nil {
 		surface := p.terminalSurfaceGeometry(false)
 		if surface.OK {
-			row, width, originX = surface.HeaderY, surface.Width, surface.X
-			if p.interactiveDescribes(false) {
-				hintFloor = p.interactiveHintFloor()
-			}
+			row, originX = surface.HeaderY, surface.X
 		} else {
 			// The terminal is not on screen (zoomed document). Do not paint
 			// action chips on top of file tabs.
@@ -128,42 +128,17 @@ func (p *Plugin) registerPreviewActionRegions(split previewSplit) {
 		}
 	}
 
-	actionIdx := 0
-	for i, placement := range layoutHeaderChips(chips, width, hintFloor) {
-		if !placement.Drawn || i < actionStart {
+	for i, placement := range placements {
+		if !placement.Drawn {
 			continue
 		}
 		hit := previewActionDiff
-		if actionIdx > 0 {
+		if i > 0 {
 			hit = previewActionTask
 		}
 		p.mouseHandler.HitMap.AddRect(regionPreviewAction,
 			originX+placement.Col, row, placement.Width, 1, hit)
-		actionIdx++
 	}
-}
-
-func (p *Plugin) previewHitChipRow() (chips []string, actionStart int) {
-	if p.selectingShell() {
-		name := "Shell"
-		if shell := p.getSelectedShell(); shell != nil && shell.Name != "" {
-			name = shell.Name
-		}
-		chips = append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
-		return chips, 1
-	}
-	if wt := p.selectedWorktree(); wt != nil && wt.IsMain {
-		return p.previewActionChips(), 0
-	}
-	if wt := p.selectedWorktree(); wt != nil {
-		name := wt.Name
-		if name == "" {
-			name = "Workspace"
-		}
-		chips = append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
-		return chips, 1
-	}
-	return nil, 0
 }
 
 // renderListView renders the main split-pane list view.

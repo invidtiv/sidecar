@@ -2,7 +2,7 @@ package keymap
 
 // DefaultBindings returns the default keymap.
 func DefaultBindings() []Binding {
-	return []Binding{
+	bindings := []Binding{
 		// Global context
 		{Key: "q", Command: "quit", Context: "global"},
 		{Key: "ctrl+c", Command: "quit", Context: "global"},
@@ -151,6 +151,8 @@ func DefaultBindings() []Binding {
 		{Key: "Y", Command: "yank-id", Context: "global-workspaces-diff"},
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-diff"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-diff"},
+		{Key: "v", Command: "toggle-diff-view", Context: "global-workspaces-diff"},
+		{Key: "z", Command: "toggle-diff-scope", Context: "global-workspaces-diff"},
 
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
@@ -693,6 +695,52 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "next-field", Context: "notes-task-modal"},
 		{Key: "shift+tab", Command: "prev-field", Context: "notes-task-modal"},
 	}
+	return append(bindings, diffViewerBindings()...)
+}
+
+// diffViewerBindings are the keys the shared Diff viewer answers inside its own
+// switch (internal/workspacediff/keys.go). Like the Agents board and the global
+// Workspaces list above, the viewer handles them before keymap dispatch; they
+// are registered so the footer, the help sheet and the command palette can show
+// a reader how to get into a diff and move around it.
+//
+// Both Diff surfaces run the same viewer, so both contexts get the same table
+// from one declaration.
+func diffViewerBindings() []Binding {
+	keys := []struct {
+		key     string
+		command string
+	}{
+		{"l", "diff-open"},
+		{"right", "diff-open"},
+		{"enter", "diff-open"},
+		{"j", "diff-down"},
+		{"down", "diff-down"},
+		{"k", "diff-up"},
+		{"up", "diff-up"},
+		{"j", "diff-scroll-down"},
+		{"down", "diff-scroll-down"},
+		{"k", "diff-scroll-up"},
+		{"up", "diff-scroll-up"},
+		{"h", "diff-back"},
+		{"left", "diff-back"},
+		{"g", "diff-top"},
+		{"G", "diff-bottom"},
+		{"ctrl+d", "diff-page-down"},
+		{"pgdown", "diff-page-down"},
+		{"ctrl+u", "diff-page-up"},
+		{"pgup", "diff-page-up"},
+		{"n", "diff-next-change"},
+		{"N", "diff-next-change"},
+	}
+	contexts := []string{"workspace-diff", "global-workspaces-diff"}
+	out := make([]Binding, 0, len(keys)*len(contexts))
+	for _, context := range contexts {
+		for _, k := range keys {
+			out = append(out, Binding{Key: k.key, Command: k.command, Context: context})
+		}
+	}
+	return out
 }
 
 // Category represents a command category.

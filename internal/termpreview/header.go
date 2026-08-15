@@ -112,6 +112,150 @@ func HeaderRow(chips []string, hints string, width, hintFloor int, truncate func
 	return left.String() + strings.Repeat(" ", gap) + hints
 }
 
+// HeaderRowSplit is HeaderRow with a second, right-aligned group of chips.
+//
+// The row reads: identity chips left, then space, then the right chips, then
+// the hints hard against the right edge. Action chips belong there because they
+// are the same two buttons on every row — putting them immediately after a name
+// of unpredictable length left them at a different column on every row, and
+// nothing about them is part of the row's identity.
+//
+// Priority under pressure is hints, then right chips, then left chips, and the
+// first left chip is the row's name: it is truncated to make room rather than
+// dropped, so a narrow row keeps a name and its buttons instead of losing both.
+//
+// The returned placements are where the right chips landed, in columns relative
+// to the row's first column. Hit regions must come from these rather than a
+// second calculation: a right-aligned chip's column depends on the hints beside
+// it, which only this function has seen.
+func HeaderRowSplit(left, right []string, hints string, width, hintFloor int, truncate func(string, int) string) (string, []ChipPlacement) {
+	placements := make([]ChipPlacement, len(right))
+	if !anyChip(right) {
+		return HeaderRow(left, hints, width, hintFloor, truncate), placements
+	}
+	if width <= 0 {
+		return "", placements
+	}
+	if truncate == nil {
+		truncate = TruncateANSI
+	}
+
+	drawn := make([]int, 0, len(right))
+	for i, chip := range right {
+		if chip != "" {
+			drawn = append(drawn, i)
+		}
+	}
+	// Give the hints what is left after the right chips, then drop right chips
+	// from the end while the pair still cannot fit the row.
+	fullHints := hints
+	hintsWidth := 0
+	for {
+		hintsWidth = 0
+		if fullHints != "" {
+			budget := width - groupWidth(right, drawn)
+			if len(drawn) > 0 {
+				budget -= ChipGap
+			}
+			hints = truncate(fullHints, max(budget, 0))
+			hintsWidth = ansi.StringWidth(hints)
+		}
+		if regionWidth(groupWidth(right, drawn), hintsWidth) <= width || len(drawn) == 0 {
+			break
+		}
+		drawn = drawn[:len(drawn)-1]
+	}
+
+	rightWidth := groupWidth(right, drawn)
+	regionW := regionWidth(rightWidth, hintsWidth)
+	leftBudget := max(width-regionW-ChipGap, 0)
+	if regionW == 0 {
+		leftBudget = width
+	}
+
+	leftChips := fitNameChip(left, leftBudget, truncate)
+	var leftText strings.Builder
+	leftUsed := 0
+	for i, placement := range LayoutChips(leftChips, leftBudget, 0) {
+		if !placement.Drawn {
+			continue
+		}
+		if leftUsed > 0 {
+			leftText.WriteString(strings.Repeat(" ", ChipGap))
+		}
+		leftText.WriteString(leftChips[i])
+		leftUsed = placement.Col + placement.Width
+	}
+
+	var row strings.Builder
+	row.WriteString(leftText.String())
+	if regionW == 0 {
+		return row.String(), placements
+	}
+	if gap := width - regionW - leftUsed; gap > 0 {
+		row.WriteString(strings.Repeat(" ", gap))
+	}
+	col := max(width-regionW, leftUsed)
+	for n, i := range drawn {
+		if n > 0 {
+			row.WriteString(strings.Repeat(" ", ChipGap))
+			col += ChipGap
+		}
+		row.WriteString(right[i])
+		placements[i] = ChipPlacement{Col: col, Width: ansi.StringWidth(right[i]), Drawn: true}
+		col += ansi.StringWidth(right[i])
+	}
+	if hintsWidth > 0 {
+		if rightWidth > 0 {
+			row.WriteString(strings.Repeat(" ", ChipGap))
+		}
+		row.WriteString(hints)
+	}
+	return row.String(), placements
+}
+
+// fitNameChip shrinks the row's name — the first chip — to the columns the row
+// can spare, so the chips beside it survive a narrow window.
+func fitNameChip(chips []string, budget int, truncate func(string, int) string) []string {
+	if len(chips) == 0 || chips[0] == "" || budget <= 0 {
+		return chips
+	}
+	if ansi.StringWidth(chips[0]) <= budget {
+		return chips
+	}
+	out := append([]string(nil), chips...)
+	out[0] = truncate(out[0], budget)
+	return out
+}
+
+func anyChip(chips []string) bool {
+	for _, chip := range chips {
+		if chip != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// groupWidth is the drawn width of the chips named by idx, gaps included.
+func groupWidth(chips []string, idx []int) int {
+	total := 0
+	for n, i := range idx {
+		if n > 0 {
+			total += ChipGap
+		}
+		total += ansi.StringWidth(chips[i])
+	}
+	return total
+}
+
+func regionWidth(chipsWidth, hintsWidth int) int {
+	if chipsWidth > 0 && hintsWidth > 0 {
+		return chipsWidth + ChipGap + hintsWidth
+	}
+	return chipsWidth + hintsWidth
+}
+
 // TruncateANSI is the default ANSI-safe truncation: no ellipsis, so a clipped
 // terminal line looks clipped rather than annotated.
 func TruncateANSI(value string, width int) string {

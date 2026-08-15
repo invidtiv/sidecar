@@ -80,12 +80,29 @@ type projectMsg struct {
 type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
+	if IsSharedDiffMessage(msg) {
+		return true
+	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
-		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg,
 		renameShellDoneMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSharedDiffMessage reports whether msg is a workspacediff load result.
+// These are the one async family this browser does not own: a project
+// plugin's Diff pane hosts the same views and issues the same loads, so the
+// result belongs to every host that is waiting on it. A caller that routes it
+// here alone leaves those panes on "Loading diff…" forever — the same shape as
+// the issueview.LoadedMsg the preview modal used to claim.
+func IsSharedDiffMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg:
 		return true
 	default:
 		return false

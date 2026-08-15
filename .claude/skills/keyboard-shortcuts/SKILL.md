@@ -398,6 +398,25 @@ tabs while the leaf is focused.
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and content |
 | `\` | toggle-sidebar | Toggle sidebar visibility |
 
+Moving around inside the viewer. These are the shared viewer's own keys
+(`internal/workspacediff/keys.go`); they are registered in `bindings.go` for both
+`workspace-diff` and `global-workspaces-diff` so the footer, help and palette show
+them, and the viewer answers them before keymap dispatch.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `l` / `right` / `enter` | diff-open | Open the selected file's diff, or a commit's file list |
+| `j` / `down` | diff-down / diff-scroll-down | Next item in the list; scroll the diff body |
+| `k` / `up` | diff-up / diff-scroll-up | Previous item; scroll the diff body up |
+| `h` / `left` | diff-back | Back to the file list (scrolls sideways first when panned) |
+| `g` / `G` | diff-top / diff-bottom | Jump to the top / bottom |
+| `ctrl+d` / `pgdown` | diff-page-down | Page down |
+| `ctrl+u` / `pgup` | diff-page-up | Page up |
+| `v` | toggle-diff-view | Cycle unified → side-by-side → full-file |
+| `z` | toggle-diff-scope | Cycle working tree → commits → aggregate |
+| `n` / `N` | diff-next-change | Next / previous change (full-file mode) |
+| `f` | file-picker | Open the file picker (project pane only) |
+
 ### Issue Pane
 
 An unmodified click on a `td-…` link in workspace or shell terminal

@@ -301,22 +301,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		wt := p.selectedWorktree()
-		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
-			return p, nil
+		if wt := p.selectedWorktree(); wt != nil {
+			p.bindDiffView()
 		}
-		p.bindDiffView()
-		if msg.Identity != "" && p.diff.Target.Identity() != "" && msg.Identity != p.diff.Target.Identity() {
-			return p, nil
-		}
-		if msg.CommitHash != "" {
-			if p.diff.CommitDetail != nil && p.diff.CommitDetail.Hash == msg.CommitHash &&
-				p.diff.CommitFileCursor >= 0 && p.diff.CommitFileCursor < len(p.diff.CommitDetail.Files) &&
-				p.diff.CommitDetail.Files[p.diff.CommitFileCursor].Path == msg.FilePath {
-				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
-			}
-		} else if msg.FilePath == p.selectedDiffTabFile() {
+		// Every live Diff view is a candidate, not just the legacy one: a
+		// pane-hosted view has its own cursor and its own workspace id, and
+		// reconciling against p.diff alone dropped its load — which is what
+		// left a pane-hosted full-file view on "Loading full file..." forever.
+		if p.fullFileWanted(msg) {
 			p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
+			p.fullFileKey = fullFileKeyForMsg(msg)
 		}
 
 	case CommitStatusLoadedMsg:
