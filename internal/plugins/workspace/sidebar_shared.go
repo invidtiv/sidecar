@@ -275,7 +275,12 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	if rowCount == 0 {
 		if p.filterActive() {
 			empty = []string{workspacelist.NoMatchRow(max(1, width-1), p.listFilter.Query())}
-		} else if len(p.shells)+len(p.worktrees) == 0 {
+		} else {
+			// Every project has a main checkout and the list does not offer it,
+			// so counting raw worktrees here left a fresh clone with an empty
+			// sidebar and no word about what to do next. The question is
+			// whether there is anything to show, not whether Git found
+			// something.
 			empty = []string{styles.Muted.Render("No workspaces"), styles.Muted.Render("Press 'n' to create one")}
 		}
 	}
@@ -296,7 +301,12 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	for _, region := range rendered.Regions {
 		id, data := string(region.Kind), region.Data
 		switch region.Kind {
-		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction:
+		// The sort pill is a header control like any other: it carries the
+		// caller's own region ID, not the shared component's kind. Falling
+		// through to the kind left the pill drawn, hit-tested, and wired to a
+		// handler that could never be reached — a button that looks pressable
+		// and does nothing.
+		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction, workspacelist.RegionSort:
 			id = region.ID
 		case workspacelist.RegionRow:
 			id = regionWorktreeItem

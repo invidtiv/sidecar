@@ -547,6 +547,12 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		result, err := workspaceops.CreateShell(spec)
 		created.PaneID = result.PaneID
 		created.Err = err
+		if result.PaneID != "" {
+			// Seed the cache with the pane we just made. This is the one moment
+			// the value is certainly fresh, and skipping it would cost a
+			// tmux list-panes on the very next poll of a brand-new shell.
+			globalPaneIDCache.set(spec.SessionName, result.PaneID)
+		}
 		return created
 	}
 }
@@ -707,14 +713,6 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 		}
 	}
 }
-
-// shellEnvArgs are the new-session flags that publish a shell's identity into
-// its own environment. An agent can then read $SIDECAR_SHELL_NAME to tell a
-// default name from a deliberate one without asking anybody.
-
-// setShellEnv publishes the display name to the tmux session environment.
-// Panes already running keep the value they were created with — the manifest
-// and `sidecar shell rename` remain the authority, this is only the cue.
 
 // withShellNamingInstruction appends the shell-naming guidance to an agent
 // launch as a session-scoped system prompt. Documentation only reaches the

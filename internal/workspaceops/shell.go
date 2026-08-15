@@ -65,6 +65,9 @@ func SessionExists(name string) bool {
 // PaneID returns a session's first pane identifier, or "" if tmux cannot say.
 // Callers that cache do so around this; there is one tmux call, here.
 func PaneID(sessionName string) string {
+	if sessionName == "" {
+		return ""
+	}
 	output, err := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}").Output()
 	if err != nil {
 		return ""

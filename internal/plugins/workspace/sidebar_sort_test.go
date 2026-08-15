@@ -1,12 +1,14 @@
 package workspace
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
@@ -317,5 +319,79 @@ func TestUnknownSavedSortFallsBackToTheDefault(t *testing.T) {
 	fresh.restoreListSort()
 	if fresh.listSort != workspacelist.SortManual {
 		t.Fatalf("unoffered saved sort restored as %s, want the Manual default", fresh.listSort.Label())
+	}
+}
+
+// The sort pill is a control, so it has to be clickable. It carries the
+// plugin's own region ID; registering it under the shared component's kind left
+// it drawn, hit-tested, and wired to a handler that could never be reached.
+func TestSortPillIsClickable(t *testing.T) {
+	p := sortPlugin(t)
+	p.mouseHandler.Clear()
+	_ = p.renderSidebarContent(40, 30)
+
+	var found *mouse.Region
+	for _, r := range p.mouseHandler.HitMap.Regions() {
+		if r.ID == regionListSortButton {
+			copied := r
+			found = &copied
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no hit region for the sort pill; clicking it can never reach its handler")
+	}
+	_ = p.handleMouseClick(mouse.MouseAction{
+		Type: mouse.ActionClick, X: found.Rect.X, Y: found.Rect.Y, Region: found,
+	})
+	if !p.viewFlyoutActive() {
+		t.Fatal("clicking the sort pill did not open View")
+	}
+}
+
+// "N of M" measures against what the list would show with no query. The main
+// checkout is offered only when it hosts shells, and asking the filtered nested
+// list made that answer depend on the query — so the denominator shrank as the
+// user typed.
+func TestFilterDenominatorDoesNotMoveWithTheQuery(t *testing.T) {
+	p := New()
+	root, other := t.TempDir(), t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: other, ProjectRoot: root, Epoch: 1}
+	p.worktrees = []*Worktree{
+		{Name: "repo", Path: root, Key: "main", Branch: "main", IsMain: true},
+		{Name: "wt-a", Path: other, Key: "a", Branch: "a"},
+	}
+	p.nestedByWorkDir = map[string][]*ShellSession{
+		filepath.Clean(root): {{Name: "main shell", TmuxName: "sh-main", WorkDir: root}},
+	}
+
+	_, before := p.filterCounts()
+	p.listFilter.Focus()
+	for _, r := range "zzzz" {
+		p.listFilter.Insert(string(r))
+	}
+	matched, after := p.filterCounts()
+	if after != before {
+		t.Fatalf("denominator moved with the query: %d then %d", before, after)
+	}
+	if matched != 0 {
+		t.Fatalf("a query matching nothing still matched %d rows", matched)
+	}
+}
+
+// A project whose only worktree is the main checkout has an empty list, and an
+// empty list has to say so. Counting raw worktrees left a fresh clone with a
+// blank sidebar and no word about what to do next.
+func TestFreshCloneExplainsItsEmptyList(t *testing.T) {
+	p := New()
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root, Epoch: 1}
+	p.sidebarVisible = true
+	p.activePane = PaneSidebar
+	p.worktrees = []*Worktree{{Name: "repo", Path: root, Key: "main", Branch: "main", IsMain: true}}
+
+	view := ansi.Strip(p.renderSidebarContent(40, 20))
+	if !strings.Contains(view, "No workspaces") {
+		t.Fatalf("a list with nothing in it said nothing:\n%s", view)
 	}
 }

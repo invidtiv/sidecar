@@ -118,7 +118,19 @@ func (p *Plugin) listedWorktree(wt *Worktree) bool {
 	if wt == nil {
 		return false
 	}
-	return !wt.IsMain || len(p.visibleNestedShells(wt)) > 0
+	return !wt.IsMain || p.hostsNestedShells(wt)
+}
+
+// hostsNestedShells asks whether a worktree has shells living in it at all,
+// ignoring the filter. Whether a row is ever offered is a property of the
+// project; whether it is showing right now is a property of the query. Reading
+// the filtered list here made the "N of M" denominator shrink as the user
+// typed, so the total they were being measured against moved under them.
+func (p *Plugin) hostsNestedShells(wt *Worktree) bool {
+	if wt == nil || p.isCurrentWorkDir(wt.Path) {
+		return false
+	}
+	return len(p.nestedByWorkDir[filepath.Clean(wt.Path)]) > 0
 }
 
 // visibleWorktreeIndices lists the worktree indices the sidebar draws.
