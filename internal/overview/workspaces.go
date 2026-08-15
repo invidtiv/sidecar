@@ -276,6 +276,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if m.createOpen {
 		view = m.overlayCreateShell(view, width, height)
 	}
+	if m.deleteOpen {
+		view = m.overlayDelete(view, width, height)
+	}
 	if m.viewFlyoutOpen {
 		view = m.overlayViewFlyout(view, width, height)
 	}
@@ -404,6 +407,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.createOpen {
 		return m.handleCreateShellKey(msg)
 	}
+	if m.deleteOpen {
+		return m.handleDeleteKey(msg)
+	}
 	// The fly-out is an overlay, not a third browse mode. Esc / backdrop close
 	// it and leave the list as the rest state. "/" still focuses the filter.
 	if m.viewFlyoutOpen {
@@ -453,6 +459,16 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch key {
+	case "D":
+		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+			return true, m.OpenDeleteSelectedShell()
+		}
+		return false, nil
+	case "m":
+		if workspace, ok := m.SelectedWorkspace(); ok && mergeRefusal(workspace) == "" {
+			return true, m.StartSelectedMerge()
+		}
+		return false, nil
 	case "n":
 		return true, m.OpenCreateWorktree("")
 	case "ctrl+n":
@@ -631,6 +647,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	if m.createOpen {
 		return m.handleCreateShellMouse(mouseMsg)
+	}
+	if m.deleteOpen {
+		return m.handleDeleteMouse(mouseMsg)
 	}
 	if m.viewFlyoutOpen {
 		return m.handleViewFlyoutMouse(mouseMsg)

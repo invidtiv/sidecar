@@ -218,6 +218,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.reconcilePendingCreation()
 			p.applyPendingWorkspaceSelection()
+			if cmd := p.TakePendingWorkspaceAction(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			if cmd := p.loadSelectedDiff(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -2013,6 +2016,9 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 		// restore the saved workspace over the one the user just opened.
 		// Re-applying here is a no-op once the selection has been consumed.
 		p.applyPendingWorkspaceSelection()
+		if cmd := p.TakePendingWorkspaceAction(); cmd != nil {
+			commands = append(commands, cmd)
+		}
 		// selectedIdx starts at zero, which is the main checkout, and the list
 		// no longer offers that row. Nothing above guarantees the restored or
 		// default selection is one the user can see, so land it on the first

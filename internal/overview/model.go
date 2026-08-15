@@ -56,11 +56,13 @@ const (
 
 type NavigateMsg struct {
 	Workspace  workspaceinventory.Workspace
+	Action     string
 	Generation int
 	RequestID  uint64
 }
 type ValidationMsg struct {
 	Workspace  workspaceinventory.Workspace
+	Action     string
 	Generation int
 	RequestID  uint64
 	Err        error
@@ -92,6 +94,8 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		// routed to the global host even while its modal owns focus.
 		return true
 	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg:
+		return true
+	case globalShellDeletedMsg:
 		return true
 	default:
 		return false
@@ -217,6 +221,14 @@ type Model struct {
 	createPlan         *workspaceops.WorktreePlan
 	createRecord       *workspaceops.WorktreeRecord
 	pendingCreatedPath string
+
+	deleteOpen      bool
+	deleteBusy      bool
+	deleteError     string
+	deleteWorkspace workspaceinventory.Workspace
+	deleteModal     *modal.Modal
+	deleteModalW    int
+	deleteMouse     *mouse.Handler
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -247,7 +259,7 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
@@ -375,8 +387,12 @@ func (m *Model) Stop() {
 // RequestNavigation binds a card activation to the current Overview lifecycle
 // and supersedes any prior in-flight destination validation.
 func (m *Model) RequestNavigation(workspace workspaceinventory.Workspace) tea.Cmd {
+	return m.RequestNavigationAction(workspace, "")
+}
+
+func (m *Model) RequestNavigationAction(workspace workspaceinventory.Workspace, action string) tea.Cmd {
 	m.requestID++
-	msg := NavigateMsg{Workspace: workspace, Generation: m.generation, RequestID: m.requestID}
+	msg := NavigateMsg{Workspace: workspace, Action: action, Generation: m.generation, RequestID: m.requestID}
 	return func() tea.Msg { return msg }
 }
 
@@ -398,6 +414,7 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 	return func() tea.Msg {
 		return ValidationMsg{
 			Workspace:  msg.Workspace,
+			Action:     msg.Action,
 			Generation: msg.Generation,
 			RequestID:  msg.RequestID,
 			Err:        m.collector.ValidateWorkspace(context.Background(), msg.Workspace),
@@ -586,6 +603,15 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(msg.Project)
+	case globalShellDeletedMsg:
+		m.deleteBusy = false
+		if msg.Err != nil {
+			m.deleteError = msg.Err.Error()
+			m.deleteModal = nil
+			return nil
+		}
+		m.closeDelete()
 		return m.refreshProjectAfterMutation(msg.Project)
 	case projectMutationRefreshMsg:
 		return m.applyProjectMutationRefresh(msg)

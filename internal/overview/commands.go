@@ -93,11 +93,15 @@ func (m *Model) Commands() []plugin.Command {
 					ID: "rename-shell", Name: "Rename", Description: "Rename the selected shell",
 					Context: ctxGlobalWorkspaces, Priority: 8,
 				})
+				cmds = append(cmds, plugin.Command{ID: "delete-shell", Name: "Delete", Description: "Delete the selected shell", Context: ctxGlobalWorkspaces, Priority: 9})
 			case workspaceinventory.KindWorktree:
 				cmds = append(cmds, plugin.Command{
 					ID: "rename-worktree", Name: "Rename", Description: "Rename the selected worktree",
 					Context: ctxGlobalWorkspaces, Priority: 8,
 				})
+				if mergeRefusal(workspace) == "" {
+					cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Open the owning project's merge strategy workflow", Context: ctxGlobalWorkspaces, Priority: 9})
+				}
 			}
 		}
 		if m.canOpenInGit() {

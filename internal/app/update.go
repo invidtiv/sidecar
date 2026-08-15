@@ -467,7 +467,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return ToastMsg{Message: "Overview item is stale: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
 			}
 		}
-		return m, m.navigateFromOverview(msg.Workspace)
+		return m, m.navigateFromOverviewAction(msg.Workspace, msg.Action)
 
 	case SwitchWorktreeMsg:
 		// Switch to the requested worktree

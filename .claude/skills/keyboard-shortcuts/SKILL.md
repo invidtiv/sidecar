@@ -104,6 +104,8 @@ There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→
 | `i` | Find TD task (`open-issue`). Not interactive |
 | `n` | Create a worktree, choosing the owning project, then confirm the Git plan |
 | `ctrl+n` | Create a shell, choosing the owning project (selected row then last-used default) |
+| `D` | Delete the selected shell (shown only for shell rows) |
+| `m` | Open the owning project's established merge strategy workflow for a safe worktree |
 | `/` | Filter |
 | `v` / `s` | Open View: sort the list. `v` matches the project sidebar; `s` is the original alias |
 | `\` | Toggle sidebar |

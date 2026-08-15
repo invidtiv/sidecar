@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // WorktreeAction identifies a mutating action offered by the workspace UI.
@@ -22,30 +24,11 @@ const (
 // WorktreeActionRefusal returns a user-facing reason when an action is unsafe.
 func WorktreeActionRefusal(wt *Worktree, action WorktreeAction) string {
 	if wt == nil {
-		return "No worktree is selected"
+		return workspaceops.WorktreeActionRefusal(nil, workspaceops.WorktreeAction(action))
 	}
-	if wt.IsMain {
-		return fmt.Sprintf("%s is unavailable for the main worktree", action)
-	}
-	if wt.IsBare {
-		return fmt.Sprintf("%s is unavailable for a bare worktree", action)
-	}
-	if wt.IsDetached || wt.Branch == "" || wt.Branch == "(detached)" {
-		return fmt.Sprintf("%s requires a checked-out branch", action)
-	}
-	if wt.IsLocked {
-		return fmt.Sprintf("%s is unavailable while the worktree is locked", action)
-	}
-	if wt.IsMissing {
-		return fmt.Sprintf("%s is unavailable because the worktree path is missing", action)
-	}
-	if wt.IsPrunable {
-		return fmt.Sprintf("%s is unavailable because the worktree record is prunable", action)
-	}
-	if info, err := os.Stat(wt.Path); err != nil || !info.IsDir() {
-		return fmt.Sprintf("%s is unavailable because the worktree path is missing", action)
-	}
-	return ""
+	return workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{Path: wt.Path, Branch: wt.Branch,
+		IsMain: wt.IsMain, IsBare: wt.IsBare, IsDetached: wt.IsDetached, IsLocked: wt.IsLocked,
+		IsMissing: wt.IsMissing, IsPrunable: wt.IsPrunable}, workspaceops.WorktreeAction(action))
 }
 
 type gitWorktreeState struct {

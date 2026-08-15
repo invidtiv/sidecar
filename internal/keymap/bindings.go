@@ -68,6 +68,8 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
+		{Key: "D", Command: "delete-shell", Context: "global-workspaces"},
+		{Key: "m", Command: "merge-workflow", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
 		{Key: "p", Command: "pin", Context: "global-workspaces"},

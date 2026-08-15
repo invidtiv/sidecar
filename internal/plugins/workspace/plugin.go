@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
@@ -164,6 +165,7 @@ type Plugin struct {
 	refreshOperationID         string
 	activeLifecycleOperationID string
 	pendingOverviewSelection   *plugin.PendingWorkspaceSelection
+	pendingOverviewAction      tea.Cmd
 
 	// Session tracking for safe cleanup
 	managedSessions map[string]bool
@@ -593,9 +595,11 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		for i, wt := range p.worktrees {
 			if workspaceinventory.CanonicalPath(wt.Path) == workspaceinventory.CanonicalPath(target.Path) {
 				p.selectWorktreeAt(i)
+				action := target.Action
 				p.pendingOverviewSelection = nil
 				p.selectKanbanFromList()
 				p.finishNavigatedSelection()
+				p.queuePendingOverviewAction(action, wt)
 				return true
 			}
 		}
@@ -623,6 +627,23 @@ func (p *Plugin) applyPendingWorkspaceSelection() bool {
 		p.toastTime = time.Now()
 	}
 	return false
+}
+
+func (p *Plugin) queuePendingOverviewAction(action string, wt *Worktree) {
+	if action != "merge" || wt == nil {
+		return
+	}
+	if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
+		p.pendingOverviewAction = appmsg.ShowToast(reason, 3*time.Second)
+		return
+	}
+	p.pendingOverviewAction = p.startMergeWorkflow(wt)
+}
+
+func (p *Plugin) TakePendingWorkspaceAction() tea.Cmd {
+	cmd := p.pendingOverviewAction
+	p.pendingOverviewAction = nil
+	return cmd
 }
 
 // finishNavigatedSelection applies this plugin's own selection-change rule to a
