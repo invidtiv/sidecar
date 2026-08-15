@@ -753,16 +753,17 @@ func (m *Model) View(width, height int) string {
 	return result.View
 }
 
+// summary is the header-right text. Refreshes are frequent and mostly
+// instantaneous, so a "Loading n/m" counter there reads as flicker and pulls
+// the eye for nothing. Loading is not an abnormal state: while it runs we keep
+// showing the last known counts (nothing at all on the very first load), and
+// only genuinely abnormal state — tmux being unavailable — replaces them.
 func (m *Model) summary() string {
-	if m.loading {
-		total := m.configured
-		if m.phase == phaseStatus {
-			total = len(m.projects)
-		}
-		return fmt.Sprintf("Loading %d/%d", len(m.completed), total)
-	}
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
+	}
+	if m.loading && len(m.results) == 0 {
+		return ""
 	}
 	return fmt.Sprintf("%d projects · %d agents", len(m.results), m.agentCount)
 }
