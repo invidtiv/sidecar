@@ -61,10 +61,10 @@ func TestRealSurfacesTakeBothBranches(t *testing.T) {
 	}{
 		{Box{X: 4, Y: 2, W: 180, H: 44}, "dimmed", "dimmed"},
 		{Box{X: 0, Y: 0, W: 140, H: 40}, "dimmed", "dimmed"},
-		{Box{X: 0, Y: 0, W: 120, H: 30}, "dimmed", "filled"},
+		{Box{X: 0, Y: 0, W: 120, H: 30}, "dimmed", "dimmed"},
+		{Box{X: 2, Y: 3, W: 80, H: 24}, "dimmed", "dimmed"},
 		// Panes with no room to spare: the surface owns the box.
-		{Box{X: 2, Y: 3, W: 80, H: 24}, "filled", "filled"},
-		{Box{X: 1, Y: 1, W: 56, H: 20}, "filled", "filled"},
+		{Box{X: 1, Y: 1, W: 56, H: 20}, "dimmed", "filled"},
 		{Box{X: 0, Y: 0, W: 40, H: 12}, "filled", "filled"},
 		{Box{X: 0, Y: 0, W: 30, H: 8}, "filled", "filled"},
 	}
@@ -104,7 +104,7 @@ func TestRealSurfacesTakeBothBranches(t *testing.T) {
 // The tight branch is not "a small box on an empty field": the surface is the
 // box, edge to edge, with its border on the box's own first and last row.
 func TestFilledSurfaceOwnsTheWholeBox(t *testing.T) {
-	for _, box := range []Box{{X: 3, Y: 1, W: 56, H: 20}, {X: 0, Y: 0, W: 80, H: 24}, {X: 0, Y: 0, W: 40, H: 12}} {
+	for _, box := range []Box{{X: 3, Y: 1, W: 34, H: 20}, {X: 0, Y: 0, W: 30, H: 24}, {X: 0, Y: 0, W: 40, H: 12}} {
 		finder := filefind.NewFinder(&filefind.Cache{Files: surfaceFiles(), OK: true}, "/root", 1)
 		finder.Open()
 		out := ansi.Strip(RenderFunc(box, background(box), mouse.NewHandler(), finderDraw(finder)))

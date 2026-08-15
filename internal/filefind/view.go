@@ -66,6 +66,19 @@ func (f *Finder) SetFill(fill bool) {
 	f.clearModal()
 }
 
+// SetPreferredWidth overrides how wide the box likes to be when it is sizing
+// itself to its content. A host sets it when it knows something about where the
+// box will land that the surface cannot: the Files plugin keeps the border off
+// the column its pane divider occupies, so the box does not read as welded to
+// the frame it is floating over. Zero restores the default.
+func (f *Finder) SetPreferredWidth(width int) {
+	if f.preferredWidth == width {
+		return
+	}
+	f.preferredWidth = width
+	f.clearModal()
+}
+
 // View renders the finder at the given size and registers its hit regions on
 // handler. The result is the modal box alone; the caller composites it over its
 // own background (ui.OverlayModal for a screen, panemodal for a pane).
@@ -115,11 +128,11 @@ func (f *Finder) modalWidthForView() int {
 	if f.fill {
 		return maxInt(f.width, 1)
 	}
-	modalW := PreferredWidth
-	maxWidth := f.width - 2*modal.DefaultMarginX
-	if maxWidth < 1 {
-		maxWidth = 1
+	modalW := f.preferredWidth
+	if modalW <= 0 {
+		modalW = PreferredWidth
 	}
+	maxWidth := modal.ContentBoxWidth(f.width)
 	if modalW > maxWidth {
 		modalW = maxWidth
 	}
@@ -262,11 +275,13 @@ func (f *Finder) resultsSection() modal.Section {
 		if len(f.matches) == 0 {
 			switch {
 			case f.Cache != nil && f.Cache.Scanning:
-				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render("Scanning files..."))}
+				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render(
+					ui.FitMessage(contentWidth, "Scanning files...", "Scanning...")))}
 			case f.query != "":
 				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render("No matches"))}
 			default:
-				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render("Type to search files..."))}
+				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render(
+					ui.FitMessage(contentWidth, "Type to search files...", "Type to search...")))}
 			}
 		}
 
@@ -326,27 +341,54 @@ func (f *Finder) statsSection() modal.Section {
 			return modal.RenderedSection{}
 		}
 
-		position := ""
-		if len(f.matches) > 0 {
-			position = fmt.Sprintf("%d/%d  ", f.cursor+1, len(f.matches))
-		}
-
-		stats := ""
-		switch {
-		case f.Cache == nil:
-		case f.Cache.Scanning:
-			stats = "scanning..."
-		case len(f.Cache.Files) > 0:
-			stats = fmt.Sprintf("%d files", len(f.Cache.Files))
-		}
-		if position == "" && stats == "" {
+		// The root is drawn opposite the counts, in every state: a finder rooted
+		// at a pane's own directory is often not rooted where the user is
+		// reading, and "No matches" about an unnamed directory is unanswerable.
+		root := ui.ShortRoot(f.root, rootBudget(contentWidth))
+		counts := f.countsText(contentWidth - ansi.StringWidth(root) - 1)
+		if counts == "" && root == "" {
 			// The row is still drawn: its height is part of the box's, and a
 			// line that appears with the first result makes the box jump.
 			return modal.RenderedSection{Content: " "}
 		}
 
-		return modal.RenderedSection{Content: styles.Muted.Render(position + stats)}
+		return modal.RenderedSection{Content: styles.Muted.Render(ui.JoinEnds(counts, root, contentWidth))}
 	}, nil)
+}
+
+// rootBudget is how much of the counts row the root may take: enough for a
+// project name at any size, never so much that the counts vanish.
+func rootBudget(contentWidth int) int {
+	budget := contentWidth / 2
+	if budget > 28 {
+		budget = 28
+	}
+	return budget
+}
+
+// countsText says where the cursor is and how many files were found, in the
+// longest phrasing that fits.
+func (f *Finder) countsText(width int) string {
+	position := ""
+	if len(f.matches) > 0 {
+		position = fmt.Sprintf("%d/%d  ", f.cursor+1, len(f.matches))
+	}
+
+	stats := ""
+	switch {
+	case f.Cache == nil:
+	case f.Cache.Scanning:
+		stats = "scanning..."
+	case len(f.Cache.Files) > 0:
+		stats = fmt.Sprintf("%d files", len(f.Cache.Files))
+	}
+
+	for _, candidate := range []string{position + stats, position, stats} {
+		if candidate != "" && ansi.StringWidth(candidate) <= width {
+			return strings.TrimRight(candidate, " ")
+		}
+	}
+	return ""
 }
 
 // renderRow renders one result row. Selection and hover paint the full width,

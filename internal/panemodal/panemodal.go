@@ -31,7 +31,11 @@ type Box struct {
 // to be words. Below these thresholds the modal takes the box instead and the
 // pane content behind it is dropped entirely.
 const (
-	dimMarginX = 8
+	// The horizontal one is shared with the surfaces themselves: a
+	// content-sized box keeps its width inside modal.RoomyMarginX so that a
+	// pane wide enough to show a ring actually gets one, rather than growing a
+	// box that can never leave room for it.
+	dimMarginX = modal.RoomyMarginX
 	dimMarginY = 2
 )
 

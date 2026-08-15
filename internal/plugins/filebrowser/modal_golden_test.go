@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectsearch"
 )
 
@@ -92,11 +93,17 @@ func goldenSearchResults() []projectsearch.SearchFileResult {
 
 // newGoldenPlugin builds a plugin with no disk dependencies at all, so the
 // golden output is a pure function of the fixtures above.
+// goldenRoot is the project both hosts are pointed at, so the root the
+// surfaces now name on their counts row is the same string in the golden and in
+// the direct render.
+const goldenRoot = "/golden/sidecar"
+
 func newGoldenPlugin(width, height int) *Plugin {
 	return &Plugin{
 		width:        width,
 		height:       height,
 		mouseHandler: mouse.NewHandler(),
+		ctx:          &plugin.Context{WorkDir: goldenRoot},
 	}
 }
 
@@ -186,7 +193,7 @@ func TestQuickOpenModalGolden(t *testing.T) {
 					cache.Files = goldenQuickOpenFiles()
 					cache.OK = true
 				}
-				direct := filefind.NewFinder(cache, t.TempDir(), 0)
+				direct := filefind.NewFinder(cache, goldenRoot, 0)
 				direct.Open()
 				for _, r := range tc.query {
 					direct.HandleKey(keyPress(r))
@@ -265,7 +272,7 @@ func TestProjectSearchModalGolden(t *testing.T) {
 				got := p.renderProjectSearchModalContent() + "\n--- regions ---\n" + regionDump(p.mouseHandler)
 
 				// Through the shared type, driven directly at the same size.
-				direct := projectsearch.New(t.TempDir(), 0)
+				direct := projectsearch.New(goldenRoot, 0)
 				tc.mutate(direct.State)
 				if tc.focused != "" {
 					direct.SetFocus(tc.focused)

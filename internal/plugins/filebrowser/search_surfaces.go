@@ -3,6 +3,7 @@ package filebrowser
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/filefind"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectsearch"
 )
@@ -57,7 +58,44 @@ func (p *Plugin) openQuickOpen() (plugin.Plugin, tea.Cmd) {
 
 // renderQuickOpenModalContent renders the quick open modal box content.
 func (p *Plugin) renderQuickOpenModalContent() string {
-	return p.fileFinder().View(p.width, p.height, p.mouseHandler)
+	f := p.fileFinder()
+	f.SetPreferredWidth(p.boxWidthOffTheDivider(filefind.PreferredWidth))
+	return f.View(p.width, p.height, p.mouseHandler)
+}
+
+// boxWidthOffTheDivider is preferred, adjusted if a box that wide would put one
+// of its vertical borders on the column the pane divider occupies.
+//
+// Centring is arithmetic and the divider is wherever the user dragged it, so
+// the two coincide sooner or later — and when they do the box reads as welded
+// to the frame rather than floating over it: one unbroken vertical line runs
+// from the top of the plugin to the bottom, through the box. Two cells of width
+// moves the border one column, which is all it takes to break the line, and the
+// surface computes its own hit regions from the same number, so nothing else
+// has to know.
+func (p *Plugin) boxWidthOffTheDivider(preferred int) int {
+	if p.width <= 0 {
+		return preferred
+	}
+	p.calculatePaneWidths()
+	frame := map[int]bool{p.treeWidth: true, p.treeWidth + 1: true}
+
+	width := preferred
+	if maxW := modal.ContentBoxWidth(p.width); width > maxW {
+		// The surface would clamp it anyway; adjust the width it will really use.
+		width = maxW
+	}
+	for range 2 {
+		if width < modal.MinModalWidth {
+			return preferred
+		}
+		left := (p.width - width) / 2
+		if !frame[left] && !frame[left+width-1] {
+			return width
+		}
+		width -= 2
+	}
+	return width
 }
 
 // handleQuickOpenKey handles key input during quick open mode.
@@ -122,6 +160,7 @@ func (p *Plugin) renderProjectSearchModalContent() string {
 	if search == nil {
 		return ""
 	}
+	search.SetPreferredWidth(p.boxWidthOffTheDivider(projectsearch.PreferredWidth))
 	return search.View(p.width, p.height, p.mouseHandler)
 }
 

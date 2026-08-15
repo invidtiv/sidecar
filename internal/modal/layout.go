@@ -24,6 +24,7 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 
 	for _, s := range m.sections {
 		res := s.Render(contentWidth, focusID, m.hoverID)
+		res.Content = clampLines(res.Content, contentWidth)
 		height := measureHeight(res.Content)
 
 		rendered = append(rendered, renderedSection{
@@ -175,7 +176,7 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 		handler.HitMap.Clear()
 
 		// Background absorber (added first = lowest priority)
-		handler.HitMap.AddRect("modal-backdrop", 0, 0, screenW, screenH, nil)
+		handler.HitMap.AddRect(BackdropRegionID, 0, 0, screenW, screenH, nil)
 
 		// Modal body absorber (for scroll events)
 		handler.HitMap.AddRect("modal-body", modalX, modalY, modalWidth, modalH, nil)

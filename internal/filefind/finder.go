@@ -73,6 +73,9 @@ type Finder struct {
 
 	width, height int
 	fill          bool
+	// preferredWidth overrides PreferredWidth when a host has a reason to place
+	// the box a little differently; 0 means the default.
+	preferredWidth int
 
 	modal      *modal.Modal
 	modalWidth int

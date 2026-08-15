@@ -119,7 +119,7 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		id := action.Region.ID
 
 		// Backdrop click optionally dismisses the modal.
-		if id == "modal-backdrop" {
+		if id == BackdropRegionID {
 			if m.closeOnBackdrop {
 				return "cancel"
 			}
@@ -141,7 +141,7 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		return ""
 
 	case mouse.ActionHover:
-		if action.Region != nil && action.Region.ID != "modal-backdrop" && action.Region.ID != "modal-body" {
+		if action.Region != nil && action.Region.ID != BackdropRegionID && action.Region.ID != "modal-body" {
 			m.hoverID = action.Region.ID
 		} else {
 			m.hoverID = ""

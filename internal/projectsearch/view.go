@@ -113,15 +113,26 @@ func (s *Search) ensureModal() {
 	s.modalFill = s.fill
 }
 
+// SetPreferredWidth overrides how wide the box likes to be when it is sizing
+// itself to its content, for a host that knows where the box will land — see
+// filefind.Finder.SetPreferredWidth. Zero restores the default.
+func (s *Search) SetPreferredWidth(width int) {
+	if s.preferredWidth == width {
+		return
+	}
+	s.preferredWidth = width
+	s.clearModal()
+}
+
 func (s *Search) modalWidthForView() int {
 	if s.fill {
 		return maxInt(s.width, 1)
 	}
-	modalW := PreferredWidth
-	maxWidth := s.width - 2*modal.DefaultMarginX
-	if maxWidth < 1 {
-		maxWidth = 1
+	modalW := s.preferredWidth
+	if modalW <= 0 {
+		modalW = PreferredWidth
 	}
+	maxWidth := modal.ContentBoxWidth(s.width)
 	if modalW > maxWidth {
 		modalW = maxWidth
 	}
@@ -178,7 +189,7 @@ func (s *Search) optionsSection() modal.Section {
 		opts := []option{
 			{id: ToggleRegexID, label: ".*", active: state.UseRegex},
 			{id: ToggleCaseID, label: "Aa", active: state.CaseSensitive},
-			{id: ToggleWordID, label: `\\b`, active: state.WholeWord},
+			{id: ToggleWordID, label: `\b`, active: state.WholeWord},
 		}
 
 		var sb strings.Builder
@@ -264,9 +275,11 @@ func (s *Search) resultsSection() modal.Section {
 		}
 		if len(state.Results) == 0 {
 			if state.Query != "" {
-				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render("No matches found"))}
+				return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render(
+					ui.FitMessage(contentWidth, "No matches found", "No matches")))}
 			}
-			return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render("Type to search project files..."))}
+			return modal.RenderedSection{Content: padToMinHeight(styles.Muted.Render(
+				ui.FitMessage(contentWidth, "Type to search project files...", "Type to search files...", "Type to search...")))}
 		}
 
 		flatLen := state.FlatLen()
@@ -295,6 +308,12 @@ func (s *Search) resultsSection() modal.Section {
 			if flatIdx >= state.ScrollOffset && len(lines) < maxVisible {
 				itemID := fileID(fi)
 				selected := flatIdx == state.Cursor
+				if !selected && len(lines) == maxVisible-1 && !file.Collapsed && len(file.Matches) > 0 {
+					// A header on the last row with no match under it is a row
+					// spent saying a file has hits without showing one. Leave
+					// the row blank and let the list scroll to it.
+					break
+				}
 				hovered := itemID == hoverID
 				line := renderFileHeader(file, selected, hovered, contentWidth)
 
@@ -354,24 +373,71 @@ func (s *Search) resultsSection() modal.Section {
 	}, nil)
 }
 
+// statsSection is the row that says how much was found and, at the other end of
+// it, where it was looked for. The root is not decoration: a pane's search is
+// rooted at that pane's directory, which in a global workspace is routinely not
+// the checkout the user is reading, and without it "No matches found" is an
+// answer with no way to tell whether it is the truth about the wrong directory.
+// It is therefore drawn in every state, including the ones with nothing to
+// count.
 func (s *Search) statsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		state := s.State
-		if state == nil || len(state.Results) == 0 {
+		root := ui.ShortRoot(s.root, rootBudget(contentWidth))
+		counts := s.countsText(contentWidth - ansi.StringWidth(root) - 1)
+		if counts == "" && root == "" {
 			// The row is still drawn: its height is part of the box's, and a
 			// line that appears with the first result makes the box jump.
 			return modal.RenderedSection{Content: " "}
 		}
-
-		position := ""
-		flatLen := state.FlatLen()
-		if flatLen > 0 {
-			position = fmt.Sprintf("%d/%d  ", state.Cursor+1, flatLen)
-		}
-		stats := fmt.Sprintf("%d matches in %d files", state.TotalMatches(), state.FileCount())
-
-		return modal.RenderedSection{Content: styles.Muted.Render(position + stats)}
+		return modal.RenderedSection{Content: styles.Muted.Render(ui.JoinEnds(counts, root, contentWidth))}
 	}, nil)
+}
+
+// rootBudget is how much of the counts row the root may take: enough for a
+// project name at any size, never so much that the counts vanish.
+func rootBudget(contentWidth int) int {
+	budget := contentWidth / 2
+	if budget > 28 {
+		budget = 28
+	}
+	return budget
+}
+
+// countsText says how much was found, in the longest phrasing that fits.
+func (s *Search) countsText(width int) string {
+	state := s.State
+	if state == nil || len(state.Results) == 0 {
+		return ""
+	}
+	matches, files := state.TotalMatches(), state.FileCount()
+
+	position := ""
+	if flatLen := state.FlatLen(); flatLen > 0 {
+		position = fmt.Sprintf("%d/%d  ", state.Cursor+1, flatLen)
+	}
+
+	long := fmt.Sprintf("%d %s in %d %s", matches, plural(matches, "match", "matches"),
+		files, plural(files, "file", "files"))
+	short := fmt.Sprintf("%d in %d %s", matches, files, plural(files, "file", "files"))
+	for _, candidate := range []string{
+		position + long,
+		long,
+		position + short,
+		short,
+		fmt.Sprintf("%d/%d", matches, files),
+	} {
+		if ansi.StringWidth(candidate) <= width {
+			return candidate
+		}
+	}
+	return strconv.Itoa(matches)
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // maxVisible is how many rows the results list gets: the modal's inner height

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -16,17 +17,23 @@ type Span struct {
 
 // ElidePath fits a path into width cells while keeping the parts that tell one
 // row from another. Rows in a result list usually share a leading prefix, so
-// the leading directories are the least informative thing on the line and are
-// spent first:
+// the outermost directories are the least informative thing on the line and are
+// spent first — but only as far as the budget demands:
 //
-//	.claude/skills/create-modal/SKILL.md  ->  .c/s/create-modal/SKILL.md
+//	.claude/skills/create-modal/SKILL.md at 30  ->  .c/s/create-modal/SKILL.md
+//	.claude/skills/create-modal/SKILL.md at 22  ->  .c/s/create-mo…/SKILL.md
 //
-// What survives longest is the filename and the directory immediately above it
-// — the pair that actually differs between rows. When even that will not fit
-// the path is truncated from the front, which keeps the tail rather than
-// eliding the middle: a middle elision keeps the shared prefix and throws away
-// the discriminating segment, which is how a narrow list turns into a dozen
-// identical-looking rows.
+// Degrading gradually is the whole point. Spending a directory outright when a
+// single cell was needed is how a list of siblings turns into a page of
+// identical rows: an all-or-nothing fallback that missed its budget by one cell
+// used to throw the entire head away, and `.c` versus `.a` is routinely the only
+// thing that differs between two rows.
+//
+// The order of sacrifice is: shorten outermost directories, then collapse the
+// middle ones into a single "…", then — and only then — cut into the filename,
+// from its front, so the end of the name and its extension survive. The
+// leading segment and the filename are what a reader recognises a row by, so
+// they are the last things to go, never the first.
 func ElidePath(path string, width int) (string, []Span) {
 	if width <= 0 {
 		return "", nil
@@ -34,56 +41,243 @@ func ElidePath(path string, width int) (string, []Span) {
 	if runewidth.StringWidth(path) <= width {
 		return path, []Span{{SrcStart: 0, SrcEnd: len(path), Dst: 0}}
 	}
+	if !strings.Contains(path, "/") {
+		return truncateStartSpans(path, width)
+	}
 
-	if slash := strings.LastIndex(path, "/"); slash >= 0 {
-		if out, spans, ok := abbreviateLeadingDirs(path, slash, width); ok {
+	segs := splitSegments(path)
+	shortenDirs(segs, width)
+	if segsWidth(segs) > width {
+		segs = collapseMiddle(segs, width)
+	}
+	if segsWidth(segs) > width {
+		if out, spans, ok := keepFilename(segs, width); ok {
 			return out, spans
 		}
+		return truncateStartSpans(path, width)
 	}
-	return truncateStartSpans(path, width)
+	out, spans := renderSegments(segs)
+	return out, spans
 }
 
-// abbreviateLeadingDirs shortens every directory above the file's own parent to
-// its first character (two for a dotted name like ".claude", so the dot does not
-// become the whole segment), leaving the parent directory and the filename
-// intact. It reports false when the result still does not fit.
-func abbreviateLeadingDirs(path string, lastSlash, width int) (string, []Span, bool) {
-	dir := path[:lastSlash]
-	parentStart := strings.LastIndex(dir, "/")
-	if parentStart < 0 {
-		// Only one directory; there is nothing above it to abbreviate.
-		return "", nil, false
-	}
+// segment is one path component on its way through an elision: where it came
+// from, what it currently renders as, and how many bytes of that rendering are
+// still a verbatim prefix of the original (which is what a Span reports).
+type segment struct {
+	srcStart, srcEnd int
+	src              string // the segment as it was in the path
+	text             string
+	keepHead         int // bytes at the front of text that are a verbatim head of the source
+	keepTail         int // bytes at the back of text that are a verbatim tail of the source
+}
 
+func splitSegments(path string) []*segment {
+	var segs []*segment
+	start := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '/' {
+			segs = append(segs, &segment{
+				srcStart: start,
+				srcEnd:   i,
+				src:      path[start:i],
+				text:     path[start:i],
+				keepHead: i - start,
+			})
+			start = i + 1
+		}
+	}
+	return segs
+}
+
+func segsWidth(segs []*segment) int {
+	w := 0
+	for i, s := range segs {
+		if i > 0 {
+			w++ // the separator
+		}
+		w += runewidth.StringWidth(s.text)
+	}
+	return w
+}
+
+func renderSegments(segs []*segment) (string, []Span) {
 	var out strings.Builder
 	var spans []Span
 	pos := 0
-	segStart := 0
-	for i := 0; i <= parentStart; i++ {
-		if path[i] != '/' {
+	for i, s := range segs {
+		if i > 0 {
+			out.WriteString("/")
+			pos++
+		}
+		if s.keepHead > 0 {
+			spans = append(spans, Span{SrcStart: s.srcStart, SrcEnd: s.srcStart + s.keepHead, Dst: pos})
+		}
+		if s.keepTail > 0 {
+			// The verbatim run sits after the ellipsis inside the segment.
+			spans = append(spans, Span{
+				SrcStart: s.srcEnd - s.keepTail,
+				SrcEnd:   s.srcEnd,
+				Dst:      pos + len(s.text) - s.keepTail,
+			})
+		}
+		out.WriteString(s.text)
+		pos += len(s.text)
+	}
+	return out.String(), spans
+}
+
+// shortenDirs shortens directory segments, outermost first, stopping the moment
+// the path fits. A segment is abbreviated to its first character (two for a
+// dotted name, so the dot does not become the whole segment) only when that is
+// no more than the budget needs; when less would do, it keeps as much of its
+// name as it can afford and marks the cut with an ellipsis.
+func shortenDirs(segs []*segment, width int) {
+	for i := 0; i < len(segs)-1; i++ {
+		over := segsWidth(segs) - width
+		if over <= 0 {
+			return
+		}
+		seg := segs[i]
+		full := runewidth.StringWidth(seg.text)
+		abbr := abbreviateSegment(seg.text)
+		if full-runewidth.StringWidth(abbr) <= over {
+			// Even spent entirely it does not free enough; take it and move on.
+			seg.text = abbr
+			seg.keepHead, seg.keepTail = len(abbr), 0
 			continue
 		}
-		seg := path[segStart:i]
-		short := leadingRunes(seg, 1)
-		if strings.HasPrefix(seg, ".") {
-			short = leadingRunes(seg, 2)
+		if head, tail, ok := trimSegment(seg.text, full-over); ok {
+			seg.text = head + "…" + tail
+			seg.keepHead, seg.keepTail = len(head), len(tail)
+			return
 		}
-		spans = append(spans, Span{SrcStart: segStart, SrcEnd: segStart + len(short), Dst: pos})
-		out.WriteString(short)
-		out.WriteString("/")
-		pos += len(short) + 1
-		segStart = i + 1
+		seg.text = abbr
+		seg.keepHead, seg.keepTail = len(abbr), 0
 	}
+}
 
-	tail := path[segStart:] // parent/file.go
-	spans = append(spans, Span{SrcStart: segStart, SrcEnd: len(path), Dst: pos})
-	out.WriteString(tail)
+// abbreviateSegment is a directory reduced to the least that still names it.
+func abbreviateSegment(seg string) string {
+	n := 1
+	if strings.HasPrefix(seg, ".") {
+		n = 2
+	}
+	return leadingRunes(seg, n)
+}
 
-	result := out.String()
-	if runewidth.StringWidth(result) > width {
+// trimSegment cuts seg down to target cells by eliding its middle, returning
+// the head and tail that survive. Both ends are kept because either end can be
+// the discriminator: `create-modal` and `create-theme` are a head apart from
+// nothing and a tail apart from each other, and a head-only cut renders both as
+// "create-…". It reports false when target leaves too little for that to say
+// anything.
+func trimSegment(seg string, target int) (head, tail string, ok bool) {
+	if target < 3 {
+		return "", "", false
+	}
+	visible := target - 1 // the ellipsis costs a cell
+	headWidth := (visible + 1) / 2
+	// A head shorter than the plain abbreviation says less than the plain
+	// abbreviation would, and costs a cell more: ".…e" for ".claude" spends the
+	// dot on nothing, where ".c" keeps the letter that tells it from ".agents".
+	if minHead := runewidth.StringWidth(abbreviateSegment(seg)); headWidth < minHead {
+		if visible-minHead < 1 {
+			return "", "", false
+		}
+		headWidth = minHead
+	}
+	runes := []rune(seg)
+
+	used := 0
+	headEnd := 0
+	for headEnd < len(runes) {
+		w := runewidth.RuneWidth(runes[headEnd])
+		if used+w > headWidth {
+			break
+		}
+		used += w
+		headEnd++
+	}
+	tailWidth := visible - used
+
+	used = 0
+	tailStart := len(runes)
+	for tailStart > headEnd {
+		w := runewidth.RuneWidth(runes[tailStart-1])
+		if used+w > tailWidth {
+			break
+		}
+		used += w
+		tailStart--
+	}
+	if headEnd == 0 || tailStart >= len(runes) {
+		return "", "", false
+	}
+	return string(runes[:headEnd]), string(runes[tailStart:]), true
+}
+
+// collapseMiddle replaces the directories between the outermost one and the
+// file's own parent with a single "…", and drops the parent too when that is
+// still not enough. The leading segment survives both steps: it is what
+// distinguishes `.claude/...` from `.agents/...`, and a list where every row
+// begins "…" is a list of rows that all look alike.
+func collapseMiddle(segs []*segment, width int) []*segment {
+	if len(segs) < 4 {
+		return segs
+	}
+	head, parent, file := segs[0], segs[len(segs)-2], segs[len(segs)-1]
+	marker := &segment{text: "…"}
+
+	// Collapsing frees cells, so the parent can often go back to its full name:
+	// "a/…/on/file.go" says where the file is, "a/…/o/file.go" does not.
+	full := &segment{srcStart: parent.srcStart, srcEnd: parent.srcEnd, src: parent.src,
+		text: parent.src, keepHead: len(parent.src)}
+
+	for _, candidate := range [][]*segment{
+		{head, marker, full, file},
+		{head, marker, parent, file},
+	} {
+		if segsWidth(candidate) <= width {
+			return candidate
+		}
+	}
+	withoutParent := []*segment{head, marker, file}
+	if segsWidth(withoutParent) < segsWidth(segs) {
+		return withoutParent
+	}
+	return segs
+}
+
+// keepFilename is the last resort: the directories have nothing left to give,
+// so everything above the file is spent on keeping the filename whole. As much
+// of the leading directory as still fits is kept in front of it — ".c/SKILL.md"
+// says more than "…/SKILL.md" — but the filename comes first, because a row
+// whose name has been cut is a row a reader cannot place at all.
+//
+// It reports false when even the filename alone will not fit, which is the one
+// case where there is nothing better to do than keep the end of the path.
+func keepFilename(segs []*segment, width int) (string, []Span, bool) {
+	file := segs[len(segs)-1]
+	fileWidth := runewidth.StringWidth(file.src)
+	budget := width - fileWidth - 1 // the separator
+	if budget < 1 {
 		return "", nil, false
 	}
-	return result, spans, true
+
+	head := abbreviateSegment(segs[0].src)
+	if runewidth.StringWidth(head) > budget {
+		head = leadingRunes(segs[0].src, budget)
+	}
+	if head == "" {
+		return "", nil, false
+	}
+
+	kept := []*segment{
+		{srcStart: segs[0].srcStart, srcEnd: segs[0].srcEnd, src: segs[0].src, text: head, keepHead: len(head)},
+		{srcStart: file.srcStart, srcEnd: file.srcEnd, src: file.src, text: file.src, keepHead: len(file.src)},
+	}
+	out, spans := renderSegments(kept)
+	return out, spans, true
 }
 
 // leadingRunes returns the first n runes of s (all of s when it is shorter).
@@ -122,13 +316,92 @@ func MapSpans(spans []Span, start, end int) (int, int, bool) {
 	return 0, 0, false
 }
 
-// TruncateAnchored fits s into width cells with the highlighted range anchored
-// near the left edge: leading context is given up before trailing context, so
-// what follows the match — the part a reader needs to recognise the line — stays
-// on screen.
+// ShortRoot names a directory in width cells: home-relative if it is under the
+// user's home, then the last couple of path segments, then the basename alone.
+// It returns "" when even the basename will not fit, so a caller can leave the
+// row alone rather than print a stub.
 //
-// The window it replaces was centred on the match, which is why a narrow pane
-// rendered every row as four characters of the query and nothing else.
+// A search surface that does not say what it is searching is a surface that can
+// answer "No matches found" about a directory the user is not looking at — the
+// pane's root and the checkout on screen are routinely different in a global
+// workspace.
+func ShortRoot(root string, width int) string {
+	if root == "" || width <= 0 {
+		return ""
+	}
+	candidates := []string{homeRelative(root)}
+	segs := strings.Split(strings.TrimSuffix(root, "/"), "/")
+	for n := 2; n <= 3 && n < len(segs); n++ {
+		candidates = append(candidates, ".../"+strings.Join(segs[len(segs)-n:], "/"))
+	}
+	candidates = append(candidates, segs[len(segs)-1])
+	for _, c := range candidates {
+		if c != "" && runewidth.StringWidth(c) <= width {
+			return c
+		}
+	}
+	return ""
+}
+
+// homeRelative rewrites a path under the user's home as ~/….
+func homeRelative(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(path, home+"/"); ok {
+		return "~/" + rest
+	}
+	return path
+}
+
+// FitMessage picks the first of candidates that fits width, falling back to the
+// last one truncated. Wording that fits is the cheapest way to keep a box the
+// height it budgeted for: a message that wraps costs a row nobody reserved.
+func FitMessage(width int, candidates ...string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	for _, c := range candidates {
+		if runewidth.StringWidth(c) <= width {
+			return c
+		}
+	}
+	return TruncateString(candidates[len(candidates)-1], width)
+}
+
+// JoinEnds lays left and right out on one row of width cells with at least one
+// space between them, dropping right when it would not fit and truncating left
+// when it does not fit on its own.
+func JoinEnds(left, right string, width int) string {
+	leftW := runewidth.StringWidth(left)
+	rightW := runewidth.StringWidth(right)
+	if right == "" || leftW+rightW+1 > width {
+		if leftW > width {
+			return TruncateString(left, width)
+		}
+		return left
+	}
+	return left + strings.Repeat(" ", width-leftW-rightW) + right
+}
+
+// TruncateAnchored fits s into width cells around the highlighted range. The
+// match itself is never given up while it fits, and the cells left over go to
+// the parts of the line that tell one row from another:
+//
+//   - Leading context is bought only when the match and a useful amount of
+//     what follows it are already paid for (leadRoom). Below that the window
+//     starts at the match, with no leading ellipsis: in a pane budget of a
+//     dozen cells, "… " is two cells spent saying nothing, and it was two of
+//     the cells that would have carried the end of the line.
+//   - When what follows the match will not fit either, the middle of the
+//     remainder is elided rather than its end. Eight rows of
+//     "**File:** `internal/plugins/workspace/…`" differ only in their last few
+//     characters; a window that runs forward from the match renders all eight
+//     identically, while one that keeps the line's end tells them apart.
 //
 // Positions are rune indices, in and out.
 func TruncateAnchored(s string, width int, hlStart, hlEnd int) (string, int, int) {
@@ -143,17 +416,15 @@ func TruncateAnchored(s string, width int, hlStart, hlEnd int) (string, int, int
 	hlStart = clampInt(hlStart, 0, len(runes))
 	hlEnd = clampInt(hlEnd, hlStart, len(runes))
 
-	// How much of the line before the match we can afford: a few cells of
-	// context help, but never at the cost of the match itself.
 	matchWidth := runewidth.StringWidth(string(runes[hlStart:hlEnd]))
 	lead := 0
-	if spare := width - matchWidth; spare > 0 {
+	if spare := width - matchWidth; spare >= leadRoom {
 		lead = minInt(6, spare/4)
 	}
 
 	start := hlStart
 	used := 0
-	for start > 0 {
+	for start > 0 && lead > 0 {
 		w := runewidth.RuneWidth(runes[start-1])
 		if used+w > lead {
 			break
@@ -164,52 +435,78 @@ func TruncateAnchored(s string, width int, hlStart, hlEnd int) (string, int, int
 
 	budget := width
 	var out []rune
-	if start > 0 {
+	if start < hlStart {
+		// Only context that is actually there earns the ellipsis that marks it.
 		out = append(out, '…')
 		budget--
+	} else {
+		start = hlStart
+	}
+	// Rune index of the match within the output, which is what callers map
+	// their highlight onto.
+	newStart := len(out) + (hlStart - start)
+
+	// The whole remainder fits: nothing else to decide.
+	if runewidth.StringWidth(string(runes[start:])) <= budget {
+		out = append(out, runes[start:]...)
+		return string(out), newStart, newStart + (hlEnd - hlStart)
 	}
 
-	newStart, newEnd := -1, -1
-	i := start
-	for ; i < len(runes); i++ {
-		w := runewidth.RuneWidth(runes[i])
-		if used := runewidth.StringWidth(string(out)); used+w > budget {
-			break
-		}
-		if i == hlStart {
-			newStart = len(out)
-		}
-		out = append(out, runes[i])
-		if i == hlEnd-1 {
-			newEnd = len(out)
-		}
-	}
-	if i < len(runes) {
-		// Trailing ellipsis replaces the last cell rather than overflowing.
-		if len(out) > 0 && runewidth.StringWidth(string(out)) >= budget {
-			out = out[:len(out)-1]
-		}
+	// Everything through the end of the match, which is the part that must
+	// survive if anything does.
+	head := runes[start:hlEnd]
+	headWidth := runewidth.StringWidth(string(head))
+	if headWidth+1 > budget {
+		// Not even the match fits: keep as much of it as the cells allow.
+		out = append(out, takeCells(head, budget-1)...)
 		out = append(out, '…')
+		end := len(out) - 1
+		if end < newStart {
+			end = newStart
+		}
+		return string(out), newStart, end
 	}
 
-	if newStart < 0 {
-		newStart = 0
+	out = append(out, head...)
+	end := len(out)
+	out = append(out, '…')
+	if tail := tailCells(runes[hlEnd:], budget-headWidth-1); len(tail) > 0 {
+		out = append(out, tail...)
 	}
-	if newEnd < 0 {
-		// The match itself ran off the end; highlight what of it survived,
-		// never the trailing ellipsis.
-		newEnd = len(out)
-		if i < len(runes) && newEnd > 0 {
-			newEnd--
+	return string(out), newStart, end
+}
+
+// leadRoom is how much room past the match a line must have before leading
+// context is worth its ellipsis.
+const leadRoom = 16
+
+// takeCells returns the longest prefix of runes fitting width cells.
+func takeCells(runes []rune, width int) []rune {
+	used := 0
+	for i, r := range runes {
+		w := runewidth.RuneWidth(r)
+		if used+w > width {
+			return runes[:i]
 		}
+		used += w
 	}
-	if newEnd > len(out) {
-		newEnd = len(out)
+	return runes
+}
+
+// tailCells returns the longest suffix of runes fitting width cells.
+func tailCells(runes []rune, width int) []rune {
+	if width <= 0 {
+		return nil
 	}
-	if newEnd < newStart {
-		newEnd = newStart
+	used := 0
+	for i := len(runes) - 1; i >= 0; i-- {
+		w := runewidth.RuneWidth(runes[i])
+		if used+w > width {
+			return runes[i+1:]
+		}
+		used += w
 	}
-	return string(out), newStart, newEnd
+	return runes
 }
 
 func clampInt(v, lo, hi int) int {

@@ -88,8 +88,29 @@ func PreferredListRows(surfaceHeight int) int {
 	return rows
 }
 
+// ContentBoxWidth is the widest a content-sized box may be on a surface this
+// wide. It keeps RoomyMarginX clear on each side so a host that dims the
+// surface around the box has something left to dim, and falls back to the
+// ordinary margin on a surface too narrow for that to leave a usable box.
+func ContentBoxWidth(surfaceWidth int) int {
+	if roomy := surfaceWidth - 2*RoomyMarginX; roomy >= MinRoomyWidth {
+		return roomy
+	}
+	if w := surfaceWidth - 2*DefaultMarginX; w > 0 {
+		return w
+	}
+	return 1
+}
+
 // Default modal dimensions
 const (
+	// BackdropRegionID names the region a modal registers over the whole
+	// surface it was drawn on. A host that composites the box somewhere other
+	// than where the modal thought it was — panemodal, placing it in a pane —
+	// registers its own under this ID so the surface behind the box still
+	// absorbs clicks.
+	BackdropRegionID = "modal-backdrop"
+
 	DefaultWidth  = 50
 	MinModalWidth = 30
 	MaxModalWidth = 120
@@ -98,6 +119,18 @@ const (
 	// DefaultMarginX/Y are the cells left clear around the modal box.
 	DefaultMarginX = 2
 	DefaultMarginY = 1
+
+	// RoomyMarginX is the surface a content-sized box tries to leave visible on
+	// each side of itself, and the width a pane host requires before it will
+	// show the surface behind the box at all. The two are the same number on
+	// purpose: a box that grows to DefaultMarginX of its surface can never leave
+	// a readable ring, so the host would always fall back to a takeover, which
+	// is how a three-row picker came to own a whole pane.
+	RoomyMarginX = 8
+
+	// MinRoomyWidth is the narrowest box worth keeping a ring around. Below it
+	// the rows need the columns more than the surface behind them does.
+	MinRoomyWidth = 40
 
 	// MinListRows/MaxListRows bound PreferredListRows.
 	MinListRows = 8

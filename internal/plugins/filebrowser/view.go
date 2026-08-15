@@ -70,6 +70,16 @@ func (p *Plugin) renderView() string {
 	// differs is how wide each box likes to be, which is a property of its rows
 	// (paths versus source lines) rather than of where it lives. Anything else
 	// reads as two components rather than one component in two modes.
+	//
+	// This is deliberately not the placement a workspace document pane uses,
+	// and the difference is scope rather than style. There, the surface belongs
+	// to one pane and is rooted at that pane's directory — two panes can have
+	// two different roots on screen at once — so scoping the box to the pane is
+	// what says which root it is searching. Here there is one root for the whole
+	// plugin, and scoping the box to the preview pane would claim a preview
+	// scope the surface does not have. What makes them read as siblings is the
+	// box itself: same border, same rows, same elision, same counts row naming
+	// the root, whichever host drew it.
 	if p.projectSearchMode {
 		background := p.renderNormalPanes()
 		modal := p.renderProjectSearchModalContent()

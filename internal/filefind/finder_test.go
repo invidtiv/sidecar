@@ -215,13 +215,18 @@ func TestElidePathKeepsWhatDiffers(t *testing.T) {
 		width int
 		want  string
 	}{
-		// Leading directories are spent first; the parent and the filename —
-		// the pair that differs between rows — survive.
-		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "…hat/goes/on/file.go"},
-		{".claude/skills/create-modal/SKILL.md", 30, ".c/s/create-modal/SKILL.md"},
-		{"internal/plugins/filebrowser/view.go", 30, "i/p/filebrowser/view.go"},
-		// Too narrow even for that: keep the tail, never the shared head.
-		{"a/very/deeply/nested/path/that/goes/on/file.go", 12, "…/on/file.go"},
+		// Outermost directories are spent first, and only as far as the budget
+		// demands: the parent keeps both of its ends, which is where sibling
+		// names differ.
+		{".claude/skills/create-modal/SKILL.md", 26, ".c/s/create-modal/SKILL.md"},
+		{".claude/skills/create-modal/SKILL.md", 22, ".c/s/crea…dal/SKILL.md"},
+		{"internal/plugins/filebrowser/view.go", 23, "i/p/filebrowser/view.go"},
+		// Too deep to abbreviate its way down: the middle collapses, and the
+		// leading segment and the filename are what survive.
+		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "a/…/on/file.go"},
+		{"a/very/deeply/nested/path/that/goes/on/file.go", 12, "a/…/file.go"},
+		// The filename comes before the head: a name cut in half places nothing.
+		{".claude/skills/create-modal/SKILL.md", 12, ".c/SKILL.md"},
 		{"dir/an_extremely_long_filename_indeed.go", 12, "…e_indeed.go"},
 		{"short.go", 20, "short.go"},
 		{"no_directory_but_far_too_long.go", 10, "…o_long.go"},
@@ -240,18 +245,31 @@ func TestElidePathKeepsWhatDiffers(t *testing.T) {
 
 // TestNarrowRowsStayDistinguishable is the property that actually matters in a
 // tight pane: rows that share a long prefix and a filename must not all render
-// as the same string. The old middle elision kept the shared head and threw the
-// discriminating segment away, so thirteen rows read ".claude/…/SKILL.md".
+// as the same string.
+//
+// The widths are the ones the app really produces, which is what the previous
+// version of this test got wrong — it passed at 30 and 45 cells while the real
+// pane, whose rows have 22, rendered fourteen of sixteen rows as byte-identical
+// pairs. A 100x30 terminal gives a 30-column workspace file pane: 24 cells of
+// modal content, less the two-cell selection marker, is a 22-cell path budget.
+// The whole rendered list is compared, not the elision in isolation.
 func TestNarrowRowsStayDistinguishable(t *testing.T) {
 	paths := []string{
 		".claude/skills/create-modal/SKILL.md",
 		".claude/skills/create-plugin/SKILL.md",
 		".claude/skills/create-theme/SKILL.md",
 		".claude/skills/ui-features/SKILL.md",
+		".claude/skills/drag-pane/SKILL.md",
 		".agents/skills/release-sidecar/SKILL.md",
 		".agents/skills/drag-pane/SKILL.md",
+		".agents/skills/shell-integration/SKILL.md",
+		"internal/plugins/workspace/plugin.go",
+		"internal/plugins/filebrowser/plugin.go",
+		"internal/plugins/gitstatus/plugin.go",
 	}
-	for _, width := range []int{30, 45} {
+	// 22: a 30-column pane at 100x30. 20: the same pane with a scrollbar.
+	// 55: the 200x50 pane, where nothing should be abbreviated at all.
+	for _, width := range []int{22, 20, 55} {
 		seen := map[string]string{}
 		for _, path := range paths {
 			row := ansi.Strip(RenderMatch(Match{Path: path}, width))
@@ -263,6 +281,98 @@ func TestNarrowRowsStayDistinguishable(t *testing.T) {
 			}
 			seen[row] = path
 		}
+	}
+}
+
+// A path that fits is not touched: the 200x50 pane shows whole paths, where the
+// old one-step abbreviation crushed `shell-integration` to `s` to save cells it
+// did not need.
+func TestWidePaneDoesNotAbbreviateWhatFits(t *testing.T) {
+	const path = ".agents/skills/shell-integration/references/tmux-notes.md"
+	row := ansi.Strip(RenderMatch(Match{Path: path}, 60))
+	if !strings.Contains(row, path) {
+		t.Errorf("a path that fits was abbreviated: %q", row)
+	}
+}
+
+// paneBoxes are the boxes a workspace file pane really hands the finder: a
+// 100x30 terminal leaves a 30x24 box below the pane's header row, an 80x24
+// terminal a 30x18 one.
+var paneBoxes = []struct {
+	name string
+	w, h int
+}{
+	{"100x30", 30, 24},
+	{"80x24", 30, 18},
+}
+
+// Filling a pane, the box is exactly the box it was given, with its bottom
+// border on the last row, in every state. Heights measured before the box wraps
+// its content are heights the border falls off the bottom of.
+func TestFinderFillsItsBoxExactlyInEveryState(t *testing.T) {
+	states := []struct {
+		name  string
+		setup func(*Finder, *Cache)
+	}{
+		{"placeholder", func(*Finder, *Cache) {}},
+		{"scanning", func(_ *Finder, c *Cache) { c.Scanning = true; c.Files = nil }},
+		{"results", func(f *Finder, _ *Cache) { f.SetQuery("skill") }},
+		{"nomatch", func(f *Finder, _ *Cache) { f.SetQuery("zzzzzz") }},
+		{"error", func(_ *Finder, c *Cache) { c.ErrText = "scan timed out after 5s" }},
+	}
+
+	for _, box := range paneBoxes {
+		for _, state := range states {
+			cache := &Cache{Files: distinguishablePaths(), OK: true}
+			f := NewFinder(cache, "/Users/someone/code/sidecar", 1)
+			f.Open()
+			f.SetFill(true)
+			state.setup(f, cache)
+
+			out := ansi.Strip(f.View(box.w, box.h, mouse.NewHandler()))
+			lines := strings.Split(out, "\n")
+			if len(lines) != box.h {
+				t.Errorf("%s/%s: %d rows in a %d-row box:\n%s", box.name, state.name, len(lines), box.h, out)
+			}
+			for i, line := range lines {
+				if w := ansi.StringWidth(line); w != box.w {
+					t.Errorf("%s/%s: row %d is %d cells, want %d", box.name, state.name, i, w, box.w)
+				}
+			}
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, "╰") || !strings.HasSuffix(last, "╯") {
+				t.Errorf("%s/%s: the last row is not the bottom border: %q", box.name, state.name, last)
+			}
+		}
+	}
+}
+
+// The finder says which directory it walked and how many files it found, in
+// every state: a pane-rooted finder is often not rooted where the user is
+// reading, and "No matches" about an unnamed directory cannot be answered.
+func TestFinderNamesItsRootAndFileCount(t *testing.T) {
+	for _, box := range paneBoxes {
+		f := NewFinder(&Cache{Files: distinguishablePaths(), OK: true}, "/Users/someone/code/sidecar", 1)
+		f.Open()
+		f.SetFill(true)
+		f.SetQuery("zzzzzz")
+
+		out := ansi.Strip(f.View(box.w, box.h, mouse.NewHandler()))
+		if !strings.Contains(out, "sidecar") {
+			t.Errorf("%s: the root is not named anywhere in:\n%s", box.name, out)
+		}
+		if !strings.Contains(out, "files") {
+			t.Errorf("%s: the file count is missing from:\n%s", box.name, out)
+		}
+	}
+}
+
+func distinguishablePaths() []string {
+	return []string{
+		".claude/skills/create-modal/SKILL.md",
+		".claude/skills/create-plugin/SKILL.md",
+		".agents/skills/drag-pane/SKILL.md",
+		"internal/plugins/workspace/plugin.go",
+		"README.md",
 	}
 }
 
