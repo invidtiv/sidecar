@@ -90,6 +90,7 @@ const (
 	regionCreateWorktreeButton = "create-worktree-button"
 	regionShellsPlusButton     = "shells-plus-button"
 	regionWorkspacesPlusButton = "workspaces-plus-button"
+	regionListSortButton       = "list-sort-button"
 
 	// Diff tab pane divider (for drag-to-resize file list vs diff viewer)
 	regionDiffTabDivider = "diff-tab-divider"

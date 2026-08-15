@@ -230,7 +230,7 @@ func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
 		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
-		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
+		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
@@ -845,8 +845,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	}
 
 	switch action.Region.ID {
+	case regionListSortButton:
+		// Click on the [⇅ Sort] pill - open View, the same surface v opens.
+		p.openViewFlyout()
+		return nil
 	case regionCreateWorktreeButton:
-		// Click on [New] button - open type selector modal
+		// Click on the header [+] - open type selector modal
 		return p.openCreateModal()
 	case regionShellsPlusButton:
 		// Click on Shells [+] button - immediately create a new shell

@@ -103,8 +103,8 @@ func renderGlobalShape(width, height int) string {
 }
 
 // renderProjectShape is how internal/plugins/workspace composes the same
-// records: a "New" header button, fixed Shells/Worktrees sections each with
-// their own "+", and no project prefix.
+// records: the shared [sort] [+] header, fixed Shells/Worktrees sections each
+// with their own "+", and no project prefix.
 //
 // It reproduces the plugin's SidebarOptions rather than importing it, because
 // the plugin owns a live tmux/Git model this package must never depend on. The
@@ -157,7 +157,8 @@ func renderProjectShape(width, height int) string {
 	return RenderSidebar(SidebarOptions{
 		Width: width, Height: height, Title: "Workspaces", Focused: true,
 		SelectedID:   "sidecar:fix-terminal-resize",
-		HeaderAction: &SidebarAction{ID: "new", Label: "New"},
+		HeaderMeta:   &SidebarAction{ID: "sort", Label: SortPillLabel(SortManual)},
+		HeaderAction: &SidebarAction{ID: "new", Label: "+"},
 		Sections:     []SidebarSection{shells, worktrees},
 	}).View
 }

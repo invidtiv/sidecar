@@ -283,7 +283,12 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	rendered := workspacelist.RenderSidebar(workspacelist.SidebarOptions{
 		Width: width, Height: height, Title: "Workspaces", Focused: p.activePane == PaneSidebar,
 		SelectedID: selectedID, ScrollOffset: p.scrollOffset,
-		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "New", Hovered: p.hoverNewButton},
+		// One header grammar with the global list: the order the list is in,
+		// then the button that adds to it. "New" became "+" because the section
+		// headings already offer "+" for the same job — three words for one
+		// action was the noisiest thing in this header.
+		HeaderMeta:   &workspacelist.SidebarAction{ID: regionListSortButton, Label: workspacelist.SortPillLabel(p.listSort)},
+		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "+", Hovered: p.hoverNewButton},
 		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
 		Sections: sections, EmptyLines: empty,
 	})
