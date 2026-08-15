@@ -442,6 +442,10 @@ func placeOverlay(ov Overlay, sectionY, scroll, viewportH int) (overlayPlacement
 		visAbove := max(0, min(oh, sectionY-scroll))
 		if visAbove > visBelow {
 			y = sectionY - oh - scroll
+			// Overlap the field rather than clip the highlight off the top.
+			if y < 0 {
+				y = 0
+			}
 		}
 	}
 	return overlayPlacement{

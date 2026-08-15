@@ -102,7 +102,7 @@ func TestComboOverlayDoesNotChangeMeasuredHeight(t *testing.T) {
 	}
 }
 
-func TestComboFilterSelectsIndexZero(t *testing.T) {
+func TestComboFilterSelectsTopMatchItemsIndex(t *testing.T) {
 	m, ti, sel := newComboModal(t)
 	handler := mouse.NewHandler()
 	m.Render(80, 24, handler)
@@ -115,8 +115,8 @@ func TestComboFilterSelectsIndexZero(t *testing.T) {
 	if ti.Value() != "b" {
 		t.Fatalf("typed value = %q, want %q", ti.Value(), "b")
 	}
-	if *sel != 0 {
-		t.Fatalf("after filter selected=%d, want 0 (top match)", *sel)
+	if *sel != 1 {
+		t.Fatalf("after filter selected=%d, want 1 (beta in items)", *sel)
 	}
 
 	// Top match should be beta; committing writes that value.
@@ -300,6 +300,52 @@ func TestComboOverlayHitRegionsLandOnOverlayRows(t *testing.T) {
 	}
 }
 
+func TestComboEmptyOverlayClickDoesNotSubmit(t *testing.T) {
+	m, _, _ := newComboModal(t)
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	m.HandleKey(comboKey("z"))
+	rendered := m.Render(80, 24, handler)
+	if !strings.Contains(stripANSI(rendered), "(no matches)") {
+		t.Fatalf("expected no-matches overlay, got %q", stripANSI(rendered))
+	}
+
+	var overlayRegion, createRegion *mouse.Region
+	regions := handler.HitMap.Regions()
+	for i := range regions {
+		switch regions[i].ID {
+		case comboOverlayID("combo"):
+			overlayRegion = &regions[i]
+		case "create":
+			createRegion = &regions[i]
+		}
+	}
+	if overlayRegion == nil {
+		t.Fatal("expected empty-overlay hit region")
+	}
+	if createRegion == nil {
+		t.Fatal("expected create button hit region")
+	}
+
+	hit := handler.HitMap.Test(overlayRegion.Rect.X+1, overlayRegion.Rect.Y)
+	if hit == nil || hit.ID == "create" {
+		t.Fatalf("no-matches cell hit %v, want overlay (not create)", hit)
+	}
+
+	action := m.HandleMouse(tea.MouseClickMsg{
+		X:      overlayRegion.Rect.X + 1,
+		Y:      overlayRegion.Rect.Y,
+		Button: tea.MouseLeft,
+	}, handler)
+	if action == "create" {
+		t.Fatal("clicking no-matches overlay submitted create")
+	}
+	if action != "" {
+		t.Fatalf("overlay click action=%q, want empty", action)
+	}
+}
+
 func TestComboValueFallsBackToLabel(t *testing.T) {
 	ti := newTestInput("")
 	sel := 0
@@ -330,5 +376,62 @@ func TestPlaceOverlayFlipsAboveWhenClipped(t *testing.T) {
 	}
 	if p.y != 1 {
 		t.Fatalf("top-of-viewport y=%d, want 1 (below)", p.y)
+	}
+
+	// Flip that would start at y=-1 is clamped to 0 so the highlight stays drawn.
+	tall := Overlay{Content: strings.Repeat("row\n", 7) + "row", OffsetY: 3}
+	p, ok = placeOverlay(tall, 7, 0, 12)
+	if !ok {
+		t.Fatal("expected placement")
+	}
+	if p.y != 0 {
+		t.Fatalf("clamped flip y=%d, want 0", p.y)
+	}
+}
+
+func TestComboFlippedOverlayKeepsHighlightVisible(t *testing.T) {
+	items := make([]DropdownItem, 8)
+	for i := range items {
+		items[i] = DropdownItem{ID: string(rune('a' + i)), Label: "item-" + string(rune('a'+i))}
+	}
+	sel := 0
+	ti := newTestInput("")
+	m := New("Create", WithWidth(44), WithHints(false), WithPrimaryAction("create"))
+	for i := 0; i < 7; i++ {
+		m.AddSection(Text("above-" + string(rune('1'+i))))
+	}
+	m.AddSection(Combo("combo", ti, items, &sel, WithComboMaxVisible(8))).
+		AddSection(Buttons(Btn(" Create ", "create"))).
+		AddSection(Text("below"))
+
+	// screenH=20 → viewport 12; combo at y=7 with OffsetY=3 and 8 rows flips to y=-1, clamped to 0.
+	handler := mouse.NewHandler()
+	rendered := m.Render(80, 20, handler)
+	plain := stripANSI(rendered)
+	if !strings.Contains(plain, "▸") {
+		t.Fatalf("expected highlighted row after flip, got %q", plain)
+	}
+
+	regions := handler.HitMap.Regions()
+	var itemRegion *mouse.Region
+	for i := range regions {
+		if regions[i].ID == comboItemID("combo", 0) {
+			itemRegion = &regions[i]
+			break
+		}
+	}
+	if itemRegion == nil {
+		t.Fatal("expected highlight hit region after flip")
+	}
+
+	modalY := (20 - lipgloss.Height(rendered)) / 2
+	lineIdx := itemRegion.Rect.Y - modalY
+	lines := strings.Split(rendered, "\n")
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		t.Fatalf("highlight region y=%d (modal line %d) outside render", itemRegion.Rect.Y, lineIdx)
+	}
+	got := stripANSI(lines[lineIdx])
+	if !strings.Contains(got, "▸") || !strings.Contains(got, "item-a") {
+		t.Fatalf("highlight region renders %q, want ▸ item-a", got)
 	}
 }

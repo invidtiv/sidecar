@@ -17,7 +17,10 @@ const (
 	actionSubmitPrimary  = "modal.submit-primary"
 )
 
-const comboItemIDSep = "/item/"
+const (
+	comboItemIDSep    = "/item/"
+	comboOverlayIDSfx = "/overlay"
+)
 
 // DropdownItem is one row in a Combo overlay.
 type DropdownItem struct {
@@ -38,8 +41,8 @@ type comboSection struct {
 	id            string
 	field         *inputSection
 	items         []DropdownItem
-	selected      *int
-	highlight     int
+	selected      *int // items index, same convention as List
+	highlight     int  // index into filtered
 	maxVisible    int
 	openOnFocus   bool
 	submitOnEnter bool
@@ -53,6 +56,8 @@ type comboSection struct {
 }
 
 // Combo creates a text field whose filtered list floats over later sections.
+// selected is an index into items (the same convention as List). Typing
+// moves it to the top match's items index, not 0 unless that item is first.
 func Combo(id string, input *textinput.Model, items []DropdownItem, selected *int, opts ...ComboOption) Section {
 	s := &comboSection{
 		id: id,
@@ -126,6 +131,10 @@ func defaultComboFilter(query string, item DropdownItem) bool {
 
 func comboItemID(comboID string, filteredIdx int) string {
 	return comboID + comboItemIDSep + strconv.Itoa(filteredIdx)
+}
+
+func comboOverlayID(comboID string) string {
+	return comboID + comboOverlayIDSfx
 }
 
 func parseComboItemID(comboID, id string) (int, bool) {
@@ -228,7 +237,7 @@ func (s *comboSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	}
 	if s.query() != old {
 		s.rebuildFilter()
-		s.setHighlight(0)
+		s.setFilteredHighlight(0)
 		s.dismissed = false
 		s.open = true
 	}
@@ -286,51 +295,75 @@ func (s *comboSection) rebuildFilter() {
 		}
 	}
 	s.filtered = next
-	if n := len(s.filtered); n > 0 && s.highlightIndex() >= n {
-		s.setHighlight(n - 1)
+	if fi := s.filteredPosOfSelected(); fi >= 0 {
+		s.highlight = fi
+		return
+	}
+	if n := len(s.filtered); n > 0 && s.highlight >= n {
+		s.highlight = n - 1
 	}
 }
 
-func (s *comboSection) highlightIndex() int {
-	n := s.highlight
-	if s.selected != nil {
-		n = *s.selected
+func (s *comboSection) filteredPos(itemIdx int) int {
+	for i, idx := range s.filtered {
+		if idx == itemIdx {
+			return i
+		}
 	}
-	if n < 0 {
+	return -1
+}
+
+func (s *comboSection) filteredPosOfSelected() int {
+	if s.selected == nil {
+		return -1
+	}
+	return s.filteredPos(*s.selected)
+}
+
+// filteredHighlight is the caret inside the current filtered list.
+func (s *comboSection) filteredHighlight() int {
+	if fi := s.filteredPosOfSelected(); fi >= 0 {
+		return fi
+	}
+	if s.highlight < 0 {
 		return 0
 	}
-	return n
+	if n := len(s.filtered); n > 0 && s.highlight >= n {
+		return n - 1
+	}
+	return s.highlight
 }
 
-func (s *comboSection) setHighlight(i int) {
-	if i < 0 {
-		i = 0
+// setFilteredHighlight moves the caret in the filtered list and writes the
+// corresponding items index into selected.
+func (s *comboSection) setFilteredHighlight(fi int) {
+	n := len(s.filtered)
+	if n == 0 {
+		s.highlight = 0
+		return
 	}
+	if fi < 0 {
+		fi = 0
+	}
+	if fi >= n {
+		fi = n - 1
+	}
+	s.highlight = fi
 	if s.selected != nil {
-		*s.selected = i
-	} else {
-		s.highlight = i
+		*s.selected = s.filtered[fi]
 	}
 }
 
 func (s *comboSection) moveHighlight(delta int) {
-	n := len(s.filtered)
-	if n == 0 {
+	if len(s.filtered) == 0 {
 		return
 	}
-	hi := s.highlightIndex() + delta
-	if hi < 0 {
-		hi = 0
-	}
-	if hi >= n {
-		hi = n - 1
-	}
-	s.setHighlight(hi)
+	s.setFilteredHighlight(s.filteredHighlight() + delta)
 }
 
 func (s *comboSection) commitHighlight() {
 	s.rebuildFilter()
-	hi := s.highlightIndex()
+	hi := s.filteredHighlight()
 	if hi < 0 || hi >= len(s.filtered) {
 		return
 	}
@@ -350,7 +383,7 @@ func (s *comboSection) handleItemClick(id string) (string, tea.Cmd) {
 	if idx < 0 || idx >= len(s.filtered) {
 		return "", nil
 	}
-	s.setHighlight(idx)
+	s.setFilteredHighlight(idx)
 	s.commitHighlight()
 	s.closeOverlay(true)
 	return actionOverlayIdle, nil
@@ -362,7 +395,7 @@ func (s *comboSection) visibleWindow() (start, count int) {
 	if count < 1 {
 		return 0, 0
 	}
-	hi := s.highlightIndex()
+	hi := s.filteredHighlight()
 	if hi < s.scroll {
 		s.scroll = hi
 	} else if hi >= s.scroll+count {
@@ -382,10 +415,17 @@ func (s *comboSection) buildOverlay(contentWidth int, hoverID string) *Overlay {
 		line := styles.Muted.Background(styles.BgTertiary).Width(contentWidth).Render("(no matches)")
 		return &Overlay{
 			Content: styles.FillBackground(line, contentWidth, styles.BgTertiary),
+			Focusables: []FocusableInfo{{
+				ID:      comboOverlayID(s.id),
+				OffsetX: 0,
+				OffsetY: 0,
+				Width:   contentWidth,
+				Height:  1,
+			}},
 		}
 	}
 
-	hi := s.highlightIndex()
+	hi := s.filteredHighlight()
 	lines := make([]string, 0, count)
 	focusables := make([]FocusableInfo, 0, count)
 
