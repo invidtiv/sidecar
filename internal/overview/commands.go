@@ -10,6 +10,7 @@ const (
 	ctxGlobalWorkspacesFilter   = "global-workspaces-filter"
 	ctxGlobalWorkspacesRename   = "global-workspaces-rename"
 	ctxGlobalWorkspacesCreate   = "global-workspaces-create"
+	ctxGlobalWorkspacesDelete   = "global-workspaces-delete"
 	ctxGlobalWorkspacesTerminal = "global-workspaces-terminal"
 	ctxGlobalWorkspacesDoc      = "global-workspaces-doc"
 	ctxGlobalWorkspacesIssue    = "global-workspaces-issue"
@@ -35,6 +36,11 @@ func (m *Model) Commands() []plugin.Command {
 		return []plugin.Command{
 			{ID: "confirm", Name: "Create", Description: "Create the shell in the chosen project", Context: ctxGlobalWorkspacesCreate, Priority: 1},
 			{ID: "cancel", Name: "Cancel", Description: "Close the create prompt", Context: ctxGlobalWorkspacesCreate, Priority: 2},
+		}
+	case ctxGlobalWorkspacesDelete:
+		return []plugin.Command{
+			{ID: "confirm-delete", Name: "Delete", Description: "Delete the selected shell", Context: ctxGlobalWorkspacesDelete, Priority: 1},
+			{ID: "cancel", Name: "Cancel", Description: "Close the delete confirmation", Context: ctxGlobalWorkspacesDelete, Priority: 2},
 		}
 	case ctxGlobalWorkspacesTerminal:
 		return []plugin.Command{

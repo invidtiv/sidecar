@@ -24,6 +24,20 @@ type globalShellDeletedMsg struct {
 
 func (m *Model) DeleteOpen() bool { return m.deleteOpen }
 
+func (m *Model) RunDeleteCommand(id string) tea.Cmd {
+	if !m.deleteOpen {
+		return nil
+	}
+	switch id {
+	case "confirm-delete":
+		return m.applyDeleteAction(globalDeleteConfirmID)
+	case "cancel":
+		return m.applyDeleteAction(globalDeleteCancelID)
+	default:
+		return nil
+	}
+}
+
 func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || workspace.Kind != workspaceinventory.KindShell || workspace.TmuxName == "" {

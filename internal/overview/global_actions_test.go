@@ -29,6 +29,13 @@ func TestGlobalShellDeleteApplicabilityAndTargetedExecution(t *testing.T) {
 		return nil
 	}
 	m.OpenDeleteSelectedShell()
+	if got := m.WorkspaceFocusContext(); got != ctxGlobalWorkspacesDelete {
+		t.Fatalf("delete focus context = %q", got)
+	}
+	commands := m.Commands()
+	if len(commands) != 2 || commands[0].ID != "confirm-delete" || commands[1].ID != "cancel" {
+		t.Fatalf("delete footer commands = %#v", commands)
+	}
 	cmd := m.applyDeleteAction(globalDeleteConfirmID)
 	msg := cmd().(globalShellDeletedMsg)
 	if msg.Project.Key != "sidecar" || root != "/tmp/sidecar" || session != "sidecar-sh-1" {

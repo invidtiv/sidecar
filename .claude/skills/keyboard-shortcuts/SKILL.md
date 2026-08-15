@@ -85,7 +85,7 @@ Global shortcuts stay live while it is open: `` ` ``/`~`, `[`/`]`, `1-9`, `@`, `
 
 ## Global Workspaces
 
-Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
+Contexts: `global-workspaces` (list, root), `global-workspaces-filter`, `global-workspaces-rename`, `global-workspaces-create`, `global-workspaces-delete`, `global-workspaces-terminal` (typing), `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-diff`.
 
 There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→` do not move focus to the preview. Clicking a file or td id focuses a content leaf with its own context; footer, help, and the palette follow `WorkspaceFocusContext()`.
 

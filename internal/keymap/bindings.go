@@ -105,6 +105,9 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "global-workspaces-rename"},
 		{Key: "enter", Command: "confirm", Context: "global-workspaces-create"},
 		{Key: "esc", Command: "cancel", Context: "global-workspaces-create"},
+		{Key: "enter", Command: "confirm-delete", Context: "global-workspaces-delete"},
+		{Key: "D", Command: "confirm-delete", Context: "global-workspaces-delete"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-delete"},
 
 		// Focused document leaf beside the selected terminal. q closes the
 		// pane; it must not be a root context or Sidecar would quit instead.

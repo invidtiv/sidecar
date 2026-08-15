@@ -533,6 +533,9 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.createOpen {
 		return "global-workspaces-create"
 	}
+	if m.deleteOpen {
+		return ctxGlobalWorkspacesDelete
+	}
 	if m.WorkspacesFilterFocused() {
 		return "global-workspaces-filter"
 	}
