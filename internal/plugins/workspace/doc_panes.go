@@ -25,6 +25,28 @@ type docPane struct {
 	root    string
 	surface string
 	tabs    docview.Tabs
+
+	// mode is the search surface this pane is showing over its document, or nil.
+	// It is rooted at this pane's own root, which is what makes the same code
+	// serve project and global Workspaces.
+	mode *docSearchMode
+	// modeRegions are the surface's hit regions from the last render, already at
+	// their true positions. They are registered after the pane tree's own, so a
+	// click inside the modal is not taken by the leaf drawn under it.
+	modeRegions []mouse.Region
+	// boxW and boxH are the box the leaf was last given, so a surface that sizes
+	// itself on input rather than on render has an answer before the first frame.
+	// boxX and boxY place that box, which is what a click-away test needs.
+	boxW, boxH, boxX, boxY int
+}
+
+// boxContains reports whether a plugin-local point is inside the pane's last
+// drawn box. A pane that has not been drawn contains nothing.
+func (d *docPane) boxContains(x, y int) bool {
+	if d == nil || d.boxW <= 0 || d.boxH <= 0 {
+		return false
+	}
+	return x >= d.boxX && x < d.boxX+d.boxW && y >= d.boxY && y < d.boxY+d.boxH
 }
 
 func newDocPane(leafID int, root, surface string, view *docview.Model) *docPane {
@@ -169,24 +191,10 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 		doc.surface = surface
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
-		if idx := doc.tabs.IndexOf(rel); idx >= 0 {
-			cmd, consumed := p.selectDocTab(doc, leaf.ContentID, idx, line, file)
-			if consumed {
-				file = nil
-			}
-			p.saveSelectionState()
-			return tea.Batch(reopen, cmd)
-		}
-		viewer := docview.New(nil)
-		var cmd tea.Cmd
-		if file != nil {
-			cmd = viewer.LoadFile(leaf.ContentID, file, rel, line, epoch)
+		cmd, consumed := p.docPaneLoadTab(doc, leaf.ContentID, rel, line, file, false)
+		if consumed {
 			file = nil
-		} else {
-			cmd = viewer.Load(leaf.ContentID, root, rel, line, epoch)
 		}
-		applyDocRenderMode(viewer, rel, line)
-		doc.tabs.Append(viewer)
 		p.saveSelectionState()
 		return tea.Batch(reopen, cmd)
 	}
@@ -226,6 +234,43 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	p.activePane = PanePreview
 	p.saveSelectionState()
 	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
+}
+
+// docPaneLoadTab puts rel at line into an existing pane and reports whether it
+// consumed file. An already-open path is selected rather than opened twice.
+// replaceActive swaps the active tab's document instead of appending one, which
+// is what a plain pick in the pane's own search does; a click on a path in the
+// terminal appends, as it always has.
+//
+// This is the one path a document enters a pane by, so a caller cannot open a
+// file in a way that skips the tab bookkeeping.
+func (p *Plugin) docPaneLoadTab(doc *docPane, modelID int, rel string, line int, file *os.File, replaceActive bool) (tea.Cmd, bool) {
+	if doc == nil || p.ctx == nil {
+		return nil, false
+	}
+	rel = docview.NormalizeTabPath(rel)
+	if rel == "" || rel == "." {
+		return nil, false
+	}
+	if idx := doc.tabs.IndexOf(rel); idx >= 0 {
+		return p.selectDocTab(doc, modelID, idx, line, file)
+	}
+	viewer := docview.New(nil)
+	var cmd tea.Cmd
+	consumed := false
+	if file != nil {
+		cmd = viewer.LoadFile(modelID, file, rel, line, p.ctx.Epoch)
+		consumed = true
+	} else {
+		cmd = viewer.Load(modelID, doc.root, rel, line, p.ctx.Epoch)
+	}
+	applyDocRenderMode(viewer, rel, line)
+	if replaceActive && doc.view() != nil {
+		doc.tabs.Items[doc.tabs.Active].View = viewer
+	} else {
+		doc.tabs.Append(viewer)
+	}
+	return cmd, consumed
 }
 
 func (p *Plugin) selectDocTab(doc *docPane, modelID, idx, line int, file *os.File) (tea.Cmd, bool) {
@@ -961,11 +1006,21 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !p.docFocused() {
 		return false, nil
 	}
-	doc, _ := p.activeDocPane()
+	doc := p.focusedDocPane()
 	if doc == nil {
 		return false, nil
 	}
+	// A live search surface owns every key in the pane, exactly as the document
+	// under it owns every key it is handed: esc closes it, and nothing it does
+	// not use reaches the workspace behind the pane.
+	if doc.mode != nil {
+		return true, p.handleDocSearchKey(doc, msg)
+	}
 	switch msg.String() {
+	case "ctrl+p":
+		return true, p.openDocFinder(doc)
+	case "f":
+		return true, p.openDocProjectSearch(doc)
 	case "\\":
 		return true, p.toggleSidebarCmd()
 	case "q", "esc":
@@ -1556,6 +1611,9 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		// a lone leaf that keeps its own shape is the one placement nothing
 		// holds to it.
 		canvas.Blit(zoomed.Box, p.renderPaneLeaf(zoomed, origin, true))
+		// Last, because the render above is what places a live search surface's
+		// regions and they have to beat the leaf region drawn under them.
+		p.registerDocSearchRegions()
 		return canvas.String(), true
 	}
 
@@ -1570,6 +1628,9 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		canvas.Blit(split.Box, p.renderPaneTreeDivider(split))
 	}
 	p.registerPaneTreeRegions(layout.Leaves, layout.Dividers)
+	// Last, because a live search surface is drawn over its leaf and its regions
+	// have to beat the leaf's own.
+	p.registerDocSearchRegions()
 	return canvas.String(), true
 }
 

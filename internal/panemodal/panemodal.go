@@ -44,16 +44,45 @@ const dimMargin = 2
 // the only ones in it afterwards — anything the pane registered before this
 // call is gone, exactly as it is for a full-screen modal.
 func Render(m *modal.Modal, box Box, background string, handler *mouse.Handler) string {
+	if m == nil {
+		if box.W <= 0 || box.H <= 0 {
+			return ""
+		}
+		return ui.OverlayModal(background, "", box.W, box.H)
+	}
+	return RenderFunc(box, background, handler, func(width, height int, h *mouse.Handler) string {
+		// The modal sizes itself to the surface it is given, so handing it the
+		// box dimensions is what keeps it inside the pane.
+		return m.Render(width, height, h)
+	})
+}
+
+// RenderFunc is Render for anything that draws itself into a given size and
+// registers its hit regions on a handler — a modal.Modal, a filefind.Finder, a
+// projectsearch.Search. draw is called with the box's own dimensions and with
+// handler; whatever regions it registers are then translated by the box origin,
+// so a surface that knows only its own coordinates still lands where it is
+// drawn.
+//
+// The compositing rules are Render's: centred with the pane content dimmed
+// around it when the box is roomy, filling the box when it is not, and always
+// exactly box.H lines of exactly box.W cells.
+//
+// handler may be nil, in which case draw is called with nil and registers
+// nothing. A surface that clears the handler (modal.Modal does) leaves the
+// pane's earlier regions gone, exactly as a full-screen modal does; a surface
+// that only adds to it leaves them in place, so hosts that care about ordering
+// hand RenderFunc a scratch handler and merge its regions themselves.
+func RenderFunc(box Box, background string, handler *mouse.Handler,
+	draw func(width, height int, h *mouse.Handler) string) string {
 	if box.W <= 0 || box.H <= 0 {
 		return ""
 	}
-	if m == nil {
+	if draw == nil {
 		return ui.OverlayModal(background, "", box.W, box.H)
 	}
 
-	// The modal sizes itself to the surface it is given, so handing it the box
-	// dimensions is what keeps it inside the pane.
-	content := m.Render(box.W, box.H, handler)
+	content := draw(box.W, box.H, handler)
 	translateRegions(handler, box.X, box.Y)
 
 	if !roomy(content, box) {

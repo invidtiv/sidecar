@@ -72,7 +72,9 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 	switch node.Kind {
 	case PaneDoc:
 		doc := p.docs[node.ContentID]
-		if doc == nil || doc.view() == nil {
+		// A pane opened straight into the file finder has no document yet: the
+		// surface it is showing is what chooses the first one.
+		if doc == nil || (doc.view() == nil && doc.mode == nil) {
 			return nil
 		}
 		return &docContent{p: p, doc: doc}
@@ -156,6 +158,9 @@ func (c *docContent) Title() string {
 // subtraction termpreview.SurfaceIn makes for a terminal leaf.
 func (c *docContent) SetSize(size Size) tea.Cmd {
 	c.size = size
+	// The box is kept on the pane as well: a search surface sized on the
+	// keystroke that opens it has no render to learn it from yet.
+	c.doc.boxW, c.doc.boxH = size.Width, size.Height
 	if view := c.doc.view(); view != nil {
 		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
 	}
@@ -164,14 +169,25 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 
 // View draws the tab strip above the viewer. Focus is the frame's answer, so
 // the active tab a click lands on matches the one the leaf drew.
+//
+// A live search surface is composited over the whole leaf — header row included
+// — as a modal scoped to this box, and the result is still exactly the box, so
+// the app's header cannot be pushed off screen.
 func (c *docContent) View(render Render) string {
+	// Where the box is, not only how big it is: a click-away test needs the
+	// origin whether or not a surface is up when the click arrives.
+	c.doc.boxX, c.doc.boxY = render.Origin.X, render.Origin.Y
 	body := ""
 	if view := c.doc.view(); view != nil {
 		body = view.View()
 	}
-	return composePaneLeaf(
+	out := composePaneLeaf(
 		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
 		body)
+	if c.doc.mode != nil {
+		return c.p.renderDocSearchOverlay(c.doc, out, render.Origin, c.size)
+	}
+	return out
 }
 
 // issueContent is the td issue leaf: the pane's own header row above the issue

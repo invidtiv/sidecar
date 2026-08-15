@@ -171,3 +171,68 @@ func TestRenderDegenerateBox(t *testing.T) {
 		t.Errorf("nil modal rendered %q, want 2 blank lines", out)
 	}
 }
+
+// RenderFunc is the same compositing for a surface that is not a modal.Modal:
+// the finder and the project search draw themselves and register their own
+// regions, and neither of them is one.
+func TestRenderFuncCompositesAndTranslatesRegions(t *testing.T) {
+	draw := func(width, height int, h *mouse.Handler) string {
+		if h != nil {
+			h.HitMap.AddRect("row", 2, 1, 6, 1, 7)
+		}
+		return strings.Join([]string{
+			strings.Repeat("#", 20),
+			"# picker          #",
+			strings.Repeat("#", 20),
+		}, "\n")
+	}
+
+	box := Box{X: 11, Y: 7, W: 60, H: 20}
+	handler := mouse.NewHandler()
+	out := RenderFunc(box, background(box), handler, draw)
+
+	lines := strings.Split(out, "\n")
+	if len(lines) != box.H {
+		t.Fatalf("got %d lines, want %d", len(lines), box.H)
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != box.W {
+			t.Errorf("line %d width %d, want %d", i, w, box.W)
+		}
+	}
+	if !strings.Contains(ansi.Strip(out), "picker") {
+		t.Error("the drawn surface is missing from the output")
+	}
+	if !strings.Contains(ansi.Strip(out), bgMarker) {
+		t.Error("a roomy box dropped the pane content instead of dimming it")
+	}
+
+	regions := handler.HitMap.Regions()
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want the one the surface registered", len(regions))
+	}
+	want := mouse.Rect{X: 2 + box.X, Y: 1 + box.Y, W: 6, H: 1}
+	if regions[0].Rect != want {
+		t.Errorf("region rect %+v, want %+v", regions[0].Rect, want)
+	}
+	if hit := handler.HitMap.Test(box.X+3, box.Y+1); hit == nil || hit.ID != "row" {
+		t.Errorf("click inside the pane hit %v, want the surface's row", hit)
+	}
+
+	// A tight box gives the surface the whole pane and drops the content behind.
+	tight := Box{X: 1, Y: 1, W: 22, H: 5}
+	small := RenderFunc(tight, background(tight), nil, draw)
+	if strings.Contains(ansi.Strip(small), bgMarker) {
+		t.Error("a tight box still shows pane content behind the surface")
+	}
+	if lines := strings.Split(small, "\n"); len(lines) != tight.H {
+		t.Errorf("tight box got %d lines, want %d", len(lines), tight.H)
+	}
+
+	if out := RenderFunc(Box{W: 0, H: 4}, "", nil, draw); out != "" {
+		t.Errorf("degenerate box rendered %q, want empty", out)
+	}
+	if out := RenderFunc(Box{W: 6, H: 2}, "", nil, nil); strings.Count(out, "\n") != 1 {
+		t.Errorf("nil draw rendered %q, want 2 blank lines", out)
+	}
+}

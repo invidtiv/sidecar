@@ -53,6 +53,13 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	// A pane-scoped search surface takes the pointer the way the file-info modal
+	// does: it hit-tests its own regions, which panemodal placed where the pane
+	// actually is, so a click inside the modal cannot reach the document under it.
+	if doc := p.docSearchPane(); doc != nil {
+		return p.handleDocSearchMouse(doc, msg)
+	}
+
 	if p.viewMode == ViewModeCreate {
 		return p.handleCreateModalMouse(msg)
 	}

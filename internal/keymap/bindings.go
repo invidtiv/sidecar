@@ -129,6 +129,19 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		// The two search surfaces a focused document pane can open on itself.
+		// Both are rooted at the pane's own directory; the rest of the pane's
+		// keys are registered by the plugin.
+		{Key: "ctrl+p", Command: "find-file", Context: "workspace-doc"},
+		{Key: "f", Command: "search-project", Context: "workspace-doc"},
+
+		// While one of them is open it owns every key in the pane, so only the
+		// ways out and in are named. It is not a root context: esc closes the
+		// search rather than leaving the plugin.
+		{Key: "esc", Command: "search-cancel", Context: "workspace-doc-search"},
+		{Key: "enter", Command: "search-open", Context: "workspace-doc-search"},
+		{Key: "shift+enter", Command: "search-open-tab", Context: "workspace-doc-search"},
+
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
 		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
@@ -519,7 +532,8 @@ func DefaultBindings() []Binding {
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
 		{Key: ",", Command: "prev-tab", Context: "workspace-list"},
 		{Key: ".", Command: "next-tab", Context: "workspace-list"},
-		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "P", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "F", Command: "find-file", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "workspace-list"},
 		{Key: "ctrl+t", Command: "toggle-terminal", Context: "workspace-list"},

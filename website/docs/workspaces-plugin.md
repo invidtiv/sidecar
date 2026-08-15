@@ -854,7 +854,8 @@ All keyboard shortcuts by context:
 | `l`, `→` | Next column / focus preview |
 | `v` | Toggle view mode |
 | `n` | Create workspace |
-| `F` | Fetch remote PR as workspace |
+| `P` | Fetch remote PR as workspace |
+| `F` | Open a file pane on the file finder |
 | `D` | Delete workspace / Delete shell |
 | `p` | Push branch |
 | `d` | Show diff |
@@ -905,12 +906,23 @@ File tabs beside the selected workspace or shell terminal. `q` hides the
 pane and remembers the set; `x` on the last tab forgets it. Each surface
 restores its own tabs.
 
+A pane can search for its own next file. `ctrl+p` opens the fuzzy file
+finder and `f` opens a project-wide ripgrep search, both rooted at the
+pane's own workspace or shell directory and drawn as a modal inside the
+pane: centred with the document dimmed around it when there is room,
+filling the pane when there is not. While one is open it owns every key
+in the pane; `esc` closes it, `enter` loads the hit in the active tab,
+and `shift+enter` opens it in a new tab. `F` in the list opens a new file
+pane straight into the finder.
+
 | Key | Action |
 |-----|--------|
 | `j`, `↓` | Scroll down |
 | `k`, `↑` | Scroll up |
 | `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
 | `g`, `G` | Jump to start / end |
+| `ctrl+p` | Find a file by name in this pane |
+| `f` | Search the project in this pane |
 | `x` | Close the active tab. Last tab forgets the set |
 | `{`, `}` | Previous / next file tab |
 | `m` | Toggle rendered / raw markdown (markdown only) |

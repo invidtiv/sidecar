@@ -1158,6 +1158,11 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.loadOpenTasks()
 		}
 	case "F":
+		// Open a file pane on the fuzzy file finder. F is the file key here for
+		// the same reason it is in the Files plugin's neighbourhood: fetching a
+		// PR moved to P, which is free and says what it does.
+		return p.openFinderPane()
+	case "P":
 		// Fetch remote PR as workspace
 		p.viewMode = ViewModeFetchPR
 		p.fetchPRLoading = true
