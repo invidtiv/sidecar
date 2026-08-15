@@ -251,7 +251,7 @@ func TestFileCacheBuiltMsg_PopulatesCacheAndMatches(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 
 	p.quickOpenMode = true
-	p.quickOpenQuery = "app"
+	p.fileFinder().SetQuery("app")
 	p.quickOpen.Scanning = true
 
 	p.Update(FileCacheBuiltMsg{Files: []string{"main.go", filepath.Join("src", "app.go")}})
@@ -262,7 +262,7 @@ func TestFileCacheBuiltMsg_PopulatesCacheAndMatches(t *testing.T) {
 	if len(p.quickOpen.Files) != 2 {
 		t.Fatalf("quickOpenFiles = %v, want 2 entries", p.quickOpen.Files)
 	}
-	if len(p.quickOpenMatches) == 0 {
+	if len(p.fileFinder().Matches()) == 0 {
 		t.Error("matches should be recomputed against the new cache")
 	}
 }

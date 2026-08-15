@@ -133,9 +133,9 @@ func TestSearchInputsAcceptSpaces(t *testing.T) {
 	}
 
 	p.quickOpenMode = true
-	p.quickOpenQuery = "main"
+	p.fileFinder().SetQuery("main")
 	_, _ = p.handleQuickOpenKey(space)
-	if got := p.quickOpenQuery; got != "main " {
+	if got := p.fileFinder().Query(); got != "main " {
 		t.Fatalf("quick-open query = %q, want %q", got, "main ")
 	}
 
@@ -152,7 +152,7 @@ func TestProjectSearchOpenedWithFAcceptsMultiWordQuery(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 
 	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	if !p.projectSearchMode || p.projectSearchState == nil {
+	if !p.projectSearchMode || p.projectSearch == nil {
 		t.Fatal("f did not open project search")
 	}
 
@@ -160,7 +160,7 @@ func TestProjectSearchOpenedWithFAcceptsMultiWordQuery(t *testing.T) {
 		_, _ = p.handleProjectSearchKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 
-	if got := p.projectSearchState.Query; got != "first second" {
+	if got := p.projectSearch.State.Query; got != "first second" {
 		t.Fatalf("project search query = %q, want %q", got, "first second")
 	}
 }
@@ -831,9 +831,9 @@ func TestQuickOpen_CloseWithEsc(t *testing.T) {
 
 	// Enter quick open
 	p.quickOpenMode = true
-	p.quickOpenQuery = "test"
+	p.fileFinder().SetQuery("test")
 	p.quickOpen.Files = []string{"test.go"}
-	p.updateQuickOpenMatches()
+	p.fileFinder().Refilter()
 
 	// Press esc
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -841,7 +841,7 @@ func TestQuickOpen_CloseWithEsc(t *testing.T) {
 	if p.quickOpenMode {
 		t.Error("quickOpenMode should be false after esc")
 	}
-	if p.quickOpenQuery != "" {
+	if p.fileFinder().Query() != "" {
 		t.Error("query should be cleared")
 	}
 }
@@ -856,13 +856,13 @@ func TestQuickOpen_TypeQuery(t *testing.T) {
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
 
-	if p.quickOpenQuery != "ma" {
-		t.Errorf("query should be 'ma', got %q", p.quickOpenQuery)
+	if p.fileFinder().Query() != "ma" {
+		t.Errorf("query should be 'ma', got %q", p.fileFinder().Query())
 	}
 
 	// Should match main.go
 	found := false
-	for _, m := range p.quickOpenMatches {
+	for _, m := range p.fileFinder().Matches() {
 		if m.Path == "main.go" {
 			found = true
 			break
@@ -878,32 +878,32 @@ func TestQuickOpen_NavigateResults(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpen.Files = []string{"a.go", "b.go", "c.go"}
-	p.updateQuickOpenMatches()
+	p.fileFinder().Refilter()
 
-	if len(p.quickOpenMatches) < 3 {
+	if len(p.fileFinder().Matches()) < 3 {
 		t.Skip("need at least 3 matches")
 	}
 
 	// Initial cursor at 0
-	if p.quickOpenCursor != 0 {
+	if p.fileFinder().Cursor() != 0 {
 		t.Error("cursor should start at 0")
 	}
 
 	// Move down
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	if p.quickOpenCursor != 1 {
-		t.Errorf("cursor should be 1, got %d", p.quickOpenCursor)
+	if p.fileFinder().Cursor() != 1 {
+		t.Errorf("cursor should be 1, got %d", p.fileFinder().Cursor())
 	}
 
 	// Move up
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyUp})
-	if p.quickOpenCursor != 0 {
-		t.Errorf("cursor should be 0, got %d", p.quickOpenCursor)
+	if p.fileFinder().Cursor() != 0 {
+		t.Errorf("cursor should be 0, got %d", p.fileFinder().Cursor())
 	}
 
 	// Can't go above 0
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyUp})
-	if p.quickOpenCursor != 0 {
+	if p.fileFinder().Cursor() != 0 {
 		t.Error("cursor should not go below 0")
 	}
 }
@@ -913,23 +913,23 @@ func TestQuickOpen_SelectMatch(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpen.Files = []string{"main.go", "src/app.go"}
-	p.quickOpenQuery = "app"
-	p.updateQuickOpenMatches()
+	p.fileFinder().SetQuery("app")
+	p.fileFinder().Refilter()
 
-	if len(p.quickOpenMatches) == 0 {
+	if len(p.fileFinder().Matches()) == 0 {
 		t.Skip("no matches found")
 	}
 
 	// Find app.go match
-	for i, m := range p.quickOpenMatches {
+	for i, m := range p.fileFinder().Matches() {
 		if m.Path == "src/app.go" {
-			p.quickOpenCursor = i
+			p.fileFinder().SetCursor(i)
 			break
 		}
 	}
 
 	// Press enter
-	_, cmd := p.selectQuickOpenMatch()
+	_, cmd := p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Should have closed quick open
 	if p.quickOpenMode {
@@ -967,13 +967,13 @@ func TestQuickOpen_Backspace(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
-	p.quickOpenQuery = "test"
+	p.fileFinder().SetQuery("test")
 	p.quickOpen.Files = []string{"test.go"}
 
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
-	if p.quickOpenQuery != "tes" {
-		t.Errorf("query should be 'tes', got %q", p.quickOpenQuery)
+	if p.fileFinder().Query() != "tes" {
+		t.Errorf("query should be 'tes', got %q", p.fileFinder().Query())
 	}
 }
 
@@ -982,14 +982,14 @@ func TestQuickOpen_CtrlPNavigates(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpen.Files = []string{"a.go", "b.go"}
-	p.updateQuickOpenMatches()
-	p.quickOpenCursor = 1
+	p.fileFinder().Refilter()
+	p.fileFinder().SetCursor(1)
 
 	// ctrl+p should move cursor up (vim-like)
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
-	if p.quickOpenCursor != 0 {
-		t.Errorf("cursor should be 0 after ctrl+p, got %d", p.quickOpenCursor)
+	if p.fileFinder().Cursor() != 0 {
+		t.Errorf("cursor should be 0 after ctrl+p, got %d", p.fileFinder().Cursor())
 	}
 }
 
@@ -998,13 +998,13 @@ func TestQuickOpen_CtrlNNavigates(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpen.Files = []string{"a.go", "b.go"}
-	p.updateQuickOpenMatches()
+	p.fileFinder().Refilter()
 
 	// ctrl+n should move cursor down
 	_, _ = p.handleQuickOpenKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 
-	if p.quickOpenCursor != 1 {
-		t.Errorf("cursor should be 1 after ctrl+n, got %d", p.quickOpenCursor)
+	if p.fileFinder().Cursor() != 1 {
+		t.Errorf("cursor should be 1 after ctrl+n, got %d", p.fileFinder().Cursor())
 	}
 }
 
@@ -1013,15 +1013,15 @@ func TestQuickOpen_UpdateMatchesResetsCursor(t *testing.T) {
 	p := createTestPlugin(t, tmpDir)
 	p.quickOpenMode = true
 	p.quickOpen.Files = []string{"aaa.go", "bbb.go", "ccc.go"}
-	p.updateQuickOpenMatches()
-	p.quickOpenCursor = 2
+	p.fileFinder().Refilter()
+	p.fileFinder().SetCursor(2)
 
 	// Type query that reduces matches
-	p.quickOpenQuery = "aaa"
-	p.updateQuickOpenMatches()
+	p.fileFinder().SetQuery("aaa")
+	p.fileFinder().Refilter()
 
 	// Cursor should be reset since only 1 match now
-	if p.quickOpenCursor >= len(p.quickOpenMatches) {
+	if p.fileFinder().Cursor() >= len(p.fileFinder().Matches()) {
 		t.Error("cursor should be within bounds after matches change")
 	}
 }

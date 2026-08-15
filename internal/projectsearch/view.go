@@ -1,4 +1,4 @@
-package filebrowser
+package projectsearch
 
 import (
 	"fmt"
@@ -8,46 +8,49 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
-	"github.com/marcus/sidecar/internal/projectsearch"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
-	projectSearchToggleRegexID = "project-search-toggle-regex"
-	projectSearchToggleCaseID  = "project-search-toggle-case"
-	projectSearchToggleWordID  = "project-search-toggle-word"
-	projectSearchOpenActionID  = "project-search-open"
-	projectSearchFilePrefix    = "project-search-file-"
-	projectSearchMatchPrefix   = "project-search-match-"
+	ToggleRegexID = "project-search-toggle-regex"
+	ToggleCaseID  = "project-search-toggle-case"
+	ToggleWordID  = "project-search-toggle-word"
+	OpenActionID  = "project-search-open"
+
+	filePrefix  = "project-search-file-"
+	matchPrefix = "project-search-match-"
 )
 
-func projectSearchFileID(fileIdx int) string {
-	return fmt.Sprintf("%s%d", projectSearchFilePrefix, fileIdx)
+func fileID(fileIdx int) string {
+	return fmt.Sprintf("%s%d", filePrefix, fileIdx)
 }
 
-func projectSearchMatchID(fileIdx, matchIdx int) string {
-	return fmt.Sprintf("%s%d-%d", projectSearchMatchPrefix, fileIdx, matchIdx)
+func matchID(fileIdx, matchIdx int) string {
+	return fmt.Sprintf("%s%d-%d", matchPrefix, fileIdx, matchIdx)
 }
 
-func parseProjectSearchFileID(id string) (int, bool) {
-	if !strings.HasPrefix(id, projectSearchFilePrefix) {
+// ParseFileID reports whether id names a file header row, and which one.
+func ParseFileID(id string) (int, bool) {
+	if !strings.HasPrefix(id, filePrefix) {
 		return 0, false
 	}
 
-	idx, err := strconv.Atoi(strings.TrimPrefix(id, projectSearchFilePrefix))
+	idx, err := strconv.Atoi(strings.TrimPrefix(id, filePrefix))
 	if err != nil {
 		return 0, false
 	}
 	return idx, true
 }
 
-func parseProjectSearchMatchID(id string) (int, int, bool) {
-	if !strings.HasPrefix(id, projectSearchMatchPrefix) {
+// ParseMatchID reports whether id names a match row, and which one.
+func ParseMatchID(id string) (int, int, bool) {
+	if !strings.HasPrefix(id, matchPrefix) {
 		return 0, 0, false
 	}
 
-	rest := strings.TrimPrefix(id, projectSearchMatchPrefix)
+	rest := strings.TrimPrefix(id, matchPrefix)
 	parts := strings.Split(rest, "-")
 	if len(parts) != 2 {
 		return 0, 0, false
@@ -66,43 +69,44 @@ func parseProjectSearchMatchID(id string) (int, int, bool) {
 	return fileIdx, matchIdx, true
 }
 
-// renderProjectSearchModalContent renders the project search modal box content.
-func (p *Plugin) renderProjectSearchModalContent() string {
-	p.ensureProjectSearchModal()
-	if p.projectSearchModal == nil {
+// renderModal renders the modal at the search's current size, registering hit
+// regions on handler.
+func (s *Search) renderModal(handler *mouse.Handler) string {
+	s.ensureModal()
+	if s.modal == nil {
 		return ""
 	}
-	return p.projectSearchModal.Render(p.width, p.height, p.mouseHandler)
+	return s.modal.Render(s.width, s.height, handler)
 }
 
-// ensureProjectSearchModal builds/rebuilds the project search modal.
-func (p *Plugin) ensureProjectSearchModal() {
-	if p.projectSearchState == nil {
+// ensureModal builds/rebuilds the modal for the current width.
+func (s *Search) ensureModal() {
+	if s.State == nil {
 		return
 	}
 
-	modalW := p.projectSearchModalWidthForView()
-	if p.projectSearchModal != nil && p.projectSearchModalWidth == modalW {
+	modalW := s.modalWidthForView()
+	if s.modal != nil && s.modalWidth == modalW {
 		return
 	}
-	p.projectSearchModalWidth = modalW
+	s.modalWidth = modalW
 
-	p.projectSearchModal = modal.New("",
+	s.modal = modal.New("",
 		modal.WithWidth(modalW),
-		modal.WithPrimaryAction(projectSearchOpenActionID),
+		modal.WithPrimaryAction(OpenActionID),
 		modal.WithHints(false),
 	).
-		AddSection(p.projectSearchHeaderSection()).
-		AddSection(p.projectSearchOptionsSection()).
+		AddSection(s.headerSection()).
+		AddSection(s.optionsSection()).
 		AddSection(modal.Spacer()).
-		AddSection(p.projectSearchResultsSection()).
-		AddSection(modal.When(p.projectSearchHasResults, modal.Spacer())).
-		AddSection(modal.When(p.projectSearchHasResults, p.projectSearchStatsSection()))
+		AddSection(s.resultsSection()).
+		AddSection(modal.When(s.hasResults, modal.Spacer())).
+		AddSection(modal.When(s.hasResults, s.statsSection()))
 }
 
-func (p *Plugin) projectSearchModalWidthForView() int {
+func (s *Search) modalWidthForView() int {
 	modalW := 120
-	maxWidth := p.width - 4
+	maxWidth := s.width - 4
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
@@ -119,28 +123,27 @@ func (p *Plugin) projectSearchModalWidthForView() int {
 	return modalW
 }
 
-func (p *Plugin) clearProjectSearchModal() {
-	p.projectSearchModal = nil
-	p.projectSearchModalWidth = 0
+func (s *Search) clearModal() {
+	s.modal = nil
+	s.modalWidth = 0
 }
 
-func (p *Plugin) projectSearchHasResults() bool {
-	state := p.projectSearchState
-	return state != nil && len(state.Results) > 0
+func (s *Search) hasResults() bool {
+	return s.State != nil && len(s.State.Results) > 0
 }
 
-func (p *Plugin) projectSearchHeaderSection() modal.Section {
+func (s *Search) headerSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.projectSearchState == nil {
+		if s.State == nil {
 			return modal.RenderedSection{}
 		}
-		return modal.RenderedSection{Content: p.renderProjectSearchHeader(contentWidth)}
+		return modal.RenderedSection{Content: s.renderHeader(contentWidth)}
 	}, nil)
 }
 
-func (p *Plugin) projectSearchOptionsSection() modal.Section {
+func (s *Search) optionsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		state := p.projectSearchState
+		state := s.State
 		if state == nil {
 			return modal.RenderedSection{}
 		}
@@ -152,9 +155,9 @@ func (p *Plugin) projectSearchOptionsSection() modal.Section {
 		}
 
 		opts := []option{
-			{id: projectSearchToggleRegexID, label: ".*", active: state.UseRegex},
-			{id: projectSearchToggleCaseID, label: "Aa", active: state.CaseSensitive},
-			{id: projectSearchToggleWordID, label: `\\b`, active: state.WholeWord},
+			{id: ToggleRegexID, label: ".*", active: state.UseRegex},
+			{id: ToggleCaseID, label: "Aa", active: state.CaseSensitive},
+			{id: ToggleWordID, label: `\\b`, active: state.WholeWord},
 		}
 
 		var sb strings.Builder
@@ -190,16 +193,16 @@ func (p *Plugin) projectSearchOptionsSection() modal.Section {
 			Content:    sb.String(),
 			Focusables: focusables,
 		}
-	}, p.projectSearchOptionsUpdate)
+	}, optionsUpdate)
 }
 
-func (p *Plugin) projectSearchOptionsUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
+func optionsUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return "", nil
 	}
 
-	if focusID != projectSearchToggleRegexID && focusID != projectSearchToggleCaseID && focusID != projectSearchToggleWordID {
+	if focusID != ToggleRegexID && focusID != ToggleCaseID && focusID != ToggleWordID {
 		return "", nil
 	}
 
@@ -213,14 +216,14 @@ func (p *Plugin) projectSearchOptionsUpdate(msg tea.Msg, focusID string) (string
 	return "", nil
 }
 
-func (p *Plugin) projectSearchResultsSection() modal.Section {
+func (s *Search) resultsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		state := p.projectSearchState
+		state := s.State
 		if state == nil {
 			return modal.RenderedSection{}
 		}
 
-		maxVisible := p.projectSearchMaxVisible()
+		maxVisible := s.maxVisible()
 
 		// Helper to pad content to minimum height so modal doesn't jump in size
 		// Uses " " instead of "" so lines aren't trimmed by measureHeight
@@ -267,10 +270,10 @@ func (p *Plugin) projectSearchResultsSection() modal.Section {
 
 		for fi, file := range state.Results {
 			if flatIdx >= state.ScrollOffset && len(lines) < maxVisible {
-				itemID := projectSearchFileID(fi)
+				itemID := fileID(fi)
 				selected := flatIdx == state.Cursor
 				hovered := itemID == hoverID
-				line := p.renderSearchFileHeader(file, fi, selected, hovered, contentWidth)
+				line := renderFileHeader(file, selected, hovered, contentWidth)
 
 				lines = append(lines, line)
 				focusables = append(focusables, modal.FocusableInfo{
@@ -287,10 +290,10 @@ func (p *Plugin) projectSearchResultsSection() modal.Section {
 			if !file.Collapsed {
 				for mi, match := range file.Matches {
 					if flatIdx >= state.ScrollOffset && len(lines) < maxVisible {
-						itemID := projectSearchMatchID(fi, mi)
+						itemID := matchID(fi, mi)
 						selected := flatIdx == state.Cursor
 						hovered := itemID == hoverID
-						line := p.renderSearchMatchLine(match, mi, selected, hovered, contentWidth)
+						line := renderMatchLine(match, selected, hovered, contentWidth)
 
 						lines = append(lines, line)
 						focusables = append(focusables, modal.FocusableInfo{
@@ -328,9 +331,9 @@ func (p *Plugin) projectSearchResultsSection() modal.Section {
 	}, nil)
 }
 
-func (p *Plugin) projectSearchStatsSection() modal.Section {
+func (s *Search) statsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		state := p.projectSearchState
+		state := s.State
 		if state == nil || len(state.Results) == 0 {
 			return modal.RenderedSection{}
 		}
@@ -346,8 +349,8 @@ func (p *Plugin) projectSearchStatsSection() modal.Section {
 	}, nil)
 }
 
-func (p *Plugin) projectSearchMaxVisible() int {
-	height := p.height - 10
+func (s *Search) maxVisible() int {
+	height := s.height - 10
 	if height < 5 {
 		height = 5
 	}
@@ -357,9 +360,9 @@ func (p *Plugin) projectSearchMaxVisible() int {
 	return height
 }
 
-// renderProjectSearchHeader renders the search input bar.
-func (p *Plugin) renderProjectSearchHeader(width int) string {
-	state := p.projectSearchState
+// renderHeader renders the search input bar.
+func (s *Search) renderHeader(width int) string {
+	state := s.State
 	// Show block cursor when input focused, thin cursor when results focused
 	cursor := "█"
 	if state.ResultsFocused {
@@ -381,8 +384,8 @@ func (p *Plugin) renderProjectSearchHeader(width int) string {
 	return styles.ModalTitle.Render(header)
 }
 
-// renderSearchFileHeader renders a file header line.
-func (p *Plugin) renderSearchFileHeader(file projectsearch.SearchFileResult, fileIdx int, selected, hovered bool, width int) string {
+// renderFileHeader renders a file header line.
+func renderFileHeader(file SearchFileResult, selected, hovered bool, width int) string {
 	icon := "▼ "
 	if file.Collapsed {
 		icon = "▶ "
@@ -413,8 +416,8 @@ func (p *Plugin) renderSearchFileHeader(file projectsearch.SearchFileResult, fil
 	)
 }
 
-// renderSearchMatchLine renders a single match line.
-func (p *Plugin) renderSearchMatchLine(match projectsearch.SearchMatch, matchIdx int, selected, hovered bool, width int) string {
+// renderMatchLine renders a single match line.
+func renderMatchLine(match SearchMatch, selected, hovered bool, width int) string {
 	indent := "    "
 	lineNum := fmt.Sprintf("%4d: ", match.LineNo)
 

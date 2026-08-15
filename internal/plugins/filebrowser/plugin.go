@@ -217,11 +217,11 @@ type Plugin struct {
 	// Text selection state (preview pane) - character-level via shared ui package
 	selection ui.SelectionState
 
-	// Quick open state
-	quickOpenMode    bool
-	quickOpenQuery   string
-	quickOpenMatches []filefind.Match
-	quickOpenCursor  int
+	// Quick open state. The finder owns the query, matches, cursor, and the
+	// modal's rendering and input handling; the plugin owns only whether it is
+	// showing and what opening a file means here.
+	quickOpenMode bool
+	finder        *filefind.Finder
 	// quickOpen holds the cached project file list (relative paths) and its
 	// scan bookkeeping. quickOpen and dirCache each own their own dirty flag: a
 	// scan clears only its own, and a change arriving while that scan is in
@@ -229,11 +229,11 @@ type Plugin struct {
 	// current. The stale cache keeps rendering until the next scan lands.
 	quickOpen filefind.Cache
 
-	// Project-wide search state (ctrl+s)
-	projectSearchMode       bool
-	projectSearchState      *projectsearch.State
-	projectSearchModal      *modal.Modal
-	projectSearchModalWidth int
+	// Project-wide search state (ctrl+s). The search owns its state, its modal,
+	// and its input handling; the plugin owns only whether it is showing and
+	// what opening a result means here.
+	projectSearchMode bool
+	projectSearch     *projectsearch.Search
 
 	// Info modal state
 	infoMode       bool
@@ -1055,10 +1055,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			return p, nil
 		}
-		p.quickOpen.Apply(msg)
-		if p.quickOpenMode {
-			p.updateQuickOpenMatches()
-		}
+		// The finder shares this cache, so applying the scan through it keeps
+		// its matches in step with the file list they were computed from.
+		p.fileFinder().Update(msg)
 		if p.searchMode {
 			// The cache is fresh, so this only re-filters, and it keeps the
 			// user's selection: the scan landing is not a new query.
@@ -1169,9 +1168,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case projectsearch.DebounceMsg:
-		// Only run search if debounce version matches (no newer keystrokes)
-		if p.projectSearchState != nil && p.projectSearchState.DebounceVersion == msg.Version {
-			return p, projectsearch.Run(p.ctx.WorkDir, p.projectSearchState, p.ctx.Epoch)
+		// The search itself decides whether this tick is still the newest one.
+		if search := p.projectSearchSurface(); search != nil {
+			return p, search.Update(msg)
 		}
 		return p, nil
 
@@ -1180,18 +1179,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if p.projectSearchState != nil {
-			p.projectSearchState.IsSearching = false
-			if msg.Error != nil {
-				p.projectSearchState.Error = msg.Error.Error()
-				p.projectSearchState.Results = nil
-			} else {
-				p.projectSearchState.Error = ""
-				p.projectSearchState.Results = msg.Results
-				p.projectSearchState.ScrollOffset = 0
-				// Set cursor to first match (skip file headers)
-				p.projectSearchState.Cursor = p.projectSearchState.FirstMatchIndex()
-			}
+		if search := p.projectSearchSurface(); search != nil {
+			search.Apply(msg)
 		}
 
 	case InlineEditStartedMsg:

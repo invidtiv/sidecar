@@ -432,3 +432,46 @@ type ripgrepNotFoundError struct{}
 func (e *ripgrepNotFoundError) Error() string {
 	return "ripgrep (rg) not found - install with: brew install ripgrep"
 }
+
+// FlatIndexForFile returns the flattened-list index of a file header, or -1
+// when there is no such file.
+func (s *State) FlatIndexForFile(fileIdx int) int {
+	if s == nil || fileIdx < 0 || fileIdx >= len(s.Results) {
+		return -1
+	}
+
+	flatIdx := 0
+	for fi := range s.Results {
+		if fi == fileIdx {
+			return flatIdx
+		}
+		flatIdx++ // file header
+		if !s.Results[fi].Collapsed {
+			flatIdx += len(s.Results[fi].Matches)
+		}
+	}
+	return -1
+}
+
+// FlatIndexForMatch returns the flattened-list index of one match, or -1 when
+// it is not visible (no such match, or its file is collapsed).
+func (s *State) FlatIndexForMatch(fileIdx, matchIdx int) int {
+	if s == nil || fileIdx < 0 || fileIdx >= len(s.Results) {
+		return -1
+	}
+
+	flatIdx := 0
+	for fi, file := range s.Results {
+		flatIdx++ // file header
+		if fi == fileIdx {
+			if file.Collapsed || matchIdx < 0 || matchIdx >= len(file.Matches) {
+				return -1
+			}
+			return flatIdx + matchIdx
+		}
+		if !file.Collapsed {
+			flatIdx += len(file.Matches)
+		}
+	}
+	return -1
+}
