@@ -26,7 +26,6 @@ func (p *Plugin) renderCreateModal(width, height int) string {
 	if p.createModal == nil {
 		return background
 	}
-	p.syncCreateModalFocus()
 
 	modalContent := p.createModal.Render(width, height, p.mouseHandler)
 	return ui.OverlayModal(background, modalContent, width, height)
@@ -361,25 +360,6 @@ func (p *Plugin) renderRenameShellModal(width, height int) string {
 	}
 
 	modalContent := p.renameShellModal.Render(width, height, p.mouseHandler)
-	return ui.OverlayModal(background, modalContent, width, height)
-}
-
-// renderPromptPickerModal renders the prompt picker modal.
-func (p *Plugin) renderPromptPickerModal(width, height int) string {
-	// Render the appropriate background based on which modal opened the picker
-	var background string
-	if p.promptPickerReturnMode == ViewModeAgentConfig {
-		background = p.renderAgentConfigModal(width, height)
-	} else {
-		background = p.renderCreateModal(width, height)
-	}
-
-	p.ensurePromptPickerModal()
-	if p.promptPickerModal == nil {
-		return background
-	}
-
-	modalContent := p.promptPickerModal.Render(width, height, p.mouseHandler)
 	return ui.OverlayModal(background, modalContent, width, height)
 }
 

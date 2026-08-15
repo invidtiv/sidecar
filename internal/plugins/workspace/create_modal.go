@@ -6,23 +6,20 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
 const (
 	createNameFieldID       = "create-name"
 	createBaseFieldID       = "create-base"
-	createPromptFieldID     = "create-prompt"
 	createTaskFieldID       = "create-task"
-	createAgentListID       = "create-agent-list"
+	createAgentFieldID      = "create-agent"
 	createSkipPermissionsID = "create-skip-permissions"
 	createSubmitID          = "create-submit"
 	createCancelID          = "create-cancel"
-	createBranchItemPrefix  = "create-branch-"
-	createTaskItemPrefix    = "create-task-item-"
-	createAgentItemPrefix   = "create-agent-"
+	createTaskNoneID        = "create-task-none"
 	createConfirmID         = "create-confirm"
 	createRetrySetupID      = "create-retry-setup"
 	createOpenAnywayID      = "create-open-anyway"
@@ -144,276 +141,131 @@ func (p *Plugin) ensureCreateModal() {
 		modalW = maxW
 	}
 
-	if p.createModal != nil && p.createModalWidth == modalW {
+	branchN, taskN := len(p.branchAll), len(p.taskSearchAll)
+	if p.createModal != nil && p.createModalWidth == modalW && p.createModalBranchN == branchN && p.createModalTaskN == taskN {
 		return
 	}
-	p.createModalWidth = modalW
 
-	agentTypes := p.selectableAgentTypes()
-	items := make([]modal.ListItem, len(agentTypes))
-	for i, at := range agentTypes {
-		items[i] = modal.ListItem{
-			ID:    createIndexedID(createAgentItemPrefix, i),
-			Label: AgentDisplayNames[at],
-		}
+	prevFocus := ""
+	if p.createModal != nil {
+		prevFocus = p.createModal.FocusedID()
 	}
+
+	p.createModalWidth = modalW
+	p.createModalBranchN = branchN
+	p.createModalTaskN = taskN
+	p.syncCreateAgentFromIdx()
+	p.prefillCreateAgentInput()
+
+	branchItems := p.createBranchItems()
+	taskItems := p.createTaskItems()
+	agentItems := p.createAgentItems()
 
 	p.createModal = modal.New("Create New Worktree",
 		modal.WithWidth(modalW),
 		modal.WithPrimaryAction(createSubmitID),
 		modal.WithHints(false),
 	).
-		AddSection(p.createNameLabelSection()).
-		AddSection(modal.Input(createNameFieldID, &p.createNameInput, modal.WithSubmitOnEnter(false))).
-		AddSection(p.createNameErrorsSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.createBaseLabelSection()).
-		AddSection(modal.Input(createBaseFieldID, &p.createBaseBranchInput, modal.WithSubmitOnEnter(false))).
-		AddSection(p.createBranchDropdownSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.createPromptSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.createTaskSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.createAgentLabelSection()).
-		AddSection(modal.List(createAgentListID, items, &p.createAgentIdx, modal.WithMaxVisible(len(items)))).
-		AddSection(p.createSkipPermissionsSpacerSection()).
+		AddSection(modal.InputWithLabel(createNameFieldID, "Name", &p.createNameInput, modal.WithSubmitOnEnter(true))).
+		AddSection(p.createSlugHintSection()).
+		AddSection(modal.Text("Base Branch")).
+		AddSection(modal.Combo(createBaseFieldID, &p.createBaseBranchInput, branchItems, &p.createBaseIdx,
+			modal.WithComboFilter(comboExactOrAllFilter(branchItems)))).
+		AddSection(modal.Text("Link Task")).
+		AddSection(modal.Combo(createTaskFieldID, &p.taskSearchInput, taskItems, &p.createTaskIdx)).
+		AddSection(modal.Text("Agent")).
+		AddSection(modal.Combo(createAgentFieldID, &p.createAgentInput, agentItems, &p.createAgentIdx,
+			modal.WithComboFilter(comboExactOrAllFilter(agentItems)))).
 		AddSection(modal.When(p.shouldShowSkipPermissions, modal.Checkbox(createSkipPermissionsID, "Auto-approve all actions", &p.createSkipPermissions))).
 		AddSection(p.createSkipPermissionsHintSection()).
-		AddSection(modal.Spacer()).
 		AddSection(p.createErrorSection()).
-		AddSection(modal.When(func() bool { return p.createError != "" }, modal.Spacer())).
 		AddSection(modal.Buttons(
 			modal.Btn(" Create ", createSubmitID),
 			modal.Btn(" Cancel ", createCancelID),
 		))
-}
 
-func (p *Plugin) syncCreateModalFocus() {
-	if p.createModal == nil {
-		return
-	}
-	p.normalizeCreateFocus()
-	p.syncCreateAgentIdx()
-
-	if focusID := p.createFocusID(); focusID != "" {
-		p.createModal.SetFocus(focusID)
+	if prevFocus != "" {
+		p.createModal.SetFocus(prevFocus)
 	}
 }
 
-func (p *Plugin) normalizeCreateFocus() {
-	if p.createFocus == 3 {
-		prompt := p.getSelectedPrompt()
-		if prompt != nil && prompt.TicketMode == TicketNone {
-			p.createFocus = 4
+func (p *Plugin) createBranchItems() []modal.DropdownItem {
+	items := make([]modal.DropdownItem, len(p.branchAll))
+	for i, branch := range p.branchAll {
+		items[i] = modal.DropdownItem{ID: branch, Label: branch, Value: branch}
+	}
+	return items
+}
+
+func (p *Plugin) createTaskItems() []modal.DropdownItem {
+	items := make([]modal.DropdownItem, 0, len(p.taskSearchAll)+1)
+	items = append(items, modal.DropdownItem{ID: createTaskNoneID, Label: "(none)", Value: ""})
+	for _, task := range p.taskSearchAll {
+		items = append(items, modal.DropdownItem{
+			ID:    task.ID,
+			Label: task.ID + "  " + task.Title,
+			Value: task.ID,
+			Desc:  task.Title,
+			Data:  task,
+		})
+	}
+	return items
+}
+
+func (p *Plugin) createAgentItems() []modal.DropdownItem {
+	types := p.selectableAgentTypes()
+	items := make([]modal.DropdownItem, len(types))
+	for i, at := range types {
+		label := AgentDisplayNames[at]
+		if label == "" {
+			label = string(at)
+		}
+		items[i] = modal.DropdownItem{
+			ID:    string(at),
+			Label: label,
+			Value: label,
+			Data:  at,
 		}
 	}
-	if p.createFocus == 5 && !p.shouldShowSkipPermissions() {
-		p.createFocus = 6
+	return items
+}
+
+func comboExactOrAllFilter(items []modal.DropdownItem) modal.ComboFilterFunc {
+	return func(query string, item modal.DropdownItem) bool {
+		if query == "" || comboQueryMatchesItemExactly(query, items) {
+			return true
+		}
+		q := strings.ToLower(query)
+		if strings.Contains(strings.ToLower(item.Label), q) {
+			return true
+		}
+		if item.Value != "" && strings.Contains(strings.ToLower(item.Value), q) {
+			return true
+		}
+		if item.Desc != "" && strings.Contains(strings.ToLower(item.Desc), q) {
+			return true
+		}
+		return false
 	}
 }
 
-func (p *Plugin) syncCreateAgentIdx() {
-	agents := p.selectableAgentTypes()
-	p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
-}
-
-func (p *Plugin) createFocusID() string {
-	switch p.createFocus {
-	case 0:
-		return createNameFieldID
-	case 1:
-		return createBaseFieldID
-	case 2:
-		return createPromptFieldID
-	case 3:
-		return createTaskFieldID
-	case 4:
-		return createAgentListID // Use list ID for singleFocus mode
-	case 5:
-		return createSkipPermissionsID
-	case 6:
-		return createSubmitID
-	case 7:
-		return createCancelID
-	default:
-		return ""
-	}
-}
-
-func (p *Plugin) createNameLabelSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		label := "Name:"
-		nameValue := p.createNameInput.Value()
-		if nameValue != "" {
-			if p.branchNameValid {
-				label = "Name: " + lipgloss.NewStyle().Foreground(styles.Success).Render("✓")
-			} else {
-				label = "Name: " + lipgloss.NewStyle().Foreground(styles.Error).Render("✗")
-			}
+func comboQueryMatchesItemExactly(query string, items []modal.DropdownItem) bool {
+	for _, it := range items {
+		if query == it.Value || query == it.Label {
+			return true
 		}
-		return modal.RenderedSection{Content: label}
-	}, nil)
-}
-
-func (p *Plugin) createNameErrorsSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		nameValue := p.createNameInput.Value()
-		if nameValue == "" || p.branchNameValid {
-			return modal.RenderedSection{}
-		}
-
-		var lines []string
-		if len(p.branchNameErrors) > 0 {
-			errorStyle := lipgloss.NewStyle().Foreground(styles.Error)
-			lines = append(lines, errorStyle.Render("  ⚠ "+strings.Join(p.branchNameErrors, ", ")))
-		}
-		if p.branchNameSanitized != "" && p.branchNameSanitized != nameValue {
-			lines = append(lines, dimText(fmt.Sprintf("  Suggestion: %s", p.branchNameSanitized)))
-		}
-
-		return modal.RenderedSection{Content: strings.Join(lines, "\n")}
-	}, nil)
-}
-
-func (p *Plugin) createBaseLabelSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return modal.RenderedSection{Content: "Base Branch (default: current):"}
-	}, nil)
-}
-
-func (p *Plugin) createBranchDropdownSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if !p.branchDropdownVisible(focusID) {
-			return modal.RenderedSection{}
-		}
-
-		lines := make([]string, 0)
-		focusables := make([]modal.FocusableInfo, 0)
-		lineY := 0
-
-		if len(p.branchFiltered) > 0 {
-			maxDropdown := max(1, min(8, p.height-17))
-			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, maxDropdown, len(p.branchFiltered))
-			end := min(len(p.branchFiltered), p.branchScroll+maxDropdown)
-
-			for i := p.branchScroll; i < end; i++ {
-				branch := p.branchFiltered[i]
-				branch = ansi.Truncate(branch, max(0, contentWidth-2), "…")
-				prefix := "  "
-				if i == p.branchIdx {
-					prefix = "> "
-				}
-				line := prefix + branch
-				if i == p.branchIdx {
-					line = lipgloss.NewStyle().Foreground(styles.Primary).Render(line)
-				} else {
-					line = dimText(line)
-				}
-				lines = append(lines, line)
-				focusables = append(focusables, modal.FocusableInfo{
-					ID:      createIndexedID(createBranchItemPrefix, i),
-					OffsetX: 0,
-					OffsetY: lineY,
-					Width:   ansi.StringWidth(line),
-					Height:  1,
-				})
-				lineY++
-			}
-			if remaining := len(p.branchFiltered) - end; remaining > 0 {
-				lines = append(lines, dimText(fmt.Sprintf("  ↓ %d more", remaining)))
-			}
-		} else if len(p.branchAll) == 0 {
-			lines = append(lines, dimText("  Loading branches..."))
-		}
-
-		return modal.RenderedSection{Content: strings.Join(lines, "\n"), Focusables: focusables}
-	}, nil)
-}
-
-func (p *Plugin) branchDropdownVisible(focusID string) bool {
-	if focusID == createBaseFieldID || strings.HasPrefix(focusID, createBranchItemPrefix) {
-		return len(p.branchFiltered) > 0 || len(p.branchAll) == 0
 	}
 	return false
 }
 
-func (p *Plugin) createPromptSection() modal.Section {
+func (p *Plugin) createSlugHintSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		lines := make([]string, 0, 4)
-		focusables := make([]modal.FocusableInfo, 0, 1)
-
-		lines = append(lines, "Prompt:")
-
-		selectedPrompt := p.getSelectedPrompt()
-		displayText := "(none)"
-		if len(p.createPrompts) == 0 {
-			displayText = "No prompts configured"
-		} else if selectedPrompt != nil {
-			scopeIndicator := "[G] global"
-			if selectedPrompt.Source == "project" {
-				scopeIndicator = "[P] project"
-			}
-			displayText = fmt.Sprintf("%s  %s", selectedPrompt.Name, dimText(scopeIndicator))
-		}
-
-		promptStyle := inputStyle()
-		if focusID == createPromptFieldID {
-			promptStyle = inputFocusedStyle()
-		}
-		rendered := promptStyle.Render(displayText)
-		renderedLines := strings.Split(rendered, "\n")
-		displayStartY := len(lines)
-		lines = append(lines, renderedLines...)
-
-		focusables = append(focusables, modal.FocusableInfo{
-			ID:      createPromptFieldID,
-			OffsetX: 0,
-			OffsetY: displayStartY,
-			Width:   ansi.StringWidth(rendered),
-			Height:  len(renderedLines),
-		})
-
-		if len(p.createPrompts) == 0 {
-			lines = append(lines, dimText("  See: .claude/skills/create-prompt/SKILL.md"))
-		} else if selectedPrompt == nil {
-			lines = append(lines, dimText("  Press Enter to select a prompt template"))
-		} else {
-			preview := strings.ReplaceAll(selectedPrompt.Body, "\n", " ")
-			if runes := []rune(preview); len(runes) > 60 {
-				preview = string(runes[:57]) + "..."
-			}
-			lines = append(lines, dimText(fmt.Sprintf("  Preview: %s", preview)))
-		}
-
-		return modal.RenderedSection{Content: strings.Join(lines, "\n"), Focusables: focusables}
-	}, nil)
-}
-
-func (p *Plugin) createTaskSection() modal.Section {
-	selectedPrompt := p.getSelectedPrompt()
-	if selectedPrompt != nil && selectedPrompt.TicketMode == TicketNone {
-		return modal.Text("Ticket: (not allowed by selected prompt)")
-	}
-	label := "Link Task (optional):"
-	if selectedPrompt != nil && selectedPrompt.TicketMode == TicketRequired {
-		label = "Link Task (required by selected prompt):"
-	}
-	return p.taskPickerSection(createTaskFieldID, createTaskItemPrefix, label, p.createTaskID != "", 8)
-}
-
-func (p *Plugin) createAgentLabelSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return modal.RenderedSection{Content: "Agent:"}
-	}, nil)
-}
-
-func (p *Plugin) createSkipPermissionsSpacerSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.createAgentType == AgentNone {
+		display := strings.TrimSpace(p.createNameInput.Value())
+		slug := SlugifyWorktreeName(display)
+		if slug == "" || slug == display {
 			return modal.RenderedSection{}
 		}
-		return modal.RenderedSection{Content: " "}
+		return modal.RenderedSection{Content: dimText("git: " + slug)}
 	}, nil)
 }
 
@@ -438,4 +290,122 @@ func (p *Plugin) createErrorSection() modal.Section {
 		errStyle := lipgloss.NewStyle().Foreground(styles.Error)
 		return modal.RenderedSection{Content: errStyle.Render("Error: " + p.createError)}
 	}, nil)
+}
+
+func (p *Plugin) prefillCreateBaseBranch() {
+	if strings.TrimSpace(p.createBaseBranchInput.Value()) != "" {
+		p.syncCreateBaseIdx()
+		return
+	}
+	if p.ctx == nil || p.ctx.WorkDir == "" {
+		return
+	}
+	current, err := getCurrentBranch(p.ctx.WorkDir)
+	if err != nil || current == "" || current == "HEAD" {
+		return
+	}
+	p.createBaseBranchInput.SetValue(current)
+	p.syncCreateBaseIdx()
+}
+
+func (p *Plugin) syncCreateBaseIdx() {
+	val := p.createBaseBranchInput.Value()
+	for i, branch := range p.branchAll {
+		if branch == val {
+			p.createBaseIdx = i
+			return
+		}
+	}
+}
+
+func (p *Plugin) prefillCreateAgentInput() {
+	label := AgentDisplayNames[p.createAgentType]
+	if label == "" {
+		label = string(p.createAgentType)
+	}
+	if p.createAgentInput.Value() != label {
+		p.createAgentInput.SetValue(label)
+	}
+}
+
+func (p *Plugin) syncCreateAgentFromIdx() {
+	agents := p.selectableAgentTypes()
+	prev := p.createAgentType
+	p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
+	if p.createAgentType != prev {
+		p.loadCreateAutoApprove()
+		p.prefillCreateAgentInput()
+	}
+}
+
+func (p *Plugin) loadCreateAutoApprove() {
+	p.createSkipPermissions = state.GetAgentAutoApprove(string(p.createAgentType))
+}
+
+func (p *Plugin) persistCreateAutoApprove() {
+	if p.createAgentType == "" {
+		return
+	}
+	_ = state.SetAgentAutoApprove(string(p.createAgentType), p.createSkipPermissions)
+}
+
+func (p *Plugin) syncCreateTaskFromCombo() {
+	val := strings.TrimSpace(p.taskSearchInput.Value())
+	if val == "" {
+		p.createTaskID = ""
+		p.createTaskTitle = ""
+		return
+	}
+	items := p.createTaskItems()
+	if p.createTaskIdx >= 0 && p.createTaskIdx < len(items) {
+		item := items[p.createTaskIdx]
+		if t, ok := item.Data.(Task); ok && (val == item.Value || val == item.Label || val == t.ID) {
+			p.createTaskID = t.ID
+			p.createTaskTitle = t.Title
+			return
+		}
+	}
+	for i, t := range p.taskSearchAll {
+		if t.ID == val {
+			p.createTaskID = t.ID
+			p.createTaskTitle = t.Title
+			p.createTaskIdx = i + 1
+			return
+		}
+	}
+	p.createTaskID = ""
+	p.createTaskTitle = ""
+}
+
+func (p *Plugin) rematchCreateTaskIdx() {
+	if p.createTaskID == "" {
+		p.createTaskIdx = 0
+		return
+	}
+	for i, t := range p.taskSearchAll {
+		if t.ID == p.createTaskID {
+			p.createTaskIdx = i + 1
+			p.taskSearchInput.SetValue(t.ID)
+			return
+		}
+	}
+}
+
+func (p *Plugin) clearCreateTaskSelection() {
+	p.createTaskID = ""
+	p.createTaskTitle = ""
+	p.createTaskIdx = 0
+	p.taskSearchInput.SetValue("")
+}
+
+func (p *Plugin) applyCreateModalAfterInput(prevAgent AgentType, prevSkip bool) {
+	p.syncCreateAgentFromIdx()
+	p.syncCreateTaskFromCombo()
+	if p.createAgentType != prevAgent {
+		p.loadCreateAutoApprove()
+		return
+	}
+	if p.createSkipPermissions != prevSkip {
+		p.persistCreateAutoApprove()
+	}
 }

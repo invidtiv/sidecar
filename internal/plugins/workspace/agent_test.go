@@ -364,7 +364,7 @@ func TestBuildAgentCommandUsesSidecarAgentStart(t *testing.T) {
 
 	p := &Plugin{}
 	wt := &Worktree{Path: tmpDir}
-	got := p.buildAgentCommand(AgentCodex, wt, true, nil)
+	got := p.buildAgentCommand(AgentCodex, wt, true)
 	want := "custom-codex --dangerously-bypass-approvals-and-sandbox"
 	if got != want {
 		t.Errorf("buildAgentCommand with override = %q, want %q", got, want)
@@ -664,15 +664,15 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		agentType AgentType
 		expected  bool
 	}{
-		{AgentNone, false},     // No agent, no checkbox
-		{AgentClaude, true},    // Has --dangerously-skip-permissions
-		{AgentCodex, true},     // Has --dangerously-bypass-approvals-and-sandbox
+		{AgentNone, false},       // No agent, no checkbox
+		{AgentClaude, true},      // Has --dangerously-skip-permissions
+		{AgentCodex, true},       // Has --dangerously-bypass-approvals-and-sandbox
 		{AgentAntigravity, true}, // Has --dangerously-skip-permissions
-		{AgentCursor, true},    // Has -f flag
-		{AgentOpenCode, false}, // No known flag
-		{AgentPi, false},       // No known flag
-		{AgentAmp, true},       // Has --dangerously-allow-all
-		{AgentGrok, true},      // Has --always-approve
+		{AgentCursor, true},      // Has -f flag
+		{AgentOpenCode, false},   // No known flag
+		{AgentPi, false},         // No known flag
+		{AgentAmp, true},         // Has --dangerously-allow-all
+		{AgentGrok, true},        // Has --always-approve
 	}
 
 	p := &Plugin{}
@@ -823,7 +823,7 @@ func TestBuildAgentCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wt := &Worktree{TaskID: tt.taskID}
-			result := p.buildAgentCommand(tt.agentType, wt, tt.skipPerms, nil)
+			result := p.buildAgentCommand(tt.agentType, wt, tt.skipPerms)
 
 			// Check base command
 			baseCmd := getAgentCommand(tt.agentType)
@@ -883,7 +883,7 @@ func TestBuildAgentCommandSyntax(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			wt := &Worktree{TaskID: ""} // No task context
-			result := p.buildAgentCommand(tt.agentType, wt, tt.skipPerms, nil)
+			result := p.buildAgentCommand(tt.agentType, wt, tt.skipPerms)
 			if result != tt.expected {
 				t.Errorf("buildAgentCommand(%s, skipPerms=%v) = %q, want %q",
 					tt.agentType, tt.skipPerms, result, tt.expected)
@@ -1257,25 +1257,25 @@ func TestExtractLastNLines(t *testing.T) {
 // Precedence: exact agentType key → "*" wildcard → "default" key.
 func TestResolveConfigAgentStart_WildcardFallbackChain(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		agentStart map[string]string
 		agentType  AgentType
 		want       string
 	}{
 		{
-			name:      "exact match wins",
+			name:       "exact match wins",
 			agentStart: map[string]string{"claude": "my-claude", "*": "wildcard-agent", "default": "default-agent"},
 			agentType:  AgentClaude,
 			want:       "my-claude",
 		},
 		{
-			name:      "miss on exact falls through to wildcard",
+			name:       "miss on exact falls through to wildcard",
 			agentStart: map[string]string{"*": "wildcard-agent", "default": "default-agent"},
 			agentType:  AgentCodex,
 			want:       "wildcard-agent",
 		},
 		{
-			name:      "miss on exact and wildcard falls through to default",
+			name:       "miss on exact and wildcard falls through to default",
 			agentStart: map[string]string{"default": "default-agent"},
 			agentType:  AgentCodex,
 			want:       "default-agent",
@@ -1287,13 +1287,13 @@ func TestResolveConfigAgentStart_WildcardFallbackChain(t *testing.T) {
 			want:       "",
 		},
 		{
-			name:      "nil map returns empty",
+			name:       "nil map returns empty",
 			agentStart: nil,
 			agentType:  AgentClaude,
 			want:       "",
 		},
 		{
-			name:      "empty map returns empty",
+			name:       "empty map returns empty",
 			agentStart: map[string]string{},
 			agentType:  AgentClaude,
 			want:       "",

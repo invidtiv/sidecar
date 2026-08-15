@@ -251,7 +251,6 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 	taskTitle := p.createTaskTitle
 	agentType := p.createAgentType
 	skipPerms := p.createSkipPermissions
-	prompt := p.getSelectedPrompt()
 
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
@@ -263,7 +262,7 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 		plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
 		if plan != nil {
 			plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
-			plan.SkipPerms, plan.Prompt = skipPerms, prompt
+			plan.SkipPerms = skipPerms
 		}
 		return CreatePlanResolvedMsg{OperationScope: scope, Plan: plan, Err: err}
 	}
@@ -276,7 +275,7 @@ func (p *Plugin) createWorktree() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
 	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
 	taskID, taskTitle, agentType := p.createTaskID, p.createTaskTitle, p.createAgentType
-	skipPerms, prompt := p.createSkipPermissions, p.getSelectedPrompt()
+	skipPerms := p.createSkipPermissions
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	if base == "" {
 		base = "HEAD"
@@ -293,7 +292,7 @@ func (p *Plugin) createWorktree() tea.Cmd {
 		// Preserve Slice 2's contract: cancellation during post-add discovery
 		// returns the created identity instead of losing the partial result.
 		_, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
-		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
+		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Err: err}
 	}
 }
 

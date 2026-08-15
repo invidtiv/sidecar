@@ -414,8 +414,6 @@ func (p *Plugin) FocusContext() string {
 		return "workspace-confirm-delete-shell"
 	case ViewModeCommitForMerge:
 		return "workspace-commit-for-merge"
-	case ViewModePromptPicker:
-		return "workspace-prompt-picker"
 	case ViewModeRenameShell:
 		return "workspace-rename-shell"
 	case ViewModeTypeSelector:
@@ -457,7 +455,6 @@ func (p *Plugin) ConsumesTextInput() bool {
 		ViewModeCreate,
 		ViewModeTaskLink,
 		ViewModeCommitForMerge,
-		ViewModePromptPicker,
 		ViewModeRenameShell,
 		ViewModeTypeSelector,
 		ViewModeFetchPR:

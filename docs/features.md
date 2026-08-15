@@ -107,7 +107,6 @@ Sidecar puts your entire software engineering workflow into a single, unified te
   - Automatic `.gitignore` management for workspace metadata files.
 - **Embedded Agent Shell Launcher (`a`):**
   - Launch coding agents (Claude, Cursor, Codex, Gemini, OpenCode, Pi, etc.) in dedicated embedded shell PTY panes.
-  - **Prompt Picker:** Inject task templates, ticket descriptions, or prompt variables (`{ticket}`) into agent startups.
   - **Shell Renaming (`sidecar shell rename`):** Automatically update tmux pane names to reflect active task goals.
   - Cross-instance manifest tracking and automated background shell recovery.
 - **GitHub Pull Request & Merge Workflow (`m`):**

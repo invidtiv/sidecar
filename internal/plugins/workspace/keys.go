@@ -37,8 +37,6 @@ func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return p.handleConfirmDeleteShellKeys(msg)
 	case ViewModeCommitForMerge:
 		return p.handleCommitForMergeKeys(msg)
-	case ViewModePromptPicker:
-		return p.handlePromptPickerKeys(msg)
 	case ViewModeTypeSelector:
 		return p.handleTypeSelectorKeys(msg)
 	case ViewModeRenameShell:
@@ -164,109 +162,6 @@ func (p *Plugin) handleFetchPRKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
-// handlePromptPickerKeys handles keys in the prompt picker modal.
-func (p *Plugin) handlePromptPickerKeys(msg tea.KeyPressMsg) tea.Cmd {
-	if p.promptPicker == nil {
-		return nil
-	}
-
-	p.ensurePromptPickerModal()
-	if p.promptPickerModal == nil {
-		return nil
-	}
-
-	pp := p.promptPicker
-	key := msg.String()
-
-	if len(pp.prompts) == 0 && key == "d" {
-		return func() tea.Msg { return PromptInstallDefaultsMsg{} }
-	}
-
-	switch key {
-	case "esc", "q":
-		return func() tea.Msg { return PromptCancelledMsg{} }
-	case "tab", "shift+tab":
-		pp.filterFocused = !pp.filterFocused
-		p.syncPromptPickerFocus()
-		return nil
-	}
-
-	before := pp.filterInput.Value()
-	action, cmd := p.promptPickerModal.HandleKey(msg)
-	if action == "cancel" {
-		return func() tea.Msg { return PromptCancelledMsg{} }
-	}
-
-	if before != pp.filterInput.Value() {
-		pp.applyFilter()
-		if !pp.filterFocused {
-			p.syncPromptPickerFocus()
-		}
-	}
-
-	if action != "" {
-		if idx, ok := parsePromptPickerItemID(action); ok {
-			pp.selectedIdx = idx
-			return p.promptPickerSelectCmd()
-		}
-		if action == promptPickerFilterID {
-			return p.promptPickerSelectCmd()
-		}
-	}
-
-	switch key {
-	case "enter":
-		return p.promptPickerSelectCmd()
-
-	case "up":
-		if pp.selectedIdx > -1 {
-			pp.selectedIdx--
-		}
-		if !pp.filterFocused {
-			p.syncPromptPickerFocus()
-		}
-		return nil
-
-	case "down":
-		if pp.selectedIdx < len(pp.filtered)-1 {
-			pp.selectedIdx++
-		}
-		if !pp.filterFocused {
-			p.syncPromptPickerFocus()
-		}
-		return nil
-	}
-
-	if !pp.filterFocused {
-		switch key {
-		case "k":
-			if pp.selectedIdx > -1 {
-				pp.selectedIdx--
-			}
-			p.syncPromptPickerFocus()
-			return nil
-		case "j":
-			if pp.selectedIdx < len(pp.filtered)-1 {
-				pp.selectedIdx++
-			}
-			p.syncPromptPickerFocus()
-			return nil
-		case "home", "g":
-			pp.selectedIdx = -1
-			p.syncPromptPickerFocus()
-			return nil
-		case "end", "G":
-			if len(pp.filtered) > 0 {
-				pp.selectedIdx = len(pp.filtered) - 1
-			}
-			p.syncPromptPickerFocus()
-			return nil
-		}
-	}
-
-	return cmd
-}
-
 // handleAgentChoiceKeys handles keys in agent choice modal.
 func (p *Plugin) handleAgentChoiceKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureAgentChoiceModal()
@@ -295,44 +190,14 @@ func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	key := msg.String()
-
-	// Handle Enter manually to respect focused element — the modal's HandleKey
-	// falls through to primaryAction (submit) when the focused section doesn't
-	// consume Enter, which incorrectly submits when prompt or agent list is focused.
-	if key == "enter" {
-		focusID := p.agentConfigModal.FocusedID()
-		switch {
-		case focusID == agentConfigPromptFieldID:
-			// Open prompt picker
-			p.openPromptPicker(p.agentConfigPrompts, ViewModeAgentConfig)
-			return nil
-		case focusID == agentConfigSubmitID:
-			return p.executeAgentConfig()
-		case focusID == agentConfigCancelID:
-			p.viewMode = ViewModeList
-			p.clearAgentConfigModal()
-			return nil
-		case strings.HasPrefix(focusID, agentConfigAgentItemPrefix):
-			// Enter on agent list item — just absorb (selection already tracked by index)
-			return nil
-		case focusID == agentConfigSkipPermissionsID:
-			// Toggle checkbox
-			p.agentConfigSkipPerms = !p.agentConfigSkipPerms
-			return nil
-		}
-		return nil
-	}
-
-	// Delegate all other keys to the modal
-	prevAgentIdx := p.agentConfigAgentIdx
+	prevAgent := p.agentConfigAgentType
+	prevSkip := p.agentConfigSkipPerms
 	action, cmd := p.agentConfigModal.HandleKey(msg)
-
-	// Sync agent type when selection changes
-	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
-			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
-		}
+	p.syncAgentConfigFromIdx()
+	if p.agentConfigAgentType != prevAgent {
+		p.loadAgentConfigAutoApprove()
+	} else if p.agentConfigSkipPerms != prevSkip {
+		p.persistAgentConfigAutoApprove()
 	}
 
 	switch action {
@@ -340,6 +205,8 @@ func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearAgentConfigModal()
 		return nil
+	case agentConfigSubmitID:
+		return p.executeAgentConfig()
 	}
 
 	return cmd
@@ -350,7 +217,6 @@ func (p *Plugin) executeAgentConfig() tea.Cmd {
 	wt := p.agentConfigWorktree
 	agentType := p.agentConfigAgentType
 	skipPerms := p.agentConfigSkipPerms
-	prompt := p.getAgentConfigPrompt()
 	isRestart := p.agentConfigIsRestart
 
 	p.viewMode = ViewModeList
@@ -360,6 +226,9 @@ func (p *Plugin) executeAgentConfig() tea.Cmd {
 		return nil
 	}
 
+	_ = state.SetLastCreateAgent(string(agentType))
+	_ = state.SetAgentAutoApprove(string(agentType), skipPerms)
+
 	if isRestart {
 		return tea.Sequence(
 			p.StopAgent(wt),
@@ -368,12 +237,11 @@ func (p *Plugin) executeAgentConfig() tea.Cmd {
 					worktree:  wt,
 					agentType: agentType,
 					skipPerms: skipPerms,
-					prompt:    prompt,
 				}
 			},
 		)
 	}
-	return p.StartAgentWithOptions(wt, agentType, skipPerms, prompt)
+	return p.StartAgentWithOptions(wt, agentType, skipPerms)
 }
 
 // executeAgentChoice executes the selected agent choice action.
@@ -1231,8 +1099,7 @@ func (p *Plugin) toggleSidebarCmd() tea.Cmd {
 	return tea.Batch(resizeCmds...)
 }
 
-// handleCreateKeys handles keys in create modal.
-// createFocus: 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create button, 7=cancel button
+// handleCreateKeys handles keys in create modal. Focus is owned by the modal.
 func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if p.createBusyStep != "" {
 		return nil
@@ -1262,168 +1129,28 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	focusID := p.createModal.FocusedID()
-
-	switch msg.String() {
-	case "esc":
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
+	if msg.String() == "backspace" && p.createModal.FocusedID() == createTaskFieldID && p.createTaskID != "" {
+		p.clearCreateTaskSelection()
 		return nil
-	case "tab":
-		p.blurCreateInputs()
-		p.createFocus = (p.createFocus + 1) % 8
-		p.normalizeCreateFocus()
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case "shift+tab":
-		p.blurCreateInputs()
-		p.createFocus = (p.createFocus + 7) % 8
-		p.normalizeCreateFocus()
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case "backspace":
-		if p.createFocus == 3 && p.createTaskID != "" {
-			p.createTaskID = ""
-			p.createTaskTitle = ""
-			p.taskSearchInput.SetValue("")
-			p.taskSearchInput.Focus()
-			p.taskSearchFiltered = filterTasks("", p.taskSearchAll)
-			p.taskSearchIdx = 0
-			p.syncCreateModalFocus()
-			return nil
-		}
-	case " ":
-		if p.createFocus == 5 {
-			p.createSkipPermissions = !p.createSkipPermissions
-			return nil
-		}
-	case "up", "ctrl+p":
-		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
-			if p.branchIdx > 0 {
-				p.branchIdx--
-				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
-			}
-			return nil
-		}
-		if p.createFocus == 3 {
-			p.moveTaskPickerSelection(-1, false, false, createTaskItemPrefix)
-			return nil
-		}
-	case "down", "ctrl+n":
-		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
-			if p.branchIdx < len(p.branchFiltered)-1 {
-				p.branchIdx++
-				p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
-			}
-			return nil
-		}
-		if p.createFocus == 3 {
-			p.moveTaskPickerSelection(1, false, false, createTaskItemPrefix)
-			return nil
-		}
-	case "enter":
-		if idx, ok := parseIndexedID(createBranchItemPrefix, focusID); ok && idx < len(p.branchFiltered) {
-			p.createBaseBranchInput.SetValue(p.branchFiltered[idx])
-			p.branchFiltered = nil
-			p.syncCreateModalFocus()
-			return nil
-		}
-		if idx, ok := parseIndexedID(createTaskItemPrefix, focusID); ok && idx < len(p.taskSearchFiltered) {
-			task := p.taskSearchFiltered[idx]
-			p.createTaskID = task.ID
-			p.createTaskTitle = task.Title
-			p.taskSearchInput.Blur()
-			p.createFocus = 4
-			p.syncCreateModalFocus()
-			return nil
-		}
-		if focusID == createPromptFieldID {
-			p.openPromptPicker(p.createPrompts, ViewModeCreate)
-			return nil
-		}
-		if focusID == createSubmitID {
-			return p.validateAndCreateWorktree()
-		}
-		if focusID == createCancelID {
-			p.viewMode = ViewModeList
-			p.clearCreateModal()
-			return nil
-		}
-		if p.createFocus == 1 && len(p.branchFiltered) > 0 {
-			selectedBranch := p.branchFiltered[p.branchIdx]
-			p.createBaseBranchInput.SetValue(selectedBranch)
-			p.createFocus = 2
-			p.focusCreateInput()
-			p.syncCreateModalFocus()
-			return nil
-		}
-		if p.createFocus == 2 {
-			p.openPromptPicker(p.createPrompts, ViewModeCreate)
-			return nil
-		}
-		if p.createFocus == 3 && len(p.taskSearchFiltered) > 0 {
-			selectedTask := p.taskSearchFiltered[p.taskSearchIdx]
-			p.createTaskID = selectedTask.ID
-			p.createTaskTitle = selectedTask.Title
-			p.taskSearchInput.Blur()
-			p.createFocus = 4
-			p.syncCreateModalFocus()
-			return nil
-		}
-		if p.createFocus == 6 {
-			return p.validateAndCreateWorktree()
-		}
-		if p.createFocus == 7 {
-			p.viewMode = ViewModeList
-			p.clearCreateModal()
-			return nil
-		}
-		if p.createFocus < 2 {
-			p.createFocus++
-			p.focusCreateInput()
-			p.syncCreateModalFocus()
-			return nil
-		}
 	}
 
-	wasAgentIdx := p.createAgentIdx
+	prevAgent := p.createAgentType
+	prevSkip := p.createSkipPermissions
 	action, cmd := p.createModal.HandleKey(msg)
-	agents := p.selectableAgentTypes()
-	if p.createAgentIdx != wasAgentIdx && p.createAgentIdx < len(agents) {
-		p.createAgentType = agents[p.createAgentIdx]
-		p.syncCreateModalFocus()
-	}
+	p.applyCreateModalAfterInput(prevAgent, prevSkip)
 
-	if action == createSubmitID && focusID != createSubmitID {
-		return cmd
-	}
-	if action == "cancel" || action == createCancelID {
+	switch action {
+	case createSubmitID:
+		return p.validateAndCreateWorktree()
+	case "cancel", createCancelID:
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
 	}
 
-	// Delegate to task input for all other keys.
-	p.createError = ""
-	switch p.createFocus {
-	case 0:
-		name := p.createNameInput.Value()
-		p.branchNameValid, p.branchNameErrors, p.branchNameSanitized = ValidateBranchName(name)
-	case 1:
-		p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
-		p.branchIdx = 0
-		p.branchScroll = 0
-	case 3:
-		if p.createTaskID == "" {
-			p.taskSearchInput, cmd = p.taskSearchInput.Update(msg)
-			p.taskSearchFiltered = filterTasks(p.taskSearchInput.Value(), p.taskSearchAll)
-			p.taskSearchIdx = 0
-			p.taskSearchScroll = 0
-		}
+	if action == "" {
+		p.createError = ""
 	}
-
 	return cmd
 }
 
@@ -1431,15 +1158,18 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 	if p.createBusyStep != "" || p.createPlan != nil {
 		return nil
 	}
-	name := p.createNameInput.Value()
+	p.syncCreateTaskFromCombo()
+	p.syncCreateAgentFromIdx()
+	name := strings.TrimSpace(p.createNameInput.Value())
 	if name == "" {
 		p.createError = "Name is required"
 		return nil
 	}
-	if !p.branchNameValid {
-		p.createError = "Invalid branch name: " + strings.Join(p.branchNameErrors, ", ")
+	if SlugifyWorktreeName(name) == "" {
+		p.createError = "Name does not produce a valid git branch"
 		return nil
 	}
+	_ = state.SetLastCreateAgent(string(p.createAgentType))
 	p.createBusyStep = "Validating branch, source, and destination"
 	p.createOperationModal = nil
 	return p.resolveCreatePlan()
@@ -1497,27 +1227,6 @@ func (p *Plugin) shouldShowShellSkipPerms() bool {
 
 func (p *Plugin) agentTypeIndex(agentType AgentType) int {
 	return agentTypeIndexIn(p.selectableAgentTypes(), agentType)
-}
-
-// blurCreateInputs blurs all create modal textinputs.
-func (p *Plugin) blurCreateInputs() {
-	p.createNameInput.Blur()
-	p.createBaseBranchInput.Blur()
-	p.taskSearchInput.Blur()
-}
-
-// focusCreateInput focuses the appropriate textinput based on createFocus.
-// createFocus: 0=name, 1=base, 2=prompt (no textinput), 3=task, 4+=non-inputs
-func (p *Plugin) focusCreateInput() {
-	switch p.createFocus {
-	case 0:
-		p.createNameInput.Focus()
-	case 1:
-		p.createBaseBranchInput.Focus()
-	// case 2 is prompt field - no textinput to focus (opens picker on Enter)
-	case 3:
-		p.taskSearchInput.Focus()
-	}
 }
 
 // handleTaskLinkKeys handles keys in task link modal.

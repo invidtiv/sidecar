@@ -34,7 +34,6 @@ type CreateOperationPlan struct {
 	TaskTitle      string
 	AgentType      AgentType
 	SkipPerms      bool
-	Prompt         *Prompt
 	RemotePolicy   string
 	CopyEnv        bool
 	EnvFiles       []string
@@ -211,7 +210,7 @@ func (p *Plugin) finishCreatedWorktree(plan *CreateOperationPlan, wt *Worktree) 
 	p.clearCreateModal()
 	cmds := []tea.Cmd{p.loadSelectedContent()}
 	if plan.AgentType != AgentNone && plan.AgentType != "" {
-		cmds = append(cmds, p.StartAgentWithOptions(wt, plan.AgentType, plan.SkipPerms, plan.Prompt))
+		cmds = append(cmds, p.StartAgentWithOptions(wt, plan.AgentType, plan.SkipPerms))
 	} else {
 		cmds = append(cmds, p.AttachToWorktreeDir(wt))
 	}
