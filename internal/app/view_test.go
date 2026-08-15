@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
@@ -16,38 +17,42 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-func TestGetRepoNameBounds_EmptyRepoName(t *testing.T) {
+func TestGetProjectSelectorBounds_EmptyRepoNameUsesFallback(t *testing.T) {
 	m := Model{
+		width: 120,
 		intro: IntroModel{
 			RepoName: "",
 		},
 	}
 
-	start, end, ok := m.getRepoNameBounds()
-	if ok {
-		t.Errorf("getRepoNameBounds() with empty repo name should return ok=false, got ok=true, start=%d, end=%d", start, end)
+	start, end, ok := m.getProjectSelectorBounds()
+	if !ok || end != m.width || start >= end {
+		t.Errorf("fallback selector bounds = %d-%d ok=%v", start, end, ok)
 	}
 }
 
 func TestGetRepoNameBounds_NormalRepoName(t *testing.T) {
 	m := Model{
+		width: 120,
 		intro: IntroModel{
 			RepoName: "sidecar",
 		},
 	}
 
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() with normal repo name should return ok=true")
 	}
 
-	// Start should be after " Sidecar" and " / "
-	// End should be after the repo name
+	// The selector is pinned to the far-right edge.
 	if start <= 0 {
 		t.Errorf("start should be > 0, got %d", start)
 	}
 	if end <= start {
 		t.Errorf("end should be > start, got start=%d, end=%d", start, end)
+	}
+	if end != m.width {
+		t.Errorf("selector end = %d, want %d", end, m.width)
 	}
 
 	// The width should roughly match the repo name length
@@ -60,12 +65,13 @@ func TestGetRepoNameBounds_NormalRepoName(t *testing.T) {
 func TestGetRepoNameBounds_LongRepoName(t *testing.T) {
 	longName := "this-is-a-very-long-repository-name-that-might-cause-issues"
 	m := Model{
+		width: 120,
 		intro: IntroModel{
 			RepoName: longName,
 		},
 	}
 
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() with long repo name should return ok=true")
 	}
@@ -84,7 +90,7 @@ func TestGetRepoNameBounds_LongRepoName(t *testing.T) {
 	}
 }
 
-func TestGetScopeBounds_OnlyInGlobal(t *testing.T) {
+func TestProjectSelectorBoundsExistInBothScopes(t *testing.T) {
 	cfg := config.Default()
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
@@ -96,20 +102,17 @@ func TestGetScopeBounds_OnlyInGlobal(t *testing.T) {
 		overview: overview.New(workspaceinventory.Collector{}),
 		width:    120,
 	}
-	if _, _, ok := m.getScopeBounds(); ok {
-		t.Fatal("project scope should not expose Overview pill bounds")
+	if start, end, ok := m.getProjectSelectorBounds(); !ok || end != m.width || start >= end {
+		t.Fatalf("project selector bounds = %d-%d ok=%v", start, end, ok)
 	}
 	m.scope = ScopeGlobal
-	start, end, ok := m.getScopeBounds()
-	if !ok || end <= start {
-		t.Fatalf("global scope bounds = %d-%d ok=%v", start, end, ok)
+	start, end, ok := m.getProjectSelectorBounds()
+	if !ok || end != m.width || end <= start {
+		t.Fatalf("global selector bounds = %d-%d ok=%v", start, end, ok)
 	}
-	if _, _, repoOK := m.getRepoNameBounds(); repoOK {
-		t.Fatal("global scope should not keep repo-name switcher bounds")
-	}
-	header := m.renderHeader()
-	if !strings.Contains(header, styles.BarChipActive.Render("Overview")) {
-		t.Fatalf("global header is missing the Overview pill: %q", ansi.Strip(header))
+	header := ansi.Strip(m.renderHeader())
+	if !strings.Contains(header, "Select Project ▾") {
+		t.Fatalf("global header is missing the selector: %q", header)
 	}
 }
 
@@ -133,7 +136,7 @@ func TestRepoNameClick_OpensProjectSwitcher(t *testing.T) {
 	}
 
 	// Get the bounds for the repo name
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() should return ok=true")
 	}
@@ -178,7 +181,7 @@ func TestRepoNameClick_FocusesProjectFilter(t *testing.T) {
 		ready:    true,
 	}
 
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() should return ok=true")
 	}
@@ -228,7 +231,7 @@ func TestRepoNameClick_BlockedDuringIntro(t *testing.T) {
 		ready:    true,
 	}
 
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() should return ok=true")
 	}
@@ -268,7 +271,7 @@ func TestRepoNameClick_OutsideBounds(t *testing.T) {
 		ready:    true,
 	}
 
-	start, _, ok := m.getRepoNameBounds()
+	start, _, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("getRepoNameBounds() should return ok=true")
 	}
@@ -288,11 +291,11 @@ func TestRepoNameClick_OutsideBounds(t *testing.T) {
 	}
 }
 
-func TestRenderHeader_ShowClockConfig(t *testing.T) {
+func TestRenderHeader_RemovesClockRegardlessOfLegacyConfig(t *testing.T) {
 	now := time.Date(2025, 1, 1, 14, 30, 0, 0, time.UTC)
 	reg := plugin.NewRegistry(nil)
 
-	t.Run("clock visible when showClock is true", func(t *testing.T) {
+	t.Run("legacy true", func(t *testing.T) {
 		m := Model{
 			showClock: true,
 			ui:        &UIState{Clock: now},
@@ -301,12 +304,12 @@ func TestRenderHeader_ShowClockConfig(t *testing.T) {
 			intro:     IntroModel{Done: true},
 		}
 		header := m.renderHeader()
-		if !strings.Contains(header, "14:30") {
-			t.Error("header should contain clock when showClock is true")
+		if strings.Contains(header, "14:30") {
+			t.Error("header should not contain clock when showClock is true")
 		}
 	})
 
-	t.Run("clock hidden when showClock is false", func(t *testing.T) {
+	t.Run("false", func(t *testing.T) {
 		m := Model{
 			showClock: false,
 			ui:        &UIState{Clock: now},
@@ -319,6 +322,248 @@ func TestRenderHeader_ShowClockConfig(t *testing.T) {
 			t.Error("header should not contain clock when showClock is false")
 		}
 	})
+}
+
+func TestNarrowHeaderHitRegionsMatchPaintedGeometry(t *testing.T) {
+	original := styles.PillTabsEnabled
+	t.Cleanup(func() { styles.PillTabsEnabled = original })
+
+	for _, pills := range []bool{false, true} {
+		styles.PillTabsEnabled = pills
+		for _, scope := range []AppScope{ScopeProject, ScopeGlobal} {
+			m, _ := scopeModelWithTasks(t)
+			m.scope = scope
+			m.globalTab = GlobalSessions
+			m.width, m.height, m.ready = minWidth, minHeight, true
+			m.intro.Active, m.intro.Done = false, true
+			m.updateContext()
+
+			header := m.renderHeader()
+			selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
+			if !ok || selectorEnd != m.width {
+				t.Fatalf("pills=%v scope=%v selector=%d-%d ok=%v", pills, scope, selectorStart, selectorEnd, ok)
+			}
+			if _, _, restoreOK := m.getProjectRestoreBounds(); restoreOK {
+				t.Fatalf("pills=%v scope=%v narrow header retained optional restore control", pills, scope)
+			}
+			for _, bounds := range m.getTabBounds() {
+				if bounds.Start < 0 || bounds.Start >= bounds.End || bounds.End > selectorStart {
+					t.Fatalf("pills=%v scope=%v tab=%#v overlaps selector %d-%d", pills, scope, bounds, selectorStart, selectorEnd)
+				}
+				painted := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(header, bounds.Start, ""), bounds.End-bounds.Start, ""))
+				if !strings.Contains(painted, m.tabLabel(bounds.Tab)) {
+					t.Fatalf("pills=%v scope=%v bounds=%#v paint=%q header=%q", pills, scope, bounds, painted, ansi.Strip(header))
+				}
+
+				candidate := m
+				updated, _ := candidate.Update(tea.MouseClickMsg{X: (bounds.Start + bounds.End) / 2, Y: 0, Button: tea.MouseLeft})
+				clicked := asAppModel(t, updated)
+				if bounds.Tab.scope == ScopeGlobal {
+					if !clicked.inGlobalScope() || clicked.globalTab != bounds.Tab.global {
+						t.Fatalf("pills=%v scope=%v global click %#v routed to scope=%v tab=%v", pills, scope, bounds, clicked.scope, clicked.globalTab)
+					}
+				} else if clicked.inGlobalScope() || clicked.activePlugin != bounds.Tab.plugin {
+					t.Fatalf("pills=%v project click %#v routed to scope=%v plugin=%d", pills, bounds, clicked.scope, clicked.activePlugin)
+				}
+			}
+
+			updated, _ := m.Update(tea.MouseClickMsg{X: (selectorStart + selectorEnd) / 2, Y: 0, Button: tea.MouseLeft})
+			selected := asAppModel(t, updated)
+			if !selected.showProjectSwitcher || selected.scope != scope {
+				t.Fatalf("pills=%v scope=%v selector click: modal=%v resulting scope=%v", pills, scope, selected.showProjectSwitcher, selected.scope)
+			}
+		}
+	}
+}
+
+func TestWideHeaderGlobalRestoreAndSelectorGeometry(t *testing.T) {
+	original := styles.PillTabsEnabled
+	t.Cleanup(func() { styles.PillTabsEnabled = original })
+
+	for _, pills := range []bool{false, true} {
+		styles.PillTabsEnabled = pills
+		m, plugins := scopeBaselineModel(t, "git")
+		m.scope = ScopeGlobal
+		m.globalTab = GlobalSessions
+		m.width, m.height, m.ready = 160, 40, true
+		m.updateContext()
+		inits := totalInits(plugins)
+
+		layout := m.headerGeometry()
+		plain := ansi.Strip(m.renderHeader())
+		if !strings.Contains(plain, "↖ one") || !strings.Contains(plain, "Select Project ▾") {
+			t.Fatalf("pills=%v global header = %q", pills, plain)
+		}
+		if strings.Contains(layout.right, "\x1b[48;") || strings.Contains(layout.right, "\ue0b6") || strings.Contains(layout.right, "\ue0b4") {
+			t.Fatalf("pills=%v global right controls are not transparent: %q", pills, layout.right)
+		}
+		restoreStart, restoreEnd, ok := m.getProjectRestoreBounds()
+		if !ok || restoreStart >= restoreEnd {
+			t.Fatalf("pills=%v restore bounds = %d-%d ok=%v", pills, restoreStart, restoreEnd, ok)
+		}
+		selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
+		if !ok || restoreEnd >= selectorStart || selectorEnd != m.width {
+			t.Fatalf("pills=%v restore=%d-%d selector=%d-%d", pills, restoreStart, restoreEnd, selectorStart, selectorEnd)
+		}
+		for _, bounds := range m.getTabBounds() {
+			if bounds.End > restoreStart {
+				t.Fatalf("pills=%v tab %#v overlaps restore %d-%d", pills, bounds, restoreStart, restoreEnd)
+			}
+		}
+
+		restoredModel, _ := m.Update(tea.MouseClickMsg{X: (restoreStart + restoreEnd) / 2, Y: 0, Button: tea.MouseLeft})
+		restored := asAppModel(t, restoredModel)
+		if restored.inGlobalScope() || restored.activePlugin != m.activePlugin || restored.ui.WorkDir != m.ui.WorkDir || totalInits(plugins) != inits {
+			t.Fatalf("pills=%v restore reinitialized or changed project: global=%v plugin=%d work=%q inits=%d", pills, restored.inGlobalScope(), restored.activePlugin, restored.ui.WorkDir, totalInits(plugins))
+		}
+
+		selectedModel, _ := m.Update(tea.MouseClickMsg{X: (selectorStart + selectorEnd) / 2, Y: 0, Button: tea.MouseLeft})
+		selected := asAppModel(t, selectedModel)
+		if !selected.inGlobalScope() || !selected.showProjectSwitcher {
+			t.Fatalf("pills=%v global selector click changed scope or missed modal", pills)
+		}
+
+		project := m
+		project.scope = ScopeProject
+		project.updateContext()
+		if _, _, ok := project.getProjectRestoreBounds(); ok {
+			t.Fatalf("pills=%v project scope exposed restore bounds", pills)
+		}
+		projectLayout := project.headerGeometry()
+		if strings.Contains(ansi.Strip(project.renderHeader()), "↖ one") {
+			t.Fatalf("pills=%v project scope painted global restore", pills)
+		}
+		if pills && !strings.Contains(projectLayout.right, "\ue0b6") {
+			t.Fatalf("pills=%v project selector lost its pill styling: %q", pills, projectLayout.right)
+		}
+	}
+}
+
+func TestHeaderControlsOnlyActivateOnPaintedRow(t *testing.T) {
+	type region struct {
+		name       string
+		x          int
+		wantAction func(before, after Model) bool
+	}
+	for _, scope := range []AppScope{ScopeProject, ScopeGlobal} {
+		m, _ := scopeModelWithTasks(t)
+		m.scope = scope
+		m.globalTab = GlobalSessions
+		m.width, m.height, m.ready = 160, 40, true
+		m.intro.Active, m.intro.Done = false, true
+		m.updateContext()
+
+		var regions []region
+		if start, end, ok := m.getLogoBounds(); ok {
+			regions = append(regions, region{"logo", (start + end) / 2, func(before, after Model) bool { return before.scope != after.scope }})
+		}
+		if start, end, ok := m.getProjectRestoreBounds(); ok {
+			regions = append(regions, region{"restore", (start + end) / 2, func(_ Model, after Model) bool { return !after.inGlobalScope() }})
+		}
+		if start, end, ok := m.getProjectSelectorBounds(); ok {
+			regions = append(regions, region{"selector", (start + end) / 2, func(_ Model, after Model) bool { return after.showProjectSwitcher }})
+		}
+		for _, bounds := range m.getTabBounds() {
+			bounds := bounds
+			regions = append(regions, region{"tab " + m.tabLabel(bounds.Tab), (bounds.Start + bounds.End) / 2, func(_ Model, after Model) bool {
+				if bounds.Tab.scope == ScopeGlobal {
+					return after.inGlobalScope() && after.globalTab == bounds.Tab.global
+				}
+				return !after.inGlobalScope() && after.activePlugin == bounds.Tab.plugin
+			}})
+		}
+
+		for _, target := range regions {
+			t.Run(target.name, func(t *testing.T) {
+				spacerModel, _ := m.Update(tea.MouseClickMsg{X: target.x, Y: 1, Button: tea.MouseLeft})
+				spacer := asAppModel(t, spacerModel)
+				if spacer.scope != m.scope || spacer.globalTab != m.globalTab || spacer.activePlugin != m.activePlugin || spacer.showProjectSwitcher {
+					t.Fatalf("scope=%v %s activated from blank spacer: scope=%v tab=%v plugin=%d switcher=%v", scope, target.name, spacer.scope, spacer.globalTab, spacer.activePlugin, spacer.showProjectSwitcher)
+				}
+
+				paintedModel, _ := m.Update(tea.MouseClickMsg{X: target.x, Y: 0, Button: tea.MouseLeft})
+				painted := asAppModel(t, paintedModel)
+				if !target.wantAction(m, painted) {
+					t.Fatalf("scope=%v %s did not activate on painted row", scope, target.name)
+				}
+			})
+		}
+	}
+}
+
+func TestLongProjectSelectorPreservesNarrowLeftAnchorAndExactBounds(t *testing.T) {
+	original := styles.PillTabsEnabled
+	t.Cleanup(func() { styles.PillTabsEnabled = original })
+
+	cases := []struct {
+		name     string
+		repo     string
+		worktree *WorktreeInfo
+	}{
+		{"long repo", strings.Repeat("repository-", 12), nil},
+		{"long worktree", "sidecar", &WorktreeInfo{Branch: strings.Repeat("feature-", 16), IsMain: false}},
+	}
+	for _, tc := range cases {
+		for _, pills := range []bool{false, true} {
+			styles.PillTabsEnabled = pills
+			m, _ := scopeModelWithTasks(t)
+			m.scope = ScopeProject
+			m.width, m.height, m.ready = minWidth, minHeight, true
+			m.intro = IntroModel{RepoName: tc.repo, Done: true}
+			m.cachedWorktreeInfo = tc.worktree
+			m.updateContext()
+
+			header := m.renderHeader()
+			plain := ansi.Strip(header)
+			if lipgloss.Width(header) != minWidth || !strings.Contains(plain, "Sidecar") {
+				t.Fatalf("%s pills=%v malformed header width/text: %d %q", tc.name, pills, lipgloss.Width(header), plain)
+			}
+			for _, label := range []string{"Sessions", "Activity", "Tasks"} {
+				if !strings.Contains(plain, label) {
+					t.Fatalf("%s pills=%v long selector displaced %s: %q", tc.name, pills, label, plain)
+				}
+			}
+			logoStart, logoEnd, ok := m.getLogoBounds()
+			if !ok || logoStart != 0 || logoEnd <= logoStart {
+				t.Fatalf("%s pills=%v logo bounds=%d-%d ok=%v", tc.name, pills, logoStart, logoEnd, ok)
+			}
+			logoPaint := ansi.Strip(ansi.Truncate(header, logoEnd, ""))
+			if !strings.Contains(logoPaint, "Sidecar") {
+				t.Fatalf("%s pills=%v logo bounds cover invisible columns: %q", tc.name, pills, logoPaint)
+			}
+
+			selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
+			if !ok || selectorEnd != minWidth || selectorStart < logoEnd || selectorStart >= selectorEnd {
+				t.Fatalf("%s pills=%v selector=%d-%d logo=%d-%d", tc.name, pills, selectorStart, selectorEnd, logoStart, logoEnd)
+			}
+			selectorPaint := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(header, selectorStart, ""), selectorEnd-selectorStart, ""))
+			if !strings.Contains(selectorPaint, "▾") {
+				t.Fatalf("%s pills=%v selector lost right edge/arrow: %q header=%q", tc.name, pills, selectorPaint, plain)
+			}
+			for _, bounds := range m.getTabBounds() {
+				if bounds.Start < logoEnd || bounds.End > selectorStart || bounds.Start >= bounds.End {
+					t.Fatalf("%s pills=%v tab %#v overlaps anchor/selector", tc.name, pills, bounds)
+				}
+				painted := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(header, bounds.Start, ""), bounds.End-bounds.Start, ""))
+				if !strings.Contains(painted, m.tabLabel(bounds.Tab)) {
+					t.Fatalf("%s pills=%v tab %#v covers %q", tc.name, pills, bounds, painted)
+				}
+			}
+		}
+	}
+}
+
+func TestGlobalRestoreOmittedWithoutProjectName(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.scope = ScopeGlobal
+	m.intro.RepoName = ""
+	m.width = 160
+	if _, _, ok := m.getProjectRestoreBounds(); ok {
+		t.Fatal("empty covered-project name produced restore bounds")
+	}
+	if strings.Contains(ansi.Strip(m.renderHeader()), "↖") {
+		t.Fatal("empty covered-project name painted a restore control")
+	}
 }
 
 func TestIntroActive_SetFalseAfterCompletion(t *testing.T) {

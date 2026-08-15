@@ -272,35 +272,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleIssuePreviewMouse(msg)
 		}
 
-		// Handle header tab clicks (Y < 2 means header area)
+		// Only row 0 is painted header chrome. Row 1 is intentional breathing
+		// room and must remain inert even though both rows make up headerHeight.
 		mi := msg.Mouse()
 		_, isClickPress := msg.(tea.MouseClickMsg)
-		if mi.Y < headerHeight && isClickPress && mi.Button == tea.MouseLeft {
+		if mi.Y == 0 && isClickPress && mi.Button == tea.MouseLeft {
 			// Brand logo opens the Overview (when the feature is enabled).
 			if start, end, ok := m.getLogoBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				return m, m.toggleOverview()
 			}
 
-			if start, end, ok := m.getScopeBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				return m, m.toggleOverview()
+			if start, end, ok := m.getProjectRestoreBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+				return m, m.exitOverview()
 			}
 
-			if start, end, ok := m.getRepoNameBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+			// The project selector is a stable far-right target in both scopes.
+			if start, end, ok := m.getProjectSelectorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 				m.showProjectSwitcher = true
 				m.activeContext = "project-switcher"
 				m.initProjectSwitcher()
 				return m, nil
-			}
-
-			// Check if click is on worktree indicator
-			if start, end, ok := m.getWorktreeIndicatorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-				worktrees := m.worktreeInventory()
-				if len(worktrees) > 1 {
-					m.showWorktreeSwitcher = true
-					m.activeContext = "worktree-switcher"
-					m.initWorktreeSwitcher()
-					return m, nil
-				}
 			}
 
 			// Check if click is on a tab. The bounds carry the typed tab of the

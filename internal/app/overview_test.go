@@ -20,7 +20,6 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -181,6 +180,7 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	m.scope = ScopeGlobal
+	m.globalTab = GlobalActivity
 	m.intro.Active = false
 	m.width, m.height, m.ready = 72, 30, true
 	panes := m.overview.Start(nil)()
@@ -191,7 +191,8 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 		t.Fatalf("app height = %d, want 30\n%s", got, view)
 	}
 	lines := strings.Split(view, "\n")
-	if !strings.Contains(lines[0], "Sidecar") || !strings.Contains(lines[0], "Overview") || lines[1] != "" || !strings.Contains(lines[len(lines)-1], "Open") {
+	first := ansi.Strip(lines[0])
+	if !strings.Contains(first, "Sidecar") || !strings.Contains(first, "Activity") || !strings.Contains(first, "Select Project") || lines[1] != "" || !strings.Contains(ansi.Strip(lines[len(lines)-1]), "Open") {
 		t.Fatalf("compact viewport hid app chrome: first=%q last=%q", lines[0], lines[len(lines)-1])
 	}
 	if got := lipgloss.Width(lines[0]); got != 72 {
@@ -200,14 +201,8 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	plainHeader := ansi.Strip(lines[0])
 	// The global space owns the tab row: its own tabs, and only its own. The
 	// project plugin tabs belong to the space the user is not in.
-	if !strings.Contains(plainHeader, "Agents") || !strings.Contains(plainHeader, "Workspaces") {
+	if !strings.Contains(plainHeader, "Activity") || !strings.Contains(plainHeader, "Sessions") {
 		t.Fatalf("narrow global header omitted its own tabs: %q", plainHeader)
-	}
-	if strings.Contains(lines[0], styles.Subtitle.Render(" / Overview")) {
-		t.Fatal("global Overview is still muted subtitle text")
-	}
-	if !strings.Contains(lines[0], styles.BarChipActive.Render("Overview")) {
-		t.Fatal("global Overview is not a filled breadcrumb pill")
 	}
 	for _, projectTab := range []string{"td", "git", "files", "conversations"} {
 		if strings.Contains(plainHeader, projectTab) {
@@ -221,46 +216,8 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	wide := m
 	wide.scope = ScopeProject
 	wide.width = 140
-	if header := ansi.Strip(wide.renderHeader()); !strings.Contains(header, "workspaces") || len(wide.getTabBounds()) != 5 {
+	if header := ansi.Strip(wide.renderHeader()); !strings.Contains(header, "workspaces") || len(wide.getTabBounds()) != 7 {
 		t.Fatalf("wide header changed existing full-tab layout: %q bounds=%#v", header, wide.getTabBounds())
-	}
-	narrowProject := wide
-	narrowProject.width = 64
-	narrowHeader := ansi.Strip(narrowProject.renderHeader())
-	if !strings.Contains(narrowHeader, "td") || !strings.Contains(narrowHeader, "git") || !strings.Contains(narrowHeader, "files") || !strings.Contains(narrowHeader, "conversations") {
-		t.Fatalf("narrow project header omitted discoverable tabs: %q", narrowHeader)
-	}
-	if strings.Contains(narrowHeader, "workspaces") || len(narrowProject.getTabBounds()) != 4 {
-		t.Fatalf("narrow project header did not deterministically omit the final inactive tab: %q bounds=%#v",
-			narrowHeader, narrowProject.getTabBounds())
-	}
-	active := m
-	active.scope = ScopeProject
-	active.activePlugin = 4
-	active.intro.RepoName = strings.Repeat("x", 50)
-	active.width = 60
-	var activeBounds TabBounds
-	foundActive := false
-	for _, bounds := range active.getTabBounds() {
-		if bounds.Tab.scope == ScopeProject && bounds.Tab.plugin == 4 {
-			activeBounds, foundActive = bounds, true
-		}
-	}
-	renderedHeader := active.renderHeader()
-	header := ansi.Strip(renderedHeader)
-	if !strings.Contains(header, "Sidecar / xxxxx") || !strings.Contains(header, "…") || !strings.Contains(header, "workspaces") || strings.Contains(header, strings.Repeat("x", 50)) || !foundActive {
-		t.Fatalf("narrow header lost active project/plugin: %q bounds=%#v", header, active.getTabBounds())
-	}
-	if got := lipgloss.Width(renderedHeader); got != active.width {
-		t.Fatalf("long-title header width = %d, want %d", got, active.width)
-	}
-	if activeBounds.Start < 0 || activeBounds.End > active.width || activeBounds.Start >= activeBounds.End {
-		t.Fatalf("active tab bounds outside fitted header: width=%d bounds=%#v", active.width, activeBounds)
-	}
-	clicked, _ := active.Update(tea.MouseClickMsg{X: (activeBounds.Start + activeBounds.End) / 2, Y: 0, Button: tea.MouseLeft})
-	clickedModel := clicked.(Model)
-	if clickedModel.showProjectSwitcher || clickedModel.activePlugin != 4 {
-		t.Fatalf("fitted active tab click misrouted: plugin=%d switcher=%v", clickedModel.activePlugin, clickedModel.showProjectSwitcher)
 	}
 	if !strings.Contains(ansi.Strip(lines[2]), "Agent Overview") {
 		t.Fatalf("content did not begin at global row 2: %q", lines[2])
@@ -562,7 +519,7 @@ func TestOverviewExitBeforeNavigateMsgIgnoresLateActivation(t *testing.T) {
 		staysGlobal bool
 	}{
 		{"esc returns to the project", tea.KeyPressMsg{Code: tea.KeyEsc}, false},
-		{"2 switches to another global tab", tea.KeyPressMsg{Code: '2', Text: "2"}, true},
+		{"1 switches to another global tab", tea.KeyPressMsg{Code: '1', Text: "1"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -641,13 +598,13 @@ func TestOverviewHeaderTabClickInvalidatesPendingNavigation(t *testing.T) {
 	navigation := overviewNavigation(t, m.overview, overviewWorkspace(target))
 	m.width, m.height, m.ready = 120, 40, true
 	bounds := m.getTabBounds()
-	if len(bounds) < 2 || bounds[1].Tab.scope != ScopeGlobal || bounds[1].Tab.global != GlobalWorkspaces {
+	if len(bounds) < 2 || bounds[0].Tab.scope != ScopeGlobal || bounds[0].Tab.global != GlobalSessions {
 		t.Fatalf("expected the global tab row in the header: %#v", bounds)
 	}
 	initialInits := p.inits
-	updatedModel, _ := m.Update(tea.MouseClickMsg{X: bounds[1].Start, Y: 0, Button: tea.MouseLeft})
+	updatedModel, _ := m.Update(tea.MouseClickMsg{X: bounds[0].Start, Y: 0, Button: tea.MouseLeft})
 	exited := updatedModel.(Model)
-	if !exited.inGlobalScope() || exited.globalTab != GlobalWorkspaces {
+	if !exited.inGlobalScope() || exited.globalTab != GlobalSessions {
 		t.Fatalf("tab click left the global space: global=%v tab=%v", exited.inGlobalScope(), exited.globalTab)
 	}
 	updatedModel, cmd := exited.Update(navigation)
@@ -660,7 +617,7 @@ func TestOverviewHeaderTabClickInvalidatesPendingNavigation(t *testing.T) {
 func TestOverviewHeaderMouseOpensSwitcher(t *testing.T) {
 	cfg := config.Default()
 	m := Model{cfg: cfg, registry: plugin.NewRegistry(nil), keymap: keymap.NewRegistry(), ui: &UIState{}, intro: IntroModel{RepoName: "repo", Done: true}, overview: overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}}), width: 120, height: 40, ready: true}
-	start, end, ok := m.getRepoNameBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok {
 		t.Fatal("project header has no switcher bounds")
 	}
@@ -671,7 +628,7 @@ func TestOverviewHeaderMouseOpensSwitcher(t *testing.T) {
 	}
 }
 
-func TestOverviewPillClickTogglesToProject(t *testing.T) {
+func TestGlobalProjectSelectorOpensSwitcher(t *testing.T) {
 	cfg := config.Default()
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
@@ -685,37 +642,32 @@ func TestOverviewPillClickTogglesToProject(t *testing.T) {
 	m.scope = ScopeGlobal
 	m.updateContext()
 
-	start, end, ok := m.getScopeBounds()
+	start, end, ok := m.getProjectSelectorBounds()
 	if !ok || end <= start {
 		t.Fatalf("scope bounds = %d-%d ok=%v", start, end, ok)
 	}
-	if _, _, repoOK := m.getRepoNameBounds(); repoOK {
-		t.Fatal("global Overview still exposes project-switcher bounds")
-	}
-
 	updated, _ := m.Update(tea.MouseClickMsg{X: (start + end) / 2, Y: 0, Button: tea.MouseLeft})
 	m = asAppModel(t, updated)
-	if m.inGlobalScope() {
-		t.Fatal("Overview pill click did not return to the project")
+	if !m.inGlobalScope() || !m.showProjectSwitcher {
+		t.Fatal("global selector click did not open the project switcher in place")
 	}
-	if m.showProjectSwitcher {
-		t.Fatal("Overview pill click opened the project switcher")
-	}
+	m.showProjectSwitcher = false
+	m.activeContext = "global-workspaces"
 
-	// Logo and K still toggle the same way.
+	// Logo and K still toggle the scope.
 	logoStart, logoEnd, ok := m.getLogoBounds()
 	if !ok {
 		t.Fatal("logo bounds vanished in project scope")
 	}
 	updated, _ = m.Update(tea.MouseClickMsg{X: (logoStart + logoEnd) / 2, Y: 0, Button: tea.MouseLeft})
 	m = asAppModel(t, updated)
-	if !m.inGlobalScope() {
-		t.Fatal("logo click did not reopen Overview")
+	if m.inGlobalScope() {
+		t.Fatal("logo click did not return to project scope")
 	}
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if m.inGlobalScope() {
-		t.Fatal("K did not leave Overview")
+	if !m.inGlobalScope() {
+		t.Fatal("K did not re-enter global scope")
 	}
 }
 
@@ -763,6 +715,7 @@ func newOverviewRaceModel(t *testing.T) (Model, *navigationPlugin, string) {
 	m := New(reg, km, cfg, "", source, source, "git")
 	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
 	m.scope = ScopeGlobal
+	m.globalTab = GlobalActivity
 	m.overview.Start(nil)
 	return m, p, source
 }
@@ -828,6 +781,7 @@ func overviewModelOverTextInput(t *testing.T) (Model, *textInputPlugin) {
 	m.intro.Active, m.intro.Done = false, true
 	m.width, m.height, m.ready = 120, 40, true
 	m.scope = ScopeGlobal
+	m.globalTab = GlobalActivity
 	m.updateContext()
 	return m, shell
 }
@@ -902,12 +856,12 @@ func TestOverviewGlobalShortcutsWorkOverInteractivePlugin(t *testing.T) {
 		m, shell := overviewModelOverTextInput(t)
 		updated, _ := m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 		m = asAppModel(t, updated)
-		if !m.inGlobalScope() || m.globalTab != GlobalWorkspaces {
+		if !m.inGlobalScope() || m.globalTab != GlobalActivity {
 			t.Fatalf("2 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
 		}
 		updated, _ = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
 		m = asAppModel(t, updated)
-		if !m.inGlobalScope() || m.globalTab != GlobalAgents {
+		if !m.inGlobalScope() || m.globalTab != GlobalSessions {
 			t.Fatalf("1 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
 		}
 		if shell.keyInputs != 0 {

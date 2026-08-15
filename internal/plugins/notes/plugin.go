@@ -24,7 +24,7 @@ import (
 
 const (
 	pluginID   = "notes"
-	pluginName = "notes"
+	pluginName = "Notes"
 	pluginIcon = "N"
 
 	// Pane layout
