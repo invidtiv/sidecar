@@ -106,7 +106,7 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 		// in the global list carries neither provider nor branch nor task, and
 		// spending a blank row on each of them is what pushes a whole section
 		// off the bottom of an ordinary pane.
-		return []string{finishRow(line1, width, selected, focused)}
+		return []string{finishRowLine(row.Marker, icon, rest, width, selected, focused)}
 	}
 	if selected {
 		return []string{
