@@ -3,7 +3,6 @@ package app
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -50,17 +49,10 @@ func TestGlobalWorkspacesFrameFitsEverySupportedSize(t *testing.T) {
 		}
 		plain := ansi.Strip(view)
 		header, footer := ansi.Strip(lines[0]), ansi.Strip(lines[len(lines)-1])
-		if !strings.Contains(header, "Sidecar") || !strings.Contains(header, "Overview") {
+		if !strings.Contains(header, "Sidecar") || !strings.Contains(header, "Sessions") || !strings.Contains(header, "Select Project") {
 			t.Fatalf("%dx%d header lost the global destination: %q", size.w, size.h, header)
 		}
-		raw := m.renderHeader()
-		if strings.Contains(raw, styles.Subtitle.Render(" / Overview")) {
-			t.Fatalf("%dx%d Overview is still muted subtitle text: %q", size.w, size.h, header)
-		}
-		if !strings.Contains(raw, styles.BarChipActive.Render("Overview")) {
-			t.Fatalf("%dx%d Overview is not a filled breadcrumb pill: %q", size.w, size.h, header)
-		}
-		if !strings.Contains(header, "Workspaces") {
+		if !strings.Contains(header, "Sessions") {
 			t.Fatalf("%dx%d header dropped the active global tab: %q", size.w, size.h, header)
 		}
 		for _, projectTab := range []string{"files", "notes"} {
@@ -144,7 +136,7 @@ func TestGlobalTabsAreReachableWithAndWithoutNerdFontGlyphs(t *testing.T) {
 		styles.PillTabsEnabled = pills
 		m := globalFrameModel(t)
 		m.width, m.height, m.ready = 140, 40, true
-		m.globalTab = GlobalAgents
+		m.globalTab = GlobalActivity
 		m.updateContext()
 
 		header := m.renderHeader()
@@ -152,26 +144,26 @@ func TestGlobalTabsAreReachableWithAndWithoutNerdFontGlyphs(t *testing.T) {
 			t.Fatalf("pills=%v header width = %d, want %d", pills, got, m.width)
 		}
 		plain := ansi.Strip(header)
-		if !strings.Contains(plain, "Agents") || !strings.Contains(plain, "Workspaces") {
+		if !strings.Contains(plain, "Activity") || !strings.Contains(plain, "Sessions") {
 			t.Fatalf("pills=%v header lost a tab label: %q", pills, plain)
 		}
 
-		var workspaces TabBounds
+		var sessions TabBounds
 		found := false
 		for _, bounds := range m.getTabBounds() {
-			if bounds.Tab.scope == ScopeGlobal && bounds.Tab.global == GlobalWorkspaces {
-				workspaces, found = bounds, true
+			if bounds.Tab.scope == ScopeGlobal && bounds.Tab.global == GlobalSessions {
+				sessions, found = bounds, true
 			}
 		}
 		if !found {
-			t.Fatalf("pills=%v registered no hit region for the Workspaces tab", pills)
+			t.Fatalf("pills=%v registered no hit region for the Sessions tab", pills)
 		}
-		clicked, _ := m.Update(tea.MouseClickMsg{X: (workspaces.Start + workspaces.End) / 2, Y: 0, Button: tea.MouseLeft})
-		if got := asAppModel(t, clicked); got.globalTab != GlobalWorkspaces || !got.inGlobalScope() {
+		clicked, _ := m.Update(tea.MouseClickMsg{X: (sessions.Start + sessions.End) / 2, Y: 0, Button: tea.MouseLeft})
+		if got := asAppModel(t, clicked); got.globalTab != GlobalSessions || !got.inGlobalScope() {
 			t.Fatalf("pills=%v tab click landed on tab %v (global=%v)", pills, got.globalTab, got.inGlobalScope())
 		}
-		numbered, _ := m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
-		if got := asAppModel(t, numbered); got.globalTab != GlobalWorkspaces {
+		numbered, _ := m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+		if got := asAppModel(t, numbered); got.globalTab != GlobalSessions {
 			t.Fatalf("pills=%v number row landed on tab %v", pills, got.globalTab)
 		}
 	}
@@ -201,51 +193,17 @@ func TestGlobalWorkspacesRendersTheSameFrameUnderAnyTheme(t *testing.T) {
 	}
 }
 
-func TestGlobalHeaderKeepsOverviewAfterClockDrops(t *testing.T) {
+func TestGlobalHeaderPinsSelectorAndRemovesClock(t *testing.T) {
 	m := globalFrameModel(t)
 	m.showClock = true
-	m.ui.Clock = time.Date(2025, 1, 1, 14, 30, 0, 0, time.UTC)
 	m.width, m.height, m.ready = 200, 40, true
-
-	title, tabs, clock, _ := m.headerLayout()
-	if clock == "" || !strings.Contains(ansi.Strip(title), "Overview") {
-		t.Fatalf("wide header lost clock or Overview: title=%q clock=%q", ansi.Strip(title), ansi.Strip(clock))
+	plain := ansi.Strip(m.renderHeader())
+	if strings.Contains(plain, ":") {
+		t.Fatalf("header still contains a clock: %q", plain)
 	}
-	tabsWidth := 0
-	for i, tab := range tabs {
-		tabsWidth += lipgloss.Width(tab.text)
-		if i > 0 {
-			tabsWidth++
-		}
-	}
-	// One column below the full row: clock is the first thing headerLayout drops.
-	m.width = lipgloss.Width(title) + tabsWidth + lipgloss.Width(clock) - 1
-	header := m.renderHeader()
-	plain := ansi.Strip(header)
-	if strings.Contains(plain, "14:30") {
-		t.Fatalf("clock should have dropped at width %d: %q", m.width, plain)
-	}
-	if !strings.Contains(plain, "Overview") {
-		t.Fatalf("Overview vanished after the clock dropped: %q", plain)
-	}
-	if !strings.Contains(header, styles.BarChipActive.Render("Overview")) {
-		t.Fatalf("Overview pill missing after the clock dropped: %q", plain)
-	}
-	if len(m.getTabBounds()) != len(tabs) {
-		t.Fatalf("dropping the clock also dropped a tab: bounds=%d want %d", len(m.getTabBounds()), len(tabs))
-	}
-
-	// Keep shrinking until an inactive tab is gone. The destination pill
-	// stays: headerLayout drops inactive tabs before the protected title.
-	for m.width > 20 && len(m.getTabBounds()) == len(tabs) {
-		m.width--
-	}
-	plain = ansi.Strip(m.renderHeader())
-	if !strings.Contains(plain, "Overview") {
-		t.Fatalf("Overview vanished before inactive tabs were gone: %q", plain)
-	}
-	if len(m.getTabBounds()) == 0 {
-		t.Fatal("narrow header dropped every tab")
+	start, end, ok := m.getProjectSelectorBounds()
+	if !ok || end != m.width || start >= end {
+		t.Fatalf("selector bounds = %d-%d ok=%v, want right edge %d", start, end, ok, m.width)
 	}
 }
 

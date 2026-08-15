@@ -117,6 +117,52 @@ func setupShellCLI(t *testing.T, displayName string) (stateHome, socket string) 
 	return stateHome, socket
 }
 
+// setupIsolatedCLI points state at a temp tree and clears TMUX so open
+// resolution cannot see a Sidecar shell.
+func setupIsolatedCLI(t *testing.T) (stateHome, stateDir string) {
+	t.Helper()
+	stateHome = t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	stateDir = filepath.Join(stateHome, "sidecar")
+	if err := os.MkdirAll(filepath.Join(stateDir, "projects"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return stateHome, stateDir
+}
+
+func writeProjectMeta(t *testing.T, stateDir, slug, workDir string) {
+	t.Helper()
+	dir := filepath.Join(stateDir, "projects", slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(`{"path":`+quoteJSON(t, workDir)+`}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeProjectShell(t *testing.T, stateDir, slug string, shell shellstate.Definition) {
+	t.Helper()
+	dir := filepath.Join(stateDir, "projects", slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := struct {
+		Version int                     `json:"version"`
+		Shells  []shellstate.Definition `json:"shells"`
+	}{Version: 1, Shells: []shellstate.Definition{shell}}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shells.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func quoteJSON(t *testing.T, value string) string {
 	t.Helper()
 	b, err := json.Marshal(value)

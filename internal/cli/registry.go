@@ -109,11 +109,12 @@ func RootCommand() *Command {
 		Name:    "open",
 		Summary: "Show a file, a td issue, or a git diff in a split pane",
 		Usage:   "sidecar open [options] [<target>]",
-		Long: "Show a file, a td issue, or a git diff to the user, as a split pane in the Sidecar workspace\n" +
-			"containing this shell. --diff with no spec is the working tree. --split only\n" +
-			"overrides the split axis; it never halves a live terminal after content is open.",
+		Long: "Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.\n" +
+			"From a Sidecar shell this targets that shell. Otherwise it targets the unique running\n" +
+			"instance, or a specific --shell / --project. --diff with no spec is the working tree.\n" +
+			"--split only overrides the split axis; it never halves a live terminal after content is open.",
 		Targets: []TargetDoc{
-			{Target: "path", Summary: "A file inside this shell's workspace, optionally \"path:line\""},
+			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
 			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
@@ -121,6 +122,8 @@ func RootCommand() *Command {
 		Flags: []Flag{
 			{Name: "--line", Arg: "N", Summary: "Line to reveal (alternative to \"path:line\")"},
 			{Name: "--diff", Summary: "Open a Diff leaf (working tree if no spec)", Bool: true},
+			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
+			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
@@ -131,7 +134,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "opened or queued"},
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage or validation error"},
-			{Code: 3, Summary: "no running Sidecar instance is showing this shell"},
+			{Code: 3, Summary: "no running instance, or several running with no target"},
 			{Code: 4, Summary: "an instance declined (e.g. the window is too small to split)"},
 		},
 		Examples: []Example{
@@ -142,20 +145,21 @@ func RootCommand() *Command {
 			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
+			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec]",
-			Summary:    "Put a file, a td issue, or a git diff in front of the user, beside your terminal",
+			Summary:    "Put a file, a td issue, or a git diff in front of the user",
 		},
 		Run: runOpen,
 	}
 
 	agentsCmd := &Command{
 		Name:    "agents",
-		Summary: "List what an agent can do from inside a Sidecar shell",
+		Summary: "List what an agent can do from Sidecar",
 		Usage:   "sidecar --agents",
-		Long: "List the Sidecar commands worth reaching for from inside a project shell,\n" +
-			"one line each. Also spelled \"sidecar --agents\".",
+		Long: "List the Sidecar commands worth reaching for, one line each.\n" +
+			"Also spelled \"sidecar --agents\".",
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "success"},
 		},

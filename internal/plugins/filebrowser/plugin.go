@@ -26,7 +26,7 @@ import (
 
 const (
 	pluginID   = "file-browser"
-	pluginName = "files"
+	pluginName = "Files"
 	pluginIcon = "F"
 
 	// Directory cache limits (for path auto-complete)

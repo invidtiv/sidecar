@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -286,6 +287,289 @@ func runOpenFireAndForget(t *testing.T, workDir string, args []string) uirequest
 	}
 	t.Fatal("no request written")
 	return uirequest.Request{}
+}
+
+func TestOpenFromPlainTerminalUniqueInstance(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("# Hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "doc.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open doc.md) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Origin.TmuxSession != "" {
+		t.Fatalf("TmuxSession = %q, want empty", req.Origin.TmuxSession)
+	}
+	if req.Origin.ProjectKey != "sidecar" {
+		t.Fatalf("ProjectKey = %q, want sidecar", req.Origin.ProjectKey)
+	}
+}
+
+func TestOpenFromPlainTerminalNoInstance(t *testing.T) {
+	setupIsolatedCLI(t)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "doc.md"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("Run(open) = %v, %d; want true, 3 (stderr %q)", handled, code, errOut.String())
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "no Sidecar instance is running") {
+		t.Fatalf("refusal missing no-instance message: %q", combined)
+	}
+	if strings.Contains(combined, "not a Sidecar project shell") {
+		t.Fatalf("old shell-only refusal leaked: %q", combined)
+	}
+}
+
+func TestOpenFromPlainTerminalSeveralInstances(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	child := startDummyProcess(t)
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: child, ProjectKey: "braid", Project: "braid",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "doc.md"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("Run(open) = %v, %d; want true, 3 (stderr %q)", handled, code, errOut.String())
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "--project sidecar") || !strings.Contains(combined, "--project braid") {
+		t.Fatalf("refusal missing --project choices: %q", combined)
+	}
+	if strings.Contains(combined, "not a Sidecar project shell") {
+		t.Fatalf("old shell-only refusal leaked: %q", combined)
+	}
+}
+
+func TestOpenShellFlagFromClearedTMUX(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+		TmuxName: "sidecar-sh-sidecar-1", DisplayName: "active task", Namespace: "/tmp/sock", WorkDir: workDir,
+	})
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "--shell", "active task", "doc.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open --shell) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Origin.TmuxSession != "sidecar-sh-sidecar-1" {
+		t.Fatalf("TmuxSession = %q", req.Origin.TmuxSession)
+	}
+	if req.Origin.ProjectKey != "sidecar" {
+		t.Fatalf("ProjectKey = %q", req.Origin.ProjectKey)
+	}
+}
+
+func TestOpenProjectFlagFromClearedTMUX(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "--project", "sidecar", "doc.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open --project) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Origin.TmuxSession != "" {
+		t.Fatalf("TmuxSession = %q, want empty", req.Origin.TmuxSession)
+	}
+	if req.Origin.ProjectKey != "sidecar" {
+		t.Fatalf("ProjectKey = %q", req.Origin.ProjectKey)
+	}
+}
+
+func TestOpenCurrentShellWinsOverInstance(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	stateDir := filepath.Join(stateHome, "sidecar")
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "other", Project: "other", WorkDir: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "doc.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Origin.TmuxSession != "sidecar-sh-sidecar-1" {
+		t.Fatalf("TmuxSession = %q, want current shell", req.Origin.TmuxSession)
+	}
+	if req.Origin.ProjectKey != "sidecar" {
+		t.Fatalf("ProjectKey = %q", req.Origin.ProjectKey)
+	}
+}
+
+func TestOpenWorkDirIsProjectRootFromSubdir(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	rel := filepath.Join("internal", "cli", "open.go")
+	if err := os.MkdirAll(filepath.Join(workDir, "internal", "cli"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, rel), []byte("package cli\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(workDir, "internal", "cli"))
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "internal/cli/open.go"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open internal/cli/open.go) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if req.Target.Value != "internal/cli/open.go" {
+		t.Fatalf("Target.Value = %q, want internal/cli/open.go", req.Target.Value)
+	}
+	if req.Origin.WorkDir != workDir {
+		t.Fatalf("Origin.WorkDir = %q, want project root %q", req.Origin.WorkDir, workDir)
+	}
+}
+
+func TestOpenProjectFlagRefusesDuplicateLiveInstances(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	child := startDummyProcess(t)
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: child, ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--project", "sidecar", "--wait", "0", "doc.md"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("Run(open --project sidecar) = %v, %d; want true, 3 (stderr %q)", handled, code, errOut.String())
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "--shell") {
+		t.Fatalf("refusal missing --shell: %q", combined)
+	}
+	reqsDir := filepath.Join(stateDir, "requests")
+	if entries, err := os.ReadDir(reqsDir); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".json") && !strings.Contains(e.Name(), ".tmp.") {
+				t.Fatalf("wrote a request despite duplicate live instances: %s", e.Name())
+			}
+		}
+	}
+}
+
+func TestOpenJSONIncludesResolvedDestination(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	if err := os.WriteFile(filepath.Join(workDir, "doc.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--json", "--wait", "0", "doc.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(open --json) = %v, %d; stderr: %q", handled, code, errOut.String())
+	}
+	var result uirequest.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("invalid json result: %v\noutput: %s", err, out.String())
+	}
+	if result.Project != "sidecar" {
+		t.Fatalf("project = %q, want sidecar", result.Project)
+	}
+	if result.Resolved != uirequest.ResolvedInstance {
+		t.Fatalf("resolved = %q, want %q", result.Resolved, uirequest.ResolvedInstance)
+	}
+}
+
+func readWrittenRequest(t *testing.T, stateDir string) uirequest.Request {
+	t.Helper()
+	reqsDir := filepath.Join(stateDir, "requests")
+	entries, err := os.ReadDir(reqsDir)
+	if err != nil {
+		t.Fatalf("read requests: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") && !strings.Contains(e.Name(), ".tmp.") {
+			req, err := uirequest.ReadRequest(filepath.Join(reqsDir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return req
+		}
+	}
+	t.Fatal("no request written")
+	return uirequest.Request{}
+}
+
+func startDummyProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start dummy process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
 }
 
 func initOpenGitRepo(t *testing.T) (dir, oid string) {

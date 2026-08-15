@@ -131,6 +131,73 @@ func TestUIRequests_SelectedShellDeclinesWhenNothingOpens(t *testing.T) {
 
 // Both pane hosts live in one process, so their acks must not share a file
 // name — otherwise one host's answer silently overwrites the other's.
+func TestUIRequests_ProjectTargetOpensSelectedSurface(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	workDir := t.TempDir()
+	p := &Plugin{
+		ctx: &plugin.Context{WorkDir: workDir, ProjectRoot: workDir},
+		shells: []*ShellSession{
+			{TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", WorkDir: workDir},
+		},
+		selectedShellIdx: 0,
+		shellSelected:    true,
+	}
+
+	req := uirequest.Request{
+		ID:        "req-project",
+		Action:    uirequest.ActionOpen,
+		CreatedAt: time.Now().UTC(),
+		TTLMs:     5000,
+		Origin:    uirequest.Origin{ProjectKey: "sidecar", WorkDir: workDir},
+		Target:    uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md"},
+	}
+	p.handleUIRequest(req)
+
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil {
+		t.Fatalf("ReadAcks error: %v", err)
+	}
+	if len(acks) != 1 {
+		t.Fatalf("expected 1 ack, got %d", len(acks))
+	}
+	if acks[0].Status != uirequest.StatusDeclined {
+		t.Errorf("expected status %s, got %s", uirequest.StatusDeclined, acks[0].Status)
+	}
+}
+
+func TestUIRequests_ProjectTargetOtherKeyIgnored(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	workDir := t.TempDir()
+	p := &Plugin{
+		ctx: &plugin.Context{WorkDir: workDir, ProjectRoot: workDir},
+		shells: []*ShellSession{
+			{TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", WorkDir: workDir},
+		},
+		selectedShellIdx: 0,
+		shellSelected:    true,
+	}
+
+	req := uirequest.Request{
+		ID:     "req-other-project",
+		Action: uirequest.ActionOpen,
+		Origin: uirequest.Origin{ProjectKey: "other", WorkDir: "/not/this/project"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md"},
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Errorf("expected nil cmd for other project, got %v", cmd)
+	}
+	acks, _ := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if len(acks) > 0 {
+		t.Errorf("expected 0 acks for other project, got %d", len(acks))
+	}
+}
+
 func TestUIRequests_InstanceIDIsPerHost(t *testing.T) {
 	if hostInstanceID() == uirequest.InstanceID("overview") {
 		t.Errorf("workspace and overview hosts share instance id %q", hostInstanceID())

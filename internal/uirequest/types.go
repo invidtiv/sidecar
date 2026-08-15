@@ -75,12 +75,22 @@ type Ack struct {
 	At       time.Time `json:"at"`
 }
 
+// How a request chose its destination. Values are stable for --json callers.
+const (
+	ResolvedCurrentShell = "current-shell"
+	ResolvedShell        = "shell"
+	ResolvedProject      = "project"
+	ResolvedInstance     = "instance"
+)
+
 // Result is the consolidated outcome presented to the agent or caller.
 type Result struct {
 	Action    Action `json:"action"`
 	Target    Target `json:"target"`
 	Shell     string `json:"shell"`
 	Name      string `json:"name"`
+	Project   string `json:"project"`
+	Resolved  string `json:"resolved"`
 	Delivered int    `json:"delivered"`
 	Results   []Ack  `json:"results"`
 }

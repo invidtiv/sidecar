@@ -213,13 +213,13 @@ func renderMarkdownCommand(buf *bytes.Buffer, cmd *Command, parentPath string, l
 	}
 }
 
-// RenderAgents lists what an agent can do from inside a Sidecar project shell.
+// RenderAgents lists what an agent can do from Sidecar.
 // It is generated from the same registry the help and the reference doc come
 // from, so a command that grows an agent-facing use appears here by declaring
 // it, not by someone remembering to update a list.
 func RenderAgents(root *Command) string {
 	var buf strings.Builder
-	buf.WriteString("Sidecar commands for agents. Each acts on the shell you are running in.\n\n")
+	buf.WriteString("Sidecar commands for agents. sidecar open works from any context; shell name and rename act on the shell you are running in.\n\n")
 
 	var lines [][2]string
 	var collect func(cmd *Command)

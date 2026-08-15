@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
@@ -407,6 +409,30 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	return m
 }
 
+func announceInstanceCmd(workDir, projectRoot string) tea.Cmd {
+	return func() tea.Msg {
+		inst := uirequest.Instance{
+			PID:       os.Getpid(),
+			Host:      uirequest.HostName(),
+			WorkDir:   workDir,
+			StartedAt: time.Now().UTC(),
+		}
+		if projectRoot != "" {
+			inst.Project = filepath.Base(projectRoot)
+			if dir, ok := projectdir.Lookup(projectRoot); ok {
+				inst.ProjectKey = filepath.Base(dir)
+			}
+			if inst.WorkDir == "" {
+				inst.WorkDir = projectRoot
+			}
+		} else if workDir != "" {
+			inst.Project = filepath.Base(workDir)
+		}
+		_ = uirequest.Announce(config.StateDir(), inst)
+		return nil
+	}
+}
+
 func listenForUIRequests(ch <-chan tea.Msg) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -425,6 +451,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tickCmd(),
 		IntroTick(),
+		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 	}
 	cmds = append(cmds, m.productCheckCmds(false)...)
 
@@ -908,6 +935,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		titleCmd,
 		inventoryRefresh,
 		overviewFocusCmd,
+		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 		func() tea.Msg {
 			return ToastMsg{
 				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),
