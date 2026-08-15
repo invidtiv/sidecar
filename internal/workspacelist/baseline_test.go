@@ -188,7 +188,9 @@ func TestSidebarBaselineFixture(t *testing.T) {
 			}
 		}
 	}
-	got := out.String()
+	// Keep the fixture newline-terminated without manufacturing a blank line at
+	// EOF when the rendered view already ends in a newline.
+	got := strings.TrimRight(out.String(), "\n") + "\n"
 
 	golden := filepath.Join("testdata", "baseline-sidebar.txt")
 	if *updateBaseline {
