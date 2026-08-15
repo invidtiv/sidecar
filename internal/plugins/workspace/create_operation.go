@@ -52,27 +52,11 @@ type pendingCreationJournal struct {
 }
 
 func pendingCreationPath(ctx context.Context, plan *CreateOperationPlan) (string, error) {
-	dir, err := projectdir.WorktreeDirContext(ctx, plan.MainWorktree, plan.Path)
-	if err != nil {
-		return "", err
-	}
-	key := stablePathKey(plan.OperationID)
-	return filepath.Join(dir, "pending-creation-"+key[:12]+".json"), nil
+	return workspaceops.PendingCreationPath(ctx, sharedCreatePlan(plan))
 }
 
 func persistPendingCreation(ctx context.Context, plan *CreateOperationPlan, wt *Worktree) error {
-	path, err := pendingCreationPath(ctx, plan)
-	if err != nil {
-		return fmt.Errorf("resolve pending creation journal: %w", err)
-	}
-	data, err := json.MarshalIndent(pendingCreationJournal{Version: 1, RepoKey: plan.RepoKey, OperationID: plan.OperationID, Plan: *plan, Worktree: *wt}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode pending creation journal: %w", err)
-	}
-	if err := writeDurableFile(path, append(data, '\n'), 0644); err != nil {
-		return fmt.Errorf("write pending creation journal: %w", err)
-	}
-	return nil
+	return workspaceops.PersistPendingCreation(ctx, sharedCreatePlan(plan), sharedWorktreeRecord(wt))
 }
 
 func removePendingCreation(plan *CreateOperationPlan) error {
@@ -87,17 +71,7 @@ func removePendingCreation(plan *CreateOperationPlan) error {
 }
 
 func removePendingCreationWithOps(plan *CreateOperationPlan, remove func(string) error, syncDir func(string) error) error {
-	path, err := pendingCreationPath(context.Background(), plan)
-	if err != nil {
-		return err
-	}
-	if err := remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := syncDir(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("sync pending creation journal directory: %w", err)
-	}
-	return nil
+	return workspaceops.RemovePendingCreationWithOps(sharedCreatePlan(plan), remove, syncDir)
 }
 
 func (p *Plugin) clearPendingCreation(plan *CreateOperationPlan) error {
@@ -108,6 +82,22 @@ func (p *Plugin) clearPendingCreation(plan *CreateOperationPlan) error {
 }
 
 func loadPendingCreation(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
+	candidates := make([]workspaceops.WorktreeRecord, 0, len(worktrees))
+	for _, wt := range worktrees {
+		if record := sharedWorktreeRecord(wt); record != nil {
+			candidates = append(candidates, *record)
+		}
+	}
+	shared, err := workspaceops.LoadPendingCreation(ctx, projectRoot, candidates, repoKey)
+	if err != nil || shared == nil {
+		return nil, err
+	}
+	plan := createPlanFromShared(&shared.Plan)
+	wt := worktreeFromShared(&shared.Worktree, plan)
+	return &pendingCreationJournal{Version: shared.Version, RepoKey: shared.RepoKey, OperationID: shared.OperationID, Plan: *plan, Worktree: *wt}, nil
+}
+
+func loadPendingCreationLegacy(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
 	for _, wt := range worktrees {
 		dir, err := projectdir.WorktreeDirContext(ctx, projectRoot, wt.Path)
 		if err != nil {
@@ -272,6 +262,67 @@ func (r *CreateSetupResult) Warnings() []CreateSetupOutcome {
 }
 
 func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, base string, dirPrefix bool, setup config.WorktreeSetupConfig) (*CreateOperationPlan, error) {
+	shared, err := workspaceops.ResolveWorktreePlan(ctx, workDir, projectRoot, name, base, dirPrefix, setup)
+	if err != nil {
+		return nil, err
+	}
+	return createPlanFromShared(shared), nil
+}
+
+func createPlanFromShared(plan *workspaceops.WorktreePlan) *CreateOperationPlan {
+	if plan == nil {
+		return nil
+	}
+	return &CreateOperationPlan{
+		RepoKey: plan.RepoKey, OperationID: plan.OperationID,
+		SourceWorktree: plan.SourceWorktree, MainWorktree: plan.MainWorktree,
+		SourceRef: plan.SourceRef, SourceOID: plan.SourceOID, Branch: plan.Branch,
+		Path: plan.Path, DisplayName: plan.DisplayName, RemotePolicy: plan.RemotePolicy,
+		TaskID: plan.TaskID, TaskTitle: plan.TaskTitle, AgentType: AgentType(plan.AgentType), SkipPerms: plan.SkipPerms,
+		CopyEnv: plan.CopyEnv, EnvFiles: append([]string(nil), plan.EnvFiles...),
+		RunHook: plan.RunHook, HookPath: plan.HookPath, HookRequired: plan.HookRequired,
+	}
+}
+
+func sharedCreatePlan(plan *CreateOperationPlan) *workspaceops.WorktreePlan {
+	if plan == nil {
+		return nil
+	}
+	return &workspaceops.WorktreePlan{
+		RepoKey: plan.RepoKey, OperationID: plan.OperationID,
+		SourceWorktree: plan.SourceWorktree, MainWorktree: plan.MainWorktree,
+		SourceRef: plan.SourceRef, SourceOID: plan.SourceOID, Branch: plan.Branch,
+		Path: plan.Path, DisplayName: plan.DisplayName, RemotePolicy: plan.RemotePolicy,
+		TaskID: plan.TaskID, TaskTitle: plan.TaskTitle, AgentType: string(plan.AgentType), SkipPerms: plan.SkipPerms,
+		CopyEnv: plan.CopyEnv, EnvFiles: append([]string(nil), plan.EnvFiles...),
+		RunHook: plan.RunHook, HookPath: plan.HookPath, HookRequired: plan.HookRequired,
+	}
+}
+
+func sharedWorktreeRecord(wt *Worktree) *workspaceops.WorktreeRecord {
+	if wt == nil {
+		return nil
+	}
+	return &workspaceops.WorktreeRecord{Key: wt.Key, RepoKey: wt.RepoKey, Name: wt.Name, Path: wt.Path,
+		Branch: wt.Branch, BaseBranch: wt.BaseBranch, HEADOID: wt.HEADOID, CreatedAt: wt.CreatedAt, UpdatedAt: wt.UpdatedAt}
+}
+
+func worktreeFromShared(record *workspaceops.WorktreeRecord, plan *CreateOperationPlan) *Worktree {
+	if record == nil {
+		return nil
+	}
+	wt := &Worktree{Key: record.Key, RepoKey: record.RepoKey, Name: record.Name, Path: record.Path,
+		Branch: record.Branch, BaseBranch: record.BaseBranch, HEADOID: record.HEADOID,
+		Status: StatusPaused, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	if plan != nil {
+		wt.TaskID, wt.TaskTitle, wt.ChosenAgentType = plan.TaskID, plan.TaskTitle, plan.AgentType
+	}
+	return wt
+}
+
+// resolveCreateOperationLegacy remains temporarily as characterization source;
+// production callers above run the shared workspaceops planner.
+func resolveCreateOperationLegacy(ctx context.Context, workDir, projectRoot, name, base string, dirPrefix bool, setup config.WorktreeSetupConfig) (*CreateOperationPlan, error) {
 	displayName := strings.TrimSpace(name)
 	if displayName == "" {
 		return nil, fmt.Errorf("workspace name is required")
@@ -398,6 +449,24 @@ func addCreatedWorktree(ctx context.Context, repoKey string, plan *CreateOperati
 }
 
 func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *CreateOperationPlan, run func(*exec.Cmd) ([]byte, error)) (*Worktree, error) {
+	shared := sharedCreatePlan(plan)
+	record, err := workspaceops.ExecuteWorktreeWithRunner(ctx, repoKey, shared, run)
+	if shared != nil {
+		plan.Path = shared.Path
+	}
+	if record == nil {
+		return nil, err
+	}
+	wt := &Worktree{Key: record.Key, RepoKey: record.RepoKey, Name: record.Name, Path: record.Path,
+		Branch: record.Branch, BaseBranch: record.BaseBranch, HEADOID: record.HEADOID,
+		TaskID: plan.TaskID, TaskTitle: plan.TaskTitle, ChosenAgentType: plan.AgentType,
+		Status: StatusPaused, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	return wt, err
+}
+
+// addCreatedWorktreeWithRunnerLegacy is retained only while the extraction's
+// characterization tests compare the old and shared operation boundaries.
+func addCreatedWorktreeWithRunnerLegacy(ctx context.Context, repoKey string, plan *CreateOperationPlan, run func(*exec.Cmd) ([]byte, error)) (*Worktree, error) {
 	if _, err := gitOutputContext(ctx, plan.SourceWorktree, "check-ref-format", "--branch", plan.Branch); err != nil {
 		return nil, fmt.Errorf("branch is no longer valid: %w", err)
 	}
@@ -524,19 +593,8 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 		}
 	}
 
-	if plan.CopyEnv {
-		for _, rel := range plan.EnvFiles {
-			source, err := openContainedRegularFile(plan.MainWorktree, rel)
-			if err == nil {
-				err = copyOpenFile(source, filepath.Join(plan.Path, rel))
-				_ = source.Close()
-			}
-			add(CreateOutcomeEnv, "copy "+rel, false, err)
-		}
-	}
-	if plan.RunHook {
-		err := runSetupHookContext(ctx, plan)
-		add(CreateOutcomeHook, "run "+plan.HookPath, plan.HookRequired, err)
+	for _, outcome := range workspaceops.RunConfiguredSetup(ctx, sharedCreatePlan(plan)) {
+		add(CreateOutcomeKind(outcome.Kind), outcome.Action, outcome.Required, outcome.Err)
 	}
 	return result
 }
@@ -546,25 +604,5 @@ func runSetupHookContext(ctx context.Context, plan *CreateOperationPlan) error {
 }
 
 func runSetupHookContextWithHook(ctx context.Context, plan *CreateOperationPlan, beforeOpen func()) error {
-	hook, err := openContainedRegularFileWithHook(plan.MainWorktree, plan.HookPath, beforeOpen)
-	if err != nil {
-		return fmt.Errorf("validate setup hook: %w", err)
-	}
-	defer func() { _ = hook.Close() }()
-	cmd := exec.CommandContext(ctx, "bash", "/dev/fd/3")
-	cmd.ExtraFiles = []*os.File{hook}
-	cmd.Dir = plan.Path
-	isolated := ApplyEnvOverrides(os.Environ(), BuildEnvOverrides(plan.MainWorktree))
-	cmd.Env = append(isolated,
-		"MAIN_WORKTREE="+plan.MainWorktree,
-		"SOURCE_WORKTREE="+plan.SourceWorktree,
-		"WORKTREE_PATH="+plan.Path,
-		"WORKTREE_BRANCH="+plan.Branch,
-	)
-	// Hook output may contain secrets. It is deliberately neither logged nor
-	// included in the UI error; only the process status crosses this seam.
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("setup hook exited unsuccessfully: %w", err)
-	}
-	return nil
+	return workspaceops.RunSetupHookWithHook(ctx, sharedCreatePlan(plan), beforeOpen)
 }
