@@ -420,6 +420,13 @@ func (v *View) renderAggregate(width, height int) string {
 	if v.Snapshot == nil {
 		return dimText("Loading aggregate diff…")
 	}
+	return v.renderRaw(v.aggregateContent(), width, height, RenderOpts{})
+}
+
+func (v *View) aggregateContent() string {
+	if v.Snapshot == nil {
+		return ""
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Aggregate: %s..HEAD", v.Snapshot.MergeBase)
 	sb.WriteString("\nCommitted branch changes\n")
@@ -435,7 +442,7 @@ func (v *View) renderAggregate(width, height int) string {
 	} else {
 		sb.WriteString(v.Snapshot.AggregateUncommitted)
 	}
-	return v.renderRaw(sb.String(), width, height, RenderOpts{})
+	return sb.String()
 }
 
 func (v *View) renderRaw(content string, width, height int, opts RenderOpts) string {

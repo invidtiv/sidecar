@@ -703,6 +703,59 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmd, m.focusList())
 }
 
+// WorkspacesWheelAtBoundary mirrors WorkspacesMouse's wheel routing without
+// mutating visible state. It is called before Bubble Tea Update/View so an
+// inertial tail at a real boundary can be discarded cheaply.
+func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m == nil || m.renameOpen || m.viewFlyoutOpen || m.workspacesMouse == nil {
+		return false
+	}
+	action := m.workspacesMouse.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if tty.WheelStaysWithPointer(m.PreviewInteractive()) {
+		return m.previewWheelAtBoundary(action)
+	}
+	if action.Region == nil {
+		return false
+	}
+	if _, ok := action.Region.Data.(previewDocTabHit); ok {
+		view := m.preview.doc.view()
+		return view == nil || view.ScrollAtBoundary(action.Delta)
+	}
+	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
+		view := m.preview.issue.view()
+		return view == nil || view.ScrollAtBoundary(action.Delta)
+	}
+	if kind, ok := action.Region.Data.(string); ok {
+		switch {
+		case kind == workspacesSidebarRegion:
+			return m.workspaces.ScrollAtBoundary(action.Delta)
+		case isPreviewDocRegion(kind):
+			view := m.preview.doc.view()
+			return view == nil || view.ScrollAtBoundary(action.Delta)
+		case isPreviewIssueRegion(kind):
+			view := m.preview.issue.view()
+			return view == nil || view.ScrollAtBoundary(action.Delta)
+		case kind == previewRegionKind:
+			if m.previewTabsVisible() && m.previewTab != workspacediff.TabOutput {
+				return m.visiblePreviewTabAtBoundary(action.Delta)
+			}
+			return m.previewWheelAtBoundary(action)
+		default:
+			return false
+		}
+	}
+	if region, ok := action.Region.Data.(workspacelist.Region); ok {
+		switch region.Kind {
+		case workspacelist.RegionRow, workspacelist.RegionSort, workspacelist.RegionFilter:
+			return m.workspaces.ScrollAtBoundary(action.Delta)
+		}
+	}
+	return false
+}
+
 // previewPointerIntent asks the shared layer what a pointer action over the
 // preview means. A drag and its release are answered by the region they started
 // in, which is what keeps a selection dragged off the box that box's.

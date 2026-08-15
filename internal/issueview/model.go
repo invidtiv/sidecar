@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -733,6 +734,15 @@ func (m *Model) ScrollOffset() int {
 		return m.pendingScroll
 	}
 	return m.scroll
+}
+
+// ScrollAtBoundary reports whether delta would leave this issue viewport
+// unchanged. It is safe to ask from Bubble Tea's pre-update input filter.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m == nil {
+		return true
+	}
+	return (sharedscroll.Bounds{Position: m.ScrollOffset(), Maximum: m.maxScroll()}).AtBoundary(delta)
 }
 
 // SetPendingScroll remembers an offset for the current load generation. A

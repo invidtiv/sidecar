@@ -1,8 +1,6 @@
 package gitstatus
 
 import (
-	"log/slog"
-
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -257,64 +255,73 @@ func (p *Plugin) clampDiffHorizScroll() {
 
 // clampDiffScroll clamps the full-screen diff scroll to valid range.
 func (p *Plugin) clampDiffScroll() {
-	if p.diffViewMode == DiffViewFullFile && p.fullFileDiff != nil {
-		lines := p.fullFileDiff.TotalLines()
-		maxScroll := lines - (p.height - 4) // paneHeight-2 (header) = (height-2)-2 = height-4
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		before := p.diffScroll
-		if p.diffScroll > maxScroll {
-			p.diffScroll = maxScroll
-		}
-		if before != p.diffScroll {
-			slog.Debug("clampDiffScroll clamped",
-				"before", before,
-				"after", p.diffScroll,
-				"maxScroll", maxScroll,
-				"totalLines", lines,
-				"height", p.height,
-			)
-		}
-	} else {
-		lines := countLines(p.diffContent)
-		maxScroll := lines - (p.height - 4)
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if p.diffScroll > maxScroll {
-			p.diffScroll = maxScroll
-		}
+	maxScroll := p.diffMaxScroll()
+	if p.diffScroll > maxScroll {
+		p.diffScroll = maxScroll
 	}
 	if p.diffScroll < 0 {
 		p.diffScroll = 0
 	}
 }
 
+// diffMaxScroll is the single vertical bound used by full-screen diff
+// rendering, wheel movement, and the app-level boundary filter.
+func (p *Plugin) diffMaxScroll() int {
+	lines := countLines(p.diffRaw)
+	switch {
+	case p.diffViewMode == DiffViewFullFile && p.fullFileDiff != nil:
+		lines = p.fullFileDiff.TotalLines()
+	case p.diffViewMode == DiffViewSideBySide:
+		parsed := p.parsedDiff
+		if parsed == nil {
+			parsed, _ = ParseUnifiedDiff(p.diffRaw)
+		}
+		if parsed != nil {
+			lines = countSideBySideDiffRows(parsed)
+		}
+	case p.parsedDiff != nil:
+		lines = countParsedDiffLines(p.parsedDiff)
+	}
+	return max(lines-(p.height-4), 0) // paneHeight-2 header = (height-2)-2
+}
+
+// countSideBySideDiffRows follows RenderSideBySide's scroll coordinate: one
+// row per hunk header plus one per paired old/new or context row.
+func countSideBySideDiffRows(diff *ParsedDiff) int {
+	if diff == nil {
+		return 0
+	}
+	count := 0
+	for i := range diff.Hunks {
+		count += 1 + len(diff.Hunks[i].sideBySidePairs())
+	}
+	return count
+}
+
 // clampDiffPaneScroll clamps the sidebar diff pane scroll to valid range.
 func (p *Plugin) clampDiffPaneScroll() {
-	if p.diffPaneViewMode == DiffViewFullFile && p.diffPaneFullFileDiff != nil {
-		lines := p.diffPaneFullFileDiff.TotalLines()
-		maxScroll := lines - (p.height - 4) // visibleHeight-2 (header) = (paneHeight-2)-2 = height-4
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if p.diffPaneScroll > maxScroll {
-			p.diffPaneScroll = maxScroll
-		}
-	} else if p.diffPaneParsedDiff != nil {
-		lines := countParsedDiffLines(p.diffPaneParsedDiff)
-		maxScroll := lines - (p.height - 4)
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if p.diffPaneScroll > maxScroll {
-			p.diffPaneScroll = maxScroll
-		}
+	maxScroll := p.diffPaneMaxScroll()
+	if p.diffPaneScroll > maxScroll {
+		p.diffPaneScroll = maxScroll
 	}
 	if p.diffPaneScroll < 0 {
 		p.diffPaneScroll = 0
 	}
+}
+
+// diffPaneMaxScroll is the single vertical bound used by rendering, wheel
+// placement, and the app-level boundary fast path.
+func (p *Plugin) diffPaneMaxScroll() int {
+	if p.diffPaneViewMode == DiffViewFullFile && p.diffPaneFullFileDiff != nil {
+		lines := p.diffPaneFullFileDiff.TotalLines()
+		maxScroll := lines - (p.height - 4) // visibleHeight-2 (header) = (paneHeight-2)-2 = height-4
+		return max(maxScroll, 0)
+	} else if p.diffPaneParsedDiff != nil {
+		lines := countParsedDiffLines(p.diffPaneParsedDiff)
+		maxScroll := lines - (p.height - 4)
+		return max(maxScroll, 0)
+	}
+	return 0
 }
 
 // clampDiffPaneHorizScroll clamps diffPaneHorizScroll to valid range.

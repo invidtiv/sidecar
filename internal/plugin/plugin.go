@@ -25,6 +25,19 @@ type TextInputConsumer interface {
 	ConsumesTextInput() bool
 }
 
+// WheelBoundaryConsumer is an optional fast-path for plugins with scrollable
+// surfaces. Bubble Tea asks it before Update and View; returning true drops an
+// inertia event that cannot move the surface under the pointer. Implementations
+// must return false when they are not certain (for example, a terminal
+// application that owns mouse reporting).
+//
+// The message coordinates are local to the plugin content box, after Sidecar's
+// header has been removed. Implementations may reset gesture-only coalescing
+// state when they report a boundary, but must not change visible content.
+type WheelBoundaryConsumer interface {
+	WheelAtBoundary(tea.MouseWheelMsg) bool
+}
+
 // GlobalKeyBlocker is an optional capability for plugins with overlays that
 // own the keyboard. While it reports true, Sidecar forwards every key except
 // its interrupt instead of running host-level shortcuts.

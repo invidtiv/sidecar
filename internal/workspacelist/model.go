@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -268,6 +269,19 @@ func (m *Model) ScrollOffset() int { return m.scroll }
 // for callers that previously moved only the viewport; workspace wheel input
 // must have the same selection-following semantics everywhere.
 func (m *Model) Scroll(delta int) { m.Move(delta) }
+
+// ScrollAtBoundary reports whether moving the selection by delta would leave
+// this list unchanged. Wheel navigation follows selection, so its boundary is
+// the first or last visible item rather than the viewport offset alone.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m == nil {
+		return true
+	}
+	return (sharedscroll.Bounds{
+		Position: m.indexOf(m.selectedID),
+		Maximum:  len(m.visible) - 1,
+	}).AtBoundary(delta)
+}
 
 // RenderOptions describes the box the list is drawn into.
 type RenderOptions struct {

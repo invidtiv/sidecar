@@ -44,6 +44,39 @@ func TestGlobalPreviewChipsOnlyForNonMainWorktrees(t *testing.T) {
 	}
 }
 
+func TestGlobalPreviewDiffWheelStopsAtRenderedBoundaries(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	m.workspaces.SelectID("a")
+	m.previewTab = workspacediff.TabDiff
+	m.diff.Content = "diff --git a/a b/a\none\ntwo\nthree\nfour\nfive"
+	m.diff.Files = []workspacediff.File{{Path: "a", Raw: "one\ntwo\nthree\nfour\nfive"}}
+	m.WorkspacesView(previewWide, previewTall)
+
+	var x, y int
+	found := false
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if region.Data == previewRegionKind {
+			x, y = region.Rect.X+region.Rect.W/2, region.Rect.Y+region.Rect.H-2
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("preview region was not registered")
+	}
+	if !m.WorkspacesWheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp}) {
+		t.Fatal("global diff top wheel was not bounded")
+	}
+	m.scrollVisiblePreviewTab(1000)
+	if m.diff.DiffScroll != m.diff.ContentMaxScroll(m.previewTabContentHeight()) {
+		t.Fatalf("global diff overscrolled to %d", m.diff.DiffScroll)
+	}
+	if !m.WorkspacesWheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown}) {
+		t.Fatal("global diff bottom wheel was not bounded")
+	}
+}
+
 func TestCommaAndPeriodCycleGlobalPreviewTabs(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
