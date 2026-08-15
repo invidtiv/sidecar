@@ -31,8 +31,8 @@ the user asks.
 Run `sidecar --agents` for what you can do from here, and use it. The two that
 earn their keep every session: keep the shell's name describing your current
 task, and put a file or issue in front of the user rather than describing its
-path. Both act on the shell you are in — never edit `shells.json` or rename
-tmux sessions directly.
+path (`sidecar open` works from any context, not only a Sidecar shell). Never
+edit `shells.json` or rename tmux sessions directly.
 
 ## Build & Versioning
 

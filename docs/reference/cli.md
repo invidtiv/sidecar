@@ -4,10 +4,10 @@ Sidecar provides non-interactive commands for scripting and agent workflows.
 
 ## `sidecar agents`
 
-List what an agent can do from inside a Sidecar shell
+List what an agent can do from Sidecar
 
-List the Sidecar commands worth reaching for from inside a project shell,
-one line each. Also spelled "sidecar --agents".
+List the Sidecar commands worth reaching for, one line each.
+Also spelled "sidecar --agents".
 
 ```
 Usage: sidecar --agents
@@ -55,9 +55,10 @@ sidecar help --json
 
 Show a file, a td issue, or a git diff in a split pane
 
-Show a file, a td issue, or a git diff to the user, as a split pane in the Sidecar workspace
-containing this shell. --diff with no spec is the working tree. --split only
-overrides the split axis; it never halves a live terminal after content is open.
+Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.
+From a Sidecar shell this targets that shell. Otherwise it targets the unique running
+instance, or a specific --shell / --project. --diff with no spec is the working tree.
+--split only overrides the split axis; it never halves a live terminal after content is open.
 
 ```
 Usage: sidecar open [options] [<target>]
@@ -65,7 +66,7 @@ Usage: sidecar open [options] [<target>]
 
 **Targets:**
 
-- `path`: A file inside this shell's workspace, optionally "path:line"
+- `path`: A file inside the target workspace, optionally "path:line"
 - `td-xxxxxx`: A td issue id
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
@@ -74,6 +75,8 @@ Usage: sidecar open [options] [<target>]
 
 - `--line N`: Line to reveal (alternative to "path:line")
 - `--diff`: Open a Diff leaf (working tree if no spec)
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
@@ -84,7 +87,7 @@ Usage: sidecar open [options] [<target>]
 - `0`: opened or queued
 - `1`: state failure
 - `2`: usage or validation error
-- `3`: no running Sidecar instance is showing this shell
+- `3`: no running instance, or several running with no target
 - `4`: an instance declined (e.g. the window is too small to split)
 
 **Examples:**
@@ -104,6 +107,8 @@ sidecar open --diff HEAD
 sidecar open abc1234
 # structured result for the agent
 sidecar open --json --split below README.md
+# from any terminal, that project's Workspaces surface
+sidecar open --project sidecar README.md
 ```
 
 ## `sidecar shell`

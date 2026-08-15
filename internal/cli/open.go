@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -22,6 +20,8 @@ func runOpen(env Env, args []string) int {
 	splitMode := "auto"
 	waitDuration := 1200 * time.Millisecond
 	lineNo := 0
+	shellFlag := ""
+	projectFlag := ""
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -34,6 +34,40 @@ func runOpen(env Env, args []string) int {
 			jsonOutput = true
 		case arg == "--diff":
 			wantDiff = true
+		case arg == "--shell":
+			if i+1 >= len(args) {
+				cliErrf(env.Stderr, "--shell requires a shell name\n\n%s", openHelp)
+				return 2
+			}
+			i++
+			shellFlag = args[i]
+			if shellFlag == "" {
+				cliErrf(env.Stderr, "--shell requires a shell name\n\n%s", openHelp)
+				return 2
+			}
+		case strings.HasPrefix(arg, "--shell="):
+			shellFlag = strings.TrimPrefix(arg, "--shell=")
+			if shellFlag == "" {
+				cliErrf(env.Stderr, "--shell requires a shell name\n\n%s", openHelp)
+				return 2
+			}
+		case arg == "--project":
+			if i+1 >= len(args) {
+				cliErrf(env.Stderr, "--project requires a project name\n\n%s", openHelp)
+				return 2
+			}
+			i++
+			projectFlag = args[i]
+			if projectFlag == "" {
+				cliErrf(env.Stderr, "--project requires a project name\n\n%s", openHelp)
+				return 2
+			}
+		case strings.HasPrefix(arg, "--project="):
+			projectFlag = strings.TrimPrefix(arg, "--project=")
+			if projectFlag == "" {
+				cliErrf(env.Stderr, "--project requires a project name\n\n%s", openHelp)
+				return 2
+			}
 		case arg == "--line":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--line requires a line number argument\n\n%s", openHelp)
@@ -115,26 +149,22 @@ func runOpen(env Env, args []string) int {
 		ctx = context.Background()
 	}
 
-	identity, err := currentShellIdentity(ctx)
+	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		return 3
-	}
-
-	originInfo, err := shellstate.LookupOrigin(env.StateDir, shellstate.Identity{
-		TmuxName:  identity.session,
-		Namespace: identity.socket,
-	})
-	if err != nil {
-		cliErrln(env.Stderr, err)
-		return 3
+		return destExitCode(err)
 	}
 
 	raw := ""
 	if len(positional) == 1 {
 		raw = positional[0]
 	}
-	target, err := uirequest.ResolveTarget(originInfo.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff})
+	if dest.Resolved != uirequest.ResolvedCurrentShell {
+		if workDir := resolveTargetWorkDirForDest(env.StateDir, dest, raw); workDir != "" {
+			dest.Origin.WorkDir = workDir
+		}
+	}
+	target, err := uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff})
 	if err != nil {
 		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, openHelp)
 		return 2
@@ -145,15 +175,9 @@ func runOpen(env Env, args []string) int {
 		ID:        uirequest.NewRequestID(),
 		CreatedAt: time.Now().UTC(),
 		TTLMs:     int(uirequest.DefaultTTL / time.Millisecond),
-		Origin: uirequest.Origin{
-			TmuxSession: identity.session,
-			Namespace:   identity.socket,
-			ProjectKey:  originInfo.ProjectKey,
-			WorkDir:     originInfo.WorkDir,
-			PID:         os.Getpid(),
-		},
-		Action: uirequest.ActionOpen,
-		Target: target,
+		Origin:    dest.Origin,
+		Action:    uirequest.ActionOpen,
+		Target:    target,
 		Options: uirequest.Options{
 			Split: splitMode,
 		},
@@ -168,15 +192,7 @@ func runOpen(env Env, args []string) int {
 	if waitDuration <= 0 {
 		// Fire-and-forget
 		if jsonOutput {
-			res := uirequest.Result{
-				Action:    req.Action,
-				Target:    req.Target,
-				Shell:     originInfo.TmuxName,
-				Name:      originInfo.DisplayName,
-				Delivered: 0,
-				Results:   nil,
-			}
-			_ = json.NewEncoder(env.Stdout).Encode(res)
+			_ = json.NewEncoder(env.Stdout).Encode(openResult(req, dest, nil))
 		} else {
 			_, _ = fmt.Fprintf(env.Stdout, "Sent open request for %s.\n", target.Value)
 		}
@@ -198,17 +214,13 @@ func runOpen(env Env, args []string) int {
 
 	if len(acks) == 0 {
 		if jsonOutput {
-			res := uirequest.Result{
-				Action:    req.Action,
-				Target:    req.Target,
-				Shell:     originInfo.TmuxName,
-				Name:      originInfo.DisplayName,
-				Delivered: 0,
-				Results:   nil,
-			}
-			_ = json.NewEncoder(env.Stdout).Encode(res)
+			_ = json.NewEncoder(env.Stdout).Encode(openResult(req, dest, nil))
 		}
-		cliErrf(env.Stderr, "no running Sidecar instance is showing this shell (%s)\n", originInfo.TmuxName)
+		if dest.Origin.TmuxSession != "" {
+			cliErrf(env.Stderr, "no running Sidecar instance is showing this shell (%s)\n", dest.Origin.TmuxSession)
+		} else {
+			cliErrf(env.Stderr, "no running Sidecar instance is showing this project (%s)\n", dest.Origin.ProjectKey)
+		}
 		return 3
 	}
 
@@ -233,15 +245,7 @@ func runOpen(env Env, args []string) int {
 
 	if hasDeclined && !hasOpened {
 		if jsonOutput {
-			res := uirequest.Result{
-				Action:    req.Action,
-				Target:    req.Target,
-				Shell:     originInfo.TmuxName,
-				Name:      originInfo.DisplayName,
-				Delivered: len(acks),
-				Results:   acks,
-			}
-			_ = json.NewEncoder(env.Stdout).Encode(res)
+			_ = json.NewEncoder(env.Stdout).Encode(openResult(req, dest, acks))
 		}
 		if declineReason == "" {
 			declineReason = "the window is too small to split"
@@ -251,31 +255,40 @@ func runOpen(env Env, args []string) int {
 	}
 
 	if jsonOutput {
-		res := uirequest.Result{
-			Action:    req.Action,
-			Target:    req.Target,
-			Shell:     originInfo.TmuxName,
-			Name:      originInfo.DisplayName,
-			Delivered: len(acks),
-			Results:   acks,
-		}
-		if err := json.NewEncoder(env.Stdout).Encode(res); err != nil {
+		if err := json.NewEncoder(env.Stdout).Encode(openResult(req, dest, acks)); err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
 		return 0
 	}
 
+	label := dest.DisplayName
+	if label == "" {
+		label = dest.Origin.ProjectKey
+	}
 	if hasOpened {
 		if allRetargeted {
-			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in the split already beside %q.\n", target.Value, originInfo.DisplayName)
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in the split already beside %q.\n", target.Value, label)
 		} else {
-			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", target.Value, originInfo.DisplayName)
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", target.Value, label)
 		}
 	} else {
-		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", target.Value, originInfo.DisplayName)
+		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", target.Value, label)
 	}
 	return 0
+}
+
+func openResult(req uirequest.Request, dest openDestination, acks []uirequest.Ack) uirequest.Result {
+	return uirequest.Result{
+		Action:    req.Action,
+		Target:    req.Target,
+		Shell:     dest.Origin.TmuxSession,
+		Name:      dest.DisplayName,
+		Project:   dest.Origin.ProjectKey,
+		Resolved:  dest.Resolved,
+		Delivered: len(acks),
+		Results:   acks,
+	}
 }
 
 func parseWaitDuration(s string) (time.Duration, error) {
