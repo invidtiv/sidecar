@@ -206,6 +206,13 @@ type (
 		Err      error  // Non-nil if rename failed
 	}
 
+	// RenameWorktreeDoneMsg signals worktree display-name persist completed.
+	RenameWorktreeDoneMsg struct {
+		Path    string
+		NewName string
+		Err     error
+	}
+
 	// pollShellByNameMsg triggers a poll for a specific shell's output by name.
 	// Includes generation for timer leak prevention (td-83dc22).
 	pollShellByNameMsg struct {
@@ -1209,8 +1216,8 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	workDir := p.ctx.WorkDir
 	name, path := wt.Name, wt.Path
+	sessionName := worktreeTmuxSession(wt)
 	return func() tea.Msg {
-		sessionName := tmuxSessionPrefix + sanitizeName(name)
 
 		// Check if session already exists
 		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)

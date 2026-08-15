@@ -2,10 +2,31 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Create New Worktree is a stable form: type a natural name, press Enter. Base
+  branch, task, and agent are one-line Combo fields that overlay instead of
+  stretching the modal. Git uses a slug of the display name.
+
+### Removed
+
+- Prompt templates and the prompt picker. Task-linked agent launch still injects
+  task context automatically.
+
 ## [v0.99.1] - 2026-08-14
 
 ### Features
 
+- Worktree terminals are terminals. The Output / Diff / Task tab row is gone.
+  **Diff** and **Task** stay as header action chips that insert a leaf beside
+  the live terminal. `,` / `.` no longer cycle worktree views; they cycle Diff
+  target tabs only while a Diff leaf is focused. `d`, the Diff chip, and
+  `sidecar open --diff` are the paths into Diff.
+- `--disable-feature=workspace_doc_panes` now means no Diff: there is no pane
+  tree, so `d` / the Diff chip / `sidecar open --diff` toast or no-op
+  ("Document panes are disabled; Diff needs the workspace pane tree").
 - File preview tabs are now clickable in both project and global Workspaces,
   with global previews retaining multiple open files instead of replacing the
   current one.

@@ -22,9 +22,9 @@ const (
 	ViewModeConfirmDelete                      // Delete confirmation modal
 	ViewModeConfirmDeleteShell                 // Shell delete confirmation modal
 	ViewModeCommitForMerge                     // Commit modal before merge workflow
-	ViewModePromptPicker                       // Prompt template picker modal
 	ViewModeTypeSelector                       // Type selector modal (shell vs worktree)
 	ViewModeRenameShell                        // Rename shell modal
+	ViewModeRenameWorktree                     // Rename worktree display-name modal
 	ViewModeFilePicker                         // Diff file picker modal
 	ViewModeInteractive                        // Interactive mode (tmux input passthrough)
 	ViewModeFetchPR                            // Fetch remote PR modal
@@ -36,16 +36,7 @@ type FocusPane int
 
 const (
 	PaneSidebar FocusPane = iota // Worktree list
-	PanePreview                  // Preview pane (output/diff/task)
-)
-
-// PreviewTab represents the active tab in the preview pane.
-type PreviewTab int
-
-const (
-	PreviewTabOutput PreviewTab = iota // Agent output
-	PreviewTabDiff                     // Git diff
-	PreviewTabTask                     // TD task info
+	PanePreview                  // Preview pane (terminal + content leaves)
 )
 
 // Diff view types live in workspacediff so the global preview can use the
@@ -255,12 +246,6 @@ var ShellAgentOrder = []AgentType{
 	AgentPi,
 	AgentAmp,
 	AgentGrok,
-}
-
-// dropdownItemData stores field ID and item index for dropdown hit regions.
-type dropdownItemData struct {
-	field int // 1=branch, 3=task
-	idx   int // index in filtered list
 }
 
 // Worktree represents a git worktree with optional agent.

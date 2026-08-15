@@ -579,7 +579,7 @@ func (p *Plugin) openFinderPane() tea.Cmd {
 		p.termPanelFocused = false
 		return p.openDocFinder(doc)
 	}
-	plan, planned := planPaneOpen(p.paneRoot, PaneDoc)
+	plan, planned := planPaneOpen(p.paneRoot, PaneDoc, p.lastPaneBoxes())
 	if !planned {
 		return p.docPaneToast("Document")
 	}

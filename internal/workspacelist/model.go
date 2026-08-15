@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -47,6 +48,23 @@ type Model struct {
 	failures   []string
 	emptyText  string
 	pinnedIDs  []string
+	pulseFrame int
+}
+
+// SetPulseFrame advances the working/blocked marker animation. Consumers that
+// never tick leave it at zero and get the steady first frame.
+func (m *Model) SetPulseFrame(frame int) { m.pulseFrame = frame }
+
+// NeedsPulse reports whether any currently visible row carries a lane that
+// breathes, so a consumer can keep its animation clock off when nothing on
+// screen would move.
+func (m *Model) NeedsPulse() bool {
+	for _, item := range m.visible {
+		if PulseLane(item.Marker.Lane) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) Filter() *Filter { return &m.filter }
@@ -269,6 +287,19 @@ func (m *Model) ScrollOffset() int { return m.scroll }
 // must have the same selection-following semantics everywhere.
 func (m *Model) Scroll(delta int) { m.Move(delta) }
 
+// ScrollAtBoundary reports whether moving the selection by delta would leave
+// this list unchanged. Wheel navigation follows selection, so its boundary is
+// the first or last visible item rather than the viewport offset alone.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m == nil {
+		return true
+	}
+	return (sharedscroll.Bounds{
+		Position: m.indexOf(m.selectedID),
+		Maximum:  len(m.visible) - 1,
+	}).AtBoundary(delta)
+}
+
 // RenderOptions describes the box the list is drawn into.
 type RenderOptions struct {
 	Width, Height int
@@ -390,8 +421,12 @@ func (m *Model) renderRow(item Item, selected, focused bool, width int, now time
 	if item.Detail != "" {
 		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
 	}
+	marker := item.Marker
+	if icon, style, ok := PulseMarker(marker.Lane, m.pulseFrame); ok {
+		marker.Icon, marker.Style, marker.HasStyle = icon, style, true
+	}
 	return RenderRow(RowPresentation{
-		Marker:        item.Marker,
+		Marker:        marker,
 		Kind:          item.Kind,
 		Name:          item.Name,
 		NamePrefix:    namePrefix,

@@ -107,6 +107,8 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 ./scripts/tmux-drive.sh stop
 ```
 
+Always run `./scripts/tmux-drive.sh stop` when done or on error to avoid leaking background polling instances.
+
 **A proof run must isolate BOTH the tmux server and the Sidecar state tree.**
 They are independent axes, and isolating only one is how td-8d18de destroyed six
 of a live user's shells: a private tmux socket did nothing to stop the run from

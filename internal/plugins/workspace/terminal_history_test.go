@@ -34,7 +34,6 @@ func watchedReachPlugin(t *testing.T) *Plugin {
 	p.width, p.height = 120, 40
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
 		TmuxName: "shell-1",

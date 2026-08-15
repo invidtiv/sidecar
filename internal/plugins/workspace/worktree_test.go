@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,70 @@ func TestSanitizeBranchName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSlugifyWorktreeName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"display with spaces", "Auth Refresh", "auth-refresh"},
+		{"already legal", "feature", "feature"},
+		{"trim and lowercase", "  Feature  ", "feature"},
+		{"preserves slash path", "feature/auth", "feature/auth"},
+		{"strips invalid chars", "Auth~Refresh^One", "authrefreshone"},
+		{"strips at-brace", "feat@{u}", "featu}"},
+		{"collapses dashes", "Auth   Refresh", "auth-refresh"},
+		{"collapses slashes", "feat//auth", "feat/auth"},
+		{"strips leading trailing seps", "-.Auth Refresh./", "auth-refresh"},
+		{"drops controls", "Auth\x01Refresh", "authrefresh"},
+		{"empty", "", ""},
+		{"only punctuation", "???", ""},
+		{"refuses at", "@", ""},
+		{"refuses lock suffix", "feature.lock", ""},
+		{"lock in middle stays", "feature.lock.branch", "feature.lock.branch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SlugifyWorktreeName(tt.input)
+			if got != tt.want {
+				t.Errorf("SlugifyWorktreeName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("truncates to 63 runes on dash boundary", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 20; i++ {
+			if i > 0 {
+				b.WriteByte('-')
+			}
+			b.WriteString("segment")
+		}
+		got := SlugifyWorktreeName(b.String())
+		if got == "" {
+			t.Fatal("slug is empty")
+		}
+		if n := len([]rune(got)); n > 63 {
+			t.Fatalf("slug runes = %d, want <= 63", n)
+		}
+		if strings.HasSuffix(got, "-") {
+			t.Fatalf("slug %q ends with dash", got)
+		}
+		if !strings.HasPrefix(b.String(), got) {
+			t.Fatalf("slug %q is not a prefix of the input", got)
+		}
+	})
+
+	t.Run("hard truncates when no dash", func(t *testing.T) {
+		input := strings.Repeat("a", 80)
+		got := SlugifyWorktreeName(input)
+		if got != strings.Repeat("a", 63) {
+			t.Fatalf("got %q (%d runes)", got, len([]rune(got)))
+		}
+	})
 }
 
 func TestParseWorktreeList(t *testing.T) {

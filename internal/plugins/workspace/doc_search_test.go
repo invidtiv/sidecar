@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,8 +12,8 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // docSearchPlugin opens README.md in a document pane beside the selected
@@ -589,17 +590,32 @@ func clickAt(x, y int) tea.MouseClickMsg {
 }
 
 // `f` in the pane is the pane's only while the pane has the keyboard. On the
-// diff tab it is still the diff's file picker.
-func TestDiffTabFStillOpensTheFilePicker(t *testing.T) {
-	p, _ := docSearchPlugin(t, false)
-	p.closeDocPane()
-	p.activePane = PanePreview
-	p.previewTab = PreviewTabDiff
-	p.multiFileDiff = &gitstatus.MultiFileDiff{Files: []gitstatus.FileDiffInfo{{}, {}}}
+// Diff leaf it is still the diff's file picker. (This guarded the old preview
+// Diff tab, which the Diff-as-a-pane work replaced with a tree leaf; the
+// guarantee is the same, so it moves to the leaf rather than being dropped.)
+func TestDiffLeafFStillOpensTheFilePicker(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	if cmd := p.openDiffPaneForSurface(resolved, "shell:test-shell", workspacediff.WorkingTreeTarget()); cmd == nil {
+		t.Fatal("open Diff leaf failed")
+	}
+	diff, _ := p.activeDiffPane()
+	if diff == nil || diff.view() == nil {
+		t.Fatal("no active Diff view")
+	}
+	// The picker only opens with more than one file to pick between.
+	diff.view().Files = []workspacediff.File{{Path: "a.go"}, {Path: "b.go"}}
 
-	p.handleListKeys(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	handled, _ := p.handleDiffKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if !handled {
+		t.Fatal("f on the Diff leaf was not handled")
+	}
 	if p.viewMode != ViewModeFilePicker {
-		t.Fatalf("f on the diff tab left view mode %v, want the file picker", p.viewMode)
+		t.Fatalf("f on the Diff leaf left view mode %v, want the file picker", p.viewMode)
 	}
 }
 

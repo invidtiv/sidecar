@@ -3,7 +3,9 @@ package overview
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -163,7 +166,7 @@ func TestGlobalPreviewURLAndIssueActivationStayDistinct(t *testing.T) {
 		t.Fatalf("issue preview = %#v", m.preview.issue)
 	}
 
-	spans := terminallink.Scan("review td-196c42", nil)
+	spans := terminallink.Scan("review td-196c42", nil, nil)
 	if len(spans) != 1 || spans[0].Kind != terminallink.KindIssue {
 		t.Fatalf("scanner issue span = %#v", spans)
 	}
@@ -768,33 +771,208 @@ func titleOrEmpty(doc *previewDoc) string {
 	return doc.view().Title()
 }
 
-func TestGlobalPreviewDiffTabDoesNotShowDoc(t *testing.T) {
+func TestGlobalPreviewDiffLeafKeepsDoc(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	action := previewNeedleAction(t, m, "README.md")
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: action.X, Y: action.Y, Button: tea.MouseLeft}))
 	if m.preview.doc == nil {
 		t.Fatal("expected an open doc")
 	}
-	m.previewTab = workspacediff.TabDiff
-	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
-	if strings.Contains(view, "Hello from preview") {
-		t.Fatalf("diff tab rendered the doc body: %q", view)
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	if m.preview.diff == nil {
+		t.Fatal("expected a Diff leaf")
 	}
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		kind, _ := region.Data.(string)
-		if kind == previewDocRegionKind || kind == previewIssueRegionKind || kind == previewPaneDividerKind {
-			t.Fatalf("diff tab retained hidden Output region %#v", region)
-		}
+	if m.preview.doc == nil {
+		t.Fatal("opening Diff hid the document leaf")
+	}
+	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
+	if !strings.Contains(view, "Hello from preview") {
+		t.Fatalf("Diff leaf hid the doc body:\n%s", view)
 	}
 }
 
 func TestGlobalPreviewDecoratesEveryActivatedLinkKind(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	decorated := m.decoratePreviewLine("see README.md then review td-196c42", 0)
+	m.previewSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
+	decorated := m.decoratePreviewLine("see README.md then review td-196c42 and abc1234", 0)
 	if !strings.Contains(decorated, "\x1b[4mREADME.md\x1b[24m") {
 		t.Fatalf("the file this surface does open was not underlined: %q", decorated)
 	}
 	if !strings.Contains(decorated, "\x1b[4mtd-196c42\x1b[24m") {
 		t.Fatalf("the issue this surface opens was not underlined: %q", decorated)
 	}
+	if !strings.Contains(decorated, "\x1b[4mabc1234\x1b[24m") {
+		t.Fatalf("the git spec this surface opens was not underlined: %q", decorated)
+	}
+}
+
+func TestPreviewClickThenCLISharesResolvedIdentity(t *testing.T) {
+	root := initPreviewTwoCommitRepo(t)
+	headShort := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "--short=7", "HEAD"))
+	headFull := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "HEAD"))
+	parentShort := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "--short=7", "HEAD~1"))
+	parentFull := strings.TrimSpace(runPreviewGit(t, root, "rev-parse", "HEAD~1"))
+
+	cases := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"commit", headShort, "c:" + headFull},
+		{"two-dot", parentShort + ".." + headShort, "r:" + parentFull + ".." + headFull},
+		{"three-dot", parentShort + "..." + headShort, "r:" + parentFull + "..." + headFull},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+			ws := m.catalog["a"]
+			ws.Path = root
+			ws.ProjectRoot = root
+			m.catalog["a"] = ws
+
+			run(t, m, m.activatePreviewDiff(terminallink.Span{
+				Kind:  terminallink.KindDiff,
+				Value: tc.token,
+				Extra: terminallink.Extra{Raw: tc.token},
+			}))
+			if m.preview.diff == nil || m.preview.diff.view() == nil {
+				t.Fatal("click opened no Diff view")
+			}
+			if got := m.preview.diff.view().Target.Identity(); got != tc.want {
+				t.Fatalf("click identity = %q, want %q", got, tc.want)
+			}
+
+			cli := uirequest.DiffTarget(previewDiffPath(ws), tc.token)
+			if cli.Identity() != tc.want {
+				t.Fatalf("DiffTarget identity = %q, want %q", cli.Identity(), tc.want)
+			}
+			run(t, m, m.openPreviewDiff(cli))
+			if keys := previewDiffKeys(m.preview.diff); !reflect.DeepEqual(keys, []string{tc.want}) {
+				t.Fatalf("tabs after click+CLI = %v, want [%s]", keys, tc.want)
+			}
+		})
+	}
+}
+
+func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	m.previewSpecResolver = func(_, raw string) (string, bool) {
+		return raw, raw == "abc1234" || raw == "abc1234..def5678"
+	}
+	if buf := m.previewBuffer(); buf == nil {
+		t.Fatal("no preview buffer")
+	} else {
+		buf.Update("landed abc1234 then abc1234..def5678\n")
+	}
+	m.WorkspacesView(previewWide, previewTall)
+
+	cmd, claimed := m.activatePreviewLinkAt(previewNeedleAction(t, m, "abc1234.."), false)
+	if !claimed || cmd == nil {
+		t.Fatal("range was not activated")
+	}
+	run(t, m, cmd)
+	if m.preview.diff == nil || m.preview.diff.view() == nil {
+		t.Fatal("range click opened no Diff leaf")
+	}
+	if got := m.preview.diff.view().Target.Identity(); got != "r:abc1234..def5678" {
+		t.Fatalf("range identity = %q", got)
+	}
+
+	run(t, m, m.activatePreviewDiff(terminallink.Span{
+		Kind:  terminallink.KindDiff,
+		Value: "abc1234",
+		Extra: terminallink.Extra{Raw: "abc1234"},
+	}))
+	if idx := m.preview.diff.tabs.Find("c:abc1234"); idx < 0 {
+		t.Fatalf("commit tab missing after click: keys=%v", previewDiffKeys(m.preview.diff))
+	}
+
+	m.preview.paneRoot = nil
+	if spans := m.previewLinkSpans("landed abc1234"); diffSpanCount(spans) != 0 {
+		t.Fatalf("nil pane tree still emitted git spans: %#v", spans)
+	}
+}
+
+func TestGlobalPreviewGitSpecCapAndRejects(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	calls := 0
+	m.previewSpecResolver = func(_, raw string) (string, bool) {
+		calls++
+		return raw, true
+	}
+	var tokens []string
+	for i := 0; i < 20; i++ {
+		tokens = append(tokens, fmt.Sprintf("aaaaaa%02x", i))
+	}
+	line := strings.Join(tokens, " ")
+	spans := m.previewLinkSpans(line)
+	if calls != terminallink.MaxNewDiffResolves {
+		t.Fatalf("resolver calls = %d, want cap %d", calls, terminallink.MaxNewDiffResolves)
+	}
+	if diffSpanCount(spans) != terminallink.MaxNewDiffResolves {
+		t.Fatalf("spans = %d, want %d", diffSpanCount(spans), terminallink.MaxNewDiffResolves)
+	}
+	_ = m.previewLinkSpans(line)
+	if calls != terminallink.MaxNewDiffResolves {
+		t.Fatalf("memo reused: calls = %d", calls)
+	}
+
+	m.previewSpecResolver = func(_, raw string) (string, bool) { return raw, true }
+	m.preview.linkMemo = previewLinkMemo{}
+	if n := diffSpanCount(m.previewLinkSpans("Abc1234")); n != 0 {
+		t.Fatalf("mixed-case produced %d spans", n)
+	}
+	if n := diffSpanCount(m.previewLinkSpans("abc1234.go")); n != 0 {
+		t.Fatalf("filename produced %d spans", n)
+	}
+	if n := diffSpanCount(m.previewLinkSpans("abc1234..def5678")); n != 1 {
+		t.Fatalf("range produced %d spans, want 1", n)
+	}
+}
+
+func initPreviewTwoCommitRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runPreviewGit(t, root, "init", "-b", "main")
+	runPreviewGit(t, root, "config", "user.email", "sidecar@example.test")
+	runPreviewGit(t, root, "config", "user.name", "Sidecar Test")
+	runPreviewGit(t, root, "commit", "--allow-empty", "-m", "one")
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runPreviewGit(t, root, "add", "a.go")
+	runPreviewGit(t, root, "commit", "-m", "two")
+	return root
+}
+
+func runPreviewGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, out, err)
+	}
+	return string(out)
+}
+
+func previewDiffKeys(diff *previewDiff) []string {
+	if diff == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(diff.tabs.Items))
+	for _, item := range diff.tabs.Items {
+		keys = append(keys, item.Key)
+	}
+	return keys
+}
+
+func diffSpanCount(spans []terminallink.Span) int {
+	n := 0
+	for _, span := range spans {
+		if span.Kind == terminallink.KindDiff {
+			n++
+		}
+	}
+	return n
 }

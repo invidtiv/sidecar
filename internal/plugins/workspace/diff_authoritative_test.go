@@ -14,7 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 func authoritativeRepo(t *testing.T) string {
@@ -178,9 +178,9 @@ func TestLoadDiffCapturesPinnedStrategyAcrossRefresh(t *testing.T) {
 	p.refreshOperationID = "refresh-new"
 	p.update(RefreshDoneMsg{OperationScope: OperationScope{Epoch: 17, OperationID: "refresh-new"},
 		Snapshot: &RepoSnapshot{Key: "new-repo"}, Worktrees: []*Worktree{{Key: "new", RepoKey: "new-repo", Path: dir}}})
-	p.diffError = "current"
+	p.diff.Error = "current"
 	p.update(loaded)
-	if p.diffError != "current" {
+	if p.diff.Error != "current" {
 		t.Fatal("stale delayed diff result was applied after repository swap")
 	}
 }
@@ -300,8 +300,8 @@ func TestMissingWorktreeRendersErrorNotClean(t *testing.T) {
 	p := New()
 	p.worktrees = []*Worktree{{Key: "missing-key", Name: "same", Path: missing}}
 	p.selectedIdx = 0
-	p.diffState = LoadStateError
-	p.diffError = err.Error()
+	p.diff.State = LoadStateError
+	p.diff.Error = err.Error()
 	p.ctx = &plugin.Context{}
 	got := p.renderDiffContent(80, 10)
 	if !strings.Contains(got, "Error loading diff") || strings.Contains(got, "No changes") {
@@ -475,11 +475,13 @@ func TestCleanWorktreeStillListsBranchCommitsInWorkingTreeScope(t *testing.T) {
 		t.Fatalf("working tree should be clean, got %q", s.WorkingTree)
 	}
 
-	p := &Plugin{diffSnapshot: s, diffScope: DiffScopeWorkingTree}
+	p := &Plugin{}
+	p.diff.Snapshot = s
+	p.diff.Scope = DiffScopeWorkingTree
 	p.applyDiffScope()
 
-	if len(p.commitStatusList) != 2 {
-		t.Errorf("commits in working-tree scope = %d, want 2", len(p.commitStatusList))
+	if len(p.diff.Commits) != 2 {
+		t.Errorf("commits in working-tree scope = %d, want 2", len(p.diff.Commits))
 	}
 	if n := p.diffTabFileCount(); n != 0 {
 		t.Errorf("clean working tree produced %d phantom file entries, want 0", n)
@@ -522,17 +524,19 @@ func commitDetailHashFromCmd(t *testing.T, cmd tea.Cmd) (string, bool) {
 		}
 		return hash, found
 	}
-	loaded, ok := msg.(CommitDetailLoadedMsg)
-	if !ok {
-		return "", false
+	if loaded, ok := msg.(CommitDetailLoadedMsg); ok {
+		return loaded.CommitHash, true
 	}
-	return loaded.CommitHash, true
+	if loaded, ok := msg.(workspacediff.CommitDetailMsg); ok {
+		return loaded.Hash, true
+	}
+	return "", false
 }
 
 func TestDiffLoadedMsgLoadsFirstCommitWithoutCursorMove(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.diffScope = DiffScopeWorkingTree
-	p.diffTabCursor = 0
+	p.diff.Scope = DiffScopeWorkingTree
+	p.diff.Cursor = 0
 
 	_, cmd := p.update(DiffLoadedMsg{
 		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
@@ -546,8 +550,8 @@ func TestDiffLoadedMsgLoadsFirstCommitWithoutCursorMove(t *testing.T) {
 		},
 	})
 
-	if p.diffTabCursor != 0 {
-		t.Fatalf("cursor = %d, want 0", p.diffTabCursor)
+	if p.diff.Cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.diff.Cursor)
 	}
 	if n := p.diffTabFileCount(); n != 0 {
 		t.Fatalf("file count = %d, want 0 so cursor sits on first commit", n)
@@ -561,12 +565,12 @@ func TestDiffLoadedMsgLoadsFirstCommitWithoutCursorMove(t *testing.T) {
 	}
 
 	// Moving to another commit and back still loads, even without another snapshot.
-	p.diffTabCursor = 1
+	p.diff.Cursor = 1
 	hash, ok = commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(0))
 	if !ok || hash != "bbb2222" {
 		t.Fatalf("move to second commit: hash=%q ok=%v, want bbb2222", hash, ok)
 	}
-	p.diffTabCursor = 0
+	p.diff.Cursor = 0
 	hash, ok = commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(1))
 	if !ok || hash != "aaa1111" {
 		t.Fatalf("move back to first commit: hash=%q ok=%v, want aaa1111", hash, ok)
@@ -575,7 +579,7 @@ func TestDiffLoadedMsgLoadsFirstCommitWithoutCursorMove(t *testing.T) {
 
 func TestDiffLoadedMsgDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.diffScope = DiffScopeWorkingTree
+	p.diff.Scope = DiffScopeWorkingTree
 
 	_, cmd := p.update(DiffLoadedMsg{
 		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
@@ -587,8 +591,8 @@ func TestDiffLoadedMsgDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 		},
 	})
 
-	if p.diffTabCursor != 0 {
-		t.Fatalf("cursor = %d, want 0", p.diffTabCursor)
+	if p.diff.Cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", p.diff.Cursor)
 	}
 	if n := p.diffTabFileCount(); n == 0 {
 		t.Fatal("expected working-tree files so cursor sits on a file")
@@ -605,27 +609,27 @@ const (
 
 func TestLoadSelectedDiffTabCommitSkipsAlreadyLoadedHash(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.commitStatusList = []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}}
-	p.diffTabCursor = 0
-	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash, ShortHash: testCommitShortHash}
-	p.commitFileCursor = 2
+	p.diff.Commits = []CommitStatusInfo{{Hash: testCommitShortHash, Subject: "first"}}
+	p.diff.Cursor = 0
+	p.diff.CommitDetail = &workspacediff.CommitDetail{Hash: testCommitFullHash, ShortHash: testCommitShortHash}
+	p.diff.CommitFileCursor = 2
 
 	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
 		t.Fatal("already-loaded commit under cursor should not refetch")
 	}
-	if p.commitFileCursor != 2 {
-		t.Fatalf("skip reset commitFileCursor to %d, want 2", p.commitFileCursor)
+	if p.diff.CommitFileCursor != 2 {
+		t.Fatalf("skip reset commitFileCursor to %d, want 2", p.diff.CommitFileCursor)
 	}
 
 	// ShortHash can be empty; list %h is still a prefix of detail %H.
-	p.commitDetail = &gitstatus.Commit{Hash: testCommitFullHash}
+	p.diff.CommitDetail = &workspacediff.CommitDetail{Hash: testCommitFullHash}
 	if cmd := p.loadSelectedDiffTabCommit(); cmd != nil {
 		t.Fatal("full-hash prefix of list short hash should skip")
 	}
 
 	// A later cursor move onto a different commit still loads.
-	p.commitStatusList = append(p.commitStatusList, CommitStatusInfo{Hash: "bbb2222", Subject: "second"})
-	p.diffTabCursor = 1
+	p.diff.Commits = append(p.diff.Commits, CommitStatusInfo{Hash: "bbb2222", Subject: "second"})
+	p.diff.Cursor = 1
 	hash, ok := commitDetailHashFromCmd(t, p.onDiffTabCursorChanged(0))
 	if !ok || hash != "bbb2222" {
 		t.Fatalf("move after skip: hash=%q ok=%v, want bbb2222", hash, ok)
@@ -634,14 +638,14 @@ func TestLoadSelectedDiffTabCommitSkipsAlreadyLoadedHash(t *testing.T) {
 
 func TestDiffLoadedMsgPreservesCommitFileCursor(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.diffScope = DiffScopeWorkingTree
-	p.diffTabCursor = 0
-	p.commitDetail = &gitstatus.Commit{
+	p.diff.Scope = DiffScopeWorkingTree
+	p.diff.Cursor = 0
+	p.diff.CommitDetail = &workspacediff.CommitDetail{
 		Hash:      testCommitFullHash,
 		ShortHash: testCommitShortHash,
-		Files:     []gitstatus.CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
+		Files:     []workspacediff.CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
 	}
-	p.commitFileCursor = 2
+	p.diff.CommitFileCursor = 2
 
 	_, cmd := p.update(DiffLoadedMsg{
 		OperationScope: OperationScope{Epoch: 1, WorktreeKey: "wt"},
@@ -652,27 +656,38 @@ func TestDiffLoadedMsgPreservesCommitFileCursor(t *testing.T) {
 		},
 	})
 
-	if p.commitDetail == nil || p.commitDetail.Hash != testCommitFullHash {
+	if p.diff.CommitDetail == nil || p.diff.CommitDetail.Hash != testCommitFullHash {
 		t.Fatal("refresh cleared commitDetail for the already-loaded commit")
 	}
-	if p.commitFileCursor != 2 {
-		t.Fatalf("commitFileCursor = %d, want 2 after DiffLoadedMsg", p.commitFileCursor)
+	if p.diff.CommitFileCursor != 2 {
+		t.Fatalf("commitFileCursor = %d, want 2 after DiffLoadedMsg", p.diff.CommitFileCursor)
 	}
 	if hash, ok := commitDetailHashFromCmd(t, cmd); ok {
 		t.Fatalf("refresh issued loadCommitDetail for %q", hash)
 	}
 }
 
+func TestLoadSelectedContentSkipsDiffOnOutput(t *testing.T) {
+	p := testDiffPlugin(t)
+	p.width, p.height = 120, 40
+	if cmd := p.loadSelectedDiff(); cmd != nil {
+		t.Fatal("loadSelectedDiff ran git with no Diff leaf showing")
+	}
+	if p.diff.State == LoadStateLoading {
+		t.Fatal("Output tab marked the viewer loading")
+	}
+}
+
 func TestCycleDiffScopeLoadsFirstCommit(t *testing.T) {
 	p := testDiffPlugin(t)
-	p.diffSnapshot = &DiffSnapshot{
+	p.diff.Snapshot = &DiffSnapshot{
 		State:       LoadStateReady,
 		WorkingTree: sampleWorkingTreeDiff,
 		Commits: []CommitStatusInfo{
 			{Hash: "aaa1111", Subject: "first"},
 		},
 	}
-	p.diffScope = DiffScopeWorkingTree
+	p.diff.Scope = DiffScopeWorkingTree
 	p.applyDiffScope()
 	if p.diffTabFileCount() == 0 {
 		t.Fatal("working-tree scope should list files before cycling")
@@ -682,7 +697,7 @@ func TestCycleDiffScopeLoadsFirstCommit(t *testing.T) {
 	if !ok || hash != "aaa1111" {
 		t.Fatalf("cycle to commits: hash=%q ok=%v, want aaa1111", hash, ok)
 	}
-	if p.diffScope != DiffScopeCommits {
-		t.Fatalf("scope = %v, want DiffScopeCommits", p.diffScope)
+	if p.diff.Scope != DiffScopeCommits {
+		t.Fatalf("scope = %v, want DiffScopeCommits", p.diff.Scope)
 	}
 }

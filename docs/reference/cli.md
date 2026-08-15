@@ -53,23 +53,27 @@ sidecar help --json
 
 ## `sidecar open`
 
-Show a file or a td issue in a split pane
+Show a file, a td issue, or a git diff in a split pane
 
-Show a file or a td issue to the user, as a split pane in the Sidecar workspace
-containing this shell.
+Show a file, a td issue, or a git diff to the user, as a split pane in the Sidecar workspace
+containing this shell. --diff with no spec is the working tree. --split only
+overrides the split axis; it never halves a live terminal after content is open.
 
 ```
-Usage: sidecar open [options] <target>
+Usage: sidecar open [options] [<target>]
 ```
 
 **Targets:**
 
 - `path`: A file inside this shell's workspace, optionally "path:line"
 - `td-xxxxxx`: A td issue id
+- `--diff`: Working-tree diff (wt); add a spec for a commit or range
+- `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
 
 **Options:**
 
 - `--line N`: Line to reveal (alternative to "path:line")
+- `--diff`: Open a Diff leaf (working tree if no spec)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
@@ -92,6 +96,12 @@ sidecar open internal/cli/cli.go
 sidecar open internal/cli/cli.go:88
 # td issue
 sidecar open td-348d88
+# working-tree Diff leaf
+sidecar open --diff
+# that commit, not the working tree
+sidecar open --diff HEAD
+# commit, unless a file of that name exists
+sidecar open abc1234
 # structured result for the agent
 sidecar open --json --split below README.md
 ```

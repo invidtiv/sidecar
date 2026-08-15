@@ -15,8 +15,10 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // A td id is a link only where there is a pane tree to open it in. Without one
@@ -1291,4 +1293,198 @@ func TestALinkClaimedPressDropsThePreviousGesturesClick(t *testing.T) {
 		t.Fatalf("a link-claimed press left %v armed from the gesture before it",
 			p.pointer.Resolution)
 	}
+}
+
+func TestGitSpecSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
+	line := "landed abc1234"
+	if links := detectTerminalLinks(line); len(links) != 0 {
+		t.Fatalf("an unbound host must ignore git specs: %#v", links)
+	}
+	if got := decorateTerminalLinks(line, nil); strings.Contains(got, "\x1b[4m") {
+		t.Fatalf("git spec was decorated: %q", got)
+	}
+
+	buffer := tty.NewOutputBuffer(20)
+	buffer.Update(line)
+	p := newSelectionTestPlugin()
+	p.shellSelected = true
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
+	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, true }
+	if cmd, ok := p.activateTerminalLink(actionAt(8, 4)); ok || cmd != nil {
+		t.Fatal("clicking a git spec activated a host path with no tree")
+	}
+	if diff, _ := p.activeDiffPane(); diff != nil {
+		t.Fatal("git spec click opened a Diff pane with no tree")
+	}
+}
+
+func TestGitSpecSpanIsDecoratedWhereItIsClickable(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
+	line := "landed abc1234 on main"
+	buffer := p.shells[0].Agent.OutputBuf
+	buffer.Update(line)
+
+	resolver := p.terminalLinkResolver(false, buffer)
+	if resolver == nil {
+		t.Fatal("a bound surface produced no link resolver")
+	}
+	links := resolver.links(line)
+	if len(links) != 1 || links[0].Kind != terminalDiffLink || links[0].Value != "abc1234" {
+		t.Fatalf("resolved links = %#v, want one diff link", links)
+	}
+	decorated := decorateTerminalLinks(line, resolver)
+	if ansi.Strip(decorated) != line || !strings.Contains(decorated, "\x1b[4m") {
+		t.Fatalf("git spec decoration = %q", decorated)
+	}
+	if strings.Contains(decorated, "\x1b]8;;") {
+		t.Fatalf("git spec was given an OSC-8 hyperlink: %q", decorated)
+	}
+}
+
+func TestGitSpecClickOpensDiffLeafForParseSpec(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.terminalSpecResolver = func(_, raw string) (string, bool) {
+		switch raw {
+		case "abc1234", "abc1234..def5678", "aaa1111...bbb2222":
+			return raw, true
+		default:
+			return "", false
+		}
+	}
+
+	cases := []struct {
+		token    string
+		identity string
+	}{
+		{"abc1234", "c:abc1234"},
+		{"abc1234..def5678", "r:abc1234..def5678"},
+		{"aaa1111...bbb2222", "r:aaa1111...bbb2222"},
+	}
+	for _, tc := range cases {
+		line := "see " + tc.token + " next"
+		p.shells[0].Agent.OutputBuf.Update(line + "\n")
+		if _, ok := p.activateDiffLink(tc.token); !ok {
+			t.Fatalf("activateDiffLink(%q) failed", tc.token)
+		}
+		diff, leaf := p.activeDiffPane()
+		if diff == nil || leaf == nil || leaf.Kind != PaneDiff {
+			t.Fatalf("%s: no Diff leaf", tc.token)
+		}
+		want, ok := workspacediff.ParseSpec(tc.token)
+		if !ok || want.Identity() != tc.identity {
+			t.Fatalf("ParseSpec(%q) = %+v ok=%v", tc.token, want, ok)
+		}
+		if idx := diff.tabs.Find(tc.identity); idx < 0 {
+			t.Fatalf("%s: tab keys = %v, want %s", tc.token, diffTabKeys(diff), tc.identity)
+		}
+		if view := diff.view(); view == nil || view.Target.Identity() != tc.identity {
+			t.Fatalf("%s: active target = %#v", tc.token, view)
+		}
+	}
+	diff, _ := p.activeDiffPane()
+	if diff == nil || len(diff.tabs.Items) != 3 {
+		t.Fatalf("want three target tabs (c + .. + ...), got %#v", diffTabKeys(diff))
+	}
+}
+
+func TestGitSpecClickEqualsOpenDiffPaneForSurface(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
+	p.shells[0].Agent.OutputBuf.Update("landed abc1234\n")
+	if _, ok := p.activateDiffLink("abc1234"); !ok {
+		t.Fatal("click path failed")
+	}
+	clicked, _ := p.activeDiffPane()
+	if clicked == nil {
+		t.Fatal("click opened no Diff leaf")
+	}
+	clickedKeys := diffTabKeys(clicked)
+	clickedIdent := clicked.view().Target.Identity()
+
+	other := docPaneTestPlugin(t, root, true)
+	surfaceRoot, surface, ok := other.selectedTerminalSurface()
+	if !ok {
+		t.Fatal("no surface")
+	}
+	target, ok := workspacediff.ParseSpec("abc1234")
+	if !ok {
+		t.Fatal("ParseSpec failed")
+	}
+	if cmd := other.openDiffPaneForSurface(surfaceRoot, surface, target); cmd == nil {
+		t.Fatal("openDiffPaneForSurface failed")
+	}
+	opened, _ := other.activeDiffPane()
+	if opened == nil || opened.view().Target.Identity() != clickedIdent {
+		t.Fatalf("open path target = %#v, click = %s", opened, clickedIdent)
+	}
+	if got := diffTabKeys(opened); !reflect.DeepEqual(got, clickedKeys) {
+		t.Fatalf("open tabs = %v, click tabs = %v", got, clickedKeys)
+	}
+}
+
+func TestGitSpecMemoCapsNewRevParsesPerBufferRevision(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	calls := 0
+	p.terminalSpecResolver = func(_, raw string) (string, bool) {
+		calls++
+		return raw, true
+	}
+	buffer := p.shells[0].Agent.OutputBuf
+	var tokens []string
+	for i := 0; i < 20; i++ {
+		tokens = append(tokens, fmt.Sprintf("aaaaaa%02x", i))
+	}
+	line := strings.Join(tokens, " ")
+	buffer.Update(line)
+	ctx := p.terminalLinkSurfaceContext(false)
+	links := p.resolvedTerminalLinks(ctx, buffer, line)
+	if calls != terminallink.MaxNewDiffResolves {
+		t.Fatalf("resolver calls = %d, want cap %d", calls, terminallink.MaxNewDiffResolves)
+	}
+	if len(links) != terminallink.MaxNewDiffResolves {
+		t.Fatalf("links = %d, want %d (further tokens stay plain)", len(links), terminallink.MaxNewDiffResolves)
+	}
+	p.resolvedTerminalLinks(ctx, buffer, line)
+	if calls != terminallink.MaxNewDiffResolves {
+		t.Fatalf("memo reused: calls = %d", calls)
+	}
+	buffer.Update(line + " changed")
+	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
+	if calls != terminallink.MaxNewDiffResolves*2 {
+		t.Fatalf("new revision calls = %d, want %d", calls, terminallink.MaxNewDiffResolves*2)
+	}
+}
+
+func TestGitSpecFilenameAndMixedCaseAreNotLinks(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, true }
+	buffer := p.shells[0].Agent.OutputBuf
+	buffer.Update("accepted")
+	ctx := p.terminalLinkSurfaceContext(false)
+	for _, line := range []string{"Abc1234", "abc1234.go", "foo/abc1234"} {
+		if links := p.resolvedTerminalLinks(ctx, buffer, line); len(links) != 0 {
+			t.Fatalf("%q produced %#v", line, links)
+		}
+	}
+	links := p.resolvedTerminalLinks(ctx, buffer, "abc1234..def5678")
+	if len(links) != 1 || links[0].Kind != terminalDiffLink || links[0].Value != "abc1234..def5678" {
+		t.Fatalf("range links = %#v", links)
+	}
+}
+
+func diffTabKeys(diff *diffPane) []string {
+	if diff == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(diff.tabs.Items))
+	for _, item := range diff.tabs.Items {
+		keys = append(keys, item.Key)
+	}
+	return keys
 }

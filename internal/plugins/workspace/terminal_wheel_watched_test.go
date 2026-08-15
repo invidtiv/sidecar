@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -21,7 +22,6 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 	p.width, p.height = 100, 30
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.shellSelected = true
 
 	buffer := testTerminalBuffer(strings.Repeat("watched row\n", 60))
@@ -170,6 +170,37 @@ func TestWatchedWheelWithoutMouseReportingScrollsLocally(t *testing.T) {
 	}
 	if logged := readTmuxLog(t, logPath); strings.Contains(logged, "send-keys") {
 		t.Fatalf("a notch was forwarded to a watched pane that tracks no mouse: %s", logged)
+	}
+}
+
+func TestWatchedTerminalBoundaryDropsOnlyLocalExhaustedInertia(t *testing.T) {
+	p := watchedWheelPlugin(t, false)
+	p.mouseHandler.HitMap.AddRect(regionPreviewPane, 40, 0, 60, 30, nil)
+	down := tea.MouseWheelMsg{X: 60, Y: 8, Button: tea.MouseWheelDown}
+	if !p.WheelAtBoundary(down) {
+		t.Fatal("local terminal inertia past the live bottom was not bounded")
+	}
+
+	up := tea.MouseWheelMsg{X: 60, Y: 8, Button: tea.MouseWheelUp}
+	if p.WheelAtBoundary(up) {
+		t.Fatal("local terminal wheel toward available history was dropped")
+	}
+	p.previewScroll = p.previewMaxScroll()
+	source, ok := p.terminalHistoryFor(false)
+	if !ok {
+		t.Fatal("test premise: terminal history source unavailable")
+	}
+	state := p.terminalHistory[source.Key]
+	state.Exhausted = true
+	p.terminalHistory[source.Key] = state
+	if !p.WheelAtBoundary(up) {
+		t.Fatal("local terminal inertia past exhausted history was not bounded")
+	}
+
+	p = watchedWheelPlugin(t, true)
+	p.mouseHandler.HitMap.AddRect(regionPreviewPane, 40, 0, 60, 30, nil)
+	if p.WheelAtBoundary(down) {
+		t.Fatal("mouse-reporting application wheel was mistaken for Sidecar scrollback")
 	}
 }
 

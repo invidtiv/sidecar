@@ -240,6 +240,7 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	}
 	paneTarget := p.paneRoot != nil &&
 		(link.Kind == terminalIssueLink ||
+			link.Kind == terminalDiffLink ||
 			(link.Kind == terminalPathLink && docPaneTarget(link.Value)))
 	// Preserve the exact live window containing the link before opening the
 	// document changes pane geometry. Claude commonly moves that transcript
@@ -252,7 +253,8 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	}
 	// URLs and non-document file navigation do not resize this surface.
 	// Bare markdown and authoritative path:line routes both create a doc pane,
-	// and a td id creates an issue pane; all three move the terminal's box.
+	// a td id creates an issue pane, and a git spec creates a Diff pane;
+	// those all move the terminal's box.
 	if !paneTarget {
 		return cmd, true
 	}
@@ -276,12 +278,17 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 // path can hand it focus without asking a second time what kind of content it
 // just opened.
 func (p *Plugin) openedPaneLeaf(kind terminalLinkKind) *PaneNode {
-	if kind == terminalIssueLink {
+	switch kind {
+	case terminalIssueLink:
 		_, leaf := p.activeIssuePane()
 		return leaf
+	case terminalDiffLink:
+		_, leaf := p.activeDiffPane()
+		return leaf
+	default:
+		_, leaf := p.activeDocPane()
+		return leaf
 	}
-	_, leaf := p.activeDocPane()
-	return leaf
 }
 
 type terminalViewportFreeze struct {

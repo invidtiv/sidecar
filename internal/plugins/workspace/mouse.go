@@ -1,15 +1,159 @@
 package workspace
 
 import (
+	"time"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
+
+// previewActionHit names a Git-style header action chip (not a tab).
+type previewActionHit int
+
+const (
+	previewActionDiff previewActionHit = iota
+	previewActionTask
+)
+
+func (p *Plugin) previewTaskID() string {
+	if wt := p.selectedWorktree(); wt != nil {
+		return wt.TaskID
+	}
+	return ""
+}
+
+func (p *Plugin) clickPreviewAction(data any) tea.Cmd {
+	hit, ok := data.(previewActionHit)
+	if !ok {
+		return nil
+	}
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+	if p.paneRoot == nil {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil
+	}
+	switch hit {
+	case previewActionTask:
+		id := p.previewTaskID()
+		if id == "" {
+			return nil
+		}
+		return p.openIssuePaneForSurface(root, surface, id)
+	default:
+		return p.openDiffPaneForSurface(root, surface, workspacediff.WorkingTreeTarget())
+	}
+}
+
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer for the project
+// Workspaces surface. It follows the same hit regions as handleMouseScroll but
+// performs no loads or visible mutations, allowing Bubble Tea to discard an
+// inertial tail before Update and View.
+func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if p.isModalViewMode() || p.mouseHandler == nil {
+		return false
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
+		return p.terminalWheelAtBoundary(p.interactiveTermPanel(), action)
+	}
+	regionID := ""
+	if action.Region != nil {
+		regionID = action.Region.ID
+	}
+	switch regionID {
+	case regionSidebar, regionWorktreeItem:
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
+		leafID := 0
+		switch data := action.Region.Data.(type) {
+		case int:
+			leafID = data
+		case docTabHit:
+			leafID = data.LeafID
+		case issueTabHit:
+			leafID = data.LeafID
+		case diffTabHit:
+			leafID = data.LeafID
+		}
+		leaf := FindPane(p.paneRoot, leafID)
+		if leaf == nil {
+			return true
+		}
+		switch leaf.Kind {
+		case PaneDoc:
+			doc := p.docs[leaf.ContentID]
+			return doc == nil || doc.view() == nil || doc.view().ScrollAtBoundary(action.Delta)
+		case PaneIssue:
+			issue := p.issues[leaf.ContentID]
+			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+		case PaneDiff:
+			view := p.activeDiffView()
+			return view.ScrollAtBoundary(action.Delta, view.Height())
+		default:
+			return false
+		}
+	case regionTermPanelContent:
+		return p.terminalWheelAtBoundary(true, action)
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane, regionDiffTabPreviewFile:
+		view := p.activeDiffView()
+		return (sharedscroll.Bounds{Position: view.Cursor, Maximum: view.TotalItems() - 1}).AtBoundary(action.Delta)
+	case regionDiffTabDiffPane, regionDiffTabMinimap, regionCommitFileDiffPane:
+		view := p.activeDiffView()
+		return view.ScrollAtBoundary(action.Delta, view.Height())
+	case regionCommitFileItem, regionCommitFileBack:
+		view := p.activeDiffView()
+		maximum := -1
+		if view.CommitDetail != nil {
+			maximum = len(view.CommitDetail.Files) - 1
+		}
+		return (sharedscroll.Bounds{Position: view.CommitFileCursor, Maximum: maximum}).AtBoundary(action.Delta)
+	case regionPreviewPane:
+		if p.previewShowsTerminal() {
+			return p.terminalWheelAtBoundary(false, action)
+		}
+		return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+	case regionKanbanCard, regionKanbanColumn:
+		return false
+	}
+	if action.Region != nil {
+		return false
+	}
+	if p.viewMode == ViewModeKanban {
+		return false
+	}
+	split := p.previewSplit()
+	if p.sidebarVisible && action.X < split.SidebarWidth {
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	}
+	if p.previewShowsTerminal() {
+		return p.terminalWheelAtBoundary(false, action)
+	}
+	return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+}
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
 func (p *Plugin) isModalViewMode() bool {
@@ -26,7 +170,7 @@ func (p *Plugin) isModalViewMode() bool {
 func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab, regionListFilter,
+		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
@@ -71,16 +215,16 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleRenameShellModalMouse(msg)
 	}
 
+	if p.viewMode == ViewModeRenameWorktree {
+		return p.handleRenameWorktreeModalMouse(msg)
+	}
+
 	if p.viewMode == ViewModeConfirmDelete {
 		return p.handleConfirmDeleteModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeConfirmDeleteShell {
 		return p.handleConfirmDeleteShellModalMouse(msg)
-	}
-
-	if p.viewMode == ViewModePromptPicker {
-		return p.handlePromptPickerModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeTypeSelector {
@@ -194,7 +338,11 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	prevAgent := p.createAgentType
+	prevSkip := p.createSkipPermissions
 	action := p.createModal.HandleMouse(msg, p.mouseHandler)
+	p.applyCreateModalAfterInput(prevAgent, prevSkip)
+
 	switch action {
 	case "":
 		return nil
@@ -204,54 +352,9 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
-	case createPromptFieldID:
-		p.createFocus = 2
-		p.syncCreateModalFocus()
-		p.openPromptPicker(p.createPrompts, ViewModeCreate)
-		return nil
-	case createNameFieldID:
-		p.createFocus = 0
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createBaseFieldID:
-		p.createFocus = 1
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createTaskFieldID:
-		p.createFocus = 3
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
 	case createSkipPermissionsID:
-		p.createFocus = 5
 		p.createSkipPermissions = !p.createSkipPermissions
-		p.syncCreateModalFocus()
-		return nil
-	}
-
-	if idx, ok := parseIndexedID(createBranchItemPrefix, action); ok && idx < len(p.branchFiltered) {
-		p.createBaseBranchInput.SetValue(p.branchFiltered[idx])
-		p.branchFiltered = nil
-		p.createFocus = 1
-		p.syncCreateModalFocus()
-		return nil
-	}
-	if idx, ok := parseIndexedID(createTaskItemPrefix, action); ok && idx < len(p.taskSearchFiltered) {
-		task := p.taskSearchFiltered[idx]
-		p.createTaskID = task.ID
-		p.createTaskTitle = task.Title
-		p.createFocus = 3
-		p.syncCreateModalFocus()
-		return nil
-	}
-	agents := p.selectableAgentTypes()
-	if idx, ok := parseIndexedID(createAgentItemPrefix, action); ok && idx < len(agents) {
-		p.createAgentIdx = idx
-		p.createAgentType = agents[idx]
-		p.createFocus = 4
-		p.syncCreateModalFocus()
+		p.persistCreateAutoApprove()
 		return nil
 	}
 
@@ -274,6 +377,26 @@ func (p *Plugin) handleRenameShellModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	case renameShellActionID, renameShellRenameID:
 		return p.executeRenameShell()
+	}
+	return nil
+}
+
+func (p *Plugin) handleRenameWorktreeModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return nil
+	}
+
+	action := p.renameWorktreeModal.HandleMouse(msg, p.mouseHandler)
+	switch action {
+	case "":
+		return nil
+	case "cancel", renameWorktreeCancelID:
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		return nil
+	case renameWorktreeActionID, renameWorktreeRenameID:
+		return p.executeRenameWorktree()
 	}
 	return nil
 }
@@ -351,38 +474,6 @@ func (p *Plugin) handleTypeSelectorModalMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) handlePromptPickerModalMouse(msg tea.MouseMsg) tea.Cmd {
-	if p.promptPicker == nil {
-		return nil
-	}
-
-	p.ensurePromptPickerModal()
-	if p.promptPickerModal == nil {
-		return nil
-	}
-
-	action := p.promptPickerModal.HandleMouse(msg, p.mouseHandler)
-	switch action {
-	case "":
-		return nil
-	case "cancel":
-		return func() tea.Msg { return PromptCancelledMsg{} }
-	case promptPickerFilterID:
-		p.promptPicker.filterFocused = true
-		p.syncPromptPickerFocus()
-		return nil
-	}
-
-	if idx, ok := parsePromptPickerItemID(action); ok {
-		p.promptPicker.selectedIdx = idx
-		p.promptPicker.filterFocused = false
-		p.syncPromptPickerFocus()
-		return p.promptPickerSelectCmd()
-	}
-
-	return nil
-}
-
 func (p *Plugin) handleAgentChoiceModalMouse(msg tea.MouseMsg) tea.Cmd {
 	p.ensureAgentChoiceModal()
 	if p.agentChoiceModal == nil {
@@ -409,14 +500,14 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	prevAgentIdx := p.agentConfigAgentIdx
+	prevAgent := p.agentConfigAgentType
+	prevSkip := p.agentConfigSkipPerms
 	action := p.agentConfigModal.HandleMouse(msg, p.mouseHandler)
-
-	// Sync agent type when list selection changes via mouse (fixed modal list)
-	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
-			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
-		}
+	p.syncAgentConfigFromIdx()
+	if p.agentConfigAgentType != prevAgent {
+		p.loadAgentConfigAutoApprove()
+	} else if p.agentConfigSkipPerms != prevSkip {
+		p.persistAgentConfigAutoApprove()
 	}
 
 	switch action {
@@ -426,11 +517,12 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearAgentConfigModal()
 		return nil
-	case agentConfigPromptFieldID:
-		p.openPromptPicker(p.agentConfigPrompts, ViewModeAgentConfig)
-		return nil
 	case agentConfigSubmitID:
 		return p.executeAgentConfig()
+	case agentConfigSkipPermissionsID:
+		p.agentConfigSkipPerms = !p.agentConfigSkipPerms
+		p.persistAgentConfigAutoApprove()
+		return nil
 	}
 	return nil
 }
@@ -542,30 +634,14 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	// Handle hover in modals that have button hover states
 	switch p.viewMode {
 	case ViewModeCreate:
-		if action.Region == nil {
-			p.createButtonHover = 0
-			return nil
-		}
-		switch action.Region.ID {
-		case regionCreateButton:
-			if idx, ok := action.Region.Data.(int); ok {
-				switch idx {
-				case 6:
-					p.createButtonHover = 1 // Create
-				case 7:
-					p.createButtonHover = 2 // Cancel
-				}
-			}
-		default:
-			p.createButtonHover = 0
-		}
+		return nil
 	case ViewModeAgentConfig:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeAgentChoice:
 		// Modal library handles hover state internally
 		return nil
-	case ViewModeRenameShell:
+	case ViewModeRenameShell, ViewModeRenameWorktree:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeMerge:
@@ -578,7 +654,6 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		// Modal library handles hover state internally
 		return nil
 	default:
-		p.createButtonHover = 0
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
@@ -723,25 +798,25 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Entering interactive mode here would resize and reframe the terminal
 		// before drag tracking is armed, so an immediate click-drag selection
 		// jumps or disappears.
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			if !action.Shift && !action.Alt {
-				if cmd, ok := p.activateTerminalLink(action); ok {
-					return cmd
-				}
+		if !action.Shift && !action.Alt {
+			if cmd, ok := p.activateTerminalLink(action); ok {
+				return cmd
 			}
-			p.releaseTerminalDocProjection(false)
-			return p.prepareTerminalClickOrDrag(action)
 		}
+		p.releaseTerminalDocProjection(false)
+		return p.prepareTerminalClickOrDrag(action)
 	case regionPaneDivider:
 		// Start drag for pane resizing
 		p.mouseHandler.StartDrag(action.X, action.Y, regionPaneDivider, p.sidebarWidth)
 	case regionDiffTabDivider:
-		// Start drag for diff tab file list resizing (pixel-based width).
-		// If no saved width, compute the effective default so drag starts from the actual position.
-		startWidth := p.diffTabListWidth
-		if startWidth <= 0 {
-			startWidth = diffTabFileListWidth(p.width)
+		// Start drag from the width the divider actually occupies in the tab box.
+		view := p.activeDiffView()
+		leafW := p.width
+		if box, ok := p.diffDividerBox(); ok {
+			leafW = box.W
 		}
+		startWidth := view.EffectiveListWidth(leafW)
+		view.SetListWidth(startWidth)
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
 		// The setter thaws the panel's window, which is what this arm did by
@@ -757,6 +832,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
 		return p.clickIssueTab(action.Region.Data)
+	case regionDiffTargetTab:
+		return p.clickDiffTab(action.Region.Data)
 	case regionPaneLeaf:
 		leafID, ok := action.Region.Data.(int)
 		if !ok {
@@ -767,6 +844,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			return nil
 		}
 		p.focusLeaf(leafID)
+		if leaf.Kind == PaneDiff {
+			return nil
+		}
 		issue, _ := p.issueLeafAt(leafID)
 		if issue == nil {
 			return nil
@@ -808,7 +888,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				if p.shellSelected || p.selectedNestedTmux != hit.TmuxName {
 					p.selectNestedShell(parent, hit.TmuxName)
 					p.resetPreviewScroll()
-					p.taskLoading = false
 					p.exitInteractiveMode()
 					p.saveSelectionState()
 				}
@@ -825,7 +904,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					if !p.shellSelected || p.selectedShellIdx != shellIdx || p.selectedNestedTmux != "" {
 						p.selectTopShellAt(shellIdx)
 						p.resetPreviewScroll()
-						p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 						// Exit interactive mode when switching selection (td-fc758e88)
 						p.exitInteractiveMode()
 						p.saveSelectionState()
@@ -838,7 +916,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				if p.shellSelected || p.selectedNestedTmux != "" || p.selectedIdx != idx {
 					p.selectWorktreeAt(idx)
 					p.resetPreviewScroll()
-					p.taskLoading = false // Reset task loading on selection change (td-3668584f)
 					// Exit interactive mode when switching selection (td-fc758e88)
 					p.exitInteractiveMode()
 					p.saveSelectionState()
@@ -848,25 +925,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.loadSelectedContent()
 			}
 		}
-	case regionPreviewTab:
-		// Click on preview tab
-		if idx, ok := action.Region.Data.(int); ok && idx >= 0 && idx <= 2 {
-			prevTab := p.previewTab
-			p.previewTab = PreviewTab(idx)
-			p.resetPreviewScroll()
-			p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-			if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-				p.clearTerminalSelection()
-			}
-
-			// Load content for the selected tab
-			switch p.previewTab {
-			case PreviewTabDiff:
-				return p.loadSelectedDiff()
-			case PreviewTabTask:
-				return p.loadTaskDetailsIfNeeded()
-			}
-		}
+	case regionPreviewAction:
+		return p.clickPreviewAction(action.Region.Data)
 	case regionKanbanCard:
 		// Click on kanban card - select it
 		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
@@ -903,41 +963,48 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionDiffTabFile:
 		// Click on file in diff tab file list
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diffTabFocus = DiffTabFocusFileList
-			if idx != p.diffTabCursor {
-				oldCursor := p.diffTabCursor
-				p.diffTabCursor = idx
-				return p.onDiffTabCursorChanged(oldCursor)
+			view.Focus = DiffTabFocusFileList
+			if idx != view.Cursor {
+				oldCursor := view.Cursor
+				view.Cursor = idx
+				return view.OnCursorChanged(oldCursor)
 			}
 		}
 	case regionDiffTabCommit:
 		// Click on commit in diff tab
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diffTabFocus = DiffTabFocusFileList
-			if idx != p.diffTabCursor {
-				oldCursor := p.diffTabCursor
-				p.diffTabCursor = idx
-				return p.onDiffTabCursorChanged(oldCursor)
+			view.Focus = DiffTabFocusFileList
+			if idx != view.Cursor {
+				oldCursor := view.Cursor
+				view.Cursor = idx
+				return view.OnCursorChanged(oldCursor)
 			}
 		}
 	case regionDiffTabDiffPane:
 		// Click in diff pane - focus it
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		if p.diffTabFocus == DiffTabFocusCommitFiles || p.diffTabFocus == DiffTabFocusCommitDiff {
-			p.diffTabFocus = DiffTabFocusCommitDiff
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitDiff
 		} else {
-			p.diffTabFocus = DiffTabFocusDiff
+			view.Focus = DiffTabFocusDiff
 		}
 	case regionDiffTabMinimap:
-		// Click on minimap - jump to scroll position
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		ffd := p.fullFileDiff
-		if ffd != nil {
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitDiff
+		} else {
+			view.Focus = DiffTabFocusDiff
+		}
+		if p.fullFileDiff != nil {
 			clickRow := action.Y - action.Region.Rect.Y
-			totalLines := ffd.TotalLines()
-			contentHeight := p.height - 6
+			totalLines := p.fullFileDiff.TotalLines()
+			contentHeight := view.Height()
 			if contentHeight < 1 {
 				contentHeight = 1
 			}
@@ -945,118 +1012,56 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if totalLines < mmH {
 				mmH = totalLines
 			}
-			p.diffTabDiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
+			view.DiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
 		}
 	case regionCommitFileBack:
 		// Click on back button in commit drill-down
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		p.diffTabFocus = DiffTabFocusFileList
-		p.commitDetail = nil
-		p.commitFileDiffRaw = ""
-		p.commitFileParsed = nil
-		p.fullFileDiff = nil
+		view.Focus = DiffTabFocusFileList
+		view.CommitDetail = nil
+		view.CommitFileDiffRaw = ""
 	case regionCommitFileItem:
 		// Click on file in commit file list
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diffTabFocus = DiffTabFocusCommitFiles
-			if idx != p.commitFileCursor {
-				p.commitFileCursor = idx
-				p.commitFileDiffRaw = ""
-				p.commitFileParsed = nil
-				p.fullFileDiff = nil
-				return p.loadSelectedCommitFileDiff()
+			view.Focus = DiffTabFocusCommitFiles
+			if idx != view.CommitFileCursor {
+				view.CommitFileCursor = idx
+				view.CommitFileDiffRaw = ""
+				return view.LoadSelectedCommitFile()
 			}
 		}
 	case regionCommitFileDiffPane:
 		// Click in commit file diff pane - focus it
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		p.diffTabFocus = DiffTabFocusCommitDiff
+		view.Focus = DiffTabFocusCommitDiff
 	case regionDiffTabPreviewFile:
 		// Click on file in commit preview (right pane) — drill into commit files view
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			commitIdx := p.diffTabCursor - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.commitStatusList) {
-				commit := p.commitStatusList[commitIdx]
-				p.diffTabFocus = DiffTabFocusCommitFiles
-				p.commitDetail = nil
-				p.commitFileCursor = idx
-				p.commitFileScroll = 0
-				p.commitFileDiffRaw = ""
-				p.commitFileParsed = nil
-				p.fullFileDiff = nil
-				return p.loadCommitDetail(commit.Hash)
+			commitIdx := view.Cursor - view.FileCount()
+			if commitIdx >= 0 && commitIdx < len(view.Commits) {
+				commit := view.Commits[commitIdx]
+				view.Focus = DiffTabFocusCommitFiles
+				view.CommitDetail = nil
+				view.CommitFileCursor = idx
+				view.CommitFileScroll = 0
+				view.CommitFileDiffRaw = ""
+				return view.LoadCommit(commit.Hash)
 			}
 		}
 	case regionDiffTabFileListPane:
 		// Click on empty space in the left pane — switch focus to file list
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		if p.diffTabFocus == DiffTabFocusCommitFiles || p.diffTabFocus == DiffTabFocusCommitDiff {
-			p.diffTabFocus = DiffTabFocusCommitFiles
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitFiles
 		} else {
-			p.diffTabFocus = DiffTabFocusFileList
-		}
-	case regionCreateBackdrop:
-		// Click outside create modal - close it
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
-	case regionCreateModalBody:
-		// Click inside modal but not on a form element - absorb
-	case regionCreateInput:
-		// Click on input field in create modal
-		if focusIdx, ok := action.Region.Data.(int); ok {
-			p.blurCreateInputs()
-			p.createFocus = focusIdx
-			p.focusCreateInput()
-
-			// If clicking prompt field, open the picker
-			if focusIdx == 2 {
-				p.openPromptPicker(p.createPrompts, ViewModeCreate)
-			}
-		}
-	case regionCreateDropdown:
-		// Click on dropdown item
-		if data, ok := action.Region.Data.(dropdownItemData); ok {
-			switch data.field {
-			case 1:
-				// Branch selection
-				if data.idx >= 0 && data.idx < len(p.branchFiltered) {
-					p.createBaseBranchInput.SetValue(p.branchFiltered[data.idx])
-					p.branchFiltered = nil
-				}
-			case 3:
-				// Task selection
-				if data.idx >= 0 && data.idx < len(p.taskSearchFiltered) {
-					task := p.taskSearchFiltered[data.idx]
-					p.createTaskID = task.ID
-					p.createTaskTitle = task.Title
-					p.taskSearchFiltered = nil
-				}
-			}
-		}
-	case regionCreateAgentOption:
-		// Click on agent option
-		if idx, ok := action.Region.Data.(int); ok {
-			agents := p.selectableAgentTypes()
-			if idx >= 0 && idx < len(agents) {
-				p.createAgentType = agents[idx]
-				p.createAgentIdx = idx
-			}
-		}
-	case regionCreateCheckbox:
-		// Toggle checkbox
-		p.createSkipPermissions = !p.createSkipPermissions
-	case regionCreateButton:
-		// Click on button
-		if idx, ok := action.Region.Data.(int); ok {
-			switch idx {
-			case 6:
-				return p.validateAndCreateWorktree()
-			case 7:
-				p.viewMode = ViewModeList
-				p.clearCreateModal()
-			}
+			view.Focus = DiffTabFocusFileList
 		}
 	case regionTaskLinkDropdown:
 		// Click on task link dropdown item
@@ -1097,10 +1102,8 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			p.termPanelFocused = false
-			return p.selectTerminalWord(action)
-		}
+		p.termPanelFocused = false
+		return p.selectTerminalWord(action)
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
 		if hit, ok := action.Region.Data.(nestedShellHit); ok {
@@ -1141,11 +1144,11 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		// Double-click on file - drill into diff pane
 		if idx, ok := action.Region.Data.(int); ok {
 			p.activePane = PanePreview
-			oldCursor := p.diffTabCursor
-			p.diffTabCursor = idx
-			p.diffTabFocus = DiffTabFocusDiff
-			p.diffTabDiffScroll = 0
-			p.diffTabHorizScroll = 0
+			oldCursor := p.diff.Cursor
+			p.diff.Cursor = idx
+			p.diff.Focus = DiffTabFocusDiff
+			p.diff.DiffScroll = 0
+			p.diff.HorizScroll = 0
 			if idx != oldCursor {
 				return p.onDiffTabCursorChanged(oldCursor)
 			}
@@ -1154,18 +1157,16 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		// Double-click on commit - drill into commit files
 		if idx, ok := action.Region.Data.(int); ok {
 			p.activePane = PanePreview
-			oldCursor := p.diffTabCursor
-			p.diffTabCursor = idx
+			oldCursor := p.diff.Cursor
+			p.diff.Cursor = idx
 			commitIdx := idx - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.commitStatusList) {
-				commit := p.commitStatusList[commitIdx]
-				p.diffTabFocus = DiffTabFocusCommitFiles
-				p.commitDetail = nil
-				p.commitFileCursor = 0
-				p.commitFileScroll = 0
-				p.commitFileDiffRaw = ""
-				p.commitFileParsed = nil
-				p.fullFileDiff = nil
+			if commitIdx >= 0 && commitIdx < len(p.diff.Commits) {
+				commit := p.diff.Commits[commitIdx]
+				p.diff.Focus = DiffTabFocusCommitFiles
+				p.diff.CommitDetail = nil
+				p.diff.CommitFileCursor = 0
+				p.diff.CommitFileScroll = 0
+				p.diff.CommitFileDiffRaw = ""
 				_ = oldCursor // cursor change handled by loading commit detail
 				return p.loadCommitDetail(commit.Hash)
 			}
@@ -1174,29 +1175,25 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		// Double-click on commit file - drill into its diff
 		if idx, ok := action.Region.Data.(int); ok {
 			p.activePane = PanePreview
-			p.commitFileCursor = idx
-			p.diffTabFocus = DiffTabFocusCommitDiff
-			p.diffTabDiffScroll = 0
-			p.diffTabHorizScroll = 0
-			p.commitFileDiffRaw = ""
-			p.commitFileParsed = nil
-			p.fullFileDiff = nil
+			p.diff.CommitFileCursor = idx
+			p.diff.Focus = DiffTabFocusCommitDiff
+			p.diff.DiffScroll = 0
+			p.diff.HorizScroll = 0
+			p.diff.CommitFileDiffRaw = ""
 			return p.loadSelectedCommitFileDiff()
 		}
 	case regionDiffTabPreviewFile:
 		// Double-click on preview file — same as single-click (drill into commit)
 		if idx, ok := action.Region.Data.(int); ok {
 			p.activePane = PanePreview
-			commitIdx := p.diffTabCursor - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.commitStatusList) {
-				commit := p.commitStatusList[commitIdx]
-				p.diffTabFocus = DiffTabFocusCommitFiles
-				p.commitDetail = nil
-				p.commitFileCursor = idx
-				p.commitFileScroll = 0
-				p.commitFileDiffRaw = ""
-				p.commitFileParsed = nil
-				p.fullFileDiff = nil
+			commitIdx := p.diff.Cursor - p.diffTabFileCount()
+			if commitIdx >= 0 && commitIdx < len(p.diff.Commits) {
+				commit := p.diff.Commits[commitIdx]
+				p.diff.Focus = DiffTabFocusCommitFiles
+				p.diff.CommitDetail = nil
+				p.diff.CommitFileCursor = idx
+				p.diff.CommitFileScroll = 0
+				p.diff.CommitFileDiffRaw = ""
 				return p.loadCommitDetail(commit.Hash)
 			}
 		}
@@ -1248,11 +1245,9 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 		p.termPanelFocused = true
 		return p.selectTerminalLine(action)
 	case regionPreviewPane:
-		if p.previewTab == PreviewTabOutput || p.selectingShell() {
-			p.activePane = PanePreview
-			p.termPanelFocused = false
-			return p.selectTerminalLine(action)
-		}
+		p.activePane = PanePreview
+		p.termPanelFocused = false
+		return p.selectTerminalLine(action)
 	}
 	return p.handleMouseDoubleClick(action)
 }
@@ -1284,7 +1279,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1292,6 +1287,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case docTabHit:
 			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case diffTabHit:
 			leafID = data.LeafID
 		}
 		leaf := FindPane(p.paneRoot, leafID)
@@ -1322,6 +1319,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 					}
 				}
 			}
+		case PaneDiff:
+			if view := p.activeDiffView(); view != nil {
+				view.ScrollContent(delta, view.Height())
+			}
 		}
 		return nil
 	case regionTermPanelContent:
@@ -1338,9 +1339,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollDiffTabFileList(delta)
 	case regionDiffTabDiffPane, regionDiffTabMinimap:
 		// Scroll diff content
-		p.diffTabDiffScroll += delta
-		if p.diffTabDiffScroll < 0 {
-			p.diffTabDiffScroll = 0
+		if view := p.activeDiffView(); view != nil {
+			view.ScrollContent(delta, view.Height())
 		}
 		return nil
 	case regionCommitFileItem, regionCommitFileBack:
@@ -1348,9 +1348,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollDiffTabCommitFileList(delta)
 	case regionCommitFileDiffPane:
 		// Scroll commit file diff content
-		p.diffTabDiffScroll += delta
-		if p.diffTabDiffScroll < 0 {
-			p.diffTabDiffScroll = 0
+		if view := p.activeDiffView(); view != nil {
+			view.ScrollContent(delta, view.Height())
 		}
 		return nil
 	case regionPreviewPane:
@@ -1422,9 +1421,9 @@ func (p *Plugin) handleMouseHorizontalScroll(action mouse.MouseAction) tea.Cmd {
 	delta := action.Delta
 	switch action.Region.ID {
 	case regionDiffTabDiffPane, regionDiffTabMinimap, regionCommitFileDiffPane:
-		p.diffTabHorizScroll += delta
-		if p.diffTabHorizScroll < 0 {
-			p.diffTabHorizScroll = 0
+		p.diff.HorizScroll += delta
+		if p.diff.HorizScroll < 0 {
+			p.diff.HorizScroll = 0
 		}
 	}
 	return nil
@@ -1437,27 +1436,24 @@ func (p *Plugin) scrollDiffTabFileList(delta int) tea.Cmd {
 	if totalItems == 0 {
 		return nil
 	}
-	newCursor := p.diffTabCursor + delta
+	newCursor := p.diff.Cursor + delta
 	if newCursor < 0 {
 		newCursor = 0
 	}
 	if newCursor >= totalItems {
 		newCursor = totalItems - 1
 	}
-	if newCursor != p.diffTabCursor {
-		p.diffTabCursor = newCursor
-		p.diffTabDiffScroll = 0
-		p.diffTabHorizScroll = 0
-		p.fullFileDiff = nil
+	if newCursor != p.diff.Cursor {
+		p.diff.Cursor = newCursor
+		p.diff.DiffScroll = 0
+		p.diff.HorizScroll = 0
 
 		fileCount := p.diffTabFileCount()
-		if p.diffTabCursor < fileCount {
+		// Cursor on a commit — just clear the stale state reset above, no
+		// async load. Only a cursor on a file needs work here.
+		if p.diff.Cursor < fileCount {
 			// Cursor on a file — sync update the parsed diff (cheap)
-			p.diffTabParsedDiff = p.parsedDiffForCurrentFile()
-			p.commitDetail = nil
-		} else {
-			// Cursor on a commit — just clear stale state, no async load
-			p.diffTabParsedDiff = nil
+			p.diff.CommitDetail = nil
 		}
 	}
 	return nil
@@ -1466,23 +1462,21 @@ func (p *Plugin) scrollDiffTabFileList(delta int) tea.Cmd {
 // scrollDiffTabCommitFileList scrolls the commit file list by moving the cursor.
 // Uses lightweight sync updates only — no expensive async loads (prevents scroll freeze).
 func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
-	if p.commitDetail == nil || len(p.commitDetail.Files) == 0 {
+	if p.diff.CommitDetail == nil || len(p.diff.CommitDetail.Files) == 0 {
 		return nil
 	}
-	fileCount := len(p.commitDetail.Files)
-	newCursor := p.commitFileCursor + delta
+	fileCount := len(p.diff.CommitDetail.Files)
+	newCursor := p.diff.CommitFileCursor + delta
 	if newCursor < 0 {
 		newCursor = 0
 	}
 	if newCursor >= fileCount {
 		newCursor = fileCount - 1
 	}
-	if newCursor != p.commitFileCursor {
-		p.commitFileCursor = newCursor
+	if newCursor != p.diff.CommitFileCursor {
+		p.diff.CommitFileCursor = newCursor
 		// Clear stale diff state — the diff will load on click or enter
-		p.commitFileDiffRaw = ""
-		p.commitFileParsed = nil
-		p.fullFileDiff = nil
+		p.diff.CommitFileDiffRaw = ""
 	}
 	return nil
 }
@@ -1536,22 +1530,13 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		startValue := p.mouseHandler.DragStartValue()
 		p.sidebarWidth = workspacelist.ResizePercent(startValue, action.DragDX, p.width)
 	case regionDiffTabDivider:
-		// Calculate new diff tab file list width based on drag (pixel-based)
-		startValue := p.mouseHandler.DragStartValue()
-		newWidth := startValue + action.DragDX
-
-		// Clamp to reasonable bounds
-		if newWidth < 20 {
-			newWidth = 20
+		view := p.activeDiffView()
+		leafW := p.width
+		if box, ok := p.diffDividerBox(); ok {
+			leafW = box.W
 		}
-		maxW := p.width - 30
-		if maxW < 20 {
-			maxW = 20
-		}
-		if newWidth > maxW {
-			newWidth = maxW
-		}
-		p.diffTabListWidth = newWidth
+		view.SetListWidth(p.mouseHandler.DragStartValue())
+		view.ApplyListWidthDelta(action.DragDX, leafW)
 	case regionTermPanelDivider:
 		// Calculate new terminal panel size based on drag (percentage-based).
 		startValue := p.mouseHandler.DragStartValue()
@@ -1644,7 +1629,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		p.lastDragRegion = ""
 		return p.resizeDocTerminalCmd()
 	case regionDiffTabDivider:
-		_ = state.SetDiffTabFileListWidth(p.diffTabListWidth)
+		_ = state.SetDiffTabFileListWidth(p.activeDiffView().ListWidth())
 	case regionTermPanelDivider:
 		_ = state.SetTermPanelSize(p.termPanelSize)
 		// Resize both panes after drag-to-resize

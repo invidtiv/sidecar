@@ -185,7 +185,6 @@ func TestEveryContentDrawsExactlyItsBox(t *testing.T) {
 		"shell with no agent":         {shell: true, setup: func(p *Plugin) { p.shells[0].Agent = nil }},
 		"workspace with a live agent": {},
 		"workspace with no agent":     {setup: func(p *Plugin) { p.worktrees[0].Agent = nil }},
-		"workspace on the diff tab":   {setup: func(p *Plugin) { p.previewTab = PreviewTabDiff }},
 		"workspace with an orphan tree": {setup: func(p *Plugin) {
 			p.worktrees[0].Agent = nil
 			p.worktrees[0].IsOrphaned = true

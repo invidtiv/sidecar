@@ -84,6 +84,7 @@ type TmuxAttachFinishedMsg struct {
 type DiffLoadedMsg struct {
 	OperationScope
 	WorkspaceName string
+	Identity      string
 	Content       string
 	Raw           string
 	Snapshot      *DiffSnapshot
@@ -136,7 +137,6 @@ type CreateDoneMsg struct {
 	Worktree  *Worktree
 	AgentType AgentType // Agent selected at creation
 	SkipPerms bool      // Whether to skip permissions
-	Prompt    *Prompt   // Selected prompt template (nil if none)
 	Err       error
 }
 
@@ -243,27 +243,6 @@ type Task struct {
 	EpicTitle   string // Parent epic title for search
 }
 
-// TaskDetails contains full task information for preview pane.
-type TaskDetails struct {
-	ID          string
-	Title       string
-	Status      string
-	Priority    string
-	Type        string
-	Description string
-	Acceptance  string
-	CreatedAt   string
-	UpdatedAt   string
-}
-
-// TaskDetailsLoadedMsg delivers task details for the preview pane.
-type TaskDetailsLoadedMsg struct {
-	OperationScope
-	TaskID  string
-	Details *TaskDetails
-	Err     error
-}
-
 // restartAgentMsg signals that an agent should be restarted after stopping.
 type restartAgentMsg struct {
 	worktree *Worktree
@@ -274,7 +253,6 @@ type restartAgentWithOptionsMsg struct {
 	worktree  *Worktree
 	agentType AgentType
 	skipPerms bool
-	prompt    *Prompt
 }
 
 // CommitStatusLoadedMsg delivers commit status info for the diff view header.

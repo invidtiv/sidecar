@@ -1,11 +1,13 @@
 package overview
 
 import (
-	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/features"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -15,106 +17,62 @@ import (
 )
 
 const (
-	previewTabRegionKind = "global-preview-tab"
-	previewGitRegionKind = "global-preview-git"
-	previewTabRows       = 2
+	previewGitRegionKind    = "global-preview-git"
+	previewActionRegionKind = "global-preview-action"
+	previewDiffDividerKind  = "global-preview-diff-divider"
 )
 
-// previewTabHit is the tab stored on the tab-row region.
-type previewTabHit int
+type previewDiffDividerHit struct{}
 
 // previewGitHit marks the Git action chip (a jump, not a tab).
 type previewGitHit struct{}
 
-// previewTabSet is which chips this row may show. Global shells get Output+Diff;
-// topic worktrees keep Output+Diff+Task; the main worktree stays tabless.
-func (m *Model) previewTabSet() workspacediff.TabSet {
-	workspace, ok := m.SelectedWorkspace()
-	if !ok {
-		return workspacediff.TabSetNone
-	}
-	return workspacediff.GlobalTabsFor(workspace.Kind == workspaceinventory.KindShell, workspace.IsMain)
-}
+// previewActionHit marks a Diff or Task action chip (a jump, not a tab).
+type previewActionHit int
 
-func (m *Model) previewTabsVisible() bool {
-	return m.previewTabSet().Visible()
-}
-
-func (m *Model) previewTabChips() []string {
-	return workspacediff.TabChipsFor(m.previewTab, m.previewTabSet())
-}
+const (
+	previewActionDiff previewActionHit = iota
+	previewActionTask
+)
 
 func gitActionChip() string {
 	return styles.RenderPillWithStyle("Git", styles.BarChip, nil)
 }
 
-func (m *Model) previewTabRowChips() []string {
-	chips := m.previewTabChips()
-	if m.canOpenInGit() {
-		chips = append(chips, gitActionChip())
+func diffActionChip() string {
+	return styles.RenderPillWithStyle("Diff", styles.BarChip, nil)
+}
+
+func taskActionChip() string {
+	return styles.RenderPillWithStyle("Task", styles.BarChip, nil)
+}
+
+func (m *Model) previewActionChips() []string {
+	chips := []string{diffActionChip()}
+	if workspace, ok := m.SelectedWorkspace(); ok && workspace.TaskID != "" {
+		chips = append(chips, taskActionChip())
 	}
 	return chips
 }
 
-func (m *Model) cyclePreviewTab(delta int) tea.Cmd {
-	if !m.previewTabsVisible() {
-		return nil
+func (m *Model) clickPreviewAction(hit previewActionHit) tea.Cmd {
+	if m.PreviewInteractive() {
+		_ = m.exitPreviewInteractive()
 	}
-	m.previewTab = workspacediff.CycleTabIn(m.previewTab, delta, m.previewTabSet())
-	return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
-}
-
-func (m *Model) setPreviewTab(tab workspacediff.Tab) tea.Cmd {
-	if !m.previewTabSet().Contains(tab) {
-		m.previewTab = workspacediff.TabOutput
-		return m.syncPreviewTerminal()
+	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
+		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
 	}
-	if m.previewTab == tab {
-		return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
-	}
-	m.previewTab = tab
-	return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
-}
-
-// ensureOutputTab is what Enter uses: Diff/Task are views of the row, so
-// typing always happens on Output.
-func (m *Model) ensureOutputTab() tea.Cmd {
-	if m.previewTab == workspacediff.TabOutput || !m.previewTabsVisible() {
-		return nil
-	}
-	m.previewTab = workspacediff.TabOutput
-	return m.syncPreviewTerminal()
-}
-
-// ensurePreviewExtras loads Diff/Task for the selected row. Switching
-// rows rebuilds the model; the same row is a no-op if already loaded.
-// Shells load Diff from ProjectRoot (the main checkout), not a worktree path.
-func (m *Model) ensurePreviewExtras() tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
-	if !ok || !m.previewTabsVisible() {
-		m.resetPreviewExtras()
-		m.previewTab = workspacediff.TabOutput
+	if !ok {
 		return nil
 	}
-	if !m.previewTabSet().Contains(m.previewTab) {
-		m.previewTab = workspacediff.TabOutput
-	}
-	if workspace.ID != m.previewExtrasID {
-		m.resetPreviewExtras()
-		m.previewExtrasID = workspace.ID
-	}
-	switch m.previewTab {
-	case workspacediff.TabDiff:
-		path := previewDiffPath(workspace)
-		if m.diff.State != workspacediff.LoadStateUnknown && m.diff.State != workspacediff.LoadStateError {
-			return m.diff.LoadSelectedCommit(path, workspace.ID)
+	if hit == previewActionTask {
+		if workspace.TaskID == "" {
+			return nil
 		}
-		m.diff.State = workspacediff.LoadStateLoading
-		return workspacediff.LoadSnapshotCmd(path, "", workspace.ID)
-	case workspacediff.TabTask:
-		return m.loadPreviewTask(workspace)
+		return m.openPreviewIssue(workspace.TaskID)
 	}
-	return nil
+	return m.openPreviewDiff(workspacediff.WorkingTreeTarget())
 }
 
 // previewDiffPath is the checkout workspacediff should read. Shells have no
@@ -126,62 +84,26 @@ func previewDiffPath(workspace workspaceinventory.Workspace) string {
 	return workspace.Path
 }
 
-func (m *Model) resetPreviewExtras() {
-	m.diff = workspacediff.View{}
-	m.task = workspacediff.TaskView{}
-	m.previewExtrasID = ""
-}
-
-func (m *Model) loadPreviewTask(workspace workspaceinventory.Workspace) tea.Cmd {
-	if workspace.TaskID == "" {
-		m.task = workspacediff.TaskView{}
-		return nil
-	}
-	if m.task.TaskID == workspace.TaskID && (m.task.Task != nil || m.task.Loading) {
-		return nil
-	}
-	m.task = workspacediff.TaskView{TaskID: workspace.TaskID, Loading: true}
-	return workspacediff.LoadTaskCmd(workspace.Path, workspace.TaskID, workspace.ID)
-}
-
 func (m *Model) applyDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
-	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.ID != msg.WorkspaceID {
-		return nil
-	}
-	if msg.Err != nil {
-		m.diff.State = workspacediff.LoadStateError
-		m.diff.Error = msg.Err.Error()
-		return nil
-	}
-	return m.diff.ApplyLoadedSnapshot(msg.Snapshot, previewDiffPath(workspace), workspace.ID)
+	return m.applyPreviewDiffSnapshot(msg)
 }
 
 func (m *Model) applyCommitDetail(msg workspacediff.CommitDetailMsg) {
-	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.ID != msg.WorkspaceID {
-		return
-	}
-	m.diff.ApplyCommitDetail(msg)
+	_ = m.applyPreviewDiffCommit(msg)
 }
 
-func (m *Model) applyTask(msg workspacediff.TaskMsg) {
-	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.ID != msg.WorkspaceID {
-		return
+func (m *Model) persistDiffViewMode() {
+	switch m.diff.ViewMode {
+	case workspacediff.ViewSideBySide:
+		_ = state.SetWorkspaceDiffMode("side-by-side")
+	case workspacediff.ViewFullFile:
+		_ = state.SetWorkspaceDiffMode("full-file")
+	default:
+		_ = state.SetWorkspaceDiffMode("unified")
 	}
-	if m.task.TaskID != msg.TaskID {
-		return
-	}
-	m.task.Loading = false
-	if msg.Err != nil {
-		m.task.Error = msg.Err.Error()
-		return
-	}
-	m.task.Task = msg.Task
 }
 
-func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
+func (m *Model) registerPreviewActionRegions(box termpreview.Box) {
 	if box.W < 1 {
 		return
 	}
@@ -189,12 +111,12 @@ func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
 	if !ok {
 		return
 	}
-	chips, tabCount, gitIndex := m.previewHitChips(workspace)
+	chips, actionStart, gitIndex := m.previewHitChips(workspace)
 	if len(chips) == 0 {
 		return
 	}
 	hintFloor := 0
-	if m.previewTab == workspacediff.TabOutput && m.PreviewInteractive() {
+	if m.PreviewInteractive() {
 		hintFloor = len([]rune(m.interactiveHints()))
 	}
 	for i, placement := range termpreview.LayoutChips(chips, box.W, hintFloor) {
@@ -205,64 +127,35 @@ func (m *Model) registerPreviewTabRegions(box termpreview.Box) {
 			m.workspacesMouse.HitMap.AddRect(previewGitRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, previewGitHit{})
 			continue
 		}
-		if m.PreviewInteractive() || i >= tabCount {
+		if i < actionStart {
 			continue
 		}
-		tabs := m.previewTabSet().Tabs()
-		if i < len(tabs) {
-			m.workspacesMouse.HitMap.AddRect(previewTabRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, previewTabHit(tabs[i]))
+		hit := previewActionDiff
+		if i > actionStart {
+			hit = previewActionTask
 		}
+		m.workspacesMouse.HitMap.AddRect(previewActionRegionKind, box.X+placement.Col, box.Y, placement.Width, 1, hit)
 	}
 }
 
-// previewHitChips is the header chips that have hit targets. The Git chip is
-// registered even while typing, so it can jump without sending O to the pane.
-func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips []string, tabCount, gitIndex int) {
+// previewHitChips is the header chips that have hit targets. Git and Diff/Task
+// action chips are registered even while typing, so they can jump without
+// sending a letter to the pane. The identity chip is drawn but is not a hit.
+func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips []string, actionStart, gitIndex int) {
+	chips = m.previewHeaderChips(workspace)
+	actionStart = 1
+	if workspace.IsMain && workspace.Kind != workspaceinventory.KindShell {
+		actionStart = 0
+	}
 	gitIndex = -1
-	if m.previewTabsVisible() && !m.PreviewInteractive() {
-		chips = m.previewTabRowChips()
-		tabCount = len(m.previewTabChips())
-		if m.canOpenInGit() {
-			gitIndex = tabCount
-		}
-		return chips, tabCount, gitIndex
-	}
-	if m.PreviewInteractive() && m.canOpenInGit() {
-		chips = m.previewHeaderChips(workspace)
+	if m.canOpenInGit() {
 		gitIndex = len(chips) - 1
-		return chips, 0, gitIndex
 	}
-	return nil, 0, -1
+	return chips, actionStart, gitIndex
 }
 
 func (m *Model) renderPreviewWithTabs(width, height int) string {
-	if width < 1 || height < 1 {
-		return ""
-	}
-	if !m.previewTabsVisible() || m.previewTab == workspacediff.TabOutput {
-		return m.renderOutputPreview(width, height)
-	}
-
-	var lines []string
-	lines = append(lines, termpreview.HeaderRow(m.previewTabRowChips(), "", width, 0, termpreview.TruncateANSI))
-	lines = append(lines, "")
-	contentHeight := height - previewTabRows
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-	switch m.previewTab {
-	case workspacediff.TabDiff:
-		lines = append(lines, m.diff.Render(width, contentHeight, workspacediff.RenderOpts{
-			Truncate: func(s string, w int, _ string) string { return termpreview.TruncateANSI(s, w) },
-		}))
-	case workspacediff.TabTask:
-		view, count := workspacediff.RenderTask(m.task, workspacediff.TaskRenderOpts{
-			Width: width, Height: contentHeight, Offset: m.task.Offset,
-		})
-		m.task.LineCount = count
-		lines = append(lines, view)
-	}
-	return m.truncatePreviewLines(strings.Join(lines, "\n"), width)
+	return m.renderOutputPreview(width, height)
 }
 
 func (m *Model) renderOutputTerminal(width, height int) string {
@@ -316,10 +209,14 @@ func (m *Model) renderOutputPreview(width, height int) string {
 			if m.preview.issue != nil {
 				content = m.renderPreviewIssue(m.preview.issue, leaf.Box)
 			}
+		case panelayout.Diff:
+			if m.preview.diff != nil {
+				content = m.renderPreviewDiff(m.preview.diff, leaf.Box)
+			}
 		}
 		canvas.Blit(leaf.Box, content)
 	}
-	focused := m.PreviewFocused() && ((m.preview.doc != nil && m.preview.doc.focused) || (m.preview.issue != nil && m.preview.issue.focused))
+	focused := m.PreviewFocused() && ((m.preview.doc != nil && m.preview.doc.focused) || (m.preview.issue != nil && m.preview.issue.focused) || (m.preview.diff != nil && m.preview.diff.focused))
 	for _, divider := range layout.Dividers {
 		canvas.Blit(divider.Box, renderPreviewPaneDivider(divider, focused))
 	}
@@ -327,52 +224,16 @@ func (m *Model) renderOutputPreview(width, height int) string {
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {
-	if m.previewTabsVisible() && !m.PreviewInteractive() {
-		// Output / Diff / Task, plus Git as a jump (not a tab).
-		return m.previewTabRowChips()
-	}
 	chips := []string{previewChip(workspace.Name, m.PreviewFocused())}
-	// While typing, O is a letter; the Git chip is how you jump without exiting.
-	// Drop the project-name chip when Git is present so the live-edge window
-	// status still fits on the header.
+	if workspace.IsMain && workspace.Kind != workspaceinventory.KindShell {
+		chips = m.previewActionChips()
+	} else {
+		chips = append(chips, m.previewActionChips()...)
+	}
 	if m.canOpenInGit() {
 		chips = append(chips, gitActionChip())
-	} else if workspace.ProjectName != "" {
+	} else if workspace.ProjectName != "" && (!workspace.IsMain || workspace.Kind == workspaceinventory.KindShell) {
 		chips = append(chips, styles.Muted.Render(workspace.ProjectName))
 	}
 	return chips
-}
-
-func (m *Model) scrollVisiblePreviewTab(delta int) {
-	switch {
-	case !m.previewTabsVisible() || m.previewTab == workspacediff.TabOutput:
-		m.scrollWatchedPreview(delta)
-	case m.previewTab == workspacediff.TabDiff:
-		m.diff.ScrollContent(delta)
-	case m.previewTab == workspacediff.TabTask:
-		m.task.Scroll(delta, max(1, m.height-2-previewTabRows))
-	}
-}
-
-func (m *Model) truncatePreviewLines(content string, maxWidth int) string {
-	if maxWidth <= 0 {
-		return content
-	}
-	var b strings.Builder
-	start := 0
-	for i := 0; i <= len(content); i++ {
-		if i == len(content) || content[i] == '\n' {
-			line := content[start:i]
-			line = ui.ExpandTabs(line, tty.DefaultTabWidth)
-			if lipgloss.Width(line) > maxWidth {
-				line = termpreview.TruncateANSI(line, maxWidth)
-			}
-			if start > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(line)
-			start = i + 1
-		}
-	}
-	return b.String()
 }

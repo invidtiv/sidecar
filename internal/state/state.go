@@ -43,6 +43,13 @@ type State struct {
 	// PinnedWorkspaceIDs is the ordered catalog IDs pinned to the top of the
 	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
 	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
+
+	// LastCreateAgent is the last agent chosen when creating a worktree.
+	LastCreateAgent string `json:"lastCreateAgent,omitempty"`
+
+	// AgentAutoApprove is the last auto-approve checkbox value per agent type.
+	// A missing key is treated as false.
+	AgentAutoApprove map[string]bool `json:"agentAutoApprove,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -85,6 +92,7 @@ type PaneLayoutJSON struct {
 	Split     *PaneSplitJSON     `json:"split,omitempty"`
 	Tabs      []PaneDocTabJSON   `json:"tabs,omitempty"`
 	IssueTabs []PaneIssueTabJSON `json:"issueTabs,omitempty"`
+	DiffTabs  []PaneDiffTabJSON  `json:"diffTabs,omitempty"`
 	Active    int                `json:"active,omitempty"`
 	// Open is true when restore should rebuild the split. False means this
 	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
@@ -100,6 +108,16 @@ type PaneLayoutJSON struct {
 // and applies Scroll; the body is not cached.
 type PaneIssueTabJSON struct {
 	Issue  string `json:"issue"`
+	Scroll int    `json:"scroll,omitempty"`
+}
+
+// PaneDiffTabJSON is one persisted Diff tab. Restore reloads the target
+// spec; the diff body is not cached.
+type PaneDiffTabJSON struct {
+	Spec   string `json:"spec"`
+	Path   string `json:"path,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Mode   string `json:"mode,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
 }
 
@@ -818,6 +836,52 @@ func SetNotesListWidth(width int) error {
 	notesState := current.Notes[""]
 	notesState.ListWidth = width
 	current.Notes[""] = notesState
+	mu.Unlock()
+	return Save()
+}
+
+// GetLastCreateAgent returns the last agent chosen when creating a worktree.
+func GetLastCreateAgent() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastCreateAgent
+}
+
+// SetLastCreateAgent saves the last agent chosen when creating a worktree.
+func SetLastCreateAgent(agent string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.LastCreateAgent = agent
+	mu.Unlock()
+	return Save()
+}
+
+// GetAgentAutoApprove returns the persisted auto-approve preference for agent.
+// A missing key is false.
+func GetAgentAutoApprove(agent string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || current.AgentAutoApprove == nil {
+		return false
+	}
+	return current.AgentAutoApprove[agent]
+}
+
+// SetAgentAutoApprove saves the auto-approve preference for agent.
+func SetAgentAutoApprove(agent string, on bool) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if current.AgentAutoApprove == nil {
+		current.AgentAutoApprove = make(map[string]bool)
+	}
+	current.AgentAutoApprove[agent] = on
 	mu.Unlock()
 	return Save()
 }

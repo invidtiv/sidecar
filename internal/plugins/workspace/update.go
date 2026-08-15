@@ -3,8 +3,6 @@ package workspace
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,8 +16,10 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // update handles messages. The public Update wrapper in terminal_control.go
@@ -218,10 +218,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.reconcilePendingCreation()
 			p.applyPendingWorkspaceSelection()
-			// Load diff for the selected worktree so diff tab shows content immediately
-			p.diffState = LoadStateLoading
-			p.diffError = ""
-			cmds = append(cmds, p.loadSelectedDiff())
+			if cmd := p.loadSelectedDiff(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 
 			// Reconnect to existing tmux sessions after initial worktree load
 			if !p.initialReconnectDone {
@@ -259,32 +258,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorktreeKey {
-			p.diffSnapshot = msg.Snapshot
-			p.diffError = ""
-			p.diffState = LoadStateClean
+			if msg.Identity != "" && msg.Identity != p.diff.Target.Identity() && p.diff.Target.Identity() != "" {
+				return p, nil
+			}
+			p.bindDiffView()
 			if msg.Snapshot != nil {
-				p.diffState = msg.Snapshot.State
 				p.commitStatusWorktree = msg.WorktreeKey
 			}
-			p.applyDiffScope()
-			// Invalidate full-file diff since diff content changed
-			p.fullFileDiff = nil
-			// Clamp cursor if total items changed
-			totalItems := p.diffTabFileCount() + len(p.commitStatusList)
-			if totalItems > 0 && p.diffTabCursor >= totalItems {
-				p.diffTabCursor = totalItems - 1
-			} else if totalItems == 0 {
-				p.diffTabCursor = 0
-			}
-			// Update cached parsed diff AFTER clamping cursor
-			p.diffTabParsedDiff = p.parsedDiffForCurrentFile()
-			// Reload full-file diff if in full-file mode and cursor is on a file
-			if p.diffViewMode == DiffViewFullFile && p.diffTabCursor < p.diffTabFileCount() {
-				cmds = append(cmds, p.loadFullFileDiffForWorkspace())
-			}
-			// Opening/applying a snapshot selects the first item without a
-			// cursor-change event. Load that commit if it is the current item.
-			cmds = append(cmds, p.loadSelectedDiffTabCommit())
+			cmds = append(cmds, p.diff.ApplyLoadedSnapshot(msg.Snapshot, p.diff.WorkDir, p.diff.WorkspaceID))
 		}
 
 	case DiffErrorMsg:
@@ -292,12 +273,29 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorktreeKey {
-			p.diffSnapshot = nil
-			p.diffState = LoadStateError
-			p.diffContent, p.diffRaw, p.multiFileDiff = "", "", nil
-			p.commitStatusList = nil
-			p.diffError = fmt.Sprintf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err)
+			p.diff.ApplySnapshotMsg(workspacediff.SnapshotMsg{
+				Epoch: msg.Epoch, WorkspaceID: msg.WorktreeKey, Identity: workspacediff.IdentityWorkingTree,
+				Err: fmt.Errorf("%s (base %q): %v", msg.Command, msg.BaseRef, msg.Err),
+			}, wt.Path, wt.IdentityKey())
 		}
+
+	case workspacediff.SnapshotMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplySnapshotMsg(msg, p.diff.WorkDir, p.diff.WorkspaceID))
+		cmds = append(cmds, p.applyDiffLoadedToLeaves(msg))
+
+	case workspacediff.CommitDetailMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitDetail(msg))
+		cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
+
+	case workspacediff.RangeMsg:
+		cmds = append(cmds, p.applyRangeToLeaves(msg))
+
+	case workspacediff.CommitFileDiffMsg:
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))
+		cmds = append(cmds, p.applyCommitFileDiffToLeaves(msg))
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -307,18 +305,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
 			return p, nil
 		}
+		p.bindDiffView()
+		if msg.Identity != "" && p.diff.Target.Identity() != "" && msg.Identity != p.diff.Target.Identity() {
+			return p, nil
+		}
 		if msg.CommitHash != "" {
-			// Commit file full-file diff: verify commit and file cursor match
-			if p.commitDetail != nil && p.commitDetail.Hash == msg.CommitHash &&
-				p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&
-				p.commitDetail.Files[p.commitFileCursor].Path == msg.FilePath {
+			if p.diff.CommitDetail != nil && p.diff.CommitDetail.Hash == msg.CommitHash &&
+				p.diff.CommitFileCursor >= 0 && p.diff.CommitFileCursor < len(p.diff.CommitDetail.Files) &&
+				p.diff.CommitDetail.Files[p.diff.CommitFileCursor].Path == msg.FilePath {
 				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 			}
-		} else {
-			// Workspace file full-file diff: verify file matches current cursor
-			if msg.FilePath == p.selectedDiffTabFile() {
-				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
-			}
+		} else if msg.FilePath == p.selectedDiffTabFile() {
+			p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 		}
 
 	case CommitStatusLoadedMsg:
@@ -327,12 +325,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err == nil && p.selectedWorktree() != nil && p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
-			p.commitStatusList = msg.Commits
+			p.diff.Commits = msg.Commits
 			p.commitStatusWorktree = msg.WorkspaceName
 			// Clamp diff tab cursor if total items changed
-			totalItems := p.diffTabFileCount() + len(p.commitStatusList)
-			if totalItems > 0 && p.diffTabCursor >= totalItems {
-				p.diffTabCursor = totalItems - 1
+			totalItems := p.diffTabFileCount() + len(p.diff.Commits)
+			if totalItems > 0 && p.diff.Cursor >= totalItems {
+				p.diff.Cursor = totalItems - 1
 			}
 		}
 
@@ -342,46 +340,31 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.Err == nil && msg.Commit != nil && p.selectedWorktree() != nil &&
 			p.selectedWorktree().IdentityKey() == msg.WorkspaceName {
-			p.commitDetail = msg.Commit
-			p.commitFileCursor = 0
-			p.commitFileScroll = 0
-			p.commitFileDiffRaw = ""
-			p.commitFileParsed = nil
-			// Auto-load diff for first file if any
-			if len(msg.Commit.Files) > 0 {
-				parentHash := ""
-				if msg.Commit.IsMerge && len(msg.Commit.ParentHashes) > 0 {
-					parentHash = msg.Commit.ParentHashes[0]
-				}
-				cmds = append(cmds, p.loadCommitFileDiff(msg.Commit.Hash, msg.Commit.Files[0].Path, parentHash))
-			}
+			p.bindDiffView()
+			cmds = append(cmds, p.diff.ApplyCommitDetail(workspacediff.CommitDetailMsg{
+				Epoch: msg.Epoch, WorkspaceID: msg.WorkspaceName, Identity: workspacediff.IdentityWorkingTree,
+				Hash: msg.CommitHash, Commit: mapPluginCommit(msg.Commit),
+			}))
 		}
 
 	case CommitFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if msg.Err == nil && p.selectedWorktree() != nil &&
-			p.selectedWorktree().IdentityKey() == msg.WorkspaceName && p.commitDetail != nil &&
-			p.commitDetail.Hash == msg.CommitHash {
-			// Verify file path matches current selection
-			if p.commitFileCursor >= 0 && p.commitFileCursor < len(p.commitDetail.Files) &&
-				p.commitDetail.Files[p.commitFileCursor].Path == msg.FilePath {
-				p.commitFileDiffRaw = msg.Raw
-				p.commitFileParsed, _ = gitstatus.ParseUnifiedDiff(msg.Raw)
-				// Auto-load full-file content if already in full-file view mode
-				if p.diffViewMode == DiffViewFullFile {
-					p.fullFileDiff = nil
-					return p, p.loadFullFileDiffForCommit()
-				}
-			}
-		}
+		p.bindDiffView()
+		cmds = append(cmds, p.diff.ApplyCommitFileDiff(workspacediff.CommitFileDiffMsg{
+			Epoch: msg.Epoch, WorkspaceID: msg.WorkspaceName, Identity: workspacediff.IdentityWorkingTree,
+			CommitHash: msg.CommitHash, FilePath: msg.FilePath, Raw: msg.Raw, Err: msg.Err,
+		}))
 
 	case CreateDoneMsg:
 		if msg.Err != nil {
 			p.createError = msg.Err.Error()
 			// Stay in ViewModeCreate - don't close modal or clear state
 		} else {
+			if msg.AgentType != "" {
+				_ = state.SetLastCreateAgent(string(msg.AgentType))
+			}
 			p.viewMode = ViewModeList
 			p.worktrees = append(p.worktrees, msg.Worktree)
 
@@ -398,7 +381,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			// Start agent or attach based on selection
 			if msg.AgentType != AgentNone && msg.AgentType != "" {
-				cmds = append(cmds, p.StartAgentWithOptions(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.Prompt))
+				cmds = append(cmds, p.StartAgentWithOptions(msg.Worktree, msg.AgentType, msg.SkipPerms))
 			} else {
 				// "None" selected - attach to worktree directory
 				cmds = append(cmds, p.AttachToWorktreeDir(msg.Worktree))
@@ -510,82 +493,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 
-	case PromptSelectedMsg:
-		// Prompt selected from picker
-		returnMode := p.promptPickerReturnMode
-		p.promptPicker = nil
-		p.clearPromptPickerModal()
-
-		if returnMode == ViewModeAgentConfig {
-			p.viewMode = ViewModeAgentConfig
-			if msg.Prompt != nil {
-				for i, pr := range p.agentConfigPrompts {
-					if pr.Name == msg.Prompt.Name {
-						p.agentConfigPromptIdx = i
-						break
-					}
-				}
-			} else {
-				p.agentConfigPromptIdx = -1
-			}
-		} else {
-			p.viewMode = ViewModeCreate
-			p.createModal = nil
-			if msg.Prompt != nil {
-				// Find index of selected prompt
-				for i, pr := range p.createPrompts {
-					if pr.Name == msg.Prompt.Name {
-						p.createPromptIdx = i
-						break
-					}
-				}
-				// If ticketMode is none, skip task field and jump to agent
-				if msg.Prompt.TicketMode == TicketNone {
-					p.createFocus = 4 // agent field
-				} else {
-					p.createFocus = 3 // task field
-				}
-			} else {
-				p.createPromptIdx = -1
-				p.createFocus = 3 // task field
-			}
-		}
-
-	case PromptCancelledMsg:
-		// Picker cancelled, return to originating modal
-		returnMode := p.promptPickerReturnMode
-		p.promptPicker = nil
-		p.clearPromptPickerModal()
-		if returnMode == ViewModeAgentConfig {
-			p.viewMode = ViewModeAgentConfig
-		} else {
-			p.viewMode = ViewModeCreate
-		}
-
-	case PromptInstallDefaultsMsg:
-		// User pressed 'd' to install default prompts
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Cannot determine home directory", Duration: 3 * time.Second, IsError: true}
-			}
-		}
-		configDir := filepath.Join(home, ".config", "sidecar")
-		if WriteDefaultPromptsToConfig(configDir) {
-			if p.promptPickerReturnMode == ViewModeAgentConfig {
-				p.agentConfigPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-				p.promptPicker = NewPromptPicker(p.agentConfigPrompts, p.width, p.height)
-			} else {
-				p.createPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-				p.promptPicker = NewPromptPicker(p.createPrompts, p.width, p.height)
-			}
-			p.clearPromptPickerModal()
-		} else {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Failed to write default prompts", Duration: 3 * time.Second, IsError: true}
-			}
-		}
-
 	case FetchPRListMsg:
 		if !p.scopeMatches(msg.OperationScope) {
 			return p, nil
@@ -655,10 +562,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Store any warnings for display
 		p.deleteWarnings = msg.Warnings
 		// Clear preview pane content to ensure old diff doesn't persist
-		p.diffContent = ""
-		p.diffRaw = ""
-		p.cachedTaskID = ""
-		p.cachedTask = nil
+		p.diff.Content = ""
+		p.diff.Raw = ""
 		// Load diff for newly selected worktree
 		cmds = append(cmds, p.loadSelectedDiff())
 
@@ -1430,6 +1335,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.scheduleShellPollByName(msg.TmuxName, interval))
 		return p, tea.Batch(cmds...)
 
+	case RenameWorktreeDoneMsg:
+		if msg.Err != nil {
+			p.renameWorktreeError = msg.Err.Error()
+			return p, nil
+		}
+		for _, wt := range p.worktrees {
+			if wt.Path == msg.Path {
+				wt.Name = msg.NewName
+				break
+			}
+		}
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		p.saveSelectionState()
+
 	case RenameShellDoneMsg:
 		if msg.Err != nil {
 			p.renameShellError = msg.Err.Error()
@@ -1477,8 +1397,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
-			// Capture session name before clearing Agent (uses sanitized name like StartAgent)
-			sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+			// Capture session name before clearing Agent (path identity, like StartAgent)
+			sessionName := worktreeTmuxSession(wt)
 			wt.Agent = nil
 			wt.Status = StatusPaused
 			// Clean up cache, active registry, and session tracking (td-53e8a023, td-018f25)
@@ -1500,7 +1420,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case restartAgentWithOptionsMsg:
 		// Start new agent after stop completed, with user-selected options
 		if msg.worktree != nil {
-			return p, p.StartAgentWithOptions(msg.worktree, msg.agentType, msg.skipPerms, msg.prompt)
+			return p, p.StartAgentWithOptions(msg.worktree, msg.agentType, msg.skipPerms)
 		}
 		return p, nil
 
@@ -1547,10 +1467,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Err == nil {
 			if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
 				wt.TaskID = msg.TaskID
-				// Load task details for the newly linked task
-				if msg.TaskID != "" {
-					cmds = append(cmds, p.loadTaskDetails(msg.TaskID))
-				}
 			}
 		}
 
@@ -1569,32 +1485,23 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, p.viewMode == ViewModeTaskLink), len(p.taskSearchFiltered))
 			p.taskLinkModal = nil
+			if p.viewMode == ViewModeCreate {
+				p.rematchCreateTaskIdx()
+				p.createModal = nil
+				p.createModalWidth = 0
+			}
 		}
 
 	case BranchListMsg:
 		if msg.Err == nil {
-			selected := ""
-			if p.branchIdx >= 0 && p.branchIdx < len(p.branchFiltered) {
-				selected = p.branchFiltered[p.branchIdx]
-			}
 			p.branchAll = msg.Branches
 			p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
-			p.branchIdx = 0
-			for i := range p.branchFiltered {
-				if p.branchFiltered[i] == selected {
-					p.branchIdx = i
-					break
-				}
+			p.prefillCreateBaseBranch()
+			p.syncCreateBaseIdx()
+			if p.viewMode == ViewModeCreate {
+				p.createModal = nil
+				p.createModalWidth = 0
 			}
-			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
-		}
-
-	case TaskDetailsLoadedMsg:
-		p.taskLoading = false
-		if msg.Err == nil && msg.Details != nil {
-			p.cachedTaskID = msg.TaskID
-			p.cachedTask = msg.Details
-			p.cachedTaskFetched = time.Now()
 		}
 
 	case LocalBranchesMsg:
@@ -1855,6 +1762,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Remove worktree from list if deleted
 			if msg.Results.LocalWorktreeDeleted {
 				sessionName := tmuxSessionPrefix + sanitizeName(msg.WorkspaceName)
+				if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
+					sessionName = worktreeTmuxSession(wt)
+				}
 				delete(p.managedSessions, sessionName)
 				globalPaneCache.remove(sessionName)
 				p.removeWorktreeByName(msg.WorkspaceName)

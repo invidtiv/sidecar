@@ -30,7 +30,6 @@ func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	p.sidebarVisible = false
 	p.activePane = PanePreview
 	p.viewMode = ViewModeList
-	p.previewTab = PreviewTabOutput
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus = 1
 	p.paneNextID = 2
@@ -261,7 +260,7 @@ func docPaneRegion(p *Plugin, id string) *mouse.Region {
 	return nil
 }
 
-func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
+func TestMOnFocusedDocTogglesRenderNotMerge(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
 	p := docPaneTestPlugin(t, root, false)
@@ -272,36 +271,16 @@ func TestTaskTabMTogglesTaskMarkdownNotHiddenDoc(t *testing.T) {
 		}
 	}
 	doc, leaf := p.activeDocPane()
-	if doc == nil || leaf == nil || !doc.view().Rendered() || !p.taskMarkdownMode {
-		t.Fatalf("opened doc = %#v rendered=%v task=%v", doc, doc != nil && doc.view().Rendered(), p.taskMarkdownMode)
+	if doc == nil || leaf == nil || !doc.view().Rendered() {
+		t.Fatalf("opened doc = %#v rendered=%v", doc, doc != nil && doc.view().Rendered())
 	}
 	if p.FocusContext() != "workspace-doc" {
-		t.Fatalf("output context = %q, want workspace-doc", p.FocusContext())
+		t.Fatalf("context = %q, want workspace-doc", p.FocusContext())
 	}
 
-	p.handleMouseClick(mouse.MouseAction{
-		Type:   mouse.ActionClick,
-		Region: &mouse.Region{ID: regionPreviewTab, Data: int(PreviewTabTask)},
-	})
-	if p.previewTab != PreviewTabTask || p.paneFocus != leaf.ID {
-		t.Fatalf("task click tab=%v focus=%d, want Task with doc leaf %d", p.previewTab, p.paneFocus, leaf.ID)
-	}
-	if p.FocusContext() == "workspace-doc" {
-		t.Fatal("hidden document kept workspace-doc focus context")
-	}
-
-	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if !doc.view().Rendered() {
-		t.Fatal("task-tab m toggled the hidden document")
-	}
-	if p.taskMarkdownMode {
-		t.Fatal("task-tab m did not toggle task markdown to raw")
-	}
-
-	p.previewTab = PreviewTabOutput
-	p.handleListKeys(tea.KeyPressMsg{Code: 'm', Text: "m"})
-	if doc.view().Rendered() || p.taskMarkdownMode {
-		t.Fatalf("output m should toggle the visible doc only: doc=%v task=%v", doc.view().Rendered(), p.taskMarkdownMode)
+	handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !handled || doc.view().Rendered() {
+		t.Fatalf("doc m: handled=%v rendered=%v", handled, doc.view().Rendered())
 	}
 }
 
@@ -634,8 +613,8 @@ func TestDocPaneTabRowClickDoesNotStealPreviewChips(t *testing.T) {
 
 	var chip *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		idx, ok := region.Data.(int)
-		if region.ID == regionPreviewTab && ok && idx == int(PreviewTabDiff) {
+		hit, ok := region.Data.(previewActionHit)
+		if region.ID == regionPreviewAction && ok && hit == previewActionDiff {
 			copy := region
 			chip = &copy
 			break
@@ -650,15 +629,15 @@ func TestDocPaneTabRowClickDoesNotStealPreviewChips(t *testing.T) {
 		Y:      chip.Rect.Y,
 		Region: chip,
 	})
-	if p.previewTab != PreviewTabDiff {
-		t.Fatalf("preview tab = %v, want Diff", p.previewTab)
+	if diff, _ := p.activeDiffPane(); diff == nil {
+		t.Fatal("Diff chip did not open a Diff leaf")
 	}
 	if got := p.activeDocPaneOrNil().view().Title(); got != "main.go" {
 		t.Fatalf("file tab changed to %q on a Diff chip click", got)
 	}
 }
 
-func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
+func TestZoomedDocumentDoesNotRegisterPreviewActionChips(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# readme\n")
 	writeDocPaneFixture(t, root, "main.go", "package main\n")
@@ -667,17 +646,14 @@ func TestZoomedDocumentDoesNotRegisterPreviewTabChips(t *testing.T) {
 	p.width, p.height = 120, 24
 	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
 	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
-	if p.previewTab != PreviewTabOutput || !p.previewTabsVisible() {
-		t.Fatalf("premise: worktree Output chips should exist: tab=%v visible=%v", p.previewTab, p.previewTabsVisible())
-	}
 
 	p.width, p.height = 40, 24
 	_ = p.View(p.width, p.height)
 	if p.terminalSurfaceGeometry(false).OK {
 		t.Fatal("expected the split to zoom away from the terminal")
 	}
-	if docPaneRegion(p, regionPreviewTab) != nil {
-		t.Fatal("zoomed document still registered Output/Diff/Task chip targets")
+	if docPaneRegion(p, regionPreviewAction) != nil {
+		t.Fatal("zoomed document still registered Diff/Task action chip targets")
 	}
 	clickDrawnDocTab(t, p, 0)
 	if got := p.activeDocPaneOrNil().view().Title(); got != "README.md" {

@@ -25,9 +25,9 @@ func TestIsModalViewMode(t *testing.T) {
 		{ViewModeConfirmDelete, true},
 		{ViewModeConfirmDeleteShell, true},
 		{ViewModeCommitForMerge, true},
-		{ViewModePromptPicker, true},
 		{ViewModeTypeSelector, true},
 		{ViewModeRenameShell, true},
+		{ViewModeRenameWorktree, true},
 		{ViewModeFilePicker, true},
 	}
 
@@ -43,7 +43,7 @@ func TestIsModalViewMode(t *testing.T) {
 func TestIsBackgroundRegion(t *testing.T) {
 	background := []string{
 		regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab,
+		regionWorktreeItem,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 	}
@@ -56,10 +56,9 @@ func TestIsBackgroundRegion(t *testing.T) {
 	modal := []string{
 		agentChoiceConfirmID, agentChoiceCancelID,
 		deleteConfirmDeleteID, deleteConfirmCancelID,
-		regionCreateBackdrop, regionCreateModalBody, regionCreateInput,
+		createSubmitID, createCancelID,
 		mergeMethodListID, mergeCleanUpButtonID, mergeSkipButtonID, // Merge modal element IDs
 		typeSelectorListID, typeSelectorConfirmID, typeSelectorCancelID, typeSelectorInputID, // Type selector modal element IDs
-		regionPromptItem, regionPromptFilter,
 	}
 	for _, id := range modal {
 		if isBackgroundRegion(id) {
@@ -72,13 +71,13 @@ func TestModalClickGuard(t *testing.T) {
 	modalModes := []ViewMode{
 		ViewModeCreate, ViewModeMerge, ViewModeAgentChoice,
 		ViewModeConfirmDelete, ViewModeConfirmDeleteShell,
-		ViewModeRenameShell, ViewModeTypeSelector,
-		ViewModePromptPicker, ViewModeTaskLink,
+		ViewModeRenameShell, ViewModeRenameWorktree, ViewModeTypeSelector,
+		ViewModeTaskLink,
 		ViewModeCommitForMerge, ViewModeFilePicker,
 	}
 	backgroundRegions := []string{
 		regionSidebar, regionPreviewPane, regionWorktreeItem,
-		regionPaneDivider, regionPreviewTab,
+		regionPaneDivider,
 	}
 
 	for _, mode := range modalModes {
@@ -208,7 +207,6 @@ func newPreviewClickTestPlugin() *Plugin {
 		width:         100,
 		height:        30,
 		sidebarWidth:  40,
-		previewTab:    PreviewTabOutput,
 		shellSelected: true,
 		shells: []*ShellSession{{
 			TmuxName: "shell-1",
@@ -386,7 +384,6 @@ func TestPreviewPaneModifierClickStaysInReadMode(t *testing.T) {
 func TestPreviewPaneClickOnNonTerminalTabDoesNotAttach(t *testing.T) {
 	p := newPreviewClickTestPlugin()
 	p.shellSelected = false
-	p.previewTab = PreviewTabDiff
 	p.worktrees = []*Worktree{{Name: "wt"}}
 
 	p.handleMouseClick(previewClickAction(false, false))

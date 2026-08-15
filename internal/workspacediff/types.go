@@ -1,4 +1,4 @@
-// Package workspacediff is the shared Diff/Task preview model.
+// Package workspacediff is the shared Diff preview model.
 //
 // The project Workspaces plugin and the global Workspaces preview both draw
 // the same working-tree + commits view. This package owns snapshot load,
@@ -8,16 +8,7 @@ package workspacediff
 
 import "strings"
 
-// Tab is the Output / Diff / Task preview tab.
-type Tab int
-
-const (
-	TabOutput Tab = iota
-	TabDiff
-	TabTask
-)
-
-// Scope names the three distinct questions answered by the Diff tab.
+// Scope names the three distinct questions answered by the Diff pane.
 type Scope int
 
 const (
@@ -34,6 +25,54 @@ const (
 	ViewSideBySide
 	ViewFullFile
 )
+
+// Persist is the state.json spelling of a working-tree scope.
+func (s Scope) Persist() string {
+	switch s {
+	case ScopeCommits:
+		return "commits"
+	case ScopeAggregate:
+		return "aggregate"
+	default:
+		return "working-tree"
+	}
+}
+
+// ParseScope reads a persisted scope. Unknown values are working-tree.
+func ParseScope(s string) Scope {
+	switch s {
+	case "commits":
+		return ScopeCommits
+	case "aggregate":
+		return ScopeAggregate
+	default:
+		return ScopeWorkingTree
+	}
+}
+
+// Persist is the state.json spelling of a view mode.
+func (m ViewMode) Persist() string {
+	switch m {
+	case ViewSideBySide:
+		return "side-by-side"
+	case ViewFullFile:
+		return "full-file"
+	default:
+		return "unified"
+	}
+}
+
+// ParseViewMode reads a persisted view mode. Unknown values are unified.
+func ParseViewMode(s string) ViewMode {
+	switch s {
+	case "side-by-side":
+		return ViewSideBySide
+	case "full-file":
+		return ViewFullFile
+	default:
+		return ViewUnified
+	}
+}
 
 // Focus is which sub-pane of the Diff tab is active.
 type Focus int
@@ -80,19 +119,6 @@ type CommitInfo struct {
 	Merged  bool
 }
 
-// Task is the linked-task payload shown on the Task tab.
-type Task struct {
-	ID          string
-	Title       string
-	Status      string
-	Priority    string
-	Type        string
-	Description string
-	Acceptance  string
-	CreatedAt   string
-	UpdatedAt   string
-}
-
 const (
 	MaxUntrackedFileSize   = 1 << 20
 	MaxUntrackedFiles      = 50
@@ -112,10 +138,12 @@ type File struct {
 
 // CommitDetail is the file list for the commit under the cursor.
 type CommitDetail struct {
-	Hash      string
-	ShortHash string
-	Subject   string
-	Files     []CommitFile
+	Hash         string
+	ShortHash    string
+	Subject      string
+	Files        []CommitFile
+	IsMerge      bool
+	ParentHashes []string
 }
 
 // CommitFile is one path inside a commit.

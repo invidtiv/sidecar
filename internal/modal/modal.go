@@ -73,13 +73,21 @@ func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 
 	switch key {
 	case "esc":
+		// Offer Esc to the focused section first so an open overlay can
+		// consume it. Only a dismiss-overlay action suppresses cancel.
+		action, cmd = m.routeToFocusedSection(msg)
+		if action == actionDismissOverlay {
+			return "", cmd
+		}
 		return "cancel", nil
 
 	case "tab":
+		m.routeToFocusedSection(overlayCommitMsg{})
 		m.cycleFocus(1)
 		return "", nil
 
 	case "shift+tab":
+		m.routeToFocusedSection(overlayCommitMsg{})
 		m.cycleFocus(-1)
 		return "", nil
 
@@ -89,20 +97,14 @@ func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 		if focusID != "" {
 			// Route to focused section first
 			action, cmd = m.routeToFocusedSection(msg)
-			if action != "" {
-				return action, cmd
-			}
-			// If section didn't return an action, use the focus ID or primary action
-			if m.primaryAction != "" {
-				return m.primaryAction, cmd
-			}
-			return focusID, cmd
+			return m.resolveEnterAction(focusID, action), cmd
 		}
 		return "", nil
 
 	default:
 		// Route other keys to the focused section
-		return m.routeToFocusedSection(msg)
+		action, cmd = m.routeToFocusedSection(msg)
+		return m.normalizeAction(action), cmd
 	}
 }
 
@@ -134,9 +136,18 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		// Click on a focusable element - focus it and return its ID as action
 		for i, fid := range m.focusIDs {
 			if fid == id {
+				if id != m.currentFocusID() {
+					m.notifyAll(overlayBlurMsg{})
+				}
 				m.focusIdx = i
 				return id
 			}
+		}
+
+		// Overlay rows are not in the tab order; a click commits without submit.
+		action, _ := m.routeToFocusedSection(overlayClickMsg{id: id})
+		if action == actionOverlayIdle {
+			return ""
 		}
 		return ""
 
@@ -244,8 +255,8 @@ func (m *Modal) scrollToFocused() {
 	}
 }
 
-// routeToFocusedSection routes a key message to the focused section.
-func (m *Modal) routeToFocusedSection(msg tea.KeyPressMsg) (string, tea.Cmd) {
+// routeToFocusedSection routes a message to the focused section.
+func (m *Modal) routeToFocusedSection(msg tea.Msg) (string, tea.Cmd) {
 	focusID := m.currentFocusID()
 	if focusID == "" {
 		return "", nil
@@ -259,4 +270,44 @@ func (m *Modal) routeToFocusedSection(msg tea.KeyPressMsg) (string, tea.Cmd) {
 		}
 	}
 	return "", nil
+}
+
+func (m *Modal) notifyAll(msg tea.Msg) {
+	focusID := m.currentFocusID()
+	for _, section := range m.sections {
+		section.Update(msg, focusID)
+	}
+}
+
+func (m *Modal) resolveEnterAction(focusID, action string) string {
+	switch action {
+	case actionOverlayIdle, actionDismissOverlay:
+		return ""
+	case actionSubmitPrimary:
+		if m.primaryAction != "" {
+			return m.primaryAction
+		}
+		return focusID
+	case "":
+		if m.primaryAction != "" {
+			return m.primaryAction
+		}
+		return focusID
+	default:
+		return action
+	}
+}
+
+func (m *Modal) normalizeAction(action string) string {
+	switch action {
+	case actionOverlayIdle, actionDismissOverlay:
+		return ""
+	case actionSubmitPrimary:
+		if m.primaryAction != "" {
+			return m.primaryAction
+		}
+		return m.currentFocusID()
+	default:
+		return action
+	}
 }

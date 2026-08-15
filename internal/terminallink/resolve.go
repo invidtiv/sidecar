@@ -3,6 +3,7 @@ package terminallink
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -105,6 +106,90 @@ func containsControl(raw string) bool {
 		}
 	}
 	return false
+}
+
+// ResolveCommit reports whether rev names a commit in workdir.
+func ResolveCommit(workdir, rev string) (oid string, ok bool) {
+	if workdir == "" || rev == "" || containsControl(rev) || strings.ContainsAny(rev, " \t\n") {
+		return "", false
+	}
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	oid = strings.TrimSpace(string(out))
+	return oid, oid != ""
+}
+
+// ResolveGitSpec existence-gates a scanner token: a lowercase hex rev,
+// "commit <rev>", or A..B / A...B. HEAD and branch names are refused here
+// even if git would accept them — those are CLI-only.
+func ResolveGitSpec(workdir, raw string) (value string, extra Extra, ok bool) {
+	extra = Extra{Raw: raw}
+	a, b, parsed := parseGitSpecToken(raw)
+	if !parsed {
+		return "", extra, false
+	}
+	if _, ok := ResolveCommit(workdir, a); !ok {
+		return "", extra, false
+	}
+	if b != "" {
+		if _, ok := ResolveCommit(workdir, b); !ok {
+			return "", extra, false
+		}
+	}
+	return raw, extra, true
+}
+
+func parseGitSpecToken(raw string) (a, b string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	if a, b, ok := splitDottedRevs(raw); ok {
+		return a, b, true
+	}
+	if rest, found := strings.CutPrefix(raw, "commit"); found {
+		rev := strings.TrimSpace(rest)
+		if gitRevExact(rev) {
+			return rev, "", true
+		}
+		return "", "", false
+	}
+	if gitRevExact(raw) {
+		return raw, "", true
+	}
+	return "", "", false
+}
+
+func splitDottedRevs(raw string) (a, b string, ok bool) {
+	for _, dots := range []string{"...", ".."} {
+		i := strings.Index(raw, dots)
+		if i <= 0 {
+			continue
+		}
+		left, right := raw[:i], raw[i+len(dots):]
+		if gitRevExact(left) && gitRevExact(right) {
+			return left, right, true
+		}
+	}
+	return "", "", false
+}
+
+func gitRevExact(s string) bool {
+	n := len(s)
+	if n < 7 || n > 64 {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if c < '0' || (c > '9' && (c < 'a' || c > 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // Markdown reports whether path should open as rendered markdown.

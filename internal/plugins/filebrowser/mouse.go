@@ -9,9 +9,45 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
+
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer. It mirrors the
+// routing in handleMouseScroll without opening files, updating selection, or
+// rendering. Inline editors and overlays keep receiving wheel input because
+// they own additional scroll state outside the ordinary Files panes.
+func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if p == nil || p.mouseHandler == nil || p.tree == nil || p.inlineEditMode || p.showExitConfirmation || p.projectSearchMode ||
+		p.quickOpenMode || p.infoMode || p.blameMode || p.fileOpMode != FileOpNone {
+		return false
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	inTreePane := action.X < p.treeWidth
+	if action.Region != nil {
+		inTreePane = action.Region.ID == regionTreePane || action.Region.ID == regionTreeItem
+	}
+	surface := regionPreviewPane
+	var bounds sharedscroll.Bounds
+	if inTreePane {
+		surface = regionTreePane
+		bounds = sharedscroll.Bounds{Position: p.treeCursor, Maximum: p.tree.Len() - 1}
+	} else {
+		maxScroll := len(p.getPreviewLines()) - p.visibleContentHeight()
+		bounds = sharedscroll.Bounds{Position: p.previewScroll, Maximum: maxScroll}
+	}
+	if !bounds.AtBoundary(action.Delta) {
+		return false
+	}
+	// A held delta must not leak into the next gesture after the filter starts
+	// dropping the inertia tail at this boundary.
+	p.wheelBursts.For(surface).Reset()
+	return true
+}
 
 // dragForwardThrottle is the minimum interval between forwarding mouse drag
 // events to the inline editor's tmux session. Without throttling, every mouse
@@ -425,12 +461,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 
 	if inTreePane {
 		// Scroll tree by moving cursor
-		p.treeCursor += delta
-		if p.treeCursor < 0 {
-			p.treeCursor = 0
-		} else if p.treeCursor >= p.tree.Len() {
-			p.treeCursor = p.tree.Len() - 1
-		}
+		p.treeCursor, _ = (sharedscroll.Bounds{
+			Position: p.treeCursor,
+			Maximum:  p.tree.Len() - 1,
+		}).Move(delta)
 		p.ensureTreeCursorVisible()
 		return p, p.schedulePreviewForCursor()
 	}
@@ -443,12 +477,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 		maxScroll = 0
 	}
 
-	p.previewScroll += delta
-	if p.previewScroll < 0 {
-		p.previewScroll = 0
-	} else if p.previewScroll > maxScroll {
-		p.previewScroll = maxScroll
-	}
+	p.previewScroll, _ = (sharedscroll.Bounds{
+		Position: p.previewScroll,
+		Maximum:  maxScroll,
+	}).Move(delta)
 
 	return p, nil
 }

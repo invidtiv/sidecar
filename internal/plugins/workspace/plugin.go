@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -46,12 +46,12 @@ const (
 	flashDuration = 1500 * time.Millisecond
 
 	// Hit region IDs
-	regionSidebar      = "sidebar"
-	regionPreviewPane  = "preview-pane"
-	regionPaneDivider  = "pane-divider"
-	regionWorktreeItem = "workspace-item"
-	regionPreviewTab   = "preview-tab"
-	regionListFilter   = "workspace-list-filter"
+	regionSidebar       = "sidebar"
+	regionPreviewPane   = "preview-pane"
+	regionPaneDivider   = "pane-divider"
+	regionWorktreeItem  = "workspace-item"
+	regionPreviewAction = "preview-action"
+	regionListFilter    = "workspace-list-filter"
 	// Agent choice modal IDs (modal library)
 	agentChoiceListID    = "agent-choice-list"
 	agentChoiceConfirmID = "agent-choice-confirm"
@@ -62,15 +62,6 @@ const (
 	regionKanbanCard   = "kanban-card"
 	regionKanbanColumn = "kanban-column"
 	regionViewToggle   = "view-toggle"
-
-	// Create modal regions
-	regionCreateBackdrop    = "create-backdrop"
-	regionCreateModalBody   = "create-modal-body"
-	regionCreateInput       = "create-input"
-	regionCreateDropdown    = "create-dropdown"
-	regionCreateButton      = "create-button"
-	regionCreateCheckbox    = "create-checkbox"
-	regionCreateAgentOption = "create-agent-option"
 
 	// Task Link modal regions
 	regionTaskLinkDropdown = "task-link-dropdown"
@@ -94,10 +85,6 @@ const (
 	mergeCreatePRID        = "merge-create-pr"
 	mergeStopWatchingID    = "merge-stop-watching"
 	mergeForceBranchID     = "merge-force-branch"
-
-	// Prompt Picker modal regions
-	regionPromptItem   = "prompt-item"
-	regionPromptFilter = "prompt-filter"
 
 	// Sidebar header regions
 	regionCreateWorktreeButton = "create-worktree-button"
@@ -127,6 +114,7 @@ const (
 	regionPaneLeaf        = "pane-leaf"
 	regionDocTab          = "doc-tab"
 	regionIssueTab        = "issue-tab"
+	regionDiffTargetTab   = "diff-target-tab"
 	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -163,6 +151,7 @@ type Plugin struct {
 	terminalLinkMemo      terminalLinkMemo
 	terminalPathResolver  func(string, string) (string, string, bool)
 	terminalRootResolver  func(string) (string, error)
+	terminalSpecResolver  func(string, string) (string, bool)
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -181,7 +170,6 @@ type Plugin struct {
 	// View state
 	viewMode     ViewMode
 	activePane   FocusPane
-	previewTab   PreviewTab
 	selectedIdx  int
 	scrollOffset int // Sidebar list scroll offset
 	visibleCount int // Number of visible list items
@@ -234,6 +222,7 @@ type Plugin struct {
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
 	issues       map[int]*issuePane
+	diffs        map[int]*diffPane
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
@@ -293,33 +282,12 @@ type Plugin struct {
 	refreshing  bool
 	lastRefresh time.Time
 
-	// Diff state
-	diffContent   string
-	diffRaw       string
-	diffSnapshot  *DiffSnapshot
-	diffState     LoadState
-	diffError     string
-	diffScope     DiffScope
-	diffViewMode  DiffViewMode             // Unified, side-by-side, or full-file
-	multiFileDiff *gitstatus.MultiFileDiff // Parsed multi-file diff with positions
-	fullFileDiff  *gitstatus.FullFileDiff  // Full-file diff for current file (loaded on demand)
+	// Diff state lives on the shared viewer. Hosts keep HitMap + drag only.
+	diff         workspacediff.View
+	fullFileDiff *gitstatus.FullFileDiff // host-owned; workspacediff cannot import gitstatus
 
-	// Diff tab two-pane state (hierarchical file list + per-file diff)
-	diffTabListWidth   int                   // Persisted file list pane width in pixels (0 = use default)
-	lastDragRegion     string                // Region ID of last drag operation (EndDrag clears handler before DragEnd)
-	diffTabFocus       DiffTabFocus          // Which sub-pane in diff tab is focused
-	diffTabCursor      int                   // Cursor position in file list
-	diffTabScroll      int                   // Scroll offset in file list
-	diffTabDiffScroll  int                   // Scroll offset in per-file diff
-	diffTabHorizScroll int                   // Horizontal scroll in per-file diff
-	diffTabParsedDiff  *gitstatus.ParsedDiff // Parsed diff for selected file
-
-	// Commit drill-down state (when viewing files within a commit)
-	commitDetail      *gitstatus.Commit     // Loaded commit detail with file list
-	commitFileCursor  int                   // Cursor in commit file list
-	commitFileScroll  int                   // Scroll offset in commit file list
-	commitFileDiffRaw string                // Raw diff for selected commit file
-	commitFileParsed  *gitstatus.ParsedDiff // Parsed diff for selected commit file
+	// lastDragRegion is the region ID of the last drag (EndDrag clears the handler before DragEnd).
+	lastDragRegion string
 
 	// Terminal panel state (Ctrl+T toggle)
 	termPanelVisible      bool              // Whether the terminal panel is shown
@@ -337,8 +305,6 @@ type Plugin struct {
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
 
-	// Commit status header for diff view
-	commitStatusList     []CommitStatusInfo
 	commitStatusWorktree string // Name of worktree for cached status
 
 	// Conflict detection state
@@ -347,16 +313,19 @@ type Plugin struct {
 	// Create modal state
 	createNameInput         textinput.Model
 	createBaseBranchInput   textinput.Model
+	createAgentInput        textinput.Model
 	createTaskID            string
 	createTaskTitle         string    // Title of selected task for display
 	createAgentType         AgentType // Selected agent type (default: AgentClaude)
 	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
+	createBaseIdx           int       // Selected base-branch index in branchAll
+	createTaskIdx           int       // Selected task index in createTaskItems() (0 = none)
 	createSkipPermissions   bool      // Skip permissions checkbox
-	createFocus             int       // 0=name, 1=base, 2=prompt, 3=task, 4=agent, 5=skipPerms, 6=create, 7=cancel
-	createButtonHover       int       // 0=none, 1=create, 2=cancel
 	createError             string    // Error message to display in create modal
 	createModal             *modal.Modal
 	createModalWidth        int
+	createModalBranchN      int
+	createModalTaskN        int
 	createOperationModal    *modal.Modal
 	createOperationWidth    int
 	createPlan              *CreateOperationPlan
@@ -367,19 +336,6 @@ type Plugin struct {
 	createRunHook           bool
 	deferredCreations       []CreateWorktreeAddedMsg         // stale cross-project results retained until matching repo returns
 	removePendingCreationFn func(*CreateOperationPlan) error // test seam for durable journal completion failures
-
-	// Branch name validation state
-	branchNameValid     bool     // Is current name valid?
-	branchNameErrors    []string // Validation error messages
-	branchNameSanitized string   // Suggested sanitized name
-
-	// Prompt state for create modal
-	createPrompts          []Prompt      // Available prompts (merged global + project)
-	createPromptIdx        int           // Selected prompt index (-1 = none)
-	promptPicker           *PromptPicker // Picker modal state (when open)
-	promptPickerModal      *modal.Modal
-	promptPickerModalWidth int
-	promptPickerModalEmpty bool
 
 	// Task search state for create modal
 	taskSearchInput    textinput.Model
@@ -400,18 +356,8 @@ type Plugin struct {
 	taskLinkModal      *modal.Modal
 	taskLinkModalWidth int
 
-	// Cached task details for preview pane
-	cachedTaskID      string
-	cachedTask        *TaskDetails
-	cachedTaskFetched time.Time
-	taskLoading       bool // True when task fetch is in progress
-
-	// Markdown rendering for task view
-	markdownRenderer      *markdown.Renderer
-	taskMarkdownMode      bool     // true = rendered, false = raw
-	taskMarkdownRendered  []string // Cached rendered lines
-	taskMarkdownWidth     int      // Width used for cached render
-	taskRenderedLineCount int      // Total line count of last task render (for scroll clamping)
+	// Markdown renderer shared with issue panes.
+	markdownRenderer *markdown.Renderer
 
 	// Merge workflow state
 	mergeState      *MergeWorkflowState
@@ -438,13 +384,9 @@ type Plugin struct {
 	agentConfigAgentIdx   int
 	agentConfigAgentList  []AgentType // Fixed picker list for modal lifetime (includes preferred)
 	agentConfigSkipPerms  bool
-	agentConfigPromptIdx  int
-	agentConfigPrompts    []Prompt
+	agentConfigAgentInput textinput.Model
 	agentConfigModal      *modal.Modal
 	agentConfigModalWidth int
-
-	// Prompt picker return routing
-	promptPickerReturnMode ViewMode
 
 	// Delete confirmation modal state
 	deleteConfirmWorktree   *Worktree // Worktree pending deletion
@@ -467,6 +409,13 @@ type Plugin struct {
 	renameShellModal      *modal.Modal    // Modal instance
 	renameShellModalWidth int             // Cached width for rebuild detection
 	renameShellError      string          // Validation error message
+
+	// Rename worktree modal state (display-name only; branch and path stay put)
+	renameWorktree           *Worktree
+	renameWorktreeInput      textinput.Model
+	renameWorktreeModal      *modal.Modal
+	renameWorktreeModalWidth int
+	renameWorktreeError      string
 
 	// Initial reconnection tracking
 	initialReconnectDone bool
@@ -544,6 +493,10 @@ type Plugin struct {
 
 	// Pending agent UI requests
 	pendingViews map[string]*pendingView
+	// openSplit is the request-scoped --split axis override ("right"/"below").
+	// Empty or "auto" leaves PlanOpen's axis alone. Set around handleUIRequest
+	// and consumePendingView only.
+	openSplit string
 }
 
 // New creates a new worktree manager plugin.
@@ -558,7 +511,6 @@ func New() *Plugin {
 		shells:              make([]*ShellSession, 0),
 		viewMode:            ViewModeList,
 		activePane:          PaneSidebar,
-		previewTab:          PreviewTabOutput,
 		mouseHandler:        mouse.NewHandler(),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
@@ -566,10 +518,8 @@ func New() *Plugin {
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
 		terminalHistory:     make(map[string]tty.HistoryReach),
 		markdownRenderer:    mdRenderer,
-		taskMarkdownMode:    true,  // Default to rendered mode
 		shellSelected:       false, // Start with first worktree selected, not shell
 		typeSelectorIdx:     1,     // Default to Worktree option
-		taskLoading:         false, // Explicitly initialized (td-3668584f)
 		applicationFocused:  true,
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
@@ -705,6 +655,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.diffs = make(map[int]*diffPane)
 	p.issueModelNextID = 0
 	p.docFinderCaches = nil
 	p.closeDocInfo()
@@ -841,6 +792,21 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-issue")
+
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(",", "prev-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(".", "next-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("}", "next-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("Y", "yank-id", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("f", "file-picker", "workspace-diff")
 	}
 
 	// Load saved sidebar width
@@ -850,7 +816,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Load saved diff tab file list width
 	if savedWidth := state.GetDiffTabFileListWidth(); savedWidth > 0 {
-		p.diffTabListWidth = savedWidth
+		p.diff.SetListWidth(savedWidth)
 	}
 
 	// Load saved terminal panel preferences
@@ -870,9 +836,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Load saved diff view mode
 	switch state.GetWorkspaceDiffMode() {
 	case "side-by-side":
-		p.diffViewMode = DiffViewSideBySide
+		p.diff.ViewMode = DiffViewSideBySide
 	case "full-file":
-		p.diffViewMode = DiffViewFullFile
+		p.diff.ViewMode = DiffViewFullFile
 	}
 
 	return nil
@@ -1376,9 +1342,6 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 	if p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive {
 		return false
 	}
-	if p.previewTab != PreviewTabOutput {
-		return false
-	}
 	wt := p.selectedWorktree()
 	if wt == nil || wt.IdentityKey() != worktreeName {
 		return false
@@ -1421,7 +1384,7 @@ func (p *Plugin) getOutputLineCount() int {
 // getPreviewVisibleHeight estimates the visible content height for scroll clamping.
 // The exact height is only known during render, but this is close enough for key handling.
 func (p *Plugin) getPreviewVisibleHeight() int {
-	if p.width > 0 && p.height > 0 && (p.previewTab == PreviewTabOutput || p.selectingShell()) {
+	if p.width > 0 && p.height > 0 {
 		var h int
 		if p.termPanelVisible {
 			_, h = p.calculateAgentPaneDimensions()
@@ -1432,13 +1395,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 			return h
 		}
 	}
-	// Terminal surfaces spend one row on their own header; Diff and Task keep
-	// the standalone tab row and the blank spacer under it.
-	chrome := previewTabRows
-	if p.previewTab == PreviewTabOutput || p.selectingShell() {
-		chrome = terminalHeaderRows
-	}
-	h := p.height - panelBorderWidth - chrome
+	h := p.height - panelBorderWidth - terminalHeaderRows
 	if h < 1 {
 		h = 1
 	}
@@ -1450,20 +1407,7 @@ func (p *Plugin) getPreviewVisibleHeight() int {
 // content, which is the same number of rows a terminal window can sit back from
 // its live bottom (previewMaxScroll reads it that way round).
 func (p *Plugin) getMaxScrollOffset() int {
-	var contentHeight int
-	switch {
-	case p.selectingShell():
-		contentHeight = p.getOutputLineCount()
-	default:
-		switch p.previewTab {
-		case PreviewTabOutput:
-			contentHeight = p.getOutputLineCount()
-		case PreviewTabTask:
-			contentHeight = p.taskRenderedLineCount
-		default:
-			return 0 // Diff tab uses its own scroll state
-		}
-	}
+	contentHeight := p.getOutputLineCount()
 	visibleHeight := p.getPreviewVisibleHeight()
 	maxOffset := contentHeight - visibleHeight
 	if maxOffset < 0 {
@@ -1473,12 +1417,10 @@ func (p *Plugin) getMaxScrollOffset() int {
 }
 
 // previewShowsTerminal reports whether the preview pane is drawing the primary
-// terminal rather than a document: the Output tab, or any shell selection.
-// Every scroll path asks it, because the two are placed by different models —
-// a document by an absolute line from its top, a terminal by a distance back
-// from its live bottom.
+// terminal rather than a document. Worktree terminals are terminals; documents
+// live in their own leaves.
 func (p *Plugin) previewShowsTerminal() bool {
-	return p.previewTab == PreviewTabOutput || p.selectingShell()
+	return true
 }
 
 // previewMaxScroll is the furthest back the primary terminal's window can sit,
@@ -1717,9 +1659,18 @@ func (p *Plugin) resolveWorktreeAgentType(wt *Worktree) AgentType {
 }
 
 // getDefaultCreateAgentType returns the default agent for create-worktree modal.
-// .sidecar-agent in the current workspace is treated equivalently to config defaultAgentType.
-// Result is clamped to the selectable allowlist when the preferred type is hidden.
+// Precedence: persisted last-create agent (if still selectable) → .sidecar-agent
+// in the current workspace → config defaultAgentType → Claude. Result is
+// clamped to the selectable allowlist when the preferred type is hidden.
 func (p *Plugin) getDefaultCreateAgentType() AgentType {
+	agents := p.selectableAgentTypes()
+	if last := AgentType(strings.TrimSpace(state.GetLastCreateAgent())); last != "" {
+		for _, at := range agents {
+			if at == last {
+				return last
+			}
+		}
+	}
 	var preferred AgentType
 	if p != nil && p.ctx != nil {
 		fileAgent := loadAgentType(p.ctx.ProjectRoot, p.ctx.WorkDir)
@@ -1731,7 +1682,6 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 	} else {
 		preferred = p.getConfigDefaultAgentType()
 	}
-	agents := p.selectableAgentTypes()
 	got, _ := clampAgentSelection(agents, preferred, -1)
 	return got
 }
@@ -1740,15 +1690,19 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 func (p *Plugin) clearCreateModal() {
 	p.createNameInput = textinput.Model{}
 	p.createBaseBranchInput = textinput.Model{}
+	p.createAgentInput = textinput.Model{}
 	p.createTaskID = ""
 	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
+	p.createBaseIdx = 0
+	p.createTaskIdx = 0
 	p.createSkipPermissions = false
-	p.createFocus = 0
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createModalBranchN = 0
+	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1769,50 +1723,47 @@ func (p *Plugin) clearCreateModal() {
 	p.branchScroll = 0
 	p.taskLinkModal = nil
 	p.taskLinkModalWidth = 0
-	// Clear prompt state
-	p.createPrompts = nil
-	p.createPromptIdx = -1
-	p.promptPicker = nil
-	p.clearPromptPickerModal()
-}
-
-func (p *Plugin) clearPromptPickerModal() {
-	p.promptPickerModal = nil
-	p.promptPickerModalWidth = 0
-	p.promptPickerModalEmpty = false
 }
 
 // initCreateModalBase initializes common create modal state.
 func (p *Plugin) initCreateModalBase() {
 	p.viewMode = ViewModeCreate
 
-	// Initialize text inputs
 	p.createNameInput = textinput.New()
-	p.createNameInput.Placeholder = "feature-name"
+	p.createNameInput.Placeholder = "feature name"
 	p.createNameInput.Prompt = ""
 	p.createNameInput.Focus()
 	p.createNameInput.CharLimit = 100
 
 	p.createBaseBranchInput = textinput.New()
-	p.createBaseBranchInput.Placeholder = "main"
+	p.createBaseBranchInput.Placeholder = ""
 	p.createBaseBranchInput.Prompt = ""
 	p.createBaseBranchInput.CharLimit = 100
 
+	p.createAgentInput = textinput.New()
+	p.createAgentInput.Placeholder = ""
+	p.createAgentInput.Prompt = ""
+	p.createAgentInput.CharLimit = 80
+
 	p.taskSearchInput = textinput.New()
-	p.taskSearchInput.Placeholder = "Search tasks..."
+	p.taskSearchInput.Placeholder = "Search tasks…"
 	p.taskSearchInput.Prompt = ""
 	p.taskSearchInput.CharLimit = 100
 
-	// Reset all state
 	p.createTaskID = ""
 	p.createTaskTitle = ""
 	p.createAgentType = p.getDefaultCreateAgentType()
 	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-	p.createSkipPermissions = false
-	p.createFocus = 0
+	p.createBaseIdx = 0
+	p.createTaskIdx = 0
+	p.loadCreateAutoApprove()
+	p.prefillCreateAgentInput()
+	p.prefillCreateBaseBranch()
 	p.createError = ""
 	p.createModal = nil
 	p.createModalWidth = 0
+	p.createModalBranchN = 0
+	p.createModalTaskN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1826,14 +1777,6 @@ func (p *Plugin) initCreateModalBase() {
 	p.taskSearchIdx = 0
 	p.taskSearchScroll = 0
 	p.taskSearchLoading = true
-
-	// Load prompts from global and project config
-	home, _ := os.UserHomeDir()
-	configDir := filepath.Join(home, ".config", "sidecar")
-	p.createPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-	p.createPromptIdx = -1
-	p.promptPicker = nil
-	p.clearPromptPickerModal()
 	p.branchAll = nil
 	p.branchFiltered = nil
 	p.branchIdx = 0
@@ -1854,11 +1797,11 @@ func (p *Plugin) openCreateModalWithTask(taskID, taskTitle string) tea.Cmd {
 	// Pre-fill name from task
 	suggestedName := p.deriveBranchName(taskID, taskTitle)
 	p.createNameInput.SetValue(suggestedName)
-	p.branchNameValid, p.branchNameErrors, p.branchNameSanitized = ValidateBranchName(suggestedName)
 
 	// Pre-fill task link
 	p.createTaskID = taskID
 	p.createTaskTitle = taskTitle
+	p.taskSearchInput.SetValue(taskID)
 
 	return tea.Batch(p.loadOpenTasks(), p.loadBranches())
 }
@@ -1876,14 +1819,6 @@ func (p *Plugin) deriveBranchName(taskID, title string) string {
 		return taskID
 	}
 	return taskID + "-" + sanitized
-}
-
-// getSelectedPrompt returns the currently selected prompt, or nil if none.
-func (p *Plugin) getSelectedPrompt() *Prompt {
-	if p.createPromptIdx < 0 || p.createPromptIdx >= len(p.createPrompts) {
-		return nil
-	}
-	return &p.createPrompts[p.createPromptIdx]
 }
 
 // toggleSidebar toggles sidebar visibility.
@@ -1930,22 +1865,8 @@ func (p *Plugin) applySelectionChange() {
 	// done marker once the selection has been held long enough to read.
 	p.selectionSince = time.Now()
 	p.resetPreviewScroll()
-	p.taskLoading = false    // Reset task loading state for new selection (td-3668584f)
-	p.multiFileDiff = nil    // Clear stale multi-file diff from previous worktree
-	p.fullFileDiff = nil     // Clear stale full-file diff from previous worktree
-	p.commitStatusList = nil // Clear stale commit list from previous worktree
+	p.resetDiffView()
 	p.commitStatusWorktree = ""
-	p.diffTabCursor = 0 // Reset diff tab file selection
-	p.diffTabScroll = 0
-	p.diffTabDiffScroll = 0
-	p.diffTabHorizScroll = 0
-	p.diffTabFocus = DiffTabFocusFileList
-	p.diffTabParsedDiff = nil
-	p.commitDetail = nil
-	p.commitFileCursor = 0
-	p.commitFileScroll = 0
-	p.commitFileDiffRaw = ""
-	p.commitFileParsed = nil
 	// Exit interactive mode when switching selection (td-fc758e88)
 	p.exitInteractiveMode()
 	// Persist selection to disk
@@ -1981,43 +1902,8 @@ func (p *Plugin) clampScrollOffset(total int) {
 	}
 }
 
-// cyclePreviewTab cycles through preview tabs.
-func (p *Plugin) cyclePreviewTab(delta int) tea.Cmd {
-	prevTab := p.previewTab
-	p.previewTab = PreviewTab((int(p.previewTab) + delta + 3) % 3)
-	p.resetPreviewScroll()
-	p.termPanelFocused = false // Reset terminal panel focus when switching tabs
-
-	if prevTab == PreviewTabOutput && p.previewTab != PreviewTabOutput {
-		p.clearTerminalSelection()
-	}
-
-	// Load content for the active tab
-	var cmds []tea.Cmd
-	switch p.previewTab {
-	case PreviewTabDiff:
-		if cmd := p.loadSelectedDiff(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case PreviewTabTask:
-		if cmd := p.loadTaskDetailsIfNeeded(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	if cmd := p.pollSelectedAgentNowIfVisible(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if len(cmds) == 0 {
-		return nil
-	}
-	if len(cmds) == 1 {
-		return cmds[0]
-	}
-	return tea.Batch(cmds...)
-}
-
-// loadSelectedContent loads content based on the active preview tab.
-// Always loads diff (for preloading), and pre-fetches task details for worktrees with linked tasks.
+// loadSelectedContent loads content for the selected surface.
+// Diff git runs only while a Diff leaf is showing.
 func (p *Plugin) loadSelectedContent() tea.Cmd {
 	p.terminalDocProjection = terminalDocProjection{}
 	var cmds []tea.Cmd
@@ -2046,13 +1932,7 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		}
 	}
 
-	// Always load diff
 	if cmd := p.loadSelectedDiff(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-
-	// Always pre-fetch task details if worktree has a linked task (eliminates lag when switching to task tab)
-	if cmd := p.loadTaskDetailsIfNeeded(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 
@@ -2077,27 +1957,6 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		return cmds[0]
 	}
 	return tea.Batch(cmds...)
-}
-
-// loadTaskDetailsIfNeeded loads task details if not cached or stale.
-// Guards against multiple simultaneous fetches (td-3668584f).
-func (p *Plugin) loadTaskDetailsIfNeeded() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil || wt.TaskID == "" {
-		return nil
-	}
-
-	// Don't start a new fetch if already loading (td-3668584f)
-	if p.taskLoading {
-		return nil
-	}
-
-	// Check if we need to refresh (different task or cache is older than 30 seconds)
-	if p.cachedTaskID != wt.TaskID || time.Since(p.cachedTaskFetched) > 30*time.Second {
-		p.taskLoading = true
-		return p.loadTaskDetails(wt.TaskID)
-	}
-	return nil
 }
 
 // now is the clock every wheel-burst decision reads.

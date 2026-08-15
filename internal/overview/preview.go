@@ -110,11 +110,27 @@ type previewState struct {
 	// cache keeps that live layout when the global cursor visits another row.
 	doc             *previewDoc
 	issue           *previewIssue
+	diff            *previewDiff
 	paneRoot        *panelayout.Node
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
 	paneCache       map[string]previewPaneCache
+
+	linkMemo previewLinkMemo
+}
+
+type previewLinkMemo struct {
+	root     string
+	buffer   *tty.OutputBuffer
+	revision uint64
+	specs    map[string]previewSpecResolution
+	newSpecs int
+}
+
+type previewSpecResolution struct {
+	value string
+	ok    bool
 }
 
 type previewPaneCache struct {
@@ -123,6 +139,7 @@ type previewPaneCache struct {
 	nextID int
 	doc    *previewDoc
 	issue  *previewIssue
+	diff   *previewDiff
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -191,6 +208,7 @@ func (m *Model) resetPreviewContent() {
 func (m *Model) resetActivePreviewPanes() {
 	m.preview.doc = nil
 	m.preview.issue = nil
+	m.preview.diff = nil
 	m.preview.paneRoot = &panelayout.Node{ID: 1, Kind: panelayout.Terminal}
 	m.preview.paneFocus = 1
 	m.preview.paneNextID = 2
@@ -211,14 +229,14 @@ func (m *Model) stashPreviewPanes() {
 	}
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
-		doc: m.preview.doc, issue: m.preview.issue,
+		doc: m.preview.doc, issue: m.preview.issue, diff: m.preview.diff,
 	}
 }
 
 func (m *Model) restorePreviewPanes(workspaceID string) {
 	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
 		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
-		m.preview.doc, m.preview.issue = cached.doc, cached.issue
+		m.preview.doc, m.preview.issue, m.preview.diff = cached.doc, cached.issue, cached.diff
 		m.preview.paneDragSplitID = 0
 		return
 	}
@@ -239,7 +257,7 @@ func (m *Model) previewSync() tea.Cmd {
 		return nil
 	}
 	if selected.ID == m.preview.workspaceID {
-		return tea.Batch(m.ensurePreviewExtras(), m.syncPreviewTerminal())
+		return m.syncPreviewTerminal()
 	}
 	return m.previewSelect()
 }
@@ -277,21 +295,19 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if !keep {
 		m.restorePreviewPanes(workspace.ID)
 	}
-	extras := m.ensurePreviewExtras()
-
 	// An item with no single live pane behind it opens no model. There is nothing
 	// to read, and guessing among several panes is exactly what the catalog refuses.
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
 		m.closePreviewTerminal()
 		m.resetPreviewContent()
-		return extras
+		return nil
 	}
 	var pendingCmd tea.Cmd
 	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
 		pendingCmd = cmd
 	}
-	return tea.Batch(extras, m.syncPreviewTerminal(), pendingCmd)
+	return tea.Batch(m.syncPreviewTerminal(), pendingCmd)
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live
@@ -334,7 +350,13 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.previewIssueKey(msg); handled {
 		return true, cmd
 	}
+	if handled, cmd := m.previewDiffPaneKey(msg); handled {
+		return true, cmd
+	}
 	if handled, cmd := m.previewDocKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.previewDiffPaneKey(msg); handled {
 		return true, cmd
 	}
 	// The same acts on the terminal surface the live pane routes through OnKey.
@@ -353,14 +375,6 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.focusList()
 	}
 	return false, nil
-}
-
-// scrollWatchedPreview moves the window outside a pointer gesture: a selection
-// anchored to the rows it leaves behind would highlight rows the user never
-// picked.
-func (m *Model) scrollWatchedPreview(delta int) {
-	m.clearPreviewSelectionOnScroll()
-	m.scrollPreview(delta)
 }
 
 // terminalKey answers the chords that act on the terminal surface rather than on
@@ -721,6 +735,17 @@ func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout
 		PaneHeight:     input.PaneHeight,
 		LiveEdgeKey:    m.previewLiveEdgeKey(),
 	})
+	// A fetch in flight is the fact the header must keep even after Diff/Task
+	// action chips shrink the leftover. Lead with it so AppendStatus cannot
+	// drop it behind the lines-back note.
+	if m.preview.history.Loading {
+		for i, note := range notes {
+			if strings.Contains(note.Compact, "loading") || strings.Contains(note.Text, "loading") {
+				notes = append([]tty.StatusNote{note}, append(notes[:i], notes[i+1:]...)...)
+				break
+			}
+		}
+	}
 	return tty.AppendStatus(hints, notes, budget, func(note string) string { return styles.Muted.Render(note) })
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 func TestWorkingActivityUsesSmoothFixedWidthPulse(t *testing.T) {
@@ -34,18 +35,18 @@ func TestWorkingActivityUsesSmoothFixedWidthPulse(t *testing.T) {
 }
 
 func TestActivityAnimationCadenceIsSlowAndContinuous(t *testing.T) {
-	workingCycle := activityAnimationInterval * time.Duration(len(workingPulse))
-	blockedCycle := activityAnimationInterval * time.Duration(len(blockedPulse))
+	workingCycle := activityAnimationInterval * time.Duration(len(workspacelist.WorkingPulse))
+	blockedCycle := activityAnimationInterval * time.Duration(len(workspacelist.BlockedPulse))
 	if workingCycle < 2300*time.Millisecond || workingCycle > 2600*time.Millisecond {
 		t.Fatalf("working cycle=%v, want a relaxed roughly 2.5s breath", workingCycle)
 	}
 	if blockedCycle < 2700*time.Millisecond || blockedCycle > 3*time.Second {
 		t.Fatalf("blocked cycle=%v, want a relaxed roughly 2.8s heartbeat", blockedCycle)
 	}
-	for i, level := range workingPulse {
-		next := workingPulse[(i+1)%len(workingPulse)]
+	for i, level := range workspacelist.WorkingPulse {
+		next := workspacelist.WorkingPulse[(i+1)%len(workspacelist.WorkingPulse)]
 		if level == next {
-			t.Fatalf("working pulse pauses between frames %d and %d at %.2f", i, (i+1)%len(workingPulse), level)
+			t.Fatalf("working pulse pauses between frames %d and %d at %.2f", i, (i+1)%len(workspacelist.WorkingPulse), level)
 		}
 	}
 }
@@ -82,7 +83,7 @@ func TestAnimatedRowsKeepTheirWidthAcrossViewsAndSelection(t *testing.T) {
 	wt := &Worktree{Name: "animated", Agent: agent}
 	p := &Plugin{ctx: &plugin.Context{}}
 
-	for frame := 0; frame < len(workingPulse); frame++ {
+	for frame := 0; frame < len(workspacelist.WorkingPulse); frame++ {
 		p.activityAnimationFrame = frame
 		for _, selected := range []bool{false, true} {
 			for _, line := range strings.Split(p.renderWorktreeItem(wt, selected, 40), "\n") {
@@ -102,7 +103,7 @@ func TestAnimatedKanbanShellWithWideNameKeepsValidWidth(t *testing.T) {
 	shell := &ShellSession{Name: "修正作業セッション", Agent: agent}
 	p := &Plugin{}
 
-	for frame := 0; frame < len(blockedPulse); frame++ {
+	for frame := 0; frame < len(workspacelist.BlockedPulse); frame++ {
 		p.activityAnimationFrame = frame
 		line := p.renderKanbanShellCardLine(shell, 0, 12, false)
 		if width := ansi.StringWidth(line); width != 12 {

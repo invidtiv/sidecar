@@ -2,28 +2,22 @@ package workspace
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/charmbracelet/x/ansi"
+	"charm.land/bubbles/v2/textinput"
 	"github.com/marcus/sidecar/internal/modal"
+	"github.com/marcus/sidecar/internal/state"
 	ui "github.com/marcus/sidecar/internal/ui"
 )
 
 const (
-	agentConfigPromptFieldID     = "agent-config-prompt"
-	agentConfigAgentListID       = "agent-config-agent-list"
+	agentConfigAgentFieldID      = "agent-config-agent"
 	agentConfigSkipPermissionsID = "agent-config-skip-permissions"
 	agentConfigSubmitID          = "agent-config-submit"
 	agentConfigCancelID          = "agent-config-cancel"
-	agentConfigAgentItemPrefix   = "agent-config-agent-"
 )
 
 // openAgentConfigModal initializes and opens the agent config modal for a worktree.
 func (p *Plugin) openAgentConfigModal(wt *Worktree, isRestart bool) {
-	home, _ := os.UserHomeDir()
-	configDir := filepath.Join(home, ".config", "sidecar")
 	p.agentConfigWorktree = wt
 	p.agentConfigIsRestart = isRestart
 	// Keep current/stored agent visible even if hidden from the global allowlist.
@@ -31,9 +25,12 @@ func (p *Plugin) openAgentConfigModal(wt *Worktree, isRestart bool) {
 	preferred := p.resolveWorktreeAgentType(wt)
 	p.agentConfigAgentList = withPreferredAgent(p.selectableAgentTypes(), preferred)
 	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(p.agentConfigAgentList, preferred, -1)
-	p.agentConfigSkipPerms = false
-	p.agentConfigPromptIdx = -1
-	p.agentConfigPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
+	p.agentConfigAgentInput = textinput.New()
+	p.agentConfigAgentInput.Placeholder = ""
+	p.agentConfigAgentInput.Prompt = ""
+	p.agentConfigAgentInput.CharLimit = 80
+	p.prefillAgentConfigAgentInput()
+	p.loadAgentConfigAutoApprove()
 	p.agentConfigModal = nil
 	p.agentConfigModalWidth = 0
 	p.viewMode = ViewModeAgentConfig
@@ -47,30 +44,11 @@ func (p *Plugin) clearAgentConfigModal() {
 	p.agentConfigAgentIdx = 0
 	p.agentConfigAgentList = nil
 	p.agentConfigSkipPerms = false
-	p.agentConfigPromptIdx = -1
-	p.agentConfigPrompts = nil
+	p.agentConfigAgentInput = textinput.Model{}
 	p.agentConfigModal = nil
 	p.agentConfigModalWidth = 0
 }
 
-// openPromptPicker opens the prompt picker overlay, routing return to the given mode.
-func (p *Plugin) openPromptPicker(prompts []Prompt, returnMode ViewMode) {
-	p.promptPickerReturnMode = returnMode
-	p.promptPicker = NewPromptPicker(prompts, p.width, p.height)
-	p.clearPromptPickerModal()
-	p.viewMode = ViewModePromptPicker
-}
-
-// getAgentConfigPrompt resolves the selected prompt index to a *Prompt.
-func (p *Plugin) getAgentConfigPrompt() *Prompt {
-	if p.agentConfigPromptIdx < 0 || p.agentConfigPromptIdx >= len(p.agentConfigPrompts) {
-		return nil
-	}
-	prompt := p.agentConfigPrompts[p.agentConfigPromptIdx]
-	return &prompt
-}
-
-// shouldShowAgentConfigSkipPerms returns true if the selected agent supports skip permissions.
 func (p *Plugin) shouldShowAgentConfigSkipPerms() bool {
 	if p.agentConfigAgentType == AgentNone || p.agentConfigAgentType == "" {
 		return false
@@ -79,7 +57,52 @@ func (p *Plugin) shouldShowAgentConfigSkipPerms() bool {
 	return ok && flag != ""
 }
 
-// ensureAgentConfigModal builds or rebuilds the agent config modal.
+func (p *Plugin) loadAgentConfigAutoApprove() {
+	p.agentConfigSkipPerms = state.GetAgentAutoApprove(string(p.agentConfigAgentType))
+}
+
+func (p *Plugin) persistAgentConfigAutoApprove() {
+	if p.agentConfigAgentType == "" {
+		return
+	}
+	_ = state.SetAgentAutoApprove(string(p.agentConfigAgentType), p.agentConfigSkipPerms)
+}
+
+func (p *Plugin) prefillAgentConfigAgentInput() {
+	label := AgentDisplayNames[p.agentConfigAgentType]
+	if label == "" {
+		label = string(p.agentConfigAgentType)
+	}
+	p.agentConfigAgentInput.SetValue(label)
+}
+
+func (p *Plugin) syncAgentConfigFromIdx() {
+	prev := p.agentConfigAgentType
+	if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
+		p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
+	}
+	if p.agentConfigAgentType != prev {
+		p.loadAgentConfigAutoApprove()
+	}
+}
+
+func (p *Plugin) agentConfigItems() []modal.DropdownItem {
+	items := make([]modal.DropdownItem, len(p.agentConfigAgentList))
+	for i, at := range p.agentConfigAgentList {
+		label := AgentDisplayNames[at]
+		if label == "" {
+			label = string(at)
+		}
+		items[i] = modal.DropdownItem{
+			ID:    string(at),
+			Label: label,
+			Value: label,
+			Data:  at,
+		}
+	}
+	return items
+}
+
 func (p *Plugin) ensureAgentConfigModal() {
 	if p.agentConfigWorktree == nil {
 		return
@@ -99,7 +122,6 @@ func (p *Plugin) ensureAgentConfigModal() {
 	}
 	p.agentConfigModalWidth = modalW
 
-	// Use the list fixed at modal open so navigation cannot change list identity.
 	agentTypes := p.agentConfigAgentList
 	if len(agentTypes) == 0 {
 		preferred := AgentNone
@@ -110,13 +132,10 @@ func (p *Plugin) ensureAgentConfigModal() {
 		p.agentConfigAgentList = agentTypes
 	}
 	p.agentConfigAgentType, p.agentConfigAgentIdx = clampAgentSelection(agentTypes, p.agentConfigAgentType, p.agentConfigAgentIdx)
-	items := make([]modal.ListItem, len(agentTypes))
-	for i, at := range agentTypes {
-		items[i] = modal.ListItem{
-			ID:    fmt.Sprintf("%s%d", agentConfigAgentItemPrefix, i),
-			Label: AgentDisplayNames[at],
-		}
+	if p.agentConfigModal == nil || p.agentConfigModal.FocusedID() != agentConfigAgentFieldID {
+		p.prefillAgentConfigAgentInput()
 	}
+	items := p.agentConfigItems()
 
 	title := fmt.Sprintf("Start Agent: %s", p.agentConfigWorktree.Name)
 	if p.agentConfigIsRestart {
@@ -128,11 +147,9 @@ func (p *Plugin) ensureAgentConfigModal() {
 		modal.WithPrimaryAction(agentConfigSubmitID),
 		modal.WithHints(false),
 	).
-		AddSection(p.agentConfigPromptSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.agentConfigAgentLabelSection()).
-		AddSection(modal.List(agentConfigAgentListID, items, &p.agentConfigAgentIdx, modal.WithMaxVisible(len(items)))).
-		AddSection(p.agentConfigSkipPermissionsSpacerSection()).
+		AddSection(modal.Text("Agent")).
+		AddSection(modal.Combo(agentConfigAgentFieldID, &p.agentConfigAgentInput, items, &p.agentConfigAgentIdx,
+			modal.WithComboFilter(comboExactOrAllFilter(items)))).
 		AddSection(modal.When(p.shouldShowAgentConfigSkipPerms, modal.Checkbox(agentConfigSkipPermissionsID, "Auto-approve all actions", &p.agentConfigSkipPerms))).
 		AddSection(p.agentConfigSkipPermissionsHintSection()).
 		AddSection(modal.Spacer()).
@@ -141,81 +158,9 @@ func (p *Plugin) ensureAgentConfigModal() {
 			modal.Btn(" Cancel ", agentConfigCancelID),
 		))
 
-	// Set initial focus when modal is first built
-	p.agentConfigModal.SetFocus(agentConfigAgentListID)
+	p.agentConfigModal.SetFocus(agentConfigAgentFieldID)
 }
 
-// agentConfigPromptSection renders the prompt selector field.
-func (p *Plugin) agentConfigPromptSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		lines := make([]string, 0, 4)
-		focusables := make([]modal.FocusableInfo, 0, 1)
-
-		lines = append(lines, "Prompt:")
-
-		selectedPrompt := p.getAgentConfigPrompt()
-		displayText := "(none)"
-		if len(p.agentConfigPrompts) == 0 {
-			displayText = "No prompts configured"
-		} else if selectedPrompt != nil {
-			scopeIndicator := "[G] global"
-			if selectedPrompt.Source == "project" {
-				scopeIndicator = "[P] project"
-			}
-			displayText = fmt.Sprintf("%s  %s", selectedPrompt.Name, dimText(scopeIndicator))
-		}
-
-		promptStyle := inputStyle()
-		if focusID == agentConfigPromptFieldID {
-			promptStyle = inputFocusedStyle()
-		}
-		rendered := promptStyle.Render(displayText)
-		renderedLines := strings.Split(rendered, "\n")
-		displayStartY := len(lines)
-		lines = append(lines, renderedLines...)
-
-		focusables = append(focusables, modal.FocusableInfo{
-			ID:      agentConfigPromptFieldID,
-			OffsetX: 0,
-			OffsetY: displayStartY,
-			Width:   ansi.StringWidth(rendered),
-			Height:  len(renderedLines),
-		})
-
-		if len(p.agentConfigPrompts) == 0 {
-			lines = append(lines, dimText("  See: .claude/skills/create-prompt/SKILL.md"))
-		} else if selectedPrompt == nil {
-			lines = append(lines, dimText("  Press Enter to select a prompt template"))
-		} else {
-			preview := strings.ReplaceAll(selectedPrompt.Body, "\n", " ")
-			if runes := []rune(preview); len(runes) > 60 {
-				preview = string(runes[:57]) + "..."
-			}
-			lines = append(lines, dimText(fmt.Sprintf("  Preview: %s", preview)))
-		}
-
-		return modal.RenderedSection{Content: strings.Join(lines, "\n"), Focusables: focusables}
-	}, nil)
-}
-
-// agentConfigAgentLabelSection renders the "Agent:" label.
-func (p *Plugin) agentConfigAgentLabelSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return modal.RenderedSection{Content: "Agent:"}
-	}, nil)
-}
-
-// agentConfigSkipPermissionsSpacerSection renders a spacer before the checkbox (hidden when agent is None).
-func (p *Plugin) agentConfigSkipPermissionsSpacerSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.agentConfigAgentType == AgentNone || p.agentConfigAgentType == "" {
-			return modal.RenderedSection{}
-		}
-		return modal.RenderedSection{Content: " "}
-	}, nil)
-}
-
-// agentConfigSkipPermissionsHintSection renders the hint showing the actual flag.
 func (p *Plugin) agentConfigSkipPermissionsHintSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		if p.agentConfigAgentType == AgentNone || p.agentConfigAgentType == "" {
@@ -229,7 +174,6 @@ func (p *Plugin) agentConfigSkipPermissionsHintSection() modal.Section {
 	}, nil)
 }
 
-// renderAgentConfigModal renders the agent config modal over a dimmed background.
 func (p *Plugin) renderAgentConfigModal(width, height int) string {
 	background := p.renderListView(width, height)
 

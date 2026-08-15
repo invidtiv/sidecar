@@ -22,7 +22,6 @@ func newSelectionTestPlugin() *Plugin {
 		width:         100,
 		height:        30,
 		sidebarWidth:  40,
-		previewTab:    PreviewTabOutput,
 		shellSelected: true,
 		shells: []*ShellSession{{
 			TmuxName: "shell-1",

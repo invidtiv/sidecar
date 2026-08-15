@@ -12,6 +12,7 @@ const (
 	ctxGlobalWorkspacesTerminal = "global-workspaces-terminal"
 	ctxGlobalWorkspacesDoc      = "global-workspaces-doc"
 	ctxGlobalWorkspacesIssue    = "global-workspaces-issue"
+	ctxGlobalWorkspacesDiff     = "global-workspaces-diff"
 )
 
 // Commands is the footer and palette metadata for the active
@@ -43,6 +44,18 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 6},
 		}
 		return cmds
+	case ctxGlobalWorkspacesDiff:
+		cmds := []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Hide the diff pane", Context: ctxGlobalWorkspacesDiff, Priority: 1},
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: ctxGlobalWorkspacesDiff, Priority: 4},
+			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: ctxGlobalWorkspacesDiff, Priority: 5},
+		}
+		if m.preview.diff != nil && m.preview.diff.view() != nil {
+			cmds = append(cmds, m.preview.diff.view().Commands(ctxGlobalWorkspacesDiff)...)
+		}
+		return cmds
 	case ctxGlobalWorkspacesIssue:
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: ctxGlobalWorkspacesIssue, Priority: 1},
@@ -63,11 +76,19 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: ctxGlobalWorkspaces, Priority: 6},
 			{ID: "close-overview", Name: "Close", Description: "Leave the global space", Context: ctxGlobalWorkspaces, Priority: 7},
 		}
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
-			cmds = append(cmds, plugin.Command{
-				ID: "rename-shell", Name: "Rename", Description: "Rename the selected shell",
-				Context: ctxGlobalWorkspaces, Priority: 8,
-			})
+		if workspace, ok := m.SelectedWorkspace(); ok {
+			switch workspace.Kind {
+			case workspaceinventory.KindShell:
+				cmds = append(cmds, plugin.Command{
+					ID: "rename-shell", Name: "Rename", Description: "Rename the selected shell",
+					Context: ctxGlobalWorkspaces, Priority: 8,
+				})
+			case workspaceinventory.KindWorktree:
+				cmds = append(cmds, plugin.Command{
+					ID: "rename-worktree", Name: "Rename", Description: "Rename the selected worktree",
+					Context: ctxGlobalWorkspaces, Priority: 8,
+				})
+			}
 		}
 		if m.canOpenInGit() {
 			cmds = append(cmds, plugin.Command{

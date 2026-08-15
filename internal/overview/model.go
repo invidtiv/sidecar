@@ -81,9 +81,10 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
+	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
-		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.TaskMsg,
+		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg,
 		renameShellDoneMsg:
 		return true
 	default:
@@ -92,58 +93,62 @@ func IsAsyncMessage(msg tea.Msg) bool {
 }
 
 type Model struct {
-	collector          workspaceinventory.Collector
-	refreshCollector   workspaceinventory.Collector
-	projects           []Project
-	roots              []string
-	generation         int
-	requestID          uint64
-	loading            bool
-	tmuxErr            error
-	results            map[string]workspaceinventory.ProjectResult
-	projectErrors      map[string]error
-	stale              map[string]bool
-	completed          map[int]bool
-	pending            []Project
-	pendingInventory   []Project
-	phase              refreshPhase
-	identityProjects   map[int]Project
-	inventoryOrder     []Project
-	inventoryScheduled map[string]bool
-	inventoryProjects  map[string]Project
-	inventoryResults   map[string]workspaceinventory.ProjectResult
-	statusInputs       map[string]workspaceinventory.ProjectResult
-	active             int
-	currentPanes       []workspaceinventory.Pane
-	shellClaims        workspaceinventory.ShellClaims
-	liveOnly           bool
-	ctx                context.Context
-	cancel             context.CancelFunc
-	traceWriter        io.Writer
-	cycleStart         time.Time
-	configured         int
-	firstResult        bool
-	maxActive          int
-	pollScheduled      bool
-	configuredPaths    []string
-	board              kanban.Component
-	cards              map[string]workspaceinventory.Workspace
-	agentCount         int
-	compactScroll      int
-	mouse              *mouse.Handler
-	workspaces         workspacelist.Model
-	workspacesMouse    *mouse.Handler
-	sidebarWidth       int
-	sidebarVisible     bool
-	catalog            map[string]workspaceinventory.Workspace
-	preview            previewState
-	previewTab         workspacediff.Tab
-	diff               workspacediff.View
-	task               workspacediff.TaskView
-	previewExtrasID    string
-	terminalConfig     tty.Config
-	width              int
-	height             int
+	collector           workspaceinventory.Collector
+	refreshCollector    workspaceinventory.Collector
+	projects            []Project
+	roots               []string
+	generation          int
+	requestID           uint64
+	loading             bool
+	tmuxErr             error
+	results             map[string]workspaceinventory.ProjectResult
+	projectErrors       map[string]error
+	stale               map[string]bool
+	completed           map[int]bool
+	pending             []Project
+	pendingInventory    []Project
+	phase               refreshPhase
+	identityProjects    map[int]Project
+	inventoryOrder      []Project
+	inventoryScheduled  map[string]bool
+	inventoryProjects   map[string]Project
+	inventoryResults    map[string]workspaceinventory.ProjectResult
+	statusInputs        map[string]workspaceinventory.ProjectResult
+	active              int
+	currentPanes        []workspaceinventory.Pane
+	shellClaims         workspaceinventory.ShellClaims
+	liveOnly            bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	traceWriter         io.Writer
+	cycleStart          time.Time
+	configured          int
+	firstResult         bool
+	maxActive           int
+	pollScheduled       bool
+	configuredPaths     []string
+	board               kanban.Component
+	cards               map[string]workspaceinventory.Workspace
+	agentCount          int
+	compactScroll       int
+	mouse               *mouse.Handler
+	workspaces          workspacelist.Model
+	workspacesMouse     *mouse.Handler
+	sidebarWidth        int
+	sidebarVisible      bool
+	catalog             map[string]workspaceinventory.Workspace
+	preview             previewState
+	diff                workspacediff.View
+	terminalConfig      tty.Config
+	width               int
+	height              int
+	previewSpecResolver func(string, string) (string, bool)
+
+	// Working/blocked markers breathe on their own clock, independent of the
+	// refresh poll. The generation lets a tick in flight be discarded.
+	pulseFrame      int
+	pulseScheduled  bool
+	pulseGeneration uint64
 
 	// A coalesced terminal wheel event that was held changed no visible state.
 	// Reuse the preceding Workspaces frame once rather than rebuilding it.
@@ -163,6 +168,8 @@ type Model struct {
 	viewFlyoutMouse   *mouse.Handler
 
 	pendingViews map[string]*pendingView
+	// openSplit is the request-scoped --split axis override ("right"/"below").
+	openSplit string
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace
@@ -344,8 +351,43 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 	}
 }
 
+// Update handles one message and, on the way out, keeps the working/blocked
+// marker animation armed. Arming here rather than at a single entry point is
+// what makes the pulse unconditional: whatever brought a live row on screen —
+// a refresh, a filter keystroke, scrolling, opening the tab — re-checks the
+// clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	cmd := m.update(msg)
+	if pulse := m.pulseCmd(); pulse != nil {
+		return tea.Batch(cmd, pulse)
+	}
+	return cmd
+}
+
+// workspacePulseTickMsg advances the shared marker animation by one frame.
+type workspacePulseTickMsg struct{ generation uint64 }
+
+func (m *Model) pulseCmd() tea.Cmd {
+	if m.pulseScheduled || !m.workspaces.NeedsPulse() {
+		return nil
+	}
+	m.pulseScheduled = true
+	generation := m.pulseGeneration
+	return tea.Tick(workspacelist.PulseInterval, func(time.Time) tea.Msg {
+		return workspacePulseTickMsg{generation: generation}
+	})
+}
+
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case workspacePulseTickMsg:
+		if msg.generation != m.pulseGeneration {
+			return nil
+		}
+		m.pulseScheduled = false
+		m.pulseFrame++
+		m.workspaces.SetPulseFrame(m.pulseFrame)
+		return nil
 	case panesMsg:
 		if msg.Generation != m.generation {
 			return nil
@@ -426,9 +468,11 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitDetailMsg:
 		m.applyCommitDetail(msg)
 		return nil
-	case workspacediff.TaskMsg:
-		m.applyTask(msg)
-		return nil
+	case workspacediff.RangeMsg:
+		return m.applyPreviewDiffRange(msg)
+	case workspacediff.CommitFileDiffMsg:
+		cmd := m.diff.ApplyCommitFileDiff(msg)
+		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil
@@ -753,16 +797,17 @@ func (m *Model) View(width, height int) string {
 	return result.View
 }
 
+// summary is the header-right text. Refreshes are frequent and mostly
+// instantaneous, so a "Loading n/m" counter there reads as flicker and pulls
+// the eye for nothing. Loading is not an abnormal state: while it runs we keep
+// showing the last known counts (nothing at all on the very first load), and
+// only genuinely abnormal state — tmux being unavailable — replaces them.
 func (m *Model) summary() string {
-	if m.loading {
-		total := m.configured
-		if m.phase == phaseStatus {
-			total = len(m.projects)
-		}
-		return fmt.Sprintf("Loading %d/%d", len(m.completed), total)
-	}
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
+	}
+	if m.loading && len(m.results) == 0 {
+		return ""
 	}
 	return fmt.Sprintf("%d projects · %d agents", len(m.results), m.agentCount)
 }

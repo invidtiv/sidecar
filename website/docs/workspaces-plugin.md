@@ -15,8 +15,8 @@ The Workspaces plugin turns git worktrees into managed development environments.
 
 **Key capabilities:**
 
-- **Create workspaces** with one command: branch + task + agent + prompt
-- **Launch AI agents** into isolated environments with reusable prompt templates
+- **Create workspaces** with one command: name + branch + task + agent
+- **Launch AI agents** into isolated environments, with task context when a task is linked
 - **Stream real-time output** from any supported agent (Claude, Codex, Gemini, Cursor, OpenCode, Pi)
 - **Monitor multiple agents** via Kanban board or list view with live status
 - **Review & merge** with built-in diff viewer and GitHub PR workflow
@@ -41,7 +41,7 @@ This workflow eliminates context-switching between branches and enables true par
 - Integrated PR workflow: diff → push → PR → cleanup in 4 keystrokes
 
 **Real use case:**
-You're working on a feature when a critical bug report arrives. Press `n`, create a "hotfix-login" workspace from `main`, launch Claude Code with the "Bug Fix" prompt, and let it work while you continue your feature. Both agents run in parallel. When Claude finishes, review the hotfix diff, merge it via PR, and return to your feature—without ever switching branches or losing state.
+You're working on a feature when a critical bug report arrives. Press `n`, create a "hotfix-login" workspace from `main`, launch Claude Code, and let it work while you continue your feature. Both agents run in parallel. When Claude finishes, review the hotfix diff, merge it via PR, and return to your feature—without ever switching branches or losing state.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ Install agents as needed. The plugin gracefully handles missing CLIs—only inst
 
 ## Quick Start
 
-Press `n` to create your first workspace. Select a base branch, choose an agent (Claude Code, Cursor, etc.), and optionally pick a reusable prompt. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
+Press `n` to create your first workspace. Type a name, confirm the base branch, optionally link a task, and choose an agent. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
 
 When done, press `m` to review the diff, create a GitHub PR, and clean up branches—all in one flow.
 
@@ -72,7 +72,7 @@ When done, press `m` to review the diff, create a GitHub PR, and clean up branch
 Workspace behavior is configured via:
 
 - **Global config:** `~/.config/sidecar/config.json` (for `plugins.workspace.*` settings)
-- **Project config:** `.sidecar/config.json` (currently used for prompt definitions)
+- **Project config:** `.sidecar/config.json` (project overrides)
 
 **Example config:**
 
@@ -89,19 +89,7 @@ Workspace behavior is configured via:
       },
       "setupScript": ".sidecar/setup-workspace.sh"
     }
-  },
-  "prompts": [
-    {
-      "name": "Bug Fix",
-      "ticketMode": "required",
-      "body": "Fix issue {{ticket}}. Run tests before marking complete."
-    },
-    {
-      "name": "Feature",
-      "ticketMode": "optional",
-      "body": "Implement {{ticket}}. Follow existing patterns. Write tests."
-    }
-  ]
+  }
 }
 ```
 
@@ -263,7 +251,9 @@ the selected row; they are not restored after a relaunch.
 
 Document panes are enabled by default. To turn them off for a launch, run
 `sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
-`~/.config/sidecar/config.json`:
+`~/.config/sidecar/config.json`. When the flag is off there is no pane tree,
+so Diff is also unavailable (`d`, the Diff chip, and `sidecar open --diff`
+toast or no-op):
 
 ```json
 {
@@ -301,9 +291,9 @@ remembered files stays a full-width terminal. Clicking a file while the
 pane is hidden reopens the remembered set and focuses (or appends) that
 path.
 
-`,` / `.` stay Output / Diff / Task on worktrees and do not cycle document
-tabs. `m` on a focused document does not start a merge. Drag the divider to
-resize.
+`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
+not cycle document tabs. `m` on a focused document does not start a merge.
+Drag the divider to resize.
 
 `shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
 is an override for opening links. Use an unmodified click to follow a path.
@@ -359,8 +349,8 @@ On the global Workspaces view, `q` / `esc` and last-`x` close the pane
 and forget that row's in-memory set. Switching rows and back restores
 tabs that were still open.
 
-`,` / `.` stay Output / Diff / Task on worktrees and do not cycle issue
-tabs.
+`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
+not cycle issue tabs.
 
 **What you'll see:**
 - Agent initialization and model selection
@@ -369,43 +359,20 @@ tabs.
 - Error messages and stack traces
 - Completion messages
 
-### Diff Tab
+### Diff pane
 
-Full git diff for the workspace branch compared to base branch. Shows all changes the agent made.
+`d`, the **Diff** header chip, or `sidecar open --diff` opens a working-tree
+Diff leaf beside the terminal. Click a printed hash or `A..B` range to open a
+commit or range tab on the same leaf. `,` / `.` cycle those target tabs while
+the leaf is focused. `q` / `esc` hide it.
 
-**Features:**
-- Unified diff (traditional +/- format)
-- Side-by-side diff (split-screen before/after)
-- Syntax highlighting for code changes
-- Horizontal scroll for wide diffs
-- Merge conflict detection and highlighting
+`--disable-feature=workspace_doc_panes` disables Diff: there is no pane tree,
+so those paths toast or no-op.
 
-| Key | Action |
-|-----|--------|
-| `v` | Toggle unified/side-by-side view |
-| `h`, `←` | Scroll left (wide diffs) |
-| `l`, `→` | Scroll right |
-| `0` | Reset horizontal scroll |
+### Task chip
 
-Diff mode preference persists across sessions.
-
-### Task Tab
-
-Displays linked TD task with full context. Shows task title, description, acceptance criteria, and metadata.
-
-**Features:**
-- Markdown rendering (headings, lists, code blocks, emphasis)
-- Raw text mode (toggle off for plain view)
-- Scrollable content for long task descriptions
-- Automatic task link detection from `.sidecar-task` file
-
-| Key | Action |
-|-----|--------|
-| `m` | Toggle markdown rendering |
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-
-Empty if no task is linked. Press `t` in the sidebar to link a task.
+When a worktree has a linked `TaskID`, the **Task** chip opens that id in the
+Issues leaf. Press `T` in the sidebar to link or unlink a task.
 
 ## Agent Integration
 
@@ -542,9 +509,8 @@ Press `n` to open the create modal:
 
 | Field | Description |
 |-------|-------------|
-| **Name** | Workspace branch name (e.g., `feature-auth`) |
-| **Base branch** | Branch to create from (defaults to `HEAD` / current branch) |
-| **Prompt** | Reusable prompt template with variables (optional) |
+| **Name** | Display name (spaces allowed; git branch and directory use a slug) |
+| **Base branch** | Branch to create from (pre-filled with the current branch) |
 | **Task** | Link to TD task for context (optional) |
 | **Agent** | AI agent to launch (Claude Code, Cursor, etc.) |
 | **Skip perms** | Auto-approve agent actions (dangerous, see warning above) |
@@ -556,53 +522,7 @@ Press `n` to open the create modal:
 3. Env files (`.env`, `.env.local`, etc.) are copied from the main worktree — see [Worktree Setup Hooks](./worktree-setup.md)
 4. If a task is linked, a `.sidecar-task` file is created and `td start` runs
 5. If an agent is selected, it launches in a tmux session named `sidecar-ws-<name>`
-6. If a prompt is selected, it's passed as the initial instruction to the agent
-7. The workspace appears in the list with "Active" status (if agent running)
-
-#### Reusable Prompts
-
-Prompts are templates stored in JSON config files. They support variables like `{{ticket}}` for dynamic substitution.
-
-**Config locations:**
-
-- **Global**: `~/.config/sidecar/config.json`
-- **Project**: `.sidecar/config.json` (project-specific, overrides global)
-
-**Example config:**
-
-```json
-{
-  "prompts": [
-    {
-      "name": "Bug Fix",
-      "ticketMode": "required",
-      "body": "Fix issue {{ticket}}. Run all tests before marking complete."
-    },
-    {
-      "name": "Feature Development",
-      "ticketMode": "optional",
-      "body": "Implement {{ticket}}. Follow existing patterns in the codebase. Write tests for new functionality."
-    },
-    {
-      "name": "Refactor",
-      "ticketMode": "none",
-      "body": "Refactor the selected code to improve readability and maintainability. Do not change behavior. Run tests to verify."
-    }
-  ]
-}
-```
-
-**Prompt variables:**
-
-- `{{ticket}}`: Replaced with task ID (if ticketMode is "required" or "optional")
-- `{{taskTitle}}`: Replaced with task title from TD
-- `{{taskBody}}`: Replaced with task description from TD
-
-**Ticket modes:**
-
-- `required`: Must link a task, variable is replaced
-- `optional`: Can link a task, variable is replaced if present
-- `none`: No task linking, no variable substitution
+6. The workspace appears in the list with "Active" status (if agent running)
 
 Modal navigation:
 
@@ -667,11 +587,11 @@ Here's a typical workspace lifecycle from creation to merge:
 
 **1. Create a workspace for a new feature:**
 
-Press `n`, enter name "feature-auth", select base branch "main", pick prompt "Feature Development", link task "td-abc123", choose agent "Claude Code", enable "Skip perms" for autonomy. Press Enter.
+Press `n`, enter name "feature auth", confirm base branch "main", link task "td-abc123", choose agent "Claude Code", enable "Skip perms" for autonomy. Press Enter.
 
 **2. Agent works autonomously:**
 
-Claude Code starts immediately with your prompt. Watch live output in the **Output** tab. Status updates to "Active" → "Waiting" (if approval needed) → "Done" when complete.
+Claude Code starts immediately. A linked task injects its context. Watch live output in the **Output** tab. Status updates to "Active" → "Waiting" (if approval needed) → "Done" when complete.
 
 **3. Review the diff:**
 
@@ -731,7 +651,7 @@ pane has focus.
 ## Mouse Support
 
 - **Click workspace**: Select
-- **Click tab**: Switch Output / Diff / Task, or select a file or issue tab
+- **Click tab**: Select a file or issue tab. Diff and Task header chips open leaves.
 - **Click button**: Execute action
 - **Drag divider**: Resize panes
 - **Scroll**: Navigate lists and content
@@ -780,9 +700,8 @@ This means you can close sidecar, continue working with Claude Code directly, th
 - Use kebab-case for consistency with git conventions
 
 **Agent usage:**
-- Start with "Skip perms" disabled for safety—enable only after testing prompts
-- Use reusable prompts for common patterns (bug fixes, features, refactors)
-- Link tasks to workspaces for context—agents can see task descriptions via `{{taskBody}}`
+- Start with "Skip perms" disabled for safety—enable only for trusted, sandboxed work
+- Link tasks to workspaces for context—the agent receives the task title and description
 - Monitor "Waiting" status agents regularly—they need approval to continue
 
 **Parallel workflows:**
@@ -1008,7 +927,6 @@ The Workspaces plugin is sidecar's most powerful feature for parallel AI-assiste
 5. Repeat for multiple parallel branches
 
 **Advanced features:**
-- Reusable prompt templates with task variables
 - Kanban board for 5+ simultaneous workspaces
 - Automatic reconnection to running agents
 - Skip permissions mode for autonomous agents

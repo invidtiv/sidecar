@@ -7,11 +7,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/features"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 type pendingView struct {
 	Target    uirequest.Target
+	Options   uirequest.Options
 	CreatedAt time.Time
 	TTLMs     int
 }
@@ -42,6 +46,10 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	isSelected := ok && surface == "shell:"+targetShell.TmuxName
 
 	if isSelected {
+		prevSplit := p.openSplit
+		p.openSplit = req.Options.Split
+		defer func() { p.openSplit = prevSplit }()
+
 		var cmd tea.Cmd
 		opened := false
 		// Asked before the open, because afterwards the pane exists either way:
@@ -60,6 +68,23 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 			retargeted = p.willRetargetPane(PaneIssue)
 			cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
 			opened = cmd != nil
+		case uirequest.TargetKindDiff:
+			if p.paneRoot == nil {
+				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+					Instance: hostInstanceID(),
+					Host:     uirequest.HostName(),
+					PID:      os.Getpid(),
+					Status:   uirequest.StatusDeclined,
+					Reason:   features.WorkspaceDocPanesDisabledDiff,
+					Surface:  surface,
+					At:       time.Now().UTC(),
+				})
+				return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+			}
+			retargeted = p.willRetargetPane(PaneDiff)
+			spec := uirequest.DiffTarget(root, req.Target.Value)
+			cmd = p.openDiffPaneForSurface(root, surface, spec)
+			opened = p.diffPaneShows(spec)
 		}
 
 		// Nothing on screen: the split did not fit, or the target could not be
@@ -104,6 +129,7 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	}
 	p.pendingViews[targetShell.TmuxName] = &pendingView{
 		Target:    req.Target,
+		Options:   req.Options,
 		CreatedAt: req.CreatedAt,
 		TTLMs:     req.TTLMs,
 	}
@@ -122,7 +148,7 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 // willRetargetPane reports whether opening kind would land in a pane that is
 // already on screen rather than splitting a new one.
 func (p *Plugin) willRetargetPane(kind PaneKind) bool {
-	plan, ok := planPaneOpen(p.paneRoot, kind)
+	plan, ok := planPaneOpen(p.paneRoot, kind, p.lastPaneBoxes())
 	return ok && plan.Retarget != 0
 }
 
@@ -162,13 +188,27 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 		return nil
 	}
 
+	prevSplit := p.openSplit
+	p.openSplit = pv.Options.Split
+	defer func() { p.openSplit = prevSplit }()
+
 	switch pv.Target.Kind {
 	case uirequest.TargetKindFile:
 		return p.openDocPaneForSurface(root, surface, pv.Target.Value, pv.Target.Line)
 	case uirequest.TargetKindIssue:
 		return p.openIssuePaneForSurface(root, surface, pv.Target.Value)
+	case uirequest.TargetKindDiff:
+		return p.openDiffPaneForSurface(root, surface, uirequest.DiffTarget(root, pv.Target.Value))
 	}
 	return nil
+}
+
+func (p *Plugin) diffPaneShows(target workspacediff.Target) bool {
+	diff, leaf := p.activeDiffPane()
+	if diff == nil || leaf == nil {
+		return false
+	}
+	return diff.tabs.Find(target.Identity()) >= 0
 }
 
 func (p *Plugin) pendingViewBadge(tmuxName string) (string, bool) {

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/markdown"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -154,6 +155,15 @@ func (m *Model) ScrollOffset() int {
 		return m.pendingScroll
 	}
 	return m.scroll
+}
+
+// ScrollAtBoundary reports whether delta would leave this document's current
+// viewport unchanged. It is safe to ask before Update/View.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m == nil {
+		return true
+	}
+	return (sharedscroll.Bounds{Position: m.ScrollOffset(), Maximum: m.maxScroll()}).AtBoundary(delta)
 }
 
 // SetPendingScroll remembers an offset to apply after the next successful load.

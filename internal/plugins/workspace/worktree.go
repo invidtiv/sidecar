@@ -251,7 +251,6 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 	taskTitle := p.createTaskTitle
 	agentType := p.createAgentType
 	skipPerms := p.createSkipPermissions
-	prompt := p.getSelectedPrompt()
 
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
@@ -263,7 +262,7 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 		plan, err := resolveCreateOperation(ctx, workDir, projectRoot, name, baseBranch, dirPrefix, setupConfig)
 		if plan != nil {
 			plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
-			plan.SkipPerms, plan.Prompt = skipPerms, prompt
+			plan.SkipPerms = skipPerms
 		}
 		return CreatePlanResolvedMsg{OperationScope: scope, Plan: plan, Err: err}
 	}
@@ -276,7 +275,7 @@ func (p *Plugin) createWorktree() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
 	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
 	taskID, taskTitle, agentType := p.createTaskID, p.createTaskTitle, p.createAgentType
-	skipPerms, prompt := p.createSkipPermissions, p.getSelectedPrompt()
+	skipPerms := p.createSkipPermissions
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	if base == "" {
 		base = "HEAD"
@@ -293,7 +292,7 @@ func (p *Plugin) createWorktree() tea.Cmd {
 		// Preserve Slice 2's contract: cancellation during post-add discovery
 		// returns the created identity instead of losing the partial result.
 		_, err := gitOutputContext(ctx, workDir, "rev-parse", "--show-toplevel")
-		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Prompt: prompt, Err: err}
+		return CreateDoneMsg{OperationScope: scope, Worktree: wt, AgentType: agentType, SkipPerms: skipPerms, Err: err}
 	}
 }
 
@@ -638,6 +637,9 @@ const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
 const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
+const sidecarDisplayNameFile = "display-name"
+
+const maxWorktreeSlugRunes = 63
 
 func saveBaseBranchContext(ctx context.Context, projectRoot, worktreePath string, branch string) error {
 	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
@@ -668,6 +670,45 @@ func loadBaseBranchContext(ctx context.Context, projectRoot, worktreePath string
 	}
 	basePath := filepath.Join(wtDir, sidecarBaseFile)
 	content, err := os.ReadFile(basePath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
+
+func saveDisplayName(projectRoot, worktreePath, name string) error {
+	return saveDisplayNameContext(context.Background(), projectRoot, worktreePath, name)
+}
+
+func saveDisplayNameContext(ctx context.Context, projectRoot, worktreePath, name string) error {
+	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
+	if err != nil {
+		return fmt.Errorf("resolve worktree dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	displayPath := filepath.Join(wtDir, sidecarDisplayNameFile)
+	if name == "" {
+		_ = os.Remove(displayPath)
+		return nil
+	}
+	return os.WriteFile(displayPath, []byte(name+"\n"), 0644)
+}
+
+func loadDisplayName(projectRoot, worktreePath string) string {
+	return loadDisplayNameContext(context.Background(), projectRoot, worktreePath)
+}
+
+func loadDisplayNameContext(ctx context.Context, projectRoot, worktreePath string) string {
+	if err := ctx.Err(); err != nil {
+		return ""
+	}
+	wtDir, ok := projectdir.LookupWorktree(projectRoot, worktreePath)
+	if !ok {
+		return ""
+	}
+	content, err := os.ReadFile(filepath.Join(wtDir, sidecarDisplayNameFile))
 	if err != nil {
 		return ""
 	}
@@ -1162,48 +1203,54 @@ func SanitizeBranchName(name string) string {
 	return result
 }
 
-// loadTaskDetails fetches full task details from td.
-func (p *Plugin) loadTaskDetails(taskID string) tea.Cmd {
-	ctx, scope := p.newOperationScope(p.selectedWorktree())
-	workDir := p.ctx.WorkDir
-	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "td", "show", taskID, "--json")
-		cmd.Dir = workDir
-		output, err := cmd.Output()
-		if err != nil {
-			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("td show: %w", err)}
-		}
-
-		var details struct {
-			ID          string `json:"id"`
-			Title       string `json:"title"`
-			Status      string `json:"status"`
-			Priority    string `json:"priority"`
-			Type        string `json:"type"`
-			Description string `json:"description"`
-			Acceptance  string `json:"acceptance"`
-			CreatedAt   string `json:"created_at"`
-			UpdatedAt   string `json:"updated_at"`
-		}
-
-		if err := json.Unmarshal(output, &details); err != nil {
-			return TaskDetailsLoadedMsg{OperationScope: scope, TaskID: taskID, Err: fmt.Errorf("parse task json: %w", err)}
-		}
-
-		return TaskDetailsLoadedMsg{
-			OperationScope: scope,
-			TaskID:         taskID,
-			Details: &TaskDetails{
-				ID:          details.ID,
-				Title:       details.Title,
-				Status:      details.Status,
-				Priority:    details.Priority,
-				Type:        details.Type,
-				Description: details.Description,
-				Acceptance:  details.Acceptance,
-				CreatedAt:   details.CreatedAt,
-				UpdatedAt:   details.UpdatedAt,
-			},
+// SlugifyWorktreeName turns a display name into a git-safe branch and directory
+// component. An empty result means the name cannot be used.
+func SlugifyWorktreeName(name string) string {
+	result := strings.ToLower(strings.TrimSpace(name))
+	result = strings.ReplaceAll(result, " ", "-")
+	result = strings.ReplaceAll(result, "@{", "")
+	for _, char := range []string{"~", "^", ":", "?", "*", "[", "\\"} {
+		result = strings.ReplaceAll(result, char, "")
+	}
+	var cleaned strings.Builder
+	for _, r := range result {
+		if r >= 32 && r != 127 {
+			cleaned.WriteRune(r)
 		}
 	}
+	result = collapseSlugSeparators(cleaned.String())
+	result = strings.Trim(result, "-./")
+	result = truncateSlugRunes(result, maxWorktreeSlugRunes)
+	result = strings.Trim(result, "-./")
+	if result == "" || result == "@" || strings.HasSuffix(result, ".lock") {
+		return ""
+	}
+	return result
+}
+
+func collapseSlugSeparators(s string) string {
+	var b strings.Builder
+	var prev rune
+	for i, r := range s {
+		if i > 0 && (r == '-' || r == '/' || r == '.') && r == prev {
+			continue
+		}
+		b.WriteRune(r)
+		prev = r
+	}
+	return b.String()
+}
+
+func truncateSlugRunes(s string, max int) string {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
+		return s
+	}
+	runes = runes[:max]
+	for i := len(runes) - 1; i > 0; i-- {
+		if runes[i] == '-' {
+			return string(runes[:i])
+		}
+	}
+	return string(runes)
 }
