@@ -293,7 +293,9 @@ func TestFilteringAScrolledSidebarStillDrawsTheMatchingRows(t *testing.T) {
 	p.worktrees[len(p.worktrees)-1].Name = "needle"
 
 	p.renderSidebarContent(40, 24) // establishes visibleCount
-	p.handleKeyPress(key("G"))     // scroll to the last worktree
+	p.handleKeyPress(key("G"))     // select the last worktree
+	// Line-aware scroll is applied on paint, not by paging visibleCount.
+	_ = p.renderSidebarContent(40, 24)
 	if p.scrollOffset == 0 {
 		t.Fatal("G did not scroll the sidebar; the case no longer exercises the bug")
 	}
@@ -331,6 +333,7 @@ func TestScrollOffsetUsesSharedShellFirstViewport(t *testing.T) {
 
 	p.shellSelected, p.selectedIdx = false, 0
 	p.ensureVisible()
+	_ = p.renderSidebarContent(40, 24)
 	if p.scrollOffset != 0 {
 		t.Fatalf("first worktree left the list scrolled to %d", p.scrollOffset)
 	}
@@ -338,11 +341,18 @@ func TestScrollOffsetUsesSharedShellFirstViewport(t *testing.T) {
 	last := len(p.worktrees) - 1
 	p.selectedIdx = last
 	p.ensureVisible()
-	if want := len(p.shells) + last - p.visibleCount + 1; p.scrollOffset != want {
-		t.Fatalf("scroll offset = %d, want %d (shell and worktree rows share one viewport)", p.scrollOffset, want)
-	}
 	view := ansi.Strip(p.renderSidebarContent(40, 24))
+	index := p.sharedSidebarSelectionIndex()
+	if p.scrollOffset <= 0 {
+		t.Fatalf("last worktree left the list unscrolled")
+	}
+	if p.visibleCount != 1 && p.scrollOffset >= index {
+		t.Fatalf("scroll offset = %d, want the minimum that reveals selected index %d", p.scrollOffset, index)
+	}
 	if !strings.Contains(view, p.worktrees[last].Name) {
 		t.Fatalf("selected last worktree is not on screen:\n%s", view)
+	}
+	if strings.Contains(view, p.shells[0].Name) {
+		t.Fatalf("first shell should share the same viewport and sit above the fold:\n%s", view)
 	}
 }

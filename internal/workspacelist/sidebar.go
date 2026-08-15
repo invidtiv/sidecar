@@ -117,25 +117,7 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		}
 	}
 
-	scroll := min(max(opts.ScrollOffset, 0), max(0, len(flat)-1))
-	selected := -1
-	for i := range flat {
-		if flat[i].row.ID == opts.SelectedID {
-			selected = i
-			break
-		}
-	}
-	if selected >= 0 && selected < scroll {
-		scroll = selected
-	}
-	for selected >= 0 {
-		end := sidebarVisibleEnd(flat, opts.Sections, scroll, bodyHeight, width, opts.SelectedID, opts.Focused)
-		if selected < end || scroll >= selected {
-			break
-		}
-		scroll++
-	}
-
+	scroll := adjustSidebarScroll(flat, opts.Sections, opts.ScrollOffset, bodyHeight, width, opts.SelectedID, opts.Focused)
 	visibleEnd := sidebarVisibleEnd(flat, opts.Sections, scroll, bodyHeight, width, opts.SelectedID, opts.Focused)
 	rowWidth := max(1, width-1)
 	y := len(lines)
@@ -202,6 +184,60 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		lines = lines[:height]
 	}
 	return SidebarRendered{View: strings.Join(lines, "\n"), Regions: regions, ScrollOffset: scroll, VisibleRows: visibleRows}
+}
+
+// adjustSidebarScroll keeps SelectedID on screen using body lines, not row
+// counts. Headings and separators consume height, so paging by visible row
+// count over-scrolls: items sit above the fold and the body pads empty space.
+//
+// If the selection already fits at the incoming offset, the offset is kept
+// (then clamped so the last page still fills the pane). Otherwise the
+// smallest offset that reveals it is used — 0 when the row fits from the top.
+func adjustSidebarScroll(flat []sidebarFlatRow, sections []SidebarSection, scroll, height, width int, selectedID string, focused bool) int {
+	n := len(flat)
+	if n == 0 {
+		return 0
+	}
+	selected := -1
+	for i := range flat {
+		if flat[i].row.ID == selectedID {
+			selected = i
+			break
+		}
+	}
+	maxScroll := sidebarMaxScroll(flat, sections, height, width, selectedID, focused)
+	scroll = min(max(scroll, 0), maxScroll)
+	if selected >= 0 && selected < scroll {
+		// Moving up out of the viewport: park the row at the top. Using the
+		// global minimum here would jump a tall list back to offset 0 on k.
+		scroll = min(selected, maxScroll)
+	}
+	for selected >= 0 {
+		end := sidebarVisibleEnd(flat, sections, scroll, height, width, selectedID, focused)
+		if selected < end || scroll >= selected {
+			break
+		}
+		scroll++
+	}
+	return min(scroll, maxScroll)
+}
+
+// sidebarMaxScroll is the smallest offset at which the last row is still
+// visible. Larger offsets leave blank body lines while items exist above.
+func sidebarMaxScroll(flat []sidebarFlatRow, sections []SidebarSection, height, width int, selectedID string, focused bool) int {
+	n := len(flat)
+	if n == 0 || height <= 0 {
+		return 0
+	}
+	if sidebarVisibleEnd(flat, sections, 0, height, width, selectedID, focused) >= n {
+		return 0
+	}
+	for scroll := 1; scroll < n; scroll++ {
+		if sidebarVisibleEnd(flat, sections, scroll, height, width, selectedID, focused) >= n {
+			return scroll
+		}
+	}
+	return n - 1
 }
 
 func sidebarVisibleEnd(flat []sidebarFlatRow, sections []SidebarSection, scroll, height, width int, selectedID string, focused bool) int {

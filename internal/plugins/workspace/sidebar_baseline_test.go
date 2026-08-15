@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -337,5 +338,121 @@ func TestSidebarHeadingsAndSeparatorPlacement(t *testing.T) {
 	}
 	if got, want := strings.TrimSpace(lines[5]), workspacelist.SectionTitle("Worktrees", 3); !strings.HasPrefix(got, want) {
 		t.Fatalf("second heading = %q, want %q", got, want)
+	}
+}
+
+func longSidebarPlugin(t *testing.T, extraWorktrees int) *Plugin {
+	t.Helper()
+	p := sidebarBaselinePlugin(t)
+	for i := 0; i < extraWorktrees; i++ {
+		p.worktrees = append(p.worktrees, &Worktree{
+			Name: fmt.Sprintf("wt-%02d", i), Path: p.ctx.ProjectRoot, Branch: fmt.Sprintf("b-%02d", i),
+		})
+	}
+	return p
+}
+
+func sidebarPlainLines(p *Plugin, width, height int) []string {
+	tLines := strings.Split(ansi.Strip(p.renderSidebarContent(width, height)), "\n")
+	for i, line := range tLines {
+		tLines[i] = strings.TrimRight(line, " ")
+	}
+	return tLines
+}
+
+func TestSidebarFirstPaintStaysAtTopWhenSelectionFits(t *testing.T) {
+	p := sidebarBaselinePlugin(t)
+	p.scrollOffset, p.visibleCount = 0, 0
+	lines := sidebarPlainLines(p, 40, 24)
+	if p.scrollOffset != 0 {
+		t.Fatalf("scrollOffset = %d, want 0 on first paint of a short list", p.scrollOffset)
+	}
+	if got, want := strings.TrimSpace(lines[1]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
+		t.Fatalf("first body row = %q, want the Shells heading", got)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "one") {
+		t.Fatalf("first shell is not on screen:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestSidebarLongListDoesNotScrollWhenSelectionFitsFromTop(t *testing.T) {
+	p := longSidebarPlugin(t, 20)
+	// A short first paint leaves a stale, underestimated visibleCount. Selecting
+	// an early worktree and calling ensureVisible used to page by that count
+	// and hide the first shells even though they fit in the real pane.
+	p.shellSelected, p.selectedShellIdx = true, 0
+	_ = p.renderSidebarContent(40, 10)
+	if p.visibleCount <= 0 {
+		t.Fatal("short paint did not record a visibleCount")
+	}
+	p.shellSelected, p.selectedIdx = false, 2
+	p.ensureVisible()
+	view := ansi.Strip(p.renderSidebarContent(40, 30))
+	if p.scrollOffset != 0 {
+		t.Fatalf("scrollOffset = %d, want 0: selected row %d fits from the top", p.scrollOffset, p.sharedSidebarSelectionIndex())
+	}
+	if !strings.Contains(view, p.shells[0].Name) {
+		t.Fatalf("first shell is above the fold:\n%s", view)
+	}
+	if !strings.Contains(view, p.worktrees[2].Name) {
+		t.Fatalf("selected worktree is not on screen:\n%s", view)
+	}
+}
+
+func TestSidebarScrollsTheMinimumToRevealABelowFoldSelection(t *testing.T) {
+	p := longSidebarPlugin(t, 20)
+	last := len(p.worktrees) - 1
+	p.shellSelected, p.selectedIdx = false, last
+	p.scrollOffset, p.visibleCount = 0, 0
+	view := ansi.Strip(p.renderSidebarContent(40, 16))
+	selected := p.worktrees[last].Name
+	if !strings.Contains(view, selected) {
+		t.Fatalf("selected %q is not on screen:\n%s", selected, view)
+	}
+	if strings.Contains(view, p.shells[0].Name) {
+		t.Fatalf("first shell should sit above the fold when the last worktree is selected:\n%s", view)
+	}
+	index := p.sharedSidebarSelectionIndex()
+	if p.scrollOffset <= 0 {
+		t.Fatalf("scrollOffset = %d, want a below-fold scroll", p.scrollOffset)
+	}
+	if p.visibleCount != 1 && p.scrollOffset >= index {
+		t.Fatalf("scrollOffset = %d equals/exceeds selected index %d; want the minimum that reveals it", p.scrollOffset, index)
+	}
+
+	// Starting from the selected index itself must clamp back to that minimum
+	// rather than park the last row at the top of an empty pane.
+	p.scrollOffset = index
+	_ = p.renderSidebarContent(40, 16)
+	if p.scrollOffset >= index && p.visibleCount != 1 {
+		t.Fatalf("stale last-row offset stayed at %d, want the filled last page", p.scrollOffset)
+	}
+	if !strings.Contains(ansi.Strip(p.renderSidebarContent(40, 16)), selected) {
+		t.Fatal("minimum clamp lost the selected row")
+	}
+}
+
+func TestSidebarGrowingThePaneClampsEmptyScrollSpace(t *testing.T) {
+	p := longSidebarPlugin(t, 20)
+	last := len(p.worktrees) - 1
+	p.shellSelected, p.selectedIdx = false, last
+	p.scrollOffset, p.visibleCount = 0, 0
+	_ = p.renderSidebarContent(40, 12)
+	small := p.scrollOffset
+	if small == 0 {
+		t.Fatal("short pane did not need to scroll; the grow case is untested")
+	}
+	view := ansi.Strip(p.renderSidebarContent(40, 40))
+	grown := p.scrollOffset
+	if grown >= small {
+		t.Fatalf("after growing, scroll stayed %d (was %d); want a clamp that fills the pane", grown, small)
+	}
+	if !strings.Contains(view, p.worktrees[last].Name) {
+		t.Fatalf("taller pane lost the selected worktree:\n%s", view)
+	}
+	p.scrollOffset = grown + 8
+	_ = p.renderSidebarContent(40, 40)
+	if p.scrollOffset != grown {
+		t.Fatalf("taller pane accepted over-scroll %d, want last-page %d", p.scrollOffset, grown)
 	}
 }

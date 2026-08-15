@@ -731,6 +731,11 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.selectedShellIdx = 0
 	p.shellSelected = false
 	p.selectedNestedTmux = ""
+	// Scroll is not persisted. A leftover offset from the previous project
+	// (or a stale visibleCount) would make RenderSidebar / ensureVisible
+	// start mid-list even when the restored selection fits from the top.
+	p.scrollOffset = 0
+	p.visibleCount = 0
 
 	// Reset state restoration flag for project switching
 	p.stateRestored = false
@@ -1892,30 +1897,32 @@ func (p *Plugin) applySelectionChange() {
 	p.saveSelectionState()
 }
 
-// ensureVisible adjusts scroll to keep selected item visible.
-// Accounts for shells (which appear before worktrees in the sidebar).
+// ensureVisible keeps the selection from sitting above the current offset.
+// Paging downward by visibleCount is wrong: that count is painted data rows,
+// while the sidebar viewport is measured in lines (headings, separators,
+// two-line rows). A stale or short count over-scrolls. RenderSidebar is the
+// line-aware authority and advances or clamps on the next paint.
 func (p *Plugin) ensureVisible() {
+	if p.visibleCount <= 0 {
+		p.scrollOffset = 0
+		return
+	}
 	position := p.sharedSidebarSelectionIndex()
-	if position >= 0 {
-		if position < p.scrollOffset {
-			p.scrollOffset = position
-		} else if p.visibleCount > 0 && position >= p.scrollOffset+p.visibleCount {
-			p.scrollOffset = position - p.visibleCount + 1
-		}
+	if position >= 0 && position < p.scrollOffset {
+		p.scrollOffset = position
 	}
 	p.clampScrollOffset(p.sharedSidebarRowCount())
 }
 
 // clampScrollOffset keeps the offset inside the rows currently drawn. A query
 // that shrinks the list must never leave the offset past its end, which would
-// render an empty sidebar under a filter row still counting matches.
+// render an empty sidebar under a filter row still counting matches. Filling
+// the pane is RenderSidebar's job: a row-count max (total-visibleCount) is
+// not the same as a line-aware last page.
 func (p *Plugin) clampScrollOffset(total int) {
-	if p.visibleCount > 0 {
-		if maxOffset := max(0, total-p.visibleCount); p.scrollOffset > maxOffset {
-			p.scrollOffset = maxOffset
-		}
+	if p.scrollOffset > max(0, total-1) {
+		p.scrollOffset = max(0, total-1)
 	}
-	// Guard against negative scroll offset (can happen with empty worktree list)
 	if p.scrollOffset < 0 {
 		p.scrollOffset = 0
 	}
