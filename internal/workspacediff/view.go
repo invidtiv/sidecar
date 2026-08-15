@@ -43,6 +43,14 @@ type View struct {
 	width     int
 	height    int
 	listWidth int
+
+	// Host paint/load hooks. workspacediff cannot import gitstatus; the
+	// project plugin fills these so CycleViewMode, n/N, and paging work.
+	LoadFullFile     func() tea.Cmd
+	JumpChange       func(scroll int, prev bool) int
+	PaintedLineCount func() int
+	LeavingFullFile  func(scroll int) int
+	ClearPaintedFile func()
 }
 
 // Bind records the host identity used to drop stale async results.
@@ -59,13 +67,12 @@ func (v *View) Bind(workdir, workspaceID string, epoch uint64) {
 	}
 }
 
-// SetSize records the allocated leaf box and reclamps scroll. Never call from View().
+// SetSize records the allocated leaf box and reclamps scroll.
+// It must not persist a clamped listWidth: hosts call this from View()
+// every frame, and a shrink must not forget the user-dragged width.
 func (v *View) SetSize(width, height int) {
 	v.width = width
 	v.height = height
-	if v.listWidth > 0 {
-		v.listWidth = clampListWidth(v.listWidth, width)
-	}
 	v.ClampScroll()
 }
 
@@ -299,15 +306,26 @@ func (v *View) CycleScope() tea.Cmd {
 }
 
 // CycleViewMode walks unified → side-by-side → full-file.
-// workspacediff cannot import gitstatus (cycle via app/overview), so the
-// painted body stays the unified raw patch; the mode label still cycles.
+// Entering full-file returns the host LoadFullFile cmd.
 func (v *View) CycleViewMode() tea.Cmd {
 	switch v.ViewMode {
 	case ViewUnified:
 		v.ViewMode = ViewSideBySide
 	case ViewSideBySide:
 		v.ViewMode = ViewFullFile
+		v.HorizScroll = 0
+		v.ClampScroll()
+		if v.LoadFullFile != nil {
+			return v.LoadFullFile()
+		}
+		return nil
 	default:
+		if v.LeavingFullFile != nil && v.DiffScroll > 0 {
+			v.DiffScroll = v.LeavingFullFile(v.DiffScroll)
+		}
+		if v.ClearPaintedFile != nil {
+			v.ClearPaintedFile()
+		}
 		v.ViewMode = ViewUnified
 	}
 	v.HorizScroll = 0
@@ -329,8 +347,15 @@ func (v *View) JumpFile(delta int) tea.Cmd {
 		v.CommitFileCursor = next
 		v.DiffScroll, v.HorizScroll = 0, 0
 		v.clearCommitFileDiff()
+		if v.ClearPaintedFile != nil {
+			v.ClearPaintedFile()
+		}
 		v.ClampScroll()
-		return v.LoadSelectedCommitFile()
+		load := v.LoadSelectedCommitFile()
+		if v.ViewMode == ViewFullFile && v.LoadFullFile != nil {
+			return tea.Batch(load, v.LoadFullFile())
+		}
+		return load
 	}
 	n := v.FileCount()
 	if n <= 1 {
@@ -354,9 +379,15 @@ func (v *View) OnCursorChanged(oldCursor int) tea.Cmd {
 	}
 	v.DiffScroll = 0
 	v.HorizScroll = 0
+	if v.ClearPaintedFile != nil {
+		v.ClearPaintedFile()
+	}
 	v.ClampScroll()
 	if v.Cursor < v.FileCount() {
 		v.CommitDetail = nil
+		if v.ViewMode == ViewFullFile && v.LoadFullFile != nil {
+			return v.LoadFullFile()
+		}
 		return nil
 	}
 	return v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)

@@ -77,6 +77,59 @@ func TestStaleSnapshotMsgIsDropped(t *testing.T) {
 	}
 }
 
+func TestSetSizeDoesNotPersistClampedListWidth(t *testing.T) {
+	v := &View{}
+	v.SetListWidth(80)
+	v.SetSize(90, 20)
+	if v.ListWidth() != 80 {
+		t.Fatalf("SetSize persisted clamped width %d, want stored 80", v.ListWidth())
+	}
+	if got := v.EffectiveListWidth(90); got != 60 {
+		t.Fatalf("narrow display width = %d, want 60 (90-30)", got)
+	}
+	if got := v.EffectiveListWidth(160); got != 80 {
+		t.Fatalf("grown display width = %d, want restored 80", got)
+	}
+}
+
+func TestPaintFileChangesBodyAcrossViewModes(t *testing.T) {
+	v := &View{
+		State: LoadStateReady,
+		Focus: FocusDiff,
+		Files: []File{{Path: "a.go", Raw: "diff --git a/a.go b/a.go\n"}},
+	}
+	v.SetSize(80, 12)
+	opts := RenderOpts{
+		PaintFile: func(name, raw string, mode ViewMode, w, h, scroll, horiz int) string {
+			return "PAINT-" + modeLabel(mode)
+		},
+	}
+	strip := func(s string) string {
+		lines := strings.Split(s, "\n")
+		if len(lines) > 2 {
+			return strings.Join(lines[2:], "\n")
+		}
+		return s
+	}
+	first := strip(v.Render(80, 12, opts))
+	_ = v.CycleViewMode()
+	second := strip(v.Render(80, 12, opts))
+	if first == second {
+		t.Fatalf("CycleViewMode left painted body identical after stripping header:\n%s", first)
+	}
+}
+
+func modeLabel(mode ViewMode) string {
+	switch mode {
+	case ViewSideBySide:
+		return "split"
+	case ViewFullFile:
+		return "full"
+	default:
+		return "unified"
+	}
+}
+
 func TestDividerHitStaysInsideLeaf(t *testing.T) {
 	v := &View{}
 	v.SetSize(160, 24)

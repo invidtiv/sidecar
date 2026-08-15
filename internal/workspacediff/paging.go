@@ -105,6 +105,11 @@ func (v *View) maxDiffScroll() int {
 }
 
 func (v *View) countDiffLines() int {
+	if v.PaintedLineCount != nil {
+		if n := v.PaintedLineCount(); n > 0 {
+			return n
+		}
+	}
 	if v.Scope == ScopeAggregate {
 		return len(splitLines(v.aggregateText()))
 	}

@@ -5,6 +5,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -929,6 +930,19 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			p.diff.Focus = DiffTabFocusCommitDiff
 		} else {
 			p.diff.Focus = DiffTabFocusDiff
+		}
+		if p.fullFileDiff != nil {
+			clickRow := action.Y - action.Region.Rect.Y
+			totalLines := p.fullFileDiff.TotalLines()
+			contentHeight := p.diff.Height()
+			if contentHeight < 1 {
+				contentHeight = 1
+			}
+			mmH := contentHeight
+			if totalLines < mmH {
+				mmH = totalLines
+			}
+			p.diff.DiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
 		}
 	case regionCommitFileBack:
 		// Click on back button in commit drill-down

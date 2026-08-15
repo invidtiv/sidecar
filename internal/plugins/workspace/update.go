@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -287,6 +288,26 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))
 
 	case FullFileDiffLoadedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		wt := p.selectedWorktree()
+		if wt == nil || wt.IdentityKey() != msg.WorkspaceName {
+			return p, nil
+		}
+		p.bindDiffView()
+		if msg.Identity != "" && p.diff.Target.Identity() != "" && msg.Identity != p.diff.Target.Identity() {
+			return p, nil
+		}
+		if msg.CommitHash != "" {
+			if p.diff.CommitDetail != nil && p.diff.CommitDetail.Hash == msg.CommitHash &&
+				p.diff.CommitFileCursor >= 0 && p.diff.CommitFileCursor < len(p.diff.CommitDetail.Files) &&
+				p.diff.CommitDetail.Files[p.diff.CommitFileCursor].Path == msg.FilePath {
+				p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
+			}
+		} else if msg.FilePath == p.selectedDiffTabFile() {
+			p.fullFileDiff = gitstatus.BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
+		}
 
 	case CommitStatusLoadedMsg:
 		// Discard stale messages from previous project

@@ -148,7 +148,11 @@ func (v *View) handleDiffPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "l", "right":
 		v.HorizScroll += 10
 		return nil, true
-	case "n", "N":
+	case "n":
+		v.jumpPaintedChange(false)
+		return nil, true
+	case "N":
+		v.jumpPaintedChange(true)
 		return nil, true
 	case "v", "V":
 		return v.CycleViewMode(), true
@@ -269,7 +273,11 @@ func (v *View) handleCommitDiffKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		v.DiffScroll = 0
 		v.HorizScroll = 0
 		return nil, true
-	case "n", "N":
+	case "n":
+		v.jumpPaintedChange(false)
+		return nil, true
+	case "N":
+		v.jumpPaintedChange(true)
 		return nil, true
 	case "{":
 		if v.CommitDetail != nil && v.CommitFileCursor > 0 {
@@ -291,6 +299,15 @@ func (v *View) handleCommitDiffKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return v.CycleViewMode(), true
 	}
 	return nil, false
+}
+
+func (v *View) jumpPaintedChange(prev bool) {
+	if v.ViewMode != ViewFullFile || v.JumpChange == nil {
+		return
+	}
+	if next := v.JumpChange(v.DiffScroll, prev); next >= 0 {
+		v.DiffScroll = next
+	}
 }
 
 func (v *View) scrollDiffBy(delta int) {

@@ -11,13 +11,17 @@ import (
 )
 
 // RenderOpts controls optional chrome the project plugin needs and the
-// global preview does not: hit regions, list-pane width.
+// global preview does not: hit regions, list-pane width, host paint.
 type RenderOpts struct {
 	Hit          func(id string, x, y, w, h int, data any)
 	ContentBaseX int
 	BaseY        int
 	PanelHeight  int
 	Truncate     func(string, int, string) string
+	// PaintFile draws one file body. workspacediff cannot import gitstatus;
+	// the project host supplies RenderLineDiff / RenderSideBySide /
+	// RenderFullFileSideBySide here. Empty return falls back to renderRaw.
+	PaintFile func(name, raw string, mode ViewMode, width, height, scroll, horiz int) string
 }
 
 const (
@@ -334,7 +338,11 @@ func (v *View) viewModeLabel() string {
 }
 
 func (v *View) renderFileDiff(name, raw string, width, height int, opts RenderOpts) string {
-	_ = name
+	if opts.PaintFile != nil {
+		if painted := opts.PaintFile(name, raw, v.ViewMode, width, height, v.DiffScroll, v.HorizScroll); painted != "" {
+			return painted
+		}
+	}
 	if raw != "" {
 		return v.renderRaw(raw, width, height, opts)
 	}

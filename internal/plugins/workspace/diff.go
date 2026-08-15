@@ -297,6 +297,7 @@ func getDiffStatFromBaseContext(ctx context.Context, workdir, baseBranch string)
 type FullFileDiffLoadedMsg struct {
 	Epoch         uint64
 	WorkspaceName string
+	Identity      string
 	OldContent    string
 	NewContent    string
 	Parsed        *gitstatus.ParsedDiff

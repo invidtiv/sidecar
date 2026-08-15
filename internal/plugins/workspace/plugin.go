@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -290,7 +291,8 @@ type Plugin struct {
 	lastRefresh time.Time
 
 	// Diff state lives on the shared viewer. Hosts keep HitMap + drag only.
-	diff workspacediff.View
+	diff         workspacediff.View
+	fullFileDiff *gitstatus.FullFileDiff // host-owned; workspacediff cannot import gitstatus
 
 	// lastDragRegion is the region ID of the last drag (EndDrag clears the handler before DragEnd).
 	lastDragRegion string
