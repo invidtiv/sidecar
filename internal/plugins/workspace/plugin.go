@@ -285,6 +285,15 @@ type Plugin struct {
 	// Diff state lives on the shared viewer. Hosts keep HitMap + drag only.
 	diff         workspacediff.View
 	fullFileDiff *gitstatus.FullFileDiff // host-owned; workspacediff cannot import gitstatus
+	// fullFileKey is the file the painted full-file body belongs to. The slot
+	// is shared by every Diff view, so without it a second view paints the
+	// first one's file and never issues a load of its own.
+	fullFileKey string
+
+	// previewActionPlacements is where this frame's header put the Diff/Task
+	// action chips. They are right-aligned against the hints, so their columns
+	// are only knowable from the render that drew them.
+	previewActionPlacements []headerChipPlacement
 
 	// lastDragRegion is the region ID of the last drag (EndDrag clears the handler before DragEnd).
 	lastDragRegion string

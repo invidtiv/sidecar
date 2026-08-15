@@ -153,13 +153,13 @@ func TestRenderCapturedTerminalUsesCachedGeometryInListView(t *testing.T) {
 	p.selectedShellIdx = 0
 
 	// Without geometry the viewport is used as-is.
-	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
+	plain := ansi.Strip(p.renderCapturedTerminal(nil, nil, "hint", buffer, 30, 3, false, "empty"))
 	if strings.Contains(plain, "showing") {
 		t.Fatalf("unknown geometry surfaced an indicator: %q", plain)
 	}
 
 	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
-	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
+	plain = ansi.Strip(p.renderCapturedTerminal(nil, nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "40x6, showing 29x2") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
 	}
@@ -190,14 +190,14 @@ func TestRenderCapturedTerminalScrollbarIsNotAMismatch(t *testing.T) {
 	// Viewport 30x3 renders 30x2 after the hint line, and the pane is exactly
 	// that — but 12 lines of scrollback put a scrollbar on screen.
 	p.recordPaneGeometry("shell", "sidecar-shell", 30, 2)
-	plain := ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
+	plain := ansi.Strip(p.renderCapturedTerminal(nil, nil, "hint", buffer, 30, 3, false, "empty"))
 	if strings.Contains(plain, "showing") {
 		t.Fatalf("scrollbar column reported as a pane mismatch: %q", plain)
 	}
 
 	// A pane that genuinely overflows still says so.
 	p.recordPaneGeometry("shell", "sidecar-shell", 40, 6)
-	plain = ansi.Strip(p.renderCapturedTerminal(nil, "hint", buffer, 30, 3, false, "empty"))
+	plain = ansi.Strip(p.renderCapturedTerminal(nil, nil, "hint", buffer, 30, 3, false, "empty"))
 	if !strings.Contains(plain, "showing") {
 		t.Fatalf("clipped pane did not surface its true size: %q", plain)
 	}

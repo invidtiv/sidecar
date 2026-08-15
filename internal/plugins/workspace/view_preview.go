@@ -8,12 +8,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
 // renderPreviewContent renders the preview pane content (no borders).
 func (p *Plugin) renderPreviewContent(width, height int) string {
+	// The action chips' hit regions are replayed from the placements this
+	// frame's header records. Clearing them first means a frame that draws no
+	// header leaves no click targets behind it.
+	p.previewActionPlacements = nil
 	if content, ok := p.renderDocumentSplit(width, height); ok {
 		return content
 	}
@@ -188,6 +193,25 @@ func (p *Plugin) terminalHeader(chips []string, hints string, width, hintFloor i
 		})
 }
 
+// terminalHeaderWithActions is terminalHeader with the Diff/Task action chips
+// right-aligned, immediately left of the hints — so they land in the same
+// column on every row instead of trailing a name of unpredictable length, and
+// so the INTERACTIVE marker still has the last word.
+//
+// It records where those chips landed. Hit regions are replayed from that
+// record rather than recomputed, because a right-aligned chip's column depends
+// on the hint text beside it and only the render has seen it.
+func (p *Plugin) terminalHeaderWithActions(chips, actions []string, hints string, width, hintFloor int) string {
+	row, placements := termpreview.HeaderRowSplit(chips, actions, ui.ExpandTabs(hints, tabStopWidth), width, hintFloor,
+		func(value string, max int) string {
+			return p.truncateCache.Truncate(value, max, "")
+		})
+	if len(actions) > 0 {
+		p.previewActionPlacements = placements
+	}
+	return row
+}
+
 // interactiveExitHint is the header hint that must survive at any width: the
 // mode label and the key that leaves it. Callers put it at the head of their
 // hint string and pass its width as the header's hint floor, so a narrow pane
@@ -226,7 +250,7 @@ const watchedLiveEdgeKey = "G"
 // renderCapturedTerminal draws one embedded terminal: its header row — identity
 // chips left, hints right — and then the viewport, which runs from the next row
 // to the bottom of the surface.
-func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
 	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
 		buffer = projected
 	}
@@ -261,10 +285,10 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	}
 	height -= terminalHeaderRows // The header occupies the surface's first row.
 	if height < 1 {
-		return p.terminalHeader(chips, hint, width, hintFloor)
+		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor)
 	}
 	if buffer == nil || buffer.LineCount() == 0 {
-		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
+		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 
 	// The window itself — the buffer, the pane geometry it is fitted to, and
@@ -279,7 +303,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 	input.LinkResolver = p.terminalLinkResolver(termPanel, buffer)
 	result := renderTerminalViewport(input, p.truncateCache)
 	if result.Content == "" {
-		return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
+		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
 	}
 	// What the header states about the drawn window — that it is off the live
 	// edge and how to get back, that older lines exist above it, that the pane is
@@ -307,7 +331,7 @@ func (p *Plugin) renderCapturedTerminal(chips []string, hint string, buffer *tty
 			}
 		}
 	}
-	return p.terminalHeader(chips, hint, width, hintFloor) + "\n" + result.Content
+	return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + result.Content
 }
 
 // renderOutputContent renders agent output.
@@ -317,14 +341,15 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	if wt := p.selectedWorktree(); wt != nil && wt.Name != "" {
 		name = wt.Name
 	}
-	chips := append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
+	chips := []string{p.paneFocusChip(name, p.primaryTerminalFocused())}
+	actions := p.previewActionChips()
 
 	// The states below have no terminal to draw, but they are still the Output
 	// tab, so they still owe the header row the tabs live on: without it a
 	// freshly created worktree shows no tabs at all while their hit regions stay
 	// live underneath the message.
 	notice := func(body string) string {
-		return p.terminalHeader(chips, "", width, 0) + "\n" + p.truncateAllLines(body, width)
+		return p.terminalHeaderWithActions(chips, actions, "", width, 0) + "\n" + p.truncateAllLines(body, width)
 	}
 
 	wt := p.selectedWorktree()
@@ -361,7 +386,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	default:
 		hint = p.watchedAttachHint()
 	}
-	return p.renderCapturedTerminal(chips, hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
+	return p.renderCapturedTerminal(chips, actions, hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 // renderOrphanedMessage renders the recovery prompt for orphaned worktrees.
@@ -409,7 +434,8 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 		name = "Shell"
 	}
 	shellFocused := p.primaryTerminalFocused()
-	chips := append([]string{p.paneFocusChip(name, shellFocused)}, p.previewActionChips()...)
+	chips := []string{p.paneFocusChip(name, shellFocused)}
+	actions := p.previewActionChips()
 
 	// Hint depends on mode - interactive mode shows exit hints
 	var hint string
@@ -424,7 +450,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	default:
 		hint = p.watchedAttachHint()
 	}
-	return p.renderCapturedTerminal(chips, hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
+	return p.renderCapturedTerminal(chips, actions, hint, shell.Agent.OutputBuf, width, height, false, "No output yet")
 }
 
 // watchedAttachHint is the watched-pane attach/detach copy. Empty when full
@@ -528,7 +554,7 @@ func (p *Plugin) renderShellPrimer(width, height int) string {
 // renderMainWorktreeView renders a helpful view when the main worktree is selected.
 func (p *Plugin) renderMainWorktreeView(width, height int) string {
 	var lines []string
-	lines = append(lines, p.terminalHeader(p.previewActionChips(), "", width, 0))
+	lines = append(lines, p.terminalHeaderWithActions(nil, p.previewActionChips(), "", width, 0))
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(styles.Primary)
 	hintStyle := lipgloss.NewStyle().Foreground(styles.Success)

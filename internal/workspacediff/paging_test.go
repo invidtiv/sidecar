@@ -84,8 +84,10 @@ func TestSetSizeDoesNotPersistClampedListWidth(t *testing.T) {
 	if v.ListWidth() != 80 {
 		t.Fatalf("SetSize persisted clamped width %d, want stored 80", v.ListWidth())
 	}
-	if got := v.EffectiveListWidth(90); got != 60 {
-		t.Fatalf("narrow display width = %d, want 60 (90-30)", got)
+	// The leaf keeps ContentInset columns on each side, so the divider clamps
+	// against the inner box: 90 - 2 padding - 30 reserve.
+	if got := v.EffectiveListWidth(90); got != 58 {
+		t.Fatalf("narrow display width = %d, want 58 (90-2-30)", got)
 	}
 	if got := v.EffectiveListWidth(160); got != 80 {
 		t.Fatalf("grown display width = %d, want restored 80", got)

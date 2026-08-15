@@ -284,7 +284,7 @@ func (c *diffContent) View(render Render) string {
 				}
 				return s
 			},
-			PaintFile: c.p.paintDiffFile,
+			PaintFile: c.p.paintFileFor(view),
 		})
 	}
 	return composePaneLeaf(

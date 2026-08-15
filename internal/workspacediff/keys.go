@@ -21,6 +21,14 @@ func (v *View) HandleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // Commands are the short footer names for a focused Diff surface.
+//
+// Every key HandleKey answers is named here, and every one of them has a
+// matching row in internal/keymap/bindings.go for both Diff contexts. The
+// bindings are what put the keys in the footer, the help sheet and the command
+// palette; before they existed, moving around a diff was folklore.
+//
+// The set follows the focused sub-pane, because the same key means different
+// things in each: on the list l opens, in the diff body it scrolls sideways.
 func (v *View) Commands(context string) []plugin.Command {
 	viewName := "Split"
 	switch v.ViewMode {
@@ -29,18 +37,53 @@ func (v *View) Commands(context string) []plugin.Command {
 	case ViewFullFile:
 		viewName = "Unified"
 	}
-	cmds := []plugin.Command{
-		{ID: "toggle-diff-scope", Name: "Scope", Description: "Cycle working tree, commits, and aggregate", Context: context, Priority: 5},
-		{ID: "toggle-diff-view", Name: viewName, Description: "Cycle diff view mode", Context: context, Priority: 6},
+	cmd := func(id, name, desc string, priority int) plugin.Command {
+		return plugin.Command{ID: id, Name: name, Description: desc, Context: context, Priority: priority}
 	}
-	if v.FileCount() > 1 {
+	var cmds []plugin.Command
+	switch v.Focus {
+	case FocusDiff, FocusCommitDiff:
 		cmds = append(cmds,
-			plugin.Command{ID: "next-file", Name: "}", Description: "Next file", Context: context, Priority: 6},
-			plugin.Command{ID: "prev-file", Name: "{", Description: "Previous file", Context: context, Priority: 7},
-			plugin.Command{ID: "file-picker", Name: "Files", Description: "Open file picker", Context: context, Priority: 8},
+			cmd("diff-scroll-down", "Down", "Scroll the diff down", 2),
+			cmd("diff-scroll-up", "Up", "Scroll the diff up", 3),
+			cmd("diff-back", "List", "Back to the file list", 4),
+		)
+	case FocusCommitFiles:
+		cmds = append(cmds,
+			cmd("diff-open", "Open", "Show the selected file's diff", 2),
+			cmd("diff-down", "Down", "Next file", 3),
+			cmd("diff-up", "Up", "Previous file", 4),
+			cmd("diff-back", "List", "Back to the file list", 5),
+		)
+	default:
+		cmds = append(cmds,
+			cmd("diff-open", "Open", "Show the selected file or commit", 2),
+			cmd("diff-down", "Down", "Next item", 3),
+			cmd("diff-up", "Up", "Previous item", 4),
 		)
 	}
-	return cmds
+	cmds = append(cmds,
+		cmd("toggle-diff-view", viewName, "Cycle diff view mode", 6),
+		cmd("toggle-diff-scope", "Scope", "Cycle working tree, commits, and aggregate", 7),
+	)
+	if v.FileCount() > 1 {
+		cmds = append(cmds,
+			cmd("next-file", "}", "Next file", 8),
+			cmd("prev-file", "{", "Previous file", 9),
+		)
+		if v.HasFilePicker {
+			cmds = append(cmds, cmd("file-picker", "Files", "Open file picker", 10))
+		}
+	}
+	if v.ViewMode == ViewFullFile && (v.Focus == FocusDiff || v.Focus == FocusCommitDiff) {
+		cmds = append(cmds, cmd("diff-next-change", "Change", "Jump to the next change", 11))
+	}
+	return append(cmds,
+		cmd("diff-top", "Top", "Jump to the top", 20),
+		cmd("diff-bottom", "Bottom", "Jump to the bottom", 21),
+		cmd("diff-page-down", "PgDn", "Page down", 22),
+		cmd("diff-page-up", "PgUp", "Page up", 23),
+	)
 }
 
 func (v *View) handleFileListKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -86,10 +129,7 @@ func (v *View) handleFileListKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		if commit, ok := v.SelectedCommit(); ok {
 			v.Focus = FocusCommitFiles
-			v.CommitDetail = nil
-			v.CommitFileCursor = 0
-			v.CommitFileScroll = 0
-			v.CommitFileDiffRaw = ""
+			v.resetCommitDetail()
 			return v.LoadCommit(commit.Hash), true
 		}
 		return nil, true
@@ -173,7 +213,7 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 				return nil, true
 			}
 			v.Focus = FocusFileList
-			v.CommitDetail = nil
+			v.resetCommitDetail()
 			v.dropPaintedFile()
 			return nil, true
 		}
@@ -218,8 +258,7 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		v.Focus = FocusFileList
-		v.CommitDetail = nil
-		v.clearCommitFileDiff()
+		v.resetCommitDetail()
 		v.dropPaintedFile()
 		return nil, true
 	case "v", "V":
@@ -355,4 +394,6 @@ func (v *View) dropPaintedFile() {
 
 func (v *View) clearCommitFileDiff() {
 	v.CommitFileDiffRaw = ""
+	v.CommitFileDiffLoaded = false
+	v.CommitFileDiffErr = ""
 }

@@ -59,7 +59,36 @@ func (v *View) baseRef() string {
 }
 
 // Render draws the working-tree + commits Diff view.
+//
+// The body is inset by ContentInset columns on both sides, the same single
+// column the issue pane keeps, so the Diff leaf does not sit flush against its
+// neighbour's border. The inset is applied here and in ContentBox alone: every
+// piece of column arithmetic below — the list/diff divider, the minimap, the
+// side-by-side split, and the hit regions the host registers — works in the
+// inner box, so what is drawn and what is clickable cannot drift apart.
 func (v *View) Render(width, height int, opts RenderOpts) string {
+	inner := contentWidth(width)
+	if inner < width {
+		opts.ContentBaseX += ContentInset
+		return indentLines(v.render(inner, height, opts), ContentInset)
+	}
+	return v.render(width, height, opts)
+}
+
+// indentLines shifts every line right by pad columns.
+func indentLines(content string, pad int) string {
+	if pad <= 0 || content == "" {
+		return content
+	}
+	prefix := strings.Repeat(" ", pad)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (v *View) render(width, height int, opts RenderOpts) string {
 	switch v.State {
 	case LoadStateLoading:
 		return dimText("Loading diff…")
@@ -119,7 +148,7 @@ func (v *View) Render(width, height int, opts RenderOpts) string {
 
 func (v *View) renderCommitRoot(width, height int, opts RenderOpts) string {
 	if v.CommitDetail == nil {
-		return dimText("Loading commit files...")
+		return v.commitDetailPlaceholder(width, opts)
 	}
 	if width < CollapseThreshold {
 		if v.Focus == FocusCommitDiff {
@@ -395,7 +424,7 @@ func (v *View) renderCommitFileList(width, height, baseX, baseY int, opts Render
 	var sb strings.Builder
 	maxWidth := width - 2
 	if v.CommitDetail == nil {
-		sb.WriteString(styles.Muted.Render("Loading commit files..."))
+		sb.WriteString(v.commitDetailPlaceholder(width, opts))
 		return sb.String()
 	}
 	files := v.CommitDetail.Files
@@ -500,7 +529,7 @@ func (v *View) renderCommitFileList(width, height, baseX, baseY int, opts Render
 
 func (v *View) renderCommitFileDiffPane(width, height, baseX, baseY int, opts RenderOpts) string {
 	if v.CommitDetail == nil {
-		return dimText("Loading...")
+		return v.commitDetailPlaceholder(width, opts)
 	}
 	if len(v.CommitDetail.Files) == 0 {
 		return dimText("No files in commit")
@@ -522,7 +551,7 @@ func (v *View) renderCommitFileDiffPane(width, height, baseX, baseY int, opts Re
 		contentHeight = 1
 	}
 	if v.CommitFileDiffRaw == "" {
-		sb.WriteString(dimText("Loading diff..."))
+		sb.WriteString(v.commitFileDiffPlaceholder(width, opts))
 		return sb.String()
 	}
 	sb.WriteString(v.renderFileDiff(file.Path, v.CommitFileDiffRaw, width, contentHeight, opts))
@@ -530,6 +559,28 @@ func (v *View) renderCommitFileDiffPane(width, height, baseX, baseY int, opts Re
 		opts.Hit(RegionCommitDiff, baseX, baseY, width, height, nil)
 	}
 	return sb.String()
+}
+
+// commitFileDiffPlaceholder is what the right pane says when it has no patch
+// text. There are three distinct reasons and they must not look alike: a load
+// still in flight, a load that failed, and a load that succeeded with nothing
+// to draw. Only the first is "Loading".
+func (v *View) commitFileDiffPlaceholder(width int, opts RenderOpts) string {
+	if v.CommitFileDiffErr != "" {
+		err := v.CommitFileDiffErr
+		if opts.Truncate != nil {
+			err = opts.Truncate(err, width, "…")
+		}
+		return styles.StatusDeleted.Render("Could not load this file's diff") + "\n" + dimText(err)
+	}
+	if !v.CommitFileDiffLoaded {
+		return dimText("Loading diff…")
+	}
+	if v.CommitDetail != nil && v.CommitDetail.IsMerge {
+		return dimText("Merge commit: git shows no combined diff for this file.") + "\n" +
+			dimText("Open a parent commit to see its changes.")
+	}
+	return dimText("No textual diff for this file in this commit.")
 }
 
 func (v *View) renderCommitPreview(commit CommitInfo, width, height, baseX, baseY int, opts RenderOpts) string {
@@ -595,9 +646,23 @@ func (v *View) renderCommitPreview(commit CommitInfo, width, height, baseX, base
 			sb.WriteString("\n")
 		}
 	} else {
-		sb.WriteString(dimText("Loading files..."))
+		sb.WriteString(v.commitDetailPlaceholder(width, opts))
 	}
 	return sb.String()
+}
+
+// commitDetailPlaceholder is what a commit surface says when it has no file
+// list: the reason it failed if it failed, and "Loading" only while a load is
+// genuinely outstanding.
+func (v *View) commitDetailPlaceholder(width int, opts RenderOpts) string {
+	if v.CommitDetailErr == "" {
+		return dimText("Loading commit files…")
+	}
+	err := v.CommitDetailErr
+	if opts.Truncate != nil {
+		err = opts.Truncate(err, width, "…")
+	}
+	return styles.StatusDeleted.Render("Could not load this commit") + "\n" + dimText(err)
 }
 
 func (v *View) renderAggregate(width, height int) string {

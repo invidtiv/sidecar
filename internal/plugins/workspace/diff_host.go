@@ -17,7 +17,7 @@ func (p *Plugin) resetDiffView() {
 	width, mode := p.diff.ListWidth(), p.diff.ViewMode
 	p.diff = workspacediff.View{ViewMode: mode, Target: workspacediff.WorkingTreeTarget()}
 	p.diff.SetListWidth(width)
-	p.fullFileDiff = nil
+	p.clearPaintedFile()
 }
 
 func mapPluginCommit(c *gitstatus.Commit) *workspacediff.CommitDetail {
@@ -63,7 +63,83 @@ func (p *Plugin) attachDiffPaintTo(view *workspacediff.View) {
 	view.JumpChange = p.jumpFullFileChange
 	view.PaintedLineCount = p.paintedLineCount
 	view.LeavingFullFile = p.mapFullFileScroll
-	view.ClearPaintedFile = func() { p.fullFileDiff = nil }
+	view.ClearPaintedFile = p.clearPaintedFile
+	view.HasFilePicker = true
+}
+
+func (p *Plugin) clearPaintedFile() {
+	p.fullFileDiff = nil
+	p.fullFileKey = ""
+}
+
+// fullFileKeyFor names the file a view wants painted in full-file mode:
+// commit hash and path for a commit file, the working-tree path otherwise.
+// It is the identity the painted slot is held under.
+func fullFileKeyFor(view *workspacediff.View) string {
+	if view == nil {
+		return ""
+	}
+	if view.Focus == DiffTabFocusCommitDiff || view.Focus == DiffTabFocusCommitFiles {
+		detail := view.CommitDetail
+		if detail == nil || view.CommitFileCursor < 0 || view.CommitFileCursor >= len(detail.Files) {
+			return ""
+		}
+		return detail.Hash + ":" + detail.Files[view.CommitFileCursor].Path
+	}
+	if name := view.SelectedFileName(); name != "" {
+		return ":" + name
+	}
+	return ""
+}
+
+// fullFileKeyForMsg is fullFileKeyFor for a landed load.
+func fullFileKeyForMsg(msg FullFileDiffLoadedMsg) string {
+	return msg.CommitHash + ":" + msg.FilePath
+}
+
+// fullFileWanted reports that some live Diff view is showing the file this
+// load answers: the legacy view or any tab in any Diff leaf.
+func (p *Plugin) fullFileWanted(msg FullFileDiffLoadedMsg) bool {
+	if fullFileMatchesView(&p.diff, msg) {
+		return true
+	}
+	for _, pane := range p.diffs {
+		if pane == nil {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			if fullFileMatchesView(item.Value, msg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fullFileMatchesView(view *workspacediff.View, msg FullFileDiffLoadedMsg) bool {
+	if view == nil {
+		return false
+	}
+	if view.WorkspaceID != "" && msg.WorkspaceName != "" && view.WorkspaceID != msg.WorkspaceName {
+		return false
+	}
+	if view.Target.Identity() != "" && msg.Identity != "" && view.Target.Identity() != msg.Identity {
+		return false
+	}
+	if msg.FilePath == "" {
+		return false
+	}
+	return fullFileKeyFor(view) == fullFileKeyForMsg(msg)
+}
+
+// paintedFileIsFor reports that the shared full-file slot holds the file this
+// view is showing. An empty key is the legacy single-view case and matches.
+func (p *Plugin) paintedFileIsFor(view *workspacediff.View) bool {
+	if p.fullFileKey == "" {
+		return true
+	}
+	key := fullFileKeyFor(view)
+	return key == "" || key == p.fullFileKey
 }
 
 func (p *Plugin) persistDiffViewMode() {
@@ -97,7 +173,7 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 		Truncate: func(s string, w int, suffix string) string {
 			return p.truncateCache.Truncate(s, w, suffix)
 		},
-		PaintFile: p.paintDiffFile,
+		PaintFile: p.paintFileFor(&p.diff),
 	})
 }
 
@@ -134,9 +210,19 @@ func (p *Plugin) loadCommitDetail(hash string) tea.Cmd {
 	return p.diff.LoadCommit(hash)
 }
 
-func (p *Plugin) selectedDiffTabFile() string { return p.diff.SelectedFileName() }
+// paintFileFor is the PaintFile hook bound to one view, so the painter can tell
+// whether the shared full-file slot holds this view's file or another's.
+func (p *Plugin) paintFileFor(view *workspacediff.View) func(string, string, workspacediff.ViewMode, int, int, int, int) string {
+	return func(name, raw string, mode workspacediff.ViewMode, width, height, scroll, horiz int) string {
+		return p.paintDiffFileFor(view, name, raw, mode, width, height, scroll, horiz)
+	}
+}
 
 func (p *Plugin) paintDiffFile(name, raw string, mode workspacediff.ViewMode, width, height, scroll, horiz int) string {
+	return p.paintDiffFileFor(&p.diff, name, raw, mode, width, height, scroll, horiz)
+}
+
+func (p *Plugin) paintDiffFileFor(view *workspacediff.View, name, raw string, mode workspacediff.ViewMode, width, height, scroll, horiz int) string {
 	parsed, err := gitstatus.ParseUnifiedDiff(raw)
 	if (err != nil || parsed == nil) && mode != workspacediff.ViewFullFile {
 		return ""
@@ -144,7 +230,7 @@ func (p *Plugin) paintDiffFile(name, raw string, mode workspacediff.ViewMode, wi
 	highlighter := gitstatus.NewSyntaxHighlighter(name)
 	switch mode {
 	case workspacediff.ViewFullFile:
-		if p.fullFileDiff != nil {
+		if p.fullFileDiff != nil && p.paintedFileIsFor(view) {
 			diffW := width - gitstatus.MinimapWidth
 			mmStr := gitstatus.RenderMinimap(p.fullFileDiff, scroll, height, height)
 			if mmStr != "" && diffW >= 30 {
@@ -168,7 +254,12 @@ func (p *Plugin) paintDiffFile(name, raw string, mode workspacediff.ViewMode, wi
 }
 
 func (p *Plugin) loadFullFileForView(view *workspacediff.View) tea.Cmd {
-	if view == nil || p.fullFileDiff != nil {
+	if view == nil {
+		return nil
+	}
+	// The painted slot is shared. Skipping the load only because something is
+	// painted is what left a second Diff view showing the first view's file.
+	if key := fullFileKeyFor(view); p.fullFileDiff != nil && key != "" && key == p.fullFileKey {
 		return nil
 	}
 	if view.Focus == DiffTabFocusCommitDiff || view.Focus == DiffTabFocusCommitFiles {
