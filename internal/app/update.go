@@ -154,7 +154,19 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.overview != nil && overview.IsAsyncMessage(msg) {
-		return m, m.overview.Update(msg)
+		cmd := m.overview.Update(msg)
+		// A workspacediff result is not the global browser's alone. A project
+		// plugin's Diff pane hosts the same view and issued its own load, so
+		// returning here claimed the answer and left commit tabs on
+		// "Loading diff…" forever. Offer it to the browser, then let it reach
+		// the plugins like any other broadcast; every host drops what is not
+		// addressed to it.
+		if !overview.IsSharedDiffMessage(msg) {
+			return m, cmd
+		}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	switch msg := msg.(type) {
