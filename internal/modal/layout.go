@@ -149,8 +149,11 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	}
 	m.lastViewportH = viewportHeight
 
-	// Clamp scroll offset
+	// Clamp scroll offset and cache the render-derived bounds so a pre-update
+	// wheel-boundary query can answer exactly without re-rendering.
 	maxScroll := max(0, actualContentHeight-viewportHeight)
+	m.lastMaxScroll = maxScroll
+	m.layoutValid = handler != nil
 	m.scrollOffset = clamp(m.scrollOffset, 0, maxScroll)
 
 	// Slice content to viewport

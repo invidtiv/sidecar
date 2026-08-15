@@ -22,6 +22,42 @@ type Section interface {
 	Update(msg tea.Msg, focusID string) (action string, cmd tea.Cmd)
 }
 
+// ScrollOwnerSection is implemented by sections that own their own scroll
+// state (a document viewport, a nested list) rather than moving the modal
+// body's offset. When the pointer is over a region such a section claims,
+// Modal.WheelAtBoundary delegates the answer to it.
+//
+// Both methods must be read-only: they may not rebuild or mutate content.
+// ScrollAtBoundary follows the same semantics as Modal.WheelAtBoundary - true
+// only when applying delta is certainly a no-op, false for movable or unknown.
+type ScrollOwnerSection interface {
+	Section
+
+	// OwnsScrollRegion reports whether the given mouse hit region ID belongs to
+	// this section's scrollable area.
+	OwnsScrollRegion(regionID string) bool
+
+	// ScrollAtBoundary reports whether delta lines (negative up, positive down)
+	// cannot move this section's own scroll state.
+	ScrollAtBoundary(delta int) bool
+}
+
+// asScrollOwner resolves a section to its scroll owner, seeing through When
+// wrappers whose condition currently holds.
+func asScrollOwner(s Section) (ScrollOwnerSection, bool) {
+	for {
+		if w, ok := s.(*whenSection); ok {
+			if !w.condition() {
+				return nil, false
+			}
+			s = w.inner
+			continue
+		}
+		owner, ok := s.(ScrollOwnerSection)
+		return owner, ok
+	}
+}
+
 // RenderedSection is the result of rendering a section.
 type RenderedSection struct {
 	Content    string          // Rendered string content
@@ -150,6 +186,40 @@ func (c *customSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 		return "", nil
 	}
 	return c.updateFn(msg, focusID)
+}
+
+// scrollingCustomSection is a Custom section that owns its own scroll state.
+type scrollingCustomSection struct {
+	customSection
+	ownsRegion func(regionID string) bool
+	atBoundary func(delta int) bool
+}
+
+// ScrollingCustom creates a Custom section that owns its own scroll state and
+// can answer wheel-boundary questions for the regions it claims. ownsRegion
+// receives a mouse hit region ID; atBoundary must be read-only and may return
+// true only when delta is certainly a no-op. Either callback may be nil, in
+// which case the section never claims the wheel.
+func ScrollingCustom(renderFn CustomRenderFunc, updateFn CustomUpdateFunc, ownsRegion func(regionID string) bool, atBoundary func(delta int) bool) Section {
+	return &scrollingCustomSection{
+		customSection: customSection{renderFn: renderFn, updateFn: updateFn},
+		ownsRegion:    ownsRegion,
+		atBoundary:    atBoundary,
+	}
+}
+
+func (s *scrollingCustomSection) OwnsScrollRegion(regionID string) bool {
+	if s.ownsRegion == nil || s.atBoundary == nil {
+		return false
+	}
+	return s.ownsRegion(regionID)
+}
+
+func (s *scrollingCustomSection) ScrollAtBoundary(delta int) bool {
+	if s.atBoundary == nil {
+		return false
+	}
+	return s.atBoundary(delta)
 }
 
 // --- Buttons Section ---
