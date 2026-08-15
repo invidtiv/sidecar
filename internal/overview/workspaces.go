@@ -459,8 +459,13 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "p":
 		return true, m.toggleWorkspacePin()
 	case "R":
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
-			return true, m.OpenRenameShell()
+		if workspace, ok := m.SelectedWorkspace(); ok {
+			switch workspace.Kind {
+			case workspaceinventory.KindShell:
+				return true, m.OpenRenameShell()
+			case workspaceinventory.KindWorktree:
+				return true, m.OpenRenameWorktree()
+			}
 		}
 		return false, nil
 	case "O":
@@ -712,6 +717,62 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmd, m.focusList())
 }
 
+// WorkspacesWheelAtBoundary mirrors WorkspacesMouse's wheel routing without
+// mutating visible state. It is called before Bubble Tea Update/View so an
+// inertial tail at a real boundary can be discarded cheaply.
+func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m == nil || m.renameOpen || m.viewFlyoutOpen || m.workspacesMouse == nil {
+		return false
+	}
+	action := m.workspacesMouse.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if tty.WheelStaysWithPointer(m.PreviewInteractive()) {
+		return m.previewWheelAtBoundary(action)
+	}
+	if action.Region == nil {
+		return false
+	}
+	if _, ok := action.Region.Data.(previewDocTabHit); ok {
+		view := m.preview.doc.view()
+		return view == nil || view.ScrollAtBoundary(action.Delta)
+	}
+	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
+		view := m.preview.issue.view()
+		return view == nil || view.ScrollAtBoundary(action.Delta)
+	}
+	if kind, ok := action.Region.Data.(string); ok {
+		switch {
+		case kind == workspacesSidebarRegion:
+			return m.workspaces.ScrollAtBoundary(action.Delta)
+		case isPreviewDocRegion(kind):
+			view := m.preview.doc.view()
+			return view == nil || view.ScrollAtBoundary(action.Delta)
+		case isPreviewIssueRegion(kind):
+			view := m.preview.issue.view()
+			return view == nil || view.ScrollAtBoundary(action.Delta)
+		case kind == previewDiffRegionKind:
+			view := m.preview.diff.view()
+			if view == nil {
+				return true
+			}
+			return view.ScrollAtBoundary(action.Delta, view.Height())
+		case kind == previewRegionKind:
+			return m.previewWheelAtBoundary(action)
+		default:
+			return false
+		}
+	}
+	if region, ok := action.Region.Data.(workspacelist.Region); ok {
+		switch region.Kind {
+		case workspacelist.RegionRow, workspacelist.RegionSort, workspacelist.RegionFilter:
+			return m.workspaces.ScrollAtBoundary(action.Delta)
+		}
+	}
+	return false
+}
+
 // previewPointerIntent asks the shared layer what a pointer action over the
 // preview means. A drag and its release are answered by the region they started
 // in, which is what keeps a selection dragged off the box that box's.
@@ -908,5 +969,6 @@ func (m *Model) WorkspacesSummary() string {
 // internal/keymap under each WorkspaceFocusContext. Help, the palette, and
 // the host footer all read that pair, so a focused document or issue leaf
 // cannot advertise the list's keys. The list itself stays a reader: no
-// create, delete, or attach. rename-shell is a display-name write, not
-// create/destroy. Typing into a live pane is Enter / click / E.
+// create, delete, or attach. rename-shell and rename-worktree are
+// display-name writes, not create/destroy. Typing into a live pane is
+// Enter / click / E.

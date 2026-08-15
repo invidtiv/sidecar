@@ -137,7 +137,6 @@ type CreateDoneMsg struct {
 	Worktree  *Worktree
 	AgentType AgentType // Agent selected at creation
 	SkipPerms bool      // Whether to skip permissions
-	Prompt    *Prompt   // Selected prompt template (nil if none)
 	Err       error
 }
 
@@ -254,7 +253,6 @@ type restartAgentWithOptionsMsg struct {
 	worktree  *Worktree
 	agentType AgentType
 	skipPerms bool
-	prompt    *Prompt
 }
 
 // CommitStatusLoadedMsg delivers commit status info for the diff view header.

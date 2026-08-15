@@ -205,6 +205,28 @@ func TestApplySnapshotDoesNotLoadCommitWhenCursorOnFile(t *testing.T) {
 	}
 }
 
+func TestDiffContentScrollClampsToRenderedViewport(t *testing.T) {
+	v := View{
+		Content: "diff --git a/a b/a\none\ntwo\nthree\nfour\nfive",
+		Files:   []File{{Path: "a", Raw: "one\ntwo\nthree\nfour\nfive"}},
+	}
+	const height = 4 // two body rows after the file header and spacer
+	if !v.ScrollAtBoundary(-1, height) {
+		t.Fatal("top was not a boundary")
+	}
+	v.ScrollContent(1000, height)
+	if got, want := v.DiffScroll, 3; got != want {
+		t.Fatalf("overscroll = %d, want clamped %d", got, want)
+	}
+	if !v.ScrollAtBoundary(1, height) {
+		t.Fatal("bottom was not a boundary")
+	}
+	v.ScrollContent(-1, height)
+	if got := v.DiffScroll; got != 2 {
+		t.Fatalf("first reverse step after bottom = %d, want 2", got)
+	}
+}
+
 func contains(s, sub string) bool {
 	return stringIndex(s, sub) >= 0
 }

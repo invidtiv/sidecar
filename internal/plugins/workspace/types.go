@@ -22,9 +22,9 @@ const (
 	ViewModeConfirmDelete                      // Delete confirmation modal
 	ViewModeConfirmDeleteShell                 // Shell delete confirmation modal
 	ViewModeCommitForMerge                     // Commit modal before merge workflow
-	ViewModePromptPicker                       // Prompt template picker modal
 	ViewModeTypeSelector                       // Type selector modal (shell vs worktree)
 	ViewModeRenameShell                        // Rename shell modal
+	ViewModeRenameWorktree                     // Rename worktree display-name modal
 	ViewModeFilePicker                         // Diff file picker modal
 	ViewModeInteractive                        // Interactive mode (tmux input passthrough)
 	ViewModeFetchPR                            // Fetch remote PR modal
@@ -246,12 +246,6 @@ var ShellAgentOrder = []AgentType{
 	AgentPi,
 	AgentAmp,
 	AgentGrok,
-}
-
-// dropdownItemData stores field ID and item index for dropdown hit regions.
-type dropdownItemData struct {
-	field int // 1=branch, 3=task
-	idx   int // index in filtered list
 }
 
 // Worktree represents a git worktree with optional agent.

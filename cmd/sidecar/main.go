@@ -248,7 +248,7 @@ func main() {
 
 	// v2: terminal features (alt-screen, mouse) are declared on tea.View in
 	// the app's View() method, not as NewProgram options.
-	p := tea.NewProgram(model)
+	p := tea.NewProgram(model, tea.WithFilter(app.FilterInput))
 
 	startuptrace.Mark("tea.Program.Run")
 	if startuptrace.Enabled() {

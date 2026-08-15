@@ -81,7 +81,7 @@ type pollMsg struct{ Generation int }
 
 func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg,
+	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
 		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg,
@@ -144,6 +144,12 @@ type Model struct {
 	width               int
 	height              int
 	previewSpecResolver func(string, string) (string, bool)
+
+	// Working/blocked markers breathe on their own clock, independent of the
+	// refresh poll. The generation lets a tick in flight be discarded.
+	pulseFrame      int
+	pulseScheduled  bool
+	pulseGeneration uint64
 
 	// A coalesced terminal wheel event that was held changed no visible state.
 	// Reuse the preceding Workspaces frame once rather than rebuilding it.
@@ -346,8 +352,43 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 	}
 }
 
+// Update handles one message and, on the way out, keeps the working/blocked
+// marker animation armed. Arming here rather than at a single entry point is
+// what makes the pulse unconditional: whatever brought a live row on screen —
+// a refresh, a filter keystroke, scrolling, opening the tab — re-checks the
+// clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	cmd := m.update(msg)
+	if pulse := m.pulseCmd(); pulse != nil {
+		return tea.Batch(cmd, pulse)
+	}
+	return cmd
+}
+
+// workspacePulseTickMsg advances the shared marker animation by one frame.
+type workspacePulseTickMsg struct{ generation uint64 }
+
+func (m *Model) pulseCmd() tea.Cmd {
+	if m.pulseScheduled || !m.workspaces.NeedsPulse() {
+		return nil
+	}
+	m.pulseScheduled = true
+	generation := m.pulseGeneration
+	return tea.Tick(workspacelist.PulseInterval, func(time.Time) tea.Msg {
+		return workspacePulseTickMsg{generation: generation}
+	})
+}
+
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case workspacePulseTickMsg:
+		if msg.generation != m.pulseGeneration {
+			return nil
+		}
+		m.pulseScheduled = false
+		m.pulseFrame++
+		m.workspaces.SetPulseFrame(m.pulseFrame)
+		return nil
 	case panesMsg:
 		if msg.Generation != m.generation {
 			return nil
@@ -757,16 +798,17 @@ func (m *Model) View(width, height int) string {
 	return result.View
 }
 
+// summary is the header-right text. Refreshes are frequent and mostly
+// instantaneous, so a "Loading n/m" counter there reads as flicker and pulls
+// the eye for nothing. Loading is not an abnormal state: while it runs we keep
+// showing the last known counts (nothing at all on the very first load), and
+// only genuinely abnormal state — tmux being unavailable — replaces them.
 func (m *Model) summary() string {
-	if m.loading {
-		total := m.configured
-		if m.phase == phaseStatus {
-			total = len(m.projects)
-		}
-		return fmt.Sprintf("Loading %d/%d", len(m.completed), total)
-	}
 	if m.tmuxErr != nil {
 		return "tmux unavailable"
+	}
+	if m.loading && len(m.results) == 0 {
+		return ""
 	}
 	return fmt.Sprintf("%d projects · %d agents", len(m.results), m.agentCount)
 }

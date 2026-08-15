@@ -243,7 +243,12 @@ func (m *Model) ensureIssuePreviewView() *issueview.Model {
 		m.issuePreviewView.SetData(m.issuePreviewData)
 	}
 	if m.issuePreviewView != nil && len(m.issuePreviewView.ActionHints()) == 0 {
+		// The card's own ACTIONS row is the modal's only hint line: it already
+		// varies with focused/active and with parent/sibling/child presence, so
+		// the modal-wide keys are folded in here rather than duplicated in a
+		// hand-rolled footer.
 		m.issuePreviewView.SetActionHints([]issueview.ActionHint{
+			{Key: "j/k", Label: "scroll"},
 			{Key: "o", Label: "open"},
 			{Key: "b", Label: "back"},
 			{Key: "y", Label: "yank"},
@@ -254,8 +259,10 @@ func (m *Model) ensureIssuePreviewView() *issueview.Model {
 }
 
 func issuePreviewViewportHeight(screenH int) int {
-	// Match modal.desiredModalInnerHeight (screenH-6) minus buttons and footer.
-	h := screenH - 12
+	// Match modal.desiredModalInnerHeight (screenH-6) minus the spacer and the
+	// button row. The modal has no footer of its own — the card renders the
+	// single hint row inside its own ACTIONS section.
+	h := screenH - 11
 	if h < 8 {
 		h = 8
 	}
@@ -263,23 +270,6 @@ func issuePreviewViewportHeight(screenH int) int {
 		h = 36
 	}
 	return h
-}
-
-func (m *Model) issuePreviewFooter() string {
-	var hintBuf strings.Builder
-	hintBuf.WriteString(styles.KeyHint.Render("enter"))
-	hintBuf.WriteString(styles.Muted.Render(" activate  "))
-	hintBuf.WriteString(styles.KeyHint.Render("j/k"))
-	hintBuf.WriteString(styles.Muted.Render(" scroll  "))
-	hintBuf.WriteString(styles.KeyHint.Render("o"))
-	hintBuf.WriteString(styles.Muted.Render(" open  "))
-	hintBuf.WriteString(styles.KeyHint.Render("b"))
-	hintBuf.WriteString(styles.Muted.Render(" back  "))
-	hintBuf.WriteString(styles.KeyHint.Render("y"))
-	hintBuf.WriteString(styles.Muted.Render(" yank  "))
-	hintBuf.WriteString(styles.KeyHint.Render("esc"))
-	hintBuf.WriteString(styles.Muted.Render(" close"))
-	return hintBuf.String()
 }
 
 func (m *Model) ensureIssuePreviewModal() {
@@ -332,7 +322,6 @@ func (m *Model) ensureIssuePreviewModal() {
 	b := modal.New("",
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
-		modal.WithCustomFooter(m.issuePreviewFooter()),
 	)
 
 	b = b.AddSection(modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {

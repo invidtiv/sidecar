@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
@@ -138,5 +139,46 @@ func TestFilesWheelFirstEventIsImmediateAndNextDenseEventRequestsReuse(t *testin
 	p.handleMouseScroll(action)
 	if p.treeCursor != mouse.WheelScrollLines || !p.reuseViewOnce {
 		t.Fatalf("held notch cursor=%d reuse=%v, want unchanged cursor and cached-frame request", p.treeCursor, p.reuseViewOnce)
+	}
+}
+
+func TestFilesBoundaryWheelDropsAndClearsHeldBurst(t *testing.T) {
+	p := newScrollBurstPlugin(t, 20)
+	p.treeCursor = p.tree.Len() - 1
+	p.mouseHandler.HitMap.AddRect(regionTreePane, 0, 0, p.treeWidth, p.height, nil)
+	at := time.Unix(300, 0)
+	p.wheelBursts.For(regionTreePane).Add(mouse.WheelScrollLines, at)
+	p.wheelBursts.For(regionTreePane).Add(mouse.WheelScrollLines, at.Add(time.Millisecond))
+	if p.wheelBursts.For(regionTreePane).Pending() == 0 {
+		t.Fatal("test premise: burst has no held delta")
+	}
+
+	down := tea.MouseWheelMsg{X: 2, Y: 4, Button: tea.MouseWheelDown}
+	if !p.WheelAtBoundary(down) {
+		t.Fatal("tree inertia at the last row was not identified as a boundary")
+	}
+	if pending := p.wheelBursts.For(regionTreePane).Pending(); pending != 0 {
+		t.Fatalf("held delta survived boundary drop: %d", pending)
+	}
+	up := tea.MouseWheelMsg{X: 2, Y: 4, Button: tea.MouseWheelUp}
+	if p.WheelAtBoundary(up) {
+		t.Fatal("wheel back into the tree was dropped")
+	}
+}
+
+func TestFilesPreviewBoundaryUsesRenderedContentHeight(t *testing.T) {
+	p := newScrollBurstPlugin(t, 1)
+	p.treeWidth = 30
+	p.previewLines = []string{"one", "two", "three"}
+	p.previewScroll = 0
+	p.mouseHandler.HitMap.AddRect(regionPreviewPane, 31, 0, 69, p.height, nil)
+
+	up := tea.MouseWheelMsg{X: 50, Y: 4, Button: tea.MouseWheelUp}
+	if !p.WheelAtBoundary(up) {
+		t.Fatal("short preview at top did not drop upward inertia")
+	}
+	p.inlineEditMode = true
+	if p.WheelAtBoundary(up) {
+		t.Fatal("inline editor wheel was classified using the ordinary preview")
 	}
 }

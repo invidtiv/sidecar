@@ -430,7 +430,7 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 	// plain workspace rather than hiding it. The Agents projection filters
 	// these out again, so the board sees exactly what it saw before.
 	for _, wt := range parseWorktrees(string(out)) {
-		provider, taskID := "", ""
+		provider, taskID, displayName := "", "", ""
 		if stateDir, ok := lookupWorktree(root, wt.Path); ok {
 			if agentBytes, err := readRegularFile(filepath.Join(stateDir, "agent")); err == nil {
 				provider = strings.TrimSpace(string(agentBytes))
@@ -439,8 +439,15 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 				taskBytes, _ := readRegularFile(filepath.Join(stateDir, "task"))
 				taskID = strings.TrimSpace(string(taskBytes))
 			}
+			if displayBytes, err := readRegularFile(filepath.Join(stateDir, "display-name")); err == nil {
+				displayName = strings.TrimSpace(string(displayBytes))
+			}
 		}
-		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: filepath.Base(wt.Path), Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, IsMain: canonical(wt.Path) == result.ProjectKey, ObservedAt: now}
+		itemName := filepath.Base(wt.Path)
+		if displayName != "" {
+			itemName = displayName
+		}
+		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: itemName, Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, IsMain: canonical(wt.Path) == result.ProjectKey, ObservedAt: now}
 		workspace.ID = workspace.ProjectKey + ":worktree:" + workspace.Key
 		workspace.Plain = provider == ""
 		if workspace.HasAgent() {

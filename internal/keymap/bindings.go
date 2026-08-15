@@ -93,8 +93,9 @@ func DefaultBindings() []Binding {
 		// Enter from the list starts typing. E is the remaining explicit
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
-		// Display-name write, not create/destroy. Worktrees ignore the key.
+		// Display-name write, not create/destroy. Branch and path stay put.
 		{Key: "R", Command: "rename-shell", Context: "global-workspaces"},
+		{Key: "R", Command: "rename-worktree", Context: "global-workspaces"},
 		// Navigation: leave global and open the project's Git plugin.
 		{Key: "O", Command: "open-in-git", Context: "global-workspaces"},
 
@@ -546,6 +547,8 @@ func DefaultBindings() []Binding {
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-list"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-list"},
 		{Key: "F", Command: "fetch-pr", Context: "workspace-list"},
+		{Key: "R", Command: "rename-shell", Context: "workspace-list"},
+		{Key: "R", Command: "rename-worktree", Context: "workspace-list"},
 		{Key: "+", Command: "resize-pane-grow", Context: "workspace-list"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "workspace-list"},
 		{Key: "ctrl+t", Command: "toggle-terminal", Context: "workspace-list"},

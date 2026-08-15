@@ -341,6 +341,9 @@ func TestCreatePostAddInventoryCancelledWithPartialResult(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.initCreateModalBase()
+			if err := os.WriteFile(count, []byte("0"), 0644); err != nil {
+				t.Fatal(err)
+			}
 			p.createNameInput.SetValue("feature")
 			cmd := p.createWorktree()
 			done := make(chan CreateDoneMsg, 1)

@@ -75,12 +75,12 @@ func (p *Plugin) View(width, height int) string {
 		view = p.renderConfirmDeleteShellModal(width, height)
 	case ViewModeCommitForMerge:
 		view = p.renderCommitForMergeModal(width, height)
-	case ViewModePromptPicker:
-		view = p.renderPromptPickerModal(width, height)
 	case ViewModeTypeSelector:
 		view = p.renderTypeSelectorModal(width, height)
 	case ViewModeRenameShell:
 		view = p.renderRenameShellModal(width, height)
+	case ViewModeRenameWorktree:
+		view = p.renderRenameWorktreeModal(width, height)
 	case ViewModeFetchPR:
 		view = p.renderFetchPRModal(width, height)
 	case ViewModeFilePicker:

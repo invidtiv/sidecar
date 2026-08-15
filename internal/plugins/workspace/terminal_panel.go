@@ -52,7 +52,7 @@ func (p *Plugin) termPanelSessionName() string {
 	if wt == nil {
 		return ""
 	}
-	return termPanelSessionPrefix + sanitizeName(wt.Name)
+	return termPanelSessionPrefix + worktreeSessionSuffix(wt)
 }
 
 // termPanelWorkDir returns the working directory for the terminal panel session.

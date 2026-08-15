@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -56,6 +57,102 @@ func (p *Plugin) clickPreviewAction(data any) tea.Cmd {
 	default:
 		return p.openDiffPaneForSurface(root, surface, workspacediff.WorkingTreeTarget())
 	}
+}
+
+// WheelAtBoundary implements plugin.WheelBoundaryConsumer for the project
+// Workspaces surface. It follows the same hit regions as handleMouseScroll but
+// performs no loads or visible mutations, allowing Bubble Tea to discard an
+// inertial tail before Update and View.
+func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if p.isModalViewMode() || p.mouseHandler == nil {
+		return false
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false
+	}
+	if tty.WheelStaysWithPointer(p.viewMode == ViewModeInteractive) {
+		return p.terminalWheelAtBoundary(p.interactiveTermPanel(), action)
+	}
+	regionID := ""
+	if action.Region != nil {
+		regionID = action.Region.ID
+	}
+	switch regionID {
+	case regionSidebar, regionWorktreeItem:
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
+		leafID := 0
+		switch data := action.Region.Data.(type) {
+		case int:
+			leafID = data
+		case docTabHit:
+			leafID = data.LeafID
+		case issueTabHit:
+			leafID = data.LeafID
+		case diffTabHit:
+			leafID = data.LeafID
+		}
+		leaf := FindPane(p.paneRoot, leafID)
+		if leaf == nil {
+			return true
+		}
+		switch leaf.Kind {
+		case PaneDoc:
+			doc := p.docs[leaf.ContentID]
+			return doc == nil || doc.view() == nil || doc.view().ScrollAtBoundary(action.Delta)
+		case PaneIssue:
+			issue := p.issues[leaf.ContentID]
+			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+		case PaneDiff:
+			view := p.activeDiffView()
+			return view.ScrollAtBoundary(action.Delta, view.Height())
+		default:
+			return false
+		}
+	case regionTermPanelContent:
+		return p.terminalWheelAtBoundary(true, action)
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane, regionDiffTabPreviewFile:
+		view := p.activeDiffView()
+		return (sharedscroll.Bounds{Position: view.Cursor, Maximum: view.TotalItems() - 1}).AtBoundary(action.Delta)
+	case regionDiffTabDiffPane, regionDiffTabMinimap, regionCommitFileDiffPane:
+		view := p.activeDiffView()
+		return view.ScrollAtBoundary(action.Delta, view.Height())
+	case regionCommitFileItem, regionCommitFileBack:
+		view := p.activeDiffView()
+		maximum := -1
+		if view.CommitDetail != nil {
+			maximum = len(view.CommitDetail.Files) - 1
+		}
+		return (sharedscroll.Bounds{Position: view.CommitFileCursor, Maximum: maximum}).AtBoundary(action.Delta)
+	case regionPreviewPane:
+		if p.previewShowsTerminal() {
+			return p.terminalWheelAtBoundary(false, action)
+		}
+		return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
+	case regionKanbanCard, regionKanbanColumn:
+		return false
+	}
+	if action.Region != nil {
+		return false
+	}
+	if p.viewMode == ViewModeKanban {
+		return false
+	}
+	split := p.previewSplit()
+	if p.sidebarVisible && action.X < split.SidebarWidth {
+		return (sharedscroll.Bounds{
+			Position: p.sharedSidebarSelectionIndex(),
+			Maximum:  len(p.visibleSidebarItems()) - 1,
+		}).AtBoundary(action.Delta)
+	}
+	if p.previewShowsTerminal() {
+		return p.terminalWheelAtBoundary(false, action)
+	}
+	return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
 }
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
@@ -111,16 +208,16 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleRenameShellModalMouse(msg)
 	}
 
+	if p.viewMode == ViewModeRenameWorktree {
+		return p.handleRenameWorktreeModalMouse(msg)
+	}
+
 	if p.viewMode == ViewModeConfirmDelete {
 		return p.handleConfirmDeleteModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeConfirmDeleteShell {
 		return p.handleConfirmDeleteShellModalMouse(msg)
-	}
-
-	if p.viewMode == ViewModePromptPicker {
-		return p.handlePromptPickerModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeTypeSelector {
@@ -234,7 +331,11 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	prevAgent := p.createAgentType
+	prevSkip := p.createSkipPermissions
 	action := p.createModal.HandleMouse(msg, p.mouseHandler)
+	p.applyCreateModalAfterInput(prevAgent, prevSkip)
+
 	switch action {
 	case "":
 		return nil
@@ -244,54 +345,9 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
-	case createPromptFieldID:
-		p.createFocus = 2
-		p.syncCreateModalFocus()
-		p.openPromptPicker(p.createPrompts, ViewModeCreate)
-		return nil
-	case createNameFieldID:
-		p.createFocus = 0
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createBaseFieldID:
-		p.createFocus = 1
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createTaskFieldID:
-		p.createFocus = 3
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
 	case createSkipPermissionsID:
-		p.createFocus = 5
 		p.createSkipPermissions = !p.createSkipPermissions
-		p.syncCreateModalFocus()
-		return nil
-	}
-
-	if idx, ok := parseIndexedID(createBranchItemPrefix, action); ok && idx < len(p.branchFiltered) {
-		p.createBaseBranchInput.SetValue(p.branchFiltered[idx])
-		p.branchFiltered = nil
-		p.createFocus = 1
-		p.syncCreateModalFocus()
-		return nil
-	}
-	if idx, ok := parseIndexedID(createTaskItemPrefix, action); ok && idx < len(p.taskSearchFiltered) {
-		task := p.taskSearchFiltered[idx]
-		p.createTaskID = task.ID
-		p.createTaskTitle = task.Title
-		p.createFocus = 3
-		p.syncCreateModalFocus()
-		return nil
-	}
-	agents := p.selectableAgentTypes()
-	if idx, ok := parseIndexedID(createAgentItemPrefix, action); ok && idx < len(agents) {
-		p.createAgentIdx = idx
-		p.createAgentType = agents[idx]
-		p.createFocus = 4
-		p.syncCreateModalFocus()
+		p.persistCreateAutoApprove()
 		return nil
 	}
 
@@ -314,6 +370,26 @@ func (p *Plugin) handleRenameShellModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	case renameShellActionID, renameShellRenameID:
 		return p.executeRenameShell()
+	}
+	return nil
+}
+
+func (p *Plugin) handleRenameWorktreeModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return nil
+	}
+
+	action := p.renameWorktreeModal.HandleMouse(msg, p.mouseHandler)
+	switch action {
+	case "":
+		return nil
+	case "cancel", renameWorktreeCancelID:
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		return nil
+	case renameWorktreeActionID, renameWorktreeRenameID:
+		return p.executeRenameWorktree()
 	}
 	return nil
 }
@@ -391,38 +467,6 @@ func (p *Plugin) handleTypeSelectorModalMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) handlePromptPickerModalMouse(msg tea.MouseMsg) tea.Cmd {
-	if p.promptPicker == nil {
-		return nil
-	}
-
-	p.ensurePromptPickerModal()
-	if p.promptPickerModal == nil {
-		return nil
-	}
-
-	action := p.promptPickerModal.HandleMouse(msg, p.mouseHandler)
-	switch action {
-	case "":
-		return nil
-	case "cancel":
-		return func() tea.Msg { return PromptCancelledMsg{} }
-	case promptPickerFilterID:
-		p.promptPicker.filterFocused = true
-		p.syncPromptPickerFocus()
-		return nil
-	}
-
-	if idx, ok := parsePromptPickerItemID(action); ok {
-		p.promptPicker.selectedIdx = idx
-		p.promptPicker.filterFocused = false
-		p.syncPromptPickerFocus()
-		return p.promptPickerSelectCmd()
-	}
-
-	return nil
-}
-
 func (p *Plugin) handleAgentChoiceModalMouse(msg tea.MouseMsg) tea.Cmd {
 	p.ensureAgentChoiceModal()
 	if p.agentChoiceModal == nil {
@@ -449,14 +493,14 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	prevAgentIdx := p.agentConfigAgentIdx
+	prevAgent := p.agentConfigAgentType
+	prevSkip := p.agentConfigSkipPerms
 	action := p.agentConfigModal.HandleMouse(msg, p.mouseHandler)
-
-	// Sync agent type when list selection changes via mouse (fixed modal list)
-	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
-			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
-		}
+	p.syncAgentConfigFromIdx()
+	if p.agentConfigAgentType != prevAgent {
+		p.loadAgentConfigAutoApprove()
+	} else if p.agentConfigSkipPerms != prevSkip {
+		p.persistAgentConfigAutoApprove()
 	}
 
 	switch action {
@@ -466,11 +510,12 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearAgentConfigModal()
 		return nil
-	case agentConfigPromptFieldID:
-		p.openPromptPicker(p.agentConfigPrompts, ViewModeAgentConfig)
-		return nil
 	case agentConfigSubmitID:
 		return p.executeAgentConfig()
+	case agentConfigSkipPermissionsID:
+		p.agentConfigSkipPerms = !p.agentConfigSkipPerms
+		p.persistAgentConfigAutoApprove()
+		return nil
 	}
 	return nil
 }
@@ -582,30 +627,14 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	// Handle hover in modals that have button hover states
 	switch p.viewMode {
 	case ViewModeCreate:
-		if action.Region == nil {
-			p.createButtonHover = 0
-			return nil
-		}
-		switch action.Region.ID {
-		case regionCreateButton:
-			if idx, ok := action.Region.Data.(int); ok {
-				switch idx {
-				case 6:
-					p.createButtonHover = 1 // Create
-				case 7:
-					p.createButtonHover = 2 // Cancel
-				}
-			}
-		default:
-			p.createButtonHover = 0
-		}
+		return nil
 	case ViewModeAgentConfig:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeAgentChoice:
 		// Modal library handles hover state internally
 		return nil
-	case ViewModeRenameShell:
+	case ViewModeRenameShell, ViewModeRenameWorktree:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeMerge:
@@ -618,7 +647,6 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		// Modal library handles hover state internally
 		return nil
 	default:
-		p.createButtonHover = 0
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
@@ -1028,67 +1056,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		} else {
 			view.Focus = DiffTabFocusFileList
 		}
-	case regionCreateBackdrop:
-		// Click outside create modal - close it
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
-	case regionCreateModalBody:
-		// Click inside modal but not on a form element - absorb
-	case regionCreateInput:
-		// Click on input field in create modal
-		if focusIdx, ok := action.Region.Data.(int); ok {
-			p.blurCreateInputs()
-			p.createFocus = focusIdx
-			p.focusCreateInput()
-
-			// If clicking prompt field, open the picker
-			if focusIdx == 2 {
-				p.openPromptPicker(p.createPrompts, ViewModeCreate)
-			}
-		}
-	case regionCreateDropdown:
-		// Click on dropdown item
-		if data, ok := action.Region.Data.(dropdownItemData); ok {
-			switch data.field {
-			case 1:
-				// Branch selection
-				if data.idx >= 0 && data.idx < len(p.branchFiltered) {
-					p.createBaseBranchInput.SetValue(p.branchFiltered[data.idx])
-					p.branchFiltered = nil
-				}
-			case 3:
-				// Task selection
-				if data.idx >= 0 && data.idx < len(p.taskSearchFiltered) {
-					task := p.taskSearchFiltered[data.idx]
-					p.createTaskID = task.ID
-					p.createTaskTitle = task.Title
-					p.taskSearchFiltered = nil
-				}
-			}
-		}
-	case regionCreateAgentOption:
-		// Click on agent option
-		if idx, ok := action.Region.Data.(int); ok {
-			agents := p.selectableAgentTypes()
-			if idx >= 0 && idx < len(agents) {
-				p.createAgentType = agents[idx]
-				p.createAgentIdx = idx
-			}
-		}
-	case regionCreateCheckbox:
-		// Toggle checkbox
-		p.createSkipPermissions = !p.createSkipPermissions
-	case regionCreateButton:
-		// Click on button
-		if idx, ok := action.Region.Data.(int); ok {
-			switch idx {
-			case 6:
-				return p.validateAndCreateWorktree()
-			case 7:
-				p.viewMode = ViewModeList
-				p.clearCreateModal()
-			}
-		}
 	case regionTaskLinkDropdown:
 		// Click on task link dropdown item
 		if idx, ok := action.Region.Data.(int); ok {
@@ -1314,6 +1281,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 			leafID = data.LeafID
 		case issueTabHit:
 			leafID = data.LeafID
+		case diffTabHit:
+			leafID = data.LeafID
 		}
 		leaf := FindPane(p.paneRoot, leafID)
 		if leaf == nil {
@@ -1343,6 +1312,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 					}
 				}
 			}
+		case PaneDiff:
+			if view := p.activeDiffView(); view != nil {
+				view.ScrollContent(delta, view.Height())
+			}
 		}
 		return nil
 	case regionTermPanelContent:
@@ -1359,9 +1332,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollDiffTabFileList(delta)
 	case regionDiffTabDiffPane, regionDiffTabMinimap:
 		// Scroll diff content
-		p.diff.DiffScroll += delta
-		if p.diff.DiffScroll < 0 {
-			p.diff.DiffScroll = 0
+		if view := p.activeDiffView(); view != nil {
+			view.ScrollContent(delta, view.Height())
 		}
 		return nil
 	case regionCommitFileItem, regionCommitFileBack:
@@ -1369,9 +1341,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return p.scrollDiffTabCommitFileList(delta)
 	case regionCommitFileDiffPane:
 		// Scroll commit file diff content
-		p.diff.DiffScroll += delta
-		if p.diff.DiffScroll < 0 {
-			p.diff.DiffScroll = 0
+		if view := p.activeDiffView(); view != nil {
+			view.ScrollContent(delta, view.Height())
 		}
 		return nil
 	case regionPreviewPane:

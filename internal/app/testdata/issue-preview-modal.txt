@@ -26,10 +26,10 @@
 │   21:47  ses_2a31ff  Checks passing                                          │
 │                                                                              │
 │   ACTIONS ──────────────────────────────────────────────────────────────     │
-│    o  open   b  back   y  yank   esc  close                                  │
+│    ↵  activate   j/k  scroll   o  open   b  back   y  yank   esc  close      │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │     Open in TD        Back        Close                                      │
-│   enter  activate   j/k  scroll   o  open   b  back   y  yank   esc  close   │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯

@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -555,6 +556,40 @@ func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 		Delta: action.Delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: m.now(),
 	})
+}
+
+// previewWheelAtBoundary is the read-only half of wheelPreview used by the
+// Bubble Tea input filter. An application that requested mouse reports is never
+// treated as bounded here: its internal viewport is not Sidecar state. Local
+// scrollback can drop at the live edge, and at the oldest loaded row only after
+// tmux has confirmed there is no older history to fetch.
+func (m *Model) previewWheelAtBoundary(action mouse.MouseAction) bool {
+	_, _, inPane := m.previewPaneCoords(action.X, action.Y)
+	route, _ := tty.RouteWheel(tty.WheelInput{
+		Delta:          action.Delta,
+		Shift:          action.Shift,
+		Alt:            action.Alt,
+		MouseReporting: m.previewTerminalActive() && m.preview.terminal.PaneMouseReporting(),
+		InPane:         inPane,
+		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
+	})
+	if route == tty.WheelPane {
+		return false
+	}
+	maximum := m.previewMaxOffset()
+	position := maximum - m.preview.offset
+	if m.preview.freeze.Active() {
+		position = m.preview.freeze.Start()
+	}
+	boundary := (sharedscroll.Bounds{Position: position, Maximum: maximum}).AtBoundary(action.Delta)
+	if !boundary {
+		return false
+	}
+	if action.Delta < 0 && m.previewTerminalActive() && !m.preview.history.Exhausted {
+		return false
+	}
+	m.preview.wheel.Reset()
+	return true
 }
 
 // notePreviewInput records input this surface delivered to the pane against the

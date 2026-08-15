@@ -10,6 +10,7 @@ import (
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
@@ -879,6 +880,50 @@ func (p *Plugin) wheelTerminal(termPanel bool, action mouse.MouseAction, delta i
 		Delta: delta, X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt, Now: p.now(),
 	})
+}
+
+// terminalWheelAtBoundary is the pre-update counterpart of wheelTerminal.
+// Pane-owned mouse reporting is intentionally never guessed at: those events
+// must reach the application. A local scrollback tail can be dropped at live,
+// or at the oldest row only once tmux has confirmed history is exhausted.
+func (p *Plugin) terminalWheelAtBoundary(termPanel bool, action mouse.MouseAction) bool {
+	if p.terminalDocProjection.buffer != nil && p.terminalDocProjection.termPanel == termPanel {
+		return false // the first explicit wheel releases the read-only projection
+	}
+	_, _, inPane := p.terminalMouseCoords(termPanel, action.X, action.Y)
+	route, _ := tty.RouteWheel(tty.WheelInput{
+		Delta:          action.Delta,
+		Shift:          action.Shift,
+		Alt:            action.Alt,
+		MouseReporting: p.paneMouseReporting(termPanel),
+		InPane:         inPane,
+		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
+	})
+	if route == tty.WheelPane {
+		return false
+	}
+	maximum, offset := p.previewMaxScroll(), p.previewScroll
+	freeze := &p.previewFreeze
+	if termPanel {
+		maximum, offset = p.termPanelMaxScroll(), p.termPanelScroll
+		freeze = &p.termPanelFreeze
+	}
+	position := maximum - offset
+	if freeze.Active() {
+		position = freeze.Start()
+	}
+	boundary := (sharedscroll.Bounds{Position: position, Maximum: maximum}).AtBoundary(action.Delta)
+	if !boundary {
+		return false
+	}
+	if action.Delta < 0 {
+		source, ok := p.terminalHistoryFor(termPanel)
+		if ok && !p.terminalHistory[source.Key].Exhausted {
+			return false
+		}
+	}
+	p.terminalWheel(termPanel).Reset()
+	return true
 }
 
 // terminalWheel is the flick over a named terminal surface. The two surfaces

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 )
 
 // View is the reusable Diff pane model: one snapshot, one cursor, one commit
@@ -625,12 +626,36 @@ func loadCommitFileDiff(workdir, hash, path, parentHash string) (string, error) 
 	return string(out), nil
 }
 
-// ScrollContent moves the visible right-pane (or collapsed) content.
-func (v *View) ScrollContent(delta int) {
-	v.DiffScroll += delta
-	if v.DiffScroll < 0 {
-		v.DiffScroll = 0
+// ContentMaxScroll returns the exact vertical bound for the content currently
+// rendered in the right pane (or collapsed view).
+func (v *View) ContentMaxScroll(height int) int {
+	content := v.Content
+	visible := height
+	switch {
+	case v.Scope == ScopeAggregate:
+		content = v.aggregateText()
+	case len(v.Files) > 0 || len(v.Commits) > 0:
+		if v.Cursor < 0 || v.Cursor >= len(v.Files) {
+			return 0 // commit preview is not scrollable
+		}
+		content = v.Files[v.Cursor].Raw
+		visible = max(1, height-2) // filename + spacer
 	}
+	return max(len(splitLines(content))-visible, 0)
+}
+
+// ScrollAtBoundary reports whether delta points farther past the rendered
+// content boundary.
+func (v *View) ScrollAtBoundary(delta, height int) bool {
+	return (sharedscroll.Bounds{Position: v.DiffScroll, Maximum: v.ContentMaxScroll(height)}).AtBoundary(delta)
+}
+
+// ScrollContent moves the visible right-pane (or collapsed) content.
+func (v *View) ScrollContent(delta, height int) {
+	v.DiffScroll, _ = (sharedscroll.Bounds{
+		Position: v.DiffScroll,
+		Maximum:  v.ContentMaxScroll(height),
+	}).Move(delta)
 }
 
 // ParseFiles splits a unified multi-file diff into named file entries.

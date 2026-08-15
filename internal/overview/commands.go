@@ -76,11 +76,19 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: ctxGlobalWorkspaces, Priority: 6},
 			{ID: "close-overview", Name: "Close", Description: "Leave the global space", Context: ctxGlobalWorkspaces, Priority: 7},
 		}
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
-			cmds = append(cmds, plugin.Command{
-				ID: "rename-shell", Name: "Rename", Description: "Rename the selected shell",
-				Context: ctxGlobalWorkspaces, Priority: 8,
-			})
+		if workspace, ok := m.SelectedWorkspace(); ok {
+			switch workspace.Kind {
+			case workspaceinventory.KindShell:
+				cmds = append(cmds, plugin.Command{
+					ID: "rename-shell", Name: "Rename", Description: "Rename the selected shell",
+					Context: ctxGlobalWorkspaces, Priority: 8,
+				})
+			case workspaceinventory.KindWorktree:
+				cmds = append(cmds, plugin.Command{
+					ID: "rename-worktree", Name: "Rename", Description: "Rename the selected worktree",
+					Context: ctxGlobalWorkspaces, Priority: 8,
+				})
+			}
 		}
 		if m.canOpenInGit() {
 			cmds = append(cmds, plugin.Command{

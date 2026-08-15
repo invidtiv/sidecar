@@ -120,9 +120,10 @@ func rowPrefix(row RowPresentation, selected bool) string {
 	if icon == "" {
 		icon = "○"
 	}
-	if !selected {
-		icon = markerStyle(row.Marker).Render(icon)
-	}
+	// The marker keeps its own colour even under selection: it is the row's
+	// live status, and a working row that stops breathing the moment you
+	// select it reads as the agent having stopped.
+	icon = markerStyle(row.Marker).Render(icon)
 	prefix := " " + icon + " "
 	if glyph := KindGlyph(row.Kind); glyph != "" {
 		if !selected {
